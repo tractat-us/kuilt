@@ -11,8 +11,8 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
 /**
- * In-memory implementation of [PeerLinkFactory] for use in tests and
- * integration harnesses. All [PeerLink] instances produced by the same
+ * In-memory implementation of [Loom] for use in tests and
+ * integration harnesses. All [Seam] instances produced by the same
  * factory instance share a single in-memory mesh.
  *
  * Thread-safe: the shared mesh state is protected by a [Mutex]. Frame
@@ -23,45 +23,45 @@ import kotlinx.coroutines.sync.withLock
  * Intended to be the test bedrock for `:session-protocol` and every layer
  * above it.
  */
-public class InMemoryPeerLinkFactory : PeerLinkFactory {
+public class InMemoryLoom : Loom {
     private val mutex = Mutex()
 
     // Shared peer set: every link in the mesh observes this same StateFlow.
-    private val _peers = MutableStateFlow<Set<TransportPeerId>>(emptySet())
+    private val _peers = MutableStateFlow<Set<PeerId>>(emptySet())
 
     // Registry of active links by their selfId.
-    private val links = mutableMapOf<TransportPeerId, InMemoryPeerLink>()
+    private val links = mutableMapOf<PeerId, InMemorySeam>()
 
     // Monotonically increasing counter used to generate unique peer IDs.
     private var peerCounter = 0
 
-    override suspend fun open(config: SessionConfig): PeerLink =
+    override suspend fun open(config: Pattern): Seam =
         mutex.withLock {
             val id = freshPeerId()
-            val link = InMemoryPeerLink(id, this)
+            val link = InMemorySeam(id, this)
             links[id] = link
             _peers.update { it + id }
             link
         }
 
-    override suspend fun join(advertisement: PeerAdvertisement): PeerLink =
+    override suspend fun join(advertisement: Tag): Seam =
         mutex.withLock {
-            require(advertisement is InMemoryPeerAdvertisement) {
-                "InMemoryPeerLinkFactory only joins InMemoryPeerAdvertisement, got ${advertisement::class}"
+            require(advertisement is InMemoryTag) {
+                "InMemoryLoom only joins InMemoryTag, got ${advertisement::class}"
             }
             val id = freshPeerId()
-            val link = InMemoryPeerLink(id, this)
+            val link = InMemorySeam(id, this)
             links[id] = link
             _peers.update { it + id }
             link
         }
 
-    public val peers: StateFlow<Set<TransportPeerId>> = _peers.asStateFlow()
+    public val peers: StateFlow<Set<PeerId>> = _peers.asStateFlow()
 
     internal suspend fun dispatch(
-        sender: TransportPeerId,
+        sender: PeerId,
         payload: ByteArray,
-        recipient: TransportPeerId?,
+        recipient: PeerId?,
     ) {
         mutex.withLock {
             val targets =
@@ -73,7 +73,7 @@ public class InMemoryPeerLinkFactory : PeerLinkFactory {
             for (targetId in targets) {
                 val target = links[targetId] ?: continue
                 val frame =
-                    OpaqueFrame(
+                    Swatch(
                         payload = payload,
                         sender = sender,
                         sequence = target.nextSequence(),
@@ -83,42 +83,42 @@ public class InMemoryPeerLinkFactory : PeerLinkFactory {
         }
     }
 
-    internal suspend fun remove(id: TransportPeerId) {
+    internal suspend fun remove(id: PeerId) {
         mutex.withLock {
             links.remove(id)
             _peers.update { it - id }
         }
     }
 
-    internal fun isActive(id: TransportPeerId): Boolean = links.containsKey(id)
+    internal fun isActive(id: PeerId): Boolean = links.containsKey(id)
 
-    private fun freshPeerId(): TransportPeerId {
+    private fun freshPeerId(): PeerId {
         peerCounter++
-        return TransportPeerId("peer-$peerCounter")
+        return PeerId("peer-$peerCounter")
     }
 }
 
 /**
- * A [PeerAdvertisement] implementation for the in-memory transport. Since
+ * A [Tag] implementation for the in-memory transport. Since
  * the in-memory factory does not need network discovery, this carries only
  * the display name. The factory itself provides the mesh context.
  */
-public data class InMemoryPeerAdvertisement(
+public data class InMemoryTag(
     override val displayName: String,
     override val peerKey: String = displayName,
-) : PeerAdvertisement
+) : Tag
 
-private class InMemoryPeerLink(
-    override val selfId: TransportPeerId,
-    private val factory: InMemoryPeerLinkFactory,
-) : PeerLink {
-    private val incomingChannel = Channel<OpaqueFrame>(capacity = Channel.UNLIMITED)
+private class InMemorySeam(
+    override val selfId: PeerId,
+    private val factory: InMemoryLoom,
+) : Seam {
+    private val incomingChannel = Channel<Swatch>(capacity = Channel.UNLIMITED)
     private var closed = false
     private var sequenceCounter = 0L
 
-    override val peers: StateFlow<Set<TransportPeerId>> = factory.peers
+    override val peers: StateFlow<Set<PeerId>> = factory.peers
 
-    override val incoming: Flow<OpaqueFrame> = incomingChannel.receiveAsFlow()
+    override val incoming: Flow<Swatch> = incomingChannel.receiveAsFlow()
 
     override suspend fun broadcast(payload: ByteArray) {
         checkNotClosed()
@@ -126,7 +126,7 @@ private class InMemoryPeerLink(
     }
 
     override suspend fun sendTo(
-        peer: TransportPeerId,
+        peer: PeerId,
         payload: ByteArray,
     ) {
         checkNotClosed()
@@ -143,13 +143,13 @@ private class InMemoryPeerLink(
 
     internal fun nextSequence(): Long = ++sequenceCounter
 
-    internal fun deliver(frame: OpaqueFrame) {
+    internal fun deliver(frame: Swatch) {
         if (!closed) {
             incomingChannel.trySend(frame)
         }
     }
 
     private fun checkNotClosed() {
-        check(!closed) { "PeerLink for $selfId is closed" }
+        check(!closed) { "Seam for $selfId is closed" }
     }
 }

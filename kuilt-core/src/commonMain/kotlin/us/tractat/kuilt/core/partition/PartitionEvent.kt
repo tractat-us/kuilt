@@ -1,6 +1,6 @@
 package us.tractat.kuilt.core.partition
 
-import us.tractat.kuilt.core.TransportPeerId
+import us.tractat.kuilt.core.PeerId
 import kotlin.time.Instant
 
 /**
@@ -21,7 +21,7 @@ import kotlin.time.Instant
  * keepalive channel.
  */
 public sealed interface PartitionEvent {
-    public val peerId: TransportPeerId
+    public val peerId: PeerId
     public val at: Instant
 
     /**
@@ -34,7 +34,7 @@ public sealed interface PartitionEvent {
      * appropriate context (D-006).
      */
     public data class PeerUnresponsive(
-        override val peerId: TransportPeerId,
+        override val peerId: PeerId,
         override val at: Instant,
         val reason: Reason,
     ) : PartitionEvent
@@ -46,7 +46,7 @@ public sealed interface PartitionEvent {
      * React by resuming game-action processing (D-001).
      */
     public data class PeerRecovered(
-        override val peerId: TransportPeerId,
+        override val peerId: PeerId,
         override val at: Instant,
     ) : PartitionEvent
 
@@ -57,7 +57,7 @@ public sealed interface PartitionEvent {
      * the peer's slot in the roster should be considered permanently vacated.
      */
     public data class PeerLost(
-        override val peerId: TransportPeerId,
+        override val peerId: PeerId,
         override val at: Instant,
     ) : PartitionEvent
 
@@ -76,7 +76,7 @@ public sealed interface PartitionEvent {
         /** Per-peer outbound buffer exceeded the configured ceiling (D-006). */
         Backpressure,
 
-        /** The underlying [us.tractat.kuilt.core.PeerLink] was closed. */
+        /** The underlying [us.tractat.kuilt.core.Seam] was closed. */
         TransportClosed,
     }
 }

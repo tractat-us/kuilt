@@ -6,16 +6,16 @@ package us.tractat.kuilt.core
  *
  * `sender` and `sequence` are filled in by the transport when the frame
  * is received; senders leave them unset (null sender, zero sequence) and
- * the local PeerLink stamps them on dispatch.
+ * the local [Seam] stamps them on dispatch.
  */
-public data class OpaqueFrame(
+public data class Swatch(
     val payload: ByteArray,
-    val sender: TransportPeerId? = null,
+    val sender: PeerId? = null,
     val sequence: Long = 0,
 ) {
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
-        if (other !is OpaqueFrame) return false
+        if (other !is Swatch) return false
         return payload.contentEquals(other.payload) &&
             sender == other.sender &&
             sequence == other.sequence

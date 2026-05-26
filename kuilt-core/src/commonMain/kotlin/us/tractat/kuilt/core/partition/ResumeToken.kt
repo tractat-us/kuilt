@@ -1,6 +1,6 @@
 package us.tractat.kuilt.core.partition
 
-import us.tractat.kuilt.core.TransportPeerId
+import us.tractat.kuilt.core.PeerId
 
 /**
  * Opaque token a joiner presents when reconnecting after a transport drop.
@@ -18,7 +18,7 @@ import us.tractat.kuilt.core.TransportPeerId
  * directly — callers must inject via `clock: () -> Long`).
  */
 public data class ResumeToken(
-    val peerId: TransportPeerId,
+    val peerId: PeerId,
     val roomId: RoomId,
     val issuedAt: Long,
 )

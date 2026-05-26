@@ -9,9 +9,9 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.launch
-import us.tractat.kuilt.core.OpaqueFrame
-import us.tractat.kuilt.core.TransportPeerId
-import us.tractat.kuilt.core.PeerLink
+import us.tractat.kuilt.core.Swatch
+import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.core.Seam
 import kotlin.time.Instant
 
 /**
@@ -31,20 +31,20 @@ import kotlin.time.Instant
  *
  * **Heartbeat frame format:**
  * Ping frames carry the prefix `kuilt.heartbeat.ping`; pong frames carry `kuilt.heartbeat.pong`.
- * Both are consumed internally and never forwarded to the application's [PeerLink.incoming]
+ * Both are consumed internally and never forwarded to the application's [Seam.incoming]
  * subscription. Applications must not emit frames with these prefixes.
  *
  * **Clock injection:** [clock] is never [kotlin.time.Clock.System] — it is injected by the
  * caller so tests can use a fixed value and [runTest] virtual time controls all delays.
  *
- * @param link The [PeerLink] to the monitored peer.
- * @param peerId The remote peer's [TransportPeerId].
+ * @param link The [Seam] to the monitored peer.
+ * @param peerId The remote peer's [PeerId].
  * @param config Timing parameters.
  * @param clock Provides the current [Instant]; inject a fixed value in tests.
  */
 public class HeartbeatPartitionDetector(
-    private val link: PeerLink,
-    private val peerId: TransportPeerId,
+    private val link: Seam,
+    private val peerId: PeerId,
     private val config: HeartbeatConfig = HeartbeatConfig(),
     private val clock: () -> Instant,
 ) : PartitionDetector {
@@ -77,13 +77,13 @@ public class HeartbeatPartitionDetector(
         closeChannel()
     }
 
-    override fun observedPeer(peerId: TransportPeerId) {
+    override fun observedPeer(peerId: PeerId) {
         if (peerId == this.peerId) {
             lastSeenEpochMs = clock().toEpochMilliseconds()
         }
     }
 
-    override fun onBackpressure(peerId: TransportPeerId) {
+    override fun onBackpressure(peerId: PeerId) {
         if (peerId == this.peerId) {
             backpressurePending = true
         }
@@ -201,8 +201,8 @@ public class HeartbeatPartitionDetector(
 
         internal fun pongPayload(): ByteArray = PONG_PREFIX.encodeToByteArray()
 
-        internal fun isPingFrame(frame: OpaqueFrame): Boolean = frame.payload.decodeToString().startsWith(PING_PREFIX)
+        internal fun isPingFrame(frame: Swatch): Boolean = frame.payload.decodeToString().startsWith(PING_PREFIX)
 
-        internal fun isPongFrame(frame: OpaqueFrame): Boolean = frame.payload.decodeToString().startsWith(PONG_PREFIX)
+        internal fun isPongFrame(frame: Swatch): Boolean = frame.payload.decodeToString().startsWith(PONG_PREFIX)
     }
 }

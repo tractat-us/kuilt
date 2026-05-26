@@ -1,7 +1,7 @@
 package us.tractat.kuilt.core
 
 /**
- * Reason a [PeerLink] is being closed. Designed as a forward-compatible
+ * Reason a [Seam] is being closed. Designed as a forward-compatible
  * sealed hierarchy — new variants can be added without breaking existing
  * `when` exhaustiveness because the common cases are covered.
  */

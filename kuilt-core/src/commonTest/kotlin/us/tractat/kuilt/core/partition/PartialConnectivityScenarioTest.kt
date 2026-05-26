@@ -11,6 +11,7 @@ import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.Direction
 import us.tractat.kuilt.core.FaultProfile
+import us.tractat.kuilt.core.PeerId
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -27,7 +28,7 @@ import kotlin.time.Instant
  * point; joiners have no direct peer-to-peer links with each other.
  *
  * **Fault injection technique:**
- * - [Direction.Inbound] on a joiner's [us.tractat.kuilt.core.FaultyPeerLink]
+ * - [Direction.Inbound] on a joiner's [us.tractat.kuilt.core.FaultySeam]
  *   drops frames arriving at that joiner from the host. The host's ping never arrives
  *   at J1 → J1 cannot pong → detector times out. Models "H→J1 outbound dropped" (S1).
  * - [Direction.Outbound] on a joiner's link drops frames the joiner sends back to the
@@ -61,7 +62,7 @@ class PartialConnectivityScenarioTest {
 
             val mesh = Mesh.build(peerCount = 3, scope = backgroundScope, clock = clock, config = config)
 
-            // J1's inbound faulted: host pings arrive at the FaultyPeerLink wrapper but
+            // J1's inbound faulted: host pings arrive at the FaultySeam wrapper but
             // are dropped before J1's application layer. J1 can't pong → detector times out.
             mesh.j0.setFaultProfile(FaultProfile.DropAll(Direction.Inbound))
 
@@ -175,7 +176,7 @@ class PartialConnectivityScenarioTest {
      *
      * Verification: host broadcasts reach both J1 and J2 regardless of J2's inbound state.
      * (In a real hub topology no joiner-sourced frame reaches another joiner without
-     * the host fanning it out — the InMemoryPeerLinkFactory models this shared-bus correctly.)
+     * the host fanning it out — the InMemoryLoom models this shared-bus correctly.)
      */
     @Test
     fun `S3 - host-as-hub fan-out delivers host broadcast to all joiners`() =
@@ -236,7 +237,7 @@ class PartialConnectivityScenarioTest {
         }
 
     /**
-     * There is no joiner-to-joiner direct path: a joiner's send to another joiner's TransportPeerId
+     * There is no joiner-to-joiner direct path: a joiner's send to another joiner's PeerId
      * must be routed through the host. Faulting a joiner's inbound does not prevent the
      * host from reaching the other joiner.
      */
@@ -411,7 +412,7 @@ class PartialConnectivityScenarioTest {
 
     /**
      * After [PartitionEvent.PeerLost] fires, a joiner attempting to reconnect with
-     * the same [us.tractat.kuilt.core.TransportPeerId] must receive
+     * the same [us.tractat.kuilt.core.PeerId] must receive
      * [ResumeResult.WindowClosed].
      *
      * Validates D-005 + #1070 contract: the reconnect window is closed after [PeerLost];
@@ -587,7 +588,7 @@ class PartialConnectivityScenarioTest {
             assertEquals(mesh.j0.selfId, recovered.peerId)
 
             // D-009: J2 is still partitioned. Game must remain paused.
-            // The leader's pause set still contains J2's TransportPeerId — no resume is possible.
+            // The leader's pause set still contains J2's PeerId — no resume is possible.
             // J3's detector (d2) must not have fired any events.
             val d2Channel = mesh.d2.events.produceIn(this)
             assertFalse(
@@ -623,13 +624,13 @@ class PartialConnectivityScenarioTest {
  * reconnect attempt returns [ResumeResult.WindowClosed].
  */
 private class FakeReconnectGate {
-    private val closedWindows = mutableSetOf<us.tractat.kuilt.core.TransportPeerId>()
+    private val closedWindows = mutableSetOf<PeerId>()
 
     fun onPartitionEvent(event: PartitionEvent) {
         if (event is PartitionEvent.PeerLost) closedWindows += event.peerId
     }
 
-    fun attemptReconnect(peerId: us.tractat.kuilt.core.TransportPeerId): ResumeResult = if (peerId in closedWindows) ResumeResult.WindowClosed else ResumeResult.Success
+    fun attemptReconnect(peerId: PeerId): ResumeResult = if (peerId in closedWindows) ResumeResult.WindowClosed else ResumeResult.Success
 }
 
 // ── Test helpers ──────────────────────────────────────────────────────────────

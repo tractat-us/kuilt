@@ -4,7 +4,7 @@ import kotlin.random.Random
 import kotlin.time.Duration
 
 /**
- * Declarative description of which faults [FaultyPeerLink] should inject.
+ * Declarative description of which faults [FaultySeam] should inject.
  *
  * All probabilistic profiles take an explicit [seed] so tests are
  * deterministic: two runs with the same seed produce identical behaviour.
@@ -127,7 +127,7 @@ enum class Direction {
 
 /**
  * Mutable per-link state that drives fault-profile evaluation.
- * One instance per [FaultyPeerLink].
+ * One instance per [FaultySeam].
  */
 internal class FaultState(
     profile: FaultProfile,
@@ -144,7 +144,7 @@ internal class FaultState(
 
     // Reorder window buffers (outbound / inbound)
     private val outboundWindow = mutableListOf<ByteArray>()
-    private val inboundWindow = mutableListOf<OpaqueFrame>()
+    private val inboundWindow = mutableListOf<Swatch>()
 
     private fun nextOutboundIndex(): Int = outboundCount++
 
@@ -161,7 +161,7 @@ internal class FaultState(
      * Returns the list of frames that should be delivered (may be empty,
      * may be reordered, may contain the original plus buffered frames).
      */
-    fun evaluateInbound(frame: OpaqueFrame): List<OpaqueFrame> {
+    fun evaluateInbound(frame: Swatch): List<Swatch> {
         val index = nextInboundIndex()
         return evaluateInboundFor(profile, frame, index)
     }
@@ -255,9 +255,9 @@ internal class FaultState(
 
     private fun evaluateInboundFor(
         p: FaultProfile,
-        frame: OpaqueFrame,
+        frame: Swatch,
         index: Int,
-    ): List<OpaqueFrame> =
+    ): List<Swatch> =
         when (p) {
             is FaultProfile.Healthy -> listOf(frame)
             is FaultProfile.DropAll -> if (p.direction.appliesToInbound()) emptyList() else listOf(frame)
@@ -292,9 +292,9 @@ internal class FaultState(
 
     private fun evaluateCompositeInbound(
         profiles: List<FaultProfile>,
-        frame: OpaqueFrame,
+        frame: Swatch,
         index: Int,
-    ): List<OpaqueFrame> {
+    ): List<Swatch> {
         var current = listOf(frame)
         for (p in profiles) {
             if (current.isEmpty()) return emptyList()

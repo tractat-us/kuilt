@@ -12,7 +12,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
 /**
- * A [PeerLink] wrapper that injects configurable faults for use in tests.
+ * A [Seam] wrapper that injects configurable faults for use in tests.
  *
  * Faults are driven by a [FaultProfile] which can be swapped atomically at
  * any point during a test via [setFaultProfile]. The profile change takes
@@ -29,18 +29,18 @@ import kotlinx.coroutines.sync.withLock
  * fault behaviour without inspecting internal channels.
  *
  * Consumed by [#1067], [#1070], [#1074] test suites. Exposes the same
- * [PeerLink] contract as [InMemoryPeerLinkFactory]-produced links.
+ * [Seam] contract as [InMemoryLoom]-produced links.
  */
-class FaultyPeerLink(
-    private val delegate: PeerLink,
+class FaultySeam(
+    private val delegate: Seam,
     private val scope: CoroutineScope,
     initialProfile: FaultProfile = FaultProfile.Healthy,
-) : PeerLink {
+) : Seam {
     private val faultState = FaultState(initialProfile)
     private val mutex = Mutex()
 
     // Incoming channel — inbound fault logic runs here before delivery.
-    private val incomingChannel = Channel<OpaqueFrame>(capacity = Channel.UNLIMITED)
+    private val incomingChannel = Channel<Swatch>(capacity = Channel.UNLIMITED)
 
     // Counters
     private var _framesDropped = 0L
@@ -70,13 +70,13 @@ class FaultyPeerLink(
     /** Shorthand for [setFaultProfile] with [FaultProfile.DropAll]. */
     fun partition(direction: Direction = Direction.Both) = setFaultProfile(FaultProfile.DropAll(direction))
 
-    // ── PeerLink ─────────────────────────────────────────────────────────────
+    // ── Seam ─────────────────────────────────────────────────────────────────
 
-    override val selfId: TransportPeerId get() = delegate.selfId
+    override val selfId: PeerId get() = delegate.selfId
 
-    override val peers: StateFlow<Set<TransportPeerId>> get() = delegate.peers
+    override val peers: StateFlow<Set<PeerId>> get() = delegate.peers
 
-    override val incoming: Flow<OpaqueFrame> = incomingChannel.receiveAsFlow()
+    override val incoming: Flow<Swatch> = incomingChannel.receiveAsFlow()
 
     override suspend fun broadcast(payload: ByteArray) {
         val decision = mutex.withLock { faultState.evaluateOutbound(payload) }
@@ -84,7 +84,7 @@ class FaultyPeerLink(
     }
 
     override suspend fun sendTo(
-        peer: TransportPeerId,
+        peer: PeerId,
         payload: ByteArray,
     ) {
         val decision = mutex.withLock { faultState.evaluateOutbound(payload) }
@@ -130,7 +130,7 @@ class FaultyPeerLink(
 
     // ── Internal inbound injection ────────────────────────────────────────────
 
-    private suspend fun injectInbound(frame: OpaqueFrame) {
+    private suspend fun injectInbound(frame: Swatch) {
         val toDeliver = mutex.withLock { faultState.evaluateInbound(frame) }
         val inboundDelay = faultState.inboundDelay(faultState.profile)
 
@@ -150,10 +150,10 @@ class FaultyPeerLink(
 }
 
 /**
- * A [PeerLinkFactory] wrapper that constructs [FaultyPeerLink] instances.
+ * A [Loom] wrapper that constructs [FaultySeam] instances.
  *
  * A [defaultProfile] applies to every link the factory creates. Individual
- * links can override their profile via [FaultyPeerLink.setFaultProfile].
+ * links can override their profile via [FaultySeam.setFaultProfile].
  *
  * Useful for fault scenarios where **all** links should start partitioned
  * or delayed, then selectively healed per-peer.
@@ -161,22 +161,22 @@ class FaultyPeerLink(
  * [scope] must be a [CoroutineScope] that outlives the test — the standard
  * pattern is to pass the [kotlinx.coroutines.test.TestScope] from [runTest].
  */
-class FaultyPeerLinkFactory(
-    private val delegate: PeerLinkFactory,
+class FaultyLoom(
+    private val delegate: Loom,
     private val scope: CoroutineScope,
     private val defaultProfile: FaultProfile = FaultProfile.Healthy,
-) : PeerLinkFactory {
-    private val _links = MutableStateFlow<List<FaultyPeerLink>>(emptyList())
+) : Loom {
+    private val _links = MutableStateFlow<List<FaultySeam>>(emptyList())
 
-    /** All [FaultyPeerLink] instances created so far, in creation order. */
-    val links: List<FaultyPeerLink> get() = _links.value
+    /** All [FaultySeam] instances created so far, in creation order. */
+    val links: List<FaultySeam> get() = _links.value
 
-    override suspend fun open(config: SessionConfig): FaultyPeerLink {
+    override suspend fun open(config: Pattern): FaultySeam {
         val inner = delegate.open(config)
         return wrap(inner)
     }
 
-    override suspend fun join(advertisement: PeerAdvertisement): FaultyPeerLink {
+    override suspend fun join(advertisement: Tag): FaultySeam {
         val inner = delegate.join(advertisement)
         return wrap(inner)
     }
@@ -186,8 +186,8 @@ class FaultyPeerLinkFactory(
         _links.value.forEach { it.setFaultProfile(profile) }
     }
 
-    private fun wrap(delegate: PeerLink): FaultyPeerLink {
-        val link = FaultyPeerLink(delegate, scope, defaultProfile)
+    private fun wrap(delegate: Seam): FaultySeam {
+        val link = FaultySeam(delegate, scope, defaultProfile)
         _links.value = _links.value + link
         return link
     }

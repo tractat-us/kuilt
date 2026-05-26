@@ -14,23 +14,23 @@ import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 
-class InMemoryPeerLinkFactoryTest {
+class InMemoryLoomTest {
     // ── Construction & membership ────────────────────────────────────────────
 
     @Test
     fun `open returns a link whose peers contains only selfId`() =
         runTest {
-            val factory = InMemoryPeerLinkFactory()
-            val link = factory.open(SessionConfig("Alice"))
+            val factory = InMemoryLoom()
+            val link = factory.open(Pattern("Alice"))
             assertEquals(setOf(link.selfId), link.peers.value)
         }
 
     @Test
     fun `join after open causes both peers to appear in each other's peer set`() =
         runTest {
-            val factory = InMemoryPeerLinkFactory()
-            val host = factory.open(SessionConfig("Alice"))
-            val joiner = factory.join(InMemoryPeerAdvertisement("Bob"))
+            val factory = InMemoryLoom()
+            val host = factory.open(Pattern("Alice"))
+            val joiner = factory.join(InMemoryTag("Bob"))
 
             assertEquals(setOf(host.selfId, joiner.selfId), host.peers.value)
             assertEquals(setOf(host.selfId, joiner.selfId), joiner.peers.value)
@@ -39,10 +39,10 @@ class InMemoryPeerLinkFactoryTest {
     @Test
     fun `third join updates all three peers to contain three ids`() =
         runTest {
-            val factory = InMemoryPeerLinkFactory()
-            val a = factory.open(SessionConfig("Alice"))
-            val b = factory.join(InMemoryPeerAdvertisement("Bob"))
-            val c = factory.join(InMemoryPeerAdvertisement("Charlie"))
+            val factory = InMemoryLoom()
+            val a = factory.open(Pattern("Alice"))
+            val b = factory.join(InMemoryTag("Bob"))
+            val c = factory.join(InMemoryTag("Charlie"))
 
             val expected = setOf(a.selfId, b.selfId, c.selfId)
             assertEquals(expected, a.peers.value)
@@ -53,10 +53,10 @@ class InMemoryPeerLinkFactoryTest {
     @Test
     fun `close removes the closing peer from every other peer's peers set`() =
         runTest {
-            val factory = InMemoryPeerLinkFactory()
-            val a = factory.open(SessionConfig("Alice"))
-            val b = factory.join(InMemoryPeerAdvertisement("Bob"))
-            val c = factory.join(InMemoryPeerAdvertisement("Charlie"))
+            val factory = InMemoryLoom()
+            val a = factory.open(Pattern("Alice"))
+            val b = factory.join(InMemoryTag("Bob"))
+            val c = factory.join(InMemoryTag("Charlie"))
 
             b.close()
 
@@ -68,8 +68,8 @@ class InMemoryPeerLinkFactoryTest {
     @Test
     fun `close is idempotent — calling twice does not throw`() =
         runTest {
-            val factory = InMemoryPeerLinkFactory()
-            val link = factory.open(SessionConfig("Alice"))
+            val factory = InMemoryLoom()
+            val link = factory.open(Pattern("Alice"))
 
             link.close()
             link.close() // must not throw
@@ -78,9 +78,9 @@ class InMemoryPeerLinkFactoryTest {
     @Test
     fun `close only removes the peer once from the peer set`() =
         runTest {
-            val factory = InMemoryPeerLinkFactory()
-            val a = factory.open(SessionConfig("Alice"))
-            val b = factory.join(InMemoryPeerAdvertisement("Bob"))
+            val factory = InMemoryLoom()
+            val a = factory.open(Pattern("Alice"))
+            val b = factory.join(InMemoryTag("Bob"))
 
             b.close()
             b.close()
@@ -91,10 +91,10 @@ class InMemoryPeerLinkFactoryTest {
     @Test
     fun `selfId is unique across peers from the same factory`() =
         runTest {
-            val factory = InMemoryPeerLinkFactory()
-            val a = factory.open(SessionConfig("Alice"))
-            val b = factory.join(InMemoryPeerAdvertisement("Bob"))
-            val c = factory.join(InMemoryPeerAdvertisement("Charlie"))
+            val factory = InMemoryLoom()
+            val a = factory.open(Pattern("Alice"))
+            val b = factory.join(InMemoryTag("Bob"))
+            val c = factory.join(InMemoryTag("Charlie"))
 
             assertNotEquals(a.selfId, b.selfId)
             assertNotEquals(a.selfId, c.selfId)
@@ -106,25 +106,25 @@ class InMemoryPeerLinkFactoryTest {
     @Test
     fun `broadcast from A causes B to receive the frame`() =
         runTest {
-            val factory = InMemoryPeerLinkFactory()
-            val a = factory.open(SessionConfig("Alice"))
-            val b = factory.join(InMemoryPeerAdvertisement("Bob"))
+            val factory = InMemoryLoom()
+            val a = factory.open(Pattern("Alice"))
+            val b = factory.join(InMemoryTag("Bob"))
 
             val receivedByB = async { b.incoming.first() }
 
             a.broadcast(byteArrayOf(1, 2, 3))
 
             val frame = receivedByB.await()
-            assertEquals(OpaqueFrame(byteArrayOf(1, 2, 3), sender = a.selfId, sequence = 1L), frame)
+            assertEquals(Swatch(byteArrayOf(1, 2, 3), sender = a.selfId, sequence = 1L), frame)
         }
 
     @Test
     fun `broadcast from A reaches both B and C`() =
         runTest {
-            val factory = InMemoryPeerLinkFactory()
-            val a = factory.open(SessionConfig("Alice"))
-            val b = factory.join(InMemoryPeerAdvertisement("Bob"))
-            val c = factory.join(InMemoryPeerAdvertisement("Charlie"))
+            val factory = InMemoryLoom()
+            val a = factory.open(Pattern("Alice"))
+            val b = factory.join(InMemoryTag("Bob"))
+            val c = factory.join(InMemoryTag("Charlie"))
 
             val receivedByB = async { b.incoming.first() }
             val receivedByC = async { c.incoming.first() }
@@ -143,9 +143,9 @@ class InMemoryPeerLinkFactoryTest {
     @Test
     fun `broadcast does not echo to the sender`() =
         runTest {
-            val factory = InMemoryPeerLinkFactory()
-            val a = factory.open(SessionConfig("Alice"))
-            val b = factory.join(InMemoryPeerAdvertisement("Bob"))
+            val factory = InMemoryLoom()
+            val a = factory.open(Pattern("Alice"))
+            val b = factory.join(InMemoryTag("Bob"))
 
             // Buffer A's incoming into a channel so we can inspect it without blocking.
             val aIncoming = a.incoming.produceIn(this)
@@ -164,11 +164,11 @@ class InMemoryPeerLinkFactoryTest {
         }
 
     @Test
-    fun `OpaqueFrame sender field on received broadcast equals sender TransportPeerId`() =
+    fun `Swatch sender field on received broadcast equals sender PeerId`() =
         runTest {
-            val factory = InMemoryPeerLinkFactory()
-            val a = factory.open(SessionConfig("Alice"))
-            val b = factory.join(InMemoryPeerAdvertisement("Bob"))
+            val factory = InMemoryLoom()
+            val a = factory.open(Pattern("Alice"))
+            val b = factory.join(InMemoryTag("Bob"))
 
             val deferred = async { b.incoming.first() }
             a.broadcast(byteArrayOf(0))
@@ -180,9 +180,9 @@ class InMemoryPeerLinkFactoryTest {
     @Test
     fun `two broadcasts from A arrive at B in order`() =
         runTest {
-            val factory = InMemoryPeerLinkFactory()
-            val a = factory.open(SessionConfig("Alice"))
-            val b = factory.join(InMemoryPeerAdvertisement("Bob"))
+            val factory = InMemoryLoom()
+            val a = factory.open(Pattern("Alice"))
+            val b = factory.join(InMemoryTag("Bob"))
 
             val frames = async { b.incoming.take(2).toList() }
 
@@ -199,10 +199,10 @@ class InMemoryPeerLinkFactoryTest {
     @Test
     fun `sendTo B from A causes B to receive and C nothing`() =
         runTest {
-            val factory = InMemoryPeerLinkFactory()
-            val a = factory.open(SessionConfig("Alice"))
-            val b = factory.join(InMemoryPeerAdvertisement("Bob"))
-            val c = factory.join(InMemoryPeerAdvertisement("Charlie"))
+            val factory = InMemoryLoom()
+            val a = factory.open(Pattern("Alice"))
+            val b = factory.join(InMemoryTag("Bob"))
+            val c = factory.join(InMemoryTag("Charlie"))
 
             val receivedByB = async { b.incoming.first() }
 
@@ -226,8 +226,8 @@ class InMemoryPeerLinkFactoryTest {
     @Test
     fun `sendTo self throws IllegalArgumentException`() =
         runTest {
-            val factory = InMemoryPeerLinkFactory()
-            val a = factory.open(SessionConfig("Alice"))
+            val factory = InMemoryLoom()
+            val a = factory.open(Pattern("Alice"))
 
             assertFailsWith<IllegalArgumentException> {
                 a.sendTo(a.selfId, byteArrayOf(1))
@@ -237,9 +237,9 @@ class InMemoryPeerLinkFactoryTest {
     @Test
     fun `sendTo a closed peer is silently dropped`() =
         runTest {
-            val factory = InMemoryPeerLinkFactory()
-            val a = factory.open(SessionConfig("Alice"))
-            val b = factory.join(InMemoryPeerAdvertisement("Bob"))
+            val factory = InMemoryLoom()
+            val a = factory.open(Pattern("Alice"))
+            val b = factory.join(InMemoryTag("Bob"))
 
             b.close()
 
@@ -250,9 +250,9 @@ class InMemoryPeerLinkFactoryTest {
     @Test
     fun `two sendTo calls from A to B arrive in order`() =
         runTest {
-            val factory = InMemoryPeerLinkFactory()
-            val a = factory.open(SessionConfig("Alice"))
-            val b = factory.join(InMemoryPeerAdvertisement("Bob"))
+            val factory = InMemoryLoom()
+            val a = factory.open(Pattern("Alice"))
+            val b = factory.join(InMemoryTag("Bob"))
 
             val frames = async { b.incoming.take(2).toList() }
 
@@ -269,9 +269,9 @@ class InMemoryPeerLinkFactoryTest {
     @Test
     fun `sequence on received frames is monotonically increasing starting from 1`() =
         runTest {
-            val factory = InMemoryPeerLinkFactory()
-            val a = factory.open(SessionConfig("Alice"))
-            val b = factory.join(InMemoryPeerAdvertisement("Bob"))
+            val factory = InMemoryLoom()
+            val a = factory.open(Pattern("Alice"))
+            val b = factory.join(InMemoryTag("Bob"))
 
             val frames = async { b.incoming.take(3).toList() }
 
@@ -288,10 +288,10 @@ class InMemoryPeerLinkFactoryTest {
     @Test
     fun `sequence numbers are receiver-local — A and B have independent counters`() =
         runTest {
-            val factory = InMemoryPeerLinkFactory()
-            val a = factory.open(SessionConfig("Alice"))
-            val b = factory.join(InMemoryPeerAdvertisement("Bob"))
-            val c = factory.join(InMemoryPeerAdvertisement("Charlie"))
+            val factory = InMemoryLoom()
+            val a = factory.open(Pattern("Alice"))
+            val b = factory.join(InMemoryTag("Bob"))
+            val c = factory.join(InMemoryTag("Charlie"))
 
             // Send 2 frames to A and 1 frame to B from C
             val framesA = async { a.incoming.take(2).toList() }
@@ -314,9 +314,9 @@ class InMemoryPeerLinkFactoryTest {
     @Test
     fun `sequence increments across mixed broadcast and sendTo calls at receiver`() =
         runTest {
-            val factory = InMemoryPeerLinkFactory()
-            val a = factory.open(SessionConfig("Alice"))
-            val b = factory.join(InMemoryPeerAdvertisement("Bob"))
+            val factory = InMemoryLoom()
+            val a = factory.open(Pattern("Alice"))
+            val b = factory.join(InMemoryTag("Bob"))
 
             val frames = async { b.incoming.take(2).toList() }
 
@@ -333,9 +333,9 @@ class InMemoryPeerLinkFactoryTest {
     @Test
     fun `sending from a closed link throws IllegalStateException`() =
         runTest {
-            val factory = InMemoryPeerLinkFactory()
-            val a = factory.open(SessionConfig("Alice"))
-            val b = factory.join(InMemoryPeerAdvertisement("Bob"))
+            val factory = InMemoryLoom()
+            val a = factory.open(Pattern("Alice"))
+            val b = factory.join(InMemoryTag("Bob"))
 
             a.close()
 
@@ -347,9 +347,9 @@ class InMemoryPeerLinkFactoryTest {
     @Test
     fun `sendTo from a closed link throws IllegalStateException`() =
         runTest {
-            val factory = InMemoryPeerLinkFactory()
-            val a = factory.open(SessionConfig("Alice"))
-            val b = factory.join(InMemoryPeerAdvertisement("Bob"))
+            val factory = InMemoryLoom()
+            val a = factory.open(Pattern("Alice"))
+            val b = factory.join(InMemoryTag("Bob"))
 
             a.close()
 
@@ -361,9 +361,9 @@ class InMemoryPeerLinkFactoryTest {
     @Test
     fun `closed peer is removed from peers set atomically`() =
         runTest {
-            val factory = InMemoryPeerLinkFactory()
-            val a = factory.open(SessionConfig("Alice"))
-            val b = factory.join(InMemoryPeerAdvertisement("Bob"))
+            val factory = InMemoryLoom()
+            val a = factory.open(Pattern("Alice"))
+            val b = factory.join(InMemoryTag("Bob"))
 
             b.close()
 
@@ -376,10 +376,10 @@ class InMemoryPeerLinkFactoryTest {
     @Test
     fun `concurrent broadcasts from multiple peers all arrive at all receivers`() =
         runTest {
-            val factory = InMemoryPeerLinkFactory()
-            val a = factory.open(SessionConfig("Alice"))
-            val b = factory.join(InMemoryPeerAdvertisement("Bob"))
-            val c = factory.join(InMemoryPeerAdvertisement("Charlie"))
+            val factory = InMemoryLoom()
+            val a = factory.open(Pattern("Alice"))
+            val b = factory.join(InMemoryTag("Bob"))
+            val c = factory.join(InMemoryTag("Charlie"))
 
             val messagesPerSender = 10
             // Each of A, B, C broadcasts 10 frames; each other peer receives 20.

@@ -7,7 +7,7 @@ import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runTest
-import us.tractat.kuilt.core.TransportPeerId
+import us.tractat.kuilt.core.PeerId
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
@@ -23,8 +23,8 @@ import kotlin.test.assertIs
 class JoinerReconnectControllerTest {
     private val sessionId = RoomId("session-abc")
     private val otherSession = RoomId("session-xyz")
-    private val peerA = TransportPeerId("peer-a")
-    private val peerB = TransportPeerId("peer-b")
+    private val peerA = PeerId("peer-a")
+    private val peerB = PeerId("peer-b")
     private val windowMs = 60_000L
 
     // Clock always returns 0; virtual time is advanced via testScheduler.

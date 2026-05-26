@@ -9,13 +9,13 @@ import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.Direction
 import us.tractat.kuilt.core.FaultProfile
-import us.tractat.kuilt.core.FaultyPeerLink
-import us.tractat.kuilt.core.InMemoryPeerAdvertisement
-import us.tractat.kuilt.core.InMemoryPeerLinkFactory
-import us.tractat.kuilt.core.OpaqueFrame
-import us.tractat.kuilt.core.TransportPeerId
-import us.tractat.kuilt.core.PeerLink
-import us.tractat.kuilt.core.SessionConfig
+import us.tractat.kuilt.core.FaultySeam
+import us.tractat.kuilt.core.InMemoryTag
+import us.tractat.kuilt.core.InMemoryLoom
+import us.tractat.kuilt.core.Swatch
+import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.core.Seam
+import us.tractat.kuilt.core.Pattern
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
@@ -29,10 +29,10 @@ import kotlin.time.Instant
  * **Virtual time**: all timing goes through [kotlinx.coroutines.delay] so [runTest] /
  * [advanceTimeBy] controls every deadline. No wall-clock dependency.
  *
- * **Determinism**: [FaultyPeerLink] + [FaultProfile] provide reproducible fault injection;
+ * **Determinism**: [FaultySeam] + [FaultProfile] provide reproducible fault injection;
  * the clock lambda always returns a fixed or manually advanced [Instant].
  *
- * **Scope discipline**: [FaultyPeerLink] and [HeartbeatPartitionDetector] are both started
+ * **Scope discipline**: [FaultySeam] and [HeartbeatPartitionDetector] are both started
  * on [backgroundScope] so their coroutines are cancelled automatically when [runTest] exits,
  * avoiding [kotlinx.coroutines.test.UncompletedCoroutinesError].
  */
@@ -49,25 +49,25 @@ class HeartbeatPartitionDetectorTest {
 
     /**
      * Builds a two-peer in-memory mesh: host and joiner.
-     * Returns the [FaultyPeerLink] wrapping the host's link (so tests can inject faults
+     * Returns the [FaultySeam] wrapping the host's link (so tests can inject faults
      * on what the host receives) and the joiner's raw link.
      *
      * [scope] must be [backgroundScope] from the enclosing [runTest] so that the
-     * [FaultyPeerLink]'s internal collection coroutine outlives any [advanceTimeBy] call.
+     * [FaultySeam]'s internal collection coroutine outlives any [advanceTimeBy] call.
      */
     private suspend fun buildMesh(scope: CoroutineScope): Mesh {
-        val factory = InMemoryPeerLinkFactory()
-        val hostLink = factory.open(SessionConfig("host"))
-        val joinerLink = factory.join(InMemoryPeerAdvertisement("joiner"))
-        val faultyHostLink = FaultyPeerLink(hostLink, scope)
+        val factory = InMemoryLoom()
+        val hostLink = factory.open(Pattern("host"))
+        val joinerLink = factory.join(InMemoryTag("joiner"))
+        val faultyHostLink = FaultySeam(hostLink, scope)
         return Mesh(hostLink.selfId, joinerLink.selfId, faultyHostLink, joinerLink)
     }
 
     private data class Mesh(
-        val hostId: TransportPeerId,
-        val joinerId: TransportPeerId,
-        val hostLink: FaultyPeerLink,
-        val joinerLink: PeerLink,
+        val hostId: PeerId,
+        val joinerId: PeerId,
+        val hostLink: FaultySeam,
+        val joinerLink: Seam,
     )
 
     private fun fixedClock(epochMs: Long): () -> Instant = { Instant.fromEpochMilliseconds(epochMs) }
@@ -289,10 +289,10 @@ class HeartbeatPartitionDetectorTest {
         assertEquals("kuilt.heartbeat.ping", HeartbeatPartitionDetector.PING_PREFIX)
         assertEquals("kuilt.heartbeat.pong", HeartbeatPartitionDetector.PONG_PREFIX)
         assertTrue(
-            HeartbeatPartitionDetector.isPingFrame(OpaqueFrame(HeartbeatPartitionDetector.pingPayload())),
+            HeartbeatPartitionDetector.isPingFrame(Swatch(HeartbeatPartitionDetector.pingPayload())),
         )
         assertTrue(
-            HeartbeatPartitionDetector.isPongFrame(OpaqueFrame(HeartbeatPartitionDetector.pongPayload())),
+            HeartbeatPartitionDetector.isPongFrame(Swatch(HeartbeatPartitionDetector.pongPayload())),
         )
     }
 
@@ -308,8 +308,8 @@ class HeartbeatPartitionDetectorTest {
 
             detector.start(backgroundScope)
 
-            // Call onBackpressure with a different TransportPeerId — should be a no-op.
-            detector.onBackpressure(TransportPeerId("some-other-peer"))
+            // Call onBackpressure with a different PeerId — should be a no-op.
+            detector.onBackpressure(PeerId("some-other-peer"))
 
             advanceTimeBy(config.interval.inWholeMilliseconds)
 
@@ -335,7 +335,7 @@ class HeartbeatPartitionDetectorTest {
 
             // Observe a different peer — should not prevent Timeout firing.
             nowMs = config.timeout.inWholeMilliseconds + config.interval.inWholeMilliseconds
-            detector.observedPeer(TransportPeerId("somebody-else"))
+            detector.observedPeer(PeerId("somebody-else"))
             advanceTimeBy(nowMs)
 
             val events = eventDeferred.await()

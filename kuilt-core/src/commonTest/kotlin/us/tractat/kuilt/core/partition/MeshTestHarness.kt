@@ -6,12 +6,12 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.launch
 import us.tractat.kuilt.core.FaultProfile
-import us.tractat.kuilt.core.FaultyPeerLink
-import us.tractat.kuilt.core.FaultyPeerLinkFactory
-import us.tractat.kuilt.core.InMemoryPeerAdvertisement
-import us.tractat.kuilt.core.InMemoryPeerLinkFactory
-import us.tractat.kuilt.core.OpaqueFrame
-import us.tractat.kuilt.core.SessionConfig
+import us.tractat.kuilt.core.FaultySeam
+import us.tractat.kuilt.core.FaultyLoom
+import us.tractat.kuilt.core.InMemoryTag
+import us.tractat.kuilt.core.InMemoryLoom
+import us.tractat.kuilt.core.Swatch
+import us.tractat.kuilt.core.Pattern
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
@@ -32,10 +32,10 @@ val testHeartbeatConfig =
  *
  * Created via [Mesh.build] (a suspend factory). All links start [FaultProfile.Healthy].
  *
- * **Multi-detector correctness:** The host's [FaultyPeerLink.incoming] is a channel-backed
+ * **Multi-detector correctness:** The host's [FaultySeam.incoming] is a channel-backed
  * cold flow — only one consumer sees each frame. To allow multiple [HeartbeatPartitionDetector]
  * instances to each observe the host's incoming stream, [Mesh.build] broadcasts the host's
- * incoming into a [MutableSharedFlow] and gives each detector a [FilteredPeerLink] that
+ * incoming into a [MutableSharedFlow] and gives each detector a [FilteredSeam] that
  * filters the shared flow by sender. All detectors see all frames; each acts only on frames
  * from its monitored peer.
  *
@@ -43,14 +43,14 @@ val testHeartbeatConfig =
  * timing without wall-clock dependency.
  */
 class Mesh(
-    val host: FaultyPeerLink,
-    val joiners: List<FaultyPeerLink>,
+    val host: FaultySeam,
+    val joiners: List<FaultySeam>,
     val detectors: List<HeartbeatPartitionDetector>,
-    val factory: FaultyPeerLinkFactory,
+    val factory: FaultyLoom,
 ) {
-    val j0: FaultyPeerLink get() = joiners[0]
-    val j1: FaultyPeerLink get() = joiners.getOrElse(1) { error("No joiner at index 1") }
-    val j2: FaultyPeerLink get() = joiners.getOrElse(2) { error("No joiner at index 2") }
+    val j0: FaultySeam get() = joiners[0]
+    val j1: FaultySeam get() = joiners.getOrElse(1) { error("No joiner at index 1") }
+    val j2: FaultySeam get() = joiners.getOrElse(2) { error("No joiner at index 2") }
 
     val d0: HeartbeatPartitionDetector get() = detectors[0]
     val d1: HeartbeatPartitionDetector get() = detectors.getOrElse(1) { error("No detector at index 1") }
@@ -80,26 +80,26 @@ class Mesh(
         ): Mesh {
             require(peerCount >= 2) { "Mesh requires host + at least 1 joiner" }
 
-            val factory = FaultyPeerLinkFactory(InMemoryPeerLinkFactory(), scope)
-            val host = factory.open(SessionConfig("Host"))
+            val factory = FaultyLoom(InMemoryLoom(), scope)
+            val host = factory.open(Pattern("Host"))
             val joiners =
                 (0 until peerCount - 1).map { i ->
-                    factory.join(InMemoryPeerAdvertisement("J$i"))
+                    factory.join(InMemoryTag("J$i"))
                 }
 
             // Broadcast the host's incoming into a shared flow so multiple detectors
             // can independently observe it. Channel.UNLIMITED means no frames are lost
             // while the replay buffer allows late subscribers to see recent frames.
-            val hostIncomingShared = MutableSharedFlow<OpaqueFrame>(replay = 64, extraBufferCapacity = 256)
+            val hostIncomingShared = MutableSharedFlow<Swatch>(replay = 64, extraBufferCapacity = 256)
             scope.launch {
                 host.incoming.collect { hostIncomingShared.emit(it) }
             }
 
-            // Each detector gets a FilteredPeerLink: same host PeerLink for sends,
+            // Each detector gets a FilteredSeam: same host Seam for sends,
             // but the incoming flow is filtered to only frames from the monitored joiner.
             val detectors =
                 joiners.map { joiner ->
-                    val filteredLink = FilteredPeerLink(host, joiner.selfId, hostIncomingShared)
+                    val filteredLink = FilteredSeam(host, joiner.selfId, hostIncomingShared)
                     HeartbeatPartitionDetector(filteredLink, joiner.selfId, config, clock)
                 }
 

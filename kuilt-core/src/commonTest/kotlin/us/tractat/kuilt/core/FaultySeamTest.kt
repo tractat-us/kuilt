@@ -15,22 +15,22 @@ import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.milliseconds
 
 /**
- * Unit tests for [FaultyPeerLink] and [FaultyPeerLinkFactory].
+ * Unit tests for [FaultySeam] and [FaultyLoom].
  *
  * All tests run under [runTest] for virtual-time control — no wall-clock
  * dependencies. Every probabilistic profile uses a fixed seed so results
  * are deterministic across runs.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
-class FaultyPeerLinkTest {
+class FaultySeamTest {
     // ── Healthy profile ───────────────────────────────────────────────────────
 
     @Test
     fun `Healthy profile delivers all frames in order`() =
         runTest {
-            val factory = FaultyPeerLinkFactory(InMemoryPeerLinkFactory(), backgroundScope)
-            val a = factory.open(SessionConfig("Alice"))
-            val b = factory.join(InMemoryPeerAdvertisement("Bob"))
+            val factory = FaultyLoom(InMemoryLoom(), backgroundScope)
+            val a = factory.open(Pattern("Alice"))
+            val b = factory.join(InMemoryTag("Bob"))
 
             val received = async { b.incoming.take(3).toList() }
             a.broadcast(byteArrayOf(1))
@@ -49,9 +49,9 @@ class FaultyPeerLinkTest {
     @Test
     fun `Healthy profile has zero drops`() =
         runTest {
-            val factory = FaultyPeerLinkFactory(InMemoryPeerLinkFactory(), backgroundScope)
-            val a = factory.open(SessionConfig("Alice"))
-            val b = factory.join(InMemoryPeerAdvertisement("Bob"))
+            val factory = FaultyLoom(InMemoryLoom(), backgroundScope)
+            val a = factory.open(Pattern("Alice"))
+            val b = factory.join(InMemoryTag("Bob"))
 
             val received = async { b.incoming.take(5).toList() }
             repeat(5) { i -> a.broadcast(byteArrayOf(i.toByte())) }
@@ -65,9 +65,9 @@ class FaultyPeerLinkTest {
     @Test
     fun `DropAll Both drops all outbound frames and records drops`() =
         runTest {
-            val factory = FaultyPeerLinkFactory(InMemoryPeerLinkFactory(), backgroundScope)
-            val a = factory.open(SessionConfig("Alice"))
-            factory.join(InMemoryPeerAdvertisement("Bob"))
+            val factory = FaultyLoom(InMemoryLoom(), backgroundScope)
+            val a = factory.open(Pattern("Alice"))
+            factory.join(InMemoryTag("Bob"))
 
             a.setFaultProfile(FaultProfile.DropAll(Direction.Both))
             repeat(5) { a.broadcast(byteArrayOf(it.toByte())) }
@@ -79,9 +79,9 @@ class FaultyPeerLinkTest {
     @Test
     fun `DropAll Inbound drops incoming frames`() =
         runTest {
-            val factory = FaultyPeerLinkFactory(InMemoryPeerLinkFactory(), backgroundScope)
-            val a = factory.open(SessionConfig("Alice"))
-            val b = factory.join(InMemoryPeerAdvertisement("Bob"))
+            val factory = FaultyLoom(InMemoryLoom(), backgroundScope)
+            val a = factory.open(Pattern("Alice"))
+            val b = factory.join(InMemoryTag("Bob"))
 
             b.setFaultProfile(FaultProfile.DropAll(Direction.Inbound))
 
@@ -107,9 +107,9 @@ class FaultyPeerLinkTest {
     @Test
     fun `DropAll Outbound does not affect inbound frames`() =
         runTest {
-            val factory = FaultyPeerLinkFactory(InMemoryPeerLinkFactory(), backgroundScope)
-            val a = factory.open(SessionConfig("Alice"))
-            val b = factory.join(InMemoryPeerAdvertisement("Bob"))
+            val factory = FaultyLoom(InMemoryLoom(), backgroundScope)
+            val a = factory.open(Pattern("Alice"))
+            val b = factory.join(InMemoryTag("Bob"))
 
             // B drops outbound only — A→B inbound path for B is unaffected
             b.setFaultProfile(FaultProfile.DropAll(Direction.Outbound))
@@ -126,9 +126,9 @@ class FaultyPeerLinkTest {
     @Test
     fun `partition drops frames and heal restores delivery`() =
         runTest {
-            val factory = FaultyPeerLinkFactory(InMemoryPeerLinkFactory(), backgroundScope)
-            val a = factory.open(SessionConfig("Alice"))
-            val b = factory.join(InMemoryPeerAdvertisement("Bob"))
+            val factory = FaultyLoom(InMemoryLoom(), backgroundScope)
+            val a = factory.open(Pattern("Alice"))
+            val b = factory.join(InMemoryTag("Bob"))
 
             a.partition()
             repeat(3) { a.broadcast(byteArrayOf(it.toByte())) }
@@ -146,9 +146,9 @@ class FaultyPeerLinkTest {
     @Test
     fun `DropProbabilistic with probability 0 never drops`() =
         runTest {
-            val factory = FaultyPeerLinkFactory(InMemoryPeerLinkFactory(), backgroundScope)
-            val a = factory.open(SessionConfig("Alice"))
-            val b = factory.join(InMemoryPeerAdvertisement("Bob"))
+            val factory = FaultyLoom(InMemoryLoom(), backgroundScope)
+            val a = factory.open(Pattern("Alice"))
+            val b = factory.join(InMemoryTag("Bob"))
 
             a.setFaultProfile(FaultProfile.DropProbabilistic(probability = 0.0, seed = 42L))
             val received = async { b.incoming.take(5).toList() }
@@ -162,9 +162,9 @@ class FaultyPeerLinkTest {
     @Test
     fun `DropProbabilistic with probability 1 drops all`() =
         runTest {
-            val factory = FaultyPeerLinkFactory(InMemoryPeerLinkFactory(), backgroundScope)
-            val a = factory.open(SessionConfig("Alice"))
-            factory.join(InMemoryPeerAdvertisement("Bob"))
+            val factory = FaultyLoom(InMemoryLoom(), backgroundScope)
+            val a = factory.open(Pattern("Alice"))
+            factory.join(InMemoryTag("Bob"))
 
             a.setFaultProfile(FaultProfile.DropProbabilistic(probability = 1.0, seed = 42L))
             repeat(10) { a.broadcast(byteArrayOf(it.toByte())) }
@@ -195,9 +195,9 @@ class FaultyPeerLinkTest {
     @Test
     fun `DropSpecific drops only listed frame indexes`() =
         runTest {
-            val factory = FaultyPeerLinkFactory(InMemoryPeerLinkFactory(), backgroundScope)
-            val a = factory.open(SessionConfig("Alice"))
-            val b = factory.join(InMemoryPeerAdvertisement("Bob"))
+            val factory = FaultyLoom(InMemoryLoom(), backgroundScope)
+            val a = factory.open(Pattern("Alice"))
+            val b = factory.join(InMemoryTag("Bob"))
 
             // Drop frames 0 and 2; deliver 1, 3, 4
             a.setFaultProfile(FaultProfile.DropSpecific(setOf(0, 2)))
@@ -216,9 +216,9 @@ class FaultyPeerLinkTest {
     @Test
     fun `DropSpecific Inbound drops listed incoming frames by index`() =
         runTest {
-            val factory = FaultyPeerLinkFactory(InMemoryPeerLinkFactory(), backgroundScope)
-            val a = factory.open(SessionConfig("Alice"))
-            val b = factory.join(InMemoryPeerAdvertisement("Bob"))
+            val factory = FaultyLoom(InMemoryLoom(), backgroundScope)
+            val a = factory.open(Pattern("Alice"))
+            val b = factory.join(InMemoryTag("Bob"))
 
             // B drops inbound frames at index 1 and 3
             b.setFaultProfile(FaultProfile.DropSpecific(setOf(1, 3), Direction.Inbound))
@@ -241,9 +241,9 @@ class FaultyPeerLinkTest {
     @Test
     fun `DelayAll respects virtual time — frame not delivered before delay elapses`() =
         runTest {
-            val factory = FaultyPeerLinkFactory(InMemoryPeerLinkFactory(), backgroundScope)
-            val a = factory.open(SessionConfig("Alice"))
-            val b = factory.join(InMemoryPeerAdvertisement("Bob"))
+            val factory = FaultyLoom(InMemoryLoom(), backgroundScope)
+            val a = factory.open(Pattern("Alice"))
+            val b = factory.join(InMemoryTag("Bob"))
 
             a.setFaultProfile(FaultProfile.DelayAll(100.milliseconds))
 
@@ -266,9 +266,9 @@ class FaultyPeerLinkTest {
     @Test
     fun `DelayAll Inbound delays incoming frames`() =
         runTest {
-            val factory = FaultyPeerLinkFactory(InMemoryPeerLinkFactory(), backgroundScope)
-            val a = factory.open(SessionConfig("Alice"))
-            val b = factory.join(InMemoryPeerAdvertisement("Bob"))
+            val factory = FaultyLoom(InMemoryLoom(), backgroundScope)
+            val a = factory.open(Pattern("Alice"))
+            val b = factory.join(InMemoryTag("Bob"))
 
             b.setFaultProfile(FaultProfile.DelayAll(100.milliseconds, Direction.Inbound))
 
@@ -291,9 +291,9 @@ class FaultyPeerLinkTest {
     fun `ReorderWindow is deterministic — same seed produces same permutation`() =
         runTest {
             suspend fun collectPayloads(scope: CoroutineScope): List<Int> {
-                val innerFactory = FaultyPeerLinkFactory(InMemoryPeerLinkFactory(), scope)
-                val sender = innerFactory.open(SessionConfig("Alice"))
-                val receiver = innerFactory.join(InMemoryPeerAdvertisement("Bob"))
+                val innerFactory = FaultyLoom(InMemoryLoom(), scope)
+                val sender = innerFactory.open(Pattern("Alice"))
+                val receiver = innerFactory.join(InMemoryTag("Bob"))
                 sender.setFaultProfile(FaultProfile.ReorderWindow(windowSize = 4, seed = 42L))
                 val received = async { receiver.incoming.take(4).toList() }
                 repeat(4) { sender.broadcast(byteArrayOf(it.toByte())) }
@@ -308,9 +308,9 @@ class FaultyPeerLinkTest {
     @Test
     fun `ReorderWindow flushes exactly windowSize frames at once`() =
         runTest {
-            val factory = FaultyPeerLinkFactory(InMemoryPeerLinkFactory(), backgroundScope)
-            val a = factory.open(SessionConfig("Alice"))
-            val b = factory.join(InMemoryPeerAdvertisement("Bob"))
+            val factory = FaultyLoom(InMemoryLoom(), backgroundScope)
+            val a = factory.open(Pattern("Alice"))
+            val b = factory.join(InMemoryTag("Bob"))
 
             a.setFaultProfile(FaultProfile.ReorderWindow(windowSize = 3, seed = 1L))
 
@@ -341,9 +341,9 @@ class FaultyPeerLinkTest {
     @Test
     fun `BufferCeiling drops frames beyond the send quota`() =
         runTest {
-            val factory = FaultyPeerLinkFactory(InMemoryPeerLinkFactory(), backgroundScope)
-            val a = factory.open(SessionConfig("Alice"))
-            val b = factory.join(InMemoryPeerAdvertisement("Bob"))
+            val factory = FaultyLoom(InMemoryLoom(), backgroundScope)
+            val a = factory.open(Pattern("Alice"))
+            val b = factory.join(InMemoryTag("Bob"))
 
             // maxOutbound=2 means frames 0 and 1 are delivered; frame 2+ are dropped
             a.setFaultProfile(FaultProfile.BufferCeiling(maxOutbound = 2))
@@ -367,9 +367,9 @@ class FaultyPeerLinkTest {
     @Test
     fun `CloseAt closes link at the specified outbound frame index`() =
         runTest {
-            val factory = FaultyPeerLinkFactory(InMemoryPeerLinkFactory(), backgroundScope)
-            val a = factory.open(SessionConfig("Alice"))
-            val b = factory.join(InMemoryPeerAdvertisement("Bob"))
+            val factory = FaultyLoom(InMemoryLoom(), backgroundScope)
+            val a = factory.open(Pattern("Alice"))
+            val b = factory.join(InMemoryTag("Bob"))
 
             // Close after frame 0 is sent (i.e. frame index 1 triggers close)
             a.setFaultProfile(FaultProfile.CloseAt(frameIndex = 1))
@@ -394,9 +394,9 @@ class FaultyPeerLinkTest {
     @Test
     fun `asymmetric Outbound partition blocks sends but not receives`() =
         runTest {
-            val factory = FaultyPeerLinkFactory(InMemoryPeerLinkFactory(), backgroundScope)
-            val a = factory.open(SessionConfig("Alice"))
-            val b = factory.join(InMemoryPeerAdvertisement("Bob"))
+            val factory = FaultyLoom(InMemoryLoom(), backgroundScope)
+            val a = factory.open(Pattern("Alice"))
+            val b = factory.join(InMemoryTag("Bob"))
 
             // A cannot send to B, but B can still send to A
             a.partition(Direction.Outbound)
@@ -415,9 +415,9 @@ class FaultyPeerLinkTest {
     @Test
     fun `asymmetric Inbound partition blocks receives but not sends`() =
         runTest {
-            val factory = FaultyPeerLinkFactory(InMemoryPeerLinkFactory(), backgroundScope)
-            val a = factory.open(SessionConfig("Alice"))
-            val b = factory.join(InMemoryPeerAdvertisement("Bob"))
+            val factory = FaultyLoom(InMemoryLoom(), backgroundScope)
+            val a = factory.open(Pattern("Alice"))
+            val b = factory.join(InMemoryTag("Bob"))
 
             // B drops all inbound — A→B frames disappear at B
             b.setFaultProfile(FaultProfile.DropAll(Direction.Inbound))
@@ -449,9 +449,9 @@ class FaultyPeerLinkTest {
     @Test
     fun `Composite DelayAll then DropAll drops everything`() =
         runTest {
-            val factory = FaultyPeerLinkFactory(InMemoryPeerLinkFactory(), backgroundScope)
-            val a = factory.open(SessionConfig("Alice"))
-            factory.join(InMemoryPeerAdvertisement("Bob"))
+            val factory = FaultyLoom(InMemoryLoom(), backgroundScope)
+            val a = factory.open(Pattern("Alice"))
+            factory.join(InMemoryTag("Bob"))
 
             a.setFaultProfile(
                 FaultProfile.Composite(
@@ -472,9 +472,9 @@ class FaultyPeerLinkTest {
     @Test
     fun `Composite delays accumulate`() =
         runTest {
-            val factory = FaultyPeerLinkFactory(InMemoryPeerLinkFactory(), backgroundScope)
-            val a = factory.open(SessionConfig("Alice"))
-            val b = factory.join(InMemoryPeerAdvertisement("Bob"))
+            val factory = FaultyLoom(InMemoryLoom(), backgroundScope)
+            val a = factory.open(Pattern("Alice"))
+            val b = factory.join(InMemoryTag("Bob"))
 
             a.setFaultProfile(
                 FaultProfile.Composite(
@@ -498,19 +498,19 @@ class FaultyPeerLinkTest {
             assertTrue(frame.payload.contentEquals(byteArrayOf(7)))
         }
 
-    // ── FaultyPeerLinkFactory — default profile propagation ─────────────────
+    // ── FaultyLoom — default profile propagation ─────────────────────────────
 
     @Test
     fun `factory defaultProfile applies to all created links`() =
         runTest {
             val factory =
-                FaultyPeerLinkFactory(
-                    InMemoryPeerLinkFactory(),
+                FaultyLoom(
+                    InMemoryLoom(),
                     backgroundScope,
                     defaultProfile = FaultProfile.DropAll(),
                 )
-            val a = factory.open(SessionConfig("Alice"))
-            factory.join(InMemoryPeerAdvertisement("Bob"))
+            val a = factory.open(Pattern("Alice"))
+            factory.join(InMemoryTag("Bob"))
 
             repeat(3) { a.broadcast(byteArrayOf(it.toByte())) }
 
@@ -520,9 +520,9 @@ class FaultyPeerLinkTest {
     @Test
     fun `setFaultProfileOnAll updates all links simultaneously`() =
         runTest {
-            val factory = FaultyPeerLinkFactory(InMemoryPeerLinkFactory(), backgroundScope)
-            val a = factory.open(SessionConfig("Alice"))
-            val b = factory.join(InMemoryPeerAdvertisement("Bob"))
+            val factory = FaultyLoom(InMemoryLoom(), backgroundScope)
+            val a = factory.open(Pattern("Alice"))
+            val b = factory.join(InMemoryTag("Bob"))
 
             factory.setFaultProfileOnAll(FaultProfile.DropAll())
 
@@ -537,10 +537,10 @@ class FaultyPeerLinkTest {
     @Test
     fun `factory links list contains all created links in order`() =
         runTest {
-            val factory = FaultyPeerLinkFactory(InMemoryPeerLinkFactory(), backgroundScope)
-            val a = factory.open(SessionConfig("Alice"))
-            val b = factory.join(InMemoryPeerAdvertisement("Bob"))
-            val c = factory.join(InMemoryPeerAdvertisement("Charlie"))
+            val factory = FaultyLoom(InMemoryLoom(), backgroundScope)
+            val a = factory.open(Pattern("Alice"))
+            val b = factory.join(InMemoryTag("Bob"))
+            val c = factory.join(InMemoryTag("Charlie"))
 
             assertAll(
                 { assertEquals(3, factory.links.size) },
@@ -555,9 +555,9 @@ class FaultyPeerLinkTest {
     @Test
     fun `counters sum correctly under healthy profile`() =
         runTest {
-            val factory = FaultyPeerLinkFactory(InMemoryPeerLinkFactory(), backgroundScope)
-            val a = factory.open(SessionConfig("Alice"))
-            val b = factory.join(InMemoryPeerAdvertisement("Bob"))
+            val factory = FaultyLoom(InMemoryLoom(), backgroundScope)
+            val a = factory.open(Pattern("Alice"))
+            val b = factory.join(InMemoryTag("Bob"))
 
             val received = async { b.incoming.take(10).toList() }
             repeat(10) { a.broadcast(byteArrayOf(it.toByte())) }
@@ -577,9 +577,9 @@ private suspend fun droppedIndexesForSeed(
     seed: Long,
     scope: CoroutineScope,
 ): Set<Int> {
-    val factory = FaultyPeerLinkFactory(InMemoryPeerLinkFactory(), scope)
-    val a = factory.open(SessionConfig("Alice"))
-    factory.join(InMemoryPeerAdvertisement("Bob"))
+    val factory = FaultyLoom(InMemoryLoom(), scope)
+    val a = factory.open(Pattern("Alice"))
+    factory.join(InMemoryTag("Bob"))
 
     a.setFaultProfile(FaultProfile.DropProbabilistic(probability = 0.5, seed = seed))
     val dropped = mutableSetOf<Int>()

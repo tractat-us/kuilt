@@ -1,7 +1,7 @@
 package us.tractat.kuilt.core.partition
 
 import kotlinx.coroutines.flow.SharedFlow
-import us.tractat.kuilt.core.TransportPeerId
+import us.tractat.kuilt.core.PeerId
 
 /**
  * Manages per-peer reconnect windows on the leader side.
@@ -47,7 +47,7 @@ public interface JoinerReconnectController {
      * it here: `partitionEvents.collect { if (it is PeerUnresponsive) onPeerUnresponsive(it.peerId, it.at) }`.
      */
     public fun onPeerUnresponsive(
-        peerId: TransportPeerId,
+        peerId: PeerId,
         at: Long,
     )
 
@@ -74,7 +74,7 @@ public interface JoinerReconnectController {
      * without advancing virtual time.
      */
     public fun expire(
-        peerId: TransportPeerId,
+        peerId: PeerId,
         at: Long,
     )
 }
@@ -83,19 +83,19 @@ public interface JoinerReconnectController {
 public sealed interface JoinerReconnectEvent {
     /** The reconnect window opened for [peerId]. It expires at epoch-millis [expiresAt]. */
     public data class WindowOpened(
-        val peerId: TransportPeerId,
+        val peerId: PeerId,
         val expiresAt: Long,
     ) : JoinerReconnectEvent
 
     /** [peerId] successfully resumed within the window. */
     public data class Resumed(
-        val peerId: TransportPeerId,
+        val peerId: PeerId,
         val at: Long,
     ) : JoinerReconnectEvent
 
     /** The reconnect window for [peerId] expired without a valid resume. */
     public data class WindowExpired(
-        val peerId: TransportPeerId,
+        val peerId: PeerId,
         val at: Long,
     ) : JoinerReconnectEvent
 }

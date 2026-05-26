@@ -9,7 +9,7 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import us.tractat.kuilt.core.TransportPeerId
+import us.tractat.kuilt.core.PeerId
 
 /**
  * Default implementation of [JoinerReconnectController].
@@ -40,14 +40,14 @@ public class DefaultJoinerReconnectController(
 ) : JoinerReconnectController {
     private val mutex = Mutex()
 
-    // Per-peer window state, keyed by TransportPeerId.
-    private val windows = mutableMapOf<TransportPeerId, WindowState>()
+    // Per-peer window state, keyed by PeerId.
+    private val windows = mutableMapOf<PeerId, WindowState>()
 
     private val _events = MutableSharedFlow<JoinerReconnectEvent>(extraBufferCapacity = 64)
     override val events: SharedFlow<JoinerReconnectEvent> = _events.asSharedFlow()
 
     override fun onPeerUnresponsive(
-        peerId: TransportPeerId,
+        peerId: PeerId,
         at: Long,
     ) {
         scope.launch { openWindow(peerId, at) }
@@ -81,7 +81,7 @@ public class DefaultJoinerReconnectController(
     }
 
     override fun expire(
-        peerId: TransportPeerId,
+        peerId: PeerId,
         at: Long,
     ) {
         scope.launch { forceExpire(peerId, at) }
@@ -90,7 +90,7 @@ public class DefaultJoinerReconnectController(
     // ── Internal ─────────────────────────────────────────────────────────────
 
     private suspend fun openWindow(
-        peerId: TransportPeerId,
+        peerId: PeerId,
         at: Long,
     ) {
         val expiresAt = at + reconnectWindowMs
@@ -107,7 +107,7 @@ public class DefaultJoinerReconnectController(
     }
 
     private suspend fun runTimer(
-        peerId: TransportPeerId,
+        peerId: PeerId,
         expiresAt: Long,
     ) {
         val remaining = (expiresAt - clock()).coerceAtLeast(0L)
@@ -116,7 +116,7 @@ public class DefaultJoinerReconnectController(
     }
 
     private suspend fun forceExpire(
-        peerId: TransportPeerId,
+        peerId: PeerId,
         at: Long,
     ) {
         val didExpire =

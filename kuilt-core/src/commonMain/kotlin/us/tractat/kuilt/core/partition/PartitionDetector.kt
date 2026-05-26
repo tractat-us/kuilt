@@ -2,14 +2,14 @@ package us.tractat.kuilt.core.partition
 
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.Flow
-import us.tractat.kuilt.core.TransportPeerId
+import us.tractat.kuilt.core.PeerId
 
 /**
  * Detects when a peer has become unresponsive and emits [PartitionEvent]s for the
  * layer above to act on.
  *
  * Implementations are per-link: one [PartitionDetector] monitors one peer across one
- * [us.tractat.kuilt.core.PeerLink]. The leader composes multiple detectors
+ * [us.tractat.kuilt.core.Seam]. The leader composes multiple detectors
  * (one per connected peer) — that composition is the leader's concern, not this interface's.
  *
  * **Calling contract for [observedPeer]:**
@@ -46,7 +46,7 @@ public interface PartitionDetector {
      *
      * Resets the liveness timeout. Thread-safe; may be called from any coroutine.
      */
-    public fun observedPeer(peerId: TransportPeerId)
+    public fun observedPeer(peerId: PeerId)
 
     /**
      * Signal that the per-peer outbound buffer has exceeded its ceiling (D-006).
@@ -54,5 +54,5 @@ public interface PartitionDetector {
      * The detector emits [PartitionEvent.PeerUnresponsive] with reason
      * [PartitionEvent.Reason.Backpressure] on the next evaluation cycle.
      */
-    public fun onBackpressure(peerId: TransportPeerId)
+    public fun onBackpressure(peerId: PeerId)
 }
