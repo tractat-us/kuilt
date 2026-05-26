@@ -18,7 +18,12 @@ public interface Seam {
     /** Live set of peers currently connected. Includes [selfId]. */
     public val peers: StateFlow<Set<PeerId>>
 
-    /** Frames received from any other peer, in arrival order. */
+    /**
+     * Frames received from peers, in send order, delivered to **a single collector**.
+     * Cold/single-collection semantics: collect once per [Seam]; fan-out consumers
+     * wrap with `shareIn`. A second concurrent collector is unsupported and will race.
+     * See tractat-us/fireworks-compose#1496.
+     */
     public val incoming: Flow<Swatch>
 
     /** Send to all other peers. Suspends until accepted by the local transport. */
