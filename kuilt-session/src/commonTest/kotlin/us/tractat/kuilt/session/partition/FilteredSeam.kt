@@ -1,4 +1,4 @@
-package us.tractat.kuilt.core.partition
+package us.tractat.kuilt.session.partition
 
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.SharedFlow
