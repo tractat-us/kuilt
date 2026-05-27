@@ -39,3 +39,4 @@ dependencyResolutionManagement {
 include(":kuilt-core")
 include(":kuilt-websocket")
 include(":kuilt-mdns")
+include(":kuilt-webrtc")
