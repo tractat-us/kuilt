@@ -37,7 +37,9 @@ dependencyResolutionManagement {
 }
 
 include(":kuilt-core")
+include(":kuilt-conformance")
 include(":kuilt-websocket")
 include(":kuilt-mdns")
 include(":kuilt-webrtc")
 include(":kuilt-multipeer")
+include(":kuilt-nearby")
