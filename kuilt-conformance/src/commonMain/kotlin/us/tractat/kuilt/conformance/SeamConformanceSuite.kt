@@ -54,10 +54,18 @@ public abstract class SeamConformanceSuite {
     @Test
     public fun hostYieldsUsableSeamWithNonEmptySelfId(): TestResult =
         runTest {
-            val (hostLoom, _) = newLoomPair()
-            val seam = hostLoom.host(Pattern("host"))
+            // Establish a real connection: a role-split server/handshake Loom's host()
+            // suspends until a joiner connects, so this test must drive host()/join()
+            // concurrently (radio fabrics returning (loom, loom) are unaffected).
+            val (hostLoom, joinerLoom) = newLoomPair()
+            coroutineScope {
+                val hostDeferred = async { hostLoom.host(Pattern("host")) }
+                val joinerDeferred = async { joinerLoom.join(joinTag()) }
+                val host = hostDeferred.await()
+                joinerDeferred.await()
 
-            assertFalse(seam.selfId.value.isEmpty(), "selfId must be non-empty")
+                assertFalse(host.selfId.value.isEmpty(), "selfId must be non-empty")
+            }
         }
 
     // ── (2) broadcast from host delivers to a joined peer ───────────────────
@@ -133,11 +141,19 @@ public abstract class SeamConformanceSuite {
     @Test
     public fun closeIsIdempotent(): TestResult =
         runTest {
-            val (hostLoom, _) = newLoomPair()
-            val seam = hostLoom.host(Pattern("host"))
+            // Connect concurrently (see hostYieldsUsableSeamWithNonEmptySelfId): a server
+            // Loom's host() blocks until a joiner connects, so close the host seam of a
+            // genuinely-established connection rather than an unconnected one.
+            val (hostLoom, joinerLoom) = newLoomPair()
+            coroutineScope {
+                val hostDeferred = async { hostLoom.host(Pattern("host")) }
+                val joinerDeferred = async { joinerLoom.join(joinTag()) }
+                val seam = hostDeferred.await()
+                joinerDeferred.await()
 
-            seam.close()
-            seam.close() // must not throw
+                seam.close()
+                seam.close() // must not throw
+            }
         }
 
     // ── (6) availability returns Available or Unavailable ───────────────────
