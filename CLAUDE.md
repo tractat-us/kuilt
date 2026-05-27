@@ -83,9 +83,11 @@ tests as the `MDNS_MULTICAST_TESTS` env var (see `kuilt-mdns/build.gradle.kts`).
   plugin's default auto-wiring, so `iosMain`/`macosMain` intermediates are also
   declared explicitly. Edit those `build.gradle.kts` source-set blocks carefully.
 - **Test a new fabric by subclassing `SeamConformanceSuite`** and implementing
-  `newLoom()`. Every fabric must pass the same suite (see
-  `InMemoryLoomConformanceTest`). Real-radio/real-network tests stay separate and
-  `-P`-gated; the conformance suite runs against an in-memory or loopback harness.
+  `newLoomPair()`. Every fabric must pass the same suite (see
+  `InMemoryLoomConformanceTest`). In-process radio fabrics return the same instance
+  twice; role-split fabrics return distinct host/joiner Looms wired to each other.
+  Real-radio/real-network tests stay separate and `-P`-gated; the conformance suite
+  runs against an in-memory or loopback harness.
 - Test methods: no `test` prefix (the `@Test` annotation suffices); multi-assert
   tests use `assertAll()`.
 

@@ -89,7 +89,10 @@ the type system won't catch:
 ## Conformance: one suite, every fabric
 
 `kuilt-core` ships `SeamConformanceSuite`, an abstract test class. Every fabric
-proves it satisfies the contract by subclassing it and implementing `newLoom()`.
+proves it satisfies the contract by subclassing it and implementing `newLoomPair()`.
+In-process radio fabrics return the same Loom instance twice (shared mesh); role-split
+fabrics (websocket, mdns, webrtc, multipeer) return distinct host/joiner Looms wired to
+reach each other.
 The suite encodes the invariants as tests: `open` yields a usable `Seam` with a
 non-empty `selfId`; `broadcast`/`sendTo` deliver to joined peers and stamp the
 sender; `peers` reflects membership; `incoming` preserves single-collection

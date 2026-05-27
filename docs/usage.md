@@ -152,8 +152,13 @@ class MyFabricLoom : Loom {
 }
 
 // In commonTest — this is your contract test. If it's green, you conform.
+// Return the same Loom instance twice for in-process radio fabrics (shared mesh),
+// or distinct host/joiner Looms for role-split fabrics.
 class MyFabricConformanceTest : SeamConformanceSuite() {
-    override fun newLoom(): Loom = MyFabricLoom()
+    override fun newLoomPair(): Pair<Loom, Loom> {
+        val loom = MyFabricLoom()
+        return loom to loom  // adjust for role-split fabrics: hostLoom to joinerLoom
+    }
 }
 ```
 
