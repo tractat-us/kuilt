@@ -1,11 +1,8 @@
 package us.tractat.kuilt.nearby
 
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
-import kotlinx.coroutines.launch
 import us.tractat.kuilt.core.FabricAvailability
 
 /**
@@ -28,6 +25,12 @@ import us.tractat.kuilt.core.FabricAvailability
  *   `PayloadReceived([DISCOVERER_SEES_ADVERTISER_AS], bytes)`.
  * - Sending to [DISCOVERER_SEES_ADVERTISER_AS] → deliver as
  *   `PayloadReceived([ADVERTISER_SEES_DISCOVERER_AS], bytes)`.
+ *
+ * ## No private scope — emit directly
+ * All event delivery is done via `suspend` emit calls on the caller's coroutine,
+ * not via a private [kotlinx.coroutines.CoroutineScope]. This ensures all work
+ * runs on the test dispatcher under `runTest`'s virtual clock, with no coroutine
+ * leaks between tests.
  */
 internal class FakeNearbyRadio {
 
@@ -43,23 +46,17 @@ internal class FakeNearbyRadio {
     private var discoveryStarted = false
     private var acceptCount = 0
 
-    // A single scope for background event delivery; uses the current dispatcher
-    // (overridden to UnconfinedTestDispatcher in runTest).
-    private val scope = CoroutineScope(SupervisorJob())
-
-    // ── event delivery ────────────────────────────────────────────────────────
-
     // Shared api reference (set when FakeNearbyApi is created).
     private lateinit var api: FakeNearbyApi
 
     internal fun bind(api: FakeNearbyApi) { this.api = api }
 
-    fun onStartAdvertising(displayName: String) {
+    suspend fun onStartAdvertising(displayName: String) {
         advertisingDisplayName = displayName
         tryAutoConnect()
     }
 
-    fun onStartDiscovery() {
+    suspend fun onStartDiscovery() {
         discoveryStarted = true
         tryAutoConnect()
     }
@@ -68,12 +65,10 @@ internal class FakeNearbyRadio {
      * Once both sides are active, deliver [EndpointFound] to the discoverer.
      * The discoverer will then call [requestConnection].
      */
-    private fun tryAutoConnect() {
+    private suspend fun tryAutoConnect() {
         if (advertisingDisplayName == null || !discoveryStarted) return
         val displayName = advertisingDisplayName ?: return
-        scope.launch {
-            api.emit(EndpointFound(DISCOVERER_SEES_ADVERTISER_AS, displayName))
-        }
+        api.emit(EndpointFound(DISCOVERER_SEES_ADVERTISER_AS, displayName))
     }
 
     /**
@@ -81,27 +76,23 @@ internal class FakeNearbyRadio {
      * Emits [ConnectionInitiated] on BOTH sides (advertiser side first, per the
      * ordering contract that lets the host's first-seen state machine capture its ID).
      */
-    fun onRequestConnection(displayName: String, endpointId: String) {
-        scope.launch {
-            // Advertiser side: sees the discoverer arrive.
-            api.emit(ConnectionInitiated(ADVERTISER_SEES_DISCOVERER_AS, displayName))
-            // Discoverer side: sees the advertiser respond.
-            api.emit(ConnectionInitiated(DISCOVERER_SEES_ADVERTISER_AS, advertisingDisplayName ?: "advertiser"))
-        }
+    suspend fun onRequestConnection(displayName: String, endpointId: String) {
+        // Advertiser side: sees the discoverer arrive.
+        api.emit(ConnectionInitiated(ADVERTISER_SEES_DISCOVERER_AS, displayName))
+        // Discoverer side: sees the advertiser respond.
+        api.emit(ConnectionInitiated(DISCOVERER_SEES_ADVERTISER_AS, advertisingDisplayName ?: "advertiser"))
     }
 
     /**
      * Called when either side accepts. Fires [ConnectionResult] success on BOTH sides
      * once two accepts have been received.
      */
-    fun onAcceptConnection(endpointId: String) {
+    suspend fun onAcceptConnection(endpointId: String) {
         acceptCount++
         if (acceptCount == 2) {
             acceptCount = 0
-            scope.launch {
-                api.emit(ConnectionResult(ADVERTISER_SEES_DISCOVERER_AS, success = true))
-                api.emit(ConnectionResult(DISCOVERER_SEES_ADVERTISER_AS, success = true))
-            }
+            api.emit(ConnectionResult(ADVERTISER_SEES_DISCOVERER_AS, success = true))
+            api.emit(ConnectionResult(DISCOVERER_SEES_ADVERTISER_AS, success = true))
         }
     }
 
@@ -109,26 +100,22 @@ internal class FakeNearbyRadio {
      * Route a bytes payload: flips the endpoint ID so the receiver sees it from
      * its own perspective.
      */
-    fun onSendBytesPayload(endpointId: String, bytes: ByteArray) {
+    suspend fun onSendBytesPayload(endpointId: String, bytes: ByteArray) {
         val deliverAsEndpointId = when (endpointId) {
             ADVERTISER_SEES_DISCOVERER_AS -> DISCOVERER_SEES_ADVERTISER_AS
             DISCOVERER_SEES_ADVERTISER_AS -> ADVERTISER_SEES_DISCOVERER_AS
             else -> return // unknown endpoint, ignore
         }
-        scope.launch {
-            api.emit(PayloadReceived(deliverAsEndpointId, bytes))
-        }
+        api.emit(PayloadReceived(deliverAsEndpointId, bytes))
     }
 
-    fun onDisconnect(endpointId: String) {
+    suspend fun onDisconnect(endpointId: String) {
         val deliverAsEndpointId = when (endpointId) {
             ADVERTISER_SEES_DISCOVERER_AS -> DISCOVERER_SEES_ADVERTISER_AS
             DISCOVERER_SEES_ADVERTISER_AS -> ADVERTISER_SEES_DISCOVERER_AS
             else -> return
         }
-        scope.launch {
-            api.emit(EndpointDisconnected(deliverAsEndpointId))
-        }
+        api.emit(EndpointDisconnected(deliverAsEndpointId))
     }
 }
 
@@ -138,18 +125,23 @@ internal class FakeNearbyRadio {
  * Create one instance per loom; both [open] and [join] on the same loom use
  * this single api. The radio partitions events by endpoint ID so both
  * state machines can coexist without interference.
+ *
+ * Shared flows use [extraBufferCapacity] = 1 as a defensive buffer for
+ * sequential same-coroutine emit patterns (e.g. two ConnectionInitiated events
+ * emitted back-to-back before any collector resumes). The flows still have no
+ * replay — subscribers only see events after they subscribe.
  */
 internal class FakeNearbyApi(radio: FakeNearbyRadio) : NearbyApi {
 
     private val _radio = radio.also { it.bind(this) }
 
-    // ── shared flows (no replay — consumers only see events after subscription) ──
-
-    private val _endpointFound = MutableSharedFlow<EndpointFound>()
-    private val _connectionInitiated = MutableSharedFlow<ConnectionInitiated>()
-    private val _connectionResult = MutableSharedFlow<ConnectionResult>()
-    private val _payloadReceived = MutableSharedFlow<PayloadReceived>()
-    private val _endpointDisconnected = MutableSharedFlow<EndpointDisconnected>()
+    // Small buffer defends against back-to-back emits on the same coroutine
+    // before a collector can resume, while still having no replay.
+    private val _endpointFound = MutableSharedFlow<EndpointFound>(extraBufferCapacity = 1)
+    private val _connectionInitiated = MutableSharedFlow<ConnectionInitiated>(extraBufferCapacity = 2)
+    private val _connectionResult = MutableSharedFlow<ConnectionResult>(extraBufferCapacity = 2)
+    private val _payloadReceived = MutableSharedFlow<PayloadReceived>(extraBufferCapacity = 64)
+    private val _endpointDisconnected = MutableSharedFlow<EndpointDisconnected>(extraBufferCapacity = 1)
 
     override val endpointFound: Flow<EndpointFound> = _endpointFound.asSharedFlow()
     override val connectionInitiated: Flow<ConnectionInitiated> = _connectionInitiated.asSharedFlow()

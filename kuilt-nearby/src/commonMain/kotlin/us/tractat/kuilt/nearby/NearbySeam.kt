@@ -142,8 +142,10 @@ internal class NearbySeam(
             if (closed) return
             closed = true
         }
-        receiveJob.cancel()
-        disconnectJob.cancel()
+        // Cancel the entire scope — this cleans up the receive/disconnect loops
+        // AND the background accept coroutine launched by NearbyLoom.open() into
+        // the same scope, preventing coroutine leaks between tests.
+        scope.coroutineContext[Job]?.cancel()
         incomingChannel.close()
         val endpoints = mutex.withLock { endpointPeers.keys.toList() }
         for (endpointId in endpoints) {
