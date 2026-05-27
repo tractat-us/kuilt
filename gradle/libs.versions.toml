@@ -10,6 +10,7 @@ android-compileSdk = "36"
 android-minSdk = "24"
 jna = "5.18.1"
 logback = "1.5.32"
+playServicesNearby = "19.3.0"
 
 [libraries]
 kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "kotlinx-coroutines" }
@@ -39,6 +40,9 @@ kotlin-logging = { module = "io.github.oshai:kotlin-logging", version.ref = "kot
 jna = { module = "net.java.dev.jna:jna", version.ref = "jna" }
 # logback — JVM logging backend for kuilt-multipeer tests:
 logback = { module = "ch.qos.logback:logback-classic", version.ref = "logback" }
+# Google Nearby Connections (Android-only) + Tasks↔coroutines bridge for kuilt-nearby:
+play-services-nearby = { module = "com.google.android.gms:play-services-nearby", version.ref = "playServicesNearby" }
+kotlinx-coroutines-playServices = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-play-services", version.ref = "kotlinx-coroutines" }
 # Gradle plugin artifacts for build-logic to depend on:
 kotlin-gradlePlugin = { module = "org.jetbrains.kotlin:kotlin-gradle-plugin", version.ref = "kotlin" }
 kotlin-serialization-gradlePlugin = { module = "org.jetbrains.kotlin:kotlin-serialization", version.ref = "kotlin" }
