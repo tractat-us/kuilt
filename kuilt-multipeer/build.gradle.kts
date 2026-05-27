@@ -23,6 +23,7 @@ kotlin {
         val macosArm64Main by getting { dependsOn(macosMain) }
         jvmMain.dependencies { implementation(libs.jna) }
         jvmTest.dependencies {
+            implementation(project(":kuilt-conformance"))
             implementation(libs.kotlin.testJunit)
             implementation(libs.kotlinx.coroutines.test)
             implementation(libs.logback)
