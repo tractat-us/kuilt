@@ -6,15 +6,10 @@ import io.ktor.server.engine.EmbeddedServer
 import io.ktor.server.engine.embeddedServer
 import io.ktor.server.netty.Netty
 import io.ktor.server.netty.NettyApplicationEngine
-import kotlinx.coroutines.async
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.runBlocking
 import us.tractat.kuilt.conformance.SeamConformanceSuite
 import us.tractat.kuilt.core.CloseReason
-import us.tractat.kuilt.core.FabricAvailability
 import us.tractat.kuilt.core.Loom
-import us.tractat.kuilt.core.Rendezvous
-import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.Tag
 import java.net.ServerSocket
 import kotlin.test.AfterTest
@@ -26,14 +21,16 @@ import io.ktor.client.plugins.websocket.WebSockets as ClientWebSockets
  * every invariant in [SeamConformanceSuite] over a **real localhost connection** —
  * a real Netty server, a real OkHttp client, real sockets and frames (ADR-001).
  *
- * [newLoomPair] returns [ReplayLoom] wrappers around a [Seam] pair that is
- * pre-connected in [@BeforeTest][BeforeTest] via a real Netty server and a real
- * OkHttp client. This lets the suite's synchronous [newLoomPair] binding compose
- * with [KtorServerLoom.nextLink]'s suspend-until-client-connects semantics without
- * any fake or mock transport. The connection is genuine; the wrappers just cache it.
+ * [newLoomPair] returns `(KtorServerLoom, KtorClientLoom)` — the actual server and
+ * client looms. The suite drives `host()`/`join()` concurrently for all tests, so
+ * `KtorServerLoom.host()`'s suspend-until-client semantics are satisfied naturally.
  *
- * [@AfterTest][AfterTest] closes the seams with [CloseReason.Normal] before stopping
- * the server, so the client's receive loop sees a graceful close rather than an
+ * [@BeforeTest][BeforeTest] starts a real Netty server on a random free port.
+ * [joinTag] returns a [WebSocketAdvertisement] pointing at it, which the suite
+ * supplies to `KtorClientLoom.join()`.
+ *
+ * [@AfterTest][AfterTest] closes any open seams with [CloseReason.Normal] before
+ * stopping the server, so the receive loop sees a graceful close rather than an
  * abrupt EOF — preventing uncaught coroutine exceptions from leaking across tests.
  */
 class WebSocketConformanceTest : SeamConformanceSuite() {
@@ -43,8 +40,6 @@ class WebSocketConformanceTest : SeamConformanceSuite() {
     private lateinit var server: EmbeddedServer<NettyApplicationEngine, NettyApplicationEngine.Configuration>
     private lateinit var serverLoom: KtorServerLoom
     private lateinit var httpClient: HttpClient
-    private lateinit var serverSeam: Seam
-    private lateinit var clientSeam: Seam
     private var port: Int = 0
 
     @BeforeTest
@@ -55,15 +50,13 @@ class WebSocketConformanceTest : SeamConformanceSuite() {
         }
         server.start(wait = false)
         httpClient = HttpClient(OkHttp) { install(ClientWebSockets) }
-        preConnect()
     }
 
     @AfterTest
     fun tearDown() {
         runBlocking {
-            if (this@WebSocketConformanceTest::serverSeam.isInitialized) {
-                serverSeam.close(CloseReason.Normal)
-            }
+            // Nothing to pre-close here — the suite's coroutineScope unwinds seams
+            // when each test completes (test 5 explicitly closes; others let scope cancel).
         }
         if (this::httpClient.isInitialized) httpClient.close()
         if (this::server.isInitialized) server.stop(gracePeriodMillis = 100, timeoutMillis = 1_000)
@@ -71,40 +64,16 @@ class WebSocketConformanceTest : SeamConformanceSuite() {
 
     // ── SeamConformanceSuite binding ─────────────────────────────────────────
     //
-    // KtorServerLoom.host() (nextLink()) suspends until a client connects. Tests that
-    // assert on the host side only (hostYieldsUsableSeamWithNonEmptySelfId,
-    // closeIsIdempotent) call host() without a corresponding join() — they would
-    // deadlock on a raw KtorServerLoom. The pre-connected ReplayLoom approach
-    // eliminates the deadlock: weave() returns the cached Seam immediately.
+    // The suite drives host()/join() concurrently for every test (including tests 1
+    // and 5 which previously deadlocked on a raw KtorServerLoom). Returning real looms
+    // here means the connection is established by the suite, not pre-wired by us.
 
     override fun newLoomPair(): Pair<Loom, Loom> =
-        ReplayLoom(serverSeam) to ReplayLoom(clientSeam)
+        serverLoom to KtorClientLoom(httpClient)
 
     override fun joinTag(): Tag = WebSocketAdvertisement(
         url = "ws://localhost:$port$serverPath",
         serverPeerId = serverLoom.selfPeerId,
         displayName = "conformance-client",
     )
-
-    // ── Connection setup ─────────────────────────────────────────────────────
-
-    private fun preConnect() {
-        runBlocking {
-            coroutineScope {
-                val serverDeferred = async { serverLoom.nextLink() }
-                clientSeam = KtorClientLoom(httpClient).join(joinTag())
-                serverSeam = serverDeferred.await()
-            }
-        }
-    }
-
-    // ── ReplayLoom ───────────────────────────────────────────────────────────
-    //
-    // Replays a single pre-connected Seam. weave() returns the stored Seam regardless
-    // of the Rendezvous variant — the real connection was established in preConnect().
-
-    private class ReplayLoom(private val seam: Seam) : Loom {
-        override suspend fun weave(rendezvous: Rendezvous): Seam = seam
-        override fun availability(): FabricAvailability = FabricAvailability.Available
-    }
 }

@@ -92,6 +92,10 @@ internal class WebSocketSeam(
                         else -> closeOnUnexpectedFrame(frame)
                     }
                 }
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                // Remote closed abruptly (EOFException, SocketException, etc.) —
+                // treat as a disconnect; the finally block still calls onRemoteDisconnect().
             } finally {
                 onRemoteDisconnect()
             }
