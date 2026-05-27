@@ -4,6 +4,7 @@ kotlinx-coroutines = "1.11.0"
 kotlinx-serialization = "1.11.0"
 ktor = "3.4.3"
 jmdns = "3.6.3"
+kotlinLogging = "7.0.7"
 agp = "8.13.2"
 android-compileSdk = "36"
 android-minSdk = "24"
@@ -13,6 +14,7 @@ kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-c
 kotlinx-coroutines-test = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-test", version.ref = "kotlinx-coroutines" }
 kotlinx-serialization-core = { module = "org.jetbrains.kotlinx:kotlinx-serialization-core", version.ref = "kotlinx-serialization" }
 kotlinx-serialization-cbor = { module = "org.jetbrains.kotlinx:kotlinx-serialization-cbor", version.ref = "kotlinx-serialization" }
+kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "kotlinx-serialization" }
 kotlin-test = { module = "org.jetbrains.kotlin:kotlin-test", version.ref = "kotlin" }
 kotlin-testJunit = { module = "org.jetbrains.kotlin:kotlin-test-junit", version.ref = "kotlin" }
 # Ktor — kuilt-websocket transport (client all platforms, server JVM/Android only):
@@ -29,6 +31,8 @@ ktor-serverCio = { module = "io.ktor:ktor-server-cio", version.ref = "ktor" }
 ktor-serverTestHost = { module = "io.ktor:ktor-server-test-host-jvm", version.ref = "ktor" }
 # jmdns — JVM/Android Bonjour/mDNS service discovery for kuilt-mdns:
 jmdns = { module = "org.jmdns:jmdns", version.ref = "jmdns" }
+# kotlin-logging — structured logging facade (SLF4J on JVM) for kuilt-webrtc:
+kotlin-logging = { module = "io.github.oshai:kotlin-logging", version.ref = "kotlinLogging" }
 # Gradle plugin artifacts for build-logic to depend on:
 kotlin-gradlePlugin = { module = "org.jetbrains.kotlin:kotlin-gradle-plugin", version.ref = "kotlin" }
 kotlin-serialization-gradlePlugin = { module = "org.jetbrains.kotlin:kotlin-serialization", version.ref = "kotlin" }
