@@ -171,15 +171,14 @@ public class FaultyLoom(
     /** All [FaultySeam] instances created so far, in creation order. */
     public val links: List<FaultySeam> get() = _links.value
 
-    override suspend fun open(config: Pattern): FaultySeam {
-        val inner = delegate.open(config)
-        return wrap(inner)
-    }
+    override suspend fun weave(rendezvous: Rendezvous): FaultySeam = wrap(delegate.weave(rendezvous))
 
-    override suspend fun join(advertisement: Tag): FaultySeam {
-        val inner = delegate.join(advertisement)
-        return wrap(inner)
-    }
+    override suspend fun host(pattern: Pattern): FaultySeam = wrap(delegate.host(pattern))
+
+    @Suppress("OVERRIDE_DEPRECATION")
+    override suspend fun open(config: Pattern): FaultySeam = wrap(delegate.host(config))
+
+    override suspend fun join(tag: Tag): FaultySeam = wrap(delegate.join(tag))
 
     /** Apply [profile] to every link the factory has created so far. */
     public fun setFaultProfileOnAll(profile: FaultProfile) {

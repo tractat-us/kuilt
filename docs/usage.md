@@ -142,8 +142,10 @@ subclassing `SeamConformanceSuite`:
 
 ```kotlin
 class MyFabricLoom : Loom {
-    override suspend fun open(config: Pattern): Seam = TODO()
-    override suspend fun join(advertisement: Tag): Seam = TODO()
+    override suspend fun weave(rendezvous: Rendezvous): Seam = when (rendezvous) {
+        is Rendezvous.New -> TODO("host")
+        is Rendezvous.Existing -> TODO("join")
+    }
     override fun availability(): FabricAvailability =
         if (myCapabilityPresent()) FabricAvailability.Available
         else FabricAvailability.Unavailable("my radio is off")
@@ -156,11 +158,11 @@ class MyFabricConformanceTest : SeamConformanceSuite() {
 ```
 
 Things the suite will hold you to (see [architecture.md](architecture.md) for the
-full list): `open` returns a usable `Seam` with a non-empty `selfId`;
-`broadcast`/`sendTo` deliver and stamp `sender`; `peers` tracks membership;
-`incoming` is single-collection and ordered; `close` is idempotent. Keep any
-real-network smoke tests in a separate, `-P`-gated test so the conformance suite
-stays fast and deterministic.
+full list): `weave(Rendezvous.New(...))` returns a usable `Seam` with a non-empty
+`selfId`; `broadcast`/`sendTo` deliver and stamp `sender`; `peers` tracks
+membership; `incoming` is single-collection and ordered; `close` is idempotent.
+Keep any real-network smoke tests in a separate, `-P`-gated test so the conformance
+suite stays fast and deterministic.
 
 ## Provide your own `Tag` for discovery
 

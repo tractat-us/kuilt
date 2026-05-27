@@ -2,9 +2,8 @@ package us.tractat.kuilt.multipeer
 
 import kotlinx.coroutines.flow.StateFlow
 import us.tractat.kuilt.core.Loom
-import us.tractat.kuilt.core.Pattern
+import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.Seam
-import us.tractat.kuilt.core.Tag
 
 /**
  * `Loom` backed by Apple's MultipeerConnectivity framework.
@@ -31,9 +30,7 @@ public expect class MultipeerPeerLinkFactory(
     displayName: String,
     serviceType: String = MultipeerService.SERVICE_TYPE,
 ) : Loom {
-    override suspend fun open(config: Pattern): Seam
-
-    override suspend fun join(advertisement: Tag): Seam
+    override suspend fun weave(rendezvous: Rendezvous): Seam
 
     /**
      * Snapshot of advertisements visible to this factory's current browse

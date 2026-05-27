@@ -4,10 +4,9 @@ import io.ktor.server.application.Application
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import us.tractat.kuilt.core.Loom
-import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.Seam
-import us.tractat.kuilt.core.Tag
 import us.tractat.kuilt.websocket.KtorClientLoom
 import us.tractat.kuilt.websocket.KtorServerLoom
 import us.tractat.kuilt.websocket.WebSocketAdvertisement
@@ -61,34 +60,33 @@ public class MDNSPeerLinkFactory(
     private var advertiser: MDNSServiceAdvertiser? = null
 
     /**
-     * Opens a new session: registers the local peer via mDNS, then suspends
-     * until the first remote peer connects via WebSocket.
+     * Establishes a [Seam]:
+     * - [Rendezvous.New] — registers the local peer via mDNS, then suspends until the first
+     *   remote peer connects via WebSocket.
+     * - [Rendezvous.Existing] — joins an existing session described by an [MDNSAdvertisement].
      *
-     * The mDNS service is registered under [config.displayName].
+     * @throws IllegalArgumentException if the tag is not an [MDNSAdvertisement].
      */
-    override suspend fun open(config: Pattern): Seam {
-        registerMDNS(config.displayName)
-        return serverFactory.open(config)
-    }
-
-    /**
-     * Joins an existing session described by [advertisement].
-     *
-     * @throws IllegalArgumentException if [advertisement] is not an [MDNSAdvertisement].
-     */
-    override suspend fun join(advertisement: Tag): Seam {
-        require(advertisement is MDNSAdvertisement) {
-            "MDNSPeerLinkFactory only joins MDNSAdvertisement, got ${advertisement::class}"
+    override suspend fun weave(rendezvous: Rendezvous): Seam =
+        when (rendezvous) {
+            is Rendezvous.New -> {
+                registerMDNS(rendezvous.pattern.displayName)
+                serverFactory.host(rendezvous.pattern)
+            }
+            is Rendezvous.Existing -> {
+                val advertisement = rendezvous.tag
+                require(advertisement is MDNSAdvertisement) {
+                    "MDNSPeerLinkFactory only joins MDNSAdvertisement, got ${advertisement::class}"
+                }
+                val wsAdvertisement =
+                    WebSocketAdvertisement(
+                        url = advertisement.wsUrl,
+                        serverPeerId = advertisement.serverPeerId,
+                        displayName = advertisement.displayName,
+                    )
+                KtorClientLoom(httpClientFactory()).join(wsAdvertisement)
+            }
         }
-        val wsAdvertisement =
-            WebSocketAdvertisement(
-                url = advertisement.wsUrl,
-                serverPeerId = advertisement.serverPeerId,
-                displayName = advertisement.displayName,
-            )
-        val clientLoom = KtorClientLoom(httpClientFactory())
-        return clientLoom.join(wsAdvertisement)
-    }
 
     /**
      * The advertiser for the locally hosted session. `null` until [open] is
