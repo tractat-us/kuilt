@@ -5,10 +5,10 @@ package us.tractat.kuilt.core.discovery
  * group, badge, or filter by mechanism.
  *
  * Open hierarchy (interface, not enum) so transport modules in other Gradle
- * modules can supply their own kinds without amending `:transport-core` —
+ * modules can supply their own kinds without amending `:kuilt-core` —
  * mirroring the policy on [us.tractat.kuilt.core.Tag].
  *
- * The two kinds Fireworks ships today are [Mdns] (Bonjour over the LAN) and
+ * The two kinds defined today are [Mdns] (Bonjour over the LAN) and
  * [Multipeer] (Apple's MultipeerConnectivity, used between iOS devices and
  * macOS desktops).
  */

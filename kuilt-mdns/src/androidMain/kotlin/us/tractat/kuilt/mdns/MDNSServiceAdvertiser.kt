@@ -6,7 +6,7 @@ import kotlinx.coroutines.CompletableDeferred
 import us.tractat.kuilt.core.PeerId
 
 /**
- * Registers a Fireworks peer as a DNS-SD service so that other peers on the
+ * Registers a peer as a DNS-SD service so that other peers on the
  * same LAN can discover it via Android's [NsdManager].
  *
  * Mirrors the JVM JmDNS-backed [MDNSServiceAdvertiser] interface:

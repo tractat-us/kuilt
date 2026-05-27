@@ -12,7 +12,7 @@ import javax.jmdns.ServiceInfo
 import javax.jmdns.ServiceListener
 
 /**
- * Discovers Fireworks peers advertising [MDNSAdvertisement.SERVICE_TYPE] via
+ * Discovers peers advertising [MDNSAdvertisement.SERVICE_TYPE] via
  * Bonjour / mDNS.
  *
  * Exposes a cold [Flow] of [MDNSAdvertisement]s: each emission is a newly
@@ -35,8 +35,8 @@ public class MDNSServiceDiscoverer(
     override val kind: DiscoveryKind = DiscoveryKind.Mdns
 
     /**
-     * Returns a [Flow] that emits an [MDNSAdvertisement] for each Fireworks
-     * peer that is discovered on the local network.
+     * Returns a [Flow] that emits an [MDNSAdvertisement] for each peer
+     * that is discovered on the local network.
      *
      * Only services that carry valid [MDNSAdvertisement.TXT_KEY_PEER_ID] TXT
      * entries are emitted; malformed records are silently dropped.
@@ -70,7 +70,7 @@ public class MDNSServiceDiscoverer(
         }
 
     /**
-     * Returns a [Flow] that emits a peer key for each Fireworks peer that
+     * Returns a [Flow] that emits a peer key for each peer that
      * de-registers from the local network.
      *
      * The peer key is the TXT `peerId` from the removed service record. Records
