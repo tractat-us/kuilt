@@ -7,9 +7,6 @@ import us.tractat.kuilt.webrtc.internal.RtcPeerConnectionFacade
 import us.tractat.kuilt.webrtc.internal.RtcPeerConnectionFacadeFactory
 import us.tractat.kuilt.webrtc.internal.WebRTCPeerLink
 import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.launch
@@ -89,8 +86,10 @@ public class WebRTCPeerLinkFactory
 
             val senderIdDeferred = CompletableDeferred<PeerId>()
             val userChannel = Channel<ByteArray>(Channel.UNLIMITED)
-            val demuxScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-            demuxScope.launch {
+            // Construct the link first so its scope exists, then launch the demux on
+            // that scope — no orphan CoroutineScope; the demux dies when the link closes.
+            val link = WebRTCPeerLink(selfId, guessedRemoteId, facade, userChannel.receiveAsFlow(), senderIdDeferred)
+            link.scope.launch {
                 var idReceived = false
                 facade.incomingBytes.collect { bytes ->
                     if (!idReceived) {
@@ -104,7 +103,7 @@ public class WebRTCPeerLinkFactory
             }
             // Return immediately — senderIdDeferred resolves in the background when the
             // remote's ID frame arrives. Seam.incoming awaits it lazily per frame.
-            return WebRTCPeerLink(selfId, guessedRemoteId, facade, userChannel.receiveAsFlow(), senderIdDeferred)
+            return link
         }
 
         /**

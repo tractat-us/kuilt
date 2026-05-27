@@ -42,7 +42,7 @@ internal class WebRTCPeerLink(
     private val userFrames: Flow<ByteArray> = facade.incomingBytes,
     private val senderIdDeferred: Deferred<PeerId> = CompletableDeferred(remoteId),
 ) : Seam {
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    internal val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val sequenceCounter = SequenceCounter()
     private val _peers = MutableStateFlow(setOf(selfId, remoteId))
 
