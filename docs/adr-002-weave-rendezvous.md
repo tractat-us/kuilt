@@ -68,38 +68,32 @@ Each fabric's `weave` switches on `Rendezvous`; the unsupported variant throws `
 | **multipeer** `MultipeerPeerLinkFactory` (`expect` common + 4 actuals: apple/jvm/wasmJs/android) | ✅ `check(activeSession==null)` then open | ✅ same guard then join | Both supported, single-session. **The `expect` declaration changes → every `actual` changes** (5 source sets). |
 | **webrtc** `WebRTCPeerLinkFactory` (wasmJs) | ✅ host handshake | ✅ joiner handshake | Both supported. `openWithServerRole`/`openWithServerRoleResult` stay as-is — *not* folded into `weave` (see above). |
 
-**In-repo extra implementor (fireworks-compose, not yet retired):** `transport-multipeer/.../MultipeerPeerLinkFactory` is a *parallel* implementation of kuilt's `Loom` still living in the consumer repo (`expect` common + apple/jvm/wasmJs/android/macos actuals). It implements the contract, so it migrates to `weave` alongside `kuilt-multipeer`. Confirm whether it's slated for deletion before this lands — if so, the migration is moot; if not, it's a sixth `expect`/`actual` set to touch.
+**No in-repo extra implementor.** An earlier draft flagged `transport-multipeer/.../MultipeerPeerLinkFactory` as a sixth `Loom` implementor in the consumer — that module was **deleted in #1613** (kuilt Phase 1e; transport now lives only in `:kuilt-multipeer`, game glue in `:live-multipeer`). So `kuilt-multipeer` is the only multipeer implementor. (The original recon ran on a 7-commit-stale checkout; re-verified against current `origin/main`, which also renamed `PeerLink*`→`Seam*` and `Multipeer*`→`MC*` in #1630 — the names below are current.)
 
-## Consumer blast radius (fireworks-compose, recon read-only)
+## Consumer blast radius (fireworks-compose, re-verified against current `origin/main`)
 
-**The asymmetry is genuine, but the consumer surface is tiny — one chokepoint.** Almost every consumer `open`/`join` flows through `PeerLinkLiveTransport` (`live-runtime`), whose three factory methods are the *only* places that call a `Loom` directly:
+**One chokepoint, and it's tiny.** `SeamLiveTransport` (`live-runtime`; renamed from `PeerLinkLiveTransport` in #1630) is the only consumer code that calls a `Loom` directly, via its `host`/`join`/`auto` factory methods:
 
 ```kotlin
-host(factory, config)        →  factory.open(config)              // → factory.host(config)
+host(factory, config)        →  factory.open(config)              // → factory.host(config)   [1-line rename]
 join(factory, advertisement) →  factory.join(advertisement)       // unchanged (wrapper survives)
 auto(opener, config)         →  opener.openWithServerRole(config) // unchanged (dynamic role unaffected)
 ```
 
-If the `host`/`join` wrappers ship, **`PeerLinkLiveTransport` changes one line** (`factory.open(config)` → `factory.host(config)`) and the ~15 downstream sites that call `PeerLinkLiveTransport.host/join/auto` change **zero**:
+With the `host`/`join` wrappers, the **~22** downstream sites that call `SeamLiveTransport.host/join/auto` change **zero**: composeApp `LANLobbyScreen.{jvm,android,ios,wasmJs}`, `QuickPlayScreen.{jvm,ios}`, `LiveDemoModule.{jvm,wasmJs}`, `IosMCSessionFactory`, `RemoteSpectateRuntimeFactory`, + tests (`SeamLiveTransportTest`, `PairedLanRealNetworkTest`, `PairedRuntimeHarness`).
 
-| Call site (via `PeerLinkLiveTransport`) | Count | Changes? |
+**Direct `Loom` rendezvous callers** — the only sites that rename `open(`→`host(` (every `join` caller is unchanged, the wrapper survives):
+
+| Call site | `open`→`host` | `join` (unchanged) |
 |---|---|---|
-| `composeApp` UI / DI (`LANLobbyScreen.{jvm,android,ios,wasmJs}`, `QuickPlayScreen.jvm`, `LiveDemoModule.{jvm,wasmJs}`) | ~10 | No |
-| `live-runtime` `RemoteSpectateRuntimeFactory`, tests (`PeerLinkLiveTransportTest`, `WebRtcHostJoinerIntegrationTest`) | ~3 files | No |
-| `composeApp` tests (`PairedLanRealNetworkTest`, `PairedRuntimeHarness`) | 2 | No |
+| `live-runtime/SeamLiveTransport.kt` (chokepoint, prod) | `:57` | `:72` |
+| `live-multipeer/MCLeaderListener.kt` (prod) | `:62` | — |
+| `data-remote/HttpRemoteGameRepository.kt` | — | `:64` |
+| `session-protocol` tests (`MembershipTest`, `TestHelpers`) | 3 | 3 |
+| `live-runtime` tests (`SeamLiveTransportTest`, `WebRtcHostJoinerIntegrationTest`) | 7 | — |
+| `live-multipeer` test (`MCLeaderListenerTest`) | 5 | — |
 
-**Direct `Loom` callers (bypass the chokepoint) — these change only if the wrapper they use is renamed:**
-
-| Call site | Call | Under the wrapper plan |
-|---|---|---|
-| `live-multipeer/MultipeerLeaderListener.kt:62` | `factory.open(sessionConfig)` | `factory.host(sessionConfig)` (one rename) |
-| `data-remote/HttpRemoteGameRepository.kt:64` | `loom.join(advertisement)` | unchanged (`join` wrapper survives) |
-| `live-runtime/PeerLinkLiveTransport.kt:57,72` | `factory.open` / `factory.join` | `.host` rename + `.join` unchanged |
-| `session-protocol` tests (`TestHelpers`, `MembershipTest`) | `factory.open(...)` / `factory.join(...)` | `.host` rename + `.join` unchanged |
-| `live-multipeer` tests (`MultipeerLeaderListenerTest`) | `factory.open(...)` ×6 | `.host` rename |
-| `live-runtime` tests (`PeerLinkLiveTransportTest`, `WebRtcHostJoinerIntegrationTest`) | `factory.open(...)` | `.host` rename |
-
-Net consumer cost with wrappers: ~6 files renaming `open(` → `host(`; **zero** behavioural change; the `includeBuild` build stays green the moment the wrappers ship. Without wrappers (hard break): every site above rewrites to `weave(New(...))`/`weave(Existing(...))` in one coordinated commit — larger, and forces kuilt+consumer to move together.
+Net consumer cost with wrappers: **2 production** `open`→`host` renames (`SeamLiveTransport.kt:57`, `MCLeaderListener.kt:62`) + ~15 test-line renames; **zero** behavioural change; the `includeBuild` build stays green the moment the wrappers ship. Dynamic role (`LiveDemoModule.wasmJs.kt:97` `openWithServerRoleResult`) is untouched. Without wrappers (hard break): every site above rewrites to `weave(New(...))`/`weave(Existing(...))` in one coordinated commit — larger, and forces kuilt+consumer to move together.
 
 **`includeBuild` lockstep:** fireworks-compose consumes kuilt via a presence-gated `includeBuild ../kuilt` override. A breaking kuilt API change breaks the fireworks build the instant both are checked out locally — so the abstract-method change (`open`/`join` → `weave`) must land in kuilt **and** the consumer's `PeerLinkLiveTransport` one-line edit must land together, *unless* the wrappers absorb it. Wrappers are what make this not a single atomic cross-repo commit.
 
@@ -109,8 +103,8 @@ Strictly serial unless noted. Foundation-first: `weave` lands before ADR-001's h
 
 1. **ADR-002 + ADR-001 update** (this PR #10, docs-only) → land.
 2. **`:kuilt-core`: add `Rendezvous`, add `weave` + `host`/`join` wrappers, migrate `InMemoryLoom`** to `override fun weave`. Existing `InMemoryLoomTest` stays green. *(serial — everything below depends on the contract)*
-3. **Each fabric's `weave`** — can **parallelize** (4 independent PRs, each its own module): websocket, mdns, webrtc, multipeer. Multipeer is the heaviest (`expect` + 4 actuals); if `transport-multipeer` in the consumer is also live, its 6 source sets migrate in the same cross-repo step.
-4. **Version bump + consumer migration** — `PeerLinkLiveTransport` one-line `open`→`host`; the ~6 direct-caller `open(`→`host(` renames. *(serial after 2–3; gated by the `includeBuild` break if wrappers are *not* used — with wrappers this is low-risk and can trail.)*
+3. **Each fabric's `weave`** — can **parallelize** (4 independent PRs, each its own module): websocket, mdns, webrtc, multipeer. Multipeer is the heaviest (`expect` + 4 actuals). No consumer-side multipeer impl to migrate (`:transport-multipeer` already deleted, #1613).
+4. **Version bump + consumer migration** — `SeamLiveTransport.kt:57` one-line `open`→`host`; `MCLeaderListener.kt:62`; the ~15 test-line renames. *(serial after 2–3; gated by the `includeBuild` break if wrappers are *not* used — with wrappers this is low-risk and can trail.)*
 5. **ADR-001 conformance reshape** (`newLoom()` → `newLoomPair()`) rebuilt to drive `weave` / `host` / `join`. *(serial after the contract is stable — building the harness on the final contract avoids re-touching it.)*
 6. **Four fabric conformance tests** — parallelize (per ADR-001 §Sequencing: webrtc → multipeer → websocket → mdns by tractability).
 
@@ -121,7 +115,7 @@ Strictly serial unless noted. Foundation-first: `weave` lands before ADR-001's h
 
 - `Loom`'s abstract surface changes: `open`/`join` (abstract) → `weave` (abstract) + `host`/`join` (default wrappers). `explicitApi()` requires explicit `public` on all three.
 - `Rendezvous` is new public API in `:kuilt-core`.
-- Every fabric implementor rewrites its dispatch into a single `when (rendezvous)`. Multipeer touches 5 source sets (+6 if `transport-multipeer` is still live).
+- Every fabric implementor rewrites its dispatch into a single `when (rendezvous)`. Multipeer touches 5 source sets (`expect` + 4 actuals in `:kuilt-multipeer`; no consumer-side impl — `:transport-multipeer` deleted in #1613).
 - Dynamic role (`openWithServerRole*`) is explicitly **out of `weave`** and documented as the relay-assigned escape hatch — no behavioural change to Quick Play.
 - Docs to update when implementing: `CLAUDE.md` "one-paragraph orientation" (`open`/`join` → `weave`), `docs/architecture.md`, `docs/usage.md`.
 - **ADR-001 stays valid.** `weave` does not remove the two-endpoint need — the listen/connect asymmetry is in the transport, so `newLoomPair()` is still required (a host Loom + a joiner Loom). ADR-001's suite sketches now drive `weave(New(...))` / `weave(Existing(...))` (or the wrappers); the `newLoomPair()` decision is unchanged.
