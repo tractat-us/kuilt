@@ -11,9 +11,9 @@ import kotlin.time.Duration
  *
  * Faults are per-[Direction] unless otherwise noted.
  */
-sealed interface FaultProfile {
+public sealed interface FaultProfile {
     /** No faults — all frames delivered in order. */
-    data object Healthy : FaultProfile
+    public data object Healthy : FaultProfile
 
     /**
      * Drop every frame in [direction].
@@ -23,7 +23,7 @@ sealed interface FaultProfile {
      * An asymmetric (one-way) loss is [DropAll] with [Direction.Outbound]
      * or [Direction.Inbound].
      */
-    data class DropAll(
+    public data class DropAll(
         val direction: Direction = Direction.Both,
     ) : FaultProfile
 
@@ -33,7 +33,7 @@ sealed interface FaultProfile {
      * [seed] makes the pseudo-random draw deterministic across test runs.
      * A [probability] of 0.0 never drops; 1.0 always drops.
      */
-    data class DropProbabilistic(
+    public data class DropProbabilistic(
         val probability: Double,
         val seed: Long,
         val direction: Direction = Direction.Both,
@@ -46,7 +46,7 @@ sealed interface FaultProfile {
      * Inbound index is tracked per-link across received frames.
      * Indexes outside [frameIndexes] are delivered normally.
      */
-    data class DropSpecific(
+    public data class DropSpecific(
         val frameIndexes: Set<Int>,
         val direction: Direction = Direction.Both,
     ) : FaultProfile
@@ -57,7 +57,7 @@ sealed interface FaultProfile {
      * Uses [kotlinx.coroutines.delay] so [kotlinx.coroutines.test.runTest]'s
      * virtual time controls delivery — no wall-clock dependency.
      */
-    data class DelayAll(
+    public data class DelayAll(
         val delay: Duration,
         val direction: Direction = Direction.Both,
     ) : FaultProfile
@@ -71,7 +71,7 @@ sealed interface FaultProfile {
      *
      * [seed] guarantees determinism across test runs.
      */
-    data class ReorderWindow(
+    public data class ReorderWindow(
         val windowSize: Int,
         val seed: Long,
         val direction: Direction = Direction.Both,
@@ -85,7 +85,7 @@ sealed interface FaultProfile {
      *
      * This is the outbound-only ceiling. Inbound is unaffected.
      */
-    data class BufferCeiling(
+    public data class BufferCeiling(
         val maxOutbound: Int,
     ) : FaultProfile
 
@@ -96,7 +96,7 @@ sealed interface FaultProfile {
      * Frames with index < [frameIndex] are sent normally.
      * Frames at or after [frameIndex] see the link already closed.
      */
-    data class CloseAt(
+    public data class CloseAt(
         val frameIndex: Int,
         val reason: CloseReason = CloseReason.Normal,
     ) : FaultProfile
@@ -106,13 +106,13 @@ sealed interface FaultProfile {
      * if any profile drops a frame, later profiles are not consulted for that
      * frame. Delays accumulate.
      */
-    data class Composite(
+    public data class Composite(
         val profiles: List<FaultProfile>,
     ) : FaultProfile
 }
 
 /** Which direction a fault applies to. */
-enum class Direction {
+public enum class Direction {
     /** Frames sent by this link (broadcast / sendTo). */
     Outbound,
 
