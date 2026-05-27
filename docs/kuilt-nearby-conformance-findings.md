@@ -97,7 +97,7 @@ broadcast, confirm receipt. Flagged as the external follow-up on #1518.
 
 ## Summary of recommendations to epic #1515
 
-1. Adopt `:kuilt-conformance` across all fabrics so "one suite, all fabrics pass" is real.
+1. Adopt `:kuilt-conformance` across all fabrics so "one suite, all fabrics pass" is real. ✅ Unblocked: `SeamConformanceSuite` now exposes `newLoomPair()` (ADR-001), enabling role-split fabrics (websocket, mdns, webrtc, multipeer) to supply distinct host/joiner Looms rather than a single loopback instance.
 2. Document the identity-exchange obligation for local-namespace P2P fabrics in the contract guide.
 3. Park (don't pursue) relaxing `incoming`'s total-order guarantee for `STREAM`-style parallelism.
 4. No `Loom`/`Seam`/`Swatch` type changes are needed — the contract held.
