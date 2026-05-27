@@ -15,6 +15,13 @@ Published to GitHub Packages under `us.tractat.kuilt:*`. Kotlin Multiplatform
 (JVM, Android, iOS, macOS, wasmJs). See `docs/architecture.md` for the design
 and `docs/usage.md` for how to consume it.
 
+> **Status: in active development (pre-1.0).** The API and module layout are
+> still moving as the extraction lands. Bias toward **aggressive, low-ceremony
+> merging** — small PRs, auto-merge once green, fix-forward over long review
+> cycles. The only hard gate is the `ci-required` check (below); everything else
+> (up-to-date branches, reviews, signed-off discussions) is intentionally relaxed
+> while the foundation settles.
+
 ## Module structure & dependency direction
 
 | Module | Targets | Role |
@@ -79,6 +86,22 @@ tests as the `MDNS_MULTICAST_TESTS` env var (see `kuilt-mdns/build.gradle.kts`).
   `-P`-gated; the conformance suite runs against an in-memory or loopback harness.
 - Test methods: no `test` prefix (the `@Test` annotation suffices); multi-assert
   tests use `assertAll()`.
+
+## CI & merging
+
+`.github/workflows/ci.yml` uses an aggregator pattern: a cheap `detect` job
+classifies the change, the heavy `build` job (`./gradlew build`) runs only when
+the change is **not** docs-only, and `ci-required` aggregates them into the one
+required status check. **Docs-only PRs** (every changed file is `*.md` or under
+`docs/`) **skip the build** — `ci-required` goes green without it — so the many
+documentation PRs don't wait on a KMP build. Touch any non-doc file and the full
+build runs.
+
+`main` is branch-protected to require only `ci-required` (no required reviews,
+no up-to-date-branch requirement, admins not enforced — matching the aggressive
+pre-1.0 posture). Auto-merge is enabled and head branches are deleted on merge,
+so the normal flow is: open PR → `gh pr merge <n> --auto --squash` → it lands as
+soon as `ci-required` is green.
 
 ## Versioning & publishing
 

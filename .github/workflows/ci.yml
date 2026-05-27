@@ -1,16 +1,27 @@
 name: ci
 
-# Fast feedback on every pull request and on push to main. Builds and
-# tests every KMP target that runs on a GitHub-hosted ubuntu runner
-# (JVM, Android, wasmJs, plus the iOS/macOS klibs compile). The mDNS
-# multicast integration suite stays opt-in (-Pmdns.multicast.tests) so
-# CI never depends on real multicast traffic. Publishing is separate
-# (publish.yml, on push to main only).
+# Aggregator pattern (mirrors fireworks-compose's build.yml):
+#
+#   detect  →  build  →  ci-required (the one required check)
+#
+# detect (ubuntu, always, cheap, no JDK) classifies whether the change is
+# docs-only by diffing the changed files.
+#
+# build (the heavy KMP build) runs only when detect says NOT docs-only.
+#
+# ci-required (if: !cancelled()) is the SOLE required status check that branch
+# protection looks for. It passes when detect+build both succeed OR when build
+# was legitimately skipped (docs-only), and fails when either failed/cancelled.
+# This lets docs-only PRs merge immediately without waiting on a build, while
+# code PRs still gate on it. Publishing stays separate (publish.yml).
 
 on:
   push:
     branches: [main]
   pull_request:
+    # ready_for_review so draft→ready transitions trigger a build (stack-draft
+    # convention: only the bottom + top of a stack are out of draft).
+    types: [opened, synchronize, reopened, ready_for_review]
   workflow_dispatch:
 
 permissions:
@@ -25,13 +36,67 @@ defaults:
     shell: bash
 
 jobs:
+  # ── detect ───────────────────────────────────────────────────────────────
+  # Always runs (except on draft PRs). Emits docs-only=true when every changed
+  # path is a doc (*.md or docs/**). Cheap: hosted runner, no JDK, no Gradle.
+  detect:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    outputs:
+      docs-only: ${{ steps.classify.outputs.docs-only }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 50
+
+      - name: Classify change (docs-only?)
+        id: classify
+        run: |
+          set -euo pipefail
+          case "${{ github.event_name }}" in
+            pull_request)
+              FILES=$(git diff --name-only "${{ github.event.pull_request.base.sha }}" HEAD 2>/dev/null || echo "")
+              ;;
+            push)
+              BEFORE="${{ github.event.before }}"
+              if [[ "$BEFORE" == "0000000000000000000000000000000000000000" ]]; then
+                echo "Initial push — treating as not docs-only."
+                echo "docs-only=false" >> "$GITHUB_OUTPUT"; exit 0
+              fi
+              FILES=$(git diff --name-only "$BEFORE" "${{ github.event.after }}" 2>/dev/null || echo "")
+              ;;
+            *)
+              echo "${{ github.event_name }} — treating as not docs-only."
+              echo "docs-only=false" >> "$GITHUB_OUTPUT"; exit 0
+              ;;
+          esac
+
+          if [ -z "$FILES" ]; then
+            echo "No changed files detected — treating as not docs-only."
+            echo "docs-only=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+
+          echo "Changed files:"; echo "$FILES"
+
+          DOCS_ONLY=true
+          while IFS= read -r file; do
+            [ -z "$file" ] && continue
+            if [[ "$file" == *.md ]] || [[ "$file" == docs/* ]]; then
+              continue
+            fi
+            DOCS_ONLY=false; break
+          done <<< "$FILES"
+
+          [ "$DOCS_ONLY" = true ] && echo "::notice::All changes are docs-class — skipping the build."
+          echo "docs-only=$DOCS_ONLY" >> "$GITHUB_OUTPUT"
+
+  # ── build ────────────────────────────────────────────────────────────────
+  # The full KMP build. Skipped entirely when detect says docs-only.
   build:
+    needs: detect
+    if: needs.detect.outputs.docs-only != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    # Skip draft PRs — they re-run automatically when marked ready for review.
-    # Pushes to main always build.
-    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
-
     steps:
       - uses: actions/checkout@v6
 
@@ -52,3 +117,36 @@ jobs:
 
       - name: Build and test all targets
         run: ./gradlew build
+
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-reports
+          path: |
+            **/build/reports/tests/
+            **/build/test-results/
+
+  # ── ci-required ────────────────────────────────────────────────────────────
+  # The SOLE required status check. Aggregates detect + build. Uses
+  # if: !cancelled() so it still runs when build is skipped (docs-only path).
+  ci-required:
+    needs: [detect, build]
+    if: |
+      !cancelled() &&
+      (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check gate results
+        run: |
+          DETECT="${{ needs.detect.result }}"
+          BUILD="${{ needs.build.result }}"
+          echo "detect: $DETECT"
+          echo "build:  $BUILD"
+          if [ "$DETECT" != "success" ]; then
+            echo "::error::detect job did not succeed (result: $DETECT)."; exit 1
+          fi
+          if [ "$BUILD" = "failure" ] || [ "$BUILD" = "cancelled" ]; then
+            echo "::error::build job $BUILD."; exit 1
+          fi
+          echo "All gates green (build: $BUILD)."
