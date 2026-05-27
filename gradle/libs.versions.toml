@@ -3,6 +3,7 @@ kotlin = "2.3.21"
 kotlinx-coroutines = "1.11.0"
 kotlinx-serialization = "1.11.0"
 ktor = "3.4.3"
+jmdns = "3.6.3"
 agp = "8.13.2"
 android-compileSdk = "36"
 android-minSdk = "24"
@@ -26,6 +27,8 @@ ktor-serverWebsockets = { module = "io.ktor:ktor-server-websockets-jvm", version
 ktor-serverNetty = { module = "io.ktor:ktor-server-netty-jvm", version.ref = "ktor" }
 ktor-serverCio = { module = "io.ktor:ktor-server-cio", version.ref = "ktor" }
 ktor-serverTestHost = { module = "io.ktor:ktor-server-test-host-jvm", version.ref = "ktor" }
+# jmdns — JVM/Android Bonjour/mDNS service discovery for kuilt-mdns:
+jmdns = { module = "org.jmdns:jmdns", version.ref = "jmdns" }
 # Gradle plugin artifacts for build-logic to depend on:
 kotlin-gradlePlugin = { module = "org.jetbrains.kotlin:kotlin-gradle-plugin", version.ref = "kotlin" }
 kotlin-serialization-gradlePlugin = { module = "org.jetbrains.kotlin:kotlin-serialization", version.ref = "kotlin" }
