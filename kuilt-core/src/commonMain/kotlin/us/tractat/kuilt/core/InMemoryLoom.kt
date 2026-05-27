@@ -35,26 +35,24 @@ public class InMemoryLoom : Loom {
     // Monotonically increasing counter used to generate unique peer IDs.
     private var peerCounter = 0
 
-    override suspend fun open(config: Pattern): Seam =
-        mutex.withLock {
-            val id = freshPeerId()
-            val link = InMemorySeam(id, this)
-            links[id] = link
-            _peers.update { it + id }
-            link
+    override suspend fun weave(rendezvous: Rendezvous): Seam =
+        when (rendezvous) {
+            is Rendezvous.New -> mutex.withLock { newSeam() }
+            is Rendezvous.Existing -> mutex.withLock {
+                require(rendezvous.tag is InMemoryTag) {
+                    "InMemoryLoom only joins InMemoryTag, got ${rendezvous.tag::class}"
+                }
+                newSeam()
+            }
         }
 
-    override suspend fun join(advertisement: Tag): Seam =
-        mutex.withLock {
-            require(advertisement is InMemoryTag) {
-                "InMemoryLoom only joins InMemoryTag, got ${advertisement::class}"
-            }
-            val id = freshPeerId()
-            val link = InMemorySeam(id, this)
-            links[id] = link
-            _peers.update { it + id }
-            link
-        }
+    private fun newSeam(): InMemorySeam {
+        val id = freshPeerId()
+        val link = InMemorySeam(id, this)
+        links[id] = link
+        _peers.update { it + id }
+        return link
+    }
 
     public val peers: StateFlow<Set<PeerId>> = _peers.asStateFlow()
 

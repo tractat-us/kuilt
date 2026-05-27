@@ -12,10 +12,9 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.first
 import us.tractat.kuilt.core.Loom
-import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.Seam
-import us.tractat.kuilt.core.Tag
 import kotlin.uuid.ExperimentalUuidApi
 import kotlin.uuid.Uuid
 
@@ -73,21 +72,20 @@ public class KtorServerLoom(
     public suspend fun nextLink(): Seam = connectionChannel.receive()
 
     /**
-     * Equivalent to [nextLink] — suspends until the next connection arrives.
-     *
-     * The [config] parameter is accepted for [Loom] compatibility but is not used.
+     * Establishes a [Seam]:
+     * - [Rendezvous.New] — equivalent to [nextLink]; the [Pattern] is accepted for
+     *   [Loom] compatibility but is not used.
+     * - [Rendezvous.Existing] — not supported on the server loom; throws [UnsupportedOperationException].
      */
-    override suspend fun open(config: Pattern): Seam = nextLink()
-
-    /**
-     * Not supported on the server loom — the server accepts connections, it does
-     * not join advertisements.
-     */
-    override suspend fun join(advertisement: Tag): Seam =
-        throw UnsupportedOperationException(
-            "KtorServerLoom does not join advertisements. " +
-                "Use KtorClientLoom.join(WebSocketAdvertisement) for the client side.",
-        )
+    override suspend fun weave(rendezvous: Rendezvous): Seam =
+        when (rendezvous) {
+            is Rendezvous.New -> nextLink()
+            is Rendezvous.Existing ->
+                throw UnsupportedOperationException(
+                    "KtorServerLoom does not join advertisements. " +
+                        "Use KtorClientLoom.join(WebSocketAdvertisement) for the client side.",
+                )
+        }
 
     private fun installWebSocketsIfAbsent(application: Application) {
         if (application.pluginOrNull(WebSockets) == null) {

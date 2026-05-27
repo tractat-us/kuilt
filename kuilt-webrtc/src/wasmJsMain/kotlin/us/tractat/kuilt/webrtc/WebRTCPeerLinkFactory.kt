@@ -8,8 +8,8 @@ import us.tractat.kuilt.webrtc.internal.WebRTCPeerLink
 import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.Seam
-import us.tractat.kuilt.core.Tag
 import kotlin.random.Random
 
 /**
@@ -38,23 +38,27 @@ public class WebRTCPeerLinkFactory
             iceConfig: IceConfig = IceConfig.DefaultStun,
         ) : this(signaling, room, iceConfig, BrowserRtcFacadeFactory())
 
-        override suspend fun open(config: Pattern): Seam {
-            val selfId = PeerId(randomToken(config.displayName.ifBlank { "host" }))
-            val remoteId = PeerId(randomToken("peer"))
-            val facade = facadeFactory.create(iceConfig, hostInitiated = true)
-            val session = signaling.open(room)
-            HandshakeRunner.runHost(facade, session)
-            return WebRTCPeerLink(selfId, remoteId, facade)
-        }
-
-        override suspend fun join(advertisement: Tag): Seam {
-            val selfId = PeerId(randomToken("peer"))
-            val remoteId = PeerId(randomToken(advertisement.displayName.ifBlank { "host" }))
-            val facade = facadeFactory.create(iceConfig, hostInitiated = false)
-            val session = signaling.open(room)
-            HandshakeRunner.runJoiner(facade, session)
-            return WebRTCPeerLink(selfId, remoteId, facade)
-        }
+        override suspend fun weave(rendezvous: Rendezvous): Seam =
+            when (rendezvous) {
+                is Rendezvous.New -> {
+                    val config = rendezvous.pattern
+                    val selfId = PeerId(randomToken(config.displayName.ifBlank { "host" }))
+                    val remoteId = PeerId(randomToken("peer"))
+                    val facade = facadeFactory.create(iceConfig, hostInitiated = true)
+                    val session = signaling.open(room)
+                    HandshakeRunner.runHost(facade, session)
+                    WebRTCPeerLink(selfId, remoteId, facade)
+                }
+                is Rendezvous.Existing -> {
+                    val advertisement = rendezvous.tag
+                    val selfId = PeerId(randomToken("peer"))
+                    val remoteId = PeerId(randomToken(advertisement.displayName.ifBlank { "host" }))
+                    val facade = facadeFactory.create(iceConfig, hostInitiated = false)
+                    val session = signaling.open(room)
+                    HandshakeRunner.runJoiner(facade, session)
+                    WebRTCPeerLink(selfId, remoteId, facade)
+                }
+            }
 
         /**
          * Open a peer link using server-assigned role assignment (#1300 B0).

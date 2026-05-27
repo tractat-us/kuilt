@@ -19,9 +19,8 @@ import platform.MultipeerConnectivity.MCPeerID
 import platform.MultipeerConnectivity.MCSession
 import platform.darwin.NSObject
 import us.tractat.kuilt.core.Loom
-import us.tractat.kuilt.core.Pattern
+import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.Seam
-import us.tractat.kuilt.core.Tag
 import us.tractat.kuilt.multipeer.internal.MCSessionLink
 
 private val log = KotlinLogging.logger {}
@@ -93,7 +92,14 @@ public actual class MultipeerPeerLinkFactory actual constructor(
     private var browserDelegate: MCNearbyServiceBrowserDelegateProtocol? = null
     private var activeLink: MCSessionLink? = null
 
-    public actual override suspend fun open(config: Pattern): Seam {
+    public actual override suspend fun weave(rendezvous: Rendezvous): Seam =
+        when (rendezvous) {
+            is Rendezvous.New -> openSession()
+            is Rendezvous.Existing -> joinSession(rendezvous.tag as? MultipeerAdvertisement
+                ?: error("MultipeerPeerLinkFactory.weave requires a MultipeerAdvertisement, got ${rendezvous.tag::class}"))
+        }
+
+    private fun openSession(): Seam {
         check(activeLink == null) { "MultipeerPeerLinkFactory already has an active session" }
         val session =
             MCSession(
@@ -121,10 +127,7 @@ public actual class MultipeerPeerLinkFactory actual constructor(
         return link
     }
 
-    public actual override suspend fun join(advertisement: Tag): Seam {
-        require(advertisement is MultipeerAdvertisement) {
-            "MultipeerPeerLinkFactory.join requires a MultipeerAdvertisement, got ${advertisement::class}"
-        }
+    private fun joinSession(advertisement: MultipeerAdvertisement): Seam {
         check(activeLink == null) { "MultipeerPeerLinkFactory already has an active session" }
         val activeBrowser =
             browser

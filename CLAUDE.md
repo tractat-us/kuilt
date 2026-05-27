@@ -35,14 +35,16 @@ points back up — `:kuilt-core` must stay free of fabric-specific imports.
 
 ## The contract (one-paragraph orientation)
 
-`Loom` is a factory: `open(Pattern): Seam` starts a session, `join(Tag): Seam`
-joins one, `availability(): FabricAvailability` reports whether the fabric is
-usable on this runtime. `Seam` is one peer's *symmetric* view of a multi-peer
-session — there is no client/server split at this layer; a 2-peer WebSocket
-connection is just the degenerate `peers.size == 2` case. `Swatch` is the
-opaque, binary-only frame. `incoming: Flow<Swatch>` is **single-collection** —
-collect it once per `Seam`; fan out with `shareIn`, never collect twice. This
-is the cohered contract of ADR-034; the full rationale is in `docs/architecture.md`.
+`Loom` is a factory: `weave(Rendezvous): Seam` is the single abstract method —
+pass `Rendezvous.New(pattern)` to host a session or `Rendezvous.Existing(tag)` to
+join one. Convenience wrappers `host(Pattern)` and `join(Tag)` delegate to `weave`.
+`availability(): FabricAvailability` reports whether the fabric is usable on this
+runtime. `Seam` is one peer's *symmetric* view of a multi-peer session — there is
+no client/server split at this layer; a 2-peer WebSocket connection is just the
+degenerate `peers.size == 2` case. `Swatch` is the opaque, binary-only frame.
+`incoming: Flow<Swatch>` is **single-collection** — collect it once per `Seam`;
+fan out with `shareIn`, never collect twice. This is the cohered contract of
+ADR-034 / ADR-002; the full rationale is in `docs/architecture.md`.
 
 ## Build & test commands
 

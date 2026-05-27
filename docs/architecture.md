@@ -37,9 +37,15 @@ WebSocket (Far), so `kuilt-mdns` depends on `kuilt-websocket`, not the reverse.
 ## The contract
 
 ```kotlin
+sealed interface Rendezvous {
+    data class New(val pattern: Pattern) : Rendezvous        // host a new session
+    data class Existing(val tag: Tag) : Rendezvous           // join an existing one
+}
+
 interface Loom {
-    suspend fun open(config: Pattern): Seam      // start a new session
-    suspend fun join(advertisement: Tag): Seam   // join an existing one
+    suspend fun weave(rendezvous: Rendezvous): Seam           // the ONE abstract method
+    suspend fun host(pattern: Pattern): Seam = weave(Rendezvous.New(pattern))
+    suspend fun join(tag: Tag): Seam = weave(Rendezvous.Existing(tag))
     fun availability(): FabricAvailability = FabricAvailability.Available
 }
 

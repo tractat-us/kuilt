@@ -6,10 +6,9 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import us.tractat.kuilt.core.Loom
-import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.Seam
-import us.tractat.kuilt.core.Tag
 import us.tractat.kuilt.multipeer.internal.BridgePeerLink
 
 /**
@@ -100,7 +99,19 @@ public actual class MultipeerPeerLinkFactory actual constructor(
     @Volatile
     private var activeSession: Pointer? = null
 
-    public actual override suspend fun open(config: Pattern): Seam {
+    public actual override suspend fun weave(rendezvous: Rendezvous): Seam =
+        when (rendezvous) {
+            is Rendezvous.New -> openSession()
+            is Rendezvous.Existing -> {
+                val advertisement = rendezvous.tag
+                require(advertisement is MultipeerAdvertisement) {
+                    "MultipeerPeerLinkFactory.weave requires MultipeerAdvertisement; got ${advertisement::class}"
+                }
+                joinSession(advertisement)
+            }
+        }
+
+    private fun openSession(): BridgePeerLink {
         val lib = nativeLib ?: throwUnsupportedPlatform()
         val runtime = runtimeHandle ?: error("mc_runtime_create returned null on a macOS host — likely a stale dylib")
         check(activeSession == null) { "MultipeerPeerLinkFactory already has an active session" }
@@ -113,10 +124,7 @@ public actual class MultipeerPeerLinkFactory actual constructor(
         )
     }
 
-    public actual override suspend fun join(advertisement: Tag): Seam {
-        require(advertisement is MultipeerAdvertisement) {
-            "MultipeerPeerLinkFactory.join requires MultipeerAdvertisement; got ${advertisement::class}"
-        }
+    private fun joinSession(advertisement: MultipeerAdvertisement): BridgePeerLink {
         val lib = nativeLib ?: throwUnsupportedPlatform()
         val runtime = runtimeHandle ?: error("mc_runtime_create returned null on a macOS host")
         check(activeSession == null) { "MultipeerPeerLinkFactory already has an active session" }

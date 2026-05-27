@@ -16,6 +16,7 @@ import us.tractat.kuilt.core.FabricAvailability
 import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.Tag
 
@@ -65,6 +66,12 @@ public class NearbyLoom(
 
     override fun availability(): FabricAvailability = api.availability()
 
+    override suspend fun weave(rendezvous: Rendezvous): Seam =
+        when (rendezvous) {
+            is Rendezvous.New -> openSession(rendezvous.pattern)
+            is Rendezvous.Existing -> joinSession(rendezvous.tag)
+        }
+
     /**
      * Start advertising and return a [Seam] immediately.
      *
@@ -75,7 +82,7 @@ public class NearbyLoom(
      * The background scope is derived from the caller's coroutine context so it
      * inherits the test dispatcher and is cleaned up when the seam is closed.
      */
-    override suspend fun open(config: Pattern): Seam {
+    private suspend fun openSession(config: Pattern): Seam {
         val peerId = freshPeerId()
         val endpointPeers = mutableMapOf<String, PeerId>()
         // Derive from caller so background work runs on the test dispatcher.
@@ -131,7 +138,7 @@ public class NearbyLoom(
      * Subscribe to [NearbyApi.endpointFound] BEFORE calling [NearbyApi.startDiscovery]
      * to avoid the emit-before-subscribe race with the fake's [MutableSharedFlow].
      */
-    override suspend fun join(advertisement: Tag): Seam {
+    private suspend fun joinSession(advertisement: Tag): Seam {
         val joinerPeerId = freshPeerId()
         val endpointPeers = mutableMapOf<String, PeerId>()
         val seamScope = CoroutineScope(currentCoroutineContext() + SupervisorJob())
