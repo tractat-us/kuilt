@@ -64,6 +64,7 @@ kotlin {
             }
         }
         jvmTest.dependencies {
+            implementation(project(":kuilt-conformance"))
             implementation(libs.kotlin.testJunit)
             implementation(libs.kotlinx.coroutines.test)
             implementation(libs.ktor.serverTestHost)
