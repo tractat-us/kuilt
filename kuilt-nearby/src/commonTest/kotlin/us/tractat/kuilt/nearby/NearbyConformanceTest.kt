@@ -1,7 +1,7 @@
 package us.tractat.kuilt.nearby
 
+import us.tractat.kuilt.conformance.SeamConformanceSuite
 import us.tractat.kuilt.core.Loom
-import us.tractat.kuilt.core.SeamConformanceSuite
 
 /**
  * Verifies that [NearbyLoom] satisfies every invariant in [SeamConformanceSuite]

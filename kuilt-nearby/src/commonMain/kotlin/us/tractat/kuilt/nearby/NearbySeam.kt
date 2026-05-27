@@ -1,6 +1,7 @@
 package us.tractat.kuilt.nearby
 
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
@@ -61,8 +62,10 @@ internal class NearbySeam(
     private val reassemblers = mutableMapOf<String, ChunkCodec.Reassembler>()
     private val sequences = mutableMapOf<String, Long>()
 
-    private val receiveJob: Job = scope.launch { receiveLoop() }
-    private val disconnectJob: Job = scope.launch { disconnectLoop() }
+    // UNDISPATCHED so both loops subscribe to their event flows synchronously at
+    // construction — before any handshake/data events can be emitted.
+    private val receiveJob: Job = scope.launch(start = CoroutineStart.UNDISPATCHED) { receiveLoop() }
+    private val disconnectJob: Job = scope.launch(start = CoroutineStart.UNDISPATCHED) { disconnectLoop() }
 
     // ── receive ───────────────────────────────────────────────────────────────
 

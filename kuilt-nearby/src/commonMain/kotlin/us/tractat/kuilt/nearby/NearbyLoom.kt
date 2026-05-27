@@ -2,9 +2,9 @@ package us.tractat.kuilt.nearby
 
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.update
@@ -100,7 +100,9 @@ public class NearbyLoom(
         api.startAdvertising(config.displayName, serviceId)
 
         // Background: accept first joiner, exchange identity, update host seam.
-        seamScope.launch {
+        // UNDISPATCHED so the host's handshake collectors subscribe synchronously
+        // during open() — before any joiner's requestConnection emits events.
+        seamScope.launch(start = CoroutineStart.UNDISPATCHED) {
             runCatching {
                 val machine = ConnectStateMachine(
                     selfId = peerId,
@@ -109,7 +111,8 @@ public class NearbyLoom(
                     serviceId = serviceId,
                     timeoutMs = timeoutMs,
                 )
-                val link = machine.await(this)
+                // Advertiser: already advertising, so no kickoff — just await a peer.
+                val link = machine.run(this) {}
                 mutex.withLock {
                     endpointPeers[link.endpointId] = link.remotePeerId
                     sharedPeers.update { it + link.remotePeerId }
@@ -158,9 +161,9 @@ public class NearbyLoom(
             timeoutMs = timeoutMs,
         )
 
-        val joinLink = coroutineScope {
+        // run() subscribes the handshake collectors before triggering requestConnection.
+        val joinLink = machine.run(seamScope) {
             api.requestConnection(advertisement.displayName, hostEndpointId)
-            machine.await(this)
         }
         endpointPeers[joinLink.endpointId] = joinLink.remotePeerId
 
@@ -185,9 +188,10 @@ public class NearbyLoom(
         trigger: suspend () -> Unit,
     ): String {
         val deferred = CompletableDeferred<String>()
-        val job: Job = scope.launch {
+        // UNDISPATCHED so we subscribe before trigger() emits EndpointFound.
+        val job: Job = scope.launch(start = CoroutineStart.UNDISPATCHED) {
             api.endpointFound.collect { event ->
-                deferred.complete(event.endpointId)
+                if (!deferred.isCompleted) deferred.complete(event.endpointId)
             }
         }
         trigger()

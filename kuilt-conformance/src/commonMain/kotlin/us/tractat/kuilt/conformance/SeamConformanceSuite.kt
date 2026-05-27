@@ -1,9 +1,14 @@
-package us.tractat.kuilt.core
+package us.tractat.kuilt.conformance
 
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.test.TestResult
 import kotlinx.coroutines.test.runTest
+import us.tractat.kuilt.core.FabricAvailability
+import us.tractat.kuilt.core.InMemoryTag
+import us.tractat.kuilt.core.Loom
+import us.tractat.kuilt.core.Pattern
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -16,17 +21,19 @@ import kotlin.test.assertTrue
  * Every [Test] in this class encodes a required invariant of the seam
  * contract — a conforming implementation must pass all of them.
  *
- * @see InMemoryLoomConformanceTest
+ * Lives in `commonMain` of `:kuilt-conformance` (not a module's `commonTest`)
+ * so every fabric adapter can subclass it from its own test source set —
+ * realising the "one conformance suite, every fabric passes it" invariant.
  */
-abstract class SeamConformanceSuite {
+public abstract class SeamConformanceSuite {
 
     /** Provide a fresh [Loom] for each test. */
-    abstract fun newLoom(): Loom
+    public abstract fun newLoom(): Loom
 
     // ── (1) open yields a usable Seam with a non-empty selfId ────────────────
 
     @Test
-    fun openYieldsUsableSeamWithNonEmptySelfId() =
+    public fun openYieldsUsableSeamWithNonEmptySelfId(): TestResult =
         runTest {
             val loom = newLoom()
             val seam = loom.open(Pattern("host"))
@@ -37,7 +44,7 @@ abstract class SeamConformanceSuite {
     // ── (2) broadcast from host delivers to a joined peer ───────────────────
 
     @Test
-    fun broadcastFromHostDeliversToJoinedPeer() =
+    public fun broadcastFromHostDeliversToJoinedPeer(): TestResult =
         runTest {
             val loom = newLoom()
             val host = loom.open(Pattern("host"))
@@ -57,7 +64,7 @@ abstract class SeamConformanceSuite {
     // ── (3) incoming preserves send order to a single collector ─────────────
 
     @Test
-    fun incomingPreservesSendOrderToSingleCollector() =
+    public fun incomingPreservesSendOrderToSingleCollector(): TestResult =
         runTest {
             val loom = newLoom()
             val host = loom.open(Pattern("host"))
@@ -79,7 +86,7 @@ abstract class SeamConformanceSuite {
     // ── (4) peers reports selfId and ≥2 after a join ────────────────────────
 
     @Test
-    fun peersReportsSelfIdAndAtLeastTwoAfterJoin() =
+    public fun peersReportsSelfIdAndAtLeastTwoAfterJoin(): TestResult =
         runTest {
             val loom = newLoom()
             val host = loom.open(Pattern("host"))
@@ -93,7 +100,7 @@ abstract class SeamConformanceSuite {
     // ── (5) close is idempotent — calling twice must not throw ──────────────
 
     @Test
-    fun closeIsIdempotent() =
+    public fun closeIsIdempotent(): TestResult =
         runTest {
             val loom = newLoom()
             val seam = loom.open(Pattern("host"))
@@ -105,7 +112,7 @@ abstract class SeamConformanceSuite {
     // ── (6) availability returns Available or Unavailable ───────────────────
 
     @Test
-    fun availabilityReturnsAKnownVariant() {
+    public fun availabilityReturnsAKnownVariant() {
         val loom = newLoom()
         val availability = loom.availability()
 

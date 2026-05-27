@@ -2,6 +2,7 @@ package us.tractat.kuilt.nearby
 
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
@@ -12,24 +13,27 @@ import us.tractat.kuilt.core.PeerId
  * for one side of a connection. Suspends until the live link is established
  * or throws on failure / timeout.
  *
+ * ## Subscribe-before-trigger
+ * All event collectors are launched with [CoroutineStart.UNDISPATCHED] so they
+ * have subscribed to the (hot, no-replay) event flows **before** [run] invokes
+ * [trigger]. Without this, the kickoff (`requestConnection`) would emit
+ * `ConnectionInitiated` before the collectors subscribed and the events would be
+ * lost — the classic `MutableSharedFlow` emit-before-subscribe race that hangs
+ * the handshake under `runTest`'s `StandardTestDispatcher`.
+ *
  * ## Identity exchange
- * Nearby assigns local-namespace endpoint IDs that are not stable across sessions.
- * To satisfy [Swatch.sender] stamping, each side sends its stable [PeerId] as the
- * very first BYTES payload immediately after the CONNECTED result. The machine
- * awaits both CONNECTED and the remote identity payload before resolving.
+ * Nearby assigns local-namespace endpoint IDs that are not stable across peers,
+ * so [us.tractat.kuilt.core.Swatch.sender] cannot be derived from an endpointId.
+ * Each side sends its stable [PeerId] as the first BYTES payload immediately after
+ * the CONNECTED result; the machine resolves only once both CONNECTED and the
+ * remote identity payload have arrived.
  *
  * ## Endpoint filtering
- * Because a single [NearbyApi] may be used for both roles simultaneously
- * (one loom, two state machines in the fake), events are filtered by endpoint ID:
- * - If [endpointId] is provided, only events with that ID are processed (discoverer path).
- * - If [endpointId] is null, the FIRST [ConnectionInitiated] event seen sets the target
- *   endpoint, after which all other events are filtered to that endpoint (advertiser path).
- *
- * @param selfId      This peer's stable identity.
- * @param api         The [NearbyApi] instance.
- * @param endpointId  Endpoint to filter on, or null for "first-seen" mode.
- * @param serviceId   Nearby service ID (informational).
- * @param timeoutMs   Timeout in milliseconds (default 30 s).
+ * A single [NearbyApi] may serve both roles at once (one loom, two machines in the
+ * fake), so events are filtered by endpoint ID:
+ * - non-null [endpointId] → only that endpoint's events (discoverer path);
+ * - null [endpointId] → the FIRST [ConnectionInitiated] seen claims the endpoint
+ *   (advertiser path), and subsequent events are filtered to it.
  */
 internal class ConnectStateMachine(
     private val selfId: PeerId,
@@ -40,67 +44,72 @@ internal class ConnectStateMachine(
 ) {
 
     /**
-     * Suspend until the handshake completes.
+     * Subscribe all handshake collectors (synchronously, via UNDISPATCHED),
+     * invoke [trigger] to kick the handshake off, then suspend until the link
+     * resolves or fails / times out.
      *
-     * The caller is responsible for having started advertising/discovery and
-     * (for the discoverer) called [NearbyApi.requestConnection] before or
-     * concurrently with this call.
+     * [trigger] is the role-specific kickoff: the discoverer calls
+     * `requestConnection`; the advertiser passes a no-op (it has already started
+     * advertising and merely awaits an incoming peer).
      */
-    suspend fun await(scope: CoroutineScope): ConnectedLink =
+    suspend fun run(
+        scope: CoroutineScope,
+        trigger: suspend () -> Unit,
+    ): ConnectedLink =
         withTimeout(timeoutMs) {
             val deferred = CompletableDeferred<ConnectedLink>()
-            val job = launchListeners(scope, deferred)
+            val handshake = HandshakeState(initialEndpoint = endpointId)
+            val jobs = launchListeners(scope, deferred, handshake)
             try {
+                trigger()
                 deferred.await()
             } finally {
-                job.cancel()
+                jobs.forEach { it.cancel() }
             }
         }
 
     private fun launchListeners(
         scope: CoroutineScope,
         deferred: CompletableDeferred<ConnectedLink>,
-    ): Job = scope.launch {
-        val handshake = HandshakeState(initialEndpoint = endpointId)
-
-        // Accept connection initiation when it arrives for our endpoint.
-        launch {
-            api.connectionInitiated.collect { event ->
-                if (deferred.isCompleted) return@collect
-                if (!handshake.claimEndpoint(event.endpointId)) return@collect
-                api.acceptConnection(event.endpointId)
-            }
-        }
-
-        // Observe connection result.
-        launch {
-            api.connectionResult.collect { event ->
-                if (deferred.isCompleted) return@collect
-                if (!handshake.isOurEndpoint(event.endpointId)) return@collect
-                if (event.success) {
-                    handshake.connected = true
-                    api.sendBytesPayload(handshake.endpoint!!, selfId.value.encodeToByteArray())
-                    handshake.maybeResolve(deferred)
-                } else {
-                    deferred.completeExceptionally(
-                        ConnectionFailedException(event.endpointId, event.reason),
-                    )
+        handshake: HandshakeState,
+    ): List<Job> =
+        listOf(
+            // Accept connection initiation when it arrives for our endpoint.
+            scope.launch(start = CoroutineStart.UNDISPATCHED) {
+                api.connectionInitiated.collect { event ->
+                    if (deferred.isCompleted) return@collect
+                    if (!handshake.claimEndpoint(event.endpointId)) return@collect
+                    api.acceptConnection(event.endpointId)
                 }
-            }
-        }
-
-        // Receive remote's identity payload (first BYTES for our endpoint).
-        launch {
-            api.payloadReceived.collect { event ->
-                if (deferred.isCompleted) return@collect
-                if (!handshake.isOurEndpoint(event.endpointId)) return@collect
-                if (handshake.remoteSelfId == null) {
-                    handshake.remoteSelfId = PeerId(event.bytes.decodeToString())
-                    handshake.maybeResolve(deferred)
+            },
+            // Observe connection result; on success send our identity.
+            scope.launch(start = CoroutineStart.UNDISPATCHED) {
+                api.connectionResult.collect { event ->
+                    if (deferred.isCompleted) return@collect
+                    if (!handshake.isOurEndpoint(event.endpointId)) return@collect
+                    if (event.success) {
+                        handshake.connected = true
+                        api.sendBytesPayload(handshake.endpoint!!, selfId.value.encodeToByteArray())
+                        handshake.maybeResolve(deferred)
+                    } else {
+                        deferred.completeExceptionally(
+                            ConnectionFailedException(event.endpointId, event.reason),
+                        )
+                    }
                 }
-            }
-        }
-    }
+            },
+            // Receive remote's identity payload (first BYTES for our endpoint).
+            scope.launch(start = CoroutineStart.UNDISPATCHED) {
+                api.payloadReceived.collect { event ->
+                    if (deferred.isCompleted) return@collect
+                    if (!handshake.isOurEndpoint(event.endpointId)) return@collect
+                    if (handshake.remoteSelfId == null) {
+                        handshake.remoteSelfId = PeerId(event.bytes.decodeToString())
+                        handshake.maybeResolve(deferred)
+                    }
+                }
+            },
+        )
 
     private class HandshakeState(initialEndpoint: String?) {
         var endpoint: String? = initialEndpoint
@@ -110,8 +119,8 @@ internal class ConnectStateMachine(
 
         /**
          * Try to claim [candidate] as our target endpoint.
-         * - If we already have a target, only returns true if [candidate] matches.
-         * - If we don't have a target yet (first-seen mode), claims it and returns true.
+         * - With a target already set, returns true only if [candidate] matches.
+         * - Without one (first-seen mode), claims it and returns true.
          */
         fun claimEndpoint(candidate: String): Boolean {
             val current = endpoint
