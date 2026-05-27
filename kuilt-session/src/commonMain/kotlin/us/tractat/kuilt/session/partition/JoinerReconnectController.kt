@@ -1,4 +1,4 @@
-package us.tractat.kuilt.core.partition
+package us.tractat.kuilt.session.partition
 
 import kotlinx.coroutines.flow.SharedFlow
 import us.tractat.kuilt.core.PeerId

@@ -1,4 +1,4 @@
-package us.tractat.kuilt.core.partition
+package us.tractat.kuilt.session.partition
 
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -75,7 +75,7 @@ class HeartbeatPartitionDetectorTest {
     // ── Steady state ──────────────────────────────────────────────────────────
 
     @Test
-    fun `healthy peer — no events emitted during normal traffic`() =
+    fun `healthy peer no events emitted during normal traffic`() =
         runTest {
             val mesh = buildMesh(backgroundScope)
             val clock = fixedClock(0)
@@ -98,7 +98,7 @@ class HeartbeatPartitionDetectorTest {
     // ── Timeout path ──────────────────────────────────────────────────────────
 
     @Test
-    fun `peer stops responding — PeerUnresponsive Timeout emitted after timeout`() =
+    fun `peer stops responding PeerUnresponsive Timeout emitted after timeout`() =
         runTest {
             val mesh = buildMesh(backgroundScope)
             var nowMs = 0L
@@ -128,7 +128,7 @@ class HeartbeatPartitionDetectorTest {
     // ── Recovery path ─────────────────────────────────────────────────────────
 
     @Test
-    fun `peer recovers before reconnect window — PeerRecovered emitted`() =
+    fun `peer recovers before reconnect window PeerRecovered emitted`() =
         runTest {
             val mesh = buildMesh(backgroundScope)
             var nowMs = 0L
@@ -168,7 +168,7 @@ class HeartbeatPartitionDetectorTest {
     // ── Loss path ─────────────────────────────────────────────────────────────
 
     @Test
-    fun `peer absent for full reconnect window — PeerLost emitted and detector stops`() =
+    fun `peer absent for full reconnect window PeerLost emitted and detector stops`() =
         runTest {
             val mesh = buildMesh(backgroundScope)
             var nowMs = 0L
@@ -229,7 +229,7 @@ class HeartbeatPartitionDetectorTest {
         }
 
     @Test
-    fun `FaultProfile BufferCeiling — backpressure signal triggers PeerUnresponsive`() =
+    fun `FaultProfile BufferCeiling backpressure signal triggers PeerUnresponsive`() =
         runTest {
             val mesh = buildMesh(backgroundScope)
             val clock = fixedClock(0)
@@ -258,7 +258,7 @@ class HeartbeatPartitionDetectorTest {
     // ── Transport close path ──────────────────────────────────────────────────
 
     @Test
-    fun `transport closed — PeerUnresponsive TransportClosed fires immediately`() =
+    fun `transport closed PeerUnresponsive TransportClosed fires immediately`() =
         runTest {
             val mesh = buildMesh(backgroundScope)
             val clock = fixedClock(0)
