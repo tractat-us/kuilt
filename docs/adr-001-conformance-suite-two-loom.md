@@ -33,8 +33,8 @@ Reshape the suite's binding point from a single `newLoom()` to a **two-Loom pair
 public abstract class SeamConformanceSuite {
     /**
      * Provide a fresh host/joiner Loom pair per test.
-     *  - `.first`  is opened with open(Pattern).
-     *  - `.second` is joined with join(joinTag()).
+     *  - `.first`  hosts via weave(Rendezvous.New(pattern))  (or the host(pattern) wrapper).
+     *  - `.second` joins via weave(Rendezvous.Existing(joinTag())) (or join(joinTag())).
      * In-process radio fabrics return the SAME instance twice: (loom, loom).
      * Role-split fabrics return DISTINCT host/joiner Looms wired to reach each other.
      */
@@ -45,7 +45,7 @@ public abstract class SeamConformanceSuite {
 }
 ```
 
-Tests then read `val (hostLoom, joinerLoom) = newLoomPair()`, `hostLoom.open(...)`, `joinerLoom.join(joinTag())`. The single-Loom invariants (`openYields…`, `availability…`) use only `.first`.
+Tests then read `val (hostLoom, joinerLoom) = newLoomPair()`, `hostLoom.weave(Rendezvous.New(...))`, `joinerLoom.weave(Rendezvous.Existing(joinTag()))` (equivalently the `host`/`join` wrappers). The single-Loom invariants (`weaveNewYields…`, `availability…`) use only `.first`.
 
 Radio fabrics stay trivial:
 
@@ -105,13 +105,11 @@ MDNSAdvertisement(host = "localhost", port = knownPort,
 - The suite now asserts *concurrent* open/join, which more faithfully models real fabrics — a small fidelity gain even for the radio fabrics.
 - **Phase-4 overlap:** [#1519](https://github.com/tractat-us/fireworks-compose/issues/1519) (`LiveChannel`→`Seam`/`Swatch` `:live-runtime` refactor) consumes the same contract. A two-Loom suite that drives genuine host↔joiner topologies (not a self-loopback) is the better regression net for that refactor's `Seam`/`Swatch` coherence; landing this first de-risks #1519.
 
-## Out of scope: unifying the rendezvous role (`weave(Rendezvous)`)
+## Decided: unifying the rendezvous role (`weave(Rendezvous)`) — see ADR-002
 
-Discussion around this ADR surfaced a contract-level idea: collapse `open(Pattern)` / `join(Tag)` into a single `weave(rendezvous: Rendezvous)` where `Rendezvous = New(Pattern) | Existing(Tag)`. It's appealing — one method, the asymmetry carried in data — and it reads as more consistent with the symmetric-`Seam` philosophy.
+An earlier draft listed `weave(Rendezvous)` as out of scope. **That is now decided in [ADR-002](adr-002-weave-rendezvous.md), and `weave` lands first (foundation-first).** `open(Pattern)` / `join(Tag)` collapse into a single `weave(rendezvous: Rendezvous)` where `Rendezvous = New(Pattern) | Existing(Tag)`, with thin `host`/`join` wrappers retained.
 
-But it does **not** remove the asymmetry, only relocates it. A `KtorServerLoom` can only ever *offer/listen* and a wasm WebRTC client can only ever *connect*, so `weave(Existing)` on the server (and `weave(New)` on the client) would still have to reject half its domain — i.e. throw exactly where `open`/`join` throw today, but with *weaker* compile-time signal about which role a Loom actually supports. `weave` pays off only at **symmetric / dynamic-role call sites**, where the caller doesn't know its role and a relay assigns it — which Quick Play already does via `WebRTCPeerLinkFactory.openWithServerRole`.
-
-So `weave` is a real but **separate** question: a `:kuilt-core` contract change (ADR-034 territory) touching every fabric and consumers including `:live-runtime` (#1519), and **orthogonal to this test-harness ADR** — the two-Loom suite is needed regardless of how the rendezvous role is spelled. Deferred to its own ADR/issue; not decided here.
+This does **not** change ADR-001's decision. `weave` does not remove the listen/connect asymmetry — it relocates it into data (a `KtorServerLoom` still supports only `New`, a wasm WebRTC client only `Existing`; the unsupported variant still throws). So a fabric still cannot play both roles on one instance, and the **two-Loom `newLoomPair()`** shape is still required. The two ADRs are coherent: **ADR-002 = the contract foundation; ADR-001 = the test harness on top of it.** ADR-001's suite reshape (below) lands *after* `weave`, so it is rebuilt to drive `weave(New(...))` / `weave(Existing(...))` (or the `host`/`join` wrappers) from day one rather than migrating twice.
 
 ## Alternatives considered
 
@@ -121,6 +119,9 @@ So `weave` is a real but **separate** question: a `:kuilt-core` contract change 
 
 ## Sequencing
 
-1. **This ADR** (docs-only) → land.
-2. **`:kuilt-conformance` reshape PR** — suite `newLoom()`→`newLoomPair()` + concurrent open/join, migrate `InMemoryLoomConformanceTest` + `NearbyConformanceTest`, update the four doc sites. Kept green; no new fabric tests yet.
-3. **Four fabric PRs, ordered by tractability:** webrtc → multipeer → websocket → mdns. (webrtc reuses an existing harness; multipeer needs the real loopback fake; websocket needs concurrent `testApplication` wiring; mdns last because it builds on the websocket pattern plus the direct-advertisement bypass.) Stack or parallelize per the epic's dispatch notes.
+Foundation-first: ADR-002's `weave` contract lands **before** this harness reshape, so the suite is built once against the final contract instead of migrating twice. See [ADR-002 §Migration sequence](adr-002-weave-rendezvous.md) for the full cross-repo stack; this ADR's steps are its tail (steps 5–6 there).
+
+1. **This ADR + ADR-002** (docs-only, PR #10) → land.
+2. **ADR-002 contract PRs first** — `:kuilt-core` adds `Rendezvous` + `weave` (+ `host`/`join` wrappers), `InMemoryLoom` migrates; then each fabric's `weave`.
+3. **`:kuilt-conformance` reshape PR** — suite `newLoom()`→`newLoomPair()`, driving `weave`/`host`/`join`, + concurrent host/join, migrate `InMemoryLoomConformanceTest` + `NearbyConformanceTest`, update the four doc sites. Kept green; no new fabric tests yet.
+4. **Four fabric PRs, ordered by tractability:** webrtc → multipeer → websocket → mdns. (webrtc reuses an existing harness; multipeer needs the real loopback fake; websocket needs concurrent `testApplication` wiring; mdns last because it builds on the websocket pattern plus the direct-advertisement bypass.) Stack or parallelize per the epic's dispatch notes.
