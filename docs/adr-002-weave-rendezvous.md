@@ -36,7 +36,7 @@ public sealed interface Rendezvous {
 
 **No third `Auto`/`RoleAssigned` variant.** The symmetric case can't fold into `weave` cleanly, because role assignment must *return* the assigned role to the caller: `openWithServerRoleResult(): Pair<Boolean, Seam>` (the `isHost` flag selects `LiveLeader` vs client-joiner downstream — see `LiveDemoModule.wasmJs`). `weave(rendezvous): Seam` has no channel for that flag. Three escape hatches were weighed (return `Pair<Role, Seam>` from `weave` for *all* fabrics, stuff role into the `Seam`, or a `RendezvousResult` wrapper) and all three pollute the common single-`Seam` return for a one-fabric concern. So dynamic role keeps its own method (`weave` for the two known-role cases; `openWithServerRole*` for the symmetric case), exactly as the consumer already models it via `PeerLinkLiveTransport.auto(AutoPeerLinkOpener)`. Revisit only if a second fabric needs relay-assigned roles.
 
-### `weave` signature — with thin convenience wrappers (no hard break)
+### `weave` signature — wrappers + a deprecated `open` alias (no hard break)
 
 ```kotlin
 public interface Loom {
@@ -47,13 +47,18 @@ public interface Loom {
     /** Convenience: join an existing session. */
     public suspend fun join(tag: Tag): Seam = weave(Rendezvous.Existing(tag))
 
+    /** Deprecated alias of [host]; kept so consumers compile across the migration.
+     *  Phase 4 (ADR-036) removes the call sites, then this is deleted from kuilt. */
+    @Deprecated("Renamed to host()", ReplaceWith("host(config)"))
+    public suspend fun open(config: Pattern): Seam = host(config)
+
     public fun availability(): FabricAvailability = FabricAvailability.Available
 }
 ```
 
-`weave` is the one abstract method each fabric implements. `host`/`join` are **default interface methods** delegating to it — terse common call sites, and an in-tree consumer (`PeerLinkLiveTransport`) that needn't change in lockstep with the kuilt release. The old abstract `open(Pattern)` is **removed** (renamed to the `host` wrapper); the old `join(Tag)` becomes the wrapper. This is a breaking change to the *implementor* surface (every fabric overrides `weave` not `open`/`join`) but a near-non-breaking change to the *caller* surface (`host`/`join` survive as wrappers, `open` is the one rename).
+`weave` is the one abstract method each fabric implements. `host`/`join`/`open` are **default interface methods** delegating to it. The old `open(Pattern)` is **kept as a `@Deprecated` alias** of `host` (not removed) — verified safe because neither kuilt nor fireworks-compose compiles with `allWarningsAsErrors`, so every existing `factory.open(...)` call site keeps compiling (deprecation warning only) the instant the contract lands. This makes the change **fully non-breaking to the caller surface: zero consumer files change at landing time.** It is a breaking change only to the *implementor* surface (every fabric overrides `weave`, not `open`/`join`). **Phase 4 (ADR-036) removes the deprecated `open` call sites during its `:live-runtime` rewrite, after which the alias is deleted from kuilt** — the deprecation warnings double as its cleanup checklist.
 
-kuilt is pre-1.0 with an explicit "aggressive, fix-forward, breaking changes expected" posture, so a hard break to `weave`-only was on the table. **Rejected** because the wrappers cost ~4 lines, keep the common call sites readable, and — load-bearing — **decouple the kuilt version bump from the consumer migration** under the `includeBuild` lockstep (below). A hard break forces both repos to move in one commit; wrappers let the consumer migrate on its own schedule.
+kuilt is pre-1.0 with an explicit "aggressive, fix-forward, breaking changes expected" posture, so a hard break to `weave`-only was on the table. **Rejected** because the wrappers cost ~4 lines, keep the common call sites readable, and — load-bearing — **decouple the kuilt version bump from the consumer migration** under the `includeBuild` lockstep (below). Keeping `open` as a deprecated alias takes this all the way: the consumer migration drops to **zero files** at landing time and becomes Phase 4's cleanup. A hard break would instead force both repos to move in one atomic commit.
 
 ## Per-fabric dispatch (verified against current source)
 
@@ -93,33 +98,31 @@ With the `host`/`join` wrappers, the **~22** downstream sites that call `SeamLiv
 | `live-runtime` tests (`SeamLiveTransportTest`, `WebRtcHostJoinerIntegrationTest`) | 7 | — |
 | `live-multipeer` test (`MCLeaderListenerTest`) | 5 | — |
 
-Net consumer cost with wrappers: **2 production** `open`→`host` renames (`SeamLiveTransport.kt:57`, `MCLeaderListener.kt:62`) + ~15 test-line renames; **zero** behavioural change; the `includeBuild` build stays green the moment the wrappers ship. Dynamic role (`LiveDemoModule.wasmJs.kt:97` `openWithServerRoleResult`) is untouched. Without wrappers (hard break): every site above rewrites to `weave(New(...))`/`weave(Existing(...))` in one coordinated commit — larger, and forces kuilt+consumer to move together.
+Net consumer cost **at `weave` landing time: zero files.** `open` stays a deprecated alias, so `SeamLiveTransport.kt:57` / `MCLeaderListener.kt:62` / the ~15 test lines keep compiling (deprecation warnings only — no `allWarningsAsErrors` in either repo). Those `open`→`host` renames (or direct `weave`) are **folded into Phase 4's `:live-runtime` rewrite**, which removes the deprecated alias afterward. Dynamic role (`LiveDemoModule.wasmJs.kt:97` `openWithServerRoleResult`) is untouched throughout.
 
-**`includeBuild` lockstep:** fireworks-compose consumes kuilt via a presence-gated `includeBuild ../kuilt` override. A breaking kuilt API change breaks the fireworks build the instant both are checked out locally — so the abstract-method change (`open`/`join` → `weave`) must land in kuilt **and** the consumer's `PeerLinkLiveTransport` one-line edit must land together, *unless* the wrappers absorb it. Wrappers are what make this not a single atomic cross-repo commit.
+**`includeBuild` lockstep:** fireworks-compose consumes kuilt via a presence-gated `includeBuild ../kuilt` override, so a breaking kuilt API change breaks the fireworks build the instant both are checked out locally. The `host`/`join` wrappers **plus the deprecated `open` alias** dissolve this entirely: every existing call site still compiles, so kuilt lands `weave` with **no coordinated consumer commit at all**.
 
 ## Migration sequence (PR stack)
 
-Strictly serial unless noted. Foundation-first: `weave` lands before ADR-001's harness reshape.
+Foundation-first: `weave` lands before ADR-001's harness reshape.
 
-1. **ADR-002 + ADR-001 update** (this PR #10, docs-only) → land.
-2. **`:kuilt-core`: add `Rendezvous`, add `weave` + `host`/`join` wrappers, migrate `InMemoryLoom`** to `override fun weave`. Existing `InMemoryLoomTest` stays green. *(serial — everything below depends on the contract)*
-3. **Each fabric's `weave`** — can **parallelize** (4 independent PRs, each its own module): websocket, mdns, webrtc, multipeer. Multipeer is the heaviest (`expect` + 4 actuals). No consumer-side multipeer impl to migrate (`:transport-multipeer` already deleted, #1613).
-4. **Version bump + consumer migration** — `SeamLiveTransport.kt:57` one-line `open`→`host`; `MCLeaderListener.kt:62`; the ~15 test-line renames. *(serial after 2–3; gated by the `includeBuild` break if wrappers are *not* used — with wrappers this is low-risk and can trail.)*
-5. **ADR-001 conformance reshape** (`newLoom()` → `newLoomPair()`) rebuilt to drive `weave` / `host` / `join`. *(serial after the contract is stable — building the harness on the final contract avoids re-touching it.)*
-6. **Four fabric conformance tests** — parallelize (per ADR-001 §Sequencing: webrtc → multipeer → websocket → mdns by tractability).
+1. **ADR-002 + ADR-001** (this PR #10, docs-only) → land.
+2. **kuilt contract PR — one PR across `:kuilt-core` + the 4 fabric modules.** Add `Rendezvous`; add `weave` (abstract) + `host`/`join` + deprecated `open` (defaults); migrate all 5 implementors (`InMemoryLoom` + websocket/mdns/webrtc/multipeer) to `override fun weave` with a `when (rendezvous)`. Making `weave` abstract breaks every fabric until it overrides, so this is **one PR**, not core-then-fabrics (small repo; 5 trivial rewraps; multipeer heaviest — `expect` + 4 actuals). No consumer-side multipeer impl (`:transport-multipeer` deleted, #1613). Per-fabric tests stay green.
+3. **kuilt version bump — no consumer migration.** `open` stays deprecated, so the `includeBuild` build is green with **zero** consumer edits. ◀ **Phase 4 (ADR-036) resumes here:** `host`/`join`/`weave` now exist on the consumed contract; Phase 4 builds against the final surface and owns the `open`→`host` cleanup + alias deletion in its `:live-runtime` rewrite.
+4. **ADR-001 conformance reshape** (`newLoom()` → `newLoomPair()`), rebuilt to drive `weave`/`host`/`join`. *(after the contract is stable — building the harness on the final contract avoids re-touching it.)*
+5. **Four fabric conformance tests** — parallelize (ADR-001 §Sequencing: webrtc → multipeer → websocket → mdns).
 
-**Parallelizable:** step 3's four fabric `weave` migrations; step 6's four conformance tests.
-**Strictly serial:** 1 → 2 → (3) → 5 → (6). Step 4 can trail 3 if wrappers ship (otherwise it's pinned to 3).
+**Serial:** 1 → 2 → 3 → 4 → 5. **Parallel within a step:** step 5's four conformance tests. Phase 4 unblocks at the end of step 3 and runs concurrently with steps 4–5.
 
 ## Consequences
 
-- `Loom`'s abstract surface changes: `open`/`join` (abstract) → `weave` (abstract) + `host`/`join` (default wrappers). `explicitApi()` requires explicit `public` on all three.
+- `Loom`'s surface: `open`/`join` (abstract) → `weave` (abstract) + `host`/`join` + deprecated `open` (defaults; `open` deleted by Phase 4). `explicitApi()` requires explicit `public` on all of them.
 - `Rendezvous` is new public API in `:kuilt-core`.
 - Every fabric implementor rewrites its dispatch into a single `when (rendezvous)`. Multipeer touches 5 source sets (`expect` + 4 actuals in `:kuilt-multipeer`; no consumer-side impl — `:transport-multipeer` deleted in #1613).
 - Dynamic role (`openWithServerRole*`) is explicitly **out of `weave`** and documented as the relay-assigned escape hatch — no behavioural change to Quick Play.
 - Docs to update when implementing: `CLAUDE.md` "one-paragraph orientation" (`open`/`join` → `weave`), `docs/architecture.md`, `docs/usage.md`.
 - **ADR-001 stays valid.** `weave` does not remove the two-endpoint need — the listen/connect asymmetry is in the transport, so `newLoomPair()` is still required (a host Loom + a joiner Loom). ADR-001's suite sketches now drive `weave(New(...))` / `weave(Existing(...))` (or the wrappers); the `newLoomPair()` decision is unchanged.
-- **Phase-4 `:live-runtime` refactor** ([#1519](https://github.com/tractat-us/fireworks-compose/issues/1519)) is the major consumer of `weave`; the `LiveChannel`→`Seam` rework should target `weave` directly rather than the wrappers, so its host/joiner branches read the role from `Rendezvous`.
+- **Phase-4 `:live-runtime` refactor** ([#1519](https://github.com/tractat-us/fireworks-compose/issues/1519), designed in **ADR-036** in fireworks-compose) is the major consumer of `weave`. **Decided (2026-05-27, foundation-first): `weave` lands first; Phase 4's `LiveChannel`→`Seam`/`Swatch` rewrite builds on `weave`/`host`/`join` from the start**, so its host/joiner branches read the role from `Rendezvous` and it inherits the migrated contract rather than doing a separate `weave` migration. The two ADRs are written in parallel and **must cross-reference**: ADR-002 (this) owns the rendezvous call surface; ADR-036 consumes it. `weave`'s only consumer-side edits (`SeamLiveTransport.kt:57`, `MCLeaderListener.kt:62`) fall inside files Phase 4 rewrites/relocates — landing `weave` first means those two renames are trivial on the current tree and Phase 4 simply builds atop them. **Action for the ADR-036 author:** assume `weave(Rendezvous)` + `host`/`join`, not `open`/`join`.
 
 ## Alternatives considered
 
