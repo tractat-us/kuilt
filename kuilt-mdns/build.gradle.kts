@@ -33,6 +33,7 @@ kotlin {
             implementation(libs.ktor.client.core)
         }
         jvmTest.dependencies {
+            implementation(project(":kuilt-conformance"))
             implementation(libs.kotlin.testJunit)
             implementation(libs.kotlinx.coroutines.test)
             implementation(libs.ktor.serverCore)
