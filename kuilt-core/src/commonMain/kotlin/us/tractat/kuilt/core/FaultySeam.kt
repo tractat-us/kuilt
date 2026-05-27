@@ -31,7 +31,7 @@ import kotlinx.coroutines.sync.withLock
  * Consumed by [#1067], [#1070], [#1074] test suites. Exposes the same
  * [Seam] contract as [InMemoryLoom]-produced links.
  */
-class FaultySeam(
+public class FaultySeam(
     private val delegate: Seam,
     private val scope: CoroutineScope,
     initialProfile: FaultProfile = FaultProfile.Healthy,
@@ -47,9 +47,9 @@ class FaultySeam(
     private var _framesDelayed = 0L
     private var _framesDelivered = 0L
 
-    val framesDropped: Long get() = _framesDropped
-    val framesDelayed: Long get() = _framesDelayed
-    val framesDelivered: Long get() = _framesDelivered
+    public val framesDropped: Long get() = _framesDropped
+    public val framesDelayed: Long get() = _framesDelayed
+    public val framesDelivered: Long get() = _framesDelivered
 
     init {
         // Pipe from the delegate's incoming flow through fault injection.
@@ -60,15 +60,15 @@ class FaultySeam(
     }
 
     /** Replace the active [FaultProfile] atomically. */
-    fun setFaultProfile(profile: FaultProfile) {
+    public fun setFaultProfile(profile: FaultProfile) {
         faultState.profile = profile
     }
 
     /** Shorthand for [setFaultProfile] with [FaultProfile.Healthy]. */
-    fun heal() = setFaultProfile(FaultProfile.Healthy)
+    public fun heal(): Unit = setFaultProfile(FaultProfile.Healthy)
 
     /** Shorthand for [setFaultProfile] with [FaultProfile.DropAll]. */
-    fun partition(direction: Direction = Direction.Both) = setFaultProfile(FaultProfile.DropAll(direction))
+    public fun partition(direction: Direction = Direction.Both): Unit = setFaultProfile(FaultProfile.DropAll(direction))
 
     // ── Seam ─────────────────────────────────────────────────────────────────
 
@@ -91,7 +91,7 @@ class FaultySeam(
         applyOutboundDecision(decision) { delegate.sendTo(peer, it) }
     }
 
-    override suspend fun close(reason: CloseReason) = delegate.close(reason)
+    override suspend fun close(reason: CloseReason): Unit = delegate.close(reason)
 
     // ── Internal outbound dispatch ────────────────────────────────────────────
 
@@ -161,7 +161,7 @@ class FaultySeam(
  * [scope] must be a [CoroutineScope] that outlives the test — the standard
  * pattern is to pass the [kotlinx.coroutines.test.TestScope] from [runTest].
  */
-class FaultyLoom(
+public class FaultyLoom(
     private val delegate: Loom,
     private val scope: CoroutineScope,
     private val defaultProfile: FaultProfile = FaultProfile.Healthy,
@@ -169,7 +169,7 @@ class FaultyLoom(
     private val _links = MutableStateFlow<List<FaultySeam>>(emptyList())
 
     /** All [FaultySeam] instances created so far, in creation order. */
-    val links: List<FaultySeam> get() = _links.value
+    public val links: List<FaultySeam> get() = _links.value
 
     override suspend fun open(config: Pattern): FaultySeam {
         val inner = delegate.open(config)
@@ -182,7 +182,7 @@ class FaultyLoom(
     }
 
     /** Apply [profile] to every link the factory has created so far. */
-    fun setFaultProfileOnAll(profile: FaultProfile) {
+    public fun setFaultProfileOnAll(profile: FaultProfile) {
         _links.value.forEach { it.setFaultProfile(profile) }
     }
 
