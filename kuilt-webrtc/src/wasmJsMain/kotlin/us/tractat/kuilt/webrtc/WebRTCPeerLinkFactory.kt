@@ -3,8 +3,16 @@ package us.tractat.kuilt.webrtc
 import us.tractat.kuilt.webrtc.internal.BrowserRtcFacadeFactory
 import us.tractat.kuilt.webrtc.internal.DEFAULT_HANDSHAKE_TIMEOUT_MS
 import us.tractat.kuilt.webrtc.internal.HandshakeRunner
+import us.tractat.kuilt.webrtc.internal.RtcPeerConnectionFacade
 import us.tractat.kuilt.webrtc.internal.RtcPeerConnectionFacadeFactory
 import us.tractat.kuilt.webrtc.internal.WebRTCPeerLink
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.receiveAsFlow
+import kotlinx.coroutines.launch
 import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
@@ -43,22 +51,61 @@ public class WebRTCPeerLinkFactory
                 is Rendezvous.New -> {
                     val config = rendezvous.pattern
                     val selfId = PeerId(randomToken(config.displayName.ifBlank { "host" }))
-                    val remoteId = PeerId(randomToken("peer"))
                     val facade = facadeFactory.create(iceConfig, hostInitiated = true)
                     val session = signaling.open(room)
                     HandshakeRunner.runHost(facade, session)
-                    WebRTCPeerLink(selfId, remoteId, facade)
+                    buildLink(selfId, facade)
                 }
                 is Rendezvous.Existing -> {
                     val advertisement = rendezvous.tag
-                    val selfId = PeerId(randomToken("peer"))
-                    val remoteId = PeerId(randomToken(advertisement.displayName.ifBlank { "host" }))
+                    val selfId = PeerId(randomToken(advertisement.displayName.ifBlank { "peer" }))
                     val facade = facadeFactory.create(iceConfig, hostInitiated = false)
                     val session = signaling.open(room)
                     HandshakeRunner.runJoiner(facade, session)
-                    WebRTCPeerLink(selfId, remoteId, facade)
+                    buildLink(selfId, facade)
                 }
             }
+
+        /**
+         * Exchange [selfId] with the remote peer over the data channel so both sides
+         * know each other's stable [PeerId]. The first frame sent and received on the
+         * data channel is the peer-id frame; all subsequent frames are user payload.
+         *
+         * The exchange is non-blocking: a background demux coroutine reads the first
+         * incoming frame as the remote's selfId and routes subsequent frames to the
+         * user-payload channel. [WebRTCPeerLink] receives the [senderIdDeferred] and
+         * awaits it lazily when incoming frames are collected — so host-only tests
+         * that never collect [Seam.incoming] do not hang waiting for the remote's ID.
+         *
+         * Both sides call this symmetrically — order of the selfId frames doesn't
+         * matter because the data channel is buffered; the frames cross in flight.
+         */
+        private suspend fun buildLink(
+            selfId: PeerId,
+            facade: RtcPeerConnectionFacade,
+        ): WebRTCPeerLink {
+            val guessedRemoteId = PeerId(randomToken("peer"))
+            facade.sendBytes(selfId.value.encodeToByteArray())
+
+            val senderIdDeferred = CompletableDeferred<PeerId>()
+            val userChannel = Channel<ByteArray>(Channel.UNLIMITED)
+            val demuxScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+            demuxScope.launch {
+                var idReceived = false
+                facade.incomingBytes.collect { bytes ->
+                    if (!idReceived) {
+                        idReceived = true
+                        senderIdDeferred.complete(PeerId(bytes.decodeToString()))
+                    } else {
+                        userChannel.send(bytes)
+                    }
+                }
+                userChannel.close()
+            }
+            // Return immediately — senderIdDeferred resolves in the background when the
+            // remote's ID frame arrives. Seam.incoming awaits it lazily per frame.
+            return WebRTCPeerLink(selfId, guessedRemoteId, facade, userChannel.receiveAsFlow(), senderIdDeferred)
+        }
 
         /**
          * Open a peer link using server-assigned role assignment (#1300 B0).
@@ -116,16 +163,14 @@ public class WebRTCPeerLinkFactory
             val link =
                 if (isHost) {
                     val selfId = PeerId(randomToken(config.displayName.ifBlank { "host" }))
-                    val remoteId = PeerId(randomToken("peer"))
                     val facade = facadeFactory.create(iceConfig, hostInitiated = true)
                     HandshakeRunner.runHost(facade, session, handshakeTimeoutMs)
-                    WebRTCPeerLink(selfId, remoteId, facade)
+                    buildLink(selfId, facade)
                 } else {
-                    val selfId = PeerId(randomToken("peer"))
-                    val remoteId = PeerId(randomToken("host"))
+                    val selfId = PeerId(randomToken(config.displayName.ifBlank { "peer" }))
                     val facade = facadeFactory.create(iceConfig, hostInitiated = false)
                     HandshakeRunner.runJoiner(facade, session, handshakeTimeoutMs)
-                    WebRTCPeerLink(selfId, remoteId, facade)
+                    buildLink(selfId, facade)
                 }
             return isHost to link
         }

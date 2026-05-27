@@ -1,7 +1,9 @@
 package us.tractat.kuilt.webrtc.internal
 
 import io.github.oshai.kotlinlogging.KotlinLogging
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
@@ -20,14 +22,25 @@ private val log = KotlinLogging.logger {}
 /**
  * [Seam] implementation backed by an open [RtcPeerConnectionFacade] data channel.
  *
- * Stamp each incoming frame with [remoteId] as the sender and a monotonically
- * increasing sequence number. The data channel is point-to-point, so
- * [broadcast] and [sendTo] are equivalent.
+ * Stamp each incoming frame with the resolved [senderIdDeferred] as the sender and
+ * a monotonically increasing sequence number. The data channel is point-to-point,
+ * so [broadcast] and [sendTo] are equivalent.
+ *
+ * [userFrames] is the post-ID-exchange byte flow — frames after the peer-identity
+ * handshake frame. The factory performs the ID exchange and passes the remaining
+ * frames here. Defaults to [facade.incomingBytes] for tests that construct
+ * [WebRTCPeerLink] directly with pre-coordinated [remoteId] values.
+ *
+ * [senderIdDeferred] is the remote peer's actual [PeerId], resolved asynchronously
+ * once the ID-exchange frame arrives. Defaults to an immediately-completed deferred
+ * holding [remoteId], preserving existing test-construction semantics.
  */
 internal class WebRTCPeerLink(
     override val selfId: PeerId,
     private val remoteId: PeerId,
     private val facade: RtcPeerConnectionFacade,
+    private val userFrames: Flow<ByteArray> = facade.incomingBytes,
+    private val senderIdDeferred: Deferred<PeerId> = CompletableDeferred(remoteId),
 ) : Seam {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val sequenceCounter = SequenceCounter()
@@ -36,8 +49,8 @@ internal class WebRTCPeerLink(
     override val peers: StateFlow<Set<PeerId>> get() = _peers
 
     override val incoming: Flow<Swatch> =
-        facade.incomingBytes.map { bytes ->
-            Swatch(payload = bytes, sender = remoteId, sequence = sequenceCounter.next())
+        userFrames.map { bytes ->
+            Swatch(payload = bytes, sender = senderIdDeferred.await(), sequence = sequenceCounter.next())
         }
 
     private var closed = false
