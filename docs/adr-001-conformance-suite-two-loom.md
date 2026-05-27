@@ -65,14 +65,26 @@ The contract must explicitly accommodate **both** "same backing" (radio: identic
 
 `KtorServerLoom.open()` suspends until a client connects (`nextLink()` blocks on `connectionChannel.receive()`), and the WebRTC handshake needs both ends running. So the delivery invariants must run `open()` and `join()` **concurrently**, not sequentially. The reshaped suite wraps them in `coroutineScope { val h = async { host.open(...) }; val j = async { joiner.join(...) }; … }` — exactly the pattern `WebRTCPeerLinkFactoryTest.openAndJoinExchangeFrames` already uses (`kuilt-webrtc/.../WebRTCPeerLinkFactoryTest.kt`). This is a behavioural change to the suite even for the radio fabrics (harmless there — their `open`/`join` don't block on each other), so the two existing subclasses must stay green after the reshape.
 
+### Real-loopback-first (which backing each pair connects over)
+
+**Default: the pair connects over the fabric's real transport. A fake is the exception, used only where no in-process real transport exists.** This keeps conformance exercising the actual `Loom`/`Seam` code over a genuine connection rather than a fabricated radio:
+
+- **websocket, mdns** connect over **real localhost** — real Ktor server + client, real sockets and frames. (mdns skips only *multicast discovery*, by handing the joiner a directly-constructed advertisement; the byte path is fully real. Real multicast stays `-P`-gated.)
+- **webrtc** connects over a real `RTCPeerConnection` loopback **if the wasmJs test runner provides WebRTC**; otherwise the existing paired fake facade stands in.
+- **multipeer** has no in-process real transport (Apple radio, macOS-only, no loopback mode), so the CI path routes the pair through a connecting fake at the JNA boundary; a real-radio two-peer test is manual/macOS-gated (mirrors the Nearby real-radio smoke).
+
+Net: we build **one** connecting fake (multipeer), possibly two (webrtc) — not four. The listen/offer-vs-connect asymmetry `open`/`join` encode is genuine, so even the real-transport pairs are two distinct instances, never one playing both roles.
+
 ## Per-fabric harness implications
 
-| Fabric | Pair | Source set | Verdict |
+Ordered real-transport-first (the fakes are last):
+
+| Fabric | Backing | Pair (source set) | Verdict |
 |---|---|---|---|
-| **webrtc** | `(WebRTCPeerLinkFactory(hostSig, room, …, hostFac), WebRTCPeerLinkFactory(joinerSig, …, joinerFac))` from existing `PairedFacadeFactory.pair()` + `PairedSignalingChannels.pair()` | wasmJsTest | **Lightest.** The harness already exists and already drives open/join concurrently; conformance test is ~the existing round-trip test re-expressed against the suite. |
-| **multipeer** | two factories sharing a **real loopback** `FakeMultipeerNativeLib` | jvmTest | **Real harness work.** Current `FakeMultipeerNativeLib` is a no-delivery STUB — `mc_session_broadcast` returns `len`, `mc_session_set_data_callback` is a no-op. Needs a fake that routes one session's broadcast into the other's data callback. Not a one-liner. |
-| **websocket** | `(KtorServerLoom(app, path), KtorClientLoom(httpClient))` over a Ktor `testApplication`/localhost | jvmTest | **Moderate.** Must run open()/join() concurrently (server's `open()` blocks until the client connects). The `WebSocketSeamRoundTripTest` precedent shows the wiring. |
-| **mdns** | `(MDNSPeerLinkFactory…open, joiner via a directly-constructed MDNSAdvertisement)` | jvmTest | **CI-runnable WITHOUT real multicast.** See below. |
+| **websocket** | ✅ **real localhost, no fake** | `(KtorServerLoom(app, path), KtorClientLoom(httpClient))` over `testApplication`/localhost (jvmTest) | **Real connection.** Two real looms, real sockets/frames. Must run open()/join() concurrently (server's `open()` blocks until the client connects). `WebSocketSeamRoundTripTest` shows the wiring. |
+| **mdns** | ✅ **real localhost byte path** (discovery skipped) | host real WS server; joiner via a directly-constructed `MDNSAdvertisement` at `localhost:port` (jvmTest) | **Real byte path, no transport fake** — see the bypass below. Real multicast stays `-P`-gated. |
+| **webrtc** | ⚠️ **real `RTCPeerConnection` if env supports, else paired fake** | two `WebRTCPeerLinkFactory` over `PairedFacadeFactory.pair()` + `PairedSignalingChannels.pair()` (wasmJsTest) | The fake harness already exists and already drives open/join concurrently; real loopback is possible only if the wasmJs runner provides WebRTC. Lightest either way. |
+| **multipeer** | ❌ **no in-process real transport → connecting fake** | two factories sharing a delivering `FakeMultipeerNativeLib` at the JNA boundary (jvmTest) | **The one unavoidable fake.** Current `FakeMultipeerNativeLib` is a no-delivery STUB — `mc_session_broadcast` returns `len`, `mc_session_set_data_callback` is a no-op. Needs a fake that routes one session's broadcast into the other's data callback. Real-radio two-peer = manual/macOS. |
 
 ### mdns multicast bypass (verified, recommended)
 
@@ -92,6 +104,14 @@ MDNSAdvertisement(host = "localhost", port = knownPort,
 - Four fabrics gain a `*ConformanceTest` and the epic's "one suite, all fabrics pass" invariant becomes real.
 - The suite now asserts *concurrent* open/join, which more faithfully models real fabrics — a small fidelity gain even for the radio fabrics.
 - **Phase-4 overlap:** [#1519](https://github.com/tractat-us/fireworks-compose/issues/1519) (`LiveChannel`→`Seam`/`Swatch` `:live-runtime` refactor) consumes the same contract. A two-Loom suite that drives genuine host↔joiner topologies (not a self-loopback) is the better regression net for that refactor's `Seam`/`Swatch` coherence; landing this first de-risks #1519.
+
+## Out of scope: unifying the rendezvous role (`weave(Rendezvous)`)
+
+Discussion around this ADR surfaced a contract-level idea: collapse `open(Pattern)` / `join(Tag)` into a single `weave(rendezvous: Rendezvous)` where `Rendezvous = New(Pattern) | Existing(Tag)`. It's appealing — one method, the asymmetry carried in data — and it reads as more consistent with the symmetric-`Seam` philosophy.
+
+But it does **not** remove the asymmetry, only relocates it. A `KtorServerLoom` can only ever *offer/listen* and a wasm WebRTC client can only ever *connect*, so `weave(Existing)` on the server (and `weave(New)` on the client) would still have to reject half its domain — i.e. throw exactly where `open`/`join` throw today, but with *weaker* compile-time signal about which role a Loom actually supports. `weave` pays off only at **symmetric / dynamic-role call sites**, where the caller doesn't know its role and a relay assigns it — which Quick Play already does via `WebRTCPeerLinkFactory.openWithServerRole`.
+
+So `weave` is a real but **separate** question: a `:kuilt-core` contract change (ADR-034 territory) touching every fabric and consumers including `:live-runtime` (#1519), and **orthogonal to this test-harness ADR** — the two-Loom suite is needed regardless of how the rendezvous role is spelled. Deferred to its own ADR/issue; not decided here.
 
 ## Alternatives considered
 
