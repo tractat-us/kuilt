@@ -33,7 +33,7 @@ private const val SERVICE_TYPE = "_fireworks._tcp."
 private const val RESOLVE_TIMEOUT_S = 5.0
 
 /**
- * Discovers Fireworks peers advertising [MDNSAdvertisement.SERVICE_TYPE] via
+ * Discovers peers advertising [MDNSAdvertisement.SERVICE_TYPE] via
  * mDNS / Bonjour using [NSNetServiceBrowser] on iOS.
  *
  * Browse-only: hosting remains JVM-only via [MDNSServiceAdvertiser] / JmDNS.

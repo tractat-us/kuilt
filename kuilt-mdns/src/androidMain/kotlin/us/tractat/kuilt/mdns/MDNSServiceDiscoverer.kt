@@ -10,7 +10,7 @@ import us.tractat.kuilt.core.discovery.DiscoveryKind
 import us.tractat.kuilt.core.discovery.PeerDiscoverySource
 
 /**
- * Discovers Fireworks peers advertising [MDNSAdvertisement.SERVICE_TYPE] via
+ * Discovers peers advertising [MDNSAdvertisement.SERVICE_TYPE] via
  * mDNS / Bonjour using Android's [NsdManager].
  *
  * Browse-only: hosting remains JVM-only via [MDNSServiceAdvertiser] / JmDNS.

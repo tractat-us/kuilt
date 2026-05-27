@@ -13,7 +13,7 @@ import us.tractat.kuilt.core.Tag
  * the UI sees one unified roster.
  *
  * Implementations expose a *narrower* return type via Kotlin's covariant-return
- * support (e.g. `Flow<MDNSTag>`); direct callers keep their typed
+ * support (e.g. `Flow<MDNSAdvertisement>`); direct callers keep their typed
  * APIs while the lobby treats every source as `Flow<Tag>`.
  */
 public interface PeerDiscoverySource {

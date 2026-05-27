@@ -5,7 +5,7 @@ import javax.jmdns.JmDNS
 import javax.jmdns.ServiceInfo
 
 /**
- * Registers a Fireworks peer as a Bonjour / mDNS service so that other peers
+ * Registers a peer as a Bonjour / mDNS service so that other peers
  * on the same LAN can discover it.
  *
  * The service type is [MDNSAdvertisement.SERVICE_TYPE] (`_fireworks._tcp.local.`).
