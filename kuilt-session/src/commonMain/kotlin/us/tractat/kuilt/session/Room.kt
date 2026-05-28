@@ -61,9 +61,21 @@ public interface Room {
     public suspend fun sendTo(peer: PeerId, bytes: ByteArray)
 
     /**
+     * The joiner's reconnect credential, available after the admit handshake completes.
+     *
+     * Non-null on a [SessionRole.Joiner] room once the host has sent its [RoomId] via
+     * the Welcome frame. Null on a [SessionRole.Host] room (the host does not reconnect
+     * to itself) and null on a joiner room whose handshake has not yet completed.
+     *
+     * Callers that need to reconnect after a transport drop should save this token.
+     * Present it to [resume] to attempt re-entry within the reconnect window.
+     */
+    public val resumeToken: ResumeToken?
+
+    /**
      * Attempt to resume this room from a [ResumeToken] after a transport drop.
      *
-     * Stub in 1B — wired fully in 1D via [us.tractat.kuilt.session.partition.JoinerReconnectController].
+     * Wired via [us.tractat.kuilt.session.partition.JoinerReconnectController] (1D).
      */
     public suspend fun resume(token: ResumeToken): ResumeResult
 

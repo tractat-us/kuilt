@@ -99,7 +99,7 @@ class RoomResumeTest {
         hostRoom.roster.first { it.size == 1 }
         joinerRoom.roster.first { it.isNotEmpty() }
 
-        val token = joinerRoom.exposedResumeToken
+        val token = joinerRoom.resumeToken
         assertNotNull(token, "joiner must hold a resume token after admit")
 
         // Partition both links.
@@ -144,7 +144,7 @@ class RoomResumeTest {
         val joinerRoom = makeSeamRoom(faultyJoiner, SessionRole.Joiner, "Bob", clock)
 
         joinerRoom.roster.first { it.isNotEmpty() }
-        val token = joinerRoom.exposedResumeToken
+        val token = joinerRoom.resumeToken
         assertNotNull(token, "joiner must have a resume token after admit")
 
         val hostLost = async { joinerRoom.events.filterIsInstance<MembershipEvent.HostLost>().first() }
@@ -214,7 +214,7 @@ class RoomResumeTest {
         hostRoom.roster.first { it.size == 1 }
         joinerRoom.roster.first { it.isNotEmpty() }
 
-        val token = joinerRoom.exposedResumeToken
+        val token = joinerRoom.resumeToken
         assertNotNull(token, "joiner must have a resume token after admit")
 
         // Partition and advance past the full reconnect window.

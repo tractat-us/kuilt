@@ -201,12 +201,12 @@ internal class SeamRoom(
      * Null until the joiner receives its own [AdmitMessage.Welcome] carrying a [RoomId]
      * from the host. Used by [resume] to present credentials to the host.
      *
-     * Exposed as [exposedResumeToken] so tests (commonTest, same module) can assert on it.
+     * Publicly readable (implements [Room.resumeToken]) so the application layer and
+     * the [us.tractat.kuilt.conformance.RoomConformanceSuite] TCK can access it without
+     * module-internal visibility.
      */
-    private var resumeToken: ResumeToken? = null
-
-    /** Test-visible accessor for [resumeToken]. Same-module visibility only. */
-    internal val exposedResumeToken: ResumeToken? get() = resumeToken
+    override var resumeToken: ResumeToken? = null
+        private set
 
     /**
      * **Joiner only.** Pending [resume] calls waiting for the host's reply.
