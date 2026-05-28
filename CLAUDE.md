@@ -75,10 +75,9 @@ tests as the `MDNS_MULTICAST_TESTS` env var (see `kuilt-mdns/build.gradle.kts`).
   build fails. New public types get `public`.
 - **Build logic is centralized** in `build-logic/`: `kuilt.kmp-library` defines
   the standard target set + Android namespace (`us.tractat.kuilt.<module>`);
-  `kuilt.publish` wires the publish targets (the in-tree `TigrisStaging`
-  file:// repo, plus a vestigial `GitHubPackages` repo that's no longer
-  invoked by `publish.yml`). New modules apply `id("kuilt.kmp-library")` and
-  almost nothing else.
+  `kuilt.publish` wires the in-tree `TigrisStaging` (file://) Maven repo that
+  `publish.yml` stages publications into. New modules apply
+  `id("kuilt.kmp-library")` and almost nothing else.
 - **KMP source-set hierarchy is wired by hand in `:kuilt-websocket`** — a manual
   `jvmAndAndroidMain` intermediate (Ktor server is JVM/Android-only) disables the
   plugin's default auto-wiring, so `iosMain`/`macosMain` intermediates are also
@@ -137,9 +136,9 @@ from Tigris hit the same Gradle s3:// transport for GETs, but GETs don't
 set those headers so the read path works.
 
 GitHub Packages still hosts the historical 0.1.x and 0.3.1/0.3.2/0.3.4
-artifacts; the `GitHubPackages` publication target remains wired in
-`kuilt.publish.gradle.kts` but is no longer invoked by `publish.yml`. To
-re-enable it manually, run `./gradlew publishAllPublicationsToGitHubPackagesRepository`.
+artifacts (read-only — consumers can still resolve them from
+`https://maven.pkg.github.com/tractat-us/kuilt` if needed). New versions go
+to Tigris only.
 
 ## Composite-build consumption
 
