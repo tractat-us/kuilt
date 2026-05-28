@@ -60,7 +60,32 @@ jobs:
           VERSION="${PREFIX}-${{ github.run_number }}"
           echo "Publishing version: $VERSION"
           echo "PUBLISH_VERSION=$VERSION" >> "$GITHUB_ENV"
-      - name: Publish to Tigris
-        # workers.max=16 here is for the I/O-bound upload phase (oversubscribing
-        # CPU count is safe because upload tasks don't fork JVMs).
-        run: ./gradlew -Pversion=${{ env.PUBLISH_VERSION }} -Dorg.gradle.workers.max=16 publishAllPublicationsToTigrisRepository
+
+      # ── Diagnostic: isolate "Gradle bug" vs "Tigris/bucket bug" ──────────────
+      # Tigris publish keeps failing with HTTP 400 InvalidArgument from S3.
+      # This vanilla `aws s3 cp` proves whether the bucket itself accepts PUTs
+      # via the standard AWS CLI (path-style + AWS SDK defaults). If THIS works
+      # and the Gradle publish fails, the issue is in Gradle's s3:// transport
+      # request shape. Continue on failure so we still get the Gradle diagnostic.
+      - name: Sanity-check Tigris with aws s3 cp (path-style)
+        continue-on-error: true
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.S3_BUILD_CACHE_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.S3_BUILD_CACHE_SECRET_KEY }}
+          AWS_DEFAULT_REGION: auto
+        run: |
+          echo "diag $(date -u +%FT%TZ) run=${{ github.run_id }}" > /tmp/tigris-sanity.txt
+          KEY="maven-sanity/tigris-sanity-${{ github.run_id }}.txt"
+          echo "=== PUT via path-style endpoint ==="
+          aws --endpoint-url=https://fly.storage.tigris.dev s3 cp /tmp/tigris-sanity.txt "s3://buildcache/$KEY"
+          echo "=== HEAD ==="
+          aws --endpoint-url=https://fly.storage.tigris.dev s3 ls "s3://buildcache/$KEY"
+          echo "=== PUT via virtual-host endpoint (matches gradle.properties) ==="
+          aws --endpoint-url=https://buildcache.fly.storage.tigris.dev s3 cp /tmp/tigris-sanity.txt "s3://buildcache/$KEY-vh.txt"
+
+      - name: Publish to Tigris (with --info --stacktrace for diagnostic)
+        # workers.max=16 is publish-only (I/O-bound, oversubscribing CPU is safe).
+        # --info + --stacktrace forces Gradle to surface the AWS SDK request /
+        # response detail when the PUT 400s, so we can see *which* argument is
+        # invalid instead of the generic "Invalid argument" wrapper.
+        run: ./gradlew --info --stacktrace -Pversion=${{ env.PUBLISH_VERSION }} -Dorg.gradle.workers.max=16 publishAllPublicationsToTigrisRepository
