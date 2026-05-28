@@ -1,0 +1,66 @@
+name: publish-tigris-test
+
+# Standalone, manual-dispatch-only workflow that publishes a dummy version to
+# Tigris (Fly's S3-compatible storage — same bucket as the build cache, under
+# the `maven/` prefix). Used to measure Tigris publish wall time in isolation
+# before deciding whether to retire GitHub Packages as the primary registry
+# (#22). Does NOT touch the production publish flow (publish.yml) and does NOT
+# upload to GitHub Packages.
+#
+# Trigger: Actions → publish-tigris-test → Run workflow. The version is
+# always "<prefix>-<run_number>" so re-dispatching never 409s on a re-upload.
+
+on:
+  workflow_dispatch:
+    inputs:
+      prefix:
+        description: 'Version prefix; final version is "<prefix>-<run_number>"'
+        default: '0.0.0-tigris-test'
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-tigris-test-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish-tigris-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      S3_BUILD_CACHE_ACCESS_KEY_ID: ${{ secrets.S3_BUILD_CACHE_ACCESS_KEY_ID }}
+      S3_BUILD_CACHE_SECRET_KEY: ${{ secrets.S3_BUILD_CACHE_SECRET_KEY }}
+    steps:
+      - uses: actions/checkout@v6
+      - name: Set up JDK 21
+        uses: actions/setup-java@v5
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          gradle-version: wrapper
+          cache-read-only: false
+      - name: Cache Kotlin/Native (~/.konan)
+        uses: actions/cache@v5
+        with:
+          path: ~/.konan
+          key: konan-${{ runner.os }}-${{ hashFiles('gradle/libs.versions.toml', 'gradle.properties', 'settings.gradle.kts') }}
+          restore-keys: konan-${{ runner.os }}-
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v4
+      - name: Compute version
+        run: |
+          set -euo pipefail
+          PREFIX="${{ github.event.inputs.prefix }}"
+          if [ -z "$PREFIX" ]; then PREFIX="0.0.0-tigris-test"; fi
+          VERSION="${PREFIX}-${{ github.run_number }}"
+          echo "Publishing version: $VERSION"
+          echo "PUBLISH_VERSION=$VERSION" >> "$GITHUB_ENV"
+      - name: Publish to Tigris
+        # workers.max=16 here is for the I/O-bound upload phase (oversubscribing
+        # CPU count is safe because upload tasks don't fork JVMs).
+        run: ./gradlew -Pversion=${{ env.PUBLISH_VERSION }} -Dorg.gradle.workers.max=16 publishAllPublicationsToTigrisRepository

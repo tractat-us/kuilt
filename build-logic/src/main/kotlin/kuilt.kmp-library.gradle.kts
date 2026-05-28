@@ -44,3 +44,18 @@ android {
     }
     defaultConfig { minSdk = libs.versions.android.minSdk.get().toInt() }
 }
+
+// Serialize wasmJsBrowserTest across the whole build. `registerIfAbsent` makes
+// the shared service idempotent across modules — every module registers, but
+// Gradle keeps one instance, so its `maxParallelUsages = 1` becomes a build-wide
+// mutex. Required because `workers.max=16` lets too many Karma+Chrome instances
+// race their startup otherwise (see BrowserTestSerializer.kt).
+val browserTestSerializer =
+    gradle.sharedServices.registerIfAbsent(
+        "browserTestSerializer",
+        BrowserTestSerializer::class.java,
+    ) { maxParallelUsages.set(1) }
+
+tasks.matching { it.name == "wasmJsBrowserTest" }.configureEach {
+    usesService(browserTestSerializer)
+}
