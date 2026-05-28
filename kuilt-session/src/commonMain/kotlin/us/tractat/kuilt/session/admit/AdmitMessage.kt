@@ -53,6 +53,8 @@ public sealed interface AdmitMessage {
      *
      * [assignedPeerId] — the new member's [us.tractat.kuilt.core.PeerId] value.
      * [identity] — the identity the new member declared in their [Hello].
+     * [roomId] — the host's stable room identifier; null in bootstrap welcomes for existing members.
+     *   Joiners use this to mint their [us.tractat.kuilt.session.partition.ResumeToken].
      */
     @Serializable
     @SerialName("welcome")
@@ -61,6 +63,7 @@ public sealed interface AdmitMessage {
         val displayName: String,
         val sessionId: String,
         val deviceId: String? = null,
+        val roomId: String? = null,
     ) : AdmitMessage
 
     /**
@@ -71,6 +74,35 @@ public sealed interface AdmitMessage {
     @Serializable
     @SerialName("reject")
     public data class Reject(val reason: String) : AdmitMessage
+
+    /**
+     * Sent by a joiner to the host to resume a partitioned session.
+     *
+     * The host validates [tokenPeerId] + [tokenRoomId] against its
+     * [us.tractat.kuilt.session.partition.JoinerReconnectController]. On success the host
+     * replies with [ResumeAck]; on failure it replies with [Reject].
+     *
+     * [tokenPeerId] — the joiner's [us.tractat.kuilt.core.PeerId] from the original admit.
+     * [tokenRoomId] — the room's stable identifier from the host's [Welcome.roomId].
+     * [issuedAt] — epoch-millis when the token was issued (from the injected clock).
+     */
+    @Serializable
+    @SerialName("resume")
+    public data class Resume(
+        val tokenPeerId: String,
+        val tokenRoomId: String,
+        val issuedAt: Long,
+    ) : AdmitMessage
+
+    /**
+     * Sent by the host to confirm that a joiner's [Resume] was accepted.
+     *
+     * The joiner's [Room.resume] awaits this as confirmation that the
+     * reconnect window was open and the token was valid.
+     */
+    @Serializable
+    @SerialName("resume-ack")
+    public data object ResumeAck : AdmitMessage
 
     public companion object {
         /**
