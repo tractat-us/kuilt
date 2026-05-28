@@ -1,5 +1,6 @@
 package us.tractat.kuilt.session
 
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.Flow
@@ -20,11 +21,15 @@ import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.Swatch
 import us.tractat.kuilt.core.Tag
 import us.tractat.kuilt.session.admit.AdmitMessage
+import us.tractat.kuilt.session.partition.DefaultJoinerReconnectController
 import us.tractat.kuilt.session.partition.HeartbeatConfig
 import us.tractat.kuilt.session.partition.HeartbeatPartitionDetector
+import us.tractat.kuilt.session.partition.JoinerReconnectController
+import us.tractat.kuilt.session.partition.JoinerReconnectEvent
 import us.tractat.kuilt.session.partition.PartitionEvent
 import us.tractat.kuilt.session.partition.ResumeResult
 import us.tractat.kuilt.session.partition.ResumeToken
+import us.tractat.kuilt.session.partition.RoomId
 import kotlin.time.Instant
 
 /**
@@ -53,6 +58,7 @@ public class SeamRoomFactory(
 ) : RoomFactory {
     override suspend fun host(pattern: Pattern): Room {
         val seam = loom.host(pattern)
+        val roomId = RoomId(seam.selfId.value + "-room")
         return SeamRoom(
             seam = seam,
             role = SessionRole.Host,
@@ -60,6 +66,7 @@ public class SeamRoomFactory(
             scope = scope,
             clock = clock,
             heartbeatConfig = heartbeatConfig,
+            roomId = roomId,
         ).also { room -> room.start() }
     }
 
@@ -72,6 +79,7 @@ public class SeamRoomFactory(
             scope = scope,
             clock = clock,
             heartbeatConfig = heartbeatConfig,
+            roomId = null,
         ).also { room -> room.start() }
     }
 }
@@ -113,6 +121,14 @@ internal class SeamRoom(
     private val scope: CoroutineScope,
     private val clock: () -> Instant,
     private val heartbeatConfig: HeartbeatConfig,
+    /**
+     * Stable room identifier. Non-null for hosts (generated at room creation);
+     * initially null for joiners (received from the host's [AdmitMessage.Welcome]).
+     *
+     * Defaults to null so existing tests that construct [SeamRoom] directly still compile.
+     * [SeamRoomFactory] always passes the host-generated id explicitly.
+     */
+    private val roomId: RoomId? = null,
 ) : Room {
     override val selfId: PeerId = seam.selfId
 
@@ -158,13 +174,60 @@ internal class SeamRoom(
      */
     private var hostPeerId: PeerId? = null
 
+    // ── Reconnect / resume state ───────────────────────────────────────────────
+
+    /**
+     * **Host only.** Manages per-joiner reconnect windows.
+     *
+     * Null when this room's [role] is [SessionRole.Joiner] — the host doesn't
+     * reconnect to itself, and the joiner doesn't manage windows for others.
+     *
+     * Constructed lazily at room start so the scope and clock are guaranteed ready.
+     */
+    private val reconnectController: JoinerReconnectController? =
+        if (role == SessionRole.Host && roomId != null) {
+            DefaultJoinerReconnectController(
+                roomId = roomId,
+                clock = { clock().toEpochMilliseconds() },
+                scope = scope,
+            )
+        } else {
+            null
+        }
+
+    /**
+     * **Joiner only.** The [ResumeToken] minted at admit time.
+     *
+     * Null until the joiner receives its own [AdmitMessage.Welcome] carrying a [RoomId]
+     * from the host. Used by [resume] to present credentials to the host.
+     *
+     * Exposed as [exposedResumeToken] so tests (commonTest, same module) can assert on it.
+     */
+    private var resumeToken: ResumeToken? = null
+
+    /** Test-visible accessor for [resumeToken]. Same-module visibility only. */
+    internal val exposedResumeToken: ResumeToken? get() = resumeToken
+
+    /**
+     * **Joiner only.** Pending [resume] calls waiting for the host's reply.
+     *
+     * When the joiner sends [AdmitMessage.Resume], it parks a [CompletableDeferred] here.
+     * The host replies with [AdmitMessage.Welcome] (success) or [AdmitMessage.Reject]
+     * (failure); [handleAdmitFrame] resolves the deferred.
+     */
+    private var pendingResume: CompletableDeferred<ResumeResult>? = null
+
     // ── Lifecycle ─────────────────────────────────────────────────────────────
 
     internal fun start() {
-        loopJobs = listOf(
+        val jobs = mutableListOf(
             scope.launch { runMainLoop() },
             scope.launch { runPeersWatcher() },
         )
+        if (reconnectController != null) {
+            jobs += scope.launch { runReconnectEventLoop(reconnectController) }
+        }
+        loopJobs = jobs
     }
 
     // ── Peers watcher: detect disconnects ─────────────────────────────────────
@@ -184,6 +247,43 @@ internal class SeamRoom(
                 removeFromRoster(peerId, LeaveReason.Normal)
             }
         }
+    }
+
+    // ── Reconnect event loop (host only) ─────────────────────────────────────
+
+    /**
+     * Collects [JoinerReconnectController] events and maps them to [MembershipEvent]s.
+     *
+     * - [JoinerReconnectEvent.WindowOpened] → [MembershipEvent.WindowOpened] (host events).
+     * - [JoinerReconnectEvent.Resumed] → [MembershipEvent.Resumed] (host events; liveness reset).
+     * - [JoinerReconnectEvent.WindowExpired] → no extra event here; the [HeartbeatPartitionDetector]
+     *   drives [PartitionEvent.PeerLost] which produces [MembershipEvent.Left] via [handlePeerLost].
+     */
+    private suspend fun runReconnectEventLoop(ctrl: JoinerReconnectController) {
+        ctrl.events.collect { event ->
+            when (event) {
+                is JoinerReconnectEvent.WindowOpened ->
+                    _events.tryEmit(MembershipEvent.WindowOpened(event.peerId, event.expiresAt))
+                is JoinerReconnectEvent.Resumed ->
+                    handleReconnectResumed(event.peerId)
+                is JoinerReconnectEvent.WindowExpired -> {
+                    // Window expired — PeerLost from the detector handles the final eviction.
+                    // No extra event emitted here; Left(PartitionExpired) follows from PeerLost.
+                }
+            }
+        }
+    }
+
+    /**
+     * A joiner successfully resumed (host perspective). Reset their liveness and
+     * send a [AdmitMessage.ResumeAck] to the joiner so the joiner's [pendingResume]
+     * deferred resolves as [ResumeResult.Success].
+     */
+    private fun handleReconnectResumed(peerId: PeerId) {
+        updateMemberLiveness(peerId, Liveness.Connected) ?: return
+        _events.tryEmit(MembershipEvent.Resumed(peerId))
+        val ackBytes = AdmitMessage.encode(AdmitMessage.ResumeAck)
+        scope.launch { runCatching { seam.sendTo(peerId, ackBytes) } }
     }
 
     // ── Main loop ──────────────────────────────────────────────────────────────
@@ -231,7 +331,23 @@ internal class SeamRoom(
                     handleWelcome(sender, msg)
                 }
             }
-            is AdmitMessage.Reject, null -> { /* ignored */ }
+            is AdmitMessage.Resume -> {
+                if (_role.value == SessionRole.Host) {
+                    scope.launch { handleResume(sender, msg) }
+                }
+            }
+            is AdmitMessage.ResumeAck -> {
+                if (_role.value == SessionRole.Joiner) {
+                    handleResumeAck(sender)
+                }
+            }
+            is AdmitMessage.Reject -> {
+                if (_role.value == SessionRole.Joiner) {
+                    pendingResume?.complete(ResumeResult.WindowClosed)
+                    pendingResume = null
+                }
+            }
+            null -> { /* malformed frame — ignore */ }
         }
     }
 
@@ -262,6 +378,7 @@ internal class SeamRoom(
             displayName = hello.displayName,
             sessionId = hello.sessionId,
             deviceId = hello.deviceId,
+            roomId = roomId?.value,
         )
         val welcomeBytes = AdmitMessage.encode(welcome)
 
@@ -306,6 +423,29 @@ internal class SeamRoom(
     }
 
     /**
+     * Host-side handler for [AdmitMessage.Resume].
+     *
+     * Validates the token against the [reconnectController]. On [ResumeResult.Success],
+     * [handleReconnectResumed] sends a [AdmitMessage.Welcome] confirmation to the joiner
+     * via the reconnect controller's event stream. On failure, replies with [AdmitMessage.Reject].
+     */
+    private suspend fun handleResume(sender: PeerId, msg: AdmitMessage.Resume) {
+        val ctrl = reconnectController ?: return
+        val token = ResumeToken(
+            peerId = PeerId(msg.tokenPeerId),
+            roomId = RoomId(msg.tokenRoomId),
+            issuedAt = msg.issuedAt,
+        )
+        val result = ctrl.tryResume(token, at = clock().toEpochMilliseconds())
+        if (result !is ResumeResult.Success) {
+            val rejectBytes = AdmitMessage.encode(AdmitMessage.Reject("resume-rejected"))
+            runCatching { seam.sendTo(sender, rejectBytes) }
+        }
+        // On Success: handleReconnectResumed fires via the controller's event stream
+        // (runReconnectEventLoop collects JoinerReconnectEvent.Resumed and calls it).
+    }
+
+    /**
      * Joiner-side: handle a [AdmitMessage.Welcome].
      *
      * The host sends Welcome both for the joiner themselves (confirming their own admission)
@@ -314,14 +454,41 @@ internal class SeamRoom(
      *
      * If [AdmitMessage.Welcome.assignedPeerId] matches [sender]'s value, this is the host's
      * self-introduction — record [sender] as the host peer for [HostLost] detection.
+     *
+     * If [welcome.roomId] is set and [resumeToken] is not yet minted, mint it now using
+     * [selfId] as the peer identifier and the received [RoomId].
+     *
+     * Note: the self-admission welcome (`assignedPeerId == selfId`) is used ONLY to mint
+     * the resume token; it does not add self to the roster. Resume confirmations arrive as
+     * [AdmitMessage.ResumeAck], not as Welcome.
      */
     private fun handleWelcome(sender: PeerId, welcome: AdmitMessage.Welcome) {
         val assignedId = PeerId(welcome.assignedPeerId)
-        if (assignedId == selfId) return // ignore self-admission — we're already "in"
+
+        // Self-admission welcome: mint the resume token (once) from the roomId carried here.
+        if (assignedId == selfId) {
+            if (resumeToken == null && welcome.roomId != null) {
+                resumeToken = ResumeToken(
+                    peerId = selfId,
+                    roomId = RoomId(welcome.roomId),
+                    issuedAt = clock().toEpochMilliseconds(),
+                )
+            }
+            return
+        }
 
         // Host self-intro: the described peer IS the sender.
         if (assignedId == sender && hostPeerId == null) {
             hostPeerId = sender
+        }
+
+        // Also mint resume token from host intro welcome if not yet minted.
+        if (resumeToken == null && welcome.roomId != null) {
+            resumeToken = ResumeToken(
+                peerId = selfId,
+                roomId = RoomId(welcome.roomId),
+                issuedAt = clock().toEpochMilliseconds(),
+            )
         }
 
         if (admittedById.containsKey(assignedId)) return // already known
@@ -332,6 +499,20 @@ internal class SeamRoom(
         )
         val member = Member(id = assignedId, identity = identity, liveness = Liveness.Connected)
         addToRoster(member)
+    }
+
+    /**
+     * Joiner-side: host confirmed our [AdmitMessage.Resume] was accepted.
+     *
+     * The host's [JoinerReconnectController] validated the token and the reconnect
+     * window was still open. Update liveness, emit [MembershipEvent.Resumed], and
+     * resolve the [pendingResume] deferred so [resume] returns [ResumeResult.Success].
+     */
+    private fun handleResumeAck(sender: PeerId) {
+        updateMemberLiveness(sender, Liveness.Connected)
+        _events.tryEmit(MembershipEvent.Resumed(selfId))
+        pendingResume?.complete(ResumeResult.Success)
+        pendingResume = null
     }
 
     // ── Partition detection ───────────────────────────────────────────────────
@@ -377,6 +558,8 @@ internal class SeamRoom(
     private fun markPartitioned(peerId: PeerId, at: Instant) {
         updateMemberLiveness(peerId, Liveness.Partitioned) ?: return
         _events.tryEmit(MembershipEvent.Partitioned(peerId, at))
+        // Open the reconnect window on the host side.
+        reconnectController?.onPeerUnresponsive(peerId, at.toEpochMilliseconds())
     }
 
     private fun markRecovered(peerId: PeerId, at: Instant) {
@@ -454,9 +637,40 @@ internal class SeamRoom(
         seam.sendTo(peer, bytes)
     }
 
+    /**
+     * Attempt to resume this room from a [ResumeToken] after a transport drop.
+     *
+     * **Joiner only.** The host's [JoinerReconnectController] holds the reconnect window;
+     * this method sends [AdmitMessage.Resume] to the host and awaits the reply:
+     * - Host replies [AdmitMessage.Welcome] (self) → [ResumeResult.Success]; [MembershipEvent.Resumed] fires.
+     * - Host replies [AdmitMessage.Reject] → [ResumeResult.WindowClosed].
+     *
+     * **Not valid** after [MembershipEvent.HostLost] — the room is terminal at that point.
+     * Callers should guard with [hostLost] before calling.
+     *
+     * **Not valid** on the host side — returns [ResumeResult.WindowClosed] immediately.
+     */
     override suspend fun resume(token: ResumeToken): ResumeResult {
-        // TODO(1D): wire JoinerReconnectController here
-        return ResumeResult.WindowClosed
+        if (_role.value != SessionRole.Joiner) return ResumeResult.WindowClosed
+        if (hostLost || closed) return ResumeResult.WindowClosed
+
+        val deferred = CompletableDeferred<ResumeResult>()
+        pendingResume = deferred
+
+        val resumeMsg = AdmitMessage.encode(
+            AdmitMessage.Resume(
+                tokenPeerId = token.peerId.value,
+                tokenRoomId = token.roomId.value,
+                issuedAt = token.issuedAt,
+            ),
+        )
+        val sendResult = runCatching { seam.broadcast(resumeMsg) }
+        if (sendResult.isFailure) {
+            pendingResume = null
+            return ResumeResult.WindowClosed
+        }
+
+        return deferred.await()
     }
 
     override suspend fun leave(reason: LeaveReason) {

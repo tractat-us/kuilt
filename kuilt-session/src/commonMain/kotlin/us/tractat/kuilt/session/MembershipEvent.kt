@@ -57,8 +57,21 @@ public sealed interface MembershipEvent {
     public data class Recovered(val peerId: PeerId, val at: Instant) : MembershipEvent
 
     /**
-     * A peer resumed from a [us.tractat.kuilt.session.partition.ResumeToken].
-     * TODO(1D): fully wired in 1D via [us.tractat.kuilt.session.partition.JoinerReconnectController].
+     * The host opened a reconnect window for a partitioned joiner.
+     *
+     * Emitted on the **host's** events stream when a joiner goes unresponsive and
+     * a reconnect window opens. The window expires at epoch-millis [expiresAt].
+     * If the joiner resumes before [expiresAt], [Resumed] follows; otherwise [Left]
+     * with [LeaveReason.PartitionExpired].
+     */
+    public data class WindowOpened(val peerId: PeerId, val expiresAt: Long) : MembershipEvent
+
+    /**
+     * A partitioned joiner successfully resumed via [Room.resume].
+     *
+     * Emitted on the **host's** events when the joiner's [us.tractat.kuilt.session.partition.ResumeToken]
+     * validated and the reconnect window was still open. Also emitted on the **joiner's** events
+     * to confirm local state recovery.
      */
     public data class Resumed(val peerId: PeerId) : MembershipEvent
 
