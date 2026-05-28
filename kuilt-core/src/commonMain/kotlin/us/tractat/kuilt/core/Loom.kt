@@ -6,7 +6,7 @@ package us.tractat.kuilt.core
  * MultipeerConnectivity advertising, WebSocket URL).
  *
  * The single abstract method is [weave]; [host] and [join] are default
- * wrappers, and [open] is a deprecated alias for [host]. ADR-002.
+ * wrappers. ADR-002.
  */
 public interface Loom {
     /** Establish a [Seam] according to [rendezvous] — either host a new session or join an existing one. */
@@ -20,10 +20,6 @@ public interface Loom {
      * to reach the existing peer set.
      */
     public suspend fun join(tag: Tag): Seam = weave(Rendezvous.Existing(tag))
-
-    /** Deprecated alias for [host]. */
-    @Deprecated("Renamed to host()", ReplaceWith("host(config)"))
-    public suspend fun open(config: Pattern): Seam = host(config)
 
     /**
      * Whether this fabric can be attempted now. Default [FabricAvailability.Available];

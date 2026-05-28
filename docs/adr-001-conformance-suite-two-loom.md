@@ -17,10 +17,10 @@ It breaks for all four real network fabrics, each of which is **architecturally 
 
 | Fabric | Why one Loom can't do both | Evidence |
 |---|---|---|
-| **websocket** | `KtorClientLoom.open()` throws `UnsupportedOperationException` ("clients join, they do not create"); `KtorServerLoom.join()` throws ("server accepts, it does not join"). | `kuilt-websocket/.../KtorClientLoom.kt:37`, `KtorServerLoom.kt:86` |
-| **multipeer** | `open()` and `join()` both `check(activeSession == null)` → calling both on one instance throws. Single-session by design (one `MCSession`/device). | `kuilt-multipeer/.../MultipeerPeerLinkFactory.jvm.kt:103,116` |
-| **mdns** | `open()` → `KtorServerLoom` + JmDNS register; `join()` → `KtorClientLoom`. Same server/client split, plus real multicast. | `kuilt-mdns/.../MDNSPeerLinkFactory.kt:69,79` |
-| **webrtc** | `open()`/`join()` each `signaling.open(room)` + a host/joiner handshake; a signaling room caps at 2 peers. One factory can't loopback to itself. | `kuilt-webrtc/.../WebRTCPeerLinkFactory.kt:41,50` |
+| **websocket** | `KtorClientLoom.host()` throws `UnsupportedOperationException` ("clients join, they do not create"); `KtorServerLoom.join()` throws ("server accepts, it does not join"). | `kuilt-websocket/.../KtorClientLoom.kt:37`, `KtorServerLoom.kt:86` |
+| **multipeer** | `host()` and `join()` both `check(activeSession == null)` → calling both on one instance throws. Single-session by design (one `MCSession`/device). | `kuilt-multipeer/.../MultipeerPeerLinkFactory.jvm.kt:103,116` |
+| **mdns** | `host()` → `KtorServerLoom` + JmDNS register; `join()` → `KtorClientLoom`. Same server/client split, plus real multicast. | `kuilt-mdns/.../MDNSPeerLinkFactory.kt:69,79` |
+| **webrtc** | `host()`/`join()` each `signaling.open(room)` + a host/joiner handshake; a signaling room caps at 2 peers. One factory can't loopback to itself. | `kuilt-webrtc/.../WebRTCPeerLinkFactory.kt:41,50` |
 
 So "implement `newLoom()`" is impossible for these four. The suite needs a contract that lets a fabric supply a **host instance and a joiner instance**, while the radio fabrics keep supplying one instance for both roles. The Nearby findings doc already flagged this and deferred the adoption decision to #1515 (`docs/kuilt-nearby-conformance-findings.md` § "Structural finding").
 
@@ -62,7 +62,7 @@ The contract must explicitly accommodate **both** "same backing" (radio: identic
 
 ### Concurrency note (load-bearing for the reshape)
 
-`KtorServerLoom.open()` suspends until a client connects (`nextLink()` blocks on `connectionChannel.receive()`), and the WebRTC handshake needs both ends running. So the delivery invariants must run `open()` and `join()` **concurrently**, not sequentially. The reshaped suite wraps them in `coroutineScope { val h = async { host.open(...) }; val j = async { joiner.join(...) }; … }` — exactly the pattern `WebRTCPeerLinkFactoryTest.openAndJoinExchangeFrames` already uses (`kuilt-webrtc/.../WebRTCPeerLinkFactoryTest.kt`). This is a behavioural change to the suite even for the radio fabrics (harmless there — their `open`/`join` don't block on each other), so the two existing subclasses must stay green after the reshape.
+`KtorServerLoom.host()` suspends until a client connects (`nextLink()` blocks on `connectionChannel.receive()`), and the WebRTC handshake needs both ends running. So the delivery invariants must run `host()` and `join()` **concurrently**, not sequentially. The reshaped suite wraps them in `coroutineScope { val h = async { host.host(...) }; val j = async { joiner.join(...) }; … }` — exactly the pattern `WebRTCPeerLinkFactoryTest.openAndJoinExchangeFrames` already uses (`kuilt-webrtc/.../WebRTCPeerLinkFactoryTest.kt`). This is a behavioural change to the suite even for the radio fabrics (harmless there — their `host`/`join` don't block on each other), so the two existing subclasses must stay green after the reshape.
 
 ### Real-loopback-first (which backing each pair connects over)
 
@@ -72,7 +72,7 @@ The contract must explicitly accommodate **both** "same backing" (radio: identic
 - **webrtc** connects over a real `RTCPeerConnection` loopback **if the wasmJs test runner provides WebRTC**; otherwise the existing paired fake facade stands in.
 - **multipeer** has no in-process real transport (Apple radio, macOS-only, no loopback mode), so the CI path routes the pair through a connecting fake at the JNA boundary; a real-radio two-peer test is manual/macOS-gated (mirrors the Nearby real-radio smoke).
 
-Net: we build **one** connecting fake (multipeer), possibly two (webrtc) — not four. The listen/offer-vs-connect asymmetry `open`/`join` encode is genuine, so even the real-transport pairs are two distinct instances, never one playing both roles.
+Net: we build **one** connecting fake (multipeer), possibly two (webrtc) — not four. The listen/offer-vs-connect asymmetry `host`/`join` encode is genuine, so even the real-transport pairs are two distinct instances, never one playing both roles.
 
 ## Per-fabric harness implications
 
@@ -80,14 +80,14 @@ Ordered real-transport-first (the fakes are last):
 
 | Fabric | Backing | Pair (source set) | Verdict |
 |---|---|---|---|
-| **websocket** | ✅ **real localhost, no fake** | `(KtorServerLoom(app, path), KtorClientLoom(httpClient))` over `testApplication`/localhost (jvmTest) | **Real connection.** Two real looms, real sockets/frames. Must run open()/join() concurrently (server's `open()` blocks until the client connects). `WebSocketSeamRoundTripTest` shows the wiring. |
+| **websocket** | ✅ **real localhost, no fake** | `(KtorServerLoom(app, path), KtorClientLoom(httpClient))` over `testApplication`/localhost (jvmTest) | **Real connection.** Two real looms, real sockets/frames. Must run host()/join() concurrently (server's `host()` blocks until the client connects). `WebSocketSeamRoundTripTest` shows the wiring. |
 | **mdns** | ✅ **real localhost byte path** (discovery skipped) | host real WS server; joiner via a directly-constructed `MDNSAdvertisement` at `localhost:port` (jvmTest) | **Real byte path, no transport fake** — see the bypass below. Real multicast stays `-P`-gated. |
 | **webrtc** | ⚠️ **real `RTCPeerConnection` if env supports, else paired fake** | two `WebRTCPeerLinkFactory` over `PairedFacadeFactory.pair()` + `PairedSignalingChannels.pair()` (wasmJsTest) | The fake harness already exists and already drives open/join concurrently; real loopback is possible only if the wasmJs runner provides WebRTC. Lightest either way. |
 | **multipeer** | ❌ **no in-process real transport → connecting fake** | two factories sharing a delivering `FakeMultipeerNativeLib` at the JNA boundary (jvmTest) | **The one unavoidable fake.** Current `FakeMultipeerNativeLib` is a no-delivery STUB — `mc_session_broadcast` returns `len`, `mc_session_set_data_callback` is a no-op. Needs a fake that routes one session's broadcast into the other's data callback. Real-radio two-peer = manual/macOS. |
 
 ### mdns multicast bypass (verified, recommended)
 
-`MDNSPeerLinkFactory.open()` registers JmDNS *then* delegates byte transport to an internal `KtorServerLoom`; `join()` only reads an `MDNSAdvertisement`, converts it to a `WebSocketAdvertisement` (`wsUrl` + `serverPeerId`), and connects via `KtorClientLoom` — **it does no multicast discovery**. So the two-Loom shape lets conformance **skip JmDNS entirely**: the host opens a server on a known port, the test constructs the `MDNSAdvertisement` directly —
+`MDNSPeerLinkFactory.host()` registers JmDNS *then* delegates byte transport to an internal `KtorServerLoom`; `join()` only reads an `MDNSAdvertisement`, converts it to a `WebSocketAdvertisement` (`wsUrl` + `serverPeerId`), and connects via `KtorClientLoom` — **it does no multicast discovery**. So the two-Loom shape lets conformance **skip JmDNS entirely**: the host opens a server on a known port, the test constructs the `MDNSAdvertisement` directly —
 
 ```kotlin
 MDNSAdvertisement(host = "localhost", port = knownPort,

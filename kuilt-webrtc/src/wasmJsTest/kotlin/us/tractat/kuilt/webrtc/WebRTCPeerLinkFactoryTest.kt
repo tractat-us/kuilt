@@ -41,7 +41,7 @@ class WebRTCPeerLinkFactoryTest {
             coroutineScope {
                 val hostLink =
                     async {
-                        hostFactory.open(Pattern(displayName = "host"))
+                        hostFactory.host(Pattern(displayName = "host"))
                     }
                 val joinerLink =
                     async {

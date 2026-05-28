@@ -21,7 +21,7 @@ class InMemoryLoomTest {
     fun `open returns a link whose peers contains only selfId`() =
         runTest {
             val factory = InMemoryLoom()
-            val link = factory.open(Pattern("Alice"))
+            val link = factory.host(Pattern("Alice"))
             assertEquals(setOf(link.selfId), link.peers.value)
         }
 
@@ -29,7 +29,7 @@ class InMemoryLoomTest {
     fun `join after open causes both peers to appear in each other's peer set`() =
         runTest {
             val factory = InMemoryLoom()
-            val host = factory.open(Pattern("Alice"))
+            val host = factory.host(Pattern("Alice"))
             val joiner = factory.join(InMemoryTag("Bob"))
 
             assertEquals(setOf(host.selfId, joiner.selfId), host.peers.value)
@@ -40,7 +40,7 @@ class InMemoryLoomTest {
     fun `third join updates all three peers to contain three ids`() =
         runTest {
             val factory = InMemoryLoom()
-            val a = factory.open(Pattern("Alice"))
+            val a = factory.host(Pattern("Alice"))
             val b = factory.join(InMemoryTag("Bob"))
             val c = factory.join(InMemoryTag("Charlie"))
 
@@ -54,7 +54,7 @@ class InMemoryLoomTest {
     fun `close removes the closing peer from every other peer's peers set`() =
         runTest {
             val factory = InMemoryLoom()
-            val a = factory.open(Pattern("Alice"))
+            val a = factory.host(Pattern("Alice"))
             val b = factory.join(InMemoryTag("Bob"))
             val c = factory.join(InMemoryTag("Charlie"))
 
@@ -69,7 +69,7 @@ class InMemoryLoomTest {
     fun `close is idempotent — calling twice does not throw`() =
         runTest {
             val factory = InMemoryLoom()
-            val link = factory.open(Pattern("Alice"))
+            val link = factory.host(Pattern("Alice"))
 
             link.close()
             link.close() // must not throw
@@ -79,7 +79,7 @@ class InMemoryLoomTest {
     fun `close only removes the peer once from the peer set`() =
         runTest {
             val factory = InMemoryLoom()
-            val a = factory.open(Pattern("Alice"))
+            val a = factory.host(Pattern("Alice"))
             val b = factory.join(InMemoryTag("Bob"))
 
             b.close()
@@ -92,7 +92,7 @@ class InMemoryLoomTest {
     fun `selfId is unique across peers from the same factory`() =
         runTest {
             val factory = InMemoryLoom()
-            val a = factory.open(Pattern("Alice"))
+            val a = factory.host(Pattern("Alice"))
             val b = factory.join(InMemoryTag("Bob"))
             val c = factory.join(InMemoryTag("Charlie"))
 
@@ -107,7 +107,7 @@ class InMemoryLoomTest {
     fun `broadcast from A causes B to receive the frame`() =
         runTest {
             val factory = InMemoryLoom()
-            val a = factory.open(Pattern("Alice"))
+            val a = factory.host(Pattern("Alice"))
             val b = factory.join(InMemoryTag("Bob"))
 
             val receivedByB = async { b.incoming.first() }
@@ -122,7 +122,7 @@ class InMemoryLoomTest {
     fun `broadcast from A reaches both B and C`() =
         runTest {
             val factory = InMemoryLoom()
-            val a = factory.open(Pattern("Alice"))
+            val a = factory.host(Pattern("Alice"))
             val b = factory.join(InMemoryTag("Bob"))
             val c = factory.join(InMemoryTag("Charlie"))
 
@@ -144,7 +144,7 @@ class InMemoryLoomTest {
     fun `broadcast does not echo to the sender`() =
         runTest {
             val factory = InMemoryLoom()
-            val a = factory.open(Pattern("Alice"))
+            val a = factory.host(Pattern("Alice"))
             val b = factory.join(InMemoryTag("Bob"))
 
             // Buffer A's incoming into a channel so we can inspect it without blocking.
@@ -167,7 +167,7 @@ class InMemoryLoomTest {
     fun `Swatch sender field on received broadcast equals sender PeerId`() =
         runTest {
             val factory = InMemoryLoom()
-            val a = factory.open(Pattern("Alice"))
+            val a = factory.host(Pattern("Alice"))
             val b = factory.join(InMemoryTag("Bob"))
 
             val deferred = async { b.incoming.first() }
@@ -181,7 +181,7 @@ class InMemoryLoomTest {
     fun `two broadcasts from A arrive at B in order`() =
         runTest {
             val factory = InMemoryLoom()
-            val a = factory.open(Pattern("Alice"))
+            val a = factory.host(Pattern("Alice"))
             val b = factory.join(InMemoryTag("Bob"))
 
             val frames = async { b.incoming.take(2).toList() }
@@ -200,7 +200,7 @@ class InMemoryLoomTest {
     fun `sendTo B from A causes B to receive and C nothing`() =
         runTest {
             val factory = InMemoryLoom()
-            val a = factory.open(Pattern("Alice"))
+            val a = factory.host(Pattern("Alice"))
             val b = factory.join(InMemoryTag("Bob"))
             val c = factory.join(InMemoryTag("Charlie"))
 
@@ -227,7 +227,7 @@ class InMemoryLoomTest {
     fun `sendTo self throws IllegalArgumentException`() =
         runTest {
             val factory = InMemoryLoom()
-            val a = factory.open(Pattern("Alice"))
+            val a = factory.host(Pattern("Alice"))
 
             assertFailsWith<IllegalArgumentException> {
                 a.sendTo(a.selfId, byteArrayOf(1))
@@ -238,7 +238,7 @@ class InMemoryLoomTest {
     fun `sendTo a closed peer is silently dropped`() =
         runTest {
             val factory = InMemoryLoom()
-            val a = factory.open(Pattern("Alice"))
+            val a = factory.host(Pattern("Alice"))
             val b = factory.join(InMemoryTag("Bob"))
 
             b.close()
@@ -251,7 +251,7 @@ class InMemoryLoomTest {
     fun `two sendTo calls from A to B arrive in order`() =
         runTest {
             val factory = InMemoryLoom()
-            val a = factory.open(Pattern("Alice"))
+            val a = factory.host(Pattern("Alice"))
             val b = factory.join(InMemoryTag("Bob"))
 
             val frames = async { b.incoming.take(2).toList() }
@@ -270,7 +270,7 @@ class InMemoryLoomTest {
     fun `sequence on received frames is monotonically increasing starting from 1`() =
         runTest {
             val factory = InMemoryLoom()
-            val a = factory.open(Pattern("Alice"))
+            val a = factory.host(Pattern("Alice"))
             val b = factory.join(InMemoryTag("Bob"))
 
             val frames = async { b.incoming.take(3).toList() }
@@ -289,7 +289,7 @@ class InMemoryLoomTest {
     fun `sequence numbers are receiver-local — A and B have independent counters`() =
         runTest {
             val factory = InMemoryLoom()
-            val a = factory.open(Pattern("Alice"))
+            val a = factory.host(Pattern("Alice"))
             val b = factory.join(InMemoryTag("Bob"))
             val c = factory.join(InMemoryTag("Charlie"))
 
@@ -315,7 +315,7 @@ class InMemoryLoomTest {
     fun `sequence increments across mixed broadcast and sendTo calls at receiver`() =
         runTest {
             val factory = InMemoryLoom()
-            val a = factory.open(Pattern("Alice"))
+            val a = factory.host(Pattern("Alice"))
             val b = factory.join(InMemoryTag("Bob"))
 
             val frames = async { b.incoming.take(2).toList() }
@@ -334,7 +334,7 @@ class InMemoryLoomTest {
     fun `sending from a closed link throws IllegalStateException`() =
         runTest {
             val factory = InMemoryLoom()
-            val a = factory.open(Pattern("Alice"))
+            val a = factory.host(Pattern("Alice"))
             val b = factory.join(InMemoryTag("Bob"))
 
             a.close()
@@ -348,7 +348,7 @@ class InMemoryLoomTest {
     fun `sendTo from a closed link throws IllegalStateException`() =
         runTest {
             val factory = InMemoryLoom()
-            val a = factory.open(Pattern("Alice"))
+            val a = factory.host(Pattern("Alice"))
             val b = factory.join(InMemoryTag("Bob"))
 
             a.close()
@@ -362,7 +362,7 @@ class InMemoryLoomTest {
     fun `closed peer is removed from peers set atomically`() =
         runTest {
             val factory = InMemoryLoom()
-            val a = factory.open(Pattern("Alice"))
+            val a = factory.host(Pattern("Alice"))
             val b = factory.join(InMemoryTag("Bob"))
 
             b.close()
@@ -377,7 +377,7 @@ class InMemoryLoomTest {
     fun `concurrent broadcasts from multiple peers all arrive at all receivers`() =
         runTest {
             val factory = InMemoryLoom()
-            val a = factory.open(Pattern("Alice"))
+            val a = factory.host(Pattern("Alice"))
             val b = factory.join(InMemoryTag("Bob"))
             val c = factory.join(InMemoryTag("Charlie"))
 

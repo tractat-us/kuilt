@@ -57,7 +57,7 @@ class HeartbeatPartitionDetectorTest {
      */
     private suspend fun buildMesh(scope: CoroutineScope): Mesh {
         val factory = InMemoryLoom()
-        val hostLink = factory.open(Pattern("host"))
+        val hostLink = factory.host(Pattern("host"))
         val joinerLink = factory.join(InMemoryTag("joiner"))
         val faultyHostLink = FaultySeam(hostLink, scope)
         return Mesh(hostLink.selfId, joinerLink.selfId, faultyHostLink, joinerLink)

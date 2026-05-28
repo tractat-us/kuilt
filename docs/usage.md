@@ -34,8 +34,8 @@ frames). Everything below is those three types over different wires.
 ## The shape of every interaction
 
 ```kotlin
-// 1. Get a Seam — either by opening a session or joining one.
-val seam: Seam = loom.open(Pattern(displayName = "alice", maxPeers = 4))
+// 1. Get a Seam — either by hosting a session or joining one.
+val seam: Seam = loom.host(Pattern(displayName = "alice", maxPeers = 4))
 
 // 2. Collect incoming frames EXACTLY ONCE. Fan out with shareIn if you need to.
 scope.launch {
@@ -68,7 +68,7 @@ mesh, so it's how you test code built on top of kuilt:
 
 ```kotlin
 val loom = InMemoryLoom()
-val host = loom.open(Pattern("host"))
+val host = loom.host(Pattern("host"))
 val joiner = loom.join(InMemoryTag("joiner"))
 
 val received = async { joiner.incoming.take(1).toList() }
@@ -94,7 +94,7 @@ scope.launch {
 }
 ```
 
-**Client (any target)** — `join` a `WebSocketAdvertisement`. `KtorClientLoom.open`
+**Client (any target)** — `join` a `WebSocketAdvertisement`. `KtorClientLoom.host`
 throws (clients don't host); always `join`:
 
 ```kotlin
@@ -122,9 +122,9 @@ to a WebSocket join on `join`. Discover peers separately with
 ```kotlin
 val jmdns = JmDNS.create()
 
-// Host: open() registers the mDNS service and waits for the first joiner.
+// Host: host() registers the mDNS service and waits for the first joiner.
 val host = MDNSPeerLinkFactory(application, jmdns, port = 8080, httpClientFactory = { HttpClient { /* … */ } })
-val hostSeam = host.open(Pattern("alice's game"))
+val hostSeam = host.host(Pattern("alice's game"))
 
 // Joiner: discover, then join one of the advertisements.
 val discoverer = MDNSServiceDiscoverer(jmdns)
