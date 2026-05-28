@@ -8,8 +8,8 @@ name: publish
 #
 # or trigger this workflow manually (Actions → publish → Run workflow) with an
 # explicit version. The version comes from the tag (v0.1.7 → 0.1.7). Day-to-day,
-# fireworks consumes kuilt via the includeBuild override; cut a tag when you want
-# fireworks CI (which resolves the published artifact) to pick up new changes.
+# consumers can use a presence-gated `includeBuild` override; cut a tag when you
+# want consumer CI (which resolves the published artifact) to pick up changes.
 
 on:
   push:

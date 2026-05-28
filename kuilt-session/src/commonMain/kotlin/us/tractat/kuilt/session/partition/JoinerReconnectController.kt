@@ -23,8 +23,8 @@ import us.tractat.kuilt.core.PeerId
  * leader changes so joiners can resume against a newly elected leader without
  * token renegotiation.
  *
- * Partition events ([PartitionEvent]) are produced by the sibling #1067 PR.
- * Until that lands, callers bridge manually: on transport close, invoke
+ * Partition events ([PartitionEvent]) are produced by the partition-detector layer.
+ * Until that wiring lands, callers bridge manually: on transport close, invoke
  * [onPeerUnresponsive] directly.
  *
  * **Thread safety:** implementations must be safe for concurrent calls.
@@ -43,7 +43,7 @@ public interface JoinerReconnectController {
      * Called by the leader when a peer's link drops. Emits
      * [JoinerReconnectEvent.WindowOpened] on [events].
      *
-     * When #1067's [PartitionEvent.PeerUnresponsive] is available, bridge
+     * When a [PartitionEvent.PeerUnresponsive] feed is available, bridge
      * it here: `partitionEvents.collect { if (it is PeerUnresponsive) onPeerUnresponsive(it.peerId, it.at) }`.
      */
     public fun onPeerUnresponsive(

@@ -60,10 +60,10 @@ import kotlin.time.TimeSource
  * or the timeout elapses. Flow collection runs on [Dispatchers.Default], which
  * does not block the main thread.
  *
- * **What this catches:** the dispatcher bug fixed in PR #728 —
- * `NSNetServiceBrowser` was being set up on a background dispatcher so
- * `scheduleInRunLoop(mainRunLoop)` never registered callbacks correctly.
- * A test collecting the flow with a real browser would have timed out and failed.
+ * **What this catches:** a dispatcher bug where `NSNetServiceBrowser` was being
+ * set up on a background dispatcher so `scheduleInRunLoop(mainRunLoop)` never
+ * registered callbacks correctly. A test collecting the flow with a real browser
+ * would have timed out and failed.
  */
 class MDNSServiceDiscovererIosTest {
     private val testScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -82,9 +82,9 @@ class MDNSServiceDiscovererIosTest {
      * This exercises the full callback path:
      * `NSNetServiceBrowser` delegate → `callbackFlow` → parsed [MDNSAdvertisement].
      *
-     * A regression of the PR #728 dispatcher bug would cause the browser to be
-     * set up on a background thread, making `scheduleInRunLoop(mainRunLoop)` a
-     * no-op — callbacks would never fire and this test would time out.
+     * A regression of the dispatcher bug would cause the browser to be set up on
+     * a background thread, making `scheduleInRunLoop(mainRunLoop)` a no-op —
+     * callbacks would never fire and this test would time out.
      */
     @Test
     fun discoverer_emits_advertisement_from_local_nsnetservice() {

@@ -2,8 +2,7 @@
 
 **Status:** Proposed
 **Date:** 2026-05-27
-**Tracks:** epic [tractat-us/fireworks-compose#1515](https://github.com/tractat-us/fireworks-compose/issues/1515) (Phase 3), issue [tractat-us/fireworks-compose#1617](https://github.com/tractat-us/fireworks-compose/issues/1617)
-**Context:** first ADR in kuilt's own series. The contract itself (`Loom`/`Seam`/`Swatch`) is fixed by [ADR-034](https://github.com/tractat-us/fireworks-compose/blob/main/docs/adr-034-cohered-transport-contract.md) in fireworks-compose; this ADR changes only the *test harness* shape, so it lives here.
+**Context:** first ADR in kuilt's own series. The `Loom`/`Seam`/`Swatch` contract surface itself is fixed elsewhere; this ADR changes only the *test harness* shape.
 
 ## Context
 
@@ -103,7 +102,7 @@ MDNSAdvertisement(host = "localhost", port = knownPort,
 - Docs to update: `CLAUDE.md` line "subclass `SeamConformanceSuite` and implement `newLoom()`", `docs/usage.md` "Writing your own fabric" snippet, `docs/architecture.md` ("implementing `newLoom()`"), and the `docs/kuilt-nearby-conformance-findings.md` recommendation #1 (adoption is now unblocked).
 - Four fabrics gain a `*ConformanceTest` and the epic's "one suite, all fabrics pass" invariant becomes real.
 - The suite now asserts *concurrent* open/join, which more faithfully models real fabrics — a small fidelity gain even for the radio fabrics.
-- **Phase-4 overlap:** [#1519](https://github.com/tractat-us/fireworks-compose/issues/1519) (`LiveChannel`→`Seam`/`Swatch` `:live-runtime` refactor) consumes the same contract. A two-Loom suite that drives genuine host↔joiner topologies (not a self-loopback) is the better regression net for that refactor's `Seam`/`Swatch` coherence; landing this first de-risks #1519.
+- **Downstream overlap:** the planned `Seam`/`Swatch` consumer-side rewrite consumes the same contract. A two-Loom suite that drives genuine host↔joiner topologies (not a self-loopback) is the better regression net for that refactor's coherence; landing this first de-risks it.
 
 ## Decided: unifying the rendezvous role (`weave(Rendezvous)`) — see ADR-002
 

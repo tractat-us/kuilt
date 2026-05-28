@@ -1,6 +1,6 @@
 name: ci
 
-# Aggregator pattern (mirrors fireworks-compose's build.yml):
+# Aggregator pattern (detect → build → ci-required):
 #
 #   detect  →  build  →  ci-required (the one required check)
 #

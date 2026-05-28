@@ -5,10 +5,8 @@ between peers over interchangeable *fabrics* — WebSocket, mDNS-discovered LAN,
 Multipeer, WebRTC — behind a single contract.
 
 kuilt knows nothing about your application. It carries bytes; what those bytes
-mean is the consumer's business. It was extracted from
-[`tractat-us/fireworks-compose`](https://github.com/tractat-us/fireworks-compose)
-(epic [#1515](https://github.com/tractat-us/fireworks-compose/issues/1515)) and
-is published to GitHub Packages under `us.tractat.kuilt:*`.
+mean is the consumer's business. Published to GitHub Packages under
+`us.tractat.kuilt:*`.
 
 Kotlin Multiplatform: JVM, Android, iOS, macOS, wasmJs.
 

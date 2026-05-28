@@ -153,7 +153,7 @@ internal class MCSessionLink(
         }
 
         // MultipeerConnectivity defines five other delegate callbacks
-        // (streams, resource transfers, certificate validation). Fireworks
+        // (streams, resource transfers, certificate validation). This library
         // doesn't use any, but the protocol requires them. Auto-accept the
         // certificate; everything else is a no-op.
         override fun session(

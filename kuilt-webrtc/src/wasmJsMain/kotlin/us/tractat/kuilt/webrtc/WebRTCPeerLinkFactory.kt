@@ -107,7 +107,7 @@ public class WebRTCPeerLinkFactory
         }
 
         /**
-         * Open a peer link using server-assigned role assignment (#1300 B0).
+         * Open a peer link using server-assigned role assignment.
          *
          * Connects to the signaling relay, reads the leading [SignalingMessage.Role]
          * frame sent by the server (which observes attach order and assigns host vs.

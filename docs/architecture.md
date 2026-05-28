@@ -1,12 +1,7 @@
 # kuilt architecture
 
-This is the design rationale for kuilt's transport contract. It is the standalone
-counterpart of fireworks-compose's
-[ADR-034 — Cohered Transport Contract](https://github.com/tractat-us/fireworks-compose/blob/main/docs/adr-034-cohered-transport-contract.md)
-and the
-[kuilt fabric-foundation roadmap](https://github.com/tractat-us/fireworks-compose/blob/main/docs/superpowers/specs/2026-05-25-kuilt-fabric-foundation-roadmap-design.md);
-those documents hold the full history. This file is the version that travels
-with the library.
+This is the design rationale for kuilt's transport contract. The contract itself
+is normative; everything else here is the reasoning that produced it.
 
 ## The one idea
 
@@ -70,12 +65,9 @@ the type system won't catch:
   frames, in send order, delivered to **one** collector. Collect it once per
   `Seam`. If multiple consumers need it, wrap it with `shareIn`/`MutableSharedFlow`
   yourself — the `Seam` does not fan out. A second concurrent collector races and
-  is unsupported. (fireworks-compose
-  [#1496](https://github.com/tractat-us/fireworks-compose/issues/1496).)
+  is unsupported.
 - **`Swatch` is binary-only.** No text-frame variant. The wire layer never
-  interprets the bytes — that is the consumer's job (in fireworks, `:session-protocol`).
-  The one historical text consumer (the hanab.live spectate proxy) drops to raw
-  Ktor and is simply not a kuilt consumer.
+  interprets the bytes — that is the consumer's job.
 - **`sender` / `sequence` are stamped on receipt.** Senders leave them unset
   (null sender, zero sequence); the receiving `Seam` fills them in on dispatch.
 - **`availability()` means present-but-not-usable-now.** A fabric scoped out by
@@ -83,8 +75,7 @@ the type system won't catch:
   simply **absent** — the artifact isn't on that platform's classpath — not
   `Unavailable`. `Unavailable(reason)` is for a runtime capability that's missing
   *now* (e.g. Play Services absent on an AOSP build). A host composes fabrics
-  with `looms.filter { it.availability() is Available }`. (fireworks-compose
-  [#1299](https://github.com/tractat-us/fireworks-compose/issues/1299).)
+  with `looms.filter { it.availability() is Available }`.
 
 ## Conformance: one suite, every fabric
 
@@ -128,11 +119,9 @@ The dependency arrow only ever points *down* toward `kuilt-core`. Keeping
 `kuilt-core` free of fabric imports is what lets the whole boundary be
 build-enforced when consumed as a composite build or a published artifact.
 
-## Relationship to fireworks-compose
+## Compatibility surface
 
-kuilt was carved out of fireworks-compose's `:transport-core` and shipping
-transports. Downstream, fireworks consumes published `us.tractat.kuilt:*`
-coordinates, with a presence-gated `includeBuild("../kuilt")` override for
+Consumers depend on kuilt via the published `us.tractat.kuilt:*` coordinates,
+optionally with a presence-gated `includeBuild("../kuilt")` override for
 zero-latency local iteration. The public API and Maven coordinates are therefore
-a compatibility surface — keep them stable. Full extraction history:
-[epic #1515](https://github.com/tractat-us/fireworks-compose/issues/1515).
+a compatibility surface — keep them stable across patch versions.

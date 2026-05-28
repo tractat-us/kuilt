@@ -54,11 +54,12 @@ dependencyResolutionManagement {
     }
 }
 
-// Remote build cache: S3-backed (Fly Tigris "buildcache" bucket), shared with the
-// rest of the org so CI and local builds hit warm artifacts across branches. Writers
-// are trusted CI refs (main); PRs and local builds read-only (opt in with
-// S3_BUILD_CACHE_PUSH=true). Absent creds ⇒ disabled. Speeds up the compile/test
-// build, not the GitHub-Packages upload (see #24). Mirrors fireworks-compose.
+// Remote build cache: S3-backed (Fly Tigris "buildcache" bucket), shared org-wide
+// so CI and local builds hit warm artifacts across branches. Writers are trusted
+// CI refs (main); PRs and local builds read-only (opt in with
+// S3_BUILD_CACHE_PUSH=true). Absent creds ⇒ disabled. Helps the compile/test
+// build; the publish step is dominated by upload time (#24), which caching
+// can't touch.
 val s3CacheAccessKey = System.getenv("S3_BUILD_CACHE_ACCESS_KEY_ID")
 if (!s3CacheAccessKey.isNullOrBlank()) {
     val isCi = System.getenv("CI") != null

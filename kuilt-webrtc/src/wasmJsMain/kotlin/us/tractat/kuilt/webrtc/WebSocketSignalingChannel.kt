@@ -60,8 +60,8 @@ public class WebSocketSignalingChannel(
     }
 
     /**
-     * Opens a session and awaits the server-assigned [SignalingMessage.Role] frame
-     * (#1300 B0). Returns the role alongside the session. The role frame is consumed
+     * Opens a session and awaits the server-assigned [SignalingMessage.Role] frame.
+     * Returns the role alongside the session. The role frame is consumed
      * from the underlying channel before returning; the session's [SignalingSession.incoming]
      * flow starts at the first offer/answer/ICE frame.
      *

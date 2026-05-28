@@ -33,9 +33,8 @@ import com.google.android.gms.common.ConnectionResult as GmsConnectionResult
  * `commonMain` — this class adds no protocol logic, only the SDK adaptation.
  *
  * Runtime permissions (Bluetooth / Wi-Fi / location / `NEARBY_WIFI_DEVICES`) are the
- * **consuming app's** responsibility — they belong to the Quick Play feature
- * (fireworks-compose#823), which is out of scope for this conformance spike. Hence the
- * class-level `@SuppressLint("MissingPermission")`.
+ * **consuming app's** responsibility — they're out of scope for this conformance spike.
+ * Hence the class-level `@SuppressLint("MissingPermission")`.
  */
 @SuppressLint("MissingPermission")
 public class GmsNearbyApi(context: Context) : NearbyApi {
