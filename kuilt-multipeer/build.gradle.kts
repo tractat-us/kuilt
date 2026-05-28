@@ -12,6 +12,7 @@ kotlin {
     sourceSets {
         commonMain.dependencies {
             implementation(project(":kuilt-core"))
+            implementation(project(":kuilt-session"))
             implementation(libs.kotlinx.coroutines.core)
             implementation(libs.kotlin.logging)
         }
@@ -22,6 +23,9 @@ kotlin {
         val macosMain by creating { dependsOn(appleMain) }
         val macosArm64Main by getting { dependsOn(macosMain) }
         jvmMain.dependencies { implementation(libs.jna) }
+        commonTest.dependencies {
+            implementation(libs.kotlinx.coroutines.test)
+        }
         jvmTest.dependencies {
             implementation(project(":kuilt-conformance"))
             implementation(libs.kotlin.testJunit)
