@@ -1,27 +1,21 @@
 name: publish
 
-# Publishes kuilt to Tigris (Fly's S3-compatible object storage). The publish
-# wall time is now ~5 min total (~20 s for the actual upload via `aws s3 sync`),
-# down from ~21 min on the old GitHub Packages path (#22, #24) — so we're back
-# to publishing on every push to main, plus tag pushes and manual dispatch.
-#
-# Versioning:
-#   - Tag push (v0.3.7 → 0.3.7)
-#   - Push to main → ${kuiltVersionLine}.<run_number>  (continuous snapshots
-#     for consumers pinning the latest; the line is read from gradle.properties
-#     so a breaking-API bump is a single-line PR)
-#   - workflow_dispatch → input version or ${kuiltVersionLine}.<run_number>
+# Publishes kuilt to Tigris (Fly's S3-compatible object storage). Every push to
+# main publishes `${kuiltVersionLine}.<run_number>` from gradle.properties (so
+# bumping the major.minor on a breaking-API release is a one-line PR — see
+# #22 for the full cutover history). Wall time is now ~5 min total (~20 s for
+# the actual upload via `aws s3 sync`), down from ~21 min on the old GitHub
+# Packages path. Tags are NOT a trigger — they're for tagging; publishing is
+# continuous from main.
 #
 # Why staging-dir + AWS CLI instead of Gradle's native s3:// transport:
 # Gradle silently sets a request header (ACL or storage-class) Tigris rejects
-# with HTTP 400. Probe results + cutover details in #22. Switching backends
-# would just take a different upload step at the end — Gradle's job is to
-# stage to build/staged-maven-repo/, nothing more.
+# with HTTP 400. Probe results + cutover details in #22. Gradle's job is to
+# stage to build/staged-maven-repo/; the upload is a separate `aws s3 sync` step.
 
 on:
   push:
     branches: [main]
-    tags: ['v*']
   workflow_dispatch:
     inputs:
       version:
@@ -72,9 +66,7 @@ jobs:
             echo "::error::Could not read kuiltVersionLine from gradle.properties" >&2
             exit 1
           fi
-          if [ "${{ github.event_name }}" = "push" ] && [[ "$GITHUB_REF" == refs/tags/v* ]]; then
-            VERSION="${GITHUB_REF_NAME#v}"      # tag push: v0.3.7 → 0.3.7
-          elif [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ github.event.inputs.version }}" ]; then
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ github.event.inputs.version }}" ]; then
             VERSION="${{ github.event.inputs.version }}"
           else
             VERSION="${VERSION_LINE}.${{ github.run_number }}"  # main push or dispatch fallback

@@ -75,8 +75,10 @@ tests as the `MDNS_MULTICAST_TESTS` env var (see `kuilt-mdns/build.gradle.kts`).
   build fails. New public types get `public`.
 - **Build logic is centralized** in `build-logic/`: `kuilt.kmp-library` defines
   the standard target set + Android namespace (`us.tractat.kuilt.<module>`);
-  `kuilt.publish` wires the GitHub Packages Maven repo. New modules apply
-  `id("kuilt.kmp-library")` and almost nothing else.
+  `kuilt.publish` wires the publish targets (the in-tree `TigrisStaging`
+  file:// repo, plus a vestigial `GitHubPackages` repo that's no longer
+  invoked by `publish.yml`). New modules apply `id("kuilt.kmp-library")` and
+  almost nothing else.
 - **KMP source-set hierarchy is wired by hand in `:kuilt-websocket`** — a manual
   `jvmAndAndroidMain` intermediate (Ktor server is JVM/Android-only) disables the
   plugin's default auto-wiring, so `iosMain`/`macosMain` intermediates are also
@@ -108,27 +110,36 @@ soon as `ci-required` is green.
 
 ## Versioning & publishing
 
-`build.gradle.kts` sets `group = us.tractat.kuilt`; version is `0.1.0-dev`
-locally and is supplied via `-Pversion=` when publishing.
+The version is parameterized by `kuiltVersionLine` in `gradle.properties`
+(currently `0.3`). Both `build.gradle.kts` (which sets the local default to
+`${kuiltVersionLine}.0-dev`) and `publish.yml` (which publishes
+`${kuiltVersionLine}.<run_number>` on every main push) read it, so a
+breaking-API release is a **one-line PR bumping the line**. Group is
+`us.tractat.kuilt`.
 
-**Publishing is tag-driven and intentional — it does NOT run on every `main`
-push.** Per-merge publishing imposed a ~20–35 min tax per merge (#24): we have
-~40 publication tasks (8 modules × ~5 targets) each doing a serial sequence of
-PUTs to GitHub Packages. Parallelism + `org.gradle.workers.max` help across
-modules but the gain is capped (Gradle's internal Apache HttpClient pool limits
-~2 concurrent connections per route, and `maven-metadata.xml` writes serialize
-within each module). While the API is still settling, cut a release when you
-actually want one:
+**Publishing runs on every push to `main`** (plus manual `workflow_dispatch`).
+No tag is required. The publish flow is:
 
-```bash
-git tag v0.1.7 && git push origin v0.1.7    # → publishes us.tractat.kuilt:*:0.1.7
-```
+1. Gradle stages publications into `build/staged-maven-repo/` via the
+   `TigrisStaging` Maven repo (file:// URL).
+2. `aws s3 sync build/staged-maven-repo/ s3://buildcache/maven/` uploads the
+   whole tree to **Tigris** (Fly's S3-compatible storage) in one parallel
+   pass.
 
-`.github/workflows/publish.yml` triggers on `v*` tags (version derived from the
-tag) or manual `workflow_dispatch` (optional version input, else a
-`0.1.<run_number>` snapshot). Consumers that resolve the published artifact in
-CI pick up changes only when a tag lands; pair the publish step with the
-consumer's catalog bump (or its `includeBuild` override) for the dev loop.
+Wall time is ~5 min total, ~12–20 s for the upload itself. This is ~40× faster
+than the prior GitHub Packages path (#22), which is why per-merge publishing
+is back on instead of tag-only.
+
+Bypassing Gradle's native `s3://` transport is deliberate: it silently sets
+a request header (ACL or storage-class) Tigris rejects with HTTP 400. The
+stage-then-`aws s3 sync` pattern sidesteps it entirely. Consumers reading
+from Tigris hit the same Gradle s3:// transport for GETs, but GETs don't
+set those headers so the read path works.
+
+GitHub Packages still hosts the historical 0.1.x and 0.3.1/0.3.2/0.3.4
+artifacts; the `GitHubPackages` publication target remains wired in
+`kuilt.publish.gradle.kts` but is no longer invoked by `publish.yml`. To
+re-enable it manually, run `./gradlew publishAllPublicationsToGitHubPackagesRepository`.
 
 ## Composite-build consumption
 
