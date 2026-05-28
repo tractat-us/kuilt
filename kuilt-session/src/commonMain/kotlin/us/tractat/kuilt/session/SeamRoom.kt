@@ -2,7 +2,6 @@ package us.tractat.kuilt.session
 
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -10,6 +9,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import us.tractat.kuilt.core.CloseReason
@@ -17,10 +17,15 @@ import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Seam
+import us.tractat.kuilt.core.Swatch
 import us.tractat.kuilt.core.Tag
 import us.tractat.kuilt.session.admit.AdmitMessage
+import us.tractat.kuilt.session.partition.HeartbeatConfig
+import us.tractat.kuilt.session.partition.HeartbeatPartitionDetector
+import us.tractat.kuilt.session.partition.PartitionEvent
 import us.tractat.kuilt.session.partition.ResumeResult
 import us.tractat.kuilt.session.partition.ResumeToken
+import kotlin.time.Instant
 
 /**
  * [Loom]-backed implementation of [RoomFactory].
@@ -36,10 +41,15 @@ import us.tractat.kuilt.session.partition.ResumeToken
  * [scope] is used to launch the per-Room admit loop coroutines. Callers should
  * use a scope whose lifetime matches the room's intended lifetime (e.g.
  * `backgroundScope` in tests, a structured session scope in production).
+ *
+ * [clock] is injected (never [kotlin.time.Clock.System]) so tests can use virtual
+ * time. [heartbeatConfig] controls partition-detection timing.
  */
 public class SeamRoomFactory(
     private val loom: Loom,
     private val scope: CoroutineScope,
+    private val clock: () -> Instant = { Instant.fromEpochMilliseconds(0L) },
+    private val heartbeatConfig: HeartbeatConfig = HeartbeatConfig(),
 ) : RoomFactory {
     override suspend fun host(pattern: Pattern): Room {
         val seam = loom.host(pattern)
@@ -48,6 +58,8 @@ public class SeamRoomFactory(
             role = SessionRole.Host,
             displayName = pattern.displayName,
             scope = scope,
+            clock = clock,
+            heartbeatConfig = heartbeatConfig,
         ).also { room -> room.start() }
     }
 
@@ -58,6 +70,8 @@ public class SeamRoomFactory(
             role = SessionRole.Joiner,
             displayName = tag.displayName,
             scope = scope,
+            clock = clock,
+            heartbeatConfig = heartbeatConfig,
         ).also { room -> room.start() }
     }
 }
@@ -69,10 +83,26 @@ public class SeamRoomFactory(
  * the mutable [roster], and [events]/[incoming] shared flows.
  *
  * Two coroutines run per room (both parented to the provided [scope]):
- * 1. **Admit loop** — collects [Seam.incoming], routes admit frames through
- *    the handshake and application frames through to [incoming].
+ * 1. **Main loop** — the single collector of [Seam.incoming]. Handles the admit protocol
+ *    (Hello/Welcome), routes application frames to [incoming], filters heartbeat frames
+ *    from application delivery, and fans incoming swatches out to [rawIncoming] so that
+ *    per-peer [HeartbeatPartitionDetector]s can subscribe without contending for the channel.
  * 2. **Peers watcher** — observes [Seam.peers] drops and fires [MembershipEvent.Left]
  *    for admitted members whose transport link closed.
+ *
+ * Additionally, a [HeartbeatPartitionDetector] is launched per admitted peer when the
+ * admit handshake completes. The detector subscribes to [rawIncoming] (filtered by sender)
+ * so it processes heartbeat ping/pong frames independently of the main loop.
+ *
+ * Partition event semantics by role:
+ * - **Joiner**: [PartitionEvent.PeerLost] of the host → [MembershipEvent.HostLost] + terminal.
+ *   [PartitionEvent.PeerLost] of a non-host → [MembershipEvent.Left(PartitionExpired)].
+ * - **Host**: [PartitionEvent.PeerLost] of any joiner → [MembershipEvent.Left(PartitionExpired)].
+ * - Both roles: [PartitionEvent.PeerUnresponsive] → [MembershipEvent.Partitioned];
+ *   [PartitionEvent.PeerRecovered] → [MembershipEvent.Recovered].
+ *
+ * **Terminal state**: once [MembershipEvent.HostLost] fires, [broadcast] and [sendTo]
+ * become silent no-ops. No auto-election is performed (D-010).
  *
  * [start] must be called by [SeamRoomFactory] after construction to launch these loops.
  */
@@ -81,6 +111,8 @@ internal class SeamRoom(
     role: SessionRole,
     private val displayName: String,
     private val scope: CoroutineScope,
+    private val clock: () -> Instant,
+    private val heartbeatConfig: HeartbeatConfig,
 ) : Room {
     override val selfId: PeerId = seam.selfId
 
@@ -98,22 +130,41 @@ internal class SeamRoom(
     private val _incoming = MutableSharedFlow<RoomFrame>(extraBufferCapacity = 64)
     override val incoming: Flow<RoomFrame> = _incoming.asSharedFlow()
 
+    /**
+     * Broadcast bus for raw incoming [Swatch]es. The main loop fans every received
+     * swatch here so per-peer [HeartbeatPartitionDetector] instances can subscribe
+     * independently without contending for the [Seam.incoming] channel.
+     *
+     * Capacity 256 absorbs burst traffic before detectors are scheduled. Subscribers
+     * that join after a frame is emitted will miss that frame; for heartbeat
+     * liveness this is acceptable — the next heartbeat cycle catches up.
+     */
+    private val rawIncoming = MutableSharedFlow<Swatch>(extraBufferCapacity = 256)
+
     private var loopJobs: List<Job> = emptyList()
+
+    // Per-admitted-peer detector collection jobs, keyed by PeerId.
+    private val detectorJobs = mutableMapOf<PeerId, Job>()
+
     private var closed = false
+    private var hostLost = false
+
+    /**
+     * The host's [PeerId] as seen from a [SessionRole.Joiner].
+     *
+     * Identified when the joiner receives a [AdmitMessage.Welcome] whose
+     * [AdmitMessage.Welcome.assignedPeerId] matches the swatch sender's PeerId —
+     * the host's self-introduction. Null for hosts (hosts don't watch themselves).
+     */
+    private var hostPeerId: PeerId? = null
 
     // ── Lifecycle ─────────────────────────────────────────────────────────────
 
     internal fun start() {
-        loopJobs = when (_role.value) {
-            SessionRole.Host -> listOf(
-                scope.launch { runHostAdmitLoop() },
-                scope.launch { runPeersWatcher() },
-            )
-            SessionRole.Joiner -> listOf(
-                scope.launch { runJoinerAdmitLoop() },
-                scope.launch { runPeersWatcher() },
-            )
-        }
+        loopJobs = listOf(
+            scope.launch { runMainLoop() },
+            scope.launch { runPeersWatcher() },
+        )
     }
 
     // ── Peers watcher: detect disconnects ─────────────────────────────────────
@@ -129,29 +180,58 @@ internal class SeamRoom(
         seam.peers.drop(1).collect { currentPeers ->
             val removedIds = admittedById.keys.filter { it !in currentPeers }
             for (peerId in removedIds) {
+                stopDetector(peerId)
                 removeFromRoster(peerId, LeaveReason.Normal)
             }
         }
     }
 
-    // ── Host-side: process incoming frames, admit new peers ──────────────────
+    // ── Main loop ──────────────────────────────────────────────────────────────
 
-    private suspend fun runHostAdmitLoop() {
+    /**
+     * Single coroutine collecting [Seam.incoming]:
+     * - Sends [AdmitMessage.Hello] first if this is a joiner.
+     * - Fans each swatch to [rawIncoming] (for per-peer detectors).
+     * - Routes frames through the admit protocol or to [incoming].
+     */
+    private suspend fun runMainLoop() {
+        if (_role.value == SessionRole.Joiner) sendHello()
+
         seam.incoming.collect { swatch ->
-            val sender = swatch.sender ?: return@collect
-            val bytes = swatch.payload
-            when {
-                AdmitMessage.isAdmitFrame(bytes) -> handleHostAdmitFrame(sender, bytes)
-                isAdmittedPeer(sender) -> routeApplicationFrame(sender, bytes)
-                else -> { /* drop: application frame from unadmitted peer */ }
-            }
+            rawIncoming.emit(swatch)
+            dispatchIncoming(swatch)
         }
     }
 
-    private suspend fun handleHostAdmitFrame(sender: PeerId, bytes: ByteArray) {
+    private fun dispatchIncoming(swatch: Swatch) {
+        val sender = swatch.sender ?: return
+        val bytes = swatch.payload
+        when {
+            HeartbeatPartitionDetector.isHeartbeatFrame(bytes) -> {
+                // Heartbeat frames are consumed by per-peer detectors via rawIncoming.
+                // No further action needed here — the detector's incomingJob handles them.
+            }
+            AdmitMessage.isAdmitFrame(bytes) -> handleAdmitFrame(sender, bytes)
+            isAdmittedPeer(sender) -> routeApplicationFrame(sender, bytes)
+            else -> { /* drop: application frame from unadmitted peer */ }
+        }
+    }
+
+    // ── Admit protocol ────────────────────────────────────────────────────────
+
+    private fun handleAdmitFrame(sender: PeerId, bytes: ByteArray) {
         when (val msg = AdmitMessage.decode(bytes)) {
-            is AdmitMessage.Hello -> admitPeer(sender, msg)
-            is AdmitMessage.Welcome, is AdmitMessage.Reject, null -> { /* host doesn't receive these */ }
+            is AdmitMessage.Hello -> {
+                if (_role.value == SessionRole.Host) {
+                    scope.launch { admitPeer(sender, msg) }
+                }
+            }
+            is AdmitMessage.Welcome -> {
+                if (_role.value == SessionRole.Joiner) {
+                    handleWelcome(sender, msg)
+                }
+            }
+            is AdmitMessage.Reject, null -> { /* ignored */ }
         }
     }
 
@@ -217,34 +297,12 @@ internal class SeamRoom(
         runCatching { seam.sendTo(joinerPeerId, hostIntro) }
     }
 
-    // ── Joiner-side: send Hello, handle Welcome responses ────────────────────
-
-    private suspend fun runJoinerAdmitLoop() {
-        // Send Hello immediately — broadcast since we don't yet know the host's PeerId
+    private suspend fun sendHello() {
         val hello = AdmitMessage.Hello(
             displayName = displayName,
             sessionId = selfId.value,
         )
         runCatching { seam.broadcast(AdmitMessage.encode(hello)) }
-
-        // Collect incoming: Welcome → roster update; app frames → route (once admitted)
-        seam.incoming.collect { swatch ->
-            val sender = swatch.sender ?: return@collect
-            val bytes = swatch.payload
-            when {
-                AdmitMessage.isAdmitFrame(bytes) -> handleJoinerAdmitFrame(sender, bytes)
-                isAdmittedPeer(sender) -> routeApplicationFrame(sender, bytes)
-                else -> { /* drop: application frame from unadmitted peer */ }
-            }
-        }
-    }
-
-    private fun handleJoinerAdmitFrame(sender: PeerId, bytes: ByteArray) {
-        when (val msg = AdmitMessage.decode(bytes)) {
-            is AdmitMessage.Welcome -> handleWelcome(msg)
-            is AdmitMessage.Reject -> { /* TODO: surface as event/error in future slice */ }
-            is AdmitMessage.Hello, null -> { /* joiners don't process Hello */ }
-        }
     }
 
     /**
@@ -253,10 +311,19 @@ internal class SeamRoom(
      * The host sends Welcome both for the joiner themselves (confirming their own admission)
      * and for each existing member (bootstrapping the joiner's roster view).
      * Either way, add the described peer to our roster if not already there.
+     *
+     * If [AdmitMessage.Welcome.assignedPeerId] matches [sender]'s value, this is the host's
+     * self-introduction — record [sender] as the host peer for [HostLost] detection.
      */
-    private fun handleWelcome(welcome: AdmitMessage.Welcome) {
+    private fun handleWelcome(sender: PeerId, welcome: AdmitMessage.Welcome) {
         val assignedId = PeerId(welcome.assignedPeerId)
         if (assignedId == selfId) return // ignore self-admission — we're already "in"
+
+        // Host self-intro: the described peer IS the sender.
+        if (assignedId == sender && hostPeerId == null) {
+            hostPeerId = sender
+        }
+
         if (admittedById.containsKey(assignedId)) return // already known
         val identity = MemberIdentity(
             displayName = welcome.displayName,
@@ -267,12 +334,88 @@ internal class SeamRoom(
         addToRoster(member)
     }
 
+    // ── Partition detection ───────────────────────────────────────────────────
+
+    /**
+     * Launches a [HeartbeatPartitionDetector] for [member].
+     *
+     * The detector is given a [PerPeerSeam] — a thin adapter that filters [rawIncoming]
+     * to frames from [member.id] only. This lets the detector subscribe to per-peer
+     * ping/pong traffic without competing for the single-consumer [Seam.incoming] channel
+     * that the main loop already holds.
+     *
+     * A separate coroutine collects the detector's events and maps them to [MembershipEvent]s.
+     */
+    private fun startDetector(member: Member) {
+        val perPeerSeam = PerPeerSeam(seam, member.id, rawIncoming)
+        val detector = HeartbeatPartitionDetector(
+            link = perPeerSeam,
+            peerId = member.id,
+            config = heartbeatConfig,
+            clock = clock,
+        )
+        detector.start(scope)
+
+        val job = scope.launch {
+            detector.events.collect { event -> handlePartitionEvent(event) }
+        }
+        detectorJobs[member.id] = job
+    }
+
+    private fun stopDetector(peerId: PeerId) {
+        detectorJobs.remove(peerId)?.cancel()
+    }
+
+    private suspend fun handlePartitionEvent(event: PartitionEvent) {
+        when (event) {
+            is PartitionEvent.PeerUnresponsive -> markPartitioned(event.peerId, event.at)
+            is PartitionEvent.PeerRecovered -> markRecovered(event.peerId, event.at)
+            is PartitionEvent.PeerLost -> handlePeerLost(event.peerId, event.at)
+        }
+    }
+
+    private fun markPartitioned(peerId: PeerId, at: Instant) {
+        updateMemberLiveness(peerId, Liveness.Partitioned) ?: return
+        _events.tryEmit(MembershipEvent.Partitioned(peerId, at))
+    }
+
+    private fun markRecovered(peerId: PeerId, at: Instant) {
+        updateMemberLiveness(peerId, Liveness.Connected) ?: return
+        _events.tryEmit(MembershipEvent.Recovered(peerId, at))
+    }
+
+    private suspend fun handlePeerLost(peerId: PeerId, at: Instant) {
+        stopDetector(peerId)
+        if (_role.value == SessionRole.Joiner && peerId == hostPeerId) {
+            markHostLost(at)
+        } else {
+            removeFromRoster(peerId, LeaveReason.PartitionExpired)
+        }
+    }
+
+    private suspend fun markHostLost(at: Instant) {
+        if (hostLost) return
+        hostLost = true
+        _events.tryEmit(MembershipEvent.HostLost(at))
+        // Room is now terminal. Leave cleanly to cancel loops and close the seam.
+        leave(LeaveReason.Error("host lost"))
+    }
+
+    private fun updateMemberLiveness(peerId: PeerId, liveness: Liveness): Member? {
+        val current = admittedById[peerId] ?: return null
+        val updated = current.copy(liveness = liveness)
+        admittedById[peerId] = updated
+        _roster.update { current -> current.map { if (it.id == peerId) updated else it }.toSet() }
+        return updated
+    }
+
     // ── Roster management ────────────────────────────────────────────────────
 
     private fun addToRoster(member: Member) {
         admittedById[member.id] = member
         _roster.update { current -> current + member }
         _events.tryEmit(MembershipEvent.Joined(member))
+        startDetector(member)
     }
 
     private fun removeFromRoster(peerId: PeerId, reason: LeaveReason) {
@@ -291,11 +434,23 @@ internal class SeamRoom(
 
     // ── Room interface ────────────────────────────────────────────────────────
 
+    /**
+     * Broadcast [bytes] to all admitted members.
+     *
+     * Silent no-op when the room is terminal (after [MembershipEvent.HostLost] or [leave]).
+     */
     override suspend fun broadcast(bytes: ByteArray) {
+        if (hostLost || closed) return
         seam.broadcast(bytes)
     }
 
+    /**
+     * Send [bytes] to one specific admitted member.
+     *
+     * Silent no-op when the room is terminal (after [MembershipEvent.HostLost] or [leave]).
+     */
     override suspend fun sendTo(peer: PeerId, bytes: ByteArray) {
+        if (hostLost || closed) return
         seam.sendTo(peer, bytes)
     }
 
@@ -308,11 +463,44 @@ internal class SeamRoom(
         if (closed) return
         closed = true
         loopJobs.forEach { it.cancel() }
+        detectorJobs.values.forEach { it.cancel() }
+        detectorJobs.clear()
         seam.close(
             when (reason) {
                 is LeaveReason.Normal -> CloseReason.Normal
                 is LeaveReason.Error -> CloseReason.Error(RuntimeException(reason.message))
+                is LeaveReason.PartitionExpired -> CloseReason.Normal
             },
         )
     }
+}
+
+/**
+ * A thin [Seam] view that presents only frames from [targetPeerId] via [rawIncoming].
+ *
+ * [HeartbeatPartitionDetector] subscribes to [incoming] to process pings/pongs for
+ * a specific peer. Since [Seam.incoming] is a channel-backed flow (single-consumer),
+ * we cannot let every detector collect it directly. Instead, [SeamRoom.runMainLoop]
+ * fans each inbound swatch to [rawIncoming] (a [MutableSharedFlow]) and each
+ * [PerPeerSeam] filters to its assigned [targetPeerId].
+ *
+ * [broadcast] and [sendTo] delegate to [delegate] unchanged.
+ * [close] is a no-op — the [PerPeerSeam] does not own the link lifecycle.
+ */
+private class PerPeerSeam(
+    private val delegate: Seam,
+    private val targetPeerId: PeerId,
+    private val rawIncoming: MutableSharedFlow<Swatch>,
+) : Seam {
+    override val selfId: PeerId get() = delegate.selfId
+    override val peers: StateFlow<Set<PeerId>> get() = delegate.peers
+
+    override val incoming: Flow<Swatch>
+        get() = rawIncoming.filter { it.sender == targetPeerId }
+
+    override suspend fun broadcast(payload: ByteArray): Unit = delegate.broadcast(payload)
+    override suspend fun sendTo(peer: PeerId, payload: ByteArray): Unit = delegate.sendTo(peer, payload)
+
+    /** No-op — lifecycle is owned by [SeamRoom], not this view. */
+    override suspend fun close(reason: CloseReason) = Unit
 }

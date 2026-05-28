@@ -204,5 +204,17 @@ public class HeartbeatPartitionDetector(
         internal fun isPingFrame(frame: Swatch): Boolean = frame.payload.decodeToString().startsWith(PING_PREFIX)
 
         internal fun isPongFrame(frame: Swatch): Boolean = frame.payload.decodeToString().startsWith(PONG_PREFIX)
+
+        /**
+         * Returns true if [bytes] is a heartbeat frame (ping or pong).
+         *
+         * Used by [us.tractat.kuilt.session.SeamRoom] to filter heartbeat frames
+         * from the application layer — they are consumed by the per-peer detectors
+         * and must not be forwarded to [us.tractat.kuilt.session.Room.incoming].
+         */
+        public fun isHeartbeatFrame(bytes: ByteArray): Boolean {
+            val s = bytes.decodeToString()
+            return s.startsWith(PING_PREFIX) || s.startsWith(PONG_PREFIX)
+        }
     }
 }

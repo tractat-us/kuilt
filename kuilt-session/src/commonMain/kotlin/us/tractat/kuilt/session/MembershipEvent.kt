@@ -1,6 +1,7 @@
 package us.tractat.kuilt.session
 
 import us.tractat.kuilt.core.PeerId
+import kotlin.time.Instant
 
 /**
  * A frame received from an admitted [Member], tagged with their [PeerId].
@@ -27,12 +28,9 @@ public data class RoomFrame(
 /**
  * Events emitted by [Room] describing changes to member membership and liveness.
  *
- * Events defined here but driven in later slices (1C/1D) are present as stubs —
- * they carry enough structure for consumers to compile against but the [Room]
- * implementation only emits [Joined] and [Left] in 1B.
+ * The [Partitioned], [Recovered], and [HostLost] events carry [at: Instant] timestamps
+ * sourced from the injected clock — never [kotlin.time.Clock.System.now()].
  *
- * TODO(1C): [HostLost] driven by host-election + [us.tractat.kuilt.session.partition.PartitionEvent].
- * TODO(1C): [Partitioned] and [Recovered] driven by [us.tractat.kuilt.session.partition.PartitionEvent].
  * TODO(1D): [Resumed] driven by [us.tractat.kuilt.session.partition.JoinerReconnectController].
  */
 public sealed interface MembershipEvent {
@@ -44,26 +42,34 @@ public sealed interface MembershipEvent {
 
     /**
      * An admitted peer's transport link dropped; reconnect window may be open.
-     * Stub in 1B — fully driven in 1C via [us.tractat.kuilt.session.partition.PartitionEvent].
+     *
+     * The member's [Liveness] transitions to [Liveness.Partitioned].
+     * Driven by [us.tractat.kuilt.session.partition.PartitionEvent.PeerUnresponsive].
      */
-    public data class Partitioned(val peerId: PeerId) : MembershipEvent
+    public data class Partitioned(val peerId: PeerId, val at: Instant) : MembershipEvent
 
     /**
      * A partitioned peer's link recovered before the window expired.
-     * Stub in 1B — fully driven in 1C via [us.tractat.kuilt.session.partition.PartitionEvent].
+     *
+     * The member's [Liveness] transitions back to [Liveness.Connected].
+     * Driven by [us.tractat.kuilt.session.partition.PartitionEvent.PeerRecovered].
      */
-    public data class Recovered(val peerId: PeerId) : MembershipEvent
+    public data class Recovered(val peerId: PeerId, val at: Instant) : MembershipEvent
 
     /**
      * A peer resumed from a [us.tractat.kuilt.session.partition.ResumeToken].
-     * Stub in 1B — fully wired in 1D.
+     * TODO(1D): fully wired in 1D via [us.tractat.kuilt.session.partition.JoinerReconnectController].
      */
     public data class Resumed(val peerId: PeerId) : MembershipEvent
 
     /**
-     * The host's transport link was permanently lost.
-     * Terminal state — no further events follow.
-     * Stub in 1B — fully driven in 1C.
+     * The host's transport link was permanently lost (joiner perspective only).
+     *
+     * Terminal state — no further events follow. [Room.broadcast] and [Room.sendTo]
+     * become silent no-ops after this event.
+     *
+     * Driven by [us.tractat.kuilt.session.partition.PartitionEvent.PeerLost] for the
+     * host peer. No auto-election (D-010): the room does not promote a new host.
      */
-    public data object HostLost : MembershipEvent
+    public data class HostLost(val at: Instant) : MembershipEvent
 }

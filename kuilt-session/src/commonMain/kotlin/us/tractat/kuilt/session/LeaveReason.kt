@@ -7,4 +7,12 @@ public sealed interface LeaveReason {
 
     /** Departure due to an error. */
     public data class Error(val message: String) : LeaveReason
+
+    /**
+     * The peer's reconnect window expired without recovery.
+     *
+     * Emitted for non-host peers whose [us.tractat.kuilt.session.partition.PartitionEvent.PeerLost]
+     * fires on the host or on any other room participant.
+     */
+    public data object PartitionExpired : LeaveReason
 }
