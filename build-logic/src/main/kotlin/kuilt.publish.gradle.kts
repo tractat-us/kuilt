@@ -19,9 +19,14 @@ publishing {
         // the default publish.yml behavior, which still only invokes the
         // GitHubPackages task. Endpoint set via `systemProp.org.gradle.s3.endpoint`
         // in gradle.properties. Cutover plan tracked in #22.
+        //
+        // The s3:// URL deliberately omits the bucket name — see the comment in
+        // gradle.properties. The actual upload URL is
+        // `https://buildcache.fly.storage.tigris.dev/maven/...`, formed by the
+        // virtual-host endpoint plus the "maven" path here.
         maven {
             name = "Tigris"
-            url = uri("s3://buildcache/maven/")
+            url = uri("s3://maven/")
             credentials(AwsCredentials::class) {
                 accessKey = providers.environmentVariable("S3_BUILD_CACHE_ACCESS_KEY_ID").orNull
                 secretKey = providers.environmentVariable("S3_BUILD_CACHE_SECRET_KEY").orNull
