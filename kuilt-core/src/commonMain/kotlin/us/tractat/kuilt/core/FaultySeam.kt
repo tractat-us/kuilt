@@ -175,9 +175,6 @@ public class FaultyLoom(
 
     override suspend fun host(pattern: Pattern): FaultySeam = wrap(delegate.host(pattern))
 
-    @Suppress("OVERRIDE_DEPRECATION")
-    override suspend fun open(config: Pattern): FaultySeam = wrap(delegate.host(config))
-
     override suspend fun join(tag: Tag): FaultySeam = wrap(delegate.join(tag))
 
     /** Apply [profile] to every link the factory has created so far. */

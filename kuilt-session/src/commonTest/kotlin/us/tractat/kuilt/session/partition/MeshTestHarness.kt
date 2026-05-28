@@ -81,7 +81,7 @@ class Mesh(
             require(peerCount >= 2) { "Mesh requires host + at least 1 joiner" }
 
             val factory = FaultyLoom(InMemoryLoom(), scope)
-            val host = factory.open(Pattern("Host"))
+            val host = factory.host(Pattern("Host"))
             val joiners =
                 (0 until peerCount - 1).map { i ->
                     factory.join(InMemoryTag("J$i"))

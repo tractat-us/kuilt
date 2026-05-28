@@ -26,7 +26,7 @@ The contract is quilt-themed. Eight types carry the whole surface:
 
 | Type | Role |
 |------|------|
-| `Loom` | Factory — `open(Pattern): Seam`, `join(Tag): Seam`, `availability(): FabricAvailability` |
+| `Loom` | Factory — `host(Pattern): Seam`, `join(Tag): Seam`, `weave(Rendezvous): Seam`, `availability(): FabricAvailability` |
 | `Seam` | One peer's symmetric view of a live session — `selfId`, `peers: StateFlow<Set<PeerId>>`, `incoming: Flow<Swatch>`, `broadcast`, `sendTo`, `close` |
 | `Swatch` | Opaque, binary-only frame — `payload: ByteArray`, plus `sender`/`sequence` stamped on receipt |
 | `Pattern` | Config for opening a session (display name, max peers) |
@@ -44,7 +44,7 @@ symmetric model.
 ```kotlin
 // In a test, or any layer above the wire, the in-memory fabric needs no network:
 val loom: Loom = InMemoryLoom()
-val host = loom.open(Pattern(displayName = "alice"))
+val host = loom.host(Pattern(displayName = "alice"))
 
 launch { host.incoming.collect { swatch -> handle(swatch.payload) } } // collect once
 host.broadcast("hello".encodeToByteArray())

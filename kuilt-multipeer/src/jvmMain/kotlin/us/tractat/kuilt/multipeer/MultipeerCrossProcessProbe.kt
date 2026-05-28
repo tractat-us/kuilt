@@ -49,12 +49,12 @@ public object MultipeerCrossProcessProbe {
         return try {
             runBlocking {
                 val link =
-                    runCatching { factory.open(Pattern(displayName)) }
+                    runCatching { factory.host(Pattern(displayName)) }
                         .getOrElse { e ->
-                            log("[host] factory.open failed: ${e::class.simpleName}: ${e.message}")
-                            return@runBlocking Result(passed = false, message = "open failed: ${e.message}")
+                            log("[host] factory.host failed: ${e::class.simpleName}: ${e.message}")
+                            return@runBlocking Result(passed = false, message = "host failed: ${e.message}")
                         }
-                log("[host] link opened in ${nowMs() - t0}ms; selfId=${link.selfId.value}; waiting for peers…")
+                log("[host] host opened in ${nowMs() - t0}ms; selfId=${link.selfId.value}; waiting for peers…")
                 val peersJob =
                     launch {
                         link.peers.collect { current ->

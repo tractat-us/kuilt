@@ -435,7 +435,7 @@ class WebSocketPeerLinkFactoryTest {
         testApplication {
             val factory = KtorClientLoom(createClient { install(WebSockets) })
             assertFailsWith<UnsupportedOperationException> {
-                factory.open(Pattern("client"))
+                factory.host(Pattern("client"))
             }
         }
 
@@ -448,7 +448,7 @@ class WebSocketPeerLinkFactoryTest {
 
             val (serverLink, clientLink) =
                 coroutineScope {
-                    val serverLinkDeferred = async { serverFactory.open(Pattern("server")) }
+                    val serverLinkDeferred = async { serverFactory.host(Pattern("server")) }
                     val clientLink =
                         clientFactory.join(
                             WebSocketAdvertisement(

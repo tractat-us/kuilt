@@ -29,7 +29,7 @@ class FaultySeamTest {
     fun `Healthy profile delivers all frames in order`() =
         runTest {
             val factory = FaultyLoom(InMemoryLoom(), backgroundScope)
-            val a = factory.open(Pattern("Alice"))
+            val a = factory.host(Pattern("Alice"))
             val b = factory.join(InMemoryTag("Bob"))
 
             val received = async { b.incoming.take(3).toList() }
@@ -50,7 +50,7 @@ class FaultySeamTest {
     fun `Healthy profile has zero drops`() =
         runTest {
             val factory = FaultyLoom(InMemoryLoom(), backgroundScope)
-            val a = factory.open(Pattern("Alice"))
+            val a = factory.host(Pattern("Alice"))
             val b = factory.join(InMemoryTag("Bob"))
 
             val received = async { b.incoming.take(5).toList() }
@@ -66,7 +66,7 @@ class FaultySeamTest {
     fun `DropAll Both drops all outbound frames and records drops`() =
         runTest {
             val factory = FaultyLoom(InMemoryLoom(), backgroundScope)
-            val a = factory.open(Pattern("Alice"))
+            val a = factory.host(Pattern("Alice"))
             factory.join(InMemoryTag("Bob"))
 
             a.setFaultProfile(FaultProfile.DropAll(Direction.Both))
@@ -80,7 +80,7 @@ class FaultySeamTest {
     fun `DropAll Inbound drops incoming frames`() =
         runTest {
             val factory = FaultyLoom(InMemoryLoom(), backgroundScope)
-            val a = factory.open(Pattern("Alice"))
+            val a = factory.host(Pattern("Alice"))
             val b = factory.join(InMemoryTag("Bob"))
 
             b.setFaultProfile(FaultProfile.DropAll(Direction.Inbound))
@@ -108,7 +108,7 @@ class FaultySeamTest {
     fun `DropAll Outbound does not affect inbound frames`() =
         runTest {
             val factory = FaultyLoom(InMemoryLoom(), backgroundScope)
-            val a = factory.open(Pattern("Alice"))
+            val a = factory.host(Pattern("Alice"))
             val b = factory.join(InMemoryTag("Bob"))
 
             // B drops outbound only — A→B inbound path for B is unaffected
@@ -127,7 +127,7 @@ class FaultySeamTest {
     fun `partition drops frames and heal restores delivery`() =
         runTest {
             val factory = FaultyLoom(InMemoryLoom(), backgroundScope)
-            val a = factory.open(Pattern("Alice"))
+            val a = factory.host(Pattern("Alice"))
             val b = factory.join(InMemoryTag("Bob"))
 
             a.partition()
@@ -147,7 +147,7 @@ class FaultySeamTest {
     fun `DropProbabilistic with probability 0 never drops`() =
         runTest {
             val factory = FaultyLoom(InMemoryLoom(), backgroundScope)
-            val a = factory.open(Pattern("Alice"))
+            val a = factory.host(Pattern("Alice"))
             val b = factory.join(InMemoryTag("Bob"))
 
             a.setFaultProfile(FaultProfile.DropProbabilistic(probability = 0.0, seed = 42L))
@@ -163,7 +163,7 @@ class FaultySeamTest {
     fun `DropProbabilistic with probability 1 drops all`() =
         runTest {
             val factory = FaultyLoom(InMemoryLoom(), backgroundScope)
-            val a = factory.open(Pattern("Alice"))
+            val a = factory.host(Pattern("Alice"))
             factory.join(InMemoryTag("Bob"))
 
             a.setFaultProfile(FaultProfile.DropProbabilistic(probability = 1.0, seed = 42L))
@@ -196,7 +196,7 @@ class FaultySeamTest {
     fun `DropSpecific drops only listed frame indexes`() =
         runTest {
             val factory = FaultyLoom(InMemoryLoom(), backgroundScope)
-            val a = factory.open(Pattern("Alice"))
+            val a = factory.host(Pattern("Alice"))
             val b = factory.join(InMemoryTag("Bob"))
 
             // Drop frames 0 and 2; deliver 1, 3, 4
@@ -217,7 +217,7 @@ class FaultySeamTest {
     fun `DropSpecific Inbound drops listed incoming frames by index`() =
         runTest {
             val factory = FaultyLoom(InMemoryLoom(), backgroundScope)
-            val a = factory.open(Pattern("Alice"))
+            val a = factory.host(Pattern("Alice"))
             val b = factory.join(InMemoryTag("Bob"))
 
             // B drops inbound frames at index 1 and 3
@@ -242,7 +242,7 @@ class FaultySeamTest {
     fun `DelayAll respects virtual time — frame not delivered before delay elapses`() =
         runTest {
             val factory = FaultyLoom(InMemoryLoom(), backgroundScope)
-            val a = factory.open(Pattern("Alice"))
+            val a = factory.host(Pattern("Alice"))
             val b = factory.join(InMemoryTag("Bob"))
 
             a.setFaultProfile(FaultProfile.DelayAll(100.milliseconds))
@@ -267,7 +267,7 @@ class FaultySeamTest {
     fun `DelayAll Inbound delays incoming frames`() =
         runTest {
             val factory = FaultyLoom(InMemoryLoom(), backgroundScope)
-            val a = factory.open(Pattern("Alice"))
+            val a = factory.host(Pattern("Alice"))
             val b = factory.join(InMemoryTag("Bob"))
 
             b.setFaultProfile(FaultProfile.DelayAll(100.milliseconds, Direction.Inbound))
@@ -292,7 +292,7 @@ class FaultySeamTest {
         runTest {
             suspend fun collectPayloads(scope: CoroutineScope): List<Int> {
                 val innerFactory = FaultyLoom(InMemoryLoom(), scope)
-                val sender = innerFactory.open(Pattern("Alice"))
+                val sender = innerFactory.host(Pattern("Alice"))
                 val receiver = innerFactory.join(InMemoryTag("Bob"))
                 sender.setFaultProfile(FaultProfile.ReorderWindow(windowSize = 4, seed = 42L))
                 val received = async { receiver.incoming.take(4).toList() }
@@ -309,7 +309,7 @@ class FaultySeamTest {
     fun `ReorderWindow flushes exactly windowSize frames at once`() =
         runTest {
             val factory = FaultyLoom(InMemoryLoom(), backgroundScope)
-            val a = factory.open(Pattern("Alice"))
+            val a = factory.host(Pattern("Alice"))
             val b = factory.join(InMemoryTag("Bob"))
 
             a.setFaultProfile(FaultProfile.ReorderWindow(windowSize = 3, seed = 1L))
@@ -342,7 +342,7 @@ class FaultySeamTest {
     fun `BufferCeiling drops frames beyond the send quota`() =
         runTest {
             val factory = FaultyLoom(InMemoryLoom(), backgroundScope)
-            val a = factory.open(Pattern("Alice"))
+            val a = factory.host(Pattern("Alice"))
             val b = factory.join(InMemoryTag("Bob"))
 
             // maxOutbound=2 means frames 0 and 1 are delivered; frame 2+ are dropped
@@ -368,7 +368,7 @@ class FaultySeamTest {
     fun `CloseAt closes link at the specified outbound frame index`() =
         runTest {
             val factory = FaultyLoom(InMemoryLoom(), backgroundScope)
-            val a = factory.open(Pattern("Alice"))
+            val a = factory.host(Pattern("Alice"))
             val b = factory.join(InMemoryTag("Bob"))
 
             // Close after frame 0 is sent (i.e. frame index 1 triggers close)
@@ -395,7 +395,7 @@ class FaultySeamTest {
     fun `asymmetric Outbound partition blocks sends but not receives`() =
         runTest {
             val factory = FaultyLoom(InMemoryLoom(), backgroundScope)
-            val a = factory.open(Pattern("Alice"))
+            val a = factory.host(Pattern("Alice"))
             val b = factory.join(InMemoryTag("Bob"))
 
             // A cannot send to B, but B can still send to A
@@ -416,7 +416,7 @@ class FaultySeamTest {
     fun `asymmetric Inbound partition blocks receives but not sends`() =
         runTest {
             val factory = FaultyLoom(InMemoryLoom(), backgroundScope)
-            val a = factory.open(Pattern("Alice"))
+            val a = factory.host(Pattern("Alice"))
             val b = factory.join(InMemoryTag("Bob"))
 
             // B drops all inbound — A→B frames disappear at B
@@ -450,7 +450,7 @@ class FaultySeamTest {
     fun `Composite DelayAll then DropAll drops everything`() =
         runTest {
             val factory = FaultyLoom(InMemoryLoom(), backgroundScope)
-            val a = factory.open(Pattern("Alice"))
+            val a = factory.host(Pattern("Alice"))
             factory.join(InMemoryTag("Bob"))
 
             a.setFaultProfile(
@@ -473,7 +473,7 @@ class FaultySeamTest {
     fun `Composite delays accumulate`() =
         runTest {
             val factory = FaultyLoom(InMemoryLoom(), backgroundScope)
-            val a = factory.open(Pattern("Alice"))
+            val a = factory.host(Pattern("Alice"))
             val b = factory.join(InMemoryTag("Bob"))
 
             a.setFaultProfile(
@@ -509,7 +509,7 @@ class FaultySeamTest {
                     backgroundScope,
                     defaultProfile = FaultProfile.DropAll(),
                 )
-            val a = factory.open(Pattern("Alice"))
+            val a = factory.host(Pattern("Alice"))
             factory.join(InMemoryTag("Bob"))
 
             repeat(3) { a.broadcast(byteArrayOf(it.toByte())) }
@@ -521,7 +521,7 @@ class FaultySeamTest {
     fun `setFaultProfileOnAll updates all links simultaneously`() =
         runTest {
             val factory = FaultyLoom(InMemoryLoom(), backgroundScope)
-            val a = factory.open(Pattern("Alice"))
+            val a = factory.host(Pattern("Alice"))
             val b = factory.join(InMemoryTag("Bob"))
 
             factory.setFaultProfileOnAll(FaultProfile.DropAll())
@@ -538,7 +538,7 @@ class FaultySeamTest {
     fun `factory links list contains all created links in order`() =
         runTest {
             val factory = FaultyLoom(InMemoryLoom(), backgroundScope)
-            val a = factory.open(Pattern("Alice"))
+            val a = factory.host(Pattern("Alice"))
             val b = factory.join(InMemoryTag("Bob"))
             val c = factory.join(InMemoryTag("Charlie"))
 
@@ -556,7 +556,7 @@ class FaultySeamTest {
     fun `counters sum correctly under healthy profile`() =
         runTest {
             val factory = FaultyLoom(InMemoryLoom(), backgroundScope)
-            val a = factory.open(Pattern("Alice"))
+            val a = factory.host(Pattern("Alice"))
             val b = factory.join(InMemoryTag("Bob"))
 
             val received = async { b.incoming.take(10).toList() }
@@ -578,7 +578,7 @@ private suspend fun droppedIndexesForSeed(
     scope: CoroutineScope,
 ): Set<Int> {
     val factory = FaultyLoom(InMemoryLoom(), scope)
-    val a = factory.open(Pattern("Alice"))
+    val a = factory.host(Pattern("Alice"))
     factory.join(InMemoryTag("Bob"))
 
     a.setFaultProfile(FaultProfile.DropProbabilistic(probability = 0.5, seed = seed))
