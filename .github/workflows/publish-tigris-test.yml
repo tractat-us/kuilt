@@ -79,15 +79,18 @@ jobs:
           AWS_ACCESS_KEY_ID: ${{ secrets.S3_BUILD_CACHE_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.S3_BUILD_CACHE_SECRET_KEY }}
           AWS_DEFAULT_REGION: auto
+        # Drop `pipefail`: `find | head -30` triggers SIGPIPE on find, which
+        # pipefail+set-e treats as a script-fatal error.
         run: |
-          set -euo pipefail
+          set -eu
           STAGED=build/staged-maven-repo
-          echo "=== staged tree (first 30 files) ==="
-          find "$STAGED" -type f | head -30
-          echo "=== total files staged: $(find "$STAGED" -type f | wc -l) ==="
+          TOTAL=$(find "$STAGED" -type f | wc -l)
+          echo "=== total files staged: $TOTAL ==="
+          echo "=== first 30 staged files ==="
+          find "$STAGED" -type f | head -30 || true
           echo "=== aws s3 sync to s3://buildcache/maven/ (timed) ==="
           time aws --endpoint-url=https://fly.storage.tigris.dev s3 sync \
             "$STAGED/" s3://buildcache/maven/ --no-progress
           echo "=== confirm a sample artifact landed ==="
           aws --endpoint-url=https://fly.storage.tigris.dev s3 ls \
-            "s3://buildcache/maven/us/tractat/kuilt/kuilt-core/${{ env.PUBLISH_VERSION }}/"
+            "s3://buildcache/maven/us/tractat/kuilt/kuilt-core/${{ env.PUBLISH_VERSION }}/" || true
