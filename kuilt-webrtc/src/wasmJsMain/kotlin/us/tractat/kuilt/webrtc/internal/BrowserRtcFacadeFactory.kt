@@ -23,7 +23,7 @@ private val log = KotlinLogging.logger {}
  * assignment to external-class vars. The bridge approach is reliable in
  * Kotlin/Wasm because the JS closure extracts primitives / [kotlin.js.JsAny]
  * values before calling the Kotlin handler — avoiding the unreliable
- * external-interface wrapper path that direct assignment uses (#1224).
+ * external-interface wrapper path that direct assignment uses.
  */
 internal class BrowserRtcFacadeFactory : RtcPeerConnectionFacadeFactory {
     override fun create(

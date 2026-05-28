@@ -415,7 +415,7 @@ class PartialConnectivityScenarioTest {
      * the same [us.tractat.kuilt.core.PeerId] must receive
      * [ResumeResult.WindowClosed].
      *
-     * Validates D-005 + #1070 contract: the reconnect window is closed after [PeerLost];
+     * Validates D-005 contract: the reconnect window is closed after [PeerLost];
      * the peer cannot resume and must re-join as a fresh peer.
      */
     @Test
@@ -613,7 +613,7 @@ class PartialConnectivityScenarioTest {
         }
 }
 
-// ── Reconnect gate stub (#1070 contract) ─────────────────────────────────────
+// ── Reconnect gate stub ──────────────────────────────────────────────────────
 
 /**
  * Local test fake for [JoinerReconnectController]'s window-close semantics.

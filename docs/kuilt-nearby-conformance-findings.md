@@ -1,8 +1,6 @@
 # `:kuilt-nearby` — Nearby Conformance Spike Findings
 
 **Date:** 2026-05-27
-**Tracks:** [tractat-us/fireworks-compose#1518](https://github.com/tractat-us/fireworks-compose/issues/1518) (Phase 3), epic #1515
-**Design:** `fireworks-compose/docs/superpowers/specs/2026-05-26-kuilt-nearby-conformance-spike-design.md`
 
 Phase 3 wrote `:kuilt-nearby` as a contract-conformance adapter for Google Nearby
 Connections against the cohered `Loom` / `Seam` / `Swatch` contract (ADR-034), to

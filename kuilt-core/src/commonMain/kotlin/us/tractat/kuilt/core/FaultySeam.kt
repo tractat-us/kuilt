@@ -28,7 +28,7 @@ import kotlinx.coroutines.sync.withLock
  * [framesDelivered] counters are updated atomically so tests can assert on
  * fault behaviour without inspecting internal channels.
  *
- * Consumed by [#1067], [#1070], [#1074] test suites. Exposes the same
+ * Consumed by partition / reconnect test suites. Exposes the same
  * [Seam] contract as [InMemoryLoom]-produced links.
  */
 public class FaultySeam(

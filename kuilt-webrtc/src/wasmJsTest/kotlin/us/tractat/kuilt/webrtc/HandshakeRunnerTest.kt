@@ -107,12 +107,12 @@ class HandshakeRunnerTest {
         }
 
     /**
-     * Regression guard for #1224 — boot-stagger fix.
+     * Regression guard for the boot-stagger fix.
      *
      * The `handshakeTimeoutMs` parameter lets callers override the default 30 s
-     * deadline. The WASM Quick Play path passes 90 s so a slow-booting partner tab
-     * (30–60 s WASM bundle load) does not cause the host to time out and retry with
-     * a fresh signaling session (which would churn the relay room).
+     * deadline — a slow-booting partner tab (30–60 s bundle load) would
+     * otherwise cause the host to time out and retry with a fresh signaling
+     * session, churning the relay room.
      *
      * This test proves the parameter is wired into [HandshakeRunner.runHost] by
      * passing a 1 ms timeout — confirming the timeout fires immediately with a small
@@ -153,7 +153,7 @@ class HandshakeRunnerTest {
         }
 
     /**
-     * Regression for #1224: after the data channel opens, `runHost` and
+     * Regression: after the data channel opens, `runHost` and
      * `runJoiner` must return *normally* — not throw
      * [kotlinx.coroutines.channels.ClosedReceiveChannelException].
      *

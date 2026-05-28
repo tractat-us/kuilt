@@ -27,7 +27,7 @@ public interface Loom {
 
     /**
      * Whether this fabric can be attempted now. Default [FabricAvailability.Available];
-     * fabrics gated on a runtime capability override. See tractat-us/fireworks-compose#1299.
+     * fabrics gated on a runtime capability override.
      */
     public fun availability(): FabricAvailability = FabricAvailability.Available
 }

@@ -22,7 +22,7 @@ import us.tractat.kuilt.core.Pattern
  *
  * Each probe writes structured log lines tagged `[host]` / `[joiner]`
  * so two simultaneous logs interleave readably. Pair with
- * `log show --predicate 'process == "us.tractat.fireworks"' --info`
+ * `log show --predicate 'process == "<your-bundle-id>"' --info`
  * for the Apple framework view alongside this Kotlin trace.
  */
 public object MultipeerCrossProcessProbe {

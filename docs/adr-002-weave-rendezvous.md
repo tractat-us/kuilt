@@ -2,8 +2,7 @@
 
 **Status:** Proposed
 **Date:** 2026-05-27
-**Tracks:** epic [tractat-us/fireworks-compose#1515](https://github.com/tractat-us/fireworks-compose/issues/1515), issue [tractat-us/fireworks-compose#1617](https://github.com/tractat-us/fireworks-compose/issues/1617)
-**Amends:** [ADR-034 (fireworks-compose)](https://github.com/tractat-us/fireworks-compose/blob/main/docs/adr-034-cohered-transport-contract.md) — the Loom/Seam/Swatch contract. kuilt now owns that contract, so the amendment lives here, cross-referenced from ADR-034.
+**Amends:** the prior `Loom`/`Seam`/`Swatch` contract — kuilt now owns that contract, so the amendment lives here.
 **Foundation for:** ADR-001 (the conformance harness is built on top of this contract).
 
 ## Context

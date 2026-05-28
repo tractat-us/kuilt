@@ -44,7 +44,7 @@ public sealed interface SignalingMessage {
      *
      * This frame originates from the relay, not from a peer. The relay is the
      * only party that observes attach order, so it is the natural place to
-     * break the symmetric tie. The vanilla-JS smoke test (#1311) ignores unknown
+     * break the symmetric tie. The vanilla-JS smoke test ignores unknown
      * `type` values (the codec has `ignoreUnknownKeys = true`), so this new type
      * does not break existing consumers.
      */

@@ -4,12 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-**kuilt** is a peer-symmetric, multiplatform networking library — the transport
-layer extracted from `tractat-us/fireworks-compose` (epic
-[#1515](https://github.com/tractat-us/fireworks-compose/issues/1515)). It moves
+**kuilt** is a peer-symmetric, multiplatform networking library. It moves
 opaque byte frames between peers over interchangeable *fabrics* (WebSocket,
-mDNS-discovered LAN, Multipeer, WebRTC) behind one contract. It knows nothing
-about Hanabi, games, or session semantics — that lives in the consumer.
+mDNS-discovered LAN, Apple Multipeer, WebRTC, Android Nearby) behind one
+contract. It knows nothing about the application semantics that ride on top —
+that's the consumer's job.
 
 Published to GitHub Packages under `us.tractat.kuilt:*`. Kotlin Multiplatform
 (JVM, Android, iOS, macOS, wasmJs). See `docs/architecture.md` for the design
@@ -113,11 +112,13 @@ soon as `ci-required` is green.
 locally and is supplied via `-Pversion=` when publishing.
 
 **Publishing is tag-driven and intentional — it does NOT run on every `main`
-push.** Per-merge publishing imposed a ~30-min tax (#24: `maven-publish`
-serializes ~600 GitHub-Packages uploads behind one lock — see
-[gradle/gradle#8950](https://github.com/gradle/gradle/issues/8950) — which no
-cache or parallelism fixes). While the API is still settling, cut a release when
-you actually want one:
+push.** Per-merge publishing imposed a ~20–35 min tax per merge (#24): we have
+~40 publication tasks (8 modules × ~5 targets) each doing a serial sequence of
+PUTs to GitHub Packages. Parallelism + `org.gradle.workers.max` help across
+modules but the gain is capped (Gradle's internal Apache HttpClient pool limits
+~2 concurrent connections per route, and `maven-metadata.xml` writes serialize
+within each module). While the API is still settling, cut a release when you
+actually want one:
 
 ```bash
 git tag v0.1.7 && git push origin v0.1.7    # → publishes us.tractat.kuilt:*:0.1.7
@@ -125,15 +126,39 @@ git tag v0.1.7 && git push origin v0.1.7    # → publishes us.tractat.kuilt:*:0
 
 `.github/workflows/publish.yml` triggers on `v*` tags (version derived from the
 tag) or manual `workflow_dispatch` (optional version input, else a
-`0.1.<run_number>` snapshot). Day-to-day, `fireworks-compose` consumes kuilt via
-the `includeBuild` override (below); cut a tag when you want fireworks CI — which
-resolves the *published* artifact — to pick up new kuilt changes.
+`0.1.<run_number>` snapshot). Consumers that resolve the published artifact in
+CI pick up changes only when a tag lands; pair the publish step with the
+consumer's catalog bump (or its `includeBuild` override) for the dev loop.
 
-## Composite-build relationship to fireworks-compose
+## Composite-build consumption
 
-Per the extraction roadmap, `fireworks-compose` consumes kuilt via published
-coordinates, with a **presence-gated local override**: a checkout at `../kuilt`
-beside the fireworks repo is wired in via `includeBuild` for zero-latency
-iteration, otherwise the published artifact resolves. Promotion to fully
-published artifacts (dropping the `includeBuild`) is Phase 5. Keep the public
-API and Maven coordinates stable; downstream substitution depends on them.
+Consumers should depend on kuilt via published coordinates
+(`us.tractat.kuilt:kuilt-*:<version>`). For zero-latency iteration when a
+consumer is developed alongside kuilt, the standard pattern is a
+**presence-gated `includeBuild`** in the consumer's `settings.gradle.kts`:
+
+```kotlin
+if (file("../kuilt").exists()) includeBuild("../kuilt")
+```
+
+Absent the side-by-side checkout (CI, ephemeral worktrees), the published
+artifact resolves. The public API and Maven coordinates are the compatibility
+surface — keep them stable across patch versions.
+
+## References policy
+
+When documenting kuilt (KDoc, README, design docs, commit messages, PR bodies,
+this file), follow two rules:
+
+- **Don't reference external projects / issues / PRs without explicit approval.**
+  Citations to third-party trackers date quickly and mislead future readers —
+  what's "the bug" today may be "the fix" tomorrow (see #24's history: it cited
+  gradle/gradle#8950 as the *cause* of serial publishes when that issue is
+  actually where the fix landed in 2019). If a citation is genuinely necessary,
+  ask first.
+- **Avoid references to other `tractat-us/*` repos where possible.** kuilt
+  ships as a standalone library; cross-repo references leak organisational
+  context that doesn't belong in this codebase and become dangling if those
+  repos move or restructure. Describe kuilt's own behaviour and contracts in
+  terms that stand alone. (Wire identifiers shared with consumers — service
+  types, dylib names, cdecl symbols — are the unavoidable exception and stay.)

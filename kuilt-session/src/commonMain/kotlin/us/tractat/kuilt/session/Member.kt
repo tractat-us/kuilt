@@ -29,7 +29,7 @@ public data class MemberIdentity(
 ) {
     /**
      * The stable key used for reconnect dedup. Prefers [deviceId] when present,
-     * falls back to [sessionId] — mirrors the ADR-030 strategy used in fireworks.
+     * falls back to [sessionId].
      */
     val dedupKey: String get() = deviceId ?: sessionId
 }
