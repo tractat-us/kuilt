@@ -1,28 +1,34 @@
 name: publish
 
-# Publishing is intentional, not automatic — it does NOT run on every main push.
-# That imposed a ~30-min tax per merge (#24, serial GitHub-Packages uploads) while
-# the API is still moving. Publish by cutting a tag:
+# Publishes kuilt to Tigris (Fly's S3-compatible object storage). The publish
+# wall time is now ~5 min total (~20 s for the actual upload via `aws s3 sync`),
+# down from ~21 min on the old GitHub Packages path (#22, #24) — so we're back
+# to publishing on every push to main, plus tag pushes and manual dispatch.
 #
-#   git tag v0.1.7 && git push origin v0.1.7
+# Versioning:
+#   - Tag push (v0.2.3 → 0.2.3)
+#   - Push to main → 0.2.<run_number>  (continuous snapshots for consumers
+#     pinning the latest)
+#   - workflow_dispatch → input version or 0.2.<run_number>
 #
-# or trigger this workflow manually (Actions → publish → Run workflow) with an
-# explicit version. The version comes from the tag (v0.1.7 → 0.1.7). Day-to-day,
-# consumers can use a presence-gated `includeBuild` override; cut a tag when you
-# want consumer CI (which resolves the published artifact) to pick up changes.
+# Why staging-dir + AWS CLI instead of Gradle's native s3:// transport:
+# Gradle silently sets a request header (ACL or storage-class) Tigris rejects
+# with HTTP 400. Probe results + cutover details in #22. Switching backends
+# would just take a different upload step at the end — Gradle's job is to
+# stage to build/staged-maven-repo/, nothing more.
 
 on:
   push:
+    branches: [main]
     tags: ['v*']
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version to publish, e.g. 0.1.7 (defaults to 0.1.<run_number>).'
+        description: 'Version to publish, e.g. 0.2.7 (defaults to 0.2.<run_number>).'
         required: false
 
 permissions:
   contents: read
-  packages: write
 
 concurrency:
   group: publish-${{ github.ref }}
@@ -31,16 +37,7 @@ concurrency:
 jobs:
   publish:
     runs-on: ubuntu-latest
-    # ~40 publications (7 modules × ~6 targets) each upload ~30-45s to GitHub
-    # Packages → ~30-40 min total, which outgrew the old 30-min cap as
-    # :kuilt-nearby + :kuilt-session were added (runs #19/#20 were killed
-    # mid-stream, not stalled). 60 gives headroom; the socket timeout (#21)
-    # still catches a genuinely stalled upload.
-    timeout-minutes: 60
-    # Shared S3 build cache (Fly Tigris) so the compile phase reuses warm artifacts
-    # from the build job for the same commit. Note: caching helps only the ~2 min
-    # compile — the ~30+ min cost is serial GitHub-Packages uploads (see #24), which
-    # no cache or parallelism addresses.
+    timeout-minutes: 30
     env:
       S3_BUILD_CACHE_ACCESS_KEY_ID: ${{ secrets.S3_BUILD_CACHE_ACCESS_KEY_ID }}
       S3_BUILD_CACHE_SECRET_KEY: ${{ secrets.S3_BUILD_CACHE_SECRET_KEY }}
@@ -66,19 +63,36 @@ jobs:
         uses: android-actions/setup-android@v4
       - name: Compute version
         run: |
-          set -euo pipefail
-          if [ "${{ github.event_name }}" = "push" ]; then
-            # Tag push: refs/tags/v0.1.7 → ref_name "v0.1.7" → "0.1.7".
-            VERSION="${GITHUB_REF_NAME#v}"
-          else
-            # Manual dispatch: explicit input, else a 0.1.<run_number> snapshot.
+          set -eu
+          if [ "${{ github.event_name }}" = "push" ] && [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            VERSION="${GITHUB_REF_NAME#v}"      # tag push: v0.2.3 → 0.2.3
+          elif [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ github.event.inputs.version }}" ]; then
             VERSION="${{ github.event.inputs.version }}"
-            if [ -z "$VERSION" ]; then VERSION="0.1.${{ github.run_number }}"; fi
+          else
+            VERSION="0.2.${{ github.run_number }}"  # main push or dispatch fallback
           fi
           echo "Publishing version: $VERSION"
           echo "PUBLISH_VERSION=$VERSION" >> "$GITHUB_ENV"
-      - name: Publish
+
+      # Step A: Gradle stages publications into build/staged-maven-repo/
+      # (TigrisStaging maven repo, file:// URL).
+      - name: Stage publications to local Maven layout
+        # workers.max=16 helps the per-task assemble/sign step.
+        run: ./gradlew -Pversion=${{ env.PUBLISH_VERSION }} -Dorg.gradle.workers.max=16 publishAllPublicationsToTigrisStagingRepository
+
+      # Step B: aws s3 sync uploads the whole tree to Tigris in one parallel
+      # pass (~10 concurrent uploads by default). Measured ~20 s for ~1,560
+      # files — vs ~12 min for the old Gradle s3:// path.
+      - name: Sync staged repo to Tigris
         env:
-          GITHUB_ACTOR: ${{ github.actor }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: ./gradlew -Pversion=${{ env.PUBLISH_VERSION }} publishAllPublicationsToGitHubPackagesRepository
+          AWS_ACCESS_KEY_ID: ${{ secrets.S3_BUILD_CACHE_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.S3_BUILD_CACHE_SECRET_KEY }}
+          AWS_DEFAULT_REGION: auto
+        # No `pipefail`: `find | head -30` would SIGPIPE find.
+        run: |
+          set -eu
+          STAGED=build/staged-maven-repo
+          TOTAL=$(find "$STAGED" -type f | wc -l)
+          echo "=== publishing version $PUBLISH_VERSION ($TOTAL files) ==="
+          time aws --endpoint-url=https://fly.storage.tigris.dev s3 sync \
+            "$STAGED/" s3://buildcache/maven/ --no-progress
