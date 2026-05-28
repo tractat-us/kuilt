@@ -7,10 +7,12 @@ kotlin {
     sourceSets {
         commonMain.dependencies {
             implementation(project(":kuilt-core"))
+            implementation(project(":kuilt-session"))
             implementation(libs.kotlinx.coroutines.core)
             implementation(libs.kotlinx.serialization.cbor)
             implementation(libs.ktor.client.core)
             implementation(libs.ktor.client.websockets)
+            implementation(libs.kotlin.logging)
         }
 
         // jvmAndAndroidMain: Ktor server core ships only for JVM/Android targets —
