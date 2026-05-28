@@ -22,6 +22,13 @@ jobs:
     # mid-stream, not stalled). 60 gives headroom; the socket timeout (#21)
     # still catches a genuinely stalled upload.
     timeout-minutes: 60
+    # Shared S3 build cache (Fly Tigris) so the compile phase reuses warm artifacts
+    # from the build job for the same commit. Note: caching helps only the ~2 min
+    # compile — the ~30+ min cost is serial GitHub-Packages uploads (see #24), which
+    # no cache or parallelism addresses.
+    env:
+      S3_BUILD_CACHE_ACCESS_KEY_ID: ${{ secrets.S3_BUILD_CACHE_ACCESS_KEY_ID }}
+      S3_BUILD_CACHE_SECRET_KEY: ${{ secrets.S3_BUILD_CACHE_SECRET_KEY }}
     steps:
       - uses: actions/checkout@v6
       - name: Set up JDK 21
@@ -34,6 +41,12 @@ jobs:
         with:
           gradle-version: wrapper
           cache-read-only: false
+      - name: Cache Kotlin/Native (~/.konan)
+        uses: actions/cache@v5
+        with:
+          path: ~/.konan
+          key: konan-${{ runner.os }}-${{ hashFiles('gradle/libs.versions.toml', 'gradle.properties', 'settings.gradle.kts') }}
+          restore-keys: konan-${{ runner.os }}-
       - name: Setup Android SDK
         uses: android-actions/setup-android@v4
       - name: Compute version

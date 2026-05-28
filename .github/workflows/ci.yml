@@ -97,6 +97,12 @@ jobs:
     if: needs.detect.outputs.docs-only != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      # Shared S3 build cache (Fly Tigris). Read on every build; pushed only from
+      # main (gated in settings.gradle.kts). Absent ⇒ off. Build scans auto-publish
+      # because GitHub Actions always sets CI=true.
+      S3_BUILD_CACHE_ACCESS_KEY_ID: ${{ secrets.S3_BUILD_CACHE_ACCESS_KEY_ID }}
+      S3_BUILD_CACHE_SECRET_KEY: ${{ secrets.S3_BUILD_CACHE_SECRET_KEY }}
     steps:
       - uses: actions/checkout@v6
 
@@ -111,6 +117,16 @@ jobs:
         with:
           gradle-version: wrapper
           cache-read-only: false
+
+      # Kotlin/Native toolchain + dependencies. setup-gradle caches ~/.gradle but
+      # not ~/.konan, so without this every run re-downloads konan and recompiles
+      # the native targets cold. Keyed on the toolchain-defining files.
+      - name: Cache Kotlin/Native (~/.konan)
+        uses: actions/cache@v5
+        with:
+          path: ~/.konan
+          key: konan-${{ runner.os }}-${{ hashFiles('gradle/libs.versions.toml', 'gradle.properties', 'settings.gradle.kts') }}
+          restore-keys: konan-${{ runner.os }}-
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v4
