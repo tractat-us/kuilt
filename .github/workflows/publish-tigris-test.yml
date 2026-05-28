@@ -61,27 +61,42 @@ jobs:
           echo "Publishing version: $VERSION"
           echo "PUBLISH_VERSION=$VERSION" >> "$GITHUB_ENV"
 
-      # ── Diagnostic: isolate "Gradle bug" vs "Tigris/bucket bug" ──────────────
-      # Tigris publish keeps failing with HTTP 400 InvalidArgument from S3.
-      # This vanilla `aws s3 cp` proves whether the bucket itself accepts PUTs
-      # via the standard AWS CLI (path-style + AWS SDK defaults). If THIS works
-      # and the Gradle publish fails, the issue is in Gradle's s3:// transport
-      # request shape. Continue on failure so we still get the Gradle diagnostic.
-      - name: Sanity-check Tigris with aws s3 cp (path-style)
+      # ── Diagnostic: probe Tigris-rejected request attributes ────────────────
+      # Previous diagnostic (run 26556330231) proved the bucket accepts plain
+      # PUTs via both path-style and virtual-host AWS CLI. Gradle's s3:// PUTs
+      # 400 with no response body. Leading hypothesis (per settings.gradle.kts
+      # comment from #25): Tigris rejects REDUCED_REDUNDANCY storage class.
+      # This step tests storage class + a few other suspect attributes directly.
+      - name: Probe Tigris request-attribute compatibility
         continue-on-error: true
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.S3_BUILD_CACHE_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.S3_BUILD_CACHE_SECRET_KEY }}
           AWS_DEFAULT_REGION: auto
+          EP: https://fly.storage.tigris.dev
         run: |
-          echo "diag $(date -u +%FT%TZ) run=${{ github.run_id }}" > /tmp/tigris-sanity.txt
-          KEY="maven-sanity/tigris-sanity-${{ github.run_id }}.txt"
-          echo "=== PUT via path-style endpoint ==="
-          aws --endpoint-url=https://fly.storage.tigris.dev s3 cp /tmp/tigris-sanity.txt "s3://buildcache/$KEY"
-          echo "=== HEAD ==="
-          aws --endpoint-url=https://fly.storage.tigris.dev s3 ls "s3://buildcache/$KEY"
-          echo "=== PUT via virtual-host endpoint (matches gradle.properties) ==="
-          aws --endpoint-url=https://buildcache.fly.storage.tigris.dev s3 cp /tmp/tigris-sanity.txt "s3://buildcache/$KEY-vh.txt"
+          set +e   # don't fail the step on a single probe — collect all results
+          BODY=/tmp/tigris-probe.txt
+          echo "probe $(date -u +%FT%TZ) run=${{ github.run_id }}" > "$BODY"
+          PREFIX="maven-sanity/probe-${{ github.run_id }}"
+
+          probe() {
+            local label="$1" key="$2"; shift 2
+            echo ""
+            echo "── PROBE: $label ──"
+            aws --endpoint-url=$EP s3api put-object \
+              --bucket buildcache --key "$key" --body "$BODY" "$@" 2>&1 \
+              | head -5
+            echo "── exit: $? ──"
+          }
+
+          probe "control: no extra args (matches CLI default)"          "$PREFIX/control.txt"
+          probe "explicit --storage-class STANDARD"                      "$PREFIX/std.txt"             --storage-class STANDARD
+          probe "explicit --storage-class REDUCED_REDUNDANCY"            "$PREFIX/rr.txt"              --storage-class REDUCED_REDUNDANCY
+          probe "explicit --acl bucket-owner-full-control"               "$PREFIX/acl-owner.txt"       --acl bucket-owner-full-control
+          probe "explicit --acl private"                                 "$PREFIX/acl-private.txt"     --acl private
+          probe "explicit --server-side-encryption AES256"               "$PREFIX/sse-aes.txt"         --server-side-encryption AES256
+          true
 
       - name: Publish to Tigris (with --info --stacktrace for diagnostic)
         # workers.max=16 is publish-only (I/O-bound, oversubscribing CPU is safe).
