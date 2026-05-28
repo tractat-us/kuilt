@@ -13,24 +13,16 @@ publishing {
                     .orElse(providers.environmentVariable("GITHUB_TOKEN")).orNull
             }
         }
-        // Tigris (Fly's S3-compatible object storage). Wired so that
-        // `publishAllPublicationsToTigrisRepository` exists and can be invoked
-        // by the standalone publish-tigris-test.yml workflow — does NOT change
-        // the default publish.yml behavior, which still only invokes the
-        // GitHubPackages task. Endpoint set via `systemProp.org.gradle.s3.endpoint`
-        // in gradle.properties. Cutover plan tracked in #22.
-        //
-        // The s3:// URL deliberately omits the bucket name — see the comment in
-        // gradle.properties. The actual upload URL is
-        // `https://buildcache.fly.storage.tigris.dev/maven/...`, formed by the
-        // virtual-host endpoint plus the "maven" path here.
+        // TigrisStaging: a *local file://* maven repo that the publish-tigris-test
+        // workflow stages publications into before `aws s3 sync`-ing the whole tree
+        // up to Tigris. We don't use Gradle's native s3:// transport here because
+        // it sets a header (likely an ACL or storage-class) that Tigris rejects
+        // with HTTP 400 — diagnostic in #22 proved vanilla AWS CLI writes work to
+        // the same bucket. Stage-and-sync sidesteps Gradle's transport entirely
+        // and reuses the AWS CLI mechanism we know works.
         maven {
-            name = "Tigris"
-            url = uri("s3://maven/")
-            credentials(AwsCredentials::class) {
-                accessKey = providers.environmentVariable("S3_BUILD_CACHE_ACCESS_KEY_ID").orNull
-                secretKey = providers.environmentVariable("S3_BUILD_CACHE_SECRET_KEY").orNull
-            }
+            name = "TigrisStaging"
+            url = rootProject.layout.buildDirectory.dir("staged-maven-repo").get().asFile.toURI()
         }
     }
 }

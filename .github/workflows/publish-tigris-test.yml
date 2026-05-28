@@ -61,46 +61,33 @@ jobs:
           echo "Publishing version: $VERSION"
           echo "PUBLISH_VERSION=$VERSION" >> "$GITHUB_ENV"
 
-      # ── Diagnostic: probe Tigris-rejected request attributes ────────────────
-      # Previous diagnostic (run 26556330231) proved the bucket accepts plain
-      # PUTs via both path-style and virtual-host AWS CLI. Gradle's s3:// PUTs
-      # 400 with no response body. Leading hypothesis (per settings.gradle.kts
-      # comment from #25): Tigris rejects REDUCED_REDUNDANCY storage class.
-      # This step tests storage class + a few other suspect attributes directly.
-      - name: Probe Tigris request-attribute compatibility
-        continue-on-error: true
+      # Two-step publish, bypassing Gradle's s3:// transport (which sets a
+      # header Tigris rejects — see #22 for the probe results that nailed it
+      # to either --acl bucket-owner-full-control or --storage-class
+      # REDUCED_REDUNDANCY, both of which return HTTP 400 InvalidArgument).
+      #
+      # Step A — Gradle stages publications into build/staged-maven-repo/
+      #          (TigrisStaging maven repo, file:// URL).
+      # Step B — `aws s3 sync` uploads the whole tree to Tigris in one
+      #          parallel pass with default (working) request headers.
+      - name: Stage publications to local Maven layout
+        # workers.max=16 still helps the per-task assemble/sign step.
+        run: ./gradlew -Pversion=${{ env.PUBLISH_VERSION }} -Dorg.gradle.workers.max=16 publishAllPublicationsToTigrisStagingRepository
+
+      - name: Sync staged repo to Tigris
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.S3_BUILD_CACHE_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.S3_BUILD_CACHE_SECRET_KEY }}
           AWS_DEFAULT_REGION: auto
-          EP: https://fly.storage.tigris.dev
         run: |
-          set +e   # don't fail the step on a single probe — collect all results
-          BODY=/tmp/tigris-probe.txt
-          echo "probe $(date -u +%FT%TZ) run=${{ github.run_id }}" > "$BODY"
-          PREFIX="maven-sanity/probe-${{ github.run_id }}"
-
-          probe() {
-            local label="$1" key="$2"; shift 2
-            echo ""
-            echo "── PROBE: $label ──"
-            aws --endpoint-url=$EP s3api put-object \
-              --bucket buildcache --key "$key" --body "$BODY" "$@" 2>&1 \
-              | head -5
-            echo "── exit: $? ──"
-          }
-
-          probe "control: no extra args (matches CLI default)"          "$PREFIX/control.txt"
-          probe "explicit --storage-class STANDARD"                      "$PREFIX/std.txt"             --storage-class STANDARD
-          probe "explicit --storage-class REDUCED_REDUNDANCY"            "$PREFIX/rr.txt"              --storage-class REDUCED_REDUNDANCY
-          probe "explicit --acl bucket-owner-full-control"               "$PREFIX/acl-owner.txt"       --acl bucket-owner-full-control
-          probe "explicit --acl private"                                 "$PREFIX/acl-private.txt"     --acl private
-          probe "explicit --server-side-encryption AES256"               "$PREFIX/sse-aes.txt"         --server-side-encryption AES256
-          true
-
-      - name: Publish to Tigris (with --info --stacktrace for diagnostic)
-        # workers.max=16 is publish-only (I/O-bound, oversubscribing CPU is safe).
-        # --info + --stacktrace forces Gradle to surface the AWS SDK request /
-        # response detail when the PUT 400s, so we can see *which* argument is
-        # invalid instead of the generic "Invalid argument" wrapper.
-        run: ./gradlew --info --stacktrace -Pversion=${{ env.PUBLISH_VERSION }} -Dorg.gradle.workers.max=16 publishAllPublicationsToTigrisRepository
+          set -euo pipefail
+          STAGED=build/staged-maven-repo
+          echo "=== staged tree (first 30 files) ==="
+          find "$STAGED" -type f | head -30
+          echo "=== total files staged: $(find "$STAGED" -type f | wc -l) ==="
+          echo "=== aws s3 sync to s3://buildcache/maven/ (timed) ==="
+          time aws --endpoint-url=https://fly.storage.tigris.dev s3 sync \
+            "$STAGED/" s3://buildcache/maven/ --no-progress
+          echo "=== confirm a sample artifact landed ==="
+          aws --endpoint-url=https://fly.storage.tigris.dev s3 ls \
+            "s3://buildcache/maven/us/tractat/kuilt/kuilt-core/${{ env.PUBLISH_VERSION }}/"
