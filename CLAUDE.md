@@ -110,9 +110,24 @@ soon as `ci-required` is green.
 ## Versioning & publishing
 
 `build.gradle.kts` sets `group = us.tractat.kuilt`; version is `0.1.0-dev`
-locally and `0.1.<run#>` in CI. `.github/workflows/publish.yml` publishes to
-GitHub Packages and tags `v0.1.<run#>` on every push to `main`. Don't hand-set
-release versions — CI owns them via `-Pversion=`.
+locally and is supplied via `-Pversion=` when publishing.
+
+**Publishing is tag-driven and intentional — it does NOT run on every `main`
+push.** Per-merge publishing imposed a ~30-min tax (#24: `maven-publish`
+serializes ~600 GitHub-Packages uploads behind one lock — see
+[gradle/gradle#8950](https://github.com/gradle/gradle/issues/8950) — which no
+cache or parallelism fixes). While the API is still settling, cut a release when
+you actually want one:
+
+```bash
+git tag v0.1.7 && git push origin v0.1.7    # → publishes us.tractat.kuilt:*:0.1.7
+```
+
+`.github/workflows/publish.yml` triggers on `v*` tags (version derived from the
+tag) or manual `workflow_dispatch` (optional version input, else a
+`0.1.<run_number>` snapshot). Day-to-day, `fireworks-compose` consumes kuilt via
+the `includeBuild` override (below); cut a tag when you want fireworks CI — which
+resolves the *published* artifact — to pick up new kuilt changes.
 
 ## Composite-build relationship to fireworks-compose
 

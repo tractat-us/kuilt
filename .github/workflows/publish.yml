@@ -1,12 +1,27 @@
 name: publish
 
+# Publishing is intentional, not automatic — it does NOT run on every main push.
+# That imposed a ~30-min tax per merge (#24, serial GitHub-Packages uploads) while
+# the API is still moving. Publish by cutting a tag:
+#
+#   git tag v0.1.7 && git push origin v0.1.7
+#
+# or trigger this workflow manually (Actions → publish → Run workflow) with an
+# explicit version. The version comes from the tag (v0.1.7 → 0.1.7). Day-to-day,
+# fireworks consumes kuilt via the includeBuild override; cut a tag when you want
+# fireworks CI (which resolves the published artifact) to pick up new changes.
+
 on:
   push:
-    branches: [main]
+    tags: ['v*']
   workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to publish, e.g. 0.1.7 (defaults to 0.1.<run_number>).'
+        required: false
 
 permissions:
-  contents: write
+  contents: read
   packages: write
 
 concurrency:
@@ -50,15 +65,20 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v4
       - name: Compute version
-        run: echo "PUBLISH_VERSION=0.1.${{ github.run_number }}" >> "$GITHUB_ENV"
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "push" ]; then
+            # Tag push: refs/tags/v0.1.7 → ref_name "v0.1.7" → "0.1.7".
+            VERSION="${GITHUB_REF_NAME#v}"
+          else
+            # Manual dispatch: explicit input, else a 0.1.<run_number> snapshot.
+            VERSION="${{ github.event.inputs.version }}"
+            if [ -z "$VERSION" ]; then VERSION="0.1.${{ github.run_number }}"; fi
+          fi
+          echo "Publishing version: $VERSION"
+          echo "PUBLISH_VERSION=$VERSION" >> "$GITHUB_ENV"
       - name: Publish
         env:
           GITHUB_ACTOR: ${{ github.actor }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: ./gradlew -Pversion=${{ env.PUBLISH_VERSION }} publishAllPublicationsToGitHubPackagesRepository
-      - name: Tag release
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag "v${{ env.PUBLISH_VERSION }}"
-          git push origin "v${{ env.PUBLISH_VERSION }}"
