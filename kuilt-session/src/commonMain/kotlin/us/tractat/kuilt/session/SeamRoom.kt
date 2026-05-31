@@ -11,6 +11,7 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.filterIsInstance
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -225,6 +226,7 @@ internal class SeamRoom(
         val jobs = mutableListOf(
             scope.launch { runMainLoop() },
             scope.launch { runPeersWatcher() },
+            scope.launch { runTornWatcher() },
         )
         if (reconnectController != null) {
             jobs += scope.launch { runReconnectEventLoop(reconnectController) }
@@ -240,14 +242,63 @@ internal class SeamRoom(
      *
      * Skips the initial emission (drop(1)) since [Seam.peers] starts with the
      * current connected set — we only care about subsequent changes.
+     *
+     * Defers to [runTornWatcher] when the seam has torn: reads [seam.state.value]
+     * directly to suppress peer-removal events that are a consequence of the transport
+     * closing (which collapses [Seam.peers] to empty). By the time this collector body
+     * executes, [SeamState.Torn] is already written — making the direct read reliable
+     * where a cross-coroutine flag is not (the flag may not yet be set when the collector
+     * body is scheduled, regardless of which StateFlow changed first).
      */
     private suspend fun runPeersWatcher() {
         seam.peers.drop(1).collect { currentPeers ->
+            if (seam.state.value is SeamState.Torn) return@collect
             val removedIds = admittedById.keys.filter { it !in currentPeers }
             for (peerId in removedIds) {
                 stopDetector(peerId)
                 removeFromRoster(peerId, LeaveReason.Normal)
             }
+        }
+    }
+
+    // ── Torn watcher: react to permanent transport closure ────────────────────
+
+    /**
+     * Watches [Seam.state] for a [SeamState.Torn] transition and emits the
+     * appropriate terminal membership event **immediately**, without waiting for
+     * heartbeat expiry.
+     *
+     * This is faster and more correct than the heartbeat-timeout path for
+     * transport-level closures: if the transport signals `Torn`, the session
+     * layer should trust it directly.
+     *
+     * [runPeersWatcher] suppresses its own emissions when torn by reading
+     * [seam.state.value] directly — no cross-coroutine flag needed.
+     *
+     * **Joiner:** emits [MembershipEvent.HostLost] and enters terminal state.
+     * **Host:** emits [MembershipEvent.Left] for each admitted peer (mirroring the
+     * heartbeat-based [LeaveReason.PartitionExpired] eviction path) and closes cleanly.
+     */
+    private suspend fun handleTorn() {
+        val at = clock()
+        if (_role.value == SessionRole.Joiner) {
+            markHostLost(at)
+        } else {
+            evictAllOnTear()
+            leave(LeaveReason.Normal)
+        }
+    }
+
+    private suspend fun runTornWatcher() {
+        seam.state.filterIsInstance<SeamState.Torn>().first()
+        handleTorn()
+    }
+
+    private fun evictAllOnTear() {
+        val peerIds = admittedById.keys.toList()
+        for (peerId in peerIds) {
+            stopDetector(peerId)
+            removeFromRoster(peerId, LeaveReason.Normal)
         }
     }
 
