@@ -1,7 +1,8 @@
+@file:OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+
 package us.tractat.kuilt.conformance
 
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
@@ -9,7 +10,8 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.CloseReason
 import us.tractat.kuilt.core.FlapSchedule
@@ -34,13 +36,12 @@ import kotlin.time.Duration.Companion.milliseconds
  * Harness: two plies, each a [FlakyLifecycleLoom] wrapping an [InMemoryLoom].
  * Ply lifecycles are driven imperatively via [FlakyLifecycleLoom.links].
  *
- * The harness scope uses [Dispatchers.Default] to match [CompositeSeam]'s internal
- * dispatcher so all coroutines interleave on real threads. Tests await propagation
- * via `flow.first { condition }` rather than test-scheduler advancement.
- *
- * Each test closes its seams and cancels its harness scope in a `finally` block to
- * prevent leaked [CompositeSeam] scopes from saturating [Dispatchers.Default] across
- * the full test suite run.
+ * All coroutines — both [FlakyLifecycleLoom] ply scopes and the [CompositeLoom]
+ * internal dispatcher — share an [UnconfinedTestDispatcher] so that every
+ * state update and Announce broadcast propagates eagerly (no real-thread waits,
+ * no [advanceUntilIdle] required). The ply scope is a standalone [CoroutineScope]
+ * with [SupervisorJob] and is cancelled in each test's [finally] block to prevent
+ * leaked coroutines after test completion.
  */
 class CompositeResilienceTest {
 
@@ -54,24 +55,22 @@ class CompositeResilienceTest {
      */
     @Test
     fun aggregateStaysWovenWhenOnePlyTearsAndSurvivorIsWoven() = runTest {
-        val harnessScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
-        val (plyALoom, plyBLoom, loom) = twoFlakyPlies(harnessScope)
+        val (plyALoom, plyBLoom, loom, plyScope) = twoFlakyPlies()
         var host: Seam? = null
         var joiner: Seam? = null
         try {
             host = loom.host(Pattern("session"))
             joiner = loom.join(InMemoryTag("join"))
 
-            // Wait for both composite peers to be fully reconciled on both sides.
-            host.peers.first { it.size == 2 }
-            joiner.peers.first { it.size == 2 }
+            // With UnconfinedTestDispatcher, announce exchange is already complete.
+            assertEquals(2, host.peers.value.size, "host must see 2 composite peers")
+            assertEquals(2, joiner.peers.value.size, "joiner must see 2 composite peers")
 
             // Tear ply B on both host and joiner sides.
             plyBLoom.links[0].tear()
             plyBLoom.links[1].tear()
 
-            // Wait for both state and peer sets to stabilise after the tear.
-            // Ply A still carries both peers so state must stay Woven and size at 2.
+            // Ply A still carries both peers: state must stay Woven.
             host.state.first { it is SeamState.Woven }
             joiner.state.first { it is SeamState.Woven }
             host.peers.first { joiner.selfId in it }
@@ -86,7 +85,7 @@ class CompositeResilienceTest {
         } finally {
             host?.close(CloseReason.Normal)
             joiner?.close(CloseReason.Normal)
-            harnessScope.cancel()
+            plyScope.cancel()
         }
     }
 
@@ -99,33 +98,27 @@ class CompositeResilienceTest {
      */
     @Test
     fun plyRecoverySendsAnnounceAndRestoresPeerDelivery() = runTest {
-        val harnessScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
-        val (plyALoom, plyBLoom, loom) = twoFlakyPlies(harnessScope)
+        val (plyALoom, _, loom, plyScope) = twoFlakyPlies()
         var host: Seam? = null
         var joiner: Seam? = null
         try {
             host = loom.host(Pattern("session"))
             joiner = loom.join(InMemoryTag("join"))
 
-            // Wait for initial reconciliation on both sides.
-            host.peers.first { it.size == 2 }
-            joiner.peers.first { it.size == 2 }
+            assertEquals(2, host.peers.value.size, "host must see 2 composite peers after setup")
+            assertEquals(2, joiner.peers.value.size, "joiner must see 2 composite peers after setup")
 
             // Blip ply A on the host side: Woven → Weaving → Woven.
             val hostPlyA = plyALoom.links[0]
             hostPlyA.enterWeaving()
             hostPlyA.recover()
 
-            // After recovery, aggregate must be Woven.
-            host.state.first { it is SeamState.Woven }
+            // After recovery, aggregate must be Woven and peers restored.
             assertIs<SeamState.Woven>(host.state.value, "aggregate must be Woven after ply A recovers")
+            assertEquals(2, host.peers.value.size, "host peer set must be fully recovered")
+            assertEquals(2, joiner.peers.value.size, "joiner peer set must be fully recovered")
 
-            // Peer set must be fully recovered on both sides.
-            host.peers.first { it.size == 2 }
-            joiner.peers.first { it.size == 2 }
-
-            // Host can still deliver frames to the joiner — Announce was re-sent on
-            // ply A recover, restoring routing over that ply.
+            // Host can still deliver frames to the joiner.
             val received = async { joiner.incoming.take(1).toList() }
             host.broadcast(byteArrayOf(42))
 
@@ -137,7 +130,7 @@ class CompositeResilienceTest {
         } finally {
             host?.close(CloseReason.Normal)
             joiner?.close(CloseReason.Normal)
-            harnessScope.cancel()
+            plyScope.cancel()
         }
     }
 
@@ -151,26 +144,23 @@ class CompositeResilienceTest {
      */
     @Test
     fun independentPlyFlapsDeduplicateFramesAndConvergePeerSet() = runTest {
-        val harnessScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
-        val (plyALoom, plyBLoom, loom) = twoFlakyPlies(harnessScope)
+        val (plyALoom, plyBLoom, loom, plyScope) = twoFlakyPlies()
         var host: Seam? = null
         var joiner: Seam? = null
         try {
             host = loom.host(Pattern("soak"))
             joiner = loom.join(InMemoryTag("join"))
 
-            // Wait for initial reconciliation.
-            host.peers.first { it.size == 2 }
-            joiner.peers.first { it.size == 2 }
+            assertEquals(2, host.peers.value.size, "host must see 2 composite peers after setup")
+            assertEquals(2, joiner.peers.value.size, "joiner must see 2 composite peers after setup")
 
             // Collect all frames delivered to the joiner.
             val deliveredPayloads = mutableListOf<Byte>()
-            val collectJob = harnessScope.launch {
+            val collectJob = launch {
                 joiner.incoming.collect { swatch -> deliveredPayloads.add(swatch.payload[0]) }
             }
 
             // Drive both plies under independent deterministic flap schedules.
-            // Short mean times (≪1s) so real-time delays finish quickly.
             val scheduleA = FlapSchedule(
                 seed = 1L,
                 meanUptime = 10.milliseconds,
@@ -194,12 +184,12 @@ class CompositeResilienceTest {
                 }
             }
 
-            // Wait for flap schedules to exhaust.
+            // Wait for flap schedules to exhaust (virtual time advances automatically).
             jobA.join()
             jobB.join()
             collectJob.cancel()
 
-            // Dedup invariant: no payload appears more than once in deliveredPayloads.
+            // Dedup invariant: no payload appears more than once.
             val counts = deliveredPayloads.groupingBy { it }.eachCount()
             val duplicated = counts.filter { it.value > 1 }
             assertTrue(duplicated.isEmpty(), "dedup violation: frames delivered more than once: $duplicated")
@@ -209,7 +199,7 @@ class CompositeResilienceTest {
         } finally {
             host?.close(CloseReason.Normal)
             joiner?.close(CloseReason.Normal)
-            harnessScope.cancel()
+            plyScope.cancel()
         }
     }
 
@@ -220,25 +210,22 @@ class CompositeResilienceTest {
      * The aggregate goes [SeamState.Torn] only when the **last** surviving ply
      * also tears — the survivor carries the session until then.
      *
-     * **Production bug found:** [CompositeSeam.broadcast] iterates ALL constituent
-     * seams unconditionally — including torn ones. When ply A is torn and host
-     * calls `broadcast`, it reaches [FlakyLifecycleSeam.broadcast] on the torn
-     * ply, which throws [IllegalStateException]. The composite must skip torn plies
-     * in `broadcast` and `sendTo`. This test documents the correct expected
-     * behaviour and will fail until that is fixed.
+     * **Production bug found:** [CompositeSeam.broadcast] iterated ALL constituent
+     * seams unconditionally — including torn ones. When ply A was torn and host
+     * called `broadcast`, it reached the torn ply's `broadcast`, which threw
+     * [IllegalStateException]. The fix skips torn plies in `broadcast` and
+     * `sendTo`. This test documents the correct expected behaviour.
      */
     @Test
     fun aggregateGoesToTornOnlyWhenLastPlyTears() = runTest {
-        val harnessScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
-        val (plyALoom, plyBLoom, loom) = twoFlakyPlies(harnessScope)
+        val (plyALoom, plyBLoom, loom, plyScope) = twoFlakyPlies()
         var host: Seam? = null
         var joiner: Seam? = null
         try {
             host = loom.host(Pattern("session"))
             joiner = loom.join(InMemoryTag("join"))
 
-            // Wait for initial reconciliation.
-            host.peers.first { it.size == 2 }
+            assertEquals(2, host.peers.value.size, "host must see 2 composite peers after setup")
 
             val hostPlyA = plyALoom.links[0]
             val hostPlyB = plyBLoom.links[0]
@@ -246,18 +233,15 @@ class CompositeResilienceTest {
             // Tear ply A — aggregate must still be Woven (ply B survives).
             hostPlyA.tear()
 
-            // The rollup sees ply A=Torn, ply B=Woven → aggregate stays Woven.
-            host.state.first { it is SeamState.Woven }
+            // Rollup: ply A=Torn, ply B=Woven → aggregate stays Woven.
             assertIs<SeamState.Woven>(host.state.value, "aggregate must stay Woven after first ply tears")
 
             // Host can still communicate via ply B. The composite must not call
             // broadcast on the already-torn ply A seam.
-            val received = async(harnessScope.coroutineContext) {
-                joiner.incoming.take(1).toList()
-            }
+            val received = async { joiner.incoming.take(1).toList() }
             host.broadcast(byteArrayOf(77))
 
-            val frames = withTimeoutOrNull(2_000) { received.await() }
+            val frames = received.await()
             assertNotNull(frames, "expected a frame via surviving ply B but got none")
             assertTrue(frames.isNotEmpty(), "host must still deliver via surviving ply B")
 
@@ -269,7 +253,7 @@ class CompositeResilienceTest {
         } finally {
             host?.close(CloseReason.Normal)
             joiner?.close(CloseReason.Normal)
-            harnessScope.cancel()
+            plyScope.cancel()
         }
     }
 
@@ -279,20 +263,31 @@ class CompositeResilienceTest {
         val plyALoom: FlakyLifecycleLoom,
         val plyBLoom: FlakyLifecycleLoom,
         val compositeLoom: CompositeLoom,
+        /** Cancelled in [finally] blocks to prevent coroutine leaks across the suite. */
+        val plyScope: CoroutineScope,
     )
 
-    private fun twoFlakyPlies(scope: CoroutineScope): TwoFlakyPlySetup {
-        // Each FlakyLifecycleLoom wraps its own InMemoryLoom mesh.
-        // The two plies share no state — each flaps independently.
-        val plyALoom = FlakyLifecycleLoom(InMemoryLoom(), scope)
-        val plyBLoom = FlakyLifecycleLoom(InMemoryLoom(), scope)
+    /**
+     * Creates two independent [FlakyLifecycleLoom]s and a [CompositeLoom] over
+     * them. Both [FlakyLifecycleLoom] ply scopes and the [CompositeLoom]
+     * dispatcher share an [UnconfinedTestDispatcher] so all state updates and
+     * Announce broadcasts propagate eagerly — peer exchange completes by the
+     * time `weave()` returns. The caller must cancel [TwoFlakyPlySetup.plyScope]
+     * in a [finally] block.
+     */
+    private fun TestScope.twoFlakyPlies(): TwoFlakyPlySetup {
+        val dispatcher = UnconfinedTestDispatcher(testScheduler)
+        val plyScope = CoroutineScope(dispatcher + SupervisorJob())
+        val plyALoom = FlakyLifecycleLoom(InMemoryLoom(), plyScope)
+        val plyBLoom = FlakyLifecycleLoom(InMemoryLoom(), plyScope)
         val compositeLoom = CompositeLoom(
             listOf(
                 PlyId("a") to plyALoom,
                 PlyId("b") to plyBLoom,
             ),
+            dispatcher,
         )
-        return TwoFlakyPlySetup(plyALoom, plyBLoom, compositeLoom)
+        return TwoFlakyPlySetup(plyALoom, plyBLoom, compositeLoom, plyScope)
     }
 }
 
