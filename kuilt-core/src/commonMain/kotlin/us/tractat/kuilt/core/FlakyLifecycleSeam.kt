@@ -5,9 +5,12 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -58,29 +61,29 @@ public class FlakyLifecycleSeam(
     private val scope: CoroutineScope,
 ) : Seam {
     private val _state = MutableStateFlow<SeamState>(delegate.state.value)
-    private val _peers = MutableStateFlow(delegate.peers.value)
     private val mutex = Mutex()
 
     // Track whether we've been torn (terminal).
     private var torn = false
 
-    init {
-        // While Woven, forward delegate membership changes to _peers directly.
-        // Lifecycle transitions (enterWeaving/recover/tear) update _peers
-        // imperatively; this collector handles churn on the underlying delegate
-        // while we are already in Woven state.
-        scope.launch {
-            delegate.peers.collect { delegatePeers ->
-                if (_state.value is SeamState.Woven) _peers.value = delegatePeers
-            }
-        }
-    }
-
     // ── Seam ──────────────────────────────────────────────────────────────────
 
     override val selfId: PeerId get() = delegate.selfId
 
-    override val peers: StateFlow<Set<PeerId>> get() = _peers.asStateFlow()
+    /**
+     * Derived single-source view of membership, shaped by lifecycle state.
+     *
+     * `combine` merges [delegate.peers] and [_state] so there is exactly one
+     * authoritative derivation: Weaving → {selfId}, Torn → empty, Woven →
+     * delegate peers. This eliminates the dual-write race that existed when
+     * [enterWeaving]/[recover]/[tear] wrote `_peers` imperatively while a
+     * `delegate.peers.collect` coroutine also wrote it. With [SharingStarted.Eagerly]
+     * the StateFlow starts collecting immediately on construction, so reads of
+     * [peers] are always current without a manual `runCurrent()` call.
+     */
+    override val peers: StateFlow<Set<PeerId>> = combine(delegate.peers, _state) { delegatePeers, st ->
+        peersFor(st, delegatePeers)
+    }.stateIn(scope, SharingStarted.Eagerly, peersFor(_state.value, delegate.peers.value))
 
     override val state: StateFlow<SeamState> get() = _state.asStateFlow()
 
@@ -107,7 +110,7 @@ public class FlakyLifecycleSeam(
 
     override suspend fun broadcast(payload: ByteArray) {
         mutex.withLock { checkNotTorn() }
-        if (_state.value is SeamState.Weaving || _peers.value.size <= 1) return
+        if (_state.value is SeamState.Weaving || peers.value.size <= 1) return
         delegate.broadcast(payload)
     }
 
@@ -116,7 +119,7 @@ public class FlakyLifecycleSeam(
         payload: ByteArray,
     ) {
         mutex.withLock { checkNotTorn() }
-        if (peer !in _peers.value) throw PeerNotConnected(peer)
+        if (peer !in peers.value) throw PeerNotConnected(peer)
         delegate.sendTo(peer, payload)
     }
 
@@ -134,7 +137,6 @@ public class FlakyLifecycleSeam(
      */
     public fun enterWeaving() {
         if (torn || _state.value is SeamState.Weaving) return
-        _peers.value = setOf(selfId)
         _state.value = SeamState.Weaving
     }
 
@@ -146,7 +148,6 @@ public class FlakyLifecycleSeam(
      */
     public fun recover() {
         if (torn || _state.value is SeamState.Woven) return
-        _peers.value = delegate.peers.value
         _state.value = SeamState.Woven
     }
 
@@ -162,7 +163,6 @@ public class FlakyLifecycleSeam(
     public fun tear(reason: CloseReason = CloseReason.Unreachable) {
         if (torn) return
         torn = true
-        _peers.value = emptySet()
         _state.value = SeamState.Torn(reason)
         scope.launch { delegate.close(reason) }
     }
@@ -228,6 +228,12 @@ public class FlakyLifecycleSeam(
 
     private fun checkNotTorn() {
         check(!torn) { "Seam for $selfId is torn (closed)" }
+    }
+
+    private fun peersFor(state: SeamState, delegatePeers: Set<PeerId>): Set<PeerId> = when (state) {
+        is SeamState.Woven -> delegatePeers
+        is SeamState.Weaving -> setOf(selfId)
+        is SeamState.Torn -> emptySet()
     }
 
     /** Returns a jittered duration in the range [50%, 150%) of [mean] ms. */
