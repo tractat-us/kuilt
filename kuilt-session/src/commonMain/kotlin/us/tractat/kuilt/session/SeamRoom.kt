@@ -11,6 +11,7 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import us.tractat.kuilt.core.CloseReason
@@ -295,8 +296,17 @@ internal class SeamRoom(
      * - Routes frames through the admit protocol or to [incoming].
      */
     private suspend fun runMainLoop() {
-        if (_role.value == SessionRole.Joiner) sendHello()
-
+        if (_role.value == SessionRole.Joiner) {
+            // Wait for at least one non-self peer before sending Hello.
+            // Some transports (MultipeerConnectivity, WebRTC) deliver a Seam
+            // before the underlying connection is fully established. Peers
+            // appear asynchronously in seam.peers once the transport reaches
+            // Connected. Without this wait the Hello broadcast lands on an
+            // empty peer set and is silently dropped, so the admit handshake
+            // never completes.
+            seam.peers.filter { it.size > 1 }.first()
+            sendHello()
+        }
         seam.incoming.collect { swatch ->
             rawIncoming.emit(swatch)
             dispatchIncoming(swatch)

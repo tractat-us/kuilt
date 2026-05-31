@@ -68,7 +68,10 @@ internal class MCSessionLink(
 
     override suspend fun broadcast(payload: ByteArray) {
         val targets = session.connectedPeers
-        if (targets.isEmpty()) return
+        if (targets.isEmpty()) {
+            log.warn { "mc.session.send dropped — no connected peers localPeer=${selfId.value} bytes=${payload.size}" }
+            return
+        }
         log.debug { "mc.session.send localPeer=${selfId.value} targets=${targets.size} bytes=${payload.size}" }
         session.sendData(
             data = payload.toNSData(),
