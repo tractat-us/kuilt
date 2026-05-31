@@ -90,6 +90,11 @@ tests as the `MDNS_MULTICAST_TESTS` env var (see `kuilt-mdns/build.gradle.kts`).
   runs against an in-memory or loopback harness.
 - Test methods: no `test` prefix (the `@Test` annotation suffices); multi-assert
   tests use `assertAll()`.
+- **Coroutine test determinism:** types that own a `CoroutineScope` take an
+  injectable dispatcher (production default), or inherit `currentCoroutineContext()`;
+  tests inject `UnconfinedTestDispatcher(testScheduler)` rather than letting a real
+  production dispatcher run under `runTest` (the cause of a past Kotlin/Native flake).
+  See `docs/testing-coroutine-determinism.md`.
 
 ## CI & merging
 
