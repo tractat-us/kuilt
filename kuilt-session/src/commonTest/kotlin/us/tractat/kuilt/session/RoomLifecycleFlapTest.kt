@@ -2,10 +2,14 @@ package us.tractat.kuilt.session
 
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.filterIsInstance
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.yield
 import us.tractat.kuilt.core.Direction
 import us.tractat.kuilt.core.FaultProfile
 import us.tractat.kuilt.core.FaultySeam
@@ -15,6 +19,7 @@ import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.session.partition.HeartbeatConfig
 import kotlin.test.Test
+import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.milliseconds
@@ -23,13 +28,14 @@ import kotlin.time.Instant
 /**
  * Resilience tests for [SeamRoom] backed by a [FlakyLifecycleLoom].
  *
- * Exercises four scenarios:
+ * Exercises five scenarios:
  * 1. A `Woven → Weaving → Woven` blip — the room survives and delivery resumes.
  * 2. Joiner sees [MembershipEvent.HostLost] **immediately** when the host seam tears
  *    (direct `SeamState.Torn` observation — no heartbeat wait required).
  * 3. Host sees [MembershipEvent.Left] for all admitted peers when its seam tears.
  * 4. Joiner sees [MembershipEvent.HostLost] after the host link goes permanently silent
  *    (heartbeat-timeout path — unchanged from before).
+ * 5. Joiner receives `HostLost` and NO spurious `Left` on seam tear (double-event regression).
  *
  * All timing uses virtual time via [runTest] + [advanceTimeBy]. The clock is advanced
  * in lockstep with virtual time so [us.tractat.kuilt.session.partition.HeartbeatPartitionDetector]
@@ -174,5 +180,49 @@ class RoomLifecycleFlapTest {
 
         val event = hostLostDeferred.await()
         assertIs<MembershipEvent.HostLost>(event)
+    }
+
+    /**
+     * Regression test for the double-event bug: when the host seam tears, the joiner
+     * must receive exactly [MembershipEvent.HostLost] and NO [MembershipEvent.Left].
+     *
+     * The bug: `tear()` sets `peers = emptySet()` before `state = Torn`, causing
+     * [runPeersWatcher] to wake first with `tornHandled == false` and emit a spurious
+     * `Left(host, Normal)` — then [runTornWatcher] fired `HostLost`. Result: the joiner
+     * received both events (contradictory: `Left(Normal)` reads as "left cleanly").
+     *
+     * The fix: [runPeersWatcher] reads `seam.state.value is SeamState.Torn` directly
+     * (which is already set by the time any collector body resumes) rather than relying
+     * on a cross-coroutine flag.
+     */
+    @Test
+    fun `joiner receives HostLost but no Left event when host seam tears`() = runTest {
+        val loom = FlakyLifecycleLoom(InMemoryLoom(), backgroundScope)
+        val factory = SeamRoomFactory(loom, backgroundScope, clock, fastConfig)
+        val hostRoom = factory.host(Pattern("host"))
+        val joinerRoom = factory.join(InMemoryTag("joiner"))
+        hostRoom.roster.first { it.isNotEmpty() }
+
+        // Subscribe to HostLost and collect all events BEFORE tear so nothing is missed.
+        val hostLostDeferred = async {
+            joinerRoom.events.filterIsInstance<MembershipEvent.HostLost>().first()
+        }
+        val events = mutableListOf<MembershipEvent>()
+        val collectJob = async {
+            joinerRoom.events.collect { events.add(it) }
+        }
+
+        // Tear the joiner's seam — transport to host is permanently gone.
+        loom.links[1].tear()
+
+        // HostLost fires without any clock advancement — no heartbeat wait.
+        val hostLostEvent = hostLostDeferred.await()
+
+        // Drain so any spurious Left (the double-event bug) would appear in events.
+        advanceUntilIdle()
+        collectJob.cancel()
+
+        assertIs<MembershipEvent.HostLost>(hostLostEvent)
+        assertFalse(events.any { it is MembershipEvent.Left }, "spurious Left event in events: $events")
     }
 }
