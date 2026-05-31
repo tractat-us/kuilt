@@ -29,7 +29,7 @@ class FlakyLifecycleSeamTest {
     // ── Task 1: Core state transitions ────────────────────────────────────────
 
     @Test
-    fun `initial state is Woven (mirrors delegate)`() =
+    fun `initial state is Woven`() =
         runTest {
             val delegate = InMemoryLoom().host(Pattern("A"))
             val seam = FlakyLifecycleSeam(delegate, backgroundScope)
@@ -117,7 +117,7 @@ class FlakyLifecycleSeamTest {
     // ── Task 2: Inbound gating ────────────────────────────────────────────────
 
     @Test
-    fun `frames sent while Weaving are dropped (not delivered on recover)`() =
+    fun `frames sent while Weaving are dropped and not delivered after recover`() =
         runTest {
             val loom = InMemoryLoom()
             val delegateA = loom.host(Pattern("A"))
@@ -220,7 +220,7 @@ class FlakyLifecycleSeamTest {
         }
 
     @Test
-    fun `broadcast while Weaving is a no-op — no error, no delivery`() =
+    fun `broadcast while Weaving is a no-op — does not throw and does not deliver`() =
         runTest {
             val loom = InMemoryLoom()
             val delegateA = loom.host(Pattern("A"))
