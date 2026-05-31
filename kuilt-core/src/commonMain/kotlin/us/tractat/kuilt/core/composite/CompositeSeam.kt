@@ -39,9 +39,12 @@ import us.tractat.kuilt.core.Swatch
 internal class CompositeSeam(
     private val constituents: List<Pair<PlyId, Seam>>,
 ) : Seam {
-    // Confined to one thread: idMap / _plies / outSeq / gate are all non-thread-safe and must
-    // not be accessed concurrently. limitedParallelism(1) serialises all dispatches.
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default.limitedParallelism(1))
+    // All internal coroutines (state rollup, announce, inbound pumps) start unconfined so they
+    // run eagerly in the caller's context. This ensures peers and state are visible synchronously
+    // after weaving on fabrics whose constituent plies are already live (e.g. InMemoryLoom).
+    // Mutable state (idMap, outSeq, gate) is safe because the unconfined dispatcher never runs
+    // two continuations in parallel — it only re-enters in the same call stack.
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
     private val gate = PlyInboundGate()
     private var outSeq = 0L
 
