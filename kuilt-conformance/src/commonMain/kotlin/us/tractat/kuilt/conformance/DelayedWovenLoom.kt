@@ -75,6 +75,9 @@ public class DelayedWovenLoom : Loom {
         _peers.update { it - id }
     }
 
+    /** Test hook: the seams woven by this loom, in weave order. */
+    public val wovenSeams: List<DelayedWovenSeam> get() = links.values.toList()
+
     internal val peers: StateFlow<Set<PeerId>> = _peers.asStateFlow()
 
     private fun freshId(): PeerId {
