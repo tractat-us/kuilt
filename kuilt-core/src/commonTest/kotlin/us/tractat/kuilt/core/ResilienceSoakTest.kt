@@ -4,9 +4,11 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.milliseconds
 
 /**
@@ -47,7 +49,7 @@ class ResilienceSoakTest {
     }
 
     @Test
-    fun `FlapSchedule driven seam delivers frames sent during Woven windows`() = runTest {
+    fun `FlapSchedule driven seam delivers frames sent during Woven windows and genuinely flaps`() = runTest {
         val mem = InMemoryLoom()
         val a = FlakyLifecycleSeam(mem.host(Pattern("a")), backgroundScope)
         val b = mem.join(InMemoryTag("b"))
@@ -55,32 +57,53 @@ class ResilienceSoakTest {
 
         val received = async { b.incoming.take(3).toList() }
 
-        // Drive a FlapSchedule in the background — seam will oscillate Woven/Weaving.
-        val schedule = FlapSchedule(
-            seed = 7L,
-            meanUptime = 100.milliseconds,
-            meanDowntime = 30.milliseconds,
-            giveUpAfter = 0, // infinite — we cancel when done
-        )
-        val driveJob = a.drive(schedule)
+        // Collect state transitions to prove real flaps occurred.
+        val stateHistory = mutableListOf<SeamState>()
+        val historyJob = launch { a.state.collect { stateHistory += it } }
+        testScheduler.runCurrent() // subscribe historyJob before drive starts
 
-        // Send 3 frames, each only when Woven, with enough time between them for the
-        // schedule to potentially flap in between.
+        // Drive flap schedule: short uptime / long downtime ensures Weaving windows
+        // are wide enough to observe between sends.
+        val driveJob = a.drive(
+            FlapSchedule(
+                seed = 7L,
+                meanUptime = 20.milliseconds,
+                meanDowntime = 80.milliseconds,
+                giveUpAfter = 0,
+            ),
+        )
+
+        // Send 3 frames, each only while Woven. Advance virtual time in small steps
+        // so the background drive loop genuinely flaps between sends.
         for (i in 1..3) {
-            // Wait until Woven before sending.
-            a.state.take(1).toList()  // just prime the flow; send immediately if already Woven
-            if (a.state.value is SeamState.Woven) {
-                a.broadcast(byteArrayOf(i.toByte()))
-            } else {
-                a.recover()
-                a.broadcast(byteArrayOf(i.toByte()))
+            // Advance past the current uptime window so the seam has had a chance to flap.
+            testScheduler.advanceTimeBy(30)
+            testScheduler.runCurrent()
+            // If currently Weaving, advance through the downtime window to reach Woven again.
+            while (a.state.value !is SeamState.Woven) {
+                testScheduler.advanceTimeBy(10)
+                testScheduler.runCurrent()
             }
-            // Small virtual-time gap to let the schedule flap.
-            testScheduler.advanceTimeBy(50)
+            a.broadcast(byteArrayOf(i.toByte()))
+            testScheduler.runCurrent()
         }
 
         driveJob.cancel()
+        historyJob.cancel()
         val frames = received.await().map { it.payload.single().toInt() }
-        assertEquals(listOf(1, 2, 3), frames)
+
+        assertAll(
+            // (a) All 3 frames arrived in order.
+            { assertEquals(listOf(1, 2, 3), frames, "all Woven-gated frames delivered in order") },
+            // (b) The schedule genuinely flapped — seam passed through Weaving at least once.
+            {
+                assertTrue(
+                    stateHistory.any { it is SeamState.Weaving },
+                    "seam must have passed through Weaving at least once (real flap, not bypassed)",
+                )
+            },
+        )
     }
 }
+
+private fun assertAll(vararg assertions: () -> Unit) = assertions.forEach { it() }
