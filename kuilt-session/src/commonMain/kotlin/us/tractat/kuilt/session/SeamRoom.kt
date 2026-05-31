@@ -298,14 +298,13 @@ internal class SeamRoom(
      */
     private suspend fun runMainLoop() {
         if (_role.value == SessionRole.Joiner) {
-            // Wait for at least one non-self peer before sending Hello.
-            // Some transports (MultipeerConnectivity, WebRTC) deliver a Seam
-            // before the underlying connection is fully established. Peers
-            // appear asynchronously in seam.peers once the transport reaches
-            // Connected. Without this wait the Hello broadcast lands on an
-            // empty peer set and is silently dropped, so the admit handshake
-            // never completes.
-            seam.peers.filter { it.size > 1 }.first()
+            // Wait for the fabric to reach Woven before sending Hello.
+            // Some transports (MultipeerConnectivity, WebRTC) hand back a Seam
+            // before the underlying connection is established. Broadcasting Hello
+            // while the fabric is still Weaving reaches no one, leaving the admit
+            // handshake permanently stuck. SeamState.Woven is the fabric-agnostic
+            // signal that the link is live and the broadcast will be carried.
+            seam.state.first { it is SeamState.Woven }
             sendHello()
         }
         seam.incoming.collect { swatch ->

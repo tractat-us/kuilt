@@ -27,31 +27,32 @@ private fun assertAll(vararg assertions: () -> Unit) = assertions.forEach { it()
  * Regression test for the joiner Hello race:
  *
  * Some transports (MultipeerConnectivity, WebRTC) deliver a [Seam] to the joiner
- * before the underlying transport connection is established. [Seam.peers] starts
- * with only [Seam.selfId] and grows asynchronously as the transport reaches
- * Connected. If [SeamRoom] sends Hello immediately on start, the broadcast lands
- * on an empty peer set and is silently dropped — the admit handshake never completes.
+ * before the underlying connection is established. [SeamRoom] must not send Hello
+ * until [SeamState.Woven] — doing so earlier risks a silent drop on an empty peer
+ * set, leaving the admit handshake permanently stuck.
  *
- * The fix: wait for `seam.peers.size > 1` before calling `sendHello()`.
+ * The fix: await `seam.state.first { it is SeamState.Woven }` before `sendHello()`.
+ * This test drives the fake via [state], keeping [peers] at `{self}` throughout, so
+ * the only gate that can unblock the Hello is the fabric lifecycle transition.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class SeamRoomJoinerHelloRaceTest {
 
     private val selfPeer = PeerId("joiner")
-    private val remotePeer = PeerId("host")
 
     @Test
-    fun joinerHelloWaitsForTransportPeerThenFiresImmediately() =
+    fun joinerHelloWaitsForWovenThenFiresImmediately() =
         runTest {
             val broadcastPayloads = mutableListOf<ByteArray>()
-            val delayedPeers = MutableStateFlow(setOf(selfPeer))
+            // peers stays {self} throughout — only state drives the gate.
+            val delayedState = MutableStateFlow<SeamState>(SeamState.Weaving)
 
             val fakeSeam =
                 object : Seam {
                     override val selfId: PeerId = selfPeer
-                    override val peers: StateFlow<Set<PeerId>> = delayedPeers.asStateFlow()
-                    override val state: StateFlow<SeamState> =
-                        MutableStateFlow<SeamState>(SeamState.Woven).asStateFlow()
+                    override val peers: StateFlow<Set<PeerId>> =
+                        MutableStateFlow(setOf(selfPeer)).asStateFlow()
+                    override val state: StateFlow<SeamState> = delayedState.asStateFlow()
                     override val incoming: Flow<Swatch> = MutableSharedFlow()
 
                     override suspend fun broadcast(payload: ByteArray) {
@@ -77,16 +78,16 @@ class SeamRoomJoinerHelloRaceTest {
                 )
             room.start()
 
-            // Give the coroutine scheduler a chance to run the main loop up to the peer-wait.
+            // Give the coroutine scheduler a chance to run the main loop up to the state-wait.
             advanceTimeBy(50.milliseconds)
 
             assertAll(
-                // No broadcast before the remote peer is visible.
-                { assertFalse(broadcastPayloads.any { AdmitMessage.isAdmitFrame(it) }, "Hello must not be sent before transport peer appears") },
+                // No broadcast while state is still Weaving.
+                { assertFalse(broadcastPayloads.any { AdmitMessage.isAdmitFrame(it) }, "Hello must not be sent while SeamState.Weaving") },
             )
 
-            // Remote peer becomes visible — transport reached Connected.
-            delayedPeers.value = setOf(selfPeer, remotePeer)
+            // Fabric transitions to Woven — transport reached Connected.
+            delayedState.value = SeamState.Woven
 
             // Give the coroutine scheduler a chance to unblock the wait and send Hello.
             advanceTimeBy(50.milliseconds)
@@ -94,7 +95,7 @@ class SeamRoomJoinerHelloRaceTest {
             val helloPayloads = broadcastPayloads.filter { AdmitMessage.isAdmitFrame(it) }
 
             assertAll(
-                { assertTrue(helloPayloads.isNotEmpty(), "Hello must be sent after transport peer appears") },
+                { assertTrue(helloPayloads.isNotEmpty(), "Hello must be sent after SeamState.Woven") },
                 {
                     val msg = AdmitMessage.decode(helloPayloads.first())
                     assertTrue(msg is AdmitMessage.Hello, "Payload must decode as AdmitMessage.Hello, was $msg")
