@@ -8,7 +8,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.flow
-import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -65,6 +64,18 @@ public class FlakyLifecycleSeam(
     // Track whether we've been torn (terminal).
     private var torn = false
 
+    init {
+        // While Woven, forward delegate membership changes to _peers directly.
+        // Lifecycle transitions (enterWeaving/recover/tear) update _peers
+        // imperatively; this collector handles churn on the underlying delegate
+        // while we are already in Woven state.
+        scope.launch {
+            delegate.peers.collect { delegatePeers ->
+                if (_state.value is SeamState.Woven) _peers.value = delegatePeers
+            }
+        }
+    }
+
     // ── Seam ──────────────────────────────────────────────────────────────────
 
     override val selfId: PeerId get() = delegate.selfId
@@ -109,7 +120,10 @@ public class FlakyLifecycleSeam(
         delegate.sendTo(peer, payload)
     }
 
-    override suspend fun close(reason: CloseReason): Unit = delegate.close(reason)
+    override suspend fun close(reason: CloseReason) {
+        tear(reason)
+        delegate.close(reason)
+    }
 
     // ── Imperative control surface ────────────────────────────────────────────
 
@@ -132,7 +146,7 @@ public class FlakyLifecycleSeam(
      */
     public fun recover() {
         if (torn || _state.value is SeamState.Woven) return
-        _peers.update { delegate.peers.value }
+        _peers.value = delegate.peers.value
         _state.value = SeamState.Woven
     }
 
