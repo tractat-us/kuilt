@@ -1,8 +1,10 @@
 package us.tractat.kuilt.conformance
 
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.CloseReason
 import us.tractat.kuilt.core.InMemoryTag
@@ -19,14 +21,24 @@ import kotlin.test.assertIs
  *
  * Uses two [DelayedWovenLoom] plies bonded under one [CompositeLoom], driving
  * [DelayedWovenSeam.markWoven] explicitly to control per-ply lifecycle transitions.
+ *
+ * [UnconfinedTestDispatcher] is injected so reconciliation coroutines run eagerly
+ * inside [runTest]'s virtual clock, making synchronous `.value` reads deterministic.
  */
+@OptIn(ExperimentalCoroutinesApi::class)
 class CompositeMultiPlyTest {
+
+    private fun makeLoom(vararg plies: Pair<PlyId, DelayedWovenLoom>) =
+        CompositeLoom(
+            plies = plies.toList(),
+            dispatcher = UnconfinedTestDispatcher(),
+        )
 
     @Test
     fun aggregateWovenWhenOnlyOnePlyWoven() = runTest {
         val plyA = DelayedWovenLoom()
         val plyB = DelayedWovenLoom()
-        val loom = CompositeLoom(listOf(PlyId("a") to plyA, PlyId("b") to plyB))
+        val loom = makeLoom(PlyId("a") to plyA, PlyId("b") to plyB)
         val seam = loom.host(Pattern("host"))
         assertIs<SeamState.Weaving>(seam.state.value)
 
@@ -44,7 +56,7 @@ class CompositeMultiPlyTest {
         // The inbound gate must deduplicate, delivering exactly one copy.
         val plyA = DelayedWovenLoom()
         val plyB = DelayedWovenLoom()
-        val loom = CompositeLoom(listOf(PlyId("a") to plyA, PlyId("b") to plyB))
+        val loom = makeLoom(PlyId("a") to plyA, PlyId("b") to plyB)
         val host = loom.host(Pattern("host"))
         val joiner = loom.join(InMemoryTag("join"))
 
@@ -66,7 +78,7 @@ class CompositeMultiPlyTest {
     fun onePlyTearingDoesNotRemoveAPeerStillOnAnother() = runTest {
         val plyA = DelayedWovenLoom()
         val plyB = DelayedWovenLoom()
-        val loom = CompositeLoom(listOf(PlyId("a") to plyA, PlyId("b") to plyB))
+        val loom = makeLoom(PlyId("a") to plyA, PlyId("b") to plyB)
         val host = loom.host(Pattern("host"))
         val joiner = loom.join(InMemoryTag("join"))
 

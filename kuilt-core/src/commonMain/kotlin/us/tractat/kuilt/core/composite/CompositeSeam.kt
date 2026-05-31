@@ -20,6 +20,7 @@ import us.tractat.kuilt.core.PlyId
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.Swatch
+import kotlin.coroutines.CoroutineContext
 
 /**
  * The composite `Seam` woven by [CompositeLoom]. Presents a single peer set,
@@ -35,16 +36,18 @@ import us.tractat.kuilt.core.Swatch
  *
  * **Receive:** Inbound [PlyFrame.Data] frames are de-duplicated and reordered per
  * origin by a [PlyInboundGate]; application payloads emerge as [Swatch] values.
+ *
+ * @param dispatcher Controls the coroutine context for all internal state-management
+ *   coroutines (rollup, announce, inbound pumps). Production code uses the confined
+ *   default ([Dispatchers.Default.limitedParallelism(1)]) which serialises all
+ *   mutations and prevents data races. Tests may inject [UnconfinedTestDispatcher]
+ *   to drive reconciliation eagerly so synchronous `.value` reads see completed state.
  */
 internal class CompositeSeam(
     private val constituents: List<Pair<PlyId, Seam>>,
+    dispatcher: CoroutineContext = Dispatchers.Default.limitedParallelism(1),
 ) : Seam {
-    // All internal coroutines (state rollup, announce, inbound pumps) start unconfined so they
-    // run eagerly in the caller's context. This ensures peers and state are visible synchronously
-    // after weaving on fabrics whose constituent plies are already live (e.g. InMemoryLoom).
-    // Mutable state (idMap, outSeq, gate) is safe because the unconfined dispatcher never runs
-    // two continuations in parallel — it only re-enters in the same call stack.
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+    private val scope = CoroutineScope(SupervisorJob() + dispatcher)
     private val gate = PlyInboundGate()
     private var outSeq = 0L
 
