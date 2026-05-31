@@ -11,6 +11,7 @@ import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.CloseReason
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Seam
+import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.Swatch
 import us.tractat.kuilt.session.admit.AdmitMessage
 import us.tractat.kuilt.session.partition.HeartbeatConfig
@@ -49,6 +50,8 @@ class SeamRoomJoinerHelloRaceTest {
                 object : Seam {
                     override val selfId: PeerId = selfPeer
                     override val peers: StateFlow<Set<PeerId>> = delayedPeers.asStateFlow()
+                    override val state: StateFlow<SeamState> =
+                        MutableStateFlow<SeamState>(SeamState.Woven).asStateFlow()
                     override val incoming: Flow<Swatch> = MutableSharedFlow()
 
                     override suspend fun broadcast(payload: ByteArray) {
