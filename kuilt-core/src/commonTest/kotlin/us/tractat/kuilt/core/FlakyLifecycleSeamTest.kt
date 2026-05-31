@@ -11,6 +11,7 @@ import kotlinx.coroutines.yield
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFails
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
@@ -328,6 +329,45 @@ class FlakyLifecycleSeamTest {
             val run1 = countFlaps(99L)
             val run2 = countFlaps(99L)
             assertEquals(run1, run2)
+        }
+
+    // ── Fix 1: close() must drive terminal Torn ───────────────────────────────
+
+    @Test
+    fun `close drives terminal Torn and sends throw`() =
+        runTest {
+            val delegate = InMemoryLoom().host(Pattern("A"))
+            val seam = FlakyLifecycleSeam(delegate, backgroundScope)
+
+            seam.close(CloseReason.Normal)
+            testScheduler.advanceUntilIdle()
+
+            assertEquals(SeamState.Torn(CloseReason.Normal), seam.state.value)
+            assertFailsWith<IllegalStateException> { seam.broadcast(byteArrayOf(1)) }
+        }
+
+    // ── Fix 2: peers tracks delegate live while Woven ─────────────────────────
+
+    @Test
+    fun `peers reflects delegate membership changes while Woven`() =
+        runTest {
+            val loom = InMemoryLoom()
+            val delegateA = loom.host(Pattern("A"))
+            val seam = FlakyLifecycleSeam(delegateA, backgroundScope)
+            // Prime the delegate.peers collector so it is subscribed before B joins.
+            testScheduler.runCurrent()
+
+            // Verify initial state: only selfId in peers (before B joins)
+            assertEquals(setOf(seam.selfId), seam.peers.value)
+
+            // B joins the same mesh — seam must reflect this without recover()
+            val delegateB = loom.join(InMemoryTag("B"))
+            testScheduler.runCurrent()
+
+            assertAll(
+                { assertTrue(seam.selfId in seam.peers.value, "selfId must be in peers") },
+                { assertTrue(delegateB.selfId in seam.peers.value, "B must appear without recover()") },
+            )
         }
 
     // ── FlakyLifecycleLoom ────────────────────────────────────────────────────
