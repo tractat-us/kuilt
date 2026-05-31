@@ -10,6 +10,7 @@ import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.SeamState
 import kotlin.test.Test
 import kotlin.test.assertIs
+import kotlin.test.assertTrue
 
 /**
  * Verifies [DelayedWovenLoom] accurately simulates the radio-fabric timing window:
@@ -60,8 +61,8 @@ class DelayedWovenLoomTest {
             // Frame sent while Weaving must arrive (DelayedWovenLoom does not gate sends).
             val frames = received.await()
             assertIs<SeamState.Woven>(joiner.state.value)
-            assert(frames.size == 1) { "Expected 1 frame, got ${frames.size}" }
-            assert(frames[0].payload.contentEquals(byteArrayOf(42))) { "Payload mismatch" }
+            assertTrue(frames.size == 1, "Expected 1 frame, got ${frames.size}")
+            assertTrue(frames[0].payload.contentEquals(byteArrayOf(42)), "Payload mismatch")
         }
 
     @Test
