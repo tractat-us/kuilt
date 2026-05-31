@@ -22,6 +22,7 @@ import platform.MultipeerConnectivity.MCSessionState
 import platform.darwin.NSObject
 import us.tractat.kuilt.core.CloseReason
 import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.core.PeerNotConnected
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.Swatch
@@ -94,7 +95,7 @@ internal class MCSessionLink(
             session.connectedPeers
                 .filterIsInstance<MCPeerID>()
                 .firstOrNull { it.displayName == peer.value }
-                ?: error("Peer ${peer.value} is not connected to MC session")
+                ?: throw PeerNotConnected(peer)
         log.debug { "mc.session.send localPeer=${selfId.value} toPeer=${peer.value} bytes=${payload.size}" }
         session.sendData(
             data = payload.toNSData(),

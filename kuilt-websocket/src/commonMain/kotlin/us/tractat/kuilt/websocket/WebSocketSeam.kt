@@ -14,6 +14,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import us.tractat.kuilt.core.CloseReason
 import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.core.PeerNotConnected
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.Swatch
@@ -76,6 +77,7 @@ internal class WebSocketSeam(
     ) {
         checkNotClosed()
         require(peer != selfId) { "Cannot send to self — use broadcast if you intend to loop back" }
+        if (peer !in _peers.value) throw PeerNotConnected(peer)
         // In the 2-peer case, sendTo(remote, ...) is equivalent to broadcast.
         session.send(KtorFrame.Binary(fin = true, data = payload))
     }

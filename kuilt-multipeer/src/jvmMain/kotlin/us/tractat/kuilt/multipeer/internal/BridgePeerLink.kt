@@ -11,6 +11,7 @@ import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
 import us.tractat.kuilt.core.CloseReason
 import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.core.PeerNotConnected
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.Swatch
@@ -93,6 +94,7 @@ internal class BridgePeerLink(
         payload: ByteArray,
     ) {
         if (closing) return
+        if (peer !in _peers.value) throw PeerNotConnected(peer)
         val sent = nativeLib.mc_session_send_to(sessionHandle, peer.value, payload, payload.size)
         if (sent < 0) {
             error("mc_session_send_to failed for ${peer.value}; peer may be disconnected")

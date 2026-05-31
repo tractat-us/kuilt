@@ -14,6 +14,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import us.tractat.kuilt.core.CloseReason
 import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.core.PeerNotConnected
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.Swatch
@@ -78,7 +79,7 @@ internal class WebRTCPeerLink(
         peer: PeerId,
         payload: ByteArray,
     ) {
-        require(peer == remoteId) { "WebRTC link is point-to-point: $peer not in peer set" }
+        if (peer !in _peers.value) throw PeerNotConnected(peer)
         facade.sendBytes(payload)
     }
 

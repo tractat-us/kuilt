@@ -2,6 +2,7 @@ package us.tractat.kuilt.conformance
 
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.test.TestResult
@@ -10,10 +11,15 @@ import us.tractat.kuilt.core.FabricAvailability
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.Pattern
+import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.core.PeerNotConnected
+import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.Tag
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
 /**
@@ -168,4 +174,84 @@ public abstract class SeamConformanceSuite {
             "availability() must return Available or Unavailable, got $availability",
         )
     }
+
+    // ── (7) state is Woven after host and joiner both return ─────────────────
+
+    @Test
+    public fun stateIsWovenAfterConnect(): TestResult =
+        runTest {
+            val (hostLoom, joinerLoom) = newLoomPair()
+            coroutineScope {
+                val hostDeferred = async { hostLoom.host(Pattern("host")) }
+                val joinerDeferred = async { joinerLoom.join(joinTag()) }
+                val host = hostDeferred.await()
+                val joiner = joinerDeferred.await()
+
+                // Both sides must reach Woven — await in case a radio fabric needs a tick.
+                assertIs<SeamState.Woven>(
+                    host.state.first { it is SeamState.Woven },
+                    "host state must be Woven",
+                )
+                assertIs<SeamState.Woven>(
+                    joiner.state.first { it is SeamState.Woven },
+                    "joiner state must be Woven",
+                )
+            }
+        }
+
+    // ── (8) host state is Woven even before any peer joins ───────────────────
+
+    @Test
+    public fun hostStateIsWovenEvenAlone(): TestResult =
+        runTest {
+            val (hostLoom, joinerLoom) = newLoomPair()
+            coroutineScope {
+                val hostDeferred = async { hostLoom.host(Pattern("host")) }
+                val joinerDeferred = async { joinerLoom.join(joinTag()) }
+                val host = hostDeferred.await()
+                joinerDeferred.await()
+
+                // Relay fabrics are Woven at construction; radio fabrics on first connect.
+                // Either way, after the connection completes, host must be Woven.
+                val hostState = host.state.first { it is SeamState.Woven }
+                assertIs<SeamState.Woven>(hostState, "host state must be Woven")
+            }
+        }
+
+    // ── (9) close drives state to Torn(Normal) ───────────────────────────────
+
+    @Test
+    public fun closeDriversStateTornNormal(): TestResult =
+        runTest {
+            val (hostLoom, joinerLoom) = newLoomPair()
+            coroutineScope {
+                val hostDeferred = async { hostLoom.host(Pattern("host")) }
+                val joinerDeferred = async { joinerLoom.join(joinTag()) }
+                val seam = hostDeferred.await()
+                joinerDeferred.await()
+
+                seam.close()
+
+                assertIs<SeamState.Torn>(seam.state.value, "state must be Torn after close()")
+            }
+        }
+
+    // ── (10) sendTo an absent peer throws PeerNotConnected ───────────────────
+
+    @Test
+    public fun sendToAbsentPeerThrowsPeerNotConnected(): TestResult =
+        runTest {
+            val (hostLoom, joinerLoom) = newLoomPair()
+            coroutineScope {
+                val hostDeferred = async { hostLoom.host(Pattern("host")) }
+                val joinerDeferred = async { joinerLoom.join(joinTag()) }
+                val host = hostDeferred.await()
+                joinerDeferred.await()
+
+                val phantom = PeerId("phantom-peer-not-in-session")
+                assertFailsWith<PeerNotConnected> {
+                    host.sendTo(phantom, byteArrayOf(1))
+                }
+            }
+        }
 }

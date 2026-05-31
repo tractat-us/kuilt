@@ -15,6 +15,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import us.tractat.kuilt.core.CloseReason
 import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.core.PeerNotConnected
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.Swatch
@@ -135,7 +136,7 @@ internal class NearbySeam(
         checkNotClosed()
         require(peer != selfId) { "Cannot send to self" }
         val endpointId = mutex.withLock { endpointIdFor(peer) }
-            ?: error("No connected endpoint for peer $peer")
+            ?: throw PeerNotConnected(peer)
         sendToEndpoints(listOf(endpointId), payload)
     }
 
