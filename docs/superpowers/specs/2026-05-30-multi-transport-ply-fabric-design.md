@@ -2,10 +2,10 @@
 
 **Status:** design, pre-implementation. Epic #49.
 **Date:** 2026-05-30
-**Depends on:** `2026-05-30-seam-lifecycle-design.md` (axis-1 `SeamState`) landing
-first — this design reuses its rollup semantics verbatim and must not begin
-implementation until axis-1 has shipped and at least the websocket + one radio
-fabric drive `state`.
+**Depends on:** `2026-05-30-seam-lifecycle-design.md` (axis-1 `SeamState`) — **now
+merged (#50)** and driven by the websocket + multipoint radio fabrics, so the
+guardrail is satisfied and this epic is unblocked for implementation. This design
+reuses axis-1's rollup semantics verbatim.
 **Scope:** `kuilt-core` contract additions (`PlyId`, `Seam.plies`) + a new
 `CompositeLoom` (also in `kuilt-core` — it depends only on the `Loom`/`Seam`
 contract, never on a fabric) + composite conformance coverage. No fabric module
@@ -114,6 +114,8 @@ public class CompositeLoom(
 
 - It is itself a `Loom`, so consumers gain no new type at the call site:
   `CompositeLoom(...).host(pattern)` returns an ordinary `Seam`.
+- `weave` mints the composite `selfId` and runs identity reconciliation (below);
+  the constituent plies' self-assigned ids are never exposed.
 - `weave(rendezvous)` fans the **same logical session identity** (`Pattern`/`Tag`)
   out to each constituent `Loom`. Each `Loom` already encapsulates how to realize
   that identity on its medium (relay → `wss://…/<tag>`; mDNS → a Bonjour service
@@ -144,34 +146,54 @@ while `state` stays `Woven`. A consumer that cares ("you've left the local
 network, now relaying — expect higher latency") reads `plies`; one that doesn't
 just sees `Woven`. That distinguishability is the entire point of this epic.
 
+### Identity reconciliation (control-plane)
+
+Each constituent `Loom` self-assigns its own `PeerId`, so one physical peer is a
+*different* transport id on each ply. To present one identity, the composite mints
+a single **composite `PeerId`** at `weave()` (its `selfId`) and reconciles
+per-ply transport ids to it via a small control-plane:
+
+- On each ply reaching `Woven`, the composite sends an **`Announce(compositeId)`**
+  control frame over that ply.
+- On receiving `Announce(C)` from transport id `T` on ply `P`, the receiver records
+  `map[(P, T)] = C`.
+- App frames carry the composite id as `originId` (see Dedup); dedup and "who sent
+  this" are always in composite ids, never per-ply transport ids.
+
+`Announce` doubles as the membership advert that makes `peers` correct *before*
+any application traffic flows.
+
 ### Peer set & membership reconciliation
 
-- `peers` = **union** across plies; a dual-reachable peer appears once.
-- A peer is present iff reachable on **≥1** ply; it is removed only when absent
-  from **all** plies. This makes overlay churn non-flapping by construction: an
-  blip on one ply for a peer still reachable on another causes **no** membership
-  change. Only a peer's disappearance from every ply removes it.
+- `peers` = `{selfId} ∪ { C | ∃ ply P, transport id T : map[(P,T)] == C ∧ T ∈
+  P.peers }` — the union expressed in **composite ids** via the learned mapping, so
+  a multi-homed peer appears **once**, not once per ply.
+- A peer is present iff reachable on **≥1** ply; it is removed only when its
+  transport ids are absent from **all** plies. This makes ply churn non-flapping by
+  construction: a blip on one ply for a peer still reachable on another causes
+  **no** membership change. Only disappearance from every ply removes it.
+- Recomputed on any constituent `peers` change or new `Announce`.
 
 ## Send & receive (the three settled decisions)
 
 ### 1. Dedup identity — explicit `(originId, originSeq)` envelope, recommended
 
-The relay-copy and overlay-copy of one frame must collapse to a single delivery.
-The composite wraps each outbound payload in a minimal **envelope** prefixed to
-the opaque payload, carrying an explicit **`(originId: PeerId, originSeq: Long)`**;
-the receiving composite strips it and dedups on that key before handing the bare
-payload to `incoming`. Plies treat the whole envelope+payload as opaque bytes,
-which is exactly the `Swatch` contract.
+The composite wire carries two frame types behind a one-byte tag: **`Announce`**
+(control — carries the sender's composite id, above) and **`Data`** (application).
+The relay-copy and overlay-copy of one `Data` frame must collapse to a single
+delivery. Each `Data` frame carries an explicit **`(originId: PeerId, originSeq:
+Long)`** envelope prefixed to the opaque payload; the receiving composite strips it
+and dedups on that key before handing the bare payload to `incoming`. Plies treat
+the whole frame as opaque bytes, which is exactly the `Swatch` contract.
 
-`originSeq` is a per-origin monotonic counter assigned by the **sending** composite.
-**`originId` is explicit on the wire** rather than relying on `swatch.sender`
-(which transports stamp per-link on receive). In the pure no-forwarding case
-`sender == origin` and the explicit id is redundant — but carrying it now is the
-single forward-compatible choice that keeps **single-hop gateway forwarding** (the
-piggyback scenario) addable later with **no wire break**: once a gateway forwards
-a frame, the per-link `sender` becomes the gateway, so the origin must travel in
-the frame. The cost is a few bytes per (tiny) game frame; the benefit is the
-forwarding door stays open.
+`originId` is the **composite id** (from identity reconciliation), and `originSeq`
+is a per-origin monotonic counter assigned by the **sending** composite. Carrying
+`originId` explicitly (rather than relying on `swatch.sender`, which transports
+stamp per-link) is also the single forward-compatible choice that keeps
+**single-hop gateway forwarding** (the piggyback scenario) addable later with **no
+wire break**: once a gateway forwards a frame, the per-link `sender` becomes the
+gateway, so the origin must travel in the frame. The cost is a few bytes per (tiny)
+game frame.
 
 > **Minor:** an origin that leaves and rejoins under the *same* `PeerId` with a
 > reset counter could collide `(originId, originSeq)`. Mitigated by `PeerId` being
@@ -267,8 +289,8 @@ pass it (a `CompositeLoom` over conformant plies is itself a conformant `Seam`).
 | Loom composition | `CompositeLoom` wrapping an ordered list of plies (union must cover the session; order = send preference); itself a `Loom`. `weave` fans the logical session identity to each constituent loom. |
 | `Woven` when only some plies woven | Aggregate `Woven` as soon as **any** ply is `Woven` (axis-1 rollup). Joiner may send then. |
 | Frame de-dup / fan-out | Broadcast over all plies; inbound dedup by explicit `(originId, originSeq)` carried in a minimal envelope (reserves wire for future single-hop forwarding). |
-| Per-ply addressing | Internal only; never exposed. `sendTo` picks a ply (overlay preferred). |
-| Membership reconciliation | `peers` = union; remove only when absent from **all** plies ⇒ no overlay-churn flap. |
+| Per-ply addressing | Internal only; never exposed. `sendTo(C)` resolves `C` to a `(ply, transportId)` via the learned map (send-preference order) and sends there. |
+| Membership reconciliation | Composite mints one id per peer; `Announce` control frames build a `(ply, transportId)→compositeId` map; `peers` = union in composite ids; remove only when absent from **all** plies ⇒ no ply-churn flap. |
 | Failure semantics / surfacing | `plies` map surfaces per-ply `Torn`; aggregate stays `Woven` if any ply lives. |
 | Conformance | Two delayed-`Woven` fakes bonded; assertions above. |
 | Ordering across plies | Per-origin ordering via bounded reorder buffer; no global cross-origin order promised. |
