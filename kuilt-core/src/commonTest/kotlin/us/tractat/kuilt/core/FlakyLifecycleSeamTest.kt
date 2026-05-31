@@ -349,11 +349,12 @@ class FlakyLifecycleSeamTest {
     // ── Single-source invariant ───────────────────────────────────────────────
 
     /**
-     * Invariant test: [peers] must stay `{selfId}` throughout a [SeamState.Weaving]
-     * window even when the delegate gains a new peer during it.
+     * Contract/regression: [peers] must stay `{selfId}` throughout a
+     * [SeamState.Weaving] window even when the delegate gains a new peer during it.
      *
-     * This is the race the former dual-write could violate: the background collector
-     * could overwrite `{selfId}` with the full delegate set while still `Weaving`.
+     * Trivial-pass on the confined test dispatcher — the collector's check-and-write
+     * is atomic there, so the cross-thread race cannot manifest in this test.
+     * Documents the contract; does not reproduce the race.
      */
     @Test
     fun `peers stays selfId-only throughout Weaving even when delegate gains a peer`() =

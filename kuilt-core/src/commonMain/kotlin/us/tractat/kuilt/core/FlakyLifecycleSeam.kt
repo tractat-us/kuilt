@@ -132,9 +132,14 @@ public class FlakyLifecycleSeam(
      *
      * No-op if already [SeamState.Weaving] or [SeamState.Torn].
      *
-     * Writes `_state` before `_peers` so the delegate-peers collector sees
-     * [SeamState.Weaving] on its next emission and skips — preventing it from
-     * overwriting `{selfId}` with the full delegate set.
+     * Writes `_state` before `_peers` so that the delegate-peers collector, on
+     * its next emission, sees [SeamState.Weaving] and skips — **narrowing** the
+     * dual-write window. The race is in any case unmanifestable on the confined
+     * single-threaded test dispatcher this class is always used with: the
+     * collector's check-and-write is a single lambda with no suspension point,
+     * so it is atomic there. Full elimination on a multi-threaded dispatcher
+     * would require locking the collector's check+write together; unnecessary
+     * for this test-only class.
      */
     public fun enterWeaving() {
         if (torn || _state.value is SeamState.Weaving) return
