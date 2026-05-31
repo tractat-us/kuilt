@@ -346,27 +346,50 @@ class FlakyLifecycleSeamTest {
             assertFailsWith<IllegalStateException> { seam.broadcast(byteArrayOf(1)) }
         }
 
-    // ── Fix 2: peers tracks delegate live while Woven ─────────────────────────
+    // ── Single-source invariant ───────────────────────────────────────────────
 
+    /**
+     * Invariant test: [peers] must stay `{selfId}` throughout a [SeamState.Weaving]
+     * window even when the delegate gains a new peer during it.
+     *
+     * This is the race the former dual-write could violate: the background collector
+     * could overwrite `{selfId}` with the full delegate set while still `Weaving`.
+     */
     @Test
-    fun `peers reflects delegate membership changes while Woven`() =
+    fun `peers stays selfId-only throughout Weaving even when delegate gains a peer`() =
         runTest {
             val loom = InMemoryLoom()
             val delegateA = loom.host(Pattern("A"))
             val seam = FlakyLifecycleSeam(delegateA, backgroundScope)
-            // Prime the delegate.peers collector so it is subscribed before B joins.
+
+            seam.enterWeaving()
+            // Peer B joins the underlying loom while the seam is Weaving.
+            loom.join(InMemoryTag("B"))
             testScheduler.runCurrent()
 
-            // Verify initial state: only selfId in peers (before B joins)
+            // peers must remain {selfId} — the Weaving gate must hold.
             assertEquals(setOf(seam.selfId), seam.peers.value)
+        }
 
-            // B joins the same mesh — seam must reflect this without recover()
+    // ── Fix 2: peers refreshes from delegate on recover ───────────────────────
+
+    @Test
+    fun `peers refills from delegate on recover after delegate membership changed`() =
+        runTest {
+            val loom = InMemoryLoom()
+            val delegateA = loom.host(Pattern("A"))
+            val seam = FlakyLifecycleSeam(delegateA, backgroundScope)
+
+            seam.enterWeaving()
             val delegateB = loom.join(InMemoryTag("B"))
             testScheduler.runCurrent()
 
+            // recover() must refresh peers from the delegate synchronously.
+            seam.recover()
+
             assertAll(
-                { assertTrue(seam.selfId in seam.peers.value, "selfId must be in peers") },
-                { assertTrue(delegateB.selfId in seam.peers.value, "B must appear without recover()") },
+                { assertTrue(seam.selfId in seam.peers.value, "selfId must be in peers after recover") },
+                { assertTrue(delegateB.selfId in seam.peers.value, "B must appear after recover()") },
             )
         }
 
