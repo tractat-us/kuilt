@@ -40,6 +40,23 @@ import kotlin.test.assertTrue
  * In-process radio fabrics return the **same** instance twice: `(loom, loom)`.
  * Role-split fabrics (websocket, mdns, webrtc, multipeer) return **distinct**
  * host/joiner Looms wired to reach each other.
+ *
+ * ## Weaving timing invariant
+ *
+ * The invariant "a frame sent while [SeamState.Weaving] is not silently dropped"
+ * is **not** asserted in this suite because all current harnesses produce
+ * instant-[SeamState.Woven] seams: relay fabrics (WebSocket, InMemory) weave at
+ * construction, and the Multipeer fake fires its peer-connected callback
+ * synchronously during `weave()`, so no harness actually starts [SeamState.Weaving]
+ * by the time [newLoomPair] returns. Asserting a `Weaving` precondition here would
+ * produce a vacuously-passing test on every fabric.
+ *
+ * The enforcement point for this invariant is [DelayedWovenLoomTest], which uses
+ * [DelayedWovenLoom] — a test-only harness that holds the seam in [SeamState.Weaving]
+ * until [DelayedWovenSeam.markWoven] is called explicitly — to reproduce the
+ * radio-fabric timing window deterministically. Radio fabric conformance harnesses
+ * that fire their connected event asynchronously should run their own equivalent of
+ * [DelayedWovenLoomTest] to confirm frames are not dropped in the window.
  */
 public abstract class SeamConformanceSuite {
 
@@ -218,10 +235,10 @@ public abstract class SeamConformanceSuite {
             }
         }
 
-    // ── (9) close drives state to Torn(Normal) ───────────────────────────────
+    // ── (9) close drives state to Torn(Normal) ──────────────────────────────
 
     @Test
-    public fun closeDriversStateTornNormal(): TestResult =
+    public fun closeDrivesStateTornNormal(): TestResult =
         runTest {
             val (hostLoom, joinerLoom) = newLoomPair()
             coroutineScope {
