@@ -40,7 +40,7 @@ class SeamRoomJoinerHelloRaceTest {
     private val remotePeer = PeerId("host")
 
     @Test
-    fun `joiner Hello is not broadcast before transport peer appears, then fires immediately after`() =
+    fun joinerHelloWaitsForTransportPeerThenFiresImmediately() =
         runTest {
             val broadcastPayloads = mutableListOf<ByteArray>()
             val delayedPeers = MutableStateFlow(setOf(selfPeer))
