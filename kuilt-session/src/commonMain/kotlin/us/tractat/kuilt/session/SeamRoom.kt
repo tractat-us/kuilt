@@ -169,16 +169,6 @@ internal class SeamRoom(
     private var hostLost = false
 
     /**
-     * Set to `true` when [runTornWatcher] handles a [SeamState.Torn] transition.
-     *
-     * Guards [runPeersWatcher]: when the seam tears, [FlakyLifecycleSeam] (and real
-     * transports) collapse [Seam.peers] to empty simultaneously, which would cause
-     * [runPeersWatcher] to emit [MembershipEvent.Left] for every admitted peer — racing
-     * the `Torn`-driven path. Setting this flag prevents those spurious [Left] events.
-     */
-    private var tornHandled = false
-
-    /**
      * The host's [PeerId] as seen from a [SessionRole.Joiner].
      *
      * Identified when the joiner receives a [AdmitMessage.Welcome] whose
@@ -253,14 +243,16 @@ internal class SeamRoom(
      * Skips the initial emission (drop(1)) since [Seam.peers] starts with the
      * current connected set — we only care about subsequent changes.
      *
-     * Defers to [runTornWatcher] when the seam has torn: [tornHandled] suppresses
-     * peer-removal events that are a consequence of the transport closing (which
-     * collapses [Seam.peers] to empty), avoiding spurious [MembershipEvent.Left]
-     * events racing the more-specific [MembershipEvent.HostLost] from the torn path.
+     * Defers to [runTornWatcher] when the seam has torn: reads [seam.state.value]
+     * directly to suppress peer-removal events that are a consequence of the transport
+     * closing (which collapses [Seam.peers] to empty). By the time this collector body
+     * executes, [SeamState.Torn] is already written — making the direct read reliable
+     * where a cross-coroutine flag is not (the flag may not yet be set when the collector
+     * body is scheduled, regardless of which StateFlow changed first).
      */
     private suspend fun runPeersWatcher() {
         seam.peers.drop(1).collect { currentPeers ->
-            if (tornHandled) return@collect
+            if (seam.state.value is SeamState.Torn) return@collect
             val removedIds = admittedById.keys.filter { it !in currentPeers }
             for (peerId in removedIds) {
                 stopDetector(peerId)
@@ -280,16 +272,14 @@ internal class SeamRoom(
      * transport-level closures: if the transport signals `Torn`, the session
      * layer should trust it directly.
      *
-     * Sets [tornHandled] before acting to suppress the concurrent [runPeersWatcher],
-     * which would otherwise emit [MembershipEvent.Left] for every admitted peer as a
-     * side-effect of [Seam.peers] collapsing to empty when the seam closes.
+     * [runPeersWatcher] suppresses its own emissions when torn by reading
+     * [seam.state.value] directly — no cross-coroutine flag needed.
      *
      * **Joiner:** emits [MembershipEvent.HostLost] and enters terminal state.
      * **Host:** emits [MembershipEvent.Left] for each admitted peer (mirroring the
      * heartbeat-based [LeaveReason.PartitionExpired] eviction path) and closes cleanly.
      */
     private suspend fun handleTorn() {
-        tornHandled = true
         val at = clock()
         if (_role.value == SessionRole.Joiner) {
             markHostLost(at)
