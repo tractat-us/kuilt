@@ -2,6 +2,7 @@ package us.tractat.kuilt.core
 
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
+import us.tractat.kuilt.core.internal.MappedStateFlow
 
 /**
  * One peer's view of a multi-peer session.
@@ -32,6 +33,14 @@ public interface Seam {
 
     /** The fabric's lifecycle as observed by this peer. */
     public val state: StateFlow<SeamState>
+
+    /**
+     * Per-ply lifecycle breakdown. Single-ply fabrics report a one-entry map
+     * keyed by [PlyId.Sole]. Invariant: `state.value` equals the rollup of
+     * `plies.value.values` under "any ply Woven ⇒ Woven".
+     */
+    public val plies: StateFlow<Map<PlyId, SeamState>>
+        get() = MappedStateFlow(state) { mapOf(PlyId.Sole to it) }
 
     /**
      * Frames received from peers, in send order, delivered to **a single collector**.
