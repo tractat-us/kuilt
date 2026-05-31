@@ -37,18 +37,40 @@ is an Android-hosted WiFi hotspot — Android SoftAP needs no cell plan — over
 which mDNS + WebSocket light up for everyone. That hotspot step is a UX nicety,
 not a contract concern.)
 
-This gives the model its spine: **there is always one *universal* ply that every
-peer shares (the relay, or an offline LAN/hotspot), and platform radios / WebRTC
-are optional low-latency *overlays* reaching a subset of peers.** The universal
-ply is the connectivity floor that makes "everyone shows up" true; overlays are
-pure optimization.
+This gives the model its spine: **the union of a session's plies must cover its
+peer set.** The common shape is one *universal* ply every peer shares (the relay,
+or an offline LAN/hotspot) plus optional low-latency *overlays* (platform radios,
+WebRTC-LAN) reaching a subset — the universal ply is the connectivity floor that
+makes "everyone shows up" true and overlays are pure latency optimization. But a
+single universal ply is not required: as long as the union covers everyone, the
+plies can be several relays a device multi-homes across (below).
+
+### Other driving scenarios
+
+- **Cross-region / multi-server.** Players connect to a server *local* to them for
+  latency but want to reach peers on other servers. A device can **multi-home**
+  across several relay plies (join server A *and* server B); `peers` is the union,
+  and if the B link drops the device sees `plies = { server-A: Woven, server-B:
+  Torn }` — "the remote region went away," cleanly distinguished from "a peer
+  left." (True server-to-server *federation* — A↔B bridging for a peer pinned to
+  one server — lives **below** kuilt: a federated relay mesh is, from the `Seam`'s
+  view, one ply. Federation alone hides the regional-down signal that multi-homing
+  surfaces.)
+- **Gateway / piggyback.** A player with internet shares it so data-less local
+  players reach the upstream server *through* them. Served at the **network layer**
+  (hotspot/NAT) with **zero kuilt changes** — the data-less players get real IP
+  internet through the gateway and appear directly on the relay ply; the gateway
+  is an OS routing detail below the `Seam`. Application-layer single-hop forwarding
+  (for data-less players on an internet-less *radio* link) is a deliberate future
+  capability the wire format reserves for (see Dedup, below); it is not built here.
 
 ## The model
 
 > One logical session is woven from several **plies** (constituent transport
-> links). One is *universal* (shared by every peer); the rest are *overlays*
-> reaching a subset at lower latency. The composite presents the union as a single
-> ordinary `Seam`.
+> links) whose **union covers the peer set**. Commonly one ply is *universal*
+> (shared by every peer) with the rest *overlays* reaching a subset at lower
+> latency; equally valid is several relays a device multi-homes across. The
+> composite presents the union as a single ordinary `Seam`.
 
 ### Contract additions (`kuilt-core`)
 
@@ -77,11 +99,16 @@ invariant trivially. Adding `plies` is the only `Seam` surface change.
 
 ```kotlin
 public class CompositeLoom(
-    private val universal: Pair<PlyId, Loom>,
-    private val overlays: List<Pair<PlyId, Loom>> = emptyList(),
+    // Ordered by send preference, most-preferred first (e.g. a low-latency local
+    // overlay ahead of the relay). Coverage is emergent — the union of these
+    // plies must cover the session; no ply is privileged as "universal".
+    private val plies: List<Pair<PlyId, Loom>>,
 ) : Loom {
     override suspend fun weave(rendezvous: Rendezvous): Seam { /* composite seam */ }
-    override fun availability(): FabricAvailability = universal.second.availability()
+    override fun availability(): FabricAvailability =
+        if (plies.any { it.second.availability() == FabricAvailability.Available })
+            FabricAvailability.Available
+        else FabricAvailability.Unavailable("no ply available")
 }
 ```
 
@@ -92,8 +119,10 @@ public class CompositeLoom(
   that identity on its medium (relay → `wss://…/<tag>`; mDNS → a Bonjour service
   named by `<tag>`). The composite carries **no** per-transport addressing — that
   stays inside each `Loom`. The `Tag`/`Pattern` is the session's logical name.
-- `availability()` reflects the **universal** ply only: overlays are optional and
-  never gate whether the session can be attempted.
+- The list order is a **send-preference hint** only (used by `sendTo` to pick the
+  lowest-latency reaching ply); it does not affect coverage or correctness.
+- `availability()` is `Available` if **any** constituent is available — a session
+  can be attempted as long as one ply might come up.
 - `close(reason)` closes every constituent ply; aggregate `state` → `Torn(reason)`.
 
 ### Lifecycle — axis-1 rollup, unchanged
@@ -120,32 +149,32 @@ just sees `Woven`. That distinguishability is the entire point of this epic.
 - `peers` = **union** across plies; a dual-reachable peer appears once.
 - A peer is present iff reachable on **≥1** ply; it is removed only when absent
   from **all** plies. This makes overlay churn non-flapping by construction: an
-  overlay blip for a peer still on the universal ply causes **no** membership
+  blip on one ply for a peer still reachable on another causes **no** membership
   change. Only a peer's disappearance from every ply removes it.
 
 ## Send & receive (the three settled decisions)
 
-### 1. Dedup identity — `(sender, originSeq)`, recommended
+### 1. Dedup identity — explicit `(originId, originSeq)` envelope, recommended
 
 The relay-copy and overlay-copy of one frame must collapse to a single delivery.
-The dedup key is **`(swatch.sender, originSeq)`**:
+The composite wraps each outbound payload in a minimal **envelope** prefixed to
+the opaque payload, carrying an explicit **`(originId: PeerId, originSeq: Long)`**;
+the receiving composite strips it and dedups on that key before handing the bare
+payload to `incoming`. Plies treat the whole envelope+payload as opaque bytes,
+which is exactly the `Swatch` contract.
 
-- `swatch.sender` is already stamped per-link on receive (existing Swatch
-  contract, axis-1 conformance-tested). **Because this design forbids cross-ply
-  forwarding (below), the immediate sender is always the origin** — so `sender`
-  is a reliable origin identifier with no extra wire field.
-- `originSeq` is a per-origin monotonic counter assigned by the **sending**
-  composite and carried in a minimal envelope prefixed to the opaque payload
-  (a fixed 8-byte big-endian `Long`; plies treat the whole thing as opaque bytes,
-  which is exactly the `Swatch` contract). The receiving composite strips the
-  envelope before handing the bare payload to `incoming`.
-
-The no-forwarding decision is what keeps this simple — with multi-hop forwarding,
-`sender` would be the last hop, not the origin, and the envelope would need an
-explicit origin id. We don't pay that cost.
+`originSeq` is a per-origin monotonic counter assigned by the **sending** composite.
+**`originId` is explicit on the wire** rather than relying on `swatch.sender`
+(which transports stamp per-link on receive). In the pure no-forwarding case
+`sender == origin` and the explicit id is redundant — but carrying it now is the
+single forward-compatible choice that keeps **single-hop gateway forwarding** (the
+piggyback scenario) addable later with **no wire break**: once a gateway forwards
+a frame, the per-link `sender` becomes the gateway, so the origin must travel in
+the frame. The cost is a few bytes per (tiny) game frame; the benefit is the
+forwarding door stays open.
 
 > **Minor:** an origin that leaves and rejoins under the *same* `PeerId` with a
-> reset counter could collide `(sender, originSeq)`. Mitigated by `PeerId` being
+> reset counter could collide `(originId, originSeq)`. Mitigated by `PeerId` being
 > unique per join (the existing convention); if a fabric reuses ids, add a small
 > per-join epoch nonce to the envelope. Noted, not built now.
 
@@ -160,7 +189,7 @@ reorder buffer:
 - Hold out-of-order frames per origin; release in sequence.
 - Bound the wait (default small — e.g. 16 frames or 250 ms); on expiry, skip the
   missing seq and release, favoring liveness over a stalled-ply head-of-line stall.
-- **No-op in the common case:** the universal ply is WebSocket (TCP — reliable,
+- **No-op in the common case:** a relay ply is WebSocket (TCP — reliable,
   ordered), so when it is the effective deliverer the buffer never holds anything.
   The cost is paid only under genuine cross-ply races.
 
@@ -198,9 +227,9 @@ axis-1 delayed-`Woven` test fabric) under one `CompositeLoom`, asserting:
 - Per-origin order is preserved when plies deliver copies in different orders
   (reorder buffer), and a permanently-missing seq is skipped within the bound
   (liveness).
-- An overlay going `Torn` while the universal stays `Woven` does **not** remove a
-  peer still reachable on the universal ply (no membership flap) and does **not**
-  change the aggregate `state`.
+- One ply going `Torn` while another stays `Woven` does **not** remove a peer
+  still reachable on that other ply (no membership flap) and does **not** change
+  the aggregate `state`.
 - `close()` drives every ply and the aggregate to `Torn(Normal)`.
 
 The existing `SeamConformanceSuite` is unchanged; composite fabrics additionally
@@ -208,10 +237,21 @@ pass it (a `CompositeLoom` over conformant plies is itself a conformant `Seam`).
 
 ## Explicitly out of scope
 
-- **Cross-ply frame forwarding / mesh routing.** No peer-level relaying between
-  plies. If no universal ply covers everyone (disjoint Apple/Android cliques),
-  those peers simply don't appear in each other's `peers` — honest, because the
-  hardware can't bridge them anyway and no device sits on both radios to forward.
+- **Arbitrary multi-hop mesh routing.** No general routing tables / transitive
+  bridging across an unknown topology. If no ply (or union of plies) covers
+  everyone — e.g. disjoint Apple/Android radio cliques with no shared LAN — those
+  peers simply don't appear in each other's `peers`. Honest: no device sits on
+  both radios, so the hardware can't bridge them regardless.
+- **Application-layer single-hop gateway forwarding** (data-less players on an
+  internet-less radio link, bridged to the relay by one gateway peer). A
+  *deliberate future* capability, not built here — but the explicit `originId` in
+  the dedup envelope (Decision 1) reserves the wire so it can be added without a
+  break. Adding it later means: origin-tagged frames (done), cross-bridge
+  membership propagation, and a forwarder loop guard (the dedup gate already
+  doubles as one for single-hop). The piggyback need is met *now* at the network
+  layer (hotspot/NAT), below kuilt.
+- **Server-to-server federation** (A↔B bridging for a peer pinned to one server).
+  Below kuilt: a federated relay mesh is one ply from the `Seam`'s view.
 - **Dynamic ply attach/detach mid-session** (e.g. an overlay appearing when peers
   come into proximity). Plies are fixed at `weave()` time in the MVP. The `plies`
   map is already the surface that would reflect dynamic plies, so this is a later
@@ -224,9 +264,9 @@ pass it (a `CompositeLoom` over conformant plies is itself a conformant `Seam`).
 
 | Brief question | Resolution |
 |---|---|
-| Loom composition | `CompositeLoom` wrapping `universal` + `overlays`; itself a `Loom`. `weave` fans the logical session identity to each constituent loom. |
+| Loom composition | `CompositeLoom` wrapping an ordered list of plies (union must cover the session; order = send preference); itself a `Loom`. `weave` fans the logical session identity to each constituent loom. |
 | `Woven` when only some plies woven | Aggregate `Woven` as soon as **any** ply is `Woven` (axis-1 rollup). Joiner may send then. |
-| Frame de-dup / fan-out | Broadcast over all plies; inbound dedup by `(sender, originSeq)`; minimal envelope carries `originSeq`. |
+| Frame de-dup / fan-out | Broadcast over all plies; inbound dedup by explicit `(originId, originSeq)` carried in a minimal envelope (reserves wire for future single-hop forwarding). |
 | Per-ply addressing | Internal only; never exposed. `sendTo` picks a ply (overlay preferred). |
 | Membership reconciliation | `peers` = union; remove only when absent from **all** plies ⇒ no overlay-churn flap. |
 | Failure semantics / surfacing | `plies` map surfaces per-ply `Torn`; aggregate stays `Woven` if any ply lives. |
