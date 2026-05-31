@@ -1,6 +1,7 @@
 package us.tractat.kuilt.core.composite
 
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
@@ -38,7 +39,9 @@ import us.tractat.kuilt.core.Swatch
 internal class CompositeSeam(
     private val constituents: List<Pair<PlyId, Seam>>,
 ) : Seam {
-    private val scope = CoroutineScope(SupervisorJob())
+    // Confined to one thread: idMap / _plies / outSeq / gate are all non-thread-safe and must
+    // not be accessed concurrently. limitedParallelism(1) serialises all dispatches.
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default.limitedParallelism(1))
     private val gate = PlyInboundGate()
     private var outSeq = 0L
 
@@ -102,14 +105,20 @@ internal class CompositeSeam(
         }
 
     private fun onPlyFrame(plyIndex: Int, swatch: Swatch) {
-        val sender = swatch.sender ?: return
         when (val frame = PlyFrame.decode(swatch.payload)) {
             is PlyFrame.Announce -> {
+                // Announce keys idMap by (plyIndex, transport sender) → composite id.
+                // Requires a non-null transport sender to establish the mapping.
+                val sender = swatch.sender ?: return
                 idMap[plyIndex to sender] = frame.compositeId
                 recomputePeers()
             }
-            is PlyFrame.Data -> gate.accept(frame).forEach { payload ->
-                incomingChannel.trySend(Swatch(payload = payload, sender = frame.originId))
+            is PlyFrame.Data -> {
+                // Data uses the in-frame originId — the transport sender is irrelevant
+                // (a gateway-forwarded frame's transport sender is the gateway, not the origin).
+                gate.accept(frame).forEach { payload ->
+                    incomingChannel.trySend(Swatch(payload = payload, sender = frame.originId))
+                }
             }
         }
     }
