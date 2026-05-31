@@ -51,12 +51,14 @@ internal sealed interface PlyFrame {
 
         private fun decodeAnnounce(bytes: ByteArray): Announce {
             val len = readInt(bytes, 1)
+            require(bytes.size >= 5 + len) { "truncated announce frame: declared id length $len exceeds buffer" }
             val id = bytes.decodeToString(5, 5 + len)
             return Announce(PeerId(id))
         }
 
         private fun decodeData(bytes: ByteArray): Data {
             val len = readInt(bytes, 1)
+            require(bytes.size >= 5 + len + 8) { "truncated data frame: declared id length $len exceeds buffer" }
             val id = bytes.decodeToString(5, 5 + len)
             val seq = readLong(bytes, 5 + len)
             val payload = bytes.copyOfRange(5 + len + 8, bytes.size)
