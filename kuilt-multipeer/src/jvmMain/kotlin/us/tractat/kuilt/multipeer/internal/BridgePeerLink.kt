@@ -86,6 +86,10 @@ internal class BridgePeerLink(
 
     override suspend fun broadcast(payload: ByteArray) {
         if (closing) return
+        if (_peers.value.none { it != selfId }) {
+            log.warn { "mc.session.send dropped — no connected peers localPeer=${selfId.value} bytes=${payload.size}" }
+            return
+        }
         nativeLib.mc_session_broadcast(sessionHandle, payload, payload.size)
     }
 
