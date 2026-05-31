@@ -97,8 +97,15 @@ internal class CompositeSeam(
                 .launchIn(scope)
 
             // Recompute composite peers when a ply's transport-level membership changes.
+            // Also re-send Announce when new transport peers appear so they learn our
+            // composite identity even if we were already Woven before they joined.
             seam.peers
-                .onEach { recomputePeers() }
+                .onEach { newPeers ->
+                    recomputePeers()
+                    if (newPeers.size > 1 && seam.state.value is SeamState.Woven) {
+                        seam.broadcast(PlyFrame.encode(PlyFrame.Announce(selfId)))
+                    }
+                }
                 .launchIn(scope)
         }
     }
@@ -143,13 +150,16 @@ internal class CompositeSeam(
     override suspend fun broadcast(payload: ByteArray) {
         check(state.value !is SeamState.Torn) { "seam is Torn" }
         val bytes = PlyFrame.encode(PlyFrame.Data(selfId, outSeq++, payload))
-        constituents.forEach { (_, seam) -> seam.broadcast(bytes) }
+        constituents
+            .filter { (_, seam) -> seam.state.value !is SeamState.Torn }
+            .forEach { (_, seam) -> seam.broadcast(bytes) }
     }
 
     override suspend fun sendTo(peer: PeerId, payload: ByteArray) {
         check(state.value !is SeamState.Torn) { "seam is Torn" }
         val bytes = PlyFrame.encode(PlyFrame.Data(selfId, outSeq++, payload))
         for (index in constituents.indices) {
+            if (constituents[index].second.state.value is SeamState.Torn) continue
             val transportId = idMap.entries
                 .firstOrNull { (k, v) -> k.first == index && v == peer }
                 ?.key?.second
