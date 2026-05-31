@@ -1,6 +1,8 @@
 package us.tractat.kuilt.core.composite
 
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.Pattern
@@ -10,11 +12,13 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
 
+@OptIn(ExperimentalCoroutinesApi::class)
 class CompositeRollupTest {
     @Test
     fun aggregateIsWovenWhenAnyPlyIsWovenAndPliesListsBoth() = runTest {
         val loom = CompositeLoom(
             listOf(PlyId("a") to InMemoryLoom(), PlyId("b") to InMemoryLoom()),
+            dispatcher = UnconfinedTestDispatcher(testScheduler),
         )
         val seam = loom.host(Pattern("host"))
         assertIs<SeamState.Woven>(seam.state.first { it is SeamState.Woven })
@@ -23,7 +27,10 @@ class CompositeRollupTest {
 
     @Test
     fun closeDrivesAggregateTorn() = runTest {
-        val loom = CompositeLoom(listOf(PlyId("a") to InMemoryLoom()))
+        val loom = CompositeLoom(
+            listOf(PlyId("a") to InMemoryLoom()),
+            dispatcher = UnconfinedTestDispatcher(testScheduler),
+        )
         val seam = loom.host(Pattern("host"))
         seam.close()
         assertIs<SeamState.Torn>(seam.state.value)
