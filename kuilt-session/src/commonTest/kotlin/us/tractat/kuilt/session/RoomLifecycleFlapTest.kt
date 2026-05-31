@@ -23,25 +23,17 @@ import kotlin.time.Instant
 /**
  * Resilience tests for [SeamRoom] backed by a [FlakyLifecycleLoom].
  *
- * Exercises two scenarios:
+ * Exercises four scenarios:
  * 1. A `Woven → Weaving → Woven` blip — the room survives and delivery resumes.
- * 2. Joiner sees [MembershipEvent.HostLost] after the host link goes permanently silent.
+ * 2. Joiner sees [MembershipEvent.HostLost] **immediately** when the host seam tears
+ *    (direct `SeamState.Torn` observation — no heartbeat wait required).
+ * 3. Host sees [MembershipEvent.Left] for all admitted peers when its seam tears.
+ * 4. Joiner sees [MembershipEvent.HostLost] after the host link goes permanently silent
+ *    (heartbeat-timeout path — unchanged from before).
  *
  * All timing uses virtual time via [runTest] + [advanceTimeBy]. The clock is advanced
  * in lockstep with virtual time so [us.tractat.kuilt.session.partition.HeartbeatPartitionDetector]
  * silence-calculation sees elapsed time correctly.
- *
- * **Task 6 architectural finding:** [MembershipEvent.HostLost] does NOT fire from
- * `FlakyLifecycleSeam.tear()` alone. When `tear()` is called, `_peers` collapses to
- * empty immediately, causing [SeamRoom]'s peers watcher to fire `Left(Normal)` for the
- * host and cancel the heartbeat detector — before the detector can escalate to
- * [us.tractat.kuilt.session.partition.PartitionEvent.PeerLost]. As a result, `HostLost`
- * is never emitted from a `tear()`. The session layer keys off **heartbeat timeout**, not
- * `SeamState`. A follow-up issue should track adding direct `SeamState.Torn` observation
- * so `HostLost` fires faster and more directly than waiting for heartbeat expiry.
- *
- * The `HostLost` test therefore simulates "permanent link loss" via [FaultySeam.DropAll]
- * (which stops frames without changing the peer set) rather than `tear()`.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class RoomLifecycleFlapTest {
@@ -77,20 +69,73 @@ class RoomLifecycleFlapTest {
     }
 
     /**
+     * Verifies [MembershipEvent.HostLost] fires **immediately** when the host seam tears.
+     *
+     * `SeamState.Torn` on the joiner's seam is a direct terminal signal — the session
+     * layer should not wait for heartbeat expiry to emit [MembershipEvent.HostLost].
+     * This is faster and more correct than the heartbeat-timeout path.
+     */
+    @Test
+    fun `joiner sees HostLost immediately when the host seam tears`() = runTest {
+        val loom = FlakyLifecycleLoom(InMemoryLoom(), backgroundScope)
+        val factory = SeamRoomFactory(loom, backgroundScope, clock, fastConfig)
+        val hostRoom = factory.host(Pattern("host"))
+        val joinerRoom = factory.join(InMemoryTag("joiner"))
+        hostRoom.roster.first { it.isNotEmpty() }
+
+        val hostLostDeferred = async {
+            joinerRoom.events.filterIsInstance<MembershipEvent.HostLost>().first()
+        }
+
+        // Tear the joiner's seam (links[1]) — the transport to the host is permanently gone.
+        loom.links[1].tear()
+
+        // HostLost fires without any clock/time advancement — no heartbeat wait.
+        val event = hostLostDeferred.await()
+        assertIs<MembershipEvent.HostLost>(event)
+    }
+
+    /**
+     * Verifies the host sees [MembershipEvent.Left] for all admitted joiners when its
+     * seam tears.
+     *
+     * When the host's transport is permanently gone, all admitted joiners are lost.
+     * The host should emit [Left] for each of them (mirroring heartbeat-based [PartitionExpired]
+     * eviction) rather than silently cancelling.
+     */
+    @Test
+    fun `host sees Left for admitted joiners when host seam tears`() = runTest {
+        val loom = FlakyLifecycleLoom(InMemoryLoom(), backgroundScope)
+        val factory = SeamRoomFactory(loom, backgroundScope, clock, fastConfig)
+        val hostRoom = factory.host(Pattern("host"))
+        factory.join(InMemoryTag("joiner"))
+        hostRoom.roster.first { it.isNotEmpty() }
+
+        val leftDeferred = async {
+            hostRoom.events.filterIsInstance<MembershipEvent.Left>().first()
+        }
+
+        // Tear the host seam — host's transport is gone.
+        loom.links[0].tear()
+
+        val leftEvent = leftDeferred.await()
+        assertIs<MembershipEvent.Left>(leftEvent)
+    }
+
+    /**
      * Verifies [MembershipEvent.HostLost] fires after permanent link silence.
      *
-     * Uses [FaultySeam] with [FaultProfile.DropAll] (not `tear()`) to simulate a dead
-     * host link while keeping the peer in the mesh — required for the heartbeat detector
-     * to remain active long enough to escalate to [us.tractat.kuilt.session.partition.PartitionEvent.PeerLost].
-     *
-     * See class-level KDoc for the full architectural finding about `tear()`.
+     * Uses [FaultySeam] with [FaultProfile.DropAll] to simulate a dead host link while
+     * keeping the peer in the mesh — the heartbeat-timeout escalation path.
+     * This path remains valid for failures that don't signal via [SeamState.Torn]
+     * (e.g. silent frame drops on an otherwise-alive transport).
      */
     @Test
     fun `joiner sees HostLost when the host link goes permanently silent`() = runTest {
         val innerLoom = InMemoryLoom()
 
         // Wrap the host seam in FaultySeam so we can drop all frames without removing
-        // the host from the mesh (unlike tear(), which removes the peer and fires Left(Normal)).
+        // the host from the mesh.
         val rawHostSeam = innerLoom.host(Pattern("host"))
         val faultyHostSeam = FaultySeam(rawHostSeam, backgroundScope, FaultProfile.Healthy)
         val hostRoom = SeamRoom(
@@ -129,32 +174,5 @@ class RoomLifecycleFlapTest {
 
         val event = hostLostDeferred.await()
         assertIs<MembershipEvent.HostLost>(event)
-    }
-
-    /**
-     * Documents that `tear()` on the host seam produces [MembershipEvent.Left] with
-     * [LeaveReason.Normal] — NOT [MembershipEvent.HostLost].
-     *
-     * This is the confirming test for the class-level architectural finding: `tear()` collapses
-     * `peers` immediately, causing the peers watcher to fire `Left(Normal)` and cancel the
-     * heartbeat detector before it can escalate.
-     */
-    @Test
-    fun `tear on the host seam produces Left Normal not HostLost`() = runTest {
-        val loom = FlakyLifecycleLoom(InMemoryLoom(), backgroundScope)
-        val factory = SeamRoomFactory(loom, backgroundScope, clock, fastConfig)
-        val hostRoom = factory.host(Pattern("host"))
-        val joinerRoom = factory.join(InMemoryTag("joiner"))
-        hostRoom.roster.first { it.isNotEmpty() }
-
-        val leftDeferred = async {
-            joinerRoom.events.filterIsInstance<MembershipEvent.Left>().first()
-        }
-
-        // Tear the host seam — peers collapses to empty, peers watcher fires Left(Normal).
-        loom.links[0].tear()
-
-        val leftEvent = leftDeferred.await()
-        assertIs<LeaveReason.Normal>(leftEvent.reason)
     }
 }
