@@ -7,6 +7,7 @@ kotlin {
         commonMain.dependencies {
             implementation(project(":kuilt-core"))
             implementation(libs.kotlinx.coroutines.core)
+            implementation(libs.kotlin.logging)
         }
         // Real Google Nearby Connections binding lives Android-only; the pure
         // adapter logic in commonMain stays GMS-free and JVM-testable.
@@ -18,6 +19,9 @@ kotlin {
             implementation(project(":kuilt-conformance"))
             implementation(libs.kotlin.test)
             implementation(libs.kotlinx.coroutines.test)
+        }
+        jvmTest.dependencies {
+            implementation(libs.logback)
         }
     }
 }

@@ -72,6 +72,10 @@ internal class WebRTCPeerLink(
     }
 
     override suspend fun broadcast(payload: ByteArray) {
+        if (_peers.value.none { it != selfId }) {
+            log.warn { "webrtc.send dropped — no connected peers selfId=${selfId.value} bytes=${payload.size}" }
+            return
+        }
         facade.sendBytes(payload)
     }
 

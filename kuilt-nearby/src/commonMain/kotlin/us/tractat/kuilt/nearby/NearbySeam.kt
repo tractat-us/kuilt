@@ -1,5 +1,6 @@
 package us.tractat.kuilt.nearby
 
+import io.github.oshai.kotlinlogging.KotlinLogging
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
@@ -19,6 +20,8 @@ import us.tractat.kuilt.core.PeerNotConnected
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.Swatch
+
+private val log = KotlinLogging.logger {}
 
 /**
  * [Seam] implementation backed by a Nearby Connections link.
@@ -129,6 +132,10 @@ internal class NearbySeam(
     override suspend fun broadcast(payload: ByteArray) {
         checkNotClosed()
         val endpoints = mutex.withLock { endpointPeers.keys.toList() }
+        if (endpoints.isEmpty()) {
+            log.warn { "nearby.send dropped — no connected peers selfId=${selfId.value} bytes=${payload.size}" }
+            return
+        }
         sendToEndpoints(endpoints, payload)
     }
 
