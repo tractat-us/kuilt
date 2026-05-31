@@ -346,7 +346,33 @@ class FlakyLifecycleSeamTest {
             assertFailsWith<IllegalStateException> { seam.broadcast(byteArrayOf(1)) }
         }
 
-    // ── Fix 2: peers tracks delegate live while Woven ─────────────────────────
+    // ── Single-source invariant ───────────────────────────────────────────────
+
+    /**
+     * Contract/regression: [peers] must stay `{selfId}` throughout a
+     * [SeamState.Weaving] window even when the delegate gains a new peer during it.
+     *
+     * Trivial-pass on the confined test dispatcher — the collector's check-and-write
+     * is atomic there, so the cross-thread race cannot manifest in this test.
+     * Documents the contract; does not reproduce the race.
+     */
+    @Test
+    fun `peers stays selfId-only throughout Weaving even when delegate gains a peer`() =
+        runTest {
+            val loom = InMemoryLoom()
+            val delegateA = loom.host(Pattern("A"))
+            val seam = FlakyLifecycleSeam(delegateA, backgroundScope)
+
+            seam.enterWeaving()
+            // Peer B joins the underlying loom while the seam is Weaving.
+            loom.join(InMemoryTag("B"))
+            testScheduler.runCurrent()
+
+            // peers must remain {selfId} — the Weaving gate must hold.
+            assertEquals(setOf(seam.selfId), seam.peers.value)
+        }
+
+    // ── Live Woven membership tracking ───────────────────────────────────────
 
     @Test
     fun `peers reflects delegate membership changes while Woven`() =
@@ -357,16 +383,37 @@ class FlakyLifecycleSeamTest {
             // Prime the delegate.peers collector so it is subscribed before B joins.
             testScheduler.runCurrent()
 
-            // Verify initial state: only selfId in peers (before B joins)
             assertEquals(setOf(seam.selfId), seam.peers.value)
 
-            // B joins the same mesh — seam must reflect this without recover()
+            // B joins the same mesh — the background collector forwards the update.
             val delegateB = loom.join(InMemoryTag("B"))
             testScheduler.runCurrent()
 
             assertAll(
                 { assertTrue(seam.selfId in seam.peers.value, "selfId must be in peers") },
                 { assertTrue(delegateB.selfId in seam.peers.value, "B must appear without recover()") },
+            )
+        }
+
+    // ── Fix 2: peers refreshes from delegate on recover ───────────────────────
+
+    @Test
+    fun `peers refills from delegate on recover after delegate membership changed`() =
+        runTest {
+            val loom = InMemoryLoom()
+            val delegateA = loom.host(Pattern("A"))
+            val seam = FlakyLifecycleSeam(delegateA, backgroundScope)
+
+            seam.enterWeaving()
+            val delegateB = loom.join(InMemoryTag("B"))
+            testScheduler.runCurrent()
+
+            // recover() must refresh peers from the delegate synchronously.
+            seam.recover()
+
+            assertAll(
+                { assertTrue(seam.selfId in seam.peers.value, "selfId must be in peers after recover") },
+                { assertTrue(delegateB.selfId in seam.peers.value, "B must appear after recover()") },
             )
         }
 

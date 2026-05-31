@@ -65,10 +65,10 @@ public class FlakyLifecycleSeam(
     private var torn = false
 
     init {
-        // While Woven, forward delegate membership changes to _peers directly.
-        // Lifecycle transitions (enterWeaving/recover/tear) update _peers
-        // imperatively; this collector handles churn on the underlying delegate
-        // while we are already in Woven state.
+        // While Woven, forward delegate membership changes to _peers.
+        // The Woven check is evaluated only once per emission (the collector lambda
+        // has no suspension point), so under a single-threaded or confined dispatcher
+        // this is atomic with respect to enterWeaving/recover writes.
         scope.launch {
             delegate.peers.collect { delegatePeers ->
                 if (_state.value is SeamState.Woven) _peers.value = delegatePeers
@@ -131,11 +131,20 @@ public class FlakyLifecycleSeam(
      * Transition `Woven → Weaving`. Held until [recover] or [tear] is called.
      *
      * No-op if already [SeamState.Weaving] or [SeamState.Torn].
+     *
+     * Writes `_state` before `_peers` so that the delegate-peers collector, on
+     * its next emission, sees [SeamState.Weaving] and skips — **narrowing** the
+     * dual-write window. The race is in any case unmanifestable on the confined
+     * single-threaded test dispatcher this class is always used with: the
+     * collector's check-and-write is a single lambda with no suspension point,
+     * so it is atomic there. Full elimination on a multi-threaded dispatcher
+     * would require locking the collector's check+write together; unnecessary
+     * for this test-only class.
      */
     public fun enterWeaving() {
         if (torn || _state.value is SeamState.Weaving) return
-        _peers.value = setOf(selfId)
         _state.value = SeamState.Weaving
+        _peers.value = setOf(selfId)
     }
 
     /**
