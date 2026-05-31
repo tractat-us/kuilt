@@ -94,6 +94,7 @@ class FlakyLifecycleSeamTest {
             val seam = FlakyLifecycleSeam(delegateA, backgroundScope)
 
             seam.enterWeaving()
+            testScheduler.runCurrent() // let the derived StateFlow emit
 
             assertEquals(setOf(seam.selfId), seam.peers.value)
         }
@@ -108,6 +109,7 @@ class FlakyLifecycleSeamTest {
 
             seam.enterWeaving()
             seam.recover()
+            testScheduler.runCurrent() // let the derived StateFlow emit
 
             assertAll(
                 { assertTrue(seam.selfId in seam.peers.value) },
@@ -367,6 +369,31 @@ class FlakyLifecycleSeamTest {
             assertAll(
                 { assertTrue(seam.selfId in seam.peers.value, "selfId must be in peers") },
                 { assertTrue(delegateB.selfId in seam.peers.value, "B must appear without recover()") },
+            )
+        }
+
+    // ── Fix 3: peers stays {selfId} during Weaving despite delegate churn ────
+
+    @Test
+    fun `peers stays selfId-only throughout Weaving even when delegate gains a peer`() =
+        runTest {
+            val loom = InMemoryLoom()
+            val delegateA = loom.host(Pattern("A"))
+            val seam = FlakyLifecycleSeam(delegateA, backgroundScope)
+            testScheduler.runCurrent()
+
+            seam.enterWeaving()
+
+            // A new peer joins the underlying mesh while we are Weaving.
+            loom.join(InMemoryTag("B"))
+            testScheduler.advanceUntilIdle()
+
+            // The invariant: peers must still be exactly {selfId} — the delegate
+            // churn during Weaving must not leak through.
+            assertEquals(
+                setOf(seam.selfId),
+                seam.peers.value,
+                "peers must remain {selfId} while Weaving even after delegate membership changes",
             )
         }
 
