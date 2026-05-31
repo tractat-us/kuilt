@@ -371,6 +371,29 @@ class FlakyLifecycleSeamTest {
             assertEquals(setOf(seam.selfId), seam.peers.value)
         }
 
+    // ── Live Woven membership tracking ───────────────────────────────────────
+
+    @Test
+    fun `peers reflects delegate membership changes while Woven`() =
+        runTest {
+            val loom = InMemoryLoom()
+            val delegateA = loom.host(Pattern("A"))
+            val seam = FlakyLifecycleSeam(delegateA, backgroundScope)
+            // Prime the delegate.peers collector so it is subscribed before B joins.
+            testScheduler.runCurrent()
+
+            assertEquals(setOf(seam.selfId), seam.peers.value)
+
+            // B joins the same mesh — the background collector forwards the update.
+            val delegateB = loom.join(InMemoryTag("B"))
+            testScheduler.runCurrent()
+
+            assertAll(
+                { assertTrue(seam.selfId in seam.peers.value, "selfId must be in peers") },
+                { assertTrue(delegateB.selfId in seam.peers.value, "B must appear without recover()") },
+            )
+        }
+
     // ── Fix 2: peers refreshes from delegate on recover ───────────────────────
 
     @Test
