@@ -15,7 +15,9 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import us.tractat.kuilt.core.CloseReason
 import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.core.PeerNotConnected
 import us.tractat.kuilt.core.Seam
+import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.Swatch
 
 /**
@@ -52,6 +54,10 @@ internal class NearbySeam(
 
     override val peers: StateFlow<Set<PeerId>> = sharedPeers.asStateFlow()
 
+    // Starts Weaving; transitions to Woven when the first remote peer joins.
+    private val _state = MutableStateFlow<SeamState>(SeamState.Weaving)
+    override val state: StateFlow<SeamState> = _state.asStateFlow()
+
     private val incomingChannel = Channel<Swatch>(capacity = Channel.UNLIMITED)
     override val incoming: Flow<Swatch> = incomingChannel.receiveAsFlow()
 
@@ -66,6 +72,15 @@ internal class NearbySeam(
     // construction — before any handshake/data events can be emitted.
     private val receiveJob: Job = scope.launch(start = CoroutineStart.UNDISPATCHED) { receiveLoop() }
     private val disconnectJob: Job = scope.launch(start = CoroutineStart.UNDISPATCHED) { disconnectLoop() }
+
+    // Watch peers: transition Weaving → Woven when the first remote peer appears.
+    private val wovenWatcher: Job = scope.launch(start = CoroutineStart.UNDISPATCHED) {
+        sharedPeers.collect { peers ->
+            if (_state.value is SeamState.Weaving && peers.any { it != selfId }) {
+                _state.value = SeamState.Woven
+            }
+        }
+    }
 
     // ── receive ───────────────────────────────────────────────────────────────
 
@@ -121,7 +136,7 @@ internal class NearbySeam(
         checkNotClosed()
         require(peer != selfId) { "Cannot send to self" }
         val endpointId = mutex.withLock { endpointIdFor(peer) }
-            ?: error("No connected endpoint for peer $peer")
+            ?: throw PeerNotConnected(peer)
         sendToEndpoints(listOf(endpointId), payload)
     }
 
@@ -145,6 +160,7 @@ internal class NearbySeam(
             if (closed) return
             closed = true
         }
+        _state.value = SeamState.Torn(reason)
         // Cancel the entire scope — this cleans up the receive/disconnect loops
         // AND the background accept coroutine launched by NearbyLoom.open() into
         // the same scope, preventing coroutine leaks between tests.
@@ -161,7 +177,7 @@ internal class NearbySeam(
         check(!closed) { "NearbySeam for $selfId is closed" }
     }
 
-    /** Register a new connected peer after a subsequent join. */
+    /** Register a new connected peer after a subsequent join. The peers-watcher handles [SeamState.Woven] transition. */
     internal fun addPeer(endpointId: String, peerId: PeerId) {
         endpointPeers[endpointId] = peerId
         sharedPeers.update { it + peerId }

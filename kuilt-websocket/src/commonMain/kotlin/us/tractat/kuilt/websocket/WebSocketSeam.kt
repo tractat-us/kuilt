@@ -14,7 +14,9 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import us.tractat.kuilt.core.CloseReason
 import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.core.PeerNotConnected
 import us.tractat.kuilt.core.Seam
+import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.Swatch
 import io.ktor.websocket.CloseReason as KtorCloseReason
 import io.ktor.websocket.Frame as KtorFrame
@@ -50,6 +52,10 @@ internal class WebSocketSeam(
     private val _peers = MutableStateFlow<Set<PeerId>>(setOf(selfId, remoteId))
     override val peers: StateFlow<Set<PeerId>> = _peers.asStateFlow()
 
+    // WebSocket session is open at construction — fabric is immediately live.
+    private val _state = MutableStateFlow<SeamState>(SeamState.Woven)
+    override val state: StateFlow<SeamState> = _state.asStateFlow()
+
     private val incomingChannel = Channel<Swatch>(capacity = Channel.UNLIMITED)
     override val incoming: Flow<Swatch> = incomingChannel.receiveAsFlow()
 
@@ -71,6 +77,7 @@ internal class WebSocketSeam(
     ) {
         checkNotClosed()
         require(peer != selfId) { "Cannot send to self — use broadcast if you intend to loop back" }
+        if (peer !in _peers.value) throw PeerNotConnected(peer)
         // In the 2-peer case, sendTo(remote, ...) is equivalent to broadcast.
         session.send(KtorFrame.Binary(fin = true, data = payload))
     }
@@ -79,6 +86,7 @@ internal class WebSocketSeam(
         if (closed) return
         closed = true
         _peers.update { setOf(selfId) }
+        _state.value = SeamState.Torn(reason)
         incomingChannel.close()
         session.close(reason.toKtorCloseReason())
     }
@@ -123,6 +131,7 @@ internal class WebSocketSeam(
 
     private fun onRemoteDisconnect() {
         _peers.update { it - remoteId }
+        _state.value = SeamState.Torn(CloseReason.RemoteRequested)
         incomingChannel.close()
     }
 
@@ -135,6 +144,7 @@ private fun CloseReason.toKtorCloseReason(): KtorCloseReason =
     when (this) {
         CloseReason.Normal -> KtorCloseReason(KtorCloseReason.Codes.NORMAL, "")
         CloseReason.RemoteRequested -> KtorCloseReason(KtorCloseReason.Codes.NORMAL, "remote requested")
+        CloseReason.Unreachable -> KtorCloseReason(KtorCloseReason.Codes.CANNOT_ACCEPT, "unreachable")
         is CloseReason.Error -> KtorCloseReason(CLOSE_CODE_APPLICATION_ERROR, throwable.message ?: "error")
     }
 

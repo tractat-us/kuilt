@@ -14,7 +14,9 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import us.tractat.kuilt.core.CloseReason
 import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.core.PeerNotConnected
 import us.tractat.kuilt.core.Seam
+import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.Swatch
 
 private val log = KotlinLogging.logger {}
@@ -48,6 +50,10 @@ internal class WebRTCPeerLink(
 
     override val peers: StateFlow<Set<PeerId>> get() = _peers
 
+    // WebRTC data channel is open at construction — fabric is immediately live.
+    private val _state = MutableStateFlow<SeamState>(SeamState.Woven)
+    override val state: StateFlow<SeamState> get() = _state
+
     override val incoming: Flow<Swatch> =
         userFrames.map { bytes ->
             Swatch(payload = bytes, sender = senderIdDeferred.await(), sequence = sequenceCounter.next())
@@ -73,7 +79,7 @@ internal class WebRTCPeerLink(
         peer: PeerId,
         payload: ByteArray,
     ) {
-        require(peer == remoteId) { "WebRTC link is point-to-point: $peer not in peer set" }
+        if (peer !in _peers.value) throw PeerNotConnected(peer)
         facade.sendBytes(payload)
     }
 
@@ -81,6 +87,7 @@ internal class WebRTCPeerLink(
         if (closed) return
         closed = true
         log.debug { "Seam closing self=$selfId remote=$remoteId reason=$reason" }
+        _state.value = SeamState.Torn(reason)
         try {
             facade.close()
         } finally {

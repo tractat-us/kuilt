@@ -9,6 +9,8 @@ import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import us.tractat.kuilt.core.SeamState.Torn
+import us.tractat.kuilt.core.SeamState.Woven
 
 /**
  * In-memory implementation of [Loom] for use in tests and
@@ -116,6 +118,10 @@ private class InMemorySeam(
 
     override val peers: StateFlow<Set<PeerId>> = factory.peers
 
+    // In-memory fabric is immediately live — no async link establishment.
+    private val _state = MutableStateFlow<SeamState>(Woven)
+    override val state: StateFlow<SeamState> = _state.asStateFlow()
+
     override val incoming: Flow<Swatch> = incomingChannel.receiveAsFlow()
 
     override suspend fun broadcast(payload: ByteArray) {
@@ -129,12 +135,14 @@ private class InMemorySeam(
     ) {
         checkNotClosed()
         require(peer != selfId) { "Cannot send to self — use broadcast if you intend to loop back" }
+        if (peer !in factory.peers.value) throw PeerNotConnected(peer)
         factory.dispatch(sender = selfId, payload = payload, recipient = peer)
     }
 
     override suspend fun close(reason: CloseReason) {
         if (closed) return
         closed = true
+        _state.value = Torn(reason)
         factory.remove(selfId)
         incomingChannel.close()
     }
@@ -148,6 +156,6 @@ private class InMemorySeam(
     }
 
     private fun checkNotClosed() {
-        check(!closed) { "Seam for $selfId is closed" }
+        check(_state.value !is Torn) { "Seam for $selfId is closed" }
     }
 }
