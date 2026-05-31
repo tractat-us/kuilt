@@ -1,6 +1,8 @@
 package us.tractat.kuilt.core.composite
 
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withTimeoutOrNull
 import us.tractat.kuilt.core.InMemoryLoom
@@ -15,11 +17,12 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
+@OptIn(ExperimentalCoroutinesApi::class)
 class CompositeSendReceiveTest {
     @Test
     fun broadcastDeliversBarePayloadToTheOtherPeer() = runTest {
         val mem = InMemoryLoom()
-        val loom = CompositeLoom(listOf(PlyId("mem") to mem))
+        val loom = CompositeLoom(listOf(PlyId("mem") to mem), dispatcher = UnconfinedTestDispatcher(testScheduler))
         val host = loom.host(Pattern("host"))
         val joiner = loom.join(InMemoryTag("join"))
         host.peers.first { it.size == 2 } // wait for reconciliation
@@ -32,7 +35,7 @@ class CompositeSendReceiveTest {
     @Test
     fun sendToUnknownPeerThrows() = runTest {
         val mem = InMemoryLoom()
-        val loom = CompositeLoom(listOf(PlyId("mem") to mem))
+        val loom = CompositeLoom(listOf(PlyId("mem") to mem), dispatcher = UnconfinedTestDispatcher(testScheduler))
         val host = loom.host(Pattern("host"))
         assertFailsWith<PeerNotConnected> { host.sendTo(PeerId("nobody"), byteArrayOf(1)) }
     }
@@ -47,7 +50,7 @@ class CompositeSendReceiveTest {
             PlyId("a") to InMemoryLoom(),
             PlyId("b") to InMemoryLoom(),
         )
-        val loom = CompositeLoom(plies)
+        val loom = CompositeLoom(plies, dispatcher = UnconfinedTestDispatcher(testScheduler))
         val host = loom.host(Pattern("host"))
         val joiner = loom.join(InMemoryTag("join"))
         host.peers.first { it.size == 2 } // wait for reconciliation on both plies
