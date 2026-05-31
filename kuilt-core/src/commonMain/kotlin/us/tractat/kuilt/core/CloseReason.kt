@@ -16,4 +16,7 @@ public sealed interface CloseReason {
 
     /** The remote peer requested the close. */
     public data object RemoteRequested : CloseReason
+
+    /** The fabric never wove — the join target was absent or the handshake timed out. */
+    public data object Unreachable : CloseReason
 }

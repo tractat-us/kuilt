@@ -12,6 +12,7 @@ import kotlinx.coroutines.flow.update
 import us.tractat.kuilt.core.CloseReason
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Seam
+import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.Swatch
 import us.tractat.kuilt.multipeer.MultipeerNativeLib
 
@@ -39,6 +40,10 @@ internal class BridgePeerLink(
     private val _peers: MutableStateFlow<Set<PeerId>> = MutableStateFlow(setOf(selfId))
     override val peers: StateFlow<Set<PeerId>> = _peers.asStateFlow()
 
+    // Starts Weaving; transitions to Woven on first peer-connected callback.
+    private val _state: MutableStateFlow<SeamState> = MutableStateFlow(SeamState.Weaving)
+    override val state: StateFlow<SeamState> = _state.asStateFlow()
+
     private val incomingChannel: Channel<Swatch> = Channel(Channel.UNLIMITED)
     override val incoming: Flow<Swatch> = incomingChannel.receiveAsFlow()
 
@@ -58,7 +63,10 @@ internal class BridgePeerLink(
         MultipeerNativeLib.PeerStateCallback { peerId, isConnected ->
             val peer = PeerId(peerId)
             if (peer == selfId) return@PeerStateCallback
-            if (isConnected == 0) {
+            if (isConnected == 1) {
+                _peers.update { it + peer }
+                if (_state.value is SeamState.Weaving) _state.value = SeamState.Woven
+            } else {
                 // MC has no dedicated error callback; .notConnected is the
                 // closest session-level error surface (unexpected drops fire here).
                 // Suppress the warn when closing — that .notConnected is from our
@@ -66,9 +74,7 @@ internal class BridgePeerLink(
                 if (!closing) {
                     log.warn { "mc.session.error selfId=${selfId.value} peer=$peerId" }
                 }
-            }
-            _peers.update { current ->
-                if (isConnected == 1) current + peer else current - peer
+                _peers.update { it - peer }
             }
         }
 
@@ -99,6 +105,7 @@ internal class BridgePeerLink(
         // when MC fires .notConnected for the clean disconnect — suppressing the
         // spurious mc.session.error warn.
         closing = true
+        _state.value = SeamState.Torn(reason)
         incomingChannel.close()
         nativeLib.mc_session_close(sessionHandle)
         // Now safe to drop the trampolines — the K/N pumps are cancelled.

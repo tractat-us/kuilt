@@ -5,6 +5,7 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.filter
 import us.tractat.kuilt.core.CloseReason
+import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.Swatch
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Seam
@@ -31,6 +32,7 @@ internal class FilteredSeam(
 ) : Seam {
     override val selfId: PeerId get() = delegate.selfId
     override val peers: StateFlow<Set<PeerId>> get() = delegate.peers
+    override val state: StateFlow<SeamState> get() = delegate.state
     override val incoming: Flow<Swatch> = sharedIncoming.filter { it.sender == filteredSender }
 
     override suspend fun broadcast(payload: ByteArray) = delegate.broadcast(payload)

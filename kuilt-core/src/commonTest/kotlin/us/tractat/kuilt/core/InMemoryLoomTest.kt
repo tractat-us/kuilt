@@ -235,7 +235,7 @@ class InMemoryLoomTest {
         }
 
     @Test
-    fun `sendTo a closed peer is silently dropped`() =
+    fun `sendTo an absent peer throws PeerNotConnected`() =
         runTest {
             val factory = InMemoryLoom()
             val a = factory.host(Pattern("Alice"))
@@ -243,8 +243,10 @@ class InMemoryLoomTest {
 
             b.close()
 
-            // Should not throw — dropped like a UDP packet
-            a.sendTo(b.selfId, byteArrayOf(1))
+            // b is gone from peers — addressing it is an error, not a silent drop.
+            assertFailsWith<PeerNotConnected> {
+                a.sendTo(b.selfId, byteArrayOf(1))
+            }
         }
 
     @Test

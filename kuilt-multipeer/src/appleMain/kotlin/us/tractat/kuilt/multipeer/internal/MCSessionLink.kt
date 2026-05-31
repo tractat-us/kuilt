@@ -23,6 +23,7 @@ import platform.darwin.NSObject
 import us.tractat.kuilt.core.CloseReason
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Seam
+import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.Swatch
 
 private val log = KotlinLogging.logger {}
@@ -55,6 +56,10 @@ internal class MCSessionLink(
 
     private val _peers: MutableStateFlow<Set<PeerId>> = MutableStateFlow(setOf(selfId))
     override val peers: StateFlow<Set<PeerId>> = _peers.asStateFlow()
+
+    // Starts Weaving; transitions to Woven on first MCSessionStateConnected callback.
+    private val _state: MutableStateFlow<SeamState> = MutableStateFlow(SeamState.Weaving)
+    override val state: StateFlow<SeamState> = _state.asStateFlow()
 
     private val incomingChannel: Channel<Swatch> = Channel(Channel.UNLIMITED)
     override val incoming: Flow<Swatch> = incomingChannel.receiveAsFlow()
@@ -104,6 +109,7 @@ internal class MCSessionLink(
         // session:peer:didChangeState fires .notConnected for the clean
         // disconnect — suppressing the spurious mc.session.error warn.
         closing = true
+        _state.value = SeamState.Torn(reason)
         incomingChannel.close()
         session.disconnect()
     }
@@ -126,7 +132,10 @@ internal class MCSessionLink(
                 }
             log.info { "mc.session.stateChange localPeer=${selfId.value} peer=${peer.displayName} to=$stateName" }
             when (didChangeState) {
-                MCSessionState.MCSessionStateConnected -> _peers.update { it + peerId }
+                MCSessionState.MCSessionStateConnected -> {
+                    _peers.update { it + peerId }
+                    if (_state.value is SeamState.Weaving) _state.value = SeamState.Woven
+                }
                 MCSessionState.MCSessionStateNotConnected -> {
                     // MCSession has no dedicated error callback; .notConnected is the
                     // closest session-level error surface (unexpected drops fire here).

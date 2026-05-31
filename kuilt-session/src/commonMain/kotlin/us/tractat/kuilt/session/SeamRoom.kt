@@ -19,6 +19,7 @@ import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Seam
+import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.Swatch
 import us.tractat.kuilt.core.Tag
 import us.tractat.kuilt.session.admit.AdmitMessage
@@ -718,6 +719,7 @@ private class PerPeerSeam(
 ) : Seam {
     override val selfId: PeerId get() = delegate.selfId
     override val peers: StateFlow<Set<PeerId>> get() = delegate.peers
+    override val state: StateFlow<SeamState> get() = delegate.state
 
     override val incoming: Flow<Swatch>
         get() = rawIncoming.filter { it.sender == targetPeerId }

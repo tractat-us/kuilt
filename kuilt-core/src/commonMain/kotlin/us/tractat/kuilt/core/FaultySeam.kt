@@ -76,6 +76,8 @@ public class FaultySeam(
 
     override val peers: StateFlow<Set<PeerId>> get() = delegate.peers
 
+    override val state: StateFlow<SeamState> get() = delegate.state
+
     override val incoming: Flow<Swatch> = incomingChannel.receiveAsFlow()
 
     override suspend fun broadcast(payload: ByteArray) {
