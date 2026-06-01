@@ -98,19 +98,26 @@ depends on physical network conditions.
 
 ## What kuilt is *not* responsible for
 
-The contract deliberately stops at moving bytes between connected peers.
-Out of scope here (these live in the consumer, or in a future `:kuilt-session`
-layer):
+The `:kuilt-core` contract deliberately stops at moving bytes between connected
+peers. The next two concerns belong to the `:kuilt-session` layer (a sibling
+module over `:kuilt-core`, not part of the transport contract):
 
-- **Role assignment** (host vs. joiner tiebreak) — not a `Loom`/`Seam` concern.
-- **Room multiplexing and the full join → active → leave → rejoin lifecycle**,
-  reconnect, resume tokens, host-loss terminal state.
-- **Application message semantics** — what the `Swatch.payload` bytes mean.
+- **Role assignment** (host vs. joiner) — not a `Loom`/`Seam` concern; `Room`
+  carries it.
+- **Membership and the full join → active → leave → rejoin lifecycle**, the
+  admit/identify handshake, reconnect, resume tokens, and the host-loss terminal
+  state — all `kuilt-session` (see [usage.md](usage.md#the-membership-layer-kuilt-session)).
+
+Genuinely out of scope for kuilt at every layer:
+
+- **Application message semantics** — what the `Swatch.payload` / `RoomFrame`
+  bytes mean is the consumer's job.
 
 ## Module boundary
 
 ```
 kuilt-core         the contract + InMemoryLoom + SeamConformanceSuite (depends on nothing fabric-specific)
+  ├── kuilt-session     membership/room layer (admit, roster, roles, resume)  → depends on kuilt-core
   ├── kuilt-websocket   Ktor WebSocket fabric (Far)            → depends on kuilt-core
   └── kuilt-mdns        Bonjour discovery → WebSocket session  → depends on kuilt-core + kuilt-websocket
 ```

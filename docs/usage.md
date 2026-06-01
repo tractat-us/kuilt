@@ -23,6 +23,7 @@ repositories {
 // build.gradle.kts
 dependencies {
     implementation("us.tractat.kuilt:kuilt-core:0.1.+")
+    implementation("us.tractat.kuilt:kuilt-session:0.1.+")    // if you want the membership/room layer
     implementation("us.tractat.kuilt:kuilt-websocket:0.1.+")  // if you want the WebSocket fabric
     implementation("us.tractat.kuilt:kuilt-mdns:0.1.+")       // if you want LAN discovery
 }
@@ -75,6 +76,58 @@ val received = async { joiner.incoming.take(1).toList() }
 host.broadcast(byteArrayOf(1, 2, 3))
 assertEquals(host.selfId, received.await().first().sender)
 ```
+
+## The membership layer (`kuilt-session`)
+
+`Seam` is pure transport: `peers` is whoever the wire says is connected. Most
+applications want more — *who has identified themselves*, *who is the host*,
+*has someone dropped and might reconnect*. That's `kuilt-session`. It wraps any
+`Loom` and adds an **admit/identify handshake** on top: a connected peer becomes
+an admitted `Member` only after the handshake completes, and only admitted
+members appear in the `roster` or deliver frames to `incoming`.
+
+`SeamRoomFactory` wraps a `Loom` and produces `Room`s. Because it takes any
+`Loom`, the same code runs over `InMemoryLoom` in tests and over the WebSocket
+or mDNS fabrics in production:
+
+```kotlin
+val factory: RoomFactory = SeamRoomFactory(loom, scope) // loom = any Loom; scope owns the room's coroutines
+
+// Host a room (this peer becomes the Host) or join one (becomes a Joiner).
+val room: Room = factory.host(Pattern(displayName = "alice", maxPeers = 4))
+// val room = factory.join(someTag)   // on the joining peer
+
+// The roster holds admitted members only — never raw, unidentified peers.
+scope.launch { room.roster.collect { members -> render(members) } }
+
+// Membership transitions: Joined / Left / Partitioned / Recovered / WindowOpened / Resumed / HostLost.
+scope.launch { room.events.collect { event -> handle(event) } }
+
+// Frames from admitted members, tagged with the sender. Single-collection, like Seam.incoming.
+scope.launch { room.incoming.collect { frame -> consume(frame.sender, frame.payload) } }
+
+room.broadcast("hello room".encodeToByteArray())
+room.sendTo(somePeerId, "just for you".encodeToByteArray())
+
+room.leave()  // idempotent
+```
+
+**Host loss is terminal — there is no auto-election.** When a joiner's link to
+the host drops permanently, the room emits `MembershipEvent.HostLost` and
+`broadcast`/`sendTo` become silent no-ops. The room does not promote a new host;
+the consumer decides what to do (tear down, start a new session, etc.).
+
+**Reconnect/resume.** A joiner's `room.resumeToken` (non-null once admitted)
+is a credential it can save and present to `room.resume(token)` after a
+transport drop, to re-enter the same room within the host's reconnect window.
+The token carries the `RoomId`, not the host's identity, so it survives a host
+change. Resume drives `MembershipEvent.WindowOpened` → `Resumed` (or `Left` with
+`LeaveReason.PartitionExpired` if the window closes first).
+
+`SeamRoomFactory` takes an injectable `clock: () -> Instant` and a
+`HeartbeatConfig`; tests pass virtual time and tight intervals, production uses
+real defaults. Conformance-test your own `RoomFactory` by subclassing
+`RoomConformanceSuite` (the `Room` analogue of `SeamConformanceSuite`).
 
 ## WebSocket fabric (`kuilt-websocket`)
 
