@@ -28,7 +28,7 @@ val testHeartbeatConfig =
     )
 
 /**
- * In-memory N-peer mesh for scenario tests, modelling the host-as-hub topology (D-003).
+ * In-memory N-peer mesh for scenario tests, modelling the host-as-hub topology.
  *
  * Created via [Mesh.build] (a suspend factory). All links start [FaultProfile.Healthy].
  *

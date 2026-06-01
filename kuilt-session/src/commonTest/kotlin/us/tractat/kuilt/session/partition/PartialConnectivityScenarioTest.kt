@@ -24,7 +24,7 @@ import kotlin.time.Instant
 /**
  * Scenario-driven tests for partial connectivity in 3- and 4-peer meshes.
  *
- * All tests model the **host-as-hub** topology (D-003): the host is the sole routing
+ * All tests model the **host-as-hub** topology: the host is the sole routing
  * point; joiners have no direct peer-to-peer links with each other.
  *
  * **Fault injection technique:**
@@ -38,10 +38,10 @@ import kotlin.time.Instant
  * **Clock contract:** all [HeartbeatPartitionDetector] instances share a single mutable
  * [clockMs] variable advanced in lockstep with [advanceTimeBy].
  *
- * **D-003 invariant:** faulting joiner↔joiner paths (which don't exist in a hub topology)
+ * **Hub invariant:** faulting joiner↔joiner paths (which don't exist in a hub topology)
  * has no observable effect on delivery (S3).
  *
- * **D-009 invariant:** game-pause is global — any peer unresponsive pauses for everyone;
+ * **Global-pause invariant:** any peer unresponsive pauses processing for everyone;
  * no subset keeps making progress (S4, S8).
  */
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -88,7 +88,7 @@ class PartialConnectivityScenarioTest {
 
     /**
      * With J1 partitioned, J2's link is still healthy.
-     * The game must pause globally (D-001 / D-009): [PartitionEvent.PeerUnresponsive]
+     * Processing must pause globally: [PartitionEvent.PeerUnresponsive]
      * from any detector signals pause for all peers, not just the affected joiner.
      */
     @Test
@@ -114,7 +114,7 @@ class PartialConnectivityScenarioTest {
             }
 
             val event = pauseEvent.await()
-            // The event came from d0 (J1); it is the global pause signal (D-009).
+            // The event came from d0 (J1); it is the global pause signal.
             // J2's detector (d1) must not have also fired — J2's link is healthy.
             assertAll(
                 { assertEquals(mesh.j0.selfId, event.peerId) },
@@ -170,7 +170,7 @@ class PartialConnectivityScenarioTest {
     // ── Scenario 3: joiner-to-joiner asymmetry under host-as-hub ────────────
 
     /**
-     * In a host-as-hub topology (D-003), joiners have no direct links to each other.
+     * In a host-as-hub topology, joiners have no direct links to each other.
      * Faulting the "J1↔J2 direct path" has no effect because that path does not exist.
      * All joiner traffic routes through the host.
      *
@@ -200,7 +200,7 @@ class PartialConnectivityScenarioTest {
 
     /**
      * Frame ordering is preserved across the host fan-out: host sends frames 1, 2, 3;
-     * both joiners receive them in order. Validates ADR-019 §1 ordering guarantee.
+     * both joiners receive them in order. Validates the session-layer ordering guarantee.
      */
     @Test
     fun `S3 - frame ordering preserved across host fan-out`() =
@@ -266,7 +266,7 @@ class PartialConnectivityScenarioTest {
      * Expected:
      * - d1 (monitoring J2) fires [PartitionEvent.PeerUnresponsive] for J2.
      * - d0 (monitoring J1) does NOT fire — J1 is still reachable.
-     * - D-009: even J1 must pause because the game state machine sees any unresponsive peer.
+     * - Even J1 must pause — the global-pause invariant applies to any unresponsive peer.
      */
     @Test
     fun `S4 - triple partition - only J2 detector fires - J1 link stays healthy`() =
@@ -297,7 +297,7 @@ class PartialConnectivityScenarioTest {
                 { assertEquals(PartitionEvent.Reason.Timeout, event.reason) },
             )
 
-            // D-009: J1's detector must not have fired (J1's link is healthy)
+            // Global-pause invariant: J1's detector must not have fired (J1's link is healthy)
             val d0Channel = mesh.d0.events.produceIn(this)
             assertFalse(
                 d0Channel.tryReceive().isSuccess,
@@ -311,7 +311,7 @@ class PartialConnectivityScenarioTest {
     /**
      * Partition H→J1 (scenario 1 profile), then heal before [HeartbeatConfig.reconnectWindow].
      * Expected: detector emits [PartitionEvent.PeerUnresponsive] then [PartitionEvent.PeerRecovered].
-     * Game may resume once [PeerRecovered] fires (D-001).
+     * Application processing may resume once [PeerRecovered] fires.
      */
     @Test
     fun `S5 - partition heals before reconnectWindow - PeerRecovered emitted`() =
@@ -415,7 +415,7 @@ class PartialConnectivityScenarioTest {
      * the same [us.tractat.kuilt.core.PeerId] must receive
      * [ResumeResult.WindowClosed].
      *
-     * Validates D-005 contract: the reconnect window is closed after [PeerLost];
+     * Validates the reconnect-window contract: the window is closed after [PeerLost];
      * the peer cannot resume and must re-join as a fresh peer.
      */
     @Test
@@ -462,9 +462,9 @@ class PartialConnectivityScenarioTest {
     // ── Scenario 8: 4-peer cascade ────────────────────────────────────────────
 
     /**
-     * 4-peer game: H + J1 + J2 + J3. H↔J1 partitions, then H↔J2 partitions.
+     * 4-peer session: H + J1 + J2 + J3. H↔J1 partitions, then H↔J2 partitions.
      * Both [PartitionEvent.PeerUnresponsive] events must fire.
-     * D-009: no subset of peers makes progress while another is partitioned.
+     * No subset of peers makes progress while another is partitioned.
      * The order of events does not matter for the final state.
      */
     @Test
@@ -519,10 +519,10 @@ class PartialConnectivityScenarioTest {
         }
 
     /**
-     * D-009 cascade: both J1 and J2 partitioned simultaneously.
-     * Healing J1 does NOT resume the game — J2 is still unresponsive.
-     * Only when both recover (or are evicted) may the game resume.
-     * J3 (healthy throughout) does not independently advance the game.
+     * Cascade: both J1 and J2 partitioned simultaneously.
+     * Healing J1 does NOT resume processing — J2 is still unresponsive.
+     * Only when both recover (or are evicted) may processing resume.
+     * J3 (healthy throughout) does not independently advance processing.
      */
     @Test
     fun `S8 - D009 cascade - healing one peer does not resume when second peer still partitioned`() =
@@ -587,7 +587,7 @@ class PartialConnectivityScenarioTest {
             val recovered = j1Recovered.await()
             assertEquals(mesh.j0.selfId, recovered.peerId)
 
-            // D-009: J2 is still partitioned. Game must remain paused.
+            // J2 is still partitioned. Processing must remain paused.
             // The leader's pause set still contains J2's PeerId — no resume is possible.
             // J3's detector (d2) must not have fired any events.
             val d2Channel = mesh.d2.events.produceIn(this)

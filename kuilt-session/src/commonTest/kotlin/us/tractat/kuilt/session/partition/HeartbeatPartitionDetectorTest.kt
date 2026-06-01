@@ -215,7 +215,7 @@ class HeartbeatPartitionDetectorTest {
             detector.start(backgroundScope)
 
             // Signal backpressure directly (the leader does this when the outbound buffer
-            // exceeds the ceiling — D-006).
+            // exceeds the ceiling).
             detector.onBackpressure(mesh.joinerId)
 
             // Advance one interval so the heartbeat loop evaluates the pending flag.

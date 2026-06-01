@@ -7,21 +7,21 @@ import us.tractat.kuilt.core.PeerId
  * Manages per-peer reconnect windows on the leader side.
  *
  * When a joiner's transport link drops, the leader calls [onPeerUnresponsive]
- * to open a timed reconnect window (default 60 s per D-005). Within that window
+ * to open a timed reconnect window (default 60 s). Within that window
  * the joiner can present a [ResumeToken] via [tryResume] to reattach. Once the
  * window expires the peer is evicted and a late reconnect is treated as a fresh
  * join.
  *
- * State-resync (replaying the action log to the reconnected joiner) is **out
- * of scope** here. The leader's `LiveLeader` subscribes to [events] and drives
- * the snapshot broadcast on [JoinerReconnectEvent.Resumed]. Integration point:
+ * State-resync (replaying application state to the reconnected joiner) is **out
+ * of scope** here. The consumer's leader logic subscribes to [events] and drives
+ * the state snapshot on [JoinerReconnectEvent.Resumed]. Integration point:
  * observe `events.filterIsInstance<JoinerReconnectEvent.Resumed>()` and push
- * current game state to `event.peerId`.
+ * current application state to `event.peerId`.
  *
  * The leader identity is not part of [ResumeToken]; only [RoomId] is. This
- * is intentional: D-010 (auto-election, v2 goal) preserves [RoomId] across
- * leader changes so joiners can resume against a newly elected leader without
- * token renegotiation.
+ * preserves forward-compatibility: if a future auto-election protocol promotes a
+ * new leader mid-session, [RoomId] survives the transition and joiners can
+ * resume against the new host without token renegotiation.
  *
  * Partition events ([PartitionEvent]) are produced by the partition-detector layer.
  * Until that wiring lands, callers bridge manually: on transport close, invoke

@@ -36,7 +36,7 @@ public sealed interface AdmitMessage {
      *
      * [displayName] — human-readable display name.
      * [sessionId] — joiner-minted session identifier (UUID-style).
-     * [deviceId] — optional hardware-stable identifier for reconnect dedup (ADR-030).
+     * [deviceId] — optional hardware-stable identifier for reconnect dedup.
      */
     @Serializable
     @SerialName("hello")

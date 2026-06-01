@@ -113,7 +113,7 @@ public class SeamRoomFactory(
  *   [PartitionEvent.PeerRecovered] → [MembershipEvent.Recovered].
  *
  * **Terminal state**: once [MembershipEvent.HostLost] fires, [broadcast] and [sendTo]
- * become silent no-ops. No auto-election is performed (D-010).
+ * become silent no-ops. No auto-election is performed.
  *
  * [start] must be called by [SeamRoomFactory] after construction to launch these loops.
  */

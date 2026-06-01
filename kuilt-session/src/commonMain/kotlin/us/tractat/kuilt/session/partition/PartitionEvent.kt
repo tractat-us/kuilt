@@ -7,9 +7,9 @@ import kotlin.time.Instant
  * An event emitted by [PartitionDetector] describing a peer's reachability state change.
  *
  * The event hierarchy is intentionally role-agnostic: there is no distinction between
- * "host" and "joiner" here. Both D-002 (explicit handoff in v1) and D-010 (automatic
- * election in v2) consume the same [PartitionEvent] stream — a v2 election protocol can
- * listen on [PeerLost] events without re-plumbing the detection layer.
+ * "host" and "joiner" here. Any leader-election protocol (explicit handoff or automatic
+ * election) consumes the same [PartitionEvent] stream without re-plumbing the detection
+ * layer.
  *
  * Reserved heartbeat frame namespace: `kuilt.heartbeat.ping` / `kuilt.heartbeat.pong`.
  * Applications must not emit frames with these namespaces; they are consumed exclusively
@@ -28,10 +28,10 @@ public sealed interface PartitionEvent {
      * The peer has stopped responding within [HeartbeatConfig.timeout].
      *
      * The peer may still recover — the detector continues monitoring until
-     * [reconnectWindow] expires. React by pausing game-action processing (D-001).
+     * [reconnectWindow] expires. React by pausing application message processing.
      *
      * [reason] distinguishes the source of the signal so logs and UX can present
-     * appropriate context (D-006).
+     * appropriate context.
      */
     public data class PeerUnresponsive(
         override val peerId: PeerId,
@@ -43,7 +43,7 @@ public sealed interface PartitionEvent {
      * A previously unresponsive peer has resumed sending frames before the
      * [HeartbeatConfig.reconnectWindow] expired.
      *
-     * React by resuming game-action processing (D-001).
+     * React by resuming application message processing.
      */
     public data class PeerRecovered(
         override val peerId: PeerId,
@@ -64,16 +64,16 @@ public sealed interface PartitionEvent {
     /**
      * The source of a [PeerUnresponsive] signal.
      *
-     * Every send-path failure surfaces with a labeled reason (D-006): this
-     * keeps logs and UI able to distinguish a silent WiFi drop ([Timeout])
-     * from a misbehaving peer that stopped reading ([Backpressure]) from a
-     * clean disconnect ([TransportClosed]).
+     * Every send-path failure surfaces with a labeled reason: this keeps logs
+     * and UI able to distinguish a silent WiFi drop ([Timeout]) from a
+     * misbehaving peer that stopped reading ([Backpressure]) from a clean
+     * disconnect ([TransportClosed]).
      */
     public enum class Reason {
         /** No pong received within [HeartbeatConfig.timeout]. */
         Timeout,
 
-        /** Per-peer outbound buffer exceeded the configured ceiling (D-006). */
+        /** Per-peer outbound buffer exceeded the configured ceiling. */
         Backpressure,
 
         /** The underlying [us.tractat.kuilt.core.Seam] was closed. */

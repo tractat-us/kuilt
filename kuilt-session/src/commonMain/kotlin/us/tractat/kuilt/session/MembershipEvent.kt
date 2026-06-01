@@ -82,7 +82,7 @@ public sealed interface MembershipEvent {
      * become silent no-ops after this event.
      *
      * Driven by [us.tractat.kuilt.session.partition.PartitionEvent.PeerLost] for the
-     * host peer. No auto-election (D-010): the room does not promote a new host.
+     * host peer. The room does not auto-elect a new host.
      */
     public data class HostLost(val at: Instant) : MembershipEvent
 }
