@@ -6,3 +6,7 @@ local.properties
 .idea
 .DS_Store
 .claude/
+
+# Session-local "do next" scratch (see /next, /donext) — never committed
+next-plan.md
+next-plan-*.md
