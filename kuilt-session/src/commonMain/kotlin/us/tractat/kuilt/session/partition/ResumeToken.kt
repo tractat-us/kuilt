@@ -10,9 +10,9 @@ import us.tractat.kuilt.core.PeerId
  * 2. The reconnect window for [peerId] is still open — prevents stale reconnects.
  *
  * The leader's own identity is **not** encoded here. Only [roomId] is. This
- * preserves D-010 forward-compatibility: when auto-election (v2 goal) replaces
- * the leader mid-session, [roomId] survives the transition and joiners can
- * resume against the new host without token renegotiation.
+ * preserves forward-compatibility: if an auto-election protocol replaces the
+ * leader mid-session, [roomId] survives the transition and joiners can resume
+ * against the new host without token renegotiation.
  *
  * [issuedAt] is epoch-millis from the injected clock (never [System.currentTimeMillis]
  * directly — callers must inject via `clock: () -> Long`).
@@ -24,14 +24,13 @@ public data class ResumeToken(
 )
 
 /**
- * Stable handle for a P2P Room session. Survives leader changes (D-010):
- * the [RoomId] is assigned at Room creation and does not rotate when
- * auto-election promotes a new leader in v2.
+ * Stable handle for a P2P Room session. Survives leader changes: the [RoomId]
+ * is assigned at Room creation and does not rotate if auto-election promotes a
+ * new leader.
  *
- * Scoped to `:transport-core` so the resume-token path stays in the library
- * layer. `:live-runtime`'s `SessionId` is a separate application-layer type
- * (game session identity) and must not be conflated with this transport-layer
- * room identity.
+ * Scoped to the session layer so the resume-token path stays in the library.
+ * Consumer application-layer session identifiers are separate concerns and must
+ * not be conflated with this transport-layer room identity.
  */
 @kotlin.jvm.JvmInline
 public value class RoomId(

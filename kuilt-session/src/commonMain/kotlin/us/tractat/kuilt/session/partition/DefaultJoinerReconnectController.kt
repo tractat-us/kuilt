@@ -24,7 +24,7 @@ import us.tractat.kuilt.core.PeerId
  * @param roomId The Room this controller guards. Tokens for a different
  *   Room are rejected as [ResumeResult.TokenInvalid].
  * @param reconnectWindowMs Duration of the reconnect window in millis. Defaults to
- *   [DEFAULT_RECONNECT_WINDOW_MS] (60 s, per D-005).
+ *   [DEFAULT_RECONNECT_WINDOW_MS] (60 s).
  * @param clock Injected clock returning epoch-millis. Must never be wired to
  *   `System.currentTimeMillis()` from commonMain production code; the JVM
  *   wiring layer (Koin, DI) passes `{ System.currentTimeMillis() }`.
@@ -136,7 +136,7 @@ public class DefaultJoinerReconnectController(
     }
 
     public companion object {
-        /** Default reconnect window — 60 s per D-005. */
+        /** Default reconnect window — 60 s. */
         public const val DEFAULT_RECONNECT_WINDOW_MS: Long = 60_000L
     }
 }

@@ -19,7 +19,7 @@ import us.tractat.kuilt.core.PeerId
  *
  * **Backpressure hook ([onBackpressure]):**
  * The leader must call [onBackpressure] when the per-peer outbound buffer exceeds the
- * configured ceiling (D-006). The detector reacts by emitting
+ * configured ceiling. The detector reacts by emitting
  * [PartitionEvent.PeerUnresponsive] with [PartitionEvent.Reason.Backpressure].
  */
 public interface PartitionDetector {
@@ -49,7 +49,7 @@ public interface PartitionDetector {
     public fun observedPeer(peerId: PeerId)
 
     /**
-     * Signal that the per-peer outbound buffer has exceeded its ceiling (D-006).
+     * Signal that the per-peer outbound buffer has exceeded its ceiling.
      *
      * The detector emits [PartitionEvent.PeerUnresponsive] with reason
      * [PartitionEvent.Reason.Backpressure] on the next evaluation cycle.

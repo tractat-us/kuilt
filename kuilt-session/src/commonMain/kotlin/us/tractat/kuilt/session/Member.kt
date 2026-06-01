@@ -16,7 +16,7 @@ public data class Member(
 )
 
 /**
- * Stable identity for a room member, used for dedup across reconnects (ADR-030).
+ * Stable identity for a room member, used for dedup across reconnects.
  *
  * [deviceId] is a hardware-stable identifier (preferred for dedup — survives app restart).
  * [sessionId] is a session-scoped identifier minted at join time (fallback when
