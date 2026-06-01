@@ -38,7 +38,7 @@ import us.tractat.kuilt.core.Swatch
  */
 public class FakeSeam(
     override val selfId: PeerId = PeerId("self"),
-    initialPeers: Set<PeerId> = setOf(PeerId("self")),
+    initialPeers: Set<PeerId> = setOf(selfId),
     initialState: SeamState = SeamState.Woven,
 ) : Seam {
     private val _peers = MutableStateFlow(initialPeers)
