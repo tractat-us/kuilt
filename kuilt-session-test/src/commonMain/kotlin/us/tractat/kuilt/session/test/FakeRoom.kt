@@ -40,6 +40,17 @@ import kotlin.time.Instant
  * **Send semantics** (matching the [Room] contract):
  * - [broadcast] and [sendTo] after [leave] are silent no-ops (matching the
  *   contract's behaviour after [MembershipEvent.HostLost]).
+ *
+ * **Stream semantics — a deliberate divergence from the real [Room].** The real
+ * [Room] documents [events] and [incoming] as *hot, no-replay* streams (late
+ * collectors miss history). For test ergonomics this double backs them with
+ * unbounded buffering channels instead, so `deliver(...)` followed by
+ * `incoming.first()` works without racing a collector. Two consequences a
+ * consumer should not encode as [Room] guarantees:
+ * - frames/events emitted before collection are **buffered and replayed** here,
+ *   whereas the real [Room] would drop them;
+ * - [leave] **completes** [events]/[incoming] (channel close), whereas the real
+ *   [Room] cancels its backing scope without completing the flows.
  */
 public class FakeRoom(
     override val selfId: PeerId = PeerId("self"),
@@ -56,7 +67,7 @@ public class FakeRoom(
     private val eventsChannel = Channel<MembershipEvent>(capacity = Channel.UNLIMITED)
     override val events: Flow<MembershipEvent> = eventsChannel.receiveAsFlow()
 
-    internal val incomingChannel = Channel<RoomFrame>(capacity = Channel.UNLIMITED)
+    private val incomingChannel = Channel<RoomFrame>(capacity = Channel.UNLIMITED)
     override val incoming: Flow<RoomFrame> = incomingChannel.receiveAsFlow()
 
     private var _resumeToken: ResumeToken? = initialResumeToken
@@ -113,6 +124,7 @@ public class FakeRoom(
      * ```
      */
     public suspend fun addMember(member: Member) {
+        require(member.id != selfId) { "roster must not include selfId ($selfId); see Room.roster" }
         _roster.update { it + member }
         eventsChannel.send(MembershipEvent.Joined(member))
     }

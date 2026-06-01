@@ -78,6 +78,6 @@ private suspend fun seedRoster(room: FakeRoom, peerId: PeerId, displayName: Stri
 
 private fun wireDelivery(sender: FakeRoom, receiver: FakeRoom) {
     sender.onBroadcast = { payload ->
-        receiver.incomingChannel.send(RoomFrame(sender = sender.selfId, payload = payload))
+        receiver.deliver(from = sender.selfId, payload = payload)
     }
 }

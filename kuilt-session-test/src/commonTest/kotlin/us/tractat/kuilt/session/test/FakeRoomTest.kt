@@ -18,6 +18,7 @@ import us.tractat.kuilt.session.partition.RoomId
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNull
@@ -202,8 +203,10 @@ class FakeRoomTest {
         )
     }
 
+    // The Fake buffers pre-subscription frames as a test-ergonomics convenience;
+    // the real Room is hot/no-replay and would drop these. See FakeRoom KDoc.
     @Test
-    fun `frames delivered before collector subscribes are buffered not lost`() = runTest {
+    fun `fake buffers frames delivered before collection - convenience not a Room guarantee`() = runTest {
         val room = FakeRoom()
         room.deliver(PeerId("bob"), byteArrayOf(42))
         val frame = room.incoming.first()
@@ -300,6 +303,26 @@ class FakeRoomTest {
         room.leave()
         room.sendTo(PeerId("bob"), byteArrayOf(1))
         assertTrue(room.directed.isEmpty())
+    }
+
+    // leave() closes the backing channels, so the streams complete. This is a
+    // Fake convenience — the real Room cancels its scope without completing them.
+    @Test
+    fun `leave completes incoming and events streams - fake convenience`() = runTest {
+        val room = FakeRoom()
+        room.leave()
+        val incoming = room.incoming.toList()
+        val events = room.events.toList()
+        assertAll(
+            { assertTrue(incoming.isEmpty()) },
+            { assertTrue(events.isEmpty()) },
+        )
+    }
+
+    @Test
+    fun `addMember rejects selfId`() = runTest {
+        val room = FakeRoom(selfId = PeerId("self"))
+        assertFailsWith<IllegalArgumentException> { room.addMember(member(PeerId("self"))) }
     }
 
     // ── role / resumeToken helpers ────────────────────────────────────────────
