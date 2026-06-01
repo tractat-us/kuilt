@@ -53,6 +53,14 @@ class FakeSeamTest {
     }
 
     @Test
+    fun `default initialPeers tracks a custom selfId`() = runTest {
+        val alice = PeerId("alice")
+        val seam = FakeSeam(selfId = alice)
+        // peers must always include selfId (Seam contract) even when only selfId is customized.
+        assertEquals(setOf(alice), seam.peers.value)
+    }
+
+    @Test
     fun `custom initialState Weaving is respected`() = runTest {
         val seam = FakeSeam(initialState = SeamState.Weaving)
         assertEquals(SeamState.Weaving, seam.state.value)
