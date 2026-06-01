@@ -78,6 +78,7 @@ if (!s3CacheAccessKey.isNullOrBlank()) {
 }
 
 include(":kuilt-core")
+include(":kuilt-test")
 include(":kuilt-conformance")
 include(":kuilt-session")
 include(":kuilt-websocket")
