@@ -1,6 +1,7 @@
 package us.tractat.kuilt.core.composite
 
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
 import us.tractat.kuilt.core.FabricAvailability
 import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.PlyId
@@ -29,8 +30,8 @@ public class CompositeLoom(
     }
 
     override suspend fun weave(rendezvous: Rendezvous): Seam {
-        val woven = plies.map { (id, loom) -> id to loom.weave(rendezvous) }
-        return CompositeSeam(woven, dispatcher)
+        val initial = plies.map { (id, loom) -> id to loom.weave(rendezvous) }
+        return CompositeSeam(initial, rendezvous, MutableStateFlow(plies), dispatcher)
     }
 
     override fun availability(): FabricAvailability =
