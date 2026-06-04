@@ -5,6 +5,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -147,12 +148,14 @@ internal class CompositeSeam(
 
     private suspend fun detachPly(id: PlyId) {
         val handle = live.remove(id) ?: return
-        // Remove from the per-ply map BEFORE closing so the aggregate never
-        // transiently latches Torn (terminal) on the last ply.
+        // Stop this ply's pumps FIRST so a resuming pump can't resurrect the
+        // _plies/idMap entries we are about to purge.
+        handle.job.cancelAndJoin()
+        // Remove from the per-ply map (now safe) so the aggregate rolls up
+        // without this ply — empty => Weaving, never a transient terminal Torn.
         _plies.value = _plies.value - id
         // Purge this ply's learned mappings so a re-attach starts clean.
         idMap.keys.removeAll { it.first == id }
-        handle.job.cancel()
         handle.seam.close(CloseReason.Normal)
         recomputePeers()
     }
@@ -219,11 +222,13 @@ internal class CompositeSeam(
     }
 
     override suspend fun close(reason: CloseReason) {
-        live.values.forEach { it.seam.close(reason) }
-        live.clear()
-        _state.value = SeamState.Torn(reason)
-        incomingChannel.close()
-        scope.cancel()
+        withContext(dispatcher) {
+            scope.cancel()
+            live.values.forEach { it.seam.close(reason) }
+            live.clear()
+            _state.value = SeamState.Torn(reason)
+            incomingChannel.close()
+        }
     }
 
     private companion object {
