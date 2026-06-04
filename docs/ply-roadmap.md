@@ -31,7 +31,7 @@ features**:
 
 | # | Capability | Trigger that unblocks it | Depends on | Wire impact |
 |---|------------|--------------------------|------------|-------------|
-| 1 | **Dynamic ply attach/detach** | A consumer with overlays that come and go (radio peers entering/leaving proximity; multi-homing a relay mid-session) | — | none (control-plane only) |
+| 1 | **Dynamic ply attach/detach** — ✅ **shipped** (#98, #99, #100) | A consumer with overlays that come and go (radio peers entering/leaving proximity; multi-homing a relay mid-session) | — | none (control-plane only) |
 | 2 | **App-layer single-hop gateway forwarding** | Data-less peers on an internet-less *radio* link needing the relay through one bridge peer | benefits from #1 (the bridge is a ply that attaches) | none — `originId` already reserved in every `Data` frame |
 | 3 | **Primary-ply-per-peer send** | Measured bandwidth/latency pain from broadcast-over-all-plies redundancy | benefits from #1 (per-ply bookkeeping is simpler once attach/detach is modeled) | none |
 
@@ -39,14 +39,21 @@ Every item is **additive** and **wire-compatible** — the MVP's explicit
 `(originId, originSeq)` envelope and the `plies` map were chosen precisely so
 these can land without a break.
 
-### 1. Dynamic ply attach/detach
+### 1. Dynamic ply attach/detach — ✅ shipped
 
-Today the ply set is frozen at `weave()`. This item lets plies join and leave a
-live session, so an overlay (a platform radio, WebRTC-LAN) can light up when
-peers come into proximity and drop when they leave — the scenario the MVP's "Why"
-describes but does not yet realize. Most foundational of the three: it reshapes
-`CompositeSeam` into a reconcile-based core, and items 2 and 3 are cleaner built
+The ply set is no longer frozen at `weave()`: construct `CompositeLoom` from a
+`StateFlow<List<Pair<PlyId, Loom>>>` of the *desired* set and emit a new list to
+attach or detach plies on a live session. An overlay (a platform radio,
+WebRTC-LAN) can light up when peers come into proximity and drop when they leave
+— the scenario the MVP's "Why" describes. Most foundational of the three: it
+reshaped `CompositeSeam` into a reconcile-based core, so items 2 and 3 now build
 on a composite whose ply set is already mutable.
+
+Shipped as #98 (reconcile engine) → #99 (declarative `StateFlow` constructor) →
+#100 (dynamic conformance). Zero-ply state is recoverable `Weaving` (only
+`close()` is terminal `Torn`); detaching a ply never flaps a peer reachable on
+another. The static list constructor is preserved as the degenerate
+single-emission case.
 
 **Designed:** `docs/superpowers/specs/2026-06-04-dynamic-ply-attach-detach-design.md`.
 
