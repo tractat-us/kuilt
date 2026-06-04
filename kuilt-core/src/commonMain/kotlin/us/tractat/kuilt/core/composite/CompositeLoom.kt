@@ -2,6 +2,7 @@ package us.tractat.kuilt.core.composite
 
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import us.tractat.kuilt.core.FabricAvailability
 import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.PlyId
@@ -11,31 +12,40 @@ import kotlin.coroutines.CoroutineContext
 
 /**
  * A [Loom] that weaves one logical session from several constituent [Loom]s
- * ("plies") at once. The union of plies covers the session's peer set; the
- * list order is a send-preference hint (most-preferred first). See
- * `docs/superpowers/specs/2026-05-30-multi-transport-ply-fabric-design.md`.
+ * ("plies"). The union of plies covers the session's peer set; the list order is a
+ * send-preference hint (most-preferred first).
  *
+ * The ply set may change while the session is live: construct with a
+ * [StateFlow] of the **desired** set and push a new list to attach or detach
+ * plies. The list constructor is the degenerate case of a never-changing flow.
+ * See `docs/superpowers/specs/2026-06-04-dynamic-ply-attach-detach-design.md`.
+ *
+ * @param plies The desired ply set; emit a new value to reconcile (attach/detach).
  * @param dispatcher Forwarded to each [CompositeSeam] as its internal dispatcher.
- *   The production default ([Dispatchers.Default.limitedParallelism(1)]) confines
- *   all mutable state access to a single thread, preventing data races. Tests
- *   should inject [UnconfinedTestDispatcher] so reconciliation runs eagerly.
+ *   Production default ([Dispatchers.Default.limitedParallelism(1)]) confines all
+ *   mutable state access to one thread; tests inject [UnconfinedTestDispatcher].
  */
 public class CompositeLoom(
-    private val plies: List<Pair<PlyId, Loom>>,
+    private val plies: StateFlow<List<Pair<PlyId, Loom>>>,
     private val dispatcher: CoroutineContext = Dispatchers.Default.limitedParallelism(1),
 ) : Loom {
-    init {
-        require(plies.isNotEmpty()) { "CompositeLoom needs at least one ply" }
-        require(plies.map { it.first }.toSet().size == plies.size) { "duplicate PlyId" }
-    }
+
+    /** Static convenience: a fixed ply set that never changes after `weave()`. */
+    public constructor(
+        plies: List<Pair<PlyId, Loom>>,
+        dispatcher: CoroutineContext = Dispatchers.Default.limitedParallelism(1),
+    ) : this(MutableStateFlow(plies), dispatcher)
 
     override suspend fun weave(rendezvous: Rendezvous): Seam {
-        val initial = plies.map { (id, loom) -> id to loom.weave(rendezvous) }
-        return CompositeSeam(initial, rendezvous, MutableStateFlow(plies), dispatcher)
+        val current = plies.value
+        require(current.isNotEmpty()) { "CompositeLoom desired set must be non-empty at weave()" }
+        require(current.map { it.first }.toSet().size == current.size) { "duplicate PlyId" }
+        val initial = current.map { (id, loom) -> id to loom.weave(rendezvous) }
+        return CompositeSeam(initial, rendezvous, plies, dispatcher)
     }
 
     override fun availability(): FabricAvailability =
-        if (plies.any { it.second.availability() == FabricAvailability.Available }) {
+        if (plies.value.any { it.second.availability() == FabricAvailability.Available }) {
             FabricAvailability.Available
         } else {
             FabricAvailability.Unavailable("no ply available")
