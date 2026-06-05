@@ -152,6 +152,33 @@ interface RaftNode {
 
 Non-leader nodes use `leader.value` to discover who to forward a proposal to (via their own application-layer message). kuilt-raft does not implement forwarding — that is the consumer's responsibility.
 
+**Forwarding and idempotency.** `LeadershipLostException` means the original proposal may or may not have committed before the leader changed — a blind retry risks double-applying. Consumers must include an idempotency key in the command payload so the state machine can detect and ignore duplicates:
+
+```kotlin
+@Serializable
+data class GameCommand(
+    val proposalId: String = uuid4(),   // stable across retries
+    val move: GameMove,
+)
+
+// Non-leader forward loop
+suspend fun proposeWithRetry(node: RaftNode, command: GameCommand) {
+    while (true) {
+        val target = node.leader.filterNotNull().first()
+        try { sendToLeader(target, command); return }
+        catch (_: LeadershipLostException) { /* await new leader, retry */ }
+    }
+}
+```
+
+The state machine deduplicates on `proposalId` before applying. kuilt-raft carries command bytes opaquely — dedup is always the consumer's concern.
+
+**`committed` emission semantics.** Per node instance: exactly once, in index order. On partition+heal: only entries not yet seen by this instance (no re-emissions). On crash+restart: the new node instance re-emits all entries from the storage log (index 0 upward) as they are replicated. Consumers that persist their own applied state should track `LogEntry.index` to avoid re-applying entries they already handled.
+
+**Membership vs reachability.** `ClusterConfig.voters` is cluster membership — the static set of nodes that participate in consensus. `RaftTransport.peers` is reachability — which nodes happen to be connected right now. `RaftNode` reads membership from `ClusterConfig` and reachability from the transport; a voter absent from `transport.peers` is "down", not "removed". They are separate concerns.
+
+**Learner passivity.** The learner (server) receives `AppendEntries` replication from the leader identically to a follower but never originates backfill. It does not accelerate recovery: if a voter partition means no quorum can form, the learner's complete persistent log does not help elect a leader. Cold-start correctness relies entirely on whichever nodes form a quorum having sufficient persistent log coverage via `RaftStorage`.
+
 **Construction — `CoroutineScope` extension:**
 
 ```kotlin
