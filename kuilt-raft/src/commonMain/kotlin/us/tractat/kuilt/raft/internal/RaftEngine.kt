@@ -154,7 +154,7 @@ internal class RaftEngine(
         }
     }
 
-    private fun becomeLeader() {
+    private suspend fun becomeLeader() {
         _role.value = RaftRole.Leader
         _leader.value = transport.selfId
         electionJob?.cancel()
@@ -169,6 +169,17 @@ internal class RaftEngine(
                 delay(raftConfig.heartbeatInterval.inWholeMilliseconds)
             }
         }
+        // §5.4.2: append a no-op from the new term so the commit guard (entry.term == currentTerm)
+        // can advance commitIndex over any prior-term entries inherited from a previous leader.
+        appendNoOp()
+    }
+
+    private suspend fun appendNoOp() {
+        val noOpIndex = (log.lastOrNull()?.index ?: 0L) + 1L
+        val noOp = LogEntry(noOpIndex, currentTerm, byteArrayOf())
+        log += noOp
+        storage.appendEntries(listOf(noOp))
+        clusterConfig.allMembers.filter { it != transport.selfId }.forEach { sendAppendEntries(it) }
     }
 
     private suspend fun stepDown(newTerm: Long) {

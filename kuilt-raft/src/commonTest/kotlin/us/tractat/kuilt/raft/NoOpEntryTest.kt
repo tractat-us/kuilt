@@ -2,9 +2,9 @@
 
 package us.tractat.kuilt.raft
 
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
@@ -53,23 +53,18 @@ class NoOpEntryTest {
         sim.crash(leaderId)
         delay(80)
 
-        // New leader elected. Collect entries it commits WITHOUT any new proposal.
+        // New leader elected. Wait for commitIndex to advance past the prior-term entries.
+        // We use commitIndex (StateFlow — always has the current value) rather than the
+        // committed Flow (SharedFlow with replay=0), since the no-op may commit before
+        // we subscribe to committed under UnconfinedTestDispatcher.
         val newLeader = awaitLeader(sim)
-        val committedByNewLeader = mutableListOf<LogEntry>()
-        val collectJob: Job = launch {
-            newLeader.committed.collect { committedByNewLeader.add(it) }
-        }
+        newLeader.commitIndex.filter { it >= e2.index }.first()
 
-        // Give the no-op time to trigger commit advancement of the prior-term entries.
-        delay(100)
-        collectJob.cancel()
-
-        // Both prior-term user entries must appear committed (no-op itself may also appear).
-        val userEntries = committedByNewLeader.filter { it.command.isNotEmpty() }
+        // commitIndex >= e2.index means all entries up to e2 committed without a new proposal.
         assertTrue(
-            userEntries.size >= 2,
+            newLeader.commitIndex.value >= e2.index,
             "Expected prior-term entries (indices ${e1.index}, ${e2.index}) to commit via no-op " +
-                "without a new proposal, but only got: $userEntries",
+                "without a new proposal, but commitIndex=${newLeader.commitIndex.value}",
         )
         sim.checkInvariants()
     }
