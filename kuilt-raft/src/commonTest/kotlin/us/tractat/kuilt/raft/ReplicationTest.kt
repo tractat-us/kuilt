@@ -5,6 +5,7 @@ package us.tractat.kuilt.raft
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
@@ -56,13 +57,13 @@ class ReplicationTest {
         val sim = replicationSim(this, backgroundScope)
         val leader = awaitLeader(sim)
 
-        // Start collecting on all followers before proposing so we don't miss the emission.
+        // Collect first non-no-op (user) entry on all followers before proposing.
         val followerJobs = sim.followers().map { f ->
-            async { f.committed.first() }
+            async { f.committed.filter { it.command.isNotEmpty() }.first() }
         }
 
         val entry = leader.propose(byteArrayOf(1, 2, 3))
-        assertEquals(1L, entry.index)
+        assertEquals(2L, entry.index) // index 1 is the leader's no-op; first user entry is at 2
 
         val received = followerJobs.awaitAll()
         received.forEach { assertContentEquals(byteArrayOf(1, 2, 3), it.command) }
@@ -94,7 +95,7 @@ class ReplicationTest {
         sim.crash(followerId)
 
         val entry = leader.propose(byteArrayOf(99))
-        assertEquals(1L, entry.index)
+        assertEquals(2L, entry.index) // index 1 is the leader's no-op; first user entry is at 2
         sim.checkInvariants()
     }
 

@@ -5,6 +5,7 @@ package us.tractat.kuilt.raft
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
@@ -54,7 +55,7 @@ class LearnerTest {
         val learner = sim.nodes[learnerId]
         assertNotNull(learner)
         assertIs<RaftRole.Learner>(learner.role.value)
-        val received = async { learner.committed.first() }
+        val received = async { learner.committed.filter { it.command.isNotEmpty() }.first() }
         delay(1) // let collector subscribe before proposing
         leader.propose(byteArrayOf(42))
         assertContentEquals(byteArrayOf(42), received.await().command)
