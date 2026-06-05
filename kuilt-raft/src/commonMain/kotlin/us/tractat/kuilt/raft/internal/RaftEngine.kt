@@ -5,6 +5,7 @@ package us.tractat.kuilt.raft.internal
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
@@ -47,7 +48,16 @@ internal class RaftEngine(
     private val _commitIndex = MutableStateFlow(0L)
     override val commitIndex: StateFlow<Long> = _commitIndex.asStateFlow()
 
-    private val _committed = MutableSharedFlow<LogEntry>(extraBufferCapacity = 256)
+    /**
+     * Emits every committed [LogEntry] in index order. The overflow policy is [BufferOverflow.SUSPEND]
+     * so the actor backpressures rather than silently dropping entries. Callers that fall behind will
+     * slow the cluster — this is the correct trade-off for a consensus log where every entry must be
+     * delivered.
+     */
+    private val _committed = MutableSharedFlow<LogEntry>(
+        extraBufferCapacity = Channel.UNLIMITED,
+        onBufferOverflow = BufferOverflow.SUSPEND,
+    )
     override val committed: Flow<LogEntry> = _committed
 
     // ── Actor-only mutable state ──────────────────────────────────────────────
@@ -274,7 +284,7 @@ internal class RaftEngine(
         }
     }
 
-    private fun tryAdvanceLeaderCommit() {
+    private suspend fun tryAdvanceLeaderCommit() {
         // Find highest N > currentCommitIndex where a majority have matchIndex >= N and log[N].term == currentTerm
         val voterMatches = clusterConfig.voters
             .filter { it != transport.selfId }
@@ -285,7 +295,7 @@ internal class RaftEngine(
             val majorityIdx = voterMatches[quorum - 1]
             val entry = log.firstOrNull { it.index == majorityIdx }
             if (entry != null && entry.term == currentTerm && majorityIdx > currentCommitIndex) {
-                scope.launch { advanceCommit(majorityIdx) }
+                advanceCommit(majorityIdx)
             }
         }
     }
