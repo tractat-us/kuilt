@@ -7,6 +7,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.channels.ClosedSendChannelException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -96,22 +97,41 @@ internal class RaftEngine(
             // Start actor and message subscription
             startActor()
             resetElectionTimeout()
-            launch { transport.incoming.collect { cmd.send(EngineCommand.IncomingMessage(it.from, Cbor.decodeFromByteArray(it.bytes))) } }
+            launch {
+                transport.incoming.collect {
+                    try {
+                        cmd.send(EngineCommand.IncomingMessage(it.from, Cbor.decodeFromByteArray(it.bytes)))
+                    } catch (_: ClosedSendChannelException) {
+                        return@collect // channel closed — node is shutting down
+                    }
+                }
+            }
         }
     }
 
     private fun startActor() {
         scope.launch {
-            for (c in cmd) {
-                when (c) {
-                    is EngineCommand.IncomingMessage -> onMessage(c.from, c.message)
-                    is EngineCommand.Propose         -> onPropose(c.command, c.response)
-                    is EngineCommand.ElectionTimeout -> onElectionTimeout()
-                    is EngineCommand.HeartbeatTick   -> onHeartbeat()
-                    is EngineCommand.Close           -> { cmd.close(); break }
+            try {
+                for (c in cmd) {
+                    when (c) {
+                        is EngineCommand.IncomingMessage -> onMessage(c.from, c.message)
+                        is EngineCommand.Propose         -> onPropose(c.command, c.response)
+                        is EngineCommand.ElectionTimeout -> onElectionTimeout()
+                        is EngineCommand.HeartbeatTick   -> onHeartbeat()
+                        is EngineCommand.Close           -> { cmd.close(); break }
+                    }
                 }
+            } finally {
+                // Complete any in-flight proposals so their callers don't hang.
+                cancelPending()
             }
         }
+    }
+
+    private fun cancelPending() {
+        val ex = LeadershipLostException("node scope cancelled")
+        pending.forEach { (_, d) -> d.completeExceptionally(ex) }
+        pending.clear()
     }
 
     // ── Trace helper ──────────────────────────────────────────────────────────
@@ -418,7 +438,11 @@ internal class RaftEngine(
 
     override suspend fun propose(command: ByteArray): LogEntry {
         val d = CompletableDeferred<LogEntry>()
-        cmd.send(EngineCommand.Propose(command, d))
+        try {
+            cmd.send(EngineCommand.Propose(command, d))
+        } catch (_: ClosedSendChannelException) {
+            throw NotLeaderException("node is closed")
+        }
         return d.await()
     }
 
@@ -434,5 +458,7 @@ internal class RaftEngine(
     private suspend fun send(peer: NodeId, m: RaftMessage) =
         transport.sendTo(peer, Cbor.encodeToByteArray(m))
 
-    override suspend fun close() { cmd.send(EngineCommand.Close) }
+    override suspend fun close() {
+        try { cmd.send(EngineCommand.Close) } catch (_: ClosedSendChannelException) { /* already closed */ }
+    }
 }
