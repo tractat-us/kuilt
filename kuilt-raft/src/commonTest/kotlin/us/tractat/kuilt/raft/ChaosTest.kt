@@ -8,6 +8,7 @@ import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
+import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.milliseconds
 
 private val fastConfig = RaftConfig(5.milliseconds, 10.milliseconds, 2.milliseconds)
@@ -37,9 +38,8 @@ class ChaosTest {
         sim.checkInvariants()
         // Restarted node should have caught up
         val restarted = sim.nodes[followerId]!!
-        assert(restarted.commitIndex.value >= 2L || restarted.committed.let { true }) {
-            "Restarted node commitIndex=${restarted.commitIndex.value}"
-        }
+        assertTrue(restarted.commitIndex.value >= 2L || restarted.committed.let { true },
+            "Restarted node commitIndex=${restarted.commitIndex.value}")
     }
 
     @Test fun rejoinPartitionedLeader_reverts_to_follower() = runTest(UnconfinedTestDispatcher()) {
@@ -54,9 +54,8 @@ class ChaosTest {
         delay(80)
         // Old leader must have stepped down upon receiving a higher term
         val oldLeaderNode = sim.nodes[leaderId]!!
-        assert(oldLeaderNode.role.value !is RaftRole.Leader) {
-            "Old partitioned leader did not step down: ${oldLeaderNode.role.value}"
-        }
+        assertTrue(oldLeaderNode.role.value !is RaftRole.Leader,
+            "Old partitioned leader did not step down: ${oldLeaderNode.role.value}")
         sim.checkInvariants()
     }
 

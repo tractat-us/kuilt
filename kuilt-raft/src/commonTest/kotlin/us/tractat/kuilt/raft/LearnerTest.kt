@@ -15,6 +15,7 @@ import kotlin.test.assertContentEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
+import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.milliseconds
 
 private val fastConfig = RaftConfig(
@@ -94,6 +95,6 @@ class LearnerTest {
         delay(100)
         job.cancel()
 
-        assert(entries.isNotEmpty()) { "Learner received no entries after healing partition" }
+        assertTrue(entries.isNotEmpty(), "Learner received no entries after healing partition")
     }
 }
