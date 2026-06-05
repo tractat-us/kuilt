@@ -124,39 +124,46 @@ Randomised election timeout within `[min, max]` is standard Raft. Tests inject f
 
 ### `RaftNode`
 
-```kotlin
-class RaftNode(
-    val clusterConfig: ClusterConfig,
-    val transport: RaftTransport,
-    val storage: RaftStorage,
-    val scope: CoroutineScope,
-    val raftConfig: RaftConfig = RaftConfig(),
-)
-```
+`RaftNode` is an interface (following kuilt's `Seam`/`Loom`/`Room` pattern — testable, fakeable).
 
 **Observed state:**
 
 ```kotlin
-val role: StateFlow<RaftRole>
-val leader: StateFlow<NodeId?>
-val commitIndex: StateFlow<Long>
-val committed: Flow<LogEntry>   // hot; backfill arrives in order on reconnect
-```
+interface RaftNode {
+    val role: StateFlow<RaftRole>
+    val leader: StateFlow<NodeId?>
+    val commitIndex: StateFlow<Long>
 
-**Commands:**
+    // Hot SharedFlow of committed entries, in log order.
+    // Followers and learners collect this to drive state.
+    // A partitioned node that rejoins sees backfill entries arrive in order.
+    val committed: Flow<LogEntry>
 
-```kotlin
-// Propose a command to the cluster. Returns the log index assigned.
-// Throws NotLeaderException if this node is not currently the leader
-// (including learners, which can never be leader).
-suspend fun propose(command: ByteArray): Long
+    // Propose a command. Suspends until a quorum has committed the entry.
+    // Returns the committed LogEntry (index + term + command).
+    // Throws NotLeaderException if this node is not currently the leader.
+    // Throws LeadershipLostException if leadership is lost while waiting.
+    // Learners always throw NotLeaderException (they can never be leader).
+    suspend fun propose(command: ByteArray): LogEntry
 
-suspend fun close()
+    suspend fun close()
+}
 ```
 
 Non-leader nodes use `leader.value` to discover who to forward a proposal to (via their own application-layer message). kuilt-raft does not implement forwarding — that is the consumer's responsibility.
 
-`committed` is a hot `SharedFlow`. A follower or learner that was partitioned and rejoins will see backfill entries arrive in log order — the consumer applies them to rebuild state correctly.
+**Construction — `CoroutineScope` extension:**
+
+```kotlin
+fun CoroutineScope.raftNode(
+    clusterConfig: ClusterConfig,
+    transport: RaftTransport,
+    storage: RaftStorage,
+    raftConfig: RaftConfig = RaftConfig(),
+): RaftNode
+```
+
+The node's internal coroutines are launched as children of the calling scope's `Job`. Cancelling the scope stops the node cleanly — no separate `close()` needed for scope-driven teardown. Call `close()` only when shutting down the node while keeping the parent scope alive (e.g. game ends, scope is reused).
 
 ### `SeamRaftTransport`
 
@@ -179,25 +186,33 @@ This is the only file in `kuilt-raft` that imports `us.tractat.kuilt.core.*`.
 ```kotlin
 // Both players and server call this at game start.
 // Server passes SqliteRaftStorage(); players pass InMemoryRaftStorage().
-val node = RaftNode(
+val node = gameScope.raftNode(
     clusterConfig = ClusterConfig(
-        voters  = playerIds.map { NodeId(it.value) }.toSet(),
+        voters   = playerIds.map { NodeId(it.value) }.toSet(),
         learners = setOf(NodeId(serverId.value)),
     ),
     transport = SeamRaftTransport(seam),
     storage   = InMemoryRaftStorage(),
-    scope     = gameScope,
 )
 
-// The elected leader is the dealer.
-node.role.collect { role ->
-    if (role is Leader) becomeDealer()
+// The elected leader is the dealer — observe role changes reactively.
+node.role
+    .filter { it is Leader }
+    .first()
+    .let { becomeDealer() }
+
+// Propose a move: suspends until a quorum commits it.
+// propose() throws if not leader — forward via leader.value if needed.
+try {
+    val committed = node.propose(Json.encodeToByteArray(move))
+    // committed.index is the durable log position
+} catch (e: NotLeaderException) {
+    // forward the proposal to node.leader.value via app-layer message
+} catch (e: LeadershipLostException) {
+    // leadership changed mid-flight; re-check and retry
 }
 
-// Propose a move (only the leader does this, or redirect to leader).
-node.propose(Json.encodeToByteArray(move))
-
-// All nodes apply committed moves in order.
+// All nodes (leader, follower, learner) apply committed entries in order.
 node.committed.collect { entry ->
     val move = Json.decodeFromByteArray<GameMove>(entry.command)
     gameState.apply(move)
@@ -217,9 +232,89 @@ Internal RPCs are serialised with `kotlinx.serialization` into the `ByteArray` f
 
 ## Testing strategy
 
-- **`RaftConformanceSuite`** — abstract test class, one `newNodeTriple()` abstract method returning three wired-up `RaftNode`s backed by `InMemoryRaftStorage` and a fake in-process transport. Covers: leader election, log replication, follower catch-up, leader failure + re-election, learner log delivery.
-- **`InMemoryRaftNetwork`** — in-process fake transport for tests (analogous to `InMemoryLoom`). Supports injecting artificial delays and message drops for partition testing.
-- **Coroutine determinism** — inject `UnconfinedTestDispatcher` via the `scope` parameter; fast election timings via `RaftConfig`. Pattern mirrors `docs/testing-coroutine-determinism.md`.
+The validation approach follows the community gold standard (MIT 6.5840, etcd, MadRaft): deterministic discrete-event simulation + per-step safety invariant assertion + scenario matrix. This finds the classes of bugs that unit tests miss: log divergence after leadership churn, split vote, log-backup under unreliable networks.
+
+### Simulation harness — `RaftSimulation`
+
+```kotlin
+// Central harness. Tests control the network; nodes never touch real I/O.
+class RaftSimulation(n: Int, raftConfig: RaftConfig = RaftConfig()) {
+    val nodes: List<RaftNode>
+
+    // Partition: drop all messages between the two sets
+    fun partition(a: Set<NodeId>, b: Set<NodeId>)
+    fun heal()
+
+    // Message bus controls
+    fun dropNextMessage(from: NodeId, to: NodeId)
+    fun delayMessages(from: NodeId, to: NodeId, delay: Duration)
+
+    // Kill and restart a node (new RaftNode, same storage)
+    fun crash(id: NodeId)
+    fun restart(id: NodeId)
+
+    // Assert all four safety invariants right now
+    fun checkInvariants()
+}
+```
+
+Every node in `RaftSimulation` uses:
+- `UnconfinedTestDispatcher(testScheduler)` — deterministic coroutine scheduling
+- Per-node `Channel<RaftEnvelope>` pair as the message bus — the test controls delivery
+- `InMemoryRaftStorage` by default; `crash()`/`restart()` re-creates the node with the same storage instance to simulate restart
+
+### Four safety invariants (checked after every delivered message)
+
+These correspond to the Raft paper's safety properties and must never be violated:
+
+1. **Election Safety** — at most one leader per term across all nodes
+2. **Log Matching** — if two nodes' logs agree on `(index, term)`, all preceding entries are identical
+3. **Leader Completeness** — if an entry is committed in term T, every leader elected in term > T has that entry in its log
+4. **State Machine Safety** — no two nodes have applied different commands at the same log index
+
+### Scenario matrix (MIT 6.5840 checklist, adapted)
+
+| Scenario | What it tests |
+|----------|---------------|
+| `initialElection` | Single leader elected; term advances after restart |
+| `reElection` | Leader crash → re-election within timeout |
+| `manyElections` | 7 rounds of leader churn, invariants hold throughout |
+| `basicReplication` | Entries proposed by leader arrive on all followers in order |
+| `followerFailure` | One follower crashes; quorum continues; follower catches up on rejoin |
+| `leaderFailure` | Leader crashes mid-proposal; new leader re-proposes; no duplicate commits |
+| `failNoAgree` | Quorum lost (majority partitioned); no commit progress; invariants hold |
+| `concurrentProposals` | N coroutines propose simultaneously; all commit in some order |
+| `rejoinPartitionedLeader` | Isolated ex-leader rejoins; reverts to follower; log reconciles |
+| `logBackup` | New leader must back up far over a follower's divergent log (§5.3 fast backup) |
+| `persistence` | Node crashes and restarts; rejoins with same term/votedFor/log |
+| `unreliableChurn` | Random drops + delays + crashes + heals; state machine stays consistent |
+| `learnerDelivery` | Learner receives all committed entries; never votes; never becomes leader |
+| `learnerCatchup` | Learner partitioned then healed; backfill arrives in order |
+
+`logBackup` and `unreliableChurn` are the hardest. `logBackup` requires the fast log-backup optimisation (§5.3 of the paper); without it the test takes O(n²) round-trips and times out.
+
+### State machine linearizability — JetBrains Lincheck
+
+Layer a thin `SimulatedKV` state machine on top of `committed`:
+
+```kotlin
+class SimulatedKV(val node: RaftNode) {
+    suspend fun put(key: String, value: String)
+    suspend fun get(key: String): String?
+    suspend fun compareAndSwap(key: String, expected: String?, new: String?): Boolean
+}
+```
+
+Drive this with concurrent coroutines and verify the observed history is linearizable with respect to a sequential map. [JetBrains Lincheck](https://github.com/JetBrains/lincheck) covers the concurrent correctness layer; the simulation scenarios cover distributed safety.
+
+### Coroutine determinism
+
+All tests use `runTest` + `UnconfinedTestDispatcher(testScheduler)`. Fast election timings (`RaftConfig(electionTimeoutMin = 5.ms, heartbeatInterval = 1.ms)`) keep the suite fast. Mirrors `docs/testing-coroutine-determinism.md`.
+
+### What's out of scope for validation
+
+- **TLA+ trace validation** — the canonical Raft TLA+ spec exists ([ongardie/raft.tla](https://github.com/ongardie/raft.tla)); wiring a Kotlin implementation to emit TLC-verifiable traces is significant infrastructure work with no established tooling. Not doing it.
+- **Jepsen / Elle** — useful for black-box network chaos against a live cluster; overkill for a library-internal conformance suite.
 
 ## Explicitly out of scope
 
