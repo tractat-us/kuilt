@@ -10,3 +10,6 @@ local.properties
 # Session-local "do next" scratch (see /next, /donext) — never committed
 next-plan.md
 next-plan-*.md
+
+# Brainstorming visual companion sessions
+.superpowers/
