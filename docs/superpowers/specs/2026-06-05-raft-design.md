@@ -316,6 +316,15 @@ All tests use `runTest` + `UnconfinedTestDispatcher(testScheduler)`. Fast electi
 - **TLA+ trace validation** — the canonical Raft TLA+ spec exists ([ongardie/raft.tla](https://github.com/ongardie/raft.tla)); wiring a Kotlin implementation to emit TLC-verifiable traces is significant infrastructure work with no established tooling. Not doing it.
 - **Jepsen / Elle** — useful for black-box network chaos against a live cluster; overkill for a library-internal conformance suite.
 
+## Potential standalone library names
+
+If `:kuilt-raft` is ever extracted into its own library, candidate names under consideration:
+
+- **rakt** — anagram of Raft; short, memorable, available as a Kotlin identifier
+- **Flotta** — Old Norse for a raft-island; thematic fit with the kuilt/weaving/fabric naming family
+
+Neither is decided. Recorded here so the choice is visible when extraction day comes.
+
 ## Explicitly out of scope
 
 - **Dynamic membership / joint consensus** (§6) — `ClusterConfig` type is ready for it; implementation deferred.
