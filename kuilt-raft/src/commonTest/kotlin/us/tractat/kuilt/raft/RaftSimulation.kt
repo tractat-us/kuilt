@@ -1,6 +1,7 @@
 package us.tractat.kuilt.raft
 
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancel
 import kotlin.test.assertTrue
 
@@ -8,6 +9,12 @@ class RaftSimulation(
     val nodeIds: List<NodeId>,
     private val scope: CoroutineScope,
     private val raftConfig: RaftConfig = RaftConfig(),
+    /**
+     * Scope used to create per-node child scopes. In tests, pass [TestScope.backgroundScope]
+     * so that the node coroutines (infinite heartbeat/election loops) are cancelled when the
+     * test body finishes without causing [UncompletedCoroutinesError].
+     */
+    private val nodeScope: CoroutineScope = scope,
     private val nodeFactory: (NodeId, RaftTransport, RaftStorage, CoroutineScope) -> RaftNode,
 ) {
     val network = InMemoryRaftNetwork()
@@ -18,7 +25,7 @@ class RaftSimulation(
     init { nodeIds.forEach { start(it) } }
 
     private fun start(id: NodeId) {
-        val child = CoroutineScope(scope.coroutineContext)
+        val child = CoroutineScope(nodeScope.coroutineContext + Job(nodeScope.coroutineContext[Job]))
         scopes[id] = child
         nodes[id] = nodeFactory(id, network.transport(id), storages.getValue(id), child)
     }

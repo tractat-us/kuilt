@@ -1,7 +1,9 @@
 package us.tractat.kuilt.raft
 
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
+import us.tractat.kuilt.raft.internal.RaftEngine
 
 public interface RaftNode {
     public val role: StateFlow<RaftRole>
@@ -18,3 +20,10 @@ public interface RaftNode {
 
     public suspend fun close()
 }
+
+public fun CoroutineScope.raftNode(
+    clusterConfig: ClusterConfig,
+    transport: RaftTransport,
+    storage: RaftStorage,
+    raftConfig: RaftConfig = RaftConfig(),
+): RaftNode = RaftEngine(clusterConfig, transport, storage, raftConfig, this)
