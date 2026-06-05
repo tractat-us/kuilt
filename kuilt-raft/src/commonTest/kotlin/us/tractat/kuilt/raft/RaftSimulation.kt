@@ -37,24 +37,25 @@ class RaftSimulation(
     fun dropLink(from: NodeId, to: NodeId) = network.dropLink(from, to)
 
     suspend fun checkInvariants() {
-        // 1. Election Safety: at most one leader
+        // 1. Election Safety: at most one leader at a time
         val leaders = nodes.values.filter { it.role.value is RaftRole.Leader }
-        assertTrue(leaders.size <= 1, "Election Safety violated: ${leaders.size} leaders simultaneously")
+        assertTrue(leaders.size <= 1,
+            "Election Safety violated: ${leaders.size} simultaneous leaders (${leaders.map { it.role.value }})")
 
-        // 2. State Machine Safety: no two nodes have different commands at the same committed index
+        // 2. State Machine Safety: no two nodes committed different commands at same index
         val minCommit = nodes.values.minOfOrNull { it.commitIndex.value } ?: 0L
         if (minCommit > 0L) {
-            val snapshots = nodes.entries.associate { (id, _) ->
-                id to storages.getValue(id).entries(1L)
+            val snapshots: Map<NodeId, List<LogEntry>> = nodes.keys.associateWith { id ->
+                storages.getValue(id).entries(1L)
             }
             val reference = snapshots.values.firstOrNull() ?: return
-            snapshots.values.drop(1).forEach { other ->
+            snapshots.entries.drop(1).forEach { (nodeId, entries) ->
                 (1..minCommit).forEach { idx ->
                     val ref = reference.firstOrNull { it.index == idx }
-                    val oth = other.firstOrNull { it.index == idx }
+                    val oth = entries.firstOrNull { it.index == idx }
                     if (ref != null && oth != null) {
                         assertTrue(ref.command.contentEquals(oth.command),
-                            "State Machine Safety violated at index $idx")
+                            "State Machine Safety violated at index $idx between reference and $nodeId")
                     }
                 }
             }
