@@ -13,6 +13,9 @@ public interface DotStore<S : DotStore<S>> {
     /** True when the store holds no dots. */
     public val isBottom: Boolean get() = dots.isEmpty()
 
+    /** The empty (bottom) store of this shape — no dots. */
+    public val empty: S
+
     /**
      * The causal join with [other]. A dot is kept when it is live in **both**
      * stores, or live in one and **not yet witnessed** by the other side's
