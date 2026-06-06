@@ -115,6 +115,7 @@ public class SeamReplicator<S : Quilted<S>>(
             is ReplicatorMessage.Delta -> onDelta(sender, msg)
             is ReplicatorMessage.Ack -> onAck(msg)
             is ReplicatorMessage.FullState -> onFullState(msg)
+            is ReplicatorMessage.Resend -> onResend(msg)
         }
     }
 
@@ -145,6 +146,14 @@ public class SeamReplicator<S : Quilted<S>>(
 
     private fun onFullState(msg: ReplicatorMessage.FullState<S>) {
         _state.update { it.piece(msg.state) }
+    }
+
+    private fun onResend(msg: ReplicatorMessage.Resend<S>) {
+        if (msg.sender != replica) return
+        for (seq in msg.fromSeq..msg.toSeq) {
+            val delta = pendingDeltas[seq] ?: continue
+            broadcastDelta(seq, delta)
+        }
     }
 
     private fun encode(msg: ReplicatorMessage<S>): ByteArray =
