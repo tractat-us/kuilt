@@ -60,7 +60,7 @@ internal class NaiveORSet<E> private constructor(
         val mergedSeen = seenDots + other.seenDots
         val mergedSeqs = buildMap {
             putAll(nextSeqPerReplica)
-            for ((r, s) in other.nextSeqPerReplica) put(r, maxOf(getOrDefault(r, 0L), s))
+            for ((r, s) in other.nextSeqPerReplica) put(r, maxOf(this[r] ?: 0L, s))
         }
         return NaiveORSet(mergedTags, mergedSeen, mergedSeqs)
     }
