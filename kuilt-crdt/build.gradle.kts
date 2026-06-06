@@ -6,9 +6,13 @@ plugins {
 kotlin {
     sourceSets {
         commonMain.dependencies {
+            api(project(":kuilt-core"))
             api(libs.kotlinx.serialization.core)
+            implementation(libs.kotlinx.coroutines.core)
+            implementation(libs.kotlinx.serialization.cbor)
         }
         commonTest.dependencies {
+            implementation(libs.kotlinx.coroutines.test)
             implementation(libs.kotlinx.serialization.json)
         }
     }

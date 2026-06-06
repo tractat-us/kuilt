@@ -1,0 +1,44 @@
+@file:OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
+
+package us.tractat.kuilt.crdt.replicator
+
+import kotlinx.serialization.cbor.Cbor
+import us.tractat.kuilt.crdt.GCounter
+import us.tractat.kuilt.crdt.ReplicaId
+import kotlin.test.Test
+import kotlin.test.assertEquals
+
+class ReplicatorMessageTest {
+
+    private val a = ReplicaId("A")
+    private val msgSerializer = ReplicatorMessage.serializer(GCounter.serializer())
+
+    @Test
+    fun deltaRoundTripsThroughCbor() {
+        val msg = ReplicatorMessage.Delta(sender = a, seq = 7L, delta = GCounter.of(a to 3L))
+        val bytes = Cbor.encodeToByteArray(msgSerializer, msg)
+        val decoded = Cbor.decodeFromByteArray(msgSerializer, bytes)
+        assertEquals(msg.sender, (decoded as ReplicatorMessage.Delta).sender)
+        assertEquals(msg.seq, decoded.seq)
+        assertEquals(msg.delta, decoded.delta)
+    }
+
+    @Test
+    fun ackRoundTripsThroughCbor() {
+        val msg = ReplicatorMessage.Ack<GCounter>(acker = a, sender = ReplicaId("B"), seq = 3L)
+        val bytes = Cbor.encodeToByteArray(msgSerializer, msg)
+        val decoded = Cbor.decodeFromByteArray(msgSerializer, bytes)
+        assertEquals(msg.acker, (decoded as ReplicatorMessage.Ack).acker)
+        assertEquals(msg.sender, decoded.sender)
+        assertEquals(msg.seq, decoded.seq)
+    }
+
+    @Test
+    fun fullStateRoundTripsThroughCbor() {
+        val msg = ReplicatorMessage.FullState(sender = a, state = GCounter.of(a to 5L))
+        val bytes = Cbor.encodeToByteArray(msgSerializer, msg)
+        val decoded = Cbor.decodeFromByteArray(msgSerializer, bytes)
+        assertEquals(msg.sender, (decoded as ReplicatorMessage.FullState).sender)
+        assertEquals(msg.state, decoded.state)
+    }
+}
