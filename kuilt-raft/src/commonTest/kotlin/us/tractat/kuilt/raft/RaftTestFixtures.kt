@@ -91,6 +91,7 @@ internal fun raftSim(
     nodeScope: CoroutineScope,
     n: Int = 3,
     config: RaftConfig = FAST_RAFT_CONFIG,
+    maxPayloadBytes: Int? = null,
 ): RaftSimulation {
     val ids = (1..n).map { NodeId("v$it") }
     val cluster = ClusterConfig(voters = ids.toSet())
@@ -99,6 +100,7 @@ internal fun raftSim(
         scope = scope,
         raftConfig = config,
         nodeScope = nodeScope,
+        maxPayloadBytes = maxPayloadBytes,
         nodeFactory = { _, transport, storage, childScope ->
             childScope.raftNode(cluster, transport, storage, config)
         },

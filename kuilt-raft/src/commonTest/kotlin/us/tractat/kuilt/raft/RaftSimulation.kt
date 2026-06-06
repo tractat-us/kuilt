@@ -33,9 +33,14 @@ class RaftSimulation(
      * test body finishes without causing [UncompletedCoroutinesError].
      */
     private val nodeScope: CoroutineScope = scope,
+    /**
+     * Per-message payload limit reported to the engine via [RaftTransport.maxPayloadBytes].
+     * A tiny value forces InstallSnapshot to span many chunks (see [InMemoryRaftNetwork]).
+     */
+    maxPayloadBytes: Int? = null,
     private val nodeFactory: (NodeId, RaftTransport, RaftStorage, CoroutineScope) -> RaftNode,
 ) {
-    val network = InMemoryRaftNetwork()
+    val network = InMemoryRaftNetwork(maxPayloadBytes)
     val storages: Map<NodeId, InMemoryRaftStorage> = nodeIds.associateWith { InMemoryRaftStorage() }
     private val scopes: MutableMap<NodeId, CoroutineScope> = mutableMapOf()
     val nodes: MutableMap<NodeId, RaftNode> = mutableMapOf()
@@ -137,6 +142,70 @@ class RaftSimulation(
     } catch (_: TimeoutCancellationException) {
         // withTimeout cancelled us; suspend again on a fresh job to render the dump.
         throw AssertionError(withContext(NonCancellable) { dumpState("$what timed out after $within") })
+    }
+
+    /** Isolates a single node from every other node — the offline-follower scenario. */
+    fun partitionOff(id: NodeId) = partition(setOf(id), nodeIds.filter { it != id }.toSet())
+
+    /**
+     * A committed index on [id] safely past the start of the log yet below its current commit, so a
+     * snapshot through it both discards the prefix an offline follower still needs *and* leaves a
+     * suffix that must replicate via AppendEntries after the install — exercising the full rejoin.
+     */
+    fun compactionFloorCandidate(id: NodeId): Long {
+        val commit = nodes.getValue(id).commitIndex.value
+        return maxOf(2L, commit - 5L)
+    }
+
+    /**
+     * A live, in-order capture of every [Committed.Install] delivered to [id]'s state machine.
+     * Start it before healing a partition so the install raised by the rejoin is recorded.
+     */
+    fun collectInstalls(id: NodeId): List<Committed.Install> {
+        val installs = mutableListOf<Committed.Install>()
+        nodeScope.launch {
+            nodes.getValue(id).committed.collect { if (it is Committed.Install) installs += it }
+        }
+        return installs
+    }
+
+    /**
+     * The applied state of [id]'s state machine, modelled as the ordered concatenation of every
+     * committed command — reset whenever a [Committed.Install] arrives, then extended by the
+     * snapshot's opaque state and any subsequent entries. Two nodes agree iff this matches.
+     */
+    fun appliedState(id: NodeId): ByteArray = stateMachines.getValue(id).bytes()
+
+    /**
+     * The opaque state bytes a consumer would snapshot for [id] covering exactly entries up to and
+     * including [throughIndex] — the concatenation of those entries' commands. Equals what a peer
+     * reaches by applying the same prefix, so a node that installs this snapshot and then replays the
+     * suffix lands in the identical applied state as a node that applied the whole log linearly.
+     */
+    suspend fun stateBytes(id: NodeId, throughIndex: Long): ByteArray {
+        val acc = ArrayList<Byte>()
+        storages.getValue(id).entries().filter { it.index <= throughIndex && !it.isNoOp }
+            .forEach { acc.addAll(it.command.asList()) }
+        return acc.toByteArray()
+    }
+
+    private val stateMachines: Map<NodeId, AppliedStateMachine> = nodeIds.associateWith { AppliedStateMachine() }
+
+    init {
+        nodeIds.forEach { id ->
+            val sm = stateMachines.getValue(id)
+            nodeScope.launch { nodes.getValue(id).committed.collect(sm::apply) }
+        }
+    }
+
+    /** Folds a node's [Committed] stream into opaque bytes — entries append, installs reset to the snapshot state. */
+    private class AppliedStateMachine {
+        private val acc = ArrayList<Byte>()
+        fun apply(c: Committed) = when (c) {
+            is Committed.Entry -> { acc.addAll(c.entry.command.asList()); Unit }
+            is Committed.Install -> { acc.clear(); acc.addAll(c.snapshot.state.asList()); Unit }
+        }
+        fun bytes(): ByteArray = acc.toByteArray()
     }
 
     suspend fun checkInvariants() {
