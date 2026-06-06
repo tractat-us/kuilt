@@ -1,0 +1,157 @@
+package us.tractat.kuilt.raft.test
+
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.receiveAsFlow
+import us.tractat.kuilt.raft.LogEntry
+import us.tractat.kuilt.raft.NodeId
+import us.tractat.kuilt.raft.NotLeaderException
+import us.tractat.kuilt.raft.RaftNode
+import us.tractat.kuilt.raft.RaftRole
+import us.tractat.kuilt.raft.RaftTraceEvent
+
+/**
+ * A test double for [RaftNode] with driver helpers for driving role transitions,
+ * injecting committed entries, emitting trace events, and inspecting outgoing proposals.
+ *
+ * Defaults make `FakeRaftNode()` ready to use in one line:
+ *
+ * ```kotlin
+ * val node = FakeRaftNode()
+ * node.setRole(RaftRole.Leader)
+ * val entry = node.propose("set x=1".encodeToByteArray())
+ * val committed = node.committed.first()
+ * // committed.command == "set x=1".encodeToByteArray()
+ * ```
+ *
+ * **Stream semantics — a deliberate divergence from the real [RaftNode].** The real
+ * [RaftNode] documents [committed] and [trace] as *hot, no-replay* flows (late
+ * collectors miss history). For test ergonomics this double backs them with
+ * unbounded-buffering channels instead, so `pushCommitted(...)` followed by
+ * `committed.first()` works without racing a collector. Two consequences a consumer
+ * should not encode as [RaftNode] guarantees:
+ * - entries/events emitted before collection are **buffered and replayed** here,
+ *   whereas the real [RaftNode] would drop them;
+ * - [close] **completes** [committed]/[trace] (channel close), whereas the real
+ *   engine cancels its backing scope without completing the flows.
+ */
+public class FakeRaftNode(
+    /** Stable identifier for this node — exposed as a convenience field, not on [RaftNode]. */
+    public val selfId: NodeId = NodeId("self"),
+    initialRole: RaftRole = RaftRole.Follower,
+    initialLeader: NodeId? = null,
+    initialCommitIndex: Long = 0L,
+) : RaftNode {
+
+    private val _role = MutableStateFlow(initialRole)
+    override val role: StateFlow<RaftRole> = _role.asStateFlow()
+
+    private val _leader = MutableStateFlow(initialLeader)
+    override val leader: StateFlow<NodeId?> = _leader.asStateFlow()
+
+    private val _commitIndex = MutableStateFlow(initialCommitIndex)
+    override val commitIndex: StateFlow<Long> = _commitIndex.asStateFlow()
+
+    private val committedChannel = Channel<LogEntry>(capacity = Channel.UNLIMITED)
+    override val committed: Flow<LogEntry> = committedChannel.receiveAsFlow()
+
+    private val traceChannel = Channel<RaftTraceEvent>(capacity = Channel.UNLIMITED)
+    override val trace: Flow<RaftTraceEvent> = traceChannel.receiveAsFlow()
+
+    private val _proposals = mutableListOf<ByteArray>()
+    private var _closed = false
+    private var _nextIndex = initialCommitIndex + 1L
+
+    /** All commands passed to [propose], in call order. */
+    public val proposals: List<ByteArray> get() = _proposals.toList()
+
+    /** Whether [close] has been called. */
+    public val closed: Boolean get() = _closed
+
+    /**
+     * Behavior of [propose]. Defaults to contract-faithful: throws [NotLeaderException]
+     * unless [role] is [RaftRole.Leader], otherwise appends the command to [committed]
+     * and returns the resulting [LogEntry].
+     *
+     * Override to inject specific outcomes:
+     * ```kotlin
+     * node.proposeBehavior = { _ -> throw LeadershipLostException() }
+     * ```
+     */
+    public var proposeBehavior: suspend (ByteArray) -> LogEntry = { command ->
+        if (_role.value !is RaftRole.Leader) throw NotLeaderException()
+        pushCommitted(command)
+    }
+
+    // ── RaftNode interface ────────────────────────────────────────────────────
+
+    override suspend fun propose(command: ByteArray): LogEntry {
+        _proposals.add(command)
+        return proposeBehavior(command)
+    }
+
+    override suspend fun close() {
+        if (_closed) return
+        _closed = true
+        committedChannel.close()
+        traceChannel.close()
+    }
+
+    // ── Test-driver helpers ───────────────────────────────────────────────────
+
+    /** Transition [role] to [newRole]. */
+    public fun setRole(newRole: RaftRole) {
+        _role.value = newRole
+    }
+
+    /** Update [leader] to [newLeader]. */
+    public fun setLeader(newLeader: NodeId?) {
+        _leader.value = newLeader
+    }
+
+    /** Set [commitIndex] to [index]. Does not push any entry onto [committed]. */
+    public fun setCommitIndex(index: Long) {
+        _commitIndex.value = index
+    }
+
+    /**
+     * Push [entry] onto [committed] and advance [commitIndex] to [entry]'s index.
+     *
+     * ```kotlin
+     * node.pushCommitted(LogEntry(index = 1, term = 1, command = byteArrayOf(42)))
+     * val entry = node.committed.first()
+     * ```
+     */
+    public suspend fun pushCommitted(entry: LogEntry): LogEntry {
+        committedChannel.send(entry)
+        _commitIndex.value = entry.index
+        return entry
+    }
+
+    /**
+     * Convenience: create a [LogEntry] at the next auto-incremented index (term=1)
+     * with [command], push it onto [committed], and return it.
+     *
+     * ```kotlin
+     * node.pushCommitted("set x=1".encodeToByteArray())
+     * val entry = node.committed.first()
+     * ```
+     */
+    public suspend fun pushCommitted(command: ByteArray): LogEntry =
+        pushCommitted(LogEntry(index = _nextIndex++, term = 1L, command = command))
+
+    /**
+     * Push [event] onto [trace].
+     *
+     * ```kotlin
+     * node.emitTrace(RaftTraceEvent.BecomeLeader(clock = 1, node = NodeId("self"), term = 2))
+     * val event = node.trace.first()
+     * ```
+     */
+    public suspend fun emitTrace(event: RaftTraceEvent) {
+        traceChannel.send(event)
+    }
+}
