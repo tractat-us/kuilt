@@ -15,35 +15,8 @@ import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
-import kotlin.time.Duration.Companion.milliseconds
-
-private val fastConfig = RaftConfig(
-    electionTimeoutMin = 5.milliseconds,
-    electionTimeoutMax = 10.milliseconds,
-    heartbeatInterval = 2.milliseconds,
-)
-
-private fun TestScope.threeNodeSim(nodeScope: CoroutineScope = backgroundScope): RaftSimulation {
-    val ids = listOf(NodeId("a"), NodeId("b"), NodeId("c"))
-    val config = ClusterConfig(voters = ids.toSet())
-    return RaftSimulation(
-        nodeIds = ids,
-        scope = this,
-        raftConfig = fastConfig,
-        nodeScope = nodeScope,
-        nodeFactory = { id, transport, storage, scope ->
-            scope.raftNode(config, transport, storage, fastConfig)
-        },
-    )
-}
-
-private suspend fun awaitLeader(sim: RaftSimulation): RaftNode {
-    repeat(500) {
-        sim.leader()?.let { return it }
-        delay(1)
-    }
-    error("No leader elected within timeout")
-}
+private fun TestScope.threeNodeSim(nodeScope: CoroutineScope = backgroundScope): RaftSimulation =
+    raftSim(this, nodeScope)
 
 private fun leaderId(sim: RaftSimulation, leader: RaftNode): NodeId =
     sim.nodes.entries.first { it.value === leader }.key
@@ -128,7 +101,7 @@ class CancellationTest {
             config,
             network.transport(NodeId("a")),
             InMemoryRaftStorage(),
-            fastConfig,
+            FAST_RAFT_CONFIG,
         )
         delay(2) // let election timer start
         nodeScope.cancel()
@@ -204,7 +177,7 @@ class CancellationTest {
             config,
             network.transport(NodeId("a")),
             storage,
-            fastConfig,
+            FAST_RAFT_CONFIG,
         )
         delay(5)
         nodeScope.cancel()

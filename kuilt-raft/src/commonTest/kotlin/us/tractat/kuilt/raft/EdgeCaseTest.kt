@@ -12,14 +12,8 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
-import kotlin.time.Duration.Companion.milliseconds
 
-private val fastConfig = RaftConfig(5.milliseconds, 10.milliseconds, 2.milliseconds)
-
-private suspend fun awaitLeader(sim: RaftSimulation): RaftNode {
-    repeat(500) { sim.leader()?.let { return it }; delay(1) }
-    error("No leader elected within timeout")
-}
+private val fastConfig = FAST_RAFT_CONFIG
 
 class EdgeCaseTest {
 

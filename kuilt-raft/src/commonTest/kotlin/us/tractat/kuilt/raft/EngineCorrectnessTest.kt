@@ -10,39 +10,6 @@ import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.time.Duration.Companion.milliseconds
-
-private val fastConfig = RaftConfig(
-    electionTimeoutMin = 5.milliseconds,
-    electionTimeoutMax = 10.milliseconds,
-    heartbeatInterval = 2.milliseconds,
-)
-
-private fun correctnessSim(
-    scope: kotlinx.coroutines.CoroutineScope,
-    nodeScope: kotlinx.coroutines.CoroutineScope,
-    n: Int = 3,
-): RaftSimulation {
-    val ids = (1..n).map { NodeId("e$it") }
-    val config = ClusterConfig(voters = ids.toSet())
-    return RaftSimulation(
-        nodeIds = ids,
-        scope = scope,
-        raftConfig = fastConfig,
-        nodeScope = nodeScope,
-        nodeFactory = { id, transport, storage, childScope ->
-            childScope.raftNode(config, transport, storage, fastConfig)
-        },
-    )
-}
-
-private suspend fun awaitLeader(sim: RaftSimulation): RaftNode {
-    repeat(500) {
-        sim.leader()?.let { return it }
-        delay(1)
-    }
-    error("No leader elected within timeout")
-}
 
 class EngineCorrectnessTest {
 
@@ -56,7 +23,7 @@ class EngineCorrectnessTest {
      */
     @Test
     fun burstProposals_eachIndexEmittedExactlyOnce() = runTest(UnconfinedTestDispatcher()) {
-        val sim = correctnessSim(this, backgroundScope)
+        val sim = raftSim(this, backgroundScope)
         val leader = awaitLeader(sim)
 
         val collectedByLeader = mutableListOf<LogEntry>()
@@ -92,7 +59,7 @@ class EngineCorrectnessTest {
      */
     @Test
     fun slowConsumer_noEntriesDropped() = runTest(UnconfinedTestDispatcher()) {
-        val sim = correctnessSim(this, backgroundScope)
+        val sim = raftSim(this, backgroundScope)
         val leader = awaitLeader(sim)
 
         val received = mutableListOf<LogEntry>()

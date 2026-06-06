@@ -16,45 +16,12 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
-import kotlin.time.Duration.Companion.milliseconds
-
-private val fastConfig = RaftConfig(
-    electionTimeoutMin = 5.milliseconds,
-    electionTimeoutMax = 10.milliseconds,
-    heartbeatInterval = 2.milliseconds,
-)
-
-private fun replicationSim(
-    scope: kotlinx.coroutines.CoroutineScope,
-    nodeScope: kotlinx.coroutines.CoroutineScope,
-    n: Int = 3,
-): RaftSimulation {
-    val ids = (1..n).map { NodeId("node$it") }
-    val config = ClusterConfig(voters = ids.toSet())
-    return RaftSimulation(
-        nodeIds = ids,
-        scope = scope,
-        raftConfig = fastConfig,
-        nodeScope = nodeScope,
-        nodeFactory = { id, transport, storage, childScope ->
-            childScope.raftNode(config, transport, storage, fastConfig)
-        },
-    )
-}
-
-private suspend fun awaitLeader(sim: RaftSimulation): RaftNode {
-    repeat(500) {
-        sim.leader()?.let { return it }
-        delay(1)
-    }
-    error("No leader elected within timeout")
-}
 
 class ReplicationTest {
 
     @Test
     fun basicReplication_entryReachesAllFollowers() = runTest(UnconfinedTestDispatcher()) {
-        val sim = replicationSim(this, backgroundScope)
+        val sim = raftSim(this, backgroundScope)
         val leader = awaitLeader(sim)
 
         // Collect first non-no-op (user) entry on all followers before proposing.
@@ -72,7 +39,7 @@ class ReplicationTest {
 
     @Test
     fun concurrentProposals_allCommitInOrder() = runTest(UnconfinedTestDispatcher()) {
-        val sim = replicationSim(this, backgroundScope)
+        val sim = raftSim(this, backgroundScope)
         val leader = awaitLeader(sim)
 
         val results = (1..5).map { i ->
@@ -87,7 +54,7 @@ class ReplicationTest {
 
     @Test
     fun followerFailure_quorumContinues() = runTest(UnconfinedTestDispatcher()) {
-        val sim = replicationSim(this, backgroundScope)
+        val sim = raftSim(this, backgroundScope)
         val leader = awaitLeader(sim)
         val leaderId = sim.nodes.entries.first { it.value === leader }.key
         val followerId = sim.nodes.keys.first { it != leaderId }
@@ -101,7 +68,7 @@ class ReplicationTest {
 
     @Test
     fun leaderFailure_newLeaderCanCommit() = runTest(UnconfinedTestDispatcher()) {
-        val sim = replicationSim(this, backgroundScope)
+        val sim = raftSim(this, backgroundScope)
         val leader = awaitLeader(sim)
         val leaderId = sim.nodes.entries.first { it.value === leader }.key
 
@@ -119,7 +86,7 @@ class ReplicationTest {
 
     @Test
     fun failNoAgree_quorumLost_noProgress() = runTest(UnconfinedTestDispatcher()) {
-        val sim = replicationSim(this, backgroundScope)
+        val sim = raftSim(this, backgroundScope)
         val leader = awaitLeader(sim)
         val leaderId = sim.nodes.entries.first { it.value === leader }.key
 

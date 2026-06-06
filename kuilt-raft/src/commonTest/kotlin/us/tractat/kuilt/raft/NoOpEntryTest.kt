@@ -10,14 +10,6 @@ import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertTrue
 import kotlin.test.assertContentEquals
-import kotlin.time.Duration.Companion.milliseconds
-
-private val fastConfig = RaftConfig(
-    electionTimeoutMin = 5.milliseconds,
-    electionTimeoutMax = 10.milliseconds,
-    heartbeatInterval = 2.milliseconds,
-)
-
 class NoOpEntryTest {
 
     /**
@@ -36,10 +28,10 @@ class NoOpEntryTest {
         val sim = RaftSimulation(
             nodeIds = ids,
             scope = this,
-            raftConfig = fastConfig,
+            raftConfig = FAST_RAFT_CONFIG,
             nodeScope = backgroundScope,
             nodeFactory = { id, transport, storage, nodeScope ->
-                nodeScope.raftNode(config, transport, storage, fastConfig)
+                nodeScope.raftNode(config, transport, storage, FAST_RAFT_CONFIG)
             },
         )
 
@@ -83,10 +75,10 @@ class NoOpEntryTest {
         val sim = RaftSimulation(
             nodeIds = ids,
             scope = this,
-            raftConfig = fastConfig,
+            raftConfig = FAST_RAFT_CONFIG,
             nodeScope = backgroundScope,
             nodeFactory = { id, transport, storage, nodeScope ->
-                nodeScope.raftNode(config, transport, storage, fastConfig)
+                nodeScope.raftNode(config, transport, storage, FAST_RAFT_CONFIG)
             },
         )
 
@@ -125,9 +117,6 @@ class NoOpEntryTest {
         }
     }
 }
-
-private suspend fun awaitLeader(sim: RaftSimulation): RaftNode =
-    awaitLeaderAmong(sim, sim.nodes.keys)
 
 private suspend fun awaitLeaderAmong(sim: RaftSimulation, ids: Set<NodeId>): RaftNode {
     repeat(500) {
