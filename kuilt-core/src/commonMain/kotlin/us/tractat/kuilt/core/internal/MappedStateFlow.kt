@@ -1,3 +1,5 @@
+@file:OptIn(kotlinx.coroutines.ExperimentalForInheritanceCoroutinesApi::class)
+
 package us.tractat.kuilt.core.internal
 
 import kotlinx.coroutines.flow.FlowCollector
