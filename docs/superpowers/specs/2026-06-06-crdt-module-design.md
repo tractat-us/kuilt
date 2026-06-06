@@ -77,6 +77,46 @@ we trade a slower start for a far more powerful, less repetitive middle.
 Op-based appears **only** at the one rung where it is genuinely superior — the
 sequence / RGA type, whose full state is too large to ship.
 
+#### State-based vs delta-state: one family, not two
+
+A natural question: should the module ship *both* state-based and delta-state
+CRDTs? No — because **delta-state subsumes state-based**, so there is only one
+family to build.
+
+A delta-state CRDT *is* a state-based CRDT (a join-semilattice with `piece`) that
+additionally lets a mutator return a small **delta**. The delta is a small element
+of the *same* lattice, joined with the *same* `piece`:
+
+- full-state merge — `local.piece(remoteWholeState)`
+- delta merge — `local.piece(delta)` — the identical operation
+
+Shipping the whole state is just the degenerate case where the "delta" is the
+entire state. So there is no `StateBasedGCounter` *and* `DeltaGCounter`: there is
+one `GCounter`, and its full-state behaviour comes for free. The zoo is a single
+hierarchy of delta-capable join-semilattices.
+
+The only place "both" is a real decision is the **replicator (rung 12)**, and even
+there it is one component with two *modes*, not two implementations:
+
+- **Full-state anti-entropy** — periodically ship the whole state; simple and
+  robust; bandwidth grows with state size.
+- **Delta anti-entropy** — ship only deltas since a peer's last ack; scales, at
+  the cost of delta buffers + per-neighbor ack/seq + GC.
+
+The delta replicator *contains* full-state transfer as its bootstrap and
+catch-up path: a freshly joined peer (or one with a delivery gap) cannot
+reconstruct state from deltas it never saw, so it receives a full-state snapshot,
+then deltas thereafter. "Support both" therefore collapses to "build the delta
+replicator; full-state sync is its join/recovery path."
+
+One subtlety makes delta genuinely more than "a smaller state": for **causal**
+types (the DotStore family — OR-Set, MV-Register), deltas cannot be applied in
+arbitrary order, because a delta may depend on causal context the receiver has
+not seen. The fix is **delta-intervals** — ship causally-contiguous runs of
+deltas, and fall back to full state on a gap. That is why the full-state path is
+not optional: it is the safety net that keeps the delta optimization sound. It is
+a rung-12 concern, not a data-type concern.
+
 ### The foundation
 
 - **Join-semilattice interface** — every CRDT is a value with a `merge` that is
