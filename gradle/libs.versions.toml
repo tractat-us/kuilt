@@ -11,6 +11,9 @@ android-minSdk = "24"
 jna = "5.18.1"
 logback = "1.5.32"
 playServicesNearby = "19.3.0"
+jqwik = "1.9.2"
+junit-platform = "1.11.4"
+junit-vintage = "5.11.4"
 
 [libraries]
 kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "kotlinx-coroutines" }
@@ -43,6 +46,12 @@ logback = { module = "ch.qos.logback:logback-classic", version.ref = "logback" }
 # Google Nearby Connections (Android-only) + Tasks↔coroutines bridge for kuilt-nearby:
 play-services-nearby = { module = "com.google.android.gms:play-services-nearby", version.ref = "playServicesNearby" }
 kotlinx-coroutines-playServices = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-play-services", version.ref = "kotlinx-coroutines" }
+# jqwik — JVM property-based / stateful testing for kuilt-raft:
+jqwik = { module = "net.jqwik:jqwik", version.ref = "jqwik" }
+# JUnit Platform launcher — needed when switching jvmTest to useJUnitPlatform():
+junit-platform-launcher = { module = "org.junit.platform:junit-platform-launcher", version.ref = "junit-platform" }
+# JUnit Vintage engine — runs existing JUnit4/kotlin-test-junit tests under the JUnit Platform:
+junit-vintage-engine = { module = "org.junit.vintage:junit-vintage-engine", version.ref = "junit-vintage" }
 # Gradle plugin artifacts for build-logic to depend on:
 kotlin-gradlePlugin = { module = "org.jetbrains.kotlin:kotlin-gradle-plugin", version.ref = "kotlin" }
 kotlin-serialization-gradlePlugin = { module = "org.jetbrains.kotlin:kotlin-serialization", version.ref = "kotlin" }

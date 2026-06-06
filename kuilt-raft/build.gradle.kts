@@ -14,5 +14,17 @@ kotlin {
         commonTest.dependencies {
             implementation(libs.kotlinx.coroutines.test)
         }
+        jvmTest.dependencies {
+            // jqwik property-based / stateful testing (JVM-only; JUnit Platform)
+            implementation(libs.jqwik)
+            // JUnit Vintage engine runs the existing kotlin-test-junit (JUnit4) suite
+            // under the JUnit Platform so both frameworks co-exist in one jvmTest task.
+            runtimeOnly(libs.junit.vintage.engine)
+            runtimeOnly(libs.junit.platform.launcher)
+        }
     }
 }
+
+// Switch jvmTest to the JUnit Platform so jqwik properties are discovered.
+// junit-vintage-engine (above) ensures the existing kotlin-test-junit tests still run.
+tasks.named<Test>("jvmTest") { useJUnitPlatform() }
