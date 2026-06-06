@@ -101,7 +101,7 @@ class BoundedCounterTest {
         assertEquals(2L, next.quota(a)) // 5 - 3
         assertEquals(8L, next.quota(b)) // 5 + 3
         assertEquals(10L, next.totalBudget) // unchanged — it's just redistribution
-        assertEquals(3L, next.totalSpent)   // sender's `spent[a]` bumped by 3
+        assertEquals(0L, next.totalSpent)   // transfers do not bump spent
     }
 
     @Test
@@ -129,8 +129,8 @@ class BoundedCounterTest {
         val final = apply(transferred, transferred.trySpend(b, 8L)!!)
         assertEquals(2L, final.quota(a))
         assertEquals(0L, final.quota(b))
-        assertEquals(11L, final.totalSpent) // 3 (transfer out from a) + 8 (b's spend)
-        assertEquals(2L, final.totalBudget) // 13 received total - 11 spent total
+        assertEquals(8L, final.totalSpent)  // only consumption; transfers conserved
+        assertEquals(2L, final.totalBudget) // 10 initial - 8 spent
     }
 
     @Test
