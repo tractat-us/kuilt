@@ -10,6 +10,8 @@ import kotlinx.serialization.Serializable
 @Serializable
 public class DotSet(override val dots: Set<Dot> = emptySet()) : DotStore<DotSet> {
 
+    override val empty: DotSet get() = DotSet()
+
     override fun join(other: DotSet, context: DotContext, otherContext: DotContext): DotSet {
         val kept = LinkedHashSet<Dot>()
         for (dot in dots) {
