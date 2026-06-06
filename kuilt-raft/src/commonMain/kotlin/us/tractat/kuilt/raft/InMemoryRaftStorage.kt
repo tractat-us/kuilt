@@ -1,5 +1,19 @@
 package us.tractat.kuilt.raft
 
+/**
+ * An in-memory [RaftStorage] implementation.
+ *
+ * State is held entirely in process memory — term, vote, and log are all lost
+ * on process exit. This makes it suitable for:
+ * - **Tests** — fast, zero-setup, deterministic.
+ * - **Ephemeral players** — nodes that rejoin the cluster fresh on restart
+ *   rather than recovering from durable state (they simply catch up via
+ *   log replication).
+ *
+ * **Production servers** should inject a persistent [RaftStorage] backed by
+ * SQLite, IndexedDB, or a similar crash-safe store to guarantee Raft's
+ * durability properties across restarts.
+ */
 public class InMemoryRaftStorage : RaftStorage {
     private var currentTerm: Long = 0L
     private var currentVotedFor: NodeId? = null

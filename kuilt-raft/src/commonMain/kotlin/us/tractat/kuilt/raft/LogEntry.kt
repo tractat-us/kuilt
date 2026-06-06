@@ -2,6 +2,17 @@ package us.tractat.kuilt.raft
 
 import kotlinx.serialization.Serializable
 
+/**
+ * One entry in the replicated Raft log.
+ *
+ * @param index 1-based, monotonically increasing position in the log. The log
+ *   is contiguous — there are no gaps between consecutive entries.
+ * @param term The leader's term when this entry was appended. Term numbers
+ *   increase monotonically across the cluster's lifetime.
+ * @param command Opaque application bytes. The Raft layer treats this as an
+ *   uninterpreted blob; the application gives [command] meaning after the
+ *   entry appears on [RaftNode.committed].
+ */
 @Serializable
 public data class LogEntry(
     val index: Long,
