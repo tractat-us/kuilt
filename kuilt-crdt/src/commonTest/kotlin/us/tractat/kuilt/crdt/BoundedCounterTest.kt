@@ -154,4 +154,23 @@ class BoundedCounterTest {
         val encoded = Json.encodeToString(BoundedCounter.serializer(), bc)
         assertEquals(bc, Json.decodeFromString(BoundedCounter.serializer(), encoded))
     }
+
+    @Test
+    fun concurrentMultiDonorTransfersConverge() {
+        // Alice and Charles each hold 5 quota; both concurrently transfer 3 to Bob.
+        // The 2D matrix preserves both transfers — Bob ends with 6 new quota; donors keep 2 each.
+        // The 1D model (received: GCounter) collides on `received[bob]` and silently loses one transfer.
+        val a = ReplicaId("A"); val c = ReplicaId("C"); val b = ReplicaId("B")
+        val start = BoundedCounter.init(mapOf(a to 5L, c to 5L))
+
+        val aliceBranch = start.piece(start.transfer(from = a, to = b, amount = 3L)!!)
+        val charlesBranch = start.piece(start.transfer(from = c, to = b, amount = 3L)!!)
+        val merged = aliceBranch.piece(charlesBranch)
+
+        assertEquals(6L, merged.quota(b))           // both 3-transfers survived
+        assertEquals(2L, merged.quota(a))
+        assertEquals(2L, merged.quota(c))
+        assertEquals(10L, merged.totalBudget)       // 10 initial, 0 spent — transfers conserved
+        assertEquals(0L, merged.totalSpent)         // no consumption yet
+    }
 }
