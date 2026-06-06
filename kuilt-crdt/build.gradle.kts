@@ -6,7 +6,7 @@ plugins {
 kotlin {
     sourceSets {
         commonMain.dependencies {
-            implementation(libs.kotlinx.serialization.core)
+            api(libs.kotlinx.serialization.core)
         }
         commonTest.dependencies {
             implementation(libs.kotlinx.serialization.json)
