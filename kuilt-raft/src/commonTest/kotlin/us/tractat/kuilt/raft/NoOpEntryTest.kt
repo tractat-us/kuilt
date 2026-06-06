@@ -3,8 +3,10 @@
 package us.tractat.kuilt.raft
 
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
@@ -116,7 +118,76 @@ class NoOpEntryTest {
             )
         }
     }
+
+    /**
+     * #136: the §5.4.2 election no-op is an internal log entry and must NOT surface on
+     * [RaftNode.committed]. Consumers drive a state machine off this flow; leaking the
+     * empty-command no-op forces them to filter it out and risks misaligned indices.
+     *
+     * We subscribe to `committed` *before* the node becomes leader (so the no-op, if it
+     * leaked, would be captured at index 1), then confirm only the application command
+     * surfaces while `commitIndex` still advances past the no-op.
+     */
+    @Test
+    fun committed_doesNotEmitElectionNoOp() = runTest(UnconfinedTestDispatcher()) {
+        val id = NodeId("solo")
+        val config = ClusterConfig(voters = setOf(id))
+        val sim = RaftSimulation(
+            nodeIds = listOf(id),
+            scope = backgroundScope,
+            raftConfig = FAST_RAFT_CONFIG,
+        ) { _, transport, storage, nodeScope ->
+            nodeScope.raftNode(config, transport, storage, FAST_RAFT_CONFIG)
+        }
+        val node = sim.nodes.getValue(id)
+        val seen = mutableListOf<LogEntry>()
+        backgroundScope.launch { node.committed.collect { seen += it } }
+
+        // Election + no-op commit happen here, after the collector has subscribed.
+        val leader = awaitLeader(sim)
+        val userEntry = leader.propose(byteArrayOf(7))
+        node.commitIndex.filter { it >= userEntry.index }.first()
+
+        assertAll(
+            { assertTrue(node.commitIndex.value >= userEntry.index, "commitIndex must advance past the no-op") },
+            { assertTrue(seen.none { it.index == 1L }, "committed leaked the index-1 election no-op: $seen") },
+            { assertTrue(seen.none { it.command.isEmpty() }, "committed leaked an empty-command no-op: $seen") },
+            { assertContentEquals(byteArrayOf(7), seen.first().command, "first committed entry should be the user command") },
+        )
+    }
+
+    /**
+     * #136 guard: a no-op must be suppressed by *provenance*, not by empty content.
+     * A user that proposes a genuinely empty command (see EdgeCaseTest.emptyCommand…)
+     * must still see that entry on `committed` — only the internal election no-op is hidden.
+     */
+    @Test
+    fun committed_includesUserProposedEmptyCommand() = runTest(UnconfinedTestDispatcher()) {
+        val id = NodeId("solo")
+        val config = ClusterConfig(voters = setOf(id))
+        val sim = RaftSimulation(
+            nodeIds = listOf(id),
+            scope = backgroundScope,
+            raftConfig = FAST_RAFT_CONFIG,
+        ) { _, transport, storage, nodeScope ->
+            nodeScope.raftNode(config, transport, storage, FAST_RAFT_CONFIG)
+        }
+        val node = sim.nodes.getValue(id)
+        val seen = mutableListOf<LogEntry>()
+        backgroundScope.launch { node.committed.collect { seen += it } }
+
+        val leader = awaitLeader(sim)
+        val emptyUserEntry = leader.propose(byteArrayOf()) // index 2 — empty, but user-proposed
+        node.commitIndex.filter { it >= emptyUserEntry.index }.first()
+
+        assertAll(
+            { assertTrue(seen.any { it.index == emptyUserEntry.index }, "user-proposed empty command must surface on committed: $seen") },
+            { assertTrue(seen.none { it.index == 1L }, "the index-1 election no-op must still be suppressed: $seen") },
+        )
+    }
 }
+
+private fun assertAll(vararg assertions: () -> Unit) = assertions.forEach { it() }
 
 private suspend fun awaitLeaderAmong(sim: RaftSimulation, ids: Set<NodeId>): RaftNode {
     repeat(500) {
