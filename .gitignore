@@ -13,3 +13,4 @@ next-plan-*.md
 
 # Brainstorming visual companion sessions
 .superpowers/
+.jqwik-database
