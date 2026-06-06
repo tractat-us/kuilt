@@ -2,7 +2,7 @@ package us.tractat.kuilt.conformance.convergence
 
 import us.tractat.kuilt.crdt.Quilted
 
-private data class IntMax(val value: Int) : Quilted<IntMax> {
+internal data class IntMax(val value: Int) : Quilted<IntMax> {
     override fun piece(other: IntMax): IntMax = IntMax(maxOf(value, other.value))
 }
 
