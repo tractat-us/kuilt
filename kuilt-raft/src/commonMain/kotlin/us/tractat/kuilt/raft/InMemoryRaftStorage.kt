@@ -18,6 +18,7 @@ public class InMemoryRaftStorage : RaftStorage {
     private var currentTerm: Long = 0L
     private var currentVotedFor: NodeId? = null
     private val log = mutableListOf<LogEntry>()
+    private var snapshot: StoredSnapshot? = null
 
     override suspend fun term(): Long = currentTerm
     override suspend fun saveTerm(term: Long) { currentTerm = term }
@@ -30,4 +31,7 @@ public class InMemoryRaftStorage : RaftStorage {
     override suspend fun appendEntries(entries: List<LogEntry>) { log.addAll(entries) }
     override suspend fun entries(fromIndex: Long): List<LogEntry> = log.filter { it.index >= fromIndex }
     override suspend fun truncateFrom(index: Long) { log.removeAll { it.index >= index } }
+    override suspend fun saveSnapshot(meta: SnapshotMeta, state: ByteArray) { snapshot = StoredSnapshot(meta, state) }
+    override suspend fun loadSnapshot(): StoredSnapshot? = snapshot
+    override suspend fun discardLogPrefix(throughIndex: Long) { log.removeAll { it.index <= throughIndex } }
 }

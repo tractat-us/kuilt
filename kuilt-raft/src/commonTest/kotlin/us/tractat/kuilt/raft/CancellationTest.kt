@@ -199,4 +199,7 @@ private class DelayedStorage(
     override suspend fun appendEntries(entries: List<LogEntry>) { delay(delayMs); delegate.appendEntries(entries) }
     override suspend fun entries(fromIndex: Long): List<LogEntry> { delay(delayMs); return delegate.entries(fromIndex) }
     override suspend fun truncateFrom(index: Long) { delay(delayMs); delegate.truncateFrom(index) }
+    override suspend fun saveSnapshot(meta: SnapshotMeta, state: ByteArray) { delay(delayMs); delegate.saveSnapshot(meta, state) }
+    override suspend fun loadSnapshot(): StoredSnapshot? { delay(delayMs); return delegate.loadSnapshot() }
+    override suspend fun discardLogPrefix(throughIndex: Long) { delay(delayMs); delegate.discardLogPrefix(throughIndex) }
 }
