@@ -138,7 +138,7 @@ class NoOpEntryTest {
         }
         val node = sim.nodes.getValue(id)
         val seen = mutableListOf<LogEntry>()
-        backgroundScope.launch { node.committed.collect { seen += it } }
+        backgroundScope.launch { node.committed.collect { if (it is Committed.Entry) seen += it.entry } }
 
         // Election + no-op commit happen here, after the collector has subscribed.
         val leader = awaitLeader(sim)
@@ -171,7 +171,7 @@ class NoOpEntryTest {
         }
         val node = sim.nodes.getValue(id)
         val seen = mutableListOf<LogEntry>()
-        backgroundScope.launch { node.committed.collect { seen += it } }
+        backgroundScope.launch { node.committed.collect { if (it is Committed.Entry) seen += it.entry } }
 
         val leader = awaitLeader(sim)
         val emptyUserEntry = leader.propose(byteArrayOf()) // index 2 — empty, but user-proposed

@@ -78,6 +78,7 @@ package us.tractat.kuilt.raft
 
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
 import us.tractat.kuilt.raft.internal.RaftEngine
@@ -117,10 +118,11 @@ public interface RaftNode {
     public val commitIndex: StateFlow<Long>
 
     /**
-     * A hot [Flow] of **application** log entries committed by a quorum, in index order.
+     * A hot [Flow] of committed instructions in index order, delivered as [Committed] values.
      *
-     * Every node in the cluster — leader and followers alike — emits the same
-     * sequence of entries here. Collect this flow to drive a state machine.
+     * Every node in the cluster — leader and followers alike — emits the same sequence here.
+     * Collect this flow to drive a state machine: apply [Committed.Entry] entries and reset
+     * to [Committed.Install] snapshots as they arrive.
      *
      * The internal §5.4.2 election no-op ([LogEntry.isNoOp]) is withheld: it advances
      * [commitIndex] but never appears here, so consumers see only application commands
@@ -131,17 +133,21 @@ public interface RaftNode {
      * To resume without gaps after subscribing late (e.g. on crash recovery),
      * use [committedFrom].
      */
-    public val committed: Flow<LogEntry>
+    public val committed: Flow<Committed>
 
     /**
-     * A cold [Flow] that **replays** already-committed application entries from
+     * A cold [Flow] that **replays** already-committed [Committed] values from
      * [fromIndex] (inclusive), then transparently tails the live [committed] stream —
      * with no gap or duplicate at the seam.
      *
      * Unlike [committed] (replay=0), this lets a late subscriber catch up: a state
      * machine that has applied up to index `i` resumes with `committedFrom(i + 1)`
-     * and sees every subsequent entry exactly once, in index order. The internal
+     * and sees every subsequent instruction exactly once, in index order. The internal
      * §5.4.2 no-op ([LogEntry.isNoOp]) is withheld here too.
+     *
+     * If [fromIndex] falls at or below [compactionFloor], a [Committed.Install] is
+     * emitted first so the consumer can reset its state machine before replaying entries
+     * above the floor.
      *
      * Each collection is independent and snapshots the committed log on subscription,
      * so collecting is more expensive than [committed]; prefer [committed] when you
@@ -150,7 +156,18 @@ public interface RaftNode {
      * @param fromIndex the first log index to replay (1-based). `0` or `1` replays
      *   from the start of the retained log.
      */
-    public fun committedFrom(fromIndex: Long): Flow<LogEntry>
+    public fun committedFrom(fromIndex: Long): Flow<Committed>
+
+    /**
+     * The outbound snapshot channel. The consumer publishes its latest durable state-machine snapshot
+     * here on its own clock (`snapshots.value = Snapshot(appliedIndex, bytes)`); raft samples it on its
+     * own clock to compact the log prefix and to serve a lagging follower. Conflated — only the newest
+     * snapshot matters. Leaving it `null` disables compaction (the pre-compaction behavior).
+     */
+    public val snapshots: MutableStateFlow<Snapshot?>
+
+    /** The `lastIncludedIndex` of the most recent compaction, or `0` if nothing has been compacted. */
+    public val compactionFloor: StateFlow<Long>
 
     /**
      * Hot [Flow] of [RaftTraceEvent]s — one event per engine state transition.

@@ -25,7 +25,9 @@ class EngineCorrectnessTest {
         val leader = awaitLeader(sim)
 
         val collectedByLeader = mutableListOf<LogEntry>()
-        val collectJob = launch { leader.committed.collect { collectedByLeader.add(it) } }
+        val collectJob = launch {
+            leader.committed.collect { if (it is Committed.Entry) collectedByLeader.add(it.entry) }
+        }
 
         (1..10).map { i -> async { leader.propose(byteArrayOf(i.toByte())) } }.awaitAll()
         delay(50)
@@ -62,9 +64,9 @@ class EngineCorrectnessTest {
 
         val received = mutableListOf<LogEntry>()
         val collectJob = launch {
-            leader.committed.collect { entry ->
+            leader.committed.collect { committed ->
                 delay(1) // simulate slow consumer
-                received.add(entry)
+                if (committed is Committed.Entry) received.add(committed.entry)
             }
         }
 

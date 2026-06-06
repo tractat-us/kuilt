@@ -57,4 +57,12 @@ public interface RaftTransport {
      * collect it from application code.
      */
     public val incoming: Flow<RaftEnvelope>
+
+    /**
+     * The maximum number of bytes a single [sendTo] payload can carry, or `null` if effectively
+     * unbounded (e.g. WebSocket). Fabrics with hard framing limits (e.g. ~32 KiB on some LAN radios)
+     * return that limit so kuilt-raft can size InstallSnapshot chunks to fit. Defaulted — existing
+     * transports need no change.
+     */
+    public val maxPayloadBytes: Int? get() = null
 }

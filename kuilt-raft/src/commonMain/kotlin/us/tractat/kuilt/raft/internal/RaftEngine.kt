@@ -23,6 +23,7 @@ import kotlinx.serialization.decodeFromByteArray
 import kotlinx.serialization.encodeToByteArray
 import kotlinx.serialization.cbor.Cbor
 import us.tractat.kuilt.raft.ClusterConfig
+import us.tractat.kuilt.raft.Committed
 import us.tractat.kuilt.raft.DenyReason
 import us.tractat.kuilt.raft.LeadershipLostException
 import us.tractat.kuilt.raft.LogEntry
@@ -35,6 +36,7 @@ import us.tractat.kuilt.raft.RaftRole
 import us.tractat.kuilt.raft.RaftStorage
 import us.tractat.kuilt.raft.RaftTraceEvent
 import us.tractat.kuilt.raft.RaftTransport
+import us.tractat.kuilt.raft.Snapshot
 import us.tractat.kuilt.raft.StepDownReason
 import kotlin.random.Random
 import kotlin.time.Duration
@@ -63,24 +65,29 @@ internal class RaftEngine(
     override val commitIndex: StateFlow<Long> = _commitIndex.asStateFlow()
 
     /**
-     * Emits every committed [LogEntry] in index order. The overflow policy is [BufferOverflow.SUSPEND]
+     * Emits every committed [Committed] in index order. The overflow policy is [BufferOverflow.SUSPEND]
      * so the actor backpressures rather than silently dropping entries. Callers that fall behind will
      * slow the cluster — this is the correct trade-off for a consensus log where every entry must be
      * delivered.
      */
-    private val _committed = MutableSharedFlow<LogEntry>(
+    private val _committed = MutableSharedFlow<Committed>(
         extraBufferCapacity = Channel.UNLIMITED,
         onBufferOverflow = BufferOverflow.SUSPEND,
     )
-    override val committed: Flow<LogEntry> = _committed
+    override val committed: Flow<Committed> = _committed
 
-    override fun committedFrom(fromIndex: Long): Flow<LogEntry> = flow {
+    override val snapshots = MutableStateFlow<Snapshot?>(null)
+
+    private val _compactionFloor = MutableStateFlow(0L)
+    override val compactionFloor: StateFlow<Long> = _compactionFloor.asStateFlow()
+
+    override fun committedFrom(fromIndex: Long): Flow<Committed> = flow {
         coroutineScope {
             // Subscribe to the live tail BEFORE the actor captures the cut. UNDISPATCHED
             // runs the collector synchronously up to its first suspension (subscriber
             // registration), so by the time we send CommitCut we're guaranteed registered
             // — no entry committed after the cut can slip through the gap.
-            val buffer = Channel<LogEntry>(Channel.UNLIMITED)
+            val buffer = Channel<Committed>(Channel.UNLIMITED)
             val tail = launch(start = CoroutineStart.UNDISPATCHED) {
                 try {
                     _committed.collect { buffer.send(it) }
@@ -91,11 +98,13 @@ internal class RaftEngine(
             val result = CompletableDeferred<CommitCutResult>()
             cmd.send(EngineCommand.CommitCut(fromIndex, result))
             val cut = result.await()
-            cut.replay.forEach { emit(it) }
+            cut.install?.let { emit(Committed.Install(it)) }     // null until Task 3 wires it
+            cut.replay.forEach { emit(Committed.Entry(it)) }
             // Tail live, deduped against the replayed prefix. Entries with index <= cutIndex
             // were already replayed from the snapshot; no-ops never surface.
-            for (entry in buffer) {
-                if (entry.index > cut.cutIndex && !entry.isNoOp) emit(entry)
+            for (committed in buffer) {
+                if (committed is Committed.Entry && committed.entry.index > cut.cutIndex) emit(committed)
+                else if (committed is Committed.Install) emit(committed)
             }
             tail.cancel()
         }
@@ -519,7 +528,7 @@ internal class RaftEngine(
             // StateFlow — deliberate; do not reorder.
             if (!entry.isNoOp) {
                 emitProposeCommittedAndApplied(entry)
-                _committed.emit(entry)
+                _committed.emit(Committed.Entry(entry))
             }
             _commitIndex.value = idx
             pending.removeAll { (i, d) -> if (i == idx) { d.complete(entry); true } else false }
