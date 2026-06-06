@@ -11,6 +11,10 @@ import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import us.tractat.kuilt.core.internal.initialLifecycleState
+import us.tractat.kuilt.core.internal.onEnterWeaving
+import us.tractat.kuilt.core.internal.onRecover
+import us.tractat.kuilt.core.internal.onTear
 import kotlin.math.roundToLong
 import kotlin.random.Random
 import kotlin.time.Duration
@@ -57,12 +61,11 @@ public class FlakyLifecycleSeam(
     private val delegate: Seam,
     private val scope: CoroutineScope,
 ) : Seam {
-    private val _state = MutableStateFlow<SeamState>(delegate.state.value)
+    private val _state = MutableStateFlow<SeamState>(initialLifecycleState(delegate.state.value))
     private val _peers = MutableStateFlow(delegate.peers.value)
     private val mutex = Mutex()
 
-    // Track whether we've been torn (terminal).
-    private var torn = false
+    private val isTorn: Boolean get() = _state.value is SeamState.Torn
 
     init {
         // While Woven, forward delegate membership changes to _peers.
@@ -100,7 +103,7 @@ public class FlakyLifecycleSeam(
      */
     override val incoming: Flow<Swatch> = flow {
         delegate.incoming.collect { frame ->
-            val deliver = mutex.withLock { !torn && _state.value is SeamState.Woven }
+            val deliver = mutex.withLock { !isTorn && _state.value is SeamState.Woven }
             if (deliver) emit(frame)
         }
     }
@@ -142,8 +145,9 @@ public class FlakyLifecycleSeam(
      * for this test-only class.
      */
     public fun enterWeaving() {
-        if (torn || _state.value is SeamState.Weaving) return
-        _state.value = SeamState.Weaving
+        val next = onEnterWeaving(_state.value)
+        if (next === _state.value) return
+        _state.value = next
         _peers.value = setOf(selfId)
     }
 
@@ -154,9 +158,10 @@ public class FlakyLifecycleSeam(
      * No-op if already [SeamState.Woven] or [SeamState.Torn].
      */
     public fun recover() {
-        if (torn || _state.value is SeamState.Woven) return
+        val next = onRecover(_state.value)
+        if (next === _state.value) return
         _peers.value = delegate.peers.value
-        _state.value = SeamState.Woven
+        _state.value = next
     }
 
     /**
@@ -169,10 +174,10 @@ public class FlakyLifecycleSeam(
      * terminates, which lets the [incoming] flow exit cleanly.
      */
     public fun tear(reason: CloseReason = CloseReason.Unreachable) {
-        if (torn) return
-        torn = true
+        val next = onTear(_state.value, reason)
+        if (next === _state.value) return
         _peers.value = emptySet()
-        _state.value = SeamState.Torn(reason)
+        _state.value = next
         scope.launch { delegate.close(reason) }
     }
 
@@ -213,15 +218,15 @@ public class FlakyLifecycleSeam(
     public fun drive(schedule: FlapSchedule): Job = scope.launch {
         val rng = Random(schedule.seed)
         var flapsCompleted = 0
-        while (!torn) {
+        while (!isTorn) {
             val uptimeMs = jitter(rng, schedule.meanUptime.inWholeMilliseconds)
             delay(uptimeMs)
-            if (torn) break
+            if (isTorn) break
 
             enterWeaving()
             val downtimeMs = jitter(rng, schedule.meanDowntime.inWholeMilliseconds)
             delay(downtimeMs)
-            if (torn) break
+            if (isTorn) break
 
             recover()
             flapsCompleted++
@@ -236,7 +241,7 @@ public class FlakyLifecycleSeam(
     // ── Internal ──────────────────────────────────────────────────────────────
 
     private fun checkNotTorn() {
-        check(!torn) { "Seam for $selfId is torn (closed)" }
+        check(!isTorn) { "Seam for $selfId is torn (closed)" }
     }
 
     /** Returns a jittered duration in the range [50%, 150%) of [mean] ms. */
