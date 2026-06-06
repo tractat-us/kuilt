@@ -45,7 +45,8 @@ class EdgeCaseTest {
         assertIs<RaftRole.Leader>(leader.role.value)
         val entry = leader.propose(byteArrayOf(1, 2, 3))
         assertContentEquals(byteArrayOf(1, 2, 3), entry.command)
-        assertEquals(1L, entry.index)
+        // Index 1 is the leader's no-op entry; the first user proposal lands at index 2.
+        assertEquals(2L, entry.index)
     }
 
     /**
