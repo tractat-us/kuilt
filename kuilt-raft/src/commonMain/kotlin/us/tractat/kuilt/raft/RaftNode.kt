@@ -116,10 +116,16 @@ public interface RaftNode {
     public val commitIndex: StateFlow<Long>
 
     /**
-     * A hot [Flow] of log entries committed by a quorum, in index order.
+     * A hot [Flow] of **application** log entries committed by a quorum, in index order.
      *
      * Every node in the cluster — leader and followers alike — emits the same
      * sequence of entries here. Collect this flow to drive a state machine.
+     *
+     * The internal §5.4.2 election no-op ([LogEntry.isNoOp]) is withheld: it advances
+     * [commitIndex] but never appears here, so consumers see only application commands
+     * and need not filter. Application-proposed entries always surface, including those
+     * with an empty [LogEntry.command].
+     *
      * Replay=0; late collectors miss entries emitted before they subscribed.
      */
     public val committed: Flow<LogEntry>

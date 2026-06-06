@@ -278,7 +278,7 @@ internal class RaftEngine(
 
     private suspend fun appendNoOp() {
         val noOpIndex = lastLogIndex + 1L
-        val noOp = LogEntry(noOpIndex, currentTerm, byteArrayOf())
+        val noOp = LogEntry(noOpIndex, currentTerm, byteArrayOf(), isNoOp = true)
         log += noOp
         storage.appendEntries(listOf(noOp))
         otherMembers.forEach { sendAppendEntries(it) }
@@ -437,8 +437,10 @@ internal class RaftEngine(
         val oldCommit = currentCommitIndex
         for (idx in (currentCommitIndex + 1)..newCommit) {
             val entry = entryAt(idx) ?: continue
-            // emit to committed before bumping commitIndex StateFlow — deliberate; do not reorder
-            _committed.emit(entry)
+            // §5.4.2 no-ops are internal: they advance commitIndex but are withheld from the
+            // application-facing committed flow (#136). emit before bumping commitIndex
+            // StateFlow — deliberate; do not reorder.
+            if (!entry.isNoOp) _committed.emit(entry)
             _commitIndex.value = idx
             pending.removeAll { (i, d) -> if (i == idx) { d.complete(entry); true } else false }
         }

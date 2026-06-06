@@ -11,20 +11,30 @@ import kotlinx.serialization.Serializable
  *   increase monotonically across the cluster's lifetime.
  * @param command Opaque application bytes. The Raft layer treats this as an
  *   uninterpreted blob; the application gives [command] meaning after the
- *   entry appears on [RaftNode.committed].
+ *   entry appears on [RaftNode.committed]. An application may legitimately
+ *   propose an empty [command] — emptiness alone does **not** mark an entry
+ *   internal (see [isNoOp]).
+ * @param isNoOp `true` only for the internal §5.4.2 election no-op a new leader
+ *   appends so prior-term entries can advance `commitIndex`. No-ops are real log
+ *   entries (replicated and persisted) but are **not** application data, so they
+ *   are withheld from [RaftNode.committed]. Application-proposed entries always
+ *   have `isNoOp == false`, even when their [command] is empty.
  */
 @Serializable
 public data class LogEntry(
     val index: Long,
     val term: Long,
     val command: ByteArray,
+    val isNoOp: Boolean = false,
 ) {
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
         if (other !is LogEntry) return false
-        return index == other.index && term == other.term && command.contentEquals(other.command)
+        return index == other.index && term == other.term &&
+            command.contentEquals(other.command) && isNoOp == other.isNoOp
     }
     override fun hashCode(): Int {
-        var r = index.hashCode(); r = 31 * r + term.hashCode(); r = 31 * r + command.contentHashCode(); return r
+        var r = index.hashCode(); r = 31 * r + term.hashCode()
+        r = 31 * r + command.contentHashCode(); r = 31 * r + isNoOp.hashCode(); return r
     }
 }
