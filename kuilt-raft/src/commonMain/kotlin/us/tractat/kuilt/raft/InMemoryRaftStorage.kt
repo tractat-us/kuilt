@@ -9,6 +9,10 @@ public class InMemoryRaftStorage : RaftStorage {
     override suspend fun saveTerm(term: Long) { currentTerm = term }
     override suspend fun votedFor(): NodeId? = currentVotedFor
     override suspend fun saveVotedFor(nodeId: NodeId?) { currentVotedFor = nodeId }
+    override suspend fun saveTermAndVotedFor(term: Long, votedFor: NodeId?) {
+        currentTerm = term
+        currentVotedFor = votedFor
+    }
     override suspend fun appendEntries(entries: List<LogEntry>) { log.addAll(entries) }
     override suspend fun entries(fromIndex: Long): List<LogEntry> = log.filter { it.index >= fromIndex }
     override suspend fun truncateFrom(index: Long) { log.removeAll { it.index >= index } }

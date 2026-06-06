@@ -128,8 +128,7 @@ internal class RaftEngine(
     private suspend fun onElectionTimeout() {
         if (_role.value is RaftRole.Leader) return
         currentTerm++
-        storage.saveTerm(currentTerm)
-        storage.saveVotedFor(transport.selfId)
+        storage.saveTermAndVotedFor(currentTerm, transport.selfId)
         votedFor = transport.selfId
         votesGranted.clear()
         votesGranted += transport.selfId
@@ -194,8 +193,7 @@ internal class RaftEngine(
 
     private suspend fun stepDown(newTerm: Long) {
         currentTerm = newTerm
-        storage.saveTerm(newTerm)
-        storage.saveVotedFor(null)
+        storage.saveTermAndVotedFor(newTerm, null)
         votedFor = null
         if (_role.value is RaftRole.Leader) {
             heartbeatJob?.cancel()
