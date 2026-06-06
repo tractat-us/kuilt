@@ -101,7 +101,7 @@ class BoundedCounterTest {
         assertEquals(2L, next.quota(a)) // 5 - 3
         assertEquals(8L, next.quota(b)) // 5 + 3
         assertEquals(10L, next.totalBudget) // unchanged — it's just redistribution
-        assertEquals(3L, next.totalSpent)   // sender's `spent[a]` bumped by 3
+        assertEquals(0L, next.totalSpent)   // transfers do not bump spent
     }
 
     @Test
@@ -129,8 +129,8 @@ class BoundedCounterTest {
         val final = apply(transferred, transferred.trySpend(b, 8L)!!)
         assertEquals(2L, final.quota(a))
         assertEquals(0L, final.quota(b))
-        assertEquals(11L, final.totalSpent) // 3 (transfer out from a) + 8 (b's spend)
-        assertEquals(2L, final.totalBudget) // 13 received total - 11 spent total
+        assertEquals(8L, final.totalSpent)  // only consumption; transfers conserved
+        assertEquals(2L, final.totalBudget) // 10 initial - 8 spent
     }
 
     @Test
@@ -153,5 +153,24 @@ class BoundedCounterTest {
         )
         val encoded = Json.encodeToString(BoundedCounter.serializer(), bc)
         assertEquals(bc, Json.decodeFromString(BoundedCounter.serializer(), encoded))
+    }
+
+    @Test
+    fun concurrentMultiDonorTransfersConverge() {
+        // Alice and Charles each hold 5 quota; both concurrently transfer 3 to Bob.
+        // The 2D matrix preserves both transfers — Bob ends with 6 new quota; donors keep 2 each.
+        // The 1D model (received: GCounter) collides on `received[bob]` and silently loses one transfer.
+        val a = ReplicaId("A"); val c = ReplicaId("C"); val b = ReplicaId("B")
+        val start = BoundedCounter.init(mapOf(a to 5L, c to 5L))
+
+        val aliceBranch = start.piece(start.transfer(from = a, to = b, amount = 3L)!!)
+        val charlesBranch = start.piece(start.transfer(from = c, to = b, amount = 3L)!!)
+        val merged = aliceBranch.piece(charlesBranch)
+
+        assertEquals(6L, merged.quota(b))           // both 3-transfers survived
+        assertEquals(2L, merged.quota(a))
+        assertEquals(2L, merged.quota(c))
+        assertEquals(10L, merged.totalBudget)       // 10 initial, 0 spent — transfers conserved
+        assertEquals(0L, merged.totalSpent)         // no consumption yet
     }
 }
