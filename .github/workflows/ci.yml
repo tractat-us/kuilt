@@ -96,7 +96,11 @@ jobs:
     needs: detect
     if: needs.detect.outputs.docs-only != 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Bumped from 30 to 45 in #175: kover instrumentation + JVM coverage report
+    # adds ~10 min to the cold-cache build. Re-evaluate if the warm-cache path
+    # consistently runs in well under 45 min — kover overhead may flatten out
+    # once the S3 cache is hot.
+    timeout-minutes: 45
     env:
       # Shared S3 build cache (Fly Tigris). Read on every build; pushed only from
       # main (gated in settings.gradle.kts). Absent ⇒ off. Build scans auto-publish
