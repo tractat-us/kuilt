@@ -17,6 +17,7 @@ Kotlin Multiplatform: JVM, Android, iOS, macOS, wasmJs.
 | `kuilt-core` | all | The contract (`Loom`/`Seam`/`Swatch`), the `InMemoryLoom` reference implementation, and `SeamConformanceSuite` for testing your own fabric. |
 | `kuilt-websocket` | all | A Ktor WebSocket fabric. `KtorClientLoom` everywhere; `KtorServerLoom` on JVM/Android. |
 | `kuilt-mdns` | JVM, Android, iOS | Bonjour/mDNS service discovery feeding a WebSocket connection. |
+| `kuilt-raft` | all | Raft consensus layer — replicated, strongly-consistent log over any `Seam`. `RaftNode` + `SeamRaftTransport` + `InMemoryRaftStorage`. |
 
 Every fabric module depends only on `kuilt-core`.
 

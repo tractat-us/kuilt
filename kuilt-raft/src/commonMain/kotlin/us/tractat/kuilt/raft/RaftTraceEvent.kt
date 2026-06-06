@@ -97,5 +97,23 @@ public sealed interface RaftTraceEvent {
     ) : RaftTraceEvent
 }
 
-public enum class StepDownReason { HigherTermObserved, AppendEntriesFromLeader }
-public enum class DenyReason { StaleTerm, AlreadyVoted, LogNotUpToDate }
+/** Why a node stepped down from [RaftRole.Leader] or [RaftRole.Candidate] to [RaftRole.Follower]. */
+public enum class StepDownReason {
+    /** A message from a peer carried a term higher than this node's current term. */
+    HigherTermObserved,
+
+    /** A valid AppendEntries arrived from a legitimate leader, resetting the election timer. */
+    AppendEntriesFromLeader,
+}
+
+/** Why a candidate's RequestVote was denied by the responding node. */
+public enum class DenyReason {
+    /** The candidate's term is lower than the responder's current term. */
+    StaleTerm,
+
+    /** The responder already voted for a different candidate in this term. */
+    AlreadyVoted,
+
+    /** The candidate's log is less up-to-date than the responder's (Raft §5.4.1). */
+    LogNotUpToDate,
+}

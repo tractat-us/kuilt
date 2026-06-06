@@ -228,3 +228,45 @@ suite stays fast and deterministic.
 (`WebSocketAdvertisement`, `MDNSAdvertisement`, …). A custom fabric supplies its
 own `Tag` carrying whatever its `join` needs (`displayName` + a stable `peerKey`
 are the only required fields).
+
+## Consensus layer (`kuilt-raft`)
+
+`kuilt-raft` adds a Raft consensus layer on top of any kuilt `Seam`. Use it
+when you need strongly-consistent, replicated state across multiple nodes —
+for example, a shared game state machine or a distributed lock.
+
+```kotlin
+// 1. Describe the cluster.
+val cluster = ClusterConfig.ofVoters(NodeId("a"), NodeId("b"), NodeId("c"))
+
+// 2. Wrap a Seam as the transport (one per node).
+val seam: Seam = loom.host(Pattern("raft-cluster"))
+val transport = SeamRaftTransport(seam)
+
+// 3. Provide storage (use a persistent implementation in production).
+val storage = InMemoryRaftStorage()
+
+// 4. Start the node — its lifetime is tied to the scope.
+val node: RaftNode = scope.raftNode(cluster, transport, storage)
+
+// 5. Apply committed entries on every node.
+scope.launch {
+    node.committed.collect { entry -> applyToStateMachine(entry.command) }
+}
+
+// 6. Propose on the leader.
+scope.launch {
+    node.role.first { it == RaftRole.Leader }
+    try {
+        val committed = node.propose("set x=1".encodeToByteArray())
+        println("committed at index ${committed.index}")
+    } catch (e: NotLeaderException) {
+        // redirect to node.leader
+    } catch (e: LeadershipLostException) {
+        // retry with idempotent key
+    }
+}
+```
+
+See the KDoc on `RaftNode` and `ClusterConfig` for the full API, and
+`docs/superpowers/specs/2026-06-05-raft-design.md` for the design rationale.
