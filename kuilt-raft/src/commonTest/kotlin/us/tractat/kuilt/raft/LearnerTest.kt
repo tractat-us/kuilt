@@ -17,13 +17,6 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
-import kotlin.time.Duration.Companion.milliseconds
-
-private val fastConfig = RaftConfig(
-    electionTimeoutMin = 5.milliseconds,
-    electionTimeoutMax = 10.milliseconds,
-    heartbeatInterval = 2.milliseconds,
-)
 private val voterIds = setOf(NodeId("v1"), NodeId("v2"), NodeId("v3"))
 private val learnerId = NodeId("learner")
 private val clusterConfig = ClusterConfig(voters = voterIds, learners = setOf(learnerId))
@@ -31,20 +24,12 @@ private val clusterConfig = ClusterConfig(voters = voterIds, learners = setOf(le
 private fun TestScope.simWithLearner(): RaftSimulation = RaftSimulation(
     nodeIds = voterIds.toList() + learnerId,
     scope = this,
-    raftConfig = fastConfig,
+    raftConfig = FAST_RAFT_CONFIG,
     nodeScope = backgroundScope,
-    nodeFactory = { id, transport, storage, nodeScope ->
-        nodeScope.raftNode(clusterConfig, transport, storage, fastConfig)
+    nodeFactory = { _, transport, storage, nodeScope ->
+        nodeScope.raftNode(clusterConfig, transport, storage, FAST_RAFT_CONFIG)
     },
 )
-
-private suspend fun awaitLeader(sim: RaftSimulation): RaftNode {
-    repeat(500) {
-        sim.leader()?.let { return it }
-        delay(1)
-    }
-    error("No leader elected within timeout")
-}
 
 class LearnerTest {
 

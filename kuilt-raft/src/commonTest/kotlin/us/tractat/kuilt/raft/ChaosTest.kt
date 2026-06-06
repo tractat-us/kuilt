@@ -9,25 +9,10 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
-import kotlin.time.Duration.Companion.milliseconds
-
-private val fastConfig = RaftConfig(5.milliseconds, 10.milliseconds, 2.milliseconds)
-
-private fun sim(scope: kotlinx.coroutines.CoroutineScope, n: Int = 3): RaftSimulation {
-    val ids = (1..n).map { NodeId("n$it") }
-    return RaftSimulation(ids, scope, fastConfig) { id, transport, storage, nodeScope ->
-        nodeScope.raftNode(ClusterConfig(ids.toSet()), transport, storage, fastConfig)
-    }
-}
-
-private suspend fun awaitLeader(sim: RaftSimulation): RaftNode {
-    repeat(500) { sim.leader()?.let { return it }; delay(1) }
-    error("No leader elected")
-}
 
 class ChaosTest {
     @Test fun persistence_node_rejoins_with_same_log() = runTest(UnconfinedTestDispatcher()) {
-        val sim = sim(backgroundScope)
+        val sim = raftSim(backgroundScope, backgroundScope)
         val leader = awaitLeader(sim)
         leader.propose(byteArrayOf(1))
         leader.propose(byteArrayOf(2))
@@ -43,7 +28,7 @@ class ChaosTest {
     }
 
     @Test fun rejoinPartitionedLeader_reverts_to_follower() = runTest(UnconfinedTestDispatcher()) {
-        val sim = sim(backgroundScope)
+        val sim = raftSim(backgroundScope, backgroundScope)
         val leader = awaitLeader(sim)
         val leaderId = sim.nodes.entries.first { it.value === leader }.key
         val others = sim.nodes.keys.filter { it != leaderId }.toSet()
@@ -62,7 +47,7 @@ class ChaosTest {
     @Test fun logBackup_newLeaderReconcilesMinorityDivergence() = runTest(UnconfinedTestDispatcher()) {
         // 5-node cluster. Partition a minority so they get no entries from the majority's leader.
         // Heal and verify the new leader can propose and the minority catches up via §5.3 fast backup.
-        val sim = sim(backgroundScope, n = 5)
+        val sim = raftSim(backgroundScope, backgroundScope, n = 5)
         val leader = awaitLeader(sim)
         val leaderId = sim.nodes.entries.first { it.value === leader }.key
         val minority = sim.nodes.keys.filter { it != leaderId }.take(2).toSet()
@@ -80,7 +65,7 @@ class ChaosTest {
     }
 
     @Test fun unreliableChurn_proposalsEventuallyCommit() = runTest(UnconfinedTestDispatcher()) {
-        val sim = sim(backgroundScope)
+        val sim = raftSim(backgroundScope, backgroundScope)
         var leader = awaitLeader(sim)
         val committed = mutableListOf<LogEntry>()
         repeat(3) { i ->

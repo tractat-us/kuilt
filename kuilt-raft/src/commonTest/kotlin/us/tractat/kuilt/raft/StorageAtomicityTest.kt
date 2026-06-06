@@ -9,7 +9,6 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
-import kotlin.time.Duration.Companion.milliseconds
 
 /**
  * Verifies that [RaftStorage.saveTermAndVotedFor] is the only path used when
@@ -63,20 +62,15 @@ class StorageAtomicityTest {
 
             val ids = listOf(NodeId("a"), NodeId("b"), NodeId("c"))
             val config = ClusterConfig(voters = ids.toSet())
-            val fastConfig = RaftConfig(
-                electionTimeoutMin = 5.milliseconds,
-                electionTimeoutMax = 10.milliseconds,
-                heartbeatInterval = 2.milliseconds,
-            )
             // Node "a" uses the spy; others use fresh in-memory storage.
             RaftSimulation(
                 nodeIds = ids,
                 scope = this,
-                raftConfig = fastConfig,
+                raftConfig = FAST_RAFT_CONFIG,
                 nodeScope = backgroundScope,
                 nodeFactory = { id, transport, storage, nodeScope ->
                     val s = if (id == NodeId("a")) spy else storage
-                    nodeScope.raftNode(config, transport, s, fastConfig)
+                    nodeScope.raftNode(config, transport, s, FAST_RAFT_CONFIG)
                 },
             )
 
