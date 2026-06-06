@@ -11,6 +11,7 @@ kotlin {
         commonMain.dependencies {
             api(project(":kuilt-core"))
             api(project(":kuilt-session"))
+            api(project(":kuilt-raft"))
             // This module intentionally ships a kotlin-test-based suite in MAIN
             // (not commonTest) so other modules' tests can subclass it. That means
             // each platform's main compilation needs the kotlin.test framework
