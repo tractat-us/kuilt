@@ -6,6 +6,9 @@ import net.jqwik.api.ForAll
 import net.jqwik.api.Property
 import net.jqwik.api.Provide
 import org.junit.jupiter.api.Assertions.assertAll
+import org.junit.jupiter.api.Assertions.assertThrows
+import org.junit.jupiter.api.Test
+import us.tractat.kuilt.raft.LogEntry
 import us.tractat.kuilt.raft.NodeId
 import us.tractat.kuilt.raft.RaftRole
 
@@ -149,10 +152,49 @@ class PureRaftModelTest {
         }
     }
 
-    private fun checkAllInvariants(c: Cluster) = assertAll(
+    /**
+     * Leader Completeness: if an entry was committed in term T, every leader
+     * whose term is strictly greater than T must have that entry in its log.
+     *
+     * [committedEntries] accumulates entries as they become committed anywhere
+     * in the cluster (index → entry). It grows monotonically across steps.
+     */
+    private fun checkLeaderCompleteness(c: Cluster, committedEntries: Map<Long, LogEntry>) {
+        val leaders = c.replicas.values.filter { it.alive && it.role == RaftRole.Leader }
+        for (leader in leaders) {
+            for ((idx, committed) in committedEntries) {
+                if (committed.term >= leader.term) continue
+                val entry = leader.entryAt(idx)
+                assert(entry != null && entry.term == committed.term && entry.command.contentEquals(committed.command)) {
+                    "Leader Completeness violated: leader ${leader.id} (term=${leader.term}) " +
+                        "is missing committed entry at index=$idx (term=${committed.term}, " +
+                        "cmd=${committed.command.contentToString()})"
+                }
+            }
+        }
+    }
+
+    /**
+     * Accumulates newly committed entries from the current cluster snapshot into
+     * [committedEntries]. An entry at index [idx] is committed on a replica when
+     * its [commitIndex] ≥ [idx].
+     */
+    private fun collectCommitted(c: Cluster, committedEntries: MutableMap<Long, LogEntry>) {
+        for (replica in c.replicas.values) {
+            if (!replica.alive) continue
+            for (entry in replica.log) {
+                if (entry.index <= replica.commitIndex && entry.index !in committedEntries) {
+                    committedEntries[entry.index] = entry
+                }
+            }
+        }
+    }
+
+    private fun checkAllInvariants(c: Cluster, committedEntries: Map<Long, LogEntry>) = assertAll(
         { checkElectionSafety(c) },
         { checkLogMatching(c) },
         { checkStateMachineSafety(c) },
+        { checkLeaderCompleteness(c, committedEntries) },
     )
 
     // ── Properties ───────────────────────────────────────────────────────────
@@ -163,9 +205,11 @@ class PureRaftModelTest {
     ): Boolean {
         var c = cluster("n1", "n2", "n3")
         val nodes = c.replicas.keys.toList()
+        val committedEntries = mutableMapOf<Long, LogEntry>()
         for (action in actions) {
             c = applyAction(c, action, nodes)
-            checkAllInvariants(c)
+            collectCommitted(c, committedEntries)
+            checkAllInvariants(c, committedEntries)
         }
         return true
     }
@@ -176,10 +220,53 @@ class PureRaftModelTest {
     ): Boolean {
         var c = cluster("n1", "n2", "n3", "n4", "n5")
         val nodes = c.replicas.keys.toList()
+        val committedEntries = mutableMapOf<Long, LogEntry>()
         for (action in actions) {
             c = applyAction(c, action, nodes)
-            checkAllInvariants(c)
+            collectCommitted(c, committedEntries)
+            checkAllInvariants(c, committedEntries)
         }
         return true
+    }
+
+    /**
+     * Verifies checkLeaderCompleteness detects a violation.
+     *
+     * Constructs a cluster state where a committed entry (index=1, term=1) exists but
+     * the only live leader is in term 2 and is missing that entry from its log — the
+     * kind of corruption that bypassing log-upToDate in election would allow.
+     */
+    @Test
+    fun `checkLeaderCompleteness detects a leader missing a committed prior-term entry`() {
+        val n1 = NodeId("n1")
+        val n2 = NodeId("n2")
+        val n3 = NodeId("n3")
+
+        val committedEntry = LogEntry(index = 1L, term = 1L, command = byteArrayOf(42))
+
+        // n1: leader in term 2, missing the committed entry from term 1
+        val staleLeader = Replica(
+            id = n1,
+            term = 2L,
+            role = RaftRole.Leader,
+            log = listOf(LogEntry(index = 2L, term = 2L, command = byteArrayOf())),
+            commitIndex = 0L,
+            alive = true,
+        )
+        // n2, n3: followers that have the committed entry
+        val follower2 = Replica(id = n2, term = 1L, log = listOf(committedEntry), commitIndex = 1L, alive = true)
+        val follower3 = Replica(id = n3, term = 1L, log = listOf(committedEntry), commitIndex = 1L, alive = true)
+
+        val c = Cluster(
+            replicas = mapOf(n1 to staleLeader, n2 to follower2, n3 to follower3),
+            voters = setOf(n1, n2, n3),
+        )
+
+        // committedEntries: the entry was committed in term 1 at index 1
+        val committedEntries = mapOf(1L to committedEntry)
+
+        assertThrows(AssertionError::class.java) {
+            checkLeaderCompleteness(c, committedEntries)
+        }
     }
 }
