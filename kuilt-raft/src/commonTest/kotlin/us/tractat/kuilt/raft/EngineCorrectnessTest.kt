@@ -66,16 +66,19 @@ class EngineCorrectnessTest {
         delay(50)
         collectJob.cancel()
 
-        val indices = collectedByLeader.map { it.index }
+        // Filter out the leader's §5.4.2 no-op (empty command, index 1) so this test
+        // asserts on the 10 user proposals regardless of where the no-op lands. The
+        // race this guards against would surface as a duplicated user-entry index.
+        val userIndices = collectedByLeader.filter { it.command.isNotEmpty() }.map { it.index }
         assertEquals(
-            (1L..10L).toList(),
-            indices.sorted(),
-            "Expected exactly indices 1-10, got: $indices",
+            10,
+            userIndices.size,
+            "Expected exactly 10 committed user entries, got: $userIndices",
         )
         assertEquals(
             10,
-            indices.distinct().size,
-            "Duplicate indices in committed: $indices",
+            userIndices.distinct().size,
+            "Duplicate indices in committed user entries: $userIndices",
         )
     }
 
