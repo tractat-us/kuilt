@@ -18,6 +18,7 @@ import kotlinx.serialization.decodeFromByteArray
 import kotlinx.serialization.encodeToByteArray
 import kotlinx.serialization.cbor.Cbor
 import us.tractat.kuilt.raft.ClusterConfig
+import us.tractat.kuilt.raft.DenyReason
 import us.tractat.kuilt.raft.LeadershipLostException
 import us.tractat.kuilt.raft.LogEntry
 import us.tractat.kuilt.raft.NodeId
@@ -26,7 +27,9 @@ import us.tractat.kuilt.raft.RaftConfig
 import us.tractat.kuilt.raft.RaftNode
 import us.tractat.kuilt.raft.RaftRole
 import us.tractat.kuilt.raft.RaftStorage
+import us.tractat.kuilt.raft.RaftTraceEvent
 import us.tractat.kuilt.raft.RaftTransport
+import us.tractat.kuilt.raft.StepDownReason
 import kotlin.random.Random
 
 internal class RaftEngine(
@@ -59,6 +62,10 @@ internal class RaftEngine(
         onBufferOverflow = BufferOverflow.SUSPEND,
     )
     override val committed: Flow<LogEntry> = _committed
+
+    private var traceClock = 0L
+    private val _trace = MutableSharedFlow<RaftTraceEvent>(extraBufferCapacity = 512)
+    override val trace: Flow<RaftTraceEvent> = _trace
 
     // ── Actor-only mutable state ──────────────────────────────────────────────
     private var currentTerm = 0L
@@ -107,6 +114,12 @@ internal class RaftEngine(
         }
     }
 
+    // ── Trace helper ──────────────────────────────────────────────────────────
+
+    private suspend fun emitTrace(event: RaftTraceEvent) = _trace.emit(event)
+
+    private fun nextClock() = ++traceClock
+
     // ── Timers ────────────────────────────────────────────────────────────────
 
     private fun resetElectionTimeout() {
@@ -136,12 +149,16 @@ internal class RaftEngine(
         _leader.value = null
         resetElectionTimeout()
         val last = log.lastOrNull()
+        emitTrace(RaftTraceEvent.Timeout(nextClock(), transport.selfId, currentTerm))
         val rv = RaftMessage.RequestVote(currentTerm, transport.selfId, last?.index ?: 0L, last?.term ?: 0L)
-        clusterConfig.voters.filter { it != transport.selfId }.forEach { send(it, rv) }
+        clusterConfig.voters.filter { it != transport.selfId }.forEach { peer ->
+            emitTrace(RaftTraceEvent.RequestVote(nextClock(), transport.selfId, peer, currentTerm, last?.index ?: 0L, last?.term ?: 0L))
+            send(peer, rv)
+        }
     }
 
     private suspend fun onRequestVote(from: NodeId, m: RaftMessage.RequestVote) {
-        if (m.term > currentTerm) stepDown(m.term)
+        if (m.term > currentTerm) stepDown(m.term, StepDownReason.HigherTermObserved)
         val last = log.lastOrNull()
         val logOk = m.lastLogTerm > (last?.term ?: 0L) ||
             (m.lastLogTerm == (last?.term ?: 0L) && m.lastLogIndex >= (last?.index ?: 0L))
@@ -150,12 +167,20 @@ internal class RaftEngine(
             storage.saveVotedFor(m.candidateId)
             votedFor = m.candidateId
             resetElectionTimeout()
+            emitTrace(RaftTraceEvent.VoteGranted(nextClock(), transport.selfId, from, m.term))
+        } else {
+            val reason = when {
+                m.term < currentTerm -> DenyReason.StaleTerm
+                votedFor != null && votedFor != m.candidateId -> DenyReason.AlreadyVoted
+                else -> DenyReason.LogNotUpToDate
+            }
+            emitTrace(RaftTraceEvent.VoteDenied(nextClock(), transport.selfId, from, m.term, reason))
         }
         send(from, RaftMessage.RequestVoteResponse(currentTerm, grant))
     }
 
     private suspend fun onRequestVoteResponse(from: NodeId, m: RaftMessage.RequestVoteResponse) {
-        if (m.term > currentTerm) { stepDown(m.term); return }
+        if (m.term > currentTerm) { stepDown(m.term, StepDownReason.HigherTermObserved); return }
         if (_role.value !is RaftRole.Candidate || m.term != currentTerm) return
         if (m.voteGranted) {
             votesGranted += from
@@ -172,6 +197,7 @@ internal class RaftEngine(
             nextIndex[p] = nextIdx
             matchIndex[p] = 0L
         }
+        emitTrace(RaftTraceEvent.BecomeLeader(nextClock(), transport.selfId, currentTerm))
         heartbeatJob = scope.launch {
             while (true) {
                 cmd.trySend(EngineCommand.HeartbeatTick)
@@ -191,7 +217,7 @@ internal class RaftEngine(
         clusterConfig.allMembers.filter { it != transport.selfId }.forEach { sendAppendEntries(it) }
     }
 
-    private suspend fun stepDown(newTerm: Long) {
+    private suspend fun stepDown(newTerm: Long, reason: StepDownReason) {
         currentTerm = newTerm
         storage.saveTermAndVotedFor(newTerm, null)
         votedFor = null
@@ -202,6 +228,7 @@ internal class RaftEngine(
         }
         _role.value = if (transport.selfId in clusterConfig.learners) RaftRole.Learner else RaftRole.Follower
         _leader.value = null
+        emitTrace(RaftTraceEvent.BecomeFollower(nextClock(), transport.selfId, currentTerm, reason))
         resetElectionTimeout()
     }
 
@@ -216,6 +243,18 @@ internal class RaftEngine(
         val ni = nextIndex[peer] ?: 1L
         val prev = log.firstOrNull { it.index == ni - 1L }
         val entries = log.filter { it.index >= ni }
+        emitTrace(
+            RaftTraceEvent.AppendEntries(
+                clock = nextClock(),
+                from = transport.selfId,
+                to = peer,
+                term = currentTerm,
+                prevLogIndex = prev?.index ?: 0L,
+                prevLogTerm = prev?.term ?: 0L,
+                entryCount = entries.size,
+                leaderCommit = currentCommitIndex,
+            )
+        )
         send(
             peer,
             RaftMessage.AppendEntries(
@@ -234,7 +273,7 @@ internal class RaftEngine(
             send(from, RaftMessage.AppendEntriesResponse(currentTerm, false))
             return
         }
-        if (m.term > currentTerm) stepDown(m.term)
+        if (m.term > currentTerm) stepDown(m.term, StepDownReason.HigherTermObserved)
         _role.value = if (transport.selfId in clusterConfig.learners) RaftRole.Learner else RaftRole.Follower
         _leader.value = m.leaderId
         resetElectionTimeout()
@@ -246,12 +285,22 @@ internal class RaftEngine(
                 // §5.3 fast backup: report conflict info
                 val conflictTerm = prev?.term ?: log.lastOrNull { it.index <= m.prevLogIndex }?.term
                 val conflictIndex = conflictTerm?.let { t -> log.firstOrNull { it.term == t }?.index }
+                val resolvedConflictIndex = conflictIndex ?: m.prevLogIndex
+                emitTrace(
+                    RaftTraceEvent.AppendEntriesRejected(
+                        clock = nextClock(),
+                        from = from,
+                        to = transport.selfId,
+                        conflictIndex = resolvedConflictIndex,
+                        conflictTerm = conflictTerm,
+                    )
+                )
                 send(
                     from,
                     RaftMessage.AppendEntriesResponse(
                         term = currentTerm,
                         success = false,
-                        conflictIndex = conflictIndex ?: m.prevLogIndex,
+                        conflictIndex = resolvedConflictIndex,
                         conflictTerm = conflictTerm,
                     )
                 )
@@ -276,11 +325,20 @@ internal class RaftEngine(
             advanceCommit(minOf(m.leaderCommit, log.lastOrNull()?.index ?: 0L))
         }
 
-        send(from, RaftMessage.AppendEntriesResponse(currentTerm, true, log.lastOrNull()?.index ?: 0L))
+        val acceptedMatchIndex = log.lastOrNull()?.index ?: 0L
+        emitTrace(
+            RaftTraceEvent.AppendEntriesAccepted(
+                clock = nextClock(),
+                from = from,
+                to = transport.selfId,
+                matchIndex = acceptedMatchIndex,
+            )
+        )
+        send(from, RaftMessage.AppendEntriesResponse(currentTerm, true, acceptedMatchIndex))
     }
 
     private suspend fun onAppendEntriesResponse(from: NodeId, m: RaftMessage.AppendEntriesResponse) {
-        if (m.term > currentTerm) { stepDown(m.term); return }
+        if (m.term > currentTerm) { stepDown(m.term, StepDownReason.HigherTermObserved); return }
         if (_role.value !is RaftRole.Leader || m.term != currentTerm) return
         if (m.success) {
             matchIndex[from] = maxOf(matchIndex[from] ?: 0L, m.matchIndex)
@@ -320,6 +378,7 @@ internal class RaftEngine(
     }
 
     private suspend fun advanceCommit(newCommit: Long) {
+        val oldCommit = currentCommitIndex
         for (idx in (currentCommitIndex + 1)..newCommit) {
             val entry = log.firstOrNull { it.index == idx } ?: continue
             _committed.emit(entry)
@@ -327,6 +386,7 @@ internal class RaftEngine(
             pending.removeAll { (i, d) -> if (i == idx) { d.complete(entry); true } else false }
         }
         currentCommitIndex = newCommit
+        emitTrace(RaftTraceEvent.AdvanceCommitIndex(nextClock(), transport.selfId, oldCommit, newCommit))
     }
 
     // ── propose() ─────────────────────────────────────────────────────────────
@@ -340,6 +400,7 @@ internal class RaftEngine(
         val entry = LogEntry(index, currentTerm, command)
         log += entry
         storage.appendEntries(listOf(entry))
+        emitTrace(RaftTraceEvent.ClientRequest(nextClock(), transport.selfId, index, currentTerm))
         pending += index to response
         clusterConfig.allMembers.filter { it != transport.selfId }.forEach { sendAppendEntries(it) }
     }
