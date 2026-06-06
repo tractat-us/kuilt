@@ -1,3 +1,5 @@
+@file:OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+
 package us.tractat.kuilt.raft.test
 
 import kotlinx.coroutines.flow.first
