@@ -51,7 +51,7 @@ class FlakyLifecycleSeamTest {
 
             seam.enterWeaving()
 
-            assertIs<SeamState.Weaving>(seam.state.value)
+            assertIs<SeamState.Weaving>(seam.state.first { it is SeamState.Weaving })
         }
 
     @Test
@@ -63,7 +63,7 @@ class FlakyLifecycleSeamTest {
             seam.enterWeaving()
             seam.recover()
 
-            assertIs<SeamState.Woven>(seam.state.value)
+            assertIs<SeamState.Woven>(seam.state.first { it is SeamState.Woven })
         }
 
     @Test
@@ -74,7 +74,7 @@ class FlakyLifecycleSeamTest {
 
             seam.tear(CloseReason.Unreachable)
 
-            val torn = assertIs<SeamState.Torn>(seam.state.value)
+            val torn = assertIs<SeamState.Torn>(seam.state.first { it is SeamState.Torn })
             assertEquals(CloseReason.Unreachable, torn.reason)
         }
 
@@ -87,7 +87,7 @@ class FlakyLifecycleSeamTest {
             seam.tear(CloseReason.Unreachable)
             seam.recover()
 
-            assertIs<SeamState.Torn>(seam.state.value)
+            assertIs<SeamState.Torn>(seam.state.first { it is SeamState.Torn })
         }
 
     @Test
@@ -100,7 +100,8 @@ class FlakyLifecycleSeamTest {
 
             seam.enterWeaving()
 
-            assertEquals(setOf(seam.selfId), seam.peers.value)
+            val expected = setOf(seam.selfId)
+            assertEquals(expected, seam.peers.first { it == expected })
         }
 
     @Test
@@ -114,9 +115,10 @@ class FlakyLifecycleSeamTest {
             seam.enterWeaving()
             seam.recover()
 
+            val peers = seam.peers.first { seam.selfId in it && delegateB.selfId in it }
             assertAll(
-                { assertTrue(seam.selfId in seam.peers.value) },
-                { assertTrue(delegateB.selfId in seam.peers.value) },
+                { assertTrue(seam.selfId in peers) },
+                { assertTrue(delegateB.selfId in peers) },
             )
         }
 
@@ -258,7 +260,7 @@ class FlakyLifecycleSeamTest {
             seam.flapThenTear(flaps = 3, weavingFor = 50.milliseconds, reason = CloseReason.Unreachable)
             testScheduler.advanceUntilIdle()
 
-            val torn = assertIs<SeamState.Torn>(seam.state.value)
+            val torn = assertIs<SeamState.Torn>(seam.state.first { it is SeamState.Torn })
             assertEquals(CloseReason.Unreachable, torn.reason)
         }
 
@@ -291,7 +293,7 @@ class FlakyLifecycleSeamTest {
             val job = seam.drive(schedule)
             job.join()
 
-            assertIs<SeamState.Torn>(seam.state.value)
+            assertIs<SeamState.Torn>(seam.state.first { it is SeamState.Torn })
         }
 
     @Test
@@ -347,7 +349,7 @@ class FlakyLifecycleSeamTest {
             seam.close(CloseReason.Normal)
             testScheduler.advanceUntilIdle()
 
-            assertEquals(SeamState.Torn(CloseReason.Normal), seam.state.value)
+            assertEquals(SeamState.Torn(CloseReason.Normal), seam.state.first { it == SeamState.Torn(CloseReason.Normal) })
             assertFailsWith<IllegalStateException> { seam.broadcast(byteArrayOf(1)) }
         }
 
@@ -374,7 +376,8 @@ class FlakyLifecycleSeamTest {
             testScheduler.runCurrent()
 
             // peers must remain {selfId} — the Weaving gate must hold.
-            assertEquals(setOf(seam.selfId), seam.peers.value)
+            val expected = setOf(seam.selfId)
+            assertEquals(expected, seam.peers.first { it == expected })
         }
 
     // ── Live Woven membership tracking ───────────────────────────────────────
@@ -392,11 +395,14 @@ class FlakyLifecycleSeamTest {
 
             // B joins the same mesh — the background collector forwards the update.
             val delegateB = loom.join(InMemoryTag("B"))
-            testScheduler.runCurrent()
 
+            // Await the background-collector forwarding B's join to seam.peers rather
+            // than sampling with .value — the collector is launched in backgroundScope
+            // and on wasmJs may not have run yet when we check (fixes #142 flake class).
+            val peers = seam.peers.first { delegateB.selfId in it }
             assertAll(
-                { assertTrue(seam.selfId in seam.peers.value, "selfId must be in peers") },
-                { assertTrue(delegateB.selfId in seam.peers.value, "B must appear without recover()") },
+                { assertTrue(seam.selfId in peers, "selfId must be in peers") },
+                { assertTrue(delegateB.selfId in peers, "B must appear without recover()") },
             )
         }
 
@@ -416,9 +422,10 @@ class FlakyLifecycleSeamTest {
             // recover() must refresh peers from the delegate synchronously.
             seam.recover()
 
+            val peers = seam.peers.first { seam.selfId in it && delegateB.selfId in it }
             assertAll(
-                { assertTrue(seam.selfId in seam.peers.value, "selfId must be in peers after recover") },
-                { assertTrue(delegateB.selfId in seam.peers.value, "B must appear after recover()") },
+                { assertTrue(seam.selfId in peers, "selfId must be in peers after recover") },
+                { assertTrue(delegateB.selfId in peers, "B must appear after recover()") },
             )
         }
 
