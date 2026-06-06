@@ -1,3 +1,5 @@
+@file:OptIn(kotlinx.coroutines.ExperimentalForInheritanceCoroutinesApi::class)
+
 package us.tractat.kuilt.raft
 
 import kotlinx.coroutines.flow.Flow
@@ -7,6 +9,8 @@ import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.map
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Seam
+
+private fun Set<PeerId>.toNodeIds(): Set<NodeId> = mapTo(mutableSetOf()) { NodeId(it.value) }
 
 /**
  * Adapts a kuilt-core [Seam] to the [RaftTransport] interface.
@@ -32,10 +36,15 @@ public class SeamRaftTransport(private val seam: Seam) : RaftTransport {
     override val selfId: NodeId get() = NodeId(seam.selfId.value)
 
     override val peers: StateFlow<Set<NodeId>> = object : StateFlow<Set<NodeId>> {
-        override val value: Set<NodeId> get() = seam.peers.value.mapTo(mutableSetOf()) { NodeId(it.value) }
+        override val value: Set<NodeId> get() = seam.peers.value.toNodeIds()
         override val replayCache: List<Set<NodeId>> get() = listOf(value)
+
+        // Collect the source StateFlow directly and transform inside the lambda.
+        // seam.peers.collect returns Nothing (a StateFlow never completes), so the
+        // override's Nothing return type is satisfied without a cast. Mapping with
+        // .map{} first would downgrade to a Flow whose collect returns Unit.
         override suspend fun collect(collector: FlowCollector<Set<NodeId>>): Nothing =
-            seam.peers.map { set -> set.mapTo(mutableSetOf()) { NodeId(it.value) } }.collect(collector) as Nothing
+            seam.peers.collect { set -> collector.emit(set.toNodeIds()) }
     }
 
     override suspend fun sendTo(peer: NodeId, message: ByteArray): Unit =
