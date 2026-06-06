@@ -35,7 +35,12 @@ class FlakyLifecycleSeamTest {
             val delegate = InMemoryLoom().host(Pattern("A"))
             val seam = FlakyLifecycleSeam(delegate, backgroundScope)
 
-            assertIs<SeamState.Woven>(seam.state.value)
+            // Await rather than sample: the seam is Woven synchronously at
+            // construction on JVM/native, but the wasmJs/browser microtask
+            // scheduler can intermittently defer the first observation. `first`
+            // returns immediately when already Woven and is robust to that
+            // deferral, removing a wasmJs-only flake (see #142).
+            assertIs<SeamState.Woven>(seam.state.first { it is SeamState.Woven })
         }
 
     @Test
