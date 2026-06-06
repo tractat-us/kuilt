@@ -3,6 +3,7 @@
 package us.tractat.kuilt.crdt.replicator
 
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -18,6 +19,39 @@ import us.tractat.kuilt.crdt.Patch
 import us.tractat.kuilt.crdt.Quilted
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.crdt.piece
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.minutes
+
+/**
+ * Configuration for [SeamReplicator].
+ *
+ * @param evictionAfter how long a peer can be absent from [Seam.peers] before it
+ *   is evicted from [knownPeers]. Absent-and-silent peers pin the pending-delta
+ *   buffer; eviction releases that pin. A peer that reappears after eviction
+ *   will receive a fresh [ReplicatorMessage.FullState].
+ * @param antiEntropyInterval how often the background eviction check runs.
+ */
+public data class SeamReplicatorConfig(
+    val evictionAfter: Duration = 5.minutes,
+    val antiEntropyInterval: Duration = 1.minutes,
+)
+
+/**
+ * A provider of monotonic time in milliseconds. The default reads from
+ * `kotlin.time.TimeSource.Monotonic`; tests pass a controlled counter.
+ */
+public fun interface MonotonicMillis {
+    public fun now(): Long
+}
+
+/**
+ * Production-default [MonotonicMillis] using the platform's monotonic clock.
+ * Returns elapsed milliseconds from an arbitrary fixed origin.
+ */
+private object SystemMonotonicMillis : MonotonicMillis {
+    private val origin = kotlin.time.TimeSource.Monotonic.markNow()
+    override fun now(): Long = origin.elapsedNow().inWholeMilliseconds
+}
 
 /**
  * Runs any [Quilted] CRDT live over a [Seam], providing eventually-consistent
@@ -33,8 +67,18 @@ import us.tractat.kuilt.crdt.piece
  * - On first contact with a new peer, a [ReplicatorMessage.FullState] is sent so the
  *   late joiner converges immediately without waiting for a delta replay.
  *
- * ## Deferred (Rung 12b)
- * Gap detection, per-neighbor receive-seq tracking, peer eviction, and `Resend`.
+ * ## Gap detection (Rung 12b)
+ * Per-sender receive-sequence tracking detects dropped or reordered deltas:
+ * - Out-of-order deltas are buffered and applied in order once the gap is filled.
+ * - Missing ranges trigger a [ReplicatorMessage.Resend] to the original sender.
+ * - Duplicate or stale deltas are re-acked and silently dropped.
+ * - [ReplicatorMessage.Resend] causes this replica to re-broadcast buffered pending
+ *   deltas for the requested range (if they haven't been GC'd yet).
+ *
+ * ## Peer eviction
+ * Peers absent from [Seam.peers] beyond [SeamReplicatorConfig.evictionAfter] are
+ * evicted from the known-peer set, releasing their buffer pin. They receive a fresh
+ * [ReplicatorMessage.FullState] if they rejoin.
  *
  * @param replica this peer's [ReplicaId].
  * @param seam the [Seam] to ride. Collect [Seam.incoming] exactly once — this class
@@ -45,6 +89,8 @@ import us.tractat.kuilt.crdt.piece
  * @param scope the [CoroutineScope] to launch background coroutines under. In tests, pass
  *   `backgroundScope` from [kotlinx.coroutines.test.TestScope] so infinite-running collectors
  *   are cancelled cleanly at test end without raising [kotlinx.coroutines.test.UncompletedCoroutinesError].
+ * @param config replication behaviour tuning (eviction TTL, anti-entropy interval).
+ * @param clock monotonic time source; override in tests to inject a fake clock.
  */
 public class SeamReplicator<S : Quilted<S>>(
     public val replica: ReplicaId,
@@ -52,6 +98,8 @@ public class SeamReplicator<S : Quilted<S>>(
     initial: S,
     private val messageSerializer: KSerializer<ReplicatorMessage<S>>,
     private val scope: CoroutineScope,
+    private val config: SeamReplicatorConfig = SeamReplicatorConfig(),
+    private val clock: MonotonicMillis = SystemMonotonicMillis,
 ) {
     private val _state = MutableStateFlow(initial)
     public val state: StateFlow<S> = _state.asStateFlow()
@@ -63,17 +111,31 @@ public class SeamReplicator<S : Quilted<S>>(
     /** Per-peer acked-through-seq for MY deltas: ackedThrough[peer] = highest seq B has acked. */
     private val ackedThrough: MutableMap<PeerId, Long> = mutableMapOf()
 
+    /** Per-sender expected receive seq: expectedReceiveSeq[sender] = next seq we expect. */
+    private val expectedReceiveSeq: MutableMap<ReplicaId, Long> = mutableMapOf()
+
+    /** Buffered out-of-order inbound deltas: pendingInbound[sender][seq] = delta. */
+    private val pendingInbound: MutableMap<ReplicaId, MutableMap<Long, S>> = mutableMapOf()
+
+    /** Last-seen time (ms from clock) per peer for eviction tracking. */
+    private val lastSeenAt: MutableMap<PeerId, Long> = mutableMapOf()
+
     /** Exposed internally so tests can observe GC behaviour. */
     internal val pendingDeltasForTest: Map<Long, S> get() = pendingDeltas
 
+    /** Exposed internally so tests can observe known-peer state. */
+    internal val knownPeersForTest: Set<PeerId> get() = knownPeers
+
     init {
         seam.incoming
-            .onEach { swatch -> swatch.sender?.let { dispatch(it, swatch.payload) } }
+            .onEach { swatch -> swatch.sender?.let { touch(it); dispatch(it, swatch.payload) } }
             .launchIn(scope)
 
         seam.peers
             .onEach { currentPeers -> onPeersChanged(currentPeers) }
             .launchIn(scope)
+
+        scope.launch { runAntiEntropy() }
     }
 
     /**
@@ -89,11 +151,38 @@ public class SeamReplicator<S : Quilted<S>>(
 
     // ---- private helpers ----
 
+    private fun touch(peer: PeerId) {
+        lastSeenAt[peer] = clock.now()
+    }
+
+    private suspend fun runAntiEntropy() {
+        while (true) {
+            delay(config.antiEntropyInterval)
+            evictStalePeers()
+        }
+    }
+
+    private fun evictStalePeers() {
+        val currentPeers = seam.peers.value
+        val now = clock.now()
+        val toEvict = knownPeers
+            .filter { peer -> peer !in currentPeers && isStale(peer, now) }
+            .toSet()
+        toEvict.forEach { peer ->
+            knownPeers.remove(peer)
+            ackedThrough.remove(peer)
+            lastSeenAt.remove(peer)
+        }
+    }
+
+    private fun isStale(peer: PeerId, nowMs: Long): Boolean {
+        val seenAt = lastSeenAt[peer] ?: return true
+        return (nowMs - seenAt) >= config.evictionAfter.inWholeMilliseconds
+    }
+
     private fun broadcastDelta(seq: Long, delta: S) {
         val msg = ReplicatorMessage.Delta(sender = replica, seq = seq, delta = delta)
         val bytes = encode(msg)
-        // Launch is used because broadcast is suspend but apply() is not.
-        // Failures are non-fatal — best-effort delivery; lattice convergence tolerates drops.
         scope.launch { runCatching { seam.broadcast(bytes) } }
     }
 
@@ -120,8 +209,55 @@ public class SeamReplicator<S : Quilted<S>>(
     }
 
     private fun onDelta(sender: PeerId, msg: ReplicatorMessage.Delta<S>) {
-        _state.update { it.piece(msg.delta) }
-        sendAck(to = sender, originalSender = msg.sender, seq = msg.seq)
+        val senderReplica = msg.sender
+        val expected = expectedReceiveSeq.getOrPut(senderReplica) { 1L }
+
+        when {
+            msg.seq == expected -> applyAndDrain(senderReplica, msg.seq, msg.delta, sender)
+            msg.seq > expected -> {
+                bufferInbound(senderReplica, msg.seq, msg.delta)
+                requestResend(sender, senderReplica, fromSeq = expected, toSeq = msg.seq - 1)
+            }
+            else -> {
+                // Duplicate or stale — re-ack for sender GC, don't re-apply
+                sendAck(to = sender, originalSender = senderReplica, seq = msg.seq)
+            }
+        }
+    }
+
+    private fun applyAndDrain(senderReplica: ReplicaId, seq: Long, delta: S, ackTarget: PeerId) {
+        _state.update { it.piece(delta) }
+        expectedReceiveSeq[senderReplica] = seq + 1
+        sendAck(to = ackTarget, originalSender = senderReplica, seq = seq)
+        drainPendingInbound(senderReplica, ackTarget)
+    }
+
+    private fun drainPendingInbound(senderReplica: ReplicaId, ackTarget: PeerId) {
+        val buffer = pendingInbound[senderReplica] ?: return
+        var next = expectedReceiveSeq[senderReplica] ?: 1L
+        while (true) {
+            val delta = buffer.remove(next) ?: break
+            _state.update { it.piece(delta) }
+            expectedReceiveSeq[senderReplica] = next + 1
+            sendAck(to = ackTarget, originalSender = senderReplica, seq = next)
+            next++
+        }
+        if (buffer.isEmpty()) pendingInbound.remove(senderReplica)
+    }
+
+    private fun bufferInbound(senderReplica: ReplicaId, seq: Long, delta: S) {
+        pendingInbound.getOrPut(senderReplica) { mutableMapOf() }[seq] = delta
+    }
+
+    private fun requestResend(to: PeerId, sender: ReplicaId, fromSeq: Long, toSeq: Long) {
+        val msg = ReplicatorMessage.Resend<S>(
+            requester = replica,
+            sender = sender,
+            fromSeq = fromSeq,
+            toSeq = toSeq,
+        )
+        val bytes = encode(msg)
+        scope.launch { runCatching { seam.sendTo(to, bytes) } }
     }
 
     private fun sendAck(to: PeerId, originalSender: ReplicaId, seq: Long) {
