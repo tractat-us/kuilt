@@ -43,7 +43,7 @@ public data class ClusterConfig(
          * All nodes participate in elections and count toward quorum; there are
          * no learners.
          */
-        public fun ofVoters(vararg voters: NodeId): ClusterConfig =
+        public fun ofVoters(voters: Collection<NodeId>): ClusterConfig =
             ClusterConfig(voters = voters.toSet())
 
         /**
