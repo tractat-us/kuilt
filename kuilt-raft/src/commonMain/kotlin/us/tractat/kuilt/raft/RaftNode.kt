@@ -42,7 +42,7 @@
  *
  * // Propose on the leader
  * scope.launch {
- *     node.role.first { it == RaftRole.Leader }   // wait for leadership
+ *     node.awaitLeadership()   // suspend until this node is the leader
  *     try {
  *         val committed = node.propose("set x=1".encodeToByteArray())
  *         println("committed at index ${committed.index}")

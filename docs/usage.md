@@ -237,7 +237,7 @@ for example, a shared game state machine or a distributed lock.
 
 ```kotlin
 // 1. Describe the cluster.
-val cluster = ClusterConfig.ofVoters(NodeId("a"), NodeId("b"), NodeId("c"))
+val cluster = ClusterConfig.ofVoters(listOf(NodeId("a"), NodeId("b"), NodeId("c")))
 
 // 2. Wrap a Seam as the transport (one per node).
 val seam: Seam = loom.host(Pattern("raft-cluster"))
@@ -256,7 +256,7 @@ scope.launch {
 
 // 6. Propose on the leader.
 scope.launch {
-    node.role.first { it == RaftRole.Leader }
+    node.awaitLeadership()
     try {
         val committed = node.propose("set x=1".encodeToByteArray())
         println("committed at index ${committed.index}")
