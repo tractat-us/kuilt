@@ -1,5 +1,6 @@
 plugins {
     id("kuilt.kmp-library")
+    alias(libs.plugins.kover)
 }
 
 // Shareable transport-contract conformance harness. Unlike a normal module's
@@ -24,5 +25,18 @@ kotlin {
         // JVM & Android resolve kotlin.test.Test via a JUnit typealias — supply it.
         jvmMain.dependencies { api(kotlin("test-junit")) }
         androidMain.dependencies { api(kotlin("test-junit")) }
+    }
+}
+
+kover {
+    reports {
+        verify {
+            rule("Minimum 70% line coverage") {
+                // Initial threshold: softer than :kuilt-crdt because commonMain here is
+                // a test-harness library exercised by consumer modules' test runs, not its own.
+                // Initial threshold: set from first measurement — raise via follow-up issues.
+                minBound(70)
+            }
+        }
     }
 }

@@ -1,6 +1,7 @@
 plugins {
     id("kuilt.kmp-library")
     alias(libs.plugins.kotlinSerialization)
+    alias(libs.plugins.kover)
 }
 
 kotlin {
@@ -27,4 +28,15 @@ kotlin {
 // Switch jvmTest to the JUnit Platform so jqwik properties are discovered.
 tasks.named<Test>("jvmTest") {
     useJUnitPlatform()
+}
+
+kover {
+    reports {
+        verify {
+            rule("Minimum 90% line coverage in commonMain") {
+                // Initial threshold: actual was 90.7% at landing. Raise via follow-up issues.
+                minBound(90)
+            }
+        }
+    }
 }
