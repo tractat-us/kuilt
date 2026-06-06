@@ -148,6 +148,8 @@ internal class RaftEngine(
         _role.value = RaftRole.Candidate
         _leader.value = null
         resetElectionTimeout()
+        // Single-voter cluster: self-vote already satisfies quorum — become leader immediately.
+        if (votesGranted.size >= clusterConfig.quorumSize) { becomeLeader(); return }
         val last = log.lastOrNull()
         emitTrace(RaftTraceEvent.Timeout(nextClock(), transport.selfId, currentTerm))
         val rv = RaftMessage.RequestVote(currentTerm, transport.selfId, last?.index ?: 0L, last?.term ?: 0L)
@@ -215,6 +217,8 @@ internal class RaftEngine(
         log += noOp
         storage.appendEntries(listOf(noOp))
         clusterConfig.allMembers.filter { it != transport.selfId }.forEach { sendAppendEntries(it) }
+        // Single-voter: no peers will ACK — check for immediate commit.
+        tryAdvanceLeaderCommit()
     }
 
     private suspend fun stepDown(newTerm: Long, reason: StepDownReason) {
@@ -352,18 +356,23 @@ internal class RaftEngine(
     }
 
     private suspend fun tryAdvanceLeaderCommit() {
-        // Find highest N > currentCommitIndex where a majority have matchIndex >= N and log[N].term == currentTerm
-        val voterMatches = clusterConfig.voters
-            .filter { it != transport.selfId }
-            .mapNotNull { matchIndex[it] }
-            .sortedDescending()
-        val quorum = clusterConfig.quorumSize - 1 // leader counts itself
-        if (voterMatches.size >= quorum) {
-            val majorityIdx = voterMatches[quorum - 1]
-            val entry = log.firstOrNull { it.index == majorityIdx }
-            if (entry != null && entry.term == currentTerm && majorityIdx > currentCommitIndex) {
-                advanceCommit(majorityIdx)
-            }
+        // Find highest N > currentCommitIndex where a majority have matchIndex >= N and log[N].term == currentTerm.
+        // quorum - 1 is the number of *peer* votes needed (leader always counts itself).
+        val peerQuorum = clusterConfig.quorumSize - 1
+        val majorityIdx = if (peerQuorum == 0) {
+            // Single-voter: leader is the sole voter — its own last log entry constitutes a majority.
+            log.lastOrNull()?.index ?: return
+        } else {
+            val voterMatches = clusterConfig.voters
+                .filter { it != transport.selfId }
+                .mapNotNull { matchIndex[it] }
+                .sortedDescending()
+            if (voterMatches.size < peerQuorum) return
+            voterMatches[peerQuorum - 1]
+        }
+        val entry = log.firstOrNull { it.index == majorityIdx }
+        if (entry != null && entry.term == currentTerm && majorityIdx > currentCommitIndex) {
+            advanceCommit(majorityIdx)
         }
     }
 
@@ -403,6 +412,8 @@ internal class RaftEngine(
         emitTrace(RaftTraceEvent.ClientRequest(nextClock(), transport.selfId, index, currentTerm))
         pending += index to response
         clusterConfig.allMembers.filter { it != transport.selfId }.forEach { sendAppendEntries(it) }
+        // Single-voter: no peers will ACK — check for immediate commit (peerQuorum == 0).
+        tryAdvanceLeaderCommit()
     }
 
     override suspend fun propose(command: ByteArray): LogEntry {
