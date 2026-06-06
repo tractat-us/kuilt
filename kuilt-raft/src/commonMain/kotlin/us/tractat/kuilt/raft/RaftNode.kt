@@ -127,8 +127,29 @@ public interface RaftNode {
      * with an empty [LogEntry.command].
      *
      * Replay=0; late collectors miss entries emitted before they subscribed.
+     * To resume without gaps after subscribing late (e.g. on crash recovery),
+     * use [committedFrom].
      */
     public val committed: Flow<LogEntry>
+
+    /**
+     * A cold [Flow] that **replays** already-committed application entries from
+     * [fromIndex] (inclusive), then transparently tails the live [committed] stream —
+     * with no gap or duplicate at the seam.
+     *
+     * Unlike [committed] (replay=0), this lets a late subscriber catch up: a state
+     * machine that has applied up to index `i` resumes with `committedFrom(i + 1)`
+     * and sees every subsequent entry exactly once, in index order. The internal
+     * §5.4.2 no-op ([LogEntry.isNoOp]) is withheld here too.
+     *
+     * Each collection is independent and snapshots the committed log on subscription,
+     * so collecting is more expensive than [committed]; prefer [committed] when you
+     * subscribe before the first proposal and only need the live tail.
+     *
+     * @param fromIndex the first log index to replay (1-based). `0` or `1` replays
+     *   from the start of the retained log.
+     */
+    public fun committedFrom(fromIndex: Long): Flow<LogEntry>
 
     /**
      * Hot [Flow] of [RaftTraceEvent]s — one event per engine state transition.

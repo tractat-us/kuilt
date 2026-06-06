@@ -1,11 +1,16 @@
 package us.tractat.kuilt.raft.test
 
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.receiveAsFlow
+import kotlinx.coroutines.launch
 import us.tractat.kuilt.raft.LogEntry
 import us.tractat.kuilt.raft.NodeId
 import us.tractat.kuilt.raft.NotLeaderException
@@ -57,6 +62,32 @@ public class FakeRaftNode(
 
     private val committedChannel = Channel<LogEntry>(capacity = Channel.UNLIMITED)
     override val committed: Flow<LogEntry> = committedChannel.receiveAsFlow()
+
+    // Backs committedFrom: an ordered history of committed entries for replay, plus a
+    // live tail so late subscribers catch up then follow along (see committedFrom KDoc).
+    private val committedHistory = mutableListOf<LogEntry>()
+    private val committedTail = MutableSharedFlow<LogEntry>(extraBufferCapacity = Int.MAX_VALUE)
+
+    override fun committedFrom(fromIndex: Long): Flow<LogEntry> = flow {
+        coroutineScope {
+            val buffer = Channel<LogEntry>(Channel.UNLIMITED)
+            val tail = launch(start = CoroutineStart.UNDISPATCHED) {
+                try {
+                    committedTail.collect { buffer.send(it) }
+                } finally {
+                    buffer.close()
+                }
+            }
+            val cutIndex = _commitIndex.value
+            committedHistory
+                .filter { it.index in fromIndex..cutIndex && !it.isNoOp }
+                .forEach { emit(it) }
+            for (entry in buffer) {
+                if (entry.index > cutIndex && !entry.isNoOp) emit(entry)
+            }
+            tail.cancel()
+        }
+    }
 
     private val traceChannel = Channel<RaftTraceEvent>(capacity = Channel.UNLIMITED)
     override val trace: Flow<RaftTraceEvent> = traceChannel.receiveAsFlow()
@@ -127,7 +158,9 @@ public class FakeRaftNode(
      */
     public suspend fun pushCommitted(entry: LogEntry): LogEntry {
         committedChannel.send(entry)
+        committedHistory.add(entry)
         _commitIndex.value = entry.index
+        committedTail.emit(entry)
         return entry
     }
 

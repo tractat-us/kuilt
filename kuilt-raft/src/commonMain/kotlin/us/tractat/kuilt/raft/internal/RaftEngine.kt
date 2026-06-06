@@ -4,16 +4,19 @@ package us.tractat.kuilt.raft.internal
 
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.ClosedSendChannelException
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.launch
 import kotlinx.serialization.decodeFromByteArray
 import kotlinx.serialization.encodeToByteArray
@@ -63,6 +66,33 @@ internal class RaftEngine(
         onBufferOverflow = BufferOverflow.SUSPEND,
     )
     override val committed: Flow<LogEntry> = _committed
+
+    override fun committedFrom(fromIndex: Long): Flow<LogEntry> = flow {
+        coroutineScope {
+            // Subscribe to the live tail BEFORE the actor captures the cut. UNDISPATCHED
+            // runs the collector synchronously up to its first suspension (subscriber
+            // registration), so by the time we send CommitCut we're guaranteed registered
+            // — no entry committed after the cut can slip through the gap.
+            val buffer = Channel<LogEntry>(Channel.UNLIMITED)
+            val tail = launch(start = CoroutineStart.UNDISPATCHED) {
+                try {
+                    _committed.collect { buffer.send(it) }
+                } finally {
+                    buffer.close()
+                }
+            }
+            val result = CompletableDeferred<CommitCutResult>()
+            cmd.send(EngineCommand.CommitCut(fromIndex, result))
+            val cut = result.await()
+            cut.replay.forEach { emit(it) }
+            // Tail live, deduped against the replayed prefix. Entries with index <= cutIndex
+            // were already replayed from the snapshot; no-ops never surface.
+            for (entry in buffer) {
+                if (entry.index > cut.cutIndex && !entry.isNoOp) emit(entry)
+            }
+            tail.cancel()
+        }
+    }
 
     private var traceClock = 0L
     private val _trace = MutableSharedFlow<RaftTraceEvent>(
@@ -134,6 +164,7 @@ internal class RaftEngine(
                         is EngineCommand.Propose         -> onPropose(c.command, c.response)
                         is EngineCommand.ElectionTimeout -> onElectionTimeout()
                         is EngineCommand.HeartbeatTick   -> onHeartbeat()
+                        is EngineCommand.CommitCut       -> onCommitCut(c)
                         is EngineCommand.Close           -> { cmd.close(); break }
                     }
                 }
@@ -446,6 +477,17 @@ internal class RaftEngine(
         }
         currentCommitIndex = newCommit
         emitTrace(RaftTraceEvent.AdvanceCommitIndex(nextClock(), transport.selfId, oldCommit, newCommit))
+    }
+
+    /**
+     * Snapshot the committed application log for [committedFrom]. Runs in the actor, so
+     * [currentCommitIndex] and [log] are read at a single consistent point in the commit
+     * stream — the caller has already registered a live subscriber, so entries committed
+     * after this cut tail through that subscription without a gap.
+     */
+    private fun onCommitCut(c: EngineCommand.CommitCut) {
+        val replay = log.filter { it.index in c.fromIndex..currentCommitIndex && !it.isNoOp }
+        c.response.complete(CommitCutResult(replay, currentCommitIndex))
     }
 
     // ── propose() ─────────────────────────────────────────────────────────────
