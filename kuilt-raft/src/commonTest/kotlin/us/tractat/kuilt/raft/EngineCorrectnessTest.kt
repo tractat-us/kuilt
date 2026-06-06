@@ -53,6 +53,10 @@ class EngineCorrectnessTest {
      * in quick succession can both pass the `majorityIdx > currentCommitIndex` check before either
      * has advanced the commit index, causing `advanceCommit` to run twice and emit the same
      * `LogEntry` twice.
+     *
+     * Note: §5.4.2 no-op appended on leader election occupies index 1 (empty command), so 10
+     * user proposals land at indices 2-11. The test filters by non-empty command to isolate
+     * user proposals, then checks they appear exactly once in monotonic index order.
      */
     @Test
     fun burstProposals_eachIndexEmittedExactlyOnce() = runTest(UnconfinedTestDispatcher()) {
@@ -66,17 +70,20 @@ class EngineCorrectnessTest {
         delay(50)
         collectJob.cancel()
 
-        val indices = collectedByLeader.map { it.index }
+        // Filter out the no-op (empty command) appended on leader election per §5.4.2
+        val userEntries = collectedByLeader.filter { it.command.isNotEmpty() }
+        val indices = userEntries.map { it.index }
         assertEquals(
-            (1L..10L).toList(),
-            indices.sorted(),
-            "Expected exactly indices 1-10, got: $indices",
+            10,
+            userEntries.size,
+            "Expected exactly 10 user entries committed, got ${userEntries.size}: $indices",
         )
         assertEquals(
             10,
             indices.distinct().size,
             "Duplicate indices in committed: $indices",
         )
+        assertEquals(indices.sorted(), indices, "Entries out of order: $indices")
     }
 
     /**
