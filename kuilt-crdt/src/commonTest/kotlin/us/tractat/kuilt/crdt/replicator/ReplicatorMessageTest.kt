@@ -41,4 +41,22 @@ class ReplicatorMessageTest {
         assertEquals(msg.sender, (decoded as ReplicatorMessage.FullState).sender)
         assertEquals(msg.state, decoded.state)
     }
+
+    @Test
+    fun resendRoundTripsThroughCbor() {
+        val b = ReplicaId("B")
+        val msg = ReplicatorMessage.Resend<GCounter>(
+            requester = a,
+            sender = b,
+            fromSeq = 3L,
+            toSeq = 5L,
+        )
+        val bytes = Cbor.encodeToByteArray(msgSerializer, msg)
+        val decoded = Cbor.decodeFromByteArray(msgSerializer, bytes)
+        val resend = decoded as ReplicatorMessage.Resend
+        assertEquals(msg.requester, resend.requester)
+        assertEquals(msg.sender, resend.sender)
+        assertEquals(msg.fromSeq, resend.fromSeq)
+        assertEquals(msg.toSeq, resend.toSeq)
+    }
 }

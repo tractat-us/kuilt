@@ -51,4 +51,18 @@ public sealed class ReplicatorMessage<S> {
         public val sender: ReplicaId,
         public val state: S,
     ) : ReplicatorMessage<S>()
+
+    /**
+     * Gap retransmission request: [requester] has detected that it is missing
+     * deltas from [sender] in the range [[fromSeq]..[toSeq]] inclusive.
+     * [sender] should re-broadcast each buffered delta in that range.
+     */
+    @Serializable
+    @SerialName("resend")
+    public class Resend<S>(
+        public val requester: ReplicaId,
+        public val sender: ReplicaId,
+        public val fromSeq: Long,
+        public val toSeq: Long,
+    ) : ReplicatorMessage<S>()
 }
