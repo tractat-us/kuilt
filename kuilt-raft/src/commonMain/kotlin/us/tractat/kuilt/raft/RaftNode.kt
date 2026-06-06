@@ -24,7 +24,7 @@
  * ## Example
  *
  * ```kotlin
- * val cluster = ClusterConfig.ofVoters(NodeId("a"), NodeId("b"), NodeId("c"))
+ * val cluster = ClusterConfig.ofVoters(listOf(NodeId("a"), NodeId("b"), NodeId("c")))
  *
  * // On node "a": wrap a kuilt Seam as the transport
  * val seam: Seam = loom.host(Pattern("raft-cluster"))
@@ -79,6 +79,7 @@ package us.tractat.kuilt.raft
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.first
 import us.tractat.kuilt.raft.internal.RaftEngine
 
 /**
@@ -146,6 +147,24 @@ public interface RaftNode {
      * @throws LeadershipLostException if leadership is lost while waiting for commitment.
      */
     public suspend fun propose(command: ByteArray): LogEntry
+
+    /**
+     * Suspends until this node is observed in the [RaftRole.Leader] role.
+     *
+     * Convenience over polling `role.value`. Returns immediately if already leader.
+     * Honours structured concurrency: if the surrounding scope is cancelled while
+     * waiting, this throws [kotlinx.coroutines.CancellationException]. A [RaftRole.Learner]
+     * never becomes leader, so calling this on a learner node suspends forever (until cancelled).
+     *
+     * Example:
+     * ```
+     * node.awaitLeadership()
+     * // this node is now the leader — safe to propose
+     * ```
+     */
+    public suspend fun awaitLeadership() {
+        role.first { it is RaftRole.Leader }
+    }
 
     /**
      * Shuts down this node, cancelling all internal coroutines.

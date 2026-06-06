@@ -68,6 +68,16 @@ internal class RaftEngine(
     private val _trace = MutableSharedFlow<RaftTraceEvent>(extraBufferCapacity = 512)
     override val trace: Flow<RaftTraceEvent> = _trace
 
+    // ── Peer-set helpers ─────────────────────────────────────────────────────
+
+    /** Voters other than self — the RequestVote recipients. */
+    private val otherVoters: List<NodeId>
+        get() = clusterConfig.voters.filter { it != transport.selfId }
+
+    /** All members (voters + learners) other than self — the AppendEntries recipients. */
+    private val otherMembers: List<NodeId>
+        get() = clusterConfig.allMembers.filter { it != transport.selfId }
+
     // ── Actor-only mutable state ──────────────────────────────────────────────
     private var currentTerm = 0L
     private var votedFor: NodeId? = null
@@ -173,7 +183,7 @@ internal class RaftEngine(
         val last = log.lastOrNull()
         emitTrace(RaftTraceEvent.Timeout(nextClock(), transport.selfId, currentTerm))
         val rv = RaftMessage.RequestVote(currentTerm, transport.selfId, last?.index ?: 0L, last?.term ?: 0L)
-        clusterConfig.voters.filter { it != transport.selfId }.forEach { peer ->
+        otherVoters.forEach { peer ->
             emitTrace(RaftTraceEvent.RequestVote(nextClock(), transport.selfId, peer, currentTerm, last?.index ?: 0L, last?.term ?: 0L))
             send(peer, rv)
         }
@@ -215,7 +225,7 @@ internal class RaftEngine(
         _leader.value = transport.selfId
         electionJob?.cancel()
         val nextIdx = (log.lastOrNull()?.index ?: 0L) + 1L
-        clusterConfig.allMembers.filter { it != transport.selfId }.forEach { p ->
+        otherMembers.forEach { p ->
             nextIndex[p] = nextIdx
             matchIndex[p] = 0L
         }
@@ -236,7 +246,7 @@ internal class RaftEngine(
         val noOp = LogEntry(noOpIndex, currentTerm, byteArrayOf())
         log += noOp
         storage.appendEntries(listOf(noOp))
-        clusterConfig.allMembers.filter { it != transport.selfId }.forEach { sendAppendEntries(it) }
+        otherMembers.forEach { sendAppendEntries(it) }
         // Single-voter: no peers will ACK — check for immediate commit.
         tryAdvanceLeaderCommit()
     }
@@ -260,7 +270,7 @@ internal class RaftEngine(
 
     private suspend fun onHeartbeat() {
         if (_role.value !is RaftRole.Leader) return
-        clusterConfig.allMembers.filter { it != transport.selfId }.forEach { sendAppendEntries(it) }
+        otherMembers.forEach { sendAppendEntries(it) }
     }
 
     private suspend fun sendAppendEntries(peer: NodeId) {
@@ -383,8 +393,7 @@ internal class RaftEngine(
             // Single-voter: leader is the sole voter — its own last log entry constitutes a majority.
             log.lastOrNull()?.index ?: return
         } else {
-            val voterMatches = clusterConfig.voters
-                .filter { it != transport.selfId }
+            val voterMatches = otherVoters
                 .mapNotNull { matchIndex[it] }
                 .sortedDescending()
             if (voterMatches.size < peerQuorum) return
@@ -431,7 +440,7 @@ internal class RaftEngine(
         storage.appendEntries(listOf(entry))
         emitTrace(RaftTraceEvent.ClientRequest(nextClock(), transport.selfId, index, currentTerm))
         pending += index to response
-        clusterConfig.allMembers.filter { it != transport.selfId }.forEach { sendAppendEntries(it) }
+        otherMembers.forEach { sendAppendEntries(it) }
         // Single-voter: no peers will ACK — check for immediate commit (peerQuorum == 0).
         tryAdvanceLeaderCommit()
     }
