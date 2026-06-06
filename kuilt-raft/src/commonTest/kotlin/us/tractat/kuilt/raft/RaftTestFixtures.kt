@@ -48,6 +48,28 @@ internal fun raftRunTest(
     body: suspend TestScope.() -> Unit,
 ): TestResult = runTest(UnconfinedTestDispatcher(), timeout = timeout, testBody = body)
 
+/** Bundles a single-voter [RaftNode] with its injectable [storage] for compaction tests. */
+internal class SingleVoterHarness(val node: RaftNode, val storage: InMemoryRaftStorage)
+
+/**
+ * Builds a single-voter [RaftNode] backed by [InMemoryRaftNetwork] — the same transport
+ * already used by all multi-node tests — and returns a [SingleVoterHarness] that exposes
+ * both the node and its [storage].
+ *
+ * [storage] is injectable so Task 5's recovery test can pre-load a persisted snapshot + log.
+ */
+internal fun singleVoterNode(
+    scope: CoroutineScope,
+    storage: InMemoryRaftStorage = InMemoryRaftStorage(),
+): SingleVoterHarness {
+    val self = NodeId("solo")
+    val cluster = ClusterConfig(voters = setOf(self))
+    val network = InMemoryRaftNetwork()
+    val transport = network.transport(self)
+    val node = scope.raftNode(cluster, transport, storage, FAST_RAFT_CONFIG)
+    return SingleVoterHarness(node, storage)
+}
+
 /** Fast timings for deterministic tests — elections fire in single-digit ms. */
 internal val FAST_RAFT_CONFIG = RaftConfig(
     electionTimeoutMin = 5.milliseconds,

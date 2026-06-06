@@ -71,6 +71,14 @@ public sealed interface RaftTraceEvent {
         val conflictTerm: Long?,
     ) : RaftTraceEvent
 
+    /** Log prefix discarded after a compaction. */
+    public data class Compacted(
+        override val clock: Long,
+        val node: NodeId,
+        val throughIndex: Long,
+        val throughTerm: Long,
+    ) : RaftTraceEvent
+
     /** commitIndex advanced. */
     public data class AdvanceCommitIndex(
         override val clock: Long,

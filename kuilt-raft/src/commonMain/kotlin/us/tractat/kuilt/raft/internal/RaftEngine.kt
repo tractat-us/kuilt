@@ -37,6 +37,7 @@ import us.tractat.kuilt.raft.RaftStorage
 import us.tractat.kuilt.raft.RaftTraceEvent
 import us.tractat.kuilt.raft.RaftTransport
 import us.tractat.kuilt.raft.Snapshot
+import us.tractat.kuilt.raft.SnapshotMeta
 import us.tractat.kuilt.raft.StepDownReason
 import kotlin.random.Random
 import kotlin.time.Duration
@@ -135,6 +136,10 @@ internal class RaftEngine(
     private val log = mutableListOf<LogEntry>()
     private var currentCommitIndex = 0L
 
+    // Snapshot / compaction state
+    private var snapshotIndex = 0L
+    private var snapshotTerm = 0L
+
     // Candidate state
     private val votesGranted = mutableSetOf<NodeId>()
 
@@ -182,6 +187,7 @@ internal class RaftEngine(
                     }
                 }
             }
+            launch { snapshots.collect { cmd.trySend(EngineCommand.Compact) } }
         }
     }
 
@@ -194,6 +200,7 @@ internal class RaftEngine(
                         is EngineCommand.Propose         -> onPropose(c.command, c.response)
                         is EngineCommand.ElectionTimeout -> onElectionTimeout()
                         is EngineCommand.HeartbeatTick   -> onHeartbeat()
+                        is EngineCommand.Compact         -> onCompact()
                         is EngineCommand.CommitCut       -> onCommitCut(c)
                         is EngineCommand.Close           -> { cmd.close(); break }
                     }
@@ -242,9 +249,16 @@ internal class RaftEngine(
 
     private fun entryAt(index: Long): LogEntry? = log.firstOrNull { it.index == index }
 
-    private val lastLogIndex: Long get() = log.lastOrNull()?.index ?: 0L
+    private val lastLogIndex: Long get() = log.lastOrNull()?.index ?: snapshotIndex
 
-    private val lastLogTerm: Long get() = log.lastOrNull()?.term ?: 0L
+    private val lastLogTerm: Long get() = log.lastOrNull()?.term ?: snapshotTerm
+
+    /** Term at [index], or `null` if [index] is in the compacted prefix (unknowable from in-memory state). */
+    private fun termAt(index: Long): Long? = when {
+        index == snapshotIndex -> snapshotTerm
+        index < snapshotIndex  -> null
+        else                   -> entryAt(index)?.term
+    }
 
     // ── Trace helper ──────────────────────────────────────────────────────────
 
@@ -560,10 +574,29 @@ internal class RaftEngine(
      * [currentCommitIndex] and [log] are read at a single consistent point in the commit
      * stream — the caller has already registered a live subscriber, so entries committed
      * after this cut tail through that subscription without a gap.
+     *
+     * When [fromIndex] falls at or below [snapshotIndex], loads the stored snapshot and
+     * prepends a [Committed.Install] so the subscriber can reset its state machine.
      */
-    private fun onCommitCut(c: EngineCommand.CommitCut) {
-        val replay = log.filter { it.index in c.fromIndex..currentCommitIndex && !it.isNoOp }
-        c.response.complete(CommitCutResult(replay, currentCommitIndex))
+    private suspend fun onCommitCut(c: EngineCommand.CommitCut) {
+        val install = if (c.fromIndex <= snapshotIndex && snapshotIndex > 0L)
+            storage.loadSnapshot()?.let { Snapshot(it.meta.lastIncludedIndex, it.state) } else null
+        val from = maxOf(c.fromIndex, snapshotIndex + 1)
+        val replay = log.filter { it.index in from..currentCommitIndex && !it.isNoOp }
+        c.response.complete(CommitCutResult(replay, currentCommitIndex, install))
+    }
+
+    private suspend fun onCompact() {
+        val s = snapshots.value ?: return
+        if (s.throughIndex <= snapshotIndex || s.throughIndex > currentCommitIndex) return
+        val term = termAt(s.throughIndex) ?: return   // must be a live, committed entry
+        storage.saveSnapshot(SnapshotMeta(s.throughIndex, term), s.state)   // durable FIRST
+        storage.discardLogPrefix(s.throughIndex)                             // then drop prefix
+        log.removeAll { it.index <= s.throughIndex }
+        snapshotIndex = s.throughIndex
+        snapshotTerm = term
+        _compactionFloor.value = snapshotIndex
+        emitTrace(RaftTraceEvent.Compacted(nextClock(), transport.selfId, snapshotIndex, snapshotTerm))
     }
 
     // ── propose() ─────────────────────────────────────────────────────────────
