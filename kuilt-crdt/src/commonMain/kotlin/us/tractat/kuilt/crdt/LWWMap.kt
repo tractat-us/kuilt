@@ -9,6 +9,12 @@ import kotlinx.serialization.Serializable
  *
  * Suited to settings, ready-toggles, and similar small key→latest-value state
  * where surfacing concurrent edits (a la [MVRegister]) is unwanted.
+ *
+ * **Clock-skew warning.** Wall-clock timestamps work only when clocks are
+ * well-synchronized across all replicas. NTP-class drift will cause surprising
+ * silent drops: a write with a lagging timestamp loses to an older write from a
+ * faster clock. For correctness under arbitrary clock skew, pair this map with
+ * a Hybrid Logical Clock above this layer.
  */
 @Serializable
 public class LWWMap<K, V> private constructor(
@@ -22,7 +28,17 @@ public class LWWMap<K, V> private constructor(
     /** The current value for [key], or `null` if unset. */
     public operator fun get(key: K): V? = cells[key]?.value
 
-    /** Write [value] for [key] tagged with [timestamp] by [replica]. */
+    /**
+     * Write [value] for [key] tagged with ([timestamp], [replica]).
+     *
+     * **Precondition — tag uniqueness.** The `(replica, timestamp)` pair MUST
+     * uniquely identify this write for the given key. Reusing the same
+     * `(replica, timestamp)` across two writes to the same key with different
+     * values produces non-deterministic convergence under merge — which value
+     * survives depends on merge order, not write order. Use a monotonic
+     * timestamp source per replica and never reuse a `(replica, timestamp)`
+     * pair. Not enforced at runtime.
+     */
     public fun set(replica: ReplicaId, timestamp: Long, key: K, value: V): LWWMap<K, V> {
         val current = cells[key] ?: LWWRegister.empty()
         val next = current.set(replica, timestamp, value)
