@@ -40,6 +40,11 @@ import kotlin.time.Duration.Companion.milliseconds
  *
  *   Set `true` only when you have explicitly validated that the test's use of
  *   `UnconfinedTestDispatcher` is correct. NEVER set in production code.
+ * @param slowProposeThreshold Wall-time threshold for a propose round-trip (from accepted to
+ *   applied). When the elapsed time exceeds this threshold, the engine logs at `warn` level.
+ *   Below this threshold, the log entry is at `debug` level. Set to [Duration.ZERO] to treat
+ *   every propose as slow (useful in tests that want to assert the warn path fires). Default
+ *   `100ms` — appropriate for LAN clusters.
  */
 public data class RaftConfig(
     val electionTimeoutMin: Duration = 150.milliseconds,
@@ -47,4 +52,5 @@ public data class RaftConfig(
     val heartbeatInterval: Duration = 50.milliseconds,
     val strictTestGuard: Boolean = false,
     val expectVirtualTime: Boolean = false,
+    val slowProposeThreshold: Duration = 100.milliseconds,
 )

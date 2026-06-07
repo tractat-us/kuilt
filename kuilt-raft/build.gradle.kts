@@ -10,6 +10,7 @@ kotlin {
             implementation(libs.kotlinx.coroutines.core)
             implementation(libs.kotlinx.serialization.core)
             implementation(libs.kotlinx.serialization.cbor)
+            implementation(libs.kotlin.logging)
         }
         commonTest.dependencies {
             implementation(libs.kotlinx.coroutines.test)
@@ -19,6 +20,8 @@ kotlin {
             implementation(libs.jqwik)
             runtimeOnly(libs.junit.vintage.engine)
             runtimeOnly(libs.junit.platform.launcher)
+            // SLF4J backend for kotlin-logging on JVM
+            runtimeOnly(libs.logback)
         }
     }
 }
