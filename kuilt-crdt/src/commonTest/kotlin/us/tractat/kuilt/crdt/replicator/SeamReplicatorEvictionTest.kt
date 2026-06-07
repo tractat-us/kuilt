@@ -82,6 +82,7 @@ class SeamReplicatorEvictionTest {
         val config = SeamReplicatorConfig(
             evictionAfter = 100.milliseconds,
             antiEntropyInterval = 50.milliseconds,
+            expectVirtualTime = true,
         )
 
         // Give A a controllable peers flow so we can simulate B leaving
@@ -135,6 +136,7 @@ class SeamReplicatorEvictionTest {
         val config = SeamReplicatorConfig(
             evictionAfter = 10.milliseconds,
             antiEntropyInterval = 5.milliseconds,
+            expectVirtualTime = true,
         )
 
         val repA = replicatorFor(rawSeamA, backgroundScope, config, clock)
@@ -169,6 +171,7 @@ class SeamReplicatorEvictionTest {
         val config = SeamReplicatorConfig(
             evictionAfter = 10.milliseconds,
             antiEntropyInterval = 5.milliseconds,
+            expectVirtualTime = true,
         )
 
         // Control A's peer view independently of the loom

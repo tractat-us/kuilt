@@ -32,7 +32,7 @@ class SeamReplicatorChaosTest {
     private fun gcounterReplicator(
         seam: Seam,
         scope: kotlinx.coroutines.CoroutineScope,
-        config: SeamReplicatorConfig = SeamReplicatorConfig(),
+        config: SeamReplicatorConfig = SeamReplicatorConfig(expectVirtualTime = true),
         clock: MonotonicMillis = MonotonicMillis { 0L },
     ) = SeamReplicator(
         replica = ReplicaId(seam.selfId.value),
@@ -134,6 +134,7 @@ class SeamReplicatorChaosTest {
             initial = GSet.empty<String>(),
             messageSerializer = gSetSer,
             scope = backgroundScope,
+            config = SeamReplicatorConfig(expectVirtualTime = true),
         )
         val repB = SeamReplicator(
             replica = ReplicaId(rawB.selfId.value),
@@ -141,6 +142,7 @@ class SeamReplicatorChaosTest {
             initial = GSet.empty<String>(),
             messageSerializer = gSetSer,
             scope = backgroundScope,
+            config = SeamReplicatorConfig(expectVirtualTime = true),
         )
 
         // 10 ops per peer — multiple of window=5, so both reorder buffers flush completely
@@ -328,6 +330,7 @@ class SeamReplicatorChaosTest {
         val config = SeamReplicatorConfig(
             evictionAfter = 100.milliseconds,
             antiEntropyInterval = 50.milliseconds,
+            expectVirtualTime = true,
         )
 
         // Give A a controllable peers view so we can simulate B disappearing

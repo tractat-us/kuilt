@@ -102,7 +102,7 @@ class SeamReplicatorResendRetryTest {
         val gatingSeamB = SendToGatingSeam(rawSeamB, unblockSendTo = false)
 
         val retryInterval = 200.milliseconds
-        val config = SeamReplicatorConfig(resendRetryInterval = retryInterval)
+        val config = SeamReplicatorConfig(resendRetryInterval = retryInterval, expectVirtualTime = true)
 
         val repA = replicatorFor(droppingSeamA, GSet.empty<String>(), gsetSer, backgroundScope, config)
         val repB = replicatorFor(gatingSeamB, GSet.empty<String>(), gsetSer, backgroundScope, config)
@@ -166,7 +166,7 @@ class SeamReplicatorResendRetryTest {
         }
 
         val retryInterval = 500.milliseconds
-        val config = SeamReplicatorConfig(resendRetryInterval = retryInterval)
+        val config = SeamReplicatorConfig(resendRetryInterval = retryInterval, expectVirtualTime = true)
 
         val repA = replicatorFor(gatingSeamA, GSet.empty<String>(), gsetSer, backgroundScope, config)
         val repB = replicatorFor(rawSeamB, GSet.empty<String>(), gsetSer, backgroundScope, config)

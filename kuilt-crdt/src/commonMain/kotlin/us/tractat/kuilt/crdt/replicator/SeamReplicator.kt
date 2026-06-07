@@ -48,6 +48,12 @@ public data class SeamReplicatorConfig(
     val antiEntropyInterval: Duration = 1.minutes,
     val resendRetryInterval: Duration = 30.seconds,
     val strictTestGuard: Boolean = false,
+    /**
+     * Suppresses the TestDispatcher warning for tests that intentionally run a real
+     * [SeamReplicator] under `UnconfinedTestDispatcher`. Has no effect in production.
+     * Default `false`: warn as usual. See [strictTestGuard].
+     */
+    val expectVirtualTime: Boolean = false,
 )
 
 /**
@@ -164,7 +170,7 @@ public class SeamReplicator<S : Quilted<S>>(
     internal val knownPeersForTest: Set<PeerId> get() = knownPeers
 
     init {
-        checkNotUnderTestDispatcher(scope, config.strictTestGuard)
+        checkNotUnderTestDispatcher(scope, config.strictTestGuard, config.expectVirtualTime)
 
         seam.incoming
             .onEach { swatch -> swatch.sender?.let { touch(it); dispatch(it, swatch.payload) } }
@@ -361,7 +367,8 @@ public class SeamReplicator<S : Quilted<S>>(
         Cbor.decodeFromByteArray(messageSerializer, bytes)
 }
 
-private fun checkNotUnderTestDispatcher(scope: CoroutineScope, strict: Boolean) {
+private fun checkNotUnderTestDispatcher(scope: CoroutineScope, strict: Boolean, expectVirtualTime: Boolean) {
+    if (expectVirtualTime) return
     val interceptor = scope.coroutineContext[ContinuationInterceptor]
     val className = interceptor?.let { it::class.qualifiedName ?: it::class.simpleName ?: "" } ?: ""
     val isTestDispatcher = "TestDispatcher" in className ||
