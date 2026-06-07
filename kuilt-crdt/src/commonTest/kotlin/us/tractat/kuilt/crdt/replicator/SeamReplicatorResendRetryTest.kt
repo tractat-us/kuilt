@@ -112,14 +112,15 @@ class SeamReplicatorResendRetryTest {
         repA.apply(Patch(GSet.of("banana")))  // seq=2 DROPPED
         repA.apply(Patch(GSet.of("cherry")))  // seq=3 delivered → gap detected
 
-        // Allow initial messages to propagate; first Resend is dropped by gatingSeamB
+        // Allow initial messages to propagate; first Resend is dropped by gatingSeamB.
+        // seq=3 ("cherry") is buffered in B's inbound queue waiting for seq=2 ("banana").
         testScheduler.advanceUntilIdle()
 
-        // B is diverged: "banana" is missing
+        // B has only seq=1; seq=3 is buffered pending seq=2, seq=2 never arrived
         assertEquals(
-            setOf("apple", "cherry"),
+            setOf("apple"),
             repB.state.value.elements,
-            "B should be missing 'banana' after dropped Resend",
+            "B should have only 'apple' — 'banana' gap is open and 'cherry' is buffered",
         )
 
         // Unblock sendTo so the retry Resend can reach A
