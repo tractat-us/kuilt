@@ -48,7 +48,8 @@ class RaftSimulation(
     /** Bounded per-node ring buffer of [RaftTraceEvent]s, for [dumpState]. */
     private val traces: MutableMap<NodeId, ArrayDeque<RaftTraceEvent>> = mutableMapOf()
 
-    init { nodeIds.forEach { start(it) } }
+    /** One [AppliedStateMachine] per node, re-created on [restart] so a crashed-then-restarted node stays tracked. */
+    private val stateMachines: MutableMap<NodeId, AppliedStateMachine> = mutableMapOf()
 
     private fun start(id: NodeId) {
         val child = CoroutineScope(nodeScope.coroutineContext + Job(nodeScope.coroutineContext[Job]))
@@ -56,6 +57,14 @@ class RaftSimulation(
         val node = nodeFactory(id, network.transport(id), storages.getValue(id), child)
         nodes[id] = node
         collectTrace(id, node)
+        collectStateMachine(id, node)
+    }
+
+    /** (Re)bind a fresh [AppliedStateMachine] for [node] on [nodeScope] so a restarted node is retracked from its first commit. */
+    private fun collectStateMachine(id: NodeId, node: RaftNode) {
+        val sm = AppliedStateMachine()
+        stateMachines[id] = sm
+        nodeScope.launch { node.committed.collect(sm::apply) }
     }
 
     /**
@@ -189,14 +198,8 @@ class RaftSimulation(
         return acc.toByteArray()
     }
 
-    private val stateMachines: Map<NodeId, AppliedStateMachine> = nodeIds.associateWith { AppliedStateMachine() }
-
-    init {
-        nodeIds.forEach { id ->
-            val sm = stateMachines.getValue(id)
-            nodeScope.launch { nodes.getValue(id).committed.collect(sm::apply) }
-        }
-    }
+    /** Construct + start every node. Declared last so all properties above are initialized before [start] runs. */
+    init { nodeIds.forEach { start(it) } }
 
     /** Folds a node's [Committed] stream into opaque bytes — entries append, installs reset to the snapshot state. */
     private class AppliedStateMachine {

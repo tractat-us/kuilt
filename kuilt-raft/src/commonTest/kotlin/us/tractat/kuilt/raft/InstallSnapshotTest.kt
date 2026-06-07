@@ -3,8 +3,6 @@
 package us.tractat.kuilt.raft
 
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.test.UnconfinedTestDispatcher
-import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -13,59 +11,62 @@ import kotlin.test.assertTrue
 class InstallSnapshotTest {
 
     /**
-     * Headline repro (#114): a follower offline across a compaction boundary must rejoin via
-     * InstallSnapshot — the leader no longer holds entries at the follower's prevLogIndex, so
+     * Headline scenario (#114): a node offline across a compaction boundary rejoins via
+     * InstallSnapshot — the leader no longer holds entries at the node's prevLogIndex, so
      * AppendEntries alone can never catch it up.
+     *
+     * "Offline" is modelled as crash + restart ([RaftSimulation.crash]/[restart]) — the node's
+     * scope is cancelled, so its election timer never fires and its term does NOT inflate. A
+     * partition-while-running model would inflate the term and trigger the orthogonal
+     * disruptive-rejoin problem (PreVote, #193), which is not what this test exercises.
      */
     @Test
-    fun offlineFollower_rejoinsViaInstallSnapshot_afterCompaction() = runTest(UnconfinedTestDispatcher()) {
-        val sim = raftSim(this, backgroundScope)
+    fun offlineFollower_rejoinsViaInstallSnapshot_afterCompaction() = raftRunTest {
+        val sim = raftSim(this, backgroundScope, n = 3)
         val leader = awaitLeader(sim)
         val leaderId = sim.nodes.entries.first { it.value === leader }.key
         val offline = sim.nodeIds.first { it != leaderId }
 
-        sim.partitionOff(offline)                         // c goes offline
-        repeat(20) { leader.propose(byteArrayOf(it.toByte())) }
-        val through = sim.compactionFloorCandidate(leaderId)   // a committed, live index past where c left off
+        sim.crash(offline)                               // truly offline — no term inflation
+        repeat(20) { leader.propose(byteArrayOf(it.toByte())) }   // commit via the surviving quorum
+        val finalCommit = leader.commitIndex.value
+        val through = sim.compactionFloorCandidate(leaderId)      // a committed index past where the node left off
 
-        // the leader's consumer snapshots through `through` and raft compacts past where c left off
         leader.snapshots.value = Snapshot(through, sim.stateBytes(leaderId, through))
-        leader.compactionFloor.first { it == through }
+        leader.compactionFloor.first { it == through }   // leader compacts past the node's needed prefix
 
-        // c rejoins — it cannot be caught up by AppendEntries (its needed prefix is gone)
+        sim.restart(offline)                             // back online, fresh from its (empty) persisted storage
         val installs = sim.collectInstalls(offline)
-        val finalIndex = leader.commitIndex.value
-        sim.heal()
-        sim.nodes.getValue(offline).commitIndex.first { it >= finalIndex }
+        sim.awaitCommit(finalCommit, on = setOf(offline))        // catches up — only possible via InstallSnapshot
 
-        assertTrue(installs.isNotEmpty(), "c must receive a Committed.Install")
+        assertTrue(installs.isNotEmpty(), "rejoined node must receive a Committed.Install")
         assertEquals(through, installs.last().snapshot.throughIndex)
         assertContentEquals(
             sim.appliedState(leaderId), sim.appliedState(offline),
-            "c's state machine matches the leader's",
+            "rejoined node's state machine must converge with the leader's",
         )
     }
 
+    /** A small snapshot still spans many chunks when the transport reports a tiny [maxPayloadBytes]. */
     @Test
-    fun chunkedTransfer_reassemblesUnderTinyMaxPayload() = runTest(UnconfinedTestDispatcher()) {
-        // transport reports a tiny maxPayloadBytes so a small snapshot still spans many chunks
-        val sim = raftSim(this, backgroundScope, maxPayloadBytes = 64)
+    fun chunkedTransfer_reassemblesUnderTinyMaxPayload() = raftRunTest {
+        val sim = raftSim(this, backgroundScope, n = 3, maxPayloadBytes = 64)
         val leader = awaitLeader(sim)
         val leaderId = sim.nodes.entries.first { it.value === leader }.key
         val offline = sim.nodeIds.first { it != leaderId }
 
-        sim.partitionOff(offline)
+        sim.crash(offline)
         repeat(10) { leader.propose(byteArrayOf(8)) }
+        val finalCommit = leader.commitIndex.value
         val through = sim.compactionFloorCandidate(leaderId)
 
-        val bigState = ByteArray(1000) { it.toByte() }          // ~16 chunks at 64B
+        val bigState = ByteArray(1000) { it.toByte() }   // ~16 chunks at 64 B
         leader.snapshots.value = Snapshot(through, bigState)
         leader.compactionFloor.first { it == through }
 
+        sim.restart(offline)
         val installs = sim.collectInstalls(offline)
-        val finalIndex = leader.commitIndex.value
-        sim.heal()
-        sim.nodes.getValue(offline).commitIndex.first { it >= finalIndex }
+        sim.awaitCommit(finalCommit, on = setOf(offline))
 
         assertEquals(through, installs.last().snapshot.throughIndex)
         assertEquals(1000, installs.last().snapshot.state.size, "all chunks reassembled in order")
