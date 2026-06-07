@@ -24,7 +24,12 @@ kotlin {
     sourceSets {
         commonMain.dependencies {
             implementation(project(":kuilt-core"))
+            implementation(project(":kuilt-crdt"))
             implementation(libs.kotlinx.coroutines.core)
+        }
+        commonTest.dependencies {
+            implementation(libs.kotlin.test)
+            implementation(libs.kotlinx.coroutines.test)
         }
         jvmMain.dependencies {
             implementation(project(":kuilt-websocket"))
