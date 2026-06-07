@@ -10,8 +10,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.test.TestScope
-import kotlinx.coroutines.test.UnconfinedTestDispatcher
-import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
@@ -43,7 +41,7 @@ class CancellationTest {
     // ── Window 1: propose() cancelled before actor receives ──────────────────
 
     @Test
-    fun proposeCancel_beforeActorReceives() = runTest(UnconfinedTestDispatcher()) {
+    fun proposeCancel_beforeActorReceives() = raftRunTest {
         val sim = threeNodeSim()
         val leader = awaitLeader(sim)
         val job = launch { leader.propose(byteArrayOf(1)) }
@@ -55,7 +53,7 @@ class CancellationTest {
     // ── Window 2: propose() cancelled while awaiting quorum ──────────────────
 
     @Test
-    fun proposeCancel_whileAwaitingQuorum() = runTest(UnconfinedTestDispatcher()) {
+    fun proposeCancel_whileAwaitingQuorum() = raftRunTest {
         val sim = threeNodeSim()
         val leader = awaitLeader(sim)
         val id = leaderId(sim, leader)
@@ -73,7 +71,7 @@ class CancellationTest {
     // ── Window 3: scope cancelled with concurrent proposals in flight ─────────
 
     @Test
-    fun scopeCancel_withConcurrentProposals() = runTest(UnconfinedTestDispatcher()) {
+    fun scopeCancel_withConcurrentProposals() = raftRunTest {
         // Child of backgroundScope so virtual time advances, but independently cancellable.
         val nodeScope = CoroutineScope(backgroundScope.coroutineContext + Job(backgroundScope.coroutineContext[Job]))
         val sim = threeNodeSim(nodeScope = nodeScope)
@@ -92,7 +90,7 @@ class CancellationTest {
     // ── Window 4: scope cancelled during election timeout ────────────────────
 
     @Test
-    fun scopeCancel_duringElectionTimeout() = runTest(UnconfinedTestDispatcher()) {
+    fun scopeCancel_duringElectionTimeout() = raftRunTest {
         // Child of backgroundScope so virtual time advances, but independently cancellable.
         val nodeScope = CoroutineScope(backgroundScope.coroutineContext + Job(backgroundScope.coroutineContext[Job]))
         val config = ClusterConfig(voters = setOf(NodeId("a"), NodeId("b"), NodeId("c")))
@@ -116,7 +114,7 @@ class CancellationTest {
     // ── Window 5: scope cancelled during heartbeat ───────────────────────────
 
     @Test
-    fun scopeCancel_duringHeartbeat() = runTest(UnconfinedTestDispatcher()) {
+    fun scopeCancel_duringHeartbeat() = raftRunTest {
         val sim = threeNodeSim()
         val leader = awaitLeader(sim)
         val id = leaderId(sim, leader)
@@ -130,7 +128,7 @@ class CancellationTest {
     // ── Window 6: close() then propose() — must not hang ─────────────────────
 
     @Test
-    fun close_thenPropose_doesNotHang() = runTest(UnconfinedTestDispatcher()) {
+    fun close_thenPropose_doesNotHang() = raftRunTest {
         val sim = threeNodeSim()
         val leader = awaitLeader(sim)
         leader.close()
@@ -144,7 +142,7 @@ class CancellationTest {
     // ── Window 7: close() idempotency ────────────────────────────────────────
 
     @Test
-    fun close_isIdempotent() = runTest(UnconfinedTestDispatcher()) {
+    fun close_isIdempotent() = raftRunTest {
         val sim = threeNodeSim()
         val leader = awaitLeader(sim)
         leader.close()
@@ -154,7 +152,7 @@ class CancellationTest {
     // ── Window 8: no coroutine leaks after scope cancel ───────────────────────
 
     @Test
-    fun scopeCancel_noLeakedCoroutines() = runTest(UnconfinedTestDispatcher()) {
+    fun scopeCancel_noLeakedCoroutines() = raftRunTest {
         // TestScope detects uncompleted coroutines on exit — if any coroutine started by the
         // node outlives its scope, runTest fails with UncompletedCoroutinesError.
         val sim = threeNodeSim(nodeScope = backgroundScope)
@@ -167,7 +165,7 @@ class CancellationTest {
     // ── Window 9: scope cancelled mid storage write ───────────────────────────
 
     @Test
-    fun scopeCancel_midStorageWrite() = runTest(UnconfinedTestDispatcher()) {
+    fun scopeCancel_midStorageWrite() = raftRunTest {
         // Child of backgroundScope so virtual time advances, but independently cancellable.
         val nodeScope = CoroutineScope(backgroundScope.coroutineContext + Job(backgroundScope.coroutineContext[Job]))
         val storage = DelayedStorage(InMemoryRaftStorage(), delayMs = 50)

@@ -1,9 +1,19 @@
+@file:OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+
 package us.tractat.kuilt.raft
 
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import kotlin.test.assertTrue
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.seconds
 
 class RaftSimulation(
     val nodeIds: List<NodeId>,
@@ -22,19 +32,104 @@ class RaftSimulation(
     private val scopes: MutableMap<NodeId, CoroutineScope> = mutableMapOf()
     val nodes: MutableMap<NodeId, RaftNode> = mutableMapOf()
 
+    /** Bounded per-node ring buffer of [RaftTraceEvent]s, for [dumpState]. */
+    private val traces: MutableMap<NodeId, ArrayDeque<RaftTraceEvent>> = mutableMapOf()
+
     init { nodeIds.forEach { start(it) } }
 
     private fun start(id: NodeId) {
         val child = CoroutineScope(nodeScope.coroutineContext + Job(nodeScope.coroutineContext[Job]))
         scopes[id] = child
-        nodes[id] = nodeFactory(id, network.transport(id), storages.getValue(id), child)
+        val node = nodeFactory(id, network.transport(id), storages.getValue(id), child)
+        nodes[id] = node
+        collectTrace(id, node)
     }
 
-    fun crash(id: NodeId) { scopes[id]?.cancel(); scopes.remove(id); nodes.remove(id) }
+    /**
+     * Collect [node]'s trace into a bounded ring buffer on [nodeScope] (NOT the test
+     * [scope]). A hot `trace.collect` on the test scope never completes and would trip
+     * [kotlinx.coroutines.test.UncompletedCoroutinesError] at teardown.
+     */
+    private fun collectTrace(id: NodeId, node: RaftNode) {
+        val ring = ArrayDeque<RaftTraceEvent>(TRACE_RING_CAPACITY)
+        traces[id] = ring
+        nodeScope.launch {
+            node.trace.collect { event ->
+                if (ring.size >= TRACE_RING_CAPACITY) ring.removeFirst()
+                ring.addLast(event)
+            }
+        }
+    }
+
+    fun crash(id: NodeId) {
+        scopes[id]?.cancel()
+        scopes.remove(id)
+        nodes.remove(id)
+        // Keep the trace ring so a post-crash dump still shows what this node did.
+    }
     fun restart(id: NodeId) { start(id) }
     fun partition(a: Set<NodeId>, b: Set<NodeId>) = network.partition(a, b)
     fun heal() = network.heal()
     fun dropLink(from: NodeId, to: NodeId) = network.dropLink(from, to)
+
+    // ── Bounded, dump-on-timeout await helpers ──────────────────────────────
+    // Every cluster-state await in a raft test must go through one of these so a
+    // non-converging cluster FAILS FAST with a full state dump rather than hanging
+    // for the whole runTest timeout. Each polls the target condition under a
+    // withTimeout(within) bound and, on expiry, throws AssertionError(dumpState(...)).
+
+    /** Suspend until [index] is committed on every node in [on]; fail fast with a dump otherwise. */
+    suspend fun awaitCommit(
+        index: Long,
+        on: Collection<NodeId> = nodeIds,
+        within: Duration = DEFAULT_AWAIT,
+    ) {
+        awaitOrDump("awaitCommit($index) on $on", within) {
+            pollUntil { true.takeIf { on.all { id -> committedTo(id) >= index } } }
+        }
+    }
+
+    private fun committedTo(id: NodeId): Long = nodes[id]?.commitIndex?.value ?: -1L
+
+    /** Suspend until some node is [RaftRole.Leader]; return it, or fail fast with a dump. */
+    suspend fun awaitLeader(within: Duration = DEFAULT_AWAIT): RaftNode =
+        awaitOrDump("awaitLeader", within) {
+            pollUntil { leader() }
+        }
+
+    /** Suspend until node [id] holds [role]; fail fast with a dump otherwise. */
+    suspend fun awaitRole(id: NodeId, role: RaftRole, within: Duration = DEFAULT_AWAIT) {
+        awaitOrDump("awaitRole($id, $role)", within) {
+            pollUntil { nodes[id]?.takeIf { it.role.value == role } }
+        }
+    }
+
+    /**
+     * Poll [probe] every virtual millisecond until it returns non-null, then return that value.
+     *
+     * The `delay`-based poll matters under [UnconfinedTestDispatcher]: each `delay(1)` advances
+     * virtual time and lets the engine actors (election, heartbeat, propose) run to a quiescent
+     * point, so a caller that subscribes to a hot flow immediately after the await sees the
+     * subsequent emissions rather than racing queued engine work. The enclosing [withTimeout]
+     * in [awaitOrDump] bounds the loop and turns non-convergence into a fast dump.
+     */
+    private suspend fun <T : Any> pollUntil(probe: () -> T?): T {
+        while (true) {
+            probe()?.let { return it }
+            delay(1)
+        }
+    }
+
+    private suspend fun <T> awaitOrDump(
+        what: String,
+        within: Duration = DEFAULT_AWAIT,
+        block: suspend () -> T,
+    ): T = try {
+        withTimeout(within) { block() }
+    } catch (_: TimeoutCancellationException) {
+        // withTimeout cancelled us; suspend again on a fresh job to render the dump.
+        throw AssertionError(withContext(NonCancellable) { dumpState("$what timed out after $within") })
+    }
 
     suspend fun checkInvariants() {
         // 1. Election Safety: at most one leader at a time
@@ -64,4 +159,61 @@ class RaftSimulation(
 
     fun leader(): RaftNode? = nodes.values.firstOrNull { it.role.value is RaftRole.Leader }
     fun followers(): List<RaftNode> = nodes.values.filter { it.role.value is RaftRole.Follower }
+
+    /**
+     * Render a per-node diagnostic: role, term, commitIndex, log range, and the trace-event
+     * histogram (Timeout / BecomeLeader / BecomeFollower) that makes leadership thrash and
+     * term inflation obvious at a glance. Used as the message of the [AssertionError] thrown
+     * by the await helpers on timeout, and callable directly from a failing assertion.
+     */
+    suspend fun dumpState(reason: String): String = buildString {
+        appendLine("RaftSimulation state dump — $reason")
+        nodeIds.forEach { id ->
+            appendLine(nodeLine(id))
+        }
+        worstOffNode()?.let { id ->
+            appendLine("Last $RECENT_EVENTS events for worst-off node $id:")
+            recentEvents(id).forEach { appendLine("    $it") }
+        }
+    }
+
+    private suspend fun nodeLine(id: NodeId): String {
+        val node = nodes[id]
+        val ring = traces[id].orEmpty()
+        val state = if (node == null) "CRASHED" else {
+            val role = node.role.value::class.simpleName
+            "role=$role leader=${node.leader.value} commitIndex=${node.commitIndex.value}"
+        }
+        return "  $id: $state log=${logRange(id)} ${eventCounts(ring)}"
+    }
+
+    private suspend fun logRange(id: NodeId): String {
+        val entries = storages.getValue(id).entries(1L)
+        return if (entries.isEmpty()) "[]" else "[${entries.first().index}..${entries.last().index}]"
+    }
+
+    private fun eventCounts(ring: Collection<RaftTraceEvent>): String {
+        val timeouts = ring.count { it is RaftTraceEvent.Timeout }
+        val becameLeader = ring.count { it is RaftTraceEvent.BecomeLeader }
+        val becameFollower = ring.count { it is RaftTraceEvent.BecomeFollower }
+        return "Timeout=$timeouts BecomeLeader=$becameLeader BecomeFollower=$becameFollower"
+    }
+
+    /** The node with the most leadership churn (Timeout + BecomeLeader + BecomeFollower). */
+    private fun worstOffNode(): NodeId? = traces.keys.maxByOrNull { id ->
+        traces[id].orEmpty().count {
+            it is RaftTraceEvent.Timeout ||
+                it is RaftTraceEvent.BecomeLeader ||
+                it is RaftTraceEvent.BecomeFollower
+        }
+    }
+
+    private fun recentEvents(id: NodeId): List<RaftTraceEvent> =
+        traces[id].orEmpty().toList().takeLast(RECENT_EVENTS)
+
+    private companion object {
+        const val TRACE_RING_CAPACITY = 256
+        const val RECENT_EVENTS = 12
+        val DEFAULT_AWAIT = 2.seconds
+    }
 }

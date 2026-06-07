@@ -3,7 +3,6 @@
 package us.tractat.kuilt.raft
 
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -33,7 +32,7 @@ class StorageAtomicityTest {
     }
 
     @Test fun engineTermAdvance_usesSingleAtomicWrite_notTwoSeparateCalls() =
-        runTest(UnconfinedTestDispatcher()) {
+        raftRunTest {
             val calls = mutableListOf<String>()
 
             // Spy that records which storage methods are invoked.

@@ -4,8 +4,6 @@ package us.tractat.kuilt.raft
 
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.test.UnconfinedTestDispatcher
-import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -25,7 +23,7 @@ class EdgeCaseTest {
      * and voterMatches is empty.
      */
     @Test
-    fun singleVoter_becomesLeaderAndCommitsImmediately() = runTest(UnconfinedTestDispatcher()) {
+    fun singleVoter_becomesLeaderAndCommitsImmediately() = raftRunTest {
         val id = NodeId("solo")
         val config = ClusterConfig(voters = setOf(id))
         val sim = RaftSimulation(
@@ -48,7 +46,7 @@ class EdgeCaseTest {
      * must handle it without truncation.
      */
     @Test
-    fun largePayload_committedCorrectly() = runTest(UnconfinedTestDispatcher()) {
+    fun largePayload_committedCorrectly() = raftRunTest {
         val ids = listOf(NodeId("x"), NodeId("y"), NodeId("z"))
         val config = ClusterConfig(voters = ids.toSet())
         val sim = RaftSimulation(ids, backgroundScope, fastConfig) { _, transport, storage, nodeScope ->
@@ -66,7 +64,7 @@ class EdgeCaseTest {
      * to propose empty commands.
      */
     @Test
-    fun emptyCommand_commitsSuccessfully() = runTest(UnconfinedTestDispatcher()) {
+    fun emptyCommand_commitsSuccessfully() = raftRunTest {
         val ids = listOf(NodeId("e1"), NodeId("e2"), NodeId("e3"))
         val config = ClusterConfig(voters = ids.toSet())
         val sim = RaftSimulation(ids, backgroundScope, fastConfig) { _, transport, storage, nodeScope ->
@@ -82,7 +80,7 @@ class EdgeCaseTest {
      * increasing indices with no gaps.
      */
     @Test
-    fun proposalIndices_areMonotonicallyIncreasing() = runTest(UnconfinedTestDispatcher()) {
+    fun proposalIndices_areMonotonicallyIncreasing() = raftRunTest {
         val ids = listOf(NodeId("p1"), NodeId("p2"), NodeId("p3"))
         val config = ClusterConfig(voters = ids.toSet())
         val sim = RaftSimulation(ids, backgroundScope, fastConfig) { _, transport, storage, nodeScope ->
@@ -105,7 +103,7 @@ class EdgeCaseTest {
      * Distinct from the learner case in LearnerTest — this confirms voters enforce the same rule.
      */
     @Test
-    fun voterFollower_propose_throwsNotLeaderException() = runTest(UnconfinedTestDispatcher()) {
+    fun voterFollower_propose_throwsNotLeaderException() = raftRunTest {
         val ids = listOf(NodeId("f1"), NodeId("f2"), NodeId("f3"))
         val config = ClusterConfig(voters = ids.toSet())
         val sim = RaftSimulation(ids, backgroundScope, fastConfig) { _, transport, storage, nodeScope ->
@@ -122,7 +120,7 @@ class EdgeCaseTest {
      * because the leader alone cannot satisfy quorum.
      */
     @Test
-    fun twoVoter_crashFollower_noProgress() = runTest(UnconfinedTestDispatcher()) {
+    fun twoVoter_crashFollower_noProgress() = raftRunTest {
         val ids = listOf(NodeId("a"), NodeId("b"))
         val config = ClusterConfig(voters = ids.toSet())
         val sim = RaftSimulation(ids, backgroundScope, fastConfig) { _, transport, storage, nodeScope ->

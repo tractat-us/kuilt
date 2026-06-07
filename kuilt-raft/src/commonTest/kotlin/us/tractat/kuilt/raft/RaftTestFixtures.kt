@@ -3,8 +3,29 @@
 package us.tractat.kuilt.raft
 
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.test.TestResult
+import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.test.runTest
+import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.Duration.Companion.seconds
+
+/**
+ * Run a `:kuilt-raft` consensus test under [UnconfinedTestDispatcher] with a **tight 5-second
+ * default timeout**.
+ *
+ * Consensus tests drive a real [RaftNode] (real-clock [kotlinx.coroutines.delay] for elections
+ * and heartbeats) under virtual time. A non-converging cluster keeps the heartbeat loop scheduling
+ * work, so `runTest` never auto-idles — without a tight timeout the only backstop is the 60s default,
+ * which surfaces as an opaque failure with zero state. This wrapper caps the wait at [timeout] and,
+ * paired with [RaftSimulation]'s bounded await helpers, guarantees a fast, diagnosable failure
+ * instead of a hang.
+ */
+internal fun raftRunTest(
+    timeout: Duration = 5.seconds,
+    body: suspend TestScope.() -> Unit,
+): TestResult = runTest(UnconfinedTestDispatcher(), timeout = timeout, testBody = body)
 
 /** Fast timings for deterministic tests — elections fire in single-digit ms. */
 internal val FAST_RAFT_CONFIG = RaftConfig(
@@ -40,11 +61,11 @@ internal fun raftSim(
     )
 }
 
-/** Poll until some node in [sim] is leader; fail after ~500 ms. */
-internal suspend fun awaitLeader(sim: RaftSimulation): RaftNode {
-    repeat(500) {
-        sim.leader()?.let { return it }
-        delay(1)
-    }
-    error("No leader elected within timeout")
-}
+/**
+ * Suspend until some node in [sim] is leader; fail fast with a full state dump otherwise.
+ *
+ * Thin delegator to [RaftSimulation.awaitLeader] — the single bounded, dump-on-timeout
+ * implementation. Kept as a free function so existing `awaitLeader(sim)` call sites need
+ * no change.
+ */
+internal suspend fun awaitLeader(sim: RaftSimulation): RaftNode = sim.awaitLeader()

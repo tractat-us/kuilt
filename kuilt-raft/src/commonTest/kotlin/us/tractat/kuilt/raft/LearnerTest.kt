@@ -9,8 +9,6 @@ import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
-import kotlinx.coroutines.test.UnconfinedTestDispatcher
-import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertFailsWith
@@ -34,7 +32,7 @@ private fun TestScope.simWithLearner(): RaftSimulation = RaftSimulation(
 class LearnerTest {
 
     @Test
-    fun learner_receives_committed_entries() = runTest(UnconfinedTestDispatcher()) {
+    fun learner_receives_committed_entries() = raftRunTest {
         val sim = simWithLearner()
         val leader = awaitLeader(sim)
         val learner = sim.nodes[learnerId]
@@ -47,21 +45,21 @@ class LearnerTest {
     }
 
     @Test
-    fun learner_never_becomes_leader() = runTest(UnconfinedTestDispatcher()) {
+    fun learner_never_becomes_leader() = raftRunTest {
         val sim = simWithLearner()
         awaitLeader(sim)
         assertIs<RaftRole.Learner>(sim.nodes[learnerId]!!.role.value)
     }
 
     @Test
-    fun learner_propose_throws_NotLeaderException() = runTest(UnconfinedTestDispatcher()) {
+    fun learner_propose_throws_NotLeaderException() = raftRunTest {
         val sim = simWithLearner()
         awaitLeader(sim)
         assertFailsWith<NotLeaderException> { sim.nodes[learnerId]!!.propose(byteArrayOf(1)) }
     }
 
     @Test
-    fun learner_catchup_after_partition() = runTest(UnconfinedTestDispatcher()) {
+    fun learner_catchup_after_partition() = raftRunTest {
         val sim = simWithLearner()
         val leader = awaitLeader(sim)
         val learner = sim.nodes[learnerId]!!

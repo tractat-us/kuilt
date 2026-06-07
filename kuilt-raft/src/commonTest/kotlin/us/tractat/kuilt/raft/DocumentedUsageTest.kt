@@ -3,8 +3,6 @@
 package us.tractat.kuilt.raft
 
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.test.UnconfinedTestDispatcher
-import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withTimeout
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -29,7 +27,7 @@ import kotlin.test.assertTrue
 class DocumentedUsageTest {
 
     @Test
-    fun documentedQuickStart_compilesAndCommits() = runTest(UnconfinedTestDispatcher()) {
+    fun documentedQuickStart_compilesAndCommits() = raftRunTest {
         // 1. Describe the cluster — exactly as documented.
         val cluster = ClusterConfig.ofVoters(listOf(NodeId("a"), NodeId("b"), NodeId("c")))
 

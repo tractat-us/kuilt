@@ -3,8 +3,6 @@ package us.tractat.kuilt.raft
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.test.UnconfinedTestDispatcher
-import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
@@ -18,7 +16,7 @@ private fun assertAll(vararg assertions: () -> Unit) = assertions.forEach { it()
 @OptIn(ExperimentalCoroutinesApi::class)
 class SeamRaftTransportTest {
     @Test
-    fun selfIdMapsFromPeerId() = runTest(UnconfinedTestDispatcher()) {
+    fun selfIdMapsFromPeerId() = raftRunTest {
         val loom = InMemoryLoom()
         val seam = loom.host(Pattern("test"))
         val transport = SeamRaftTransport(seam)
@@ -26,7 +24,7 @@ class SeamRaftTransportTest {
     }
 
     @Test
-    fun deliversMessageToSender() = runTest(UnconfinedTestDispatcher()) {
+    fun deliversMessageToSender() = raftRunTest {
         val loom = InMemoryLoom()
         val seamA = loom.host(Pattern("test"))
         val seamB = loom.join(InMemoryTag("joiner"))
@@ -44,7 +42,7 @@ class SeamRaftTransportTest {
     }
 
     @Test
-    fun peersReflectsSeamPeers() = runTest(UnconfinedTestDispatcher()) {
+    fun peersReflectsSeamPeers() = raftRunTest {
         val loom = InMemoryLoom()
         val seamA = loom.host(Pattern("test"))
         val seamB = loom.join(InMemoryTag("joiner"))

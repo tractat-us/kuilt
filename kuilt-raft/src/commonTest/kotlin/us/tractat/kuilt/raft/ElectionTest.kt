@@ -3,14 +3,12 @@
 package us.tractat.kuilt.raft
 
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.test.UnconfinedTestDispatcher
-import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 class ElectionTest {
-    @Test fun initialElection_elects_exactly_one_leader() = runTest(UnconfinedTestDispatcher()) {
+    @Test fun initialElection_elects_exactly_one_leader() = raftRunTest {
         val sim = raftSim(this, backgroundScope)
         val leader = awaitLeader(sim)
         assertNotNull(leader)
@@ -18,7 +16,7 @@ class ElectionTest {
         sim.checkInvariants()
     }
 
-    @Test fun reElection_after_leader_crash() = runTest(UnconfinedTestDispatcher()) {
+    @Test fun reElection_after_leader_crash() = raftRunTest {
         val sim = raftSim(this, backgroundScope)
         val leader = awaitLeader(sim)
         val leaderId = sim.nodes.entries.first { it.value === leader }.key
@@ -30,7 +28,7 @@ class ElectionTest {
         sim.checkInvariants()
     }
 
-    @Test fun manyElections_invariants_hold() = runTest(UnconfinedTestDispatcher()) {
+    @Test fun manyElections_invariants_hold() = raftRunTest {
         val sim = raftSim(this, backgroundScope)
         repeat(5) {
             val leader = awaitLeader(sim)
