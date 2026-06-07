@@ -29,7 +29,19 @@ public class DotContext private constructor(
     public fun contains(dot: Dot): Boolean =
         dot.seq <= (vv[dot.replica] ?: 0L) || dot in cloud
 
-    /** The next dot [replica] should mint for a new local operation. */
+    /**
+     * Returns the next [Dot] for [replica] to mint for a new local operation.
+     *
+     * **Precondition — one DotContext per logical replica.** The returned dot
+     * is globally unique *within the causal history of this DotContext*. Two
+     * independently-constructed `DotContext` instances for the same replica will
+     * both compute `seq = 1` for their first dot — producing a collision. Every
+     * causal CRDT that depends on dot uniqueness ([ORSet], [MVRegister], [ORMap])
+     * will produce wrong results if two events share the same `(replica, seq)`.
+     *
+     * In practice: create exactly **one** `DotContext` per logical replica and
+     * thread it through all of that replica's operations for its lifetime.
+     */
     public fun nextDot(replica: ReplicaId): Dot =
         Dot(replica, (vv[replica] ?: 0L) + 1L)
 

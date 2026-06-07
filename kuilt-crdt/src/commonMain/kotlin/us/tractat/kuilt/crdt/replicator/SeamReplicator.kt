@@ -57,6 +57,15 @@ private object SystemMonotonicMillis : MonotonicMillis {
  * Runs any [Quilted] CRDT live over a [Seam], providing eventually-consistent
  * multi-peer replication via a simple delta-propagation protocol.
  *
+ * **Precondition — one instance per `(replica, CRDT type)` pair.** Running two
+ * `SeamReplicator<S>` instances with the same [replica] concurrently in the
+ * same process breaks the delta GC protocol: both will mint deltas starting at
+ * `seq = 1`, colliding on sequence numbers. The recipient cannot distinguish
+ * them and will silently drop or misorder deltas, leaving replicas permanently
+ * diverged. This is the same class of collision that the `BoundedCounter`
+ * single-dimension fix addressed in a prior release. Create exactly **one**
+ * `SeamReplicator<S>` per `(replica, CRDT type)` per process.
+ *
  * ## Protocol
  * - **[apply]** applies a local mutation, updates [state], and broadcasts a [ReplicatorMessage.Delta]
  *   to all current peers. Each delta is tagged with a monotonic [seq].
