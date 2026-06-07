@@ -103,6 +103,24 @@ public sealed interface RaftTraceEvent {
         val term: Long,
         val reason: DenyReason,
     ) : RaftTraceEvent
+
+    /** §7 InstallSnapshot chunk sent to a follower whose needed prefix has been compacted away. */
+    public data class InstallSnapshot(
+        override val clock: Long,
+        val from: NodeId,
+        val to: NodeId,
+        val lastIncludedIndex: Long,
+        val offset: Long,
+        val done: Boolean,
+    ) : RaftTraceEvent
+
+    /** A follower finished reassembling and installed a snapshot. */
+    public data class InstallSnapshotAccepted(
+        override val clock: Long,
+        val from: NodeId,
+        val to: NodeId,
+        val lastIncludedIndex: Long,
+    ) : RaftTraceEvent
 }
 
 /** Why a node stepped down from [RaftRole.Leader] or [RaftRole.Candidate] to [RaftRole.Follower]. */
