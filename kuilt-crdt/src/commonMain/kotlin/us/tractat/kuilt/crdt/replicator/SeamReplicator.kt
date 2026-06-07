@@ -19,6 +19,7 @@ import us.tractat.kuilt.crdt.Patch
 import us.tractat.kuilt.crdt.Quilted
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.crdt.piece
+import kotlin.coroutines.ContinuationInterceptor
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.minutes
 
@@ -30,10 +31,16 @@ import kotlin.time.Duration.Companion.minutes
  *   buffer; eviction releases that pin. A peer that reappears after eviction
  *   will receive a fresh [ReplicatorMessage.FullState].
  * @param antiEntropyInterval how often the background eviction check runs.
+ * @param strictTestGuard When `true`, throw [IllegalStateException] at construction
+ *   time if the owning [kotlinx.coroutines.CoroutineScope] contains a
+ *   `kotlinx.coroutines.test.TestDispatcher`. When `false` (the default), emit a
+ *   warning to stdout instead. Set to `true` in tests that want to assert the guard
+ *   fires. Leave `false` in production — the guard is informational there.
  */
 public data class SeamReplicatorConfig(
     val evictionAfter: Duration = 5.minutes,
     val antiEntropyInterval: Duration = 1.minutes,
+    val strictTestGuard: Boolean = false,
 )
 
 /**
@@ -91,6 +98,13 @@ private object SystemMonotonicMillis : MonotonicMillis {
  *   are cancelled cleanly at test end without raising [kotlinx.coroutines.test.UncompletedCoroutinesError].
  * @param config replication behaviour tuning (eviction TTL, anti-entropy interval).
  * @param clock monotonic time source; override in tests to inject a fake clock.
+ *
+ * **Test-dispatcher guard.** If the scope contains a `kotlinx.coroutines.test.TestDispatcher`,
+ * a diagnostic is emitted because [runAntiEntropy] uses real-clock [kotlinx.coroutines.delay] —
+ * under virtual time those delays never advance automatically, causing tests to deadlock silently.
+ * Either use `UnconfinedTestDispatcher` (delays execute eagerly) or advance virtual time via
+ * `testScheduler.advanceTimeBy(…)` if you must use `StandardTestDispatcher`. Set
+ * [SeamReplicatorConfig.strictTestGuard] to `true` to throw rather than warn.
  */
 public class SeamReplicator<S : Quilted<S>>(
     public val replica: ReplicaId,
@@ -127,6 +141,8 @@ public class SeamReplicator<S : Quilted<S>>(
     internal val knownPeersForTest: Set<PeerId> get() = knownPeers
 
     init {
+        checkNotUnderTestDispatcher(scope, config.strictTestGuard)
+
         seam.incoming
             .onEach { swatch -> swatch.sender?.let { touch(it); dispatch(it, swatch.payload) } }
             .launchIn(scope)
@@ -297,4 +313,18 @@ public class SeamReplicator<S : Quilted<S>>(
 
     private fun decode(bytes: ByteArray): ReplicatorMessage<S> =
         Cbor.decodeFromByteArray(messageSerializer, bytes)
+}
+
+private fun checkNotUnderTestDispatcher(scope: CoroutineScope, strict: Boolean) {
+    val interceptor = scope.coroutineContext[ContinuationInterceptor]
+    val className = interceptor?.let { it::class.qualifiedName ?: it::class.simpleName ?: "" } ?: ""
+    val isTestDispatcher = "TestDispatcher" in className ||
+        className.startsWith("kotlinx.coroutines.test.")
+    if (!isTestDispatcher) return
+    val msg = "SeamReplicator constructed under a TestDispatcher ($className). " +
+        "The anti-entropy loop uses real-clock delay() — under virtual time those delays " +
+        "never advance automatically and your test will deadlock silently. " +
+        "Either use UnconfinedTestDispatcher (delays execute eagerly) or drive virtual time via " +
+        "testScheduler.advanceTimeBy(…) if you must use StandardTestDispatcher."
+    if (strict) error(msg) else println("WARNING: $msg")
 }
