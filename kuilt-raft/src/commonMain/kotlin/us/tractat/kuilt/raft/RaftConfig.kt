@@ -32,10 +32,19 @@ import kotlin.time.Duration.Companion.milliseconds
  *   `kotlinx.coroutines.test.TestDispatcher`. When `false` (the default), emit a
  *   warning to stdout instead. Set to `true` in tests that want to assert the guard
  *   fires. Leave `false` in production — the guard is informational there.
+ * @param expectVirtualTime Suppresses the TestDispatcher warning (see [strictTestGuard])
+ *   for tests that intentionally run a real `RaftNode` under `UnconfinedTestDispatcher` —
+ *   where real-clock `delay()` actually fires, so the engine's election/heartbeat loops
+ *   tick normally. Has no effect in production (production code is never under a
+ *   `TestDispatcher`). Default `false`: warn as usual.
+ *
+ *   Set `true` only when you have explicitly validated that the test's use of
+ *   `UnconfinedTestDispatcher` is correct. NEVER set in production code.
  */
 public data class RaftConfig(
     val electionTimeoutMin: Duration = 150.milliseconds,
     val electionTimeoutMax: Duration = 300.milliseconds,
     val heartbeatInterval: Duration = 50.milliseconds,
     val strictTestGuard: Boolean = false,
+    val expectVirtualTime: Boolean = false,
 )
