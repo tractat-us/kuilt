@@ -4,7 +4,6 @@ package us.tractat.kuilt.raft
 
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
@@ -12,7 +11,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 class InMemoryRaftNetworkTest {
-    @Test fun deliversMessage() = runTest(UnconfinedTestDispatcher()) {
+    @Test fun deliversMessage() = raftRunTest {
         val net = InMemoryRaftNetwork()
         val a = net.transport(NodeId("a"))
         val b = net.transport(NodeId("b"))
@@ -36,7 +35,7 @@ class InMemoryRaftNetworkTest {
         assertTrue(NodeId("b") in peers && NodeId("c") in peers)
     }
 
-    @Test fun partitionDropsMessages() = runTest(UnconfinedTestDispatcher()) {
+    @Test fun partitionDropsMessages() = raftRunTest {
         val net = InMemoryRaftNetwork()
         val a = net.transport(NodeId("a"))
         val b = net.transport(NodeId("b"))

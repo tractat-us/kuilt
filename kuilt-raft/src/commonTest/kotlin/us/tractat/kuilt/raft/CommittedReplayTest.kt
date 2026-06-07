@@ -2,13 +2,9 @@
 
 package us.tractat.kuilt.raft
 
-import kotlinx.coroutines.flow.filter
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.test.UnconfinedTestDispatcher
-import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertTrue
@@ -37,7 +33,7 @@ class CommittedReplayTest {
      * entries via committedFrom(0) — in index order, with the no-op excluded.
      */
     @Test
-    fun committedFrom_replaysPriorCommitsForLateSubscriber() = runTest(UnconfinedTestDispatcher()) {
+    fun committedFrom_replaysPriorCommitsForLateSubscriber() = raftRunTest {
         val sim = soloSim(backgroundScope)
         val leader = awaitLeader(sim)
         val e1 = leader.propose(byteArrayOf(1))
@@ -61,7 +57,7 @@ class CommittedReplayTest {
      * committedFrom must honour [fromIndex]: entries below it are not replayed.
      */
     @Test
-    fun committedFrom_skipsEntriesBelowFromIndex() = runTest(UnconfinedTestDispatcher()) {
+    fun committedFrom_skipsEntriesBelowFromIndex() = raftRunTest {
         val sim = soloSim(backgroundScope)
         val leader = awaitLeader(sim)
         leader.propose(byteArrayOf(1)) // index 2
@@ -82,7 +78,7 @@ class CommittedReplayTest {
      * each exactly once (no duplicate at the replay/live seam).
      */
     @Test
-    fun committedFrom_replaysThenTailsLiveWithoutDuplicates() = runTest(UnconfinedTestDispatcher()) {
+    fun committedFrom_replaysThenTailsLiveWithoutDuplicates() = raftRunTest {
         val sim = soloSim(backgroundScope)
         val leader = awaitLeader(sim)
         val e1 = leader.propose(byteArrayOf(1)) // index 2
@@ -93,7 +89,7 @@ class CommittedReplayTest {
 
         // Propose a third entry *after* the subscription is live — it must tail through.
         val e3 = leader.propose(byteArrayOf(3)) // index 4
-        leader.commitIndex.filter { it >= e3.index }.first()
+        sim.awaitCommit(e3.index)
 
         assertContentEquals(
             listOf(e1.index, e2.index, e3.index),

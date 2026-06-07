@@ -6,8 +6,6 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.test.UnconfinedTestDispatcher
-import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
@@ -22,7 +20,7 @@ class EngineCorrectnessTest {
      * `LogEntry` twice.
      */
     @Test
-    fun burstProposals_eachIndexEmittedExactlyOnce() = runTest(UnconfinedTestDispatcher()) {
+    fun burstProposals_eachIndexEmittedExactlyOnce() = raftRunTest {
         val sim = raftSim(this, backgroundScope)
         val leader = awaitLeader(sim)
 
@@ -58,7 +56,7 @@ class EngineCorrectnessTest {
      * committed entry must reach every collector.
      */
     @Test
-    fun slowConsumer_noEntriesDropped() = runTest(UnconfinedTestDispatcher()) {
+    fun slowConsumer_noEntriesDropped() = raftRunTest {
         val sim = raftSim(this, backgroundScope)
         val leader = awaitLeader(sim)
 

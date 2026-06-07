@@ -4,11 +4,7 @@ package us.tractat.kuilt.raft
 
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
-import kotlinx.coroutines.flow.filter
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.test.UnconfinedTestDispatcher
-import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertTrue
 import kotlin.test.assertContentEquals
@@ -24,7 +20,7 @@ class NoOpEntryTest {
      * With the fix, they commit promptly via the no-op that satisfies the term guard.
      */
     @Test
-    fun priorTermEntries_commitAfterElection_withoutNewProposal() = runTest(UnconfinedTestDispatcher()) {
+    fun priorTermEntries_commitAfterElection_withoutNewProposal() = raftRunTest {
         val ids = listOf(NodeId("a"), NodeId("b"), NodeId("c"))
         val config = ClusterConfig(voters = ids.toSet())
         val sim = RaftSimulation(
@@ -52,7 +48,8 @@ class NoOpEntryTest {
         // committed Flow (SharedFlow with replay=0), since the no-op may commit before
         // we subscribe to committed under UnconfinedTestDispatcher.
         val newLeader = awaitLeader(sim)
-        newLeader.commitIndex.filter { it >= e2.index }.first()
+        val newLeaderId = sim.nodes.entries.first { it.value === newLeader }.key
+        sim.awaitCommit(e2.index, on = listOf(newLeaderId))
 
         // commitIndex >= e2.index means all entries up to e2 committed without a new proposal.
         assertTrue(
@@ -71,7 +68,7 @@ class NoOpEntryTest {
      * After healing, all nodes must have both X and Y in storage.
      */
     @Test
-    fun committedEntry_survivesPartitionAndLeaderChange() = runTest(UnconfinedTestDispatcher()) {
+    fun committedEntry_survivesPartitionAndLeaderChange() = raftRunTest {
         val ids = listOf(NodeId("a"), NodeId("b"), NodeId("c"))
         val config = ClusterConfig(voters = ids.toSet())
         val sim = RaftSimulation(
@@ -129,7 +126,7 @@ class NoOpEntryTest {
      * surfaces while `commitIndex` still advances past the no-op.
      */
     @Test
-    fun committed_doesNotEmitElectionNoOp() = runTest(UnconfinedTestDispatcher()) {
+    fun committed_doesNotEmitElectionNoOp() = raftRunTest {
         val id = NodeId("solo")
         val config = ClusterConfig(voters = setOf(id))
         val sim = RaftSimulation(
@@ -146,7 +143,7 @@ class NoOpEntryTest {
         // Election + no-op commit happen here, after the collector has subscribed.
         val leader = awaitLeader(sim)
         val userEntry = leader.propose(byteArrayOf(7))
-        node.commitIndex.filter { it >= userEntry.index }.first()
+        sim.awaitCommit(userEntry.index, on = listOf(id))
 
         assertAll(
             { assertTrue(node.commitIndex.value >= userEntry.index, "commitIndex must advance past the no-op") },
@@ -162,7 +159,7 @@ class NoOpEntryTest {
      * must still see that entry on `committed` — only the internal election no-op is hidden.
      */
     @Test
-    fun committed_includesUserProposedEmptyCommand() = runTest(UnconfinedTestDispatcher()) {
+    fun committed_includesUserProposedEmptyCommand() = raftRunTest {
         val id = NodeId("solo")
         val config = ClusterConfig(voters = setOf(id))
         val sim = RaftSimulation(
@@ -178,7 +175,7 @@ class NoOpEntryTest {
 
         val leader = awaitLeader(sim)
         val emptyUserEntry = leader.propose(byteArrayOf()) // index 2 — empty, but user-proposed
-        node.commitIndex.filter { it >= emptyUserEntry.index }.first()
+        sim.awaitCommit(emptyUserEntry.index, on = listOf(id))
 
         assertAll(
             { assertTrue(seen.any { it.index == emptyUserEntry.index }, "user-proposed empty command must surface on committed: $seen") },

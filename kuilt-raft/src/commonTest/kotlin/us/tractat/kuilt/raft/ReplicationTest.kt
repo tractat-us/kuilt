@@ -8,8 +8,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.test.UnconfinedTestDispatcher
-import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -20,7 +18,7 @@ import kotlin.test.assertNotNull
 class ReplicationTest {
 
     @Test
-    fun basicReplication_entryReachesAllFollowers() = runTest(UnconfinedTestDispatcher()) {
+    fun basicReplication_entryReachesAllFollowers() = raftRunTest {
         val sim = raftSim(this, backgroundScope)
         val leader = awaitLeader(sim)
 
@@ -38,7 +36,7 @@ class ReplicationTest {
     }
 
     @Test
-    fun concurrentProposals_allCommitInOrder() = runTest(UnconfinedTestDispatcher()) {
+    fun concurrentProposals_allCommitInOrder() = raftRunTest {
         val sim = raftSim(this, backgroundScope)
         val leader = awaitLeader(sim)
 
@@ -53,7 +51,7 @@ class ReplicationTest {
     }
 
     @Test
-    fun followerFailure_quorumContinues() = runTest(UnconfinedTestDispatcher()) {
+    fun followerFailure_quorumContinues() = raftRunTest {
         val sim = raftSim(this, backgroundScope)
         val leader = awaitLeader(sim)
         val leaderId = sim.nodes.entries.first { it.value === leader }.key
@@ -67,7 +65,7 @@ class ReplicationTest {
     }
 
     @Test
-    fun leaderFailure_newLeaderCanCommit() = runTest(UnconfinedTestDispatcher()) {
+    fun leaderFailure_newLeaderCanCommit() = raftRunTest {
         val sim = raftSim(this, backgroundScope)
         val leader = awaitLeader(sim)
         val leaderId = sim.nodes.entries.first { it.value === leader }.key
@@ -85,7 +83,7 @@ class ReplicationTest {
     }
 
     @Test
-    fun failNoAgree_quorumLost_noProgress() = runTest(UnconfinedTestDispatcher()) {
+    fun failNoAgree_quorumLost_noProgress() = raftRunTest {
         val sim = raftSim(this, backgroundScope)
         val leader = awaitLeader(sim)
         val leaderId = sim.nodes.entries.first { it.value === leader }.key

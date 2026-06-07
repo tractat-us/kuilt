@@ -4,15 +4,13 @@ package us.tractat.kuilt.raft
 
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.test.UnconfinedTestDispatcher
-import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 class TraceTest {
 
-    @Test fun initialElection_emits_BecomeLeader() = runTest(UnconfinedTestDispatcher()) {
+    @Test fun initialElection_emits_BecomeLeader() = raftRunTest {
         val sim = raftSim(this, backgroundScope)
         val allEvents = mutableListOf<RaftTraceEvent>()
         val collectJobs = sim.nodes.values.map { node ->
@@ -30,7 +28,7 @@ class TraceTest {
         }
     }
 
-    @Test fun initialElection_emits_Timeout_and_RequestVote() = runTest(UnconfinedTestDispatcher()) {
+    @Test fun initialElection_emits_Timeout_and_RequestVote() = raftRunTest {
         val sim = raftSim(this, backgroundScope)
         val allEvents = mutableListOf<RaftTraceEvent>()
         val collectJobs = sim.nodes.values.map { node ->
@@ -46,7 +44,7 @@ class TraceTest {
             "Expected at least one RequestVote event")
     }
 
-    @Test fun proposal_emits_ClientRequest_then_AdvanceCommitIndex() = runTest(UnconfinedTestDispatcher()) {
+    @Test fun proposal_emits_ClientRequest_then_AdvanceCommitIndex() = raftRunTest {
         val sim = raftSim(this, backgroundScope)
         val leader = awaitLeader(sim)
         val events = mutableListOf<RaftTraceEvent>()
@@ -68,7 +66,7 @@ class TraceTest {
         )
     }
 
-    @Test fun stepDown_emits_BecomeFollower() = runTest(UnconfinedTestDispatcher()) {
+    @Test fun stepDown_emits_BecomeFollower() = raftRunTest {
         val sim = raftSim(this, backgroundScope)
         val leader = awaitLeader(sim)
         val leaderId = sim.nodes.entries.first { it.value === leader }.key
@@ -85,7 +83,7 @@ class TraceTest {
         assertTrue(stepDowns.isNotEmpty(), "Expected BecomeFollower event after partition heal")
     }
 
-    @Test fun trace_clocks_are_monotonic() = runTest(UnconfinedTestDispatcher()) {
+    @Test fun trace_clocks_are_monotonic() = raftRunTest {
         val sim = raftSim(this, backgroundScope)
         val leader = awaitLeader(sim)
         val clocks = mutableListOf<Long>()
@@ -103,7 +101,7 @@ class TraceTest {
         }
     }
 
-    @Test fun vote_events_emitted() = runTest(UnconfinedTestDispatcher()) {
+    @Test fun vote_events_emitted() = raftRunTest {
         val sim = raftSim(this, backgroundScope)
         val allEvents = mutableListOf<RaftTraceEvent>()
         val collectJobs = sim.nodes.values.map { node ->
@@ -117,7 +115,7 @@ class TraceTest {
         assertTrue(granted.isNotEmpty(), "Expected at least one VoteGranted event")
     }
 
-    @Test fun appendEntries_events_emitted() = runTest(UnconfinedTestDispatcher()) {
+    @Test fun appendEntries_events_emitted() = raftRunTest {
         val sim = raftSim(this, backgroundScope)
         val leader = awaitLeader(sim)
         val events = mutableListOf<RaftTraceEvent>()

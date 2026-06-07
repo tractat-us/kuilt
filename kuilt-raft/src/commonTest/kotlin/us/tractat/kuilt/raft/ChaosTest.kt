@@ -3,15 +3,13 @@
 package us.tractat.kuilt.raft
 
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.test.UnconfinedTestDispatcher
-import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 class ChaosTest {
-    @Test fun persistence_node_rejoins_with_same_log() = runTest(UnconfinedTestDispatcher()) {
+    @Test fun persistence_node_rejoins_with_same_log() = raftRunTest {
         val sim = raftSim(backgroundScope, backgroundScope)
         val leader = awaitLeader(sim)
         leader.propose(byteArrayOf(1))
@@ -27,7 +25,7 @@ class ChaosTest {
             "Restarted node commitIndex=${restarted.commitIndex.value}")
     }
 
-    @Test fun rejoinPartitionedLeader_reverts_to_follower() = runTest(UnconfinedTestDispatcher()) {
+    @Test fun rejoinPartitionedLeader_reverts_to_follower() = raftRunTest {
         val sim = raftSim(backgroundScope, backgroundScope)
         val leader = awaitLeader(sim)
         val leaderId = sim.nodes.entries.first { it.value === leader }.key
@@ -44,7 +42,7 @@ class ChaosTest {
         sim.checkInvariants()
     }
 
-    @Test fun logBackup_newLeaderReconcilesMinorityDivergence() = runTest(UnconfinedTestDispatcher()) {
+    @Test fun logBackup_newLeaderReconcilesMinorityDivergence() = raftRunTest {
         // 5-node cluster. Partition a minority so they get no entries from the majority's leader.
         // Heal and verify the new leader can propose and the minority catches up via §5.3 fast backup.
         val sim = raftSim(backgroundScope, backgroundScope, n = 5)
@@ -64,7 +62,7 @@ class ChaosTest {
         sim.checkInvariants()
     }
 
-    @Test fun unreliableChurn_proposalsEventuallyCommit() = runTest(UnconfinedTestDispatcher()) {
+    @Test fun unreliableChurn_proposalsEventuallyCommit() = raftRunTest {
         val sim = raftSim(backgroundScope, backgroundScope)
         var leader = awaitLeader(sim)
         val committed = mutableListOf<LogEntry>()

@@ -2,8 +2,6 @@
 
 package us.tractat.kuilt.raft
 
-import kotlinx.coroutines.test.UnconfinedTestDispatcher
-import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
@@ -12,7 +10,7 @@ class TestDispatcherGuardTest {
 
     @Test
     fun realRaftNodeUnderTestDispatcher_throwsWithActionableMessage_whenStrictGuardEnabled() =
-        runTest(UnconfinedTestDispatcher()) {
+        raftRunTest {
             val network = InMemoryRaftNetwork()
             val cluster = ClusterConfig(voters = setOf(NodeId("a")))
             val config = FAST_RAFT_CONFIG.copy(strictTestGuard = true)
@@ -38,7 +36,7 @@ class TestDispatcherGuardTest {
 
     @Test
     fun realRaftNodeUnderTestDispatcher_doesNotThrow_whenStrictGuardDisabled() =
-        runTest(UnconfinedTestDispatcher()) {
+        raftRunTest {
             val network = InMemoryRaftNetwork()
             val cluster = ClusterConfig(voters = setOf(NodeId("a")))
             val config = FAST_RAFT_CONFIG // strictTestGuard defaults to false

@@ -3,8 +3,6 @@
 package us.tractat.kuilt.raft
 
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.test.UnconfinedTestDispatcher
-import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withTimeout
 import kotlin.test.Test
 import kotlin.test.assertIs
@@ -12,7 +10,7 @@ import kotlin.test.assertIs
 class AwaitLeadershipTest {
 
     @Test
-    fun awaitLeadership_returnsWhenNodeBecomesLeader() = runTest(UnconfinedTestDispatcher()) {
+    fun awaitLeadership_returnsWhenNodeBecomesLeader() = raftRunTest {
         val sim = raftSim(this, backgroundScope)
         withTimeout(2000) {
             // Wait for any node to reach leadership
