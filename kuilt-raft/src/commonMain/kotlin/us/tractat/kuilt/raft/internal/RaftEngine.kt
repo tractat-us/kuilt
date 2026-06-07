@@ -518,10 +518,9 @@ internal class RaftEngine(
             // application-facing committed flow (#136). emit before bumping commitIndex
             // StateFlow — deliberate; do not reorder.
             if (!entry.isNoOp) {
+                emitProposeCommittedAndApplied(entry)
                 _committed.emit(entry)
-                emitProposeApplied(entry)
             }
-            emitProposeCommitted(idx)
             _commitIndex.value = idx
             pending.removeAll { (i, d) -> if (i == idx) { d.complete(entry); true } else false }
         }
@@ -529,20 +528,16 @@ internal class RaftEngine(
         emitTrace(RaftTraceEvent.AdvanceCommitIndex(nextClock(), transport.selfId, oldCommit, newCommit))
     }
 
-    /** Emit [RaftMetric.ProposeCommitted] for [logIndex] if we have a start time recorded. */
-    private fun emitProposeCommitted(logIndex: Long) {
-        val startMark = proposeStartTimes[logIndex] ?: return
-        val elapsed = startMark.elapsedNow()
-        emitMetric(RaftMetric.ProposeCommitted(logIndex, elapsed))
-    }
-
     /**
-     * Emit [RaftMetric.ProposeApplied] for [entry]. Logs at warn when elapsed exceeds
-     * [RaftConfig.slowProposeThreshold]; debug otherwise. Cleans up the start-time map entry.
+     * Emit [RaftMetric.ProposeCommitted] then [RaftMetric.ProposeApplied] for [entry].
+     * Both share the same elapsed time snapshot so the sequence is consistent. Logs at warn
+     * when elapsed exceeds [RaftConfig.slowProposeThreshold], debug otherwise.
+     * Removes the start-time entry from [proposeStartTimes].
      */
-    private fun emitProposeApplied(entry: LogEntry) {
+    private fun emitProposeCommittedAndApplied(entry: LogEntry) {
         val startMark = proposeStartTimes.remove(entry.index) ?: return
         val elapsed = startMark.elapsedNow()
+        emitMetric(RaftMetric.ProposeCommitted(entry.index, elapsed))
         emitMetric(RaftMetric.ProposeApplied(entry.index, elapsed))
         if (elapsed >= raftConfig.slowProposeThreshold) {
             logger.warn { "[raft:${transport.selfId}] slow propose at index ${entry.index}: ${elapsed.inWholeMilliseconds}ms (threshold ${raftConfig.slowProposeThreshold.inWholeMilliseconds}ms)" }

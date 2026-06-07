@@ -20,6 +20,8 @@ kotlin {
             implementation(libs.jqwik)
             runtimeOnly(libs.junit.vintage.engine)
             runtimeOnly(libs.junit.platform.launcher)
+            // SLF4J backend for kotlin-logging on JVM
+            runtimeOnly(libs.logback)
         }
     }
 }

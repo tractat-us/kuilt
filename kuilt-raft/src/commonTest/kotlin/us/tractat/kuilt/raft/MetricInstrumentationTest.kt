@@ -2,14 +2,10 @@
 
 package us.tractat.kuilt.raft
 
-import kotlinx.coroutines.launch
 import kotlin.test.Test
-import kotlin.test.assertContains
 import kotlin.test.assertEquals
-import kotlin.test.assertIs
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.milliseconds
-import kotlin.time.Duration.Companion.seconds
 
 /**
  * Verifies the [RaftMetric] hook fires with the expected event sequence for a
