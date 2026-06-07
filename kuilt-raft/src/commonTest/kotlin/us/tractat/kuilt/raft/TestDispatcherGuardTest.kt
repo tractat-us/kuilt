@@ -49,4 +49,22 @@ class TestDispatcherGuardTest {
                 raftConfig = config,
             )
         }
+
+    @Test
+    fun realRaftNodeUnderTestDispatcher_doesNotWarnOrThrow_whenExpectVirtualTimeIsTrue() =
+        raftRunTest {
+            val network = InMemoryRaftNetwork()
+            val cluster = ClusterConfig(voters = setOf(NodeId("a")))
+            // strictTestGuard = true would normally throw; expectVirtualTime = true must take precedence
+            val config = FAST_RAFT_CONFIG.copy(strictTestGuard = true, expectVirtualTime = true)
+
+            // If expectVirtualTime did NOT take precedence, strictTestGuard = true would throw here
+            val node = backgroundScope.raftNode(
+                clusterConfig = cluster,
+                transport = network.transport(NodeId("a")),
+                storage = InMemoryRaftStorage(),
+                raftConfig = config,
+            )
+            kotlin.test.assertNotNull(node)
+        }
 }
