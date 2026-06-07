@@ -19,15 +19,23 @@ import kotlin.time.Duration.Companion.milliseconds
  * followers will time out spuriously. A ratio of roughly 1:3–1:10 is typical.
  *
  * **Tests** should use fast values (e.g. 20 ms / 40 ms / 5 ms) so elections
- * complete quickly without real-clock waits.
+ * complete quickly without real-clock waits. The preferred test substitute is
+ * `FakeRaftNode` from `:kuilt-raft-test`, which avoids real-clock delays
+ * entirely — see [strictTestGuard] for misuse detection.
  *
  * @param electionTimeoutMin Lower bound of the randomised election timeout window.
  * @param electionTimeoutMax Upper bound of the randomised election timeout window.
  * @param heartbeatInterval How often the leader sends a heartbeat. Must be less
  *   than [electionTimeoutMin].
+ * @param strictTestGuard When `true`, throw [IllegalStateException] at construction
+ *   time if the owning [kotlinx.coroutines.CoroutineScope] contains a
+ *   `kotlinx.coroutines.test.TestDispatcher`. When `false` (the default), emit a
+ *   warning to stdout instead. Set to `true` in tests that want to assert the guard
+ *   fires. Leave `false` in production — the guard is informational there.
  */
 public data class RaftConfig(
     val electionTimeoutMin: Duration = 150.milliseconds,
     val electionTimeoutMax: Duration = 300.milliseconds,
     val heartbeatInterval: Duration = 50.milliseconds,
+    val strictTestGuard: Boolean = false,
 )
