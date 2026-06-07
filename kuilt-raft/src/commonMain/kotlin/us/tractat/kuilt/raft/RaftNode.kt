@@ -80,6 +80,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
+import kotlin.coroutines.ContinuationInterceptor
 import us.tractat.kuilt.raft.internal.RaftEngine
 
 /**
@@ -209,6 +210,12 @@ public interface RaftNode {
  * cancelled automatically when the scope completes or is cancelled, and any
  * exception in the node propagates to the scope's supervisor.
  *
+ * **Test-dispatcher guard.** If the scope contains a `kotlinx.coroutines.test.TestDispatcher`,
+ * a diagnostic is emitted because real `RaftNode` uses real-clock [kotlinx.coroutines.delay]
+ * for elections — under virtual time those delays never advance automatically and the test will
+ * deadlock silently for the full `runTest` timeout. Use `FakeRaftNode` from `:kuilt-raft-test`
+ * for unit tests instead. Set [RaftConfig.strictTestGuard] to `true` to throw rather than warn.
+ *
  * @param clusterConfig The cluster membership (voters + optional learners).
  * @param transport The messaging layer connecting this node to its peers.
  * @param storage Durable state for this node's term, vote, and log.
@@ -221,4 +228,20 @@ public fun CoroutineScope.raftNode(
     transport: RaftTransport,
     storage: RaftStorage,
     raftConfig: RaftConfig = RaftConfig(),
-): RaftNode = RaftEngine(clusterConfig, transport, storage, raftConfig, this)
+): RaftNode {
+    checkNotUnderTestDispatcher(this, raftConfig.strictTestGuard)
+    return RaftEngine(clusterConfig, transport, storage, raftConfig, this)
+}
+
+private fun checkNotUnderTestDispatcher(scope: CoroutineScope, strict: Boolean) {
+    val interceptor = scope.coroutineContext[ContinuationInterceptor]
+    val className = interceptor?.let { it::class.qualifiedName ?: it::class.simpleName ?: "" } ?: ""
+    val isTestDispatcher = "TestDispatcher" in className ||
+        className.startsWith("kotlinx.coroutines.test.")
+    if (!isTestDispatcher) return
+    val msg = "RaftNode constructed under a TestDispatcher ($className). " +
+        "Real RaftNode uses real-clock delay() for elections — under virtual time, the election " +
+        "never completes and your test will deadlock silently. Use FakeRaftNode from " +
+        ":kuilt-raft-test for tests; reserve real RaftNode for integration tests that drive real time."
+    if (strict) error(msg) else println("WARNING: $msg")
+}
