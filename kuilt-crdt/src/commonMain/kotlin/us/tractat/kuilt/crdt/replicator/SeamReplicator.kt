@@ -3,6 +3,7 @@
 package us.tractat.kuilt.crdt.replicator
 
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -22,6 +23,7 @@ import us.tractat.kuilt.crdt.piece
 import kotlin.coroutines.ContinuationInterceptor
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.minutes
+import kotlin.time.Duration.Companion.seconds
 
 /**
  * Configuration for [SeamReplicator].
@@ -31,6 +33,10 @@ import kotlin.time.Duration.Companion.minutes
  *   buffer; eviction releases that pin. A peer that reappears after eviction
  *   will receive a fresh [ReplicatorMessage.FullState].
  * @param antiEntropyInterval how often the background eviction check runs.
+ * @param resendRetryInterval how long to wait before re-emitting a [ReplicatorMessage.Resend]
+ *   when the first Resend is itself dropped and no further inbound traffic triggers
+ *   re-detection. The timer is cancelled when the gap closes. In a low-traffic system
+ *   this is the only mechanism that heals a gap whose first Resend was lost.
  * @param strictTestGuard When `true`, throw [IllegalStateException] at construction
  *   time if the owning [kotlinx.coroutines.CoroutineScope] contains a
  *   `kotlinx.coroutines.test.TestDispatcher`. When `false` (the default), emit a
@@ -40,6 +46,7 @@ import kotlin.time.Duration.Companion.minutes
 public data class SeamReplicatorConfig(
     val evictionAfter: Duration = 5.minutes,
     val antiEntropyInterval: Duration = 1.minutes,
+    val resendRetryInterval: Duration = 30.seconds,
     val strictTestGuard: Boolean = false,
 )
 
@@ -142,6 +149,13 @@ public class SeamReplicator<S : Quilted<S>>(
 
     /** Last-seen time (ms from clock) per peer for eviction tracking. */
     private val lastSeenAt: MutableMap<PeerId, Long> = mutableMapOf()
+
+    /**
+     * Pending retry jobs per sender: when a Resend is emitted, a [Job] is scheduled
+     * to re-fire after [SeamReplicatorConfig.resendRetryInterval]. The job is cancelled
+     * when the gap closes or a new Resend supersedes it for the same sender.
+     */
+    private val pendingResendJobs: MutableMap<ReplicaId, Job> = mutableMapOf()
 
     /** Exposed internally so tests can observe GC behaviour. */
     internal val pendingDeltasForTest: Map<Long, S> get() = pendingDeltas
@@ -255,6 +269,7 @@ public class SeamReplicator<S : Quilted<S>>(
         expectedReceiveSeq[senderReplica] = seq + 1
         sendAck(to = ackTarget, originalSender = senderReplica, seq = seq)
         drainPendingInbound(senderReplica, ackTarget)
+        cancelResendRetry(senderReplica)
     }
 
     private fun drainPendingInbound(senderReplica: ReplicaId, ackTarget: PeerId) {
@@ -275,6 +290,11 @@ public class SeamReplicator<S : Quilted<S>>(
     }
 
     private fun requestResend(to: PeerId, sender: ReplicaId, fromSeq: Long, toSeq: Long) {
+        sendResend(to, sender, fromSeq, toSeq)
+        scheduleResendRetry(to, sender, fromSeq, toSeq)
+    }
+
+    private fun sendResend(to: PeerId, sender: ReplicaId, fromSeq: Long, toSeq: Long) {
         val msg = ReplicatorMessage.Resend<S>(
             requester = replica,
             sender = sender,
@@ -283,6 +303,23 @@ public class SeamReplicator<S : Quilted<S>>(
         )
         val bytes = encode(msg)
         scope.launch { runCatching { seam.sendTo(to, bytes) } }
+    }
+
+    private fun scheduleResendRetry(to: PeerId, sender: ReplicaId, fromSeq: Long, toSeq: Long) {
+        pendingResendJobs[sender]?.cancel()
+        pendingResendJobs[sender] = scope.launch {
+            delay(config.resendRetryInterval)
+            // Re-check that the gap is still open before retrying.
+            val stillExpecting = expectedReceiveSeq[sender] ?: 1L
+            if (stillExpecting <= toSeq) {
+                sendResend(to, sender, stillExpecting, toSeq)
+                scheduleResendRetry(to, sender, stillExpecting, toSeq)
+            }
+        }
+    }
+
+    private fun cancelResendRetry(sender: ReplicaId) {
+        pendingResendJobs.remove(sender)?.cancel()
     }
 
     private fun sendAck(to: PeerId, originalSender: ReplicaId, seq: Long) {
