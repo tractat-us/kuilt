@@ -13,7 +13,8 @@ class TestDispatcherGuardTest {
         raftRunTest {
             val network = InMemoryRaftNetwork()
             val cluster = ClusterConfig(voters = setOf(NodeId("a")))
-            val config = FAST_RAFT_CONFIG.copy(strictTestGuard = true)
+            // expectVirtualTime = false so the guard actually fires; FAST_RAFT_CONFIG defaults to true
+            val config = FAST_RAFT_CONFIG.copy(strictTestGuard = true, expectVirtualTime = false)
 
             val ex = assertFailsWith<IllegalStateException> {
                 backgroundScope.raftNode(
