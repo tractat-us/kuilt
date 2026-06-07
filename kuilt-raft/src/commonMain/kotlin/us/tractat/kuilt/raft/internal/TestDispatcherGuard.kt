@@ -19,13 +19,19 @@ import kotlin.coroutines.ContinuationInterceptor
  * @param typeName Short name of the calling type, used in the diagnostic message.
  * @param substitute The recommended test substitute (e.g. "FakeRaftNode").
  * @param strict When `true`, throw [IllegalStateException] instead of printing.
+ * @param expectVirtualTime When `true`, the caller has explicitly validated that
+ *   `UnconfinedTestDispatcher` is appropriate (real-clock `delay()` fires normally
+ *   under it). Suppresses both the warning and the [strict] throw. Has no effect
+ *   outside a test dispatcher context.
  */
 internal fun checkNotUnderTestDispatcher(
     scope: CoroutineScope,
     typeName: String,
     substitute: String,
     strict: Boolean,
+    expectVirtualTime: Boolean,
 ) {
+    if (expectVirtualTime) return
     val interceptor = scope.coroutineContext[ContinuationInterceptor]
     val className = interceptor?.let { it::class.qualifiedName ?: it::class.simpleName ?: "" } ?: ""
     if (!isTestDispatcher(className)) return

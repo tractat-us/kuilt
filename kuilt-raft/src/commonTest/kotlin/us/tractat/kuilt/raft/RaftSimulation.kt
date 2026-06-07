@@ -15,6 +15,14 @@ import kotlin.test.assertTrue
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
 
+/**
+ * Drives a multi-node real-[RaftNode] cluster for testing.
+ *
+ * Requires `UnconfinedTestDispatcher` — see the banner in [RaftTestFixtures] for the
+ * full TestDispatcher contract. Pass the test's [kotlinx.coroutines.test.TestScope] as
+ * [scope] and [kotlinx.coroutines.test.TestScope.backgroundScope] as [nodeScope] so the
+ * infinite election/heartbeat loops are cancelled when the test body completes.
+ */
 class RaftSimulation(
     val nodeIds: List<NodeId>,
     private val scope: CoroutineScope,

@@ -16,7 +16,17 @@ import kotlin.time.Duration.Companion.milliseconds
 private val electionTimeoutMin = 150.milliseconds
 private val electionTimeoutMax = 300.milliseconds
 private val heartbeatInterval = 50.milliseconds
-private val schedulerConfig = RaftConfig(electionTimeoutMin, electionTimeoutMax, heartbeatInterval)
+
+// expectVirtualTime = true: this test drives virtual time deliberately via
+// StandardTestDispatcher + advanceTimeBy. The warning is suppressed here
+// intentionally — this is the one test that actually validates the
+// advanceTimeBy path works.
+private val schedulerConfig = RaftConfig(
+    electionTimeoutMin = electionTimeoutMin,
+    electionTimeoutMax = electionTimeoutMax,
+    heartbeatInterval = heartbeatInterval,
+    expectVirtualTime = true,
+)
 
 private fun schedulerSim(scheduler: TestCoroutineScheduler, n: Int = 3): RaftSimulation {
     val ids = (1..n).map { NodeId("s$it") }

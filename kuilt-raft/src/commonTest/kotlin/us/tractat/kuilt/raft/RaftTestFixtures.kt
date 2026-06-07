@@ -1,3 +1,24 @@
+/**
+ * # TestDispatcher contract for raft tests
+ *
+ * Every raft test in this suite that constructs a real [RaftNode] (via [raftSim]
+ * or by calling `nodeScope.raftNode(...)` directly) runs under
+ * `UnconfinedTestDispatcher()`. This is **load-bearing**: the engine uses real-clock
+ * `delay()` for elections and heartbeats; `UnconfinedTestDispatcher` runs
+ * continuations eagerly but does NOT install virtual time, so those `delay()` calls
+ * elapse normally on the wall clock. With [FAST_RAFT_CONFIG]'s single-digit-ms
+ * timings, the cluster converges in milliseconds.
+ *
+ * **DO NOT** switch to `StandardTestDispatcher()` or add `testScheduler.advanceTimeBy(...)`
+ * to "speed up" a slow test. Under `StandardTestDispatcher` (without explicit
+ * `advanceTimeBy`), `delay()` virtual-time-waits forever and the engine deadlocks
+ * silently. The lone exception is tests that use `StandardTestDispatcher` +
+ * `advanceTimeBy` *intentionally* to drive the real-clock election path deterministically.
+ *
+ * [FAST_RAFT_CONFIG] sets `expectVirtualTime = true` to suppress the TestDispatcher
+ * warning across the whole suite. If you introduce a new test fixture, mirror this
+ * config — or migrate away from real [RaftNode] per issue #186.
+ */
 @file:OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 
 package us.tractat.kuilt.raft
@@ -32,6 +53,7 @@ internal val FAST_RAFT_CONFIG = RaftConfig(
     electionTimeoutMin = 5.milliseconds,
     electionTimeoutMax = 10.milliseconds,
     heartbeatInterval = 2.milliseconds,
+    expectVirtualTime = true,  // see banner above — raft tests use UnconfinedTestDispatcher intentionally
 )
 
 /**

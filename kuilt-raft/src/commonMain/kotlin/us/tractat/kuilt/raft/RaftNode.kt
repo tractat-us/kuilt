@@ -229,6 +229,12 @@ public fun CoroutineScope.raftNode(
     storage: RaftStorage,
     raftConfig: RaftConfig = RaftConfig(),
 ): RaftNode {
-    checkNotUnderTestDispatcher(this, "RaftNode", "FakeRaftNode from :kuilt-raft-test", raftConfig.strictTestGuard)
+    checkNotUnderTestDispatcher(
+        scope = this,
+        typeName = "RaftNode",
+        substitute = "FakeRaftNode from :kuilt-raft-test",
+        strict = raftConfig.strictTestGuard,
+        expectVirtualTime = raftConfig.expectVirtualTime,
+    )
     return RaftEngine(clusterConfig, transport, storage, raftConfig, this)
 }
