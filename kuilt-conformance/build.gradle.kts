@@ -28,14 +28,21 @@ kotlin {
     }
 }
 
+// koverVerify is NOT bound to the check lifecycle — coverage verification is
+// opt-in via: ./gradlew koverVerify koverHtmlReport
+// onCheck = false keeps the threshold rules available for explicit invocation
+// without paying the kover instrumentation cost on every CI build.
 kover {
     reports {
-        verify {
-            rule("Minimum 70% line coverage") {
-                // Initial threshold: softer than :kuilt-crdt because commonMain here is
-                // a test-harness library exercised by consumer modules' test runs, not its own.
-                // Initial threshold: set from first measurement — raise via follow-up issues.
-                minBound(70)
+        total {
+            verify {
+                onCheck = false
+                rule("Minimum 70% line coverage") {
+                    // Initial threshold: softer than :kuilt-crdt because commonMain here is
+                    // a test-harness library exercised by consumer modules' test runs, not its own.
+                    // Initial threshold: set from first measurement — raise via follow-up issues.
+                    minBound(70)
+                }
             }
         }
     }
