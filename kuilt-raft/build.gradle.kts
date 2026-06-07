@@ -10,6 +10,7 @@ kotlin {
             implementation(libs.kotlinx.coroutines.core)
             implementation(libs.kotlinx.serialization.core)
             implementation(libs.kotlinx.serialization.cbor)
+            implementation(libs.kotlin.logging)
         }
         commonTest.dependencies {
             implementation(libs.kotlinx.coroutines.test)

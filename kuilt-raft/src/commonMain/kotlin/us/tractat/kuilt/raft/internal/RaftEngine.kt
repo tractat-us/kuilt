@@ -2,6 +2,7 @@
 
 package us.tractat.kuilt.raft.internal
 
+import io.github.oshai.kotlinlogging.KotlinLogging
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
@@ -28,6 +29,7 @@ import us.tractat.kuilt.raft.LogEntry
 import us.tractat.kuilt.raft.NodeId
 import us.tractat.kuilt.raft.NotLeaderException
 import us.tractat.kuilt.raft.RaftConfig
+import us.tractat.kuilt.raft.RaftMetric
 import us.tractat.kuilt.raft.RaftNode
 import us.tractat.kuilt.raft.RaftRole
 import us.tractat.kuilt.raft.RaftStorage
@@ -35,6 +37,10 @@ import us.tractat.kuilt.raft.RaftTraceEvent
 import us.tractat.kuilt.raft.RaftTransport
 import us.tractat.kuilt.raft.StepDownReason
 import kotlin.random.Random
+import kotlin.time.Duration
+import kotlin.time.TimeSource
+
+private val logger = KotlinLogging.logger("us.tractat.kuilt.raft.RaftEngine")
 
 internal class RaftEngine(
     private val clusterConfig: ClusterConfig,
@@ -42,6 +48,7 @@ internal class RaftEngine(
     private val storage: RaftStorage,
     private val raftConfig: RaftConfig,
     private val scope: CoroutineScope,
+    private val onMetric: ((RaftMetric) -> Unit)?,
 ) : RaftNode {
 
     private val cmd = Channel<EngineCommand>(Channel.UNLIMITED)
@@ -131,6 +138,20 @@ internal class RaftEngine(
     // timer jobs are children of scope and die with it; Close only stops the actor loop
     private var electionJob: Job? = null
     private var heartbeatJob: Job? = null
+
+    // ── Metric instrumentation state (actor-only) ─────────────────────────────
+
+    /** Start mark for each in-flight propose, keyed by log index. */
+    private val proposeStartTimes = mutableMapOf<Long, TimeSource.Monotonic.ValueTimeMark>()
+
+    /**
+     * Start mark for the current election term, or `null` if this node is not a candidate.
+     * Reset to `null` on [becomeLeader] or when a new election fires (the old term timed out).
+     */
+    private var electionStartTime: TimeSource.Monotonic.ValueTimeMark? = null
+
+    /** Term for which [electionStartTime] was recorded — used to emit [RaftMetric.ElectionTimedOut]. */
+    private var electionStartTerm: Long = 0L
 
     init {
         scope.launch {
@@ -222,6 +243,11 @@ internal class RaftEngine(
 
     private fun nextClock() = ++traceClock
 
+    // ── Metric helper ─────────────────────────────────────────────────────────
+
+    /** Emit [metric] to the [onMetric] hook (no-op when null). */
+    private fun emitMetric(metric: RaftMetric) = onMetric?.invoke(metric)
+
     // ── Timers ────────────────────────────────────────────────────────────────
 
     private fun resetElectionTimeout() {
@@ -242,12 +268,22 @@ internal class RaftEngine(
 
     private suspend fun onElectionTimeout() {
         if (_role.value is RaftRole.Leader) return
+        // If a prior election is still pending, it timed out — emit before overwriting the term.
+        if (electionStartTime != null) {
+            emitMetric(RaftMetric.ElectionTimedOut(electionStartTerm))
+            logger.warn { "[raft:${transport.selfId}] election timed out for term $electionStartTerm" }
+        }
         persistTermAndVote(currentTerm + 1, transport.selfId)
         votesGranted.clear()
         votesGranted += transport.selfId
         _role.value = RaftRole.Candidate
         _leader.value = null
         resetElectionTimeout()
+        // Record the election start time and emit the metric.
+        electionStartTime = TimeSource.Monotonic.markNow()
+        electionStartTerm = currentTerm
+        emitMetric(RaftMetric.ElectionStarted(currentTerm))
+        logger.debug { "[raft:${transport.selfId}] election started for term $currentTerm" }
         // Single-voter cluster: self-vote already satisfies quorum — become leader immediately.
         if (votesGranted.size >= clusterConfig.quorumSize) { becomeLeader(); return }
         emitTrace(RaftTraceEvent.Timeout(nextClock(), transport.selfId, currentTerm))
@@ -287,6 +323,11 @@ internal class RaftEngine(
     }
 
     private suspend fun becomeLeader() {
+        val elapsed = electionStartTime?.elapsedNow() ?: Duration.ZERO
+        electionStartTime = null
+        emitMetric(RaftMetric.ElectionWon(currentTerm, elapsed))
+        logger.debug { "[raft:${transport.selfId}] won election for term $currentTerm in ${elapsed.inWholeMilliseconds}ms" }
+
         _role.value = RaftRole.Leader
         _leader.value = transport.selfId
         electionJob?.cancel()
@@ -323,6 +364,11 @@ internal class RaftEngine(
         if (_role.value is RaftRole.Leader) {
             heartbeatJob?.cancel()
             failPending(LeadershipLostException())
+        }
+        // If we were a candidate, the election for the prior term implicitly timed out.
+        if (_role.value is RaftRole.Candidate && electionStartTime != null) {
+            emitMetric(RaftMetric.ElectionTimedOut(electionStartTerm))
+            electionStartTime = null
         }
         _role.value = followerRole
         _leader.value = null
@@ -471,12 +517,38 @@ internal class RaftEngine(
             // §5.4.2 no-ops are internal: they advance commitIndex but are withheld from the
             // application-facing committed flow (#136). emit before bumping commitIndex
             // StateFlow — deliberate; do not reorder.
-            if (!entry.isNoOp) _committed.emit(entry)
+            if (!entry.isNoOp) {
+                _committed.emit(entry)
+                emitProposeApplied(entry)
+            }
+            emitProposeCommitted(idx)
             _commitIndex.value = idx
             pending.removeAll { (i, d) -> if (i == idx) { d.complete(entry); true } else false }
         }
         currentCommitIndex = newCommit
         emitTrace(RaftTraceEvent.AdvanceCommitIndex(nextClock(), transport.selfId, oldCommit, newCommit))
+    }
+
+    /** Emit [RaftMetric.ProposeCommitted] for [logIndex] if we have a start time recorded. */
+    private fun emitProposeCommitted(logIndex: Long) {
+        val startMark = proposeStartTimes[logIndex] ?: return
+        val elapsed = startMark.elapsedNow()
+        emitMetric(RaftMetric.ProposeCommitted(logIndex, elapsed))
+    }
+
+    /**
+     * Emit [RaftMetric.ProposeApplied] for [entry]. Logs at warn when elapsed exceeds
+     * [RaftConfig.slowProposeThreshold]; debug otherwise. Cleans up the start-time map entry.
+     */
+    private fun emitProposeApplied(entry: LogEntry) {
+        val startMark = proposeStartTimes.remove(entry.index) ?: return
+        val elapsed = startMark.elapsedNow()
+        emitMetric(RaftMetric.ProposeApplied(entry.index, elapsed))
+        if (elapsed >= raftConfig.slowProposeThreshold) {
+            logger.warn { "[raft:${transport.selfId}] slow propose at index ${entry.index}: ${elapsed.inWholeMilliseconds}ms (threshold ${raftConfig.slowProposeThreshold.inWholeMilliseconds}ms)" }
+        } else {
+            logger.debug { "[raft:${transport.selfId}] propose at index ${entry.index} applied in ${elapsed.inWholeMilliseconds}ms" }
+        }
     }
 
     /**
@@ -502,6 +574,9 @@ internal class RaftEngine(
         log += entry
         storage.appendEntries(listOf(entry))
         emitTrace(RaftTraceEvent.ClientRequest(nextClock(), transport.selfId, index, currentTerm))
+        proposeStartTimes[index] = TimeSource.Monotonic.markNow()
+        emitMetric(RaftMetric.ProposeAccepted(index, currentTerm))
+        logger.debug { "[raft:${transport.selfId}] propose accepted at index $index term $currentTerm" }
         pending += index to response
         otherMembers.forEach { sendAppendEntries(it) }
         // Single-voter: no peers will ACK — check for immediate commit (peerQuorum == 0).

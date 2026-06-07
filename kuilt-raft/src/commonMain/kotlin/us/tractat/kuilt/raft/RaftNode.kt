@@ -221,6 +221,10 @@ public interface RaftNode {
  * @param storage Durable state for this node's term, vote, and log.
  * @param raftConfig Timing parameters. Defaults are suitable for LAN; adjust
  *   for high-latency or test environments.
+ * @param onMetric Optional callback invoked on the engine's coroutine at each [RaftMetric]
+ *   transition. Use to route metrics to Prometheus, StatsD, OpenTelemetry, or a test
+ *   assertion. **Must not block** — the callback runs synchronously on the engine actor;
+ *   blocking stalls replication for the entire cluster. `null` (default) disables the hook.
  * @return A running [RaftNode] ready to receive proposals and emit committed entries.
  */
 public fun CoroutineScope.raftNode(
@@ -228,6 +232,7 @@ public fun CoroutineScope.raftNode(
     transport: RaftTransport,
     storage: RaftStorage,
     raftConfig: RaftConfig = RaftConfig(),
+    onMetric: ((RaftMetric) -> Unit)? = null,
 ): RaftNode {
     checkNotUnderTestDispatcher(
         scope = this,
@@ -236,5 +241,5 @@ public fun CoroutineScope.raftNode(
         strict = raftConfig.strictTestGuard,
         expectVirtualTime = raftConfig.expectVirtualTime,
     )
-    return RaftEngine(clusterConfig, transport, storage, raftConfig, this)
+    return RaftEngine(clusterConfig, transport, storage, raftConfig, this, onMetric)
 }
