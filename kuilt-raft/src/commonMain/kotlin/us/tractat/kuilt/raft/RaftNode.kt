@@ -80,8 +80,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
-import kotlin.coroutines.ContinuationInterceptor
 import us.tractat.kuilt.raft.internal.RaftEngine
+import us.tractat.kuilt.raft.internal.checkNotUnderTestDispatcher
 
 /**
  * The runtime interface for a single Raft cluster member.
@@ -229,19 +229,6 @@ public fun CoroutineScope.raftNode(
     storage: RaftStorage,
     raftConfig: RaftConfig = RaftConfig(),
 ): RaftNode {
-    checkNotUnderTestDispatcher(this, raftConfig.strictTestGuard)
+    checkNotUnderTestDispatcher(this, "RaftNode", "FakeRaftNode from :kuilt-raft-test", raftConfig.strictTestGuard)
     return RaftEngine(clusterConfig, transport, storage, raftConfig, this)
-}
-
-private fun checkNotUnderTestDispatcher(scope: CoroutineScope, strict: Boolean) {
-    val interceptor = scope.coroutineContext[ContinuationInterceptor]
-    val className = interceptor?.let { it::class.qualifiedName ?: it::class.simpleName ?: "" } ?: ""
-    val isTestDispatcher = "TestDispatcher" in className ||
-        className.startsWith("kotlinx.coroutines.test.")
-    if (!isTestDispatcher) return
-    val msg = "RaftNode constructed under a TestDispatcher ($className). " +
-        "Real RaftNode uses real-clock delay() for elections — under virtual time, the election " +
-        "never completes and your test will deadlock silently. Use FakeRaftNode from " +
-        ":kuilt-raft-test for tests; reserve real RaftNode for integration tests that drive real time."
-    if (strict) error(msg) else println("WARNING: $msg")
 }
