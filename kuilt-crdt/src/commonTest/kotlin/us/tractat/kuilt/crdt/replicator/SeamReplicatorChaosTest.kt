@@ -310,6 +310,137 @@ class SeamReplicatorChaosTest {
         )
     }
 
+    // ---- scenario 7: control-plane Ack chaos — convergence is unaffected ----
+
+    /**
+     * Acks travel via [sendTo]; with a 30% Ack drop rate the sender's GC is delayed
+     * (it never learns all peers have caught up) but the deltas themselves are still
+     * delivered and applied. Convergence must be unaffected — data-plane replication
+     * does not depend on Acks arriving.
+     *
+     * GCounter is the right subject: if duplicate or out-of-order deltas were
+     * re-applied, the count would be inflated. Its idempotent max-merge means
+     * even if control messages are lost, the state arrives correctly via the data path.
+     */
+    @Test
+    fun convergesWithDroppedAcks() = runTest(UnconfinedTestDispatcher()) {
+        val loom = InMemoryLoom()
+        val rawA = loom.host(Pattern("chaos-control-ack"))
+        val rawB = loom.join(InMemoryTag("b"))
+
+        // Drop only control-plane (Acks/Resends/FullState); data path is clean.
+        val controlChaos = ChaosConfig(controlPlaneDropProbability = 0.3)
+        val chaosA = chaosWrap(rawA, controlChaos, backgroundScope, seed = 0xAC_A1L)
+        val chaosB = chaosWrap(rawB, controlChaos, backgroundScope, seed = 0xAC_B1L)
+
+        val repA = gcounterReplicator(chaosA, backgroundScope)
+        val repB = gcounterReplicator(chaosB, backgroundScope)
+
+        repeat(20) {
+            repA.apply(repA.state.value.inc(repA.replica, 1L))
+            repB.apply(repB.state.value.inc(repB.replica, 1L))
+        }
+        testScheduler.advanceUntilIdle()
+
+        // 20 increments per peer → total 40; Ack drops don't prevent convergence
+        assertAll(
+            { assertEquals(40L, repA.state.value.value, "A must converge to 40 despite Ack drops") },
+            { assertEquals(40L, repB.state.value.value, "B must converge to 40 despite Ack drops") },
+        )
+    }
+
+    // ---- scenario 8: control-plane Resend chaos — retry timer bridges the gap ----
+
+    /**
+     * Combines broadcast drop (creating delta gaps) with control-plane drop (Resend messages
+     * are themselves lost). The replicator's [SeamReplicatorConfig.resendRetryInterval] timer
+     * must fire and re-issue the Resend, eventually reaching the sender, who retransmits
+     * the missing delta. Both peers must converge.
+     *
+     * This exercises the highest-risk control-plane path: silent loss of a Resend leaves
+     * a gap open indefinitely without the retry timer.
+     */
+    @Test
+    fun convergesWithDroppedResendViaRetry() = runTest(UnconfinedTestDispatcher()) {
+        val loom = InMemoryLoom()
+        val rawA = loom.host(Pattern("chaos-control-resend"))
+        val rawB = loom.join(InMemoryTag("b"))
+
+        // Broadcast drops create gaps; control-plane drops lose Resends (retry must heal).
+        val combinedChaos = ChaosConfig(
+            dropProbability = 0.2,
+            controlPlaneDropProbability = 0.3,
+        )
+        // Short retry interval so virtual-time advancement is minimal.
+        val replicatorConfig = SeamReplicatorConfig(
+            resendRetryInterval = 50.milliseconds,
+            expectVirtualTime = true,
+        )
+        val chaosA = chaosWrap(rawA, combinedChaos, backgroundScope, seed = 0x5E_A1L)
+        val chaosB = chaosWrap(rawB, combinedChaos, backgroundScope, seed = 0x5E_B1L)
+
+        val repA = gcounterReplicator(chaosA, backgroundScope, config = replicatorConfig)
+        val repB = gcounterReplicator(chaosB, backgroundScope, config = replicatorConfig)
+
+        repeat(20) {
+            repA.apply(repA.state.value.inc(repA.replica, 1L))
+            repB.apply(repB.state.value.inc(repB.replica, 1L))
+        }
+
+        // Recovery rounds: advance virtual time past the retry interval to let retry timers fire.
+        // 5 rounds: P(all 5 retries dropped by 30% control-plane chaos) ≈ 0.2%
+        repeat(5) {
+            testScheduler.advanceUntilIdle()
+            testScheduler.advanceTimeBy(60L) // past the 50ms retry interval
+            repA.apply(repA.state.value.inc(repA.replica, 1L))
+            repB.apply(repB.state.value.inc(repB.replica, 1L))
+        }
+        testScheduler.advanceUntilIdle()
+        testScheduler.advanceTimeBy(60L)
+        testScheduler.advanceUntilIdle()
+
+        // 20 + 5 = 25 increments per peer → total 50
+        assertAll(
+            { assertEquals(50L, repA.state.value.value, "A must converge to 50 after retry-healed Resends") },
+            { assertEquals(50L, repB.state.value.value, "B must converge to 50 after retry-healed Resends") },
+        )
+    }
+
+    // ---- scenario 9: control-plane duplicate Acks are absorbed idempotently ----
+
+    /**
+     * With 50% Ack duplication, each Ack may arrive twice. The GC protocol's
+     * `ackedThrough[acker] = maxOf(current, seq)` guard must absorb duplicates without
+     * over-advancing GC or corrupting per-peer tracking. GCounter convergence to the
+     * correct total confirms no spurious mutation.
+     */
+    @Test
+    fun convergesWithDuplicatedControlPlaneMessages() = runTest(UnconfinedTestDispatcher()) {
+        val loom = InMemoryLoom()
+        val rawA = loom.host(Pattern("chaos-control-dup"))
+        val rawB = loom.join(InMemoryTag("b"))
+
+        // Duplicate Acks and Resends; no data-plane chaos so all deltas arrive cleanly.
+        val controlDupChaos = ChaosConfig(controlPlaneDuplicateProbability = 0.5)
+        val chaosA = chaosWrap(rawA, controlDupChaos, backgroundScope, seed = 0xD0_A1L)
+        val chaosB = chaosWrap(rawB, controlDupChaos, backgroundScope, seed = 0xD0_B1L)
+
+        val repA = gcounterReplicator(chaosA, backgroundScope)
+        val repB = gcounterReplicator(chaosB, backgroundScope)
+
+        repeat(20) {
+            repA.apply(repA.state.value.inc(repA.replica, 1L))
+            repB.apply(repB.state.value.inc(repB.replica, 1L))
+        }
+        testScheduler.advanceUntilIdle()
+
+        // Duplicate Acks must not inflate the counter — max-merge is idempotent
+        assertAll(
+            { assertEquals(40L, repA.state.value.value, "A must not double-count due to duplicated Acks") },
+            { assertEquals(40L, repB.state.value.value, "B must not double-count due to duplicated Acks") },
+        )
+    }
+
     // ---- scenario 6: eviction under partition, then FullState recovery ----
 
     /**

@@ -21,13 +21,19 @@ import kotlin.time.Duration
 /**
  * Configuration for [ChaosSeam]. All probabilities are in [0, 1].
  *
- * @param dropProbability fraction of outgoing frames to discard
+ * @param dropProbability fraction of outgoing [broadcast] frames to discard
  * @param maxDelay upper bound on per-frame uniform-random virtual-time delay (ms)
  * @param reorderWindow number of frames to buffer before flushing in shuffled order;
  *        0 disables reordering
- * @param duplicateProbability fraction of frames to forward twice
+ * @param duplicateProbability fraction of [broadcast] frames to forward twice
  * @param partitioned when this returns true, all outgoing and incoming frames are
  *        silently discarded; tests toggle it mid-run to simulate partition/heal
+ * @param controlPlaneDropProbability fraction of [sendTo] frames (Acks, Resends, FullState)
+ *        to discard. Defaults to 0.0. Use with a resend-retry-aware replicator only —
+ *        dropped Acks and Resends will be healed by the retry timer, not by re-detection.
+ * @param controlPlaneDuplicateProbability fraction of [sendTo] frames to forward twice.
+ *        The replicator's duplicate-handling (idempotent Ack processing) absorbs these.
+ *        Defaults to 0.0.
  */
 internal data class ChaosConfig(
     val dropProbability: Double = 0.0,
@@ -35,6 +41,8 @@ internal data class ChaosConfig(
     val reorderWindow: Int = 0,
     val duplicateProbability: Double = 0.0,
     val partitioned: () -> Boolean = { false },
+    val controlPlaneDropProbability: Double = 0.0,
+    val controlPlaneDuplicateProbability: Double = 0.0,
 )
 
 /**
@@ -91,18 +99,23 @@ internal class ChaosSeam(
     /**
      * Chaos is applied to [broadcast] (the delta dissemination path). Deliberate drops,
      * reordering, and duplication here exercise the replicator's gap-detection and Resend
-     * paths. [sendTo] (used for Acks, Resends, and FullState) is left unobstructed so the
-     * recovery control-plane remains reliable, matching realistic network behaviour where
-     * unicast control messages are prioritised over broadcast data.
+     * paths.
      */
     override suspend fun broadcast(payload: ByteArray) {
         if (config.partitioned()) return
         sendWithChaos { delegate.broadcast(it) }(payload)
     }
 
+    /**
+     * Chaos is applied to [sendTo] (used for Acks, Resends, and FullState) when
+     * [ChaosConfig.controlPlaneDropProbability] or [ChaosConfig.controlPlaneDuplicateProbability]
+     * are non-zero. Drop/duplicate on this path exercises the replicator's Resend retry
+     * policy and FullState recovery without introducing reorder (which would require a
+     * more complex control-plane protocol). Partition is still honoured unconditionally.
+     */
     override suspend fun sendTo(peer: PeerId, payload: ByteArray) {
         if (config.partitioned()) return
-        delegate.sendTo(peer, payload)
+        sendToWithChaos(peer, payload)
     }
 
     override suspend fun close(reason: CloseReason) = delegate.close(reason)
@@ -121,6 +134,22 @@ internal class ChaosSeam(
     }
 
     // ---- chaos helpers ----
+
+    /**
+     * Applies drop/duplicate chaos to a [sendTo] call. No delay or reorder: unicast
+     * control messages are order-sensitive and delay-chaos on them is a different (deeper)
+     * test surface that the current scenarios don't require.
+     *
+     * Random is only consumed when the relevant probability is non-zero, so tests that
+     * don't configure control-plane chaos see the same random sequence as before.
+     */
+    private suspend fun sendToWithChaos(peer: PeerId, payload: ByteArray) {
+        if (config.controlPlaneDropProbability > 0.0 && random.nextDouble() < config.controlPlaneDropProbability) return
+        delegate.sendTo(peer, payload)
+        if (config.controlPlaneDuplicateProbability > 0.0 && random.nextDouble() < config.controlPlaneDuplicateProbability) {
+            delegate.sendTo(peer, payload)
+        }
+    }
 
     /**
      * Returns a send function that applies drop/delay/reorder/duplicate chaos before
