@@ -132,7 +132,10 @@ jobs:
         uses: android-actions/setup-android@v4
 
       - name: Build and test all targets
-        run: ./gradlew build
+        # Cap workers at the runner's CPU count (4). gradle.properties sets
+        # workers.max=16 for publish (upload-bound), but that causes OOM on CI
+        # when multiple Kotlin daemons + wasmJs browser run concurrently.
+        run: ./gradlew build --max-workers=4
 
       - name: Upload test reports
         if: always()

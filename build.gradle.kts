@@ -1,3 +1,7 @@
+plugins {
+    alias(libs.plugins.kover) apply false
+}
+
 val kuiltVersionLine: String = providers.gradleProperty("kuiltVersionLine").get()
 
 allprojects {
