@@ -1,3 +1,11 @@
+/**
+ * Replicator tests run a real [SeamReplicator] under `UnconfinedTestDispatcher`.
+ * The contract mirrors `:kuilt-raft`'s `RaftTestFixtures.kt`: see issue #186.
+ *
+ * Tests inject [SeamReplicatorConfig] with `expectVirtualTime = true` so the
+ * TestDispatcher guard does not warn. Future replicator tests should follow
+ * the same pattern, or use a fake replicator (planned in #186 Phase B).
+ */
 @file:OptIn(
     kotlinx.serialization.ExperimentalSerializationApi::class,
     kotlinx.coroutines.ExperimentalCoroutinesApi::class,
@@ -24,6 +32,9 @@ private fun gcounterSer() = ReplicatorMessage.serializer(GCounter.serializer())
 private fun orSetSer() =
     ReplicatorMessage.serializer(ORSet.serializer(kotlinx.serialization.serializer<String>()))
 
+/** Default config for replicator tests: suppresses the TestDispatcher guard warning. */
+private val REPLICATOR_TEST_CONFIG = SeamReplicatorConfig(expectVirtualTime = true)
+
 private fun gcounterReplicator(
     seam: us.tractat.kuilt.core.Seam,
     scope: CoroutineScope,
@@ -33,6 +44,7 @@ private fun gcounterReplicator(
     initial = GCounter.ZERO,
     messageSerializer = gcounterSer(),
     scope = scope,
+    config = REPLICATOR_TEST_CONFIG,
 )
 
 class SeamReplicatorTest {
@@ -79,6 +91,7 @@ class SeamReplicatorTest {
             initial = ORSet.empty<String>(),
             messageSerializer = msgSer,
             scope = backgroundScope,
+            config = REPLICATOR_TEST_CONFIG,
         )
 
         val repA = orSetRep(seamA)

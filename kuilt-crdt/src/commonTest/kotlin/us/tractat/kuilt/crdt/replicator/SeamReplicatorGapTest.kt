@@ -61,12 +61,14 @@ class SeamReplicatorGapTest {
         initial: S,
         serializer: kotlinx.serialization.KSerializer<ReplicatorMessage<S>>,
         scope: CoroutineScope,
+        config: SeamReplicatorConfig = SeamReplicatorConfig(expectVirtualTime = true),
     ) = SeamReplicator(
         replica = ReplicaId(seam.selfId.value),
         seam = seam,
         initial = initial,
         messageSerializer = serializer,
         scope = scope,
+        config = config,
     )
 
     /**

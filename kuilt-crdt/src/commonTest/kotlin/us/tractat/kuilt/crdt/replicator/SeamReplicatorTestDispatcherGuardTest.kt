@@ -13,6 +13,7 @@ import us.tractat.kuilt.crdt.GCounter
 import us.tractat.kuilt.crdt.ReplicaId
 import kotlin.test.Test
 import kotlin.test.assertFailsWith
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 class SeamReplicatorTestDispatcherGuardTest {
@@ -71,5 +72,32 @@ class SeamReplicatorTestDispatcherGuardTest {
                 scope = backgroundScope,
                 config = config,
             )
+        }
+
+    /**
+     * `expectVirtualTime = true` must suppress the guard — no throw even when
+     * `strictTestGuard = true`. The opt-out takes precedence.
+     */
+    @Test
+    fun seamReplicatorUnderTestDispatcher_doesNotWarnOrThrow_whenExpectVirtualTimeIsTrue() =
+        runTest(UnconfinedTestDispatcher()) {
+            val loom = InMemoryLoom()
+            val seam = loom.host(Pattern("guard-suppress"))
+            val config = SeamReplicatorConfig(
+                strictTestGuard = true,    // would normally throw
+                expectVirtualTime = true,  // opt-out must take precedence
+            )
+
+            // Must not throw — expectVirtualTime = true short-circuits before the check.
+            val replicator = SeamReplicator(
+                replica = ReplicaId(seam.selfId.value),
+                seam = seam,
+                initial = GCounter.ZERO,
+                messageSerializer = ser,
+                scope = backgroundScope,
+                config = config,
+            )
+
+            assertNotNull(replicator)
         }
 }
