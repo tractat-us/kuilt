@@ -81,10 +81,11 @@ class PreVoteTest {
         val leader = awaitLeader(sim)
         val leaderId = sim.nodes.entries.first { it.value === leader }.key
         val follower = sim.nodeIds.first { it != leaderId }
+        val candidate = sim.nodeIds.first { it != leaderId && it != follower }
         sim.awaitCommit(1L, on = setOf(follower))   // follower has heard the leader → leaderAlive
         val trace = mutableListOf<RaftTraceEvent>()
         backgroundScope.launch { sim.nodes.getValue(follower).trace.collect { trace += it } }
-        sim.deliverRequestVote(to = follower, from = NodeId("v3"), term = 99L, lastLogIndex = 99L, lastLogTerm = 99L)
+        sim.deliverRequestVote(to = follower, from = candidate, term = 99L, lastLogIndex = 99L, lastLogTerm = 99L)
         sim.settle()
         assertTrue(trace.any { it is RaftTraceEvent.VoteDenied && it.reason == DenyReason.LeaderAlive },
             "sticky follower must deny with LeaderAlive: $trace")
