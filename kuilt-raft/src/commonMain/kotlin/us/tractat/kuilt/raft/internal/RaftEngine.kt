@@ -165,6 +165,11 @@ internal class RaftEngine(
     // timer jobs are children of scope and die with it; Close only stops the actor loop
     private var electionJob: Job? = null
     private var heartbeatJob: Job? = null
+    private var quorumCheckJob: Job? = null
+
+    // CheckQuorum: voters (other than self) from whom any response arrived in the current window.
+    // Reset each tick. Leader-only.
+    private val recentVoterContacts = mutableSetOf<NodeId>()
 
     // Leader-lease state: true while this node has heard from a live leader recently enough
     // that triggering an election would be disruptive. Cleared on stepDown and after electionTimeoutMin.
@@ -234,6 +239,7 @@ internal class RaftEngine(
                         is EngineCommand.LeaseExpired    -> { leaderAlive = false }
                         is EngineCommand.Compact         -> onCompact()
                         is EngineCommand.CommitCut       -> onCommitCut(c)
+                        is EngineCommand.QuorumCheck     -> onQuorumCheck()
                         is EngineCommand.Close           -> { cmd.close(); break }
                     }
                 }
@@ -315,16 +321,16 @@ internal class RaftEngine(
 
     // ── Timers ────────────────────────────────────────────────────────────────
 
+    private fun randomElectionTimeoutMillis(): Long = Random.nextLong(
+        raftConfig.electionTimeoutMin.inWholeMilliseconds,
+        raftConfig.electionTimeoutMax.inWholeMilliseconds,
+    )
+
     private fun resetElectionTimeout() {
         electionJob?.cancel()
         if (_role.value is RaftRole.Learner) return
         electionJob = scope.launch {
-            delay(
-                Random.nextLong(
-                    raftConfig.electionTimeoutMin.inWholeMilliseconds,
-                    raftConfig.electionTimeoutMax.inWholeMilliseconds,
-                )
-            )
+            delay(randomElectionTimeoutMillis())
             cmd.trySend(EngineCommand.ElectionTimeout)
         }
     }
@@ -480,6 +486,14 @@ internal class RaftEngine(
                 delay(raftConfig.heartbeatInterval.inWholeMilliseconds)
             }
         }
+        recentVoterContacts.clear()
+        quorumCheckJob?.cancel()
+        quorumCheckJob = scope.launch {
+            while (true) {
+                delay(randomElectionTimeoutMillis())
+                cmd.trySend(EngineCommand.QuorumCheck)
+            }
+        }
         // §5.4.2: append a no-op from the new term so the commit guard (entry.term == currentTerm)
         // can advance commitIndex over any prior-term entries inherited from a previous leader.
         appendNoOp()
@@ -496,16 +510,32 @@ internal class RaftEngine(
     }
 
     private suspend fun stepDown(newTerm: Long, reason: StepDownReason) {
-        // higher term: adopt it, then continue processing this message in the new term
+        // higher term: adopt it, then relinquish leadership
         persistTermAndVote(newTerm, null)
+        relinquishToFollower(reason)
+    }
+
+    /**
+     * Same-term step-down: relinquish leadership without bumping the term (CheckQuorum path).
+     * The term is already current — no persistence required.
+     */
+    private suspend fun stepDownToFollower(reason: StepDownReason) = relinquishToFollower(reason)
+
+    /**
+     * Shared leadership-relinquish body: cancel all leader jobs, fail pending proposals,
+     * reset follower state, emit the trace event, and restart the election timer.
+     * Called by both [stepDown] (after a term adoption) and [stepDownToFollower] (same-term).
+     */
+    private suspend fun relinquishToFollower(reason: StepDownReason) {
         if (_role.value is RaftRole.Leader) {
             heartbeatJob?.cancel()
+            quorumCheckJob?.cancel()
             failPending(LeadershipLostException())
             snapshotXfer.clear()   // leader-only transfer state — abandon any in-flight snapshot sends
         }
         leaderAlive = false
         leaderLeaseJob?.cancel()
-        preVoteTerm = null          // discard any in-flight pre-vote probe when adopting a new term
+        preVoteTerm = null          // discard any in-flight pre-vote probe when stepping down
         // If we were a candidate, the election for the prior term implicitly timed out.
         if (_role.value is RaftRole.Candidate && electionStartTime != null) {
             emitMetric(RaftMetric.ElectionTimedOut(electionStartTerm))
@@ -515,6 +545,19 @@ internal class RaftEngine(
         _leader.value = null
         emitTrace(RaftTraceEvent.BecomeFollower(nextClock(), transport.selfId, currentTerm, reason))
         resetElectionTimeout()
+    }
+
+    /**
+     * CheckQuorum tick: count voters that reached us this window (+1 for self).
+     * If fewer than quorumSize, the leader is on the minority side of a partition — step down
+     * at the same term (no term bump).
+     */
+    private suspend fun onQuorumCheck() {
+        if (_role.value !is RaftRole.Leader) return
+        val voterContacts = recentVoterContacts.count { it in clusterConfig.voters }
+        recentVoterContacts.clear()
+        val reachable = voterContacts + 1   // +1 for self: a leader always counts itself
+        if (reachable < clusterConfig.quorumSize) stepDownToFollower(StepDownReason.LostQuorum)
     }
 
     // ── Log replication ───────────────────────────────────────────────────────
@@ -610,6 +653,7 @@ internal class RaftEngine(
     private suspend fun onInstallSnapshotResponse(from: NodeId, m: RaftMessage.InstallSnapshotResponse) {
         if (m.term > currentTerm) { stepDown(m.term, StepDownReason.HigherTermObserved); return }
         if (_role.value !is RaftRole.Leader || m.term != currentTerm) return
+        recentVoterContacts += from   // reachability signal for CheckQuorum
         val xfer = snapshotXfer[from] ?: return
         xfer.nextOffset = m.nextOffset
         if (xfer.nextOffset >= xfer.state.size) {                 // fully received
@@ -769,6 +813,7 @@ internal class RaftEngine(
         // stale-term peer response: step down and discard
         if (m.term > currentTerm) { stepDown(m.term, StepDownReason.HigherTermObserved); return }
         if (_role.value !is RaftRole.Leader || m.term != currentTerm) return
+        recentVoterContacts += from   // reachability signal for CheckQuorum (success or failure)
         if (m.success) {
             matchIndex[from] = maxOf(matchIndex[from] ?: 0L, m.matchIndex)
             nextIndex[from] = matchIndex.getValue(from) + 1L

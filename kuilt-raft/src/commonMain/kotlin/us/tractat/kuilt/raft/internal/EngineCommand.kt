@@ -14,6 +14,9 @@ internal sealed interface EngineCommand {
     data object Compact : EngineCommand
     data object Close : EngineCommand
 
+    /** Periodic leader self-check: did a voter-quorum reach us this window? */
+    data object QuorumCheck : EngineCommand
+
     /**
      * Atomically snapshot the committed log for [committedFrom][us.tractat.kuilt.raft.RaftNode.committedFrom].
      * Processed inside the actor so the captured [CommitCutResult.cutIndex] and the
