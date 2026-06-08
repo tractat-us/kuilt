@@ -39,17 +39,20 @@ without collision.
 `Seam.incoming` is single-collection per the kuilt contract. `SeamReplicator`
 already owns that collection. The coordinator needs its own incoming channel.
 
-Solution: **`RoutingSeam`** wraps the underlying seam and owns the single collect.
-It prefixes every frame with a 1-byte discriminator:
+Solution: **`MuxSeam`** (`kuilt-core`) wraps the underlying seam and owns the
+single collect via `shareIn`. It prefixes every frame with a 1-byte tag and
+provides an N-way channel split:
 
 | Tag  | Channel |
 |------|---------|
 | `0x00` | `SeamReplicator` (delta / ack / fullState / resend) |
 | `0x01` | `BoundedCounterTransferCoordinator` (transfer requests) |
 
-Each consumer gets a typed view (`replicatorView` / `coordinatorView`) that
-transparently strips the tag on reads and prepends it on writes. Neither consumer
-needs to know about the other.
+Each consumer calls `mux.channel(tag)` to get a typed `Seam` view that strips
+the tag on reads and prepends it on writes. Neither consumer needs to know about
+the other. The same `MuxSeam` mechanism powers `Room.channel(id)` in
+`kuilt-session`, which extends this pattern to session metadata convergence (see
+`docs/architecture.md`).
 
 ## Safety invariant
 
