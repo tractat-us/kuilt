@@ -111,6 +111,18 @@ class RaftSimulation(
     }
 
     /**
+     * Encode and inject a [RaftMessage.RequestVote] directly into [to]'s incoming channel,
+     * bypassing the normal partition/drop rules.
+     */
+    @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
+    suspend fun deliverRequestVote(to: NodeId, from: NodeId, term: Long, lastLogIndex: Long, lastLogTerm: Long) {
+        val bytes = Cbor.encodeToByteArray<RaftMessage>(
+            RaftMessage.RequestVote(term, from, lastLogIndex, lastLogTerm)
+        )
+        network.deliver(from = from, to = to, bytes = bytes)
+    }
+
+    /**
      * Yield multiple times to let actor queues drain — deliberately yield-only (no `delay`),
      * because `advanceUntilIdle()` would fire the leader-lease timer and invalidate leader-alive tests.
      */

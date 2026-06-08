@@ -389,6 +389,14 @@ internal class RaftEngine(
     }
 
     private suspend fun onRequestVote(from: NodeId, m: RaftMessage.RequestVote) {
+        // §4.2.3 leader-stickiness: a node within its leader-lease rejects a higher-term
+        // RequestVote without adopting the term, preventing a partitioned voter from deposing
+        // a healthy leader the moment it regains connectivity.
+        if (leaderAlive && m.term > currentTerm) {
+            emitTrace(RaftTraceEvent.VoteDenied(nextClock(), transport.selfId, from, m.term, DenyReason.LeaderAlive))
+            send(from, RaftMessage.RequestVoteResponse(currentTerm, false))
+            return
+        }
         if (m.term > currentTerm) stepDown(m.term, StepDownReason.HigherTermObserved)
         val logOk = isLogUpToDate(log.lastOrNull(), m.lastLogIndex, m.lastLogTerm)
         val grant = m.term == currentTerm && logOk && (votedFor == null || votedFor == m.candidateId)

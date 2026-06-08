@@ -72,6 +72,26 @@ class PreVoteTest {
             "healthy leader must not be deposed by the partitioned node: $leaderTrace")
     }
 
+    // §4.2.3: a follower within its leader-lease rejects a higher-term RequestVote WITHOUT adopting
+    // the term. Asserted via trace: a VoteDenied(LeaderAlive) is emitted and the follower does NOT
+    // emit BecomeFollower (which a term adoption would trigger).
+    @Test
+    fun stickyFollowerRejectsHigherTermVoteWithoutAdopting() = runTest(UnconfinedTestDispatcher(), timeout = 5.seconds) {
+        val sim = raftSim(this, backgroundScope, n = 3)
+        val leader = awaitLeader(sim)
+        val leaderId = sim.nodes.entries.first { it.value === leader }.key
+        val follower = sim.nodeIds.first { it != leaderId }
+        sim.awaitCommit(1L, on = setOf(follower))   // follower has heard the leader → leaderAlive
+        val trace = mutableListOf<RaftTraceEvent>()
+        backgroundScope.launch { sim.nodes.getValue(follower).trace.collect { trace += it } }
+        sim.deliverRequestVote(to = follower, from = NodeId("v3"), term = 99L, lastLogIndex = 99L, lastLogTerm = 99L)
+        sim.settle()
+        assertTrue(trace.any { it is RaftTraceEvent.VoteDenied && it.reason == DenyReason.LeaderAlive },
+            "sticky follower must deny with LeaderAlive: $trace")
+        assertTrue(trace.none { it is RaftTraceEvent.BecomeFollower },
+            "sticky follower must NOT adopt the higher term: $trace")
+    }
+
     // A node only bumps its term once a pre-vote quorum is reached: with peers reachable and no
     // leader, an election still completes (sanity that pre-vote doesn't deadlock normal elections).
     @Test
