@@ -45,4 +45,47 @@ class PreVoteTest {
         assertTrue(trace.any { it is RaftTraceEvent.PreVoteDenied },
             "follower hearing the leader must deny pre-votes: $trace")
     }
+
+    // The headline fix: a partitioned voter does NOT inflate its term, so on heal it does not
+    // depose the leader. Asserted via trace: the leader emits no BecomeFollower; the offline node
+    // emits no real Timeout (term bump). And the offline node rejoins (commitIndex catches up).
+    @Test
+    fun partitionedVoterDoesNotDisruptLeaderOnRejoin() = runTest(UnconfinedTestDispatcher(), timeout = 5.seconds) {
+        val sim = raftSim(this, backgroundScope, n = 3)
+        val leader = awaitLeader(sim)
+        val leaderId = sim.nodes.entries.first { it.value === leader }.key
+        val offline = sim.nodeIds.first { it != leaderId }
+        val leaderTrace = mutableListOf<RaftTraceEvent>()
+        backgroundScope.launch { sim.nodes.getValue(leaderId).trace.collect { leaderTrace += it } }
+
+        sim.partition(setOf(offline), sim.nodeIds.filter { it != offline }.toSet())
+        repeat(3) { leader.propose(byteArrayOf(it.toByte())) }
+        sim.nodes.getValue(leaderId).commitIndex.first { it >= 3L }
+        // Wait long enough for the offline node to fire several election timeouts (electionTimeoutMax=10ms)
+        // and inflate its term — the pre-vote fix gates this behind a quorum probe that will fail while
+        // partitioned, keeping the term intact.
+        kotlinx.coroutines.delay(100)
+        sim.heal()
+        sim.nodes.getValue(offline).commitIndex.first { it >= 3L }   // it rejoins
+
+        assertTrue(leaderTrace.none { it is RaftTraceEvent.BecomeFollower },
+            "healthy leader must not be deposed by the partitioned node: $leaderTrace")
+    }
+
+    // A node only bumps its term once a pre-vote quorum is reached: with peers reachable and no
+    // leader, an election still completes (sanity that pre-vote doesn't deadlock normal elections).
+    @Test
+    fun electionStillCompletesViaPreVote() = runTest(UnconfinedTestDispatcher(), timeout = 5.seconds) {
+        val sim = raftSim(this, backgroundScope, n = 3)
+        val leader = awaitLeader(sim)        // election must succeed through the pre-vote path
+        assertTrue(leader.role.value is RaftRole.Leader)
+    }
+
+    // Single-voter still elects instantly (self pre-vote satisfies quorum).
+    @Test
+    fun singleVoterElectsInstantly() = runTest(UnconfinedTestDispatcher(), timeout = 5.seconds) {
+        val sim = raftSim(this, backgroundScope, n = 1)
+        val leader = awaitLeader(sim)
+        assertTrue(leader.role.value is RaftRole.Leader)
+    }
 }

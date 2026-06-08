@@ -143,6 +143,10 @@ internal class RaftEngine(
     // Candidate state
     private val votesGranted = mutableSetOf<NodeId>()
 
+    // Pre-vote probe state — set while a pre-vote round is in flight, null otherwise
+    private var preVoteTerm: Long? = null
+    private val preVotesGranted = mutableSetOf<NodeId>()
+
     // Leader state
     private val nextIndex = mutableMapOf<NodeId, Long>()
     private val matchIndex = mutableMapOf<NodeId, Long>()
@@ -341,6 +345,23 @@ internal class RaftEngine(
 
     private suspend fun onElectionTimeout() {
         if (_role.value is RaftRole.Leader) return
+        // A re-timing-out Candidate (probe didn't gather quorum) drops back to follower role
+        // for the probe phase so the role accurately reflects "not yet a candidate".
+        _role.value = followerRole
+        preVoteTerm = currentTerm + 1
+        preVotesGranted.clear()
+        preVotesGranted += transport.selfId
+        resetElectionTimeout()
+        // Single-voter: self pre-vote already satisfies quorum — skip the probe round.
+        if (preVotesGranted.size >= clusterConfig.quorumSize) { startRealElection(); return }
+        emitTrace(RaftTraceEvent.PreVoteStarted(nextClock(), transport.selfId, preVoteTerm!!))
+        val pv = RaftMessage.PreVote(preVoteTerm!!, transport.selfId, lastLogIndex, lastLogTerm)
+        otherVoters.forEach { send(it, pv) }
+    }
+
+    /** Gate the actual term bump behind a pre-vote quorum. Verbatim body of the old [onElectionTimeout]. */
+    private suspend fun startRealElection() {
+        preVoteTerm = null
         // If a prior election is still pending, it timed out — emit before overwriting the term.
         if (electionStartTime != null) {
             emitMetric(RaftMetric.ElectionTimedOut(electionStartTerm))
@@ -416,9 +437,14 @@ internal class RaftEngine(
         send(from, RaftMessage.PreVoteResponse(currentTerm, grant, m.term))
     }
 
-    /** No-op stub — pre-vote response tallying is implemented in Task 2. */
-    @Suppress("UNUSED_PARAMETER")
-    private suspend fun onPreVoteResponse(from: NodeId, m: RaftMessage.PreVoteResponse) { /* Task 2 */ }
+    private suspend fun onPreVoteResponse(from: NodeId, m: RaftMessage.PreVoteResponse) {
+        if (m.term > currentTerm) { stepDown(m.term, StepDownReason.HigherTermObserved); return }
+        if (preVoteTerm == null || m.proposedTerm != preVoteTerm) return
+        if (m.voteGranted) {
+            preVotesGranted += from
+            if (preVotesGranted.size >= clusterConfig.quorumSize) startRealElection()
+        }
+    }
 
     private suspend fun becomeLeader() {
         val elapsed = electionStartTime?.elapsedNow() ?: Duration.ZERO
@@ -468,6 +494,7 @@ internal class RaftEngine(
         }
         leaderAlive = false
         leaderLeaseJob?.cancel()
+        preVoteTerm = null          // discard any in-flight pre-vote probe when adopting a new term
         // If we were a candidate, the election for the prior term implicitly timed out.
         if (_role.value is RaftRole.Candidate && electionStartTime != null) {
             emitMetric(RaftMetric.ElectionTimedOut(electionStartTerm))
@@ -592,6 +619,7 @@ internal class RaftEngine(
         if (m.term < currentTerm) { send(from, RaftMessage.InstallSnapshotResponse(currentTerm, 0L)); return }
         if (m.term > currentTerm) stepDown(m.term, StepDownReason.HigherTermObserved)
         _role.value = followerRole
+        preVoteTerm = null          // a live leader appeared — cancel any in-flight pre-vote probe
         _leader.value = m.leaderId
         resetElectionTimeout()
         armLeaderLease()
@@ -651,6 +679,7 @@ internal class RaftEngine(
         if (m.term > currentTerm) stepDown(m.term, StepDownReason.HigherTermObserved)
         // higher term: already adopted it via stepDown above, continue processing in new term
         _role.value = followerRole
+        preVoteTerm = null          // a live leader appeared — cancel any in-flight pre-vote probe
         _leader.value = m.leaderId
         resetElectionTimeout()
         armLeaderLease()
