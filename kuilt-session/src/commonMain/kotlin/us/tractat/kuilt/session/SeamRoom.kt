@@ -143,6 +143,22 @@ internal class SeamRoom(
     private val _roster = MutableStateFlow<Set<Member>>(emptySet())
     override val roster: StateFlow<Set<Member>> = _roster.asStateFlow()
 
+    /**
+     * Admitted roster as a [StateFlow] of [PeerId]s, including self.
+     *
+     * Updated in lock-step with [_roster] by [syncRosterPeers]. Used by [RoomChannelSeam.peers]
+     * to provide the admit-gated peer set to consumers such as
+     * [us.tractat.kuilt.crdt.replicator.SeamReplicator].
+     */
+    private val _rosterPeers = MutableStateFlow<Set<PeerId>>(setOf(selfId))
+    internal val rosterPeers: StateFlow<Set<PeerId>> = _rosterPeers.asStateFlow()
+
+    /** The underlying seam's state — forwarded to channel views. */
+    internal val seamState: StateFlow<SeamState> get() = seam.state
+
+    /** Channel views keyed by sub-id. Created on demand via [channel]. */
+    private val channelViews = mutableMapOf<Short, Seam>()
+
     private val _events = MutableSharedFlow<MembershipEvent>(extraBufferCapacity = 64)
     override val events: Flow<MembershipEvent> = _events.asSharedFlow()
 
@@ -373,6 +389,11 @@ internal class SeamRoom(
                 // No further action needed here — the detector's incomingJob handles them.
             }
             AdmitMessage.isAdmitFrame(bytes) -> handleAdmitFrame(sender, bytes)
+            RoomChannel.isChannelFrame(bytes) -> {
+                // Channel frames are routed to [RoomChannelSeam] subscribers via rawIncoming.
+                // Admit gating is applied per-subscriber in [RoomChannelSeam.incoming].
+                // No additional routing needed here.
+            }
             isAdmittedPeer(sender) -> routeApplicationFrame(sender, bytes)
             else -> { /* drop: application frame from unadmitted peer */ }
         }
@@ -658,6 +679,7 @@ internal class SeamRoom(
     private fun addToRoster(member: Member) {
         admittedById[member.id] = member
         _roster.update { current -> current + member }
+        _rosterPeers.update { current -> current + member.id }
         _events.tryEmit(MembershipEvent.Joined(member))
         startDetector(member)
     }
@@ -665,10 +687,19 @@ internal class SeamRoom(
     private fun removeFromRoster(peerId: PeerId, reason: LeaveReason) {
         admittedById.remove(peerId) ?: return // already removed, avoid duplicate Left events
         _roster.update { current -> current.filterNot { it.id == peerId }.toSet() }
+        _rosterPeers.update { current -> current - peerId }
         _events.tryEmit(MembershipEvent.Left(peerId, reason))
     }
 
     private fun isAdmittedPeer(peerId: PeerId): Boolean = admittedById.containsKey(peerId)
+
+    /**
+     * Returns `true` if [peerId] is an admitted member.
+     *
+     * Used by [RoomChannelSeam] to filter incoming frames to admitted peers only.
+     * Accepting a nullable [PeerId] matches [Swatch.sender], which is nullable.
+     */
+    internal fun isAdmitted(peerId: PeerId?): Boolean = peerId != null && admittedById.containsKey(peerId)
 
     // ── Application frame routing ─────────────────────────────────────────────
 
@@ -696,6 +727,21 @@ internal class SeamRoom(
     override suspend fun sendTo(peer: PeerId, bytes: ByteArray) {
         if (hostLost || closed) return
         seam.sendTo(peer, bytes)
+    }
+
+    /**
+     * Returns a [Seam] view scoped to channel [id].
+     *
+     * The returned [RoomChannelSeam] sources its peer set from [rosterPeers] (admitted
+     * roster + self) and its inbound stream from [rawIncoming] filtered to channel frames
+     * with the sub-id derived from [id]. Idempotent: the same [Seam] instance is returned
+     * for each distinct [id].
+     */
+    override fun channel(id: String): Seam {
+        val subId = RoomChannel.channelSubId(id)
+        return channelViews.getOrPut(subId) {
+            RoomChannelSeam(room = this, subId = subId, sharedRaw = rawIncoming)
+        }
     }
 
     /**

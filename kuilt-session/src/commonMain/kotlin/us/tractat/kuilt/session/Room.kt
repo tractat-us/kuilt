@@ -4,6 +4,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.Tag
 import us.tractat.kuilt.session.partition.ResumeResult
 import us.tractat.kuilt.session.partition.ResumeToken
@@ -78,6 +79,47 @@ public interface Room {
      * Wired via [us.tractat.kuilt.session.partition.JoinerReconnectController] (1D).
      */
     public suspend fun resume(token: ResumeToken): ResumeResult
+
+    /**
+     * Returns a [Seam] view scoped to this channel [id].
+     *
+     * The returned [Seam] provides:
+     * - **`peers`** — the admitted roster plus self, reactive to [MembershipEvent.Joined] /
+     *   [MembershipEvent.Left]. Raw transport peers that have not completed the admit
+     *   handshake are **never** included. This is the central correctness guarantee: a
+     *   replicator running over this [Seam] will only ever send state to admitted members.
+     * - **`incoming`** — frames from admitted members tagged with this channel [id], with
+     *   channel framing stripped. Frames from unadmitted peers are silently dropped.
+     * - **`broadcast` / `sendTo`** — send channel-framed payloads over the Room's
+     *   underlying transport. No-ops when the room is terminal (HostLost / closed).
+     * - **`state`** — forwards the underlying [us.tractat.kuilt.core.SeamState].
+     * - **`close`** — no-op. The Room owns lifecycle; closing the channel view does not
+     *   tear down the Room.
+     *
+     * ## Wire framing
+     *
+     * Channel frames are prefixed with [RoomChannel.CHANNEL_PREFIX] (`0x63`, 'c' for
+     * "channel") followed by a 2-byte sub-id derived deterministically from [id] via
+     * [RoomChannel.channelSubId]. This keeps frame headers small (3 bytes overhead)
+     * and requires no registration handshake — both peers independently compute the
+     * same sub-id for the same String. Sub-id collisions across distinct channel names
+     * are theoretically possible (1/65536 per pair) but negligible for typical usage
+     * (< 100 channels).
+     *
+     * Applications **must not** emit payloads starting with [RoomChannel.CHANNEL_PREFIX]
+     * on the Room's raw [broadcast] / [sendTo] — that byte is reserved for channel framing.
+     *
+     * ## Idempotency
+     *
+     * Multiple calls with the same [id] return the same [Seam] instance.
+     *
+     * ## Late-subscriber semantics
+     *
+     * The shared upstream uses `replay = 0`. Frames emitted before [incoming] is
+     * collected are dropped. Safe for [us.tractat.kuilt.crdt.replicator.SeamReplicator]
+     * (gaps heal via FullState + resend) but **not** for raw at-least-once consumers.
+     */
+    public fun channel(id: String): Seam
 
     /** Leave the room cleanly. Idempotent. */
     public suspend fun leave(reason: LeaveReason = LeaveReason.Normal)
