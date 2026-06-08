@@ -6,7 +6,9 @@ import net.jqwik.api.ForAll
 import net.jqwik.api.Property
 import net.jqwik.api.Provide
 import org.junit.jupiter.api.Assertions.assertAll
+import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertThrows
+import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import us.tractat.kuilt.raft.LogEntry
 import us.tractat.kuilt.raft.NodeId
@@ -36,6 +38,8 @@ public sealed interface RaftAction {
     data class Partition(val aIdx: Int, val bIdx: Int) : RaftAction
     /** Heal all partitions. */
     data object Heal : RaftAction
+    /** Compact node[nodeIdx % clusterSize] through the cluster-wide replicated floor. */
+    data class Compact(val nodeIdx: Int) : RaftAction
 }
 
 class PureRaftModelTest {
@@ -53,11 +57,12 @@ class PureRaftModelTest {
             Arbitraries.integers().between(0, 10).map<RaftAction> { b -> RaftAction.Partition(a, b) }
         }
         val heal = Arbitraries.just<RaftAction>(RaftAction.Heal)
+        val compact = Arbitraries.integers().between(0, 10).map { RaftAction.Compact(it) }
 
         // Deliver weighted 3x — messages need to be processed to make progress
         val oneAction: Arbitrary<RaftAction> = Arbitraries.oneOf(
             timeout, deliver, deliver, deliver,
-            propose, crash, restart, partition, heal,
+            propose, crash, restart, partition, heal, compact,
         )
         return oneAction.list().ofMinSize(1).ofMaxSize(40)
     }
@@ -78,6 +83,7 @@ class PureRaftModelTest {
                 if (a == b) c else c.partition(a, b)
             }
             is RaftAction.Heal -> c.healAll()
+            is RaftAction.Compact -> c.compact(nodes[action.nodeIdx.mod(nodes.size)], c.globalCommitFloor())
         }
     }
 
@@ -164,11 +170,32 @@ class PureRaftModelTest {
         for (leader in leaders) {
             for ((idx, committed) in committedEntries) {
                 if (committed.term >= leader.term) continue
+                // A compacted leader holds the entry in its snapshot baseline, not its retained log.
+                if (idx <= leader.snapshotIndex) continue
                 val entry = leader.entryAt(idx)
                 assert(entry != null && entry.term == committed.term && entry.command.contentEquals(committed.command)) {
                     "Leader Completeness violated: leader ${leader.id} (term=${leader.term}) " +
                         "is missing committed entry at index=$idx (term=${committed.term}, " +
                         "cmd=${committed.command.contentToString()})"
+                }
+            }
+        }
+    }
+
+    /**
+     * Compaction Completeness: compaction never discards a committed entry the snapshot doesn't cover.
+     * For every alive replica, every committed index is either in the retained log or below the
+     * snapshot baseline — so the node can always reconstruct its full committed state from
+     * `snapshot ∪ retained-log`. Catches a bug where compaction discards past `commitIndex` or fails
+     * to advance `snapshotIndex` when it drops the prefix.
+     */
+    private fun checkCompactionCompleteness(c: Cluster) {
+        for (r in c.replicas.values) {
+            if (!r.alive) continue
+            for (idx in 1..r.commitIndex) {
+                assert(r.hasCommitted(idx)) {
+                    "Compaction Completeness violated on ${r.id}: committed index $idx is neither in the " +
+                        "retained log nor covered by the snapshot baseline (snapshotIndex=${r.snapshotIndex})"
                 }
             }
         }
@@ -195,6 +222,7 @@ class PureRaftModelTest {
         { checkLogMatching(c) },
         { checkStateMachineSafety(c) },
         { checkLeaderCompleteness(c, committedEntries) },
+        { checkCompactionCompleteness(c) },
     )
 
     // ── Properties ───────────────────────────────────────────────────────────
@@ -268,5 +296,57 @@ class PureRaftModelTest {
         assertThrows(AssertionError::class.java) {
             checkLeaderCompleteness(c, committedEntries)
         }
+    }
+
+    /**
+     * Verifies checkCompactionCompleteness detects over-compaction: a node whose snapshot baseline
+     * (index 3) leaves a hole at committed index 4 — dropped from the log but not covered by the snapshot.
+     */
+    @Test
+    fun `checkCompactionCompleteness detects a committed entry lost to over-compaction`() {
+        val n1 = NodeId("n1")
+        val broken = Replica(
+            id = n1,
+            term = 2L,
+            role = RaftRole.Leader,
+            log = listOf(LogEntry(5L, 2L, byteArrayOf())),   // index 4 missing from log
+            commitIndex = 5L,
+            snapshotIndex = 3L,                              // ...and not covered by the snapshot
+            snapshotTerm = 1L,
+            alive = true,
+        )
+        val c = Cluster(replicas = mapOf(n1 to broken), voters = setOf(n1))
+
+        assertThrows(AssertionError::class.java) { checkCompactionCompleteness(c) }
+    }
+
+    /**
+     * Compacting every node through the cluster-wide replicated floor discards the log prefix yet keeps
+     * every committed index reconstructable (snapshot ∪ retained log), and all safety invariants hold —
+     * including Leader Completeness for a higher-term leader whose prior-term committed entries now live
+     * only in its snapshot.
+     */
+    @Test
+    fun `compacting through the global floor preserves committed state and invariants`() {
+        val ids = listOf("n1", "n2", "n3").map { NodeId(it) }
+        val log = (1L..5L).map { LogEntry(it, 1L, byteArrayOf(it.toByte())) }
+        // Converged: all three hold [1..5] committed; n1 later won term 2 (no new entries yet).
+        var c = Cluster(
+            replicas = ids.associateWith { Replica(id = it, term = 1L, log = log, commitIndex = 5L) } +
+                (ids[0] to Replica(id = ids[0], term = 2L, role = RaftRole.Leader, log = log, commitIndex = 5L)),
+            voters = ids.toSet(),
+        )
+        val floor = c.globalCommitFloor()
+        for (id in ids) c = c.compact(id, floor)
+
+        val committed = (1L..5L).associateWith { idx -> log.first { it.index == idx } }
+        assertAll(
+            { assertEquals(5L, floor) },
+            { c.replicas.values.forEach { r -> assertEquals(emptyList<LogEntry>(), r.log, "${r.id} log fully compacted") } },
+            { c.replicas.values.forEach { r -> (1L..r.commitIndex).forEach { assertTrue(r.hasCommitted(it)) } } },
+            { checkCompactionCompleteness(c) },
+            { checkLeaderCompleteness(c, committed) },
+            { checkStateMachineSafety(c) },
+        )
     }
 }

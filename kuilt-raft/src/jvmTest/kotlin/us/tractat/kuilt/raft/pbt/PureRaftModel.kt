@@ -71,10 +71,17 @@ internal data class Replica(
     val matchIndex: Map<NodeId, Long> = emptyMap(),
     val votesReceived: Set<NodeId> = emptySet(),
     val alive: Boolean = true,
+    // Compaction baseline: the snapshot covers every committed index <= snapshotIndex. Entries at or
+    // below it are discarded from [log] but remain "present" for safety purposes via the snapshot.
+    val snapshotIndex: Long = 0L,
+    val snapshotTerm: Long = 0L,
 ) {
-    val lastLogIndex: Long get() = log.lastOrNull()?.index ?: 0L
-    val lastLogTerm: Long get() = log.lastOrNull()?.term ?: 0L
+    val lastLogIndex: Long get() = log.lastOrNull()?.index ?: snapshotIndex
+    val lastLogTerm: Long get() = log.lastOrNull()?.term ?: snapshotTerm
     fun entryAt(index: Long): LogEntry? = log.firstOrNull { it.index == index }
+
+    /** A committed index is "present" if it is in the retained log or covered by the snapshot baseline. */
+    fun hasCommitted(index: Long): Boolean = index <= snapshotIndex || entryAt(index) != null
 }
 
 // ── Cluster snapshot ────────────────────────────────────────────────────────
@@ -191,6 +198,35 @@ internal fun Cluster.restart(nodeId: NodeId): Cluster {
     val restarted = r.copy(alive = true, role = RaftRole.Follower, votesReceived = emptySet())
     return copy(replicas = replicas + (nodeId to restarted))
 }
+
+/**
+ * Compacts [nodeId]'s log through [throughIndex] — discards every entry at or below it and records
+ * the snapshot baseline. A no-op unless [throughIndex] is a retained, already-committed entry strictly
+ * above the current snapshot. Modelling InstallSnapshot catch-up is out of scope for this pure model,
+ * so the driver only compacts through the cluster-wide replicated floor (see [globalCommitFloor]),
+ * where every voter already holds the prefix and no peer needs it served below the floor.
+ */
+internal fun Cluster.compact(nodeId: NodeId, throughIndex: Long): Cluster {
+    val r = replicas[nodeId] ?: return this
+    if (!r.alive) return this
+    if (throughIndex <= r.snapshotIndex || throughIndex > r.commitIndex) return this
+    val term = r.entryAt(throughIndex)?.term ?: return this   // must be a live, committed entry
+    val compacted = r.copy(
+        log = r.log.filter { it.index > throughIndex },
+        snapshotIndex = throughIndex,
+        snapshotTerm = term,
+    )
+    return copy(replicas = replicas + (nodeId to compacted))
+}
+
+/**
+ * The highest index committed on **every** replica (alive or crashed) — the safe compaction floor.
+ * Compacting at or below this never strands a peer: all of them already hold the prefix, so even a
+ * crashed node that restarts is never behind the floor and can be caught up by ordinary AppendEntries.
+ * (Crashed nodes retain their committed prefix, so they must be counted in the minimum.)
+ */
+internal fun Cluster.globalCommitFloor(): Long =
+    replicas.values.minOfOrNull { it.commitIndex } ?: 0L
 
 /** Partitions two nodes from each other (bidirectional). */
 internal fun Cluster.partition(a: NodeId, b: NodeId): Cluster =

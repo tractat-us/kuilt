@@ -18,8 +18,11 @@
  * 5. **Observe [RaftNode.role]** to know when this node becomes [RaftRole.Leader].
  * 6. **Propose** by calling [RaftNode.propose] on the leader — it suspends until
  *    a quorum commits the entry and returns the committed [LogEntry].
- * 7. **Apply** by collecting [RaftNode.committed] on every node — entries appear
- *    here in index order once committed by a quorum.
+ * 7. **Apply** by collecting [RaftNode.committed] on every node — committed
+ *    instructions appear here in index order as [Committed] values.
+ * 8. **(Optional) Compact** by publishing a state-machine snapshot into
+ *    [RaftNode.snapshots]; raft discards the covered log prefix and catches lagging
+ *    peers up with a [Committed.Install] reset.
  *
  * ## Example
  *
@@ -33,10 +36,16 @@
  *
  * val node: RaftNode = scope.raftNode(cluster, transport, storage)
  *
- * // Apply committed entries (runs on every node in the cluster)
+ * // Apply the committed stream (runs on every node in the cluster)
  * scope.launch {
- *     node.committed.collect { entry ->
- *         applyToStateMachine(entry.command)
+ *     var appliedIndex = 0L
+ *     node.committed.collect { committed ->
+ *         when (committed) {
+ *             is Committed.Entry -> { applyToStateMachine(committed.entry.command); appliedIndex = committed.entry.index }
+ *             is Committed.Install -> { resetStateMachineTo(committed.snapshot.state); appliedIndex = committed.snapshot.throughIndex }
+ *         }
+ *         // Optionally publish a snapshot so raft can compact the log prefix:
+ *         // node.snapshots.value = Snapshot(appliedIndex, serializeStateMachine())
  *     }
  * }
  *

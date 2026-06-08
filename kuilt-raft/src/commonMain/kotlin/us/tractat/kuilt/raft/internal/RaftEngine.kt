@@ -181,6 +181,19 @@ internal class RaftEngine(
             currentTerm = storage.term()
             votedFor = storage.votedFor()
             log.addAll(storage.entries())
+            // Recover the snapshot baseline: a persisted snapshot is by definition committed, so
+            // seed snapshotIndex/Term, the compaction floor, and commitIndex from it. The persisted
+            // log already excludes the discarded prefix, so `entries()` above loaded only entries
+            // with index > snapshotIndex.
+            storage.loadSnapshot()?.let { stored ->
+                snapshotIndex = stored.meta.lastIncludedIndex
+                snapshotTerm = stored.meta.lastIncludedTerm
+                _compactionFloor.value = snapshotIndex
+                if (currentCommitIndex < snapshotIndex) {
+                    currentCommitIndex = snapshotIndex
+                    _commitIndex.value = snapshotIndex
+                }
+            }
             // Set initial role
             _role.value = followerRole
             // Start actor and message subscription
