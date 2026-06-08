@@ -7,8 +7,8 @@ import us.tractat.kuilt.crdt.ReplicaId
 /**
  * Wire messages exchanged by [BoundedCounterTransferCoordinator] instances.
  *
- * These travel over the coordinator's routing channel (discriminator [RoutingSeam.COORDINATOR_TAG]),
- * distinct from the replicator's delta/ack/fullState channel. The protocol is advisory:
+ * These travel over the coordinator's [us.tractat.kuilt.core.MuxSeam] channel (tag `0x01`),
+ * distinct from the replicator's delta/ack/fullState channel (tag `0x00`). The protocol is advisory:
  * a donor may refuse a request (zero surplus), and the requester degrades gracefully to
  * "deny locally" until quota arrives via a future transfer.
  */

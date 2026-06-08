@@ -1,5 +1,5 @@
 /**
- * Tests for [BoundedCounterTransferCoordinator] and [RoutingSeam].
+ * Tests for [BoundedCounterTransferCoordinator].
  *
  * All tests use [UnconfinedTestDispatcher] so coroutine launches are eager.
  * The [SeamReplicatorConfig.expectVirtualTime] suppresses the TestDispatcher
@@ -16,6 +16,7 @@ import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
+import us.tractat.kuilt.core.MuxSeam
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.crdt.BoundedCounter
@@ -31,7 +32,7 @@ private val bcSer = ReplicatorMessage.serializer(BoundedCounter.serializer())
 
 /**
  * Creates a [SeamReplicator] + [BoundedCounterTransferCoordinator] pair wired together
- * via a [RoutingSeam]. Returns the replicator so the caller can apply patches and observe state.
+ * via a [MuxSeam]. Returns the replicator so the caller can apply patches and observe state.
  */
 private fun wireCoordinator(
     rawSeam: Seam,
@@ -40,17 +41,17 @@ private fun wireCoordinator(
     coordConfig: BoundedCounterTransferConfig,
     scope: kotlinx.coroutines.CoroutineScope,
 ): SeamReplicator<BoundedCounter> {
-    val routing = RoutingSeam(rawSeam, scope)
+    val mux = MuxSeam(rawSeam, scope)
     val replicator = SeamReplicator(
         replica = self,
-        seam = routing.replicatorView,
+        seam = mux.channel(0x00),
         initial = initial,
         messageSerializer = bcSer,
         scope = scope,
         config = REPLICATOR_CFG,
     )
     BoundedCounterTransferCoordinator(
-        coordSeam = routing.coordinatorView,
+        coordSeam = mux.channel(0x01),
         state = replicator.state,
         self = self,
         applyTransfer = { patch -> replicator.apply(patch) },
