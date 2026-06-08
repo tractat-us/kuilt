@@ -2,11 +2,8 @@
 
 package us.tractat.kuilt.raft
 
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.flow.toList
-import kotlinx.coroutines.test.UnconfinedTestDispatcher
-import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -20,7 +17,7 @@ import kotlin.test.assertTrue
 class SnapshotRecoveryTest {
 
     @Test
-    fun nodeRestart_recoversSnapshotBaseline_andReplaysInstallThenTail() = runTest(UnconfinedTestDispatcher()) {
+    fun nodeRestart_recoversSnapshotBaseline_andReplaysInstallThenTail() = raftRunTest {
         val storage = InMemoryRaftStorage()
         // A prior life: a durable snapshot through index 7 (term 3) plus uncompacted entries 8, 9.
         storage.saveSnapshot(SnapshotMeta(7L, 3L), byteArrayOf(1, 2, 3))
@@ -29,10 +26,11 @@ class SnapshotRecoveryTest {
         )
 
         // Restart: a fresh node over the pre-loaded storage.
-        val node = singleVoterNode(backgroundScope, storage).node
+        val h = singleVoterNode(backgroundScope, storage)
+        val node = h.node
 
         // The single voter self-elects and commits its own-term no-op, pulling 8 and 9 to committed.
-        node.commitIndex.first { it >= 9L }
+        h.awaitCommit(9L)
 
         // Recovery seeded the compaction floor from the persisted snapshot (0 without recovery).
         assertEquals(7L, node.compactionFloor.value, "compaction floor recovered from persisted snapshot")

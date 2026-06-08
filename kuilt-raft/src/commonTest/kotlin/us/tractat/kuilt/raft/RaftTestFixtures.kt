@@ -24,10 +24,12 @@
 package us.tractat.kuilt.raft
 
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.TestResult
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withTimeout
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
@@ -50,6 +52,16 @@ internal fun raftRunTest(
 
 /** Bundles a single-voter [RaftNode] with its injectable [storage] for compaction tests. */
 internal class SingleVoterHarness(val node: RaftNode, val storage: InMemoryRaftStorage)
+
+/**
+ * Bounded await for a single-voter harness: suspend until [node]'s commit index reaches [index],
+ * failing fast (via [withTimeout]) rather than hanging if the node never commits. The sibling of
+ * [RaftSimulation.awaitCommit] for the single-node path — kept in this sanctioned fixture file so the
+ * raw `commitIndex.first` lives behind the bound (issue #192 harness discipline), not in test bodies.
+ */
+internal suspend fun SingleVoterHarness.awaitCommit(index: Long, within: Duration = 2.seconds) {
+    withTimeout(within) { node.commitIndex.first { it >= index } }
+}
 
 /**
  * Builds a single-voter [RaftNode] backed by [InMemoryRaftNetwork] — the same transport

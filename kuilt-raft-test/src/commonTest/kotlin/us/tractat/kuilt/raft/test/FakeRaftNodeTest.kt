@@ -6,6 +6,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
+import us.tractat.kuilt.raft.Committed
 import us.tractat.kuilt.raft.LeadershipLostException
 import us.tractat.kuilt.raft.LogEntry
 import us.tractat.kuilt.raft.NodeId
@@ -73,10 +74,11 @@ class FakeRaftNodeTest {
         val entry = LogEntry(index = 1, term = 1, command = byteArrayOf(42))
         node.pushCommitted(entry)
         val received = node.committed.first()
+        assertIs<Committed.Entry>(received)
         assertAll(
-            { assertEquals(1L, received.index) },
-            { assertEquals(1L, received.term) },
-            { assertContentEquals(byteArrayOf(42), received.command) },
+            { assertEquals(1L, received.entry.index) },
+            { assertEquals(1L, received.entry.term) },
+            { assertContentEquals(byteArrayOf(42), received.entry.command) },
         )
     }
 
@@ -103,8 +105,9 @@ class FakeRaftNodeTest {
         val node = FakeRaftNode()
         node.pushCommitted(byteArrayOf(99))
         // No collector was active when pushCommitted was called — channel buffers it.
-        val entry = node.committed.first()
-        assertContentEquals(byteArrayOf(99), entry.command)
+        val committed = node.committed.first()
+        assertIs<Committed.Entry>(committed)
+        assertContentEquals(byteArrayOf(99), committed.entry.command)
     }
 
     // ── setRole ───────────────────────────────────────────────────────────────
@@ -172,7 +175,7 @@ class FakeRaftNodeTest {
         val committed = node.committed.first()
         assertAll(
             { assertContentEquals(cmd, entry.command) },
-            { assertEquals(entry, committed) },
+            { assertEquals(Committed.Entry(entry), committed) },
         )
     }
 

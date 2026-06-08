@@ -11,12 +11,14 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.launch
+import us.tractat.kuilt.raft.Committed
 import us.tractat.kuilt.raft.LogEntry
 import us.tractat.kuilt.raft.NodeId
 import us.tractat.kuilt.raft.NotLeaderException
 import us.tractat.kuilt.raft.RaftNode
 import us.tractat.kuilt.raft.RaftRole
 import us.tractat.kuilt.raft.RaftTraceEvent
+import us.tractat.kuilt.raft.Snapshot
 
 /**
  * A test double for [RaftNode] with driver helpers for driving role transitions,
@@ -28,8 +30,8 @@ import us.tractat.kuilt.raft.RaftTraceEvent
  * val node = FakeRaftNode()
  * node.setRole(RaftRole.Leader)
  * val entry = node.propose("set x=1".encodeToByteArray())
- * val committed = node.committed.first()
- * // committed.command == "set x=1".encodeToByteArray()
+ * val committed = node.committed.first() as Committed.Entry
+ * // committed.entry.command == "set x=1".encodeToByteArray()
  * ```
  *
  * **Stream semantics — a deliberate divergence from the real [RaftNode].** The real
@@ -60,15 +62,15 @@ public class FakeRaftNode(
     private val _commitIndex = MutableStateFlow(initialCommitIndex)
     override val commitIndex: StateFlow<Long> = _commitIndex.asStateFlow()
 
-    private val committedChannel = Channel<LogEntry>(capacity = Channel.UNLIMITED)
-    override val committed: Flow<LogEntry> = committedChannel.receiveAsFlow()
+    private val committedChannel = Channel<Committed>(capacity = Channel.UNLIMITED)
+    override val committed: Flow<Committed> = committedChannel.receiveAsFlow()
 
     // Backs committedFrom: an ordered history of committed entries for replay, plus a
     // live tail so late subscribers catch up then follow along (see committedFrom KDoc).
     private val committedHistory = mutableListOf<LogEntry>()
     private val committedTail = MutableSharedFlow<LogEntry>(extraBufferCapacity = Int.MAX_VALUE)
 
-    override fun committedFrom(fromIndex: Long): Flow<LogEntry> = flow {
+    override fun committedFrom(fromIndex: Long): Flow<Committed> = flow {
         coroutineScope {
             val buffer = Channel<LogEntry>(Channel.UNLIMITED)
             val tail = launch(start = CoroutineStart.UNDISPATCHED) {
@@ -81,13 +83,23 @@ public class FakeRaftNode(
             val cutIndex = _commitIndex.value
             committedHistory
                 .filter { it.index in fromIndex..cutIndex && !it.isNoOp }
-                .forEach { emit(it) }
+                .forEach { emit(Committed.Entry(it)) }
             for (entry in buffer) {
-                if (entry.index > cutIndex && !entry.isNoOp) emit(entry)
+                if (entry.index > cutIndex && !entry.isNoOp) emit(Committed.Entry(entry))
             }
             tail.cancel()
         }
     }
+
+    /**
+     * Snapshot publish channel — present to satisfy [RaftNode]. This double runs no real compaction
+     * loop, so setting it has no functional effect; drive [setCompactionFloor] to simulate a floor and
+     * [pushInstall] to inject a [Committed.Install] on the [committed] stream.
+     */
+    override val snapshots: MutableStateFlow<Snapshot?> = MutableStateFlow(null)
+
+    private val _compactionFloor = MutableStateFlow(0L)
+    override val compactionFloor: StateFlow<Long> = _compactionFloor.asStateFlow()
 
     private val traceChannel = Channel<RaftTraceEvent>(capacity = Channel.UNLIMITED)
     override val trace: Flow<RaftTraceEvent> = traceChannel.receiveAsFlow()
@@ -157,11 +169,26 @@ public class FakeRaftNode(
      * ```
      */
     public suspend fun pushCommitted(entry: LogEntry): LogEntry {
-        committedChannel.send(entry)
+        committedChannel.send(Committed.Entry(entry))
         committedHistory.add(entry)
         _commitIndex.value = entry.index
         committedTail.emit(entry)
         return entry
+    }
+
+    /**
+     * Push a [Committed.Install] onto [committed], advancing [compactionFloor] and [commitIndex] to
+     * [snapshot]'s `throughIndex` — the test-double analogue of the engine accepting an InstallSnapshot.
+     */
+    public suspend fun pushInstall(snapshot: Snapshot) {
+        committedChannel.send(Committed.Install(snapshot))
+        _compactionFloor.value = snapshot.throughIndex
+        if (_commitIndex.value < snapshot.throughIndex) _commitIndex.value = snapshot.throughIndex
+    }
+
+    /** Set [compactionFloor] to [index] without emitting a [Committed.Install]. */
+    public fun setCompactionFloor(index: Long) {
+        _compactionFloor.value = index
     }
 
     /**

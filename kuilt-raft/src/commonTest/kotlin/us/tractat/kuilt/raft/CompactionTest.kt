@@ -7,8 +7,6 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.flow.toList
-import kotlinx.coroutines.test.UnconfinedTestDispatcher
-import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -16,12 +14,12 @@ import kotlin.test.assertTrue
 class CompactionTest {
 
     @Test
-    fun publishingSnapshot_advancesCompactionFloorAndDiscardsPrefix() = runTest(UnconfinedTestDispatcher()) {
+    fun publishingSnapshot_advancesCompactionFloorAndDiscardsPrefix() = raftRunTest {
         val h = singleVoterNode(backgroundScope)
         h.node.awaitLeadership()
         // In a single-voter cluster the no-op lands at index 1; 5 proposals land at 2..6.
         repeat(5) { h.node.propose(byteArrayOf(it.toByte())) }
-        h.node.commitIndex.first { it >= 6L }   // wait for all 5 proposals to commit
+        h.awaitCommit(6L)   // wait for all 5 proposals to commit
 
         // Snapshot through index 4 (the no-op + first 3 proposals); entries 5..6 remain.
         h.node.snapshots.value = Snapshot(throughIndex = 4L, state = byteArrayOf(99))
@@ -33,11 +31,11 @@ class CompactionTest {
     }
 
     @Test
-    fun snapshotBeyondCommitIndex_isIgnoredUntilCommitCatchesUp() = runTest(UnconfinedTestDispatcher()) {
+    fun snapshotBeyondCommitIndex_isIgnoredUntilCommitCatchesUp() = raftRunTest {
         val h = singleVoterNode(backgroundScope)
         h.node.awaitLeadership()
         h.node.propose(byteArrayOf(1))
-        h.node.commitIndex.first { it >= 1L }
+        h.awaitCommit(1L)
         h.node.snapshots.value = Snapshot(throughIndex = 99L, state = byteArrayOf(0)) // beyond commit
         // floor must NOT advance to 99
         repeat(3) { h.node.propose(byteArrayOf(it.toByte())) }
@@ -45,11 +43,11 @@ class CompactionTest {
     }
 
     @Test
-    fun committedFrom_belowFloor_leadsWithInstall() = runTest(UnconfinedTestDispatcher()) {
+    fun committedFrom_belowFloor_leadsWithInstall() = raftRunTest {
         val h = singleVoterNode(backgroundScope)
         h.node.awaitLeadership()
         repeat(5) { h.node.propose(byteArrayOf(it.toByte())) }
-        h.node.commitIndex.first { it >= 5L }
+        h.awaitCommit(5L)
         h.node.snapshots.value = Snapshot(3L, byteArrayOf(123))
         h.node.compactionFloor.first { it == 3L }
 

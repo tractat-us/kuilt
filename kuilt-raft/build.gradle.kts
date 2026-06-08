@@ -23,6 +23,13 @@ kotlin {
             // SLF4J backend for kotlin-logging on JVM
             runtimeOnly(libs.logback)
         }
+        androidUnitTest.dependencies {
+            // SLF4J backend for kotlin-logging on the Android unit-test variants
+            // (testDebugUnitTest / testReleaseUnitTest). Without it, kotlin-logging's
+            // Slf4jLoggerFactory init throws NoClassDefFoundError and contaminates the
+            // whole raft suite once any logger.* call fires (issue #222).
+            runtimeOnly(libs.logback)
+        }
     }
 }
 
