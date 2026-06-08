@@ -441,6 +441,63 @@ class SeamReplicatorChaosTest {
         )
     }
 
+    // ---- scenario 10: late-joiner FullState convergence under drop chaos ----
+
+    /**
+     * C joins after A and B have already exchanged several deltas. The FullState that A sends
+     * to C is subject to a 40% control-plane drop probability. After several retry intervals,
+     * the FullState must get through and C must converge.
+     *
+     * This exercises the FullState retry timer as the sole recovery mechanism for a late
+     * joiner whose initial snapshot is lost before the delta-log has been GC'd.
+     */
+    @Test
+    fun lateJoinerConvergesViaFullStateRetryUnderDrop() = runTest(UnconfinedTestDispatcher()) {
+        val loom = InMemoryLoom()
+        val rawA = loom.host(Pattern("chaos-fullstate-retry"))
+        val rawB = loom.join(InMemoryTag("b"))
+
+        // A and B exchange ops first (C not yet present)
+        val repA = gcounterReplicator(rawA, backgroundScope)
+        val repB = gcounterReplicator(rawB, backgroundScope)
+
+        repeat(5) {
+            repA.apply(repA.state.value.inc(repA.replica, 1L))
+            repB.apply(repB.state.value.inc(repB.replica, 1L))
+        }
+        testScheduler.advanceUntilIdle()
+
+        // A and B each have 10; now C joins late
+        val rawC = loom.join(InMemoryTag("c"))
+
+        // Wrap A's seam to inject 40% control-plane drops (FullState is a sendTo call)
+        val controlDropChaos = ChaosConfig(controlPlaneDropProbability = 0.4)
+        val chaosA = chaosWrap(rawA, controlDropChaos, backgroundScope, seed = 0xF5_A1L)
+
+        // Replace repA with a chaos-wrapped version (C will now be seen through chaosA's sendTo)
+        val retryInterval = 50.milliseconds
+        val chaosConfig = SeamReplicatorConfig(
+            fullStateRetryInterval = retryInterval,
+            expectVirtualTime = true,
+        )
+        val repAChaos = gcounterReplicator(chaosA, backgroundScope, config = chaosConfig)
+        val repC = gcounterReplicator(rawC, backgroundScope, config = chaosConfig)
+
+        // A (chaos) now sees C; kick the retry loop enough times to break through the 40% drop.
+        // 8 rounds: P(all 8 attempts dropped at 40%) ≈ 1.7%; with seed 0xF5_A1L this converges.
+        repeat(8) {
+            testScheduler.advanceUntilIdle()
+            testScheduler.advanceTimeBy(retryInterval.inWholeMilliseconds + 1L)
+        }
+        testScheduler.advanceUntilIdle()
+
+        assertEquals(
+            repAChaos.state.value.value,
+            repC.state.value.value,
+            "C must converge to A's state via FullState retry despite 40% drop rate",
+        )
+    }
+
     // ---- scenario 6: eviction under partition, then FullState recovery ----
 
     /**
