@@ -76,11 +76,11 @@ public data class BoundedCounterTransferConfig(
  *
  * ## Multiplexing
  *
- * The coordinator receives frames from a [RoutingSeam.coordinatorView] — a [Seam] view that
- * carries only [RoutingSeam.COORDINATOR_TAG]-prefixed frames. This avoids a second collection
- * of the underlying seam's [Seam.incoming] flow (which is single-collection by contract).
+ * The coordinator receives frames from a [us.tractat.kuilt.core.MuxSeam] channel — a [Seam]
+ * view that carries only frames tagged with its assigned byte prefix. This avoids a second
+ * collection of the underlying seam's [Seam.incoming] flow (which is single-collection by contract).
  *
- * @param coordSeam the [RoutingSeam.coordinatorView] — must be pre-wired by the caller using [RoutingSeam].
+ * @param coordSeam a [us.tractat.kuilt.core.MuxSeam] channel — must be pre-wired by the caller.
  * @param state live [BoundedCounter] state (updated whenever [SeamReplicator] applies a patch).
  * @param self this replica's [ReplicaId].
  * @param applyTransfer called by the donor side with a transfer [Patch]; the caller is expected to
