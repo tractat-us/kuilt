@@ -96,6 +96,22 @@ against it. Real-radio / real-network behavior is verified by separate tests tha
 stay `-P`-gated (e.g. `-Pmdns.multicast.tests`) so the standard build never
 depends on physical network conditions.
 
+## Consensus and leader election
+
+`:kuilt-raft` implements a Raft consensus layer over the `Seam` transport. To
+avoid spurious term inflation when a node is merely partitioned from the leader
+rather than the leader being dead, elections use a two-phase approach: on an
+election timeout a node runs a non-mutating *pre-vote* probe, sending a
+`PreVote` request to all peers without bumping its term. A peer grants a
+pre-vote only when it has not heard from a live leader recently and the
+candidate's log is at least as up-to-date; term and vote state are left
+unchanged. The node advances to a real election — incrementing its term and
+sending `RequestVote` — only after collecting pre-vote grants from a quorum.
+Complementing this, a follower that is within its leader-lease window rejects an
+incoming `RequestVote` for a higher term without adopting that term, preventing a
+re-joining partitioned node from deposing a healthy leader the moment it regains
+connectivity.
+
 ## What kuilt is *not* responsible for
 
 The `:kuilt-core` contract deliberately stops at moving bytes between connected

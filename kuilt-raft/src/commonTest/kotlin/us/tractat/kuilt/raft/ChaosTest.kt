@@ -3,12 +3,78 @@
 package us.tractat.kuilt.raft
 
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
+import kotlin.time.Duration.Companion.seconds
 
 class ChaosTest {
+    /**
+     * Term-stability invariant: across repeated partition/heal rounds, a node that is only ever
+     * isolated (never legitimately contested) must never inflate its term high enough to depose
+     * the healthy leader. With pre-vote enabled, the isolated node fires election timeouts but
+     * its pre-vote probe fails (no quorum reachable) so it never bumps its real term — on rejoin
+     * it follows the existing leader rather than triggering a new election.
+     *
+     * [RaftTraceEvent.Timeout] fires only when the real term bump occurs (inside
+     * [startRealElection], gated by a pre-vote quorum). A correctly-functioning pre-vote round
+     * emits [RaftTraceEvent.PreVoteStarted] on timeout but no [RaftTraceEvent.Timeout] while
+     * the node is isolated.
+     *
+     * Invariants checked per round:
+     *   1. The leader emits no BecomeFollower (it was not deposed).
+     *   2. The isolated node emits no Timeout events (pre-vote blocked every real election).
+     *   3. The isolated node catches up (commitIndex reaches the proposal index on rejoin).
+     *   4. checkInvariants() passes at the end of every round.
+     */
+    @Test fun termStability_partitionedFollowerNeverDeposesLeader() = raftRunTest(timeout = 10.seconds) {
+        val sim = raftSim(backgroundScope, backgroundScope, n = 3)
+
+        repeat(3) { round ->
+            // Re-confirm (or elect) the current leader at the start of every round.
+            val leader = awaitLeader(sim)
+            val leaderId = sim.nodes.entries.first { it.value === leader }.key
+            val isolated = sim.nodeIds.first { it != leaderId }
+
+            val leaderTrace = mutableListOf<RaftTraceEvent>()
+            val isolatedTrace = mutableListOf<RaftTraceEvent>()
+            val leaderTraceJob   = backgroundScope.launch { sim.nodes.getValue(leaderId).trace.collect { leaderTrace += it } }
+            val isolatedTraceJob = backgroundScope.launch { sim.nodes.getValue(isolated).trace.collect { isolatedTrace += it } }
+
+            // Isolate one follower; leader + third node hold quorum and can still commit.
+            sim.partitionOff(isolated)
+            val proposalIndex = leader.propose(byteArrayOf(round.toByte())).index
+            sim.awaitCommit(proposalIndex, on = setOf(leaderId))
+
+            // Let the isolated node fire many election timeouts (electionTimeoutMax = 10 ms).
+            // Pre-vote probes will all fail (no quorum), so Timeout must never fire.
+            delay(80)
+
+            sim.heal()
+            sim.awaitCommit(proposalIndex, on = setOf(isolated))
+
+            leaderTraceJob.cancel()
+            isolatedTraceJob.cancel()
+
+            // Invariant 1: healthy leader was never deposed by a partitioned voter.
+            assertTrue(
+                leaderTrace.none { it is RaftTraceEvent.BecomeFollower },
+                "Round $round: healthy leader $leaderId was deposed — term inflation from isolated $isolated. " +
+                    "leaderTrace=${leaderTrace.takeLast(8)}"
+            )
+            // Invariant 2: pre-vote blocked every real election on the isolated node.
+            val realElectionAttempts = isolatedTrace.filterIsInstance<RaftTraceEvent.Timeout>()
+            assertTrue(
+                realElectionAttempts.isEmpty(),
+                "Round $round: isolated $isolated bumped its real term ${realElectionAttempts.size} time(s) — " +
+                    "pre-vote should have blocked all of them. events=${realElectionAttempts}"
+            )
+            sim.checkInvariants()
+        }
+    }
+
     @Test fun persistence_node_rejoins_with_same_log() = raftRunTest {
         val sim = raftSim(backgroundScope, backgroundScope)
         val leader = awaitLeader(sim)
