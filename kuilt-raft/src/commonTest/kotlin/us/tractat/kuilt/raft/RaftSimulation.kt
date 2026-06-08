@@ -123,6 +123,26 @@ class RaftSimulation(
     }
 
     /**
+     * Encode and inject a [RaftMessage.PreVoteResponse] directly into [to]'s incoming channel,
+     * bypassing the normal partition/drop rules. [round] is the pre-vote round nonce; use a stale
+     * value to simulate a delayed response from a previous round.
+     */
+    @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
+    suspend fun deliverPreVoteResponse(
+        to: NodeId,
+        from: NodeId,
+        term: Long,
+        voteGranted: Boolean,
+        proposedTerm: Long,
+        round: Long,
+    ) {
+        val bytes = Cbor.encodeToByteArray<RaftMessage>(
+            RaftMessage.PreVoteResponse(term, voteGranted, proposedTerm, round)
+        )
+        network.deliver(from = from, to = to, bytes = bytes)
+    }
+
+    /**
      * Yield multiple times to let actor queues drain — deliberately yield-only (no `delay`),
      * because `advanceUntilIdle()` would fire the leader-lease timer and invalidate leader-alive tests.
      */
