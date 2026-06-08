@@ -3,12 +3,14 @@ package us.tractat.kuilt.raft.internal
 import kotlinx.coroutines.CompletableDeferred
 import us.tractat.kuilt.raft.LogEntry
 import us.tractat.kuilt.raft.NodeId
+import us.tractat.kuilt.raft.Snapshot
 
 internal sealed interface EngineCommand {
     data class IncomingMessage(val from: NodeId, val message: RaftMessage) : EngineCommand
     data class Propose(val command: ByteArray, val response: CompletableDeferred<LogEntry>) : EngineCommand
     data object ElectionTimeout : EngineCommand
     data object HeartbeatTick : EngineCommand
+    data object Compact : EngineCommand
     data object Close : EngineCommand
 
     /**
@@ -28,4 +30,6 @@ internal class CommitCutResult(
     val replay: List<LogEntry>,
     /** The `commitIndex` at the moment of the cut; live entries with a greater index tail afterwards. */
     val cutIndex: Long,
+    /** A snapshot to emit before the replay, or `null` if no install is needed (no compaction yet). */
+    val install: Snapshot? = null,
 )

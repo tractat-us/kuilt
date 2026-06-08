@@ -2,6 +2,8 @@
 
 package us.tractat.kuilt.raft
 
+import kotlinx.coroutines.flow.filterIsInstance
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.launch
@@ -41,7 +43,8 @@ class CommittedReplayTest {
         val e3 = leader.propose(byteArrayOf(3))
 
         // Subscribe only now — committed (replay=0) would have missed all three.
-        val replayed = leader.committedFrom(0).take(3).toList()
+        val replayed = leader.committedFrom(0).filterIsInstance<Committed.Entry>().map { it.entry }
+            .take(3).toList()
 
         assertContentEquals(
             listOf(e1.index, e2.index, e3.index),
@@ -64,7 +67,8 @@ class CommittedReplayTest {
         val e2 = leader.propose(byteArrayOf(2)) // index 3
         val e3 = leader.propose(byteArrayOf(3)) // index 4
 
-        val replayed = leader.committedFrom(e2.index).take(2).toList()
+        val replayed = leader.committedFrom(e2.index).filterIsInstance<Committed.Entry>().map { it.entry }
+            .take(2).toList()
 
         assertContentEquals(
             listOf(e2.index, e3.index),
@@ -85,7 +89,9 @@ class CommittedReplayTest {
         val e2 = leader.propose(byteArrayOf(2)) // index 3
 
         val seen = mutableListOf<LogEntry>()
-        backgroundScope.launch { leader.committedFrom(e1.index).collect { seen += it } }
+        backgroundScope.launch {
+            leader.committedFrom(e1.index).collect { if (it is Committed.Entry) seen += it.entry }
+        }
 
         // Propose a third entry *after* the subscription is live — it must tail through.
         val e3 = leader.propose(byteArrayOf(3)) // index 4

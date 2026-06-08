@@ -1,5 +1,11 @@
 package us.tractat.kuilt.raft
 
+/** Identifies the log position a snapshot covers: everything with `index <= lastIncludedIndex`. */
+public data class SnapshotMeta(val lastIncludedIndex: Long, val lastIncludedTerm: Long)
+
+/** A persisted snapshot: its [meta] plus the opaque application [state] bytes. */
+public class StoredSnapshot(public val meta: SnapshotMeta, public val state: ByteArray)
+
 /**
  * Durable state that a Raft node must persist to survive restarts.
  *
@@ -84,4 +90,19 @@ public interface RaftStorage {
      * write the correct entries from the leader.
      */
     public suspend fun truncateFrom(index: Long)
+
+    /**
+     * Persists [state] as the snapshot covering all entries with `index <= meta.lastIncludedIndex`.
+     *
+     * Crash-safety: this MUST be durable before [discardLogPrefix] runs. A crash between the two
+     * leaves the snapshot plus the full log — redundant but safe and recoverable. Overwrites any
+     * previously stored snapshot (an older snapshot is strictly dominated).
+     */
+    public suspend fun saveSnapshot(meta: SnapshotMeta, state: ByteArray)
+
+    /** Returns the stored snapshot, or `null` if none has been saved. */
+    public suspend fun loadSnapshot(): StoredSnapshot?
+
+    /** Removes all log entries with `index <= throughIndex`. Idempotent; tolerates a floor below the first retained entry. */
+    public suspend fun discardLogPrefix(throughIndex: Long)
 }

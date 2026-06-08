@@ -24,10 +24,12 @@
 package us.tractat.kuilt.raft
 
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.TestResult
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withTimeout
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
@@ -47,6 +49,38 @@ internal fun raftRunTest(
     timeout: Duration = 5.seconds,
     body: suspend TestScope.() -> Unit,
 ): TestResult = runTest(UnconfinedTestDispatcher(), timeout = timeout, testBody = body)
+
+/** Bundles a single-voter [RaftNode] with its injectable [storage] for compaction tests. */
+internal class SingleVoterHarness(val node: RaftNode, val storage: InMemoryRaftStorage)
+
+/**
+ * Bounded await for a single-voter harness: suspend until [node]'s commit index reaches [index],
+ * failing fast (via [withTimeout]) rather than hanging if the node never commits. The sibling of
+ * [RaftSimulation.awaitCommit] for the single-node path — kept in this sanctioned fixture file so the
+ * raw `commitIndex.first` lives behind the bound (issue #192 harness discipline), not in test bodies.
+ */
+internal suspend fun SingleVoterHarness.awaitCommit(index: Long, within: Duration = 2.seconds) {
+    withTimeout(within) { node.commitIndex.first { it >= index } }
+}
+
+/**
+ * Builds a single-voter [RaftNode] backed by [InMemoryRaftNetwork] — the same transport
+ * already used by all multi-node tests — and returns a [SingleVoterHarness] that exposes
+ * both the node and its [storage].
+ *
+ * [storage] is injectable so Task 5's recovery test can pre-load a persisted snapshot + log.
+ */
+internal fun singleVoterNode(
+    scope: CoroutineScope,
+    storage: InMemoryRaftStorage = InMemoryRaftStorage(),
+): SingleVoterHarness {
+    val self = NodeId("solo")
+    val cluster = ClusterConfig(voters = setOf(self))
+    val network = InMemoryRaftNetwork()
+    val transport = network.transport(self)
+    val node = scope.raftNode(cluster, transport, storage, FAST_RAFT_CONFIG)
+    return SingleVoterHarness(node, storage)
+}
 
 /** Fast timings for deterministic tests — elections fire in single-digit ms. */
 internal val FAST_RAFT_CONFIG = RaftConfig(
@@ -69,6 +103,7 @@ internal fun raftSim(
     nodeScope: CoroutineScope,
     n: Int = 3,
     config: RaftConfig = FAST_RAFT_CONFIG,
+    maxPayloadBytes: Int? = null,
 ): RaftSimulation {
     val ids = (1..n).map { NodeId("v$it") }
     val cluster = ClusterConfig(voters = ids.toSet())
@@ -77,6 +112,7 @@ internal fun raftSim(
         scope = scope,
         raftConfig = config,
         nodeScope = nodeScope,
+        maxPayloadBytes = maxPayloadBytes,
         nodeFactory = { _, transport, storage, childScope ->
             childScope.raftNode(cluster, transport, storage, config)
         },

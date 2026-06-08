@@ -6,7 +6,9 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.filterIsInstance
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
 import kotlin.test.Test
@@ -38,7 +40,10 @@ class LearnerTest {
         val learner = sim.nodes[learnerId]
         assertNotNull(learner)
         assertIs<RaftRole.Learner>(learner.role.value)
-        val received = async { learner.committed.filter { it.command.isNotEmpty() }.first() }
+        val received = async {
+            learner.committed.filterIsInstance<Committed.Entry>().map { it.entry }
+                .filter { it.command.isNotEmpty() }.first()
+        }
         delay(1) // let collector subscribe before proposing
         leader.propose(byteArrayOf(42))
         assertContentEquals(byteArrayOf(42), received.await().command)
@@ -75,7 +80,7 @@ class LearnerTest {
         sim.heal()
 
         val entries = mutableListOf<LogEntry>()
-        val job = launch { learner.committed.collect { entries.add(it) } }
+        val job = launch { learner.committed.collect { if (it is Committed.Entry) entries.add(it.entry) } }
         delay(100)
         job.cancel()
 

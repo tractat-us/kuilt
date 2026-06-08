@@ -57,6 +57,11 @@ class StorageAtomicityTest {
                     delegate.appendEntries(entries)
                 override suspend fun entries(fromIndex: Long) = delegate.entries(fromIndex)
                 override suspend fun truncateFrom(index: Long) = delegate.truncateFrom(index)
+                override suspend fun saveSnapshot(meta: SnapshotMeta, state: ByteArray) =
+                    delegate.saveSnapshot(meta, state)
+                override suspend fun loadSnapshot(): StoredSnapshot? = delegate.loadSnapshot()
+                override suspend fun discardLogPrefix(throughIndex: Long) =
+                    delegate.discardLogPrefix(throughIndex)
             }
 
             val ids = listOf(NodeId("a"), NodeId("b"), NodeId("c"))

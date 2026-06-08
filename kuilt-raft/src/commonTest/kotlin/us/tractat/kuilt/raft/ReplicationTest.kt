@@ -6,7 +6,9 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.filterIsInstance
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
@@ -24,7 +26,10 @@ class ReplicationTest {
 
         // Collect first non-no-op (user) entry on all followers before proposing.
         val followerJobs = sim.followers().map { f ->
-            async { f.committed.filter { it.command.isNotEmpty() }.first() }
+            async {
+                f.committed.filterIsInstance<Committed.Entry>().map { it.entry }
+                    .filter { it.command.isNotEmpty() }.first()
+            }
         }
 
         val entry = leader.propose(byteArrayOf(1, 2, 3))

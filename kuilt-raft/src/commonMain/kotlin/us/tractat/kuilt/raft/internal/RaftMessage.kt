@@ -40,4 +40,27 @@ internal sealed interface RaftMessage {
         val conflictIndex: Long? = null,
         val conflictTerm: Long? = null,
     ) : RaftMessage
+
+    /**
+     * §7 InstallSnapshot — one chunk of a snapshot transfer. The leader diverts to this when a
+     * follower's needed prefix has been compacted away. [data] carries bytes `[offset, offset+size)`
+     * of the opaque snapshot; [done] marks the final chunk.
+     */
+    @Serializable
+    data class InstallSnapshot(
+        val term: Long,
+        val leaderId: NodeId,
+        val lastIncludedIndex: Long,
+        val lastIncludedTerm: Long,
+        val offset: Long,
+        val data: ByteArray,
+        val done: Boolean,
+    ) : RaftMessage
+
+    /** Follower's reply to [InstallSnapshot]: [nextOffset] is how many bytes it has stored, resyncing the leader after a dropped chunk. */
+    @Serializable
+    data class InstallSnapshotResponse(
+        val term: Long,
+        val nextOffset: Long,
+    ) : RaftMessage
 }

@@ -45,6 +45,10 @@ import kotlin.time.Duration.Companion.milliseconds
  *   Below this threshold, the log entry is at `debug` level. Set to [Duration.ZERO] to treat
  *   every propose as slow (useful in tests that want to assert the warn path fires). Default
  *   `100ms` — appropriate for LAN clusters.
+ * @param snapshotChunkCeiling Upper bound on the bytes carried in a single §7
+ *   InstallSnapshot chunk. The actual chunk size is the lesser of this and the
+ *   transport's [RaftTransport.maxPayloadBytes] (minus a small header budget), so
+ *   a fabric with a tighter framing limit shrinks chunks automatically.
  */
 public data class RaftConfig(
     val electionTimeoutMin: Duration = 150.milliseconds,
@@ -53,4 +57,5 @@ public data class RaftConfig(
     val strictTestGuard: Boolean = false,
     val expectVirtualTime: Boolean = false,
     val slowProposeThreshold: Duration = 100.milliseconds,
+    val snapshotChunkCeiling: Int = 16 * 1024,
 )

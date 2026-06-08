@@ -40,8 +40,9 @@ class DocumentedUsageTest {
         // 3. Apply committed entries on every node (documented step 5).
         val appliedOnA = mutableListOf<ByteArray>()
         backgroundScope.launch {
-            nodes.getValue(NodeId("a")).committed.collect { entry ->
-                if (entry.command.isNotEmpty()) appliedOnA.add(entry.command)
+            nodes.getValue(NodeId("a")).committed.collect { committed ->
+                if (committed is Committed.Entry && committed.entry.command.isNotEmpty())
+                    appliedOnA.add(committed.entry.command)
             }
         }
 
