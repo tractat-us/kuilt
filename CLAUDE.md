@@ -23,14 +23,46 @@ and `docs/usage.md` for how to consume it.
 
 ## Module structure & dependency direction
 
+"all" = the `kuilt.kmp-library` default target set: JVM, Android, iOS
+(`iosArm64`/`iosSimulatorArm64`), macOS (`macosArm64`), wasmJs.
+
+**Contract & core**
+
 | Module | Targets | Role |
 |--------|---------|------|
-| `:kuilt-core` | all | The contract (`Loom`/`Seam`/`Swatch`/…), the `InMemoryLoom` reference impl, and `SeamConformanceSuite`. Depends on nothing but coroutines + serialization. |
-| `:kuilt-websocket` | all | Ktor WebSocket fabric — the "Far"/relay topology. `KtorClientLoom` everywhere; `KtorServerLoom` on JVM/Android only. |
+| `:kuilt-core` | all | The contract (`Loom`/`Seam`/`Swatch`/…) and the `InMemoryLoom` reference impl. Depends on nothing but coroutines + serialization. |
+
+**Libraries layered on the contract**
+
+| Module | Targets | Role |
+|--------|---------|------|
+| `:kuilt-crdt` | all | The delta-state CRDT zoo (`GCounter`/`PNCounter`/`GSet`/`ORSet`/`TwoPhaseSet`/`LWWRegister`/`MVRegister`/`LWWMap`/`ORMap`/`BoundedCounter`/`Rga`/`Causal`), plus `SeamReplicator` (live replication over a `Seam`) and `RoutingSeam` (multiplexes several CRDTs over one fabric). |
+| `:kuilt-raft` | all | Raft consensus over a `Seam` — leader election + PreVote, log replication, log compaction + chunked `InstallSnapshot`, dynamic membership. |
+| `:kuilt-session` | all | Membership-aware `Room` over a `Loom` (`SeamRoom`): admit/identify handshake, roster, reconnect tokens, partition detection. |
+
+**Fabrics & discovery**
+
+| Module | Targets | Role |
+|--------|---------|------|
+| `:kuilt-websocket` | all | Ktor WebSocket fabric — the "Far"/relay topology. `KtorClientLoom` everywhere; `KtorServerLoom` + `KtorRoomHost` on JVM/Android only. |
+| `:kuilt-multipeer` | iOS, macOS | Apple Multipeer Connectivity fabric — the "Near"/peer-to-peer topology. Provides `MultipeerRoomHost`. |
+| `:kuilt-nearby` | all (Android impl) | Google Nearby Connections fabric — Android implementation behind `play-services-nearby`. |
+| `:kuilt-webrtc` | all (browser/wasmJs) | WebRTC data-channel fabric. |
 | `:kuilt-mdns` | JVM, Android, iOS | Bonjour/mDNS discovery. On JVM it depends on `:kuilt-websocket` (discovery feeds a WebSocket connection — discovery is orthogonal to topology). |
 
-Every fabric module depends only on `:kuilt-core`. The dependency arrow never
-points back up — `:kuilt-core` must stay free of fabric-specific imports.
+**Conformance & test support**
+
+| Module | Targets | Role |
+|--------|---------|------|
+| `:kuilt-conformance` | all | The TCKs — `SeamConformanceSuite` and `RoomConformanceSuite`. Every fabric/room impl is verified by subclassing these. |
+| `:kuilt-test` | all | Shared test utilities/fakes built on `:kuilt-core`. |
+| `:kuilt-session-test` | all | Session test support (`FakeRoomFactory`, …). |
+| `:kuilt-raft-test` | all | Raft test harness (`FakeRaftNode`, …). |
+
+Fabric and feature modules depend on `:kuilt-core` (some also on sibling
+libraries — e.g. `:kuilt-mdns` → `:kuilt-websocket`, `:kuilt-crdt`). The
+dependency arrow never points back into `:kuilt-core` — it must stay free of
+fabric-specific imports.
 
 ## The contract (one-paragraph orientation)
 
