@@ -10,6 +10,7 @@ internal sealed interface EngineCommand {
     data class Propose(val command: ByteArray, val response: CompletableDeferred<LogEntry>) : EngineCommand
     data object ElectionTimeout : EngineCommand
     data object HeartbeatTick : EngineCommand
+    data object LeaseExpired : EngineCommand
     data object Compact : EngineCommand
     data object Close : EngineCommand
 

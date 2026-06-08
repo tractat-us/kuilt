@@ -110,7 +110,10 @@ class RaftSimulation(
         network.deliver(from = from, to = to, bytes = bytes)
     }
 
-    /** Yield multiple times to let actor queues drain. */
+    /**
+     * Yield multiple times to let actor queues drain — deliberately yield-only (no `delay`),
+     * because `advanceUntilIdle()` would fire the leader-lease timer and invalidate leader-alive tests.
+     */
     suspend fun settle() = repeat(10) { yield() }
 
     // ── Bounded, dump-on-timeout await helpers ──────────────────────────────

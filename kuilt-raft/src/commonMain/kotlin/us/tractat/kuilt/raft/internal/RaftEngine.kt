@@ -226,6 +226,7 @@ internal class RaftEngine(
                         is EngineCommand.Propose         -> onPropose(c.command, c.response)
                         is EngineCommand.ElectionTimeout -> onElectionTimeout()
                         is EngineCommand.HeartbeatTick   -> onHeartbeat()
+                        is EngineCommand.LeaseExpired    -> { leaderAlive = false }
                         is EngineCommand.Compact         -> onCompact()
                         is EngineCommand.CommitCut       -> onCommitCut(c)
                         is EngineCommand.Close           -> { cmd.close(); break }
@@ -332,7 +333,7 @@ internal class RaftEngine(
         leaderLeaseJob?.cancel()
         leaderLeaseJob = scope.launch {
             delay(raftConfig.electionTimeoutMin.inWholeMilliseconds)
-            leaderAlive = false
+            cmd.trySend(EngineCommand.LeaseExpired)
         }
     }
 
