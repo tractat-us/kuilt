@@ -145,6 +145,7 @@ internal class RaftEngine(
 
     // Pre-vote probe state — set while a pre-vote round is in flight, null otherwise
     private var preVoteTerm: Long? = null
+    private var preVoteRound: Long = 0L
     private val preVotesGranted = mutableSetOf<NodeId>()
 
     // Leader state
@@ -350,13 +351,14 @@ internal class RaftEngine(
         _role.value = followerRole
         val proposed = currentTerm + 1
         preVoteTerm = proposed
+        preVoteRound++
         preVotesGranted.clear()
         preVotesGranted += transport.selfId
         resetElectionTimeout()
         // Single-voter: self pre-vote already satisfies quorum — skip the probe round.
         if (preVotesGranted.size >= clusterConfig.quorumSize) { startRealElection(); return }
         emitTrace(RaftTraceEvent.PreVoteStarted(nextClock(), transport.selfId, proposed))
-        val pv = RaftMessage.PreVote(proposed, transport.selfId, lastLogIndex, lastLogTerm)
+        val pv = RaftMessage.PreVote(proposed, transport.selfId, lastLogIndex, lastLogTerm, preVoteRound)
         otherVoters.forEach { send(it, pv) }
     }
 
@@ -443,12 +445,12 @@ internal class RaftEngine(
             }
             emitTrace(RaftTraceEvent.PreVoteDenied(nextClock(), transport.selfId, from, m.term, reason))
         }
-        send(from, RaftMessage.PreVoteResponse(currentTerm, grant, m.term))
+        send(from, RaftMessage.PreVoteResponse(currentTerm, grant, m.term, m.round))
     }
 
     private suspend fun onPreVoteResponse(from: NodeId, m: RaftMessage.PreVoteResponse) {
         if (m.term > currentTerm) { stepDown(m.term, StepDownReason.HigherTermObserved); return }
-        if (preVoteTerm == null || m.proposedTerm != preVoteTerm) return
+        if (preVoteTerm == null || m.proposedTerm != preVoteTerm || m.round != preVoteRound) return
         if (m.voteGranted) {
             preVotesGranted += from
             if (preVotesGranted.size >= clusterConfig.quorumSize) startRealElection()

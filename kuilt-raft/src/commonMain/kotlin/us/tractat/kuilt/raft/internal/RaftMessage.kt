@@ -68,6 +68,11 @@ internal sealed interface RaftMessage {
      * PreVote phase-1 request: a candidate asks whether peers would vote for it in a hypothetical
      * election at [term] (= currentTerm + 1), without actually incrementing its own term. This
      * prevents term inflation from isolated nodes triggering spurious elections.
+     *
+     * [round] is a monotonically-increasing nonce incremented by the candidate on every probe
+     * cycle. Because pre-vote deliberately does NOT bump [term], the same [term] value recurs on
+     * every timeout. Without [round], a delayed [PreVoteResponse] from a previous probe cycle is
+     * indistinguishable from one in the current cycle and can prematurely satisfy a quorum.
      */
     @Serializable
     data class PreVote(
@@ -75,16 +80,18 @@ internal sealed interface RaftMessage {
         val candidateId: NodeId,
         val lastLogIndex: Long,
         val lastLogTerm: Long,
+        val round: Long,
     ) : RaftMessage
 
     /**
-     * Response to [PreVote]. [proposedTerm] echoes the [PreVote.term] so the candidate can
-     * correlate responses to the correct pre-election round.
+     * Response to [PreVote]. [proposedTerm] echoes the [PreVote.term] and [round] echoes the
+     * [PreVote.round] so the candidate can reject responses from a previous probe cycle.
      */
     @Serializable
     data class PreVoteResponse(
         val term: Long,
         val voteGranted: Boolean,
         val proposedTerm: Long,
+        val round: Long,
     ) : RaftMessage
 }

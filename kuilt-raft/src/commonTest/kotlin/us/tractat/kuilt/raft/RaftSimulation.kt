@@ -103,9 +103,16 @@ class RaftSimulation(
      * bypassing the normal partition/drop rules.
      */
     @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
-    suspend fun deliverPreVote(to: NodeId, from: NodeId, term: Long, lastLogIndex: Long, lastLogTerm: Long) {
+    suspend fun deliverPreVote(
+        to: NodeId,
+        from: NodeId,
+        term: Long,
+        lastLogIndex: Long,
+        lastLogTerm: Long,
+        round: Long = 1L,
+    ) {
         val bytes = Cbor.encodeToByteArray<RaftMessage>(
-            RaftMessage.PreVote(term, from, lastLogIndex, lastLogTerm)
+            RaftMessage.PreVote(term, from, lastLogIndex, lastLogTerm, round)
         )
         network.deliver(from = from, to = to, bytes = bytes)
     }
