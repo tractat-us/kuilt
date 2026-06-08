@@ -154,6 +154,12 @@ public enum class StepDownReason {
 
     /** A valid AppendEntries arrived from a legitimate leader, resetting the election timer. */
     AppendEntriesFromLeader,
+
+    /**
+     * CheckQuorum: the leader did not hear from a voter-quorum within an election-timeout window.
+     * The node reverts to follower **at the same term** — no term bump.
+     */
+    LostQuorum,
 }
 
 /** Why a candidate's RequestVote or PreVote was denied by the responding node. */
