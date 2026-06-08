@@ -1,11 +1,9 @@
 @file:OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 package us.tractat.kuilt.raft
 
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
-import kotlinx.coroutines.withTimeout
 import kotlin.test.Test
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.seconds
@@ -37,7 +35,7 @@ class PreVoteTest {
         val leader = awaitLeader(sim)
         val leaderId = sim.nodes.entries.first { it.value === leader }.key
         val follower = sim.nodeIds.first { it != leaderId }
-        withTimeout(2.seconds) { sim.nodes.getValue(follower).commitIndex.first { it >= 1L } }
+        sim.awaitCommit(1L, on = setOf(follower))   // it has heard the leader → leaderAlive
         val trace = mutableListOf<RaftTraceEvent>()
         backgroundScope.launch { sim.nodes.getValue(follower).trace.collect { trace += it } }
         sim.deliverPreVote(to = follower, from = leaderId, term = 99L, lastLogIndex = 99L, lastLogTerm = 99L)
