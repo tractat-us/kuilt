@@ -103,9 +103,16 @@ class RaftSimulation(
      * bypassing the normal partition/drop rules.
      */
     @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
-    suspend fun deliverPreVote(to: NodeId, from: NodeId, term: Long, lastLogIndex: Long, lastLogTerm: Long) {
+    suspend fun deliverPreVote(
+        to: NodeId,
+        from: NodeId,
+        term: Long,
+        lastLogIndex: Long,
+        lastLogTerm: Long,
+        round: Long = 1L,
+    ) {
         val bytes = Cbor.encodeToByteArray<RaftMessage>(
-            RaftMessage.PreVote(term, from, lastLogIndex, lastLogTerm)
+            RaftMessage.PreVote(term, from, lastLogIndex, lastLogTerm, round)
         )
         network.deliver(from = from, to = to, bytes = bytes)
     }
@@ -118,6 +125,26 @@ class RaftSimulation(
     suspend fun deliverRequestVote(to: NodeId, from: NodeId, term: Long, lastLogIndex: Long, lastLogTerm: Long) {
         val bytes = Cbor.encodeToByteArray<RaftMessage>(
             RaftMessage.RequestVote(term, from, lastLogIndex, lastLogTerm)
+        )
+        network.deliver(from = from, to = to, bytes = bytes)
+    }
+
+    /**
+     * Encode and inject a [RaftMessage.PreVoteResponse] directly into [to]'s incoming channel,
+     * bypassing the normal partition/drop rules. [round] is the pre-vote round nonce; use a stale
+     * value to simulate a delayed response from a previous round.
+     */
+    @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
+    suspend fun deliverPreVoteResponse(
+        to: NodeId,
+        from: NodeId,
+        term: Long,
+        voteGranted: Boolean,
+        proposedTerm: Long,
+        round: Long,
+    ) {
+        val bytes = Cbor.encodeToByteArray<RaftMessage>(
+            RaftMessage.PreVoteResponse(term, voteGranted, proposedTerm, round)
         )
         network.deliver(from = from, to = to, bytes = bytes)
     }

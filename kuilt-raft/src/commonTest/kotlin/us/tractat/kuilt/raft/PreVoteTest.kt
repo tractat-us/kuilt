@@ -107,4 +107,36 @@ class PreVoteTest {
         val leader = awaitLeader(sim)
         assertTrue(leader.role.value is RaftRole.Leader)
     }
+
+    // A PreVoteResponse carrying a stale round nonce (from a previous probe cycle) must NOT
+    // count toward the current round's quorum. Without the round nonce, a delayed grant from
+    // round N is indistinguishable from one in round N+1 and can trigger a spurious real election.
+    @Test
+    fun stalePreVoteResponseFromPreviousRoundIsRejected() = runTest(UnconfinedTestDispatcher(), timeout = 5.seconds) {
+        val v1 = NodeId("v1"); val v2 = NodeId("v2"); val v3 = NodeId("v3")
+        val sim = raftSim(this, backgroundScope, n = 3)
+        // Isolate v1 so its pre-vote probes never reach quorum — it can only collect its own self-vote.
+        sim.partitionOff(v1)
+        val trace = mutableListOf<RaftTraceEvent>()
+        backgroundScope.launch { sim.nodes.getValue(v1).trace.collect { trace += it } }
+        // Wait for v1 to fire two election timeouts, advancing its preVoteRound from 0 to 2.
+        // Round 1: first ElectionTimeout → preVoteRound = 1. Round 2: second timeout → preVoteRound = 2.
+        kotlinx.coroutines.delay(50)   // well past two election cycles (electionTimeoutMax = 10ms)
+        // v1 is now in round ≥ 2. Inject a PreVoteResponse that carries round=1 (stale).
+        // voteGranted=true from v2 with term=0 (pre-votes don't bump term), proposedTerm = currentTerm+1.
+        // The injected round is 1, but v1 is now in round 2 — this must be discarded.
+        sim.deliverPreVoteResponse(
+            to = v1,
+            from = v2,
+            term = 0L,
+            voteGranted = true,
+            proposedTerm = 1L,
+            round = 1L,
+        )
+        sim.settle()
+        assertTrue(
+            trace.none { it is RaftTraceEvent.Timeout },
+            "stale round pre-vote response must not trigger a real election (Timeout): $trace",
+        )
+    }
 }
