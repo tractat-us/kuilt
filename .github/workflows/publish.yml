@@ -94,5 +94,19 @@ jobs:
           STAGED=build/staged-maven-repo
           TOTAL=$(find "$STAGED" -type f | wc -l)
           echo "=== publishing version $PUBLISH_VERSION ($TOTAL files) ==="
-          time aws --endpoint-url=https://fly.storage.tigris.dev s3 sync \
-            "$STAGED/" s3://buildcache/maven/ --no-progress
+          # `aws s3 sync` is idempotent — it transfers only files missing/changed at the
+          # destination — so retry on transient Tigris errors (e.g. a spurious NoSuchBucket
+          # under parallel PUTs, which once partially published a release). Each retry uploads
+          # only what the previous pass missed, so it's cheap and converges.
+          attempt=1
+          max=4
+          until time aws --endpoint-url=https://fly.storage.tigris.dev s3 sync \
+                "$STAGED/" s3://buildcache/maven/ --no-progress; do
+            if [ "$attempt" -ge "$max" ]; then
+              echo "::error::aws s3 sync failed after $max attempts" >&2
+              exit 1
+            fi
+            echo "::warning::aws s3 sync attempt $attempt failed; retrying in $((attempt * 5))s" >&2
+            sleep $((attempt * 5))
+            attempt=$((attempt + 1))
+          done
