@@ -1,5 +1,7 @@
 package us.tractat.kuilt.raft
 
+import kotlinx.serialization.Serializable
+
 /**
  * Describes the membership of a Raft cluster.
  *
@@ -23,6 +25,7 @@ package us.tractat.kuilt.raft
  * @param voters The set of nodes that vote and count toward quorum.
  * @param learners Non-voting nodes that receive replication. Defaults to empty.
  */
+@Serializable
 public data class ClusterConfig(
     val voters: Set<NodeId>,
     val learners: Set<NodeId> = emptySet(),

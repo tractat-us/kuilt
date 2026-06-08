@@ -114,6 +114,24 @@ public sealed interface RaftTraceEvent {
         val done: Boolean,
     ) : RaftTraceEvent
 
+    /**
+     * A config entry was appended to the log (adopted on append, per §6).
+     * Emitted by both the leader (on [RaftNode.changeMembership]) and followers
+     * (on receiving the AppendEntries carrying the config entry). This is the
+     * primary assertion point for membership-change tests — config and term are
+     * private engine state, so tests observe transitions through this event.
+     *
+     * [old] is the previous effective configuration — the bootstrap config on the first
+     * ever change. [new] is the newly adopted configuration.
+     */
+    public data class ConfigChange(
+        override val clock: Long,
+        val node: NodeId,
+        val index: Long,
+        val old: ClusterConfig?,
+        val new: ClusterConfig,
+    ) : RaftTraceEvent
+
     /** A follower finished reassembling and installed a snapshot. */
     public data class InstallSnapshotAccepted(
         override val clock: Long,
@@ -160,6 +178,13 @@ public enum class StepDownReason {
      * The node reverts to follower **at the same term** — no term bump.
      */
     LostQuorum,
+
+    /**
+     * The leader stepped down after C_new committed and the leader itself is not a member of
+     * C_new.voters (§6.4.1 — the removed-leader case). Used in PR B; added now so the enum
+     * is stable across the PR stack.
+     */
+    RemovedFromConfig,
 }
 
 /** Why a candidate's RequestVote or PreVote was denied by the responding node. */

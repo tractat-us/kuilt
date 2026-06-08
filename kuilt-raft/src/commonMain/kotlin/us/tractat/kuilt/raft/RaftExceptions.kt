@@ -18,3 +18,15 @@ public class NotLeaderException(message: String = "not the current leader") : Ex
  * should either retry (idempotent commands) or use a deduplication key.
  */
 public class LeadershipLostException(message: String = "leadership lost while proposal was in flight") : Exception(message)
+
+/**
+ * Thrown by [RaftNode.changeMembership] when a membership change is already in progress
+ * (a config entry is uncommitted).
+ *
+ * The one-change-at-a-time rule is a liveness guard: it keeps the membership state
+ * machine trivial and prevents multiple joint configs from stacking. The caller should
+ * wait for the in-flight change to complete (or fail) before retrying.
+ */
+public class MembershipChangeInProgressException(
+    message: String = "a membership change is already in progress — wait for it to commit before starting another",
+) : Exception(message)

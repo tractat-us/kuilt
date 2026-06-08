@@ -16,6 +16,8 @@ import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
+private fun assertAll(vararg assertions: () -> Unit) = assertions.forEach { it() }
+
 // ── Node IDs ─────────────────────────────────────────────────────────────────
 
 private val v1 = NodeId("v1")
@@ -112,12 +114,57 @@ class MembershipTest {
             "learner received an entry with unexpected command byte")
 
         // Commit required only voter majority: partition the learner away and confirm
-        // the voters can still commit — learner is NOT in the quorum.
+        // the voters can still commit — learner is NOT in the quorum. propose() suspends
+        // until commit, so this proves the entry committed on the 3 voters alone (quorum=2);
+        // were the learner wrongly in quorum, propose() would never return and the test
+        // would time out. Make the advance explicit rather than asserting the always-true
+        // `commitIndex > 0`.
+        val commitBeforePartition = leader.commitIndex.value
         sim.partition(setOf(learnerNode), voterSet)
-        leader.propose(byteArrayOf(0x43)) // commits on 3 voters alone (quorum=2)
-        val voterCommitIndex = leader.commitIndex.value
-        assertTrue(voterCommitIndex > 0L,
-            "voters could not commit while learner was partitioned (learner wrongly in quorum)")
+        val committedEntry = leader.propose(byteArrayOf(0x43))
+        assertAll(
+            { assertTrue(committedEntry.index > commitBeforePartition,
+                "post-partition entry index ${committedEntry.index} did not advance past pre-partition commit $commitBeforePartition") },
+            { assertTrue(leader.commitIndex.value >= committedEntry.index,
+                "entry ${committedEntry.index} did not commit on the voter majority while the learner was partitioned (learner wrongly in quorum)") },
+        )
+    }
+
+    /**
+     * Adopt-on-append is observable on followers, not just the leader: a follower that
+     * receives the config entry via AppendEntries recomputes its membership and emits its
+     * own [RaftTraceEvent.ConfigChange]. This is the contract the rest of the stack relies
+     * on to observe follower-side membership transitions (config/term are private), so it is
+     * pinned here.
+     */
+    @Test
+    fun addLearner_followerAlsoEmitsConfigChange() = raftRunTest {
+        val sim = simWithVotersAndBootstrappedLearner()
+        val leader = awaitLeader(sim)
+        val leaderId = sim.nodes.entries.first { it.value === leader }.key
+
+        // Pick a voter that is NOT the leader and subscribe to its trace before the change.
+        val followerId = voterSet.first { it != leaderId }
+        val follower = sim.nodes.getValue(followerId)
+        val followerConfigChanges = mutableListOf<RaftTraceEvent.ConfigChange>()
+        backgroundScope.launch {
+            follower.trace.filterIsInstance<RaftTraceEvent.ConfigChange>().collect { followerConfigChanges += it }
+        }
+        delay(1) // let the collector subscribe before the change
+
+        val targetConfig = ClusterConfig(voters = voterSet, learners = setOf(learnerNode))
+        leader.changeMembership(targetConfig)
+        // Let the config entry replicate to the follower and be adopted on append.
+        sim.awaitCommit(leader.commitIndex.value, on = voterSet)
+
+        val adopted = followerConfigChanges.firstOrNull { it.new.learners == targetConfig.learners }
+        assertNotNull(adopted,
+            "follower $followerId never emitted a ConfigChange for the adopted config (adopt-on-append not observable)")
+        assertAll(
+            { assertEquals(followerId, adopted.node) },
+            { assertEquals(targetConfig.voters, adopted.new.voters) },
+            { assertEquals(targetConfig.learners, adopted.new.learners) },
+        )
     }
 
     /**

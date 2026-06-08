@@ -203,6 +203,36 @@ public interface RaftNode {
     public suspend fun propose(command: ByteArray): LogEntry
 
     /**
+     * Requests a cluster membership change to [target], suspending until the
+     * change commits as C_new, then returning [target].
+     *
+     * Only the leader may call this. On non-leaders the default implementation
+     * throws [NotLeaderException] immediately, so [FakeRaftNode] in
+     * `:kuilt-raft-test` requires no change — it inherits this default.
+     *
+     * ## Two change classes
+     *
+     * If [target].voters equals the current voter set (a **learner-set-only** change),
+     * a single `Simple(target)` config entry is appended — quorum is unchanged.
+     * If the voter set differs (a **voter-set change**), the transition goes through
+     * §6 joint consensus (PR B — voter-set changes are rejected with
+     * [IllegalArgumentException] until PR B implements joint consensus).
+     *
+     * ## Failure modes
+     *
+     * - [NotLeaderException] — this node is not the leader.
+     * - [MembershipChangeInProgressException] — a config entry is already uncommitted;
+     *   only one change may be in flight at a time.
+     * - [IllegalArgumentException] — [target].voters is empty, or (in PR A) the voter
+     *   set differs from the current voter set.
+     * - [LeadershipLostException] — leadership was lost mid-transition; the change may
+     *   or may not have committed on some nodes.
+     */
+    public suspend fun changeMembership(target: ClusterConfig): ClusterConfig {
+        throw NotLeaderException("changeMembership: not the current leader")
+    }
+
+    /**
      * Suspends until this node is observed in the [RaftRole.Leader] role.
      *
      * Convenience over polling `role.value`. Returns immediately if already leader.
