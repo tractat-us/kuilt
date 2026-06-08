@@ -132,10 +132,15 @@ jobs:
         uses: android-actions/setup-android@v4
 
       - name: Build and test all targets
-        # Cap workers at the runner's CPU count (4). gradle.properties sets
-        # workers.max=16 for publish (upload-bound), but that causes OOM on CI
-        # when multiple Kotlin daemons + wasmJs browser run concurrently.
-        run: ./gradlew build --max-workers=4
+        # Cap workers at 2 (below the runner's 4 CPUs). gradle.properties sets
+        # workers.max=16 for publish (upload-bound). On CI, concurrent Kotlin
+        # daemons + JVM test forks + wasmJs-browser Chrome OOM the 16 GB runner —
+        # worst on COLD builds (e.g. a build-logic change busts every module's
+        # cache), where compile-daemon heaps are still resident when the test
+        # phase forks. 4 was enough for cache-hit builds but still OOMed cold
+        # builds (killed ~14 min into the test phase); 2 keeps peak memory in
+        # budget. Cache-hit builds barely notice (little left to do).
+        run: ./gradlew build --max-workers=2
 
       - name: Upload test reports
         if: always()
