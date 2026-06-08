@@ -112,6 +112,35 @@ incoming `RequestVote` for a higher term without adopting that term, preventing 
 re-joining partitioned node from deposing a healthy leader the moment it regains
 connectivity.
 
+## Session metadata convergence
+
+`kuilt-session` and `kuilt-crdt` compose to provide live-converging session
+metadata without a separate replication protocol. The three-layer chain is:
+
+1. **`MuxSeam`** (`kuilt-core`) — N-way Seam multiplexer; multiple logical
+   channels share one physical transport collection.
+2. **`Room.channel(id)`** (`kuilt-session`) — a `Seam` view scoped to admitted
+   members only. Its `peers` is the live admitted roster, so a replicator
+   running over it never sends state to unadmitted peers.
+3. **`SeamReplicator<LWWMap<PeerId, String>>`** (`kuilt-crdt`) — runs over
+   `room.channel("member-metadata")` to converge display names live across
+   all admitted members with no explicit `merge()` call.
+
+```kotlin
+val rep = SeamReplicator<LWWMap<PeerId, String>>(
+    replica = ReplicaId(room.selfId.value),
+    seam = room.channel("member-metadata"),
+    initial = LWWMap.empty(),
+    messageSerializer = ReplicatorMessage.serializer(
+        LWWMap.serializer(PeerId.serializer(), String.serializer())
+    ),
+    scope = scope,
+)
+// rep.state is the live-converging display-name map.
+```
+
+`MemberMetadata` remains a pure value type; the replication wiring sits above it.
+
 ## What kuilt is *not* responsible for
 
 The `:kuilt-core` contract deliberately stops at moving bytes between connected
