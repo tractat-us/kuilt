@@ -132,10 +132,15 @@ jobs:
         uses: android-actions/setup-android@v4
 
       - name: Build and test all targets
-        # Cap workers at the runner's CPU count (4). gradle.properties sets
-        # workers.max=16 for publish (upload-bound), but that causes OOM on CI
-        # when multiple Kotlin daemons + wasmJs browser run concurrently.
-        run: ./gradlew build --max-workers=4
+        # Cap workers at 2 (below the runner's 4 CPUs). gradle.properties sets
+        # workers.max=16 for publish (upload-bound). On CI, concurrent Kotlin
+        # daemons + JVM test forks + wasmJs-browser Chrome OOM the 16 GB runner —
+        # worst on COLD builds (e.g. a build-logic change busts every module's
+        # cache), where compile-daemon heaps are still resident when the test
+        # phase forks. 4 was enough for cache-hit builds but still OOMed cold
+        # builds (killed ~14 min into the test phase); 2 keeps peak memory in
+        # budget. Cache-hit builds barely notice (little left to do).
+        run: ./gradlew build --max-workers=2
 
       - name: Upload test reports
         if: always()
@@ -146,11 +151,47 @@ jobs:
             **/build/reports/tests/
             **/build/test-results/
 
+  # ── detekt ───────────────────────────────────────────────────────────────
+  # Static analysis (Kotlin null-safety rules). Runs as its OWN job, parallel to
+  # build, so detekt's type-resolution analysis doesn't share a runner — and its
+  # memory — with the build's wasmJs-browser + test tasks (that concurrency OOMs
+  # the runner; see the --max-workers=4 note above). Skipped on docs-only.
+  detekt:
+    needs: detect
+    if: needs.detect.outputs.docs-only != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      S3_BUILD_CACHE_ACCESS_KEY_ID: ${{ secrets.S3_BUILD_CACHE_ACCESS_KEY_ID }}
+      S3_BUILD_CACHE_SECRET_KEY: ${{ secrets.S3_BUILD_CACHE_SECRET_KEY }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v5
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          gradle-version: wrapper
+          cache-read-only: false
+
+      # detekt's Android-library configuration needs the SDK; it analyzes only
+      # commonMain + jvmMain, so no Kotlin/Native toolchain is required.
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v4
+
+      - name: Run detekt (null-safety rules)
+        run: ./gradlew detektAll --max-workers=4
+
   # ── ci-required ────────────────────────────────────────────────────────────
   # The SOLE required status check. Aggregates detect + build. Uses
   # if: !cancelled() so it still runs when build is skipped (docs-only path).
   ci-required:
-    needs: [detect, build]
+    needs: [detect, build, detekt]
     if: |
       !cancelled() &&
       (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
@@ -160,12 +201,17 @@ jobs:
         run: |
           DETECT="${{ needs.detect.result }}"
           BUILD="${{ needs.build.result }}"
+          DETEKT="${{ needs.detekt.result }}"
           echo "detect: $DETECT"
           echo "build:  $BUILD"
+          echo "detekt: $DETEKT"
           if [ "$DETECT" != "success" ]; then
             echo "::error::detect job did not succeed (result: $DETECT)."; exit 1
           fi
           if [ "$BUILD" = "failure" ] || [ "$BUILD" = "cancelled" ]; then
             echo "::error::build job $BUILD."; exit 1
           fi
-          echo "All gates green (build: $BUILD)."
+          if [ "$DETEKT" = "failure" ] || [ "$DETEKT" = "cancelled" ]; then
+            echo "::error::detekt job $DETEKT."; exit 1
+          fi
+          echo "All gates green (build: $BUILD, detekt: $DETEKT)."

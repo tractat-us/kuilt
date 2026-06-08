@@ -45,6 +45,36 @@ android {
     defaultConfig { minSdk = libs.versions.android.minSdk.get().toInt() }
 }
 
+apply(plugin = "io.gitlab.arturbosch.detekt")
+
+configure<io.gitlab.arturbosch.detekt.extensions.DetektExtension> {
+    config.setFrom(rootProject.files("config/detekt/detekt.yml"))
+    buildUponDefaultConfig = false
+    allRules = false
+}
+
+// In KMP projects detekt generates per-sourceset tasks (detektMetadataCommonMain,
+// detektJvmMain, …); the plain `detekt` lifecycle task is NO-SOURCE (no default
+// JVM source dirs). The detekt plugin wires `check -> detekt`, so we must NOT
+// hang the heavy type-resolution sourceset tasks off `detekt` — that would drag
+// them into `./gradlew build`, where running them concurrently with the wasmJs-
+// browser + test tasks OOMs the CI runner (same constraint behind --max-workers=4
+// in ci.yml). Instead expose them via a dedicated `detektAll` task that CI runs
+// as its own parallel job, isolated from the build's memory footprint.
+afterEvaluate {
+    val perSourceSet = listOf("detektMetadataCommonMain", "detektJvmMain")
+        .mapNotNull { tasks.findByName(it) }
+    tasks.register("detektAll") {
+        group = "verification"
+        description = "Runs detekt (commonMain + jvmMain, with type resolution). Not wired into check — CI runs it as a separate job to avoid OOM."
+        dependsOn(perSourceSet)
+    }
+    val detektBaselineLifecycle = tasks.findByName("detektBaseline") ?: return@afterEvaluate
+    listOf("detektBaselineMetadataCommonMain", "detektBaselineJvmMain").forEach { name ->
+        tasks.findByName(name)?.let { detektBaselineLifecycle.dependsOn(it) }
+    }
+}
+
 // Serialize wasmJsBrowserTest across the whole build. `registerIfAbsent` makes
 // the shared service idempotent across modules — every module registers, but
 // Gradle keeps one instance, so its `maxParallelUsages = 1` becomes a build-wide

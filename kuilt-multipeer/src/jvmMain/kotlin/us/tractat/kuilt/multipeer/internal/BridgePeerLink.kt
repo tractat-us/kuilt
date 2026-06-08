@@ -52,15 +52,17 @@ internal class BridgePeerLink(
     private var closing: Boolean = false
 
     // Strong refs so JNA trampolines aren't GC'd before the K/N side
-    // finishes pumping. Cleared in close().
-    private var dataCallback: MultipeerNativeLib.DataCallback? =
+    // finishes pumping. Held for this link's whole lifetime — they outlive
+    // mc_session_close (after which native never calls back), then fall away
+    // with the link itself, so they can never be collected while still in use.
+    private val dataCallback: MultipeerNativeLib.DataCallback =
         MultipeerNativeLib.DataCallback { peerId, data, len ->
             val bytes = if (len > 0) data.getByteArray(0, len) else ByteArray(0)
             val frame = Swatch(payload = bytes, sender = PeerId(peerId))
             incomingChannel.trySend(frame)
         }
 
-    private var peerStateCallback: MultipeerNativeLib.PeerStateCallback? =
+    private val peerStateCallback: MultipeerNativeLib.PeerStateCallback =
         MultipeerNativeLib.PeerStateCallback { peerId, isConnected ->
             val peer = PeerId(peerId)
             if (peer == selfId) return@PeerStateCallback
@@ -80,8 +82,8 @@ internal class BridgePeerLink(
         }
 
     init {
-        nativeLib.mc_session_set_data_callback(sessionHandle, dataCallback!!)
-        nativeLib.mc_session_set_peer_state_callback(sessionHandle, peerStateCallback!!)
+        nativeLib.mc_session_set_data_callback(sessionHandle, dataCallback)
+        nativeLib.mc_session_set_peer_state_callback(sessionHandle, peerStateCallback)
     }
 
     override suspend fun broadcast(payload: ByteArray) {
@@ -114,8 +116,5 @@ internal class BridgePeerLink(
         _state.value = SeamState.Torn(reason)
         incomingChannel.close()
         nativeLib.mc_session_close(sessionHandle)
-        // Now safe to drop the trampolines — the K/N pumps are cancelled.
-        dataCallback = null
-        peerStateCallback = null
     }
 }
