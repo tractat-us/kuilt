@@ -63,4 +63,28 @@ internal sealed interface RaftMessage {
         val term: Long,
         val nextOffset: Long,
     ) : RaftMessage
+
+    /**
+     * PreVote phase-1 request: a candidate asks whether peers would vote for it in a hypothetical
+     * election at [term] (= currentTerm + 1), without actually incrementing its own term. This
+     * prevents term inflation from isolated nodes triggering spurious elections.
+     */
+    @Serializable
+    data class PreVote(
+        val term: Long,
+        val candidateId: NodeId,
+        val lastLogIndex: Long,
+        val lastLogTerm: Long,
+    ) : RaftMessage
+
+    /**
+     * Response to [PreVote]. [proposedTerm] echoes the [PreVote.term] so the candidate can
+     * correlate responses to the correct pre-election round.
+     */
+    @Serializable
+    data class PreVoteResponse(
+        val term: Long,
+        val voteGranted: Boolean,
+        val proposedTerm: Long,
+    ) : RaftMessage
 }

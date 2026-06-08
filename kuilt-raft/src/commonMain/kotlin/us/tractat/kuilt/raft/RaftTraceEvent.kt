@@ -121,6 +121,30 @@ public sealed interface RaftTraceEvent {
         val to: NodeId,
         val lastIncludedIndex: Long,
     ) : RaftTraceEvent
+
+    /** Pre-vote phase started: candidate broadcasts hypothetical-term requests. */
+    public data class PreVoteStarted(
+        override val clock: Long,
+        val node: NodeId,
+        val proposedTerm: Long,
+    ) : RaftTraceEvent
+
+    /** Node granted a pre-vote to a candidate. */
+    public data class PreVoteGranted(
+        override val clock: Long,
+        val node: NodeId,
+        val to: NodeId,
+        val proposedTerm: Long,
+    ) : RaftTraceEvent
+
+    /** Node denied a pre-vote to a candidate. */
+    public data class PreVoteDenied(
+        override val clock: Long,
+        val node: NodeId,
+        val to: NodeId,
+        val proposedTerm: Long,
+        val reason: DenyReason,
+    ) : RaftTraceEvent
 }
 
 /** Why a node stepped down from [RaftRole.Leader] or [RaftRole.Candidate] to [RaftRole.Follower]. */
@@ -132,7 +156,7 @@ public enum class StepDownReason {
     AppendEntriesFromLeader,
 }
 
-/** Why a candidate's RequestVote was denied by the responding node. */
+/** Why a candidate's RequestVote or PreVote was denied by the responding node. */
 public enum class DenyReason {
     /** The candidate's term is lower than the responder's current term. */
     StaleTerm,
@@ -142,4 +166,7 @@ public enum class DenyReason {
 
     /** The candidate's log is less up-to-date than the responder's (Raft §5.4.1). */
     LogNotUpToDate,
+
+    /** The responder recently heard from a leader and considers it alive. */
+    LeaderAlive,
 }

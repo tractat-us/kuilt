@@ -42,4 +42,9 @@ class InMemoryRaftNetwork(
 
     fun heal() { dropped.clear() }
     fun dropLink(from: NodeId, to: NodeId) { dropped += from to to }
+
+    /** Inject [bytes] from [from] directly into [to]'s channel, bypassing all partition/drop rules. */
+    suspend fun deliver(from: NodeId, to: NodeId, bytes: ByteArray) {
+        channels[to]?.send(RaftEnvelope(from, bytes))
+    }
 }

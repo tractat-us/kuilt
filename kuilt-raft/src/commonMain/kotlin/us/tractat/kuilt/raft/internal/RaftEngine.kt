@@ -161,6 +161,11 @@ internal class RaftEngine(
     private var electionJob: Job? = null
     private var heartbeatJob: Job? = null
 
+    // Leader-lease state: true while this node has heard from a live leader recently enough
+    // that triggering an election would be disruptive. Cleared on stepDown and after electionTimeoutMin.
+    private var leaderAlive = false
+    private var leaderLeaseJob: Job? = null
+
     // ── Metric instrumentation state (actor-only) ─────────────────────────────
 
     /** Start mark for each in-flight propose, keyed by log index. */
@@ -318,6 +323,19 @@ internal class RaftEngine(
         }
     }
 
+    /**
+     * Mark the leader as alive and start a lease timer. When the timer fires the lease expires and
+     * [leaderAlive] is cleared, allowing pre-votes to be granted again.
+     */
+    private fun armLeaderLease() {
+        leaderAlive = true
+        leaderLeaseJob?.cancel()
+        leaderLeaseJob = scope.launch {
+            delay(raftConfig.electionTimeoutMin.inWholeMilliseconds)
+            leaderAlive = false
+        }
+    }
+
     // ── Election ──────────────────────────────────────────────────────────────
 
     private suspend fun onElectionTimeout() {
@@ -376,6 +394,31 @@ internal class RaftEngine(
         }
     }
 
+    /**
+     * Respond to a pre-vote request: grant iff the proposed term is higher than ours, the
+     * candidate's log is at least as up-to-date, and we have not heard from a live leader recently.
+     * Does NOT mutate term, votedFor, or timers — pre-vote is hypothesis-only.
+     */
+    private suspend fun onPreVote(from: NodeId, m: RaftMessage.PreVote) {
+        val logOk = isLogUpToDate(log.lastOrNull(), m.lastLogIndex, m.lastLogTerm)
+        val grant = m.term > currentTerm && logOk && !leaderAlive
+        if (grant) {
+            emitTrace(RaftTraceEvent.PreVoteGranted(nextClock(), transport.selfId, from, m.term))
+        } else {
+            val reason = when {
+                leaderAlive    -> DenyReason.LeaderAlive
+                !logOk         -> DenyReason.LogNotUpToDate
+                else           -> DenyReason.StaleTerm
+            }
+            emitTrace(RaftTraceEvent.PreVoteDenied(nextClock(), transport.selfId, from, m.term, reason))
+        }
+        send(from, RaftMessage.PreVoteResponse(currentTerm, grant, m.term))
+    }
+
+    /** No-op stub — pre-vote response tallying is implemented in Task 2. */
+    @Suppress("UNUSED_PARAMETER")
+    private suspend fun onPreVoteResponse(from: NodeId, m: RaftMessage.PreVoteResponse) { /* Task 2 */ }
+
     private suspend fun becomeLeader() {
         val elapsed = electionStartTime?.elapsedNow() ?: Duration.ZERO
         electionStartTime = null
@@ -385,6 +428,8 @@ internal class RaftEngine(
         _role.value = RaftRole.Leader
         _leader.value = transport.selfId
         electionJob?.cancel()
+        leaderAlive = true
+        leaderLeaseJob?.cancel()
         val nextIdx = lastLogIndex + 1L
         otherMembers.forEach { p ->
             nextIndex[p] = nextIdx
@@ -420,6 +465,8 @@ internal class RaftEngine(
             failPending(LeadershipLostException())
             snapshotXfer.clear()   // leader-only transfer state — abandon any in-flight snapshot sends
         }
+        leaderAlive = false
+        leaderLeaseJob?.cancel()
         // If we were a candidate, the election for the prior term implicitly timed out.
         if (_role.value is RaftRole.Candidate && electionStartTime != null) {
             emitMetric(RaftMetric.ElectionTimedOut(electionStartTerm))
@@ -546,6 +593,7 @@ internal class RaftEngine(
         _role.value = followerRole
         _leader.value = m.leaderId
         resetElectionTimeout()
+        armLeaderLease()
 
         val meta = SnapshotMeta(m.lastIncludedIndex, m.lastIncludedTerm)
         val r = if (m.offset == 0L) SnapshotReassembly(meta).also { incomingSnapshot = it } else incomingSnapshot
@@ -604,6 +652,7 @@ internal class RaftEngine(
         _role.value = followerRole
         _leader.value = m.leaderId
         resetElectionTimeout()
+        armLeaderLease()
 
         // Log consistency check.
         //
@@ -810,6 +859,8 @@ internal class RaftEngine(
         is RaftMessage.AppendEntriesResponse   -> onAppendEntriesResponse(from, m)
         is RaftMessage.InstallSnapshot         -> onInstallSnapshot(from, m)
         is RaftMessage.InstallSnapshotResponse -> onInstallSnapshotResponse(from, m)
+        is RaftMessage.PreVote                 -> onPreVote(from, m)
+        is RaftMessage.PreVoteResponse         -> onPreVoteResponse(from, m)
     }
 
     private suspend fun send(peer: NodeId, m: RaftMessage) =

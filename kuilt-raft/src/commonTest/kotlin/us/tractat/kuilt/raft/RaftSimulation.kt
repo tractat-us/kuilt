@@ -11,6 +11,10 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.yield
+import kotlinx.serialization.cbor.Cbor
+import kotlinx.serialization.encodeToByteArray
+import us.tractat.kuilt.raft.internal.RaftMessage
 import kotlin.test.assertTrue
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
@@ -93,6 +97,21 @@ class RaftSimulation(
     fun partition(a: Set<NodeId>, b: Set<NodeId>) = network.partition(a, b)
     fun heal() = network.heal()
     fun dropLink(from: NodeId, to: NodeId) = network.dropLink(from, to)
+
+    /**
+     * Encode and inject a [RaftMessage.PreVote] directly into [to]'s incoming channel,
+     * bypassing the normal partition/drop rules.
+     */
+    @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
+    suspend fun deliverPreVote(to: NodeId, from: NodeId, term: Long, lastLogIndex: Long, lastLogTerm: Long) {
+        val bytes = Cbor.encodeToByteArray<RaftMessage>(
+            RaftMessage.PreVote(term, from, lastLogIndex, lastLogTerm)
+        )
+        network.deliver(from = from, to = to, bytes = bytes)
+    }
+
+    /** Yield multiple times to let actor queues drain. */
+    suspend fun settle() = repeat(10) { yield() }
 
     // ── Bounded, dump-on-timeout await helpers ──────────────────────────────
     // Every cluster-state await in a raft test must go through one of these so a
