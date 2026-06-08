@@ -37,6 +37,11 @@ import kotlin.time.Duration.Companion.seconds
  *   when the first Resend is itself dropped and no further inbound traffic triggers
  *   re-detection. The timer is cancelled when the gap closes. In a low-traffic system
  *   this is the only mechanism that heals a gap whose first Resend was lost.
+ * @param fullStateRetryInterval how long to wait before re-sending a [ReplicatorMessage.FullState]
+ *   to a peer when the initial snapshot may have been dropped. The timer is cancelled
+ *   when any message from that peer is received, confirming it is alive and reachable.
+ * @param fullStateRetryLimit maximum number of FullState retry attempts per peer before giving up.
+ *   A value of 10 means up to 10 retries (11 total send attempts) before the timer is abandoned.
  * @param strictTestGuard When `true`, throw [IllegalStateException] at construction
  *   time if the owning [kotlinx.coroutines.CoroutineScope] contains a
  *   `kotlinx.coroutines.test.TestDispatcher`. When `false` (the default), emit a
@@ -47,6 +52,8 @@ public data class SeamReplicatorConfig(
     val evictionAfter: Duration = 5.minutes,
     val antiEntropyInterval: Duration = 1.minutes,
     val resendRetryInterval: Duration = 30.seconds,
+    val fullStateRetryInterval: Duration = 30.seconds,
+    val fullStateRetryLimit: Int = 10,
     val strictTestGuard: Boolean = false,
     /**
      * Suppresses the TestDispatcher warning for tests that intentionally run a real
@@ -163,6 +170,14 @@ public class SeamReplicator<S : Quilted<S>>(
      */
     private val pendingResendJobs: MutableMap<ReplicaId, Job> = mutableMapOf()
 
+    /**
+     * Pending FullState retry jobs per peer: when a [ReplicatorMessage.FullState] is sent
+     * to a new peer, a [Job] is scheduled to re-send it after
+     * [SeamReplicatorConfig.fullStateRetryInterval] in case the initial snapshot was dropped.
+     * The job is cancelled when any message from that peer arrives, confirming reachability.
+     */
+    private val pendingFullStateJobs: MutableMap<PeerId, Job> = mutableMapOf()
+
     /** Exposed internally so tests can observe GC behaviour. */
     internal val pendingDeltasForTest: Map<Long, S> get() = pendingDeltas
 
@@ -217,6 +232,7 @@ public class SeamReplicator<S : Quilted<S>>(
             knownPeers.remove(peer)
             ackedThrough.remove(peer)
             lastSeenAt.remove(peer)
+            cancelFullStateRetry(peer)
         }
     }
 
@@ -241,9 +257,32 @@ public class SeamReplicator<S : Quilted<S>>(
         val msg = ReplicatorMessage.FullState(sender = replica, state = _state.value)
         val bytes = encode(msg)
         scope.launch { runCatching { seam.sendTo(peer, bytes) } }
+        scheduleFullStateRetry(peer, config.fullStateRetryLimit)
+    }
+
+    private fun scheduleFullStateRetry(peer: PeerId, attemptsLeft: Int) {
+        if (attemptsLeft <= 0) {
+            pendingFullStateJobs.remove(peer)
+            return
+        }
+        pendingFullStateJobs[peer]?.cancel()
+        pendingFullStateJobs[peer] = scope.launch {
+            delay(config.fullStateRetryInterval)
+            if (peer in knownPeers) {
+                val msg = ReplicatorMessage.FullState(sender = replica, state = _state.value)
+                val bytes = encode(msg)
+                runCatching { seam.sendTo(peer, bytes) }
+                scheduleFullStateRetry(peer, attemptsLeft - 1)
+            }
+        }
+    }
+
+    private fun cancelFullStateRetry(peer: PeerId) {
+        pendingFullStateJobs.remove(peer)?.cancel()
     }
 
     private fun dispatch(sender: PeerId, payload: ByteArray) {
+        cancelFullStateRetry(sender)
         val msg = runCatching { decode(payload) }.getOrNull() ?: return
         when (msg) {
             is ReplicatorMessage.Delta -> onDelta(sender, msg)

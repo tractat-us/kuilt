@@ -65,9 +65,11 @@ class SeamReplicatorFullStateRetryTest {
 
     /**
      * Scenario:
-     * 1. A hosts, B joins — all of A's unicast [sendTo] calls are blocked (FullState dropped).
-     * 2. A applies a delta — the broadcast is also blocked initially, so B has no state at all.
-     * 3. We unblock A's sendTo so the retry attempt can succeed.
+     * 1. A hosts and applies a delta before B joins, so B is a genuine late joiner.
+     * 2. B joins — A sends a FullState to B, but it is dropped (A's gating seam blocks sendTo).
+     *    B also sends A a FullState (symmetric first-contact), but A's dispatch would cancel
+     *    the retry — so we also gate B's sendTo to A so A receives nothing from B initially.
+     * 3. We unblock both gates so the retry attempt can succeed.
      * 4. Advance virtual time past [fullStateRetryInterval] — retry FullState fires → B converges.
      *
      * Without the retry timer, B stays diverged forever after the initial FullState is lost.
@@ -79,19 +81,9 @@ class SeamReplicatorFullStateRetryTest {
     ) {
         val loom = InMemoryLoom()
         val rawSeamA = loom.host(Pattern("fullstate-retry"))
-        val rawSeamB = loom.join(InMemoryTag("b"))
 
-        // Gate A's sendTo so the FullState sent when B joins is dropped
+        // Gate A's sendTo so the FullState sent to the late joiner is dropped
         val gatingSeamA = SendToGatingSeam(rawSeamA, unblockSendTo = false)
-
-        // Also block A's broadcast initially so B gets no state at all from the data path
-        var broadcastBlocked = true
-        val droppingSeamA = object : Seam by gatingSeamA {
-            override suspend fun broadcast(payload: ByteArray) {
-                if (!broadcastBlocked) gatingSeamA.broadcast(payload)
-                // else: drop silently
-            }
-        }
 
         val retryInterval = 200.milliseconds
         val config = SeamReplicatorConfig(
@@ -99,24 +91,31 @@ class SeamReplicatorFullStateRetryTest {
             expectVirtualTime = true,
         )
 
-        val repA = replicatorFor(droppingSeamA, GSet.empty<String>(), gsetSer, backgroundScope, config)
-        val repB = replicatorFor(rawSeamB, GSet.empty<String>(), gsetSer, backgroundScope, config)
+        val repA = replicatorFor(gatingSeamA, GSet.empty<String>(), gsetSer, backgroundScope, config)
 
-        // A applies a delta that B cannot receive yet (broadcast blocked, sendTo blocked)
+        // A applies state before B joins — this is what B needs to catch up on
         repA.apply(Patch(GSet.of("apple")))
+        testScheduler.advanceUntilIdle()
 
-        // Drain queued coroutines — B's initial FullState was dropped, delta broadcast was dropped
+        // B joins late — A sees B as a new peer and fires sendFullStateTo(B), which is gated
+        val rawSeamB = loom.join(InMemoryTag("b"))
+
+        // Also gate B's sendTo so B's symmetric FullState to A doesn't trigger cancelFullStateRetry
+        val gatingSeamB = SendToGatingSeam(rawSeamB, unblockSendTo = false)
+        val repB = replicatorFor(gatingSeamB, GSet.empty<String>(), gsetSer, backgroundScope, config)
+
+        // Drain: A's FullState to B is dropped; B's FullState to A is also dropped
         testScheduler.advanceUntilIdle()
 
         assertEquals(
             emptySet<String>(),
             repB.state.value.elements,
-            "B should have no state — initial FullState and delta broadcast were both dropped",
+            "B should have no state — initial FullState was dropped",
         )
 
-        // Unblock A's sendTo so the retry FullState can reach B
-        broadcastBlocked = false
+        // Unblock both gates so the retry FullState from A can reach B, and B can ack back
         gatingSeamA.unblockSendTo = true
+        gatingSeamB.unblockSendTo = true
 
         // Advance virtual time past the retry interval — the retry timer should fire
         testScheduler.advanceTimeBy(retryInterval.inWholeMilliseconds + 1L)
