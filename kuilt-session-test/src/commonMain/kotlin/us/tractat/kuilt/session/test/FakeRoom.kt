@@ -7,7 +7,11 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
+import us.tractat.kuilt.core.CloseReason
 import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.core.Seam
+import us.tractat.kuilt.core.SeamState
+import us.tractat.kuilt.core.Swatch
 import us.tractat.kuilt.session.LeaveReason
 import us.tractat.kuilt.session.Liveness
 import us.tractat.kuilt.session.Member
@@ -64,6 +68,15 @@ public class FakeRoom(
     private val _roster = MutableStateFlow(initialRoster)
     override val roster: StateFlow<Set<Member>> = _roster.asStateFlow()
 
+    /**
+     * Admitted roster as peer ids including self. Kept in sync with [_roster] by
+     * [addMember] and [removeMember]. Used by [FakeChannelSeam.peers].
+     */
+    private val _rosterPeers = MutableStateFlow(initialRoster.mapTo(mutableSetOf()) { it.id } + selfId)
+
+    /** Seam state forwarded to channel views. Use [tearSeam] to simulate transport closure. */
+    private val _seamState = MutableStateFlow<SeamState>(SeamState.Woven)
+
     private val eventsChannel = Channel<MembershipEvent>(capacity = Channel.UNLIMITED)
     override val events: Flow<MembershipEvent> = eventsChannel.receiveAsFlow()
 
@@ -76,6 +89,9 @@ public class FakeRoom(
     private val _broadcasts = mutableListOf<ByteArray>()
     private val _directed = mutableListOf<Pair<PeerId, ByteArray>>()
     private var left = false
+
+    /** Channel views keyed by channel id. Created on demand and cached via [channel]. */
+    private val channelViews = mutableMapOf<String, Seam>()
 
     /** All payloads passed to [broadcast], in call order. */
     public val broadcasts: List<ByteArray> get() = _broadcasts.toList()
@@ -126,6 +142,7 @@ public class FakeRoom(
     public suspend fun addMember(member: Member) {
         require(member.id != selfId) { "roster must not include selfId ($selfId); see Room.roster" }
         _roster.update { it + member }
+        _rosterPeers.update { it + member.id }
         eventsChannel.send(MembershipEvent.Joined(member))
     }
 
@@ -135,6 +152,7 @@ public class FakeRoom(
      */
     public suspend fun removeMember(peerId: PeerId, reason: LeaveReason = LeaveReason.Normal) {
         _roster.update { roster -> roster.filterNot { it.id == peerId }.toSet() }
+        _rosterPeers.update { it - peerId }
         eventsChannel.send(MembershipEvent.Left(peerId, reason))
     }
 
@@ -211,6 +229,34 @@ public class FakeRoom(
         _resumeToken = token
     }
 
+    // ── channel ───────────────────────────────────────────────────────────────
+
+    /**
+     * Returns a [Seam] view scoped to channel [id], backed by [_rosterPeers] for
+     * admit-gated peer visibility and a dedicated [Channel<Swatch>] for test-driver
+     * frame delivery via [FakeChannelSeam.deliver].
+     *
+     * Idempotent: the same [Seam] instance is returned for each distinct [id].
+     */
+    override fun channel(id: String): Seam = channelViews.getOrPut(id) { FakeChannelSeam(id) }
+
+    /**
+     * Transition the seam state to [SeamState.Torn]. Channel views forward [state] from
+     * [_seamState], so tearing the seam winds down any [us.tractat.kuilt.crdt.replicator.SeamReplicator]
+     * subscribed to the channel.
+     */
+    public fun tearSeam(reason: CloseReason = CloseReason.Normal) {
+        _seamState.value = SeamState.Torn(reason)
+    }
+
+    /**
+     * Returns the [FakeChannelSeam] for [id] if it has been created, or null otherwise.
+     *
+     * Useful in tests that need to deliver frames into a channel before the production
+     * code under test calls [channel].
+     */
+    public fun channelOrNull(id: String): FakeChannelSeam? = channelViews[id] as? FakeChannelSeam
+
     // ── Internal helpers ──────────────────────────────────────────────────────
 
     private fun updateLiveness(peerId: PeerId, liveness: Liveness) {
@@ -218,6 +264,36 @@ public class FakeRoom(
             roster.map { member ->
                 if (member.id == peerId) member.copy(liveness = liveness) else member
             }.toSet()
+        }
+    }
+
+    /**
+     * A [Seam] view returned by [FakeRoom.channel].
+     *
+     * - `peers` reflects the admitted roster (+ self) via [_rosterPeers].
+     * - `incoming` is driven by test-driver [deliver] calls.
+     * - `broadcast`/`sendTo` delegate to [FakeRoom.broadcast]/[sendTo] with raw
+     *   payloads (no channel framing added — the Fake is not a protocol layer).
+     * - `state` forwards [_seamState].
+     * - `close` is a no-op — the [FakeRoom] owns the lifecycle.
+     */
+    public inner class FakeChannelSeam(public val id: String) : Seam {
+        override val selfId: PeerId get() = this@FakeRoom.selfId
+        override val peers: StateFlow<Set<PeerId>> get() = _rosterPeers.asStateFlow()
+        override val state: StateFlow<SeamState> get() = _seamState.asStateFlow()
+
+        private val incomingChannel = Channel<Swatch>(capacity = Channel.UNLIMITED)
+        override val incoming: Flow<Swatch> = incomingChannel.receiveAsFlow()
+
+        override suspend fun broadcast(payload: ByteArray): Unit = this@FakeRoom.broadcast(payload)
+        override suspend fun sendTo(peer: PeerId, payload: ByteArray): Unit = this@FakeRoom.sendTo(peer, payload)
+
+        /** No-op — [FakeRoom] owns the lifecycle. */
+        override suspend fun close(reason: CloseReason): Unit = Unit
+
+        /** Push [payload] from [sender] into this channel's [incoming]. */
+        public suspend fun deliver(sender: PeerId, payload: ByteArray) {
+            incomingChannel.send(Swatch(payload = payload, sender = sender, sequence = 0L))
         }
     }
 }

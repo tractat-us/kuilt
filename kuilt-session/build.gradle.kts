@@ -13,6 +13,7 @@ kotlin {
             implementation(libs.kotlinx.serialization.cbor)
         }
         commonTest.dependencies {
+            implementation(project(":kuilt-crdt"))
             implementation(libs.kotlinx.coroutines.test)
         }
     }
