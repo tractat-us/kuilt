@@ -54,16 +54,21 @@ configure<io.gitlab.arturbosch.detekt.extensions.DetektExtension> {
 }
 
 // In KMP projects detekt generates per-sourceset tasks (detektMetadataCommonMain,
-// detektJvmMain, …) but the lifecycle `detekt` task gets NO-SOURCE because it
-// has no default JVM source dirs wired. Wire it to the two most useful targets:
-// commonMain (all platforms, no compiler needed) and jvmMain (type resolution).
+// detektJvmMain, …); the plain `detekt` lifecycle task is NO-SOURCE (no default
+// JVM source dirs). The detekt plugin wires `check -> detekt`, so we must NOT
+// hang the heavy type-resolution sourceset tasks off `detekt` — that would drag
+// them into `./gradlew build`, where running them concurrently with the wasmJs-
+// browser + test tasks OOMs the CI runner (same constraint behind --max-workers=4
+// in ci.yml). Instead expose them via a dedicated `detektAll` task that CI runs
+// as its own parallel job, isolated from the build's memory footprint.
 afterEvaluate {
-    val detektLifecycle = tasks.findByName("detekt") ?: return@afterEvaluate
-    listOf("detektMetadataCommonMain", "detektJvmMain").forEach { name ->
-        tasks.findByName(name)?.let { detektLifecycle.dependsOn(it) }
+    val perSourceSet = listOf("detektMetadataCommonMain", "detektJvmMain")
+        .mapNotNull { tasks.findByName(it) }
+    tasks.register("detektAll") {
+        group = "verification"
+        description = "Runs detekt (commonMain + jvmMain, with type resolution). Not wired into check — CI runs it as a separate job to avoid OOM."
+        dependsOn(perSourceSet)
     }
-    // Enforce on every `check`/`build` so CI's `./gradlew build` gates on it.
-    tasks.findByName("check")?.dependsOn(detektLifecycle)
     val detektBaselineLifecycle = tasks.findByName("detektBaseline") ?: return@afterEvaluate
     listOf("detektBaselineMetadataCommonMain", "detektBaselineJvmMain").forEach { name ->
         tasks.findByName(name)?.let { detektBaselineLifecycle.dependsOn(it) }

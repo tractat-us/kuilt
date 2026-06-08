@@ -146,11 +146,47 @@ jobs:
             **/build/reports/tests/
             **/build/test-results/
 
+  # ── detekt ───────────────────────────────────────────────────────────────
+  # Static analysis (Kotlin null-safety rules). Runs as its OWN job, parallel to
+  # build, so detekt's type-resolution analysis doesn't share a runner — and its
+  # memory — with the build's wasmJs-browser + test tasks (that concurrency OOMs
+  # the runner; see the --max-workers=4 note above). Skipped on docs-only.
+  detekt:
+    needs: detect
+    if: needs.detect.outputs.docs-only != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      S3_BUILD_CACHE_ACCESS_KEY_ID: ${{ secrets.S3_BUILD_CACHE_ACCESS_KEY_ID }}
+      S3_BUILD_CACHE_SECRET_KEY: ${{ secrets.S3_BUILD_CACHE_SECRET_KEY }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v5
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          gradle-version: wrapper
+          cache-read-only: false
+
+      # detekt's Android-library configuration needs the SDK; it analyzes only
+      # commonMain + jvmMain, so no Kotlin/Native toolchain is required.
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v4
+
+      - name: Run detekt (null-safety rules)
+        run: ./gradlew detektAll --max-workers=4
+
   # ── ci-required ────────────────────────────────────────────────────────────
   # The SOLE required status check. Aggregates detect + build. Uses
   # if: !cancelled() so it still runs when build is skipped (docs-only path).
   ci-required:
-    needs: [detect, build]
+    needs: [detect, build, detekt]
     if: |
       !cancelled() &&
       (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
@@ -160,12 +196,17 @@ jobs:
         run: |
           DETECT="${{ needs.detect.result }}"
           BUILD="${{ needs.build.result }}"
+          DETEKT="${{ needs.detekt.result }}"
           echo "detect: $DETECT"
           echo "build:  $BUILD"
+          echo "detekt: $DETEKT"
           if [ "$DETECT" != "success" ]; then
             echo "::error::detect job did not succeed (result: $DETECT)."; exit 1
           fi
           if [ "$BUILD" = "failure" ] || [ "$BUILD" = "cancelled" ]; then
             echo "::error::build job $BUILD."; exit 1
           fi
-          echo "All gates green (build: $BUILD)."
+          if [ "$DETEKT" = "failure" ] || [ "$DETEKT" = "cancelled" ]; then
+            echo "::error::detekt job $DETEKT."; exit 1
+          fi
+          echo "All gates green (build: $BUILD, detekt: $DETEKT)."
