@@ -60,13 +60,13 @@ class PreVoteTest {
 
         sim.partition(setOf(offline), sim.nodeIds.filter { it != offline }.toSet())
         repeat(3) { leader.propose(byteArrayOf(it.toByte())) }
-        sim.nodes.getValue(leaderId).commitIndex.first { it >= 3L }
+        sim.awaitCommit(3L, on = setOf(leaderId))
         // Wait long enough for the offline node to fire several election timeouts (electionTimeoutMax=10ms)
         // and inflate its term — the pre-vote fix gates this behind a quorum probe that will fail while
         // partitioned, keeping the term intact.
         kotlinx.coroutines.delay(100)
         sim.heal()
-        sim.nodes.getValue(offline).commitIndex.first { it >= 3L }   // it rejoins
+        sim.awaitCommit(3L, on = setOf(offline))   // it rejoins
 
         assertTrue(leaderTrace.none { it is RaftTraceEvent.BecomeFollower },
             "healthy leader must not be deposed by the partitioned node: $leaderTrace")
