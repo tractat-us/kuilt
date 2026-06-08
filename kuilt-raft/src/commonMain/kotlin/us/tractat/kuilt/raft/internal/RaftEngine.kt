@@ -348,14 +348,15 @@ internal class RaftEngine(
         // A re-timing-out Candidate (probe didn't gather quorum) drops back to follower role
         // for the probe phase so the role accurately reflects "not yet a candidate".
         _role.value = followerRole
-        preVoteTerm = currentTerm + 1
+        val proposed = currentTerm + 1
+        preVoteTerm = proposed
         preVotesGranted.clear()
         preVotesGranted += transport.selfId
         resetElectionTimeout()
         // Single-voter: self pre-vote already satisfies quorum — skip the probe round.
         if (preVotesGranted.size >= clusterConfig.quorumSize) { startRealElection(); return }
-        emitTrace(RaftTraceEvent.PreVoteStarted(nextClock(), transport.selfId, preVoteTerm!!))
-        val pv = RaftMessage.PreVote(preVoteTerm!!, transport.selfId, lastLogIndex, lastLogTerm)
+        emitTrace(RaftTraceEvent.PreVoteStarted(nextClock(), transport.selfId, proposed))
+        val pv = RaftMessage.PreVote(proposed, transport.selfId, lastLogIndex, lastLogTerm)
         otherVoters.forEach { send(it, pv) }
     }
 
