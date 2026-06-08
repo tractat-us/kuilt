@@ -292,6 +292,16 @@ internal class RaftEngine(
     /** Emit [metric] to the [onMetric] hook (no-op when null). */
     private fun emitMetric(metric: RaftMetric) = onMetric?.invoke(metric)
 
+    /**
+     * Real-sink replication trace at `debug` level via kotlin-logging. Lazy — the message lambda is
+     * only built when debug logging is enabled. Unlike [emitTrace] (the [trace] flow), it does not
+     * route through a flow, so it stays visible even when a test's virtual clock stalls — the
+     * failure mode that hid the post-install AppendEntries reject loop.
+     */
+    private inline fun debug(crossinline msg: () -> String) {
+        logger.debug { "[raft:${transport.selfId}] ${msg()}" }
+    }
+
     // ── Timers ────────────────────────────────────────────────────────────────
 
     private fun resetElectionTimeout() {
@@ -431,10 +441,14 @@ internal class RaftEngine(
     private suspend fun sendAppendEntries(peer: NodeId) {
         val ni = nextIndex[peer] ?: 1L
         // §7: the prefix the follower still needs has been compacted away — divert to InstallSnapshot.
-        if (ni <= snapshotIndex) { sendSnapshotChunk(peer, restart = true); return }
+        if (ni <= snapshotIndex) {
+            debug { "sendAppendEntries($peer): ni=$ni <= snapshotIndex=$snapshotIndex → divert to InstallSnapshot" }
+            sendSnapshotChunk(peer, restart = true); return
+        }
         val prevIndex = ni - 1L
         val prevTerm = if (prevIndex == snapshotIndex) snapshotTerm else entryAt(prevIndex)?.term ?: 0L
         val entries = log.filter { it.index >= ni }
+        debug { "sendAppendEntries($peer): ni=$ni prevIndex=$prevIndex prevTerm=$prevTerm entries=${entries.size} commit=$currentCommitIndex" }
         emitTrace(
             RaftTraceEvent.AppendEntries(
                 clock = nextClock(),
@@ -486,6 +500,7 @@ internal class RaftEngine(
         val start = xfer.nextOffset.toInt()
         val end = minOf(start + chunkBytes(), xfer.state.size)
         val done = end >= xfer.state.size
+        debug { "sendSnapshotChunk($peer): through=${xfer.meta.lastIncludedIndex} offset=$start..$end/${xfer.state.size} done=$done restart=$restart" }
         emitTrace(
             RaftTraceEvent.InstallSnapshot(
                 nextClock(), transport.selfId, peer, xfer.meta.lastIncludedIndex, xfer.nextOffset, done,
@@ -515,9 +530,11 @@ internal class RaftEngine(
             matchIndex[from] = maxOf(matchIndex[from] ?: 0L, xfer.meta.lastIncludedIndex)
             nextIndex[from] = xfer.meta.lastIncludedIndex + 1L
             snapshotXfer.remove(from)
+            debug { "onInstallSnapshotResponse($from): COMPLETE through=${xfer.meta.lastIncludedIndex} → nextIndex=${nextIndex[from]}, resume AppendEntries" }
             sendAppendEntries(from)                               // resume normal replication
             tryAdvanceLeaderCommit()
         } else {
+            debug { "onInstallSnapshotResponse($from): ack offset=${xfer.nextOffset}/${xfer.state.size}, send next chunk" }
             sendSnapshotChunk(from, restart = false)              // next chunk
         }
     }
@@ -536,12 +553,14 @@ internal class RaftEngine(
         if (r == null || r.meta != meta || m.offset != r.buffer.size.toLong()) {
             val have = if (r?.meta == meta) r.buffer.size.toLong() else 0L
             if (have == 0L) incomingSnapshot = null
+            debug { "onInstallSnapshot($from): out-of-order offset=${m.offset} (have=$have) → re-advertise, await resend" }
             send(from, RaftMessage.InstallSnapshotResponse(currentTerm, have))
             return
         }
         r.buffer.addAll(m.data.asList())
 
         if (!m.done) {
+            debug { "onInstallSnapshot($from): chunk offset=${m.offset} accepted (have=${r.buffer.size}), await more" }
             send(from, RaftMessage.InstallSnapshotResponse(currentTerm, r.buffer.size.toLong()))
             return
         }
@@ -570,6 +589,7 @@ internal class RaftEngine(
         _compactionFloor.value = snapshotIndex
         _committed.emit(Committed.Install(Snapshot(m.lastIncludedIndex, bytes)))
         incomingSnapshot = null
+        debug { "finalizeInstalledSnapshot($from): INSTALLED through=${m.lastIncludedIndex} term=${m.lastIncludedTerm} commit=$currentCommitIndex logTail=${log.firstOrNull()?.index}..${log.lastOrNull()?.index}" }
         emitTrace(RaftTraceEvent.InstallSnapshotAccepted(nextClock(), from, transport.selfId, m.lastIncludedIndex))
         send(from, RaftMessage.InstallSnapshotResponse(currentTerm, bytes.size.toLong()))
     }
@@ -585,14 +605,24 @@ internal class RaftEngine(
         _leader.value = m.leaderId
         resetElectionTimeout()
 
-        // Log consistency check
-        if (m.prevLogIndex > 0L) {
+        // Log consistency check.
+        //
+        // The boundary entry at [snapshotIndex] is not in [log] — it was folded into the snapshot —
+        // so `entryAt(snapshotIndex)` is null. A normal AppendEntries that resumes right after an
+        // install carries `prevLogIndex == snapshotIndex` (the leader supplies `prevLogTerm =
+        // snapshotTerm`, see sendAppendEntries). Treating that null as a conflict rejects the resume,
+        // the leader backs nextIndex below the floor and re-sends the snapshot, and the
+        // install→reject→install loop spins with no delay — freezing virtual time in tests. The
+        // snapshot prefix is committed and cluster-agreed, so any `prevLogIndex <= snapshotIndex`
+        // already matches; only check entries strictly above the floor.
+        if (m.prevLogIndex > snapshotIndex) {
             val prev = entryAt(m.prevLogIndex)
             if (prev == null || prev.term != m.prevLogTerm) {
                 // §5.3 fast backup: report conflict info
                 val conflictTerm = prev?.term ?: log.lastOrNull { it.index <= m.prevLogIndex }?.term
                 val conflictIndex = conflictTerm?.let { t -> log.firstOrNull { it.term == t }?.index }
                 val resolvedConflictIndex = conflictIndex ?: m.prevLogIndex
+                debug { "onAppendEntries($from): REJECT prevLogIndex=${m.prevLogIndex} prevLogTerm=${m.prevLogTerm} (have=${prev?.term}) snapshotIndex=$snapshotIndex → conflictIndex=$resolvedConflictIndex" }
                 emitTrace(
                     RaftTraceEvent.AppendEntriesRejected(
                         clock = nextClock(),
@@ -633,6 +663,7 @@ internal class RaftEngine(
         }
 
         val acceptedMatchIndex = lastLogIndex
+        debug { "onAppendEntries($from): ACCEPT prevLogIndex=${m.prevLogIndex} +${m.entries.size} entries → matchIndex=$acceptedMatchIndex commit=$currentCommitIndex" }
         emitTrace(
             RaftTraceEvent.AppendEntriesAccepted(
                 clock = nextClock(),
@@ -655,6 +686,7 @@ internal class RaftEngine(
         } else {
             // §5.3 fast backup: jump nextIndex to reduce O(n) recovery to O(#terms)
             nextIndex[from] = nextIndexAfterFailure(nextIndex[from] ?: 1L, m, log)
+            debug { "onAppendEntriesResponse($from): REJECTED → backup nextIndex=${nextIndex[from]} (snapshotIndex=$snapshotIndex), resend" }
             sendAppendEntries(from)
         }
     }
