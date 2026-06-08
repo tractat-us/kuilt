@@ -45,6 +45,31 @@ android {
     defaultConfig { minSdk = libs.versions.android.minSdk.get().toInt() }
 }
 
+apply(plugin = "io.gitlab.arturbosch.detekt")
+
+configure<io.gitlab.arturbosch.detekt.extensions.DetektExtension> {
+    config.setFrom(rootProject.files("config/detekt/detekt.yml"))
+    buildUponDefaultConfig = false
+    allRules = false
+}
+
+// In KMP projects detekt generates per-sourceset tasks (detektMetadataCommonMain,
+// detektJvmMain, …) but the lifecycle `detekt` task gets NO-SOURCE because it
+// has no default JVM source dirs wired. Wire it to the two most useful targets:
+// commonMain (all platforms, no compiler needed) and jvmMain (type resolution).
+afterEvaluate {
+    val detektLifecycle = tasks.findByName("detekt") ?: return@afterEvaluate
+    listOf("detektMetadataCommonMain", "detektJvmMain").forEach { name ->
+        tasks.findByName(name)?.let { detektLifecycle.dependsOn(it) }
+    }
+    // Enforce on every `check`/`build` so CI's `./gradlew build` gates on it.
+    tasks.findByName("check")?.dependsOn(detektLifecycle)
+    val detektBaselineLifecycle = tasks.findByName("detektBaseline") ?: return@afterEvaluate
+    listOf("detektBaselineMetadataCommonMain", "detektBaselineJvmMain").forEach { name ->
+        tasks.findByName(name)?.let { detektBaselineLifecycle.dependsOn(it) }
+    }
+}
+
 // Serialize wasmJsBrowserTest across the whole build. `registerIfAbsent` makes
 // the shared service idempotent across modules — every module registers, but
 // Gradle keeps one instance, so its `maxParallelUsages = 1` becomes a build-wide

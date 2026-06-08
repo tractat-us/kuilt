@@ -1,0 +1,11 @@
+# kuilt detekt configuration
+# Only the nullability rules not enabled by default — all other checks inherit defaults.
+potential-bugs:
+  UnsafeCallOnNullableType:
+    active: true
+  UnnecessaryNotNullOperator:
+    active: true
+  MapGetWithNotNullAssertionOperator:
+    active: true
+  CastNullableToNonNullableType:
+    active: true
