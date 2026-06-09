@@ -4,6 +4,8 @@ import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.crdt.GSet
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 
 class CardStateTest {
 
@@ -110,6 +112,56 @@ class CardStateTest {
         val b = emptyCard().copy(encryptedBy = GSet.of(bob))
         val c = emptyCard().copy(encryptedBy = GSet.of(carol))
         assertEquals(a.merge(b).merge(c), a.merge(b.merge(c)))
+    }
+
+    @Test
+    fun encryptOpIsRejectedIfPlayerAlreadyEncrypted() {
+        val state = emptyCard().copy(encryptedBy = GSet.of(alice))
+        val op = CardOp.Encrypt(alice, byteArrayOf(1), EncryptProof(ByteArray(0)))
+        assertFalse(state.canApply(op))
+    }
+
+    @Test
+    fun encryptOpIsAcceptedIfPlayerHasNotYetEncrypted() {
+        val state = emptyCard()
+        val op = CardOp.Encrypt(alice, byteArrayOf(1), EncryptProof(ByteArray(0)))
+        assertTrue(state.canApply(op))
+    }
+
+    @Test
+    fun stripOpIsRejectedIfPlayerIsInQuorum() {
+        // alice is in the quorum — she must NOT strip
+        val state = emptyCard(quorum = quorumAlice).copy(
+            encryptedBy = GSet.of(alice, bob, carol),
+        )
+        val op = CardOp.Strip(alice, byteArrayOf(1), StripProof(ByteArray(0)))
+        assertFalse(state.canApply(op))
+    }
+
+    @Test
+    fun stripOpIsRejectedIfPlayerHasNotEncrypted() {
+        val state = emptyCard().copy(encryptedBy = GSet.empty())
+        val op = CardOp.Strip(bob, byteArrayOf(1), StripProof(ByteArray(0)))
+        assertFalse(state.canApply(op))
+    }
+
+    @Test
+    fun stripOpIsRejectedIfPlayerAlreadyStripped() {
+        val state = emptyCard().copy(
+            encryptedBy = GSet.of(alice, bob, carol),
+            strippedBy = GSet.of(bob),
+        )
+        val op = CardOp.Strip(bob, byteArrayOf(1), StripProof(ByteArray(0)))
+        assertFalse(state.canApply(op))
+    }
+
+    @Test
+    fun stripOpIsAcceptedForNonQuorumPlayerWhoHasEncrypted() {
+        val state = emptyCard().copy(
+            encryptedBy = GSet.of(alice, bob, carol),
+        )
+        val op = CardOp.Strip(bob, byteArrayOf(1), StripProof(ByteArray(0)))
+        assertTrue(state.canApply(op))
     }
 }
 
