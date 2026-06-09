@@ -907,8 +907,12 @@ internal class RaftEngine(
 
     private suspend fun advanceCommit(newCommit: Long) {
         val oldCommit = currentCommitIndex
-        // Capture the last committed config entry in this advance window; side-effects run AFTER
+        // Capture only the LAST committed config entry in this advance window; side-effects run AFTER
         // the loop so currentCommitIndex is already bumped and entryAt is not racing a mutation.
+        // Keeping only the last is safe even if a Joint and its trailing Simple(C_new) both commit in
+        // one window: C_new is then already in the log, so onConfigCommitted's Joint branch would only
+        // re-append an entry C_new identical to what already exists — skipping it is harmless, and we
+        // run the Simple(C_new) side-effects (complete the deferred, removed-leader step-down) directly.
         var committedConfigEntry: LogEntry? = null
         for (idx in (currentCommitIndex + 1)..newCommit) {
             val entry = entryAt(idx) ?: continue
@@ -1079,6 +1083,12 @@ internal class RaftEngine(
             if (desired is RaftRole.Learner) {
                 electionJob?.cancel()   // learners do not participate in elections
                 electionJob = null
+            } else {
+                // Promoted INTO a voting role (Learner → Follower). Arm the election timer now — a
+                // freshly-promoted voter that never hears from a leader must be able to start an
+                // election, rather than staying passive until the next inbound AppendEntries.
+                debug { "reevaluateSelfRole: promoted to voter — arming election timer" }
+                resetElectionTimeout()
             }
         }
     }
@@ -1107,8 +1117,11 @@ internal class RaftEngine(
     /**
      * Leader: validate and initiate a membership change request from [changeMembership].
      *
-     * For PR A: only learner-set-only changes (voter set unchanged) are supported; voter-set
-     * changes are rejected with [IllegalArgumentException] until PR B implements joint consensus.
+     * A learner-set-only change (voter set unchanged) appends a single `Simple(target)` entry — no
+     * quorum shift, so no joint phase. A voter-set change appends a `Joint(old, new)` entry and
+     * transitions through §6 joint consensus: dual majorities for commit/election until C_new commits,
+     * at which point [onConfigCommitted] appends `Simple(new)` and completes the change. Rejected when
+     * not leader, when a change is already in progress, or when the target voter set is empty.
      */
     private suspend fun onChangeMembership(target: ClusterConfig, deferred: CompletableDeferred<ClusterConfig>) {
         if (_role.value !is RaftRole.Leader) {
@@ -1126,35 +1139,60 @@ internal class RaftEngine(
             deferred.completeExceptionally(IllegalArgumentException("target voter set must not be empty"))
             return
         }
-        if (target.voters != membership.currentVoters) {
-            debug { "onChangeMembership: rejected — voter-set change not yet supported (PR A only supports learner-set changes)" }
-            deferred.completeExceptionally(
-                IllegalArgumentException(
-                    "voter-set membership changes are not yet supported — see PR B of #194"
-                )
-            )
+        // A change may only start from a settled Simple config. An in-flight — or orphaned, after a
+        // leader crash mid-transition — Joint config means a §6 transition is still converging; reject
+        // until C_new commits. This also makes the `current.config` read below total.
+        val current = membership
+        if (current !is MembershipState.Simple) {
+            debug { "onChangeMembership: rejected — joint transition in progress ($current)" }
+            deferred.completeExceptionally(MembershipChangeInProgressException())
             return
         }
-        // Learner-set-only change: append a Simple(target) entry, no joint phase needed.
-        debug { "onChangeMembership: accepted — learner-set-only change to $target" }
         pendingConfigChange = deferred
         configChangeTargetVoters = target.voters
-        appendConfigEntry(ConfigPayload(old = null, new = target))
+        if (target.voters != current.config.voters) {
+            // Voter-set change → §6 joint consensus. Append Joint(old=current, new=target); on its
+            // commit, onConfigCommitted appends Simple(C_new) and the transition completes when that
+            // entry commits. Commit and election require dual majorities throughout the joint phase.
+            debug { "onChangeMembership: accepted — voter-set change to $target via joint consensus (old=${current.config})" }
+            appendConfigEntry(ConfigPayload(old = current.config, new = target))
+        } else {
+            // Learner-set-only change: append a Simple(target) entry, no joint phase needed.
+            debug { "onChangeMembership: accepted — learner-set-only change to $target" }
+            appendConfigEntry(ConfigPayload(old = null, new = target))
+        }
     }
 
     /**
-     * Called by [advanceCommit] after a config entry commits. For PR A (Simple entries only):
-     * completes the [pendingConfigChange] deferred with the new config.
+     * Called by [advanceCommit] after a config entry commits.
      *
-     * The PR B joint path (entry.config.old != null) is scaffolded but unreachable in PR A.
+     * Joint committed (`payload.old != null`): the C_{old,new} transition is now durable under both
+     * majorities — append `Simple(new)` to drive the cluster onto C_new alone. The deferred is NOT
+     * completed yet; it completes when that `Simple(new)` entry commits (the branch below).
+     *
+     * Simple committed: the transition is complete — wake the [changeMembership] caller. §6.4.1: if
+     * this leader is not a voter in C_new (removed-leader / leader-replace), step down once C_new is
+     * durable, so the new cluster elects a leader from its own membership.
      */
     private suspend fun onConfigCommitted(entry: LogEntry) {
         val payload = entry.config ?: return
         debug { "onConfigCommitted: entry.index=${entry.index} payload=$payload" }
         if (payload.old != null) {
-            // Joint committed → append C_new (Simple) to complete the transition. PR B path.
-            // Unreachable in PR A since voter-set changes are rejected at onChangeMembership.
-            appendConfigEntry(ConfigPayload(old = null, new = payload.new))
+            // Joint committed → append C_new (Simple) to complete the transition — but ONLY if no
+            // later config entry has already superseded the Joint. `membership` always reflects the
+            // last config entry in the log, so `membership is Joint` is exactly the condition "no
+            // Simple(C_new) follows the Joint yet." A new leader that inherits a Joint whose trailing
+            // Simple(C_new) is already in its log (the original leader appended it before crashing /
+            // stepping down) must NOT append a second C_new: that duplicate carries the new leader's
+            // term, diverges from the existing C_new, and wedges replication in an infinite
+            // AppendEntries backup loop. Skipping is safe — C_new already exists; the Simple branch
+            // will complete the deferred and run the step-down when that existing C_new commits.
+            if (membership is MembershipState.Joint) {
+                debug { "onConfigCommitted: Joint committed — appending Simple(C_new=${payload.new})" }
+                appendConfigEntry(ConfigPayload(old = null, new = payload.new))
+            } else {
+                debug { "onConfigCommitted: Joint committed but C_new already in log (membership=$membership) — skip duplicate append" }
+            }
         } else {
             // Simple committed → transition complete; wake the changeMembership caller.
             val result = ClusterConfig(payload.new.voters, payload.new.learners)
