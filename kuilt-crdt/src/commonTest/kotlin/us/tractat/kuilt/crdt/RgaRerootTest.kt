@@ -124,4 +124,26 @@ class RgaRerootTest {
             "positional reroot: Compact records I.after=M, so J chain-follows I→M and stays below M",
         )
     }
+
+    @Test
+    fun chainedGcPassesResolveToNearestSurvivingAncestor() {
+        // Build M→I→K→J (each element after the previous), then tombstone I and K.
+        val (r0, opM) = Rga.empty<String>().insertAfter(p, RgaId.HEAD, "M")
+        val (r1, opI) = r0.insertAfter(p, opM.id, "I")
+        val (r2, opK) = r1.insertAfter(p, opI.id, "K")
+        val (r3, opJ) = r2.insertAfter(p, opK.id, "J")
+        assertEquals(listOf("M", "I", "K", "J"), r3.toList(), "baseline")
+
+        val t1 = r3.removeAt(1)!!.first  // tombstone I → visible [M, K, J]
+        val t2 = t1.removeAt(1)!!.first  // tombstone K → visible [M, J]
+        assertEquals(listOf("M", "J"), t2.toList(), "I and K tombstoned")
+
+        // GC K first (K.after=I, I still present): J.after=K → compactPositions[K]=I (present).
+        val gcK = t2.apply(RgaOp.Compact(mapOf(opK.id to opI.id)))
+        assertEquals(listOf("M", "J"), gcK.toList(), "K GC'd; J reroots to I (nearest present ancestor)")
+
+        // GC I second (I.after=M): two-hop chain J→K(compacted,pos=I)→I(compacted,pos=M)→M(present).
+        val gcKI = gcK.apply(RgaOp.Compact(mapOf(opI.id to opM.id)))
+        assertEquals(listOf("M", "J"), gcKI.toList(), "two-hop chain: J resolves K→I→M; no reorder")
+    }
 }
