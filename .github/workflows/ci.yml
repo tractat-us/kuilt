@@ -188,13 +188,24 @@ jobs:
         run: ./gradlew detektAll --max-workers=4
 
   # ── ci-required ────────────────────────────────────────────────────────────
-  # The SOLE required status check. Aggregates detect + build. Uses
-  # if: !cancelled() so it still runs when build is skipped (docs-only path).
+  # The SOLE required status check. Aggregates detect + build + detekt.
+  #
+  # Uses if: always() (not !cancelled()) so this job runs — and can FAIL —
+  # even when build or detekt was skipped or cancelled. A required check that
+  # is itself skipped is treated as "passed" by branch protection, which is
+  # part of the race this job is designed to close.
+  #
+  # Invariant: ci-required succeeds if and only if:
+  #   (a) detect succeeded AND docs-only=true AND build+detekt were skipped, OR
+  #   (b) detect succeeded AND docs-only=false AND build=success AND detekt=success.
+  #
+  # Any other combination fails. In particular, build=skipped on a non-docs
+  # change is an explicit failure — this closes the race where a PR initially
+  # looked docs-only (earning a green ci-required), then gained code commits
+  # before auto-merge fired on the stale green result.
   ci-required:
     needs: [detect, build, detekt]
-    if: |
-      !cancelled() &&
-      (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+    if: always() && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
     runs-on: ubuntu-latest
     steps:
       - name: Check gate results
@@ -202,16 +213,37 @@ jobs:
           DETECT="${{ needs.detect.result }}"
           BUILD="${{ needs.build.result }}"
           DETEKT="${{ needs.detekt.result }}"
-          echo "detect: $DETECT"
-          echo "build:  $BUILD"
-          echo "detekt: $DETEKT"
+          DOCS_ONLY="${{ needs.detect.outputs.docs-only }}"
+          echo "detect:    $DETECT"
+          echo "build:     $BUILD"
+          echo "detekt:    $DETEKT"
+          echo "docs-only: $DOCS_ONLY"
+
+          # detect must always succeed — it runs unconditionally.
           if [ "$DETECT" != "success" ]; then
             echo "::error::detect job did not succeed (result: $DETECT)."; exit 1
           fi
-          if [ "$BUILD" = "failure" ] || [ "$BUILD" = "cancelled" ]; then
-            echo "::error::build job $BUILD."; exit 1
+
+          if [ "$DOCS_ONLY" = "true" ]; then
+            # Docs-only path: build and detekt must have been skipped (not run).
+            # If either somehow ran and failed, that's still a failure.
+            if [ "$BUILD" != "skipped" ] && [ "$BUILD" != "success" ]; then
+              echo "::error::docs-only=true but build job had unexpected result: $BUILD."; exit 1
+            fi
+            if [ "$DETEKT" != "skipped" ] && [ "$DETEKT" != "success" ]; then
+              echo "::error::docs-only=true but detekt job had unexpected result: $DETEKT."; exit 1
+            fi
+            echo "Docs-only change — build correctly skipped. Gate green."
+          else
+            # Code-change path: build and detekt MUST have run and succeeded.
+            # skipped here means the build was bypassed without a legitimate
+            # docs-only classification — that is the exact race condition being
+            # closed. Treat skipped the same as failure.
+            if [ "$BUILD" != "success" ]; then
+              echo "::error::Non-docs change requires a passing build (result: $BUILD). skipped is not accepted."; exit 1
+            fi
+            if [ "$DETEKT" != "success" ]; then
+              echo "::error::Non-docs change requires passing detekt (result: $DETEKT). skipped is not accepted."; exit 1
+            fi
+            echo "Build and detekt both succeeded. Gate green."
           fi
-          if [ "$DETEKT" = "failure" ] || [ "$DETEKT" = "cancelled" ]; then
-            echo "::error::detekt job $DETEKT."; exit 1
-          fi
-          echo "All gates green (build: $BUILD, detekt: $DETEKT)."
