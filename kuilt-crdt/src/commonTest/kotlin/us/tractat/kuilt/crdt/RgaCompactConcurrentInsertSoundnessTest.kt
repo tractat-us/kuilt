@@ -1,5 +1,3 @@
-@file:Suppress("DEPRECATION") // Documents the unsound scalar compact(Long) the new predicate replaces.
-
 package us.tractat.kuilt.crdt
 
 import kotlin.test.Test
@@ -67,26 +65,5 @@ class RgaCompactConcurrentInsertSoundnessTest {
             aTombstoned.apply(opJ).toList(),
             "concurrent Insert(J, after=I) survives — not silently lost when I would-have-been GC'd",
         )
-    }
-
-    /**
-     * Differential: the **deprecated** scalar watermark still exhibits the loss —
-     * documents *why* the predicate had to change (and guards against anyone
-     * re-routing onto the scalar path).
-     */
-    @Test
-    fun scalarWatermark_stillLosesJ_documentsTheBugTheNewPredicateFixes() {
-        val (a0, opI) = Rga.empty<String>().insertAfter(a, RgaId.HEAD, "I")
-        val (aTombstoned, remI) = a0.removeAt(0)!!
-        val cBase = Rga.empty<String>().apply(opI).apply(remI)
-        val (cWithJ, opJ) = cBase.insertAfter(c, opI.id, "J")
-
-        // The scalar watermark GCs I (it cannot see C's undelivered J).
-        val (aCompacted, compactOp) = aTombstoned.compact(watermark = opI.id.lamport)!!
-        val aFinal = aCompacted.apply(opJ)
-        val cFinal = cWithJ.apply(compactOp)
-
-        assertEquals(aFinal, cFinal, "convergence holds — the bug is loss, not divergence")
-        assertEquals(emptyList(), aFinal.toList(), "scalar path silently drops J — the bug v3 fixes")
     }
 }

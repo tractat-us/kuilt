@@ -297,31 +297,6 @@ public class Rga<V> private constructor(
     }
 
     /**
-     * **Deprecated — unsound.** Scalar-watermark GC: purges a tombstoned `id` when
-     * `id.lamport ≤ watermark` and no surviving insert references it. This silently
-     * drops concurrent inserts (#262): the watermark never proves every peer has
-     * *delivered* all ops ≤ watermark, so a concurrent `Insert(J, after=I)` minted by
-     * a different author can be lost. Use the three-argument causal-stability form
-     * instead. Retained only so the (also-deprecated) `RgaGcCoordinator` keeps
-     * compiling until #270 rewrites it onto the version-vector barrier.
-     */
-    @Deprecated(
-        message = "Unsound — silently drops concurrent inserts (#262). " +
-            "Use compact(stableCut, frontierMax, delivered).",
-        level = DeprecationLevel.WARNING,
-    )
-    public fun compact(watermark: Long): Pair<Rga<V>, RgaOp.Compact>? {
-        val predecessors = insertsByid.values.mapTo(mutableSetOf()) { it.after }
-        val gcIds = tombstones
-            .filter { id -> id.lamport <= watermark && id !in predecessors }
-            .toSet()
-        if (gcIds.isEmpty()) return null
-        val compactOp = RgaOp.Compact(gcIds)
-        val newOps = purgeAndRecord(ops, gcIds, compactOp)
-        return Rga(newOps, lamport) to compactOp
-    }
-
-    /**
      * Apply an [op] received from a remote replica, advancing the Lamport clock.
      *
      * This is the receive path for op-based propagation: each received op is

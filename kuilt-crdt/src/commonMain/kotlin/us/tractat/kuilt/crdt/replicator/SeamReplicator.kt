@@ -174,18 +174,6 @@ public class SeamReplicator<S : Quilted<S>>(
      */
     public val universalAckFlow: StateFlow<Long> = _universalAckFlow.asStateFlow()
 
-    private val _nextSeqFlow = MutableStateFlow(0L)
-
-    /**
-     * The sequence number that will be assigned to the **next** local [apply] call.
-     * Advances by 1 on each [apply]; `_nextSeqFlow.value - 1` is the seq of the most
-     * recently applied local delta, or 0 if no local delta has been applied yet.
-     *
-     * Exposed for coordinators ([us.tractat.kuilt.crdt.replicator.RgaGcCoordinator]) that need
-     * to correlate local delta sequences with CRDT state snapshots.
-     */
-    public val nextSeqFlow: StateFlow<Long> = _nextSeqFlow.asStateFlow()
-
     private val _deliveredLocal = MutableStateFlow(VersionVector.EMPTY)
 
     /**
@@ -298,7 +286,6 @@ public class SeamReplicator<S : Quilted<S>>(
     public fun apply(patch: Patch<S>) {
         _state.update { it.piece(patch) }
         val seq = ++nextSeq
-        _nextSeqFlow.value = seq
         pendingDeltas[seq] = patch.delta
         recomputeDeliveredLocal()
         broadcastDelta(seq, patch.delta)
