@@ -4,6 +4,7 @@ package us.tractat.kuilt.raft
 
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
@@ -126,6 +127,76 @@ class ChaosTest {
         val entry = newLeader.propose(byteArrayOf(99))
         assertNotNull(entry)
         sim.checkInvariants()
+    }
+
+    /**
+     * C1 (#194) — random **membership churn** interleaved with partition/heal must preserve the Raft
+     * safety invariants. Over several rounds, each round: (1) applies a voter-set membership change
+     * (promote a learner → voter, or demote a non-leader voter → learner, keeping voters in [3,5]) via
+     * joint consensus under full connectivity, then (2) partitions a **strict minority** of the current
+     * voters away, commits an entry on the surviving majority, and heals. After each round the cluster
+     * must reconverge and satisfy:
+     *   - **Election Safety** — at most one leader at any moment ([RaftSimulation.checkInvariants]).
+     *   - **State Machine Safety** — no two nodes hold different commands at the same committed index
+     *     ([RaftSimulation.checkInvariants]).
+     *   - **Leader Completeness** — the entry committed this round survives the partition/heal and
+     *     reaches **every** node (the `awaitCommit(on = all)`).
+     *   - **No two leaders at the same term** — asserted explicitly over the live role/term view.
+     *
+     * Controlled randomness ([Random] with a fixed seed) keeps it reproducible. The membership change
+     * is applied under full connectivity (so it converges) and only a strict minority is ever isolated,
+     * so the cluster always retains a reachable majority of the current voters — the scenario is
+     * designed to converge each round, with the harness election-thrash bound (#273) as a backstop.
+     *
+     * **Coverage note (logged for the PR):** this exercises voter-set changes *between* partition
+     * episodes, not a membership change applied *during* a partition; that stronger interleaving (a
+     * joint that straddles a partition) is covered deterministically by the rollback and
+     * crash-leader-mid-joint tests in `MembershipTest`, not here.
+     */
+    @Test fun randomMembershipChurnWithPartitionHeal_preservesSafety() = raftRunTest(timeout = 20.seconds) {
+        val sim = raftSim(this, backgroundScope, n = 5)
+        awaitLeader(sim)
+        val all = sim.nodeIds.toSet()
+        val rng = Random(20260609)
+        var voters = all                                  // start: all 5 are voters
+
+        repeat(8) { round ->
+            // 1) Voter-set membership change under full connectivity (converges via joint consensus).
+            val canPromote = voters.size < all.size
+            val canDemote = voters.size > 3
+            val promote = when {
+                !canPromote -> false
+                !canDemote -> true
+                else -> rng.nextBoolean()
+            }
+            val newVoters = if (promote) {
+                voters + (all - voters).first()                                       // learner → voter
+            } else {
+                val leaderId = sim.nodes.entries.first { it.value.role.value is RaftRole.Leader }.key
+                voters - (voters - leaderId).random(rng)                              // voter → learner
+            }
+            // Every non-voter node stays a learner, so all 5 remain members of the config and are
+            // replicated to — none is silently orphaned by a membership change.
+            val target = ClusterConfig(voters = newVoters, learners = all - newVoters)
+            sim.changeMembershipOnLeader(target)
+            voters = newVoters
+
+            // 2) Partition a STRICT minority of the current voters; commit on the majority; heal.
+            val maxIsolated = (voters.size - 1) / 2
+            val isolated = voters.shuffled(rng).take(rng.nextInt(0, maxIsolated + 1)).toSet()
+            val connected = all - isolated
+            if (isolated.isNotEmpty()) sim.partition(isolated, connected)
+            val entry = sim.proposeOnLeader(byteArrayOf(round.toByte()), among = voters - isolated)
+            if (isolated.isNotEmpty()) sim.heal()
+
+            // 3) Reconverge + assert safety. awaitCommit(on = all) is the Leader Completeness check:
+            //    the round's committed entry survives and reaches every node, including the isolated set.
+            sim.awaitCommit(entry.index, on = all)
+            sim.checkInvariants()
+            val liveLeaders = sim.nodes.values.filter { it.role.value is RaftRole.Leader }
+            assertTrue(liveLeaders.size <= 1,
+                "round $round: ${liveLeaders.size} simultaneous leaders — Election Safety violated")
+        }
     }
 
     @Test fun unreliableChurn_proposalsEventuallyCommit() = raftRunTest {

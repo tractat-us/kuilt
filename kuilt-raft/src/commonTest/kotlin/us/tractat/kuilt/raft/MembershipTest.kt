@@ -576,13 +576,67 @@ class MembershipTest {
         assertIs<RaftRole.Learner>(rejoined.role.value)
     }
 
-    // NOTE: an explicit adopt-on-append *rollback* test (follower adopts an uncommitted Joint, a new
-    // leader overwrites the suffix, membership reverts) is deferred to PR C (#194 chaos/PBT). A
-    // deterministic version must pin the election outcome: the follower holding the doomed Joint has
-    // the most up-to-date log, so by §5.4.1 it can itself WIN the election and preserve the Joint
-    // instead of being overwritten. Forcing the majority to win (keep the Joint-holder partitioned
-    // until the majority has elected AND committed past the Joint index, then heal) needs the chaos
-    // harness — and that harness must be resilient to a non-converging election cycle, which otherwise
-    // spins the virtual-time scheduler CPU-bound and defeats runTest's wall-clock timeout (see #273).
-    // Rollback-on-truncate is still exercised indirectly by the leadership churn in the B3 tests.
+    /**
+     * #273(a) — deterministic adopt-on-append **rollback**. A follower adopts an *uncommitted* Joint
+     * from a doomed leader; a majority that never saw it overwrites that log slot; on heal the
+     * follower's Joint suffix is truncated and recompute-from-log reverts its membership.
+     *
+     * The earlier attempt was racy because the Joint-holder has the most up-to-date log and can itself
+     * win the post-heal election (§5.4.1), *preserving* the Joint. This version pins the outcome: the
+     * Joint-holder F is kept in the **minority** partition (with the doomed leader) the entire time, so
+     * it can never out-vote the majority. The 3-of-5 majority elects its own leader and commits past
+     * the Joint index before the heal, guaranteeing F's suffix loses.
+     *
+     * Observed via F's own [RaftTraceEvent.ConfigChange] stream, subscribed before the change (F is
+     * present from the start — no restart race). The election-thrash bound in [RaftSimulation] keeps a
+     * mis-set scenario from hanging.
+     */
+    @Test
+    fun followerAdoptsUncommittedJoint_rollsBackWhenSuffixOverwritten() = raftRunTest(timeout = 10.seconds) {
+        val sim = raftSim(this, backgroundScope, n = 5)
+        val leader = awaitLeader(sim)
+        val leaderId = sim.nodes.entries.first { it.value === leader }.key
+        val allVoters = sim.nodeIds.toSet()
+
+        // Baseline: commit an entry so all 5 share a log prefix the divergence will fork from.
+        sim.proposeOnLeader(byteArrayOf(0x01))
+        sim.awaitCommit(leader.commitIndex.value, on = allVoters)
+
+        val follower = (allVoters - leaderId).first()        // F — stays in the minority with the leader
+        val majority = allVoters - leaderId - follower        // the other 3 = a majority of 5
+
+        // Subscribe to F's config transitions BEFORE the change.
+        val fConfigs = mutableListOf<RaftTraceEvent.ConfigChange>()
+        backgroundScope.launch {
+            sim.nodes.getValue(follower).trace.filterIsInstance<RaftTraceEvent.ConfigChange>().collect { fConfigs += it }
+        }
+        delay(1)
+
+        // Isolate {leader, F}. The leader (still in its term within the minority) appends a Joint and
+        // replicates it to F, but it can never commit (no 3-of-5 quorum). The async change ultimately
+        // fails when the leader is deposed; we only care that F adopts the Joint on append.
+        sim.partition(setOf(leaderId, follower), majority)
+        val jointTarget = ClusterConfig(voters = setOf(leaderId, follower))   // a clearly-different shrink-to-2
+        val change = backgroundScope.async {
+            runCatching { sim.nodes.getValue(leaderId).changeMembership(jointTarget) }
+        }
+        sim.awaitTrue("F adopts the uncommitted joint") {
+            fConfigs.any { it.new.voters == jointTarget.voters }
+        }
+
+        // The majority elects its own leader and commits PAST the joint index, overwriting that slot
+        // with an entry the joint-holder never saw.
+        val majLeader = sim.awaitLeader(among = majority)
+        sim.proposeOnLeader(byteArrayOf(0x02), among = majority)
+        sim.awaitCommit(majLeader.commitIndex.value, on = majority)
+
+        // Heal: F learns the majority's higher term, its uncommitted joint suffix is truncated, and
+        // recompute-from-log reverts its membership to the pre-joint 5-voter base.
+        sim.heal()
+        sim.awaitTrue("F rolls back to the base 5-voter config after the overwrite") {
+            val adoptIdx = fConfigs.indexOfFirst { it.new.voters == jointTarget.voters }
+            adoptIdx >= 0 && fConfigs.drop(adoptIdx + 1).any { it.new.voters == allVoters }
+        }
+        change.cancel()
+    }
 }
