@@ -11,6 +11,7 @@ kotlin {
             api(libs.kotlinx.serialization.core)
             implementation(libs.kotlinx.coroutines.core)
             implementation(libs.kotlinx.serialization.cbor)
+            implementation(libs.kotlin.logging)
         }
         commonTest.dependencies {
             implementation(project(":kuilt-test"))
@@ -22,6 +23,15 @@ kotlin {
             implementation(libs.jqwik)
             runtimeOnly(libs.junit.vintage.engine)
             runtimeOnly(libs.junit.platform.launcher)
+            // SLF4J backend for kotlin-logging on JVM
+            runtimeOnly(libs.logback)
+        }
+        androidUnitTest.dependencies {
+            // SLF4J backend for kotlin-logging on the Android unit-test variants
+            // (testDebugUnitTest / testReleaseUnitTest). Without it, kotlin-logging's
+            // Slf4jLoggerFactory init throws NoClassDefFoundError and contaminates the
+            // whole crdt suite once any logger.* call fires (raft issue #222).
+            runtimeOnly(libs.logback)
         }
     }
 }

@@ -302,7 +302,6 @@ public class SeamReplicator<S : Quilted<S>>(
         pendingDeltas[seq] = patch.delta
         recomputeDeliveredLocal()
         broadcastDelta(seq, patch.delta)
-        gossipDelivered()
     }
 
     // ---- private helpers ----
@@ -313,10 +312,19 @@ public class SeamReplicator<S : Quilted<S>>(
      * `1..seq` is present. A gap truncates that author at the gap (dots `{1,2,4}` →
      * frontier `2`). Called after every state mutation; the value only changes for
      * dot-carrying CRDTs ([us.tractat.kuilt.crdt.Rga]).
+     *
+     * When the vector **advances** — on local [apply] *and* on every inbound delivery
+     * ([applyAndDrain], [drainPendingInbound], [onFullState]) — this replica [gossipDelivered]s
+     * the fresh row so peers' matrix clocks (and hence the [cutFrontier] that drives RGA GC)
+     * converge without waiting on the slow anti-entropy tick. A receiver that just delivered an
+     * author's op is the timeliest witness of that delivery; gossiping here is what lets the
+     * stable cut rise as deltas land rather than only once per [SeamReplicatorConfig.antiEntropyInterval].
      */
     private fun recomputeDeliveredLocal() {
+        val previous = _deliveredLocal.value
         _deliveredLocal.value = contiguousFrontier(_state.value.causalDots())
         recomputeCut()
+        if (_deliveredLocal.value != previous) gossipDelivered()
     }
 
     /**
