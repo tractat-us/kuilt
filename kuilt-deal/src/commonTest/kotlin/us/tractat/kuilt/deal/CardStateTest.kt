@@ -203,6 +203,29 @@ class CardStateTest {
         assertTrue(card.canApply(CardOp.DepositKey(alice, EncryptedKey(ByteArray(0)))))
     }
 
+    @Test
+    fun sraEncryptThenStripReturnsOriginal() {
+        val scheme = SraScheme()
+        val key = scheme.generateKey()
+        val original = "card:ACE_OF_SPADES".encodeToByteArray()
+        val (encrypted, _) = scheme.encrypt(original, key.encryptKey)
+        val (recovered, _) = scheme.strip(encrypted, key.stripKey)
+        assertEquals(original.toList(), recovered.toList())
+    }
+
+    @Test
+    fun sraEncryptionIsCommutative() {
+        val scheme = SraScheme()
+        val keyA = scheme.generateKey()
+        val keyB = scheme.generateKey()
+        val original = "card:KING_OF_HEARTS".encodeToByteArray()
+
+        val (ab, _) = scheme.encrypt(scheme.encrypt(original, keyA.encryptKey).first, keyB.encryptKey)
+        val (ba, _) = scheme.encrypt(scheme.encrypt(original, keyB.encryptKey).first, keyA.encryptKey)
+
+        assertEquals(ab.toList(), ba.toList())
+    }
+
 }
 
 private fun assertAll(vararg assertions: () -> Unit) = assertions.forEach { it() }
