@@ -8,6 +8,7 @@
     kotlinx.serialization.ExperimentalSerializationApi::class,
     kotlinx.coroutines.ExperimentalCoroutinesApi::class,
 )
+@file:Suppress("DEPRECATION")
 
 package us.tractat.kuilt.crdt.replicator
 

@@ -11,6 +11,13 @@ import us.tractat.kuilt.crdt.RgaId
 import us.tractat.kuilt.crdt.RgaOp
 
 /**
+ * **⚠ EXPERIMENTAL — UNSOUND.**
+ *
+ * This coordinator can silently drop concurrent inserts: a `Insert(J, after=I)` from a peer is
+ * lost if another peer GCs tombstoned `I` before `J` is delivered, because the GC watermark is
+ * derived from per-author delta-ack rather than true causal stability. Do not use in production
+ * until [#262](https://github.com/tractat-us/kuilt/issues/262) lands.
+ *
  * Coordinator that drives tombstone GC (and optional history windowing) for an [Rga] CRDT
  * replicated via [SeamReplicator].
  *
@@ -66,6 +73,10 @@ import us.tractat.kuilt.crdt.RgaOp
  * @see SeamReplicator.nextSeqFlow
  * @see WindowPolicy
  */
+@Deprecated(
+    message = "Experimental and unsound — silently drops concurrent inserts; see #262. Do not use until fixed.",
+    level = DeprecationLevel.WARNING,
+)
 public class RgaGcCoordinator<V>(
     private val replicaId: ReplicaId,
     private val state: StateFlow<Rga<V>>,
