@@ -3,7 +3,7 @@ package us.tractat.kuilt.crdt
 import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.SerializationException
-import kotlinx.serialization.builtins.SetSerializer
+import kotlinx.serialization.builtins.MapSerializer
 import kotlinx.serialization.descriptors.SerialDescriptor
 import kotlinx.serialization.descriptors.buildClassSerialDescriptor
 import kotlinx.serialization.descriptors.element
@@ -25,7 +25,7 @@ import kotlinx.serialization.encoding.encodeStructure
  *
  * - Insert: `{ "t": 0, "id": RgaId, "v": V, "a": RgaId }`
  * - Remove: `{ "t": 1, "id": RgaId }`
- * - Compact: `{ "t": 2, "ids": Set<RgaId> }`
+ * - Compact: `{ "t": 2, "positions": Map<RgaId, RgaId> }`
  *
  * @param vSerializer the serializer for the element type [V].
  */
@@ -35,14 +35,14 @@ public class RgaOpSerializer<V>(
 ) : KSerializer<RgaOp<V>> {
 
     private val rgaIdSerializer: KSerializer<RgaId> = RgaId.serializer()
-    private val idsSerializer: KSerializer<Set<RgaId>> = SetSerializer(rgaIdSerializer)
+    private val positionsSerializer: KSerializer<Map<RgaId, RgaId>> = MapSerializer(rgaIdSerializer, rgaIdSerializer)
 
     override val descriptor: SerialDescriptor = buildClassSerialDescriptor("us.tractat.kuilt.crdt.RgaOp") {
         element<Int>("t")         // 0 = Insert, 1 = Remove, 2 = Compact
-        element("id", rgaIdSerializer.descriptor, isOptional = true)   // Insert + Remove
-        element("v", vSerializer.descriptor, isOptional = true)        // Insert only
-        element("a", rgaIdSerializer.descriptor, isOptional = true)    // Insert only
-        element("ids", idsSerializer.descriptor, isOptional = true)    // Compact only
+        element("id", rgaIdSerializer.descriptor, isOptional = true)          // Insert + Remove
+        element("v", vSerializer.descriptor, isOptional = true)               // Insert only
+        element("a", rgaIdSerializer.descriptor, isOptional = true)           // Insert only
+        element("positions", positionsSerializer.descriptor, isOptional = true) // Compact only
     }
 
     override fun serialize(encoder: Encoder, value: RgaOp<V>): Unit = encoder.encodeStructure(descriptor) {
@@ -59,7 +59,7 @@ public class RgaOpSerializer<V>(
             }
             is RgaOp.Compact -> {
                 encodeIntElement(descriptor, 0, TYPE_COMPACT)
-                encodeSerializableElement(descriptor, 4, idsSerializer, value.ids)
+                encodeSerializableElement(descriptor, 4, positionsSerializer, value.positions)
             }
         }
     }
@@ -71,7 +71,7 @@ public class RgaOpSerializer<V>(
         var value: V = null as V
         var hasValue = false
         var after: RgaId? = null
-        var ids: Set<RgaId>? = null
+        var positions: Map<RgaId, RgaId>? = null
 
         mainLoop@ while (true) {
             when (val index = decodeElementIndex(descriptor)) {
@@ -80,7 +80,7 @@ public class RgaOpSerializer<V>(
                 1 -> id = decodeSerializableElement(descriptor, 1, rgaIdSerializer)
                 2 -> { value = decodeSerializableElement(descriptor, 2, vSerializer); hasValue = true }
                 3 -> after = decodeSerializableElement(descriptor, 3, rgaIdSerializer)
-                4 -> ids = decodeSerializableElement(descriptor, 4, idsSerializer)
+                4 -> positions = decodeSerializableElement(descriptor, 4, positionsSerializer)
                 else -> throw SerializationException("Unexpected index: $index")
             }
         }
@@ -92,7 +92,7 @@ public class RgaOpSerializer<V>(
                 after = after ?: missingField("Insert", "after"),
             )
             TYPE_REMOVE -> RgaOp.Remove(id = id ?: missingField("Remove", "id"))
-            TYPE_COMPACT -> RgaOp.Compact(ids = ids ?: missingField("Compact", "ids"))
+            TYPE_COMPACT -> RgaOp.Compact(positions = positions ?: missingField("Compact", "positions"))
             else -> throw SerializationException("Unknown RgaOp type discriminator: $type")
         }
     }

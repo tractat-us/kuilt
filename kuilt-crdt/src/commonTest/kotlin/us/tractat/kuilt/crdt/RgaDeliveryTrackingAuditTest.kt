@@ -270,7 +270,7 @@ class RgaDeliveryTrackingAuditTest {
         val tomb = b1.removeAt(idx)!!.first
         val full = VersionVector.of(mapOf(b to 2L))
         val (_, compactOp) = tomb.compact(stableCut = full, frontierMax = full, delivered = full)!!
-        assertEquals(setOf(Dot(b, 2L)), compactOp.ids.map { it.dot }.toSet(), "Compact carries only (b,2)")
+        assertEquals(setOf(Dot(b, 2L)), compactOp.positions.keys.map { it.dot }.toSet(), "Compact carries only (b,2)")
 
         // A receiver that has NOT delivered (b,1) applies this Compact in isolation.
         val receiver = Rga.empty<String>().apply(compactOp)

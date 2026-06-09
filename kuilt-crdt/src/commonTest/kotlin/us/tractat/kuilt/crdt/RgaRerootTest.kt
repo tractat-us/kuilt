@@ -41,7 +41,11 @@ class RgaRerootTest {
         assertEquals(listOf("0", "1", "2", "3", "4", "5"), rga.toList(), "baseline chain renders in order")
 
         // Window-drop the leading three live inserts via a Compact (purges Insert(0..2)).
-        val dropped = setOf(ops[0].id, ops[1].id, ops[2].id)
+        val dropped = mapOf(
+            ops[0].id to RgaId.HEAD,
+            ops[1].id to ops[0].id,
+            ops[2].id to ops[1].id,
+        )
         val windowed = rga.apply(RgaOp.Compact(dropped))
 
         assertEquals(
@@ -56,8 +60,15 @@ class RgaRerootTest {
         val (rga, ops) = chainOfSix()
 
         // Peer X drops {0,1,2}; peer Y drops {0,1}. Different windows, same op-log otherwise.
-        val x = rga.apply(RgaOp.Compact(setOf(ops[0].id, ops[1].id, ops[2].id)))
-        val y = rga.apply(RgaOp.Compact(setOf(ops[0].id, ops[1].id)))
+        val x = rga.apply(RgaOp.Compact(mapOf(
+            ops[0].id to RgaId.HEAD,
+            ops[1].id to ops[0].id,
+            ops[2].id to ops[1].id,
+        )))
+        val y = rga.apply(RgaOp.Compact(mapOf(
+            ops[0].id to RgaId.HEAD,
+            ops[1].id to ops[0].id,
+        )))
 
         // Set-union merge in both directions must converge to the more-aggressive window [3,4,5].
         val xy = x.piece(y)
@@ -77,7 +88,7 @@ class RgaRerootTest {
         val (r3, bChild) = r2.insertAfter(p, b.id, "b-child")
 
         // Purge both roots; a-child and b-child reroot to HEAD.
-        val windowed = r3.apply(RgaOp.Compact(setOf(a.id, b.id)))
+        val windowed = r3.apply(RgaOp.Compact(mapOf(a.id to RgaId.HEAD, b.id to RgaId.HEAD)))
 
         val expectedFirst = if (aChild.id > bChild.id) "a-child" else "b-child"
         val expectedSecond = if (aChild.id > bChild.id) "b-child" else "a-child"
@@ -109,7 +120,7 @@ class RgaRerootTest {
         val tombstoned = r2.removeAt(1)!!.first
         assertEquals(listOf("M", "J"), tombstoned.toList(), "I tombstoned, J still chains off it")
 
-        val windowed = tombstoned.apply(RgaOp.Compact(setOf(opI.id)))
+        val windowed = tombstoned.apply(RgaOp.Compact(mapOf(opI.id to opM.id)))
 
         // J (higher id) reroots to HEAD and sorts before M (lower id) — the accepted quirk.
         assertEquals(

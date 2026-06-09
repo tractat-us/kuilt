@@ -78,19 +78,22 @@ public sealed interface RgaOp<out V> {
     ) : RgaOp<V>
 
     /**
-     * Records that the [ids] have been garbage-collected from the op-log.
+     * Records that the [positions] entries have been garbage-collected from the op-log.
      *
-     * [Compact] carries no element value — it is typed as `RgaOp<Nothing>` and
-     * is valid in the covariant `out V` position for any `V`. A single sealed
-     * hierarchy keeps the serializer simple.
+     * The map carries each compacted id's predecessor at GC time (`id → Insert.after`).
+     * [computeSequence] uses this to reattach surviving successors to the nearest surviving
+     * ancestor (positional reroot, #293) rather than to [RgaId.HEAD].
      *
-     * Applying a [Compact] removes every [Insert] and [Remove] op whose id is
-     * in [ids]. Merging two [Compact] ops via [Rga.piece] unions their [ids] sets.
+     * The ids that are purged are [positions].keys. Merging two [Compact] ops via [Rga.piece]
+     * unions their [positions] maps — sound because a given id's `after` is fixed when its
+     * [Insert] was created, so two replicas always agree on the value.
+     *
+     * Applying a [Compact] removes every [Insert] and [Remove] op whose id is in [positions].keys.
      * Receiving the same [Compact] twice is idempotent.
      */
     @Serializable
     public data class Compact(
-        public val ids: Set<RgaId>,
+        public val positions: Map<RgaId, RgaId>,
     ) : RgaOp<Nothing>
 }
 
@@ -133,7 +136,7 @@ public class Rga<V> private constructor(
      */
     private val compactedIds: Set<RgaId> by lazy {
         ops.filterIsInstance<RgaOp.Compact>()
-            .flatMapTo(mutableSetOf()) { it.ids }
+            .flatMapTo(mutableSetOf()) { it.positions.keys }
     }
 
     /**
@@ -291,10 +294,20 @@ public class Rga<V> private constructor(
             .filter { id -> stableCut.contains(id.dot) && id !in predecessors } // (2) + (4)
             .toSet()
         if (gcIds.isEmpty()) return null
-        val compactOp = RgaOp.Compact(gcIds)
+        val positions = gcIds.associateWith { id -> insertsByid.getValue(id).after }
+        val compactOp = RgaOp.Compact(positions)
         val newOps = purgeAndRecord(ops, gcIds, compactOp)
         return Rga(newOps, lamport) to compactOp
     }
+
+    /**
+     * Returns a positions map for [ids]: each id mapped to its [RgaOp.Insert.after].
+     * All ids must be present in [insertsByid] (live, non-compacted elements).
+     * Used by [us.tractat.kuilt.crdt.replicator.RgaGcCoordinator] to build positions
+     * for window-dropped live elements when constructing a combined [RgaOp.Compact].
+     */
+    internal fun positionsFor(ids: Set<RgaId>): Map<RgaId, RgaId> =
+        ids.associateWith { id -> insertsByid.getValue(id).after }
 
     /**
      * Apply an [op] received from a remote replica, advancing the Lamport clock.
@@ -314,7 +327,7 @@ public class Rga<V> private constructor(
     public fun apply(op: RgaOp<V>): Rga<V> = when (op) {
         is RgaOp.Insert -> if (op.id in compactedIds) this else Rga(ops + op, maxOf(lamport, op.id.lamport))
         is RgaOp.Remove -> if (op.id in compactedIds) this else Rga(ops + op, lamport)
-        is RgaOp.Compact -> Rga(purgeAndRecord(ops, op.ids, op), lamport)
+        is RgaOp.Compact -> Rga(purgeAndRecord(ops, op.positions.keys, op), lamport)
     }
 
     /**
@@ -359,7 +372,7 @@ public class Rga<V> private constructor(
             .flatMap { op ->
                 when (op) {
                     is RgaOp.Insert -> sequenceOf(op.id.dot)
-                    is RgaOp.Compact -> op.ids.asSequence().map { it.dot }
+                    is RgaOp.Compact -> op.positions.keys.asSequence().map { it.dot }
                     is RgaOp.Remove -> emptySequence()
                 }
             }
@@ -369,7 +382,7 @@ public class Rga<V> private constructor(
         val rawUnion = ops + other.ops
         val mergedLamport = maxOf(lamport, other.lamport)
         val allCompactedIds = rawUnion.filterIsInstance<RgaOp.Compact>()
-            .flatMapTo(mutableSetOf()) { it.ids }
+            .flatMapTo(mutableSetOf()) { it.positions.keys }
         val mergedOps = if (allCompactedIds.isEmpty()) rawUnion else purge(rawUnion, allCompactedIds)
         return Rga(mergedOps, mergedLamport)
     }
