@@ -27,14 +27,12 @@ public fun interface WindowPolicy {
      * [sequence] is the full ordered sequence of all [RgaId]s (both visible and tombstoned).
      * [tombstones] is the subset that have been removed but not yet compacted.
      *
-     * The returned ids are *candidates* — what the policy *would like* dropped. [RgaGcCoordinator]
-     * gates every one through the causal-stability barrier before any is removed.
-     *
-     * **Live-element windowing is not yet wired (see [byCount]).** Forgetting old *visible* history
-     * (the convergent `DROP_OLDEST`) requires dropping live elements, which orphans the retained
-     * window unless the materializer re-roots inserts whose predecessor was compacted. That reroot
-     * primitive is a pending design decision; until it lands, a returned live id has no effect and
-     * only tombstoned candidates are compacted.
+     * The returned ids are dropped on this pass via the **history-windowing path**, which is
+     * **un-gated** — unlike tombstone GC it does not pass through the causal-stability barrier.
+     * Windowing forgets position, so dropping a live id is safe: reroot-to-HEAD (#254) keeps the
+     * retained window reachable, and a concurrent `Insert(J, after=window-dropped-I)` resurfaces
+     * at the window boundary instead of being orphaned. The barrier-gated tombstone-GC path stays
+     * separate and position-preserving; the two never share a gate.
      */
     public fun idsToTruncate(sequence: List<RgaId>, tombstones: Set<RgaId>): Set<RgaId>
 
@@ -52,13 +50,10 @@ public fun interface WindowPolicy {
          * leading prefix — every id (visible *or* tombstoned) that sorts before the start of
          * the retained window of `n` visible elements.
          *
-         * This is intended as the convergent replacement for
-         * `MutableSharedFlow(replay = n, DROP_OLDEST)`: old visible history is forgotten once it
-         * falls out of the window. **This selection is correct, but the drop is not yet enforced**
-         * for live elements — dropping a live prefix orphans the retained window unless the RGA
-         * materializer re-roots inserts whose predecessor was compacted. That reroot primitive is a
-         * pending design decision (#254 re-plan); until it lands [byCount] selects the prefix but
-         * [RgaGcCoordinator] only compacts the tombstoned subset of it.
+         * This is the convergent replacement for `MutableSharedFlow(replay = n, DROP_OLDEST)`: old
+         * visible history is forgotten once it falls out of the window. The leading prefix —
+         * **live and tombstoned ids alike** — is dropped via the un-gated windowing path;
+         * reroot-to-HEAD (#254) keeps the retained window reachable after its predecessor is purged.
          *
          * **Per-peer divergence is allowed.** Two replicas with different [n] both converge:
          * after `Compact` set-union the more-aggressive (smaller-[n]) window dominates.
