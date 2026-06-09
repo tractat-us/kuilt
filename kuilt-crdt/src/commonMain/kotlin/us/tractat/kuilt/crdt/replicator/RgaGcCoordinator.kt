@@ -111,32 +111,32 @@ public class RgaGcCoordinator<V>(
     }
 
     /**
-     * Runs [Rga.compact] + optional [windowPolicy] in a loop until no further compaction
-     * is possible for this [cut]. Handles the two-pass chain-GC case: removing a tombstone
-     * may unblock a structural predecessor, making it eligible on the next pass.
+     * Runs the barrier-gated tombstone GC ([Rga.compact]) and the un-gated history-windowing
+     * drop ([windowPolicy]) in a loop until neither yields anything further for this [cut].
+     * Handles the two-pass chain-GC case: removing a tombstone may unblock a structural
+     * predecessor, making it eligible on the next pass.
+     *
+     * The frontier-completeness check is **not** applied here: it gates only tombstone GC, and
+     * [Rga.compact] already enforces it internally (returning `null` when `delivered` does not
+     * dominate `frontierMax`). Windowing must run regardless — it forgets position and relies on
+     * reroot-to-HEAD, so it is safe even when the frontier is incomplete (#254). Keeping the gate
+     * inside [Rga.compact] is what holds the two paths apart.
      *
      * [SeamReplicator.apply] updates [StateFlow] synchronously via `StateFlow.update`, so
      * `state.value` reflects each compaction before the next loop iteration. This makes the
      * loop-until-null safe: each iteration reads fresh state and terminates when nothing
-     * further can be GC'd.
+     * further can be compacted (windowing shrinks its own candidate set as it drops the prefix).
      */
     private fun compactUntilStable(cut: CutFrontier, delivered: VersionVector) {
-        if (!delivered.dominates(cut.frontierMax)) {
-            logger.debug {
-                "[rga-gc] GC refused — frontier-incomplete: known-but-undelivered dots remain " +
-                    "(delivered=$delivered does not dominate frontierMax=${cut.frontierMax})"
-            }
-            return
-        }
         while (true) {
             val current = state.value
             val windowIds = windowPolicy.idsToTruncate(current.sequence, current.tombstones)
             val (_, compactOp) = compactWithWindow(current, cut, delivered, windowIds) ?: run {
-                logger.debug { "[rga-gc] nothing to compact at cut=$cut (stable + window yield nothing)" }
+                logger.debug { "[rga-gc] nothing to compact at cut=$cut (stable GC + window yield nothing)" }
                 return
             }
             logger.debug {
-                "[rga-gc] compacting ${compactOp.ids.size} tombstone(s) at " +
+                "[rga-gc] compacting ${compactOp.ids.size} id(s) at " +
                     "stableCut=${cut.stableCut} frontierMax=${cut.frontierMax}"
             }
             applyCompaction(Patch(Rga.empty<V>().apply(compactOp)))
@@ -144,8 +144,20 @@ public class RgaGcCoordinator<V>(
     }
 
     /**
-     * Merges GC candidates from [Rga.compact] and [windowIds], returning a unified
-     * [RgaOp.Compact] that covers both, or `null` if there is nothing to compact.
+     * Merges candidates from the **two separate** compaction paths into one unified
+     * [RgaOp.Compact], or `null` if there is nothing to compact:
+     *
+     * - **Tombstone GC** ([Rga.compact]) — barrier-gated and **position-preserving**. Drops only
+     *   tombstoned, causally-stable elements with no surviving local successor (#262/#275). This
+     *   path is *never* allowed to drop a live element; the causal-stability barrier is exactly
+     *   what keeps a concurrent `Insert(J, after=I)` from being orphaned.
+     *
+     * - **History windowing** ([windowIds]) — **un-gated and reroot-safe**. Drops the leading
+     *   prefix the [windowPolicy] selected, **including live ids** (the convergent `DROP_OLDEST`).
+     *   Windowing deliberately *forgets position*, so it does **not** need the causal-stability
+     *   gate: reroot-to-HEAD (#254) keeps the retained window reachable, and a concurrent
+     *   `Insert(J, after=window-dropped-I)` resurfaces at the window boundary rather than being
+     *   lost. The two paths stay separate by design — only the windowing path is gate-free.
      */
     private fun compactWithWindow(
         rga: Rga<V>,
@@ -153,24 +165,14 @@ public class RgaGcCoordinator<V>(
         delivered: VersionVector,
         windowIds: Set<RgaId>,
     ): Pair<Rga<V>, RgaOp.Compact>? {
-        val gcResult = rga.compact(
+        val gcIds = rga.compact(
             stableCut = cut.stableCut,
             frontierMax = cut.frontierMax,
             delivered = delivered,
-        )
-        val windowTombstones = windowIds.intersect(rga.tombstones)
-        return when {
-            gcResult != null && windowTombstones.isNotEmpty() -> {
-                val (gcRga, gcOp) = gcResult
-                val mergedIds = gcOp.ids + windowTombstones
-                gcRga to RgaOp.Compact(mergedIds)
-            }
-            gcResult != null -> gcResult
-            windowTombstones.isNotEmpty() -> {
-                val compactOp = RgaOp.Compact(windowTombstones)
-                rga.apply(compactOp) to compactOp
-            }
-            else -> null
-        }
+        )?.second?.ids.orEmpty()
+        val dropIds = gcIds + windowIds.intersect(rga.sequence.toSet())
+        if (dropIds.isEmpty()) return null
+        val compactOp = RgaOp.Compact(dropIds)
+        return rga.apply(compactOp) to compactOp
     }
 }
