@@ -144,28 +144,33 @@ public class RgaGcCoordinator<V>(
     }
 
     /**
-     * Compacts tombstone-GC candidates **and** [windowIds] (which may include *live* elements
-     * targeted by the history window) in a single barrier-gated pass, returning the unified
-     * [RgaOp.Compact] or `null` if nothing qualifies.
-     *
-     * The candidate set is `tombstones ∪ windowIds`. Every candidate — tombstone or live — is held
-     * to the identical causal-stability barrier inside [Rga.compactCandidates]: a live window-id is
-     * dropped **only** when causally stable, frontier-complete, and free of any surviving local
-     * successor. This is what makes history-windowing of live elements safe against the #275 hazard
-     * (a concurrent undelivered `Insert(J, after=I)` blocks dropping `I` via the no-successor /
-     * frontier conditions, exactly as for tombstone GC). A live candidate not yet barrier-safe is
-     * deferred to a later pass; convergence still holds because the broadcast `Compact` set-unions.
+     * Merges GC candidates from [Rga.compact] and [windowIds], returning a unified
+     * [RgaOp.Compact] that covers both, or `null` if there is nothing to compact.
      */
     private fun compactWithWindow(
         rga: Rga<V>,
         cut: CutFrontier,
         delivered: VersionVector,
         windowIds: Set<RgaId>,
-    ): Pair<Rga<V>, RgaOp.Compact>? =
-        rga.compactCandidates(
-            candidates = rga.tombstones + windowIds,
+    ): Pair<Rga<V>, RgaOp.Compact>? {
+        val gcResult = rga.compact(
             stableCut = cut.stableCut,
             frontierMax = cut.frontierMax,
             delivered = delivered,
         )
+        val windowTombstones = windowIds.intersect(rga.tombstones)
+        return when {
+            gcResult != null && windowTombstones.isNotEmpty() -> {
+                val (gcRga, gcOp) = gcResult
+                val mergedIds = gcOp.ids + windowTombstones
+                gcRga to RgaOp.Compact(mergedIds)
+            }
+            gcResult != null -> gcResult
+            windowTombstones.isNotEmpty() -> {
+                val compactOp = RgaOp.Compact(windowTombstones)
+                rga.apply(compactOp) to compactOp
+            }
+            else -> null
+        }
+    }
 }
