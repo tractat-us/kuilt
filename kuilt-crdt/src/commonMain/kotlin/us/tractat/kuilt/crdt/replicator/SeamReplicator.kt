@@ -204,15 +204,41 @@ public class SeamReplicator<S : Quilted<S>>(
 
     /**
      * The matrix clock: `peer → that peer's last-gossiped delivered VV`. Populated by
-     * inbound [ReplicatorMessage.Delivered]. **Unconsumed in this slice (#268)** — the
-     * stable-cut / frontier StateFlows and the eviction retain-before-drop logic that
-     * read it land in #269 (honoring wiring invariants W1/W2 of the ADR §4.6). Mutated
-     * only from the single seam-incoming collector coroutine (W2).
+     * inbound [ReplicatorMessage.Delivered]; consumed by [recomputeCut] to derive the
+     * stable cut and frontier. Mutated only from the single confined coroutine context
+     * (W2 of ADR §4.6 — see [recomputeCut] / [evictStalePeers]).
      */
     private val frontiers: MutableMap<PeerId, VersionVector> = mutableMapOf()
 
     /** Exposed internally so tests can observe the matrix clock. */
     internal val frontiersForTest: Map<PeerId, VersionVector> get() = frontiers
+
+    /**
+     * The eviction-proof floor on known-to-exist dots (ADR §4.2). On eviction, a
+     * departing peer's last-gossiped frontier is folded in by elementwise max
+     * ([evictStalePeers], retain rule §4.3) so `F` never falls below a dot the peer
+     * witnessed; entries are released (§4.4 release rule) once self delivers them (R1)
+     * or a live peer dominates them (R2). Mutated only from the confined context (W2).
+     */
+    private var retainedFrontier: VersionVector = VersionVector.EMPTY
+
+    /** The monotonic stable cut `S` — never decreases (ADR §4.2; a FullState-synced joiner must not lower it). */
+    private var monotonicStableCut: VersionVector = VersionVector.EMPTY
+
+    private val _cutFrontier = MutableStateFlow(CutFrontier.EMPTY)
+
+    /**
+     * The causal-stability cut + frontier, recomputed on every matrix change (local
+     * apply, inbound delta, inbound [ReplicatorMessage.Delivered], join, eviction) and
+     * published **atomically** as a single [CutFrontier] (W1 of ADR §4.6). A
+     * [us.tractat.kuilt.crdt.Rga] GC coordinator (#270) consumes this together with
+     * [deliveredLocal] and feeds them to `Rga.compact(stableCut, frontierMax, delivered)`.
+     * For CRDTs that expose no dots (the delta-state zoo) it stays at [CutFrontier.EMPTY].
+     */
+    public val cutFrontier: StateFlow<CutFrontier> = _cutFrontier.asStateFlow()
+
+    /** Exposed internally so tests can observe the retained frontier. */
+    internal val retainedFrontierForTest: VersionVector get() = retainedFrontier
 
     private var nextSeq: Long = 0L
     private val pendingDeltas: MutableMap<Long, S> = mutableMapOf()
@@ -290,6 +316,35 @@ public class SeamReplicator<S : Quilted<S>>(
      */
     private fun recomputeDeliveredLocal() {
         _deliveredLocal.value = contiguousFrontier(_state.value.causalDots())
+        recomputeCut()
+    }
+
+    /**
+     * Recomputes the stable cut `S`, the retained-frontier release (§4.4), and the
+     * frontier `F = max(F_live, retainedFrontier)`, then publishes both as one atomic
+     * [CutFrontier] (W1 of ADR §4.6 — no observable half-update). Called from every
+     * site that mutates the matrix-clock state ([recomputeDeliveredLocal], [onDelivered],
+     * [onPeersChanged], [evictStalePeers]); all run on the single confined coroutine
+     * context (W2) — this method must never be moved into a separately-launched coroutine.
+     *
+     * `S = min over live peers ∪ self` (a known-but-not-yet-gossiped peer contributes
+     * [VersionVector.EMPTY], conservatively flooring `S` to 0 until it gossips), kept
+     * monotonic. `F_live = max over live peers ∪ self`.
+     */
+    private fun recomputeCut() {
+        val self = _deliveredLocal.value
+        val rows = knownPeers.map { frontiers[it] ?: VersionVector.EMPTY } + self
+        val fLive = rows.fold(VersionVector.EMPTY) { acc, vv -> acc.ceilWith(vv) }
+        val sMin = rows.reduce { acc, vv -> acc.floorWith(vv) } // rows always non-empty (self)
+        monotonicStableCut = monotonicStableCut.ceilWith(sMin)
+        // Release rule §4.4: a retained entry survives only as the EXCESS over what self
+        // has delivered (R1) or any live peer witnesses (R2).
+        val selfOrLive = self.ceilWith(fLive)
+        retainedFrontier = VersionVector.of(
+            retainedFrontier.entries.filter { (author, seq) -> seq > selfOrLive[author] },
+        )
+        val fMax = fLive.ceilWith(retainedFrontier)
+        _cutFrontier.value = CutFrontier(stableCut = monotonicStableCut, frontierMax = fMax)
     }
 
     /**
@@ -324,13 +379,26 @@ public class SeamReplicator<S : Quilted<S>>(
         val toEvict = knownPeers
             .filter { peer -> peer !in currentPeers && isStale(peer, now) }
             .toSet()
+        if (toEvict.isEmpty()) return
+
+        // W1 (ADR §4.6) — retain-capture-BEFORE-drop atomicity. Fold every evicting peer's
+        // last-gossiped row into `retainedFrontier` (retain rule §4.3) FIRST, then drop the
+        // live rows. Both halves run synchronously on this single confined coroutine (W2)
+        // and `cutFrontier` is republished exactly once, at the end — so a compactor can
+        // never observe an intermediate where `F_live` has fallen but `retainedFrontier`
+        // has not yet floored (that intermediate is precisely the #275 hole).
+        toEvict.forEach { peer ->
+            frontiers[peer]?.let { retainedFrontier = retainedFrontier.ceilWith(it) }
+        }
         toEvict.forEach { peer ->
             knownPeers.remove(peer)
+            frontiers.remove(peer)
             ackedThrough.remove(peer)
             lastSeenAt.remove(peer)
             cancelFullStateRetry(peer)
         }
-        if (toEvict.isNotEmpty()) recomputeUniversalAck()
+        recomputeUniversalAck()
+        recomputeCut()
     }
 
     private fun isStale(peer: PeerId, nowMs: Long): Boolean {
@@ -348,6 +416,10 @@ public class SeamReplicator<S : Quilted<S>>(
         val newPeers = currentPeers - seam.selfId - knownPeers
         knownPeers += currentPeers - seam.selfId
         newPeers.forEach { peer -> sendFullStateTo(peer) }
+        // A new peer that has not gossiped contributes EMPTY to `min over live` — but the
+        // cut is monotonic, so it cannot lower `S`. Safe: the joiner is FullState-synced and
+        // has no concurrent history to orphan (ADR §4.5). Recompute so membership is reflected.
+        if (newPeers.isNotEmpty()) recomputeCut()
     }
 
     private fun sendFullStateTo(peer: PeerId) {
@@ -504,12 +576,13 @@ public class SeamReplicator<S : Quilted<S>>(
     }
 
     /**
-     * Absorbs a peer's gossiped delivered VV into the [frontiers] matrix clock.
-     * **Stored only in this slice (#268)** — nothing consumes the matrix yet; the
-     * stable-cut / frontier-max derivation and eviction retain logic land in #269.
+     * Absorbs a peer's gossiped delivered VV into the [frontiers] matrix clock and
+     * recomputes the cut/frontier (the inbound knowledge can raise `F_live` and, via the
+     * §4.4 release rule, discharge retained entries this peer now witnesses).
      */
     private fun onDelivered(sender: PeerId, msg: ReplicatorMessage.Delivered<S>) {
         frontiers[sender] = msg.vector
+        recomputeCut()
     }
 
     private fun onResend(msg: ReplicatorMessage.Resend<S>) {

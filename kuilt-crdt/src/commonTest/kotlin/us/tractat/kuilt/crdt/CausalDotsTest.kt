@@ -6,8 +6,8 @@ import kotlin.test.assertEquals
 /**
  * The [Quilted.causalDots] capability (#268) — the per-CRDT causal-dot export the
  * causal-stability GC barrier folds into a delivered version vector. [Rga] returns its
- * `Insert`/`Remove` op dots and **excludes** `Compact`; every other delta-state CRDT in
- * the zoo inherits the empty default.
+ * **`Insert`** op dots and excludes `Remove`/`Compact` (#269); every other delta-state
+ * CRDT in the zoo inherits the empty default.
  */
 class CausalDotsTest {
 
@@ -15,11 +15,28 @@ class CausalDotsTest {
     private val b = ReplicaId("b")
 
     @Test
-    fun rgaExposesInsertAndRemoveDots() {
+    fun rgaExposesInsertDots() {
         val (r1, op1) = Rga.empty<String>().insertAfter(a, RgaId.HEAD, "x")
         val (r2, op2) = r1.insertAfter(b, op1.id, "y")
+        // removeAt tombstones op1's element; its Insert dot is still exported (the op stays
+        // in the log), and the Remove — which reuses op1's id — adds nothing of its own.
         val (r3, _) = r2.removeAt(0)!!
         assertEquals(setOf(op1.id.dot, op2.id.dot), r3.causalDots())
+    }
+
+    @Test
+    fun rgaExcludesOrphanRemoveDot() {
+        // A Remove delivered out-of-order — before its target Insert — must NOT cause the
+        // holder to claim it delivered that dot (it holds only the tombstone). #269: counting
+        // Remove dots would over-claim and prematurely advance the stable cut (the #275 hazard).
+        val (r1, insOp) = Rga.empty<String>().insertAfter(a, RgaId.HEAD, "x")
+        val (_, remOp) = r1.removeAt(0)!! // remOp = Remove(insOp.id)
+        val orphanRemove = Rga.empty<String>().apply(remOp) // has the Remove, NOT the Insert
+        assertEquals(
+            emptySet(),
+            orphanRemove.causalDots(),
+            "an orphan Remove (Insert absent) must not claim the target dot as delivered",
+        )
     }
 
     @Test
