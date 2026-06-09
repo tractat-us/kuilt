@@ -355,33 +355,37 @@ public class Rga<V> private constructor(
      * ops already GC'd on one peer do not re-inflate the op-log on merge.
      */
     /**
-     * The causal [Dot]s this op-log has delivered — one per surviving `Insert`/`Remove`
-     * op (`id.dot = (replicaId, seq)`). `Compact` ops are **excluded**: a compaction
-     * mints no author dot, it only records GC of others' dots.
+     * The causal [Dot]s this op-log has delivered: every `Insert`'s own dot
+     * (`id.dot = (replicaId, seq)`) **plus** every dot recorded in a `Compact` op.
      *
      * This is the [Quilted] capability the causal-stability GC barrier consumes
-     * (ADR-003 addendum v3, #262). The [SeamReplicator] folds these into a contiguous
-     * **delivered** version vector. Compacted ids are already absent from [ops], so a
-     * GC'd dot naturally drops out — which is correct: the replica still *delivered* it,
-     * but the delivered vector is recomputed from current state and a contiguous prefix
-     * that was already certified-stable does not regress (its dots sit at-or-below the
-     * stable cut that authorised the compaction).
+     * (ADR-003 addendum v3, #262); the [SeamReplicator] folds it into a **contiguous**
+     * delivered version vector. The per-author seq space is dense and defined by
+     * `Insert`s, so the set must stay gap-free across GC:
+     *
+     * - **`Insert` → its dot.**
+     * - **`Compact` → its `ids`' dots.** A compaction *removes* the GC'd `Insert`s from
+     *   [ops], but those dots **were delivered** (GC only fires once a dot is causally
+     *   stable — at-or-below the min over all peers — so every replica delivered it).
+     *   If they were dropped here, GC'ing a non-tail dot would punch a permanent hole in
+     *   the contiguous frontier, pinning that author's delivered high-water below the gap
+     *   forever and stalling all further GC for that author. Re-emitting the `Compact`'d
+     *   dots keeps the frontier monotonic across compaction. Including them cannot
+     *   over-claim: a `Compact` only exists for universally-delivered dots, and a late
+     *   joiner receives them inside FullState's already-compacted state.
+     * - **`Remove` → nothing.** A `Remove` reuses its *target Insert's* id (`removeAt`:
+     *   `val id = visible[index]`); it mints no dot of its own. Counting it would
+     *   over-claim when a `Remove(x)` is delivered out-of-order before `Insert(x)` —
+     *   reporting `x` delivered while holding only the tombstone, prematurely advancing
+     *   the stable cut (the #275-class hazard).
      */
     override fun causalDots(): Set<Dot> =
         ops.asSequence()
-            .mapNotNull { op ->
+            .flatMap { op ->
                 when (op) {
-                    is RgaOp.Insert -> op.id.dot
-                    // Inserts ONLY. A Remove reuses the *target Insert's* id (`removeAt`:
-                    // `val id = visible[index]`) — it mints no dot of its own, so the
-                    // per-author seq space is defined entirely by Inserts. Counting a
-                    // Remove would over-claim delivery when a `Remove(x)` is delivered
-                    // out-of-order before `Insert(x)`: this replica would report `x` as
-                    // delivered while holding only the tombstone, prematurely advancing the
-                    // stable cut → the #275-class premature-GC hazard. (#269; see PR #281.)
-                    is RgaOp.Remove -> null
-                    // A Compact records GC of others' dots; it mints no author dot.
-                    is RgaOp.Compact -> null
+                    is RgaOp.Insert -> sequenceOf(op.id.dot)
+                    is RgaOp.Compact -> op.ids.asSequence().map { it.dot }
+                    is RgaOp.Remove -> emptySequence()
                 }
             }
             .toSet()

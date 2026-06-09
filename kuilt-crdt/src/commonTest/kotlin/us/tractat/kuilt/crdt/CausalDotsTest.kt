@@ -40,13 +40,19 @@ class CausalDotsTest {
     }
 
     @Test
-    fun rgaExcludesCompactDots() {
-        // I inserted, removed, compacted; the Compact op contributes no dot.
+    fun rgaIncludesCompactDotsForDeliveryTracking() {
+        // I inserted, removed, compacted. The Compact RE-EMITS the GC'd dot: it was
+        // delivered (GC fires only at causal stability), so dropping it would punch a
+        // permanent hole in the contiguous delivered frontier (#262 / the regression bug).
         val (a0, opI) = Rga.empty<String>().insertAfter(a, RgaId.HEAD, "I")
         val (a1, _) = a0.removeAt(0)!!
         val stable = VersionVector.of(mapOf(a to opI.id.seq))
         val (compacted, _) = a1.compact(stableCut = stable, frontierMax = stable, delivered = stable)!!
-        assertEquals(emptySet(), compacted.causalDots(), "compacted Insert/Remove dots are gone; Compact mints none")
+        assertEquals(
+            setOf(opI.id.dot),
+            compacted.causalDots(),
+            "a Compact'd (delivered-then-GC'd) dot stays in causalDots so the frontier never regresses",
+        )
     }
 
     @Test
