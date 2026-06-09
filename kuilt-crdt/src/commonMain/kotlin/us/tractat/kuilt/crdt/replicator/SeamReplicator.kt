@@ -422,6 +422,12 @@ public class SeamReplicator<S : Quilted<S>>(
 
     private fun onResend(msg: ReplicatorMessage.Resend<S>) {
         if (msg.sender != replica) return
+        val requesterPeer = PeerId(msg.requester.value)
+        val allPresent = (msg.fromSeq..msg.toSeq).all { seq -> seq in pendingDeltas }
+        if (!allPresent) {
+            sendFullStateTo(requesterPeer)
+            return
+        }
         for (seq in msg.fromSeq..msg.toSeq) {
             val delta = pendingDeltas[seq] ?: continue
             broadcastDelta(seq, delta)
