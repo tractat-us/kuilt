@@ -17,9 +17,11 @@ import kotlinx.serialization.KSerializer
 import kotlinx.serialization.cbor.Cbor
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Seam
+import us.tractat.kuilt.crdt.Dot
 import us.tractat.kuilt.crdt.Patch
 import us.tractat.kuilt.crdt.Quilted
 import us.tractat.kuilt.crdt.ReplicaId
+import us.tractat.kuilt.crdt.VersionVector
 import us.tractat.kuilt.crdt.piece
 import kotlin.coroutines.ContinuationInterceptor
 import kotlin.time.Duration
@@ -184,6 +186,34 @@ public class SeamReplicator<S : Quilted<S>>(
      */
     public val nextSeqFlow: StateFlow<Long> = _nextSeqFlow.asStateFlow()
 
+    private val _deliveredLocal = MutableStateFlow(VersionVector.EMPTY)
+
+    /**
+     * This replica's **delivered** version vector: `author → highest contiguous
+     * (gap-free) seq this replica has applied`, derived from the current merged
+     * [state]'s [Quilted.causalDots]. Recomputed on every state change (local apply
+     * and inbound delta), so it never carries an incremental-contiguity bug — a gap
+     * in an author's dots truncates that author's high-water at the gap.
+     *
+     * This is the per-replica matrix-clock row of the causal-stability barrier
+     * (ADR-003 addendum v3, #262): it is gossiped via [ReplicatorMessage.Delivered]
+     * and folded into peers' matrices. Empty for CRDTs that expose no dots (the whole
+     * delta-state zoo); populated for [us.tractat.kuilt.crdt.Rga].
+     */
+    public val deliveredLocal: StateFlow<VersionVector> = _deliveredLocal.asStateFlow()
+
+    /**
+     * The matrix clock: `peer → that peer's last-gossiped delivered VV`. Populated by
+     * inbound [ReplicatorMessage.Delivered]. **Unconsumed in this slice (#268)** — the
+     * stable-cut / frontier StateFlows and the eviction retain-before-drop logic that
+     * read it land in #269 (honoring wiring invariants W1/W2 of the ADR §4.6). Mutated
+     * only from the single seam-incoming collector coroutine (W2).
+     */
+    private val frontiers: MutableMap<PeerId, VersionVector> = mutableMapOf()
+
+    /** Exposed internally so tests can observe the matrix clock. */
+    internal val frontiersForTest: Map<PeerId, VersionVector> get() = frontiers
+
     private var nextSeq: Long = 0L
     private val pendingDeltas: MutableMap<Long, S> = mutableMapOf()
     private val knownPeers: MutableSet<PeerId> = mutableSetOf()
@@ -244,10 +274,37 @@ public class SeamReplicator<S : Quilted<S>>(
         val seq = ++nextSeq
         _nextSeqFlow.value = seq
         pendingDeltas[seq] = patch.delta
+        recomputeDeliveredLocal()
         broadcastDelta(seq, patch.delta)
+        gossipDelivered()
     }
 
     // ---- private helpers ----
+
+    /**
+     * Recomputes [deliveredLocal] from the current [state]'s [Quilted.causalDots] as the
+     * **contiguous frontier**: per author, the highest `seq` such that every seq in
+     * `1..seq` is present. A gap truncates that author at the gap (dots `{1,2,4}` →
+     * frontier `2`). Called after every state mutation; the value only changes for
+     * dot-carrying CRDTs ([us.tractat.kuilt.crdt.Rga]).
+     */
+    private fun recomputeDeliveredLocal() {
+        _deliveredLocal.value = contiguousFrontier(_state.value.causalDots())
+    }
+
+    /**
+     * Gossips this replica's whole-room [deliveredLocal] as a [ReplicatorMessage.Delivered]
+     * broadcast. Fired on local [apply] and on the anti-entropy tick — its own cadence,
+     * separate from the delta/ack path. Skipped while the vector is empty (nothing yet
+     * delivered, so no peer's matrix row gains information).
+     */
+    private fun gossipDelivered() {
+        val vector = _deliveredLocal.value
+        if (vector.entries.isEmpty()) return
+        val msg = ReplicatorMessage.Delivered<S>(sender = replica, vector = vector)
+        val bytes = encode(msg)
+        scope.launch { runCatching { seam.broadcast(bytes) } }
+    }
 
     private fun touch(peer: PeerId) {
         lastSeenAt[peer] = clock.now()
@@ -257,6 +314,7 @@ public class SeamReplicator<S : Quilted<S>>(
         while (true) {
             delay(config.antiEntropyInterval)
             evictStalePeers()
+            gossipDelivered()
         }
     }
 
@@ -328,6 +386,7 @@ public class SeamReplicator<S : Quilted<S>>(
             is ReplicatorMessage.Ack -> onAck(msg)
             is ReplicatorMessage.FullState -> onFullState(msg)
             is ReplicatorMessage.Resend -> onResend(msg)
+            is ReplicatorMessage.Delivered -> onDelivered(sender, msg)
         }
     }
 
@@ -351,6 +410,7 @@ public class SeamReplicator<S : Quilted<S>>(
     private fun applyAndDrain(senderReplica: ReplicaId, seq: Long, delta: S, ackTarget: PeerId) {
         _state.update { it.piece(delta) }
         expectedReceiveSeq[senderReplica] = seq + 1
+        recomputeDeliveredLocal()
         sendAck(to = ackTarget, originalSender = senderReplica, seq = seq)
         drainPendingInbound(senderReplica, ackTarget)
         cancelResendRetry(senderReplica)
@@ -363,6 +423,7 @@ public class SeamReplicator<S : Quilted<S>>(
             val delta = buffer.remove(next) ?: break
             _state.update { it.piece(delta) }
             expectedReceiveSeq[senderReplica] = next + 1
+            recomputeDeliveredLocal()
             sendAck(to = ackTarget, originalSender = senderReplica, seq = next)
             next++
         }
@@ -439,6 +500,16 @@ public class SeamReplicator<S : Quilted<S>>(
 
     private fun onFullState(msg: ReplicatorMessage.FullState<S>) {
         _state.update { it.piece(msg.state) }
+        recomputeDeliveredLocal()
+    }
+
+    /**
+     * Absorbs a peer's gossiped delivered VV into the [frontiers] matrix clock.
+     * **Stored only in this slice (#268)** — nothing consumes the matrix yet; the
+     * stable-cut / frontier-max derivation and eviction retain logic land in #269.
+     */
+    private fun onDelivered(sender: PeerId, msg: ReplicatorMessage.Delivered<S>) {
+        frontiers[sender] = msg.vector
     }
 
     private fun onResend(msg: ReplicatorMessage.Resend<S>) {
@@ -460,6 +531,28 @@ public class SeamReplicator<S : Quilted<S>>(
 
     private fun decode(bytes: ByteArray): ReplicatorMessage<S> =
         binaryFormat.decodeFromByteArray(messageSerializer, bytes)
+}
+
+/**
+ * The contiguous (gap-free) frontier of a set of causal [Dot]s: for each author, the
+ * highest `seq` such that every seq in `1..seq` is present. A gap stops the frontier at
+ * the gap — dots `{1, 2, 4}` for one author yield high-water `2`. Authors with no dot at
+ * `seq == 1` contribute nothing (omitted, reading as `0`). This is exactly the
+ * **delivered** quantity the causal-stability barrier requires (ADR-003 addendum v3).
+ */
+internal fun contiguousFrontier(dots: Set<Dot>): VersionVector {
+    val seqsByAuthor: Map<ReplicaId, Set<Long>> = dots
+        .groupBy(keySelector = { it.replica }, valueTransform = { it.seq })
+        .mapValues { (_, seqs) -> seqs.toSet() }
+    val highWaters = seqsByAuthor.mapValues { (_, seqs) -> contiguousHighWater(seqs) }
+    return VersionVector.of(highWaters)
+}
+
+/** The highest `n` such that `1..n` are all in [seqs`; `0` if `1` is absent. */
+private fun contiguousHighWater(seqs: Set<Long>): Long {
+    var n = 0L
+    while ((n + 1L) in seqs) n++
+    return n
 }
 
 private fun checkNotUnderTestDispatcher(scope: CoroutineScope, strict: Boolean, expectVirtualTime: Boolean) {

@@ -3,6 +3,7 @@ package us.tractat.kuilt.crdt.replicator
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import us.tractat.kuilt.crdt.ReplicaId
+import us.tractat.kuilt.crdt.VersionVector
 
 /**
  * Wire messages exchanged between [SeamReplicator] instances.
@@ -64,5 +65,23 @@ public sealed class ReplicatorMessage<S> {
         public val sender: ReplicaId,
         public val fromSeq: Long,
         public val toSeq: Long,
+    ) : ReplicatorMessage<S>()
+
+    /**
+     * A delivered-version-vector gossip from [sender] — [sender]'s whole-room
+     * contiguous **delivered** [VersionVector] (`author → highest gap-free seq it has
+     * applied), the per-replica row of the matrix clock that decides causal stability
+     * for RGA GC (ADR-003 addendum v3, #262).
+     *
+     * Kept **separate from [Ack]** deliberately: [Ack] is per-author progress on
+     * *this* replica's own deltas and rides the delta/ack cadence; [Delivered] is a
+     * cross-author whole-room snapshot gossiped on its own cadence (on local apply and
+     * on the anti-entropy tick). The recipient stores it as that peer's matrix row.
+     */
+    @Serializable
+    @SerialName("delivered")
+    public class Delivered<S>(
+        public val sender: ReplicaId,
+        public val vector: VersionVector,
     ) : ReplicatorMessage<S>()
 }

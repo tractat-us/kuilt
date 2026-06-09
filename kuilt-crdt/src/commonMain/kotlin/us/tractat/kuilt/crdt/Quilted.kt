@@ -27,6 +27,24 @@ import kotlin.jvm.JvmInline
 public interface Quilted<S : Quilted<S>> {
     /** The join: the least-upper-bound of `this` and [other]. */
     public fun piece(other: S): S
+
+    /**
+     * The causal [Dot]s this state has delivered — `(author, author-seq)` per op.
+     *
+     * This is the capability the causal-stability GC of ADR-003 addendum v3 (#262)
+     * needs without breaking [Quilted]'s genericity: a [SeamReplicator] generic over
+     * `Quilted<S>` cannot know about any one CRDT's internal op identities, so the
+     * CRDT exposes them here. The replicator folds these dots into a contiguous
+     * **delivered** [VersionVector] (highest gap-free seq per author) and gossips it.
+     *
+     * Only op-based CRDTs whose elements carry per-author dense [Dot]s participate —
+     * today that is [Rga], which returns its `Insert`/`Remove` op dots and **excludes**
+     * `Compact` ops (a compaction mints no author dot). Every other delta-state CRDT in
+     * the zoo (`GCounter`, `ORSet`, …) does not use this GC path; the default empty set
+     * keeps the capability non-breaking for them — they contribute nothing to any
+     * delivered vector.
+     */
+    public fun causalDots(): Set<Dot> = emptySet()
 }
 
 /**
