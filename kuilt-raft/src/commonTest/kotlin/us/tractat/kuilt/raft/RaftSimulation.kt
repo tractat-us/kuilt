@@ -81,10 +81,45 @@ class RaftSimulation(
         traces[id] = ring
         nodeScope.launch {
             node.trace.collect { event ->
+                // Monotonic count of election-cycle markers across all nodes; the await helpers bound
+                // the churn a single await may tolerate so a non-converging cluster (leadership that
+                // never settles) FAILS FAST with a dump instead of running out the wall clock.
+                if (event is RaftTraceEvent.Timeout || event is RaftTraceEvent.BecomeLeader) churnEvents++
                 if (ring.size >= TRACE_RING_CAPACITY) ring.removeFirst()
                 ring.addLast(event)
             }
         }
+    }
+
+    /**
+     * Monotonic count of election-cycle markers ([RaftTraceEvent.Timeout] + [RaftTraceEvent.BecomeLeader])
+     * observed across every node. A converging scenario fires only a handful per await; runaway
+     * leadership thrash inflates it without bound. See [tick] / [MAX_ELECTION_THRASH].
+     */
+    private var churnEvents: Long = 0L
+
+    /**
+     * Upper bound on [churnEvents] for the in-flight await, set by [awaitOrDump] to
+     * `churnEvents + MAX_ELECTION_THRASH`. [tick] trips when it is exceeded.
+     *
+     * NOTE: this catches non-convergence that still *advances virtual time* (delay-based election
+     * timers keep firing, so [tick] keeps running and can observe the churn). A pathological scenario
+     * that spins the scheduler CPU-bound at a *single* virtual instant starves [tick] itself and is an
+     * engine bug — it must be fixed at the source, not papered over here.
+     */
+    private var churnDeadline: Long = Long.MAX_VALUE
+
+    /**
+     * One virtual-time poll step: trip the election-thrash bound if this await has churned past
+     * [churnDeadline], else advance virtual time by 1 ms so the engine actors run to a quiescent point.
+     */
+    private suspend fun tick() {
+        if (churnEvents > churnDeadline) {
+            throw AssertionError(withContext(NonCancellable) {
+                dumpState("election thrash exceeded $MAX_ELECTION_THRASH cycles — cluster is not converging")
+            })
+        }
+        delay(1)
     }
 
     fun crash(id: NodeId) {
@@ -205,13 +240,13 @@ class RaftSimulation(
         awaitOrDump("changeMembershipOnLeader($target)", within) {
             while (true) {
                 val l = leader()
-                if (l == null) { delay(1); continue }
+                if (l == null) { tick(); continue }
                 try {
                     return@awaitOrDump l.changeMembership(target)
                 } catch (_: NotLeaderException) {
-                    delay(1)
+                    tick()
                 } catch (_: MembershipChangeInProgressException) {
-                    delay(1)
+                    tick()
                 }
             }
             @Suppress("UNREACHABLE_CODE") error("unreachable")
@@ -229,11 +264,11 @@ class RaftSimulation(
     ): LogEntry = awaitOrDump("proposeOnLeader", within) {
         while (true) {
             val l = leader()?.takeIf { among == null || nodeIdOf(it) in among }
-            if (l == null) { delay(1); continue }
+            if (l == null) { tick(); continue }
             try {
                 return@awaitOrDump l.propose(command)
             } catch (_: NotLeaderException) {
-                delay(1)
+                tick()
             }
         }
         @Suppress("UNREACHABLE_CODE") error("unreachable")
@@ -271,7 +306,7 @@ class RaftSimulation(
     private suspend fun <T : Any> pollUntil(probe: () -> T?): T {
         while (true) {
             probe()?.let { return it }
-            delay(1)
+            tick()
         }
     }
 
@@ -279,11 +314,17 @@ class RaftSimulation(
         what: String,
         within: Duration = DEFAULT_AWAIT,
         block: suspend () -> T,
-    ): T = try {
-        withTimeout(within) { block() }
-    } catch (_: TimeoutCancellationException) {
-        // withTimeout cancelled us; suspend again on a fresh job to render the dump.
-        throw AssertionError(withContext(NonCancellable) { dumpState("$what timed out after $within") })
+    ): T {
+        val priorDeadline = churnDeadline
+        churnDeadline = churnEvents + MAX_ELECTION_THRASH
+        return try {
+            withTimeout(within) { block() }
+        } catch (_: TimeoutCancellationException) {
+            // withTimeout cancelled us; suspend again on a fresh job to render the dump.
+            throw AssertionError(withContext(NonCancellable) { dumpState("$what timed out after $within") })
+        } finally {
+            churnDeadline = priorDeadline
+        }
     }
 
     /** Isolates a single node from every other node — the offline-follower scenario. */
@@ -427,6 +468,13 @@ class RaftSimulation(
     private companion object {
         const val TRACE_RING_CAPACITY = 256
         const val RECENT_EVENTS = 12
+
+        /**
+         * Election-cycle markers a single await tolerates before [tick] fails fast. Generous enough to
+         * absorb the few elections a legitimate crash/partition scenario provokes, tight enough to trip
+         * on a cluster that never converges. Tune up only if a real converging scenario exceeds it.
+         */
+        const val MAX_ELECTION_THRASH = 60L
         val DEFAULT_AWAIT = 2.seconds
     }
 }
