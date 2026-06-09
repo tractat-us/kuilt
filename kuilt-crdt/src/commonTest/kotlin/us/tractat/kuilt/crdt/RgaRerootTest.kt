@@ -106,7 +106,7 @@ class RgaRerootTest {
      * position; J chain-follows I→M and lands below M → `[M, J]`.
      */
     @Test
-    fun evictionOrphanRerootsAbovePrecedingContent() {
+    fun evictionOrphanPositionalReroot() {
         val (r0, opM) = Rga.empty<String>().insertAfter(p, RgaId.HEAD, "M")
         val (r1, opI) = r0.insertAfter(p, opM.id, "I")
         val (r2, opJ) = r1.insertAfter(p, opI.id, "J")

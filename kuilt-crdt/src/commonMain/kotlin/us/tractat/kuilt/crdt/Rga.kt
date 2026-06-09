@@ -163,6 +163,8 @@ public class Rga<V> private constructor(
      * Union of all [RgaOp.Compact] ops' [RgaOp.Compact.positions] maps in this log.
      * Maps each compacted id to its [RgaOp.Insert.after] at GC time.
      * Used by [computeSequence] to resolve orphaned elements to their nearest surviving ancestor.
+     * Collisions are impossible: a given id's [RgaOp.Insert.after] is fixed at insert time,
+     * so two [RgaOp.Compact] ops can carry the same key only with the same value.
      */
     private val compactPositions: Map<RgaId, RgaId> by lazy {
         ops.filterIsInstance<RgaOp.Compact>()
