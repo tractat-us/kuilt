@@ -25,7 +25,7 @@ import kotlinx.serialization.encoding.encodeStructure
  *
  * - Insert: `{ "t": 0, "id": RgaId, "v": V, "a": RgaId }`
  * - Remove: `{ "t": 1, "id": RgaId }`
- * - Compact: `{ "t": 2, "positions": Map<RgaId, RgaId> }`
+ * - Compact: `{ "t": 2, "pos": Map<RgaId, RgaId> }`
  *
  * @param vSerializer the serializer for the element type [V].
  */
@@ -42,7 +42,7 @@ public class RgaOpSerializer<V>(
         element("id", rgaIdSerializer.descriptor, isOptional = true)          // Insert + Remove
         element("v", vSerializer.descriptor, isOptional = true)               // Insert only
         element("a", rgaIdSerializer.descriptor, isOptional = true)           // Insert only
-        element("positions", positionsSerializer.descriptor, isOptional = true) // Compact only
+        element("pos", positionsSerializer.descriptor, isOptional = true)    // Compact only
     }
 
     override fun serialize(encoder: Encoder, value: RgaOp<V>): Unit = encoder.encodeStructure(descriptor) {
