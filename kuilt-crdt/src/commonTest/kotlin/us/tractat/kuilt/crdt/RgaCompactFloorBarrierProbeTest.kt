@@ -79,25 +79,20 @@ class RgaCompactFloorBarrierProbeTest {
 
         val result = compactFloor(aTombstoned, floorAtA)
 
-        // I's author-floor authorises GC of I, and A's local op-log has NO
-        // surviving Insert(after=I) because A never delivered J. So condition 3
-        // does NOT catch it. The floor barrier as designed STILL GCs I here.
-        if (result != null) {
-            val (aCompacted, compactOp) = result
-            val aFinal = aCompacted.apply(opJ)
-            val cFinal = cWithJ.apply(compactOp)
-            assertEquals(aFinal, cFinal, "convergence still holds")
-            // If we reach here with I GC'd, J is orphaned -> data loss.
-            assertEquals(
-                listOf("J"),
-                aFinal.toList(),
-                "DESIGN HOLDS only if J survives; if this fails the barrier is UNSOUND",
-            )
-        } else {
-            // Barrier refused GC -> sound for this interleaving.
-            assertTrue(true, "floor refused GC; J trivially survives")
-            assertEquals(listOf("J"), cWithJ.apply(RgaOp.Compact(emptySet())).toList())
-        }
+        // GREEN here == the barrier is UNSOUND. I's author-floor authorises GC of
+        // I, and A's local op-log has NO surviving Insert(after=I) because A never
+        // delivered J. Condition 3 is blind, so the barrier STILL GCs I.
+        assertTrue(result != null, "barrier GC'd I despite undelivered concurrent successor J")
+        val (aCompacted, compactOp) = result
+        val aFinal = aCompacted.apply(opJ)
+        val cFinal = cWithJ.apply(compactOp)
+        assertEquals(aFinal, cFinal, "convergence still holds (the bug is loss, not divergence)")
+        // J is orphaned everywhere — the committed insert is silently lost.
+        assertEquals(
+            emptyList(),
+            aFinal.toList(),
+            "UNSOUND: J lost. A correct barrier would refuse GC of I and yield [J].",
+        )
     }
 
     /**
@@ -134,13 +129,18 @@ class RgaCompactFloorBarrierProbeTest {
 
         val result = compactFloor(aTombstoned, floor)
 
-        // If result != null, I was GC'd despite J being undelivered to A -> the
-        // barrier is UNSOUND for this interleaving.
-        assertNull(
-            result,
-            "BARRIER UNSOUND: floor[a] authorised GC of I while concurrent Insert(J, after=I) " +
-                "was undelivered to the compactor; condition 3 is blind; J will be orphaned. " +
-                "result=$result",
+        // GREEN here == UNSOUND. A correct barrier would return null (refuse GC).
+        // The design returns Compact({I}) because the gate only consults floor[a]
+        // (I's own author) and A's local op-log, never floor[c]/seq(J).
+        assertTrue(
+            result != null,
+            "expected the design to (wrongly) GC I; if this is null the design was fixed",
+        )
+        assertEquals(
+            setOf(opI.id),
+            result.second.ids,
+            "UNSOUND: floor[a] authorised GC of I while Insert(J, after=I) was undelivered; " +
+                "condition 3 blind; J orphaned",
         )
     }
 
@@ -240,9 +240,16 @@ class RgaCompactFloorBarrierProbeTest {
         val floor = mapOf(a to opI.id.lamport)
         val (aCompacted, _) = compactFloor(aTomb, floor)!!
 
-        // Raw apply of a late Insert(I) — bypasses piece's purge.
+        // Raw apply of a late Insert(I) — bypasses piece's purge. Unlike piece,
+        // `apply` does NOT consult compactedIds, so the GC'd element resurrects.
+        // The live replicator path uses piece (idempotent), masking this; but it
+        // is a latent sharp edge: any future caller delivering ops through bare
+        // `apply` re-inflates compacted elements.
         val resurrected = aCompacted.apply(opI)
-        // Document actual behaviour: does I come back?
-        println("PROBE rawApply reintroduction -> toList=${resurrected.toList()}")
+        assertEquals(
+            listOf("I"),
+            resurrected.toList(),
+            "documents the bare-apply resurrection hazard: apply() ignores compactedIds",
+        )
     }
 }
