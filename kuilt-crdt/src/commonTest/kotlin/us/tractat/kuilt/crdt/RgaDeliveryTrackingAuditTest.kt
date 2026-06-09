@@ -138,7 +138,7 @@ class RgaDeliveryTrackingAuditTest {
         // Holder has an orphan Remove(a,1) (Insert absent) AND merges a state that carries a
         // Compact for a DIFFERENT author c. The orphan dot must STILL be excluded — the
         // unrelated Compact must not resurrect (a,1) into causalDots.
-        val (r1, insA) = Rga.empty<String>().insertAfter(a, RgaId.HEAD, "x") // (a,1)
+        val (r1, _) = Rga.empty<String>().insertAfter(a, RgaId.HEAD, "x") // (a,1)
         val (_, remA) = r1.removeAt(0)!!
         val orphan = Rga.empty<String>().apply(remA) // Remove(a,1), no Insert
         assertEquals(emptySet(), orphan.causalDots(), "baseline: orphan Remove excluded")
@@ -155,7 +155,7 @@ class RgaDeliveryTrackingAuditTest {
             merged.causalDots(),
             "merging an unrelated third-author Compact must not resurrect the orphan-Remove dot (a,1)",
         )
-        assertNull(merged.causalDots().firstOrNull { it == Dot(a, 1L) }?.let { it }, "(a,1) absent")
+        assertTrue(Dot(a, 1L) !in merged.causalDots(), "(a,1) absent from the merged delivery surface")
     }
 
     @Test
@@ -230,6 +230,56 @@ class RgaDeliveryTrackingAuditTest {
             "two GC rounds accrue both dots — neither lost, neither doubled",
         )
         assertEquals(3L, frontier(r2)[a], "frontier stable across two compaction rounds")
+    }
+
+    // ---- Sharp corners surfaced during the audit ----
+
+    @Test
+    fun deliveredLocalNeverRegressesAcrossAPurgingMerge() {
+        // The #284 sibling to fear: a merge that PURGES Insert dots while lowering the frontier.
+        // piece only purges ids covered by a Compact in the union, and causalDots re-emits those
+        // Compact dots — so the contiguous frontier is monotonic across any merge. Pin it.
+        val (base, ids, _) = threeByA()
+        val full = VersionVector.of(mapOf(a to 3L))
+
+        val before = frontier(base)[a]
+        // A peer that has GC'd ALL THREE of a's dots (Compact{(a,1),(a,2),(a,3)}), all Inserts purged.
+        var tomb = base
+        listOf(0, 1, 2).forEach { i ->
+            val idx = tomb.sequence.filter { it !in tomb.tombstones }.indexOf(ids[i])
+            tomb = tomb.removeAt(idx)!!.first
+        }
+        val fullyCompacted = tomb.compact(stableCut = full, frontierMax = full, delivered = full)!!.first
+        assertEquals(emptyList(), fullyCompacted.toList(), "all visible elements GC'd")
+
+        val merged = base.piece(fullyCompacted)
+        assertTrue(frontier(merged)[a] >= before, "frontier must not regress when a fully-compacted peer merges in")
+        assertEquals(3L, frontier(merged)[a], "and it holds at the full high-water (3), not below")
+    }
+
+    @Test
+    fun compactDotForAnUnseenAuthorDoesNotOverClaimWithAGap() {
+        // A Compact can carry dots for an author the receiver never delivered an Insert from
+        // (a late joiner absorbs a peer's already-compacted state). causalDots emits those dots
+        // verbatim — and contiguousFrontier must apply the SAME gap rule to them. If b's only
+        // Compact'd dot is (b,2) with no (b,1), the receiver must read b as 0, never 2.
+        val (b0, bIns1) = Rga.empty<String>().insertAfter(b, RgaId.HEAD, "b1") // (b,1)
+        val (b1, bIns2) = b0.insertAfter(b, RgaId.HEAD, "b2")                  // (b,2)
+        // Tombstone + GC ONLY (b,2): a non-contiguous Compact relative to a holder missing (b,1).
+        val idx = b1.sequence.filter { it !in b1.tombstones }.indexOf(bIns2.id)
+        val tomb = b1.removeAt(idx)!!.first
+        val full = VersionVector.of(mapOf(b to 2L))
+        val (_, compactOp) = tomb.compact(stableCut = full, frontierMax = full, delivered = full)!!
+        assertEquals(setOf(Dot(b, 2L)), compactOp.ids.map { it.dot }.toSet(), "Compact carries only (b,2)")
+
+        // A receiver that has NOT delivered (b,1) applies this Compact in isolation.
+        val receiver = Rga.empty<String>().apply(compactOp)
+        assertEquals(setOf(Dot(b, 2L)), receiver.causalDots(), "the Compact'd dot is exported")
+        assertEquals(
+            0L,
+            frontier(receiver)[b],
+            "a Compact'd dot at seq 2 with no seq 1 must NOT advance the frontier — gap rule applies to Compact dots too",
+        )
     }
 
     @Test
