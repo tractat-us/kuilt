@@ -2,6 +2,8 @@
 
 package us.tractat.kuilt.crdt.replicator
 
+import kotlinx.atomicfu.locks.reentrantLock
+import kotlinx.atomicfu.locks.withLock
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -154,6 +156,22 @@ public class SeamReplicator<S : Quilted<S>>(
      */
     private val binaryFormat: BinaryFormat = Cbor,
 ) {
+    /**
+     * Guards every mutation of the plain replicator state (`nextSeq`, `pendingDeltas`,
+     * `knownPeers`, `ackedThrough`, `expectedReceiveSeq`, `pendingInbound`, `frontiers`,
+     * `retainedFrontier`, `monotonicStableCut`, `lastSeenAt`, the retry-job maps).
+     *
+     * Four contexts read-modify-write that state — public [apply] (any caller thread) plus the
+     * three `launchIn(scope)` collectors ([dispatch] over `seam.incoming`, [onPeersChanged] over
+     * `seam.peers`, and [runAntiEntropy]) — and a consumer may run them under a multithreaded
+     * dispatcher. This coarse **reentrant** lock serialises them (ADR-003 §4.6 W2). Critical
+     * sections are pure synchronous map updates (µs); all I/O (`seam.broadcast`/`sendTo`) and
+     * every `delay` already run in separate `scope.launch {}` children, so the lock is never held
+     * across a suspension point and one lock cannot deadlock. Reentrant ⇒ the rule is uniformly
+     * "touch state only under `lock`", composable as helpers call one another.
+     */
+    private val lock = reentrantLock()
+
     private val _state = MutableStateFlow(initial)
     public val state: StateFlow<S> = _state.asStateFlow()
 
@@ -283,7 +301,7 @@ public class SeamReplicator<S : Quilted<S>>(
      * Apply a local mutation. Updates [state] synchronously; broadcasts a [ReplicatorMessage.Delta]
      * to all current peers asynchronously (fire-and-forget within [scope]).
      */
-    public fun apply(patch: Patch<S>) {
+    public fun apply(patch: Patch<S>): Unit = lock.withLock {
         _state.update { it.piece(patch) }
         val seq = ++nextSeq
         pendingDeltas[seq] = patch.delta
@@ -356,15 +374,18 @@ public class SeamReplicator<S : Quilted<S>>(
         scope.launch { runCatching { seam.broadcast(bytes) } }
     }
 
-    private fun touch(peer: PeerId) {
+    private fun touch(peer: PeerId): Unit = lock.withLock {
         lastSeenAt[peer] = clock.now()
     }
 
     private suspend fun runAntiEntropy() {
         while (true) {
             delay(config.antiEntropyInterval)
-            evictStalePeers()
-            gossipDelivered()
+            // Lock the state work, NOT the delay (which must stay a suspension point outside it).
+            lock.withLock {
+                evictStalePeers()
+                gossipDelivered()
+            }
         }
     }
 
@@ -407,7 +428,7 @@ public class SeamReplicator<S : Quilted<S>>(
         scope.launch { runCatching { seam.broadcast(bytes) } }
     }
 
-    private fun onPeersChanged(currentPeers: Set<PeerId>) {
+    private fun onPeersChanged(currentPeers: Set<PeerId>): Unit = lock.withLock {
         val newPeers = currentPeers - seam.selfId - knownPeers
         knownPeers += currentPeers - seam.selfId
         newPeers.forEach { peer -> sendFullStateTo(peer) }
@@ -432,12 +453,14 @@ public class SeamReplicator<S : Quilted<S>>(
         pendingFullStateJobs[peer]?.cancel()
         pendingFullStateJobs[peer] = scope.launch {
             delay(config.fullStateRetryInterval)
-            if (peer in knownPeers) {
-                val msg = ReplicatorMessage.FullState(sender = replica, state = _state.value)
-                val bytes = encode(msg)
-                runCatching { seam.sendTo(peer, bytes) }
-                scheduleFullStateRetry(peer, attemptsLeft - 1)
+            // Snapshot the frame under the lock; perform the suspending send OUTSIDE it; then
+            // reschedule under the lock again — the lock is never held across `seam.sendTo`.
+            val bytes = lock.withLock {
+                if (peer !in knownPeers) return@launch
+                encode(ReplicatorMessage.FullState(sender = replica, state = _state.value))
             }
+            runCatching { seam.sendTo(peer, bytes) }
+            lock.withLock { scheduleFullStateRetry(peer, attemptsLeft - 1) }
         }
     }
 
@@ -445,9 +468,9 @@ public class SeamReplicator<S : Quilted<S>>(
         pendingFullStateJobs.remove(peer)?.cancel()
     }
 
-    private fun dispatch(sender: PeerId, payload: ByteArray) {
+    private fun dispatch(sender: PeerId, payload: ByteArray): Unit = lock.withLock {
         cancelFullStateRetry(sender)
-        val msg = runCatching { decode(payload) }.getOrNull() ?: return
+        val msg = runCatching { decode(payload) }.getOrNull() ?: return@withLock
         when (msg) {
             is ReplicatorMessage.Delta -> onDelta(sender, msg)
             is ReplicatorMessage.Ack -> onAck(msg)
@@ -521,11 +544,15 @@ public class SeamReplicator<S : Quilted<S>>(
         pendingResendJobs[sender]?.cancel()
         pendingResendJobs[sender] = scope.launch {
             delay(config.resendRetryInterval)
-            // Re-check that the gap is still open before retrying.
-            val stillExpecting = expectedReceiveSeq[sender] ?: 1L
-            if (stillExpecting <= toSeq) {
-                sendResend(to, sender, stillExpecting, toSeq)
-                scheduleResendRetry(to, sender, stillExpecting, toSeq)
+            // Lock the state re-check + reschedule, NOT the preceding delay. `sendResend` only
+            // launches a child coroutine for the actual send, so it stays safe under the lock.
+            lock.withLock {
+                // Re-check that the gap is still open before retrying.
+                val stillExpecting = expectedReceiveSeq[sender] ?: 1L
+                if (stillExpecting <= toSeq) {
+                    sendResend(to, sender, stillExpecting, toSeq)
+                    scheduleResendRetry(to, sender, stillExpecting, toSeq)
+                }
             }
         }
     }
