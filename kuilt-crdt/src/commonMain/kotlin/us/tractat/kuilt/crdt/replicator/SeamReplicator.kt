@@ -174,18 +174,6 @@ public class SeamReplicator<S : Quilted<S>>(
      */
     public val universalAckFlow: StateFlow<Long> = _universalAckFlow.asStateFlow()
 
-    private val _nextSeqFlow = MutableStateFlow(0L)
-
-    /**
-     * The sequence number that will be assigned to the **next** local [apply] call.
-     * Advances by 1 on each [apply]; `_nextSeqFlow.value - 1` is the seq of the most
-     * recently applied local delta, or 0 if no local delta has been applied yet.
-     *
-     * Exposed for coordinators ([us.tractat.kuilt.crdt.replicator.RgaGcCoordinator]) that need
-     * to correlate local delta sequences with CRDT state snapshots.
-     */
-    public val nextSeqFlow: StateFlow<Long> = _nextSeqFlow.asStateFlow()
-
     private val _deliveredLocal = MutableStateFlow(VersionVector.EMPTY)
 
     /**
@@ -298,11 +286,9 @@ public class SeamReplicator<S : Quilted<S>>(
     public fun apply(patch: Patch<S>) {
         _state.update { it.piece(patch) }
         val seq = ++nextSeq
-        _nextSeqFlow.value = seq
         pendingDeltas[seq] = patch.delta
         recomputeDeliveredLocal()
         broadcastDelta(seq, patch.delta)
-        gossipDelivered()
     }
 
     // ---- private helpers ----
@@ -313,10 +299,19 @@ public class SeamReplicator<S : Quilted<S>>(
      * `1..seq` is present. A gap truncates that author at the gap (dots `{1,2,4}` →
      * frontier `2`). Called after every state mutation; the value only changes for
      * dot-carrying CRDTs ([us.tractat.kuilt.crdt.Rga]).
+     *
+     * When the vector **advances** — on local [apply] *and* on every inbound delivery
+     * ([applyAndDrain], [drainPendingInbound], [onFullState]) — this replica [gossipDelivered]s
+     * the fresh row so peers' matrix clocks (and hence the [cutFrontier] that drives RGA GC)
+     * converge without waiting on the slow anti-entropy tick. A receiver that just delivered an
+     * author's op is the timeliest witness of that delivery; gossiping here is what lets the
+     * stable cut rise as deltas land rather than only once per [SeamReplicatorConfig.antiEntropyInterval].
      */
     private fun recomputeDeliveredLocal() {
+        val previous = _deliveredLocal.value
         _deliveredLocal.value = contiguousFrontier(_state.value.causalDots())
         recomputeCut()
+        if (_deliveredLocal.value != previous) gossipDelivered()
     }
 
     /**

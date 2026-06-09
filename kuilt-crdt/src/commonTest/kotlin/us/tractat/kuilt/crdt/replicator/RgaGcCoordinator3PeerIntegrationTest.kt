@@ -11,7 +11,6 @@
     kotlinx.serialization.ExperimentalSerializationApi::class,
     kotlinx.coroutines.ExperimentalCoroutinesApi::class,
 )
-@file:Suppress("DEPRECATION")
 
 package us.tractat.kuilt.crdt.replicator
 
@@ -55,10 +54,9 @@ private fun wireRgaWithGc(
         config = RGA_REP_CFG,
     )
     RgaGcCoordinator(
-        replicaId = replica,
         state = replicator.state,
-        universalAck = replicator.universalAckFlow,
-        localSeq = replicator.nextSeqFlow,
+        cutFrontier = replicator.cutFrontier,
+        delivered = replicator.deliveredLocal,
         applyCompaction = { patch -> replicator.apply(patch) },
         scope = scope,
     )
