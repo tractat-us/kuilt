@@ -254,6 +254,11 @@ class RaftSimulation(
             pollUntil { nodes[id]?.takeIf(pred) }
         }
 
+    /** Suspend until [cond] holds (polled each virtual ms); fail fast with a dump on timeout. */
+    suspend fun awaitTrue(what: String, within: Duration = DEFAULT_AWAIT, cond: () -> Boolean) {
+        awaitOrDump(what, within) { pollUntil { true.takeIf { cond() } } }
+    }
+
     /**
      * Poll [probe] every virtual millisecond until it returns non-null, then return that value.
      *

@@ -455,4 +455,112 @@ class MembershipTest {
         val entry = sim.proposeOnLeader(byteArrayOf(0x44), among = survivors)
         assertTrue(entry.index > 0L, "surviving 2-voter cluster must commit after the leader is removed")
     }
+
+    /**
+     * B4 — the leader crashes mid-joint, before C_new commits. The caller's [RaftNode.changeMembership]
+     * deferred fails with [LeadershipLostException] (the actor's cancellation path fails any in-flight
+     * change), and the surviving voters converge on a single consistent membership (C_old, which they
+     * never left) and keep committing — no split-brain from the dead leader's uncommitted Joint.
+     *
+     * Determinism: the leader is isolated first, so its Joint entry is appended locally (adopt-on-append
+     * emits the ConfigChange) but can never commit; crashing it then fails the deferred without any race
+     * against the change completing.
+     */
+    @Test
+    fun crashLeaderMidJoint_callerSeesLeadershipLost_survivorsConverge() = raftRunTest(timeout = 10.seconds) {
+        val sim = simWithVotersAndTwoBootstrappedLearners()
+        awaitLeader(sim)
+        // Wire the learners in first so all five nodes share the pre-change config.
+        sim.changeMembershipOnLeader(ClusterConfig(voters = voterSet, learners = twoLearners))
+        sim.awaitCommit(sim.awaitLeader().commitIndex.value, on = voterSet + twoLearners)
+
+        val leaderId = sim.nodes.entries.first { it.value.role.value is RaftRole.Leader }.key
+        val leaderNode = sim.nodes.getValue(leaderId)
+        val survivors = (voterSet + twoLearners) - leaderId
+
+        // Pre-subscribe to the leader's config transitions (before the change, to avoid missing the
+        // Joint emission).
+        val leaderConfigs = mutableListOf<RaftTraceEvent.ConfigChange>()
+        backgroundScope.launch {
+            leaderNode.trace.filterIsInstance<RaftTraceEvent.ConfigChange>().collect { leaderConfigs += it }
+        }
+        delay(1)
+
+        // Isolate the leader, then start a voter-set change on it: it appends the Joint locally
+        // (adopt-on-append) but can never commit it — no reachable majority.
+        sim.partition(setOf(leaderId), survivors)
+        val change = backgroundScope.async {
+            runCatching { leaderNode.changeMembership(ClusterConfig(voters = fiveVoters)) }
+        }
+        // Wait until the leader has appended & adopted the Joint (effective voters = the 5-voter target).
+        sim.awaitTrue("leader appends the joint mid-transition") {
+            leaderConfigs.any { it.new.voters == fiveVoters }
+        }
+
+        // Crash the leader mid-joint. The caller's deferred fails (the dead leader can neither commit
+        // C_new nor hand off the in-flight change).
+        sim.crash(leaderId)
+        val outcome = change.await()
+        assertTrue(outcome.exceptionOrNull() is LeadershipLostException,
+            "caller's changeMembership must fail with LeadershipLostException when the leader dies mid-joint; got $outcome")
+
+        // The survivors never saw the Joint (the leader was isolated): the two original voters left
+        // (a majority of the 3-voter C_old) elect and keep committing — no split-brain.
+        val survivingVoters = voterSet - leaderId
+        val entry = sim.proposeOnLeader(byteArrayOf(0x55), among = survivingVoters)
+        assertTrue(entry.index > 0L, "survivors must converge on C_old and keep committing")
+    }
+
+    /**
+     * B4 — adopt-on-append rollback. A follower that adopts an uncommitted `Joint` from a doomed leader
+     * must roll its membership back when a new leader (elected by a majority that never saw the Joint)
+     * overwrites that log suffix. Observed through the follower's [RaftTraceEvent.ConfigChange] trace:
+     * it adopts the joint's effective config, then reverts to the prior config once the suffix is
+     * truncated and `recomputeMembership` re-runs.
+     */
+    @Test
+    fun followerAdoptsUncommittedJoint_rollsBackWhenSuffixOverwritten() = raftRunTest(timeout = 10.seconds) {
+        val sim = simWithVotersAndTwoBootstrappedLearners()
+        awaitLeader(sim)
+        // Grow to a 5-voter cluster so a 3-voter majority can depose the leader while a follower holds
+        // the doomed Joint.
+        sim.changeMembershipOnLeader(ClusterConfig(voters = voterSet, learners = twoLearners))
+        sim.changeMembershipOnLeader(ClusterConfig(voters = fiveVoters))
+        sim.awaitCommit(sim.awaitLeader().commitIndex.value, on = fiveVoters)
+
+        val leaderId = sim.nodes.entries.first { it.value.role.value is RaftRole.Leader }.key
+        val follower = (fiveVoters - leaderId).first()
+        val majority = fiveVoters - leaderId - follower // the other three voters — a 5-voter majority
+
+        // Record the follower's config transitions.
+        val followerConfigs = mutableListOf<RaftTraceEvent.ConfigChange>()
+        backgroundScope.launch {
+            sim.nodes.getValue(follower).trace.filterIsInstance<RaftTraceEvent.ConfigChange>()
+                .collect { followerConfigs += it }
+        }
+        delay(1)
+
+        // Split the leader + the chosen follower away from the three-voter majority. The leader can
+        // still replicate to that one follower (so it adopts the Joint) but cannot commit it (minority).
+        sim.partition(setOf(leaderId, follower), majority)
+        val doomed = ClusterConfig(voters = voterSet) // shrink target → Joint(old=5, new=3)
+        val change = backgroundScope.async {
+            runCatching { sim.nodes.getValue(leaderId).changeMembership(doomed) }
+        }
+        // The follower adopts the uncommitted Joint (effective voters = the shrink target).
+        sim.awaitTrue("follower adopts the doomed joint") {
+            followerConfigs.any { it.new.voters == voterSet }
+        }
+
+        // Crash the doomed leader and heal the follower back into the majority. The majority (which never
+        // saw the Joint) has elected a higher-term leader on the 5-voter config; it overwrites the
+        // follower's uncommitted Joint suffix, rolling the follower's membership back.
+        sim.crash(leaderId)
+        change.await() // doomed; ignore outcome
+        sim.heal()
+        sim.awaitTrue("follower rolls membership back to the 5-voter config") {
+            val adopted = followerConfigs.indexOfFirst { it.new.voters == voterSet }
+            adopted >= 0 && followerConfigs.drop(adopted + 1).any { it.new.voters == fiveVoters }
+        }
+    }
 }
