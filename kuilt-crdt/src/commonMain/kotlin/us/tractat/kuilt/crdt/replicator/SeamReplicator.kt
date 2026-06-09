@@ -147,6 +147,23 @@ public class SeamReplicator<S : Quilted<S>>(
     private val _state = MutableStateFlow(initial)
     public val state: StateFlow<S> = _state.asStateFlow()
 
+    private val _universalAckFlow = MutableStateFlow(0L)
+
+    /**
+     * The causal-stability watermark: the highest sequence number that every currently
+     * known peer has acknowledged. Advances monotonically — it never decreases.
+     *
+     * A newly-joined peer receives a [ReplicatorMessage.FullState] that already reflects
+     * any compacted history, so it does not need to acknowledge old deltas before the
+     * watermark can advance. Consequently a late-joiner's absence from [ackedThrough]
+     * does not drag the watermark backward: the flow stays at its last value until the
+     * peer actually acks (or is evicted). Eviction of a lagging peer may legitimately
+     * raise the watermark.
+     *
+     * Emits `0L` until at least one delta has been universally acknowledged.
+     */
+    public val universalAckFlow: StateFlow<Long> = _universalAckFlow.asStateFlow()
+
     private var nextSeq: Long = 0L
     private val pendingDeltas: MutableMap<Long, S> = mutableMapOf()
     private val knownPeers: MutableSet<PeerId> = mutableSetOf()
@@ -234,6 +251,7 @@ public class SeamReplicator<S : Quilted<S>>(
             lastSeenAt.remove(peer)
             cancelFullStateRetry(peer)
         }
+        if (toEvict.isNotEmpty()) recomputeUniversalAck()
     }
 
     private fun isStale(peer: PeerId, nowMs: Long): Boolean {
@@ -378,12 +396,23 @@ public class SeamReplicator<S : Quilted<S>>(
         val acker = PeerId(msg.acker.value)
         val current = ackedThrough[acker] ?: 0L
         if (msg.seq > current) ackedThrough[acker] = msg.seq
-        gcPendingDeltas()
+        recomputeUniversalAck()
     }
 
-    private fun gcPendingDeltas() {
+    /**
+     * Recomputes `min(ackedThrough over knownPeers)` and updates [universalAckFlow]
+     * monotonically (never decreases). Also GCs pending deltas up to the new watermark.
+     * No-op when [knownPeers] is empty.
+     */
+    private fun recomputeUniversalAck() {
         if (knownPeers.isEmpty()) return
-        val universalAck = knownPeers.minOfOrNull { peer -> ackedThrough[peer] ?: 0L } ?: return
+        val candidate = knownPeers.minOfOrNull { peer -> ackedThrough[peer] ?: 0L } ?: return
+        val next = maxOf(_universalAckFlow.value, candidate)
+        _universalAckFlow.value = next
+        gcPendingDeltas(next)
+    }
+
+    private fun gcPendingDeltas(universalAck: Long) {
         pendingDeltas.keys.removeAll { it <= universalAck }
     }
 
