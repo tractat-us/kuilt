@@ -59,6 +59,22 @@ public sealed interface RgaOp<out V> {
     public data class Remove<V>(
         public val id: RgaId,
     ) : RgaOp<V>
+
+    /**
+     * Records that the [ids] have been garbage-collected from the op-log.
+     *
+     * [Compact] carries no element value — it is typed as `RgaOp<Nothing>` and
+     * is valid in the covariant `out V` position for any `V`. A single sealed
+     * hierarchy keeps the serializer simple.
+     *
+     * Applying a [Compact] removes every [Insert] and [Remove] op whose id is
+     * in [ids]. Merging two [Compact] ops via [Rga.piece] unions their [ids] sets.
+     * Receiving the same [Compact] twice is idempotent.
+     */
+    @Serializable
+    public data class Compact(
+        public val ids: Set<RgaId>,
+    ) : RgaOp<Nothing>
 }
 
 /**
@@ -79,7 +95,7 @@ public sealed interface RgaOp<out V> {
  *
  * **Tombstones.** Removed elements remain in the op-log. This is deliberate:
  * a future `Insert(id, _, removedId)` must still find the predecessor. GC of
- * tombstones requires a distributed garbage-collection protocol (out of scope).
+ * tombstones is performed by [compact].
  *
  * **Lamport clock.** Each replica tracks a local [lamport] counter. Minting a
  * new op increments it and records the current maximum observed across all
@@ -96,14 +112,25 @@ public class Rga<V> private constructor(
 ) : Quilted<Rga<V>> {
 
     /**
-     * The set of all [RgaId]s that have been tombstoned.
+     * All ids that have been garbage-collected by any [RgaOp.Compact] in this op-log.
+     */
+    private val compactedIds: Set<RgaId> by lazy {
+        ops.filterIsInstance<RgaOp.Compact>()
+            .flatMapTo(mutableSetOf()) { it.ids }
+    }
+
+    /**
+     * The set of all [RgaId]s that have been tombstoned (and not yet compacted).
      */
     private val tombstones: Set<RgaId> by lazy {
-        ops.filterIsInstance<RgaOp.Remove<V>>().mapTo(mutableSetOf()) { it.id }
+        ops.filterIsInstance<RgaOp.Remove<V>>()
+            .mapTo(mutableSetOf()) { it.id }
+            .apply { removeAll(compactedIds) }
     }
 
     /**
      * Map from each [RgaId] to its insert op, for O(1) lookup by id.
+     * Excludes compacted ids — their Insert ops have been removed from the log.
      */
     private val insertsByid: Map<RgaId, RgaOp.Insert<V>> by lazy {
         ops.filterIsInstance<RgaOp.Insert<V>>().associateBy { it.id }
@@ -184,17 +211,46 @@ public class Rga<V> private constructor(
     }
 
     /**
+     * Garbage-collect tombstoned elements whose Lamport timestamp is at or below
+     * [watermark] and which are not referenced as structural predecessors by any
+     * surviving insert.
+     *
+     * An element may be compacted only when **both** conditions hold:
+     * 1. Its id's `lamport` ≤ [watermark] — it is causally stable.
+     * 2. No surviving [RgaOp.Insert] has `after == id` — the structural
+     *    predecessor invariant is preserved.
+     *
+     * Returns the compacted [Rga] and a [RgaOp.Compact] delta to broadcast to
+     * peers, or `null` if no element qualifies.
+     *
+     * Peers that receive the [RgaOp.Compact] delta apply it via [apply] or absorb
+     * it through [piece] — both paths strip the referenced ops from the log.
+     */
+    public fun compact(watermark: Long): Pair<Rga<V>, RgaOp.Compact>? {
+        val predecessors = insertsByid.values.mapTo(mutableSetOf()) { it.after }
+        val gcIds = tombstones
+            .filter { id -> id.lamport <= watermark && id !in predecessors }
+            .toSet()
+        if (gcIds.isEmpty()) return null
+        val compactOp = RgaOp.Compact(gcIds)
+        val newOps = purgeAndRecord(ops, gcIds, compactOp)
+        return Rga(newOps, lamport) to compactOp
+    }
+
+    /**
      * Apply an [op] received from a remote replica, advancing the Lamport clock.
      *
      * This is the receive path for op-based propagation: each received op is
      * absorbed exactly once. Duplicate delivery is safe — set-union is idempotent.
+     *
+     * Applying a [RgaOp.Compact] strips the referenced [RgaOp.Insert] and
+     * [RgaOp.Remove] ops from the log. The [RgaOp.Compact] op itself is retained
+     * so that a later [piece] with a peer that hasn't compacted yet re-applies GC.
      */
-    public fun apply(op: RgaOp<V>): Rga<V> {
-        val newLamport = when (op) {
-            is RgaOp.Insert -> maxOf(lamport, op.id.lamport)
-            is RgaOp.Remove -> lamport
-        }
-        return Rga(ops + op, newLamport)
+    public fun apply(op: RgaOp<V>): Rga<V> = when (op) {
+        is RgaOp.Insert -> Rga(ops + op, maxOf(lamport, op.id.lamport))
+        is RgaOp.Remove -> Rga(ops + op, lamport)
+        is RgaOp.Compact -> Rga(purgeAndRecord(ops, op.ids, op), lamport)
     }
 
     /**
@@ -205,11 +261,17 @@ public class Rga<V> private constructor(
      * - **Idempotent**: `a.piece(a) == a` (set union with itself)
      * - **Commutative**: `a.piece(b) == b.piece(a)` (set union is commutative)
      * - **Associative**: `a.piece(b).piece(c) == a.piece(b.piece(c))` (set union)
+     *
+     * Any [RgaOp.Compact] ops in the union are applied eagerly so that Insert/Remove
+     * ops already GC'd on one peer do not re-inflate the op-log on merge.
      */
     override fun piece(other: Rga<V>): Rga<V> {
-        val merged = ops + other.ops
+        val rawUnion = ops + other.ops
         val mergedLamport = maxOf(lamport, other.lamport)
-        return Rga(merged, mergedLamport)
+        val allCompactedIds = rawUnion.filterIsInstance<RgaOp.Compact>()
+            .flatMapTo(mutableSetOf()) { it.ids }
+        val mergedOps = if (allCompactedIds.isEmpty()) rawUnion else purge(rawUnion, allCompactedIds)
+        return Rga(mergedOps, mergedLamport)
     }
 
     override fun equals(other: Any?): Boolean =
@@ -264,5 +326,32 @@ public class Rga<V> private constructor(
     public companion object {
         /** The empty sequence with no ops. */
         public fun <V> empty(): Rga<V> = Rga(ops = emptySet(), lamport = 0L)
+
+        /**
+         * Strip Insert and Remove ops for all [gcIds] from [ops], merging the
+         * [compactOp] in (replacing any prior Compact op with the same or smaller
+         * id set — or adding if absent). The Compact op itself is retained.
+         */
+        internal fun <V> purgeAndRecord(
+            ops: Set<RgaOp<V>>,
+            gcIds: Set<RgaId>,
+            compactOp: RgaOp.Compact,
+        ): Set<RgaOp<V>> {
+            val purged = purge(ops, gcIds)
+            return purged + compactOp
+        }
+
+        /**
+         * Remove all [RgaOp.Insert] and [RgaOp.Remove] ops whose id is in [gcIds].
+         * [RgaOp.Compact] ops are left intact.
+         */
+        internal fun <V> purge(ops: Set<RgaOp<V>>, gcIds: Set<RgaId>): Set<RgaOp<V>> =
+            ops.filterTo(mutableSetOf()) { op ->
+                when (op) {
+                    is RgaOp.Insert -> op.id !in gcIds
+                    is RgaOp.Remove -> op.id !in gcIds
+                    is RgaOp.Compact -> true
+                }
+            }
     }
 }
