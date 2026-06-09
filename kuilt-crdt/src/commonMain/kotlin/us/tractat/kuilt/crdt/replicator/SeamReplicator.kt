@@ -12,6 +12,7 @@ import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.serialization.BinaryFormat
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.cbor.Cbor
 import us.tractat.kuilt.core.PeerId
@@ -143,6 +144,13 @@ public class SeamReplicator<S : Quilted<S>>(
     private val scope: CoroutineScope,
     private val config: SeamReplicatorConfig = SeamReplicatorConfig(),
     private val clock: MonotonicMillis = SystemMonotonicMillis,
+    /**
+     * Binary format used to encode and decode [ReplicatorMessage] frames.
+     * Defaults to plain [Cbor]. Override in tests or for CRDTs whose serializer
+     * requires a custom [kotlinx.serialization.modules.SerializersModule]
+     * (e.g. [us.tractat.kuilt.crdt.Rga] with a generic value type).
+     */
+    private val binaryFormat: BinaryFormat = Cbor,
 ) {
     private val _state = MutableStateFlow(initial)
     public val state: StateFlow<S> = _state.asStateFlow()
@@ -163,6 +171,18 @@ public class SeamReplicator<S : Quilted<S>>(
      * Emits `0L` until at least one delta has been universally acknowledged.
      */
     public val universalAckFlow: StateFlow<Long> = _universalAckFlow.asStateFlow()
+
+    private val _nextSeqFlow = MutableStateFlow(0L)
+
+    /**
+     * The sequence number that will be assigned to the **next** local [apply] call.
+     * Advances by 1 on each [apply]; `_nextSeqFlow.value - 1` is the seq of the most
+     * recently applied local delta, or 0 if no local delta has been applied yet.
+     *
+     * Exposed for coordinators ([us.tractat.kuilt.crdt.replicator.RgaGcCoordinator]) that need
+     * to correlate local delta sequences with CRDT state snapshots.
+     */
+    public val nextSeqFlow: StateFlow<Long> = _nextSeqFlow.asStateFlow()
 
     private var nextSeq: Long = 0L
     private val pendingDeltas: MutableMap<Long, S> = mutableMapOf()
@@ -222,6 +242,7 @@ public class SeamReplicator<S : Quilted<S>>(
     public fun apply(patch: Patch<S>) {
         _state.update { it.piece(patch) }
         val seq = ++nextSeq
+        _nextSeqFlow.value = seq
         pendingDeltas[seq] = patch.delta
         broadcastDelta(seq, patch.delta)
     }
@@ -435,10 +456,10 @@ public class SeamReplicator<S : Quilted<S>>(
     }
 
     private fun encode(msg: ReplicatorMessage<S>): ByteArray =
-        Cbor.encodeToByteArray(messageSerializer, msg)
+        binaryFormat.encodeToByteArray(messageSerializer, msg)
 
     private fun decode(bytes: ByteArray): ReplicatorMessage<S> =
-        Cbor.decodeFromByteArray(messageSerializer, bytes)
+        binaryFormat.decodeFromByteArray(messageSerializer, bytes)
 }
 
 private fun checkNotUnderTestDispatcher(scope: CoroutineScope, strict: Boolean, expectVirtualTime: Boolean) {
