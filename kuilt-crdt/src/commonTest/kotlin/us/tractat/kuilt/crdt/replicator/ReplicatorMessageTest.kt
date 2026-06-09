@@ -5,6 +5,7 @@ package us.tractat.kuilt.crdt.replicator
 import kotlinx.serialization.cbor.Cbor
 import us.tractat.kuilt.crdt.GCounter
 import us.tractat.kuilt.crdt.ReplicaId
+import us.tractat.kuilt.crdt.VersionVector
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
@@ -58,5 +59,18 @@ class ReplicatorMessageTest {
         assertEquals(msg.sender, resend.sender)
         assertEquals(msg.fromSeq, resend.fromSeq)
         assertEquals(msg.toSeq, resend.toSeq)
+    }
+
+    @Test
+    fun deliveredRoundTripsThroughCbor() {
+        val b = ReplicaId("B")
+        val msg = ReplicatorMessage.Delivered<GCounter>(
+            sender = a,
+            vector = VersionVector.of(mapOf(a to 4L, b to 2L)),
+        )
+        val bytes = Cbor.encodeToByteArray(msgSerializer, msg)
+        val decoded = Cbor.decodeFromByteArray(msgSerializer, bytes) as ReplicatorMessage.Delivered
+        assertEquals(msg.sender, decoded.sender)
+        assertEquals(msg.vector, decoded.vector)
     }
 }

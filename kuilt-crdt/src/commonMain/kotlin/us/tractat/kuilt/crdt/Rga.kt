@@ -354,6 +354,30 @@ public class Rga<V> private constructor(
      * Any [RgaOp.Compact] ops in the union are applied eagerly so that Insert/Remove
      * ops already GC'd on one peer do not re-inflate the op-log on merge.
      */
+    /**
+     * The causal [Dot]s this op-log has delivered — one per surviving `Insert`/`Remove`
+     * op (`id.dot = (replicaId, seq)`). `Compact` ops are **excluded**: a compaction
+     * mints no author dot, it only records GC of others' dots.
+     *
+     * This is the [Quilted] capability the causal-stability GC barrier consumes
+     * (ADR-003 addendum v3, #262). The [SeamReplicator] folds these into a contiguous
+     * **delivered** version vector. Compacted ids are already absent from [ops], so a
+     * GC'd dot naturally drops out — which is correct: the replica still *delivered* it,
+     * but the delivered vector is recomputed from current state and a contiguous prefix
+     * that was already certified-stable does not regress (its dots sit at-or-below the
+     * stable cut that authorised the compaction).
+     */
+    override fun causalDots(): Set<Dot> =
+        ops.asSequence()
+            .mapNotNull { op ->
+                when (op) {
+                    is RgaOp.Insert -> op.id.dot
+                    is RgaOp.Remove -> op.id.dot
+                    is RgaOp.Compact -> null
+                }
+            }
+            .toSet()
+
     override fun piece(other: Rga<V>): Rga<V> {
         val rawUnion = ops + other.ops
         val mergedLamport = maxOf(lamport, other.lamport)
