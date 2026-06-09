@@ -19,6 +19,10 @@ import kotlinx.serialization.Serializable
  *   entries (replicated and persisted) but are **not** application data, so they
  *   are withheld from [RaftNode.committed]. Application-proposed entries always
  *   have `isNoOp == false`, even when their [command] is empty.
+ * @param config Non-null only for internal membership-change entries (§6 joint
+ *   consensus). Like [isNoOp], config entries are replicated and persisted but
+ *   withheld from [RaftNode.committed] — they carry cluster membership, not
+ *   application data. A `null` value means this is a normal application entry.
  */
 @Serializable
 public data class LogEntry(
@@ -26,15 +30,36 @@ public data class LogEntry(
     val term: Long,
     val command: ByteArray,
     val isNoOp: Boolean = false,
+    val config: ConfigPayload? = null,
 ) {
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
         if (other !is LogEntry) return false
         return index == other.index && term == other.term &&
-            command.contentEquals(other.command) && isNoOp == other.isNoOp
+            command.contentEquals(other.command) && isNoOp == other.isNoOp &&
+            config == other.config
     }
     override fun hashCode(): Int {
         var r = index.hashCode(); r = 31 * r + term.hashCode()
-        r = 31 * r + command.contentHashCode(); r = 31 * r + isNoOp.hashCode(); return r
+        r = 31 * r + command.contentHashCode(); r = 31 * r + isNoOp.hashCode()
+        r = 31 * r + config.hashCode(); return r
     }
 }
+
+/**
+ * The membership payload carried by a config log entry (§6 joint consensus).
+ *
+ * A non-null [old] means this is a **joint** configuration C_{old,new}: commit and
+ * election require majorities of both [old].voters and [new].voters independently.
+ * A null [old] means this is a **simple** configuration C_new: cluster has fully
+ * transitioned to [new].
+ *
+ * Config entries ride the normal replicated log and are adopted on append
+ * (not on commit) — the cardinal §6 safety rule. They are serializable so they
+ * survive CBOR encoding in [RaftMessage] and persistence in [RaftStorage].
+ */
+@Serializable
+public data class ConfigPayload(
+    val old: ClusterConfig?,
+    val new: ClusterConfig,
+)
