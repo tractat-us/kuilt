@@ -14,15 +14,22 @@ import kotlin.random.Random
  *
  * Proof is a stub (ByteArray(0)). The GSet membership check is the
  * primary double-encode defence. Full ZK proofs are a follow-up.
+ *
+ * **Security limitation (pre-1.0):** [generateKey] uses [kotlin.random.Random],
+ * which is NOT a cryptographically secure RNG. Combined with the stubbed
+ * verify methods (no cheat-detection yet), this scheme is not production-secure.
+ * A CSPRNG (expect/actual over platform secure-random) is tracked as a follow-up.
  */
 public class SraScheme : CommutativeScheme {
 
     override fun encrypt(plaintext: ByteArray, key: SchemeKey): Pair<ByteArray, EncryptProof> {
+        requireInDomain(plaintext)
         val result = modPow(plaintext, key.raw)
         return result to EncryptProof(ByteArray(0))
     }
 
     override fun strip(ciphertext: ByteArray, key: SchemeKey): Pair<ByteArray, StripProof> {
+        requireInDomain(ciphertext)
         val result = modPow(ciphertext, key.raw)
         return result to StripProof(ByteArray(0))
     }
@@ -31,6 +38,11 @@ public class SraScheme : CommutativeScheme {
 
     override fun verifyStrip(prev: ByteArray, next: ByteArray, proof: StripProof, pubKey: SchemeKey): Boolean = true
 
+    /**
+     * Generates a random SRA key pair.
+     *
+     * Uses a non-cryptographic RNG — see the class-level security limitation.
+     */
     override fun generateKey(): SchemeKeyPair {
         val pMinus1 = PRIME - BigInteger.ONE
         var e: BigInteger
@@ -46,6 +58,13 @@ public class SraScheme : CommutativeScheme {
             encryptKey = SchemeKey(e.toByteArray()),
             stripKey = SchemeKey(d.toByteArray()),
         )
+    }
+
+    private fun requireInDomain(bytes: ByteArray) {
+        val value = BigInteger.fromByteArray(bytes, Sign.POSITIVE)
+        require(value >= BigInteger.TWO && value < PRIME) {
+            "SRA plaintext/ciphertext out of domain [2, p-1]: a card must encode to an integer >= 2 and < the 2048-bit modulus (max ~255 bytes). Use encodePlaintext() to map card bytes into this domain."
+        }
     }
 
     private fun modPow(base: ByteArray, exponent: ByteArray): ByteArray {
@@ -72,4 +91,32 @@ public class SraScheme : CommutativeScheme {
             16,
         )
     }
+}
+
+/**
+ * Encode arbitrary card [plaintext] into the SRA domain for [SraScheme].
+ *
+ * Prepends a 0x01 marker byte. This guarantees the encoded value is:
+ *  - >= 2 (the marker makes the high byte nonzero; for non-empty input the
+ *    value is >= 256), so it is never the 0 or 1 encryption fixed point; and
+ *  - canonically encoded (nonzero high byte), so BigInteger round-trips it
+ *    without dropping leading zeros.
+ *
+ * Apply ONCE when building the deck, before the first encryption. Recover the
+ * original bytes with [decodePlaintext] after the final decryption. Do NOT
+ * apply per encryption layer.
+ *
+ * [plaintext] must be non-empty (an empty card has no secure SRA encoding).
+ */
+public fun encodePlaintext(plaintext: ByteArray): ByteArray {
+    require(plaintext.isNotEmpty()) { "Cannot SRA-encode an empty plaintext" }
+    return byteArrayOf(1) + plaintext
+}
+
+/** Inverse of [encodePlaintext]: drops the 0x01 marker byte. */
+public fun decodePlaintext(encoded: ByteArray): ByteArray {
+    require(encoded.isNotEmpty() && encoded[0] == 1.toByte()) {
+        "Not a valid encodePlaintext() output (missing 0x01 marker)"
+    }
+    return encoded.copyOfRange(1, encoded.size)
 }

@@ -4,6 +4,7 @@ import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.crdt.GSet
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
@@ -163,6 +164,7 @@ class CardStateTest {
         val op = CardOp.Strip(bob, byteArrayOf(1), StripProof(ByteArray(0)))
         assertTrue(state.canApply(op))
     }
+
     @Test
     fun applyEncryptAddsPlayerAndSwapsCiphertext() {
         val next = emptyCard().applyOp(CardOp.Encrypt(alice, byteArrayOf(7), EncryptProof(ByteArray(0))))
@@ -224,6 +226,36 @@ class CardStateTest {
         val (ba, _) = scheme.encrypt(scheme.encrypt(original, keyB.encryptKey).first, keyA.encryptKey)
 
         assertEquals(ab.toList(), ba.toList())
+    }
+
+    @Test
+    fun encodeDecodePlaintextRoundTripsLeadingZeros() {
+        val original = byteArrayOf(0, 0, 5, 7)
+        assertEquals(original.toList(), decodePlaintext(encodePlaintext(original)).toList())
+    }
+
+    @Test
+    fun sraRoundTripsLeadingZeroPlaintextViaCodec() {
+        val scheme = SraScheme()
+        val key = scheme.generateKey()
+        val original = byteArrayOf(0, 0, 42)  // leading zeros — would corrupt without the codec
+        val encoded = encodePlaintext(original)
+        val (encrypted, _) = scheme.encrypt(encoded, key.encryptKey)
+        val (recoveredEncoded, _) = scheme.strip(encrypted, key.stripKey)
+        assertEquals(original.toList(), decodePlaintext(recoveredEncoded).toList())
+    }
+
+    @Test
+    fun sraEncryptRejectsOutOfDomainValues() {
+        val scheme = SraScheme()
+        val key = scheme.generateKey()
+        assertFailsWith<IllegalArgumentException> { scheme.encrypt(byteArrayOf(0), key.encryptKey) }  // m=0
+        assertFailsWith<IllegalArgumentException> { scheme.encrypt(byteArrayOf(1), key.encryptKey) }  // m=1
+    }
+
+    @Test
+    fun encodePlaintextRejectsEmpty() {
+        assertFailsWith<IllegalArgumentException> { encodePlaintext(ByteArray(0)) }
     }
 
 }
