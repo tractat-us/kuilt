@@ -372,7 +372,15 @@ public class Rga<V> private constructor(
             .mapNotNull { op ->
                 when (op) {
                     is RgaOp.Insert -> op.id.dot
-                    is RgaOp.Remove -> op.id.dot
+                    // Inserts ONLY. A Remove reuses the *target Insert's* id (`removeAt`:
+                    // `val id = visible[index]`) — it mints no dot of its own, so the
+                    // per-author seq space is defined entirely by Inserts. Counting a
+                    // Remove would over-claim delivery when a `Remove(x)` is delivered
+                    // out-of-order before `Insert(x)`: this replica would report `x` as
+                    // delivered while holding only the tombstone, prematurely advancing the
+                    // stable cut → the #275-class premature-GC hazard. (#269; see PR #281.)
+                    is RgaOp.Remove -> null
+                    // A Compact records GC of others' dots; it mints no author dot.
                     is RgaOp.Compact -> null
                 }
             }
