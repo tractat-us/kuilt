@@ -6,26 +6,42 @@ import kotlinx.serialization.Serializable
 /**
  * A unique, totally-ordered identity for a single RGA element.
  *
- * Total order: higher [lamport] wins; [replicaId] breaks ties deterministically.
+ * Carries two orthogonal counters:
+ * - [lamport] — the total-order tiebreak used by `computeSequence`. Monotonic per
+ *   author but **not dense** (the clock jumps to `max(seen) + 1`).
+ * - [seq] — a **dense, contiguous per-author delivery counter** (1, 2, 3, …). This
+ *   is the quantity Lamports cannot provide: it certifies *contiguous* delivery, so
+ *   it is the key into the causal-stability version vectors used by [Rga.compact]
+ *   (ADR-003 addendum v3, #262). [seq] never participates in ordering.
+ *
+ * Total order ([compareTo]): higher [lamport] wins; [replicaId] breaks ties
+ * deterministically. [seq] is deliberately excluded — it tracks delivery, not order.
+ * Two real ids from the same author can never share a [lamport] (an author's clock
+ * is strictly monotonic), so the order is still total.
+ *
  * The special sentinel [HEAD] sorts before every real id and is used as the
- * "insert at front" predecessor.
+ * "insert at front" predecessor; its [seq] is `0` (it is never an author dot).
  */
 @Serializable
 public data class RgaId(
     public val lamport: Long,
     public val replicaId: ReplicaId,
+    public val seq: Long,
 ) : Comparable<RgaId> {
     override fun compareTo(other: RgaId): Int {
         val byLamport = lamport.compareTo(other.lamport)
         return if (byLamport != 0) byLamport else replicaId.value.compareTo(other.replicaId.value)
     }
 
+    /** This id's causal [Dot] — `(replicaId, seq)`. The key into causal-stability VVs. */
+    public val dot: Dot get() = Dot(replicaId, seq)
+
     public companion object {
         /**
          * Sentinel predecessor meaning "insert at the very beginning of the list".
-         * Sorts before every real [RgaId].
+         * Sorts before every real [RgaId]; its [seq] is `0` (never an author dot).
          */
-        public val HEAD: RgaId = RgaId(lamport = Long.MIN_VALUE, replicaId = ReplicaId(""))
+        public val HEAD: RgaId = RgaId(lamport = Long.MIN_VALUE, replicaId = ReplicaId(""), seq = 0L)
     }
 }
 
@@ -175,10 +191,26 @@ public class Rga<V> private constructor(
         value: V,
     ): Pair<Rga<V>, RgaOp.Insert<V>> {
         val newLamport = lamport + 1L
-        val id = RgaId(lamport = newLamport, replicaId = replica)
+        val seq = nextSeqFor(replica)
+        val id = RgaId(lamport = newLamport, replicaId = replica, seq = seq)
         val op = RgaOp.Insert(id = id, value = value, after = after)
         val newOps = ops + op
         return Rga(newOps, newLamport) to op
+    }
+
+    /**
+     * The next dense per-author [RgaId.seq] for [replica], derived from the op-log:
+     * one past the highest [RgaId.seq] this replica has already authored. No external
+     * counter — the op-log is the source of truth, so a replica reconstructed from its
+     * ops mints the correct next seq.
+     */
+    private fun nextSeqFor(replica: ReplicaId): Long {
+        val highest = ops.asSequence()
+            .filterIsInstance<RgaOp.Insert<V>>()
+            .map { it.id }
+            .filter { it.replicaId == replica }
+            .maxOfOrNull { it.seq } ?: 0L
+        return highest + 1L
     }
 
     /**
@@ -218,21 +250,66 @@ public class Rga<V> private constructor(
     }
 
     /**
-     * Garbage-collect tombstoned elements whose Lamport timestamp is at or below
-     * [watermark] and which are not referenced as structural predecessors by any
-     * surviving insert.
+     * Garbage-collect tombstoned elements that are **causally stable** under the
+     * eviction-safe causal-stability barrier (ADR-003 addendum v3, #262).
      *
-     * An element may be compacted only when **both** conditions hold:
-     * 1. Its id's `lamport` ≤ [watermark] — it is causally stable.
-     * 2. No surviving [RgaOp.Insert] has `after == id` — the structural
-     *    predecessor invariant is preserved.
+     * A tombstoned element with dot `(r, sᵢ)` is purged iff **all** hold:
+     * 1. **Tombstoned** — implied (only [tombstones] are candidates).
+     * 2. **Causally stable** — `sᵢ ≤ stableCut[r]`: every live peer has delivered it.
+     * 3. **Frontier-complete** — `∀x: delivered[x] ≥ frontierMax[x]`: this replica
+     *    has delivered every op below every known frontier, so condition 4 below is
+     *    *complete* (any concurrent `Insert(_, after=id)` that exists anywhere has
+     *    been delivered locally and is therefore visible to condition 4).
+     * 4. **No surviving local successor** — no surviving [RgaOp.Insert] has
+     *    `after == id`, preserving the structural-predecessor invariant.
+     *
+     * Conditions 2 and 3 are the author-independent barrier the prior scalar
+     * watermark silently assumed: a concurrent `Insert(J, after=I)` minted by a
+     * *different* author cannot coexist with a [frontierMax] this replica has fully
+     * delivered. See the ADR for the by-construction safety argument against the
+     * #272 (author-independence) and #275 (eviction) probes.
+     *
+     * @param stableCut `S` — elementwise **min** over all live peers' delivered VVs.
+     * @param frontierMax `F` — elementwise **max** of the live frontier and the
+     *   retained (evicted-peer) frontier; the set of dots known to *exist*.
+     * @param delivered this replica's own contiguous delivered VV.
      *
      * Returns the compacted [Rga] and a [RgaOp.Compact] delta to broadcast to
-     * peers, or `null` if no element qualifies.
+     * peers, or `null` if no element qualifies (or condition 3 is not yet met).
      *
      * Peers that receive the [RgaOp.Compact] delta apply it via [apply] or absorb
      * it through [piece] — both paths strip the referenced ops from the log.
      */
+    public fun compact(
+        stableCut: VersionVector,
+        frontierMax: VersionVector,
+        delivered: VersionVector,
+    ): Pair<Rga<V>, RgaOp.Compact>? {
+        if (!delivered.dominates(frontierMax)) return null // condition 3 — frontier-complete
+        val predecessors = insertsByid.values.mapTo(mutableSetOf()) { it.after }
+        val gcIds = tombstones
+            .filter { id -> stableCut.contains(id.dot) && id !in predecessors } // (2) + (4)
+            .toSet()
+        if (gcIds.isEmpty()) return null
+        val compactOp = RgaOp.Compact(gcIds)
+        val newOps = purgeAndRecord(ops, gcIds, compactOp)
+        return Rga(newOps, lamport) to compactOp
+    }
+
+    /**
+     * **Deprecated — unsound.** Scalar-watermark GC: purges a tombstoned `id` when
+     * `id.lamport ≤ watermark` and no surviving insert references it. This silently
+     * drops concurrent inserts (#262): the watermark never proves every peer has
+     * *delivered* all ops ≤ watermark, so a concurrent `Insert(J, after=I)` minted by
+     * a different author can be lost. Use the three-argument causal-stability form
+     * instead. Retained only so the (also-deprecated) `RgaGcCoordinator` keeps
+     * compiling until #270 rewrites it onto the version-vector barrier.
+     */
+    @Deprecated(
+        message = "Unsound — silently drops concurrent inserts (#262). " +
+            "Use compact(stableCut, frontierMax, delivered).",
+        level = DeprecationLevel.WARNING,
+    )
     public fun compact(watermark: Long): Pair<Rga<V>, RgaOp.Compact>? {
         val predecessors = insertsByid.values.mapTo(mutableSetOf()) { it.after }
         val gcIds = tombstones
@@ -253,10 +330,15 @@ public class Rga<V> private constructor(
      * Applying a [RgaOp.Compact] strips the referenced [RgaOp.Insert] and
      * [RgaOp.Remove] ops from the log. The [RgaOp.Compact] op itself is retained
      * so that a later [piece] with a peer that hasn't compacted yet re-applies GC.
+     *
+     * An [RgaOp.Insert] or [RgaOp.Remove] whose id is already compacted is **not**
+     * re-added — a late raw apply of a purged op must not resurrect it. This makes
+     * [apply] agree with [piece] (and [tombstones]): once compacted, always
+     * compacted (ADR-003 addendum v3, #262).
      */
     public fun apply(op: RgaOp<V>): Rga<V> = when (op) {
-        is RgaOp.Insert -> Rga(ops + op, maxOf(lamport, op.id.lamport))
-        is RgaOp.Remove -> Rga(ops + op, lamport)
+        is RgaOp.Insert -> if (op.id in compactedIds) this else Rga(ops + op, maxOf(lamport, op.id.lamport))
+        is RgaOp.Remove -> if (op.id in compactedIds) this else Rga(ops + op, lamport)
         is RgaOp.Compact -> Rga(purgeAndRecord(ops, op.ids, op), lamport)
     }
 
