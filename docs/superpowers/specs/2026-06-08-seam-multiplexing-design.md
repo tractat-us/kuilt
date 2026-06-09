@@ -109,8 +109,11 @@ val md = SeamReplicator<LWWMap<PeerId, String>>(
 ## Risks
 
 - **`peers` semantics (raw vs roster)** — the primary correctness trap; gets a
-  dedicated test asserting a replicator on a Room channel never sends to an
-  unadmitted peer.
+  dedicated test asserting a replicator on a Room channel never sends FullState,
+  Ack, or Resend to an unadmitted peer. Note the precise boundary: Delta frames
+  go out via `seam.broadcast` and reach all transport peers (including unadmitted
+  ones); FullState / Ack / Resend are `sendTo` gated on the admitted roster. An
+  unadmitted peer has no FullState base and therefore cannot reconstruct state.
 - **Prefix-namespace collision** with admit/heartbeat — pick and document a
   reserved channel prefix ("applications must not emit this namespace," mirroring
   the existing heartbeat note).

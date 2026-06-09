@@ -86,8 +86,7 @@ public interface Room {
      * The returned [Seam] provides:
      * - **`peers`** — the admitted roster plus self, reactive to [MembershipEvent.Joined] /
      *   [MembershipEvent.Left]. Raw transport peers that have not completed the admit
-     *   handshake are **never** included. This is the central correctness guarantee: a
-     *   replicator running over this [Seam] will only ever send state to admitted members.
+     *   handshake are **never** included.
      * - **`incoming`** — frames from admitted members tagged with this channel [id], with
      *   channel framing stripped. Frames from unadmitted peers are silently dropped.
      * - **`broadcast` / `sendTo`** — send channel-framed payloads over the Room's
@@ -95,6 +94,22 @@ public interface Room {
      * - **`state`** — forwards the underlying [us.tractat.kuilt.core.SeamState].
      * - **`close`** — no-op. The Room owns lifecycle; closing the channel view does not
      *   tear down the Room.
+     *
+     * ## Admit-gating guarantee for replicators
+     *
+     * A [us.tractat.kuilt.crdt.replicator.SeamReplicator] running over this [Seam]
+     * uses `peers` to maintain its membership book, so:
+     *
+     * - **FullState** (the convergence base) is sent via `sendTo` only to peers in
+     *   `peers` — i.e. admitted members. An unadmitted transport peer never receives
+     *   FullState and therefore cannot reconstruct the replicated state.
+     * - **Ack and Resend** are also `sendTo` gated on admitted peers.
+     * - **Delta** frames are broadcast via `seam.broadcast` and reach all connected
+     *   transport peers, including unadmitted ones. Unadmitted peers have no FullState
+     *   base to apply deltas to, so the frames are harmless noise. This is the documented
+     *   behaviour: channel framing and admit-gated `peers` prevent the replicator from
+     *   *targeting* unadmitted peers and from FullState-syncing them; they do **not**
+     *   encrypt or withhold broadcast bytes at the wire level.
      *
      * ## Wire framing
      *

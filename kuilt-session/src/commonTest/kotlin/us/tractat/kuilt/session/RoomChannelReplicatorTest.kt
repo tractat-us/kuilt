@@ -6,12 +6,18 @@
 package us.tractat.kuilt.session
 
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.cbor.Cbor
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
+import us.tractat.kuilt.core.Seam
+import us.tractat.kuilt.core.Swatch
 import us.tractat.kuilt.crdt.GCounter
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.crdt.replicator.ReplicatorMessage
@@ -20,20 +26,34 @@ import us.tractat.kuilt.crdt.replicator.SeamReplicatorConfig
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 
 /**
  * Integration: a [SeamReplicator] running over [Room.channel] converges correctly
  * in a 2-peer room, and the admit-gating property holds — the replicator never
- * sends frames to unadmitted peers.
+ * directs FullState, Ack, or Resend to unadmitted peers.
  *
- * ## Admit-gating correctness
+ * ## Exact admit-gating guarantee
  *
  * [Room.channel] exposes a [us.tractat.kuilt.core.Seam] whose
  * [us.tractat.kuilt.core.Seam.peers] is the **admitted roster** (not raw transport
- * peers). Therefore a [SeamReplicator] over [Room.channel] will only ever send
- * FullState or deltas to peers that have completed the admit handshake. An
- * unadmitted peer that connects at the transport layer but never sends Hello is
- * absent from `channel.peers` and receives no replicator traffic.
+ * peers). The [SeamReplicator] uses `Seam.peers` for its membership book
+ * (`knownPeers`), so:
+ *
+ * - **FullState** — sent via `seam.sendTo` only to peers in `knownPeers` (admitted
+ *   roster). An unadmitted transport peer never receives FullState.
+ * - **Ack / Resend** — also `sendTo` gated on known peers; never directed at
+ *   unadmitted peers.
+ * - **Delta** — broadcast via `seam.broadcast`, which reaches **all** connected
+ *   transport peers regardless of admission. This is not a bug: convergence is
+ *   driven by FullState (withheld from unadmitted peers); broadcast Deltas are
+ *   harmless noise to an unadmitted peer since it has no FullState base to apply
+ *   them to. The guarantee is membership-gating + FullState confidentiality, **not**
+ *   wire-level broadcast confidentiality for deltas.
+ *
+ * This class tests both the indirect property (unadmitted peer absent from
+ * `channel.peers`) and the direct property (FullState is never delivered to an
+ * unadmitted peer's raw transport seam).
  */
 class RoomChannelReplicatorTest {
 
@@ -49,6 +69,22 @@ class RoomChannelReplicatorTest {
             scope = scope,
             config = replicatorConfig,
         )
+
+    private fun collectIncoming(seam: Seam, scope: CoroutineScope): Pair<MutableList<Swatch>, Job> {
+        val frames = mutableListOf<Swatch>()
+        val job = scope.launch { seam.incoming.collect { frames += it } }
+        return frames to job
+    }
+
+    /**
+     * Strip 3-byte channel framing and decode as [ReplicatorMessage].
+     * Returns null if the bytes are not a recognizable channel-framed replicator message.
+     */
+    private fun decodeChannelFrame(payload: ByteArray): ReplicatorMessage<GCounter>? {
+        if (!RoomChannel.isChannelFrame(payload)) return null
+        val inner = payload.copyOfRange(3, payload.size)
+        return runCatching { Cbor.decodeFromByteArray(messageSer, inner) }.getOrNull()
+    }
 
     // ── Convergence ───────────────────────────────────────────────────────────
 
@@ -85,9 +121,11 @@ class RoomChannelReplicatorTest {
     // ── Admit gating ──────────────────────────────────────────────────────────
 
     /**
-     * An unadmitted peer connected to the underlying transport must NOT receive
-     * replicator traffic. Asserted by verifying that `channel.peers` does not include
-     * the unadmitted peer — the replicator only targets peers visible in `Seam.peers`.
+     * An unadmitted peer connected to the underlying transport must NOT appear in
+     * `channel.peers` — asserted both before and after the replicator applies a mutation.
+     *
+     * This is the indirect property: the replicator uses `channel.peers` to build its
+     * membership book, so absence here means no `sendTo` call targets the unadmitted peer.
      */
     @Test
     fun `replicator never targets unadmitted peers via channel peers`() =
@@ -115,6 +153,60 @@ class RoomChannelReplicatorTest {
             assertFalse(
                 hostChannel.peers.value.contains(unadmitted.selfId),
                 "unadmitted peer must not appear in channel peers after replication",
+            )
+
+            unadmitted.close()
+            hostRoom.leave()
+        }
+
+    /**
+     * Direct wire-level assertion: an unadmitted transport peer receives broadcast
+     * Delta frames (see class KDoc for why that is acceptable) but NEVER receives a
+     * FullState, Ack, or Resend frame from the replicator.
+     *
+     * FullState is the base that enables a peer to apply Deltas; withholding it from
+     * unadmitted peers is the critical admission-gate guarantee. This test would fail if
+     * `channel.peers` were changed to include raw transport peers, because the replicator
+     * would then call `sendFullStateTo` for the unadmitted peer.
+     */
+    @Test
+    fun `replicator never delivers FullState to unadmitted transport peer`() =
+        runTest(UnconfinedTestDispatcher()) {
+            val loom = InMemoryLoom()
+            val hostRoom = SeamRoomFactory(loom, backgroundScope).host(Pattern("Alice"))
+
+            // Connect a raw seam that never sends Hello (never admitted).
+            val unadmitted = loom.join(InMemoryTag("Unadmitted"))
+
+            // Start collecting all frames arriving on the unadmitted seam's transport channel.
+            val (rawFrames, collectJob) = collectIncoming(unadmitted, backgroundScope)
+
+            val rep = gcounterReplicator(hostRoom, backgroundScope)
+            rep.apply(rep.state.value.inc(rep.replica, 7L))
+            testScheduler.advanceUntilIdle()
+            collectJob.cancel()
+
+            val replicatorMessages = rawFrames.mapNotNull { decodeChannelFrame(it.payload) }
+
+            // Deltas are broadcast and therefore do arrive — that is the documented behaviour.
+            assertTrue(
+                replicatorMessages.any { it is ReplicatorMessage.Delta },
+                "at least one broadcast Delta should be observable on the raw transport seam",
+            )
+
+            // FullState, Ack, and Resend are sendTo operations gated on admitted peers.
+            // None of them should ever reach an unadmitted transport peer.
+            assertFalse(
+                replicatorMessages.any { it is ReplicatorMessage.FullState },
+                "FullState must never be sent to an unadmitted peer: ${replicatorMessages.filterIsInstance<ReplicatorMessage.FullState<GCounter>>()}",
+            )
+            assertFalse(
+                replicatorMessages.any { it is ReplicatorMessage.Ack },
+                "Ack must never be sent to an unadmitted peer",
+            )
+            assertFalse(
+                replicatorMessages.any { it is ReplicatorMessage.Resend },
+                "Resend must never be sent to an unadmitted peer",
             )
 
             unadmitted.close()
