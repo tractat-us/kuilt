@@ -169,10 +169,15 @@ class RgaCompactV3AdversarialProbeTest {
             result,
             "WRONG wiring purges I — proves retain-capture-on-eviction (W1) is a REQUIRED invariant",
         )
+        // The purge is still the bug the (W1) invariant forbids — but with reroot-to-HEAD (#254)
+        // the structural orphan is no longer *silent data loss*: J, whose purged predecessor I is
+        // gone, resurfaces at HEAD rather than vanishing to []. The wrong wiring is still wrong
+        // (it compacts a tombstone whose concurrent successor is undelivered-to-self), but reroot
+        // makes the failure recoverable, not catastrophic.
         assertEquals(
-            emptyList(),
+            listOf("J"),
             aTomb.apply(opJ).apply(result.second).toList(),
-            "under wrong wiring J is orphaned — this is what #267-270 must NOT implement",
+            "even under wrong wiring J survives via reroot — the W1 violation is the spurious purge, not lost data",
         )
     }
 
@@ -240,10 +245,13 @@ class RgaCompactV3AdversarialProbeTest {
         assertEquals(0L, fLive(fLiveOnlyMatrix)[c] ?: 0L, "F_live[c] fell to 0 — the eviction hole")
         val purged = compactV3(aTomb, fLiveOnlyMatrix)
         assertNotNull(purged, "v2 F_live is blind to (c,seqJ) post-eviction — predicate purges I")
+        // The v2 hole still spuriously purges I (the #275 bug the retained floor closes). Reroot
+        // (#254) means the resulting orphan is no longer silent loss — J resurfaces at HEAD — but
+        // the predicate-level defect is identical: F_live blind to (c,seqJ) compacts I prematurely.
         assertEquals(
-            emptyList(),
+            listOf("J"),
             aTomb.apply(opJ).apply(purged.second).toList(),
-            "and J orphans — exactly #275; v3's retained floor is what closes it",
+            "J resurfaces via reroot — the v2 defect is the premature purge; v3's retained floor avoids it",
         )
         assertTrue(seqJ > 0L)
     }

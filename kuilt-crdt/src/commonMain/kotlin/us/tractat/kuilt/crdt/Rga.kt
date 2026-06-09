@@ -396,11 +396,25 @@ public class Rga<V> private constructor(
      *
      * This produces the canonical RGA sequence: deterministic across all replicas
      * that have seen the same op-log, regardless of insertion order.
+     *
+     * **Reroot-to-HEAD (#254).** An [RgaOp.Insert] whose `after` is **neither [RgaId.HEAD]
+     * nor a present (non-compacted) Insert id** has had its structural predecessor purged
+     * (history windowing compacts a leading prefix of live inserts). Rather than letting the
+     * survivor become unreachable from [RgaId.HEAD] — collapsing the whole retained window to
+     * `[]` — it materializes as a child of [RgaId.HEAD], deterministically ordered with HEAD's
+     * other children by the same descending-id tiebreak. This is essential for windowing and
+     * benign for tombstone GC: a causally-stable GC'd element has no surviving local successor
+     * (barrier condition 4), so nothing ever reroots on the GC path.
      */
     private fun computeSequence(): List<RgaId> {
-        // Group all insert ops by their `after` predecessor.
+        // Group all insert ops by their effective predecessor: HEAD if `after` is HEAD or has
+        // been compacted away (reroot-to-HEAD), else the present `after` id.
+        val present = insertsByid.keys
         val childrenOf: Map<RgaId, List<RgaId>> = insertsByid.values
-            .groupBy(keySelector = { it.after }, valueTransform = { it.id })
+            .groupBy(
+                keySelector = { if (it.after in present) it.after else RgaId.HEAD },
+                valueTransform = { it.id },
+            )
             .mapValues { (_, ids) -> ids.sortedDescending() }
 
         val result = mutableListOf<RgaId>()
