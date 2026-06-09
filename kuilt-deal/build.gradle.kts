@@ -35,6 +35,7 @@ kotlin {
         val iosSimulatorArm64Main by getting { dependsOn(iosMain) }
         val macosMain by creating { dependsOn(commonMain.get()) }
         val macosArm64Main by getting { dependsOn(macosMain) }
+        val wasmJsMain by getting { dependsOn(commonMain.get()) }
 
         jvmTest.dependencies {
             implementation(libs.kotlinx.coroutines.test)
