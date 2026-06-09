@@ -224,27 +224,6 @@ class MembershipTest {
     }
 
     /**
-     * changeMembership rejects a voter-set change (PR A only supports learner-set changes).
-     * A voter-set change throws [IllegalArgumentException] with a clear message.
-     *
-     * NOTE: This test is replaced by [grow3VotersTo5_viaJointConsensus] in PR B once
-     * voter-set changes are supported. It is kept here to pin the PR-A rejection behavior
-     * for the failing-test commit; the implementation removes the rejection in the same PR.
-     */
-    @Test
-    fun changeMembership_voterSetChange_rejectedInPrA() = raftRunTest {
-        val sim = simWithVotersAndBootstrappedLearner()
-        val leader = awaitLeader(sim)
-
-        val newVoter = NodeId("v4")
-        val targetConfig = ClusterConfig(voters = voterSet + newVoter)
-
-        assertFailsWith<IllegalArgumentException> {
-            leader.changeMembership(targetConfig)
-        }
-    }
-
-    /**
      * B1 — FAILING TEST: grow a 3-voter cluster to 5 voters via §6 joint consensus.
      *
      * Setup:
@@ -268,8 +247,7 @@ class MembershipTest {
      *   so its return proves C_new committed. After that, assert any 3-of-5 partition can still
      *   elect a leader and commit entries; confirm a partition leaving only 2 nodes cannot.
      *
-     * This test FAILS today because [onChangeMembership] rejects voter-set changes with
-     * [IllegalArgumentException] ("voter-set membership changes are not yet supported").
+     * Made to pass by the joint-consensus wiring in [onChangeMembership] / [onConfigCommitted].
      */
     @Test
     fun grow3VotersTo5_viaJointConsensus() = raftRunTest(timeout = 10.seconds) {
@@ -321,13 +299,21 @@ class MembershipTest {
         val survivingVoters = voterSet   // v1, v2, v3 stay connected
         sim.partition(partitionedOut, survivingVoters)
 
-        // A new leader must emerge among the survivors and be able to commit.
-        val newLeader = sim.awaitLeader()
-        val newLeaderId = sim.nodes.entries.first { it.value === newLeader }.key
-        assertTrue(newLeaderId in survivingVoters,
-            "leader $newLeaderId after partition should be in the surviving 3-voter partition")
+        // A leader must emerge among the survivors (3-of-5 = quorum) and be able to commit. We scope
+        // the await to survivingVoters: the pre-partition leader may itself be one of the now-isolated
+        // promoted voters (L1/L2), transiently still in Leader role until its CheckQuorum step-down —
+        // it cannot commit (no 3-of-5 quorum), but awaitLeader() unscoped would race and return it.
+        val newLeader = sim.awaitLeader(among = survivingVoters)
 
         val committedEntry = newLeader.propose(byteArrayOf(0xBE.toByte()))
         assertTrue(committedEntry.index > 0L, "entry must commit on the surviving 3-of-5 partition")
+
+        // Dual-majority negative: the isolated 2-of-5 partition {L1, L2} cannot commit the new entry —
+        // it never reaches their logs, so their commitIndex stays below it. (Deterministic: they are
+        // partitioned away from the leader, not merely slow.)
+        partitionedOut.forEach { id ->
+            assertTrue(sim.nodes.getValue(id).commitIndex.value < committedEntry.index,
+                "$id is isolated in a 2-of-5 partition and must not commit ${committedEntry.index}")
+        }
     }
 }

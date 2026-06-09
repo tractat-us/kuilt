@@ -180,6 +180,18 @@ class RaftSimulation(
             pollUntil { leader() }
         }
 
+    /**
+     * Suspend until a node whose id is in [among] is [RaftRole.Leader]; return it, or fail fast.
+     *
+     * Use after a partition when a leader from a non-quorum partition may still be transiently in
+     * [RaftRole.Leader] mid-step-down: scoping the await to the surviving voters ignores that stale
+     * leader and waits for the partition that actually holds a quorum to elect one.
+     */
+    suspend fun awaitLeader(among: Set<NodeId>, within: Duration = DEFAULT_AWAIT): RaftNode =
+        awaitOrDump("awaitLeader(among=$among)", within) {
+            pollUntil { nodes.entries.firstOrNull { it.key in among && it.value.role.value is RaftRole.Leader }?.value }
+        }
+
     /** Suspend until node [id] holds [role]; fail fast with a dump otherwise. */
     suspend fun awaitRole(id: NodeId, role: RaftRole, within: Duration = DEFAULT_AWAIT) {
         awaitOrDump("awaitRole($id, $role)", within) {
