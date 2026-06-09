@@ -190,22 +190,30 @@ jobs:
   # ── ci-required ────────────────────────────────────────────────────────────
   # The SOLE required status check. Aggregates detect + build + detekt.
   #
-  # Uses if: always() (not !cancelled()) so this job runs — and can FAIL —
-  # even when build or detekt was skipped or cancelled. A required check that
-  # is itself skipped is treated as "passed" by branch protection, which is
-  # part of the race this job is designed to close.
+  # Uses if: always() unconditionally — NO draft guard here. This is the core
+  # fix for the draft→ready→auto-merge race (#131): a required check that is
+  # itself *skipped* is treated as "passed" by branch protection. If this job
+  # had a draft guard, draft runs would post a SKIPPED ci-required (= green),
+  # then gh pr ready + gh pr merge --auto would fire on the stale skip before
+  # the real build completed. Without the guard, draft runs execute this job,
+  # see detect=skipped (its draft guard still stands), and FAIL the gate —
+  # so branch protection correctly blocks merge until a real post-ready run
+  # posts a genuine success.
+  #
+  # detect/build/detekt still carry their own draft/docs-only guards (cheap
+  # jobs don't burn a runner on every draft push). Only ci-required runs
+  # unconditionally, so the gate is always in a definite pass/fail state.
   #
   # Invariant: ci-required succeeds if and only if:
   #   (a) detect succeeded AND docs-only=true AND build+detekt were skipped, OR
   #   (b) detect succeeded AND docs-only=false AND build=success AND detekt=success.
   #
-  # Any other combination fails. In particular, build=skipped on a non-docs
-  # change is an explicit failure — this closes the race where a PR initially
-  # looked docs-only (earning a green ci-required), then gained code commits
-  # before auto-merge fired on the stale green result.
+  # Any other combination fails. In particular:
+  #   - detect=skipped (draft PR) → fails → merge blocked until post-ready run.
+  #   - build=skipped on a non-docs change → fails → closes the docs→code race too.
   ci-required:
     needs: [detect, build, detekt]
-    if: always() && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+    if: always()
     runs-on: ubuntu-latest
     steps:
       - name: Check gate results
