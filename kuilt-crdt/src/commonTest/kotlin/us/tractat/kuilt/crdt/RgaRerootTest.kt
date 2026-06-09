@@ -41,7 +41,11 @@ class RgaRerootTest {
         assertEquals(listOf("0", "1", "2", "3", "4", "5"), rga.toList(), "baseline chain renders in order")
 
         // Window-drop the leading three live inserts via a Compact (purges Insert(0..2)).
-        val dropped = setOf(ops[0].id, ops[1].id, ops[2].id)
+        val dropped = mapOf(
+            ops[0].id to RgaId.HEAD,
+            ops[1].id to ops[0].id,
+            ops[2].id to ops[1].id,
+        )
         val windowed = rga.apply(RgaOp.Compact(dropped))
 
         assertEquals(
@@ -56,8 +60,15 @@ class RgaRerootTest {
         val (rga, ops) = chainOfSix()
 
         // Peer X drops {0,1,2}; peer Y drops {0,1}. Different windows, same op-log otherwise.
-        val x = rga.apply(RgaOp.Compact(setOf(ops[0].id, ops[1].id, ops[2].id)))
-        val y = rga.apply(RgaOp.Compact(setOf(ops[0].id, ops[1].id)))
+        val x = rga.apply(RgaOp.Compact(mapOf(
+            ops[0].id to RgaId.HEAD,
+            ops[1].id to ops[0].id,
+            ops[2].id to ops[1].id,
+        )))
+        val y = rga.apply(RgaOp.Compact(mapOf(
+            ops[0].id to RgaId.HEAD,
+            ops[1].id to ops[0].id,
+        )))
 
         // Set-union merge in both directions must converge to the more-aggressive window [3,4,5].
         val xy = x.piece(y)
@@ -77,7 +88,7 @@ class RgaRerootTest {
         val (r3, bChild) = r2.insertAfter(p, b.id, "b-child")
 
         // Purge both roots; a-child and b-child reroot to HEAD.
-        val windowed = r3.apply(RgaOp.Compact(setOf(a.id, b.id)))
+        val windowed = r3.apply(RgaOp.Compact(mapOf(a.id to RgaId.HEAD, b.id to RgaId.HEAD)))
 
         val expectedFirst = if (aChild.id > bChild.id) "a-child" else "b-child"
         val expectedSecond = if (aChild.id > bChild.id) "b-child" else "a-child"
@@ -89,17 +100,13 @@ class RgaRerootTest {
     }
 
     /**
-     * Pins the accepted reroot-to-HEAD quirk: an eviction-orphan reorders **above** preceding
-     * content. Build `[M, I, J]` (M@HEAD, I@M, J@I), tombstone I, then `Compact(I)`. J's `after`
-     * is now purged so J reroots to HEAD; as a HEAD child it sorts by descending id, landing
-     * before M. Result is `[J, M]`, not `[M, J]`.
-     *
-     * This is the documented baseline #293 (positional reroot) would flip: retaining I's
-     * `after`-position on Compact would keep J below M, giving `[M, J]`. If this assertion ever
-     * reads `[M, J]`, reroot semantics changed — reconcile with #293 before merging.
+     * Positional reroot (#293): an eviction-orphan reattaches to the nearest surviving ancestor,
+     * not HEAD. Build `[M, I, J]` (I removed, then GC'd). Before this fix J rerooted to HEAD
+     * and sorted above M (`[J, M]`). With positional reroot, `Compact({I→M})` records I's
+     * position; J chain-follows I→M and lands below M → `[M, J]`.
      */
     @Test
-    fun evictionOrphanRerootsAbovePrecedingContent() {
+    fun evictionOrphanPositionalReroot() {
         val (r0, opM) = Rga.empty<String>().insertAfter(p, RgaId.HEAD, "M")
         val (r1, opI) = r0.insertAfter(p, opM.id, "I")
         val (r2, opJ) = r1.insertAfter(p, opI.id, "J")
@@ -109,14 +116,34 @@ class RgaRerootTest {
         val tombstoned = r2.removeAt(1)!!.first
         assertEquals(listOf("M", "J"), tombstoned.toList(), "I tombstoned, J still chains off it")
 
-        val windowed = tombstoned.apply(RgaOp.Compact(setOf(opI.id)))
+        val windowed = tombstoned.apply(RgaOp.Compact(mapOf(opI.id to opM.id)))
 
-        // J (higher id) reroots to HEAD and sorts before M (lower id) — the accepted quirk.
         assertEquals(
-            listOf("J", "M"),
+            listOf("M", "J"),
             windowed.toList(),
-            "reroot-to-HEAD reorders an eviction-orphan above preceding content; " +
-                "#293 (positional reroot) would give [M, J]",
+            "positional reroot: Compact records I.after=M, so J chain-follows I→M and stays below M",
         )
+    }
+
+    @Test
+    fun chainedGcPassesResolveToNearestSurvivingAncestor() {
+        // Build M→I→K→J (each element after the previous), then tombstone I and K.
+        val (r0, opM) = Rga.empty<String>().insertAfter(p, RgaId.HEAD, "M")
+        val (r1, opI) = r0.insertAfter(p, opM.id, "I")
+        val (r2, opK) = r1.insertAfter(p, opI.id, "K")
+        val (r3, opJ) = r2.insertAfter(p, opK.id, "J")
+        assertEquals(listOf("M", "I", "K", "J"), r3.toList(), "baseline")
+
+        val t1 = r3.removeAt(1)!!.first  // tombstone I → visible [M, K, J]
+        val t2 = t1.removeAt(1)!!.first  // tombstone K → visible [M, J]
+        assertEquals(listOf("M", "J"), t2.toList(), "I and K tombstoned")
+
+        // GC K first (K.after=I, I still present): J.after=K → compactPositions[K]=I (present).
+        val gcK = t2.apply(RgaOp.Compact(mapOf(opK.id to opI.id)))
+        assertEquals(listOf("M", "J"), gcK.toList(), "K GC'd; J reroots to I (nearest present ancestor)")
+
+        // GC I second (I.after=M): two-hop chain J→K(compacted,pos=I)→I(compacted,pos=M)→M(present).
+        val gcKI = gcK.apply(RgaOp.Compact(mapOf(opI.id to opM.id)))
+        assertEquals(listOf("M", "J"), gcKI.toList(), "two-hop chain: J resolves K→I→M; no reorder")
     }
 }

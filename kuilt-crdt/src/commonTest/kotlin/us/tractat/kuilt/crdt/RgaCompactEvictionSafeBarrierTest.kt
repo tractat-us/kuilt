@@ -274,7 +274,7 @@ class RgaCompactEvictionSafeBarrierTest {
 
         val result = compactV3(aTomb, matrix)
         assertNotNull(result, "a stable, caught-up tombstone with no successor IS collected")
-        assertEquals(setOf(opI.id), result.second.ids)
+        assertEquals(setOf(opI.id), result.second.positions.keys)
         assertEquals(emptyList(), result.first.toList())
         assertEquals(emptySet(), result.first.tombstones)
     }

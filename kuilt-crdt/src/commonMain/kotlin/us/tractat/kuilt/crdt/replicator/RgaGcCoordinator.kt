@@ -136,7 +136,7 @@ public class RgaGcCoordinator<V>(
                 return
             }
             logger.debug {
-                "[rga-gc] compacting ${compactOp.ids.size} id(s) at " +
+                "[rga-gc] compacting ${compactOp.positions.size} id(s) at " +
                     "stableCut=${cut.stableCut} frontierMax=${cut.frontierMax}"
             }
             applyCompaction(Patch(Rga.empty<V>().apply(compactOp)))
@@ -165,14 +165,16 @@ public class RgaGcCoordinator<V>(
         delivered: VersionVector,
         windowIds: Set<RgaId>,
     ): Pair<Rga<V>, RgaOp.Compact>? {
-        val gcIds = rga.compact(
+        val gcPositions = rga.compact(
             stableCut = cut.stableCut,
             frontierMax = cut.frontierMax,
             delivered = delivered,
-        )?.second?.ids.orEmpty()
-        val dropIds = gcIds + windowIds.intersect(rga.sequence.toSet())
-        if (dropIds.isEmpty()) return null
-        val compactOp = RgaOp.Compact(dropIds)
+        )?.second?.positions.orEmpty()
+        val liveDropIds = windowIds.intersect(rga.sequence.toSet())
+        val livePositions = rga.positionsFor(liveDropIds)
+        val allPositions = gcPositions + livePositions
+        if (allPositions.isEmpty()) return null
+        val compactOp = RgaOp.Compact(allPositions)
         return rga.apply(compactOp) to compactOp
     }
 }

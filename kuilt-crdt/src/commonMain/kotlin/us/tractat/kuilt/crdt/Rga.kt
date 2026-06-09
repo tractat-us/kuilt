@@ -78,19 +78,22 @@ public sealed interface RgaOp<out V> {
     ) : RgaOp<V>
 
     /**
-     * Records that the [ids] have been garbage-collected from the op-log.
+     * Records that the [positions] entries have been garbage-collected from the op-log.
      *
-     * [Compact] carries no element value — it is typed as `RgaOp<Nothing>` and
-     * is valid in the covariant `out V` position for any `V`. A single sealed
-     * hierarchy keeps the serializer simple.
+     * The map carries each compacted id's predecessor at GC time (`id → Insert.after`).
+     * [computeSequence] uses this to reattach surviving successors to the nearest surviving
+     * ancestor (positional reroot, #293) rather than to [RgaId.HEAD].
      *
-     * Applying a [Compact] removes every [Insert] and [Remove] op whose id is
-     * in [ids]. Merging two [Compact] ops via [Rga.piece] unions their [ids] sets.
+     * The ids that are purged are [positions].keys. Merging two [Compact] ops via [Rga.piece]
+     * unions their [positions] maps — sound because a given id's `after` is fixed when its
+     * [Insert] was created, so two replicas always agree on the value.
+     *
+     * Applying a [Compact] removes every [Insert] and [Remove] op whose id is in [positions].keys.
      * Receiving the same [Compact] twice is idempotent.
      */
     @Serializable
     public data class Compact(
-        public val ids: Set<RgaId>,
+        public val positions: Map<RgaId, RgaId>,
     ) : RgaOp<Nothing>
 }
 
@@ -133,7 +136,7 @@ public class Rga<V> private constructor(
      */
     private val compactedIds: Set<RgaId> by lazy {
         ops.filterIsInstance<RgaOp.Compact>()
-            .flatMapTo(mutableSetOf()) { it.ids }
+            .flatMapTo(mutableSetOf()) { it.positions.keys }
     }
 
     /**
@@ -154,6 +157,19 @@ public class Rga<V> private constructor(
      */
     private val insertsByid: Map<RgaId, RgaOp.Insert<V>> by lazy {
         ops.filterIsInstance<RgaOp.Insert<V>>().associateBy { it.id }
+    }
+
+    /**
+     * Union of all [RgaOp.Compact] ops' [RgaOp.Compact.positions] maps in this log.
+     * Maps each compacted id to its [RgaOp.Insert.after] at GC time.
+     * Used by [computeSequence] to resolve orphaned elements to their nearest surviving ancestor.
+     * Collisions are impossible: a given id's [RgaOp.Insert.after] is fixed at insert time,
+     * so two [RgaOp.Compact] ops can carry the same key only with the same value.
+     */
+    private val compactPositions: Map<RgaId, RgaId> by lazy {
+        ops.filterIsInstance<RgaOp.Compact>()
+            .flatMap { it.positions.entries }
+            .associate { (k, v) -> k to v }
     }
 
     /**
@@ -291,10 +307,20 @@ public class Rga<V> private constructor(
             .filter { id -> stableCut.contains(id.dot) && id !in predecessors } // (2) + (4)
             .toSet()
         if (gcIds.isEmpty()) return null
-        val compactOp = RgaOp.Compact(gcIds)
+        val positions = gcIds.associateWith { id -> insertsByid.getValue(id).after }
+        val compactOp = RgaOp.Compact(positions)
         val newOps = purgeAndRecord(ops, gcIds, compactOp)
         return Rga(newOps, lamport) to compactOp
     }
+
+    /**
+     * Returns a positions map for [ids]: each id mapped to its [RgaOp.Insert.after].
+     * All ids must be present in [insertsByid] (non-compacted — live or tombstoned).
+     * Used by [us.tractat.kuilt.crdt.replicator.RgaGcCoordinator] to build positions
+     * for window-dropped live elements when constructing a combined [RgaOp.Compact].
+     */
+    internal fun positionsFor(ids: Set<RgaId>): Map<RgaId, RgaId> =
+        ids.associateWith { id -> insertsByid.getValue(id).after }
 
     /**
      * Apply an [op] received from a remote replica, advancing the Lamport clock.
@@ -314,7 +340,7 @@ public class Rga<V> private constructor(
     public fun apply(op: RgaOp<V>): Rga<V> = when (op) {
         is RgaOp.Insert -> if (op.id in compactedIds) this else Rga(ops + op, maxOf(lamport, op.id.lamport))
         is RgaOp.Remove -> if (op.id in compactedIds) this else Rga(ops + op, lamport)
-        is RgaOp.Compact -> Rga(purgeAndRecord(ops, op.ids, op), lamport)
+        is RgaOp.Compact -> Rga(purgeAndRecord(ops, op.positions.keys, op), lamport)
     }
 
     /**
@@ -359,7 +385,7 @@ public class Rga<V> private constructor(
             .flatMap { op ->
                 when (op) {
                     is RgaOp.Insert -> sequenceOf(op.id.dot)
-                    is RgaOp.Compact -> op.ids.asSequence().map { it.dot }
+                    is RgaOp.Compact -> op.positions.keys.asSequence().map { it.dot }
                     is RgaOp.Remove -> emptySequence()
                 }
             }
@@ -369,7 +395,7 @@ public class Rga<V> private constructor(
         val rawUnion = ops + other.ops
         val mergedLamport = maxOf(lamport, other.lamport)
         val allCompactedIds = rawUnion.filterIsInstance<RgaOp.Compact>()
-            .flatMapTo(mutableSetOf()) { it.ids }
+            .flatMapTo(mutableSetOf()) { it.positions.keys }
         val mergedOps = if (allCompactedIds.isEmpty()) rawUnion else purge(rawUnion, allCompactedIds)
         return Rga(mergedOps, mergedLamport)
     }
@@ -397,26 +423,38 @@ public class Rga<V> private constructor(
      * This produces the canonical RGA sequence: deterministic across all replicas
      * that have seen the same op-log, regardless of insertion order.
      *
-     * **Reroot-to-HEAD (#254).** An [RgaOp.Insert] whose `after` is **neither [RgaId.HEAD]
-     * nor a present (non-compacted) Insert id** has had its structural predecessor purged
-     * (history windowing compacts a leading prefix of live inserts). Rather than letting the
-     * survivor become unreachable from [RgaId.HEAD] — collapsing the whole retained window to
-     * `[]` — it materializes as a child of [RgaId.HEAD], deterministically ordered with HEAD's
-     * other children by the same descending-id tiebreak. This is essential for windowing and
-     * benign for tombstone GC: a causally-stable GC'd element has no surviving local successor
-     * (barrier condition 4), so nothing ever reroots on the GC path.
+     * **Positional reroot (#293).** An [RgaOp.Insert] whose `after` has been compacted away
+     * does not simply jump to [RgaId.HEAD]. Instead, `nearestAncestor` chain-walks
+     * [compactPositions] — the union of all [RgaOp.Compact] `positions` maps — until it
+     * reaches either a present (non-compacted) id or [RgaId.HEAD]. This preserves the
+     * relative order of surviving elements: a successor of a GC'd element stays below
+     * the GC'd element's own surviving predecessor rather than floating to the top.
+     *
+     * The chain-walk is bounded: compaction only removes causally-stable tombstones (barrier
+     * condition 4 ensures no surviving successor exists for the element being GC'd when it
+     * is GC'd by [compact]), so the positions map is acyclic and terminates at HEAD or a
+     * live element within at most O(compacted depth) steps.
      */
     private fun computeSequence(): List<RgaId> {
-        // Group all insert ops by their effective predecessor: HEAD if `after` is HEAD or has
-        // been compacted away (reroot-to-HEAD), else the present `after` id.
+        // Group each insert op by its effective predecessor: HEAD if `after` is HEAD or present,
+        // else chain-walk compactPositions to the nearest surviving ancestor (positional
+        // reroot, #293) — preserves relative order when GC removes an intermediate element.
         val present = insertsByid.keys
-        val childrenOf: Map<RgaId, List<RgaId>> = insertsByid.values
+        val positions = compactPositions
+        fun nearestAncestor(start: RgaId): RgaId {
+            var cur = start
+            while (cur != RgaId.HEAD && cur !in present) cur = positions[cur] ?: RgaId.HEAD
+            return cur
+        }
+        val childrenOf = insertsByid.values
             .groupBy(
-                keySelector = { if (it.after in present) it.after else RgaId.HEAD },
+                keySelector = { ins ->
+                    val a = ins.after
+                    if (a == RgaId.HEAD || a in present) a else nearestAncestor(a)
+                },
                 valueTransform = { it.id },
             )
             .mapValues { (_, ids) -> ids.sortedDescending() }
-
         val result = mutableListOf<RgaId>()
         appendChildren(RgaId.HEAD, childrenOf, result)
         return result
