@@ -163,6 +163,46 @@ class CardStateTest {
         val op = CardOp.Strip(bob, byteArrayOf(1), StripProof(ByteArray(0)))
         assertTrue(state.canApply(op))
     }
+    @Test
+    fun applyEncryptAddsPlayerAndSwapsCiphertext() {
+        val next = emptyCard().applyOp(CardOp.Encrypt(alice, byteArrayOf(7), EncryptProof(ByteArray(0))))
+        assertAll(
+            { assertTrue(next != null) },
+            { assertEquals(setOf(alice), next!!.encryptedBy.elements) },
+            { assertEquals(listOf<Byte>(7), next!!.ciphertext.toList()) },
+        )
+    }
+
+    @Test
+    fun applyStripAddsPlayerAndSwapsCiphertext() {
+        val card = emptyCard().copy(encryptedBy = GSet.of(alice, bob, carol))
+        val next = card.applyOp(CardOp.Strip(bob, byteArrayOf(9), StripProof(ByteArray(0))))
+        assertAll(
+            { assertTrue(next != null) },
+            { assertEquals(setOf(bob), next!!.strippedBy.elements) },
+            { assertEquals(listOf<Byte>(9), next!!.ciphertext.toList()) },
+        )
+    }
+
+    @Test
+    fun applyInvalidOpReturnsNull() {
+        val card = emptyCard().copy(encryptedBy = GSet.of(alice))
+        // alice already encrypted — re-encrypt is invalid
+        assertEquals(null, card.applyOp(CardOp.Encrypt(alice, byteArrayOf(1), EncryptProof(ByteArray(0)))))
+    }
+
+    @Test
+    fun depositKeyRejectedBeforeFullyEncrypted() {
+        val card = emptyCard().copy(encryptedBy = GSet.of(alice))  // SHUFFLING (not all encrypted)
+        assertFalse(card.canApply(CardOp.DepositKey(alice, EncryptedKey(ByteArray(0)))))
+    }
+
+    @Test
+    fun depositKeyAcceptedWhenFullyEncrypted() {
+        val card = emptyCard().copy(encryptedBy = GSet.of(alice, bob, carol))  // FULLY_ENCRYPTED
+        assertTrue(card.canApply(CardOp.DepositKey(alice, EncryptedKey(ByteArray(0)))))
+    }
+
 }
 
 private fun assertAll(vararg assertions: () -> Unit) = assertions.forEach { it() }
