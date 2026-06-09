@@ -185,12 +185,12 @@ internal class RgaLawsPropertyTest {
     fun twoInserts(): Arbitrary<Tuple2<RgaOp.Insert<String>, RgaOp.Insert<String>>> {
         return Arbitraries.integers().between(1, 100).map { lamport ->
             val insertA = RgaOp.Insert(
-                id = RgaId(lamport = lamport.toLong(), replicaId = ReplicaId("A")),
+                id = RgaId(lamport = lamport.toLong(), replicaId = ReplicaId("A"), seq = 1L),
                 value = "valA-$lamport",
                 after = RgaId.HEAD,
             )
             val insertB = RgaOp.Insert(
-                id = RgaId(lamport = lamport.toLong() + 1, replicaId = ReplicaId("B")),
+                id = RgaId(lamport = lamport.toLong() + 1, replicaId = ReplicaId("B"), seq = 1L),
                 value = "valB-${lamport + 1}",
                 after = RgaId.HEAD,
             )

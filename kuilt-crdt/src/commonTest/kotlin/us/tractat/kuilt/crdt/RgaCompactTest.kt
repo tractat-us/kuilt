@@ -1,3 +1,5 @@
+@file:Suppress("DEPRECATION") // Exercises the deprecated scalar compact(Long) until #270 removes it.
+
 package us.tractat.kuilt.crdt
 
 import kotlinx.serialization.json.Json
@@ -211,8 +213,8 @@ class RgaCompactTest {
 
     @Test
     fun compactOpRoundTripsThroughJson() {
-        val id1 = RgaId(lamport = 1L, replicaId = ReplicaId("alice"))
-        val id2 = RgaId(lamport = 2L, replicaId = ReplicaId("bob"))
+        val id1 = RgaId(lamport = 1L, replicaId = ReplicaId("alice"), seq = 1L)
+        val id2 = RgaId(lamport = 2L, replicaId = ReplicaId("bob"), seq = 1L)
         val compact = RgaOp.Compact(setOf(id1, id2))
 
         val rgaOpSerializer = RgaOp.serializer(serializer<String>())
