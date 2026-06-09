@@ -302,7 +302,7 @@ public class Rga<V> private constructor(
 
     /**
      * Returns a positions map for [ids]: each id mapped to its [RgaOp.Insert.after].
-     * All ids must be present in [insertsByid] (live, non-compacted elements).
+     * All ids must be present in [insertsByid] (non-compacted — live or tombstoned).
      * Used by [us.tractat.kuilt.crdt.replicator.RgaGcCoordinator] to build positions
      * for window-dropped live elements when constructing a combined [RgaOp.Compact].
      */

@@ -92,7 +92,7 @@ public class RgaOpSerializer<V>(
                 after = after ?: missingField("Insert", "after"),
             )
             TYPE_REMOVE -> RgaOp.Remove(id = id ?: missingField("Remove", "id"))
-            TYPE_COMPACT -> RgaOp.Compact(positions = positions ?: missingField("Compact", "positions"))
+            TYPE_COMPACT -> RgaOp.Compact(positions = positions ?: missingField("Compact", "pos"))
             else -> throw SerializationException("Unknown RgaOp type discriminator: $type")
         }
     }
