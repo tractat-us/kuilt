@@ -1,6 +1,6 @@
 # ADR-003 — RGA tombstone GC + history windowing
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-06-08
 **Resolves:** #247
 
@@ -23,7 +23,7 @@ they cannot pin the watermark forever.
 
 ### 1. Layering: new `RgaGcCoordinator` alongside the replicator
 
-**Decision:** GC and windowing logic lives in a new coordinator type,
+GC and windowing logic lives in a new coordinator type,
 `RgaGcCoordinator`, following the `BoundedCounterTransferCoordinator`
 precedent. `Rga` gains a single new primitive (`compact(watermark)`).
 `SeamReplicator` is unchanged except for one new `StateFlow<Long>`.
@@ -69,7 +69,9 @@ with `A` tombstoned keeps `A` anchored until `B` is also tombstoned and
 compacted. In practice, for a chat log where deleted messages are
 rarely used as insert predecessors, most tombstones compact quickly.
 
-**`Compact` op records which ids were removed so late joiners converge:**
+**`Compact` op typing.** `Compact` is encoded as a variant of the
+single `RgaOp<V>` sealed hierarchy using `RgaOp<Nothing>` — one
+hierarchy, one serializer, no parallel `RgaControl` type:
 
 ```kotlin
 @Serializable
@@ -88,16 +90,28 @@ log as lightweight "GC tombstones" to make `FullState` merges
 idempotent; their total size is bounded by the number of compaction
 events, not the number of elements ever inserted.
 
-**Watermark derivation.** `RgaGcCoordinator` consumes a
-`universalAckFlow: StateFlow<Long>` supplied by `SeamReplicator` (see
-sub-issue B). When it advances, the coordinator calls
-`compact(watermark)`, passes the patch to the replicator's `apply`, and
-the delta propagates normally.
+**Watermark derivation.** `RgaGcCoordinator` consumes
+`SeamReplicator.universalAckFlow` (see Decision 3). When it advances,
+the coordinator calls `compact(watermark)`, passes the patch to the
+replicator's `apply`, and the delta propagates normally.
 
-### 3. History windowing / stable-prefix truncation
+### 3. `SeamReplicator.universalAckFlow` — permanent public API
 
-**Design:** a convergent window drops elements from the visible prefix
-using the same `Compact` op. The coordinator accepts a `WindowPolicy`:
+`SeamReplicator` exposes a new deliberate, permanent public property:
+
+```kotlin
+public val universalAckFlow: StateFlow<Long>
+```
+
+It tracks `min(ackedThrough over knownPeers)` and advances
+monotonically. This is a first-class API commitment, not an internal
+accessor promoted for convenience. The coordinator observes it
+directly; no re-derivation from observed deltas inside the coordinator.
+
+### 4. History windowing / stable-prefix truncation
+
+A convergent window drops elements from the visible prefix using the
+same `Compact` op. The coordinator accepts a `WindowPolicy`:
 
 ```kotlin
 fun interface WindowPolicy {
@@ -112,12 +126,16 @@ Built-in policies:
   structural predecessors are entirely outside the retained window.
 - `WindowPolicy.never()` — GC-only, no windowing (the default).
 
+**Per-peer policy divergence is allowed.** Two replicas may run
+different `WindowPolicy` configurations; no room-uniform enforcement.
+After set-union merge, the more-aggressive window dominates — each
+replica ends up compacting the union of what either dropped. This
+"most-aggressive-window-wins" behaviour is expected and convergent.
+
 **Convergence.** The window is expressed as a `Compact` op and
-broadcast identically to tombstone GC. Two replicas independently
-computing the same policy on the same causally-stable state produce
-the same `ids` set. Asymmetric races (one replica has windowed, the
-other has not yet) resolve via set-union: after merging, both have
-compacted the union of what either dropped.
+broadcast identically to tombstone GC. Asymmetric races (one replica
+has windowed, the other has not yet) resolve via set-union: after
+merging, both have compacted the union of what either dropped.
 
 **Late-joiner semantics.** A new peer receives a `FullState` already
 reflecting the window. It converges to the current window without
@@ -137,7 +155,7 @@ public class RgaGcCoordinator<V>(
 )
 ```
 
-### 4. Forward-looking: edit (LWW-per-element)
+### 5. Forward-looking: edit (LWW-per-element)
 
 An update-in-place primitive would associate each `RgaId` with a
 `LWWRegister<V>` rather than a fixed value. GC interacts cleanly:
@@ -145,27 +163,13 @@ once an id is tombstoned, its register state is irrelevant; the
 `Compact` op removes both the insert and its register. The window
 design does not foreclose this path.
 
-## Open questions
+## Resolved decisions
 
-1. **`universalAckFlow` exposure.** `SeamReplicator` currently exposes
-   ack state only in `internal` test accessors. Making `universalAck`
-   a public `StateFlow<Long>` is a small but permanent API commitment.
-   Preferred over re-deriving it inside the coordinator from observed
-   deltas (which would be fragile). This is the main API decision
-   point before implementation starts.
-
-2. **`Compact` in `RgaOp<out V>`.** Encoding `Compact` as an `RgaOp`
-   variant is natural but `Compact` carries `Set<RgaId>`, not a `V`.
-   A parallel `RgaControl = Compact(ids)` sealed type carried alongside
-   the op-log may be cleaner; the trade-off is whether it complicates
-   `piece` and serialization.
-
-3. **Window-policy coordination.** Two replicas with different
-   `WindowPolicy` configurations produce different `Compact` ops.
-   After set-union, the intersection of what each dropped is removed
-   — safe, but potentially surprising. Whether to enforce a
-   room-uniform policy (agreed on join) or leave it heterogeneous is
-   unresolved.
+| # | Question | Resolution |
+|---|----------|------------|
+| Op typing | `Compact` as `RgaOp<Nothing>` or a parallel `RgaControl` sealed type? | `RgaOp<Nothing>` — single hierarchy, one serializer. |
+| Watermark API | Internal accessor or public `StateFlow<Long>`? | `public val universalAckFlow: StateFlow<Long>` on `SeamReplicator` — deliberate, permanent. |
+| Window-policy coordination | Room-uniform enforcement or per-peer divergence? | Per-peer divergence allowed; "most-aggressive-window-wins" set-union is expected convergent behaviour. |
 
 ## Sub-issue decomposition
 
@@ -174,14 +178,14 @@ clock fake harness, and must be green on wasmJs + iOS.
 
 | # | Title | Acceptance |
 |---|-------|------------|
-| A | `Rga.compact(watermark)` — tombstone GC primitive | `compact` removes causally stable tombstones satisfying the predecessor-safety check; `Compact` op merges idempotently; existing `RgaTest` battery stays green |
-| B | `SeamReplicator.universalAckFlow` — expose causal-stability watermark | New `StateFlow<Long>` advances monotonically as `gcPendingDeltas` fires; unit tests with fake seam + ≥3 peers confirm it tracks the minimum ack |
+| A | `Rga.compact(watermark)` — tombstone GC primitive | `compact` removes causally stable tombstones satisfying the predecessor-safety check; `Compact: RgaOp<Nothing>` op merges idempotently; existing `RgaTest` battery stays green |
+| B | `SeamReplicator.universalAckFlow` — expose causal-stability watermark | New `public val universalAckFlow: StateFlow<Long>` advances monotonically; deterministic test with fake seam + ≥3 peers confirms it tracks the minimum ack |
 | C | `RgaGcCoordinator` — drives compaction from replicator ack state | Coordinator triggers `compact` when watermark advances; delta propagates normally; 3-peer integration test converges to bounded op-log under continuous insert + remove |
-| D | History windowing — `WindowPolicy.byCount(n)` | Late joiner over a 3-peer room with `byCount(10)` converges to the windowed state via `FullState`, not full-history replay; op-log size remains bounded |
+| D | History windowing — `WindowPolicy.byCount(n)` | Late joiner over a 3-peer room with `byCount(10)` converges to the windowed state via `FullState`, not full-history replay; per-peer policy divergence resolves by set-union |
 
 ## Consequences
 
-- `Rga` gains `compact(watermark)` and a `Compact` op variant.
+- `Rga` gains `compact(watermark)` and a `Compact: RgaOp<Nothing>` op variant.
 - `SeamReplicator` gains one new public `StateFlow<Long>`
   (`universalAckFlow`); no other changes.
 - New `RgaGcCoordinator` class (similar scope to
