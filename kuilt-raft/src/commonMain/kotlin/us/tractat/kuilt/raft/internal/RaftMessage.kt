@@ -1,6 +1,7 @@
 package us.tractat.kuilt.raft.internal
 
 import kotlinx.serialization.Serializable
+import us.tractat.kuilt.raft.ConfigPayload
 import us.tractat.kuilt.raft.LogEntry
 import us.tractat.kuilt.raft.NodeId
 
@@ -45,6 +46,10 @@ internal sealed interface RaftMessage {
      * §7 InstallSnapshot — one chunk of a snapshot transfer. The leader diverts to this when a
      * follower's needed prefix has been compacted away. [data] carries bytes `[offset, offset+size)`
      * of the opaque snapshot; [done] marks the final chunk.
+     *
+     * [config] is the effective membership as of [lastIncludedIndex] (see [SnapshotMeta.config]).
+     * Carried on every chunk (it is tiny relative to the state) so the installer can adopt it
+     * regardless of which chunk it finalizes on; `null` when the covered prefix held no config change.
      */
     @Serializable
     data class InstallSnapshot(
@@ -55,6 +60,7 @@ internal sealed interface RaftMessage {
         val offset: Long,
         val data: ByteArray,
         val done: Boolean,
+        val config: ConfigPayload? = null,
     ) : RaftMessage
 
     /** Follower's reply to [InstallSnapshot]: [nextOffset] is how many bytes it has stored, resyncing the leader after a dropped chunk. */
