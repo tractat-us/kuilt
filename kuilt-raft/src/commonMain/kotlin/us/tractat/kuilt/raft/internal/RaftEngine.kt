@@ -132,9 +132,11 @@ internal class RaftEngine(
     private var membership: MembershipState = MembershipState.Simple(bootstrapConfig)
 
     /**
-     * The effective config recorded in the most recently installed snapshot, or null if no snapshot
-     * has been installed. Wired fully in A3 (SnapshotMeta.config); for PR A, only `recomputeMembership`
-     * reads it (which falls through to bootstrapConfig when null). Always null in PR A.
+     * The effective config as of the baseline of the most recently installed or compacted snapshot
+     * ([SnapshotMeta.config]), or null when no snapshot is in force or its covered prefix held no config
+     * change. Seeded on restart-load, on snapshot install, and on local compaction; consumed by
+     * [recomputeMembership] as the "else snapshot's config" branch when the live log no longer carries a
+     * config entry (the entry that set the membership was compacted away).
      */
     private var snapshotConfig: ConfigPayload? = null
 
@@ -237,6 +239,9 @@ internal class RaftEngine(
             storage.loadSnapshot()?.let { stored ->
                 snapshotIndex = stored.meta.lastIncludedIndex
                 snapshotTerm = stored.meta.lastIncludedTerm
+                // Seed the membership baseline from the snapshot so a node that crashed after compacting
+                // past a config change recovers under that change (the config entry is gone from the log).
+                snapshotConfig = stored.meta.config
                 _compactionFloor.value = snapshotIndex
                 if (currentCommitIndex < snapshotIndex) {
                     currentCommitIndex = snapshotIndex
@@ -702,6 +707,7 @@ internal class RaftEngine(
                 offset = xfer.nextOffset,
                 data = xfer.state.copyOfRange(start, end),
                 done = done,
+                config = xfer.meta.config,
             )
         )
     }
@@ -736,7 +742,7 @@ internal class RaftEngine(
         resetElectionTimeout()
         armLeaderLease()
 
-        val meta = SnapshotMeta(m.lastIncludedIndex, m.lastIncludedTerm)
+        val meta = SnapshotMeta(m.lastIncludedIndex, m.lastIncludedTerm, m.config)
         val r = if (m.offset == 0L) SnapshotReassembly(meta).also { incomingSnapshot = it } else incomingSnapshot
         // Out-of-order or stale chunk: re-advertise the offset we actually hold and wait for a resend.
         if (r == null || r.meta != meta || m.offset != r.buffer.size.toLong()) {
@@ -758,7 +764,7 @@ internal class RaftEngine(
 
     /** Persist + apply a fully-reassembled snapshot, reset the log around it, and emit the install. */
     private suspend fun finalizeInstalledSnapshot(from: NodeId, m: RaftMessage.InstallSnapshot, bytes: ByteArray) {
-        val meta = SnapshotMeta(m.lastIncludedIndex, m.lastIncludedTerm)
+        val meta = SnapshotMeta(m.lastIncludedIndex, m.lastIncludedTerm, m.config)
         storage.saveSnapshot(meta, bytes)
         // Keep the suffix only if our entry at the boundary matches the snapshot's term (Log Matching);
         // otherwise the whole local log is suspect — discard it and rebuild from the snapshot.
@@ -776,8 +782,11 @@ internal class RaftEngine(
             _commitIndex.value = m.lastIncludedIndex
         }
         _compactionFloor.value = snapshotIndex
-        // Recompute membership after snapshot install — the snapshot may carry a config in A3
-        // (snapshotConfig); for now it is always null (falls through to log-based or bootstrapConfig).
+        // Adopt the snapshot's effective config as the recompute baseline, then recompute membership:
+        // the config entries that produced this membership were compacted away on the leader, so the
+        // snapshot is the only place the installer can learn them. A non-null joint payload resumes the
+        // joint phase. Falls through to log-based or bootstrapConfig when the snapshot carries no config.
+        snapshotConfig = m.config
         recomputeMembership()
         _committed.emit(Committed.Install(Snapshot(m.lastIncludedIndex, bytes)))
         incomingSnapshot = null
@@ -977,11 +986,20 @@ internal class RaftEngine(
         val s = snapshots.value ?: return
         if (s.throughIndex <= snapshotIndex || s.throughIndex > currentCommitIndex) return
         val term = termAt(s.throughIndex) ?: return   // must be a live, committed entry
-        storage.saveSnapshot(SnapshotMeta(s.throughIndex, term), s.state)   // durable FIRST
+        // The membership the snapshot must carry is the config as of `throughIndex` — the highest-index
+        // config entry at or below the cut, else the config the prior snapshot already recorded. It must
+        // NOT be the live `membership`, which may reflect a later config entry between the cut and the
+        // log tail (that would stamp the snapshot with a future config and corrupt an installer's view).
+        val configAsOfCut = log.lastOrNull { it.config != null && it.index <= s.throughIndex }?.config
+            ?: snapshotConfig
+        storage.saveSnapshot(SnapshotMeta(s.throughIndex, term, configAsOfCut), s.state)   // durable FIRST
         storage.discardLogPrefix(s.throughIndex)                             // then drop prefix
         log.removeAll { it.index <= s.throughIndex }
         snapshotIndex = s.throughIndex
         snapshotTerm = term
+        // Retain the compacted config as the snapshot baseline so a subsequent recompute (or restart)
+        // still resolves membership correctly once the config entry is gone from the live log.
+        snapshotConfig = configAsOfCut
         _compactionFloor.value = snapshotIndex
         emitTrace(RaftTraceEvent.Compacted(nextClock(), transport.selfId, snapshotIndex, snapshotTerm))
     }
