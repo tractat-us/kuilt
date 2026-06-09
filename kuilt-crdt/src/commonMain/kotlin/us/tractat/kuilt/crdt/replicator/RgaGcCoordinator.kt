@@ -145,6 +145,7 @@ public class RgaGcCoordinator<V>(
      * Merges GC candidates from [Rga.compact] and [windowIds], returning a unified
      * [RgaOp.Compact] that covers both, or `null` if there is nothing to compact.
      */
+    @Suppress("DEPRECATION") // Unsound scalar watermark; replaced by the VV barrier in #270.
     private fun compactWithWindow(
         rga: Rga<V>,
         watermark: Long,
