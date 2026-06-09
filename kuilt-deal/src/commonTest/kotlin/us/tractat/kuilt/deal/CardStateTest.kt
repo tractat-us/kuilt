@@ -88,6 +88,29 @@ class CardStateTest {
         )
         assertEquals(CardPhase.REVEALED, state.phase())
     }
+
+    @Test
+    fun mergeIsIdempotent() {
+        val card = emptyCard().copy(encryptedBy = GSet.of(alice), strippedBy = GSet.of(bob))
+        assertEquals(card, card.merge(card))
+    }
+
+    @Test
+    fun mergeIsCommutative() {
+        // Same ciphertext on both sides so full CardState equality holds; the
+        // tie-break path (equal encryptor count, different members) is exercised.
+        val left = emptyCard().copy(encryptedBy = GSet.of(alice))
+        val right = emptyCard().copy(encryptedBy = GSet.of(bob))
+        assertEquals(left.merge(right), right.merge(left))
+    }
+
+    @Test
+    fun mergeIsAssociative() {
+        val a = emptyCard().copy(encryptedBy = GSet.of(alice))
+        val b = emptyCard().copy(encryptedBy = GSet.of(bob))
+        val c = emptyCard().copy(encryptedBy = GSet.of(carol))
+        assertEquals(a.merge(b).merge(c), a.merge(b.merge(c)))
+    }
 }
 
 private fun assertAll(vararg assertions: () -> Unit) = assertions.forEach { it() }

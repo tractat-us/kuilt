@@ -13,6 +13,10 @@ public data class DeckState(
 
     public fun isRevealed(index: Int): Boolean = cards[index].phase() == CardPhase.REVEALED
 
-    public fun merge(other: DeckState): DeckState =
-        DeckState(cards.zip(other.cards) { a, b -> a.merge(b) })
+    public fun merge(other: DeckState): DeckState {
+        require(cards.size == other.cards.size) {
+            "Cannot merge decks of different sizes: ${cards.size} vs ${other.cards.size}"
+        }
+        return DeckState(cards.zip(other.cards) { a, b -> a.merge(b) })
+    }
 }

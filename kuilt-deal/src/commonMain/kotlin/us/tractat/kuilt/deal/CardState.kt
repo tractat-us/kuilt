@@ -27,13 +27,23 @@ public data class CardState(
         else -> CardPhase.REVEALED
     }
 
-    public fun merge(other: CardState): CardState = copy(
-        encryptedBy = encryptedBy.piece(other.encryptedBy),
-        strippedBy = strippedBy.piece(other.strippedBy),
-        // ciphertext converges to same value by commutativity — take either
-        ciphertext = if (encryptedBy.elements.size >= other.encryptedBy.elements.size)
-            ciphertext else other.ciphertext,
-    )
+    public fun merge(other: CardState): CardState {
+        // Ciphertext convergence: the side with more encryption layers wins.
+        // On a tie (equal encryptor count — possibly divergent members mid-shuffle),
+        // break deterministically by ciphertext byte order so merge stays commutative.
+        // Once encryptedBy converges the two ciphertexts are byte-identical, so the
+        // tie-break is invisible in steady state.
+        val winningCiphertext = when {
+            encryptedBy.elements.size > other.encryptedBy.elements.size -> ciphertext
+            encryptedBy.elements.size < other.encryptedBy.elements.size -> other.ciphertext
+            else -> if (compareCiphertext(ciphertext, other.ciphertext) <= 0) ciphertext else other.ciphertext
+        }
+        return copy(
+            encryptedBy = encryptedBy.piece(other.encryptedBy),
+            strippedBy = strippedBy.piece(other.strippedBy),
+            ciphertext = winningCiphertext,
+        )
+    }
 
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
@@ -53,4 +63,13 @@ public data class CardState(
         result = 31 * result + allPlayers.hashCode()
         return result
     }
+}
+
+private fun compareCiphertext(a: ByteArray, b: ByteArray): Int {
+    val min = minOf(a.size, b.size)
+    for (i in 0 until min) {
+        val cmp = (a[i].toInt() and 0xFF).compareTo(b[i].toInt() and 0xFF)
+        if (cmp != 0) return cmp
+    }
+    return a.size.compareTo(b.size)
 }
