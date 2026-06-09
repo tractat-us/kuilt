@@ -9,6 +9,7 @@ kotlin {
         commonMain.dependencies {
             api(project(":kuilt-core"))
             api(libs.kotlinx.serialization.core)
+            implementation(libs.kotlinx.atomicfu)
             implementation(libs.kotlinx.coroutines.core)
             implementation(libs.kotlinx.serialization.cbor)
             implementation(libs.kotlin.logging)
