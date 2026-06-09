@@ -192,12 +192,67 @@ class RaftSimulation(
             pollUntil { nodes.entries.firstOrNull { it.key in among && it.value.role.value is RaftRole.Leader }?.value }
         }
 
+    /**
+     * Apply a membership change against whichever node is currently leader, re-acquiring the leader
+     * and retrying as leadership moves. A dynamic-membership change legitimately races leader
+     * elections (a freshly-promoted voter may time out and unseat the leader, a removed leader steps
+     * down), so a test must not pin a single `leader` reference across the call. Retries on
+     * [NotLeaderException] (leadership moved) and [MembershipChangeInProgressException] (a change —
+     * possibly a prior attempt completed by a new leader — is still settling). Returns the committed
+     * config once a leader accepts and commits the change.
+     */
+    suspend fun changeMembershipOnLeader(target: ClusterConfig, within: Duration = DEFAULT_AWAIT): ClusterConfig =
+        awaitOrDump("changeMembershipOnLeader($target)", within) {
+            while (true) {
+                val l = leader()
+                if (l == null) { delay(1); continue }
+                try {
+                    return@awaitOrDump l.changeMembership(target)
+                } catch (_: NotLeaderException) {
+                    delay(1)
+                } catch (_: MembershipChangeInProgressException) {
+                    delay(1)
+                }
+            }
+            @Suppress("UNREACHABLE_CODE") error("unreachable")
+        }
+
+    /**
+     * Propose against the current leader (optionally restricted to [among]), re-acquiring + retrying
+     * on [NotLeaderException]. Returns the committed entry. Use instead of a pinned `leader.propose`
+     * when leadership may move during a membership test.
+     */
+    suspend fun proposeOnLeader(
+        command: ByteArray,
+        among: Set<NodeId>? = null,
+        within: Duration = DEFAULT_AWAIT,
+    ): LogEntry = awaitOrDump("proposeOnLeader", within) {
+        while (true) {
+            val l = leader()?.takeIf { among == null || nodeIdOf(it) in among }
+            if (l == null) { delay(1); continue }
+            try {
+                return@awaitOrDump l.propose(command)
+            } catch (_: NotLeaderException) {
+                delay(1)
+            }
+        }
+        @Suppress("UNREACHABLE_CODE") error("unreachable")
+    }
+
+    private fun nodeIdOf(node: RaftNode): NodeId = nodes.entries.first { it.value === node }.key
+
     /** Suspend until node [id] holds [role]; fail fast with a dump otherwise. */
     suspend fun awaitRole(id: NodeId, role: RaftRole, within: Duration = DEFAULT_AWAIT) {
         awaitOrDump("awaitRole($id, $role)", within) {
             pollUntil { nodes[id]?.takeIf { it.role.value == role } }
         }
     }
+
+    /** Suspend until node [id] satisfies [pred]; return it, or fail fast with a dump. */
+    suspend fun awaitNode(id: NodeId, within: Duration = DEFAULT_AWAIT, pred: (RaftNode) -> Boolean): RaftNode =
+        awaitOrDump("awaitNode($id)", within) {
+            pollUntil { nodes[id]?.takeIf(pred) }
+        }
 
     /**
      * Poll [probe] every virtual millisecond until it returns non-null, then return that value.

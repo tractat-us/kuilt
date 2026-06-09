@@ -1178,9 +1178,21 @@ internal class RaftEngine(
         val payload = entry.config ?: return
         debug { "onConfigCommitted: entry.index=${entry.index} payload=$payload" }
         if (payload.old != null) {
-            // Joint committed → append C_new (Simple) to complete the transition.
-            debug { "onConfigCommitted: Joint committed — appending Simple(C_new=${payload.new})" }
-            appendConfigEntry(ConfigPayload(old = null, new = payload.new))
+            // Joint committed → append C_new (Simple) to complete the transition — but ONLY if no
+            // later config entry has already superseded the Joint. `membership` always reflects the
+            // last config entry in the log, so `membership is Joint` is exactly the condition "no
+            // Simple(C_new) follows the Joint yet." A new leader that inherits a Joint whose trailing
+            // Simple(C_new) is already in its log (the original leader appended it before crashing /
+            // stepping down) must NOT append a second C_new: that duplicate carries the new leader's
+            // term, diverges from the existing C_new, and wedges replication in an infinite
+            // AppendEntries backup loop. Skipping is safe — C_new already exists; the Simple branch
+            // will complete the deferred and run the step-down when that existing C_new commits.
+            if (membership is MembershipState.Joint) {
+                debug { "onConfigCommitted: Joint committed — appending Simple(C_new=${payload.new})" }
+                appendConfigEntry(ConfigPayload(old = null, new = payload.new))
+            } else {
+                debug { "onConfigCommitted: Joint committed but C_new already in log (membership=$membership) — skip duplicate append" }
+            }
         } else {
             // Simple committed → transition complete; wake the changeMembership caller.
             val result = ClusterConfig(payload.new.voters, payload.new.learners)

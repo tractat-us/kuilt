@@ -316,4 +316,143 @@ class MembershipTest {
                 "$id is isolated in a 2-of-5 partition and must not commit ${committedEntry.index}")
         }
     }
+
+    /**
+     * B3 — promote a learner to a voter. A learner-set change wires L1 in (PR A path); then a
+     * voter-set change promotes it to a voter via joint consensus.
+     *
+     * Asserts the §6 + Fix-#5 behavior: once C_new commits, L1 leaves [RaftRole.Learner] (it is
+     * election-eligible — `reevaluateSelfRole` arms its election timer on the Learner→voter flip,
+     * rather than leaving it passive), and the 4-voter cluster commits with L1 counted in the new
+     * quorum (quorum of 4 = 3).
+     */
+    @Test
+    fun promoteLearnerToVoter_leavesLearnerRole_andJoinsQuorum() = raftRunTest(timeout = 10.seconds) {
+        val sim = simWithVotersAndBootstrappedLearner()
+        awaitLeader(sim)
+        assertIs<RaftRole.Learner>(sim.nodes.getValue(learnerNode).role.value)
+
+        // Wire the learner in (learner-set path), then promote it to a 4th voter (voter-set change →
+        // joint consensus). Leadership-tolerant: a freshly-promoted voter may itself contend.
+        sim.changeMembershipOnLeader(ClusterConfig(voters = voterSet, learners = setOf(learnerNode)))
+        val fourVoters = voterSet + learnerNode
+        val result = sim.changeMembershipOnLeader(ClusterConfig(voters = fourVoters))
+        assertAll(
+            { assertEquals(fourVoters, result.voters, "C_new must have all 4 voters") },
+            { assertTrue(result.learners.isEmpty(), "no learners in C_new") },
+        )
+
+        // The promoted node adopts C_new and leaves the Learner role (election-eligible, Fix #5).
+        sim.awaitNode(learnerNode) { it.role.value !is RaftRole.Learner }
+
+        // L1 now counts toward quorum: a proposal commits under the 4-voter membership.
+        val entry = sim.proposeOnLeader(byteArrayOf(0x11))
+        assertTrue(entry.index > 0L, "4-voter cluster must commit with the promoted voter in quorum")
+    }
+
+    /**
+     * B3 — shrink a 5-voter cluster back to 3. Grows 3→5 (B1 path) to set up, then removes the two
+     * promoted voters. Once C_new (the 3 original voters) is in force, the quorum is majority-of-3 = 2;
+     * the removed pair is no longer needed and, partitioned away, cannot block commit — and being out
+     * of the config, cannot commit the new entry themselves.
+     */
+    @Test
+    fun shrink5To3_removedVotersDropFromQuorum() = raftRunTest(timeout = 10.seconds) {
+        val sim = simWithVotersAndTwoBootstrappedLearners()
+        awaitLeader(sim)
+
+        // Grow 3 → 5 first (wire learners, then promote).
+        sim.changeMembershipOnLeader(ClusterConfig(voters = voterSet, learners = twoLearners))
+        sim.changeMembershipOnLeader(ClusterConfig(voters = fiveVoters))
+
+        // Shrink 5 → 3, dropping two voters that are NOT the current leader. (Removing the leader is
+        // its own scenario — removeLeader_…; keeping the leader among the survivors means it shepherds
+        // the shrink without a mid-transition step-down.) After the grow, a promoted learner is often
+        // the leader, so the dropped pair is chosen relative to whoever leads.
+        val leaderId = sim.nodes.entries.first { it.value.role.value is RaftRole.Leader }.key
+        val removed = (fiveVoters - leaderId).take(2).toSet()
+        val survivors = fiveVoters - removed
+        val result = sim.changeMembershipOnLeader(ClusterConfig(voters = survivors))
+        assertEquals(survivors, result.voters, "C_new must be the 3 surviving voters")
+        sim.awaitCommit(sim.awaitLeader(among = survivors).commitIndex.value, on = survivors)
+
+        // The dropped pair is decommissioned (partition them off). The surviving 3 (quorum 2) commit.
+        sim.partition(removed, survivors)
+        val entry = sim.proposeOnLeader(byteArrayOf(0x22), among = survivors)
+        assertTrue(entry.index > 0L, "shrunk 3-voter cluster must commit with majority 2-of-3")
+        removed.forEach { id ->
+            assertTrue(sim.nodes.getValue(id).commitIndex.value < entry.index,
+                "$id was removed from the config and partitioned — must not commit ${entry.index}")
+        }
+    }
+
+    /**
+     * B3 — replace a voter. A learner is wired in, then a single voter-set change swaps one
+     * (non-leader) voter out for the learner — same voter-set size, different membership. After C_new
+     * is in force, the replaced voter — partitioned off — is no longer in any majority, and the new
+     * triple commits. A non-leader voter is replaced so the leader shepherds the change to completion
+     * (removing the leader is covered by removeLeader_…).
+     */
+    @Test
+    fun replaceVoter_swapForLearner() = raftRunTest(timeout = 10.seconds) {
+        val sim = simWithVotersAndBootstrappedLearner()
+        awaitLeader(sim)
+
+        // Wire the learner in, then replace a non-leader voter with L1 (same size, different set).
+        sim.changeMembershipOnLeader(ClusterConfig(voters = voterSet, learners = setOf(learnerNode)))
+        val leaderId = sim.nodes.entries.first { it.value.role.value is RaftRole.Leader }.key
+        val replaced = (voterSet - leaderId).first()
+        val newVoters = (voterSet - replaced) + learnerNode
+        val result = sim.changeMembershipOnLeader(ClusterConfig(voters = newVoters))
+        assertEquals(newVoters, result.voters, "C_new must replace $replaced with L1")
+        sim.awaitCommit(sim.awaitLeader(among = newVoters).commitIndex.value, on = newVoters)
+
+        // The replaced voter is partitioned away. The new triple (quorum 2) still commits.
+        sim.partition(setOf(replaced), newVoters)
+        val entry = sim.proposeOnLeader(byteArrayOf(0x33), among = newVoters)
+        assertTrue(entry.index > 0L, "replaced cluster $newVoters must commit with majority 2-of-3")
+        assertTrue(sim.nodes.getValue(replaced).commitIndex.value < entry.index,
+            "replaced voter $replaced was partitioned and is out of the config — must not commit ${entry.index}")
+    }
+
+    /**
+     * B3 — remove the leader itself (§6.4.1). Removing the current leader from a 3-voter cluster makes
+     * C_new the two surviving voters. The leader shepherds the joint transition (it owns the joint
+     * entries) until C_new is durable on the new majority, then steps down with
+     * [StepDownReason.RemovedFromConfig]. The survivors (quorum 2-of-2) elect a new leader and commit.
+     *
+     * The removed leader is partitioned off after the change to keep the post-step-down leaderless gap
+     * deterministic — without leadership transfer (out of scope), a removed node can briefly contend
+     * before PreVote settles; isolating it tests the in-scope outcome (clean survivor cluster).
+     */
+    @Test
+    fun removeLeader_stepsDownRemovedFromConfig_survivorsElect() = raftRunTest(timeout = 10.seconds) {
+        val sim = simWithVotersAndBootstrappedLearner() // learner unused here; 3 voters in play
+        val leader = awaitLeader(sim)
+        val leaderId = sim.nodes.entries.first { it.value === leader }.key
+        val survivors = voterSet - leaderId
+
+        // Observe the removed leader's step-down reason.
+        val stepDowns = mutableListOf<RaftTraceEvent.BecomeFollower>()
+        backgroundScope.launch {
+            sim.nodes.getValue(leaderId).trace
+                .filterIsInstance<RaftTraceEvent.BecomeFollower>()
+                .collect { stepDowns += it }
+        }
+        delay(1)
+
+        // Remove the leader: C_new = the two surviving voters.
+        val result = leader.changeMembership(ClusterConfig(voters = survivors))
+        assertEquals(survivors, result.voters, "C_new must be the two surviving voters")
+
+        // §6.4.1: the removed leader steps down with RemovedFromConfig once C_new commits.
+        sim.awaitRole(leaderId, RaftRole.Follower)
+        assertTrue(stepDowns.any { it.reason == StepDownReason.RemovedFromConfig },
+            "removed leader must step down RemovedFromConfig; saw ${stepDowns.map { it.reason }}")
+
+        // Isolate the removed leader; the survivors (quorum 2-of-2) elect and commit among themselves.
+        sim.partition(setOf(leaderId), survivors)
+        val entry = sim.proposeOnLeader(byteArrayOf(0x44), among = survivors)
+        assertTrue(entry.index > 0L, "surviving 2-voter cluster must commit after the leader is removed")
+    }
 }
