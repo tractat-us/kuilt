@@ -160,6 +160,17 @@ public class Rga<V> private constructor(
     }
 
     /**
+     * Union of all [RgaOp.Compact] ops' [RgaOp.Compact.positions] maps in this log.
+     * Maps each compacted id to its [RgaOp.Insert.after] at GC time.
+     * Used by [computeSequence] to resolve orphaned elements to their nearest surviving ancestor.
+     */
+    private val compactPositions: Map<RgaId, RgaId> by lazy {
+        ops.filterIsInstance<RgaOp.Compact>()
+            .flatMap { it.positions.entries }
+            .associate { (k, v) -> k to v }
+    }
+
+    /**
      * The materialized sequence of all [RgaId]s in RGA order, including tombstones.
      * Computed lazily and cached.
      *
@@ -410,26 +421,38 @@ public class Rga<V> private constructor(
      * This produces the canonical RGA sequence: deterministic across all replicas
      * that have seen the same op-log, regardless of insertion order.
      *
-     * **Reroot-to-HEAD (#254).** An [RgaOp.Insert] whose `after` is **neither [RgaId.HEAD]
-     * nor a present (non-compacted) Insert id** has had its structural predecessor purged
-     * (history windowing compacts a leading prefix of live inserts). Rather than letting the
-     * survivor become unreachable from [RgaId.HEAD] — collapsing the whole retained window to
-     * `[]` — it materializes as a child of [RgaId.HEAD], deterministically ordered with HEAD's
-     * other children by the same descending-id tiebreak. This is essential for windowing and
-     * benign for tombstone GC: a causally-stable GC'd element has no surviving local successor
-     * (barrier condition 4), so nothing ever reroots on the GC path.
+     * **Positional reroot (#293).** An [RgaOp.Insert] whose `after` has been compacted away
+     * does not simply jump to [RgaId.HEAD]. Instead, `nearestAncestor` chain-walks
+     * [compactPositions] — the union of all [RgaOp.Compact] `positions` maps — until it
+     * reaches either a present (non-compacted) id or [RgaId.HEAD]. This preserves the
+     * relative order of surviving elements: a successor of a GC'd element stays below
+     * the GC'd element's own surviving predecessor rather than floating to the top.
+     *
+     * The chain-walk is bounded: compaction only removes causally-stable tombstones (barrier
+     * condition 4 ensures no surviving successor exists for the element being GC'd when it
+     * is GC'd by [compact]), so the positions map is acyclic and terminates at HEAD or a
+     * live element within at most O(compacted depth) steps.
      */
     private fun computeSequence(): List<RgaId> {
-        // Group all insert ops by their effective predecessor: HEAD if `after` is HEAD or has
-        // been compacted away (reroot-to-HEAD), else the present `after` id.
+        // Group each insert op by its effective predecessor: HEAD if `after` is HEAD or present,
+        // else chain-walk compactPositions to the nearest surviving ancestor (positional
+        // reroot, #293) — preserves relative order when GC removes an intermediate element.
         val present = insertsByid.keys
-        val childrenOf: Map<RgaId, List<RgaId>> = insertsByid.values
+        val positions = compactPositions
+        fun nearestAncestor(start: RgaId): RgaId {
+            var cur = start
+            while (cur != RgaId.HEAD && cur !in present) cur = positions[cur] ?: RgaId.HEAD
+            return cur
+        }
+        val childrenOf = insertsByid.values
             .groupBy(
-                keySelector = { if (it.after in present) it.after else RgaId.HEAD },
+                keySelector = { ins ->
+                    val a = ins.after
+                    if (a == RgaId.HEAD || a in present) a else nearestAncestor(a)
+                },
                 valueTransform = { it.id },
             )
             .mapValues { (_, ids) -> ids.sortedDescending() }
-
         val result = mutableListOf<RgaId>()
         appendChildren(RgaId.HEAD, childrenOf, result)
         return result

@@ -100,14 +100,10 @@ class RgaRerootTest {
     }
 
     /**
-     * Pins the accepted reroot-to-HEAD quirk: an eviction-orphan reorders **above** preceding
-     * content. Build `[M, I, J]` (M@HEAD, I@M, J@I), tombstone I, then `Compact(I)`. J's `after`
-     * is now purged so J reroots to HEAD; as a HEAD child it sorts by descending id, landing
-     * before M. Result is `[J, M]`, not `[M, J]`.
-     *
-     * This is the documented baseline #293 (positional reroot) would flip: retaining I's
-     * `after`-position on Compact would keep J below M, giving `[M, J]`. If this assertion ever
-     * reads `[M, J]`, reroot semantics changed — reconcile with #293 before merging.
+     * Positional reroot (#293): an eviction-orphan reattaches to the nearest surviving ancestor,
+     * not HEAD. Build `[M, I, J]` (I removed, then GC'd). Before this fix J rerooted to HEAD
+     * and sorted above M (`[J, M]`). With positional reroot, `Compact({I→M})` records I's
+     * position; J chain-follows I→M and lands below M → `[M, J]`.
      */
     @Test
     fun evictionOrphanRerootsAbovePrecedingContent() {
@@ -122,12 +118,10 @@ class RgaRerootTest {
 
         val windowed = tombstoned.apply(RgaOp.Compact(mapOf(opI.id to opM.id)))
 
-        // J (higher id) reroots to HEAD and sorts before M (lower id) — the accepted quirk.
         assertEquals(
-            listOf("J", "M"),
+            listOf("M", "J"),
             windowed.toList(),
-            "reroot-to-HEAD reorders an eviction-orphan above preceding content; " +
-                "#293 (positional reroot) would give [M, J]",
+            "positional reroot: Compact records I.after=M, so J chain-follows I→M and stays below M",
         )
     }
 }
