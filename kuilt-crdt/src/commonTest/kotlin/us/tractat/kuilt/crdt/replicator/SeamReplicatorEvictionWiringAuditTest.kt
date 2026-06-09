@@ -338,4 +338,123 @@ class SeamReplicatorEvictionWiringAuditTest {
             "self delivered everything known → condition 3 satisfied; GC authorized, relying on FullState-on-join",
         )
     }
+
+    // ---- Hypothesis 5: real Compact through apply() ↔ cut recompute consistency ----
+
+    /**
+     * H5 VERDICT: SOUND. A real coordinator GC emits an [RgaOp.Compact] and feeds it
+     * back through [SeamReplicator.apply]. That `apply` runs the SAME
+     * `recomputeDeliveredLocal → recomputeCut` path as any other mutation. The probe
+     * asserts the Compact does NOT churn S or F: `causalDots()` counts `Compact.ids`
+     * as delivered (Rga §causalDots) so `deliveredLocal` stays put, and S/F do not
+     * decrease across the GC.
+     *
+     * Load-bearing invariant: a Compact preserves the dots it purges in its own
+     * `ids`, so the contiguous delivered frontier — and therefore S and F — is stable
+     * across local GC.
+     */
+    @Test
+    fun probe5_realCompactThroughApplyKeepsCutStable() = runTest(UnconfinedTestDispatcher()) {
+        val loom = InMemoryLoom()
+        val seamA = loom.host(Pattern("h5-compact"))
+        val rawB = loom.join(InMemoryTag("b"))
+        val controlledPeers = MutableStateFlow(loom.peers.value)
+        val repA = auditRep(AuditControllableSeam(seamA, controlledPeers), backgroundScope, AuditFakeClock())
+        val a = repA.replica
+        controlledPeers.value = loom.peers.value
+
+        // Build a GC-able tombstone: insert two, remove the SECOND (a leaf — not anyone's
+        // structural predecessor, so it passes compact predicate (4)).
+        val (_, ins1) = repA.state.value.insertAfter(a, RgaId.HEAD, "first")
+        repA.apply(Patch(Rga.empty<String>().apply(ins1)))
+        val (_, ins2) = repA.state.value.insertAfter(a, ins1.id, "second")
+        repA.apply(Patch(Rga.empty<String>().apply(ins2)))
+        val removable = repA.state.value
+        val (_, rem) = removable.removeAt(1)!! // remove "second" (the leaf)
+        repA.apply(Patch(Rga.empty<String>().apply(rem)))
+
+        // B caught up to all 3 local deltas. Cut/frontier now reflect full delivery.
+        craftDelivered(rawB, repA.deliveredLocal.value)
+        testScheduler.advanceUntilIdle()
+        val cutBefore = repA.cutFrontier.value
+        val deliveredBefore = repA.deliveredLocal.value
+
+        // Build the sound compaction op directly (the #270 barrier form) and apply it,
+        // exactly as a coordinator's applyCompaction → SeamReplicator.apply would.
+        val (_, compactOp) = repA.state.value.compact(
+            stableCut = cutBefore.stableCut,
+            frontierMax = cutBefore.frontierMax,
+            delivered = deliveredBefore,
+        ) ?: error("expected a GC-able tombstone")
+        repA.apply(Patch(Rga.empty<String>().apply(compactOp)))
+        testScheduler.advanceUntilIdle()
+
+        val cutAfter = repA.cutFrontier.value
+        assertEquals(
+            deliveredBefore, repA.deliveredLocal.value,
+            "Compact preserves purged dots in its ids → deliveredLocal unchanged after GC",
+        )
+        assertTrue(
+            cutAfter.stableCut.dominates(cutBefore.stableCut),
+            "stableCut does not regress across a real Compact",
+        )
+        assertTrue(
+            cutAfter.frontierMax.dominates(cutBefore.frontierMax),
+            "frontierMax does not regress across a real Compact",
+        )
+    }
+
+    // ---- Hypothesis 6: W2 single-coroutine confinement of matrix mutations ----
+
+    /**
+     * H6 VERDICT: WIRING GAP (structural). The ADR §4.6 (W2) requires every mutation
+     * of `frontiers` / `retainedFrontier` / `knownPeers` / the cut to be confined to
+     * ONE coroutine context, and warns `scope` must not be multithreaded. The three
+     * `launchIn(scope)` collectors satisfy that — but [SeamReplicator.apply] is a
+     * PUBLIC method invoked by the consumer from an arbitrary context, and it mutates
+     * the matrix SYNCHRONOUSLY on the caller's thread (apply → recomputeDeliveredLocal
+     * → recomputeCut writes `monotonicStableCut`, `retainedFrontier`, `_cutFrontier`).
+     *
+     * This probe pins the load-bearing fact: `apply` mutates the cut with NO dispatch
+     * hop onto `scope` — `cutFrontier` is updated before `apply` returns, on the
+     * caller's context. On a single-threaded test dispatcher this is benign (the
+     * collectors can't preempt a synchronous method), so the probe PASSES; but it
+     * documents that confinement depends on the *consumer* invoking `apply` on the
+     * same single thread that backs `scope`. Nothing in the type enforces or even
+     * documents that precondition (unlike the TestDispatcher guard). If a consumer
+     * calls `apply` from `Dispatchers.Default` while the seam-incoming collector runs
+     * the matrix on another thread, W2 is violated with no happens-before edge —
+     * exactly the race (W2) exists to forbid.
+     *
+     * Fix direction (for triage, not implemented here): either (a) document `apply`'s
+     * confinement precondition and add an `apply`-side dispatcher assertion mirroring
+     * the construction-time TestDispatcher guard, or (b) route `apply` through the
+     * confined context (e.g. an actor `Channel` the collectors also feed) so the
+     * matrix is only ever mutated from one coroutine regardless of the caller.
+     */
+    @Test
+    fun probe6_applyMutatesCutSynchronouslyOnCallerContext() = runTest(UnconfinedTestDispatcher()) {
+        val loom = InMemoryLoom()
+        val seamA = loom.host(Pattern("h6-confine"))
+        loom.join(InMemoryTag("b"))
+        val controlledPeers = MutableStateFlow(loom.peers.value)
+        val repA = auditRep(AuditControllableSeam(seamA, controlledPeers), backgroundScope, AuditFakeClock())
+        val a = repA.replica
+        controlledPeers.value = loom.peers.value
+        testScheduler.advanceUntilIdle()
+
+        // Before apply, self has delivered nothing → cut/frontier carry no (a,*).
+        assertEquals(0L, repA.cutFrontier.value.frontierMax[a], "pre-apply: nothing delivered")
+
+        // apply() returns having ALREADY mutated the matrix-derived cut — synchronously,
+        // on THIS (the caller's) context, with no dispatch onto `scope`. We do NOT advance
+        // the scheduler between apply and the read: the cut is already updated.
+        repA.insertHead("x")
+        assertEquals(
+            1L,
+            repA.cutFrontier.value.frontierMax[a],
+            "apply mutated the matrix-derived cut synchronously on the caller's context — no scope dispatch. " +
+                "This is the W2 confinement gap: confinement holds only if the consumer calls apply on scope's thread.",
+        )
+    }
 }
