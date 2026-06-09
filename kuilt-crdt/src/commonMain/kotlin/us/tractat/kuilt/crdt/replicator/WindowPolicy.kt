@@ -16,7 +16,7 @@ import us.tractat.kuilt.crdt.RgaId
  * ## Built-in factories
  *
  * - [WindowPolicy.never] — GC-only, no windowing (the default). Always returns an empty set.
- * - `WindowPolicy.byCount(n)` — keep the last *n* visible elements (sub-issue #254, not yet built).
+ * - [WindowPolicy.byCount] — keep the last *n* **visible** elements; drop the leading prefix.
  *
  * @see RgaGcCoordinator
  */
@@ -27,8 +27,11 @@ public fun interface WindowPolicy {
      * [sequence] is the full ordered sequence of all [RgaId]s (both visible and tombstoned).
      * [tombstones] is the subset that have been removed but not yet compacted.
      *
-     * Returning an id that is not a tombstone is safe but has no effect: [RgaGcCoordinator]
-     * only compacts tombstoned ids (live elements cannot be garbage-collected).
+     * The returned ids are *candidates*: [RgaGcCoordinator] still gates every one through the
+     * causal-stability barrier (causally-stable + frontier-complete + no surviving successor)
+     * before it is dropped, so a window policy may safely target **live** elements as well as
+     * tombstones — a live candidate that is not yet barrier-safe is deferred to a later pass.
+     * This is what lets [byCount] forget old *visible* history (the convergent `DROP_OLDEST`).
      */
     public fun idsToTruncate(sequence: List<RgaId>, tombstones: Set<RgaId>): Set<RgaId>
 
@@ -40,5 +43,50 @@ public fun interface WindowPolicy {
          * This is the default for [RgaGcCoordinator].
          */
         public fun never(): WindowPolicy = WindowPolicy { _, _ -> emptySet() }
+
+        /**
+         * History-windowing policy: keep the last [n] **visible** elements, targeting the
+         * leading prefix — every id (visible *or* tombstoned) that sorts before the start of
+         * the retained window of `n` visible elements.
+         *
+         * This is the convergent replacement for `MutableSharedFlow(replay = n, DROP_OLDEST)`:
+         * old visible history is forgotten once it falls out of the window. The targeted live
+         * ids are still gated by the causal-stability barrier in [RgaGcCoordinator] before they
+         * are dropped, so dropping a live element can never orphan a concurrent undelivered
+         * successor (the #275 hazard). Tombstones in the prefix are swept along with the live
+         * elements, so a windowed log does not accumulate old tombstones either.
+         *
+         * **Per-peer divergence is allowed.** Two replicas with different [n] both converge:
+         * after `Compact` set-union the more-aggressive (smaller-[n]) window dominates.
+         *
+         * @param n the number of trailing visible elements to retain. `n <= 0` targets the
+         *   entire prefix (drop everything); a window larger than the visible count drops nothing.
+         * @throws IllegalArgumentException never — any [n] is valid (`n <= 0` is "keep nothing").
+         */
+        public fun byCount(n: Int): WindowPolicy = WindowPolicy { sequence, tombstones ->
+            prefixBeyondWindow(sequence, tombstones, n)
+        }
+
+        /**
+         * The leading prefix of [sequence] that falls outside a window retaining the last [n]
+         * **visible** ids. Walks the sequence from the end counting visible (non-tombstoned)
+         * ids; once [n] visible ids have been seen, every remaining (earlier) id — visible or
+         * tombstoned — is in the truncation set.
+         */
+        private fun prefixBeyondWindow(
+            sequence: List<RgaId>,
+            tombstones: Set<RgaId>,
+            n: Int,
+        ): Set<RgaId> {
+            val keep = maxOf(n, 0)
+            var visibleSeen = 0
+            var cut = sequence.size // index where the retained window begins
+            for (i in sequence.indices.reversed()) {
+                if (visibleSeen == keep) break
+                if (sequence[i] !in tombstones) visibleSeen++
+                cut = i
+            }
+            return sequence.subList(0, cut).toSet()
+        }
     }
 }
