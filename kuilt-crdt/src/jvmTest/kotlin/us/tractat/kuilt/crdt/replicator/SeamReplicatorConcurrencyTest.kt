@@ -49,8 +49,12 @@ import kotlin.time.Duration.Companion.seconds
  * `ConcurrentModificationException` (or, in [concurrentApplyAndInboundDeltasConverge], drop a
  * delta and never converge).
  *
- * NB: this is a JVM/Native-meaningful race. wasmJs is single-threaded, so `Dispatchers.Default`
- * collapses to one thread there and these tests prove nothing on wasm — they just pass trivially.
+ * **JVM-hosted on purpose.** The fix lives in `commonMain`, but the race only manifests under
+ * real OS-thread parallelism. wasmJs is single-threaded, so `Dispatchers.Default` collapses to one
+ * thread and proves nothing; on Kotlin/Native the eviction-oscillation storm's thousands of
+ * blocking-lock acquisitions on the small native thread pool are too slow to finish within
+ * `runTest`'s budget. The JVM gives fast, reliable real-thread coverage of the common-code lock,
+ * so this suite lives in `jvmTest`.
  */
 class SeamReplicatorConcurrencyTest {
 

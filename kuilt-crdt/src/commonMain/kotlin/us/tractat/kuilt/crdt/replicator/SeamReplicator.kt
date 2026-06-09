@@ -211,8 +211,8 @@ public class SeamReplicator<S : Quilted<S>>(
     /**
      * The matrix clock: `peer → that peer's last-gossiped delivered VV`. Populated by
      * inbound [ReplicatorMessage.Delivered]; consumed by [recomputeCut] to derive the
-     * stable cut and frontier. Mutated only from the single confined coroutine context
-     * (W2 of ADR §4.6 — see [recomputeCut] / [evictStalePeers]).
+     * stable cut and frontier. Mutated only under [lock] (ADR §4.6 W2 — see [recomputeCut] /
+     * [evictStalePeers]).
      */
     private val frontiers: MutableMap<PeerId, VersionVector> = mutableMapOf()
 
@@ -224,7 +224,7 @@ public class SeamReplicator<S : Quilted<S>>(
      * departing peer's last-gossiped frontier is folded in by elementwise max
      * ([evictStalePeers], retain rule §4.3) so `F` never falls below a dot the peer
      * witnessed; entries are released (§4.4 release rule) once self delivers them (R1)
-     * or a live peer dominates them (R2). Mutated only from the confined context (W2).
+     * or a live peer dominates them (R2). Mutated only under [lock] (W2).
      */
     private var retainedFrontier: VersionVector = VersionVector.EMPTY
 
@@ -300,6 +300,11 @@ public class SeamReplicator<S : Quilted<S>>(
     /**
      * Apply a local mutation. Updates [state] synchronously; broadcasts a [ReplicatorMessage.Delta]
      * to all current peers asynchronously (fire-and-forget within [scope]).
+     *
+     * **Thread-safe.** Safe to call from any thread or coroutine context — the state mutation is
+     * serialised against the inbound/peers/anti-entropy collectors by an internal reentrant
+     * [lock] — and remains **synchronous** (non-suspending): it returns once [state] reflects the
+     * mutation, the broadcast having been handed off to a child coroutine.
      */
     public fun apply(patch: Patch<S>): Unit = lock.withLock {
         _state.update { it.piece(patch) }
@@ -337,8 +342,8 @@ public class SeamReplicator<S : Quilted<S>>(
      * frontier `F = max(F_live, retainedFrontier)`, then publishes both as one atomic
      * [CutFrontier] (W1 of ADR §4.6 — no observable half-update). Called from every
      * site that mutates the matrix-clock state ([recomputeDeliveredLocal], [onDelivered],
-     * [onPeersChanged], [evictStalePeers]); all run on the single confined coroutine
-     * context (W2) — this method must never be moved into a separately-launched coroutine.
+     * [onPeersChanged], [evictStalePeers]); all hold [lock] (W2) — this method's effects must
+     * stay inside the critical section, never moved into a separately-launched coroutine.
      *
      * `S = min over live peers ∪ self` (a known-but-not-yet-gossiped peer contributes
      * [VersionVector.EMPTY], conservatively flooring `S` to 0 until it gossips), kept
@@ -399,7 +404,7 @@ public class SeamReplicator<S : Quilted<S>>(
 
         // W1 (ADR §4.6) — retain-capture-BEFORE-drop atomicity. Fold every evicting peer's
         // last-gossiped row into `retainedFrontier` (retain rule §4.3) FIRST, then drop the
-        // live rows. Both halves run synchronously on this single confined coroutine (W2)
+        // live rows. Both halves run synchronously under the held [lock] (W2)
         // and `cutFrontier` is republished exactly once, at the end — so a compactor can
         // never observe an intermediate where `F_live` has fallen but `retainedFrontier`
         // has not yet floored (that intermediate is precisely the #275 hole).
