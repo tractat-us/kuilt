@@ -1,7 +1,19 @@
 package us.tractat.kuilt.raft
 
-/** Identifies the log position a snapshot covers: everything with `index <= lastIncludedIndex`. */
-public data class SnapshotMeta(val lastIncludedIndex: Long, val lastIncludedTerm: Long)
+/**
+ * Identifies the log position a snapshot covers: everything with `index <= lastIncludedIndex`.
+ *
+ * [config] is the effective cluster configuration as of [lastIncludedIndex] — the membership a node
+ * must adopt when it installs this snapshot, since the config log entries that produced it were
+ * discarded by compaction. `null` means the covered prefix carried no config change (the cluster was
+ * still under its bootstrap configuration); a non-null [ConfigPayload] may be simple (`old == null`)
+ * or joint (`old != null`), so a snapshot taken mid-transition resumes the joint phase on install.
+ */
+public data class SnapshotMeta(
+    val lastIncludedIndex: Long,
+    val lastIncludedTerm: Long,
+    val config: ConfigPayload? = null,
+)
 
 /** A persisted snapshot: its [meta] plus the opaque application [state] bytes. */
 public class StoredSnapshot(public val meta: SnapshotMeta, public val state: ByteArray)

@@ -511,6 +511,71 @@ class MembershipTest {
         assertTrue(entry.index > 0L, "survivors must converge on C_old and keep committing")
     }
 
+    /**
+     * Snapshots carry the effective configuration (spec §"Snapshots must carry the configuration").
+     *
+     * A node that rejoins across a compaction boundary can learn a membership change **only** from the
+     * InstallSnapshot it receives, when the config log entries that produced it were discarded by
+     * compaction on every node that would replicate to it. If `SnapshotMeta`/`InstallSnapshot` do not
+     * carry the config, the installer's `recomputeMembership` finds no config entry and reverts to its
+     * bootstrap config — silently losing every committed membership change.
+     *
+     * Setup: 3 voters {v1,v2,v3}. v3 goes offline; the survivors demote it from voter to **learner**
+     * (a voter-set change → joint consensus), commit well past the change, and compact **both** live
+     * voters past it — so the config entries are gone everywhere and the only surviving record is each
+     * snapshot's [SnapshotMeta.config]. v3 then rejoins via InstallSnapshot.
+     *
+     * The adoption is observed via v3's **stable** [RaftNode.role] (not a transient trace event): v3
+     * booted with a voters-only bootstrap, so it is a voter/[RaftRole.Follower] by default; it can only
+     * become a [RaftRole.Learner] by adopting the snapshot's config. This is race-free — `role` is a
+     * StateFlow we can poll until it settles.
+     *
+     * FAILS before the foundation fix: the install carries no config, so v3 reverts to its bootstrap
+     * voter config and never enters the Learner role.
+     */
+    @Test
+    fun installSnapshot_adoptsConfigCompactedAwayFromTheLog() = raftRunTest(timeout = 10.seconds) {
+        val sim = simWithVotersAndBootstrappedLearner() // 3 voters in play; the bootstrapped L1 is unused
+        awaitLeader(sim)
+        val demoted = v3                          // bootstrap config: a voter of {v1,v2,v3}
+        val survivors = setOf(v1, v2)
+
+        // Offline across the compaction boundary (crash, not partition — no term inflation).
+        sim.crash(demoted)
+        // Demote v3 voter → learner while it is offline (voter-set change via joint consensus). The
+        // survivors {v1,v2} are a majority of both the old {v1,v2,v3} and the new {v1,v2} voter sets.
+        val demotedConfig = ClusterConfig(voters = survivors, learners = setOf(demoted))
+        sim.changeMembershipOnLeader(demotedConfig)
+        repeat(20) { sim.proposeOnLeader(byteArrayOf(it.toByte()), among = survivors) }
+
+        // Compact BOTH live voters past the config entries, so no node can replay them to v3 — its only
+        // possible source for the demotion is an InstallSnapshot's config.
+        survivors.forEach { id ->
+            val node = sim.nodes.getValue(id)
+            val through = sim.compactionFloorCandidate(id)
+            node.snapshots.value = Snapshot(through, sim.stateBytes(id, through))
+            node.compactionFloor.first { it == through }
+            // Each compacted snapshot must record the demotion as of its cut (onCompact stamps config).
+            val storedConfig = sim.storages.getValue(id).loadSnapshot()!!.meta.config
+            assertNotNull(storedConfig, "compacted snapshot on $id must carry a ConfigPayload")
+            assertAll(
+                { assertEquals(survivors, storedConfig.new.voters, "snapshot voters must be the demoted-down set") },
+                { assertEquals(setOf(demoted), storedConfig.new.learners, "snapshot must record v3 as a learner") },
+            )
+        }
+        val finalCommit = sim.nodes.getValue(sim.awaitLeader(among = survivors).let { l ->
+            sim.nodes.entries.first { it.value === l }.key
+        }).commitIndex.value
+
+        // Rejoin: v3 boots fresh (voters-only bootstrap) and catches up via InstallSnapshot.
+        sim.restart(demoted)
+        sim.awaitCommit(finalCommit, on = setOf(demoted))   // only reachable via the snapshot install
+        // The stable, race-free signal: v3 entered the Learner role, which is only possible by adopting
+        // the snapshot's config (its bootstrap makes it a voter).
+        val rejoined = sim.awaitNode(demoted) { it.role.value is RaftRole.Learner }
+        assertIs<RaftRole.Learner>(rejoined.role.value)
+    }
+
     // NOTE: an explicit adopt-on-append *rollback* test (follower adopts an uncommitted Joint, a new
     // leader overwrites the suffix, membership reverts) is deferred to PR C (#194 chaos/PBT). A
     // deterministic version must pin the election outcome: the follower holding the doomed Joint has
