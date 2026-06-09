@@ -13,6 +13,7 @@ kotlin {
             implementation(libs.kotlinx.serialization.cbor)
         }
         commonTest.dependencies {
+            implementation(project(":kuilt-test"))
             implementation(libs.kotlinx.coroutines.test)
             implementation(libs.kotlinx.serialization.json)
         }
