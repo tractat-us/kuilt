@@ -37,7 +37,6 @@ import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.crdt.RgaId
 import us.tractat.kuilt.crdt.RgaOp
 import us.tractat.kuilt.test.ControllableLoom
-import kotlin.test.Ignore
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -129,13 +128,6 @@ class RgaGcLiveStackAuditTest {
      * refuse to GC I while a concurrent successor J exists undelivered to the compactor.
      */
     @Test
-    @Ignore // PENDING #254 reroot-to-HEAD. ROOT-CAUSED: A is fully partitioned from C, so A's
-    // frontiers[C] never learns J; when C is evicted on TTL during the window, eviction retains
-    // nothing for J (A never knew it), A's cut advances, A GCs I, and J orphans on heal → A=[].
-    // This is a real eviction-vs-delayed-delivery data-loss path (latent in #269's eviction model,
-    // exposed by #270's faster gossip). reroot-to-HEAD (#254) is the fix: an insert whose `after`
-    // was GC'd materialises at HEAD instead of orphaning, so J resurfaces and all converge to [J].
-    // #254 MUST un-ignore this and prove it green — it is the eviction-during-partition acceptance.
     fun h2_concurrentInsertAfterTombstone_survivesPartitionHeal() = runTest(UnconfinedTestDispatcher()) {
         val loom = ControllableLoom()
         val a = gcPeer(loom, "h2-host", isHost = true)
