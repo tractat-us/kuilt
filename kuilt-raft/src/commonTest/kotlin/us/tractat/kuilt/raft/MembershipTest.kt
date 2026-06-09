@@ -4,6 +4,7 @@ package us.tractat.kuilt.raft
 
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.filterIsInstance
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
@@ -15,6 +16,7 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
+import kotlin.time.Duration.Companion.seconds
 
 private fun assertAll(vararg assertions: () -> Unit) = assertions.forEach { it() }
 
@@ -24,6 +26,7 @@ private val v1 = NodeId("v1")
 private val v2 = NodeId("v2")
 private val v3 = NodeId("v3")
 private val learnerNode = NodeId("L1")
+private val learnerNode2 = NodeId("L2")
 
 private val voterSet = setOf(v1, v2, v3)
 
@@ -44,6 +47,32 @@ private fun TestScope.simWithVotersAndBootstrappedLearner(): RaftSimulation {
         nodeScope = backgroundScope,
         nodeFactory = { id, transport, storage, nodeScope ->
             val config = if (id == learnerNode) learnerConfig else voterConfig
+            nodeScope.raftNode(config, transport, storage, FAST_RAFT_CONFIG)
+        },
+    )
+}
+
+private val twoLearners = setOf(learnerNode, learnerNode2)
+private val fiveVoters = voterSet + twoLearners
+
+/**
+ * Build a [RaftSimulation] with 3 voters + 2 learners present from start.
+ *
+ * Each learner bootstraps with a config that lists it as a learner of the 3 voters —
+ * the same pattern as [simWithVotersAndBootstrappedLearner], generalised to two learners.
+ * The voter nodes start with a voters-only config; the learners are wired in via
+ * [RaftNode.changeMembership] (the behavior under test).
+ */
+private fun TestScope.simWithVotersAndTwoBootstrappedLearners(): RaftSimulation {
+    val voterConfig = ClusterConfig(voters = voterSet)
+    val learnerConfig = ClusterConfig(voters = voterSet, learners = twoLearners)
+    return RaftSimulation(
+        nodeIds = voterSet.toList() + learnerNode + learnerNode2,
+        scope = this,
+        raftConfig = FAST_RAFT_CONFIG,
+        nodeScope = backgroundScope,
+        nodeFactory = { id, transport, storage, nodeScope ->
+            val config = if (id in twoLearners) learnerConfig else voterConfig
             nodeScope.raftNode(config, transport, storage, FAST_RAFT_CONFIG)
         },
     )
@@ -197,6 +226,10 @@ class MembershipTest {
     /**
      * changeMembership rejects a voter-set change (PR A only supports learner-set changes).
      * A voter-set change throws [IllegalArgumentException] with a clear message.
+     *
+     * NOTE: This test is replaced by [grow3VotersTo5_viaJointConsensus] in PR B once
+     * voter-set changes are supported. It is kept here to pin the PR-A rejection behavior
+     * for the failing-test commit; the implementation removes the rejection in the same PR.
      */
     @Test
     fun changeMembership_voterSetChange_rejectedInPrA() = raftRunTest {
@@ -209,5 +242,92 @@ class MembershipTest {
         assertFailsWith<IllegalArgumentException> {
             leader.changeMembership(targetConfig)
         }
+    }
+
+    /**
+     * B1 — FAILING TEST: grow a 3-voter cluster to 5 voters via §6 joint consensus.
+     *
+     * Setup:
+     * - 3 voters (v1, v2, v3) boot with a voters-only config.
+     * - 2 learner nodes (L1, L2) are present from the start with a config listing them as
+     *   learners of the 3 voters (same bootstrap pattern as [simWithVotersAndBootstrappedLearner]).
+     * - The leader first calls changeMembership to wire the 2 learners into the voters' effective
+     *   membership (learner-set-only change — PR A path). This lets the learners replicate the log.
+     * - After the learners are caught up, the leader calls changeMembership to promote both to
+     *   voters (voter-set change — the joint consensus PR B path that FAILS today).
+     *
+     * Joint-phase observation strategy:
+     * - Collect ConfigChange trace events from the leader over the whole voter promotion.
+     * - A voter-set change produces TWO ConfigChange events:
+     *     1. Joint(old=C_old, new=C_new) adopted on append → effectiveConfig = C_new voters.
+     *     2. Simple(C_new) adopted on append when onConfigCommitted appends C_new → same effectiveConfig.
+     *   Both events report new.voters == fiveVoters. To distinguish joint from simple we assert
+     *   EXACTLY TWO ConfigChange events fired for the voter promotion (one Joint append, one Simple append),
+     *   rather than racing to catch a transient internal membership representation.
+     * - The behavioral dual-majority assertion: changeMembership suspends until C_new commits,
+     *   so its return proves C_new committed. After that, assert any 3-of-5 partition can still
+     *   elect a leader and commit entries; confirm a partition leaving only 2 nodes cannot.
+     *
+     * This test FAILS today because [onChangeMembership] rejects voter-set changes with
+     * [IllegalArgumentException] ("voter-set membership changes are not yet supported").
+     */
+    @Test
+    fun grow3VotersTo5_viaJointConsensus() = raftRunTest(timeout = 10.seconds) {
+        val sim = simWithVotersAndTwoBootstrappedLearners()
+        val leader = awaitLeader(sim)
+        val leaderId = sim.nodes.entries.first { it.value === leader }.key
+
+        // Step 1: wire both learners into the voters' effective membership (PR A learner-set path).
+        val withLearnersConfig = ClusterConfig(voters = voterSet, learners = twoLearners)
+        leader.changeMembership(withLearnersConfig)
+        // Learners are now being replicated to. Wait until they're caught up to the leader's
+        // commit index before promoting — ensures the new majority is reachable immediately.
+        sim.awaitCommit(leader.commitIndex.value, on = voterSet + twoLearners)
+
+        // Collect ConfigChange events on the leader for the voter-promotion step.
+        val configChanges = mutableListOf<RaftTraceEvent.ConfigChange>()
+        backgroundScope.launch {
+            sim.nodes.getValue(leaderId).trace
+                .filterIsInstance<RaftTraceEvent.ConfigChange>()
+                .collect { configChanges += it }
+        }
+        delay(1) // let collector register before the promotion
+
+        // Step 2: promote both learners to voters via joint consensus. FAILS today.
+        val fiveVoterConfig = ClusterConfig(voters = fiveVoters)
+        val result = leader.changeMembership(fiveVoterConfig)
+
+        // changeMembership suspends until C_new commits — if we get here, the transition
+        // completed end-to-end.
+        assertAll(
+            { assertEquals(fiveVoters, result.voters, "returned config must have all 5 voters") },
+            { assertTrue(result.learners.isEmpty(), "no learners in C_new") },
+        )
+
+        // Two ConfigChange events for the voter promotion: Joint adopted, then Simple(C_new) adopted.
+        // Both report new.voters == fiveVoters (effectiveConfig is always C_new during joint phase).
+        assertTrue(configChanges.size >= 2,
+            "expected at least 2 ConfigChange events for a voter-set change (Joint + Simple), " +
+                "got ${configChanges.size}: $configChanges")
+        configChanges.forEach { change ->
+            assertEquals(fiveVoters, change.new.voters,
+                "ConfigChange.new.voters must be the 5-voter set at every step; got ${change.new.voters}")
+        }
+
+        // Behavioral: after C_new commits, a partition leaving any 3 of the 5 can commit.
+        // We use the 3 original voters as the surviving partition.
+        sim.awaitCommit(leader.commitIndex.value, on = fiveVoters) // all 5 caught up
+        val partitionedOut = twoLearners // L1 and L2 are isolated
+        val survivingVoters = voterSet   // v1, v2, v3 stay connected
+        sim.partition(partitionedOut, survivingVoters)
+
+        // A new leader must emerge among the survivors and be able to commit.
+        val newLeader = sim.awaitLeader()
+        val newLeaderId = sim.nodes.entries.first { it.value === newLeader }.key
+        assertTrue(newLeaderId in survivingVoters,
+            "leader $newLeaderId after partition should be in the surviving 3-voter partition")
+
+        val committedEntry = newLeader.propose(byteArrayOf(0xBE.toByte()))
+        assertTrue(committedEntry.index > 0L, "entry must commit on the surviving 3-of-5 partition")
     }
 }
