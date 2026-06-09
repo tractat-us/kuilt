@@ -284,11 +284,43 @@ public class Rga<V> private constructor(
         stableCut: VersionVector,
         frontierMax: VersionVector,
         delivered: VersionVector,
+    ): Pair<Rga<V>, RgaOp.Compact>? =
+        compactCandidates(tombstones, stableCut, frontierMax, delivered)
+
+    /**
+     * Garbage-collect an explicit set of [candidates] — which **may include live (non-tombstoned)
+     * elements** — under the same eviction-safe causal-stability barrier as [compact].
+     *
+     * This is the history-windowing path (ADR-003 §4, #254). A window policy targets the leading
+     * prefix of the sequence (visible *and* tombstoned ids); dropping a **live** element is exactly
+     * the operation the #275 barrier guards, so every candidate is held to the identical predicate:
+     * 1. **Causally stable** — `stableCut.contains(id.dot)`.
+     * 2. **Frontier-complete** — `delivered.dominates(frontierMax)` (a whole-pass gate).
+     * 3. **No surviving local successor** — no surviving [RgaOp.Insert] has `after == id`.
+     *
+     * A candidate that fails (1) or (3) this pass is simply **not** dropped now; it becomes eligible
+     * on a later pass once the cut advances (or once a successor is itself windowed away). Because the
+     * resulting [RgaOp.Compact] is broadcast and merged by set-union, per-peer window divergence still
+     * converges — "most-aggressive-window-wins" (ADR-003 Decision 4).
+     *
+     * Dropping a live id is sound because [RgaOp.Compact] strips the element's [RgaOp.Insert] from the
+     * op-log: the element leaves the visible sequence (no insert → not reachable from [RgaId.HEAD]) and
+     * the op-log atomically, with no separate `Remove`. Condition 3 guarantees no surviving insert
+     * still anchors after it.
+     *
+     * Returns the compacted [Rga] and the [RgaOp.Compact] delta, or `null` if nothing qualifies (or
+     * the frontier is incomplete).
+     */
+    public fun compactCandidates(
+        candidates: Set<RgaId>,
+        stableCut: VersionVector,
+        frontierMax: VersionVector,
+        delivered: VersionVector,
     ): Pair<Rga<V>, RgaOp.Compact>? {
         if (!delivered.dominates(frontierMax)) return null // condition 3 — frontier-complete
         val predecessors = insertsByid.values.mapTo(mutableSetOf()) { it.after }
-        val gcIds = tombstones
-            .filter { id -> stableCut.contains(id.dot) && id !in predecessors } // (2) + (4)
+        val gcIds = candidates
+            .filter { id -> stableCut.contains(id.dot) && id !in predecessors } // (1) + (3)
             .toSet()
         if (gcIds.isEmpty()) return null
         val compactOp = RgaOp.Compact(gcIds)
