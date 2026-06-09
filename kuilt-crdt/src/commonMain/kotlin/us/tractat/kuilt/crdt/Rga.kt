@@ -1,5 +1,6 @@
 package us.tractat.kuilt.crdt
 
+import kotlinx.serialization.KSerializer
 import kotlinx.serialization.Serializable
 
 /**
@@ -106,7 +107,7 @@ public sealed interface RgaOp<out V> {
 @Serializable
 public class Rga<V> private constructor(
     /** All ops ever seen by this replica. Op-log is the source of truth. */
-    private val ops: Set<RgaOp<V>>,
+    internal val ops: Set<RgaOp<V>>,
     /** This replica's current Lamport timestamp (max seen + 1 after any op). */
     public val lamport: Long,
 ) : Quilted<Rga<V>> {
@@ -121,8 +122,11 @@ public class Rga<V> private constructor(
 
     /**
      * The set of all [RgaId]s that have been tombstoned (and not yet compacted).
+     *
+     * Exposed for [us.tractat.kuilt.crdt.replicator.WindowPolicy] implementations that need to
+     * inspect the current tombstone set (e.g. `WindowPolicy.byCount`).
      */
-    private val tombstones: Set<RgaId> by lazy {
+    public val tombstones: Set<RgaId> by lazy {
         ops.filterIsInstance<RgaOp.Remove<V>>()
             .mapTo(mutableSetOf()) { it.id }
             .apply { removeAll(compactedIds) }
@@ -137,10 +141,13 @@ public class Rga<V> private constructor(
     }
 
     /**
-     * The materialized sequence: all inserted elements in RGA order, including
-     * tombstones. Computed lazily and cached.
+     * The materialized sequence of all [RgaId]s in RGA order, including tombstones.
+     * Computed lazily and cached.
+     *
+     * Exposed for [us.tractat.kuilt.crdt.replicator.WindowPolicy] implementations that need to
+     * inspect the full ordered sequence (e.g. `WindowPolicy.byCount`).
      */
-    private val sequence: List<RgaId> by lazy { computeSequence() }
+    public val sequence: List<RgaId> by lazy { computeSequence() }
 
     // ---- Public API ----
 
@@ -328,6 +335,33 @@ public class Rga<V> private constructor(
         public fun <V> empty(): Rga<V> = Rga(ops = emptySet(), lamport = 0L)
 
         /**
+         * Package-internal factory for deserialization via [RgaSerializer].
+         * Uses the private constructor directly.
+         */
+        internal fun <V> fromOps(ops: Set<RgaOp<V>>, lamport: Long): Rga<V> = Rga(ops, lamport)
+
+        /**
+         * Returns a [kotlinx.serialization.KSerializer] for [Rga]`<V>` that correctly threads
+         * [vSerializer] through the op-log serialization, avoiding the CBOR polymorphism
+         * limitation of the compiler-generated `Rga$$serializer`.
+         *
+         * **Use this instead of `Rga.serializer(...)` when wiring [Rga] into a
+         * [us.tractat.kuilt.crdt.replicator.SeamReplicator]** — the generated serializer fails
+         * for CBOR transport because it defaults to `PolymorphicSerializer(Any::class)` for the
+         * element type [V] in [RgaOp.Insert.value].
+         *
+         * Usage:
+         * ```kotlin
+         * val msgSer = ReplicatorMessage.serializer(Rga.wireSerializer(serializer<String>()))
+         * val replicator = SeamReplicator(..., messageSerializer = msgSer)
+         * ```
+         *
+         * @param vSerializer the [kotlinx.serialization.KSerializer] for element type [V].
+         */
+        public fun <V> wireSerializer(vSerializer: KSerializer<V>): KSerializer<Rga<V>> =
+            RgaSerializer(vSerializer)
+
+        /**
          * Strip Insert and Remove ops for all [gcIds] from [ops], merging the
          * [compactOp] in (replacing any prior Compact op with the same or smaller
          * id set — or adding if absent). The Compact op itself is retained.
@@ -353,5 +387,6 @@ public class Rga<V> private constructor(
                     is RgaOp.Compact -> true
                 }
             }
+
     }
 }
