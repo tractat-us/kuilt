@@ -511,56 +511,13 @@ class MembershipTest {
         assertTrue(entry.index > 0L, "survivors must converge on C_old and keep committing")
     }
 
-    /**
-     * B4 — adopt-on-append rollback. A follower that adopts an uncommitted `Joint` from a doomed leader
-     * must roll its membership back when a new leader (elected by a majority that never saw the Joint)
-     * overwrites that log suffix. Observed through the follower's [RaftTraceEvent.ConfigChange] trace:
-     * it adopts the joint's effective config, then reverts to the prior config once the suffix is
-     * truncated and `recomputeMembership` re-runs.
-     */
-    @Test
-    fun followerAdoptsUncommittedJoint_rollsBackWhenSuffixOverwritten() = raftRunTest(timeout = 10.seconds) {
-        val sim = simWithVotersAndTwoBootstrappedLearners()
-        awaitLeader(sim)
-        // Grow to a 5-voter cluster so a 3-voter majority can depose the leader while a follower holds
-        // the doomed Joint.
-        sim.changeMembershipOnLeader(ClusterConfig(voters = voterSet, learners = twoLearners))
-        sim.changeMembershipOnLeader(ClusterConfig(voters = fiveVoters))
-        sim.awaitCommit(sim.awaitLeader().commitIndex.value, on = fiveVoters)
-
-        val leaderId = sim.nodes.entries.first { it.value.role.value is RaftRole.Leader }.key
-        val follower = (fiveVoters - leaderId).first()
-        val majority = fiveVoters - leaderId - follower // the other three voters — a 5-voter majority
-
-        // Record the follower's config transitions.
-        val followerConfigs = mutableListOf<RaftTraceEvent.ConfigChange>()
-        backgroundScope.launch {
-            sim.nodes.getValue(follower).trace.filterIsInstance<RaftTraceEvent.ConfigChange>()
-                .collect { followerConfigs += it }
-        }
-        delay(1)
-
-        // Split the leader + the chosen follower away from the three-voter majority. The leader can
-        // still replicate to that one follower (so it adopts the Joint) but cannot commit it (minority).
-        sim.partition(setOf(leaderId, follower), majority)
-        val doomed = ClusterConfig(voters = voterSet) // shrink target → Joint(old=5, new=3)
-        val change = backgroundScope.async {
-            runCatching { sim.nodes.getValue(leaderId).changeMembership(doomed) }
-        }
-        // The follower adopts the uncommitted Joint (effective voters = the shrink target).
-        sim.awaitTrue("follower adopts the doomed joint") {
-            followerConfigs.any { it.new.voters == voterSet }
-        }
-
-        // Crash the doomed leader and heal the follower back into the majority. The majority (which never
-        // saw the Joint) has elected a higher-term leader on the 5-voter config; it overwrites the
-        // follower's uncommitted Joint suffix, rolling the follower's membership back.
-        sim.crash(leaderId)
-        change.await() // doomed; ignore outcome
-        sim.heal()
-        sim.awaitTrue("follower rolls membership back to the 5-voter config") {
-            val adopted = followerConfigs.indexOfFirst { it.new.voters == voterSet }
-            adopted >= 0 && followerConfigs.drop(adopted + 1).any { it.new.voters == fiveVoters }
-        }
-    }
+    // NOTE: an explicit adopt-on-append *rollback* test (follower adopts an uncommitted Joint, a new
+    // leader overwrites the suffix, membership reverts) is deferred to PR C (#194 chaos/PBT). A
+    // deterministic version must pin the election outcome: the follower holding the doomed Joint has
+    // the most up-to-date log, so by §5.4.1 it can itself WIN the election and preserve the Joint
+    // instead of being overwritten. Forcing the majority to win (keep the Joint-holder partitioned
+    // until the majority has elected AND committed past the Joint index, then heal) needs the chaos
+    // harness — and that harness must be resilient to a non-converging election cycle, which otherwise
+    // spins the virtual-time scheduler CPU-bound and defeats runTest's wall-clock timeout (see #273).
+    // Rollback-on-truncate is still exercised indirectly by the leadership churn in the B3 tests.
 }
