@@ -66,8 +66,9 @@ public abstract class CommutativeSchemeConformanceSuite {
             // Layer all three encryptions (order k0, k1, k2).
             var cipher = m
             for (k in keys) cipher = scheme.encrypt(cipher, k.encryptKey).first
-            // Strip in a DIFFERENT order (k1, k0, k2) — commutativity must still recover m.
-            for (k in listOf(keys[1], keys[0], keys[2])) cipher = scheme.strip(cipher, k.stripKey).first
+            // Strip in a fully deranged order (k2, k0, k1) — no layer in its
+            // encryption position — so commutativity is genuinely exercised.
+            for (k in listOf(keys[2], keys[0], keys[1])) cipher = scheme.strip(cipher, k.stripKey).first
             assertEquals(m.toList(), cipher.toList(), "multi-layer recovery failed for ${m.toList()}")
         }
     }
@@ -95,5 +96,28 @@ public abstract class CommutativeSchemeConformanceSuite {
             val (recovered, _) = scheme.strip(cipher, key.stripKey)
             assertTrue(m.contentEquals(recovered), "generated key pair failed to round-trip")
         }
+    }
+
+    /**
+     * Honest-path verification: an [CommutativeScheme.encrypt]/[CommutativeScheme.strip]
+     * transition that the scheme itself produced must verify. Current schemes stub the
+     * verify methods to `true`, so this pins the baseline a future (e.g. ZK-proof)
+     * implementation must also satisfy — honest transitions are always accepted.
+     */
+    @Test
+    public fun verifyAcceptsHonestTransitions() {
+        val scheme = newScheme()
+        val key = scheme.generateKey()
+        val m = validPlaintexts().first()
+        val (cipher, encryptProof) = scheme.encrypt(m, key.encryptKey)
+        assertTrue(
+            scheme.verifyEncrypt(m, cipher, encryptProof, key.encryptKey),
+            "verifyEncrypt rejected an honestly-produced encryption",
+        )
+        val (recovered, stripProof) = scheme.strip(cipher, key.stripKey)
+        assertTrue(
+            scheme.verifyStrip(cipher, recovered, stripProof, key.encryptKey),
+            "verifyStrip rejected an honestly-produced strip",
+        )
     }
 }
