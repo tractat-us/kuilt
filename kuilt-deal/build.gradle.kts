@@ -3,6 +3,15 @@ plugins {
     alias(libs.plugins.kotlinSerialization)
 }
 
+// Forward -Pkuilt.benchmark.tests=true to the JVM test process so the timing
+// benchmarks (SraSchemeBenchmark, DealBenchmark, ElGamal benchmarks) opt in.
+// They are skipped by default because hard timing thresholds flake under shared-JVM
+// GC pressure and on contended CI runners.
+tasks.withType<Test>().configureEach {
+    val flag = providers.gradleProperty("kuilt.benchmark.tests").orNull
+    if (flag != null) systemProperty("kuilt.benchmark.tests", flag)
+}
+
 kotlin {
     sourceSets {
         commonMain.dependencies {
@@ -39,6 +48,7 @@ kotlin {
 
         jvmTest.dependencies {
             implementation(libs.kotlinx.coroutines.test)
+            implementation(libs.kotlin.testJunit)
         }
     }
 }

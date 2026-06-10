@@ -1,21 +1,41 @@
 package us.tractat.kuilt.deal
 
-import kotlin.test.Test
+import org.junit.Assume
+import org.junit.Before
+import org.junit.Test
 import kotlin.test.assertTrue
 import kotlin.time.measureTime
 
 /**
  * Tier 1 performance benchmarks for SraScheme using ionspin/bignum (pure Kotlin, multiplatform).
  *
+ * **Opt-in:** These tests are skipped by default because hard timing thresholds flake under
+ * shared-JVM GC pressure and on contended CI runners. To run them:
+ *
+ * ```
+ * ./gradlew :kuilt-deal:jvmTest -Pkuilt.benchmark.tests=true
+ * ```
+ *
+ * The `build.gradle.kts` for `:kuilt-deal` forwards the Gradle project property to a JVM
+ * system property so the flag works without `-D`.
+ *
  * NOTE: ionspin's ModularBigInteger.pow is a pure-Kotlin implementation without Montgomery
  * multiplication optimisations. Observed JVM medians: ~27ms encrypt (512-bit exponent),
  * ~160ms strip (2048-bit inverse exponent). These are slower than Java's BigInteger.modPow
- * (~1–2ms for 2048-bit RSA), which is used by ElGamalScheme (Task 7, JVM/Android fast path).
+ * (~1-2ms for 2048-bit RSA), which is used by ElGamalScheme (Task 7, JVM/Android fast path).
  *
  * Thresholds here are set to the realistic ionspin baseline on a modern JVM, not the
  * Java-BigInteger target. Tighten once ElGamalScheme replaces SraScheme on JVM/Android.
  */
 class SraSchemeBenchmark {
+
+    @Before
+    fun requireBenchmarkFlag() {
+        Assume.assumeTrue(
+            "Skipped: set -Pkuilt.benchmark.tests=true to run timing benchmarks",
+            System.getProperty("kuilt.benchmark.tests") == "true",
+        )
+    }
 
     @Test
     fun sraEncryptMedianUnder100ms() {
