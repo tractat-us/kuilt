@@ -2,7 +2,6 @@ package us.tractat.kuilt.deal
 
 import com.ionspin.kotlin.bignum.integer.BigInteger
 import com.ionspin.kotlin.bignum.integer.Sign
-import kotlin.random.Random
 
 /**
  * SRA (Shamir–Rivest–Adleman) commutative encryption scheme.
@@ -15,10 +14,10 @@ import kotlin.random.Random
  * Proof is a stub (ByteArray(0)). The GSet membership check is the
  * primary double-encode defence. Full ZK proofs are a follow-up.
  *
- * **Security limitation (pre-1.0):** [generateKey] uses [kotlin.random.Random],
- * which is NOT a cryptographically secure RNG. Combined with the stubbed
- * verify methods (no cheat-detection yet), this scheme is not production-secure.
- * A CSPRNG (expect/actual over platform secure-random) is tracked as a follow-up.
+ * **Security limitation (pre-1.0):** the [verifyEncrypt]/[verifyStrip] methods
+ * are stubs (no cheat-detection yet), so this scheme is not yet production-secure
+ * against a malicious peer. Key material itself is drawn from the platform CSPRNG
+ * (see [secureRandomBytes]).
  */
 public class SraScheme : CommutativeScheme {
 
@@ -39,16 +38,15 @@ public class SraScheme : CommutativeScheme {
     override fun verifyStrip(prev: ByteArray, next: ByteArray, proof: StripProof, pubKey: SchemeKey): Boolean = true
 
     /**
-     * Generates a random SRA key pair.
-     *
-     * Uses a non-cryptographic RNG — see the class-level security limitation.
+     * Generates a random SRA key pair, drawing the secret exponent from the
+     * platform CSPRNG via [secureRandomBytes].
      */
     override fun generateKey(): SchemeKeyPair {
         val pMinus1 = PRIME - BigInteger.ONE
         var e: BigInteger
         do {
-            // Pick a random 512-bit odd number as the exponent
-            val bytes = Random.nextBytes(64)  // 512 bits
+            // Pick a cryptographically random 512-bit odd number as the exponent
+            val bytes = secureRandomBytes(64)  // 512 bits
             bytes[bytes.size - 1] = (bytes[bytes.size - 1].toInt() or 1).toByte()  // force odd
             e = BigInteger.fromByteArray(bytes, Sign.POSITIVE)
         } while (e.gcd(pMinus1) != BigInteger.ONE)
