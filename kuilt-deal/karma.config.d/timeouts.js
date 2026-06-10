@@ -1,0 +1,13 @@
+// Raise Karma's socket/activity timeouts. :kuilt-deal runs SRA crypto cases
+// (CardStateTest) on wasmJs, where 2048-bit modular exponentiation is pure
+// interpreted big-integer math (no JIT) and blocks the browser's single JS
+// thread for several seconds per test. The default ~2s ping timeout then
+// triggers a spurious "disconnect" on slower CI runners. These generous
+// timeouts let the (correct, just slow) crypto tests complete.
+config.set({
+    pingTimeout: 120000,
+    browserNoActivityTimeout: 120000,
+    browserDisconnectTimeout: 120000,
+    browserDisconnectTolerance: 3,
+    captureTimeout: 120000,
+});
