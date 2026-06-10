@@ -47,10 +47,19 @@ mavenPublishing {
         }
     }
 
-    // NOT wired yet (later sub-issues of the Maven Central epic):
-    //   signAllPublications()                                  — needs the signing key
-    //   publishToMavenCentral(SonatypeHost.CENTRAL_PORTAL, ...) — needs the portal token
-    // Until then publications stage to TigrisStaging unsigned, exactly as before.
+    // GPG-sign every publication — but ONLY when an in-memory signing key is
+    // present. vanniktech reads `signingInMemoryKey` / `signingInMemoryKeyPassword`
+    // (set in CI from the SIGNING_KEY / SIGNING_PASSWORD secrets via the
+    // ORG_GRADLE_PROJECT_* env convention). Gating on key presence keeps the
+    // unsigned paths green: local `./gradlew build` and the per-merge TigrisStaging
+    // push have no key and must not fail on a missing signature. Maven Central
+    // requires signatures, so the release workflow (#303) supplies the key.
+    if (providers.gradleProperty("signingInMemoryKey").isPresent) {
+        signAllPublications()
+    }
+
+    // NOT wired yet:
+    //   publishToMavenCentral(SonatypeHost.CENTRAL_PORTAL, ...) — needs the portal token (#303)
 }
 
 publishing {
