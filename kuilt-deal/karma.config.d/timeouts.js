@@ -11,3 +11,11 @@ config.set({
     browserDisconnectTolerance: 3,
     captureTimeout: 120000,
 });
+
+// Raise the per-test limit, which is Mocha's (applied by Karma) — the Gradle
+// `useMocha { timeout }` DSL does not reach the wasmJs *browser* task, so a single
+// 2048-bit keygen/encrypt overruns the 2s default on slow CI. Mutate in place so
+// the existing client.args set by the Kotlin test runner is preserved.
+config.client = config.client || {};
+config.client.mocha = config.client.mocha || {};
+config.client.mocha.timeout = 120000;

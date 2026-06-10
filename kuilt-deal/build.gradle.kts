@@ -1,24 +1,14 @@
-import org.jetbrains.kotlin.gradle.ExperimentalWasmDsl
-
 plugins {
     id("kuilt.kmp-library")
     alias(libs.plugins.kotlinSerialization)
 }
 
+// SRA does real 2048-bit modular exponentiation; on wasmJs (interpreted, no JIT)
+// a single CardStateTest crypto case can exceed Mocha's default 2s per-test
+// timeout and Karma's socket ping on slow CI runners. Both limits are raised in
+// karma.config.d/timeouts.js (the Gradle `useMocha` DSL does not reach the wasmJs
+// browser test task).
 kotlin {
-    // SRA does real 2048-bit modular exponentiation; on wasmJs (interpreted,
-    // no JIT) a single CardStateTest crypto case blocks the browser's JS thread
-    // for seconds, overrunning Mocha's default 2s per-test timeout (and Karma's
-    // socket ping — see karma.config.d/timeouts.js). Give it ample headroom.
-    @OptIn(ExperimentalWasmDsl::class)
-    wasmJs {
-        browser {
-            testTask {
-                useMocha { timeout = "120s" }
-            }
-        }
-    }
-
     sourceSets {
         commonMain.dependencies {
             api(project(":kuilt-core"))
