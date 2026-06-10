@@ -1,6 +1,17 @@
+import org.jetbrains.kotlin.gradle.ExperimentalWasmDsl
+
 plugins { id("kuilt.kmp-library") }
 
 kotlin {
+    @OptIn(ExperimentalWasmDsl::class)
+    wasmJs {
+        browser {
+            testTask {
+                useMocha { timeout = "120s" }
+            }
+        }
+    }
+
     sourceSets {
         commonMain.dependencies {
             api(project(":kuilt-deal"))
