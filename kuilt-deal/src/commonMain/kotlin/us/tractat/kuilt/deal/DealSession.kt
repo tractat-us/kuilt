@@ -2,6 +2,7 @@
 
 package us.tractat.kuilt.deal
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -23,6 +24,15 @@ import us.tractat.kuilt.crdt.GSet
  * compose because the cipher is commutative), then non-quorum players strip their
  * layer so only the visibility quorum can read each card. State converges via the
  * [CardOp] stream broadcast over the seam.
+ *
+ * **Single-writer assumption.** The [shuffle] and [strip] helpers read the base
+ * ciphertext from [state] outside the `_state.update` block, run crypto, then
+ * commit. If the incoming-op collector races to apply a remote op to the same card
+ * in that window, the commit can overwrite converged state with a stale-base
+ * ciphertext (`canApply` checks GSet membership, not ciphertext provenance). This
+ * is safe under the current model where each session has exactly one local writer;
+ * concurrent local shuffle/strip while remote ops mutate the same card is a
+ * production hazard that needs an "await my turn" gate (deferred).
  */
 public class DealSession(
     private val seam: Seam,
@@ -38,7 +48,15 @@ public class DealSession(
     init {
         seam.incoming
             .onEach { swatch ->
-                val frame = Cbor.decodeFromByteArray<IndexedCardOp>(swatch.payload)
+                val frame = try {
+                    Cbor.decodeFromByteArray<IndexedCardOp>(swatch.payload)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Exception) {
+                    // Drop a malformed/foreign frame rather than letting it cancel the
+                    // collector (which would silently halt all further op delivery).
+                    return@onEach
+                }
                 _state.update { deck -> deck.applyRemote(frame.cardIndex, frame.op) }
             }
             .launchIn(scope)
@@ -134,11 +152,16 @@ public class DealSession(
 
     /**
      * Remove my own encryption layer from the card at [cardIndex] and decode the
-     * original plaintext. Call once the card is REVEALED (all non-quorum players
-     * have stripped). Local — does not broadcast.
+     * original plaintext. Call once the card is [CardPhase.REVEALED] (all non-quorum
+     * players have stripped). Local — does not broadcast.
+     *
+     * @throws IllegalArgumentException if the card is not yet [CardPhase.REVEALED].
      */
     public fun decrypt(cardIndex: Int): ByteArray {
         val card = _state.value.cards[cardIndex]
+        require(card.phase() == CardPhase.REVEALED) {
+            "Card $cardIndex is not REVEALED (phase=${card.phase()}); cannot decrypt until all non-quorum players have stripped"
+        }
         val (stripped, _) = scheme.strip(card.ciphertext, myKey.stripKey)
         return decodePlaintext(stripped)
     }

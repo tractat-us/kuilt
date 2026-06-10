@@ -5,6 +5,7 @@ import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.deal.SraScheme
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNotEquals
 
 class DealSessionTest {
 
@@ -33,6 +34,10 @@ class DealSessionTest {
         // Alice decrypts her own layer
         val revealed = aliceSession.decrypt(0)
         assertEquals(originalCard.toList(), revealed.toList())
+
+        // Secrecy: bob is not in the quorum — he cannot recover the plaintext.
+        val bobAttempt = runCatching { bobSession.decrypt(0) }.getOrNull()
+        assertNotEquals(originalCard.toList(), bobAttempt?.toList())
     }
 
     @Test
@@ -59,5 +64,9 @@ class DealSessionTest {
         // bob decrypts his own layer
         val revealed = bobSession.decrypt(0)
         assertEquals(originalCard.toList(), revealed.toList())
+
+        // Secrecy: alice is not in the quorum — she cannot recover the plaintext.
+        val aliceAttempt = runCatching { aliceSession.decrypt(0) }.getOrNull()
+        assertNotEquals(originalCard.toList(), aliceAttempt?.toList())
     }
 }
