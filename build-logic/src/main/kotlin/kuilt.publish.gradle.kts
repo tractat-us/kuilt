@@ -1,5 +1,6 @@
 import com.vanniktech.maven.publish.JavadocJar
 import com.vanniktech.maven.publish.KotlinMultiplatform
+import com.vanniktech.maven.publish.SonatypeHost
 
 plugins {
     `maven-publish`
@@ -58,8 +59,19 @@ mavenPublishing {
         signAllPublications()
     }
 
-    // NOT wired yet:
-    //   publishToMavenCentral(SonatypeHost.CENTRAL_PORTAL, ...) — needs the portal token (#303)
+    // Maven Central (Central Portal) — configured ONLY when a Central username is
+    // present (CI maps the MAVEN_CENTRAL_USERNAME/PASSWORD secrets to
+    // ORG_GRADLE_PROJECT_mavenCentralUsername/Password). Gating on credential
+    // presence means local builds and the per-merge Tigris path never configure a
+    // Central repo — so they can't publish to Central even by accident; that
+    // absence is itself a release-control interlock. `automaticRelease = false`:
+    // even a triggered release uploads to the Portal as a *validated, pending*
+    // deployment that must be released by hand — deliberate control of every
+    // version, especially the first. The release path is gated again in the
+    // workflow (tags / manual dispatch only).
+    if (providers.gradleProperty("mavenCentralUsername").isPresent) {
+        publishToMavenCentral(SonatypeHost.CENTRAL_PORTAL, automaticRelease = false)
+    }
 }
 
 publishing {

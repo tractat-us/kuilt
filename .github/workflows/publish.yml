@@ -16,11 +16,16 @@ name: publish
 on:
   push:
     branches: [main]
+    tags: ['v*']            # v<x.y.z> → Maven Central release (maven-central job only)
   workflow_dispatch:
     inputs:
       version:
         description: 'Explicit version (defaults to ${kuiltVersionLine}.<run_number> from gradle.properties).'
         required: false
+      release_to_central:
+        description: 'Stage a release to Maven Central (uploads as a PENDING deployment — you release it by hand in the Central Portal afterward).'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -31,6 +36,9 @@ concurrency:
 
 jobs:
   publish:
+    # Tigris (build-cache) publish — every main push + manual dispatch. Deliberately
+    # NOT tag pushes: tags are Maven Central releases (the maven-central job below).
+    if: github.event_name != 'push' || github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
@@ -110,3 +118,70 @@ jobs:
             sleep $((attempt * 5))
             attempt=$((attempt + 1))
           done
+
+  # ── Maven Central (Central Portal) ──────────────────────────────────────────
+  # RELEASE-CONTROLLED. Runs ONLY on a version tag (v<x.y.z>) or a manual dispatch
+  # with release_to_central=true — NEVER on a plain main push. Uploads signed
+  # artifacts to the Portal as a *pending* deployment (automaticRelease=false in
+  # the publish convention), which a human then releases at central.sonatype.com.
+  # So the first version that ships — and every one after — is a deliberate act.
+  # Independent of the Tigris job above (different artifact store, different cadence).
+  maven-central:
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.release_to_central)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      # vanniktech reads these as Gradle properties via the ORG_GRADLE_PROJECT_ prefix.
+      ORG_GRADLE_PROJECT_mavenCentralUsername: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
+      ORG_GRADLE_PROJECT_mavenCentralPassword: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
+      ORG_GRADLE_PROJECT_signingInMemoryKey: ${{ secrets.SIGNING_KEY }}
+      ORG_GRADLE_PROJECT_signingInMemoryKeyPassword: ${{ secrets.SIGNING_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v6
+      - name: Set up JDK 21
+        uses: actions/setup-java@v5
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          gradle-version: wrapper
+          cache-read-only: false
+      - name: Cache Kotlin/Native (~/.konan)
+        uses: actions/cache@v5
+        with:
+          path: ~/.konan
+          key: konan-${{ runner.os }}-${{ hashFiles('gradle/libs.versions.toml', 'gradle.properties', 'settings.gradle.kts') }}
+          restore-keys: konan-${{ runner.os }}-
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v4
+      - name: Compute release version
+        run: |
+          set -eu
+          # Tag push: version is the tag minus the leading 'v' (v0.4.0 → 0.4.0).
+          # Manual dispatch: REQUIRE an explicit version — never a throwaway
+          # run-number version for a permanent, immutable Central release.
+          if [ "${{ github.event_name }}" = "push" ]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+          else
+            VERSION="${{ github.event.inputs.version }}"
+          fi
+          if [ -z "$VERSION" ]; then
+            echo "::error::Maven Central release needs an explicit version (tag v<x.y.z> or the 'version' dispatch input)." >&2
+            exit 1
+          fi
+          echo "Releasing version to Maven Central: $VERSION"
+          echo "PUBLISH_VERSION=$VERSION" >> "$GITHUB_ENV"
+      - name: Preflight — required secrets present
+        # Fail fast with a clear message rather than halfway through a publish.
+        run: |
+          set -eu
+          : "${ORG_GRADLE_PROJECT_mavenCentralUsername:?MAVEN_CENTRAL_USERNAME secret is not set}"
+          : "${ORG_GRADLE_PROJECT_mavenCentralPassword:?MAVEN_CENTRAL_PASSWORD secret is not set}"
+          : "${ORG_GRADLE_PROJECT_signingInMemoryKey:?SIGNING_KEY secret is not set}"
+          echo "All required Central + signing secrets are present."
+      - name: Upload to Maven Central (pending — release by hand in the Portal)
+        # publishToMavenCentral (NOT ...AndRelease) honours automaticRelease=false:
+        # the deployment is uploaded + validated, then waits for a manual release.
+        run: ./gradlew -Pversion=${{ env.PUBLISH_VERSION }} --no-configuration-cache publishToMavenCentral
