@@ -18,6 +18,7 @@ junit-platform-launcher = "1.11.4"
 junit-vintage-engine = "5.11.4"
 kover = "0.9.1"
 ionspin-bignum = "0.3.10"
+vanniktechMavenPublish = "0.30.0"
 
 [libraries]
 # atomicfu — multiplatform reentrant lock (locks API only; the runtime artifact is
@@ -64,6 +65,9 @@ kotlin-gradlePlugin = { module = "org.jetbrains.kotlin:kotlin-gradle-plugin", ve
 kotlin-serialization-gradlePlugin = { module = "org.jetbrains.kotlin:kotlin-serialization", version.ref = "kotlin" }
 android-gradlePlugin = { module = "com.android.tools.build:gradle", version.ref = "agp" }
 detekt-gradlePlugin = { module = "io.gitlab.arturbosch.detekt:detekt-gradle-plugin", version.ref = "detekt" }
+# vanniktech maven-publish (base plugin) — POM, sources/javadoc jars, signing,
+# and Central Portal upload for the publish convention:
+vanniktech-mavenPublish-gradlePlugin = { module = "com.vanniktech:gradle-maven-publish-plugin", version.ref = "vanniktechMavenPublish" }
 
 [plugins]
 detekt = { id = "io.gitlab.arturbosch.detekt", version.ref = "detekt" }
