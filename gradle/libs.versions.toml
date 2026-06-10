@@ -18,7 +18,6 @@ junit-platform-launcher = "1.11.4"
 junit-vintage-engine = "5.11.4"
 kover = "0.9.1"
 ionspin-bignum = "0.3.10"
-bouncycastle = "1.80"
 
 [libraries]
 # atomicfu — multiplatform reentrant lock (locks API only; the runtime artifact is
@@ -60,8 +59,6 @@ play-services-nearby = { module = "com.google.android.gms:play-services-nearby",
 kotlinx-coroutines-playServices = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-play-services", version.ref = "kotlinx-coroutines" }
 # ionspin bignum — arbitrary-precision arithmetic for SRA commutative encryption in kuilt-deal:
 ionspin-bignum = { module = "com.ionspin.kotlin:bignum", version.ref = "ionspin-bignum" }
-# BouncyCastle — JVM/Android ElGamal fast path in kuilt-deal (no native/wasmJs variant):
-bouncycastle = { module = "org.bouncycastle:bcprov-jdk18on", version.ref = "bouncycastle" }
 # Gradle plugin artifacts for build-logic to depend on:
 kotlin-gradlePlugin = { module = "org.jetbrains.kotlin:kotlin-gradle-plugin", version.ref = "kotlin" }
 kotlin-serialization-gradlePlugin = { module = "org.jetbrains.kotlin:kotlin-serialization", version.ref = "kotlin" }
