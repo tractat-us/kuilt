@@ -279,9 +279,13 @@ public abstract class SeamConformanceSuite {
     // Contract from Seam.incoming KDoc: the flow terminates once the seam is Torn,
     // whether via local close() or remote disconnect. Consumers (e.g. SeamReplicator)
     // rely on this to self-close via onCompletion without requiring an explicit caller.
+    //
+    // `open` so a fabric that does not yet honour the contract can override this with
+    // `@Ignore` (visible as skipped in its report) and a tracking issue, rather than
+    // silently weakening the assertion for every fabric. WebRTC does so today — see #335.
 
     @Test
-    public fun incomingCompletesWhenSeamCloses(): TestResult =
+    public open fun incomingCompletesWhenSeamCloses(): TestResult =
         runTest {
             val (hostLoom, joinerLoom) = newLoomPair()
             coroutineScope {
