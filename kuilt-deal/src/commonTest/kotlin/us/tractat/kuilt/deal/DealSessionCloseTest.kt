@@ -2,17 +2,17 @@
 
 package us.tractat.kuilt.deal
 
-import kotlinx.coroutines.test.UnconfinedTestDispatcher
-import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import us.tractat.kuilt.conformance.CloseableLifecycleConformanceSuite
 import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.core.ScopedCloseable
 import us.tractat.kuilt.test.fakeSeamPair
-import kotlin.test.Test
-import kotlin.test.assertFalse
-import kotlin.test.assertTrue
 
-class DealSessionCloseTest {
+class DealSessionCloseTest : CloseableLifecycleConformanceSuite() {
 
-    private fun makeDealSession(peerId: PeerId, scope: kotlinx.coroutines.CoroutineScope): DealSession {
+    override fun create(scope: CoroutineScope): ScopedCloseable {
+        val peerId = PeerId("alice")
         val allPlayers = setOf(peerId, PeerId("other"))
         val (seam, _) = fakeSeamPair(peerId, PeerId("other"))
         val scheme = SraScheme()
@@ -26,26 +26,6 @@ class DealSessionCloseTest {
         )
     }
 
-    @Test
-    fun incomingJobActiveBeforeClose() = runTest(UnconfinedTestDispatcher()) {
-        val session = makeDealSession(PeerId("alice"), backgroundScope)
-        assertTrue(session.incomingJobForTest.isActive)
-        // Cancel before runTest cleanup to prevent the infinite collector from blocking drain.
-        session.close()
-    }
-
-    @Test
-    fun closeStopsIncomingJob() = runTest(UnconfinedTestDispatcher()) {
-        val session = makeDealSession(PeerId("alice"), backgroundScope)
-        session.close()
-        assertFalse(session.incomingJobForTest.isActive)
-    }
-
-    @Test
-    fun closeIsIdempotent() = runTest(UnconfinedTestDispatcher()) {
-        val session = makeDealSession(PeerId("alice"), backgroundScope)
-        session.close()
-        session.close() // must not throw
-        assertFalse(session.incomingJobForTest.isActive)
-    }
+    override fun backgroundJobsOf(instance: ScopedCloseable): List<Job> =
+        listOf((instance as DealSession).incomingJobForTest)
 }

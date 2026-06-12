@@ -43,6 +43,8 @@ private suspend fun makeCoordinator(
     )
 }
 
+// BoundedCounterTransferCoordinator is not yet migrated to ScopedCloseable.
+// These tests will collapse into CloseableLifecycleConformanceSuite once the migration lands.
 class BoundedCounterTransferCoordinatorCloseTest {
 
     @Test

@@ -7,6 +7,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.flow.onEach
+import us.tractat.kuilt.core.ScopedCloseable
 import us.tractat.kuilt.crdt.Patch
 import us.tractat.kuilt.crdt.Rga
 import us.tractat.kuilt.crdt.RgaId
@@ -82,8 +83,8 @@ public class RgaGcCoordinator<V>(
     private val delivered: StateFlow<VersionVector>,
     private val applyCompaction: (Patch<Rga<V>>) -> Unit,
     private val windowPolicy: WindowPolicy = WindowPolicy.never(),
-    private val scope: CoroutineScope,
-) : AutoCloseable {
+    scope: CoroutineScope,
+) : ScopedCloseable(scope) {
 
     private val gcJob: Job
 
@@ -96,19 +97,10 @@ public class RgaGcCoordinator<V>(
         // it does not move [delivered] / [cutFrontier] — without observing [state] too, a tombstone
         // applied while the cut already covers it would never be re-considered (the [StateFlow]
         // dedups the unchanged cut). Both triggers read the current cut + delivered fresh.
+        // `this.scope` is the owned child scope inherited from ScopedCloseable.
         gcJob = merge(cutFrontier, state)
             .onEach { evaluate() }
-            .launchIn(scope)
-    }
-
-    /**
-     * Cancels the background GC loop. Idempotent — safe to call more than once.
-     *
-     * After [close], no further compaction evaluations will run. The [scope] passed at
-     * construction is **not** cancelled — only the job owned by this coordinator is stopped.
-     */
-    override fun close() {
-        gcJob.cancel()
+            .launchIn(this.scope)
     }
 
     /**

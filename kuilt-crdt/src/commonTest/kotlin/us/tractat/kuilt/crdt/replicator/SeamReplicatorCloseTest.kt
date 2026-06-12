@@ -5,71 +5,41 @@
 
 package us.tractat.kuilt.crdt.replicator
 
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
+import us.tractat.kuilt.conformance.CloseableLifecycleConformanceSuite
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.Pattern
+import us.tractat.kuilt.core.ScopedCloseable
 import us.tractat.kuilt.crdt.GCounter
 import us.tractat.kuilt.crdt.ReplicaId
 import kotlin.test.Test
 import kotlin.test.assertFailsWith
-import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 private val TEST_CONFIG = SeamReplicatorConfig(expectVirtualTime = true)
 
-class SeamReplicatorCloseTest {
+private fun makeReplicator(scope: CoroutineScope): SeamReplicator<GCounter> {
+    val loom = InMemoryLoom()
+    val seam = loom.host(Pattern("lifecycle-test"))
+    return SeamReplicator(
+        replica = ReplicaId(seam.selfId.value),
+        seam = seam,
+        initial = GCounter.ZERO,
+        messageSerializer = ReplicatorMessage.serializer(GCounter.serializer()),
+        scope = scope,
+        config = TEST_CONFIG,
+    )
+}
 
-    // ── Tier 1 regression — child-Job ownership ──────────────────────────────
+class SeamReplicatorCloseTest : CloseableLifecycleConformanceSuite() {
 
-    @Test
-    fun backgroundJobsActiveBeforeClose() = runTest(UnconfinedTestDispatcher()) {
-        val loom = InMemoryLoom()
-        val seam = loom.host(Pattern("close-test"))
-        val replicator = SeamReplicator(
-            replica = ReplicaId(seam.selfId.value),
-            seam = seam,
-            initial = GCounter.ZERO,
-            messageSerializer = ReplicatorMessage.serializer(GCounter.serializer()),
-            scope = backgroundScope,
-            config = TEST_CONFIG,
-        )
-        assertTrue(replicator.backgroundJobsForTest.all { it.isActive })
-        replicator.close()
-    }
+    override fun create(scope: CoroutineScope): ScopedCloseable = makeReplicator(scope)
 
-    @Test
-    fun closeStopsAllBackgroundJobs() = runTest(UnconfinedTestDispatcher()) {
-        val loom = InMemoryLoom()
-        val seam = loom.host(Pattern("close-test"))
-        val replicator = SeamReplicator(
-            replica = ReplicaId(seam.selfId.value),
-            seam = seam,
-            initial = GCounter.ZERO,
-            messageSerializer = ReplicatorMessage.serializer(GCounter.serializer()),
-            scope = backgroundScope,
-            config = TEST_CONFIG,
-        )
-        replicator.close()
-        assertTrue(replicator.backgroundJobsForTest.all { !it.isActive })
-    }
-
-    @Test
-    fun closeIsIdempotent() = runTest(UnconfinedTestDispatcher()) {
-        val loom = InMemoryLoom()
-        val seam = loom.host(Pattern("close-idempotent"))
-        val replicator = SeamReplicator(
-            replica = ReplicaId(seam.selfId.value),
-            seam = seam,
-            initial = GCounter.ZERO,
-            messageSerializer = ReplicatorMessage.serializer(GCounter.serializer()),
-            scope = backgroundScope,
-            config = TEST_CONFIG,
-        )
-        replicator.close()
-        replicator.close() // must not throw
-        assertTrue(replicator.backgroundJobsForTest.all { !it.isActive })
-    }
+    override fun backgroundJobsOf(instance: ScopedCloseable): List<Job> =
+        (instance as SeamReplicator<*>).backgroundJobsForTest
 
     // ── Tier 2 — auto-close on seam teardown (re-entrancy proof) ─────────────
     //

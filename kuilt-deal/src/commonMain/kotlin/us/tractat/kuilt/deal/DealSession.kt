@@ -16,6 +16,7 @@ import kotlinx.serialization.cbor.Cbor
 import kotlinx.serialization.decodeFromByteArray
 import kotlinx.serialization.encodeToByteArray
 import us.tractat.kuilt.core.Seam
+import us.tractat.kuilt.core.ScopedCloseable
 import us.tractat.kuilt.crdt.GSet
 
 /**
@@ -42,7 +43,7 @@ public class DealSession(
     private val allPlayers: Set<PlayerId>,
     private val myId: PlayerId,
     scope: CoroutineScope,
-) : AutoCloseable {
+) : ScopedCloseable(scope) {
     private val _state = MutableStateFlow(DeckState(emptyList()))
     public val state: StateFlow<DeckState> = _state.asStateFlow()
 
@@ -59,20 +60,10 @@ public class DealSession(
             }
             _state.update { deck -> deck.applyRemote(frame.cardIndex, frame.op) }
         }
-        .launchIn(scope)
+        .launchIn(this.scope)
 
     /** Exposed internally so tests can verify [close] cancels the background job. */
     internal val incomingJobForTest: Job get() = incomingJob
-
-    /**
-     * Cancels the incoming-frame collector job. Idempotent — safe to call more than once.
-     *
-     * The [scope] passed at construction is **not** cancelled — only the job owned by
-     * this instance is stopped, leaving other coroutines in that scope alive.
-     */
-    override fun close() {
-        incomingJob.cancel()
-    }
 
     /**
      * Apply a remote op, growing the deck with placeholder cards if the op references
