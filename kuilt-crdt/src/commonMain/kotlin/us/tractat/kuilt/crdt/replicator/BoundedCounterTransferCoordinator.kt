@@ -3,6 +3,7 @@
 package us.tractat.kuilt.crdt.replicator
 
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.launchIn
@@ -95,17 +96,35 @@ public class BoundedCounterTransferCoordinator(
     private val applyTransfer: (Patch<BoundedCounter>) -> Unit,
     private val scope: CoroutineScope,
     private val config: BoundedCounterTransferConfig = BoundedCounterTransferConfig(),
-) {
+) : AutoCloseable {
     private val serializer = BoundedCounterCoordMessage.serializer()
 
+    private val backgroundJobs: List<Job>
+
+    /** Exposed internally so tests can verify [close] cancels both background jobs. */
+    internal val backgroundJobsForTest: List<Job> get() = backgroundJobs
+
     init {
-        observeQuota()
-        observeIncoming()
+        val quotaJob = observeQuota()
+        val incomingJob = observeIncoming()
+        backgroundJobs = listOf(quotaJob, incomingJob)
     }
 
-    private fun observeQuota() {
+    /**
+     * Cancels the quota-observer and incoming-frame-collector background jobs. Idempotent —
+     * safe to call more than once.
+     *
+     * After [close], no further transfer requests are sent and incoming coordination frames are
+     * ignored. The [scope] passed at construction is **not** cancelled — only the jobs owned
+     * by this coordinator are stopped, leaving other coroutines in that scope alive.
+     */
+    override fun close() {
+        backgroundJobs.forEach { it.cancel() }
+    }
+
+    private fun observeQuota(): Job {
         var requestInFlight = false
-        state.onEach { bc ->
+        return state.onEach { bc ->
             val quota = bc.quota(self)
             if (quota <= config.lowWaterThreshold && !requestInFlight) {
                 requestInFlight = true
@@ -138,11 +157,10 @@ public class BoundedCounterTransferCoordinator(
         // exhausted retries — degrade to "deny locally" (trySpend returns null until state updates)
     }
 
-    private fun observeIncoming() {
+    private fun observeIncoming(): Job =
         coordSeam.incoming
             .onEach { swatch -> swatch.sender?.let { dispatch(it, swatch) } }
             .launchIn(scope)
-    }
 
     private fun dispatch(sender: PeerId, swatch: Swatch) {
         val msg = runCatching { decode(swatch.payload) }.getOrNull() ?: return
