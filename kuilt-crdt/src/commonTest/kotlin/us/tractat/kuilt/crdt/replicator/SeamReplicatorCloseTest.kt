@@ -32,6 +32,7 @@ class SeamReplicatorCloseTest {
             config = TEST_CONFIG,
         )
         assertTrue(replicator.backgroundJobsForTest.all { it.isActive })
+        replicator.close() // prevent infinite anti-entropy loop from blocking runTest cleanup
     }
 
     @Test

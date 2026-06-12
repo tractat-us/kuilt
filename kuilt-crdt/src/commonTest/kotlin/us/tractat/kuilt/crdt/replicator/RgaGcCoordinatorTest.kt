@@ -296,6 +296,7 @@ class RgaGcCoordinatorTest {
             scope = backgroundScope,
         )
         assertTrue(coordinator.gcJobForTest.isActive)
+        coordinator.close() // prevent the gc loop from blocking runTest cleanup
     }
 
     @Test
