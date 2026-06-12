@@ -1,3 +1,5 @@
+import org.gradle.api.artifacts.component.ModuleComponentIdentifier
+
 plugins {
     id("kuilt.kmp-library")
     alias(libs.plugins.kotlinSerialization)
@@ -16,6 +18,7 @@ kotlin {
         }
         commonTest.dependencies {
             implementation(project(":kuilt-test"))
+            implementation(project(":kuilt-conformance"))
             implementation(libs.kotlinx.coroutines.test)
             implementation(libs.kotlinx.serialization.json)
         }
@@ -40,6 +43,22 @@ kotlin {
 // Switch jvmTest to the JUnit Platform so jqwik properties are discovered.
 tasks.named<Test>("jvmTest") {
     useJUnitPlatform()
+}
+
+// kuilt-conformance ships its conformance suites in MAIN bound to kotlin-test-junit
+// (JUnit4), but this module runs jvmTest on the JUnit Platform (jqwik), which otherwise
+// pulls kotlin-test-junit5. Both provide the `kotlin-test-framework-impl` capability,
+// so pulling kuilt-conformance into commonTest creates a capability conflict. Resolve it
+// to the JUnit4 variant: junit-vintage-engine (already a jvmTest runtime dep) runs those
+// kotlin-test tests on the Platform alongside jqwik. junit5 is not selected because no
+// JUnit Jupiter engine is on the test runtime — only vintage.
+configurations.configureEach {
+    resolutionStrategy.capabilitiesResolution.withCapability(
+        "org.jetbrains.kotlin:kotlin-test-framework-impl",
+    ) {
+        candidates.firstOrNull { (it.id as? ModuleComponentIdentifier)?.module == "kotlin-test-junit" }
+            ?.let { select(it) }
+    }
 }
 
 // koverVerify is NOT bound to the check lifecycle — coverage verification is
