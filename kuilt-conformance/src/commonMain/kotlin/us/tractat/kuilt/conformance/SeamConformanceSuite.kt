@@ -5,6 +5,8 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.withTimeout
+import kotlin.time.Duration.Companion.seconds
 import kotlinx.coroutines.test.TestResult
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.FabricAvailability
@@ -269,6 +271,42 @@ public abstract class SeamConformanceSuite {
                 assertFailsWith<PeerNotConnected> {
                     host.sendTo(phantom, byteArrayOf(1))
                 }
+            }
+        }
+
+    // ── (11) incoming completes when the seam reaches Torn ───────────────────
+    //
+    // Contract from Seam.incoming KDoc: the flow terminates once the seam is Torn,
+    // whether via local close() or remote disconnect. Consumers (e.g. SeamReplicator)
+    // rely on this to self-close via onCompletion without requiring an explicit caller.
+    //
+    // `open` so a fabric that does not yet honour the contract can override this with
+    // `@Ignore` (visible as skipped in its report) and a tracking issue, rather than
+    // silently weakening the assertion for every fabric. WebRTC does so today — see #335.
+
+    @Test
+    public open fun incomingCompletesWhenSeamCloses(): TestResult =
+        runTest {
+            val (hostLoom, joinerLoom) = newLoomPair()
+            coroutineScope {
+                val hostDeferred = async { hostLoom.host(Pattern("host")) }
+                val joinerDeferred = async { joinerLoom.join(joinTag()) }
+                val host = hostDeferred.await()
+                joinerDeferred.await()
+
+                // Collect host.incoming in the background; it should complete once host closes.
+                val collectingJob = async {
+                    withTimeout(5.seconds) {
+                        host.incoming.toList()
+                    }
+                }
+
+                host.close()
+
+                // If the fabric honours the contract, toList() completes (flow terminated).
+                // withTimeout(5s) guards against fabrics that hang instead of completing.
+                collectingJob.await()
+                assertIs<SeamState.Torn>(host.state.value, "host state must be Torn after close()")
             }
         }
 }
