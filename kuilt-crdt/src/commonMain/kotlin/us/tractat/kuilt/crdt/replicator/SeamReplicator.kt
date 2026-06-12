@@ -6,11 +6,13 @@ import kotlinx.atomicfu.locks.reentrantLock
 import kotlinx.atomicfu.locks.withLock
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.launchIn
+import kotlinx.coroutines.flow.onCompletion
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -283,6 +285,31 @@ public class SeamReplicator<S : Quilted<S>>(
     /** Exposed internally so tests can observe known-peer state. */
     internal val knownPeersForTest: Set<PeerId> get() = knownPeers
 
+    /**
+     * Whether [close] has been called. Set to `true` before cancelling [ownJob] so a
+     * re-entrant path (e.g. the [seam.incoming] `onCompletion` calling [close] while
+     * already completing) sees the flag and short-circuits.
+     */
+    private var closed = false
+
+    /**
+     * Owned child job. A [SupervisorJob] child of the caller's scope so that:
+     * - A crashing collector cancels only the replicator's own work, not the caller's
+     *   scope or siblings (supervisor boundary).
+     * - Parent-scope cancellation still propagates down — [ownJob] is a child of the
+     *   parent Job, so a cancelled caller scope tears the replicator down as well.
+     * - Every future `ownScope.launch` is automatically a child; no manual job list
+     *   is needed. Job-list drift (a `scope.launch` that escapes close()) is structurally
+     *   impossible.
+     */
+    private val ownJob = SupervisorJob(scope.coroutineContext[Job])
+
+    /**
+     * The replicator's own [CoroutineScope]. Derived from the caller's context but
+     * rooted at [ownJob], so [close] cancels it independently of the caller's scope.
+     */
+    private val ownScope = CoroutineScope(scope.coroutineContext + ownJob)
+
     private val backgroundJobs: List<Job>
 
     /** Exposed internally so tests can verify [close] cancels every background job. */
@@ -293,13 +320,14 @@ public class SeamReplicator<S : Quilted<S>>(
 
         val incomingJob = seam.incoming
             .onEach { swatch -> swatch.sender?.let { touch(it); dispatch(it, swatch.payload) } }
-            .launchIn(scope)
+            .onCompletion { close() }   // seam torn ⇒ incoming completes ⇒ replicator closes itself
+            .launchIn(ownScope)
 
         val peersJob = seam.peers
             .onEach { currentPeers -> onPeersChanged(currentPeers) }
-            .launchIn(scope)
+            .launchIn(ownScope)
 
-        val antiEntropyJob = scope.launch { runAntiEntropy() }
+        val antiEntropyJob = ownScope.launch { runAntiEntropy() }
 
         backgroundJobs = listOf(incomingJob, peersJob, antiEntropyJob)
     }
@@ -310,29 +338,28 @@ public class SeamReplicator<S : Quilted<S>>(
      * pending resend/full-state retry jobs. Idempotent — safe to call more than once.
      *
      * After [close], the replicator stops processing inbound frames and emitting anti-entropy
-     * gossip. The [scope] passed at construction is **not** cancelled — only the individual
-     * jobs owned by this instance are stopped, leaving other coroutines in that scope alive.
+     * gossip. The [scope] passed at construction is **not** cancelled — only the child
+     * [ownJob] (and its children) is cancelled, leaving other coroutines in that scope alive.
      */
     override fun close() {
-        backgroundJobs.forEach { it.cancel() }
-        lock.withLock {
-            pendingResendJobs.values.forEach { it.cancel() }
-            pendingResendJobs.clear()
-            pendingFullStateJobs.values.forEach { it.cancel() }
-            pendingFullStateJobs.clear()
-        }
+        if (closed) return
+        closed = true
+        ownJob.cancel()
     }
 
     /**
      * Apply a local mutation. Updates [state] synchronously; broadcasts a [ReplicatorMessage.Delta]
-     * to all current peers asynchronously (fire-and-forget within [scope]).
+     * to all current peers asynchronously (fire-and-forget within [ownScope]).
      *
      * **Thread-safe.** Safe to call from any thread or coroutine context — the state mutation is
      * serialised against the inbound/peers/anti-entropy collectors by an internal reentrant
      * [lock] — and remains **synchronous** (non-suspending): it returns once [state] reflects the
      * mutation, the broadcast having been handed off to a child coroutine.
+     *
+     * @throws IllegalStateException if this replicator has been [close]d.
      */
     public fun apply(patch: Patch<S>): Unit = lock.withLock {
+        check(!closed) { "SeamReplicator($replica) is closed" }
         _state.update { it.piece(patch) }
         val seq = ++nextSeq
         pendingDeltas[seq] = patch.delta
@@ -402,7 +429,7 @@ public class SeamReplicator<S : Quilted<S>>(
         if (vector.entries.isEmpty()) return
         val msg = ReplicatorMessage.Delivered<S>(sender = replica, vector = vector)
         val bytes = encode(msg)
-        scope.launch { runCatching { seam.broadcast(bytes) } }
+        ownScope.launch { runCatching { seam.broadcast(bytes) } }
     }
 
     private fun touch(peer: PeerId): Unit = lock.withLock {
@@ -456,7 +483,7 @@ public class SeamReplicator<S : Quilted<S>>(
     private fun broadcastDelta(seq: Long, delta: S) {
         val msg = ReplicatorMessage.Delta(sender = replica, seq = seq, delta = delta)
         val bytes = encode(msg)
-        scope.launch { runCatching { seam.broadcast(bytes) } }
+        ownScope.launch { runCatching { seam.broadcast(bytes) } }
     }
 
     private fun onPeersChanged(currentPeers: Set<PeerId>): Unit = lock.withLock {
@@ -472,7 +499,7 @@ public class SeamReplicator<S : Quilted<S>>(
     private fun sendFullStateTo(peer: PeerId) {
         val msg = ReplicatorMessage.FullState(sender = replica, state = _state.value)
         val bytes = encode(msg)
-        scope.launch { runCatching { seam.sendTo(peer, bytes) } }
+        ownScope.launch { runCatching { seam.sendTo(peer, bytes) } }
         scheduleFullStateRetry(peer, config.fullStateRetryLimit)
     }
 
@@ -482,7 +509,7 @@ public class SeamReplicator<S : Quilted<S>>(
             return
         }
         pendingFullStateJobs[peer]?.cancel()
-        pendingFullStateJobs[peer] = scope.launch {
+        pendingFullStateJobs[peer] = ownScope.launch {
             delay(config.fullStateRetryInterval)
             // Snapshot the frame under the lock; perform the suspending send OUTSIDE it; then
             // reschedule under the lock again — the lock is never held across `seam.sendTo`.
@@ -568,12 +595,12 @@ public class SeamReplicator<S : Quilted<S>>(
             toSeq = toSeq,
         )
         val bytes = encode(msg)
-        scope.launch { runCatching { seam.sendTo(to, bytes) } }
+        ownScope.launch { runCatching { seam.sendTo(to, bytes) } }
     }
 
     private fun scheduleResendRetry(to: PeerId, sender: ReplicaId, fromSeq: Long, toSeq: Long) {
         pendingResendJobs[sender]?.cancel()
-        pendingResendJobs[sender] = scope.launch {
+        pendingResendJobs[sender] = ownScope.launch {
             delay(config.resendRetryInterval)
             // Lock the state re-check + reschedule, NOT the preceding delay. `sendResend` only
             // launches a child coroutine for the actual send, so it stays safe under the lock.
@@ -595,7 +622,7 @@ public class SeamReplicator<S : Quilted<S>>(
     private fun sendAck(to: PeerId, originalSender: ReplicaId, seq: Long) {
         val msg = ReplicatorMessage.Ack<S>(acker = replica, sender = originalSender, seq = seq)
         val bytes = encode(msg)
-        scope.launch { runCatching { seam.sendTo(to, bytes) } }
+        ownScope.launch { runCatching { seam.sendTo(to, bytes) } }
     }
 
     private fun onAck(msg: ReplicatorMessage.Ack<S>) {
