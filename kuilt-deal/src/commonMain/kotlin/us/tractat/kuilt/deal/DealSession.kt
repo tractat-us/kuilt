@@ -4,6 +4,7 @@ package us.tractat.kuilt.deal
 
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -41,25 +42,36 @@ public class DealSession(
     private val allPlayers: Set<PlayerId>,
     private val myId: PlayerId,
     scope: CoroutineScope,
-) {
+) : AutoCloseable {
     private val _state = MutableStateFlow(DeckState(emptyList()))
     public val state: StateFlow<DeckState> = _state.asStateFlow()
 
-    init {
-        seam.incoming
-            .onEach { swatch ->
-                val frame = try {
-                    Cbor.decodeFromByteArray<IndexedCardOp>(swatch.payload)
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (_: Exception) {
-                    // Drop a malformed/foreign frame rather than letting it cancel the
-                    // collector (which would silently halt all further op delivery).
-                    return@onEach
-                }
-                _state.update { deck -> deck.applyRemote(frame.cardIndex, frame.op) }
+    private val incomingJob: Job = seam.incoming
+        .onEach { swatch ->
+            val frame = try {
+                Cbor.decodeFromByteArray<IndexedCardOp>(swatch.payload)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                // Drop a malformed/foreign frame rather than letting it cancel the
+                // collector (which would silently halt all further op delivery).
+                return@onEach
             }
-            .launchIn(scope)
+            _state.update { deck -> deck.applyRemote(frame.cardIndex, frame.op) }
+        }
+        .launchIn(scope)
+
+    /** Exposed internally so tests can verify [close] cancels the background job. */
+    internal val incomingJobForTest: Job get() = incomingJob
+
+    /**
+     * Cancels the incoming-frame collector job. Idempotent — safe to call more than once.
+     *
+     * The [scope] passed at construction is **not** cancelled — only the job owned by
+     * this instance is stopped, leaving other coroutines in that scope alive.
+     */
+    override fun close() {
+        incomingJob.cancel()
     }
 
     /**
