@@ -1,12 +1,8 @@
 package us.tractat.kuilt.webrtc
 
-import kotlinx.coroutines.test.TestResult
-import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.conformance.SeamConformanceSuite
 import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.Tag
-import kotlin.test.Ignore
-import kotlin.test.Test
 
 /**
  * Verifies that [WebRTCPeerLinkFactory] satisfies every invariant in [SeamConformanceSuite]
@@ -50,15 +46,4 @@ class WebRTCConformanceTest : SeamConformanceSuite() {
         override val displayName = "host"
         override val peerKey = room
     }
-
-    /**
-     * KNOWN GAP — tracked in #335. WebRTC's `incoming` flow (`userFrames.map { … }`)
-     * does not complete when the seam reaches `Torn`: local `close()` tears the facade
-     * down but never terminates the underlying byte flow, so `incoming.toList()` hangs.
-     * Ignored here ONLY — every other fabric still enforces the contract via the base
-     * suite. Remove this override as the closing change of #335.
-     */
-    @Ignore
-    @Test
-    override fun incomingCompletesWhenSeamCloses(): TestResult = runTest { }
 }

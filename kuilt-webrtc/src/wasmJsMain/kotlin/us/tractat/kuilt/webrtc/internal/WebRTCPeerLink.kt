@@ -10,7 +10,8 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.channelFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import us.tractat.kuilt.core.CloseReason
 import us.tractat.kuilt.core.PeerId
@@ -54,10 +55,15 @@ internal class WebRTCPeerLink(
     private val _state = MutableStateFlow<SeamState>(SeamState.Woven)
     override val state: StateFlow<SeamState> get() = _state
 
-    override val incoming: Flow<Swatch> =
-        userFrames.map { bytes ->
-            Swatch(payload = bytes, sender = senderIdDeferred.await(), sequence = sequenceCounter.next())
+    override val incoming: Flow<Swatch> = channelFlow {
+        val frames = launch {
+            userFrames.collect { bytes ->
+                send(Swatch(payload = bytes, sender = senderIdDeferred.await(), sequence = sequenceCounter.next()))
+            }
         }
+        _state.first { it is SeamState.Torn }
+        frames.cancel()
+    }
 
     private var closed = false
 
@@ -68,6 +74,7 @@ internal class WebRTCPeerLink(
             facade.awaitDataChannelClose()
             log.debug { "Seam data channel closed by remote self=$selfId remote=$remoteId" }
             _peers.value = setOf(selfId)
+            _state.value = SeamState.Torn(CloseReason.RemoteRequested)
         }
     }
 
