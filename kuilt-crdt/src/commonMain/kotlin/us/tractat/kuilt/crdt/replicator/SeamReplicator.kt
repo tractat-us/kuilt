@@ -2,6 +2,7 @@
 
 package us.tractat.kuilt.crdt.replicator
 
+import io.github.oshai.kotlinlogging.KotlinLogging
 import kotlinx.atomicfu.locks.reentrantLock
 import kotlinx.atomicfu.locks.withLock
 import kotlinx.coroutines.CoroutineScope
@@ -31,6 +32,8 @@ import kotlin.coroutines.ContinuationInterceptor
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
+
+private val logger = KotlinLogging.logger("us.tractat.kuilt.crdt.SeamReplicator")
 
 /**
  * Configuration for [SeamReplicator].
@@ -280,6 +283,9 @@ public class SeamReplicator<S : Quilted<S>>(
      */
     private val pendingFullStateJobs: MutableMap<PeerId, Job> = mutableMapOf()
 
+    /** Counts anti-entropy iterations; logged each tick so virtual-time cycling is visible. */
+    private var antiEntropyCount = 0L
+
     /** Exposed internally so tests can observe GC behaviour. */
     internal val pendingDeltasForTest: Map<Long, S> get() = pendingDeltas
 
@@ -317,6 +323,7 @@ public class SeamReplicator<S : Quilted<S>>(
      * Called at most once, always before the coroutines stop.
      */
     override fun onClose() {
+        logger.debug { "[SeamReplicator/$replica] close() — anti-entropy ran $antiEntropyCount iteration(s)" }
         lock.withLock {
             pendingResendJobs.values.forEach { it.cancel() }
             pendingResendJobs.clear()
@@ -417,6 +424,11 @@ public class SeamReplicator<S : Quilted<S>>(
     private suspend fun runAntiEntropy() {
         while (true) {
             delay(config.antiEntropyInterval)
+            val n = ++antiEntropyCount
+            // Logged at DEBUG so virtual-time cycling is visible in the test/CI artifact:
+            // normal production = one line per antiEntropyInterval; cycling = rapid-fire lines
+            // with ascending iteration numbers, immediately distinguishing the #329 signature.
+            logger.debug { "[SeamReplicator/$replica] anti-entropy iteration=$n peers=${seam.peers.value.size}" }
             // Lock the state work, NOT the delay (which must stay a suspension point outside it).
             lock.withLock {
                 evictStalePeers()

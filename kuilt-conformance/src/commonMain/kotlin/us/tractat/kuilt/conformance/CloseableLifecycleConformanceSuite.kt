@@ -62,7 +62,7 @@ public abstract class CloseableLifecycleConformanceSuite {
     protected abstract fun backgroundJobsOf(instance: ScopedCloseable): List<Job>
 
     @Test
-    fun backgroundJobsActiveBeforeClose(): TestResult = runTest(UnconfinedTestDispatcher()) {
+    public fun backgroundJobsActiveBeforeClose(): TestResult = runTest(UnconfinedTestDispatcher()) {
         val instance = create(backgroundScope)
         try {
             assertTrue(
@@ -75,7 +75,7 @@ public abstract class CloseableLifecycleConformanceSuite {
     }
 
     @Test
-    fun closeStopsAllBackgroundJobs(): TestResult = runTest(UnconfinedTestDispatcher()) {
+    public fun closeStopsAllBackgroundJobs(): TestResult = runTest(UnconfinedTestDispatcher()) {
         val instance = create(backgroundScope)
         instance.close()
         assertFalse(
@@ -85,7 +85,7 @@ public abstract class CloseableLifecycleConformanceSuite {
     }
 
     @Test
-    fun closeIsIdempotent(): TestResult = runTest(UnconfinedTestDispatcher()) {
+    public fun closeIsIdempotent(): TestResult = runTest(UnconfinedTestDispatcher()) {
         val instance = create(backgroundScope)
         instance.close()
         instance.close() // must not throw

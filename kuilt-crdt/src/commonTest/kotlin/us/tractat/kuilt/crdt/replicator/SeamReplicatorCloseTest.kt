@@ -7,23 +7,28 @@ package us.tractat.kuilt.crdt.replicator
 
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.conformance.CloseableLifecycleConformanceSuite
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.Pattern
+import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.ScopedCloseable
 import us.tractat.kuilt.crdt.GCounter
 import us.tractat.kuilt.crdt.ReplicaId
+import us.tractat.kuilt.test.fakeSeamPair
 import kotlin.test.Test
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 private val TEST_CONFIG = SeamReplicatorConfig(expectVirtualTime = true)
 
+// Uses a non-suspend [fakeSeamPair] seam so the TCK's non-suspend `create` can construct
+// the replicator (the real `loom.host` is a suspend call). The lifecycle tests only need a
+// working `incoming`/`peers`/`selfId`, which the fake provides.
 private fun makeReplicator(scope: CoroutineScope): SeamReplicator<GCounter> {
-    val loom = InMemoryLoom()
-    val seam = loom.host(Pattern("lifecycle-test"))
+    val (seam, _) = fakeSeamPair(PeerId("self"), PeerId("other"))
     return SeamReplicator(
         replica = ReplicaId(seam.selfId.value),
         seam = seam,
@@ -90,5 +95,29 @@ class SeamReplicatorCloseTest : CloseableLifecycleConformanceSuite() {
         assertFailsWith<IllegalStateException> {
             replicator.apply(GCounter.ZERO.inc(replica))
         }
+    }
+
+    // ── #329 regression — child-Job ownership stops jobs on parent cancel ─────
+    //
+    // The original #329 hang came from an anti-entropy loop left running when a test
+    // forgot to close the replicator. Child-Job ownership (ScopedCloseable) makes the
+    // owned coroutines structural children of the parent scope's Job, so cancelling the
+    // parent — exactly what `runTest` does at teardown — stops them WITHOUT any explicit
+    // close(). This proves the mechanism deterministically (no reliance on runTest cleanup
+    // timing, so it cannot itself hang), and confirms that relying on scope cancellation
+    // for cleanup is now a legitimate, leak-free pattern.
+
+    @Test
+    fun parentScopeCancellationStopsJobsWithoutClose() = runTest(UnconfinedTestDispatcher()) {
+        val parent = CoroutineScope(coroutineContext + Job())
+        val replicator = makeReplicator(parent)
+        assertTrue(replicator.backgroundJobsForTest.all { it.isActive }, "jobs active before cancel")
+
+        parent.cancel() // caller's scope dies; no one called close()
+
+        assertTrue(
+            replicator.backgroundJobsForTest.all { !it.isActive },
+            "child-Job ownership must stop owned jobs when the parent scope is cancelled (the #329 fix)",
+        )
     }
 }
