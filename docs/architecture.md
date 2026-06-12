@@ -29,6 +29,40 @@ WebRTC signaling are *rendezvous* — they tell you who is out there and how to
 reach them; they feed any fabric. An mDNS-discovered game still connects over
 WebSocket (Far), so `kuilt-mdns` depends on `kuilt-websocket`, not the reverse.
 
+### Why there is no raw Bluetooth fabric (yet)
+
+A recurring question: should kuilt expose Bluetooth/BLE directly? Today the
+answer is **no**, for reasons that are worth recording so the question doesn't
+get re-litigated from scratch.
+
+- **Bluetooth is already present, at the right altitude.** The Near meta-fabrics
+  ride it transparently: Multipeer multiplexes Bluetooth + infra-WiFi +
+  peer-to-peer WiFi (and hands off between them), and Android Nearby does the
+  same over BLE + Bluetooth Classic + WiFi. Both present a *connection-oriented,
+  multi-peer* surface that maps cleanly onto `Seam`. A raw fabric would mostly
+  duplicate — worse — what they already do.
+- **Raw BLE fights the contract in three places.** (1) GATT is central/peripheral
+  — *asymmetric* — whereas `Seam` is peer-symmetric, so you'd need a symmetry shim
+  over an inherently asymmetric link. (2) `Swatch` is an arbitrary opaque blob, but
+  BLE gives ~185–512-byte writes at sub-kbps effective throughput, forcing a real
+  fragmentation/reassembly protocol (GATT-notify chunking or L2CAP CoC) *inside* the
+  fabric. (3) There is no common platform surface — CoreBluetooth, Android
+  `BluetoothGatt`, Chrome-only Web Bluetooth (gesture-gated), and nothing standard
+  on desktop JVM — so the `expect`/`actual` spread is the widest of any fabric, for
+  the worst transport.
+- **The one genuine gap it would close** is *cross-ecosystem* proximity: Multipeer
+  is Apple-only and Nearby is Android-only, and they don't interoperate. A raw
+  BLE/L2CAP fabric is the only way an iPhone and an Android phone connect with no
+  AP, router, or internet — but it's a narrow niche, viable only for small,
+  low-rate payloads given BLE's throughput.
+
+This costs nothing to defer: fabrics are pluggable, so a `:kuilt-ble` module can
+be added later as a normal fabric that passes `SeamConformanceSuite` via
+`newLoomPair()` (plus the symmetry shim and fragmentation layer), and documented
+as the lowest-throughput, highest-cost Near fabric. Nothing Bluetooth-shaped
+belongs in `:kuilt-core` — the contract stays transport-agnostic, so this is only
+ever a "is the niche worth a module" decision, never a core one.
+
 ## The contract
 
 ```kotlin
