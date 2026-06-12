@@ -2,6 +2,7 @@
 
 package us.tractat.kuilt.crdt.replicator
 
+import io.github.oshai.kotlinlogging.KotlinLogging
 import kotlinx.atomicfu.locks.reentrantLock
 import kotlinx.atomicfu.locks.withLock
 import kotlinx.coroutines.CoroutineScope
@@ -29,6 +30,8 @@ import kotlin.coroutines.ContinuationInterceptor
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
+
+private val logger = KotlinLogging.logger("us.tractat.kuilt.crdt.SeamReplicator")
 
 /**
  * Configuration for [SeamReplicator].
@@ -288,8 +291,32 @@ public class SeamReplicator<S : Quilted<S>>(
     /** Exposed internally so tests can verify [close] cancels every background job. */
     internal val backgroundJobsForTest: List<Job> get() = backgroundJobs
 
+    /** Counts anti-entropy iterations; each log line names the iteration so cycling is visible. */
+    private var antiEntropyCount = 0L
+
+    /** Set to `true` by [close]; read by the leak guard registered in [init]. */
+    private var closed = false
+
     init {
         checkNotUnderTestDispatcher(scope, config.strictTestGuard, config.expectVirtualTime)
+
+        // Leak guard: when running under a test dispatcher, warn if the scope ends without
+        // close() being called. Under virtual time an unclosed anti-entropy loop causes
+        // advanceUntilIdle() to cycle indefinitely — this warning names the replica so the
+        // artifact log immediately identifies the culprit. Under real time it catches resource
+        // leaks. Fires via invokeOnCompletion after the scope's Job is cancelled; in a hang
+        // scenario the warning shows up in the test output once the 15-min task timeout kills
+        // the JVM and the partial log is written to the artifact.
+        if (isUnderTestDispatcher(scope)) {
+            scope.coroutineContext[Job]?.invokeOnCompletion {
+                if (!closed) logger.warn {
+                    "[SeamReplicator/$replica] scope cancelled without close() — " +
+                        "anti-entropy ran $antiEntropyCount iteration(s). " +
+                        "If tests hung, virtual-time cycling is likely: call close() " +
+                        "before the test body exits."
+                }
+            }
+        }
 
         val incomingJob = seam.incoming
             .onEach { swatch -> swatch.sender?.let { touch(it); dispatch(it, swatch.payload) } }
@@ -314,6 +341,8 @@ public class SeamReplicator<S : Quilted<S>>(
      * jobs owned by this instance are stopped, leaving other coroutines in that scope alive.
      */
     override fun close() {
+        closed = true
+        logger.debug { "[SeamReplicator/$replica] close() called — cancelling background jobs" }
         backgroundJobs.forEach { it.cancel() }
         lock.withLock {
             pendingResendJobs.values.forEach { it.cancel() }
@@ -412,6 +441,11 @@ public class SeamReplicator<S : Quilted<S>>(
     private suspend fun runAntiEntropy() {
         while (true) {
             delay(config.antiEntropyInterval)
+            val n = ++antiEntropyCount
+            // Each iteration is logged at DEBUG so virtual-time cycling is visible in the
+            // test artifact: normal production = one log per antiEntropyInterval; cycling =
+            // rapid-fire logs with incrementing iteration numbers on consecutive lines.
+            logger.debug { "[SeamReplicator/$replica] anti-entropy iteration=$n peers=${seam.peers.value.size}" }
             // Lock the state work, NOT the delay (which must stay a suspension point outside it).
             lock.withLock {
                 evictStalePeers()
@@ -681,13 +715,17 @@ private fun contiguousHighWater(seqs: Set<Long>): Long {
     return n
 }
 
-private fun checkNotUnderTestDispatcher(scope: CoroutineScope, strict: Boolean, expectVirtualTime: Boolean) {
-    if (expectVirtualTime) return
+private fun isUnderTestDispatcher(scope: CoroutineScope): Boolean {
     val interceptor = scope.coroutineContext[ContinuationInterceptor]
     val className = interceptor?.let { it::class.qualifiedName ?: it::class.simpleName ?: "" } ?: ""
-    val isTestDispatcher = "TestDispatcher" in className ||
-        className.startsWith("kotlinx.coroutines.test.")
-    if (!isTestDispatcher) return
+    return "TestDispatcher" in className || className.startsWith("kotlinx.coroutines.test.")
+}
+
+private fun checkNotUnderTestDispatcher(scope: CoroutineScope, strict: Boolean, expectVirtualTime: Boolean) {
+    if (expectVirtualTime) return
+    if (!isUnderTestDispatcher(scope)) return
+    val className = scope.coroutineContext[ContinuationInterceptor]
+        ?.let { it::class.qualifiedName ?: it::class.simpleName ?: "" } ?: ""
     val msg = "SeamReplicator constructed under a TestDispatcher ($className). " +
         "The anti-entropy loop uses real-clock delay() — under virtual time those delays " +
         "never advance automatically and your test will deadlock silently. " +
