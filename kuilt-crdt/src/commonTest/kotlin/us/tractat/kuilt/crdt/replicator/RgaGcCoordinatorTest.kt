@@ -280,4 +280,55 @@ class RgaGcCoordinatorTest {
 
         assertEquals(1, sink.patches.size, "never() policy must still allow causal-stability GC")
     }
+
+    // ---- close() ----
+
+    @Test
+    fun gcJobActiveBeforeClose() = runTest(UnconfinedTestDispatcher()) {
+        val sink = PatchSink(Rga.empty<String>())
+        val cut = MutableStateFlow(CutFrontier.EMPTY)
+        val delivered = MutableStateFlow(VersionVector.EMPTY)
+        val coordinator = RgaGcCoordinator(
+            state = sink.stateFlow,
+            cutFrontier = cut,
+            delivered = delivered,
+            applyCompaction = sink::apply,
+            scope = backgroundScope,
+        )
+        assertTrue(coordinator.gcJobForTest.isActive)
+        coordinator.close() // prevent the gc loop from blocking runTest cleanup
+    }
+
+    @Test
+    fun closeStopsGcJob() = runTest(UnconfinedTestDispatcher()) {
+        val sink = PatchSink(Rga.empty<String>())
+        val cut = MutableStateFlow(CutFrontier.EMPTY)
+        val delivered = MutableStateFlow(VersionVector.EMPTY)
+        val coordinator = RgaGcCoordinator(
+            state = sink.stateFlow,
+            cutFrontier = cut,
+            delivered = delivered,
+            applyCompaction = sink::apply,
+            scope = backgroundScope,
+        )
+        coordinator.close()
+        assertFalse(coordinator.gcJobForTest.isActive)
+    }
+
+    @Test
+    fun closeIsIdempotent() = runTest(UnconfinedTestDispatcher()) {
+        val sink = PatchSink(Rga.empty<String>())
+        val cut = MutableStateFlow(CutFrontier.EMPTY)
+        val delivered = MutableStateFlow(VersionVector.EMPTY)
+        val coordinator = RgaGcCoordinator(
+            state = sink.stateFlow,
+            cutFrontier = cut,
+            delivered = delivered,
+            applyCompaction = sink::apply,
+            scope = backgroundScope,
+        )
+        coordinator.close()
+        coordinator.close()
+        assertFalse(coordinator.gcJobForTest.isActive)
+    }
 }

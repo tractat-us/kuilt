@@ -2,6 +2,7 @@ package us.tractat.kuilt.crdt.replicator
 
 import io.github.oshai.kotlinlogging.KotlinLogging
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.merge
@@ -82,16 +83,32 @@ public class RgaGcCoordinator<V>(
     private val applyCompaction: (Patch<Rga<V>>) -> Unit,
     private val windowPolicy: WindowPolicy = WindowPolicy.never(),
     private val scope: CoroutineScope,
-) {
+) : AutoCloseable {
+
+    private val gcJob: Job
+
+    /** Exposed internally so tests can verify [close] cancels the GC loop. */
+    internal val gcJobForTest: Job get() = gcJob
+
     init {
         // Re-evaluate GC on EITHER trigger: a [cutFrontier] change (the cut/frontier advanced)
         // OR a [state] change (a new tombstone appeared). A local Remove mints no author dot, so
         // it does not move [delivered] / [cutFrontier] — without observing [state] too, a tombstone
         // applied while the cut already covers it would never be re-considered (the [StateFlow]
         // dedups the unchanged cut). Both triggers read the current cut + delivered fresh.
-        merge(cutFrontier, state)
+        gcJob = merge(cutFrontier, state)
             .onEach { evaluate() }
             .launchIn(scope)
+    }
+
+    /**
+     * Cancels the background GC loop. Idempotent — safe to call more than once.
+     *
+     * After [close], no further compaction evaluations will run. The [scope] passed at
+     * construction is **not** cancelled — only the job owned by this coordinator is stopped.
+     */
+    override fun close() {
+        gcJob.cancel()
     }
 
     /**

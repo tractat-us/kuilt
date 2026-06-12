@@ -155,7 +155,7 @@ public class SeamReplicator<S : Quilted<S>>(
      * (e.g. [us.tractat.kuilt.crdt.Rga] with a generic value type).
      */
     private val binaryFormat: BinaryFormat = Cbor,
-) {
+) : AutoCloseable {
     /**
      * Guards every mutation of the plain replicator state (`nextSeq`, `pendingDeltas`,
      * `knownPeers`, `ackedThrough`, `expectedReceiveSeq`, `pendingInbound`, `frontiers`,
@@ -283,18 +283,44 @@ public class SeamReplicator<S : Quilted<S>>(
     /** Exposed internally so tests can observe known-peer state. */
     internal val knownPeersForTest: Set<PeerId> get() = knownPeers
 
+    private val backgroundJobs: List<Job>
+
+    /** Exposed internally so tests can verify [close] cancels every background job. */
+    internal val backgroundJobsForTest: List<Job> get() = backgroundJobs
+
     init {
         checkNotUnderTestDispatcher(scope, config.strictTestGuard, config.expectVirtualTime)
 
-        seam.incoming
+        val incomingJob = seam.incoming
             .onEach { swatch -> swatch.sender?.let { touch(it); dispatch(it, swatch.payload) } }
             .launchIn(scope)
 
-        seam.peers
+        val peersJob = seam.peers
             .onEach { currentPeers -> onPeersChanged(currentPeers) }
             .launchIn(scope)
 
-        scope.launch { runAntiEntropy() }
+        val antiEntropyJob = scope.launch { runAntiEntropy() }
+
+        backgroundJobs = listOf(incomingJob, peersJob, antiEntropyJob)
+    }
+
+    /**
+     * Cancels all background coroutines launched by this replicator (the incoming-frame
+     * collector, the peers-change collector, and the anti-entropy loop) as well as any
+     * pending resend/full-state retry jobs. Idempotent — safe to call more than once.
+     *
+     * After [close], the replicator stops processing inbound frames and emitting anti-entropy
+     * gossip. The [scope] passed at construction is **not** cancelled — only the individual
+     * jobs owned by this instance are stopped, leaving other coroutines in that scope alive.
+     */
+    override fun close() {
+        backgroundJobs.forEach { it.cancel() }
+        lock.withLock {
+            pendingResendJobs.values.forEach { it.cancel() }
+            pendingResendJobs.clear()
+            pendingFullStateJobs.values.forEach { it.cancel() }
+            pendingFullStateJobs.clear()
+        }
     }
 
     /**
