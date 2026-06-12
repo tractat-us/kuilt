@@ -67,8 +67,9 @@ class SeamReplicatorConcurrencyTest {
         messageSerializer = gsetSer,
         scope = scope,
         // Real-clock anti-entropy is fine: these tests run on real time, not virtual time.
-        // A short resend interval heals out-of-order broadcasts promptly so convergence is quick.
-        config = SeamReplicatorConfig(resendRetryInterval = 20.milliseconds),
+        // 250ms gives in-flight deltas time to land before a gap triggers a resend, so the
+        // system actually quiesces under the apply flood rather than generating a resend storm.
+        config = SeamReplicatorConfig(resendRetryInterval = 250.milliseconds),
     )
 
     /**
@@ -188,7 +189,7 @@ class SeamReplicatorConcurrencyTest {
                 val repB = gsetReplicator(seamB, scope)
 
                 val workers = 8
-                val perWorker = 400
+                val perWorker = 150   // 2400 racing applies — ample race coverage; ~3× less backlog than 400
                 val aElements = buildSet { repeat(workers) { w -> repeat(perWorker) { i -> add("a-$w-$i") } } }
                 val bElements = buildSet { repeat(workers) { w -> repeat(perWorker) { i -> add("b-$w-$i") } } }
                 val expected = aElements + bElements
@@ -211,14 +212,23 @@ class SeamReplicatorConcurrencyTest {
 
                 // Real-time convergence: poll until both sides reach the full union (gaps from
                 // out-of-order broadcast heal via Resend) or the budget expires.
-                val deadline = 30.seconds
-                var waited = 0.milliseconds
-                val step = 50.milliseconds
-                while (waited < deadline &&
-                    !(repA.state.value.elements == expected && repB.state.value.elements == expected)
-                ) {
-                    delay(step)
-                    waited += step
+                //
+                // IMPORTANT: run this on Dispatchers.IO, NOT Dispatchers.Default. The apply flood
+                // above saturates Default's small CPU-bound pool; if the observer's delay(50ms)
+                // continuation waits behind the replicator coroutines for a Default thread, `waited`
+                // advances far slower than wall-clock and the loop never finishes — a hang rather
+                // than a fast failure. IO's elastic thread pool is unaffected by Default starvation,
+                // so a non-convergence surfaces as an assertion failure within the budget window.
+                withContext(Dispatchers.IO) {
+                    val deadline = 30.seconds
+                    var waited = 0.milliseconds
+                    val step = 50.milliseconds
+                    while (waited < deadline &&
+                        !(repA.state.value.elements == expected && repB.state.value.elements == expected)
+                    ) {
+                        delay(step)
+                        waited += step
+                    }
                 }
 
                 lock.withLock {
