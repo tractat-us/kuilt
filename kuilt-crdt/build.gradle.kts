@@ -16,6 +16,7 @@ kotlin {
         }
         commonTest.dependencies {
             implementation(project(":kuilt-test"))
+            implementation(project(":kuilt-conformance"))
             implementation(libs.kotlinx.coroutines.test)
             implementation(libs.kotlinx.serialization.json)
         }
