@@ -5,7 +5,7 @@
 | Tier | Version pattern | Where | Who uses it |
 |------|----------------|-------|-------------|
 | **Public** | `0.x.0` | Maven Central (`mavenCentral()`) | External consumers, downstream OSS |
-| **Internal** | `0.x.y` (y > 0) | Tigris build cache | sibling projects (`fgn`, `hanab-kt`, …) |
+| **Internal** | `0.x.y` (y > 0) | Tigris build cache | other in-house projects |
 
 Patch releases (`0.x.1`, `0.x.2`, …) are continuous snapshots published on every push to `main` — fast iteration for in-house consumers, no guarantees of stability or compatibility. Minor releases (`0.x.0`) are the deliberate, signed, permanently-available Central artifacts.
 

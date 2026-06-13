@@ -63,7 +63,7 @@ class DealBenchmark {
     }
 
     @Test
-    fun fullCycleHanabi50CardsTwoPlayers() = runBlocking {
+    fun fullCycleTwoPlayers50Cards() = runBlocking {
         val ids = listOf(PeerId("alice"), PeerId("bob"))
         val scheme = SraScheme()
         val scope = CoroutineScope(Dispatchers.Unconfined)
@@ -74,7 +74,7 @@ class DealBenchmark {
         val elapsed = measureTime {
             alice.shuffle(deck)
             bob.shuffle(deck)
-            // Hanabi: alice cannot see her own cards (quorum = {bob})
+            // holder cannot see their own cards — quorum = everyone except the holder
             val quorums = (0..49).associate { it to setOf(ids[1]) }
             alice.assignQuorums(quorums)
             bob.assignQuorums(quorums)
@@ -82,10 +82,10 @@ class DealBenchmark {
             check(bob.decrypt(0).isNotEmpty())  // sanity: card 0 recovers
         }
 
-        println("Tier 2 Hanabi (2-player, 50 cards, SRA-2048 ionspin): ${elapsed.inWholeMilliseconds}ms")
+        println("Tier 2 holder-blind deal (2-player, 50 cards, SRA-2048 ionspin): ${elapsed.inWholeMilliseconds}ms")
         assertTrue(
             elapsed.inWholeSeconds < 30,
-            "Full Hanabi cycle took ${elapsed.inWholeMilliseconds}ms — exceeds the 30s catastrophic-regression bound",
+            "Full holder-blind deal cycle took ${elapsed.inWholeMilliseconds}ms — exceeds the 30s catastrophic-regression bound",
         )
     }
 }

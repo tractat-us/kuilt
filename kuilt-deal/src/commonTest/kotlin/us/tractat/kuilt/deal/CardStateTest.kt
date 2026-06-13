@@ -82,10 +82,10 @@ class CardStateTest {
     }
 
     @Test
-    fun hanabiphaseRevealedMeansAllExceptHolderHaveStripped() {
-        // Hanabi: quorum = {alice, bob, carol} except carol (carol holds this card)
-        val hanabi = emptyCard(quorum = setOf(alice, bob))  // carol NOT in quorum
-        val state = hanabi.copy(
+    fun allExceptHolderHaveStripped() {
+        // holder cannot see their own card — quorum is everyone except the holder
+        val holderBlind = emptyCard(quorum = setOf(alice, bob))  // carol NOT in quorum (carol is the holder)
+        val state = holderBlind.copy(
             encryptedBy = GSet.of(alice, bob, carol),
             strippedBy = GSet.of(carol),  // only carol needs to strip
         )
