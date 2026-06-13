@@ -101,7 +101,9 @@ class ReplicationTest {
             try {
                 leader.propose(byteArrayOf(55))
                 committed = true
-            } catch (_: Exception) {}
+            }
+            catch (_: NotLeaderException) {}
+            catch (_: LeadershipLostException) {}
         }
         delay(100)
         job.cancel()

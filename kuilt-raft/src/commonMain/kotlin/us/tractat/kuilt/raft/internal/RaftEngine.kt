@@ -186,9 +186,6 @@ internal class RaftEngine(
      */
     private var pendingConfigChange: CompletableDeferred<ClusterConfig>? = null
 
-    /** The target voter set of the in-flight change — used to distinguish simple vs joint completion. */
-    private var configChangeTargetVoters: Set<NodeId>? = null
-
     // §7 InstallSnapshot transfer state — leader-only (one chunk in flight per peer; await-ack-then-next).
     private class SnapshotXfer(val meta: SnapshotMeta, val state: ByteArray, var nextOffset: Long)
     private val snapshotXfer = mutableMapOf<NodeId, SnapshotXfer>()
@@ -323,7 +320,6 @@ internal class RaftEngine(
     private fun failPendingConfigChange(cause: Throwable) {
         pendingConfigChange?.completeExceptionally(cause)
         pendingConfigChange = null
-        configChangeTargetVoters = null
     }
 
     // ── Role helper ───────────────────────────────────────────────────────────
@@ -1167,7 +1163,6 @@ internal class RaftEngine(
             return
         }
         pendingConfigChange = deferred
-        configChangeTargetVoters = target.voters
         if (target.voters != current.config.voters) {
             // Voter-set change → §6 joint consensus. Append Joint(old=current, new=target); on its
             // commit, onConfigCommitted appends Simple(C_new) and the transition completes when that
@@ -1217,7 +1212,6 @@ internal class RaftEngine(
             debug { "onConfigCommitted: Simple committed — completing pendingConfigChange with $result" }
             pendingConfigChange?.complete(result)
             pendingConfigChange = null
-            configChangeTargetVoters = null
             // §6.4.1: if self is not in the new voter set, step down (removed-leader case — PR B path).
             if (_role.value is RaftRole.Leader && transport.selfId !in payload.new.voters) {
                 debug { "onConfigCommitted: self not in new voters — stepping down (RemovedFromConfig)" }
