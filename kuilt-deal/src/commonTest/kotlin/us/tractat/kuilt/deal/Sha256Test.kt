@@ -40,5 +40,12 @@ class Sha256Test {
         )
     }
 
-    private fun ByteArray.hex(): String = joinToString("") { "%02x".format(it.toInt() and 0xFF) }
+    private fun ByteArray.hex(): String = joinToString("") { b ->
+        val v = b.toInt() and 0xFF
+        HEX_CHARS[v shr 4].toString() + HEX_CHARS[v and 0xF]
+    }
+
+    private val HEX_CHARS = charArrayOf(
+        '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f',
+    )
 }
