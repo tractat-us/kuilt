@@ -128,6 +128,30 @@ tests as the `MDNS_MULTICAST_TESTS` env var (see `kuilt-mdns/build.gradle.kts`).
   tests inject `UnconfinedTestDispatcher(testScheduler)` rather than letting a real
   production dispatcher run under `runTest` (the cause of a past Kotlin/Native flake).
   See `docs/testing-coroutine-determinism.md`.
+  - **No real-dispatcher defaults.** A factory/helper that owns a scope makes the
+    `scope`/dispatcher a **required** parameter — never `= CoroutineScope(Dispatchers.Unconfined)`
+    or similar. A default real dispatcher silently decouples the work from `runTest`'s
+    virtual clock; a `backgroundScope` (lazy `StandardTestDispatcher`) silently breaks
+    tests that assume eager delivery. Both bit us; required injection makes the caller choose.
+  - **Production dispatchers are banned in test sources** (`Dispatchers.{Unconfined,Default,IO,Main}`,
+    `GlobalScope`). The rare deliberate real-threading harness (a true-parallelism stress test,
+    a callback-thread regression test, a `runBlocking` benchmark) carries an inline
+    `@Suppress` with a one-line reason.
+  - **Thread-safety of scope-owning types:** the library is single-event-loop-per-session
+    (`incoming` is single-collection), so serial dispatch is a load-bearing invariant — but a
+    type must *own* that invariant, not assume it. Follow one of the two templates: **own a
+    confinement dispatcher** (`CompositeSeam` → `limitedParallelism(1)` + `withContext`), or
+    **guard shared mutable state with a lock** (`SeamReplicator`/`SeamRoom` → atomicfu
+    `reentrantLock`, with suspend calls kept *outside* the locked section). Don't leak an
+    unguarded mutable field across coroutines and rely on the caller's dispatcher being serial.
+
+- **Exception discipline — never swallow cancellation.** In any `suspend`/coroutine context,
+  use `runCatchingCancellable { … }` (in `:kuilt-core`), **not** bare `runCatching` — the latter
+  catches `CancellationException` and converts a structured-concurrency cancel into a normal
+  `Result`, a silent bug. A `catch (e: Exception)`/`catch (e: Throwable)` that should tolerate
+  failure must `if (e is CancellationException) throw e` (or a leading `catch (CancellationException) { throw e }`)
+  before swallowing. Best-effort fabric sends are the common case:
+  `runCatchingCancellable { seam.broadcast(frame) }.onFailure { logger.debug { … } }`.
 
 ## Documentation
 
