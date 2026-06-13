@@ -27,17 +27,31 @@ import kotlinx.serialization.encoding.Encoder
  *   the multi-value state.
  * - *Cross-type conflicts* (e.g. one replica replaces an object with a scalar
  *   concurrently with the other replica adding a key to the object) — the richer
- *   structural type wins: `Object > Array > Leaf`. This is a v1 simplification;
- *   move/re-type semantics are out of scope.
+ *   structural type wins: `Object > Array > Leaf`. **This is a data-loss decision,
+ *   not a data-preservation one.** The losing node's entire subtree is silently
+ *   discarded. The scalar equivalent ([JsonNode.Leaf] vs [JsonNode.Leaf]) surfaces
+ *   both values via [MVRegister], but a Leaf-vs-Object cross-type conflict does not.
+ *   This is a deliberate v1 simplification; a future version may model cross-type
+ *   conflicts as a multi-valued register at the type level.
  *
- * **Out of scope v1.** Move and subtree-reattachment operations are deferred.
- * Array semantics use [Rga] (position-stable). Conflict-free re-typing is a
- * follow-up.
+ * **Known limitations (v1):**
+ * - *Move / subtree-reattachment* — not supported.
+ * - *Nested [Rga] GC* — arrays embedded inside a JSON document do not participate
+ *   in the [Rga.compact] / [us.tractat.kuilt.crdt.replicator.SeamReplicator] GC
+ *   path. Tombstones inside array elements accumulate without bound until an
+ *   explicit compact is triggered by the caller.
+ * - *Conflict-free re-typing* — concurrent changes of a key's type are resolved
+ *   by the precedence rule above, not by surfacing a conflict.
  *
  * **Serialization.** Use [JsonCrdt.serializer] to obtain a [KSerializer]. The
  * [replica] id is *not* included in the wire format — it is a local identity.
  * After deserializing, call [withReplica] to restore the local replica id before
  * performing mutations.
+ *
+ * **Caution — mutate after [withReplica].** The deserialized document defaults to
+ * [ReplicaId]`("")`, which collides with [RgaId.HEAD]'s sentinel replica and may
+ * corrupt [Dot] uniqueness if used to mint new operations. Always call [withReplica]
+ * before invoking [set] or [remove] on a deserialized document.
  *
  * @see JsonNode the node algebra this document is built over.
  * @see JsonValue the scalar type for [JsonNode.Leaf] registers.
@@ -99,9 +113,12 @@ public class JsonCrdt internal constructor(
             JsonCrdt(ORMap.empty<String, JsonNode>(), replica)
 
         /**
-         * Returns a [KSerializer] for [JsonCrdt]. The [replica] id is not serialized;
-         * deserialized documents default to [ReplicaId]`("")` — call [withReplica]
-         * before mutating.
+         * Returns a [KSerializer] for [JsonCrdt]. The [replica] id is not included
+         * in the wire format; deserialized documents default to [ReplicaId]`("")`.
+         *
+         * **Always call [withReplica] before mutating a deserialized document.**
+         * Minting dots under [ReplicaId]`("")` shares the sentinel namespace used by
+         * [RgaId.HEAD] and corrupts [Dot] uniqueness across peers.
          */
         public fun serializer(): KSerializer<JsonCrdt> = JsonCrdtSerializer
     }

@@ -1,5 +1,7 @@
 package us.tractat.kuilt.crdt
 
+import kotlinx.serialization.ExperimentalSerializationApi
+import kotlinx.serialization.cbor.Cbor
 import kotlinx.serialization.json.Json
 import kotlin.test.Test
 import kotlin.test.assertContains
@@ -16,12 +18,14 @@ import kotlin.test.assertNull
  * peer has a globally-unique identity. The helper functions below use `a` for
  * replica A and `b` for replica B throughout.
  */
+@OptIn(ExperimentalSerializationApi::class)
 class JsonCrdtTest {
 
     private val a = ReplicaId("A")
     private val b = ReplicaId("B")
 
     private val json = Json { allowStructuredMapKeys = true }
+    private val cbor = Cbor
 
     // ---- JsonNode factory helpers ----
 
@@ -87,15 +91,9 @@ class JsonCrdtTest {
      */
     @Test
     fun nestedObjectMerge() {
-        // shared base: "profile" key exists, inner map is empty
         val base = JsonCrdt.empty(a).set("profile", JsonNode.Object(ORMap.empty()))
-
-        // replica A adds "name" to profile — uses replica a in the inner map
         val docA = base.set("profile", obj(a, "name" to str("Alice")))
-
-        // replica B concurrently adds "age" to profile — uses replica b in the inner map
         val docB = base.withReplica(b).set("profile", obj(b, "age" to num(30.0)))
-
         val merged = docA.piece(docB)
         val profile = assertIs<JsonNode.Object>(merged["profile"])
         assertEquals(setOf("name", "age"), profile.map.keys)
@@ -105,14 +103,10 @@ class JsonCrdtTest {
 
     @Test
     fun addWinsOverConcurrentRemove() {
-        // shared base: "x" key exists
         val base = JsonCrdt.empty(a).set("x", str("hello"))
-        // replica A removes x
         val docA = base.remove("x")
-        // replica B concurrently re-adds x with a new value (uses b to avoid dot collision)
         val docB = base.withReplica(b).set("x", str("world"))
         val merged = docA.piece(docB)
-        // B's concurrent add wins
         assertContains(merged.keys, "x")
     }
 
@@ -132,15 +126,11 @@ class JsonCrdtTest {
 
     @Test
     fun arrayMergeUnionsOpLogs() {
-        // Replica A creates a list with "a", "b"; replica B independently creates a list with "c".
-        // When merged, the Rga set-union preserves all 3 elements.
         val base = JsonCrdt.empty(a)
         val docA = base.set("list", arr(a, str("a"), str("b")))
-        // Replica B uses its own identity — distinct Lamport/seq, no collision with A's ops.
         val docB = base.withReplica(b).set("list", arr(b, str("c")))
         val merged = docA.piece(docB)
         val list = assertIs<JsonNode.Array>(merged["list"])
-        // Both arrays' ops survive after union — total visible count is 3
         assertEquals(3, list.rga.toList().size)
     }
 
@@ -148,12 +138,10 @@ class JsonCrdtTest {
 
     @Test
     fun deeplyNestedObjectMerge() {
-        // Replica A: root.inner has "value"
         val innerA = obj(a, "value" to num(1.0))
         val outerA = obj(a, "inner" to innerA)
         val docA = JsonCrdt.empty(a).set("root", outerA)
 
-        // Replica B: root.inner has "extra" (B uses its own replica for all inner maps)
         val innerB = obj(b, "extra" to bool(true))
         val outerB = obj(b, "inner" to innerB)
         val docB = JsonCrdt.empty(b).set("root", outerB)
@@ -164,14 +152,77 @@ class JsonCrdtTest {
         assertEquals(setOf("value", "extra"), innerMerged.map.keys)
     }
 
-    // ---- Tests: serialization round-trips ----
+    // ---- Tests: cross-type conflict resolution ----
+
+    /**
+     * Object wins over Leaf in both merge orders — the tiebreak is commutative
+     * and the losing Leaf's data is irrecoverably dropped (documented behaviour).
+     */
+    @Test
+    fun objectWinsOverLeafBothMergeOrders() {
+        val docObject = JsonCrdt.empty(a).set("k", obj(a, "x" to str("v")))
+        val docLeaf = JsonCrdt.empty(b).set("k", str("scalar"))
+        val merged1 = docObject.piece(docLeaf)
+        val merged2 = docLeaf.piece(docObject)
+        assertIs<JsonNode.Object>(merged1["k"])
+        assertIs<JsonNode.Object>(merged2["k"])
+        assertEquals(merged1, merged2)  // commutative
+    }
+
+    @Test
+    fun objectWinsOverArrayBothMergeOrders() {
+        val docObject = JsonCrdt.empty(a).set("k", obj(a, "x" to str("v")))
+        val docArray = JsonCrdt.empty(b).set("k", arr(b, str("item")))
+        val merged1 = docObject.piece(docArray)
+        val merged2 = docArray.piece(docObject)
+        assertIs<JsonNode.Object>(merged1["k"])
+        assertIs<JsonNode.Object>(merged2["k"])
+        assertEquals(merged1, merged2)
+    }
+
+    @Test
+    fun arrayWinsOverLeafBothMergeOrders() {
+        val docArray = JsonCrdt.empty(a).set("k", arr(a, str("item")))
+        val docLeaf = JsonCrdt.empty(b).set("k", str("scalar"))
+        val merged1 = docArray.piece(docLeaf)
+        val merged2 = docLeaf.piece(docArray)
+        assertIs<JsonNode.Array>(merged1["k"])
+        assertIs<JsonNode.Array>(merged2["k"])
+        assertEquals(merged1, merged2)
+    }
+
+    /**
+     * Setting a key to Object then Leaf on the same replica produces Object
+     * (because [ORMap.put] pieces the existing value with the new one).
+     * This is a local consequence of the additive put: the Object dominates.
+     */
+    @Test
+    fun localRetypeObjectThenLeafKeepsObject() {
+        val doc = JsonCrdt.empty(a)
+            .set("k", obj(a, "x" to str("v")))
+            .set("k", str("scalar"))
+        assertIs<JsonNode.Object>(doc["k"])
+    }
+
+    /**
+     * Three-way associativity with a genuine cross-type conflict at one key.
+     * a.piece(b).piece(c) == a.piece(b.piece(c)) even when types differ.
+     */
+    @Test
+    fun crossTypePieceIsAssociative() {
+        val c = ReplicaId("C")
+        val docA = JsonCrdt.empty(a).set("k", obj(a, "x" to str("v")))
+        val docB = JsonCrdt.empty(b).set("k", str("scalar"))
+        val docC = JsonCrdt.empty(c).set("k", arr(c, str("item")))
+        assertEquals(docA.piece(docB).piece(docC), docA.piece(docB.piece(docC)))
+    }
+
+    // ---- Tests: serialization round-trips — JSON ----
 
     @Test
     fun leafRoundTripsThroughJson() {
         val node = str("hello")
         val ser = JsonNode.serializer()
-        // MVRegister uses DotFun<V> which has Map<Dot,V> — Dot is a data class and
-        // requires allowStructuredMapKeys in JSON.
         assertEquals(node, json.decodeFromString(ser, json.encodeToString(ser, node)))
     }
 
@@ -198,27 +249,81 @@ class JsonCrdtTest {
         assertEquals(crdt, json.decodeFromString(ser, json.encodeToString(ser, crdt)))
     }
 
+    // ---- Tests: serialization round-trips — CBOR (the SeamReplicator wire format) ----
+
+    /**
+     * CBOR is the format used by [SeamReplicator] on the wire. The custom
+     * [JsonNodeSerializer] was specifically written to handle the recursive
+     * [ORMap] and [Rga] element types that fail with the compiler-generated
+     * serializer under CBOR. These tests verify that the hand-rolled descriptor
+     * + encode/decode round-trip correctly under CBOR's stricter encoding.
+     */
+    @Test
+    fun leafRoundTripsThroughCbor() {
+        val node = str("hello")
+        val ser = JsonNode.serializer()
+        assertEquals(node, cbor.decodeFromByteArray(ser, cbor.encodeToByteArray(ser, node)))
+    }
+
+    @Test
+    fun objectRoundTripsThroughCbor() {
+        val node = obj(a, "x" to str("v"), "n" to num(42.0))
+        val ser = JsonNode.serializer()
+        assertEquals(node, cbor.decodeFromByteArray(ser, cbor.encodeToByteArray(ser, node)))
+    }
+
+    @Test
+    fun arrayRoundTripsThroughCbor() {
+        val node = arr(a, str("a"), bool(true), nullLeaf())
+        val ser = JsonNode.serializer()
+        assertEquals(node, cbor.decodeFromByteArray(ser, cbor.encodeToByteArray(ser, node)))
+    }
+
+    @Test
+    fun jsonCrdtRoundTripsThroughCbor() {
+        val crdt = JsonCrdt.empty(a)
+            .set("name", str("Alice"))
+            .set("tags", arr(a, str("admin"), str("user")))
+            .set("meta", obj(a, "active" to bool(true), "score" to num(9.5)))
+        val ser = JsonCrdt.serializer()
+        assertEquals(crdt, cbor.decodeFromByteArray(ser, cbor.encodeToByteArray(ser, crdt)))
+    }
+
+    @Test
+    fun deeplyNestedCrdtRoundTripsThroughCbor() {
+        val inner = obj(a, "value" to num(1.0), "label" to str("x"))
+        val crdt = JsonCrdt.empty(a)
+            .set("profile", obj(a, "name" to str("Alice"), "inner" to inner))
+            .set("items", arr(a, str("a"), str("b")))
+        val ser = JsonCrdt.serializer()
+        assertEquals(crdt, cbor.decodeFromByteArray(ser, cbor.encodeToByteArray(ser, crdt)))
+    }
+
     // ---- Tests: lattice laws ----
 
     @Test
     fun pieceIsIdempotent() {
-        val crdt = JsonCrdt.empty(a).set("x", str("v"))
+        // Use a doc with a shared key to exercise nested-merge idempotence
+        val crdt = JsonCrdt.empty(a)
+            .set("x", str("v"))
+            .set("obj", obj(a, "k" to num(1.0)))
         assertEquals(crdt, crdt.piece(crdt))
     }
 
     @Test
     fun pieceIsCommutative() {
-        val docA = JsonCrdt.empty(a).set("a", str("alpha"))
-        val docB = JsonCrdt.empty(b).set("b", str("beta"))
+        // Both replicas write to the same key with different types to exercise conflict
+        val docA = JsonCrdt.empty(a).set("shared", obj(a, "ka" to str("va"))).set("a-only", str("a"))
+        val docB = JsonCrdt.empty(b).set("shared", arr(b, str("item"))).set("b-only", str("b"))
         assertEquals(docA.piece(docB), docB.piece(docA))
     }
 
     @Test
     fun pieceIsAssociative() {
         val c = ReplicaId("C")
-        val docA = JsonCrdt.empty(a).set("a", str("1"))
-        val docB = JsonCrdt.empty(b).set("b", str("2"))
-        val docC = JsonCrdt.empty(c).set("c", str("3"))
+        val docA = JsonCrdt.empty(a).set("a", str("1")).set("shared", obj(a, "ka" to str("va")))
+        val docB = JsonCrdt.empty(b).set("b", str("2")).set("shared", str("scalar"))
+        val docC = JsonCrdt.empty(c).set("c", str("3")).set("shared", arr(c, str("item")))
         assertEquals(docA.piece(docB).piece(docC), docA.piece(docB.piece(docC)))
     }
 }

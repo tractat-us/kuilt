@@ -27,8 +27,12 @@ import kotlinx.serialization.encoding.encodeStructure
  * **Merge semantics for cross-type conflicts.** When the same key in a parent
  * [Object] holds an [Object] on one side and an [Array] or [Leaf] on the other
  * (a concurrent type-change), the richer type wins deterministically:
- * `Object > Array > Leaf`. This is a deliberate v1 simplification — move and
- * re-type operations are out of scope for now.
+ * `Object > Array > Leaf`. This rule is a total order, so [piece] is commutative
+ * and associative on the type dimension — convergence holds. However the losing
+ * node's entire subtree is **silently and permanently discarded**: unlike scalar
+ * conflicts (where [MVRegister] surfaces both values), a cross-type conflict has
+ * no observable indication that data was lost. This is a v1 simplification; a
+ * future version may surface these conflicts as multi-valued entries.
  *
  * **Serialization.** Use [JsonNode.serializer] to obtain a [KSerializer] that
  * handles the recursive structure correctly. The compiler-generated serializer
