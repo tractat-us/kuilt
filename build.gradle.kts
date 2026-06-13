@@ -3,15 +3,23 @@ plugins {
     alias(libs.plugins.dokka)
 }
 
-// Root aggregation for both doc/coverage tools. Each module applies the Kover
-// and Dokka plugins via the kmp-library convention, so a `dokka`/`kover` project
-// dependency here is all the aggregation needs:
-//   - `koverXmlReport`/`koverHtmlReport` → one merged coverage report.
-//   - `dokkaGenerate` → ONE browsable HTML API site at build/dokka/html/ listing
-//     all modules (without these the root task would render only the empty root).
-dependencies {
-    subprojects.forEach { kover(it) }
-    subprojects.forEach { dokka(it) }
+// Root aggregation for both doc/coverage tools:
+//   - Kover: `koverXmlReport`/`koverHtmlReport` → one merged coverage report.
+//   - Dokka: `dokkaGenerate` → ONE browsable HTML API site at build/dokka/html/
+//     listing all modules (without it the root task renders only the empty root).
+// Each module gets the aggregation dependency only if it actually applies the
+// tool — `plugins.withId` adds it lazily per applied plugin. This excludes
+// `:kuilt-bom` (a Gradle `java-platform` with no sources/coverage and neither
+// plugin) and any future platform module. A plain
+// `subprojects.forEach { kover(it) }` instead fails to resolve the BOM's
+// non-existent `kover`/`dokka` variant.
+subprojects.forEach { sub ->
+    sub.plugins.withId("org.jetbrains.kotlinx.kover") {
+        dependencies { kover(sub) }
+    }
+    sub.plugins.withId("org.jetbrains.dokka") {
+        dependencies { dokka(sub) }
+    }
 }
 
 val kuiltVersionLine: String = providers.gradleProperty("kuiltVersionLine").get()
