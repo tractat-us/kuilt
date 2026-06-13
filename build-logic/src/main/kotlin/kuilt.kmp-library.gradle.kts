@@ -7,6 +7,7 @@ plugins {
     id("kuilt.publish")
     id("org.jetbrains.kotlin.multiplatform")
     id("com.android.library")
+    id("org.jetbrains.kotlinx.kover")
 }
 
 val libs = the<LibrariesForLibs>()
@@ -43,6 +44,17 @@ android {
         targetCompatibility = JavaVersion.VERSION_11
     }
     defaultConfig { minSdk = libs.versions.android.minSdk.get().toInt() }
+}
+
+// Kover (applied above) measures the JVM variant of each module — KMP common
+// code plus JVM-specific code. Android's generated BuildConfig carries no
+// meaningful logic, so it's filtered out of the report.
+kover {
+    reports {
+        filters {
+            excludes { classes("*.BuildConfig") }
+        }
+    }
 }
 
 apply(plugin = "io.gitlab.arturbosch.detekt")

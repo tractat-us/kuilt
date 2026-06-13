@@ -68,6 +68,8 @@ detekt-gradlePlugin = { module = "io.gitlab.arturbosch.detekt:detekt-gradle-plug
 # vanniktech maven-publish (base plugin) — POM, sources/javadoc jars, signing,
 # and Central Portal upload for the publish convention:
 vanniktech-mavenPublish-gradlePlugin = { module = "com.vanniktech:gradle-maven-publish-plugin", version.ref = "vanniktechMavenPublish" }
+# Kover — Kotlin/KMP-aware code coverage; applied by the kmp-library convention.
+kover-gradlePlugin = { module = "org.jetbrains.kotlinx:kover-gradle-plugin", version.ref = "kover" }
 
 [plugins]
 detekt = { id = "io.gitlab.arturbosch.detekt", version.ref = "detekt" }
