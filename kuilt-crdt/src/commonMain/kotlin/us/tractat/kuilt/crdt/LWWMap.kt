@@ -15,6 +15,8 @@ import kotlinx.serialization.Serializable
  * silent drops: a write with a lagging timestamp loses to an older write from a
  * faster clock. For correctness under arbitrary clock skew, pair this map with
  * a Hybrid Logical Clock above this layer.
+ *
+ * @sample us.tractat.kuilt.crdt.sampleLWWMap
  */
 @Serializable
 public class LWWMap<K, V> private constructor(

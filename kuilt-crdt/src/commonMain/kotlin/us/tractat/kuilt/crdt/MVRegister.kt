@@ -11,6 +11,8 @@ import kotlinx.serialization.Serializable
  * Thin wrapper over `Causal<DotFun<V>>`: each write mints a fresh dot → value and
  * drops every dot it has already observed; the causal merge keeps exactly the
  * writes that are mutually concurrent.
+ *
+ * @sample us.tractat.kuilt.crdt.sampleMVRegister
  */
 @Serializable
 public class MVRegister<V> private constructor(

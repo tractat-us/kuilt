@@ -6,6 +6,8 @@ import kotlinx.serialization.Serializable
  * A grow-only set of [E]. [add] returns a [Patch] carrying a one-element set;
  * [piece] is union. Once added, an element cannot be removed — for
  * remove-supporting sets see [TwoPhaseSet] (tombstones) or [ORSet] (causal).
+ *
+ * @sample us.tractat.kuilt.crdt.sampleGSet
  */
 @Serializable
 public class GSet<E> private constructor(public val elements: Set<E>) : Quilted<GSet<E>> {

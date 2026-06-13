@@ -23,6 +23,13 @@ import us.tractat.kuilt.core.internal.MappedStateFlow
  * - [sendTo] when the addressed peer is absent from [peers]: throws
  *   [PeerNotConnected].
  * - Either call when [SeamState.Torn]: throws [IllegalStateException].
+ *
+ * ## Collecting incoming frames
+ *
+ * Collect [incoming] exactly once per `Seam`. For multiple consumers, wrap with
+ * `shareIn` in a coroutine scope you control.
+ *
+ * @sample us.tractat.kuilt.core.sampleIncomingFanout
  */
 public interface Seam {
     /** This peer's own identifier. */

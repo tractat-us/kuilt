@@ -32,6 +32,8 @@ import kotlinx.serialization.Serializable
  * transfer-request protocol — how a low replica *asks* a peer to invoke
  * [transfer] over a Seam, and rebalancing policy — is deferred to Rung 5b once
  * the Seam replicator (Rung 12) exists.
+ *
+ * @sample us.tractat.kuilt.crdt.sampleBoundedCounter
  */
 @Serializable
 public class BoundedCounter private constructor(

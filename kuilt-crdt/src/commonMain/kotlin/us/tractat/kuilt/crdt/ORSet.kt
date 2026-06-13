@@ -13,6 +13,8 @@ import kotlinx.serialization.Serializable
  * to the set of dots that added it; it is present iff that set is non-empty.
  *
  * Immutable: [add]/[remove] return a new set. [piece] is the causal merge.
+ *
+ * @sample us.tractat.kuilt.crdt.sampleORSet
  */
 @Serializable
 public class ORSet<E> private constructor(

@@ -13,6 +13,9 @@ import kotlinx.serialization.Serializable
  *
  * Because merge is max, two replicas must never increment the *same* slot
  * concurrently — each replica owns its own [ReplicaId] slot.
+ *
+ * @sample us.tractat.kuilt.crdt.sampleGCounter
+ * @sample us.tractat.kuilt.crdt.sampleGCounterPiece
  */
 @Serializable
 public class GCounter private constructor(
