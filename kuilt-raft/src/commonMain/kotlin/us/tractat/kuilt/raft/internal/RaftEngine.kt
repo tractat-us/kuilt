@@ -1220,7 +1220,7 @@ internal class RaftEngine(
             else                       -> MembershipState.Simple(resolved.new)
         }
         val branch = when {
-            logConfig != null      -> "log[${configEntry!!.index}]"
+            configEntry != null    -> "log[${configEntry.index}]"
             snapshotConfig != null -> "snapshot"
             else                   -> "bootstrap"
         }
