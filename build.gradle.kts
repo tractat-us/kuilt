@@ -3,6 +3,15 @@ plugins {
     alias(libs.plugins.dokka)
 }
 
+// Multi-module Dokka aggregation. The root applies Dokka (above) and declares a
+// `dokka` dependency on every subproject, so `./gradlew dokkaGenerate` emits ONE
+// browsable HTML site at `build/dokka/html/` that lists all modules. Without
+// these dependencies the root task would render only the (empty) root project,
+// leaving 15 disconnected per-module sites instead of a single API reference.
+dependencies {
+    subprojects.forEach { dokka(it) }
+}
+
 val kuiltVersionLine: String = providers.gradleProperty("kuiltVersionLine").get()
 
 allprojects {
