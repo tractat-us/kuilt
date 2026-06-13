@@ -93,7 +93,4 @@ public class KtorServerLoom(
         }
     }
 
-    internal companion object {
-        const val PEER_QUERY_PARAM: String = "peer"
-    }
 }
