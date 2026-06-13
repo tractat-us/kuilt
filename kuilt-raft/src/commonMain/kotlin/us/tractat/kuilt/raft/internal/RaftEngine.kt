@@ -212,6 +212,17 @@ internal class RaftEngine(
     /** In-flight readIndex() calls awaiting a quorum heartbeat ACK in a round after sinceRound. */
     private val pendingReads = mutableListOf<PendingRead>()
 
+    /**
+     * Per-voter last-ACK round: maps each voter to the [heartbeatRound] value at the time of its
+     * most recent AppendEntriesResponse or InstallSnapshotResponse ACK. Used by
+     * [resolveReadsIfQuorumFresh] to count only voters whose ACK arrived *strictly after* a read
+     * was queued (BLOCKER 1 fix: replaces the cumulative [recentVoterContacts] check which allowed
+     * a stale in-flight ACK from a prior round to inflate the fresh-voter count).
+     *
+     * Seeded/cleared on [becomeLeader]. Leader-only.
+     */
+    private val lastAckRound = mutableMapOf<NodeId, Long>()
+
     /** Monotonically increasing per-leadership heartbeat round counter; bumped on each broadcast. */
     private var heartbeatRound = 0L
 
@@ -587,6 +598,7 @@ internal class RaftEngine(
         pendingReads.clear()
         pendingNoOpGate.clear()
         heartbeatRound = 0L
+        lastAckRound.clear()
         // §5.4.2: append a no-op from the new term so the commit guard (entry.term == currentTerm)
         // can advance commitIndex over any prior-term entries inherited from a previous leader.
         // currentTermNoOpIndex is set inside appendNoOp so readIndex() knows when to gate.
@@ -794,7 +806,9 @@ internal class RaftEngine(
     private suspend fun onInstallSnapshotResponse(from: NodeId, m: RaftMessage.InstallSnapshotResponse) {
         if (m.term > currentTerm) { stepDown(m.term, StepDownReason.HigherTermObserved); return }
         if (_role.value !is RaftRole.Leader || m.term != currentTerm) return
-        recentVoterContacts += from   // reachability signal for CheckQuorum
+        recentVoterContacts += from        // reachability signal for CheckQuorum
+        lastAckRound[from] = heartbeatRound // record round for ReadIndex freshness (BLOCKER 1)
+        resolveReadsIfQuorumFresh()         // ReadIndex: snapshot ACKs count as freshness evidence
         val xfer = snapshotXfer[from] ?: return
         xfer.nextOffset = m.nextOffset
         if (xfer.nextOffset >= xfer.state.size) {                 // fully received
@@ -968,8 +982,9 @@ internal class RaftEngine(
         // stale-term peer response: step down and discard
         if (m.term > currentTerm) { stepDown(m.term, StepDownReason.HigherTermObserved); return }
         if (_role.value !is RaftRole.Leader || m.term != currentTerm) return
-        recentVoterContacts += from   // reachability signal for CheckQuorum (success or failure)
-        resolveReadsIfQuorumFresh()   // ReadIndex: check if any pending reads can now be confirmed
+        recentVoterContacts += from        // reachability signal for CheckQuorum (success or failure)
+        lastAckRound[from] = heartbeatRound // record the round for ReadIndex freshness (BLOCKER 1)
+        resolveReadsIfQuorumFresh()         // ReadIndex: check if any pending reads can now be confirmed
         if (m.success) {
             matchIndex[from] = maxOf(matchIndex[from] ?: 0L, m.matchIndex)
             nextIndex[from] = matchIndex.getValue(from) + 1L
@@ -984,18 +999,42 @@ internal class RaftEngine(
 
     /**
      * ReadIndex: resolve any pending reads whose sinceRound predates the current heartbeatRound,
-     * provided a voter-quorum has ACKed in recentVoterContacts (plus self).
+     * provided a voter-quorum has ACKed in a round *strictly after* the read was queued.
      *
-     * The sinceRound guard ensures a read is only confirmed by ACKs from a heartbeat round that
-     * *started after* the read was queued — a stale ACK already in flight when readIndex() was
-     * called does not prove freshness for this read.
+     * BLOCKER 1 fix (per-voter lastAckRound map, not cumulative recentVoterContacts):
+     * A voter is counted as fresh only when [lastAckRound][v] > read.sinceRound. This prevents
+     * a stale in-flight ACK that arrived in the same round as sinceRound from inflating the count.
+     * The cumulative set (cleared only on election-timeout ticks) would count such ACKs, which can
+     * confirm a read on a partitioned-but-still-leading node — a non-linearizable read.
+     *
+     * BLOCKER 2 fix (joint-consensus dual-majority via [MembershipState.quorumOfContacts]):
+     * During a Joint config, both the old and new voter sets must independently reach a fresh
+     * quorum. Counting only [effectiveConfig] (= new) voters would allow a new-only majority to
+     * confirm a read while the old majority is unreachable — violating linearizability for writes
+     * committed under the old majority that have not yet been covered by the new one.
+     * [quorumOfContacts] already handles Simple vs Joint correctly (same logic used by CheckQuorum).
+     *
+     * Design note (Raft §6.4): reads fail only on step-down (no per-read timeout). A partitioned
+     * leader that cannot form a quorum will be stepped down by CheckQuorum within one
+     * election-timeout window, at which point [failPendingReads] delivers [LeadershipLostException]
+     * to all callers. This is intentional: adding per-read timeouts would require a separate timer
+     * per read and would not improve safety — only latency in the partition case.
+     *
+     * Also opportunistically drops reads whose deferred has already been completed (caller cancelled)
+     * to avoid an unbounded accumulation of dead waiters.
      */
     private suspend fun resolveReadsIfQuorumFresh() {
         if (pendingReads.isEmpty()) return
-        val reachable = recentVoterContacts.count { it in membership.effectiveConfig.voters } + 1
-        if (reachable < membership.effectiveConfig.quorumSize) return
+        // Drop reads whose caller cancelled before we resolved them.
+        pendingReads.removeAll { it.deferred.isCompleted }
+        if (pendingReads.isEmpty()) return
         val now = heartbeatRound
-        val ready = pendingReads.filter { now > it.sinceRound }
+        val ready = pendingReads.filter { read ->
+            // Only voters whose ACK arrived strictly after the read was queued count as fresh.
+            val freshContacts = lastAckRound.filterValues { ackRound -> ackRound > read.sinceRound }.keys
+            // BLOCKER 2: require fresh quorum of BOTH old and new voter sets for Joint config.
+            membership.quorumOfContacts(freshContacts, transport.selfId) && now > read.sinceRound
+        }
         if (ready.isEmpty()) return
         pendingReads.removeAll(ready)
         ready.forEach {

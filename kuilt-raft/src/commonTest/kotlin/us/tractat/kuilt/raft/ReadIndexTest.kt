@@ -1,18 +1,38 @@
-@file:OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+@file:OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class, kotlinx.serialization.ExperimentalSerializationApi::class)
 
 package us.tractat.kuilt.raft
 
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.supervisorScope
+import kotlinx.serialization.cbor.Cbor
+import kotlinx.serialization.encodeToByteArray
+import us.tractat.kuilt.raft.internal.RaftMessage
 import kotlin.test.Test
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.Duration.Companion.seconds
 
 private fun assertAll(vararg assertions: () -> Unit) = assertions.forEach { it() }
+
+/**
+ * Config for the stale-ACK BLOCKER 1 test: heartbeat stays at 2 ms (so we can advance
+ * heartbeatRound quickly) but the election timeout is 300–400 ms so CheckQuorum does NOT fire
+ * during the 10–15 ms window where stale ACKs are injected and the fresh ACK triggers
+ * resolveReadsIfQuorumFresh. FAST_RAFT_CONFIG's 5-10 ms election timeout races with that
+ * window on slower machines.
+ */
+private val SLOW_ELECTION_CONFIG = RaftConfig(
+    electionTimeoutMin = 300.milliseconds,
+    electionTimeoutMax = 400.milliseconds,
+    heartbeatInterval = 2.milliseconds,
+    expectVirtualTime = true,
+)
 
 /**
  * Behaviour tests for [RaftNode.readIndex] (linearizable reads without a log write).
@@ -264,5 +284,184 @@ class ReadIndexTest {
             confirmedEvents.any { it.readIndex == ri },
             "expected ReadIndexConfirmed(readIndex=$ri) in trace: $confirmedEvents",
         )
+    }
+
+    // ── BLOCKER 1: stale ACK must not confirm a read ──────────────────────────
+
+    /**
+     * BLOCKER 1 — a voter ACK that arrived *before* the read was queued must not be
+     * counted when checking whether a quorum has responded *after* the read.
+     *
+     * Scenario: 5-voter cluster (quorum = 3) using [SLOW_ELECTION_CONFIG] (election timeout
+     * 300–400 ms; heartbeat 2 ms). After a leader is elected and the no-op commits, the
+     * leader is partitioned from all four followers. Two stale ACKs (one each from two
+     * follower nodes) are injected at the current heartbeatRound H — *before* the read is
+     * queued at sinceRound = H. The leader's heartbeat ticks, advancing heartbeatRound to
+     * H+1. A single fresh ACK from a third follower is injected, triggering
+     * resolveReadsIfQuorumFresh.
+     *
+     * Bug (cumulative recentVoterContacts set): reachable = |{staleA, staleB, freshC}| + 1 = 4
+     * ≥ 3 (quorum) → read confirmed. Stale entries from round H inflate the count above quorum.
+     *
+     * Fix (per-voter lastAckRound map): staleA and staleB have lastAckRound = H = sinceRound
+     * (not strictly greater), so they do NOT count. Only freshC (lastAckRound = H+1 > H)
+     * counts → reachable = 1 + 1 = 2 < 3 → NOT confirmed.
+     *
+     * [SLOW_ELECTION_CONFIG] guarantees QuorumCheck does not fire during the ~10 ms ACK
+     * injection window (election timeout 300–400 ms vs. injection duration < 15 ms).
+     *
+     * The leader's term is read from its storage after the no-op commits; the injected ACKs
+     * use that term so they are not discarded by the stale-term guard.
+     */
+    @Test
+    fun staleAckDoesNotConfirmReadIndex() = raftRunTest(timeout = 5.seconds) {
+        // Use raftSim so awaitLeader() gets whichever node wins — no need to predict v1.
+        val sim = raftSim(this, backgroundScope, n = 5, config = SLOW_ELECTION_CONFIG)
+        val leader = awaitLeader(sim)
+        val leaderId = sim.nodes.entries.first { it.value === leader }.key
+        val followerIds = sim.nodeIds.filter { it != leaderId }
+
+        // Wait for the no-op to commit so the no-op gate is satisfied.
+        sim.awaitCommit(1)
+
+        // Read the leader's actual term from its storage so fake ACKs use the correct term
+        // and are not dropped by the stale-term guard (m.term != currentTerm).
+        val leaderTerm = sim.storages.getValue(leaderId).entries().first().term
+
+        // Partition the leader from all followers — no real ACKs can arrive after this point.
+        // QuorumCheck fires at 300–400 ms; all actions below complete in ~15 ms so
+        // recentVoterContacts is NOT cleared between stale injection and fresh injection.
+        sim.partitionOff(leaderId)
+
+        // Pick two "stale" follower IDs and one "fresh" follower ID.
+        val staleA = followerIds[0]
+        val staleB = followerIds[1]
+        val freshC = followerIds[2]
+
+        // Inject stale ACKs from staleA, staleB — arrive at current heartbeatRound H.
+        // These set lastAckRound[staleA] = lastAckRound[staleB] = H.
+        // The read is queued AFTER these ACKs, so sinceRound = H = their lastAckRound.
+        val staleAck = Cbor.encodeToByteArray<RaftMessage>(
+            RaftMessage.AppendEntriesResponse(term = leaderTerm, success = true, matchIndex = 1L)
+        )
+        sim.network.deliver(from = staleA, to = leaderId, bytes = staleAck)
+        sim.network.deliver(from = staleB, to = leaderId, bytes = staleAck)
+        delay(2) // let the actor process both stale ACKs before queuing the read
+
+        supervisorScope {
+            // Queue the read — sinceRound = H captured inside onRequestReadIndex.
+            val read = async { leader.readIndex() }
+            delay(1) // let the ReadIndex command reach the actor
+
+            // Wait one heartbeat interval (2 ms) so heartbeatRound bumps from H to H+1.
+            delay(3)
+
+            // Inject one fresh ACK from freshC — arrives in round H+1 > sinceRound = H.
+            // Bug: recentVoterContacts = {staleA, staleB, freshC} → 3+1 = 4 ≥ 3 → CONFIRMED.
+            // Fix: lastAckRound[staleA]=H=sinceRound → excluded; same for staleB.
+            //   Only freshC (lastAckRound=H+1) counts → 1+1=2 < 3 → NOT confirmed.
+            val freshAck = Cbor.encodeToByteArray<RaftMessage>(
+                RaftMessage.AppendEntriesResponse(term = leaderTerm, success = true, matchIndex = 1L)
+            )
+            sim.network.deliver(from = freshC, to = leaderId, bytes = freshAck)
+            delay(2) // let the actor process freshC's ACK and call resolveReadsIfQuorumFresh
+
+            assertFalse(
+                read.isCompleted,
+                "read must NOT be confirmed when stale ACKs (same round as sinceRound) inflate the quorum count",
+            )
+
+            // Let CheckQuorum fire twice (300–400 ms each in SLOW_ELECTION_CONFIG):
+            //   first: recentVoterContacts = {staleA,staleB} (from injections) → 3 ≥ 3 → passes, clears.
+            //   second: recentVoterContacts = {} (no new ACKs) → 1 < 3 → step down.
+            delay(1200)
+            assertFailsWith<LeadershipLostException> { read.await() }
+        }
+    }
+
+    // ── BLOCKER 2: joint-consensus freshness requires both old and new majority ─
+
+    /**
+     * BLOCKER 2 — joint-consensus read freshness requires dual-majority: a quorum of BOTH
+     * the old and the new voter sets must have ACKed in a fresh round.
+     *
+     * Scenario: leader v1 changes its voter set from {v1,v2} (old) to {v1,v3,v4} (new),
+     * creating Joint(old={v1,v2}, new={v1,v3,v4}). The old-only voter v2 is isolated
+     * (only ACKs from v3,v4 arrive after the read is queued). v1+v3+v4 form the
+     * new-majority (2/3) but NOT the old-majority (1/2 < 2). The read must NOT be
+     * confirmed, because old-majority freshness is not established.
+     *
+     * With the pre-fix single-majority implementation (effectiveConfig = new), v1+v3+v4
+     * forming a new-majority is mistakenly treated as sufficient. With the dual-majority
+     * fix the read stays pending until CheckQuorum steps the leader down.
+     *
+     * Election ordering: v1 is registered first and given a 15 ms head start (> FAST_RAFT_CONFIG's
+     * 10 ms max election timeout) before v2 registers. v1 fires its pre-vote first and wins.
+     */
+    @Test
+    fun jointConsensusReadRequiresBothOldAndNewMajority() = raftRunTest(timeout = 15.seconds) {
+        val v1 = NodeId("v1")
+        val v2 = NodeId("v2")
+        val v3 = NodeId("v3")
+        val v4 = NodeId("v4")
+
+        val initCluster = ClusterConfig(voters = setOf(v1, v2))
+        val targetCluster = ClusterConfig(voters = setOf(v1, v3, v4))
+        // v3 and v4 bootstrap with {v1} so they don't arm election timers before joining.
+        val joineeBootstrap = ClusterConfig(voters = setOf(v1))
+        val network = InMemoryRaftNetwork()
+
+        // Use SLOW_ELECTION_CONFIG so CheckQuorum (fired at election-timeout = 300–400 ms)
+        // does not step the leader down during the ~10 ms assertFalse check window after
+        // v2 is isolated. FAST_RAFT_CONFIG's 5–10 ms election timeout races with that window.
+        //
+        // v1 starts alone; its election-timeout fires in 300–400 ms. v2 registers after 5 ms
+        // so v1 has not yet started the election; both fire at roughly the same time. However,
+        // since v1's election-timeout job started first and its timer fires first on the same
+        // coroutine event loop, v1 wins the pre-vote race with high probability.
+        val leaderNode = backgroundScope.raftNode(initCluster, network.transport(v1), InMemoryRaftStorage(), SLOW_ELECTION_CONFIG)
+        delay(5) // let v1's election-timeout job register before v2's; v1 fires first
+        backgroundScope.raftNode(initCluster, network.transport(v2), InMemoryRaftStorage(), SLOW_ELECTION_CONFIG)
+        backgroundScope.raftNode(joineeBootstrap, network.transport(v3), InMemoryRaftStorage(), SLOW_ELECTION_CONFIG)
+        backgroundScope.raftNode(joineeBootstrap, network.transport(v4), InMemoryRaftStorage(), SLOW_ELECTION_CONFIG)
+
+        // Wait for v1 to become leader and for the no-op to commit.
+        leaderNode.awaitLeadership()
+        leaderNode.commitIndex.first { it >= 1L }
+
+        // Start changeMembership in the background. Once the actor processes the command,
+        // v1's membership becomes Joint(old={v1,v2}, new={v1,v3,v4}).
+        val changeJob = backgroundScope.async {
+            try { leaderNode.changeMembership(targetCluster) } catch (_: Exception) { /* expected: cancelled below */ }
+        }
+        delay(1) // let the actor process ChangeMembership → membership = Joint
+
+        // Isolate v2 (old-only voter). v1 alone = 1/2 < quorum-size 2 for old set {v1,v2}.
+        network.dropLink(v2, v1)
+
+        // Queue a readIndex while v1's membership is Joint(old={v1,v2}, new={v1,v3,v4}).
+        // v3 and v4 are connected → fresh ACKs in round H+1. New-majority satisfied.
+        // Old-majority (v1 alone = 1/2 < 2) NOT satisfied.
+        supervisorScope {
+            val read = async { leaderNode.readIndex() }
+
+            // Wait one heartbeat cycle (2 ms) so v3, v4 ACKs arrive in round H+1.
+            delay(5)
+
+            // Bug (effectiveConfig = new only): new-majority satisfied → CONFIRMED (wrong).
+            // Fix (dual majority via quorumOfContacts): old-majority not established → NOT confirmed.
+            assertFalse(
+                read.isCompleted,
+                "readIndex must NOT be confirmed when only the new-majority is reachable in joint consensus: " +
+                    "old-majority (v1+v2, need 2/2) is not satisfied because v2 is isolated",
+            )
+
+            // Let CheckQuorum fire twice (300–400 ms each with SLOW_ELECTION_CONFIG):
+            // T+300ms: recentVoterContacts = {v3,v4} → old-majority (1/2 < 2) fails → step down.
+            delay(750)
+            assertFailsWith<LeadershipLostException> { read.await() }
+        }
+
+        changeJob.cancel()
     }
 }
