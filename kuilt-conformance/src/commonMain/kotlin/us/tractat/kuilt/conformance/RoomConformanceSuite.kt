@@ -26,6 +26,7 @@ import us.tractat.kuilt.session.partition.HeartbeatConfig
 import us.tractat.kuilt.session.partition.ResumeResult
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.milliseconds
@@ -329,8 +330,7 @@ public abstract class RoomConformanceSuite {
 
             assertIs<MembershipEvent.HostLost>(hostLostDeferred.await())
 
-            val broadcastResult = runCatching { joinerRoom.broadcast("after-host-lost".encodeToByteArray()) }
-            assertTrue(broadcastResult.isSuccess, "broadcast after HostLost must not throw")
+            joinerRoom.broadcast("after-host-lost".encodeToByteArray())
         }
 
     // ── (10) Left member no longer receives broadcast frames ─────────────────
@@ -355,7 +355,7 @@ public abstract class RoomConformanceSuite {
             advanceTimeBy(100L)
             collectJob.cancel()
 
-            assertTrue(!received, "a member that has Left must not receive broadcast frames")
+            assertFalse(received, "a member that has Left must not receive broadcast frames")
 
             hostRoom.leave()
         }

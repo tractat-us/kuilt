@@ -68,6 +68,8 @@ public class ControllableLoom : Loom {
     override fun availability(): FabricAvailability = FabricAvailability.Available
 
     // ── Control surface ───────────────────────────────────────────────────────
+    // These methods assume single-threaded test usage and are deliberately NOT mutex-guarded;
+    // concurrent dispatch/remove calls are guarded separately via [mutex].
 
     /** Start buffering frames destined for [to] rather than delivering them immediately. */
     public fun holdDelivery(to: PeerId) {

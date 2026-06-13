@@ -41,15 +41,10 @@ public class CrdtConvergenceHarness<S : Quilted<S>>(
     /** Run over every seed in [seeds]; returns the converged state for each. */
     public fun runSeeds(seeds: LongRange): List<S> = seeds.map(::run)
 
-    private fun buildReplicas(random: Random): List<S> {
-        val replicas = MutableList(replicaCount) { initial }
-        for (r in replicas.indices) {
-            repeat(opsPerReplica) {
-                replicas[r] = gen.applyRandomOp(replicas[r], replicaIndex = r, random = random)
-            }
+    private fun buildReplicas(random: Random): List<S> =
+        List(replicaCount) { r ->
+            (0 until opsPerReplica).fold(initial) { acc, _ -> gen.applyRandomOp(acc, replicaIndex = r, random = random) }
         }
-        return replicas
-    }
 
     private fun assertAllPermutationsConverge(replicas: List<S>, canonical: S) {
         for (permutation in permutationsOf(replicas.indices.toList())) {
