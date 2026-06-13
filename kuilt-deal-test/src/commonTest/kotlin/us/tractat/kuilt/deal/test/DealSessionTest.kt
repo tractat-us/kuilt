@@ -1,5 +1,9 @@
+@file:OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+
 package us.tractat.kuilt.deal.test
 
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.deal.SraScheme
@@ -14,7 +18,8 @@ class DealSessionTest {
         val alice = PeerId("alice")
         val bob = PeerId("bob")
         val scheme = SraScheme()
-        val (aliceSession, bobSession) = fakeDealSessionPair(alice, bob, scheme, backgroundScope)
+        val (aliceSession, bobSession) =
+            fakeDealSessionPair(alice, bob, scheme, CoroutineScope(UnconfinedTestDispatcher(testScheduler)))
 
         val originalCard = "ACE_OF_SPADES".encodeToByteArray()
         val deck = listOf(originalCard)
@@ -45,7 +50,8 @@ class DealSessionTest {
         val alice = PeerId("alice")
         val bob = PeerId("bob")
         val scheme = SraScheme()
-        val (aliceSession, bobSession) = fakeDealSessionPair(alice, bob, scheme, backgroundScope)
+        val (aliceSession, bobSession) =
+            fakeDealSessionPair(alice, bob, scheme, CoroutineScope(UnconfinedTestDispatcher(testScheduler)))
 
         val originalCard = "KING_OF_HEARTS".encodeToByteArray()
         val deck = listOf(originalCard)
