@@ -1,3 +1,5 @@
+@file:Suppress("ForbiddenImport") // deliberate: GCD-thread/flowOn regression test — Dispatchers.Unconfined required to reproduce the callback-thread inline-resume scenario
+
 package us.tractat.kuilt.multipeer
 
 import com.sun.jna.Pointer

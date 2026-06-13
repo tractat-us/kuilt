@@ -197,10 +197,11 @@ jobs:
             build/jstack-dumps/
 
   # ── detekt ───────────────────────────────────────────────────────────────
-  # Static analysis (Kotlin null-safety rules). Runs as its OWN job, parallel to
-  # build, so detekt's type-resolution analysis doesn't share a runner — and its
-  # memory — with the build's wasmJs-browser + test tasks (that concurrency OOMs
-  # the runner; see the --max-workers=4 note above). Skipped on docs-only.
+  # Static analysis: null-safety rules on main sources + production-dispatcher
+  # ban on test sources. Runs as its OWN job, parallel to build, so detekt's
+  # type-resolution analysis doesn't share a runner — and its memory — with the
+  # build's wasmJs-browser + test tasks (that concurrency OOMs the runner; see
+  # the --max-workers=4 note above). Skipped on docs-only.
   detekt:
     needs: detect
     if: needs.detect.outputs.docs-only != 'true'

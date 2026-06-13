@@ -129,7 +129,7 @@ internal class RgaLawsPropertyTest {
     fun removedElementsAreExcludedFromToList(@ForAll("statesA") state: Rga<String>) {
         val visible = state.toList()
         if (visible.isEmpty()) return
-        val (afterRemove, _) = state.removeAt(0)!!
+        val (afterRemove, _) = checkNotNull(state.removeAt(0)) { "removeAt(0) returned null on non-empty Rga" }
         val newVisible = afterRemove.toList()
         // The list must shrink by exactly one — even if the same value appears
         // multiple times, one positional occurrence is gone.
