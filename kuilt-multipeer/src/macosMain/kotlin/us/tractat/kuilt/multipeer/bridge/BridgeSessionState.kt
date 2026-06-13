@@ -1,5 +1,6 @@
 package us.tractat.kuilt.multipeer.bridge
 
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -18,11 +19,15 @@ import us.tractat.kuilt.core.Seam
  * underlying `MCSession` disconnects.
  *
  * Internal-only; the JVM never sees this type.
+ *
+ * @param dispatcher Dispatcher for the [scope]. Production default is
+ *   [Dispatchers.Default]; tests inject [kotlinx.coroutines.test.UnconfinedTestDispatcher].
  */
 internal class BridgeSessionState(
     val link: Seam,
+    dispatcher: CoroutineDispatcher = Dispatchers.Default,
 ) {
-    val scope: CoroutineScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
+    val scope: CoroutineScope = CoroutineScope(dispatcher + SupervisorJob())
     var dataPumpJob: Job? = null
     var peerStatePumpJob: Job? = null
 

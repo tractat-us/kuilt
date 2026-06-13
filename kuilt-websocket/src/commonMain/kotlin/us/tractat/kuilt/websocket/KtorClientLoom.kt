@@ -2,6 +2,7 @@ package us.tractat.kuilt.websocket
 
 import io.ktor.client.HttpClient
 import io.ktor.client.plugins.websocket.webSocketSession
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -25,9 +26,13 @@ import kotlin.uuid.Uuid
  *
  * **HttpClient lifecycle:** the [httpClient] is not closed by this loom.
  * Callers are responsible for closing it when all connections are done.
+ *
+ * @param dispatcher Dispatcher for the per-connection [CoroutineScope]. Production
+ *   default is [Dispatchers.Default]; tests inject [kotlinx.coroutines.test.UnconfinedTestDispatcher].
  */
 public class KtorClientLoom(
     private val httpClient: HttpClient,
+    private val dispatcher: CoroutineDispatcher = Dispatchers.Default,
 ) : Loom {
     /**
      * Establishes a [Seam]:
@@ -53,7 +58,7 @@ public class KtorClientLoom(
                 val selfId = PeerId(Uuid.random().toString())
                 val urlWithPeer = appendPeerQuery(advertisement.url, selfId)
                 val wsSession = httpClient.webSocketSession(urlWithPeer)
-                val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
+                val scope = CoroutineScope(dispatcher + SupervisorJob())
                 WebSocketSeam(
                     selfId = selfId,
                     remoteId = advertisement.serverPeerId,
