@@ -1,11 +1,11 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE product-profile
+<!DOCTYPE instance-profile
         SYSTEM "https://resources.jetbrains.com/writerside/1.0/product-profile.dtd">
 
-<product-profile id="kuilt"
-                 name="kuilt"
-                 start-page="overview.md"
-                 status="release">
+<instance-profile id="kuilt"
+                  name="kuilt"
+                  start-page="overview.md"
+                  status="release">
 
     <toc-element topic="overview.md"/>
 
@@ -48,4 +48,4 @@
         </toc-element>
     </toc-element>
 
-</product-profile>
+</instance-profile>
