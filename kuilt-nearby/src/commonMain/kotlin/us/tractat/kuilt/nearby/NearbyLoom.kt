@@ -56,12 +56,9 @@ public class NearbyLoom(
 
     // Shared peer set — all seams on this loom observe the same StateFlow.
     private val sharedPeers = MutableStateFlow<Set<PeerId>>(emptySet())
-    // Threading note: `mutex` guards loom-level state (hostLinkDeferred, peerCounter).
-    // `endpointPeers` maps passed to NearbySeam are also written here (under this mutex) when
-    // a handshake completes. Seams guard their own reads/mutations of `endpointPeers` under
-    // the seam's mutex. Both mutexes are held briefly and non-nested, relying on the
-    // single-dispatcher scope contract described in the KDoc above.
-    private val mutex = Mutex()
+
+    // Guards loom-level state: peerCounter, hostLinkDeferred.
+    private val loomMutex = Mutex()
 
     // Per-instance counter — uniqueness within this loom suffices.
     private var peerCounter = 0
@@ -90,12 +87,16 @@ public class NearbyLoom(
     private suspend fun openSession(config: Pattern): Seam {
         val peerId = freshPeerId()
         val endpointPeers = mutableMapOf<String, PeerId>()
+        // Single mutex shared with the seam — all endpointPeers access on both sides
+        // serialises on this one lock, eliminating the two-mutex race.
+        val endpointPeersMutex = Mutex()
         // Derive from caller so background work runs on the test dispatcher.
         val seamScope = CoroutineScope(currentCoroutineContext() + SupervisorJob())
 
         val seam = NearbySeam(
             selfId = peerId,
             endpointPeers = endpointPeers,
+            endpointPeersMutex = endpointPeersMutex,
             api = api,
             sharedPeers = sharedPeers,
             scope = seamScope,
@@ -103,7 +104,7 @@ public class NearbyLoom(
             msgIdCounter = MsgIdCounter(),
         )
         val linkDeferred = CompletableDeferred<ConnectedLink>()
-        mutex.withLock {
+        loomMutex.withLock {
             hostLinkDeferred = linkDeferred
         }
 
@@ -125,7 +126,7 @@ public class NearbyLoom(
                 )
                 // Advertiser: already advertising, so no kickoff — just await a peer.
                 val link = machine.run(this) {}
-                mutex.withLock {
+                endpointPeersMutex.withLock {
                     endpointPeers[link.endpointId] = link.remotePeerId
                     sharedPeers.update { it + link.remotePeerId }
                 }
@@ -146,11 +147,14 @@ public class NearbyLoom(
     private suspend fun joinSession(advertisement: Tag): Seam {
         val joinerPeerId = freshPeerId()
         val endpointPeers = mutableMapOf<String, PeerId>()
+        // Single mutex shared with the seam — same pattern as openSession.
+        val endpointPeersMutex = Mutex()
         val seamScope = CoroutineScope(currentCoroutineContext() + SupervisorJob())
 
         val seam = NearbySeam(
             selfId = joinerPeerId,
             endpointPeers = endpointPeers,
+            endpointPeersMutex = endpointPeersMutex,
             api = api,
             sharedPeers = sharedPeers,
             scope = seamScope,
@@ -177,10 +181,12 @@ public class NearbyLoom(
         val joinLink = machine.run(seamScope) {
             api.requestConnection(advertisement.displayName, hostEndpointId)
         }
-        endpointPeers[joinLink.endpointId] = joinLink.remotePeerId
+        endpointPeersMutex.withLock {
+            endpointPeers[joinLink.endpointId] = joinLink.remotePeerId
+        }
 
         // Wait for the host side to complete — ensures host.peers is populated.
-        val hostDeferred = mutex.withLock { hostLinkDeferred }
+        val hostDeferred = loomMutex.withLock { hostLinkDeferred }
         hostDeferred?.await()
 
         api.stopDiscovery()
@@ -224,4 +230,3 @@ public class NearbyLoom(
         public const val DEFAULT_SERVICE_ID: String = "us.tractat.kuilt.nearby"
     }
 }
-
