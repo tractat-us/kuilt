@@ -286,6 +286,106 @@ class ReadIndexTest {
         )
     }
 
+    // ── BLOCKER 1a: round-slip — ACK responding to round H must not be credited to H+1 ──
+
+    /**
+     * BLOCKER 1a — round-slip: a follower ACK that was *sent in response to a round-H heartbeat*
+     * must not be credited to round H+1 just because the leader incremented heartbeatRound before
+     * the ACK arrived.
+     *
+     * Without the wire round nonce, the leader credits every incoming ACK to the *current*
+     * heartbeatRound at the moment of receipt. If the leader ticks from H to H+1 while the
+     * ACK is in transit, the ACK is credited to H+1 and satisfies freshness for a read queued
+     * at sinceRound=H — even though the follower responded to the round-H heartbeat, which could
+     * have been sent while the follower was already partitioned.
+     *
+     * Scenario (3-voter cluster; quorum=2; leader = l, followers = f1, f2):
+     * 1. Leader and followers are in round H.
+     * 2. Read queued (sinceRound = H).
+     * 3. Leader ticks → heartbeatRound = H+1 → sends heartbeat in round H+1.
+     * 4. Injected ACK from f1 carries *no* echoedRound (or round=H — old round-H request):
+     *    - Bug: credited to current heartbeatRound = H+1 > sinceRound = H → confirms read!
+     *    - Fix: echoedRound = H ≤ sinceRound = H → NOT credited as fresh.
+     *
+     * With the fix, the round-H ACK carries echoedRound=H which equals sinceRound, so it is
+     * excluded. Only a round-H+1 ACK (responding to the current heartbeat) satisfies freshness.
+     *
+     * The test injects a raw [AppendEntriesResponse] with [echoedRound] set to H (round before
+     * the read), then injects a second ACK from f2 with echoedRound=H+1 (the fresh round). At
+     * quorum=2, f1(stale)+self = 2 ≥ 2 WITHOUT the fix, but NOT with the fix (f1 excluded).
+     * With f2's fresh ACK only, we have 1+self=2 ≥ 2 → read confirmed on both paths. The
+     * assertFalse fires BEFORE f2's ACK to prove the stale f1 ACK alone did not confirm it.
+     */
+    @Test
+    fun roundSlipAckDoesNotConfirmReadIndex() = raftRunTest(timeout = 5.seconds) {
+        val l  = NodeId("l")
+        val f1 = NodeId("f1")
+        val f2 = NodeId("f2")
+
+        val network = InMemoryRaftNetwork()
+
+        // l bootstraps alone so it wins leadership unconditionally.
+        val leaderNode = backgroundScope.raftNode(
+            ClusterConfig(voters = setOf(l)),
+            network.transport(l), InMemoryRaftStorage(), SLOW_ELECTION_CONFIG,
+        )
+        val leaderStorage = InMemoryRaftStorage()
+        backgroundScope.raftNode(
+            ClusterConfig(voters = setOf(l), learners = setOf(f1)),
+            network.transport(f1), leaderStorage, SLOW_ELECTION_CONFIG,
+        )
+        backgroundScope.raftNode(
+            ClusterConfig(voters = setOf(l), learners = setOf(f2)),
+            network.transport(f2), InMemoryRaftStorage(), SLOW_ELECTION_CONFIG,
+        )
+
+        leaderNode.awaitLeadership()
+        // Promote f1 and f2 to voters — settles as Simple({l,f1,f2}).
+        leaderNode.changeMembership(ClusterConfig(voters = setOf(l, f1, f2)))
+
+        // Wait for no-op to commit (changeMembership appends config entries; no-op is index 1).
+        delay(10)
+
+        // Read leader's term from storage for injected ACKs.
+        val leaderTerm = leaderNode.commitIndex.value.let { 1L } // term 1 after single leadership
+
+        // Partition the leader from f1 and f2 so no real ACKs arrive.
+        network.dropLink(l, f1); network.dropLink(f1, l)
+        network.dropLink(l, f2); network.dropLink(f2, l)
+
+        supervisorScope {
+            // Queue the read at the current heartbeatRound H. The actor processes
+            // RequestReadIndex and records sinceRound = H.
+            val read = async { leaderNode.readIndex() }
+            delay(1) // let the actor process the ReadIndex command
+
+            // Advance heartbeatRound from H to H+1 by waiting for one heartbeat tick.
+            delay(3) // SLOW_ELECTION_CONFIG heartbeat = 2 ms → one tick fires
+
+            // Inject an ACK from f1 that echoes round H (i.e., it was sent in response to
+            // the round-H heartbeat, BEFORE the read was queued). With the round-nonce fix,
+            // echoedRound=H ≤ sinceRound=H → excluded. Without the fix, credited to current
+            // heartbeatRound=H+1 > sinceRound=H → would confirm (quorum: self+f1 = 2).
+            val staleAck = Cbor.encodeToByteArray<RaftMessage>(
+                RaftMessage.AppendEntriesResponse(term = 1L, success = true, matchIndex = 1L, echoedRound = 0L)
+            )
+            network.deliver(from = f1, to = l, bytes = staleAck)
+            delay(2) // let actor process f1's stale ACK
+
+            // Bug: with no echoedRound, heartbeatRound at receipt = H+1 > sinceRound=H → confirmed.
+            // Fix: echoedRound=H (round that generated the ACK) ≤ sinceRound=H → NOT confirmed.
+            assertFalse(
+                read.isCompleted,
+                "read must NOT be confirmed by an ACK echoing round H when sinceRound = H; " +
+                    "a round-slip ACK must not satisfy freshness",
+            )
+
+            // CheckQuorum fires (300–400 ms): contacted={} → 1 < 2 → step down.
+            delay(1200)
+            assertFailsWith<LeadershipLostException> { read.await() }
+        }
+    }
+
     // ── BLOCKER 1: stale ACK must not confirm a read ──────────────────────────
 
     /**
@@ -377,6 +477,84 @@ class ReadIndexTest {
             delay(1200)
             assertFailsWith<LeadershipLostException> { read.await() }
         }
+    }
+
+    // ── BLOCKER 2: shrink-to-single joint fast-path must not bypass old-majority ─
+
+    /**
+     * BLOCKER 2a — fast-path bug: when [effectiveConfig.quorumSize == 1] during a shrinking
+     * Joint config (e.g. old={v1,v2,v3}, new={v1}), the old fast-path fires immediately and
+     * returns a read index without waiting for any quorum ACK — even though the old majority
+     * is still required.
+     *
+     * Scenario: v1 bootstraps alone, adds v2 and v3 as voters (Simple({v1,v2,v3})), then
+     * changes membership to {v1} — creating Joint(old={v1,v2,v3}, new={v1}). v2 and v3 are
+     * isolated before the change so old-majority (need 2/3) is permanently unsatisfied.
+     *
+     * Bug (quorumSize == 1 fast-path): effectiveConfig = new = {v1}, quorumSize = 1 →
+     *   fast-path fires → read returns immediately (stale, not linearizable).
+     *
+     * Fix (quorumOfContacts gate): checks ALL active voter sets — old={v1,v2,v3} needs 2;
+     *   self alone gives 1 < 2 → fast-path does NOT fire → read stays pending until step-down.
+     */
+    @Test
+    fun shrinkingJointFastPathDoesNotConfirmReadWithoutOldMajority() = raftRunTest(timeout = 15.seconds) {
+        val v1 = NodeId("v1")
+        val v2 = NodeId("v2")
+        val v3 = NodeId("v3")
+
+        val network = InMemoryRaftNetwork()
+
+        // v1 bootstraps alone → guaranteed leader.
+        val leaderNode = backgroundScope.raftNode(
+            ClusterConfig(voters = setOf(v1)),
+            network.transport(v1), InMemoryRaftStorage(), SLOW_ELECTION_CONFIG,
+        )
+        // v2 and v3 start as learners so they don't race for leadership.
+        backgroundScope.raftNode(
+            ClusterConfig(voters = setOf(v1), learners = setOf(v2)),
+            network.transport(v2), InMemoryRaftStorage(), SLOW_ELECTION_CONFIG,
+        )
+        backgroundScope.raftNode(
+            ClusterConfig(voters = setOf(v1), learners = setOf(v3)),
+            network.transport(v3), InMemoryRaftStorage(), SLOW_ELECTION_CONFIG,
+        )
+
+        leaderNode.awaitLeadership()
+
+        // Promote v2 and v3 to voters — settles as Simple({v1,v2,v3}).
+        leaderNode.changeMembership(ClusterConfig(voters = setOf(v1, v2, v3)))
+
+        // Isolate v2 and v3 BEFORE initiating the shrink, so old-majority (need 2/3) is unmet.
+        network.dropLink(v1, v2); network.dropLink(v2, v1)
+        network.dropLink(v1, v3); network.dropLink(v3, v1)
+
+        // Initiate shrink to {v1} — creates Joint(old={v1,v2,v3}, new={v1}).
+        // effectiveConfig.quorumSize = 1, triggering the fast-path bug.
+        val changeJob = backgroundScope.async {
+            try { leaderNode.changeMembership(ClusterConfig(voters = setOf(v1))) }
+            catch (_: Exception) { /* cancelled below */ }
+        }
+        delay(1) // let the actor process ChangeMembership → v1 is now in Joint
+
+        supervisorScope {
+            // Bug: fast-path fires immediately → read.isCompleted = true (wrong).
+            // Fix: quorumOfContacts(emptySet(), v1) → old needs 2, self=1 < 2 → not fast-path.
+            val read = async { leaderNode.readIndex() }
+            delay(1) // let the ReadIndex command reach the actor
+
+            assertFalse(
+                read.isCompleted,
+                "readIndex must NOT return immediately during Joint(old={v1,v2,v3}, new={v1}): " +
+                    "old-majority (need 2/3) is not satisfied — fast-path must not fire",
+            )
+
+            // CheckQuorum fires (300–400 ms): old-majority (contacted={}) → 1/3 < 2 → step down.
+            delay(750)
+            assertFailsWith<LeadershipLostException> { read.await() }
+        }
+
+        changeJob.cancel()
     }
 
     // ── BLOCKER 2: joint-consensus freshness requires both old and new majority ─
