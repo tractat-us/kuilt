@@ -203,6 +203,24 @@ public interface RaftNode {
     public suspend fun propose(command: ByteArray): LogEntry
 
     /**
+     * Confirms this leader still holds a voter-quorum at its current term, then returns a
+     * **read index**: a commit index `ri` such that any state machine that has applied through
+     * `ri` reflects every write committed before this call. The read is linearizable once the
+     * caller's apply loop reaches `ri`. The leader does **not** write to the log.
+     *
+     * Concurrent calls in the same heartbeat window share one round. A single-voter cluster
+     * returns immediately. A freshly-elected leader suspends until its current-term no-op
+     * commits before returning. Because the state machine is external (driven by [committed]),
+     * the caller must wait until it has applied through the returned index — see [awaitRead].
+     *
+     * @throws NotLeaderException if this node is not the leader (including learners).
+     * @throws LeadershipLostException if leadership is lost before the round confirms.
+     */
+    public suspend fun readIndex(): Long {
+        throw NotLeaderException("readIndex: not the current leader")
+    }
+
+    /**
      * Requests a cluster membership change to [target], suspending until the
      * change commits as C_new, then returning [target].
      *
@@ -256,6 +274,20 @@ public interface RaftNode {
      * Idempotent. Equivalent to cancelling the owning [CoroutineScope].
      */
     public suspend fun close()
+}
+
+/**
+ * Linearizable read barrier: confirms the read index via [RaftNode.readIndex], then suspends
+ * until [applied] reaches it, returning that index. [applied] is the caller's own monotonic
+ * applied-index flow, advanced as it consumes [RaftNode.committed].
+ *
+ * @throws NotLeaderException if not the leader.
+ * @throws LeadershipLostException if leadership is lost before the round confirms.
+ */
+public suspend fun RaftNode.awaitRead(applied: StateFlow<Long>): Long {
+    val ri = readIndex()
+    applied.first { it >= ri }
+    return ri
 }
 
 /**

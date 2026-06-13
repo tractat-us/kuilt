@@ -20,6 +20,13 @@ internal sealed interface EngineCommand {
     data object QuorumCheck : EngineCommand
 
     /**
+     * Request a linearizable read index from the leader. The leader confirms quorum freshness
+     * via a heartbeat round, then completes [deferred] with the current commit index (the read index).
+     * On non-leader or leadership-loss, [deferred] completes exceptionally.
+     */
+    data class RequestReadIndex(val deferred: CompletableDeferred<Long>) : EngineCommand
+
+    /**
      * Atomically snapshot the committed log for [committedFrom][us.tractat.kuilt.raft.RaftNode.committedFrom].
      * Processed inside the actor so the captured [CommitCutResult.cutIndex] and the
      * replayed entries are consistent with a single point in the commit stream.
