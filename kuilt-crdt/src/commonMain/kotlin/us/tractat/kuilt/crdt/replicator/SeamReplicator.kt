@@ -22,6 +22,7 @@ import kotlinx.serialization.cbor.Cbor
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.ScopedCloseable
+import us.tractat.kuilt.core.checkNotUnderTestDispatcher
 import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.crdt.Dot
 import us.tractat.kuilt.crdt.Patch
@@ -29,7 +30,6 @@ import us.tractat.kuilt.crdt.Quilted
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.crdt.VersionVector
 import us.tractat.kuilt.crdt.piece
-import kotlin.coroutines.ContinuationInterceptor
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
@@ -303,7 +303,13 @@ public class SeamReplicator<S : Quilted<S>>(
     init {
         // `scope` here is the constructor parameter (the original parent scope).
         // `this.scope` is the owned child scope inherited from ScopedCloseable.
-        checkNotUnderTestDispatcher(scope, config.strictTestGuard, config.expectVirtualTime)
+        checkNotUnderTestDispatcher(
+            scope = scope,
+            typeName = "SeamReplicator",
+            substitute = "a SeamReplicator under UnconfinedTestDispatcher or with manual testScheduler.advanceTimeBy(…)",
+            strict = config.strictTestGuard,
+            expectVirtualTime = config.expectVirtualTime,
+        )
 
         val incomingJob = seam.incoming
             .onEach { swatch -> swatch.sender?.let { touch(it); dispatch(it, swatch.payload) } }
@@ -715,17 +721,3 @@ private fun contiguousHighWater(seqs: Set<Long>): Long {
     return n
 }
 
-private fun checkNotUnderTestDispatcher(scope: CoroutineScope, strict: Boolean, expectVirtualTime: Boolean) {
-    if (expectVirtualTime) return
-    val interceptor = scope.coroutineContext[ContinuationInterceptor]
-    val className = interceptor?.let { it::class.qualifiedName ?: it::class.simpleName ?: "" } ?: ""
-    val isTestDispatcher = "TestDispatcher" in className ||
-        className.startsWith("kotlinx.coroutines.test.")
-    if (!isTestDispatcher) return
-    val msg = "SeamReplicator constructed under a TestDispatcher ($className). " +
-        "The anti-entropy loop uses real-clock delay() — under virtual time those delays " +
-        "never advance automatically and your test will deadlock silently. " +
-        "Either use UnconfinedTestDispatcher (delays execute eagerly) or drive virtual time via " +
-        "testScheduler.advanceTimeBy(…) if you must use StandardTestDispatcher."
-    if (strict) error(msg) else logger.warn { msg }
-}

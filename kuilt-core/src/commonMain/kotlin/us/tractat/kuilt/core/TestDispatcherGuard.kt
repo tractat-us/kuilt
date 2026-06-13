@@ -1,4 +1,4 @@
-package us.tractat.kuilt.raft.internal
+package us.tractat.kuilt.core
 
 import kotlinx.coroutines.CoroutineScope
 import kotlin.coroutines.ContinuationInterceptor
@@ -7,24 +7,25 @@ import kotlin.coroutines.ContinuationInterceptor
  * Emits a warning (or throws, when [strict] is `true`) if [scope] contains a
  * `kotlinx.coroutines.test.TestDispatcher`.
  *
- * Real-clock `delay()` loops never advance automatically under virtual time.
- * Any type in `kuilt-raft` that runs such a loop should call this at
- * construction time so misuse surfaces loudly rather than deadlocking silently.
+ * Types that own a real-clock `delay()` loop (e.g. an election timer, an anti-entropy
+ * ticker) should call this at construction time. Under virtual time those delays never
+ * advance automatically, causing tests to deadlock silently rather than failing with a
+ * clear message. Calling this guard surfaces the misuse immediately, at the moment the
+ * type is constructed.
  *
- * `TestDispatcher` is `internal` in the coroutines library, so the check is
- * class-name-based: "TestDispatcher" in the qualified name, or the package
- * prefix `kotlinx.coroutines.test.`.
+ * `TestDispatcher` is `internal` in the coroutines library, so detection is class-name-based:
+ * "TestDispatcher" in the qualified name, or the package prefix `kotlinx.coroutines.test.`.
  *
  * @param scope The scope to inspect.
  * @param typeName Short name of the calling type, used in the diagnostic message.
  * @param substitute The recommended test substitute (e.g. "FakeRaftNode").
  * @param strict When `true`, throw [IllegalStateException] instead of printing.
- * @param expectVirtualTime When `true`, the caller has explicitly validated that
- *   `UnconfinedTestDispatcher` is appropriate (real-clock `delay()` fires normally
- *   under it). Suppresses both the warning and the [strict] throw. Has no effect
- *   outside a test dispatcher context.
+ * @param expectVirtualTime When `true`, the caller has explicitly validated that a
+ *   `TestDispatcher` is appropriate (e.g. an `UnconfinedTestDispatcher` where real-clock
+ *   `delay()` fires normally, or a test that advances virtual time manually). Suppresses
+ *   both the warning and the [strict] throw. Has no effect outside a test dispatcher context.
  */
-internal fun checkNotUnderTestDispatcher(
+public fun checkNotUnderTestDispatcher(
     scope: CoroutineScope,
     typeName: String,
     substitute: String,
@@ -34,7 +35,7 @@ internal fun checkNotUnderTestDispatcher(
     if (expectVirtualTime) return
     val interceptor = scope.coroutineContext[ContinuationInterceptor]
     val className = interceptor?.let { it::class.qualifiedName ?: it::class.simpleName ?: "" } ?: ""
-    if (!isTestDispatcher(className)) return
+    if (!isTestDispatcherClass(className)) return
     val msg = "$typeName constructed under a TestDispatcher ($className). " +
         "Real $typeName uses real-clock delay() — under virtual time, delays never advance " +
         "and your test will deadlock silently. Use $substitute for tests; " +
@@ -42,5 +43,5 @@ internal fun checkNotUnderTestDispatcher(
     if (strict) error(msg) else println("WARNING: $msg")
 }
 
-private fun isTestDispatcher(className: String): Boolean =
+private fun isTestDispatcherClass(className: String): Boolean =
     "TestDispatcher" in className || className.startsWith("kotlinx.coroutines.test.")
