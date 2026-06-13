@@ -14,7 +14,7 @@ class DealSessionTest {
         val alice = PeerId("alice")
         val bob = PeerId("bob")
         val scheme = SraScheme()
-        val (aliceSession, bobSession) = fakeDealSessionPair(alice, bob, scheme)
+        val (aliceSession, bobSession) = fakeDealSessionPair(alice, bob, scheme, backgroundScope)
 
         val originalCard = "ACE_OF_SPADES".encodeToByteArray()
         val deck = listOf(originalCard)
@@ -45,7 +45,7 @@ class DealSessionTest {
         val alice = PeerId("alice")
         val bob = PeerId("bob")
         val scheme = SraScheme()
-        val (aliceSession, bobSession) = fakeDealSessionPair(alice, bob, scheme)
+        val (aliceSession, bobSession) = fakeDealSessionPair(alice, bob, scheme, backgroundScope)
 
         val originalCard = "KING_OF_HEARTS".encodeToByteArray()
         val deck = listOf(originalCard)
