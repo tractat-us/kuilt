@@ -1,0 +1,26 @@
+plugins {
+    id("kuilt.kmp-library")
+    alias(libs.plugins.kotlinSerialization)
+}
+
+kotlin {
+    sourceSets {
+        commonMain.dependencies {
+            api(project(":kuilt-core"))
+            api(project(":kuilt-raft"))
+            implementation(libs.kotlinx.coroutines.core)
+            implementation(libs.kotlinx.serialization.core)
+            implementation(libs.kotlinx.serialization.cbor)
+        }
+        commonTest.dependencies {
+            implementation(project(":kuilt-raft-test"))
+            implementation(libs.kotlinx.coroutines.test)
+        }
+        jvmTest.dependencies {
+            runtimeOnly(libs.logback)
+        }
+        androidUnitTest.dependencies {
+            runtimeOnly(libs.logback)
+        }
+    }
+}
