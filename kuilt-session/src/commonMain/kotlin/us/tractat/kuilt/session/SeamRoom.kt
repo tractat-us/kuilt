@@ -49,6 +49,10 @@ import kotlin.time.Instant
  * [scope] is used to launch the per-Room admit loop coroutines. Callers should
  * use a scope whose lifetime matches the room's intended lifetime (e.g.
  * `backgroundScope` in tests, a structured session scope in production).
+ * The scope's dispatcher **must** be single-threaded or otherwise serially
+ * executing (e.g. `Dispatchers.Main`, a confined dispatcher, or
+ * `UnconfinedTestDispatcher` in tests). [SeamRoom]'s internal mutable state
+ * is not thread-safe under multi-threaded dispatchers such as `Dispatchers.Default`.
  *
  * [clock] is injected (never [kotlin.time.Clock.System]) so tests can use virtual
  * time. [heartbeatConfig] controls partition-detection timing.
@@ -181,6 +185,17 @@ internal class SeamRoom(
     // Per-admitted-peer detector collection jobs, keyed by PeerId.
     private val detectorJobs = mutableMapOf<PeerId, Job>()
 
+    // ── Threading contract ─────────────────────────────────────────────────────
+    // All mutable state below (admittedById, detectorJobs, closed, hostLost,
+    // hostPeerId, pendingResume, resumeToken) is accessed from multiple coroutines
+    // launched into [scope] — runMainLoop, runPeersWatcher, runTornWatcher,
+    // runReconnectEventLoop, and admitPeer. This class is safe only when [scope]
+    // uses a single-threaded or otherwise serially-executing dispatcher (e.g.
+    // Dispatchers.Main, a confined test dispatcher, or a single-threaded Executor).
+    // Callers must NOT pass a scope backed by Dispatchers.Default or
+    // Dispatchers.IO — those allow the launched coroutines to run on different
+    // threads simultaneously, which would produce data races on the plain-var and
+    // mutableMap fields below. SeamRoomFactory's KDoc states this scope contract.
     private var closed = false
     private var hostLost = false
 
@@ -549,13 +564,7 @@ internal class SeamRoom(
 
         // Self-admission welcome: mint the resume token (once) from the roomId carried here.
         if (assignedId == selfId) {
-            if (resumeToken == null && welcome.roomId != null) {
-                resumeToken = ResumeToken(
-                    peerId = selfId,
-                    roomId = RoomId(welcome.roomId),
-                    issuedAt = clock().toEpochMilliseconds(),
-                )
-            }
+            mintResumeTokenIfAbsent(welcome.roomId)
             return
         }
 
@@ -565,13 +574,7 @@ internal class SeamRoom(
         }
 
         // Also mint resume token from host intro welcome if not yet minted.
-        if (resumeToken == null && welcome.roomId != null) {
-            resumeToken = ResumeToken(
-                peerId = selfId,
-                roomId = RoomId(welcome.roomId),
-                issuedAt = clock().toEpochMilliseconds(),
-            )
-        }
+        mintResumeTokenIfAbsent(welcome.roomId)
 
         if (admittedById.containsKey(assignedId)) return // already known
         val identity = MemberIdentity(
@@ -581,6 +584,16 @@ internal class SeamRoom(
         )
         val member = Member(id = assignedId, identity = identity, liveness = Liveness.Connected)
         addToRoster(member)
+    }
+
+    private fun mintResumeTokenIfAbsent(roomId: String?) {
+        if (resumeToken == null && roomId != null) {
+            resumeToken = ResumeToken(
+                peerId = selfId,
+                roomId = RoomId(roomId),
+                issuedAt = clock().toEpochMilliseconds(),
+            )
+        }
     }
 
     /**

@@ -4,7 +4,6 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.channels.SendChannel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.receiveAsFlow
@@ -166,14 +165,8 @@ public class HeartbeatPartitionDetector(
     }
 
     private suspend fun emitIfOpen(event: PartitionEvent) {
-        if (!stopped) {
-            eventChannel.trySendOrSend(event)
-        }
-    }
-
-    // Channel.UNLIMITED capacity means trySend never suspends, but use send for correctness.
-    private suspend fun SendChannel<PartitionEvent>.trySendOrSend(event: PartitionEvent) {
-        send(event)
+        // Channel.UNLIMITED capacity means trySend never suspends, but use send for correctness.
+        if (!stopped) eventChannel.send(event)
     }
 
     // ── Ping / pong frame encoding ────────────────────────────────────────────

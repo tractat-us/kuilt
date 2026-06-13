@@ -176,7 +176,7 @@ public class DealSession(
 
     private fun DeckState.applyLocalOp(index: Int, op: CardOp): DeckState {
         val updated = cards[index].applyOp(op) ?: return this
-        return copy(cards = cards.toMutableList().also { it[index] = updated })
+        return copy(cards = cards.mapIndexed { i, c -> if (i == index) updated else c })
     }
 }
 
