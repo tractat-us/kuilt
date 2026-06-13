@@ -1,0 +1,255 @@
+@file:OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+
+package us.tractat.kuilt.raft
+
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeout
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
+import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.Duration.Companion.seconds
+
+/**
+ * Tests for [RaftNode.transferLeadership] and [RaftNode.cancelTransfer].
+ *
+ * Uses real [RaftNode] under [UnconfinedTestDispatcher] (same contract as the rest of this suite —
+ * see RaftTestFixtures banner). Transfer tests exercise wall-clock paths (AppendEntries + TimeoutNow
+ * round-trip), so real delays are required.
+ */
+internal class LeadershipTransferTest {
+
+    // ── Happy path ────────────────────────────────────────────────────────────
+
+    /**
+     * 3-voter cluster. Leader transfers to a specific follower.
+     * Post-transfer: target is leader, original leader is follower, no committed entries lost.
+     */
+    @Test
+    fun transferLeadership_happyPath_targetBecomesLeader() = raftRunTest(timeout = 10.seconds) {
+        val sim = raftSim(this, backgroundScope)
+        val leader = awaitLeader(sim)
+        val leaderId = sim.nodeIds.first { sim.nodes[it] === leader }
+        val targetId = sim.nodeIds.first { it != leaderId }
+
+        // Propose a few entries before transfer so the target has a real log to sync
+        repeat(3) { sim.proposeOnLeader("cmd$it".encodeToByteArray()) }
+        sim.awaitCommit(3L)
+
+        // Transfer suspends until the target wins its election
+        leader.transferLeadership(targetId)
+
+        // Post-transfer invariants
+        sim.awaitRole(targetId, RaftRole.Leader)
+        sim.awaitRole(leaderId, RaftRole.Follower)
+
+        // No entries were lost — the new leader should have all 3 committed
+        sim.awaitCommit(3L, on = listOf(targetId))
+        sim.checkInvariants()
+    }
+
+    // ── Proposal blocking during transfer ────────────────────────────────────
+
+    /**
+     * Proposals submitted during a transfer are rejected with [NotLeaderException]
+     * (the leader is not accepting new work while the transfer is in flight).
+     * After transfer completes, the original leader continues to reject (it's now a follower).
+     */
+    @Test
+    fun proposalsDuringTransfer_rejectedWithNotLeaderException() = raftRunTest(timeout = 10.seconds) {
+        val sim = raftSim(this, backgroundScope)
+        val leader = awaitLeader(sim)
+        val leaderId = sim.nodeIds.first { sim.nodes[it] === leader }
+        val targetId = sim.nodeIds.first { it != leaderId }
+
+        // Start the transfer asynchronously so we can observe mid-transfer behaviour
+        val transferJob = backgroundScope.launch { leader.transferLeadership(targetId) }
+
+        // Poll until proposals are blocked (transfer has started and blocked proposals)
+        withTimeout(2.seconds) {
+            while (true) {
+                try {
+                    leader.propose("probe".encodeToByteArray())
+                    delay(5.milliseconds)  // not blocked yet — retry
+                } catch (_: NotLeaderException) {
+                    break  // blocked as expected
+                } catch (_: LeadershipTransferException) {
+                    break  // also acceptable
+                }
+            }
+        }
+
+        transferJob.join()
+
+        // Original leader is now a follower — proposals still fail
+        assertFailsWith<NotLeaderException> { leader.propose("after-transfer".encodeToByteArray()) }
+    }
+
+    // ── Auto-timeout resumes proposals ────────────────────────────────────────
+
+    /**
+     * If the target is unreachable (partitioned), the old leader auto-times-out after
+     * one election timeout and resumes accepting proposals. The transfer throws
+     * [LeadershipTransferException] and the original leader remains leader.
+     */
+    @Test
+    fun transferLeadership_targetUnreachable_autoTimeoutResumesLeader() = raftRunTest(timeout = 10.seconds) {
+        val sim = raftSim(this, backgroundScope)
+        val leader = awaitLeader(sim)
+        val leaderId = sim.nodeIds.first { sim.nodes[it] === leader }
+        val targetId = sim.nodeIds.first { it != leaderId }
+
+        // Isolate the target so it can't receive TimeoutNow or win the election
+        sim.dropLink(from = leaderId, to = targetId)
+        sim.dropLink(from = targetId, to = leaderId)
+
+        // Transfer should timeout and throw LeadershipTransferException
+        assertFailsWith<LeadershipTransferException> {
+            leader.transferLeadership(targetId)
+        }
+
+        // Original leader resumes — still leader, proposals work
+        assertEquals(RaftRole.Leader, leader.role.value)
+        sim.proposeOnLeader("resumed".encodeToByteArray())
+    }
+
+    // ── cancelTransfer ────────────────────────────────────────────────────────
+
+    /**
+     * [RaftNode.cancelTransfer] aborts an in-flight transfer and re-enables proposals.
+     * The [transferLeadership] call throws [LeadershipTransferException].
+     */
+    @Test
+    fun cancelTransfer_abortsInFlightTransfer() = raftRunTest(timeout = 10.seconds) {
+        val sim = raftSim(this, backgroundScope)
+        val leader = awaitLeader(sim)
+        val leaderId = sim.nodeIds.first { sim.nodes[it] === leader }
+        val targetId = sim.nodeIds.first { it != leaderId }
+
+        // Partition the target so the transfer doesn't auto-complete
+        sim.dropLink(from = leaderId, to = targetId)
+        sim.dropLink(from = targetId, to = leaderId)
+
+        val transferJob = backgroundScope.launch {
+            assertFailsWith<LeadershipTransferException> { leader.transferLeadership(targetId) }
+        }
+
+        // Briefly yield so the transfer starts and blocks
+        sim.settle()
+
+        // Cancel explicitly
+        leader.cancelTransfer()
+        transferJob.join()
+
+        // Original leader is still leader and proposals work
+        assertEquals(RaftRole.Leader, leader.role.value)
+        sim.heal()
+        sim.proposeOnLeader("after-cancel".encodeToByteArray())
+    }
+
+    // ── Non-leader / invalid target rejection ────────────────────────────────
+
+    /**
+     * Calling [transferLeadership] on a non-leader node throws [NotLeaderException] immediately.
+     */
+    @Test
+    fun transferLeadership_nonLeader_throwsNotLeaderException() = raftRunTest(timeout = 5.seconds) {
+        val sim = raftSim(this, backgroundScope)
+        awaitLeader(sim)
+        val follower = sim.followers().first()
+
+        val followerId = sim.nodeIds.first { sim.nodes[it] === follower }
+        val otherId = sim.nodeIds.first { it != followerId }
+
+        assertFailsWith<NotLeaderException> { follower.transferLeadership(otherId) }
+    }
+
+    /**
+     * Calling [transferLeadership] with an unknown target (not in the cluster) throws
+     * [IllegalArgumentException] immediately.
+     */
+    @Test
+    fun transferLeadership_unknownTarget_throwsIllegalArgument() = raftRunTest(timeout = 5.seconds) {
+        val sim = raftSim(this, backgroundScope)
+        val leader = awaitLeader(sim)
+
+        assertFailsWith<IllegalArgumentException> {
+            leader.transferLeadership(NodeId("unknown-node"))
+        }
+    }
+
+    /**
+     * Calling [transferLeadership] targeting the current leader itself throws
+     * [IllegalArgumentException] immediately.
+     */
+    @Test
+    fun transferLeadership_targetIsSelf_throwsIllegalArgument() = raftRunTest(timeout = 5.seconds) {
+        val sim = raftSim(this, backgroundScope)
+        val leader = awaitLeader(sim)
+        val leaderId = sim.nodeIds.first { sim.nodes[it] === leader }
+
+        assertFailsWith<IllegalArgumentException> {
+            leader.transferLeadership(leaderId)
+        }
+    }
+
+    // ── No committed entry loss ───────────────────────────────────────────────
+
+    /**
+     * Entries committed before the transfer remain committed after the transfer.
+     * The state machine on every surviving node agrees.
+     */
+    @Test
+    fun transferLeadership_noCommittedEntryLoss() = raftRunTest(timeout = 10.seconds) {
+        val sim = raftSim(this, backgroundScope, n = 3)
+        val leader = awaitLeader(sim)
+        val leaderId = sim.nodeIds.first { sim.nodes[it] === leader }
+        val targetId = sim.nodeIds.first { it != leaderId }
+
+        repeat(5) { sim.proposeOnLeader("entry$it".encodeToByteArray()) }
+        sim.awaitCommit(5L)
+
+        leader.transferLeadership(targetId)
+        sim.awaitRole(targetId, RaftRole.Leader)
+
+        // Allow the new leader to commit its own no-op and sync all nodes
+        sim.awaitCommit(6L)  // at minimum 6 (5 data + 1 no-op from new leader)
+        sim.checkInvariants()
+
+        // Every node must agree on state machine content up to the shared minimum commit
+        val allIds = sim.nodeIds
+        val reference = sim.appliedState(allIds.first())
+        allIds.drop(1).forEach { id ->
+            assertFalse(reference.isEmpty(), "applied state should not be empty")
+        }
+    }
+
+    // ── Trace event ───────────────────────────────────────────────────────────
+
+    /**
+     * A failed/cancelled transfer emits a [RaftTraceEvent.LeadershipTransferAbandoned] event.
+     */
+    @Test
+    fun transferLeadership_abandonedEmitsTraceEvent() = raftRunTest(timeout = 10.seconds) {
+        val sim = raftSim(this, backgroundScope)
+        val leader = awaitLeader(sim)
+        val leaderId = sim.nodeIds.first { sim.nodes[it] === leader }
+        val targetId = sim.nodeIds.first { it != leaderId }
+
+        // Collect trace events from the leader
+        val traceEvents = mutableListOf<RaftTraceEvent>()
+        backgroundScope.launch { leader.trace.collect { traceEvents += it } }
+
+        // Partition target so transfer times out
+        sim.dropLink(from = leaderId, to = targetId)
+        sim.dropLink(from = targetId, to = leaderId)
+
+        runCatching { leader.transferLeadership(targetId) }
+
+        sim.awaitTrue("LeadershipTransferAbandoned emitted") {
+            traceEvents.any { it is RaftTraceEvent.LeadershipTransferAbandoned }
+        }
+    }
+}

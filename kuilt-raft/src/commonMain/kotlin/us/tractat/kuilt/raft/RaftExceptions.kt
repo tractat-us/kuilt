@@ -30,3 +30,16 @@ public class LeadershipLostException(message: String = "leadership lost while pr
 public class MembershipChangeInProgressException(
     message: String = "a membership change is already in progress — wait for it to commit before starting another",
 ) : Exception(message)
+
+/**
+ * Thrown by [RaftNode.transferLeadership] when the transfer could not complete.
+ *
+ * Two causes:
+ * - **Timeout**: the target did not win an election within one election-timeout window.
+ *   The old leader resumed normal operation before throwing this exception.
+ * - **Cancelled**: [RaftNode.cancelTransfer] was called explicitly.
+ *
+ * In both cases the old leader is back in its normal operating mode (accepting proposals)
+ * when this exception propagates — the caller does not need to do anything to recover.
+ */
+public class LeadershipTransferException(message: String) : Exception(message)

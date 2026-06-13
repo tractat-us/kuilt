@@ -269,6 +269,45 @@ public interface RaftNode {
     }
 
     /**
+     * Initiates a graceful leadership transfer to [target] per Raft §3.10, and suspends until
+     * the transfer either completes (target wins an election) or fails.
+     *
+     * **Protocol**:
+     * 1. The leader stops accepting new [propose] calls (they receive [NotLeaderException]).
+     * 2. The leader sends AppendEntries to bring [target]'s log up to the current [commitIndex].
+     * 3. The leader sends a `TimeoutNow` message to [target].
+     * 4. [target] immediately starts a real election (bypassing its election-timeout wait).
+     * 5. If [target] wins, the old leader steps down naturally on seeing the higher term.
+     *    This call returns normally.
+     * 6. If [target] does not win within one election-timeout window, the auto-timeout fires:
+     *    the old leader resumes accepting proposals and this call throws [LeadershipTransferException].
+     *
+     * **Cancellation**: call [cancelTransfer] from a separate coroutine to abort early.
+     * The [LeadershipTransferException] will carry `"cancelled"` in its message.
+     *
+     * **Constraints**:
+     * - Only the leader may call this. Non-leaders throw [NotLeaderException] immediately.
+     * - [target] must be a voter in the current cluster config, and must not be `this` node's own id.
+     *   Invalid targets throw [IllegalArgumentException] immediately.
+     * - While a transfer is in flight, [propose] throws [NotLeaderException].
+     *
+     * @param target The [NodeId] of the voter to transfer leadership to.
+     * @throws NotLeaderException if this node is not currently the leader.
+     * @throws IllegalArgumentException if [target] is not a known voter, or is this node's own id.
+     * @throws LeadershipTransferException if the transfer timed out or was cancelled.
+     */
+    public suspend fun transferLeadership(target: NodeId): Unit =
+        throw NotLeaderException("transferLeadership: not the current leader")
+
+    /**
+     * Aborts an in-flight [transferLeadership] and re-enables proposal acceptance.
+     *
+     * If no transfer is in flight, this is a no-op. The suspended [transferLeadership] call
+     * will throw [LeadershipTransferException] with reason "cancelled".
+     */
+    public fun cancelTransfer(): Unit = Unit
+
+    /**
      * Shuts down this node, cancelling all internal coroutines.
      *
      * Idempotent. Equivalent to cancelling the owning [CoroutineScope].
