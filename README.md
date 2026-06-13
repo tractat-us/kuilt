@@ -62,6 +62,7 @@ Replace `0.4.0` with the [latest release](https://central.sonatype.com/artifact/
 | Module | Targets | What it gives you |
 |--------|---------|-------------------|
 | `kuilt-crdt` | all | Delta-state CRDT zoo (`GCounter`, `ORSet`, `LWWMap`, `Rga`, …) + `SeamReplicator` live replication. |
+| `kuilt-game` | all | Turn-based game facade over `kuilt-raft`: `TurnSequencer` + `IndexedAction`. |
 | `kuilt-raft` | all | Raft consensus — leader election, log replication, snapshots, dynamic membership. |
 | `kuilt-session` | all | Membership-aware `Room` (`SeamRoom`): handshake, roster, reconnect tokens, partition detection. |
 

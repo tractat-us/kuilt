@@ -196,6 +196,8 @@ Genuinely out of scope for kuilt at every layer:
 
 ```
 kuilt-core         the contract + InMemoryLoom + SeamConformanceSuite (depends on nothing fabric-specific)
+  ├── kuilt-raft        Raft consensus (election, log, snapshots, membership)  → depends on kuilt-core
+  │     └── kuilt-game  turn-based game facade (TurnSequencer / IndexedAction)  → depends on kuilt-raft
   ├── kuilt-session     membership/room layer (admit, roster, roles, resume)  → depends on kuilt-core
   ├── kuilt-websocket   Ktor WebSocket fabric (Far)            → depends on kuilt-core
   └── kuilt-mdns        Bonjour discovery → WebSocket session  → depends on kuilt-core + kuilt-websocket
