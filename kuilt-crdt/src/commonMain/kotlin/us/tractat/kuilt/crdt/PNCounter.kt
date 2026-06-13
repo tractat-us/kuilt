@@ -28,6 +28,8 @@ import kotlinx.serialization.Serializable
  * subtraction of two non-negative `Long` sums. Overflow is theoretically
  * possible at `Long.MAX_VALUE` increments per replica, which is not a practical
  * concern.
+ *
+ * @sample us.tractat.kuilt.crdt.samplePNCounter
  */
 @Serializable
 public class PNCounter private constructor(

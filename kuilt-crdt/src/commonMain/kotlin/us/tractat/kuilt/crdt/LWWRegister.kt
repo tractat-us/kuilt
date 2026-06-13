@@ -15,6 +15,8 @@ import kotlinx.serialization.Serializable
  * older write from a faster clock. For semantics that preserve concurrent writes
  * use [MVRegister]; for correctness under arbitrary clock skew, pair with a
  * Hybrid Logical Clock above this layer.
+ *
+ * @sample us.tractat.kuilt.crdt.sampleLWWRegister
  */
 @Serializable
 public class LWWRegister<V> private constructor(
