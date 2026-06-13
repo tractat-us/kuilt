@@ -18,7 +18,7 @@ per-author-floor draft **and** the v2 stable-cut draft for membership change)
 >   **monotonic floor on F**, closing the eviction hole. Re-verified by
 >   construction against **both** prior probes (#272 author-independence, #275
 >   eviction) plus two new membership-change probes. The §7 liveness tradeoff is
->   stated honestly and is a **decision-needed for Iain**, not papered over.
+>   stated honestly and is a **maintainer decision**, not papered over.
 
 The barrier itself (the matrix-clock stable cut, the 3-condition predicate, the
 `RgaId` dense-`seq` decision, the `apply` re-inflation fix) is unchanged from v2
@@ -290,7 +290,7 @@ and (barring `c` ever returning with it) no replica will ever deliver it. The
 retained frontier still carries `(c, seq(J))`, so it **pins GC of `I` forever** —
 an unbounded op-log stall for that one element (and any tombstone `I` it guards).
 
-This is the honest tradeoff and it is a **decision for Iain**:
+This is the honest tradeoff and it is a **maintainer decision**:
 
 - The pin is **not harmful to safety** — keeping `I` retained is conservative; the
   list stays correct, just un-GC'd for that element.
@@ -387,4 +387,4 @@ retain/release rule with a precisely-stated discharge condition (§4.4). The
 boundable** when the successor was minted-then-lost by a crashing peer (case b).
 Case (b) cannot be bounded without a new membership/consensus mechanism that
 itself trades away safety — so v3 **does not invent one**; it accepts the narrow
-pin by default and surfaces the alternative (committed departure) as Iain's call.
+pin by default and surfaces the alternative (committed departure) as the maintainer's decision.

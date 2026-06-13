@@ -41,7 +41,7 @@ class DealSessionTest {
     }
 
     @Test
-    fun twoPlayerHanabiDeal_bobCanSeeAlicesCard_aliceCannot() = runTest {
+    fun twoPlayerDeal_holderCannotSeeOwnCard() = runTest {
         val alice = PeerId("alice")
         val bob = PeerId("bob")
         val scheme = SraScheme()
@@ -53,7 +53,7 @@ class DealSessionTest {
         aliceSession.shuffle(deck)
         bobSession.shuffle(deck)
 
-        // Hanabi: bob can see alice's card — quorum is {bob} (everyone except alice)
+        // holder cannot see their own card — quorum is {bob} (everyone except alice)
         val quorumBob = mapOf(0 to setOf(bob))
         aliceSession.assignQuorums(quorumBob)
         bobSession.assignQuorums(quorumBob)

@@ -19,7 +19,7 @@ allprojects {
 //    30-min job cancel that produces no actionable signal. 15 min is generous for
 //    any single module's test task (kuilt-crdt:jvmTest peaks at ~9 min on a cold
 //    build) while still catching a true hang well before the job-level 30-min cap.
-//    See #329 for the incident; fireworks-compose uses 20 min for a similar suite.
+//    See #329 for the incident.
 //
 // 2. kotlinx.coroutines.debug: names every coroutine with its launch call-site.
 //    When a runTest timeout fires, the JVM dump (from the jstack watchdog in
