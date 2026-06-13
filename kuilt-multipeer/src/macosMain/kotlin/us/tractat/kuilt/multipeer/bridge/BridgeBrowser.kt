@@ -28,6 +28,7 @@ import kotlinx.cinterop.asStableRef
 import kotlinx.cinterop.cstr
 import kotlinx.cinterop.invoke
 import kotlinx.cinterop.memScoped
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -64,11 +65,16 @@ private typealias PeerLostCallback = CFunction<(CPointer<ByteVar>?) -> Unit>
  * so `mc_browser_stop` has a single thing to dispose, and so a later
  * `mc_browser_set_peer_lost_callback` can attach a second collector to the
  * same scope.
+ *
+ * @param dispatcher Dispatcher for the [scope]. Production default is
+ *   [Dispatchers.Default]; tests inject [kotlinx.coroutines.test.UnconfinedTestDispatcher].
  */
-private class BrowserState(
-    val scope: CoroutineScope,
+internal class BrowserState(
     val factory: MultipeerPeerLinkFactory,
-)
+    dispatcher: CoroutineDispatcher = Dispatchers.Default,
+) {
+    val scope: CoroutineScope = CoroutineScope(dispatcher + SupervisorJob())
+}
 
 /**
  * Starts an MC browse session for the given runtime and forwards every
@@ -88,8 +94,8 @@ public fun mc_browser_start(
     val factory = runtimeHandle.asStableRef<MultipeerPeerLinkFactory>().get()
     val browser = MultipeerServiceBrowser(factory)
 
-    val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
-    scope.launch {
+    val state = BrowserState(factory)
+    state.scope.launch {
         browser.discoveries().collect { ad ->
             if (ad is MultipeerAdvertisement) {
                 memScoped {
@@ -99,7 +105,6 @@ public fun mc_browser_start(
         }
     }
 
-    val state = BrowserState(scope, factory)
     return StableRef.create(state).asCPointer()
 }
 

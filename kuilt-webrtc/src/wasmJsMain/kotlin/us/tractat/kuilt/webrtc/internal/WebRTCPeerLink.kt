@@ -2,6 +2,7 @@ package us.tractat.kuilt.webrtc.internal
 
 import io.github.oshai.kotlinlogging.KotlinLogging
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
@@ -37,6 +38,9 @@ private val log = KotlinLogging.logger {}
  * [senderIdDeferred] is the remote peer's actual [PeerId], resolved asynchronously
  * once the ID-exchange frame arrives. Defaults to an immediately-completed deferred
  * holding [remoteId], preserving existing test-construction semantics.
+ *
+ * @param dispatcher Dispatcher for the internal [CoroutineScope]. Production default is
+ *   [Dispatchers.Default]; tests inject [kotlinx.coroutines.test.UnconfinedTestDispatcher].
  */
 internal class WebRTCPeerLink(
     override val selfId: PeerId,
@@ -44,8 +48,9 @@ internal class WebRTCPeerLink(
     private val facade: RtcPeerConnectionFacade,
     private val userFrames: Flow<ByteArray> = facade.incomingBytes,
     private val senderIdDeferred: Deferred<PeerId> = CompletableDeferred(remoteId),
+    dispatcher: CoroutineDispatcher = Dispatchers.Default,
 ) : Seam {
-    internal val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    internal val scope = CoroutineScope(SupervisorJob() + dispatcher)
     private val sequenceCounter = SequenceCounter()
     private val _peers = MutableStateFlow(setOf(selfId, remoteId))
 

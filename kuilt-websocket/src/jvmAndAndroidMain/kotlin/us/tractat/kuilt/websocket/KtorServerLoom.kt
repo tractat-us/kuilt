@@ -6,6 +6,7 @@ import io.ktor.server.application.pluginOrNull
 import io.ktor.server.routing.routing
 import io.ktor.server.websocket.WebSockets
 import io.ktor.server.websocket.webSocket
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -32,12 +33,16 @@ import kotlin.uuid.Uuid
  *  - Client's [PeerId] is read from the `?peer=<uuid>` query parameter set by
  *    [KtorClientLoom.join]. Connections without a `peer=` parameter are assigned
  *    an `anon-<uuid>` placeholder.
+ *
+ * @param dispatcher Dispatcher for each per-connection [CoroutineScope]. Production
+ *   default is [Dispatchers.IO]; tests inject [kotlinx.coroutines.test.UnconfinedTestDispatcher].
  */
 @OptIn(ExperimentalUuidApi::class)
 public class KtorServerLoom(
     application: Application,
     private val path: String,
     public val selfPeerId: PeerId = PeerId("server-${Uuid.random()}"),
+    private val dispatcher: CoroutineDispatcher = Dispatchers.IO,
 ) : Loom {
     private val connectionChannel = Channel<Seam>(capacity = Channel.UNLIMITED)
 
@@ -50,7 +55,7 @@ public class KtorServerLoom(
                     clientPeerValue
                         ?.let { PeerId(it) }
                         ?: PeerId("anon-${Uuid.random()}")
-                val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+                val scope = CoroutineScope(dispatcher + SupervisorJob())
                 val seam =
                     WebSocketSeam(
                         selfId = selfPeerId,
