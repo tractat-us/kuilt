@@ -7,8 +7,14 @@ plugins {
 // `koverHtmlReport` writes a browsable report for local inspection. Each module
 // applies the Kover plugin via the kmp-library convention, so a project
 // dependency here is all the aggregation needs.
+//
+// `kuilt-bom` is excluded: it's a `java-platform` (a BOM) with no Kotlin sources
+// and therefore no Kover coverage variant. Including it makes the aggregation
+// fail dependency resolution with "No matching variant of project :kuilt-bom".
 dependencies {
-    subprojects.forEach { kover(it) }
+    subprojects
+        .filterNot { it.name == "kuilt-bom" }
+        .forEach { kover(it) }
 }
 
 val kuiltVersionLine: String = providers.gradleProperty("kuiltVersionLine").get()
