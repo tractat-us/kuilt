@@ -22,6 +22,21 @@ dependencyResolutionManagement {
 }
 ```
 
+### Recommended: import the BOM
+
+`kuilt-bom` is the recommended entry point for consumers using more than one module. Import it once and omit version numbers from all subsequent kuilt dependencies:
+
+```kotlin
+// build.gradle.kts
+dependencies {
+    implementation(platform("us.tractat.kuilt:kuilt-bom:0.4.0"))
+    implementation("us.tractat.kuilt:kuilt-core")
+    // kuilt-crdt, kuilt-raft, kuilt-session, kuilt-websocket, …
+}
+```
+
+### Without the BOM
+
 ```kotlin
 // build.gradle.kts
 dependencies {

@@ -77,6 +77,7 @@ if (!s3CacheAccessKey.isNullOrBlank()) {
     }
 }
 
+include(":kuilt-bom")
 include(":kuilt-core")
 include(":kuilt-test")
 include(":kuilt-conformance")
