@@ -90,8 +90,8 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
+import us.tractat.kuilt.core.checkNotUnderTestDispatcher
 import us.tractat.kuilt.raft.internal.RaftEngine
-import us.tractat.kuilt.raft.internal.checkNotUnderTestDispatcher
 
 /**
  * The runtime interface for a single Raft cluster member.
