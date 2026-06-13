@@ -8,6 +8,7 @@ import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestCoroutineScheduler
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
+import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
@@ -17,15 +18,17 @@ private val electionTimeoutMin = 150.milliseconds
 private val electionTimeoutMax = 300.milliseconds
 private val heartbeatInterval = 50.milliseconds
 
-// expectVirtualTime = true: this test drives virtual time deliberately via
-// StandardTestDispatcher + advanceTimeBy. The warning is suppressed here
-// intentionally — this is the one test that actually validates the
-// advanceTimeBy path works.
+// This file is intentionally NOT converted to raftRunTest/raftSim. It exists as a distinct
+// witness: it constructs a separate TestCoroutineScheduler and drives time via explicit
+// advanceTimeBy calls on that scheduler — proving the engine respects an externally-controlled
+// virtual clock. Folding it into raftRunTest would merge it with VirtualElectionTest and
+// lose the explicit advanceTimeBy witness. Already deterministic; no conversion needed.
 private val schedulerConfig = RaftConfig(
     electionTimeoutMin = electionTimeoutMin,
     electionTimeoutMax = electionTimeoutMax,
     heartbeatInterval = heartbeatInterval,
     expectVirtualTime = true,
+    random = Random(RAFT_TEST_SEED),
 )
 
 private fun schedulerSim(scheduler: TestCoroutineScheduler, n: Int = 3): RaftSimulation {

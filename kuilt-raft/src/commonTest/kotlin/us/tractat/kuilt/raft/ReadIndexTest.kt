@@ -11,6 +11,7 @@ import kotlinx.coroutines.supervisorScope
 import kotlinx.serialization.cbor.Cbor
 import kotlinx.serialization.encodeToByteArray
 import us.tractat.kuilt.raft.internal.RaftMessage
+import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
@@ -32,14 +33,15 @@ private val SLOW_ELECTION_CONFIG = RaftConfig(
     electionTimeoutMax = 400.milliseconds,
     heartbeatInterval = 2.milliseconds,
     expectVirtualTime = true,
+    random = Random(RAFT_TEST_SEED),
 )
 
 /**
  * Behaviour tests for [RaftNode.readIndex] (linearizable reads without a log write).
  *
- * All tests use [raftRunTest] with [UnconfinedTestDispatcher] and real-clock [delay] — the
+ * All tests use [raftRunTest] with [StandardTestDispatcher] and virtual [delay] — the
  * standard harness contract for this suite (see [RaftTestFixtures] banner). Tests that need
- * multi-voter quorum confirmation advance real time past one heartbeat interval (2 ms in
+ * multi-voter quorum confirmation advance virtual time past one heartbeat interval (2 ms in
  * [FAST_RAFT_CONFIG]) so the ACK majority accumulates.
  */
 class ReadIndexTest {
@@ -616,9 +618,10 @@ class ReadIndexTest {
         leaderNode.changeMembership(ClusterConfig(voters = setOf(v1, v2)))
 
         // Isolate v2 (both directions) BEFORE issuing the second changeMembership.
-        // Under UnconfinedTestDispatcher, message delivery is synchronous — if v2 can
-        // receive the Joint entry it will ACK immediately, satisfying old-majority (v1+v2),
-        // and the Joint commits before the read is queued.
+        // Isolate v2 (both directions) BEFORE issuing the second changeMembership.
+        // Under StandardTestDispatcher's FIFO scheduling, actors process messages in a fixed
+        // order — isolating v2 before the Joint entry is sent prevents it from ACKing and
+        // satisfying old-majority (v1+v2) ahead of the readIndex call.
         network.dropLink(v1, v2)
         network.dropLink(v2, v1)
 
