@@ -71,7 +71,4 @@ public class KtorClientLoom(
         return "$url${separator}${PEER_QUERY_PARAM}=${peerId.value}"
     }
 
-    internal companion object {
-        const val PEER_QUERY_PARAM: String = "peer"
-    }
 }

@@ -67,6 +67,13 @@ internal class NearbySeam(
     private val mutex = Mutex()
     private var closed = false
 
+    // Threading note: `endpointPeers` is shared with the owning NearbyLoom — it is written
+    // by NearbyLoom under the loom's own mutex (on handshake completion) and read/mutated
+    // here under this seam's mutex (on receive and disconnect events). Both paths execute on
+    // the single-dispatcher scope derived from the caller's coroutine context (see NearbyLoom
+    // KDoc), so interleaving is serialised by that dispatcher. Do not re-architect without
+    // auditing all addPeer() call sites and endpointPeers accesses in NearbyLoom.
+
     // Per-endpoint reassemblers and sequence counters — keyed by endpointId.
     private val reassemblers = mutableMapOf<String, ChunkCodec.Reassembler>()
     private val sequences = mutableMapOf<String, Long>()
