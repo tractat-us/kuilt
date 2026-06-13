@@ -1,25 +1,72 @@
 # kuilt
 
+[![Maven Central](https://img.shields.io/maven-central/v/us.tractat.kuilt/kuilt-core.svg?label=Maven%20Central)](https://central.sonatype.com/artifact/us.tractat.kuilt/kuilt-core)
+[![CI](https://github.com/tractat-us/kuilt/actions/workflows/ci.yml/badge.svg)](https://github.com/tractat-us/kuilt/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
+
 A peer-symmetric, multiplatform networking library for moving opaque byte frames
 between peers over interchangeable *fabrics* — WebSocket, mDNS-discovered LAN,
 Multipeer, WebRTC — behind a single contract.
 
 kuilt knows nothing about your application. It carries bytes; what those bytes
-mean is the consumer's business. Published to GitHub Packages under
-`us.tractat.kuilt:*`.
+mean is the consumer's business.
 
 Kotlin Multiplatform: JVM, Android, iOS, macOS, wasmJs.
 
+## Setup
+
+```kotlin
+// settings.gradle.kts
+repositories { mavenCentral() }
+```
+
+```kotlin
+// build.gradle.kts — pick the modules you need
+dependencies {
+    implementation("us.tractat.kuilt:kuilt-core:VERSION")
+    implementation("us.tractat.kuilt:kuilt-websocket:VERSION")  // WebSocket fabric
+    implementation("us.tractat.kuilt:kuilt-raft:VERSION")       // Raft consensus
+    implementation("us.tractat.kuilt:kuilt-crdt:VERSION")       // CRDT zoo
+    implementation("us.tractat.kuilt:kuilt-session:VERSION")    // membership / room
+}
+```
+
+Replace `VERSION` with the [latest release](https://central.sonatype.com/artifact/us.tractat.kuilt/kuilt-core).
+
 ## Modules
+
+**Contract & core**
 
 | Module | Targets | What it gives you |
 |--------|---------|-------------------|
-| `kuilt-core` | all | The contract (`Loom`/`Seam`/`Swatch`), the `InMemoryLoom` reference implementation, and `SeamConformanceSuite` for testing your own fabric. |
-| `kuilt-websocket` | all | A Ktor WebSocket fabric. `KtorClientLoom` everywhere; `KtorServerLoom` on JVM/Android. |
-| `kuilt-mdns` | JVM, Android, iOS | Bonjour/mDNS service discovery feeding a WebSocket connection. |
-| `kuilt-raft` | all | Raft consensus layer — replicated, strongly-consistent log over any `Seam`. `RaftNode` + `SeamRaftTransport` + `InMemoryRaftStorage`. |
+| `kuilt-core` | all | The contract (`Loom`/`Seam`/`Swatch`), `InMemoryLoom` reference impl. |
 
-Every fabric module depends only on `kuilt-core`.
+**Libraries**
+
+| Module | Targets | What it gives you |
+|--------|---------|-------------------|
+| `kuilt-crdt` | all | Delta-state CRDT zoo (`GCounter`, `ORSet`, `LWWMap`, `Rga`, …) + `SeamReplicator` live replication. |
+| `kuilt-raft` | all | Raft consensus — leader election, log replication, snapshots, dynamic membership. |
+| `kuilt-session` | all | Membership-aware `Room` (`SeamRoom`): handshake, roster, reconnect tokens, partition detection. |
+
+**Fabrics**
+
+| Module | Targets | What it gives you |
+|--------|---------|-------------------|
+| `kuilt-websocket` | all | Ktor WebSocket fabric. `KtorClientLoom` everywhere; `KtorServerLoom` on JVM/Android. |
+| `kuilt-mdns` | JVM, Android, iOS | Bonjour/mDNS discovery feeding a WebSocket connection. |
+| `kuilt-multipeer` | iOS, macOS | Apple Multipeer Connectivity fabric. |
+| `kuilt-nearby` | Android | Google Nearby Connections fabric. |
+| `kuilt-webrtc` | wasmJs | WebRTC data-channel fabric. |
+
+**Test support**
+
+| Module | What it gives you |
+|--------|-------------------|
+| `kuilt-conformance` | `SeamConformanceSuite` — verifies any fabric impl with one subclass. |
+| `kuilt-test` | Shared fakes and test utilities built on `kuilt-core`. |
+
+Every module depends only on `kuilt-core` (plus any fabric it wraps).
 
 ## The vocabulary
 
@@ -51,10 +98,10 @@ launch { host.incoming.collect { swatch -> handle(swatch.payload) } } // collect
 host.broadcast("hello".encodeToByteArray())
 ```
 
-See **[docs/usage.md](docs/usage.md)** to add a dependency, open/join a real
-WebSocket session, discover peers over mDNS, and write + conformance-test your
-own fabric. See **[docs/architecture.md](docs/architecture.md)** for the design
-and the rules the contract enforces.
+See **[docs/usage.md](docs/usage.md)** to open/join a WebSocket session, discover
+peers over mDNS, and write + conformance-test your own fabric. See
+**[docs/architecture.md](docs/architecture.md)** for the design and the rules
+the contract enforces.
 
 ## Building
 
