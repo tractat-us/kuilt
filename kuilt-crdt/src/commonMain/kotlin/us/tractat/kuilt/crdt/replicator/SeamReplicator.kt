@@ -22,6 +22,7 @@ import kotlinx.serialization.cbor.Cbor
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.ScopedCloseable
+import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.crdt.Dot
 import us.tractat.kuilt.crdt.Patch
 import us.tractat.kuilt.crdt.Quilted
@@ -415,9 +416,8 @@ public class SeamReplicator<S : Quilted<S>>(
         val msg = ReplicatorMessage.Delivered<S>(sender = replica, vector = vector)
         val bytes = encode(msg)
         scope.launch {
-            try { seam.broadcast(bytes) }
-            catch (e: kotlinx.coroutines.CancellationException) { throw e }
-            catch (e: Exception) { logger.debug { "gossipDelivered broadcast failed: ${e.message}" } }
+            runCatchingCancellable { seam.broadcast(bytes) }
+                .onFailure { logger.debug { "gossipDelivered broadcast failed: ${it.message}" } }
         }
     }
 
@@ -478,9 +478,8 @@ public class SeamReplicator<S : Quilted<S>>(
         val msg = ReplicatorMessage.Delta(sender = replica, seq = seq, delta = delta)
         val bytes = encode(msg)
         scope.launch {
-            try { seam.broadcast(bytes) }
-            catch (e: kotlinx.coroutines.CancellationException) { throw e }
-            catch (e: Exception) { logger.debug { "broadcastDelta failed: ${e.message}" } }
+            runCatchingCancellable { seam.broadcast(bytes) }
+                .onFailure { logger.debug { "broadcastDelta failed: ${it.message}" } }
         }
     }
 
@@ -498,9 +497,8 @@ public class SeamReplicator<S : Quilted<S>>(
         val msg = ReplicatorMessage.FullState(sender = replica, state = _state.value)
         val bytes = encode(msg)
         scope.launch {
-            try { seam.sendTo(peer, bytes) }
-            catch (e: kotlinx.coroutines.CancellationException) { throw e }
-            catch (e: Exception) { logger.debug { "sendFullStateTo $peer failed: ${e.message}" } }
+            runCatchingCancellable { seam.sendTo(peer, bytes) }
+                .onFailure { logger.debug { "sendFullStateTo $peer failed: ${it.message}" } }
         }
         scheduleFullStateRetry(peer, config.fullStateRetryLimit)
     }
@@ -519,9 +517,8 @@ public class SeamReplicator<S : Quilted<S>>(
                 if (peer !in knownPeers) return@launch
                 encode(ReplicatorMessage.FullState(sender = replica, state = _state.value))
             }
-            try { seam.sendTo(peer, bytes) }
-            catch (e: kotlinx.coroutines.CancellationException) { throw e }
-            catch (e: Exception) { logger.debug { "fullStateRetry sendTo $peer failed: ${e.message}" } }
+            runCatchingCancellable { seam.sendTo(peer, bytes) }
+                .onFailure { logger.debug { "fullStateRetry sendTo $peer failed: ${it.message}" } }
             lock.withLock { scheduleFullStateRetry(peer, attemptsLeft - 1) }
         }
     }
@@ -600,9 +597,8 @@ public class SeamReplicator<S : Quilted<S>>(
         )
         val bytes = encode(msg)
         scope.launch {
-            try { seam.sendTo(to, bytes) }
-            catch (e: kotlinx.coroutines.CancellationException) { throw e }
-            catch (e: Exception) { logger.debug { "sendResend to $to failed: ${e.message}" } }
+            runCatchingCancellable { seam.sendTo(to, bytes) }
+                .onFailure { logger.debug { "sendResend to $to failed: ${it.message}" } }
         }
     }
 
@@ -631,9 +627,8 @@ public class SeamReplicator<S : Quilted<S>>(
         val msg = ReplicatorMessage.Ack<S>(acker = replica, sender = originalSender, seq = seq)
         val bytes = encode(msg)
         scope.launch {
-            try { seam.sendTo(to, bytes) }
-            catch (e: kotlinx.coroutines.CancellationException) { throw e }
-            catch (e: Exception) { logger.debug { "sendAck to $to failed: ${e.message}" } }
+            runCatchingCancellable { seam.sendTo(to, bytes) }
+                .onFailure { logger.debug { "sendAck to $to failed: ${it.message}" } }
         }
     }
 

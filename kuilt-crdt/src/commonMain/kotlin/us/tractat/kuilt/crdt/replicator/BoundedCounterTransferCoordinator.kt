@@ -14,6 +14,7 @@ import kotlinx.coroutines.launch
 import kotlinx.serialization.cbor.Cbor
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Seam
+import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.core.Swatch
 import us.tractat.kuilt.crdt.BoundedCounter
 import us.tractat.kuilt.crdt.Patch
@@ -156,9 +157,8 @@ public class BoundedCounterTransferCoordinator(
         repeat(config.maxRetries) { attempt ->
             val peersAttempt = coordSeam.peers.value - PeerId(self.value)
             if (peersAttempt.isEmpty()) return
-            try { coordSeam.broadcast(encoded) }
-            catch (e: kotlinx.coroutines.CancellationException) { throw e }
-            catch (e: Exception) { /* send failed — retry or degrade on next iteration */ }
+            runCatchingCancellable { coordSeam.broadcast(encoded) }
+                .onFailure { /* send failed — retry or degrade on next iteration */ }
             // check if quota improved (a donor may have responded already)
             if (state.value.quota(self) > config.lowWaterThreshold) return
             if (attempt < config.maxRetries - 1) {
