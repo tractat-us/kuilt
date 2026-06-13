@@ -23,11 +23,11 @@ repositories { mavenCentral() }
 ```kotlin
 // build.gradle.kts — pick the modules you need
 dependencies {
-    implementation("us.tractat.kuilt:kuilt-core:VERSION")
-    implementation("us.tractat.kuilt:kuilt-websocket:VERSION")  // WebSocket fabric
-    implementation("us.tractat.kuilt:kuilt-raft:VERSION")       // Raft consensus
-    implementation("us.tractat.kuilt:kuilt-crdt:VERSION")       // CRDT zoo
-    implementation("us.tractat.kuilt:kuilt-session:VERSION")    // membership / room
+    implementation("us.tractat.kuilt:kuilt-core:0.4.0")
+    implementation("us.tractat.kuilt:kuilt-websocket:0.4.0")  // WebSocket fabric
+    implementation("us.tractat.kuilt:kuilt-raft:0.4.0")       // Raft consensus
+    implementation("us.tractat.kuilt:kuilt-crdt:0.4.0")       // CRDT zoo
+    implementation("us.tractat.kuilt:kuilt-session:0.4.0")    // membership / room
 }
 ```
 
