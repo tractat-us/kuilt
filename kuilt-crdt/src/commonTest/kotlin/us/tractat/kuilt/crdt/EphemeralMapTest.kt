@@ -2,6 +2,7 @@ package us.tractat.kuilt.crdt
 
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
+import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -103,6 +104,48 @@ class EphemeralMapTest {
         val mB = EphemeralMap.empty<String>().put(b, "y", clock = 2L)
         val mC = EphemeralMap.empty<String>().put(c, "z", clock = 3L)
         assertEquals(mA.piece(mB).piece(mC), mA.piece(mB.piece(mC)))
+    }
+
+    // ---- adversarial tie-break: equal clocks, present vs null ----
+    // These cases were not covered by the disjoint-replica tests above.
+    // A crash-detector tombstone minted at seenClock+1 can collide with a live
+    // peer's next heartbeat if both increment from the same base.
+
+    @Test
+    fun equalClock_presentBeatsNull_bothMergeOrders() {
+        val present = EphemeralMap.empty<String>().put(a, "alive", clock = 3L)
+        val departed = EphemeralMap.empty<String>().leave(a, clock = 3L)
+        // Both orders must produce the same result: "present" wins.
+        val forwardMerge = present.piece(departed)
+        val reverseMerge = departed.piece(present)
+        assertAll(
+            { assertEquals("alive", forwardMerge.entries[a]?.value, "present.piece(departed) must keep presence") },
+            { assertEquals("alive", reverseMerge.entries[a]?.value, "departed.piece(present) must keep presence") },
+            { assertEquals(forwardMerge, reverseMerge, "piece must be commutative at equal clock") },
+        )
+    }
+
+    @Test
+    fun equalClock_nullVsNull_isNoOp_bothMergeOrders() {
+        val d1 = EphemeralMap.empty<String>().leave(a, clock = 2L)
+        val d2 = EphemeralMap.empty<String>().leave(a, clock = 2L)
+        assertAll(
+            { assertNull(d1.piece(d2).entries[a]?.value, "null piece null must stay null") },
+            { assertEquals(d1.piece(d2), d2.piece(d1), "null piece null must be commutative") },
+        )
+    }
+
+    @Test
+    fun equalClock_associativity_withConflict() {
+        // A = present clock 2, B = departed clock 2, C = unrelated replica
+        val present = EphemeralMap.empty<String>().put(a, "here", clock = 2L)
+        val departed = EphemeralMap.empty<String>().leave(a, clock = 2L)
+        val other = EphemeralMap.empty<String>().put(c, "z", clock = 1L)
+        assertEquals(
+            present.piece(departed).piece(other),
+            present.piece(departed.piece(other)),
+            "piece must be associative with a present/null conflict in the group",
+        )
     }
 
     // ---- TTL eviction ----

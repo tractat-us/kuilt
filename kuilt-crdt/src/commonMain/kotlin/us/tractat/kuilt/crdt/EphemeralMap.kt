@@ -53,6 +53,15 @@ public class EphemeralEntry<V>(
  * current. Peers that merge the departure suppress the slot from [live] output
  * even if a stale presence entry with a lower clock also exists.
  *
+ * **Tie-break at equal clocks — present beats null.** A crash-detector
+ * tombstone minted at `seenClock + 1` can collide with a live peer's next
+ * heartbeat if both increment from the same base. At equal clock, [piece]
+ * keeps the non-null (present) entry, so a live peer's heartbeat is never
+ * evicted by a same-clock departure. Null-vs-null at equal clock is a no-op.
+ * Value-vs-value at equal clock for the same replica is precluded by the
+ * single-writer contract (each replica writes only its own slot), so no
+ * second tie-break is needed there.
+ *
  * **TTL eviction location.** The CRDT state is time-free and serialisable: it
  * holds all entries, including stale and null ones. The [live] helper filters
  * entries given a caller-supplied *receive-time* map and a `now` timestamp —
@@ -66,6 +75,19 @@ public class EphemeralEntry<V>(
  *
  * **Not durable.** This CRDT is intentionally *not* designed for persistence
  * across reconnect. Use [LWWMap] or [ORMap] for durable key→value mappings.
+ *
+ * ## Reconnect and clock-reset recovery
+ *
+ * When a replica restarts it resets its local clock to zero (or a low value),
+ * which is below the stale high-clock entry that peers already have for that
+ * replica. Writes from the restarted replica will be silently dropped by [piece]
+ * and [put] until its clock catches up. The **only recovery mechanism is TTL
+ * eviction**: each observer holds the stale entry until it expires, at which
+ * point the slot is cleared and the next heartbeat from the restarted replica
+ * is accepted as fresh. Rejoin-visibility latency is therefore bounded by
+ * `ttlMs`. There is no explicit "reset" message — design reconnect flows to
+ * either (a) persist and restore the last clock so it is always increasing, or
+ * (b) accept the TTL-bounded window before the restarted replica becomes visible.
  *
  * @param V the value type carried in each presence entry.
  */
@@ -129,14 +151,17 @@ public class EphemeralMap<V> private constructor(
         }
         .toMap()
 
-    /** The join: per-replica max-clock wins. */
+    /**
+     * The join: per-replica max-clock wins. At equal clocks, present beats null
+     * (see class-level KDoc for the tie-break rationale).
+     */
     override fun piece(other: EphemeralMap<V>): EphemeralMap<V> {
         if (other.entries.isEmpty()) return this
         if (entries.isEmpty()) return other
         val merged = HashMap<ReplicaId, EphemeralEntry<V>>(entries)
         for ((replica, theirEntry) in other.entries) {
             val mine = merged[replica]
-            if (mine == null || theirEntry.clock > mine.clock) {
+            if (mine == null || dominates(theirEntry, mine)) {
                 merged[replica] = theirEntry
             }
         }
@@ -166,3 +191,16 @@ private fun <V> isLive(
     val receivedAt = receiveTime[replica] ?: return false
     return (now - receivedAt) < ttlMs
 }
+
+/**
+ * Returns true when [candidate] should replace [current] in the merge.
+ *
+ * Rules:
+ * - Higher clock always wins.
+ * - At equal clocks: present (non-null value) beats null (departure). Null vs null is
+ *   a no-op (returns false). Value vs value at the same clock is precluded by the
+ *   single-writer contract, so no further tie-break is needed.
+ */
+private fun <V> dominates(candidate: EphemeralEntry<V>, current: EphemeralEntry<V>): Boolean =
+    candidate.clock > current.clock ||
+        (candidate.clock == current.clock && candidate.value != null && current.value == null)

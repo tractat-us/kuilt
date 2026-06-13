@@ -195,6 +195,36 @@ subtree is silently discarded; see `JsonNode` KDoc for the v1 rationale.
 arrays, so `SeamReplicator`'s causal-stability GC barrier fires correctly for
 nested array tombstones.
 
+## Presence/awareness CRDT (`kuilt-crdt`)
+
+`EphemeralMap<V>` is a presence and awareness CRDT — it models the set of replicas
+currently online, each with an arbitrary value (cursor, scroll position, user name,
+…). It complements the durable CRDT types (`LWWMap`, `ORMap`) with an explicitly
+*ephemeral* variant intended for real-time, non-durable state.
+
+Key design decisions:
+
+- **Per-replica slot ownership.** Each replica writes only to its own slot; there
+  is no mechanism for replica `A` to overwrite `B`'s entry. This eliminates the
+  need for tombstones or add-wins logic — absence after TTL is sufficient for
+  removal.
+- **Local receive-time TTL.** The CRDT itself is time-free and serialisable.
+  `EphemeralMapTracker` stamps a local monotonic receive time whenever an entry
+  advances, and `live()` filters by `now - receiveTime < ttlMs`. Cross-peer
+  wall-clock comparison is avoided.
+- **Graceful departure — null + higher clock.** A replica calls `leave()` to
+  publish a `null`-valued entry with an incremented clock. Peers that merge the
+  departure suppress the slot from `live()` output even if a stale presence entry
+  with a lower clock is also in state.
+- **Tie-break at equal clocks — present beats null.** A crash-detector tombstone
+  minted at `seenClock + 1` can collide with the live peer's next heartbeat if
+  both increment from the same base. `EphemeralMap.piece` keeps the non-null
+  (present) entry at equal clocks, so a live peer's heartbeat is never silently
+  evicted.
+- **Reconnect recovery via TTL only.** A restarted replica whose clock resets to
+  zero will have its writes dropped until the stale high-clock entry TTL-evicts
+  on each observer. Rejoin-visibility latency is bounded by `ttlMs`.
+
 ## What kuilt is *not* responsible for
 
 The `:kuilt-core` contract deliberately stops at moving bytes between connected

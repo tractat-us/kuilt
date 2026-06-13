@@ -36,17 +36,16 @@ public class EphemeralMapTracker<V>(
     /**
      * Merge an inbound [update] into the local state.
      *
-     * For each replica whose clock advances, the local receive time is
-     * re-stamped to `clock()`. Stale or equal-clock deliveries (duplicates,
-     * reordered re-sends) do **not** update the receive time — they only
-     * absorb into the lattice if their content is new, and they leave the
-     * existing TTL timer intact.
+     * For each replica whose entry advances (higher clock, or present beating a
+     * same-clock null), the local receive time is re-stamped to `clock()`.
+     * Stale deliveries and same-clock equal-value duplicates do **not** update
+     * the receive time — they leave the existing TTL timer intact.
      */
     public fun received(update: EphemeralMap<V>) {
         val now = clock()
         for ((replica, inbound) in update.entries) {
             val existing = state.entries[replica]
-            if (existing == null || inbound.clock > existing.clock) {
+            if (advancesEntry(inbound, existing)) {
                 receiveTime[replica] = now
             }
         }
@@ -65,6 +64,22 @@ public class EphemeralMapTracker<V>(
 
     /** The current merged CRDT state (all entries, including departed/stale). */
     public fun snapshot(): EphemeralMap<V> = state
+}
+
+/**
+ * Returns true when [inbound] should be considered an advance over [existing],
+ * triggering a receive-time re-stamp.
+ *
+ * Mirrors the tie-break in [EphemeralMap.piece]:
+ * - Higher clock always advances.
+ * - Equal clock: present (non-null) over null advances (so the TTL is refreshed
+ *   when a present heartbeat arrives at the same logical time as a departure).
+ * - A missing existing entry means any inbound entry is an advance.
+ */
+private fun <V> advancesEntry(inbound: EphemeralEntry<V>, existing: EphemeralEntry<V>?): Boolean {
+    if (existing == null) return true
+    return inbound.clock > existing.clock ||
+        (inbound.clock == existing.clock && inbound.value != null && existing.value == null)
 }
 
 /**
