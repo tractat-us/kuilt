@@ -385,25 +385,21 @@ class ReadIndexTest {
      * BLOCKER 2 — joint-consensus read freshness requires dual-majority: a quorum of BOTH
      * the old and the new voter sets must have ACKed in a fresh round.
      *
-     * Scenario: leader v1 begins changing its voter set from {v1,v2} (old) to {v1,v3,v4} (new).
-     * v2 is isolated BEFORE changeMembership is issued, so the Joint config entry can never reach
-     * v2 and old-majority (v1 alone = 1/2 < 2) is permanently unsatisfied. v3 and v4 ARE
-     * connected and provide fresh ACKs, satisfying the new-majority (2/3). The read must NOT be
-     * confirmed, because old-majority freshness is not established.
+     * Scenario: leader v1 changes its voter set from {v1,v2} (old) to {v1,v3,v4} (new),
+     * creating Joint(old={v1,v2}, new={v1,v3,v4}). v2 is isolated BEFORE this second
+     * changeMembership is issued, so old-majority (v1 alone = 1/2 < 2) is permanently
+     * unsatisfied. v3 and v4 ARE connected and provide fresh ACKs, satisfying new-majority.
+     * The read must NOT be confirmed because old-majority freshness is not established.
      *
-     * With the pre-fix single-majority implementation (effectiveConfig = new), v1+v3+v4 forming
-     * a new-majority is mistakenly treated as sufficient. With the dual-majority fix the read
-     * stays pending until CheckQuorum steps the leader down.
+     * With the pre-fix implementation (effectiveConfig = new), v1+v3+v4 forming new-majority
+     * is mistakenly sufficient. With the dual-majority fix the read stays pending until
+     * CheckQuorum steps the leader down.
      *
-     * v2 is isolated before changeMembership so the Joint config (which requires old-majority to
-     * commit) never commits, keeping the leader stuck in Joint(old={v1,v2}, new={v1,v3,v4})
-     * throughout the test. Under UnconfinedTestDispatcher message delivery is instant — so without
-     * isolating v2 first, v2 would ACK the Joint entry before the test can isolate it, causing the
-     * Joint to commit and Simple(C_new) to be immediately appended (membership leaves Joint before
-     * the read is queued).
-     *
-     * v3 and v4 bootstrap as learners under v1 so they do not arm election timers before the
-     * Joint config propagates and reevaluateSelfRole promotes them to Follower status.
+     * Setup: v1 starts as sole voter and wins leadership unconditionally (no election race).
+     * changeMembership({v1,v2}) runs first so v2 becomes a voter. v3 and v4 start as learners.
+     * After {v1,v2} is established, v2 is isolated (both directions) and changeMembership to
+     * {v1,v3,v4} is initiated. The Joint entry can reach v3/v4 but NOT v2, so old-majority
+     * is never satisfied; the leader stays in Joint throughout the test.
      */
     @Test
     fun jointConsensusReadRequiresBothOldAndNewMajority() = raftRunTest(timeout = 15.seconds) {
@@ -412,65 +408,70 @@ class ReadIndexTest {
         val v3 = NodeId("v3")
         val v4 = NodeId("v4")
 
-        val initCluster = ClusterConfig(voters = setOf(v1, v2))
-        val targetCluster = ClusterConfig(voters = setOf(v1, v3, v4))
-        // v3 and v4 bootstrap as learners under v1 so they never arm an election timer before
-        // the joint config propagates. A node that is a learner (in learners, not in voters)
-        // skips election-timer arming entirely (see RaftEngine.resetElectionTimeout). Once the
-        // Joint(old={v1,v2}, new={v1,v3,v4}) config replicates to them, reevaluateSelfRole
-        // promotes them to Follower/Voter status.
-        val joineeBootstrap = ClusterConfig(voters = setOf(v1), learners = setOf(v3, v4))
         val network = InMemoryRaftNetwork()
 
-        // Use SLOW_ELECTION_CONFIG so CheckQuorum (fired at election-timeout = 300–400 ms)
-        // does not step the leader down during the assertFalse check window after the read
-        // is queued. FAST_RAFT_CONFIG's 5–10 ms election timeout races with that window.
-        val leaderNode = backgroundScope.raftNode(initCluster, network.transport(v1), InMemoryRaftStorage(), SLOW_ELECTION_CONFIG)
-        delay(5) // let v1's election-timeout job register before v2's; v1 fires first
-        backgroundScope.raftNode(initCluster, network.transport(v2), InMemoryRaftStorage(), SLOW_ELECTION_CONFIG)
-        backgroundScope.raftNode(joineeBootstrap, network.transport(v3), InMemoryRaftStorage(), SLOW_ELECTION_CONFIG)
-        backgroundScope.raftNode(joineeBootstrap, network.transport(v4), InMemoryRaftStorage(), SLOW_ELECTION_CONFIG)
+        // v1 bootstraps alone → guaranteed leader (no election race).
+        val leaderNode = backgroundScope.raftNode(
+            ClusterConfig(voters = setOf(v1)),
+            network.transport(v1), InMemoryRaftStorage(), SLOW_ELECTION_CONFIG,
+        )
+        // v2 starts as a learner so it doesn't arm an election timer before being added as voter.
+        backgroundScope.raftNode(
+            ClusterConfig(voters = setOf(v1), learners = setOf(v2)),
+            network.transport(v2), InMemoryRaftStorage(), SLOW_ELECTION_CONFIG,
+        )
+        // v3 and v4 start as learners under v1 so they don't arm election timers either.
+        backgroundScope.raftNode(
+            ClusterConfig(voters = setOf(v1), learners = setOf(v3)),
+            network.transport(v3), InMemoryRaftStorage(), SLOW_ELECTION_CONFIG,
+        )
+        backgroundScope.raftNode(
+            ClusterConfig(voters = setOf(v1), learners = setOf(v4)),
+            network.transport(v4), InMemoryRaftStorage(), SLOW_ELECTION_CONFIG,
+        )
 
-        // Wait for v1 to become leader and for the no-op to commit.
+        // Wait for v1 to become leader (guaranteed because it's the only voter).
         leaderNode.awaitLeadership()
-        leaderNode.commitIndex.first { it >= 1L }
 
-        // Isolate v2 BEFORE initiating changeMembership. Under UnconfinedTestDispatcher, message
-        // delivery is instantaneous — if v2 can receive the Joint config entry, it will ACK before
-        // the test can isolate it, the Joint config will commit (old-majority = v1+v2 = 2/2), and
-        // Simple(C_new) will be immediately appended, leaving Simple({v1,v3,v4}) as the membership
-        // before the read is queued. Isolating first ensures the Joint config never reaches v2,
-        // keeping the leader stuck in Joint(old={v1,v2}, new={v1,v3,v4}).
+        // changeMembership({v1,v2}): promote v2 to voter. Suspends until Simple({v1,v2}) commits,
+        // so when it returns the membership is settled as Simple({v1,v2}) and commitIndex reflects it.
+        leaderNode.changeMembership(ClusterConfig(voters = setOf(v1, v2)))
+
+        // Isolate v2 (both directions) BEFORE issuing the second changeMembership.
+        // Under UnconfinedTestDispatcher, message delivery is synchronous — if v2 can
+        // receive the Joint entry it will ACK immediately, satisfying old-majority (v1+v2),
+        // and the Joint commits before the read is queued.
+        network.dropLink(v1, v2)
         network.dropLink(v2, v1)
-        network.dropLink(v1, v2)  // drop both directions so v2 can't ACK the Joint entry
 
-        // Start changeMembership in the background. Once the actor processes the command,
-        // v1's membership becomes Joint(old={v1,v2}, new={v1,v3,v4}). v2 is isolated so
-        // the Joint config entry cannot commit via old-majority.
+        // changeMembership({v1,v3,v4}): v1's membership becomes Joint(old={v1,v2}, new={v1,v3,v4}).
+        // v2 is isolated so old-majority (need 2 of {v1,v2}) is permanently unsatisfied.
+        // This call suspends until committed, which will never happen — run it in the background.
         val changeJob = backgroundScope.async {
-            try { leaderNode.changeMembership(targetCluster) } catch (_: Exception) { /* expected: cancelled below */ }
+            try { leaderNode.changeMembership(ClusterConfig(voters = setOf(v1, v3, v4))) }
+            catch (_: Exception) { /* cancelled below */ }
         }
-        delay(1) // let the actor process ChangeMembership → membership = Joint
+        delay(1) // let the actor process ChangeMembership → v1 is now in Joint
 
-        // Queue a readIndex while v1's membership is Joint(old={v1,v2}, new={v1,v3,v4}).
-        // v3 and v4 are connected → fresh ACKs in round H+1. New-majority satisfied.
-        // Old-majority (v1 alone = 1/2 < 2) NOT satisfied — v2 is isolated.
+        // Queue a readIndex. v3 and v4 are connected and will ACK in fresh rounds.
+        // New-majority ({v1,v3,v4}, need 2) = satisfied. Old-majority ({v1,v2}, need 2)
+        // = v1 alone = 1 < 2, NOT satisfied.
         supervisorScope {
             val read = async { leaderNode.readIndex() }
 
-            // Wait a few heartbeat cycles (2 ms each) so v3, v4 ACKs arrive in fresh rounds.
+            // Wait a few heartbeat cycles (2 ms each) so v3, v4 ACKs arrive in a fresh round.
             delay(10)
 
-            // Bug (effectiveConfig = new only): new-majority satisfied → CONFIRMED (wrong).
+            // Bug (effectiveConfig = new only): new-majority → CONFIRMED (wrong).
             // Fix (dual majority via quorumOfContacts): old-majority not established → NOT confirmed.
             assertFalse(
                 read.isCompleted,
-                "readIndex must NOT be confirmed when only the new-majority is reachable in joint consensus: " +
-                    "old-majority (v1+v2, need 2/2) is not satisfied because v2 is isolated",
+                "readIndex must NOT be confirmed when only the new-majority is reachable in joint " +
+                    "consensus: old-majority (v1+v2, need 2/2) is not satisfied because v2 is isolated",
             )
 
             // Let CheckQuorum fire (300–400 ms with SLOW_ELECTION_CONFIG):
-            // recentVoterContacts = {v3,v4} → old-majority (1+0=1 < 2) fails → step down.
+            // recentVoterContacts = {v3,v4} → old-majority (1+0 = 1 < 2) fails → step down.
             delay(750)
             assertFailsWith<LeadershipLostException> { read.await() }
         }
