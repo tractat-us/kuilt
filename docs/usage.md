@@ -247,6 +247,27 @@ val received: JsonCrdt = cbor.decodeFromByteArray(JsonCrdt.serializer(), bytes)
 See the `JsonCrdt` and `JsonNode` KDoc for conflict-resolution semantics and
 the cross-type precedence rule (`Object > Array > Leaf`).
 
+For live presence and awareness (cursors, typing indicators, per-peer ephemeral
+state), use `EphemeralMap` with `EphemeralMapTracker`:
+
+```kotlin
+val tracker = EphemeralMapTracker<String>(ttlMs = 5_000)
+
+// On each local heartbeat / state change:
+val next = tracker.snapshot().put(myReplica, "cursor=42", clock = localClock++)
+tracker.received(next)   // stamps local receive time
+sendDelta(next)          // broadcast the update over the Seam
+
+// On receiving a remote delta:
+tracker.received(decoded)
+
+// Read live peers (departed and TTL-expired entries are hidden):
+val live: Map<ReplicaId, String> = tracker.live()
+```
+
+TTL eviction is the sole recovery mechanism after a peer restart — see
+`EphemeralMap` KDoc for the reconnect / clock-reset contract.
+
 ## Consensus layer (`kuilt-raft`)
 
 `kuilt-raft` adds a Raft consensus layer on top of any kuilt `Seam`. Use it
