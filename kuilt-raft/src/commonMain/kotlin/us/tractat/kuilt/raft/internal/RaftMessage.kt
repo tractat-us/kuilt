@@ -130,4 +130,17 @@ internal sealed interface RaftMessage {
         val proposedTerm: Long,
         val round: Long,
     ) : RaftMessage
+
+    /**
+     * §3.10 TimeoutNow: sent by the leader to [targetId] to initiate a graceful leadership transfer.
+     * The target immediately converts to a candidate and starts a real election (bypassing its
+     * election-timeout wait and the pre-vote phase), so the transfer completes within one round-trip.
+     *
+     * [term] is the sender's current term; the target uses it to verify the message is current.
+     */
+    @Serializable
+    data class TimeoutNow(
+        val term: Long,
+        val leaderId: NodeId,
+    ) : RaftMessage
 }
