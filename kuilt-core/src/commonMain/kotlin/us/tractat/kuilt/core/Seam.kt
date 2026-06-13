@@ -35,7 +35,18 @@ public interface Seam {
     /** This peer's own identifier. */
     public val selfId: PeerId
 
-    /** Live set of peers currently connected. Includes [selfId]. */
+    /**
+     * Live set of peers currently connected. Includes [selfId].
+     *
+     * **Initial value invariant:** The initial value of this `StateFlow` is `{ selfId }` —
+     * this peer is included from the moment a `Seam` is created, even before any remote
+     * peers connect. This makes `peers.value.size > 1` a reliable sentinel for "at least
+     * one remote peer is connected."
+     *
+     * Every subsequent emission reflects the current connected peer set, always including
+     * this peer's own id. Remote peers are added when connections complete and removed
+     * when connections drop.
+     */
     public val peers: StateFlow<Set<PeerId>>
 
     /** The fabric's lifecycle as observed by this peer. */
