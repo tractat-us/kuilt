@@ -20,18 +20,34 @@ Kotlin Multiplatform: JVM, Android, iOS, macOS, wasmJs.
 repositories { mavenCentral() }
 ```
 
+### Using the BOM (recommended for multi-module consumers)
+
+Import the BOM once to align all module versions, then add individual modules without version numbers:
+
 ```kotlin
-// build.gradle.kts — pick the modules you need
+// build.gradle.kts
 dependencies {
-    implementation("us.tractat.kuilt:kuilt-core:0.4.0")
-    implementation("us.tractat.kuilt:kuilt-websocket:0.4.0")  // WebSocket fabric
-    implementation("us.tractat.kuilt:kuilt-raft:0.4.0")       // Raft consensus
-    implementation("us.tractat.kuilt:kuilt-crdt:0.4.0")       // CRDT zoo
-    implementation("us.tractat.kuilt:kuilt-session:0.4.0")    // membership / room
+    implementation(platform("us.tractat.kuilt:kuilt-bom:0.4.0"))
+
+    implementation("us.tractat.kuilt:kuilt-core")
+    implementation("us.tractat.kuilt:kuilt-websocket")  // WebSocket fabric
+    implementation("us.tractat.kuilt:kuilt-raft")       // Raft consensus
+    implementation("us.tractat.kuilt:kuilt-crdt")       // CRDT zoo
+    implementation("us.tractat.kuilt:kuilt-session")    // membership / room
 }
 ```
 
-Replace `VERSION` with the [latest release](https://central.sonatype.com/artifact/us.tractat.kuilt/kuilt-core).
+### Without the BOM
+
+```kotlin
+// build.gradle.kts — pick the modules you need, specifying versions explicitly
+dependencies {
+    implementation("us.tractat.kuilt:kuilt-core:0.4.0")
+    implementation("us.tractat.kuilt:kuilt-websocket:0.4.0")
+}
+```
+
+Replace `0.4.0` with the [latest release](https://central.sonatype.com/artifact/us.tractat.kuilt/kuilt-core).
 
 ## Modules
 
