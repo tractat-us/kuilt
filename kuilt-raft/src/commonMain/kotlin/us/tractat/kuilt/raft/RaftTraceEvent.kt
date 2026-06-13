@@ -163,6 +163,16 @@ public sealed interface RaftTraceEvent {
         val proposedTerm: Long,
         val reason: DenyReason,
     ) : RaftTraceEvent
+
+    /**
+     * The leader confirmed quorum freshness for a linearizable read at [readIndex] in [term].
+     * No log entry is written for the read. Emitted once per pending read as it resolves.
+     */
+    public data class ReadIndexConfirmed(
+        override val clock: Long,
+        val readIndex: Long,
+        val term: Long,
+    ) : RaftTraceEvent
 }
 
 /** Why a node stepped down from [RaftRole.Leader] or [RaftRole.Candidate] to [RaftRole.Follower]. */

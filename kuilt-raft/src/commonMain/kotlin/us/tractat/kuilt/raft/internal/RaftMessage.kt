@@ -33,6 +33,13 @@ internal sealed interface RaftMessage {
         val prevLogTerm: Long,
         val entries: List<LogEntry>,
         val leaderCommit: Long,
+        /**
+         * The leader's [RaftEngine.heartbeatRound] at send time, echoed back by the follower
+         * in [AppendEntriesResponse.echoedRound]. Used by the leader to credit an ACK to the
+         * round it actually responded to — not to the current heartbeatRound at receipt, which
+         * may have advanced during transit (round-slip bug, BLOCKER 1a).
+         */
+        val round: Long = 0L,
     ) : RaftMessage
 
     /** Response includes §5.3 fast-backup fields for efficient log reconciliation. */
@@ -43,6 +50,13 @@ internal sealed interface RaftMessage {
         val matchIndex: Long = 0L,
         val conflictIndex: Long? = null,
         val conflictTerm: Long? = null,
+        /**
+         * Echoes the [AppendEntries.round] from the request that triggered this response.
+         * The leader uses this to set [RaftEngine.lastAckRound] to the round the follower
+         * actually responded to, preventing a round-slip stale ACK from being credited to a
+         * later round that the follower has not yet confirmed (BLOCKER 1a fix).
+         */
+        val echoedRound: Long = 0L,
     ) : RaftMessage
 
     /**
@@ -53,6 +67,10 @@ internal sealed interface RaftMessage {
      * [config] is the effective membership as of [lastIncludedIndex] (see [SnapshotMeta.config]).
      * Carried on every chunk (it is tiny relative to the state) so the installer can adopt it
      * regardless of which chunk it finalizes on; `null` when the covered prefix held no config change.
+     *
+     * [round] echoes the leader's [RaftEngine.heartbeatRound] at send time; it is returned in
+     * [InstallSnapshotResponse.echoedRound] so the leader can credit the ACK to the correct round
+     * (BLOCKER 1a fix, same as [AppendEntries.round]).
      *
      * Note: intentionally never value-compared — [data] is a ByteArray whose generated equals
      * compares by reference. This is a transport envelope only; identity equality is never meaningful.
@@ -67,13 +85,19 @@ internal sealed interface RaftMessage {
         val data: ByteArray,
         val done: Boolean,
         val config: ConfigPayload? = null,
+        val round: Long = 0L,
     ) : RaftMessage
 
-    /** Follower's reply to [InstallSnapshot]: [nextOffset] is how many bytes it has stored, resyncing the leader after a dropped chunk. */
+    /**
+     * Follower's reply to [InstallSnapshot]: [nextOffset] is how many bytes it has stored, resyncing
+     * the leader after a dropped chunk. [echoedRound] echoes the [InstallSnapshot.round] from the
+     * request (BLOCKER 1a fix — same purpose as [AppendEntriesResponse.echoedRound]).
+     */
     @Serializable
     data class InstallSnapshotResponse(
         val term: Long,
         val nextOffset: Long,
+        val echoedRound: Long = 0L,
     ) : RaftMessage
 
     /**
