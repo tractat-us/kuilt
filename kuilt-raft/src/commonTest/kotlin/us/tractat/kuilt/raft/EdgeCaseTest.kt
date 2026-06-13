@@ -132,7 +132,9 @@ class EdgeCaseTest {
         sim.crash(followerId)
         var committed = false
         val job = launch {
-            try { leader.propose(byteArrayOf(99)); committed = true } catch (_: Exception) {}
+            try { leader.propose(byteArrayOf(99)); committed = true }
+            catch (_: NotLeaderException) {}
+            catch (_: LeadershipLostException) {}
         }
         delay(100)
         job.cancel()

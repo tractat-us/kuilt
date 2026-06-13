@@ -22,6 +22,9 @@ internal sealed interface RaftMessage {
         val voteGranted: Boolean,
     ) : RaftMessage
 
+    // Note: AppendEntries is intentionally never value-compared — entries contains List<LogEntry>
+    // whose ByteArray command fields compare by reference in generated equals. It is only used as a
+    // transport envelope decoded from the wire; identity equality is never meaningful here.
     @Serializable
     data class AppendEntries(
         val term: Long,
@@ -50,6 +53,9 @@ internal sealed interface RaftMessage {
      * [config] is the effective membership as of [lastIncludedIndex] (see [SnapshotMeta.config]).
      * Carried on every chunk (it is tiny relative to the state) so the installer can adopt it
      * regardless of which chunk it finalizes on; `null` when the covered prefix held no config change.
+     *
+     * Note: intentionally never value-compared — [data] is a ByteArray whose generated equals
+     * compares by reference. This is a transport envelope only; identity equality is never meaningful.
      */
     @Serializable
     data class InstallSnapshot(

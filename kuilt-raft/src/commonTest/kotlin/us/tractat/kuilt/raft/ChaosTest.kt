@@ -204,7 +204,9 @@ class ChaosTest {
         var leader = awaitLeader(sim)
         val committed = mutableListOf<LogEntry>()
         repeat(3) { i ->
-            try { committed += leader.propose(byteArrayOf(i.toByte())) } catch (_: Exception) {}
+            try { committed += leader.propose(byteArrayOf(i.toByte())) }
+            catch (_: NotLeaderException) {}
+            catch (_: LeadershipLostException) {}
             val id = sim.nodes.entries.firstOrNull { it.value === leader }?.key
             if (id != null) {
                 sim.crash(id)
