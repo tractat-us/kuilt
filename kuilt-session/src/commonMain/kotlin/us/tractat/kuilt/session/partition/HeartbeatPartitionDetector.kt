@@ -8,9 +8,10 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.launch
-import us.tractat.kuilt.core.Swatch
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Seam
+import us.tractat.kuilt.core.Swatch
+import us.tractat.kuilt.core.runCatchingCancellable
 import kotlin.time.Instant
 
 /**
@@ -172,15 +173,16 @@ public class HeartbeatPartitionDetector(
     // ── Ping / pong frame encoding ────────────────────────────────────────────
 
     /**
-     * Sends a ping frame on [link]. Failures are swallowed — the timeout fires regardless,
-     * and a send failure typically means the link is already closed.
+     * Sends a ping frame on [link]. Non-cancellation failures are swallowed — the timeout
+     * fires regardless, and a send failure typically means the link is already closed.
+     * [CancellationException] propagates so structured-concurrency cancellation is not hidden.
      */
     private suspend fun sendPing() {
-        runCatching { link.sendTo(peerId, pingPayload()) }
+        runCatchingCancellable { link.sendTo(peerId, pingPayload()) }
     }
 
     private suspend fun replyWithPong() {
-        runCatching { link.sendTo(peerId, pongPayload()) }
+        runCatchingCancellable { link.sendTo(peerId, pongPayload()) }
     }
 
     public companion object {

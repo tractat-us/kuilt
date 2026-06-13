@@ -1,5 +1,7 @@
 package us.tractat.kuilt.session
 
+import kotlinx.atomicfu.locks.reentrantLock
+import kotlinx.atomicfu.locks.withLock
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -23,6 +25,7 @@ import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.Swatch
 import us.tractat.kuilt.core.Tag
+import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.session.admit.AdmitMessage
 import us.tractat.kuilt.session.partition.DefaultJoinerReconnectController
 import us.tractat.kuilt.session.partition.HeartbeatConfig
@@ -49,10 +52,11 @@ import kotlin.time.Instant
  * [scope] is used to launch the per-Room admit loop coroutines. Callers should
  * use a scope whose lifetime matches the room's intended lifetime (e.g.
  * `backgroundScope` in tests, a structured session scope in production).
- * The scope's dispatcher **must** be single-threaded or otherwise serially
- * executing (e.g. `Dispatchers.Main`, a confined dispatcher, or
- * `UnconfinedTestDispatcher` in tests). [SeamRoom]'s internal mutable state
- * is not thread-safe under multi-threaded dispatchers such as `Dispatchers.Default`.
+ *
+ * [SeamRoom]'s internal membership state is guarded by a reentrant lock and is
+ * safe under any dispatcher, including multi-threaded ones such as
+ * `Dispatchers.Default`. Suspend calls (sends, broadcasts) are always performed
+ * outside the lock.
  *
  * [clock] is injected (never [kotlin.time.Clock.System]) so tests can use virtual
  * time. [heartbeatConfig] controls partition-detection timing.
@@ -119,6 +123,11 @@ public class SeamRoomFactory(
  * **Terminal state**: once [MembershipEvent.HostLost] fires, [broadcast] and [sendTo]
  * become silent no-ops. No auto-election is performed.
  *
+ * **Thread safety**: all mutable membership state (`admittedById`, `closed`, `hostLost`,
+ * `hostPeerId`, `pendingResume`, `resumeToken`, `detectorJobs`, `channelViews`) is
+ * guarded by an atomicfu [reentrantLock]. Critical sections perform only synchronous
+ * map/field operations; all suspend calls (sends, broadcasts) are made outside the lock.
+ *
  * [start] must be called by [SeamRoomFactory] after construction to launch these loops.
  */
 internal class SeamRoom(
@@ -141,6 +150,22 @@ internal class SeamRoom(
 
     private val _role = MutableStateFlow(role)
     override val role: StateFlow<SessionRole> = _role.asStateFlow()
+
+    /**
+     * Guards every mutation of the plain membership state:
+     * `admittedById`, `closed`, `hostLost`, `hostPeerId`, `pendingResume`,
+     * `resumeToken`, `detectorJobs`, `channelViews`.
+     *
+     * Multiple coroutines (`runMainLoop`, `runPeersWatcher`, `runTornWatcher`,
+     * `runReconnectEventLoop`, per-peer detector collectors, `scope.launch { admitPeer }`,
+     * `scope.launch { handleResume }`) may run under a multithreaded dispatcher and all
+     * read-modify-write that state. This reentrant lock serialises them.
+     *
+     * Critical sections are pure synchronous map/field operations (µs); all suspend calls
+     * (`seam.sendTo`, `seam.broadcast`) run outside the lock — the lock is never held
+     * across a suspension point.
+     */
+    private val lock = reentrantLock()
 
     // Admitted members (excluding self), keyed by PeerId for O(1) lookup.
     private val admittedById = mutableMapOf<PeerId, Member>()
@@ -185,17 +210,6 @@ internal class SeamRoom(
     // Per-admitted-peer detector collection jobs, keyed by PeerId.
     private val detectorJobs = mutableMapOf<PeerId, Job>()
 
-    // ── Threading contract ─────────────────────────────────────────────────────
-    // All mutable state below (admittedById, detectorJobs, closed, hostLost,
-    // hostPeerId, pendingResume, resumeToken) is accessed from multiple coroutines
-    // launched into [scope] — runMainLoop, runPeersWatcher, runTornWatcher,
-    // runReconnectEventLoop, and admitPeer. This class is safe only when [scope]
-    // uses a single-threaded or otherwise serially-executing dispatcher (e.g.
-    // Dispatchers.Main, a confined test dispatcher, or a single-threaded Executor).
-    // Callers must NOT pass a scope backed by Dispatchers.Default or
-    // Dispatchers.IO — those allow the launched coroutines to run on different
-    // threads simultaneously, which would produce data races on the plain-var and
-    // mutableMap fields below. SeamRoomFactory's KDoc states this scope contract.
     private var closed = false
     private var hostLost = false
 
@@ -284,9 +298,9 @@ internal class SeamRoom(
     private suspend fun runPeersWatcher() {
         seam.peers.drop(1).collect { currentPeers ->
             if (seam.state.value is SeamState.Torn) return@collect
-            val removedIds = admittedById.keys.filter { it !in currentPeers }
+            val removedIds = lock.withLock { admittedById.keys.filter { it !in currentPeers } }
             for (peerId in removedIds) {
-                stopDetector(peerId)
+                lock.withLock { stopDetector(peerId) }
                 removeFromRoster(peerId, LeaveReason.Normal)
             }
         }
@@ -326,9 +340,9 @@ internal class SeamRoom(
     }
 
     private fun evictAllOnTear() {
-        val peerIds = admittedById.keys.toList()
+        val peerIds = lock.withLock { admittedById.keys.toList() }
         for (peerId in peerIds) {
-            stopDetector(peerId)
+            lock.withLock { stopDetector(peerId) }
             removeFromRoster(peerId, LeaveReason.Normal)
         }
     }
@@ -362,12 +376,14 @@ internal class SeamRoom(
      * A joiner successfully resumed (host perspective). Reset their liveness and
      * send a [AdmitMessage.ResumeAck] to the joiner so the joiner's [pendingResume]
      * deferred resolves as [ResumeResult.Success].
+     *
+     * State mutation under lock; suspend send outside lock.
      */
-    private fun handleReconnectResumed(peerId: PeerId) {
-        updateMemberLiveness(peerId, Liveness.Connected) ?: return
-        _events.tryEmit(MembershipEvent.Resumed(peerId))
+    private suspend fun handleReconnectResumed(peerId: PeerId) {
+        val updated = lock.withLock { updateMemberLiveness(peerId, Liveness.Connected) } ?: return
+        _events.tryEmit(MembershipEvent.Resumed(updated.id))
         val ackBytes = AdmitMessage.encode(AdmitMessage.ResumeAck)
-        scope.launch { runCatching { seam.sendTo(peerId, ackBytes) } }
+        runCatchingCancellable { seam.sendTo(peerId, ackBytes) }
     }
 
     // ── Main loop ──────────────────────────────────────────────────────────────
@@ -440,8 +456,10 @@ internal class SeamRoom(
             }
             is AdmitMessage.Reject -> {
                 if (_role.value == SessionRole.Joiner) {
-                    pendingResume?.complete(ResumeResult.WindowClosed)
-                    pendingResume = null
+                    lock.withLock {
+                        pendingResume?.complete(ResumeResult.WindowClosed)
+                        pendingResume = null
+                    }
                 }
             }
             null -> { /* malformed frame — ignore */ }
@@ -452,11 +470,13 @@ internal class SeamRoom(
      * Host-side: admit a peer that sent [AdmitMessage.Hello].
      *
      * Steps:
-     * 1. Add peer to roster.
+     * 1. Add peer to roster (under lock).
      * 2. Send [AdmitMessage.Welcome] back to the joiner with their [PeerId].
      * 3. Broadcast the welcome to all other admitted members (roster sync).
      * 4. Send each already-known member's welcome to the new joiner (bootstrap their view).
      * 5. Send self-introduction (host identity) to the new joiner.
+     *
+     * State mutation is under lock; all seam sends happen outside the lock.
      */
     private suspend fun admitPeer(joinerPeerId: PeerId, hello: AdmitMessage.Hello) {
         val identity = MemberIdentity(
@@ -466,9 +486,12 @@ internal class SeamRoom(
         )
         val member = Member(id = joinerPeerId, identity = identity, liveness = Liveness.Connected)
 
-        // Snapshot current members before adding the new one (for bootstrap step)
-        val existingMembers = admittedById.values.toList()
-        addToRoster(member)
+        // Snapshot current members and mutate roster under lock; no I/O inside.
+        val existingMembers = lock.withLock {
+            val existing = admittedById.values.toList()
+            addToRoster(member)
+            existing
+        }
 
         val welcome = AdmitMessage.Welcome(
             assignedPeerId = joinerPeerId.value,
@@ -479,12 +502,14 @@ internal class SeamRoom(
         )
         val welcomeBytes = AdmitMessage.encode(welcome)
 
+        // All sends below are outside the lock — they are suspend calls.
+
         // Send welcome directly to the joiner
-        runCatching { seam.sendTo(joinerPeerId, welcomeBytes) }
+        runCatchingCancellable { seam.sendTo(joinerPeerId, welcomeBytes) }
 
         // Broadcast welcome to all other admitted members (roster sync)
         for (existing in existingMembers) {
-            runCatching { seam.sendTo(existing.id, welcomeBytes) }
+            runCatchingCancellable { seam.sendTo(existing.id, welcomeBytes) }
         }
 
         // Bootstrap the joiner's view: send welcomes for all pre-existing members
@@ -497,7 +522,7 @@ internal class SeamRoom(
                     deviceId = existing.identity.deviceId,
                 ),
             )
-            runCatching { seam.sendTo(joinerPeerId, existingWelcome) }
+            runCatchingCancellable { seam.sendTo(joinerPeerId, existingWelcome) }
         }
 
         // Send self-introduction (host introduces itself to the new joiner)
@@ -508,7 +533,7 @@ internal class SeamRoom(
                 sessionId = selfId.value,
             ),
         )
-        runCatching { seam.sendTo(joinerPeerId, hostIntro) }
+        runCatchingCancellable { seam.sendTo(joinerPeerId, hostIntro) }
     }
 
     private suspend fun sendHello() {
@@ -516,7 +541,7 @@ internal class SeamRoom(
             displayName = displayName,
             sessionId = selfId.value,
         )
-        runCatching { seam.broadcast(AdmitMessage.encode(hello)) }
+        runCatchingCancellable { seam.broadcast(AdmitMessage.encode(hello)) }
     }
 
     /**
@@ -536,7 +561,7 @@ internal class SeamRoom(
         val result = ctrl.tryResume(token, at = clock().toEpochMilliseconds())
         if (result !is ResumeResult.Success) {
             val rejectBytes = AdmitMessage.encode(AdmitMessage.Reject("resume-rejected"))
-            runCatching { seam.sendTo(sender, rejectBytes) }
+            runCatchingCancellable { seam.sendTo(sender, rejectBytes) }
         }
         // On Success: handleReconnectResumed fires via the controller's event stream
         // (runReconnectEventLoop collects JoinerReconnectEvent.Resumed and calls it).
@@ -560,32 +585,37 @@ internal class SeamRoom(
      * [AdmitMessage.ResumeAck], not as Welcome.
      */
     private fun handleWelcome(sender: PeerId, welcome: AdmitMessage.Welcome) {
-        val assignedId = PeerId(welcome.assignedPeerId)
+        lock.withLock {
+            val assignedId = PeerId(welcome.assignedPeerId)
 
-        // Self-admission welcome: mint the resume token (once) from the roomId carried here.
-        if (assignedId == selfId) {
+            // Self-admission welcome: mint the resume token (once) from the roomId carried here.
+            if (assignedId == selfId) {
+                mintResumeTokenIfAbsent(welcome.roomId)
+                return@withLock
+            }
+
+            // Host self-intro: the described peer IS the sender.
+            if (assignedId == sender && hostPeerId == null) {
+                hostPeerId = sender
+            }
+
+            // Also mint resume token from host intro welcome if not yet minted.
             mintResumeTokenIfAbsent(welcome.roomId)
-            return
+
+            if (admittedById.containsKey(assignedId)) return@withLock // already known
+            val identity = MemberIdentity(
+                displayName = welcome.displayName,
+                sessionId = welcome.sessionId,
+                deviceId = welcome.deviceId,
+            )
+            val member = Member(id = assignedId, identity = identity, liveness = Liveness.Connected)
+            addToRoster(member)
         }
-
-        // Host self-intro: the described peer IS the sender.
-        if (assignedId == sender && hostPeerId == null) {
-            hostPeerId = sender
-        }
-
-        // Also mint resume token from host intro welcome if not yet minted.
-        mintResumeTokenIfAbsent(welcome.roomId)
-
-        if (admittedById.containsKey(assignedId)) return // already known
-        val identity = MemberIdentity(
-            displayName = welcome.displayName,
-            sessionId = welcome.sessionId,
-            deviceId = welcome.deviceId,
-        )
-        val member = Member(id = assignedId, identity = identity, liveness = Liveness.Connected)
-        addToRoster(member)
     }
 
+    /**
+     * Mints the [resumeToken] if not yet set. Callers must hold [lock].
+     */
     private fun mintResumeTokenIfAbsent(roomId: String?) {
         if (resumeToken == null && roomId != null) {
             resumeToken = ResumeToken(
@@ -604,10 +634,14 @@ internal class SeamRoom(
      * resolve the [pendingResume] deferred so [resume] returns [ResumeResult.Success].
      */
     private fun handleResumeAck(sender: PeerId) {
-        updateMemberLiveness(sender, Liveness.Connected)
+        val deferred = lock.withLock {
+            updateMemberLiveness(sender, Liveness.Connected)
+            val d = pendingResume
+            pendingResume = null
+            d
+        }
         _events.tryEmit(MembershipEvent.Resumed(selfId))
-        pendingResume?.complete(ResumeResult.Success)
-        pendingResume = null
+        deferred?.complete(ResumeResult.Success)
     }
 
     // ── Partition detection ───────────────────────────────────────────────────
@@ -621,6 +655,8 @@ internal class SeamRoom(
      * that the main loop already holds.
      *
      * A separate coroutine collects the detector's events and maps them to [MembershipEvent]s.
+     *
+     * Callers must hold [lock] when invoking this method.
      */
     private fun startDetector(member: Member) {
         val perPeerSeam = PerPeerSeam(seam, member.id, rawIncoming)
@@ -638,6 +674,9 @@ internal class SeamRoom(
         detectorJobs[member.id] = job
     }
 
+    /**
+     * Cancels the detector job for [peerId]. Callers must hold [lock].
+     */
     private fun stopDetector(peerId: PeerId) {
         detectorJobs.remove(peerId)?.cancel()
     }
@@ -651,20 +690,22 @@ internal class SeamRoom(
     }
 
     private fun markPartitioned(peerId: PeerId, at: Instant) {
-        updateMemberLiveness(peerId, Liveness.Partitioned) ?: return
-        _events.tryEmit(MembershipEvent.Partitioned(peerId, at))
-        // Open the reconnect window on the host side.
+        val updated = lock.withLock { updateMemberLiveness(peerId, Liveness.Partitioned) } ?: return
+        _events.tryEmit(MembershipEvent.Partitioned(updated.id, at))
         reconnectController?.onPeerUnresponsive(peerId, at.toEpochMilliseconds())
     }
 
     private fun markRecovered(peerId: PeerId, at: Instant) {
-        updateMemberLiveness(peerId, Liveness.Connected) ?: return
-        _events.tryEmit(MembershipEvent.Recovered(peerId, at))
+        val updated = lock.withLock { updateMemberLiveness(peerId, Liveness.Connected) } ?: return
+        _events.tryEmit(MembershipEvent.Recovered(updated.id, at))
     }
 
     private suspend fun handlePeerLost(peerId: PeerId, at: Instant) {
-        stopDetector(peerId)
-        if (_role.value == SessionRole.Joiner && peerId == hostPeerId) {
+        val isHostPeer = lock.withLock {
+            stopDetector(peerId)
+            _role.value == SessionRole.Joiner && peerId == hostPeerId
+        }
+        if (isHostPeer) {
             markHostLost(at)
         } else {
             removeFromRoster(peerId, LeaveReason.PartitionExpired)
@@ -672,13 +713,22 @@ internal class SeamRoom(
     }
 
     private suspend fun markHostLost(at: Instant) {
-        if (hostLost) return
-        hostLost = true
+        val alreadyLost = lock.withLock {
+            val was = hostLost
+            hostLost = true
+            was
+        }
+        if (alreadyLost) return
         _events.tryEmit(MembershipEvent.HostLost(at))
-        // Room is now terminal. Leave cleanly to cancel loops and close the seam.
         leave(LeaveReason.Error("host lost"))
     }
 
+    /**
+     * Updates the in-memory [Member] for [peerId] to reflect [liveness].
+     *
+     * Returns the updated [Member], or null if [peerId] is not an admitted member.
+     * Callers must hold [lock] when invoking this method.
+     */
     private fun updateMemberLiveness(peerId: PeerId, liveness: Liveness): Member? {
         val current = admittedById[peerId] ?: return null
         val updated = current.copy(liveness = liveness)
@@ -689,6 +739,10 @@ internal class SeamRoom(
 
     // ── Roster management ────────────────────────────────────────────────────
 
+    /**
+     * Adds [member] to [admittedById], [_roster], and [_rosterPeers], emits
+     * [MembershipEvent.Joined], and starts its detector. Callers must hold [lock].
+     */
     private fun addToRoster(member: Member) {
         admittedById[member.id] = member
         _roster.update { current -> current + member }
@@ -698,13 +752,14 @@ internal class SeamRoom(
     }
 
     private fun removeFromRoster(peerId: PeerId, reason: LeaveReason) {
-        admittedById.remove(peerId) ?: return // already removed, avoid duplicate Left events
+        val removed = lock.withLock { admittedById.remove(peerId) }
+        removed ?: return // already removed, avoid duplicate Left events
         _roster.update { current -> current.filterNot { it.id == peerId }.toSet() }
         _rosterPeers.update { current -> current - peerId }
         _events.tryEmit(MembershipEvent.Left(peerId, reason))
     }
 
-    private fun isAdmittedPeer(peerId: PeerId): Boolean = admittedById.containsKey(peerId)
+    private fun isAdmittedPeer(peerId: PeerId): Boolean = lock.withLock { admittedById.containsKey(peerId) }
 
     /**
      * Returns `true` if [peerId] is an admitted member.
@@ -712,7 +767,7 @@ internal class SeamRoom(
      * Used by [RoomChannelSeam] to filter incoming frames to admitted peers only.
      * Accepting a nullable [PeerId] matches [Swatch.sender], which is nullable.
      */
-    internal fun isAdmitted(peerId: PeerId?): Boolean = peerId != null && admittedById.containsKey(peerId)
+    internal fun isAdmitted(peerId: PeerId?): Boolean = peerId != null && lock.withLock { admittedById.containsKey(peerId) }
 
     // ── Application frame routing ─────────────────────────────────────────────
 
@@ -728,7 +783,8 @@ internal class SeamRoom(
      * Silent no-op when the room is terminal (after [MembershipEvent.HostLost] or [leave]).
      */
     override suspend fun broadcast(bytes: ByteArray) {
-        if (hostLost || closed) return
+        val terminal = lock.withLock { hostLost || closed }
+        if (terminal) return
         seam.broadcast(bytes)
     }
 
@@ -738,7 +794,8 @@ internal class SeamRoom(
      * Silent no-op when the room is terminal (after [MembershipEvent.HostLost] or [leave]).
      */
     override suspend fun sendTo(peer: PeerId, bytes: ByteArray) {
-        if (hostLost || closed) return
+        val terminal = lock.withLock { hostLost || closed }
+        if (terminal) return
         seam.sendTo(peer, bytes)
     }
 
@@ -752,8 +809,10 @@ internal class SeamRoom(
      */
     override fun channel(id: String): Seam {
         val subId = RoomChannel.channelSubId(id)
-        return channelViews.getOrPut(subId) {
-            RoomChannelSeam(room = this, subId = subId, sharedRaw = rawIncoming)
+        return lock.withLock {
+            channelViews.getOrPut(subId) {
+                RoomChannelSeam(room = this, subId = subId, sharedRaw = rawIncoming)
+            }
         }
     }
 
@@ -762,20 +821,25 @@ internal class SeamRoom(
      *
      * **Joiner only.** The host's [JoinerReconnectController] holds the reconnect window;
      * this method sends [AdmitMessage.Resume] to the host and awaits the reply:
-     * - Host replies [AdmitMessage.Welcome] (self) → [ResumeResult.Success]; [MembershipEvent.Resumed] fires.
+     * - Host replies [AdmitMessage.ResumeAck] → [ResumeResult.Success]; [MembershipEvent.Resumed] fires.
      * - Host replies [AdmitMessage.Reject] → [ResumeResult.WindowClosed].
      *
      * **Not valid** after [MembershipEvent.HostLost] — the room is terminal at that point.
      * Callers should guard with [hostLost] before calling.
      *
      * **Not valid** on the host side — returns [ResumeResult.WindowClosed] immediately.
+     *
+     * State mutation (installing the deferred) is under [lock]; the suspend broadcast is outside.
+     * A [CancellationException] from the broadcast propagates — it is not swallowed.
      */
     override suspend fun resume(token: ResumeToken): ResumeResult {
         if (_role.value != SessionRole.Joiner) return ResumeResult.WindowClosed
-        if (hostLost || closed) return ResumeResult.WindowClosed
 
-        val deferred = CompletableDeferred<ResumeResult>()
-        pendingResume = deferred
+        // Install the deferred under lock; check terminal flags first.
+        val deferred = lock.withLock {
+            if (hostLost || closed) return ResumeResult.WindowClosed
+            CompletableDeferred<ResumeResult>().also { pendingResume = it }
+        }
 
         val resumeMsg = AdmitMessage.encode(
             AdmitMessage.Resume(
@@ -784,9 +848,11 @@ internal class SeamRoom(
                 issuedAt = token.issuedAt,
             ),
         )
-        val sendResult = runCatching { seam.broadcast(resumeMsg) }
+        // Suspend send outside the lock. A genuine CancellationException propagates (correct).
+        // A non-cancellation send failure becomes WindowClosed.
+        val sendResult = runCatchingCancellable { seam.broadcast(resumeMsg) }
         if (sendResult.isFailure) {
-            pendingResume = null
+            lock.withLock { pendingResume = null }
             return ResumeResult.WindowClosed
         }
 
@@ -794,11 +860,14 @@ internal class SeamRoom(
     }
 
     override suspend fun leave(reason: LeaveReason) {
-        if (closed) return
-        closed = true
-        loopJobs.forEach { it.cancel() }
-        detectorJobs.values.forEach { it.cancel() }
-        detectorJobs.clear()
+        // Flip closed and snapshot jobs under lock; cancel + close seam outside.
+        val (jobsToCancel, detectorJobsToCancel) = lock.withLock {
+            if (closed) return
+            closed = true
+            loopJobs to detectorJobs.values.toList().also { detectorJobs.clear() }
+        }
+        jobsToCancel.forEach { it.cancel() }
+        detectorJobsToCancel.forEach { it.cancel() }
         seam.close(
             when (reason) {
                 is LeaveReason.Normal -> CloseReason.Normal
