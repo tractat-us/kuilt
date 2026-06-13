@@ -50,6 +50,8 @@ public class ORMapEntry<S : Quilted<S>>(
  * Built over `Causal<DotMap<K, ORMapEntry<S>>>`: each entry's `tags` is the
  * observed-remove handle for the key; the value lives alongside and is merged
  * by its own `piece`.
+ *
+ * @sample us.tractat.kuilt.crdt.sampleORMap
  */
 @Serializable
 public class ORMap<K, S : Quilted<S>> private constructor(

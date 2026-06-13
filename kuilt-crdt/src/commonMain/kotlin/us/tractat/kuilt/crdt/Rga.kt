@@ -122,6 +122,8 @@ public sealed interface RgaOp<out V> {
  * received ops.
  *
  * @param V the element type. Must be serializable for wire transport.
+ *
+ * @sample us.tractat.kuilt.crdt.sampleRga
  */
 @Serializable
 public class Rga<V> private constructor(
