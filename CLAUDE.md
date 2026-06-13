@@ -37,6 +37,7 @@ and `docs/usage.md` for how to consume it.
 | Module | Targets | Role |
 |--------|---------|------|
 | `:kuilt-crdt` | all | The delta-state CRDT zoo (`GCounter`/`PNCounter`/`GSet`/`ORSet`/`TwoPhaseSet`/`LWWRegister`/`MVRegister`/`LWWMap`/`ORMap`/`BoundedCounter`/`Rga`/`Causal`), plus `SeamReplicator` (live replication over a `Seam`). |
+| `:kuilt-game` | all | Turn-based game facade over `:kuilt-raft`: `TurnSequencer` (propose/commit typed actions) + `IndexedAction` (committed action carrier). |
 | `:kuilt-raft` | all | Raft consensus over a `Seam` — leader election + PreVote, log replication, log compaction + chunked `InstallSnapshot`, dynamic membership. |
 | `:kuilt-session` | all | Membership-aware `Room` over a `Loom` (`SeamRoom`): admit/identify handshake, roster, reconnect tokens, partition detection. |
 

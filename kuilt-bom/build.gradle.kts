@@ -22,6 +22,7 @@ dependencies {
         api(project(":kuilt-crdt"))
         api(project(":kuilt-deal"))
         api(project(":kuilt-deal-test"))
+        api(project(":kuilt-game"))
         api(project(":kuilt-raft"))
         api(project(":kuilt-raft-test"))
         api(project(":kuilt-session"))
