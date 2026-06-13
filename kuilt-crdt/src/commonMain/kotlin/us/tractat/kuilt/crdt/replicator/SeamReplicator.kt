@@ -414,7 +414,11 @@ public class SeamReplicator<S : Quilted<S>>(
         if (vector.entries.isEmpty()) return
         val msg = ReplicatorMessage.Delivered<S>(sender = replica, vector = vector)
         val bytes = encode(msg)
-        scope.launch { runCatching { seam.broadcast(bytes) } }
+        scope.launch {
+            try { seam.broadcast(bytes) }
+            catch (e: kotlinx.coroutines.CancellationException) { throw e }
+            catch (e: Exception) { logger.debug { "gossipDelivered broadcast failed: ${e.message}" } }
+        }
     }
 
     private fun touch(peer: PeerId): Unit = lock.withLock {
@@ -473,7 +477,11 @@ public class SeamReplicator<S : Quilted<S>>(
     private fun broadcastDelta(seq: Long, delta: S) {
         val msg = ReplicatorMessage.Delta(sender = replica, seq = seq, delta = delta)
         val bytes = encode(msg)
-        scope.launch { runCatching { seam.broadcast(bytes) } }
+        scope.launch {
+            try { seam.broadcast(bytes) }
+            catch (e: kotlinx.coroutines.CancellationException) { throw e }
+            catch (e: Exception) { logger.debug { "broadcastDelta failed: ${e.message}" } }
+        }
     }
 
     private fun onPeersChanged(currentPeers: Set<PeerId>): Unit = lock.withLock {
@@ -489,7 +497,11 @@ public class SeamReplicator<S : Quilted<S>>(
     private fun sendFullStateTo(peer: PeerId) {
         val msg = ReplicatorMessage.FullState(sender = replica, state = _state.value)
         val bytes = encode(msg)
-        scope.launch { runCatching { seam.sendTo(peer, bytes) } }
+        scope.launch {
+            try { seam.sendTo(peer, bytes) }
+            catch (e: kotlinx.coroutines.CancellationException) { throw e }
+            catch (e: Exception) { logger.debug { "sendFullStateTo $peer failed: ${e.message}" } }
+        }
         scheduleFullStateRetry(peer, config.fullStateRetryLimit)
     }
 
@@ -507,7 +519,9 @@ public class SeamReplicator<S : Quilted<S>>(
                 if (peer !in knownPeers) return@launch
                 encode(ReplicatorMessage.FullState(sender = replica, state = _state.value))
             }
-            runCatching { seam.sendTo(peer, bytes) }
+            try { seam.sendTo(peer, bytes) }
+            catch (e: kotlinx.coroutines.CancellationException) { throw e }
+            catch (e: Exception) { logger.debug { "fullStateRetry sendTo $peer failed: ${e.message}" } }
             lock.withLock { scheduleFullStateRetry(peer, attemptsLeft - 1) }
         }
     }
@@ -585,7 +599,11 @@ public class SeamReplicator<S : Quilted<S>>(
             toSeq = toSeq,
         )
         val bytes = encode(msg)
-        scope.launch { runCatching { seam.sendTo(to, bytes) } }
+        scope.launch {
+            try { seam.sendTo(to, bytes) }
+            catch (e: kotlinx.coroutines.CancellationException) { throw e }
+            catch (e: Exception) { logger.debug { "sendResend to $to failed: ${e.message}" } }
+        }
     }
 
     private fun scheduleResendRetry(to: PeerId, sender: ReplicaId, fromSeq: Long, toSeq: Long) {
@@ -612,7 +630,11 @@ public class SeamReplicator<S : Quilted<S>>(
     private fun sendAck(to: PeerId, originalSender: ReplicaId, seq: Long) {
         val msg = ReplicatorMessage.Ack<S>(acker = replica, sender = originalSender, seq = seq)
         val bytes = encode(msg)
-        scope.launch { runCatching { seam.sendTo(to, bytes) } }
+        scope.launch {
+            try { seam.sendTo(to, bytes) }
+            catch (e: kotlinx.coroutines.CancellationException) { throw e }
+            catch (e: Exception) { logger.debug { "sendAck to $to failed: ${e.message}" } }
+        }
     }
 
     private fun onAck(msg: ReplicatorMessage.Ack<S>) {
@@ -710,5 +732,5 @@ private fun checkNotUnderTestDispatcher(scope: CoroutineScope, strict: Boolean, 
         "never advance automatically and your test will deadlock silently. " +
         "Either use UnconfinedTestDispatcher (delays execute eagerly) or drive virtual time via " +
         "testScheduler.advanceTimeBy(…) if you must use StandardTestDispatcher."
-    if (strict) error(msg) else println("WARNING: $msg")
+    if (strict) error(msg) else logger.warn { msg }
 }

@@ -155,7 +155,7 @@ public class Rga<V> private constructor(
      * Map from each [RgaId] to its insert op, for O(1) lookup by id.
      * Excludes compacted ids — their Insert ops have been removed from the log.
      */
-    private val insertsByid: Map<RgaId, RgaOp.Insert<V>> by lazy {
+    private val insertsById: Map<RgaId, RgaOp.Insert<V>> by lazy {
         ops.filterIsInstance<RgaOp.Insert<V>>().associateBy { it.id }
     }
 
@@ -188,7 +188,7 @@ public class Rga<V> private constructor(
      */
     public fun toList(): List<V> = sequence
         .filter { id -> id !in tombstones }
-        .map { id -> insertsByid.getValue(id).value }
+        .map { id -> insertsById.getValue(id).value }
 
     /**
      * The number of visible elements.
@@ -302,12 +302,12 @@ public class Rga<V> private constructor(
         delivered: VersionVector,
     ): Pair<Rga<V>, RgaOp.Compact>? {
         if (!delivered.dominates(frontierMax)) return null // condition 3 — frontier-complete
-        val predecessors = insertsByid.values.mapTo(mutableSetOf()) { it.after }
+        val predecessors = insertsById.values.mapTo(mutableSetOf()) { it.after }
         val gcIds = tombstones
             .filter { id -> stableCut.contains(id.dot) && id !in predecessors } // (2) + (4)
             .toSet()
         if (gcIds.isEmpty()) return null
-        val positions = gcIds.associateWith { id -> insertsByid.getValue(id).after }
+        val positions = gcIds.associateWith { id -> insertsById.getValue(id).after }
         val compactOp = RgaOp.Compact(positions)
         val newOps = purgeAndRecord(ops, gcIds, compactOp)
         return Rga(newOps, lamport) to compactOp
@@ -315,12 +315,12 @@ public class Rga<V> private constructor(
 
     /**
      * Returns a positions map for [ids]: each id mapped to its [RgaOp.Insert.after].
-     * All ids must be present in [insertsByid] (non-compacted — live or tombstoned).
+     * All ids must be present in [insertsById] (non-compacted — live or tombstoned).
      * Used by [us.tractat.kuilt.crdt.replicator.RgaGcCoordinator] to build positions
      * for window-dropped live elements when constructing a combined [RgaOp.Compact].
      */
     internal fun positionsFor(ids: Set<RgaId>): Map<RgaId, RgaId> =
-        ids.associateWith { id -> insertsByid.getValue(id).after }
+        ids.associateWith { id -> insertsById.getValue(id).after }
 
     /**
      * Apply an [op] received from a remote replica, advancing the Lamport clock.
@@ -343,18 +343,6 @@ public class Rga<V> private constructor(
         is RgaOp.Compact -> Rga(purgeAndRecord(ops, op.positions.keys, op), lamport)
     }
 
-    /**
-     * Merge two replicas' op-logs. The result is the idempotent union — both
-     * replicas converge to the same [toList] after [piece].
-     *
-     * This satisfies the [Quilted] lattice laws:
-     * - **Idempotent**: `a.piece(a) == a` (set union with itself)
-     * - **Commutative**: `a.piece(b) == b.piece(a)` (set union is commutative)
-     * - **Associative**: `a.piece(b).piece(c) == a.piece(b.piece(c))` (set union)
-     *
-     * Any [RgaOp.Compact] ops in the union are applied eagerly so that Insert/Remove
-     * ops already GC'd on one peer do not re-inflate the op-log on merge.
-     */
     /**
      * The causal [Dot]s this op-log has delivered: every `Insert`'s own dot
      * (`id.dot = (replicaId, seq)`) **plus** every dot recorded in a `Compact` op.
@@ -391,6 +379,18 @@ public class Rga<V> private constructor(
             }
             .toSet()
 
+    /**
+     * Merge two replicas' op-logs. The result is the idempotent union — both
+     * replicas converge to the same [toList] after [piece].
+     *
+     * This satisfies the [Quilted] lattice laws:
+     * - **Idempotent**: `a.piece(a) == a` (set union with itself)
+     * - **Commutative**: `a.piece(b) == b.piece(a)` (set union is commutative)
+     * - **Associative**: `a.piece(b).piece(c) == a.piece(b.piece(c))` (set union)
+     *
+     * Any [RgaOp.Compact] ops in the union are applied eagerly so that Insert/Remove
+     * ops already GC'd on one peer do not re-inflate the op-log on merge.
+     */
     override fun piece(other: Rga<V>): Rga<V> {
         val rawUnion = ops + other.ops
         val mergedLamport = maxOf(lamport, other.lamport)
@@ -439,14 +439,14 @@ public class Rga<V> private constructor(
         // Group each insert op by its effective predecessor: HEAD if `after` is HEAD or present,
         // else chain-walk compactPositions to the nearest surviving ancestor (positional
         // reroot, #293) — preserves relative order when GC removes an intermediate element.
-        val present = insertsByid.keys
+        val present = insertsById.keys
         val positions = compactPositions
         fun nearestAncestor(start: RgaId): RgaId {
             var cur = start
             while (cur != RgaId.HEAD && cur !in present) cur = positions[cur] ?: RgaId.HEAD
             return cur
         }
-        val childrenOf = insertsByid.values
+        val childrenOf = insertsById.values
             .groupBy(
                 keySelector = { ins ->
                     val a = ins.after
