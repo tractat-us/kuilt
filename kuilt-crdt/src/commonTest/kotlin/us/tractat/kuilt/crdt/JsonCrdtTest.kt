@@ -6,8 +6,10 @@ import kotlinx.serialization.json.Json
 import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 /**
  * Tests for [JsonCrdt] — a recursive CRDT over arbitrary JSON that composes
@@ -325,5 +327,121 @@ class JsonCrdtTest {
         val docB = JsonCrdt.empty(b).set("b", str("2")).set("shared", str("scalar"))
         val docC = JsonCrdt.empty(c).set("c", str("3")).set("shared", arr(c, str("item")))
         assertEquals(docA.piece(docB).piece(docC), docA.piece(docB.piece(docC)))
+    }
+
+    // ---- Tests: replica guard (F4) ----
+
+    /**
+     * A document deserialized without calling [withReplica] must fail loud on mutation
+     * rather than silently corrupting the dot namespace with [ReplicaId]("").
+     */
+    @Test
+    fun setFailsOnEmptyReplicaId() {
+        val doc = JsonCrdt.empty(a).set("x", str("hello"))
+        val deserialized = json.decodeFromString(JsonCrdt.serializer(), json.encodeToString(JsonCrdt.serializer(), doc))
+        assertFailsWith<IllegalArgumentException> { deserialized.set("y", str("world")) }
+    }
+
+    @Test
+    fun removeFailsOnEmptyReplicaId() {
+        val doc = JsonCrdt.empty(a).set("x", str("hello"))
+        val deserialized = json.decodeFromString(JsonCrdt.serializer(), json.encodeToString(JsonCrdt.serializer(), doc))
+        assertFailsWith<IllegalArgumentException> { deserialized.remove("x") }
+    }
+
+    @Test
+    fun withReplicaAllowsMutationAfterDeserialization() {
+        val doc = JsonCrdt.empty(a).set("x", str("hello"))
+        val deserialized = json.decodeFromString(JsonCrdt.serializer(), json.encodeToString(JsonCrdt.serializer(), doc))
+            .withReplica(a)
+        assertEquals(doc, deserialized)
+        val updated = deserialized.set("y", str("world"))
+        assertContains(updated.keys, "y")
+    }
+
+    // ---- Tests: cross-type data-loss semantics (F5) ----
+
+    /**
+     * When Object wins a cross-type conflict, the losing Leaf's payload is absent —
+     * the winning Object has no record of the scalar value that was discarded.
+     */
+    @Test
+    fun crossTypeMergeObjectOverLeafPayloadIsAbsent() {
+        val docObject = JsonCrdt.empty(a).set("k", obj(a, "nested" to str("kept")))
+        val docLeaf = JsonCrdt.empty(b).set("k", str("discarded"))
+        val merged = docObject.piece(docLeaf)
+        val winner = assertIs<JsonNode.Object>(merged["k"])
+        // The Object's inner content is intact
+        assertEquals(setOf("nested"), winner.map.keys)
+        // No trace of the scalar "discarded" — it is silently gone
+    }
+
+    /**
+     * Two-level cross-type conflict: an Object wins over an Array at the root level;
+     * the Array's entire subtree is discarded.
+     */
+    @Test
+    fun crossTypeMergeObjectOverArraySubtreeIsAbsent() {
+        val docObject = JsonCrdt.empty(a).set("k", obj(a, "x" to str("v")))
+        val docArray = JsonCrdt.empty(b).set("k", arr(b, str("item1"), str("item2")))
+        val merged1 = docObject.piece(docArray)
+        val merged2 = docArray.piece(docObject)
+        // Object wins in both merge orders
+        assertIs<JsonNode.Object>(merged1["k"])
+        assertIs<JsonNode.Object>(merged2["k"])
+        // The Array's elements are gone — nothing about "item1"/"item2" survives
+        assertEquals(merged1, merged2)
+    }
+
+    // ---- Tests: post-deserialize convergence (F6) ----
+
+    /**
+     * Deserialize two independently-evolved documents from CBOR, piece them, and
+     * assert the result matches an in-memory merge of the originals. Proves the
+     * wire format preserves enough causal context for correct convergence.
+     */
+    @Test
+    fun deserializedDocumentsConvergeCorrectly() {
+        val ser = JsonCrdt.serializer()
+        val docA = JsonCrdt.empty(a)
+            .set("shared", obj(a, "name" to str("Alice")))
+            .set("a-only", str("from-a"))
+        val docB = JsonCrdt.empty(b)
+            .set("shared", obj(b, "age" to num(30.0)))
+            .set("b-only", str("from-b"))
+        val expected = docA.piece(docB)
+
+        val deserA = cbor.decodeFromByteArray(ser, cbor.encodeToByteArray(ser, docA))
+        val deserB = cbor.decodeFromByteArray(ser, cbor.encodeToByteArray(ser, docB))
+        val actual = deserA.piece(deserB)
+
+        assertEquals(expected, actual)
+    }
+
+    // ---- Tests: causalDots recursion (F1) ----
+
+    /**
+     * A [JsonCrdt] containing a nested [JsonNode.Array] must expose the embedded
+     * [Rga]'s causal dots via [causalDots], so [SeamReplicator] can build the
+     * correct causal-stability frontier. An empty set here would suppress GC for
+     * all nested Rga tombstones.
+     */
+    @Test
+    fun causalDotsIncludesNestedArrayDots() {
+        val doc = JsonCrdt.empty(a).set("items", arr(a, str("x"), str("y")))
+        val dots = doc.causalDots()
+        // arr() builds an Rga with Insert ops minted by replica a — those dots
+        // must surface at the JsonCrdt level.
+        assertTrue(dots.isNotEmpty(), "causalDots() must not be empty for a document with nested Rga arrays")
+        assertTrue(dots.all { it.replica == a }, "All dots should belong to replica $a")
+    }
+
+    @Test
+    fun causalDotsIncludesDeeplyNestedArrayDots() {
+        val innerArr = arr(a, str("deep"))
+        val outerObj = obj(a, "list" to innerArr)
+        val doc = JsonCrdt.empty(a).set("root", outerObj)
+        val dots = doc.causalDots()
+        assertTrue(dots.isNotEmpty(), "causalDots() must recurse into nested Object→Array")
     }
 }

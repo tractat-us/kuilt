@@ -175,6 +175,26 @@ val rep = SeamReplicator<LWWMap<PeerId, String>>(
 
 `MemberMetadata` remains a pure value type; the replication wiring sits above it.
 
+## JSON document CRDT (`kuilt-crdt`)
+
+`JsonCrdt` is a recursive, convergent JSON document CRDT that composes three
+primitives from the zoo:
+
+- **`ORMap<String, JsonNode>`** — the root and every nested object, with add-wins
+  key semantics.
+- **`Rga<JsonNode>`** — every JSON array: position-stable, concurrent-insert-safe.
+- **`MVRegister<JsonValue>`** — every JSON scalar: concurrent writes from distinct
+  replicas are retained until one replica observes and supersedes them.
+
+Cross-type conflicts (concurrent type changes at the same key — e.g. one replica
+turns a scalar into an object while another replica adds items to an array there)
+are resolved by a total precedence rule (`Object > Array > Leaf`). The losing
+subtree is silently discarded; see `JsonNode` KDoc for the v1 rationale.
+
+`JsonCrdt` overrides `causalDots()` to recurse through all embedded `Rga`
+arrays, so `SeamReplicator`'s causal-stability GC barrier fires correctly for
+nested array tombstones.
+
 ## What kuilt is *not* responsible for
 
 The `:kuilt-core` contract deliberately stops at moving bytes between connected

@@ -74,20 +74,46 @@ public class JsonCrdt internal constructor(
      * [JsonNode.piece] — a put is additive within the node's own lattice. This
      * matches [ORMap.put]'s semantics and preserves the add-wins invariant for
      * nested structure.
+     *
+     * @throws IllegalArgumentException if the document was not configured with a replica id
+     *   (i.e. it was deserialized and [withReplica] was not called beforehand).
      */
-    public fun set(key: String, node: JsonNode): JsonCrdt =
-        JsonCrdt(root.put(replica, key, node), replica)
+    public fun set(key: String, node: JsonNode): JsonCrdt {
+        require(replica.value.isNotEmpty()) {
+            "Cannot mutate a JsonCrdt with an empty replica id — call withReplica() after deserialization."
+        }
+        return JsonCrdt(root.put(replica, key, node), replica)
+    }
 
     /**
      * Remove [key] from this document, returning the updated document.
      * Concurrent adds of the same key on another replica will survive the merge
      * (add-wins).
+     *
+     * @throws IllegalArgumentException if the document was not configured with a replica id
+     *   (i.e. it was deserialized and [withReplica] was not called beforehand).
      */
-    public fun remove(key: String): JsonCrdt =
-        JsonCrdt(root.remove(key), replica)
+    public fun remove(key: String): JsonCrdt {
+        require(replica.value.isNotEmpty()) {
+            "Cannot mutate a JsonCrdt with an empty replica id — call withReplica() after deserialization."
+        }
+        return JsonCrdt(root.remove(key), replica)
+    }
 
     override fun piece(other: JsonCrdt): JsonCrdt =
         JsonCrdt(root.piece(other.root), replica)
+
+    /**
+     * Unions the [Rga.causalDots] of every [JsonNode.Array] reachable from the root,
+     * recursing through [JsonNode.Object] values. This feeds the causal-stability GC
+     * barrier in [us.tractat.kuilt.crdt.replicator.SeamReplicator]: without this
+     * override, embedded [Rga] tombstones in nested arrays would never be considered
+     * for compaction because the delivered frontier would always be empty.
+     */
+    override fun causalDots(): Set<Dot> = root.keys
+        .mapNotNull { root[it] }
+        .flatMap { it.causalDots() }
+        .toSet()
 
     /**
      * Returns a copy of this document configured to issue mutations on behalf of

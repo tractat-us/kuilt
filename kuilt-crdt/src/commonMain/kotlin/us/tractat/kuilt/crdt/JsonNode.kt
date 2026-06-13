@@ -57,6 +57,16 @@ public sealed class JsonNode : Quilted<JsonNode> {
             is Array, is Leaf -> this  // Object wins cross-type conflict
         }
 
+        /**
+         * Unions the [Rga.causalDots] of every [Array] node reachable through this object,
+         * recursing through nested [Object] maps. [Leaf] and [ORMap]/[MVRegister] dot spaces
+         * do not participate in this GC path.
+         */
+        override fun causalDots(): Set<Dot> = map.keys
+            .mapNotNull { map[it] }
+            .flatMap { it.causalDots() }
+            .toSet()
+
         override fun equals(other: Any?): Boolean = other is Object && map == other.map
         override fun hashCode(): Int = map.hashCode()
         override fun toString(): String = "JsonNode.Object($map)"
@@ -74,6 +84,13 @@ public sealed class JsonNode : Quilted<JsonNode> {
             is Array -> Array(rga.piece(other.rga))
             is Leaf -> this              // Array wins over Leaf
         }
+
+        /**
+         * Returns this array's own [Rga.causalDots] union with the [causalDots] of all
+         * [JsonNode] elements stored in the sequence — nested arrays recurse naturally.
+         */
+        override fun causalDots(): Set<Dot> =
+            rga.causalDots() + rga.toList().flatMap { it.causalDots() }.toSet()
 
         override fun equals(other: Any?): Boolean = other is Array && rga == other.rga
         override fun hashCode(): Int = rga.hashCode()
@@ -93,6 +110,9 @@ public sealed class JsonNode : Quilted<JsonNode> {
             is Array -> other                         // Array wins over Leaf
             is Leaf -> Leaf(register.piece(other.register))
         }
+
+        // Leaf holds an MVRegister over scalars — scalars carry no Rga dots, so
+        // the default empty set from Quilted is correct here.
 
         override fun equals(other: Any?): Boolean = other is Leaf && register == other.register
         override fun hashCode(): Int = register.hashCode()
