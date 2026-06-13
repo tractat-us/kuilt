@@ -19,6 +19,7 @@ junit-vintage-engine = "5.11.4"
 kover = "0.9.1"
 dokka = "2.2.0"
 ionspin-bignum = "0.3.10"
+kotlincrypto-hash = "0.7.0"
 vanniktechMavenPublish = "0.30.0"
 
 [libraries]
@@ -61,6 +62,8 @@ play-services-nearby = { module = "com.google.android.gms:play-services-nearby",
 kotlinx-coroutines-playServices = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-play-services", version.ref = "kotlinx-coroutines" }
 # ionspin bignum — arbitrary-precision arithmetic for SRA commutative encryption in kuilt-deal:
 ionspin-bignum = { module = "com.ionspin.kotlin:bignum", version.ref = "ionspin-bignum" }
+# KotlinCrypto SHA-2 — multiplatform SHA-256 for kuilt-deal commit-reveal protocol:
+kotlincrypto-hash-sha2 = { module = "org.kotlincrypto.hash:sha2", version.ref = "kotlincrypto-hash" }
 # Gradle plugin artifacts for build-logic to depend on:
 kotlin-gradlePlugin = { module = "org.jetbrains.kotlin:kotlin-gradle-plugin", version.ref = "kotlin" }
 kotlin-serialization-gradlePlugin = { module = "org.jetbrains.kotlin:kotlin-serialization", version.ref = "kotlin" }
