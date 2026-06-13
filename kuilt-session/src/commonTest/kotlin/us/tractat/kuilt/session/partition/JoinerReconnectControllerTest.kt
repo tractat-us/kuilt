@@ -8,6 +8,7 @@ import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
@@ -271,4 +272,3 @@ class JoinerReconnectControllerTest {
     }
 }
 
-private fun assertAll(vararg assertions: () -> Unit) = assertions.forEach { it() }

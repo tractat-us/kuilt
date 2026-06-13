@@ -15,6 +15,7 @@ import us.tractat.kuilt.session.SessionRole
 import us.tractat.kuilt.session.partition.ResumeResult
 import us.tractat.kuilt.session.partition.ResumeToken
 import us.tractat.kuilt.session.partition.RoomId
+import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -373,4 +374,3 @@ class FakeRoomTest {
     )
 }
 
-private fun assertAll(vararg assertions: () -> Unit) = assertions.forEach { it() }

@@ -5,6 +5,7 @@ package us.tractat.kuilt.raft
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
+import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertTrue
 import kotlin.test.assertContentEquals
@@ -184,7 +185,6 @@ class NoOpEntryTest {
     }
 }
 
-private fun assertAll(vararg assertions: () -> Unit) = assertions.forEach { it() }
 
 private suspend fun awaitLeaderAmong(sim: RaftSimulation, ids: Set<NodeId>): RaftNode {
     repeat(500) {

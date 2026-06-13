@@ -5,6 +5,7 @@ import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.raft.LogEntry
 import us.tractat.kuilt.raft.NodeId
 import us.tractat.kuilt.raft.RaftStorage
+import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
@@ -216,4 +217,3 @@ public abstract class RaftStorageConformanceSuite {
     }
 }
 
-private fun assertAll(vararg assertions: () -> Unit) = assertions.forEach { it() }

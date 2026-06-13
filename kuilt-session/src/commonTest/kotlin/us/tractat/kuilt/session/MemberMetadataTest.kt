@@ -2,6 +2,7 @@ package us.tractat.kuilt.session
 
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.crdt.ReplicaId
+import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
@@ -115,4 +116,3 @@ class MemberMetadataTest {
     }
 }
 
-private fun assertAll(vararg assertions: () -> Unit) = assertions.forEach { it() }

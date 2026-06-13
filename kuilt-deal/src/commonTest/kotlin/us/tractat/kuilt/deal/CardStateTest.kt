@@ -2,6 +2,7 @@ package us.tractat.kuilt.deal
 
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.crdt.GSet
+import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -237,4 +238,3 @@ class CardStateTest {
 
 }
 
-private fun assertAll(vararg assertions: () -> Unit) = assertions.forEach { it() }

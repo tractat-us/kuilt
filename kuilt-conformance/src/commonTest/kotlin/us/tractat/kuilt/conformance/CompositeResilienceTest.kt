@@ -23,6 +23,7 @@ import us.tractat.kuilt.core.PlyId
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.composite.CompositeLoom
+import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
@@ -293,4 +294,3 @@ class CompositeResilienceTest {
 
 // ── Test helpers ──────────────────────────────────────────────────────────────
 
-private fun assertAll(vararg assertions: () -> Unit) = assertions.forEach { it() }

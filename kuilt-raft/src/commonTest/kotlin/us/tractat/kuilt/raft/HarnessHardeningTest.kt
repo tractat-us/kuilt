@@ -2,6 +2,7 @@
 
 package us.tractat.kuilt.raft
 
+import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertTrue
 import kotlin.test.assertFailsWith
@@ -62,4 +63,3 @@ class HarnessHardeningTest {
     }
 }
 
-private fun assertAll(vararg assertions: () -> Unit) = assertions.forEach { it() }

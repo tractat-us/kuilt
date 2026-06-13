@@ -8,6 +8,7 @@ import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.yield
+import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFails
@@ -457,4 +458,3 @@ class FlakyLifecycleSeamTest {
 
 // ── Test helpers ──────────────────────────────────────────────────────────────
 
-private fun assertAll(vararg assertions: () -> Unit) = assertions.forEach { it() }
