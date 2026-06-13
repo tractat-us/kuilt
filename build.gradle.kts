@@ -1,5 +1,6 @@
 plugins {
     alias(libs.plugins.kover) apply false
+    alias(libs.plugins.dokka)
 }
 
 val kuiltVersionLine: String = providers.gradleProperty("kuiltVersionLine").get()
