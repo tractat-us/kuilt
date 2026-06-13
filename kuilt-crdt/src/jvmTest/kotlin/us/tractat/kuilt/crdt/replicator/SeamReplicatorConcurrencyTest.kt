@@ -146,6 +146,8 @@ class SeamReplicatorConcurrencyTest {
                                 if (raced) break
                                 try {
                                     rep.apply(rep.state.value.add("$w-$i"))
+                                } catch (e: kotlinx.coroutines.CancellationException) {
+                                    throw e
                                 } catch (t: Throwable) {
                                     record(t)
                                 }
@@ -201,6 +203,8 @@ class SeamReplicatorConcurrencyTest {
                                 for (i in 0 until perWorker) {
                                     try {
                                         rep.apply(rep.state.value.add("$tag-$w-$i"))
+                                    } catch (e: kotlinx.coroutines.CancellationException) {
+                                        throw e
                                     } catch (t: Throwable) {
                                         lock.withLock { errors.add(t) }
                                     }
