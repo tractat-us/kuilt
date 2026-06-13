@@ -190,6 +190,20 @@ class RaftSimulation(
     }
 
     /**
+     * Encode and inject a [RaftMessage.TimeoutNow] directly into [to]'s incoming channel,
+     * bypassing the normal partition/drop rules. The transport-level sender is [from], so a
+     * non-leader [from] exercises the receiver's sender-authentication guard. Use this to simulate
+     * a stale or spoofed TimeoutNow from a peer that is not the current leader.
+     */
+    @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
+    suspend fun deliverTimeoutNow(to: NodeId, from: NodeId, term: Long) {
+        val bytes = Cbor.encodeToByteArray<RaftMessage>(
+            RaftMessage.TimeoutNow(term, from)
+        )
+        network.deliver(from = from, to = to, bytes = bytes)
+    }
+
+    /**
      * Let pending work at the current virtual instant run without advancing the clock: deliberately
      * yield-only (no `delay`). Under [StandardTestDispatcher]'s FIFO scheduling, yielding hands the
      * single test thread back to the scheduler so already-scheduled coroutines (e.g. a freshly

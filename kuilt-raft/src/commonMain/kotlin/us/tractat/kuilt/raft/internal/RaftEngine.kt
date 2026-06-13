@@ -1585,8 +1585,9 @@ internal class RaftEngine(
     /**
      * §3.10 TimeoutNow received: immediately start a real election without waiting for election timeout.
      *
-     * Only valid when this node is a follower (not a leader or candidate). The message must carry
-     * the sender's current term — if it's stale, ignore it (the sender is no longer the leader).
+     * Only valid when this node is a voting follower (not a leader, candidate, or learner) and only
+     * when [from] is the leader we currently recognise. The message must carry the sender's current
+     * term — if it's stale, or if a same-term TimeoutNow arrives from a non-leader peer, ignore it.
      *
      * The pre-vote phase is intentionally skipped: the leader already validated this node's log is
      * up-to-date (it just sent AppendEntries to sync us), so the pre-vote safety check is redundant
@@ -1601,6 +1602,21 @@ internal class RaftEngine(
         }
         if (_role.value is RaftRole.Leader || _role.value is RaftRole.Candidate) {
             debug { "onTimeoutNow: already ${_role.value} — ignoring" }
+            return
+        }
+        // Only the current leader may issue TimeoutNow. A stale or spoofed same-term TimeoutNow from
+        // a peer that is not the leader we know about must not trigger a spurious election. _leader is
+        // only meaningful at the current term: for a strictly-higher term the sender has legitimately
+        // advanced past us (we step down below), and _leader is stale, so the check applies only when
+        // m.term == currentTerm. _leader may be null before we have heard from any leader this term;
+        // in that case accept (the sender asserts current-term leadership, validated by the term guards).
+        if (m.term == currentTerm && _leader.value != null && from != _leader.value) {
+            debug { "onTimeoutNow: sender ${from.value} is not the current leader (${_leader.value?.value}) — ignoring" }
+            return
+        }
+        // A learner never votes and must never start an election.
+        if (_role.value is RaftRole.Learner) {
+            debug { "onTimeoutNow: self is a learner — ignoring" }
             return
         }
         if (m.term > currentTerm) stepDown(m.term, StepDownReason.HigherTermObserved)

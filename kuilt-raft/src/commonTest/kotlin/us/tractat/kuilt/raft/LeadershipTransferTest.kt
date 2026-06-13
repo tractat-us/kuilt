@@ -231,6 +231,49 @@ internal class LeadershipTransferTest {
         assertFalse(reference.isEmpty(), "applied state on reference node should not be empty")
     }
 
+    // ── onTimeoutNow sender authentication ────────────────────────────────────
+
+    /**
+     * A same-term TimeoutNow from a peer that is NOT the current leader must be ignored: the target
+     * starts no election (no [RaftTraceEvent.RequestVote] / [RaftTraceEvent.Timeout]), stays a
+     * follower, and the real leader keeps its leadership. Without sender authentication a spoofed or
+     * stale TimeoutNow would let any peer force a follower into a disruptive, term-bumping election.
+     */
+    @Test
+    fun timeoutNow_fromNonLeader_isIgnored() = raftRunTest(timeout = 10.seconds) {
+        val sim = raftSim(this, backgroundScope, n = 3)
+        val leader = awaitLeader(sim)
+        val leaderId = sim.nodeIds.first { sim.nodes[it] === leader }
+        val followers = sim.nodeIds.filter { it != leaderId }
+        val target = followers[0]
+        val spoofedSender = followers[1]   // another follower — not the leader
+
+        // Commit an entry first so every node settles at a stable, known leader/term.
+        sim.proposeOnLeader("before-spoof".encodeToByteArray())
+        sim.awaitCommit(1L)
+        sim.settle()
+
+        // A *same-term* TimeoutNow is what the auth guard rejects: a higher term would legitimately
+        // advance the cluster, a lower one is stale. Read the leader's persisted term so we hit it.
+        val leaderTerm = sim.storages.getValue(leaderId).term()
+
+        // Watch the target for any sign of an election round it should never run.
+        val targetTrace = mutableListOf<RaftTraceEvent>()
+        backgroundScope.launch { sim.nodes.getValue(target).trace.collect { targetTrace += it } }
+        sim.settle()
+
+        // Inject a same-term TimeoutNow whose transport sender is a non-leader follower.
+        sim.deliverTimeoutNow(to = target, from = spoofedSender, term = leaderTerm)
+        sim.settle()
+
+        assertEquals(RaftRole.Follower, sim.nodes.getValue(target).role.value)
+        assertEquals(RaftRole.Leader, leader.role.value)
+        assertFalse(
+            targetTrace.any { it is RaftTraceEvent.RequestVote || it is RaftTraceEvent.Timeout },
+            "target must not start an election from a non-leader TimeoutNow",
+        )
+    }
+
     // ── Trace event ───────────────────────────────────────────────────────────
 
     /**
