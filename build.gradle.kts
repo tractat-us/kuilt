@@ -1,5 +1,14 @@
 plugins {
-    alias(libs.plugins.kover) apply false
+    alias(libs.plugins.kover)
+}
+
+// Aggregate every module's JVM coverage into one root report. `koverXmlReport`
+// emits build/reports/kover/report.xml (uploaded to Codecov from CI);
+// `koverHtmlReport` writes a browsable report for local inspection. Each module
+// applies the Kover plugin via the kmp-library convention, so a project
+// dependency here is all the aggregation needs.
+dependencies {
+    subprojects.forEach { kover(it) }
 }
 
 val kuiltVersionLine: String = providers.gradleProperty("kuiltVersionLine").get()

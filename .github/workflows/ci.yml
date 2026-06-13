@@ -169,7 +169,12 @@ jobs:
         # phase forks. 4 was enough for cache-hit builds but still OOMed cold
         # builds (killed ~14 min into the test phase); 2 keeps peak memory in
         # budget. Cache-hit builds barely notice (little left to do).
-        run: ./gradlew build --max-workers=2
+        #
+        # koverXmlReport rides on the same invocation so the JVM test tasks it
+        # depends on run once: build executes them, then the report aggregates
+        # the coverage data into build/reports/kover/report.xml (collected as an
+        # artifact below; no external coverage service).
+        run: ./gradlew build koverXmlReport --max-workers=2
 
       - name: Kill jstack heartbeat
         # Stop the background watchdog. Runs if: always() so the orphaned loop is
@@ -188,6 +193,7 @@ jobs:
           path: |
             **/build/reports/tests/
             **/build/test-results/
+            build/reports/kover/
             build/jstack-dumps/
 
   # ── detekt ───────────────────────────────────────────────────────────────
