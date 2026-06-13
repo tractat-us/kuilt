@@ -95,6 +95,11 @@ data class Swatch(val payload: ByteArray, val sender: PeerId? = null, val sequen
 These are the load-bearing decisions. Violating them breaks consumers in ways
 the type system won't catch:
 
+- **`peers` initial state is `{ selfId }`** — the moment a `Seam` returns from
+  `weave()`, `peers.value` contains exactly this peer's own identifier. Remote
+  peers are added when they connect and removed when they disconnect. This makes
+  `peers.value.size > 1` a reliable sentinel for "at least one remote peer is
+  connected" — a pattern used by diagnostic and handshake tooling.
 - **`incoming` is single-collection.** One `Flow<Swatch>` carries *all* peers'
   frames, in send order, delivered to **one** collector. Collect it once per
   `Seam`. If multiple consumers need it, wrap it with `shareIn`/`MutableSharedFlow`
