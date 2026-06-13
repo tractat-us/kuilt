@@ -20,20 +20,33 @@ Transfers move quota between replicas via a 2D matrix (one row per donor, one co
 
 ## Code examples
 
-**Initialise and spend within quota:**
+**Initialise — per-replica quotas:**
 
-<!-- verbatim from kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/BoundedCounterTest.kt#initSetsPerReplicaQuotas / trySpendWithinQuotaProducesADeltaThatDebitsTheReplica -->
+<!-- verbatim from kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/BoundedCounterTest.kt#initSetsPerReplicaQuotas -->
 ```kotlin
 // Source: https://github.com/tractat-us/kuilt/blob/main/kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/BoundedCounterTest.kt
-// Tests: initSetsPerReplicaQuotas / trySpendWithinQuotaProducesADeltaThatDebitsTheReplica
+// Test: initSetsPerReplicaQuotas
 val bc = BoundedCounter.init(mapOf(a to 5L, b to 5L))
 assertEquals(10L, bc.totalBudget)
+assertEquals(0L, bc.totalSpent)
 assertEquals(5L, bc.quota(a))
+assertEquals(5L, bc.quota(b))
+assertEquals(0L, bc.quota(ReplicaId("nobody")))
+```
 
-val delta = bc.trySpend(a, 3L)!!
+**Spend within quota:**
+
+<!-- verbatim from kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/BoundedCounterTest.kt#trySpendWithinQuotaProducesADeltaThatDebitsTheReplica -->
+```kotlin
+// Source: https://github.com/tractat-us/kuilt/blob/main/kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/BoundedCounterTest.kt
+// Test: trySpendWithinQuotaProducesADeltaThatDebitsTheReplica
+val bc = BoundedCounter.init(mapOf(a to 5L))
+val delta = bc.trySpend(a, 3L)
+assertNotNull(delta)
 val next = bc.piece(delta)
 assertEquals(2L, next.quota(a))
 assertEquals(3L, next.totalSpent)
+assertEquals(2L, next.totalBudget) // 5 received - 3 spent
 ```
 
 **Spend over quota is denied:**

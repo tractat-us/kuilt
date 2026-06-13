@@ -29,8 +29,8 @@ delivery order or duplication.
 `SeamReplicator` streams deltas over a `Seam` — attach it to any `Quilted` state
 and every peer converges automatically.
 
-`RoutingSeam` multiplexes several CRDTs over one underlying `Seam`, routing
-frames by type tag.
+`MuxSeam` multiplexes several CRDTs over one underlying `Seam`, routing
+frames by channel tag.
 
 ## The `Causal` layer
 

@@ -30,6 +30,7 @@ val bob = Causal(
 val merged = alice.piece(bob)
 // (A,1): Alice saw & dropped -> gone. (B,1): Alice never saw -> kept.
 assertEquals(setOf(Dot(b, 1L)), merged.store.dots)
+assertFalse(merged.store.isBottom) // present — add wins
 ```
 
 **Remove wins when the add was already seen:**

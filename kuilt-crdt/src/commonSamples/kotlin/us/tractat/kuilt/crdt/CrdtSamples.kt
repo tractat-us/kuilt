@@ -192,6 +192,30 @@ internal fun sampleBoundedCounter() {
     check(counter.quota(b) == 2L)
 }
 
+// ── Causal ────────────────────────────────────────────────────────────────────
+
+/**
+ * Add-wins over concurrent remove: a dot unknown to the remover survives the merge.
+ * Remove-wins when the remover had already witnessed the dot.
+ */
+@Suppress("unused")
+internal fun sampleCausal() {
+    val a = ReplicaId("A")
+    val b = ReplicaId("B")
+
+    // Alice removed the only dot she saw; her context still remembers (A,1).
+    val alice = Causal(DotSet(emptySet()), DotContext.of(Dot(a, 1L)))
+    // Bob concurrently added a fresh dot; he still holds both.
+    val bob = Causal(
+        DotSet(setOf(Dot(a, 1L), Dot(b, 1L))),
+        DotContext.of(Dot(a, 1L), Dot(b, 1L)),
+    )
+    val merged = alice.piece(bob)
+    // (A,1): Alice saw & dropped -> gone. (B,1): Alice never saw -> kept.
+    check(merged.store.dots == setOf(Dot(b, 1L)))
+    check(!merged.store.isBottom)  // present — add wins
+}
+
 // ── Rga ───────────────────────────────────────────────────────────────────────
 
 /** Concurrent inserts converge to a deterministic order. */

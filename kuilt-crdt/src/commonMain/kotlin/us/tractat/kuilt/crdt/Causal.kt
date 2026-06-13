@@ -10,6 +10,8 @@ import kotlinx.serialization.Serializable
  *
  * Invariant: every dot in [store] is witnessed by [context]. The factory paths
  * that build CRDTs on top of `Causal` maintain it; merges preserve it.
+ *
+ * @sample us.tractat.kuilt.crdt.sampleCausal
  */
 @Serializable
 public class Causal<S : DotStore<S>>(

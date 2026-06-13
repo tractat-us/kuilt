@@ -16,18 +16,26 @@ There is no floor at zero. A replica can decrement without having incremented â€
 
 ## Code examples
 
-**Increment and decrement:**
+**Increment:**
 
-<!-- verbatim from kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/PNCounterTest.kt#incrementRaisesValue / decrementLowersValue -->
+<!-- verbatim from kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/PNCounterTest.kt#incrementRaisesValue -->
 ```kotlin
 // Source: https://github.com/tractat-us/kuilt/blob/main/kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/PNCounterTest.kt
-// Tests: incrementRaisesValue / decrementLowersValue
+// Test: incrementRaisesValue
 val pn = PNCounter.ZERO
-val afterInc = pn.piece(pn.increment(a, 3L))
-assertEquals(3L, afterInc.value)
+val next = pn.piece(pn.increment(a, 3L))
+assertEquals(3L, next.value)
+```
 
-val afterDec = afterInc.piece(afterInc.decrement(a, 2L))
-assertEquals(1L, afterDec.value)
+**Decrement:**
+
+<!-- verbatim from kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/PNCounterTest.kt#decrementLowersValue -->
+```kotlin
+// Source: https://github.com/tractat-us/kuilt/blob/main/kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/PNCounterTest.kt
+// Test: decrementLowersValue
+val pn = PNCounter.ZERO.piece(PNCounter.ZERO.increment(a, 5L))
+val next = pn.piece(pn.decrement(a, 2L))
+assertEquals(3L, next.value)
 ```
 
 **Concurrent increments from different replicas merge:**
