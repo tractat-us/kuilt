@@ -701,8 +701,11 @@ internal class RaftEngine(
             return
         }
         val ri = currentCommitIndex
-        if (membership.effectiveConfig.quorumSize == 1) {
-            // Single-voter cluster: self is the quorum; freshness is trivially satisfied.
+        if (membership.quorumOfContacts(emptySet(), transport.selfId)) {
+            // Self alone constitutes a quorum of every active voter set (Simple single-voter, or
+            // Joint where self is a majority of BOTH old and new). Freshness is trivially satisfied.
+            // NOTE: gating on effectiveConfig.quorumSize == 1 is wrong during a shrinking Joint:
+            // effectiveConfig = new, so quorumSize = 1 fires even when old still needs a majority.
             deferred.complete(ri)
             return
         }
@@ -751,6 +754,7 @@ internal class RaftEngine(
                 prevLogTerm = prevTerm,
                 entries = entries,
                 leaderCommit = currentCommitIndex,
+                round = heartbeatRound,
             )
         )
     }
@@ -798,6 +802,7 @@ internal class RaftEngine(
                 data = xfer.state.copyOfRange(start, end),
                 done = done,
                 config = xfer.meta.config,
+                round = heartbeatRound,
             )
         )
     }
@@ -806,9 +811,9 @@ internal class RaftEngine(
     private suspend fun onInstallSnapshotResponse(from: NodeId, m: RaftMessage.InstallSnapshotResponse) {
         if (m.term > currentTerm) { stepDown(m.term, StepDownReason.HigherTermObserved); return }
         if (_role.value !is RaftRole.Leader || m.term != currentTerm) return
-        recentVoterContacts += from        // reachability signal for CheckQuorum
-        lastAckRound[from] = heartbeatRound // record round for ReadIndex freshness (BLOCKER 1)
-        resolveReadsIfQuorumFresh()         // ReadIndex: snapshot ACKs count as freshness evidence
+        recentVoterContacts += from                // reachability signal for CheckQuorum
+        lastAckRound[from] = m.echoedRound         // credit ACK to the round it actually responded to (BLOCKER 1a)
+        resolveReadsIfQuorumFresh()                // ReadIndex: snapshot ACKs count as freshness evidence
         val xfer = snapshotXfer[from] ?: return
         xfer.nextOffset = m.nextOffset
         if (xfer.nextOffset >= xfer.state.size) {                 // fully received
@@ -841,14 +846,14 @@ internal class RaftEngine(
             val have = if (r?.meta == meta) r.buffer.size.toLong() else 0L
             if (have == 0L) incomingSnapshot = null
             debug { "onInstallSnapshot($from): out-of-order offset=${m.offset} (have=$have) → re-advertise, await resend" }
-            send(from, RaftMessage.InstallSnapshotResponse(currentTerm, have))
+            send(from, RaftMessage.InstallSnapshotResponse(currentTerm, have, echoedRound = m.round))
             return
         }
         r.buffer.addAll(m.data.asList())
 
         if (!m.done) {
             debug { "onInstallSnapshot($from): chunk offset=${m.offset} accepted (have=${r.buffer.size}), await more" }
-            send(from, RaftMessage.InstallSnapshotResponse(currentTerm, r.buffer.size.toLong()))
+            send(from, RaftMessage.InstallSnapshotResponse(currentTerm, r.buffer.size.toLong(), echoedRound = m.round))
             return
         }
         finalizeInstalledSnapshot(from, m, r.buffer.toByteArray())
@@ -884,12 +889,12 @@ internal class RaftEngine(
         incomingSnapshot = null
         debug { "finalizeInstalledSnapshot($from): INSTALLED through=${m.lastIncludedIndex} term=${m.lastIncludedTerm} commit=$currentCommitIndex logTail=${log.firstOrNull()?.index}..${log.lastOrNull()?.index} membership=$membership" }
         emitTrace(RaftTraceEvent.InstallSnapshotAccepted(nextClock(), from, transport.selfId, m.lastIncludedIndex))
-        send(from, RaftMessage.InstallSnapshotResponse(currentTerm, bytes.size.toLong()))
+        send(from, RaftMessage.InstallSnapshotResponse(currentTerm, bytes.size.toLong(), echoedRound = m.round))
     }
 
     private suspend fun onAppendEntries(from: NodeId, m: RaftMessage.AppendEntries) {
         if (m.term < currentTerm) {
-            send(from, RaftMessage.AppendEntriesResponse(currentTerm, false))
+            send(from, RaftMessage.AppendEntriesResponse(currentTerm, false, echoedRound = m.round))
             return
         }
         if (m.term > currentTerm) stepDown(m.term, StepDownReason.HigherTermObserved)
@@ -934,6 +939,7 @@ internal class RaftEngine(
                         success = false,
                         conflictIndex = resolvedConflictIndex,
                         conflictTerm = conflictTerm,
+                        echoedRound = m.round,
                     )
                 )
                 return
@@ -975,16 +981,16 @@ internal class RaftEngine(
                 matchIndex = acceptedMatchIndex,
             )
         )
-        send(from, RaftMessage.AppendEntriesResponse(currentTerm, true, acceptedMatchIndex))
+        send(from, RaftMessage.AppendEntriesResponse(currentTerm, true, acceptedMatchIndex, echoedRound = m.round))
     }
 
     private suspend fun onAppendEntriesResponse(from: NodeId, m: RaftMessage.AppendEntriesResponse) {
         // stale-term peer response: step down and discard
         if (m.term > currentTerm) { stepDown(m.term, StepDownReason.HigherTermObserved); return }
         if (_role.value !is RaftRole.Leader || m.term != currentTerm) return
-        recentVoterContacts += from        // reachability signal for CheckQuorum (success or failure)
-        lastAckRound[from] = heartbeatRound // record the round for ReadIndex freshness (BLOCKER 1)
-        resolveReadsIfQuorumFresh()         // ReadIndex: check if any pending reads can now be confirmed
+        recentVoterContacts += from                 // reachability signal for CheckQuorum (success or failure)
+        lastAckRound[from] = m.echoedRound          // credit ACK to the round it actually responded to (BLOCKER 1a)
+        resolveReadsIfQuorumFresh()                 // ReadIndex: check if any pending reads can now be confirmed
         if (m.success) {
             matchIndex[from] = maxOf(matchIndex[from] ?: 0L, m.matchIndex)
             nextIndex[from] = matchIndex.getValue(from) + 1L
@@ -1001,11 +1007,13 @@ internal class RaftEngine(
      * ReadIndex: resolve any pending reads whose sinceRound predates the current heartbeatRound,
      * provided a voter-quorum has ACKed in a round *strictly after* the read was queued.
      *
-     * BLOCKER 1 fix (per-voter lastAckRound map, not cumulative recentVoterContacts):
-     * A voter is counted as fresh only when [lastAckRound][v] > read.sinceRound. This prevents
-     * a stale in-flight ACK that arrived in the same round as sinceRound from inflating the count.
-     * The cumulative set (cleared only on election-timeout ticks) would count such ACKs, which can
-     * confirm a read on a partitioned-but-still-leading node — a non-linearizable read.
+     * BLOCKER 1 fix (per-voter lastAckRound map, echoed round nonce):
+     * A voter is counted as fresh only when [lastAckRound][v] > read.sinceRound. [lastAckRound] is
+     * now set to [AppendEntriesResponse.echoedRound] (the round the follower actually responded to),
+     * not to the current [heartbeatRound] at receipt. This fixes the round-slip bug: an ACK that
+     * was generated in response to a round-H heartbeat but arrived when heartbeatRound=H+1 was
+     * previously credited to H+1 (appearing fresh for a read queued at sinceRound=H). With the
+     * nonce, it is correctly credited to H = sinceRound and therefore excluded.
      *
      * BLOCKER 2 fix (joint-consensus dual-majority via [MembershipState.quorumOfContacts]):
      * During a Joint config, both the old and new voter sets must independently reach a fresh
@@ -1013,6 +1021,9 @@ internal class RaftEngine(
      * confirm a read while the old majority is unreachable — violating linearizability for writes
      * committed under the old majority that have not yet been covered by the new one.
      * [quorumOfContacts] already handles Simple vs Joint correctly (same logic used by CheckQuorum).
+     * The single-voter fast-path in [onRequestReadIndex] is similarly corrected to use
+     * [MembershipState.quorumOfContacts] instead of [effectiveConfig.quorumSize == 1] so a
+     * shrinking Joint (old={v1,v2,v3}, new={v1}) does not bypass the old-majority requirement.
      *
      * Design note (Raft §6.4): reads fail only on step-down (no per-read timeout). A partitioned
      * leader that cannot form a quorum will be stepped down by CheckQuorum within one
