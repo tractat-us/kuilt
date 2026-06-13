@@ -2,6 +2,8 @@
 
 package us.tractat.kuilt.crdt.replicator
 
+import kotlinx.atomicfu.locks.reentrantLock
+import kotlinx.atomicfu.locks.withLock
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -98,6 +100,7 @@ public class BoundedCounterTransferCoordinator(
     private val config: BoundedCounterTransferConfig = BoundedCounterTransferConfig(),
 ) : AutoCloseable {
     private val serializer = BoundedCounterCoordMessage.serializer()
+    private val lock = reentrantLock()
 
     private val backgroundJobs: List<Job>
 
@@ -126,11 +129,18 @@ public class BoundedCounterTransferCoordinator(
         var requestInFlight = false
         return state.onEach { bc ->
             val quota = bc.quota(self)
-            if (quota <= config.lowWaterThreshold && !requestInFlight) {
-                requestInFlight = true
+            val shouldLaunch = lock.withLock {
+                if (quota <= config.lowWaterThreshold && !requestInFlight) {
+                    requestInFlight = true
+                    true
+                } else {
+                    false
+                }
+            }
+            if (shouldLaunch) {
                 scope.launch {
                     sendRequestWithRetries()
-                    requestInFlight = false
+                    lock.withLock { requestInFlight = false }
                 }
             }
         }.launchIn(scope)
@@ -146,7 +156,9 @@ public class BoundedCounterTransferCoordinator(
         repeat(config.maxRetries) { attempt ->
             val peersAttempt = coordSeam.peers.value - PeerId(self.value)
             if (peersAttempt.isEmpty()) return
-            runCatching { coordSeam.broadcast(encoded) }
+            try { coordSeam.broadcast(encoded) }
+            catch (e: kotlinx.coroutines.CancellationException) { throw e }
+            catch (e: Exception) { /* send failed — retry or degrade on next iteration */ }
             // check if quota improved (a donor may have responded already)
             if (state.value.quota(self) > config.lowWaterThreshold) return
             if (attempt < config.maxRetries - 1) {

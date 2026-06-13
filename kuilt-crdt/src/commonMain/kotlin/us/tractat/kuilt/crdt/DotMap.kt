@@ -30,7 +30,11 @@ public class DotMap<K, S : DotStore<S>>(
             val joined: S = when {
                 mine != null && theirs != null -> mine.join(theirs, context, otherContext)
                 mine != null -> mine.join(mine.empty, context, otherContext)
-                else -> theirs!!.join(theirs.empty, otherContext, context)
+                else -> {
+                    // mine == null: key came from other.entries, so theirs is non-null here
+                    val theirsNonNull = checkNotNull(theirs)
+                    theirsNonNull.join(theirsNonNull.empty, otherContext, context)
+                }
             }
             if (!joined.isBottom) merged[key] = joined
         }
