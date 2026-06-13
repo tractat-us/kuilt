@@ -6,10 +6,12 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
+import kotlinx.serialization.SerializationException
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.cbor.Cbor
 import kotlinx.serialization.decodeFromByteArray
 import kotlinx.serialization.encodeToByteArray
+import org.kotlincrypto.hash.sha2.SHA256
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Seam
 
@@ -20,10 +22,14 @@ import us.tractat.kuilt.core.Seam
  * participate. Once every peer has committed and then revealed, every participant
  * derives the same seed:
  *
- *     seed = first 8 bytes of SHA-256(secret₁ ‖ … ‖ secretₙ)
+ *     seed = first 8 bytes of SHA-256(H(id₁ ‖ secret₁) ‖ … ‖ H(idₙ ‖ secretₙ))
  *
- * Secrets are sorted by [PeerId] value (lexicographic) before concatenation so
- * the result is deterministic regardless of reveal-arrival order.
+ * Per-contributor inputs are hashed as `SHA-256(peerId.encodeToByteArray() ‖ secret)`
+ * before combination, making the seed framing self-describing: the 32-byte hash
+ * domain-separates each contributor by identity, preventing length-extension and
+ * ambiguous-split attacks. Contributors are sorted by [PeerId] value (lexicographic)
+ * before concatenation so the result is deterministic regardless of reveal-arrival
+ * order.
  *
  * ## Abort resistance
  *
@@ -33,8 +39,11 @@ import us.tractat.kuilt.core.Seam
  * forfeit semantics for abort at the game layer. Full abort-resistance requires
  * threshold signatures or a VRF — out of scope here.
  *
- * A peer that never sends a reveal will cause [roll] to stall until the coroutine
- * is cancelled. Applications should apply an outer timeout.
+ * A peer that never sends a reveal (or never sends a commit) will cause [roll] to
+ * stall until the coroutine is cancelled. Applications should apply an outer timeout.
+ * Similarly, a seam that becomes [us.tractat.kuilt.core.FabricState.Torn] during
+ * either phase will never deliver the missing message; callers should observe seam
+ * state and cancel accordingly.
  *
  * ## Usage
  *
@@ -67,13 +76,23 @@ public class FairRandom(
      * commitment hash.
      *
      * @throws CommitmentViolation if a peer's reveal does not match its commit.
+     * @throws IllegalArgumentException if [seam]'s own identity is not in [peers],
+     *   or if [peers] contains fewer than two participants.
      * @throws CancellationException if the coroutine is cancelled (e.g. no-reveal
      *   peer stalls the round — apply an outer timeout).
      */
     public suspend fun roll(): Long = coroutineScope {
+        require(seam.selfId in peers) {
+            "selfId '${seam.selfId.value}' must be listed in peers"
+        }
+        require(peers.size >= 2) {
+            "At least 2 peers are required; got ${peers.size}"
+        }
+
         val myId = seam.selfId
-        val secret = fixedSecret ?: secureRandomBytes(SECRET_BYTES)
-        val nonce = fixedNonce ?: secureRandomBytes(NONCE_BYTES)
+        val secret = resolveSecret()
+        val nonce = resolveNonce()
+
         val myCommit = commitment(secret, nonce)
 
         val commits = Channel<Pair<PeerId, FairRandomMessage.Commit>>(Channel.UNLIMITED)
@@ -86,7 +105,7 @@ public class FairRandom(
                     Cbor.decodeFromByteArray<FairRandomMessage>(swatch.payload)
                 } catch (e: CancellationException) {
                     throw e
-                } catch (_: Exception) {
+                } catch (_: SerializationException) {
                     return@collect
                 }
                 when (msg) {
@@ -137,6 +156,9 @@ public class FairRandom(
         while (result.keys != peers) {
             val (sender, msg) = commits.receive()
             if (sender !in peers || sender == myId) continue
+            // F8: ignore a second commit from an already-committed sender so all honest
+            // peers converge on the same committed hash regardless of racing duplicates.
+            if (sender in result) continue
             result[sender] = msg.hash
         }
         return result
@@ -153,6 +175,7 @@ public class FairRandom(
         while (result.keys != peers) {
             val (sender, msg) = reveals.receive()
             if (sender !in peers || sender == myId) continue
+            if (sender in result) continue
             // Reject reveals with wrong field lengths before verifying.
             // The commitment hash is SHA-256(secret ‖ nonce) with no length framing,
             // so without this check a peer could reveal a different (secret', nonce')
@@ -166,12 +189,14 @@ public class FairRandom(
                     ByteArray(0),
                 )
             }
-            verifyCommitment(sender, msg.secret, msg.nonce, allCommits[sender]
-                ?: error("Reveal from $sender who did not commit"))
+            val expectedHash = checkNotNull(allCommits[sender]) {
+                "Reveal from $sender who did not commit"
+            }
+            verifyCommitment(sender, msg.secret, msg.nonce, expectedHash)
             result[sender] = msg.secret
         }
         // Self-verify: catches the tamperedReveal test path.
-        verifyCommitment(myId, mySecret, myNonce, allCommits[myId]!!)
+        verifyCommitment(myId, mySecret, myNonce, checkNotNull(allCommits[myId]))
         return result
     }
 
@@ -183,7 +208,9 @@ public class FairRandom(
     private fun deriveSeed(secrets: Map<PeerId, ByteArray>): Long {
         val combined = secrets.entries
             .sortedBy { (id, _) -> id.value }
-            .fold(ByteArray(0)) { acc, (_, s) -> acc + s }
+            .fold(ByteArray(0)) { acc, (id, secret) ->
+                acc + sha256(id.value.encodeToByteArray() + secret)
+            }
         return sha256(combined).toLong()
     }
 
@@ -195,12 +222,28 @@ public class FairRandom(
 
     private fun commitment(secret: ByteArray, nonce: ByteArray): ByteArray = sha256(secret + nonce)
 
+    private fun resolveSecret(): ByteArray {
+        if (fixedSecret != null) return fixedSecret
+        val bytes = secureRandomBytes(SECRET_BYTES)
+        require(bytes.size == SECRET_BYTES) { "secureRandomBytes returned ${bytes.size} bytes; expected $SECRET_BYTES" }
+        return bytes
+    }
+
+    private fun resolveNonce(): ByteArray {
+        if (fixedNonce != null) return fixedNonce
+        val bytes = secureRandomBytes(NONCE_BYTES)
+        require(bytes.size == NONCE_BYTES) { "secureRandomBytes returned ${bytes.size} bytes; expected $NONCE_BYTES" }
+        return bytes
+    }
+
     private fun tamper(secret: ByteArray): ByteArray =
         secret.copyOf().also { it[0] = (it[0].toInt() xor 0xFF).toByte() }
 
-    private companion object {
-        private const val SECRET_BYTES = 32
-        private const val NONCE_BYTES = 16
+    internal companion object {
+        internal const val SECRET_BYTES = 32
+        internal const val NONCE_BYTES = 16
+
+        internal fun sha256(input: ByteArray): ByteArray = SHA256().digest(input)
     }
 }
 
