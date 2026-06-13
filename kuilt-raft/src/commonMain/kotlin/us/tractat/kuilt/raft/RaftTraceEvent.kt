@@ -173,6 +173,37 @@ public sealed interface RaftTraceEvent {
         val readIndex: Long,
         val term: Long,
     ) : RaftTraceEvent
+
+    /**
+     * The leader started a leadership transfer to [target].
+     * Proposals are blocked until the transfer completes or is abandoned.
+     */
+    public data class LeadershipTransferStarted(
+        override val clock: Long,
+        val leader: NodeId,
+        val target: NodeId,
+    ) : RaftTraceEvent
+
+    /**
+     * A leadership transfer was abandoned — either because the auto-timeout expired before the
+     * target won an election, or because [RaftNode.cancelTransfer] was called explicitly.
+     * [reason] describes which path fired. Normal proposal acceptance is resumed.
+     */
+    public data class LeadershipTransferAbandoned(
+        override val clock: Long,
+        val leader: NodeId,
+        val target: NodeId,
+        val reason: LeadershipTransferAbandonReason,
+    ) : RaftTraceEvent
+}
+
+/** Why a leadership transfer was abandoned without completing. */
+public enum class LeadershipTransferAbandonReason {
+    /** The target did not win an election within one election-timeout window. */
+    Timeout,
+
+    /** [RaftNode.cancelTransfer] was called explicitly by the application. */
+    Cancelled,
 }
 
 /** Why a node stepped down from [RaftRole.Leader] or [RaftRole.Candidate] to [RaftRole.Follower]. */

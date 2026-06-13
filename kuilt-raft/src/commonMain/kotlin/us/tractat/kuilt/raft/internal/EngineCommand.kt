@@ -35,6 +35,28 @@ internal sealed interface EngineCommand {
         val fromIndex: Long,
         val response: CompletableDeferred<CommitCutResult>,
     ) : EngineCommand
+
+    /**
+     * §3.10 leadership transfer: the leader should sync [target]'s log and send [RaftMessage.TimeoutNow].
+     * [response] is completed when the transfer either succeeds (this node steps down) or fails
+     * (auto-timeout or explicit cancel).
+     */
+    data class TransferLeadership(
+        val target: NodeId,
+        val response: CompletableDeferred<Unit>,
+    ) : EngineCommand
+
+    /**
+     * Abort an in-flight leadership transfer. If no transfer is in flight this is a no-op.
+     * The transfer's [TransferLeadership.response] will be failed with [us.tractat.kuilt.raft.LeadershipTransferException].
+     */
+    data object CancelTransfer : EngineCommand
+
+    /**
+     * Auto-timeout for a leadership transfer: fired by a timer after one election timeout window.
+     * If the transfer is still in flight, it is abandoned and normal operation resumes.
+     */
+    data object TransferTimeout : EngineCommand
 }
 
 /** The result of an [EngineCommand.CommitCut]: committed application entries plus the cut index. */
