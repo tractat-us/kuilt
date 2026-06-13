@@ -47,7 +47,7 @@ class NoOpEntryTest {
         // New leader elected. Wait for commitIndex to advance past the prior-term entries.
         // We use commitIndex (StateFlow — always has the current value) rather than the
         // committed Flow (SharedFlow with replay=0), since the no-op may commit before
-        // we subscribe to committed under UnconfinedTestDispatcher.
+        // we subscribe to committed (StateFlow replay=1 avoids this; SharedFlow replay=0 does not).
         val newLeader = awaitLeader(sim)
         val newLeaderId = sim.nodes.entries.first { it.value === newLeader }.key
         sim.awaitCommit(e2.index, on = listOf(newLeaderId))

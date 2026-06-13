@@ -17,10 +17,11 @@ private val electionTimeoutMin = 150.milliseconds
 private val electionTimeoutMax = 300.milliseconds
 private val heartbeatInterval = 50.milliseconds
 
-// expectVirtualTime = true: this test drives virtual time deliberately via
-// StandardTestDispatcher + advanceTimeBy. The warning is suppressed here
-// intentionally — this is the one test that actually validates the
-// advanceTimeBy path works.
+// This file is intentionally NOT converted to raftRunTest/raftSim. It exists as a distinct
+// witness: it constructs a separate TestCoroutineScheduler and drives time via explicit
+// advanceTimeBy calls on that scheduler — proving the engine respects an externally-controlled
+// virtual clock. Folding it into raftRunTest would merge it with VirtualElectionTest and
+// lose the explicit advanceTimeBy witness. Already deterministic; no conversion needed.
 private val schedulerConfig = RaftConfig(
     electionTimeoutMin = electionTimeoutMin,
     electionTimeoutMax = electionTimeoutMax,

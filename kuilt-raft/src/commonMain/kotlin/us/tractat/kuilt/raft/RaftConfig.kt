@@ -33,13 +33,14 @@ import kotlin.time.Duration.Companion.milliseconds
  *   warning to stdout instead. Set to `true` in tests that want to assert the guard
  *   fires. Leave `false` in production — the guard is informational there.
  * @param expectVirtualTime Suppresses the TestDispatcher warning (see [strictTestGuard])
- *   for tests that intentionally run a real `RaftNode` under `UnconfinedTestDispatcher` —
- *   where real-clock `delay()` actually fires, so the engine's election/heartbeat loops
- *   tick normally. Has no effect in production (production code is never under a
- *   `TestDispatcher`). Default `false`: warn as usual.
+ *   for tests that intentionally run a real `RaftNode` under a `TestDispatcher` (both
+ *   `StandardTestDispatcher` and `UnconfinedTestDispatcher` are supported). Under any
+ *   `TestDispatcher`, `delay()` is virtual — the engine's election/heartbeat loops tick
+ *   via the test scheduler. Has no effect in production. Default `false`: warn as usual.
  *
- *   Set `true` only when you have explicitly validated that the test's use of
- *   `UnconfinedTestDispatcher` is correct. NEVER set in production code.
+ *   The `:kuilt-raft` suite uses `StandardTestDispatcher` (see `RaftTestFixtures`). Set
+ *   `true` in any config used by a test that constructs a real `RaftNode`. NEVER set in
+ *   production code.
  * @param slowProposeThreshold Wall-time threshold for a propose round-trip (from accepted to
  *   applied). When the elapsed time exceeds this threshold, the engine logs at `warn` level.
  *   Below this threshold, the log entry is at `debug` level. Set to [Duration.ZERO] to treat

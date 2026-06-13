@@ -11,7 +11,21 @@ Any **production type that internally creates a `CoroutineScope`** for backgroun
 
 ## The test rule
 
-Construct such types under `runTest` with **`UnconfinedTestDispatcher(testScheduler)`** (eager + single-threaded + on the test clock) — or `StandardTestDispatcher` if you want to drive time explicitly. **Never** let a production real-thread dispatcher (`Dispatchers.Default`/`IO`, even `limitedParallelism(1)`) run under `runTest`: its work is decoupled from the virtual clock, so synchronous `.value` reads race it — passing on JVM and flaking on Native. Injecting the test dispatcher also gives free coroutine-leak detection (`runTest` fails on uncompleted jobs in the test scope).
+Construct such types under `runTest` with **`StandardTestDispatcher`** (FIFO at each virtual instant, single-threaded, on the test clock) — or `UnconfinedTestDispatcher` if the type has no concurrent timers or message flows where ordering matters. **Never** let a production real-thread dispatcher (`Dispatchers.Default`/`IO`, even `limitedParallelism(1)`) run under `runTest`: its work is decoupled from the virtual clock, so synchronous `.value` reads race it — passing on JVM and flaking on Native.
+
+### `delay()` is already virtual — no production change needed
+
+Any `TestDispatcher` constructed with no explicit scheduler binds to the enclosing `runTest`'s `TestCoroutineScheduler`, so every engine `delay()` (election timers, heartbeats) is virtual — a 5 s delay advances virtual time 5 s and consumes ~0 ms wall. No production timer change is required.
+
+### The real risk is *ordering* under `UnconfinedTestDispatcher`
+
+`UnconfinedTestDispatcher` runs continuations **eagerly inline**. At a single virtual instant the interleaving of a timer firing against an in-flight message round-trip depends on how many continuation steps the CPU happened to take — load-dependent ordering that produces flaky tests on Kotlin/Native.
+
+`StandardTestDispatcher` is **FIFO at each virtual instant** (no eager inline execution), so the ordering of timers vs message round-trips is fixed and reproducible on any machine. Use it for any system with concurrent timers and messages (e.g. `RaftNode` election/heartbeat loops). The raft suite switched to `StandardTestDispatcher` for this reason in issue #383.
+
+### `advanceUntilIdle()` is unsafe for never-quiescing systems
+
+A system whose timers perpetually re-arm (election + heartbeat loops) never becomes idle — `advanceUntilIdle()` would spin forever. Use bounded `advanceTimeBy` steps or the `RaftSimulation.await*` helpers instead; they drive time in fixed increments and fail fast with a state dump if the cluster doesn't converge.
 
 ## Why — post-mortem (native flakiness, May 2026)
 
@@ -30,8 +44,9 @@ The fix (PR #82) injected `UnconfinedTestDispatcher(testScheduler)` into the com
 
 ## Existing components
 
-| Component | Status |
-|---|---|
-| `CompositeSeam` / `CompositeLoom` | ✅ Pattern A (injectable) |
-| `NearbyLoom` | ✅ Pattern B (`currentCoroutineContext()`) |
-| `KtorClientLoom`, `KtorServerLoom`, `WebRTCPeerLink`, Multipeer bridge (`BridgeBrowser`/`BridgeSessionState`) | Hardcode `Dispatchers.Default`/`IO`. Not currently flaky (integration/loopback-tested, not virtual-time unit tests). **Migrate to Pattern A when next touched or if they gain `runTest` unit tests.** |
+| Component | Dispatcher | Status |
+|---|---|---|
+| `CompositeSeam` / `CompositeLoom` | `UnconfinedTestDispatcher` (injected) | ✅ Pattern A |
+| `NearbyLoom` | inherits caller | ✅ Pattern B |
+| `RaftNode` (`:kuilt-raft` suite) | `StandardTestDispatcher` via `raftRunTest` | ✅ #383 — FIFO ordering required; see `RaftTestFixtures` banner |
+| `KtorClientLoom`, `KtorServerLoom`, `WebRTCPeerLink`, Multipeer bridge (`BridgeBrowser`/`BridgeSessionState`) | hardcode `Dispatchers.Default`/`IO` | Not currently flaky (integration/loopback-tested, not virtual-time unit tests). **Migrate to Pattern A when next touched or if they gain `runTest` unit tests.** |
