@@ -56,6 +56,11 @@ public class NearbyLoom(
 
     // Shared peer set — all seams on this loom observe the same StateFlow.
     private val sharedPeers = MutableStateFlow<Set<PeerId>>(emptySet())
+    // Threading note: `mutex` guards loom-level state (hostLinkDeferred, peerCounter).
+    // `endpointPeers` maps passed to NearbySeam are also written here (under this mutex) when
+    // a handshake completes. Seams guard their own reads/mutations of `endpointPeers` under
+    // the seam's mutex. Both mutexes are held briefly and non-nested, relying on the
+    // single-dispatcher scope contract described in the KDoc above.
     private val mutex = Mutex()
 
     // Per-instance counter — uniqueness within this loom suffices.

@@ -78,6 +78,10 @@ internal class WebRTCPeerLink(
         }
     }
 
+    /**
+     * Best-effort: silently drops the frame (with a warning) when no remote peer is connected.
+     * Use [sendTo] for addressed delivery that throws [PeerNotConnected] on a missing peer.
+     */
     override suspend fun broadcast(payload: ByteArray) {
         if (_peers.value.none { it != selfId }) {
             log.warn { "webrtc.send dropped — no connected peers selfId=${selfId.value} bytes=${payload.size}" }
