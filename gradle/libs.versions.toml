@@ -17,6 +17,7 @@ jqwik = "1.9.2"
 junit-platform-launcher = "1.11.4"
 junit-vintage-engine = "5.11.4"
 kover = "0.9.1"
+dokka = "2.2.0"
 ionspin-bignum = "0.3.10"
 vanniktechMavenPublish = "0.30.0"
 
@@ -70,6 +71,8 @@ detekt-gradlePlugin = { module = "io.gitlab.arturbosch.detekt:detekt-gradle-plug
 vanniktech-mavenPublish-gradlePlugin = { module = "com.vanniktech:gradle-maven-publish-plugin", version.ref = "vanniktechMavenPublish" }
 # Kover — Kotlin/KMP-aware code coverage; applied by the kmp-library convention.
 kover-gradlePlugin = { module = "org.jetbrains.kotlinx:kover-gradle-plugin", version.ref = "kover" }
+# Dokka — KMP-aware API-doc generation; applied by the kmp-library convention.
+dokka-gradlePlugin = { module = "org.jetbrains.dokka:dokka-gradle-plugin", version.ref = "dokka" }
 
 [plugins]
 detekt = { id = "io.gitlab.arturbosch.detekt", version.ref = "detekt" }
@@ -77,3 +80,4 @@ kotlinMultiplatform = { id = "org.jetbrains.kotlin.multiplatform", version.ref =
 kotlinSerialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
 androidLibrary = { id = "com.android.library", version.ref = "agp" }
 kover = { id = "org.jetbrains.kotlinx.kover", version.ref = "kover" }
+dokka = { id = "org.jetbrains.dokka", version.ref = "dokka" }

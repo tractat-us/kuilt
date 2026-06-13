@@ -8,6 +8,7 @@ plugins {
     id("org.jetbrains.kotlin.multiplatform")
     id("com.android.library")
     id("org.jetbrains.kotlinx.kover")
+    id("org.jetbrains.dokka")
 }
 
 val libs = the<LibrariesForLibs>()
@@ -33,6 +34,13 @@ kotlin {
 
     sourceSets {
         commonTest.dependencies { implementation(libs.kotlin.test) }
+        // Compile any src/commonSamples/kotlin sources as part of commonTest.
+        // This means @sample functions referenced in KDoc are compiled and
+        // verified on every test run — they cannot silently rot.
+        val samplesDir = project.file("src/commonSamples/kotlin")
+        if (samplesDir.exists()) {
+            commonTest { kotlin.srcDir(samplesDir) }
+        }
     }
 }
 
@@ -54,6 +62,36 @@ kover {
         filters {
             excludes { classes("*.BuildConfig") }
         }
+    }
+}
+
+// Dokka per-module source set wiring.
+//
+// Dokka's KotlinAdapter auto-discovers KMP source sets by looking up
+// KotlinBasePlugin via Class.forName in the *project* classloader. When KMP is
+// applied through a precompiled convention plugin (build-logic), the Kotlin
+// plugin classes live in the build-logic classloader — the project classloader
+// cannot find them, so KotlinAdapter silently produces sourceSets=[]. This is a
+// known limitation of Gradle precompiled script plugins + Dokka 2.x.
+//
+// Workaround: capture the KMP extension reference inside the convention plugin
+// body (where `kotlin` is the typed accessor from the same classloader) and
+// register Dokka source sets in afterEvaluate once all source sets exist.
+val kmpExtension = kotlin
+afterEvaluate {
+    configure<org.jetbrains.dokka.gradle.DokkaExtension> {
+        val samplesDir = project.file("src/commonSamples/kotlin")
+        val moduleMd = project.file("module.md")
+        kmpExtension.sourceSets
+            .filter { it.name.endsWith("Main") }
+            .forEach { kmpSs ->
+                dokkaSourceSets.register(kmpSs.name) {
+                    sourceRoots.from(kmpSs.kotlin.srcDirs)
+                    if (samplesDir.exists()) samples.from(samplesDir)
+                    if (moduleMd.exists()) includes.from(moduleMd)
+                    suppress.set(!kmpSs.name.startsWith("common"))
+                }
+            }
     }
 }
 

@@ -1,5 +1,6 @@
 plugins {
     alias(libs.plugins.kover)
+    alias(libs.plugins.dokka)
 }
 
 // Aggregate every module's JVM coverage into one root report. `koverXmlReport`
