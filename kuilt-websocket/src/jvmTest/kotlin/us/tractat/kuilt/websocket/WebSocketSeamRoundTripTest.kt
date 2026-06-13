@@ -4,12 +4,14 @@ import io.ktor.client.plugins.websocket.WebSockets
 import io.ktor.server.testing.testApplication
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.withTimeout
 import us.tractat.kuilt.core.CloseReason
 import us.tractat.kuilt.core.Seam
+import us.tractat.kuilt.core.SeamState
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -155,6 +157,26 @@ class WebSocketSeamRoundTripTest {
             assertEquals(1, finalPeers.size)
             assertTrue(serverLink.selfId in finalPeers)
             assertFalse(clientLink.selfId in finalPeers)
+        }
+
+    // ── Close reason is preserved ────────────────────────────────────────────
+
+    @Test
+    fun `local close preserves caller close reason and does not clobber it with RemoteRequested`() =
+        testApplication {
+            val serverLoom = KtorServerLoom(application, serverPath)
+            val clientLoom = KtorClientLoom(createClient { install(WebSockets) })
+
+            val (_, clientLink) = connectPair(serverLoom, clientLoom)
+
+            clientLink.close(CloseReason.Normal)
+
+            // Wait for Torn to be set, then yield to let the receive-loop finally block
+            // run — if the bug is present it overwrites Torn(Normal) with Torn(RemoteRequested).
+            withTimeout(3_000) { clientLink.state.first { it is SeamState.Torn } }
+            delay(200)
+
+            assertEquals(SeamState.Torn(CloseReason.Normal), clientLink.state.value)
         }
 
     // ── Helper ───────────────────────────────────────────────────────────────
