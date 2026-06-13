@@ -54,10 +54,10 @@ public class FakeSeam(
     private val _directed = mutableListOf<Pair<PeerId, ByteArray>>()
     private var sequenceCounter = 0L
 
-    /** All payloads passed to [broadcast], in call order. */
+    /** All payloads passed to [broadcast], in call order. Each read returns a fresh defensive snapshot; two reads may observe different snapshots if a broadcast lands between them. */
     public val broadcasts: List<ByteArray> get() = _broadcasts.toList()
 
-    /** All (peer, payload) pairs passed to [sendTo], in call order. */
+    /** All (peer, payload) pairs passed to [sendTo], in call order. Each read returns a fresh defensive snapshot; two reads may observe different snapshots if a [sendTo] lands between them. */
     public val directed: List<Pair<PeerId, ByteArray>> get() = _directed.toList()
 
     /**
