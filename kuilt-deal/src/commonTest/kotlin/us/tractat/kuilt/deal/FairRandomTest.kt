@@ -82,6 +82,28 @@ class FairRandomTest {
         assertIs<CommitmentViolation>(bobResult.exceptionOrNull())
     }
 
+    @Test
+    fun wrong_length_reveal_isRejected() = runTest {
+        val scope = CoroutineScope(UnconfinedTestDispatcher(testScheduler))
+        val peers = setOf(alice, bob)
+        val (aliceSeam, bobSeam) = fakeSeamPair(alice, bob)
+
+        // Alice uses a 33-byte secret (not the canonical SECRET_BYTES=32). Bob must
+        // reject it at the length check, preventing the re-split preimage ambiguity
+        // attack: SHA-256(S₃₃ ‖ N₁₅) == SHA-256(S₃₂ ‖ N₁₆) for a crafted split.
+        val dishonestAlice = FairRandom(aliceSeam, peers, fixedSecret = ByteArray(33) { 0xCC.toByte() })
+        val honestBob = FairRandom(bobSeam, peers)
+
+        val aliceDef = scope.async { runCatching { dishonestAlice.roll() } }
+        val bobDef = scope.async { runCatching { honestBob.roll() } }
+
+        aliceDef.await()
+        val bobResult = bobDef.await()
+
+        assertFails { bobResult.getOrThrow() }
+        assertIs<CommitmentViolation>(bobResult.exceptionOrNull())
+    }
+
     // ── Deterministic derivation ──────────────────────────────────────────────
 
     @Test

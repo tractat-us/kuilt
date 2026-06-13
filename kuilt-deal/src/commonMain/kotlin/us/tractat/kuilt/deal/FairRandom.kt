@@ -153,6 +153,19 @@ public class FairRandom(
         while (result.keys != peers) {
             val (sender, msg) = reveals.receive()
             if (sender !in peers || sender == myId) continue
+            // Reject reveals with wrong field lengths before verifying.
+            // The commitment hash is SHA-256(secret ‖ nonce) with no length framing,
+            // so without this check a peer could reveal a different (secret', nonce')
+            // split that hashes identically yet contributes a different secret to the
+            // seed — a post-commit bias attack. Fixed lengths make the preimage
+            // unambiguous.
+            if (msg.secret.size != SECRET_BYTES || msg.nonce.size != NONCE_BYTES) {
+                throw CommitmentViolation(
+                    sender,
+                    allCommits[sender] ?: ByteArray(0),
+                    ByteArray(0),
+                )
+            }
             verifyCommitment(sender, msg.secret, msg.nonce, allCommits[sender]
                 ?: error("Reveal from $sender who did not commit"))
             result[sender] = msg.secret
