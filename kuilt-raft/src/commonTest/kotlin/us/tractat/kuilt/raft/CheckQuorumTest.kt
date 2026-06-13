@@ -3,10 +3,10 @@ package us.tractat.kuilt.raft
 
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertTrue
 
-private fun assertAll(vararg assertions: () -> Unit) = assertions.forEach { it() }
 
 class CheckQuorumTest {
 

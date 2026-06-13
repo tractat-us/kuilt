@@ -13,6 +13,7 @@ import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PlyId
 import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.composite.CompositeLoom
+import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
@@ -29,8 +30,6 @@ import kotlin.test.assertTrue
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class CompositeDynamicPlyTest {
-
-    private fun assertAll(vararg assertions: () -> Unit) = assertions.forEach { it() }
 
     @Test
     fun attachingAPlyMidSessionAddsItToPliesAndDedupsAcrossBoth() = runTest {

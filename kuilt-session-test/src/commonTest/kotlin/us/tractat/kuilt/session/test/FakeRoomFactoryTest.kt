@@ -10,6 +10,7 @@ import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.session.Liveness
 import us.tractat.kuilt.session.MembershipEvent
 import us.tractat.kuilt.session.SessionRole
+import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -133,4 +134,3 @@ class FakeRoomFactoryTest {
     }
 }
 
-private fun assertAll(vararg assertions: () -> Unit) = assertions.forEach { it() }

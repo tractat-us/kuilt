@@ -12,6 +12,7 @@ import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.Direction
 import us.tractat.kuilt.core.FaultProfile
 import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -636,4 +637,3 @@ private class FakeReconnectGate {
 // ── Test helpers ──────────────────────────────────────────────────────────────
 
 /** Runs all [assertions] and reports all failures together (project convention). */
-private fun assertAll(vararg assertions: () -> Unit) = assertions.forEach { it() }

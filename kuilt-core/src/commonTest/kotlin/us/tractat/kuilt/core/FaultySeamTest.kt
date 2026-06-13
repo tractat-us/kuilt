@@ -8,6 +8,7 @@ import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
+import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -591,4 +592,3 @@ private suspend fun droppedIndexesForSeed(
     return dropped
 }
 
-private fun assertAll(vararg assertions: () -> Unit) = assertions.forEach { it() }

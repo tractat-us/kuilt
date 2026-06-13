@@ -12,6 +12,7 @@ import kotlinx.coroutines.yield
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
+import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -324,4 +325,3 @@ class SeamRoomTest {
         }
 }
 
-private fun assertAll(vararg assertions: () -> Unit) = assertions.forEach { it() }

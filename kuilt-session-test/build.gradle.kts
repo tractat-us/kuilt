@@ -7,6 +7,7 @@ kotlin {
             implementation(libs.kotlinx.coroutines.core)
         }
         commonTest.dependencies {
+            implementation(project(":kuilt-test"))
             implementation(libs.kotlinx.coroutines.test)
         }
     }

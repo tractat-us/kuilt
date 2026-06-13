@@ -17,10 +17,10 @@ import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.crdt.replicator.ReplicatorMessage
 import us.tractat.kuilt.crdt.replicator.SeamReplicator
 import us.tractat.kuilt.crdt.replicator.SeamReplicatorConfig
+import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
-private fun assertAll(vararg assertions: () -> Unit) = assertions.forEach { it() }
 
 /**
  * Integration: a [GCounter] [SeamReplicator] over [Room.channel] converges across

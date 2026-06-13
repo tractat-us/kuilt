@@ -13,6 +13,7 @@ kotlin {
             implementation(libs.kotlin.logging)
         }
         commonTest.dependencies {
+            implementation(project(":kuilt-test"))
             implementation(libs.kotlinx.coroutines.test)
         }
         jvmTest.dependencies {
