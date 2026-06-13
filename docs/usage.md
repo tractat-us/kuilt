@@ -229,6 +229,24 @@ suite stays fast and deterministic.
 own `Tag` carrying whatever its `join` needs (`displayName` + a stable `peerKey`
 are the only required fields).
 
+## Live-converging state (`kuilt-crdt`)
+
+`kuilt-crdt` provides the delta-state CRDT zoo and `SeamReplicator`, which
+propagates any `Quilted<S>` over a `Seam` with no application-level merge
+calls. For collaborative JSON documents, use `JsonCrdt`:
+
+```kotlin
+val doc = JsonCrdt.empty(ReplicaId("my-peer"))
+    .set("title", JsonNode.Leaf(MVRegister.empty<JsonValue>().set(replica, JsonValue.Str("Hello"))))
+
+// After deserialization, restore the replica id before mutating:
+val received: JsonCrdt = cbor.decodeFromByteArray(JsonCrdt.serializer(), bytes)
+    .withReplica(ReplicaId("my-peer"))
+```
+
+See the `JsonCrdt` and `JsonNode` KDoc for conflict-resolution semantics and
+the cross-type precedence rule (`Object > Array > Leaf`).
+
 ## Consensus layer (`kuilt-raft`)
 
 `kuilt-raft` adds a Raft consensus layer on top of any kuilt `Seam`. Use it
