@@ -7,4 +7,4 @@ package us.tractat.kuilt.game
  *   Two nodes in the same cluster assign the same [index] to the same [action].
  * @param action The deserialized application action.
  */
-public data class IndexedAction<A>(val index: Long, val action: A)
+public data class IndexedAction<out A>(val index: Long, val action: A)

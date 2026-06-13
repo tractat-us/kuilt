@@ -6,13 +6,18 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.BinaryFormat
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.cbor.Cbor
 import kotlinx.serialization.serializer
+import us.tractat.kuilt.raft.LeadershipLostException
+import us.tractat.kuilt.raft.NotLeaderException
 import us.tractat.kuilt.raft.RaftRole
 import us.tractat.kuilt.raft.test.FakeRaftNode
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
+import kotlin.test.assertIs
 import kotlin.time.Duration.Companion.seconds
 
 class TurnSequencerTest {
@@ -20,8 +25,17 @@ class TurnSequencerTest {
     @Serializable
     private data class Move(val player: Int, val card: Int)
 
+    // Single shared format — same instance used by TurnSequencer and encodeMove so
+    // the wire encoding is guaranteed to match without any implicit coupling.
+    private val format: BinaryFormat = Cbor
+
     private fun sequencer(node: FakeRaftNode = FakeRaftNode()) =
-        TurnSequencer(node, serializer<Move>())
+        TurnSequencer(node, serializer<Move>(), format)
+
+    // Encode a Move to bytes in the same way TurnSequencer does, for injecting
+    // via FakeRaftNode.pushCommitted. Uses the shared [format] instance.
+    private fun encodeMove(move: Move): ByteArray =
+        format.encodeToByteArray(serializer<Move>(), move)
 
     @Test
     fun proposedActionAppearsOnCommittedFlow() = runTest(timeout = 5.seconds) {
@@ -103,10 +117,29 @@ class TurnSequencerTest {
         assertEquals(result.index, seq.committed.first().index)
     }
 
-    // Encode a Move to bytes in the same way TurnSequencer does, for injecting
-    // via FakeRaftNode.pushCommitted. This must match TurnSequencer's encoding.
-    private fun encodeMove(move: Move): ByteArray {
-        val serializer = serializer<Move>()
-        return kotlinx.serialization.cbor.Cbor.encodeToByteArray(serializer, move)
+    @Test
+    fun proposeWrapsNotLeaderExceptionAsNotYourTurnException() = runTest(timeout = 5.seconds) {
+        val node = FakeRaftNode()
+        // Default role is Follower — propose will throw NotLeaderException
+        val seq = sequencer(node)
+
+        val ex = assertFailsWith<NotYourTurnException> {
+            seq.propose(Move(player = 1, card = 1))
+        }
+        assertIs<NotLeaderException>(ex.cause)
+    }
+
+    @Test
+    fun proposeWrapsLeadershipLostExceptionAsTurnLostInFlightException() = runTest(timeout = 5.seconds) {
+        val node = FakeRaftNode()
+        node.setRole(RaftRole.Leader)
+        val raftCause = LeadershipLostException("lost during test")
+        node.proposeBehavior = { _ -> throw raftCause }
+        val seq = sequencer(node)
+
+        val ex = assertFailsWith<TurnLostInFlightException> {
+            seq.propose(Move(player = 1, card = 1))
+        }
+        assertEquals(raftCause, ex.cause)
     }
 }
