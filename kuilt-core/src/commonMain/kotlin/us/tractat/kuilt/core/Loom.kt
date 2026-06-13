@@ -7,6 +7,12 @@ package us.tractat.kuilt.core
  *
  * The single abstract method is [weave]; [host] and [join] are default
  * wrappers. ADR-002.
+ *
+ * ## Usage
+ *
+ * Host a session, let a second peer join, and exchange a frame:
+ *
+ * @sample us.tractat.kuilt.core.sampleHostAndJoin
  */
 public interface Loom {
     /** Establish a [Seam] according to [rendezvous] — either host a new session or join an existing one. */

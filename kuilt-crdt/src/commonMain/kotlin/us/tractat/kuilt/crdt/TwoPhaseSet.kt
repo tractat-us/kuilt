@@ -11,6 +11,8 @@ import kotlinx.serialization.Serializable
  * The pedagogical wart: tombstones grow without bound. The next rung up,
  * [ORSet], uses dots + causal context so an add issued after a remove can
  * survive — at the cost of more bookkeeping.
+ *
+ * @sample us.tractat.kuilt.crdt.sampleTwoPhaseSet
  */
 @Serializable
 public class TwoPhaseSet<E> private constructor(
