@@ -114,10 +114,20 @@ launch { host.incoming.collect { swatch -> handle(swatch.payload) } } // collect
 host.broadcast("hello".encodeToByteArray())
 ```
 
-See **[docs/usage.md](docs/usage.md)** to open/join a WebSocket session, discover
-peers over mDNS, and write + conformance-test your own fabric. See
-**[docs/architecture.md](docs/architecture.md)** for the design and the rules
-the contract enforces.
+## Documentation
+
+The full documentation suite is published to GitHub Pages on every push to `main`:
+
+- **[Guide](https://tractat-us.github.io/kuilt/guide/)** — concepts, usage, fabrics,
+  and the [CRDT zoo](https://tractat-us.github.io/kuilt/guide/crdt-overview.html),
+  with every code example drawn from real, compiled test code.
+- **[API reference](https://tractat-us.github.io/kuilt/api/)** — Dokka multi-module
+  reference for every public symbol, with runnable `@sample` snippets.
+
+The in-repo sources are **[docs/usage.md](docs/usage.md)** (open/join a WebSocket
+session, discover peers over mDNS, write + conformance-test your own fabric) and
+**[docs/architecture.md](docs/architecture.md)** (the design and the rules the
+contract enforces).
 
 ## Building
 

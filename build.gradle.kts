@@ -3,13 +3,15 @@ plugins {
     alias(libs.plugins.dokka)
 }
 
-// Aggregate every module's JVM coverage into one root report. `koverXmlReport`
-// emits build/reports/kover/report.xml (uploaded to Codecov from CI);
-// `koverHtmlReport` writes a browsable report for local inspection. Each module
-// applies the Kover plugin via the kmp-library convention, so a project
-// dependency here is all the aggregation needs.
+// Root aggregation for both doc/coverage tools. Each module applies the Kover
+// and Dokka plugins via the kmp-library convention, so a `dokka`/`kover` project
+// dependency here is all the aggregation needs:
+//   - `koverXmlReport`/`koverHtmlReport` → one merged coverage report.
+//   - `dokkaGenerate` → ONE browsable HTML API site at build/dokka/html/ listing
+//     all modules (without these the root task would render only the empty root).
 dependencies {
     subprojects.forEach { kover(it) }
+    subprojects.forEach { dokka(it) }
 }
 
 val kuiltVersionLine: String = providers.gradleProperty("kuiltVersionLine").get()
