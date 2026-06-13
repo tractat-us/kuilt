@@ -34,20 +34,24 @@ private val log = KotlinLogging.logger {}
  * [broadcast] and [sendTo] chunk-encode the payload and call
  * [NearbyApi.sendBytesPayload] for each chunk.
  *
- * @param selfId         This peer's stable identity.
- * @param endpointPeers  Mutable map from Nearby endpointId → remote [PeerId],
- *                       pre-populated with the just-connected peer after handshake.
- *                       Shared with the owning [NearbyLoom] so later joiners update it.
- * @param api            The [NearbyApi] instance.
- * @param sharedPeers    The shared [MutableStateFlow] of the whole session's peer set
- *                       (owned by [NearbyLoom]).
- * @param scope          Coroutine scope for the receive loop; cancelled on [close].
- * @param maxChunkPayload  Per-chunk payload cap forwarded to [ChunkCodec].
- * @param msgIdCounter   Shared monotonic counter for message IDs (use one per seam).
+ * @param selfId              This peer's stable identity.
+ * @param endpointPeers       Mutable map from Nearby endpointId → remote [PeerId],
+ *                            pre-populated with the just-connected peer after handshake.
+ *                            Shared with the owning [NearbyLoom] so later joiners update it.
+ * @param endpointPeersMutex  The single [Mutex] that guards [endpointPeers]. Created once
+ *                            by [NearbyLoom] and passed here so both sides serialise every
+ *                            read and write on the same lock instance.
+ * @param api                 The [NearbyApi] instance.
+ * @param sharedPeers         The shared [MutableStateFlow] of the whole session's peer set
+ *                            (owned by [NearbyLoom]).
+ * @param scope               Coroutine scope for the receive loop; cancelled on [close].
+ * @param maxChunkPayload     Per-chunk payload cap forwarded to [ChunkCodec].
+ * @param msgIdCounter        Shared monotonic counter for message IDs (use one per seam).
  */
 internal class NearbySeam(
     override val selfId: PeerId,
     private val endpointPeers: MutableMap<String, PeerId>,
+    private val endpointPeersMutex: Mutex,
     private val api: NearbyApi,
     private val sharedPeers: MutableStateFlow<Set<PeerId>>,
     private val scope: CoroutineScope,
@@ -64,17 +68,12 @@ internal class NearbySeam(
     private val incomingChannel = Channel<Swatch>(capacity = Channel.UNLIMITED)
     override val incoming: Flow<Swatch> = incomingChannel.receiveAsFlow()
 
-    private val mutex = Mutex()
+    // Guards only the `closed` flag. All `endpointPeers` access uses `endpointPeersMutex`.
+    private val closedMutex = Mutex()
     private var closed = false
 
-    // Threading note: `endpointPeers` is shared with the owning NearbyLoom — it is written
-    // by NearbyLoom under the loom's own mutex (on handshake completion) and read/mutated
-    // here under this seam's mutex (on receive and disconnect events). Both paths execute on
-    // the single-dispatcher scope derived from the caller's coroutine context (see NearbyLoom
-    // KDoc), so interleaving is serialised by that dispatcher. Do not re-architect without
-    // auditing all addPeer() call sites and endpointPeers accesses in NearbyLoom.
-
     // Per-endpoint reassemblers and sequence counters — keyed by endpointId.
+    // Accessed only within endpointPeersMutex, so no separate guard needed.
     private val reassemblers = mutableMapOf<String, ChunkCodec.Reassembler>()
     private val sequences = mutableMapOf<String, Long>()
 
@@ -96,7 +95,7 @@ internal class NearbySeam(
 
     private suspend fun receiveLoop() {
         api.payloadReceived.collect { event ->
-            mutex.withLock {
+            endpointPeersMutex.withLock {
                 if (closed) return@collect
                 // Ignore payloads from unknown endpoints (e.g. not yet connected).
                 val remotePeerId = endpointPeers[event.endpointId] ?: return@collect
@@ -124,7 +123,7 @@ internal class NearbySeam(
 
     private suspend fun disconnectLoop() {
         api.endpointDisconnected.collect { event ->
-            mutex.withLock {
+            endpointPeersMutex.withLock {
                 if (closed) return@collect
                 val peerId = endpointPeers.remove(event.endpointId) ?: return@collect
                 reassemblers.remove(event.endpointId)?.reset()
@@ -138,7 +137,7 @@ internal class NearbySeam(
 
     override suspend fun broadcast(payload: ByteArray) {
         checkNotClosed()
-        val endpoints = mutex.withLock { endpointPeers.keys.toList() }
+        val endpoints = endpointPeersMutex.withLock { endpointPeers.keys.toList() }
         if (endpoints.isEmpty()) {
             log.warn { "nearby.send dropped — no connected peers selfId=${selfId.value} bytes=${payload.size}" }
             return
@@ -149,7 +148,7 @@ internal class NearbySeam(
     override suspend fun sendTo(peer: PeerId, payload: ByteArray) {
         checkNotClosed()
         require(peer != selfId) { "Cannot send to self" }
-        val endpointId = mutex.withLock { endpointIdFor(peer) }
+        val endpointId = endpointPeersMutex.withLock { endpointIdFor(peer) }
             ?: throw PeerNotConnected(peer)
         sendToEndpoints(listOf(endpointId), payload)
     }
@@ -170,7 +169,7 @@ internal class NearbySeam(
     // ── close ─────────────────────────────────────────────────────────────────
 
     override suspend fun close(reason: CloseReason) {
-        mutex.withLock {
+        closedMutex.withLock {
             if (closed) return
             closed = true
         }
@@ -180,7 +179,7 @@ internal class NearbySeam(
         // the same scope, preventing coroutine leaks between tests.
         scope.coroutineContext[Job]?.cancel()
         incomingChannel.close()
-        val endpoints = mutex.withLock { endpointPeers.keys.toList() }
+        val endpoints = endpointPeersMutex.withLock { endpointPeers.keys.toList() }
         for (endpointId in endpoints) {
             api.disconnect(endpointId)
         }
@@ -189,12 +188,6 @@ internal class NearbySeam(
 
     private fun checkNotClosed() {
         check(!closed) { "NearbySeam for $selfId is closed" }
-    }
-
-    /** Register a new connected peer after a subsequent join. The peers-watcher handles [SeamState.Woven] transition. */
-    internal fun addPeer(endpointId: String, peerId: PeerId) {
-        endpointPeers[endpointId] = peerId
-        sharedPeers.update { it + peerId }
     }
 }
 
