@@ -35,7 +35,7 @@ internal class PlyInboundGate(private val maxBuffered: Int = 16) {
             buffer[frame.originSeq] = frame.payload
             // Overflow: buffer has reached the cap → skip the gap to the lowest buffered.
             if (buffer.size >= maxBuffered) {
-                nextExpected[origin] = buffer.firstKey()
+                nextExpected[origin] = buffer.lowestBufferedSeq()
             }
         }
         return drain(origin, buffer)
@@ -53,6 +53,6 @@ internal class PlyInboundGate(private val maxBuffered: Int = 16) {
         return out
     }
 
-    // commonMain has no TreeMap; keep a sorted-by-key map via min-of-keys lookup.
-    private fun MutableMap<Long, ByteArray>.firstKey(): Long = keys.min()
+    // commonMain has no sorted map; scan for the min buffered key.
+    private fun MutableMap<Long, ByteArray>.lowestBufferedSeq(): Long = keys.min()
 }

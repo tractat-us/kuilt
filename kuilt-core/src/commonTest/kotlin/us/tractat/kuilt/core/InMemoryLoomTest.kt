@@ -212,13 +212,15 @@ class InMemoryLoomTest {
             assertEquals(a.selfId, frame.sender)
             assertTrue(frame.payload.contentEquals(byteArrayOf(42)))
 
-            // C should have received nothing
+            // C should have received nothing — advance virtual time so the launched
+            // coroutine actually gets a chance to collect; then cancel it.
             var cReceived = false
             val cJob =
                 launch {
                     c.incoming.first()
                     cReceived = true
                 }
+            testScheduler.advanceUntilIdle()
             cJob.cancel()
             assertFalse(cReceived)
         }
