@@ -92,10 +92,15 @@ class CommittedReplayTest {
         backgroundScope.launch {
             leader.committedFrom(e1.index).collect { if (it is Committed.Entry) seen += it.entry }
         }
+        // Under StandardTestDispatcher the launched collector does not run until virtual time
+        // advances; settle lets it subscribe (and replay [e1, e2]) before we propose e3, so the
+        // "tail the live stream" half of the seam is actually exercised. See RaftTestFixtures.
+        sim.settle()
 
         // Propose a third entry *after* the subscription is live — it must tail through.
         val e3 = leader.propose(byteArrayOf(3)) // index 4
         sim.awaitCommit(e3.index)
+        sim.settle() // let the collector drain the live e3 emission before asserting
 
         assertContentEquals(
             listOf(e1.index, e2.index, e3.index),

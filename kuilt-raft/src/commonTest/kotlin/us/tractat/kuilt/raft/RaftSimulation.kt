@@ -20,12 +20,17 @@ import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
 
 /**
- * Drives a multi-node real-[RaftNode] cluster for testing.
+ * Drives a multi-node real-[RaftNode] cluster for testing under deterministic virtual time.
  *
- * Requires `UnconfinedTestDispatcher` — see the banner in [RaftTestFixtures] for the
- * full TestDispatcher contract. Pass the test's [kotlinx.coroutines.test.TestScope] as
- * [scope] and [kotlinx.coroutines.test.TestScope.backgroundScope] as [nodeScope] so the
- * infinite election/heartbeat loops are cancelled when the test body completes.
+ * Runs on the [StandardTestDispatcher] installed by [raftRunTest] — see the banner in
+ * [RaftTestFixtures] for the full determinism contract. Pass the test's
+ * [kotlinx.coroutines.test.TestScope] as [scope] and [kotlinx.coroutines.test.TestScope.backgroundScope]
+ * as [nodeScope] so the infinite election/heartbeat loops are cancelled when the test body completes.
+ *
+ * Wait on cluster state through the bounded `await*` helpers (or [settle]) only; each suspends on
+ * virtual `delay`, which `runTest` auto-advances, so they drive time forward in bounded steps and
+ * fail fast with a [dumpState] on non-convergence. Never `advanceUntilIdle()` — the engine never
+ * quiesces. See #383.
  */
 class RaftSimulation(
     val nodeIds: List<NodeId>,
@@ -185,8 +190,12 @@ class RaftSimulation(
     }
 
     /**
-     * Yield multiple times to let actor queues drain — deliberately yield-only (no `delay`),
-     * because `advanceUntilIdle()` would fire the leader-lease timer and invalidate leader-alive tests.
+     * Let pending work at the current virtual instant run without advancing the clock: deliberately
+     * yield-only (no `delay`). Under [StandardTestDispatcher]'s FIFO scheduling, yielding hands the
+     * single test thread back to the scheduler so already-scheduled coroutines (e.g. a freshly
+     * launched collector, or a queued actor step) run at *this* instant. Use it after launching a
+     * collector you expect to observe a subsequent emission, and to drain a live emission before
+     * asserting — without firing the leader-lease/heartbeat timers an `advanceTimeBy` would.
      */
     suspend fun settle() = repeat(10) { yield() }
 
@@ -195,6 +204,12 @@ class RaftSimulation(
     // non-converging cluster FAILS FAST with a full state dump rather than hanging
     // for the whole runTest timeout. Each polls the target condition under a
     // withTimeout(within) bound and, on expiry, throws AssertionError(dumpState(...)).
+    //
+    // Determinism contract (#383): each helper advances virtual time in bounded 1 ms steps via
+    // tick()/pollUntil under StandardTestDispatcher's FIFO scheduling — never advanceUntilIdle().
+    // This is what lets a test simply `awaitLeader(sim)` and get a deterministic, load-independent
+    // result. To write a new deterministic await, build it on pollUntil/awaitOrDump, not on a raw
+    // flow.first or advanceUntilIdle.
 
     /** Suspend until [index] is committed on every node in [on]; fail fast with a dump otherwise. */
     suspend fun awaitCommit(
@@ -297,11 +312,11 @@ class RaftSimulation(
     /**
      * Poll [probe] every virtual millisecond until it returns non-null, then return that value.
      *
-     * The `delay`-based poll matters under [UnconfinedTestDispatcher]: each `delay(1)` advances
-     * virtual time and lets the engine actors (election, heartbeat, propose) run to a quiescent
-     * point, so a caller that subscribes to a hot flow immediately after the await sees the
-     * subsequent emissions rather than racing queued engine work. The enclosing [withTimeout]
-     * in [awaitOrDump] bounds the loop and turns non-convergence into a fast dump.
+     * Each `delay(1)` (in [tick]) advances virtual time by one ms; `runTest` auto-advances to it and
+     * runs every coroutine scheduled at that instant under [StandardTestDispatcher]'s FIFO order, so
+     * the engine actors (election, heartbeat, propose) make deterministic progress between probes.
+     * The enclosing [withTimeout] in [awaitOrDump] bounds the loop and turns non-convergence into a
+     * fast dump.
      */
     private suspend fun <T : Any> pollUntil(probe: () -> T?): T {
         while (true) {
