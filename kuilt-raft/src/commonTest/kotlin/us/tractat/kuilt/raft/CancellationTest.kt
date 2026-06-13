@@ -62,7 +62,14 @@ class CancellationTest {
         val job = launch {
             try { leader.propose(byteArrayOf(99)) } catch (_: CancellationException) {}
         }
-        delay(10) // let propose() reach deferred.await()
+        // Advance exactly 1 virtual ms: enough for the launched propose() to be dispatched and reach
+        // deferred.await() (StandardTestDispatcher runs the launch only once time advances), but below
+        // the partitioned leader's 5-10 ms election timeout / 2 ms CheckQuorum step-down window. A
+        // larger advance (the old delay(10)) let the isolated leader step down first, so the propose
+        // failed with LeadershipLostException instead of unblocking via cancellation — the residual
+        // #383 flake. With the seeded RNG (FAST_RAFT_CONFIG) the timeout draws are fixed, so 1 ms is
+        // deterministically before any step-down.
+        delay(1)
         job.cancel()
         job.join()
         assertTrue(job.isCompleted, "propose() must unblock on cancel when awaiting quorum")

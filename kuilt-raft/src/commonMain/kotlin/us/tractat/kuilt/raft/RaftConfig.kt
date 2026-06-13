@@ -1,5 +1,6 @@
 package us.tractat.kuilt.raft
 
+import kotlin.random.Random
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
 
@@ -50,6 +51,13 @@ import kotlin.time.Duration.Companion.milliseconds
  *   InstallSnapshot chunk. The actual chunk size is the lesser of this and the
  *   transport's [RaftTransport.maxPayloadBytes] (minus a small header budget), so
  *   a fabric with a tighter framing limit shrinks chunks automatically.
+ * @param random Source of randomness for the election-timeout draw. Randomness is a
+ *   dependency, like time: under virtual time a [kotlinx.coroutines.test.TestDispatcher]
+ *   makes scheduling deterministic, but an unseeded RNG still injects non-determinism into
+ *   the *durations* the engine waits. Production default is [Random.Default]. Tests that run
+ *   under virtual time should inject a **seeded** `Random(<fixed seed>)` so every run draws
+ *   identical election timeouts — making the whole engine deterministic. NEVER seed in
+ *   production: a fixed seed defeats the split-vote avoidance that timeout randomisation exists for.
  */
 public data class RaftConfig(
     val electionTimeoutMin: Duration = 150.milliseconds,
@@ -59,4 +67,5 @@ public data class RaftConfig(
     val expectVirtualTime: Boolean = false,
     val slowProposeThreshold: Duration = 100.milliseconds,
     val snapshotChunkCeiling: Int = 16 * 1024,
+    val random: Random = Random.Default,
 )

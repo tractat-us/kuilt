@@ -8,6 +8,7 @@ import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestCoroutineScheduler
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
+import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
@@ -27,6 +28,7 @@ private val schedulerConfig = RaftConfig(
     electionTimeoutMax = electionTimeoutMax,
     heartbeatInterval = heartbeatInterval,
     expectVirtualTime = true,
+    random = Random(RAFT_TEST_SEED),
 )
 
 private fun schedulerSim(scheduler: TestCoroutineScheduler, n: Int = 3): RaftSimulation {

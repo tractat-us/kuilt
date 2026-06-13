@@ -57,6 +57,7 @@ import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withTimeout
+import kotlin.random.Random
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
@@ -114,13 +115,30 @@ internal fun singleVoterNode(
     return SingleVoterHarness(node, storage)
 }
 
-/** Fast timings for deterministic tests — elections fire in single-digit ms. */
+/**
+ * Fast timings for deterministic tests — elections fire in single-digit ms.
+ *
+ * The election timeout is drawn from a **seeded** [kotlin.random.Random]. Under
+ * [StandardTestDispatcher] scheduling is deterministic, but the *duration* each node waits is still
+ * an RNG draw — an unseeded `Random.Default` reintroduces non-determinism in the timeouts (the
+ * residual flake of issue #383: a partitioned leader's election timeout occasionally drew below a
+ * test's `delay`, stepping it down before the test acted). Seeding pins every draw so the whole
+ * engine is reproducible. NEVER seed in production — see [RaftConfig.random].
+ */
 internal val FAST_RAFT_CONFIG = RaftConfig(
     electionTimeoutMin = 5.milliseconds,
     electionTimeoutMax = 10.milliseconds,
     heartbeatInterval = 2.milliseconds,
     expectVirtualTime = true,  // see banner above — raft tests run on StandardTestDispatcher under virtual time
+    random = Random(RAFT_TEST_SEED),
 )
+
+/**
+ * Fixed seed for the raft suite's election-timeout RNG — keeps every run identical. Any test fixture
+ * that builds its own [RaftConfig] (rather than reusing [FAST_RAFT_CONFIG]) must seed `random` with
+ * this so the whole suite stays deterministic.
+ */
+internal const val RAFT_TEST_SEED = 383L
 
 /**
  * Build a [RaftSimulation] of [n] voters wired with [config].

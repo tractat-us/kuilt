@@ -11,6 +11,7 @@ import kotlinx.coroutines.supervisorScope
 import kotlinx.serialization.cbor.Cbor
 import kotlinx.serialization.encodeToByteArray
 import us.tractat.kuilt.raft.internal.RaftMessage
+import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
@@ -32,6 +33,7 @@ private val SLOW_ELECTION_CONFIG = RaftConfig(
     electionTimeoutMax = 400.milliseconds,
     heartbeatInterval = 2.milliseconds,
     expectVirtualTime = true,
+    random = Random(RAFT_TEST_SEED),
 )
 
 /**

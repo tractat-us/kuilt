@@ -41,7 +41,6 @@ import us.tractat.kuilt.raft.RaftTransport
 import us.tractat.kuilt.raft.Snapshot
 import us.tractat.kuilt.raft.SnapshotMeta
 import us.tractat.kuilt.raft.StepDownReason
-import kotlin.random.Random
 import kotlin.time.Duration
 import kotlin.time.TimeSource
 
@@ -420,7 +419,7 @@ internal class RaftEngine(
 
     // ── Timers ────────────────────────────────────────────────────────────────
 
-    private fun randomElectionTimeoutMillis(): Long = Random.nextLong(
+    private fun randomElectionTimeoutMillis(): Long = raftConfig.random.nextLong(
         raftConfig.electionTimeoutMin.inWholeMilliseconds,
         raftConfig.electionTimeoutMax.inWholeMilliseconds,
     )
