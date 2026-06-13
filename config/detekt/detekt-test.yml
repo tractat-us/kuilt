@@ -1,0 +1,18 @@
+# kuilt detekt configuration for TEST source sets only.
+# Bans production dispatchers and GlobalScope in test code — prevents the
+# accidental real-dispatcher-under-runTest class of bug (the root cause of #340).
+#
+# Deliberate real-threading test harnesses use @Suppress("ForbiddenMethodCall")
+# at the narrowest scope with a trailing "// deliberate: <reason>" comment.
+style:
+  ForbiddenImport:
+    active: true
+    imports:
+      # Ban importing Dispatchers in test sources.
+      # Use UnconfinedTestDispatcher(testScheduler) from kotlinx.coroutines.test instead.
+      # Deliberate real-threading harnesses: @Suppress("ForbiddenImport") at file level.
+      - reason: "Use UnconfinedTestDispatcher(testScheduler) in tests; real dispatchers break virtual-time determinism."
+        value: "kotlinx.coroutines.Dispatchers"
+      # Ban GlobalScope — unstructured concurrency leaks across test boundaries.
+      - reason: "GlobalScope escapes test lifecycle; use a CoroutineScope(UnconfinedTestDispatcher(testScheduler)) instead."
+        value: "kotlinx.coroutines.GlobalScope"

@@ -112,12 +112,30 @@ configure<io.gitlab.arturbosch.detekt.extensions.DetektExtension> {
 // in ci.yml). Instead expose them via a dedicated `detektAll` task that CI runs
 // as its own parallel job, isolated from the build's memory footprint.
 afterEvaluate {
-    val perSourceSet = listOf("detektMetadataCommonMain", "detektJvmMain")
+    // Test-source detekt tasks use an extended config that also bans production
+    // dispatchers (Dispatchers.Default/IO/Main/Unconfined) and GlobalScope.
+    // Deliberate real-threading sites suppress with @Suppress("ForbiddenMethodCall").
+    val testDetektConfig = rootProject.files(
+        "config/detekt/detekt.yml",
+        "config/detekt/detekt-test.yml",
+    )
+    val testSourceSetTaskNames = listOf(
+        "detektJvmTest",
+        "detektAndroidDebugUnitTest",
+        "detektAndroidReleaseUnitTest",
+    )
+    testSourceSetTaskNames.mapNotNull { tasks.findByName(it) }.forEach { task ->
+        (task as io.gitlab.arturbosch.detekt.Detekt).config.setFrom(testDetektConfig)
+    }
+
+    val mainSourceSetTasks = listOf("detektMetadataCommonMain", "detektJvmMain")
+        .mapNotNull { tasks.findByName(it) }
+    val testSourceSetTasks = testSourceSetTaskNames
         .mapNotNull { tasks.findByName(it) }
     tasks.register("detektAll") {
         group = "verification"
-        description = "Runs detekt (commonMain + jvmMain, with type resolution). Not wired into check — CI runs it as a separate job to avoid OOM."
-        dependsOn(perSourceSet)
+        description = "Runs detekt on main sources (commonMain + jvmMain) and test sources (jvmTest, androidUnitTest) with type resolution. Not wired into check — CI runs it as a separate job to avoid OOM."
+        dependsOn(mainSourceSetTasks + testSourceSetTasks)
     }
     val detektBaselineLifecycle = tasks.findByName("detektBaseline") ?: return@afterEvaluate
     listOf("detektBaselineMetadataCommonMain", "detektBaselineJvmMain").forEach { name ->

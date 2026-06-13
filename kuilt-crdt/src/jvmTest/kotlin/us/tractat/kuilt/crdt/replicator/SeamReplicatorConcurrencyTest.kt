@@ -2,6 +2,8 @@
     kotlinx.serialization.ExperimentalSerializationApi::class,
     kotlinx.coroutines.ExperimentalCoroutinesApi::class,
 )
+@file:Suppress("ForbiddenImport") // deliberate: real OS-thread concurrency stress harness — needs Dispatchers.Default/IO for genuine parallelism probes
+
 
 package us.tractat.kuilt.crdt.replicator
 

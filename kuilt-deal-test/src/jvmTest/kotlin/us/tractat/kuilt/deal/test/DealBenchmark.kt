@@ -1,3 +1,5 @@
+@file:Suppress("ForbiddenImport") // deliberate: timing benchmark under runBlocking (not runTest) — Dispatchers.Unconfined needed for zero-overhead scope around real crypto operations
+
 package us.tractat.kuilt.deal.test
 
 import kotlinx.coroutines.CoroutineScope

@@ -92,6 +92,7 @@ class BridgePeerLinkClosingFlagTest {
 
     private companion object {
         fun attachCapture(): Pair<Logger, ListAppender<ILoggingEvent>> {
+            @Suppress("CastNullableToNonNullableType") // SLF4J returns non-null; Logback is the bound implementation
             val logger =
                 LoggerFactory.getLogger(
                     "us.tractat.kuilt.multipeer",
