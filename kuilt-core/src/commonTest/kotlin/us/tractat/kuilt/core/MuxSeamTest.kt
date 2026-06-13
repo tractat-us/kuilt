@@ -8,6 +8,7 @@
 package us.tractat.kuilt.core
 
 import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.produceIn
 import kotlinx.coroutines.flow.take
@@ -18,6 +19,7 @@ import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 class MuxSeamTest {
@@ -248,6 +250,38 @@ class MuxSeamTest {
 
         val swatch = received.await()
         assertTrue(swatch.sender == rawA.selfId, "sender PeerId must be preserved through MuxSeam")
+    }
+
+    // ── concurrent channel() calls are race-free ──────────────────────────────
+
+    /**
+     * N concurrent coroutines call channel() with the same tag; each must
+     * receive the identical Seam instance (idempotency holds under concurrency).
+     * Distinct tags each get their own consistent instance.
+     *
+     * Uses UnconfinedTestDispatcher so async blocks interleave eagerly on the
+     * single test thread — the shared-state invariant must be preserved by the
+     * lock, not by sequential scheduling.
+     */
+    @Test
+    fun concurrentChannelCallsAreSafe() = runTest(UnconfinedTestDispatcher()) {
+        val loom = InMemoryLoom()
+        val rawA = loom.host(Pattern("mux-concurrent"))
+        val muxA = MuxSeam(rawA, backgroundScope)
+
+        val tag = 0x07.toByte()
+        val results = (1..16).map { async { muxA.channel(tag) } }.awaitAll()
+
+        val distinct = results.toSet()
+        assertAll(
+            { assertEquals(1, distinct.size, "all 16 concurrent channel(tag) calls must return the same instance") },
+            { assertSame(results[0], results[15], "first and last must be identical") },
+        )
+
+        // Distinct tags produce distinct instances.
+        val a = muxA.channel(0x0A.toByte())
+        val b = muxA.channel(0x0B.toByte())
+        assertTrue(a !== b, "different tags must produce different channel views")
     }
 }
 

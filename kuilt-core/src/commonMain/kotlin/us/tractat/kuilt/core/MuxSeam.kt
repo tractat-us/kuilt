@@ -1,5 +1,7 @@
 package us.tractat.kuilt.core
 
+import kotlinx.atomicfu.locks.reentrantLock
+import kotlinx.atomicfu.locks.withLock
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.SharingStarted
@@ -34,7 +36,8 @@ import kotlinx.coroutines.flow.shareIn
  * ## Channel identity
  *
  * [channel] is idempotent: calling it twice with the same [tag] returns the
- * same [Seam] instance.
+ * same [Seam] instance. Thread-safe: concurrent [channel] calls are serialised
+ * by an internal reentrant lock so the backing map is never raced.
  *
  * @param delegate the underlying [Seam] whose [Seam.incoming] this class owns.
  * @param scope a [CoroutineScope] for the shared upstream collector.
@@ -51,6 +54,7 @@ public class MuxSeam(
     private val sharedIncoming = delegate.incoming
         .shareIn(scope = scope, started = SharingStarted.Eagerly, replay = 0)
 
+    private val lock = reentrantLock()
     private val channels = mutableMapOf<Byte, Seam>()
 
     /**
@@ -60,9 +64,9 @@ public class MuxSeam(
      * are delivered with the tag byte stripped.
      *
      * This method is idempotent: multiple calls with the same [tag] return the
-     * same [Seam] instance.
+     * same [Seam] instance. Thread-safe.
      */
-    public fun channel(tag: Byte): Seam = channels.getOrPut(tag) { ChannelView(tag) }
+    public fun channel(tag: Byte): Seam = lock.withLock { channels.getOrPut(tag) { ChannelView(tag) } }
 
     private fun taggedPayload(tag: Byte, payload: ByteArray): ByteArray {
         val tagged = ByteArray(payload.size + 1)
