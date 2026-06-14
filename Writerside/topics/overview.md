@@ -20,7 +20,9 @@ There is no client/server split in kuilt's contract. Every peer in a session hol
 |--------|-------------------|
 | `kuilt-core` | The contract (`Loom`/`Seam`/`Swatch`), `InMemoryLoom` reference impl, conformance suite |
 | `kuilt-crdt` | Delta-state CRDT zoo + `SeamReplicator` live replication |
-| `kuilt-raft` | Raft consensus — leader election, log replication, snapshots, dynamic membership |
+| `kuilt-deal` | Cryptographically fair card dealing (`DealSession`) + dealer-less fair-random (`FairRandom`) |
+| `kuilt-game` | Turn-based game facade: `TurnSequencer` + `SpeculativeSequencer` (optimistic apply + rollback) |
+| `kuilt-raft` | Raft consensus — leader election, log replication, snapshots, dynamic membership, linearizable reads, leadership transfer |
 | `kuilt-session` | Membership-aware `Room`: admit/identify handshake, roster, reconnect tokens |
 | `kuilt-websocket` | Ktor WebSocket fabric (`KtorClientLoom` + `KtorServerLoom`) |
 | `kuilt-mdns` | Bonjour/mDNS discovery feeding a WebSocket connection |

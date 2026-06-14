@@ -62,8 +62,9 @@ Replace `0.4.0` with the [latest release](https://central.sonatype.com/artifact/
 | Module | Targets | What it gives you |
 |--------|---------|-------------------|
 | `kuilt-crdt` | all | Delta-state CRDT zoo (`GCounter`, `ORSet`, `LWWMap`, `Rga`, `JsonCrdt`, `EphemeralMap`, …) + `SeamReplicator` live replication. |
-| `kuilt-game` | all | Turn-based game facade over `kuilt-raft`: `TurnSequencer` + `IndexedAction`. |
-| `kuilt-raft` | all | Raft consensus — leader election, log replication, snapshots, dynamic membership. |
+| `kuilt-deal` | all | Cryptographically fair card dealing (`DealSession`, `SraScheme`) + dealer-less fair-random seed agreement (`FairRandom`). |
+| `kuilt-game` | all | Turn-based game facade over `kuilt-raft`: `TurnSequencer` + `IndexedAction` + `SpeculativeSequencer` (optimistic apply + rollback). |
+| `kuilt-raft` | all | Raft consensus — leader election, log replication, snapshots, dynamic membership, linearizable reads, leadership transfer. |
 | `kuilt-session` | all | Membership-aware `Room` (`SeamRoom`): handshake, roster, reconnect tokens, partition detection. |
 
 **Fabrics**

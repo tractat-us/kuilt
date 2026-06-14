@@ -10,7 +10,8 @@ mDNS-discovered LAN, Apple Multipeer, WebRTC, Android Nearby) behind one
 contract. It knows nothing about the application semantics that ride on top —
 that's the consumer's job.
 
-Published to GitHub Packages under `us.tractat.kuilt:*`. Kotlin Multiplatform
+Published to Maven Central under `us.tractat.kuilt:*` (tagged releases), with
+continuous snapshots on Tigris. Kotlin Multiplatform
 (JVM, Android, iOS, macOS, wasmJs). See `docs/architecture.md` for the design
 and `docs/usage.md` for how to consume it.
 
@@ -37,8 +38,9 @@ and `docs/usage.md` for how to consume it.
 | Module | Targets | Role |
 |--------|---------|------|
 | `:kuilt-crdt` | all | The delta-state CRDT zoo (`GCounter`/`PNCounter`/`GSet`/`ORSet`/`TwoPhaseSet`/`LWWRegister`/`MVRegister`/`LWWMap`/`ORMap`/`BoundedCounter`/`Rga`/`Causal`/`JsonCrdt`/`EphemeralMap`), plus `SeamReplicator` (live replication over a `Seam`). |
-| `:kuilt-game` | all | Turn-based game facade over `:kuilt-raft`: `TurnSequencer` (propose/commit typed actions) + `IndexedAction` (committed action carrier). |
-| `:kuilt-raft` | all | Raft consensus over a `Seam` — leader election + PreVote, log replication, log compaction + chunked `InstallSnapshot`, dynamic membership. |
+| `:kuilt-deal` | all | Cryptographically fair card dealing over a `Seam`: `DealSession` (op-based shuffle/strip/quorum-reveal via the SRA commutative-encryption scheme, `SraScheme`) plus `FairRandom` (two-phase commit-reveal seed agreement, no trusted dealer). Depends on `:kuilt-core` + `:kuilt-crdt`. |
+| `:kuilt-game` | all | Turn-based game facade over `:kuilt-raft`: `TurnSequencer` (propose/commit typed actions) + `IndexedAction` (committed action carrier) + `SpeculativeSequencer` (optimistic apply with deterministic rollback/replay). |
+| `:kuilt-raft` | all | Raft consensus over a `Seam` — leader election + PreVote, log replication, log compaction + chunked `InstallSnapshot`, dynamic membership, linearizable reads (`readIndex()`, §3.6/§3.7) and graceful leadership transfer (`transferLeadership()` via TimeoutNow, §3.10). |
 | `:kuilt-session` | all | Membership-aware `Room` over a `Loom` (`SeamRoom`): admit/identify handshake, roster, reconnect tokens, partition detection. |
 
 **Fabrics & discovery**
@@ -59,11 +61,18 @@ and `docs/usage.md` for how to consume it.
 | `:kuilt-test` | all | Shared test utilities/fakes built on `:kuilt-core`. |
 | `:kuilt-session-test` | all | Session test support (`FakeRoomFactory`, …). |
 | `:kuilt-raft-test` | all | Raft test harness (`FakeRaftNode`, …). |
+| `:kuilt-deal-test` | all | Commutative-scheme TCK — `CommutativeSchemeConformanceSuite` verifies any `CommutativeScheme` impl (round-trip recovery, commutativity, strip-order independence, key distinctness). Shipped in `commonMain` for subclassing. |
+
+**Packaging**
+
+| Artifact | Role |
+|----------|------|
+| `:kuilt-bom` | A Gradle/Maven platform (`java-platform`) that constrains every kuilt module to one aligned version. Consumers import it once (`implementation(platform("us.tractat.kuilt:kuilt-bom:<v>"))`) and then declare modules without versions. Not a KMP code module. |
 
 Fabric and feature modules depend on `:kuilt-core` (some also on sibling
-libraries — e.g. `:kuilt-mdns` → `:kuilt-websocket`, `:kuilt-crdt`). The
-dependency arrow never points back into `:kuilt-core` — it must stay free of
-fabric-specific imports.
+libraries — e.g. `:kuilt-mdns` → `:kuilt-websocket`, `:kuilt-deal` →
+`:kuilt-crdt`). The dependency arrow never points back into `:kuilt-core` — it
+must stay free of fabric-specific imports.
 
 ## The contract (one-paragraph orientation)
 
@@ -125,9 +134,13 @@ tests as the `MDNS_MULTICAST_TESTS` env var (see `kuilt-mdns/build.gradle.kts`).
   tests use `assertAll()`.
 - **Coroutine test determinism:** types that own a `CoroutineScope` take an
   injectable dispatcher (production default), or inherit `currentCoroutineContext()`;
-  tests inject `UnconfinedTestDispatcher(testScheduler)` rather than letting a real
-  production dispatcher run under `runTest` (the cause of a past Kotlin/Native flake).
-  See `docs/testing-coroutine-determinism.md`.
+  tests inject a test dispatcher rather than letting a real production dispatcher run
+  under `runTest` (the cause of a past Kotlin/Native flake). Use
+  `StandardTestDispatcher(testScheduler)` (FIFO at each virtual instant) for any
+  system with concurrent timers + messages — e.g. `RaftNode`'s election/heartbeat
+  loops, which switched to it in #383; `UnconfinedTestDispatcher(testScheduler)` is
+  fine only where eager-inline ordering doesn't matter. See
+  `docs/testing-coroutine-determinism.md`.
   - **No real-dispatcher defaults.** A factory/helper that owns a scope makes the
     `scope`/dispatcher a **required** parameter — never `= CoroutineScope(Dispatchers.Unconfined)`
     or similar. A default real dispatcher silently decouples the work from `runTest`'s
@@ -190,14 +203,16 @@ soon as `ci-required` is green.
 ## Versioning & publishing
 
 The version is parameterized by `kuiltVersionLine` in `gradle.properties`
-(currently `0.3`). Both `build.gradle.kts` (which sets the local default to
+(currently `0.4`). Both `build.gradle.kts` (which sets the local default to
 `${kuiltVersionLine}.0-dev`) and `publish.yml` (which publishes
 `${kuiltVersionLine}.<run_number>` on every main push) read it, so a
 breaking-API release is a **one-line PR bumping the line**. Group is
 `us.tractat.kuilt`.
 
-**Publishing runs on every push to `main`** (plus manual `workflow_dispatch`).
-No tag is required. The publish flow is:
+There are **two publish channels**, by trigger:
+
+**Tigris snapshots — every push to `main`** (plus manual `workflow_dispatch`).
+Continuous `${kuiltVersionLine}.<run_number>` builds; no tag required. Flow:
 
 1. Gradle stages publications into `build/staged-maven-repo/` via the
    `TigrisStaging` Maven repo (file:// URL).
@@ -205,20 +220,25 @@ No tag is required. The publish flow is:
    whole tree to **Tigris** (Fly's S3-compatible storage) in one parallel
    pass.
 
-Wall time is ~5 min total, ~12–20 s for the upload itself. This is ~40× faster
-than the prior GitHub Packages path (#22), which is why per-merge publishing
-is back on instead of tag-only.
+Wall time is ~5 min total, ~12–20 s for the upload itself. Bypassing Gradle's
+native `s3://` transport is deliberate: it silently sets a request header (ACL
+or storage-class) Tigris rejects with HTTP 400. The stage-then-`aws s3 sync`
+pattern sidesteps it entirely. Consumers reading from Tigris hit the same
+Gradle s3:// transport for GETs, but GETs don't set those headers so the read
+path works.
 
-Bypassing Gradle's native `s3://` transport is deliberate: it silently sets
-a request header (ACL or storage-class) Tigris rejects with HTTP 400. The
-stage-then-`aws s3 sync` pattern sidesteps it entirely. Consumers reading
-from Tigris hit the same Gradle s3:// transport for GETs, but GETs don't
-set those headers so the read path works.
+**Maven Central releases — on a `v<x.y.z>` tag** (or a manual dispatch with
+`release_to_central=true`), **never** on a plain main push. The `maven-central`
+job derives the version from the tag (`v0.4.0` → `0.4.0`), publishes signed
+artifacts as a **PENDING** deployment to the Central Portal that a human then
+releases by hand at central.sonatype.com, and commits the README version bump
+back to `main`. This is the consumer-facing channel — the README's
+`mavenCentral()` setup and version badge resolve here.
 
-GitHub Packages still hosts the historical 0.1.x and 0.3.1/0.3.2/0.3.4
-artifacts (read-only — consumers can still resolve them from
-`https://maven.pkg.github.com/tractat-us/kuilt` if needed). New versions go
-to Tigris only.
+GitHub Packages still hosts the historical 0.1.x and 0.3.x artifacts
+(read-only — consumers can still resolve them from
+`https://maven.pkg.github.com/tractat-us/kuilt` if needed). New versions go to
+Tigris (snapshots) and Maven Central (tagged releases).
 
 ## Composite-build consumption
 

@@ -13,18 +13,22 @@ repositories {
 
 ## Depend on the modules you need
 
+The recommended way is the **BOM** — import it once to align every module on a single version, then declare modules without version numbers:
+
 ```kotlin
 // build.gradle.kts
 dependencies {
-    implementation("us.tractat.kuilt:kuilt-core:VERSION")       // always — the contract
-    implementation("us.tractat.kuilt:kuilt-websocket:VERSION")  // WebSocket fabric
-    implementation("us.tractat.kuilt:kuilt-crdt:VERSION")       // CRDT zoo
-    implementation("us.tractat.kuilt:kuilt-raft:VERSION")       // Raft consensus
-    implementation("us.tractat.kuilt:kuilt-session:VERSION")    // membership / room
+    implementation(platform("us.tractat.kuilt:kuilt-bom:VERSION"))
+
+    implementation("us.tractat.kuilt:kuilt-core")       // always — the contract
+    implementation("us.tractat.kuilt:kuilt-websocket")  // WebSocket fabric
+    implementation("us.tractat.kuilt:kuilt-crdt")       // CRDT zoo
+    implementation("us.tractat.kuilt:kuilt-raft")       // Raft consensus
+    implementation("us.tractat.kuilt:kuilt-session")    // membership / room
 }
 ```
 
-Replace `VERSION` with the [latest release](https://central.sonatype.com/artifact/us.tractat.kuilt/kuilt-core).
+Without the BOM, pin each module explicitly (`us.tractat.kuilt:kuilt-core:VERSION`). Replace `VERSION` with the [latest release](https://central.sonatype.com/artifact/us.tractat.kuilt/kuilt-core).
 
 Pick only the modules you actually use — each depends on `kuilt-core` and nothing unnecessary. A project that only needs in-memory message passing depends only on `kuilt-core`.
 
