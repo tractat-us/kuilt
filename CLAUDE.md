@@ -31,7 +31,7 @@ and `docs/usage.md` for how to consume it.
 
 | Module | Targets | Role |
 |--------|---------|------|
-| `:kuilt-core` | all | The contract (`Loom`/`Seam`/`Swatch`/…), the `InMemoryLoom` reference impl, and `MuxSeam` (multiplexes several logical channels over one fabric). Depends on nothing but coroutines + serialization. |
+| `:kuilt-core` | all | The contract (`Loom`/`Seam`/`Swatch`/…), the `InMemoryLoom` reference impl, `MuxSeam` (multiplexes several logical channels over one fabric), and `CompositeLoom` (bonds several transports/"plies" into one multipath `Seam` — see `docs/ply-roadmap.md`). Depends on nothing but coroutines + serialization. |
 
 **Libraries layered on the contract**
 
