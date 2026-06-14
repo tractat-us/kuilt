@@ -1,19 +1,30 @@
 name: ci
 
-# Aggregator pattern (detect → build → ci-required):
+# Aggregator pattern (detect → {build-jvm, build-native, detekt} → ci-required):
 #
-#   detect  →  build  →  ci-required (the one required check)
+#   detect  →  build-jvm    ┐
+#           →  build-native ├→  ci-required (the one required check)
+#           →  detekt       ┘
 #
 # detect (ubuntu, always, cheap, no JDK) classifies whether the change is
 # docs-only by diffing the changed files.
 #
-# build (the heavy KMP build) runs only when detect says NOT docs-only.
+# The heavy KMP build runs only when detect says NOT docs-only, and is SPLIT
+# across two jobs so the memory-heavy wasm/native codegen never co-resides with
+# the JVM test forks on one 16 GB runner (see #320 / the build-job comments):
+#   - build-jvm:    full `build koverXmlReport` MINUS the wasm-browser + K/N test
+#                   *executions* (JVM + Android tests, lint, kover, assemble).
+#   - build-native: ONLY the wasm + macOS + iOS-sim test executions (wasm-opt /
+#                   Binaryen / Karma-Chrome / K/N test exes), with no JVM forks.
+# Their task graphs union to exactly the old single `build koverXmlReport` graph
+# (proven by --dry-run set-diff), so no platform loses coverage.
 #
 # ci-required (if: !cancelled()) is the SOLE required status check that branch
-# protection looks for. It passes when detect+build both succeed OR when build
-# was legitimately skipped (docs-only), and fails when either failed/cancelled.
-# This lets docs-only PRs merge immediately without waiting on a build, while
-# code PRs still gate on it. Publishing stays separate (publish.yml).
+# protection looks for. It passes when detect + both build jobs + detekt all
+# succeed OR when the heavy jobs were legitimately skipped (docs-only), and
+# fails when any of them failed/cancelled. This lets docs-only PRs merge
+# immediately without waiting on a build, while code PRs still gate on it.
+# Publishing stays separate (publish.yml).
 
 on:
   push:
@@ -91,9 +102,17 @@ jobs:
           [ "$DOCS_ONLY" = true ] && echo "::notice::All changes are docs-class — skipping the build."
           echo "docs-only=$DOCS_ONLY" >> "$GITHUB_OUTPUT"
 
-  # ── build ────────────────────────────────────────────────────────────────
-  # The full KMP build. Skipped entirely when detect says docs-only.
-  build:
+  # ── build-jvm ──────────────────────────────────────────────────────────────
+  # The JVM/Android half of the build: full `build koverXmlReport` with the
+  # wasm-browser + Kotlin/Native test *executions* excluded. This still runs the
+  # whole compile/assemble graph (all platforms' main compile incl.
+  # compileKotlinIosArm64, the Android AAR, the wasmJs jar), Android lint, JVM +
+  # Android unit tests, and the kover report + verify. It drops only the
+  # wasm-opt/Karma-Chrome and K/N test-executable runs — those move to
+  # build-native so they never co-reside with the forked JVM test JVMs (the
+  # documented OOM cause; see #320 and the daemon-heap note below). Skipped on
+  # docs-only.
+  build-jvm:
     needs: detect
     if: needs.detect.outputs.docs-only != 'true'
     runs-on: ubuntu-latest
@@ -121,7 +140,9 @@ jobs:
 
       # Kotlin/Native toolchain + dependencies. setup-gradle caches ~/.gradle but
       # not ~/.konan, so without this every run re-downloads konan and recompiles
-      # the native targets cold. Keyed on the toolchain-defining files.
+      # the native targets cold. build-jvm still compiles the native main sources
+      # (via assemble/build), so it needs the toolchain too. Keyed on the
+      # toolchain-defining files; shared key with build-native (same cache).
       - name: Cache Kotlin/Native (~/.konan)
         uses: actions/cache@v5
         with:
@@ -161,7 +182,7 @@ jobs:
           ) &
           echo "JSTACK_PID=$!" >> "$GITHUB_ENV"
 
-      - name: Build and test all targets
+      - name: Build, lint, JVM/Android tests + coverage
         # Two coordinated levers keep peak memory inside the 16 GB runner.
         #
         # 1. --max-workers=2 caps the *additive* peak — concurrent Gradle worker
@@ -174,26 +195,29 @@ jobs:
         #    long-lived daemons (Gradle + Kotlin) reserve 8 GB of heap that stays
         #    resident regardless of --max-workers. On a COLD build (a catalog or
         #    build-logic change busts every module's cache) those daemon heaps are
-        #    at their high-water mark from compilation just as the test phase forks
-        #    JVMs and launches Binaryen wasm-opt + a Karma headless Chrome — the
-        #    concurrent committed footprint then exceeds 16 GB, the runner VM
-        #    thrashes, and the hosted-compute layer reclaims it (SIGTERM → exit 143,
-        #    "The runner has received a shutdown signal"). This is load-dependent:
-        #    a cache-hit build never grows the daemons, so it never trips. An
-        #    earlier --max-workers=4→2 step reduced but did not remove it because it
-        #    left the 8 GB daemon floor untouched. Capping each daemon to 3 GB drops
-        #    the floor to 6 GB, restoring ~2 GB of headroom for the cold-build peak.
-        #    Verified by a controlled experiment: two -Xmx4g JVMs that commit their
-        #    heaps are OOM-killed in a 7 GB cgroup every run, while -Xmx3g/-Xmx2g
-        #    pairs survive; a full cold build at 3 GB/3 GB completes with no
-        #    OutOfMemoryError and no GC-overhead, same wall time as 4 GB/4 GB.
+        #    at their high-water mark from compilation. Capping each daemon to 3 GB
+        #    drops the floor to 6 GB. Verified by a controlled experiment: two
+        #    -Xmx4g JVMs that commit their heaps are OOM-killed in a 7 GB cgroup
+        #    every run, while -Xmx3g/-Xmx2g pairs survive; a full cold build at
+        #    3 GB/3 GB completes with no OutOfMemoryError, same wall time as 4 GB.
+        #
+        # The structural fix for #320 is the job split itself: excluding the
+        # wasm-browser + K/N test *executions* (-x below) removes the Binaryen
+        # wasm-opt + Karma headless-Chrome + native test-executable burst that
+        # used to fire concurrently with these forked JVM test JVMs and tip the
+        # committed footprint over 16 GB. That burst now runs alone in
+        # build-native. The 3 GB cap is retained conservatively — this job still
+        # compiles the native main sources alongside the JVM forks; relaxing back
+        # toward 4 GB can follow once the split is proven over several cold builds.
         #
         # koverXmlReport rides on the same invocation so the JVM test tasks it
         # depends on run once: build executes them, then the report aggregates
         # the coverage data into build/reports/kover/report.xml (collected as an
-        # artifact below; no external coverage service).
+        # artifact below; no external coverage service). koverVerify runs via
+        # `build` and gates the coverage thresholds.
         run: >-
           ./gradlew build koverXmlReport --max-workers=2
+          -x wasmJsTest -x wasmJsBrowserTest -x macosArm64Test -x iosSimulatorArm64Test
           -Dorg.gradle.jvmargs="-Xmx3g -Dfile.encoding=UTF-8"
           -Dkotlin.daemon.jvmargs="-Xmx3g"
 
@@ -210,19 +234,114 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: test-reports
+          name: test-reports-jvm
           path: |
             **/build/reports/tests/
             **/build/test-results/
             build/reports/kover/
             build/jstack-dumps/
 
+  # ── build-native ─────────────────────────────────────────────────────────
+  # The wasm/native half of the build: ONLY the wasm + macOS + iOS-sim test
+  # *executions*. Each task pulls in its own platform compile transitively, so
+  # this job runs the Binaryen wasm-opt + Karma headless-Chrome (wasmJsBrowserTest)
+  # and the Kotlin/Native test executables — the memory-heavy codegen burst —
+  # with NO forked JVM test JVMs sharing the box. Combined with build-jvm's task
+  # graph this is exactly the old single `build koverXmlReport` graph (proven by
+  # --dry-run set-diff: union is identical, zero tasks dropped). Skipped on
+  # docs-only.
+  build-native:
+    needs: detect
+    if: needs.detect.outputs.docs-only != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      S3_BUILD_CACHE_ACCESS_KEY_ID: ${{ secrets.S3_BUILD_CACHE_ACCESS_KEY_ID }}
+      S3_BUILD_CACHE_SECRET_KEY: ${{ secrets.S3_BUILD_CACHE_SECRET_KEY }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v5
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          gradle-version: wrapper
+          cache-read-only: false
+
+      - name: Cache Kotlin/Native (~/.konan)
+        uses: actions/cache@v5
+        with:
+          path: ~/.konan
+          key: konan-${{ runner.os }}-${{ hashFiles('gradle/libs.versions.toml', 'gradle.properties', 'settings.gradle.kts') }}
+          restore-keys: konan-${{ runner.os }}-
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v4
+
+      - name: Start jstack heartbeat
+        # Same background watchdog as build-jvm (see #329) — dumps thread stacks
+        # every 5 min so a hung K/N test or wasm-browser run leaves a diagnosable
+        # artifact even on a timeout kill.
+        run: |
+          mkdir -p build/jstack-dumps
+          (
+            while true; do
+              sleep 300
+              STAMP=$(date +%Y%m%dT%H%M%S)
+              DUMP_FILE="build/jstack-dumps/jstack-${STAMP}.txt"
+              echo "=== jstack heartbeat ${STAMP} ===" >> "$DUMP_FILE"
+              pids=$(jps -l 2>/dev/null | grep -i 'GradleWorkerMain\|gradle\|java' | awk '{print $1}' || true)
+              if [ -n "$pids" ]; then
+                for pid in $pids; do
+                  echo "--- PID $pid ---" >> "$DUMP_FILE"
+                  jstack "$pid" >> "$DUMP_FILE" 2>&1 || echo "(jstack failed for PID $pid)" >> "$DUMP_FILE"
+                done
+              else
+                echo "(no matching Java processes found)" >> "$DUMP_FILE"
+              fi
+            done
+          ) &
+          echo "JSTACK_PID=$!" >> "$GITHUB_ENV"
+
+      - name: wasm + native tests
+        # wasmJsTest (incl. wasmJsBrowserTest — Binaryen wasm-opt + Karma Chrome),
+        # macosArm64Test and iosSimulatorArm64Test cover every non-JVM/Android test
+        # target. No JVM test forks run here, so the heavy codegen burst has the
+        # whole 16 GB to itself. Same --max-workers=2 + 3 GB daemon caps as build-jvm
+        # for parity and conservative headroom; this job has no JVM forks, so the
+        # caps can likely relax once the split is proven, but stay conservative now.
+        run: >-
+          ./gradlew wasmJsTest macosArm64Test iosSimulatorArm64Test --max-workers=2
+          -Dorg.gradle.jvmargs="-Xmx3g -Dfile.encoding=UTF-8"
+          -Dkotlin.daemon.jvmargs="-Xmx3g"
+
+      - name: Kill jstack heartbeat
+        if: always()
+        run: |
+          if [ -n "${JSTACK_PID:-}" ]; then
+            kill "$JSTACK_PID" 2>/dev/null || true
+          fi
+
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-reports-native
+          path: |
+            **/build/reports/tests/
+            **/build/test-results/
+            build/jstack-dumps/
+
   # ── detekt ───────────────────────────────────────────────────────────────
   # Static analysis: null-safety rules on main sources + production-dispatcher
-  # ban on test sources. Runs as its OWN job, parallel to build, so detekt's
-  # type-resolution analysis doesn't share a runner — and its memory — with the
-  # build's wasmJs-browser + test tasks (that concurrency OOMs the runner; see
-  # the --max-workers=4 note above). Skipped on docs-only.
+  # ban on test sources. Runs as its OWN job, parallel to the build jobs, so
+  # detekt's type-resolution analysis doesn't share a runner — and its memory —
+  # with the build's wasmJs-browser + test tasks. Skipped on docs-only.
   detekt:
     needs: detect
     if: needs.detect.outputs.docs-only != 'true'
@@ -255,7 +374,8 @@ jobs:
         run: ./gradlew detektAll --max-workers=4
 
   # ── ci-required ────────────────────────────────────────────────────────────
-  # The SOLE required status check. Aggregates detect + build + detekt.
+  # The SOLE required status check. Aggregates detect + build-jvm + build-native
+  # + detekt.
   #
   # Uses if: always() unconditionally — NO draft guard here. This is the core
   # fix for the draft→ready→auto-merge race (#131): a required check that is
@@ -267,32 +387,37 @@ jobs:
   # so branch protection correctly blocks merge until a real post-ready run
   # posts a genuine success.
   #
-  # detect/build/detekt still carry their own draft/docs-only guards (cheap
-  # jobs don't burn a runner on every draft push). Only ci-required runs
-  # unconditionally, so the gate is always in a definite pass/fail state.
+  # detect/build-jvm/build-native/detekt still carry their own draft/docs-only
+  # guards (cheap jobs don't burn a runner on every draft push). Only ci-required
+  # runs unconditionally, so the gate is always in a definite pass/fail state.
   #
   # Invariant: ci-required succeeds if and only if:
-  #   (a) detect succeeded AND docs-only=true AND build+detekt were skipped, OR
-  #   (b) detect succeeded AND docs-only=false AND build=success AND detekt=success.
+  #   (a) detect succeeded AND docs-only=true AND build-jvm + build-native +
+  #       detekt were skipped, OR
+  #   (b) detect succeeded AND docs-only=false AND build-jvm=success AND
+  #       build-native=success AND detekt=success.
   #
   # Any other combination fails. In particular:
   #   - detect=skipped (draft PR) → fails → merge blocked until post-ready run.
-  #   - build=skipped on a non-docs change → fails → closes the docs→code race too.
+  #   - a heavy job skipped on a non-docs change → fails → closes the docs→code
+  #     race too.
   ci-required:
-    needs: [detect, build, detekt]
+    needs: [detect, build-jvm, build-native, detekt]
     if: always()
     runs-on: ubuntu-latest
     steps:
       - name: Check gate results
         run: |
           DETECT="${{ needs.detect.result }}"
-          BUILD="${{ needs.build.result }}"
+          BUILD_JVM="${{ needs.build-jvm.result }}"
+          BUILD_NATIVE="${{ needs.build-native.result }}"
           DETEKT="${{ needs.detekt.result }}"
           DOCS_ONLY="${{ needs.detect.outputs.docs-only }}"
-          echo "detect:    $DETECT"
-          echo "build:     $BUILD"
-          echo "detekt:    $DETEKT"
-          echo "docs-only: $DOCS_ONLY"
+          echo "detect:        $DETECT"
+          echo "build-jvm:     $BUILD_JVM"
+          echo "build-native:  $BUILD_NATIVE"
+          echo "detekt:        $DETEKT"
+          echo "docs-only:     $DOCS_ONLY"
 
           # detect must always succeed — it runs unconditionally.
           if [ "$DETECT" != "success" ]; then
@@ -300,25 +425,25 @@ jobs:
           fi
 
           if [ "$DOCS_ONLY" = "true" ]; then
-            # Docs-only path: build and detekt must have been skipped (not run).
-            # If either somehow ran and failed, that's still a failure.
-            if [ "$BUILD" != "skipped" ] && [ "$BUILD" != "success" ]; then
-              echo "::error::docs-only=true but build job had unexpected result: $BUILD."; exit 1
-            fi
-            if [ "$DETEKT" != "skipped" ] && [ "$DETEKT" != "success" ]; then
-              echo "::error::docs-only=true but detekt job had unexpected result: $DETEKT."; exit 1
-            fi
+            # Docs-only path: the heavy jobs must have been skipped (not run).
+            # If any somehow ran and failed, that's still a failure.
+            for pair in "build-jvm:$BUILD_JVM" "build-native:$BUILD_NATIVE" "detekt:$DETEKT"; do
+              name="${pair%%:*}"; result="${pair#*:}"
+              if [ "$result" != "skipped" ] && [ "$result" != "success" ]; then
+                echo "::error::docs-only=true but $name had unexpected result: $result."; exit 1
+              fi
+            done
             echo "Docs-only change — build correctly skipped. Gate green."
           else
-            # Code-change path: build and detekt MUST have run and succeeded.
-            # skipped here means the build was bypassed without a legitimate
-            # docs-only classification — that is the exact race condition being
-            # closed. Treat skipped the same as failure.
-            if [ "$BUILD" != "success" ]; then
-              echo "::error::Non-docs change requires a passing build (result: $BUILD). skipped is not accepted."; exit 1
-            fi
-            if [ "$DETEKT" != "success" ]; then
-              echo "::error::Non-docs change requires passing detekt (result: $DETEKT). skipped is not accepted."; exit 1
-            fi
-            echo "Build and detekt both succeeded. Gate green."
+            # Code-change path: every heavy job MUST have run and succeeded.
+            # skipped here means a job was bypassed without a legitimate
+            # docs-only classification — the exact race condition being closed.
+            # Treat skipped the same as failure.
+            for pair in "build-jvm:$BUILD_JVM" "build-native:$BUILD_NATIVE" "detekt:$DETEKT"; do
+              name="${pair%%:*}"; result="${pair#*:}"
+              if [ "$result" != "success" ]; then
+                echo "::error::Non-docs change requires a passing $name (result: $result). skipped is not accepted."; exit 1
+              fi
+            done
+            echo "build-jvm, build-native and detekt all succeeded. Gate green."
           fi
