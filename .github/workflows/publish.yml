@@ -189,13 +189,26 @@ jobs:
         run: ./gradlew -Pversion=${{ env.PUBLISH_VERSION }} --no-configuration-cache publishToMavenCentral
       - name: Update README coordinates to released version
         # Rewrites every us.tractat.kuilt:<module>:<old-version> in README.md to
-        # the new version and commits directly to main. Keeps the copy-paste snippet
-        # current without any manual step.
+        # the new version and opens a PR (branch protection prevents direct main push
+        # from Actions even with contents:write).
         run: |
           set -eu
           sed -i -E "s|(us\.tractat\.kuilt:[a-z-]+:)[0-9A-Za-z._-]+|\1${{ env.PUBLISH_VERSION }}|g" README.md
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          BRANCH="docs/readme-coords-${{ env.PUBLISH_VERSION }}"
+          git checkout -b "$BRANCH"
           git add README.md
-          git diff --staged --quiet || git commit -m "docs: update README coordinates to ${{ env.PUBLISH_VERSION }}"
-          git push origin HEAD:main
+          if git diff --staged --quiet; then
+            echo "README already up to date — nothing to commit"
+            exit 0
+          fi
+          git commit -m "docs: update README coordinates to ${{ env.PUBLISH_VERSION }}"
+          git push origin "$BRANCH"
+          gh pr create \
+            --title "docs: update README coordinates to ${{ env.PUBLISH_VERSION }}" \
+            --body "Automated bump from the Maven Central release workflow." \
+            --base main \
+            --head "$BRANCH"
+        env:
+          GH_TOKEN: ${{ github.token }}
