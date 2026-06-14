@@ -188,6 +188,17 @@ jobs:
         # publishToMavenCentral (NOT ...AndRelease) honours automaticRelease=false:
         # the deployment is uploaded + validated, then waits for a manual release.
         run: ./gradlew -Pversion=${{ env.PUBLISH_VERSION }} --no-configuration-cache publishToMavenCentral
+      - name: Create GitHub Release
+        run: |
+          set -eu
+          PRE_FLAG=""
+          [[ "${{ env.PUBLISH_VERSION }}" == *-* ]] && PRE_FLAG="--prerelease"
+          gh release create "v${{ env.PUBLISH_VERSION }}" \
+            --title "v${{ env.PUBLISH_VERSION }}" \
+            --generate-notes \
+            $PRE_FLAG
+        env:
+          GH_TOKEN: ${{ github.token }}
       - name: Update README coordinates to released version
         # Rewrites every us.tractat.kuilt:<module>:<old-version> in README.md to
         # the new version and opens a PR (branch protection prevents direct main push
