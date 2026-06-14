@@ -189,10 +189,13 @@ private class MeshSeam(
         val conns = lock.withLock {
             val snapshot = links.values.toList()
             links.clear()
+            // peers before state: a consumer observing Torn must already see the collapsed roster
+            // (matches LinkSeam). Published inside the lock so removePeer cannot overwrite this
+            // with a stale partial set after the lock is released.
+            _peers.value = setOf(selfId)
             snapshot
         }
         _state.value = SeamState.Torn(reason)
-        _peers.value = setOf(selfId)
         inbox.close()
         scope.cancel()
         return conns
@@ -200,14 +203,17 @@ private class MeshSeam(
 
     /** Remove a single peer from the live link map and update the peer set. Thread-safe. */
     private fun removePeer(remoteId: PeerId) {
-        val removed = lock.withLock { links.remove(remoteId) != null }
-        if (removed) _peers.value = buildPeerSet()
+        // buildPeerSet and _peers.value assignment are inside the same lock acquisition as the
+        // remove so that tearDown's peers-collapse (also inside the lock) cannot be overwritten
+        // by a stale buildPeerSet result computed before tearDown cleared links.
+        lock.withLock {
+            if (links.remove(remoteId) != null) _peers.value = buildPeerSet()
+        }
     }
 
-    private fun buildPeerSet(): Set<PeerId> = lock.withLock {
+    private fun buildPeerSet(): Set<PeerId> =
         buildSet {
             add(selfId)
             addAll(links.keys)
         }
-    }
 }
