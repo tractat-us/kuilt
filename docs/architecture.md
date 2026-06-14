@@ -200,6 +200,11 @@ against it. Real-radio / real-network behavior is verified by separate tests tha
 stay `-P`-gated (e.g. `-Pmdns.multicast.tests`) so the standard build never
 depends on physical network conditions.
 
+To implement a new fabric — message-based or stream-based — see
+[`docs/extending-fabrics.md`](extending-fabrics.md) for a step-by-step tutorial
+with copy-pasteable Track A (message RPC) and Track B (stream RPC / TCP) paths,
+the cold-`Conn` pump gotcha, and a `SeamConformanceSuite` subclass template.
+
 ## Consensus and leader election
 
 `:kuilt-raft` implements a Raft consensus layer over the `Seam` transport. To
