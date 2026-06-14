@@ -63,6 +63,47 @@ as the lowest-throughput, highest-cost Near fabric. Nothing Bluetooth-shaped
 belongs in `:kuilt-core` — the contract stays transport-agnostic, so this is only
 ever a "is the niche worth a module" decision, never a core one.
 
+## Multipath: one peer, several transports
+
+Near and Far are not exclusive. A peer can ride **both at once** — e.g. a phone
+reaching the others over a relay WebSocket *and* over a direct LAN/TCP link — and
+have the two paths act as one. `CompositeLoom` (`kuilt-core`,
+`us.tractat.kuilt.core.composite`) is a `Loom` that composes other `Loom`s: you
+give it a list of `(PlyId, Loom)` *plies*, it weaves each, and `weave()` returns a
+single `CompositeSeam` over the union.
+
+The composite presents the ordinary `Seam` contract, so everything above it is
+unchanged. What it does underneath:
+
+- **One stable `selfId`.** Minted once and kept across plies attaching and
+  detaching, so a path change is *not* an identity change.
+- **Remote-peer collapse.** On each ply reaching `Woven` the peer broadcasts a
+  `PlyFrame.Announce(compositeId)`; the far side maps every `(plyId, transportId)`
+  back to one composite id. A remote peer that is itself multi-homed therefore
+  appears **once** in `peers`, not once per path.
+- **Send over all live plies; dedup + reorder on receive.** `broadcast` fans out
+  over every non-torn ply, and an inbound gate keyed on `(originId, originSeq)`
+  drops the duplicate copy that arrives over the second path and restores
+  per-origin order.
+- **Failover with no membership event.** Tear one ply and the aggregate stays
+  `Woven` while a survivor carries the peer; only the *last* ply tearing drives the
+  aggregate `Torn`, and a recovered ply re-announces to restore routing.
+
+Why this matters for the layers above: because the bonding lives **below** the
+`Seam`, the consensus and CRDT layers never see it. Hand the composite `Seam` to
+`SeamRaftTransport` or `SeamReplicator` and Raft sees one `NodeId`, the replicator
+tracks one peer, and a WebSocket→TCP failover reaches them as nothing at all — no
+election, no membership churn, no full-state resync. That is the whole point of
+keeping multipath at the transport layer rather than teaching each consumer about
+it.
+
+The ply set may also change while the session is live — construct `CompositeLoom`
+from a `StateFlow` of the desired set to attach or detach overlays (a LAN radio
+lighting up as peers come into proximity) on the fly. Capabilities deliberately
+left for when a consumer needs them — application-layer gateway forwarding,
+primary-ply-per-peer send — are tracked in
+[`docs/ply-roadmap.md`](ply-roadmap.md).
+
 ## The contract
 
 ```kotlin

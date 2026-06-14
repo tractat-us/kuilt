@@ -17,6 +17,7 @@
     <toc-element toc-title="The Contract">
         <toc-element topic="contract.md"/>
         <toc-element topic="fabrics.md"/>
+        <toc-element topic="multipath.md"/>
     </toc-element>
 
     <toc-element toc-title="CRDT Zoo">

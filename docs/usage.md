@@ -191,6 +191,50 @@ val joinerSeam = host.join(ad)
 mDNS service resolution is timing-sensitive — bound your collection with a
 timeout or `take(n)` rather than collecting `discoveries()` forever.
 
+## Bonding multiple transports (composite fabric)
+
+When one peer should ride several transports at once — say a relay WebSocket
+*and* a direct LAN link, for redundancy — wrap the per-transport `Loom`s in a
+`CompositeLoom`. It weaves each as a *ply* and hands back a single `Seam` over the
+union, so the rest of your code is unchanged:
+
+```kotlin
+import us.tractat.kuilt.core.PlyId
+import us.tractat.kuilt.core.composite.CompositeLoom
+
+val loom = CompositeLoom(
+    listOf(
+        PlyId("ws")  to wsLoom,   // e.g. KtorClientLoom to the relay
+        PlyId("lan") to lanLoom,  // e.g. a direct LAN/TCP fabric
+    ),
+)
+val seam = loom.join(tag)         // one Seam, bonded over both plies
+```
+
+The composite keeps a single stable `selfId` across plies coming and going,
+collapses a remote multi-homed peer to one entry in `peers`, sends over every live
+ply, and drops the duplicate copy that arrives over the second path. A path
+failing over is **not** a membership change — tear one ply and the survivor keeps
+the peer present. Because the bonding sits below the `Seam`, you can feed the
+composite straight into the layers above:
+
+```kotlin
+// Same wiring as any other Seam — Raft/CRDT never know there are two transports.
+val replicator = SeamReplicator(
+    replica = ReplicaId(seam.selfId.value),
+    seam = seam,
+    initial = GCounter.ZERO,
+    messageSerializer = ReplicatorMessage.serializer(GCounter.serializer()),
+    scope = coroutineScope,
+)
+```
+
+To attach or detach plies on a live session (an overlay that lights up when peers
+come into proximity), construct `CompositeLoom` from a
+`StateFlow<List<Pair<PlyId, Loom>>>` and emit a new list. See
+[architecture.md](architecture.md#multipath-one-peer-several-transports) for the
+design and [`ply-roadmap.md`](ply-roadmap.md) for what is deliberately deferred.
+
 ## Writing your own fabric
 
 Implement `Loom` (and a private `Seam`), then **prove it conforms** by
