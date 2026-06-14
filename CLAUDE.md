@@ -42,12 +42,14 @@ and `docs/usage.md` for how to consume it.
 | `:kuilt-game` | all | Turn-based game facade over `:kuilt-raft`: `TurnSequencer` (propose/commit typed actions) + `IndexedAction` (committed action carrier) + `SpeculativeSequencer` (optimistic apply with deterministic rollback/replay). |
 | `:kuilt-raft` | all | Raft consensus over a `Seam` — leader election + PreVote, log replication, log compaction + chunked `InstallSnapshot`, dynamic membership, linearizable reads (`readIndex()`, §3.6/§3.7) and graceful leadership transfer (`transferLeadership()` via TimeoutNow, §3.10). |
 | `:kuilt-session` | all | Membership-aware `Room` over a `Loom` (`SeamRoom`): admit/identify handshake, roster, reconnect tokens, partition detection. |
+| `:kuilt-stream` | all | Byte-stream → message-link adapter: `framed()` wraps a kotlinx-io `Source`/`Sink` as a `Conn` with 4-byte length-prefix framing + oversize protection (`FrameTooLargeException`). The bridge a *stream* transport crosses to become a fabric; consumed by `:kuilt-tcp`. |
 
 **Fabrics & discovery**
 
 | Module | Targets | Role |
 |--------|---------|------|
 | `:kuilt-websocket` | all | Ktor WebSocket fabric — the "Far"/relay topology. `KtorClientLoom` everywhere; `KtorServerLoom` + `KtorRoomHost` on JVM/Android only. |
+| `:kuilt-tcp` | JVM, Android | Raw TCP fabric (the pluggable-fabric-kit headline). `TcpLoom.host`/`join` adapt a Ktor socket via `:kuilt-stream`'s `framed()` + `handshaking()` into a 2-peer `Seam`; real-IO only (guards against virtual-time construction). |
 | `:kuilt-multipeer` | iOS, macOS | Apple Multipeer Connectivity fabric — the "Near"/peer-to-peer topology. Provides `MultipeerRoomHost`. |
 | `:kuilt-nearby` | all (Android impl) | Google Nearby Connections fabric — Android implementation behind `play-services-nearby`. |
 | `:kuilt-webrtc` | all (browser/wasmJs) | WebRTC data-channel fabric. |
