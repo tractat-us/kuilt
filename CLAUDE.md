@@ -107,6 +107,9 @@ source ~/.sdkman/bin/sdkman-init.sh && sdk use java 21.0.5-tem
 | All platforms' tests | `./gradlew allTests` |
 | wasmJs / iOS sim / macOS | `./gradlew wasmJsTest` · `iosSimulatorArm64Test` · `macosArm64Test` |
 | mDNS multicast integration (off by default — needs a real network) | `./gradlew :kuilt-mdns:jvmTest -Pmdns.multicast.tests=true` |
+| Lint / static analysis | `./gradlew detektAll` |
+
+**Use `detektAll`, not bare `detekt`.** Plain `detekt` is `NO-SOURCE` in this KMP setup (the per-target tasks have no aggregated source) and reports BUILD SUCCESSFUL without analyzing anything. `detektAll` is the real check — and the one CI runs. "Detekt passed locally" via bare `detekt` is a false green.
 
 The mDNS multicast suite is opt-in because it sends real multicast packets; the
 `-P` flag is forwarded to JVM tests as a system property and to K/N simulator
