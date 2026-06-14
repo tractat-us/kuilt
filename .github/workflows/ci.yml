@@ -38,7 +38,8 @@ defaults:
 jobs:
   # ── detect ───────────────────────────────────────────────────────────────
   # Always runs (except on draft PRs). Emits docs-only=true when every changed
-  # path is a doc (*.md or docs/**). Cheap: hosted runner, no JDK, no Gradle.
+  # path is a doc (*.md, docs/**, or Writerside/** — the Writerside guide source,
+  # incl. its non-.md .tree/.cfg/.list files). Cheap: hosted runner, no JDK, no Gradle.
   detect:
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: ubuntu-latest
@@ -81,7 +82,7 @@ jobs:
           DOCS_ONLY=true
           while IFS= read -r file; do
             [ -z "$file" ] && continue
-            if [[ "$file" == *.md ]] || [[ "$file" == docs/* ]]; then
+            if [[ "$file" == *.md ]] || [[ "$file" == docs/* ]] || [[ "$file" == Writerside/* ]]; then
               continue
             fi
             DOCS_ONLY=false; break
