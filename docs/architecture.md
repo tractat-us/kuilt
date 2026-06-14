@@ -114,7 +114,7 @@ consumes and produces** — they line up on the `Conn`↔`Seam` axis:
 |------|-----------|------|
 | `Conn` | — | The point-to-point SPI a transport implements: a duplex, message-framed link between *exactly two* peers. Not a `Seam`. |
 | `identified()` → `LinkSeam` | **Conn → Seam** | One link, both identities known, presented as a 2-peer `Seam` (`broadcast == sendTo(remote)`). |
-| `meshSeam()` → `MeshSeam` | **Conns → Seam** | *Topology builder.* N point-to-point links woven into one fully-connected N-peer `Seam`; learns each remote id via a `Hello` preamble and dedups duplicate links. |
+| `meshSeam()` → `Mesh` | **Conns → Seam** | *Topology builder.* N point-to-point links woven into one fully-connected N-peer `Seam`; learns each remote id via a mesh preamble (id + per-connection nonce) and dedups duplicate links from a simultaneous dial by a canonical, order-independent link nonce both ends agree on. Admits later joiners via `Mesh.addLink`. |
 | `CompositeLoom` → `CompositeSeam` | **Seams → Seam** | *Transport multiplexer.* Several `Seam`s (plies) for the **same** logical session bonded into one multipath `Seam` (see [Multipath](#multipath-one-peer-several-transports)). |
 | `MuxSeam` | **Seam → Seams** | *Channel splitter.* One `Seam` fanned into several byte-tagged logical-channel `Seam` views over a single collection. |
 
