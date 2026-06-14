@@ -34,6 +34,10 @@ suspend fun join(tag: Tag): Seam = weave(Rendezvous.Existing(tag))
 val activeLoom = looms.first { it.availability() is FabricAvailability.Available }
 ```
 
+A `Loom` can also *combine* other `Loom`s rather than pick one: `CompositeLoom`
+runs several transports as one bonded session for the same peer. See
+[Multipath](multipath.md).
+
 ## Seam
 
 `Seam` is one peer's symmetric view of a multi-peer session. There is no client `Seam` and no server `Seam` — every peer holds the same interface.
