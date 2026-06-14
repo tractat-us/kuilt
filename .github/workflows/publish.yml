@@ -131,7 +131,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
-      contents: write  # needed to commit the README version bump back to main
+      contents: write       # push the readme-coords branch
+      pull-requests: write  # open the PR
     env:
       # vanniktech reads these as Gradle properties via the ORG_GRADLE_PROJECT_ prefix.
       ORG_GRADLE_PROJECT_mavenCentralUsername: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
