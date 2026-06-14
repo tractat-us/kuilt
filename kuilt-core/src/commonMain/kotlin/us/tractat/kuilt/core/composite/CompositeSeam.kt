@@ -1,5 +1,8 @@
 package us.tractat.kuilt.core.composite
 
+import kotlinx.atomicfu.atomic
+import kotlinx.atomicfu.locks.reentrantLock
+import kotlinx.atomicfu.locks.withLock
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -14,7 +17,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.receiveAsFlow
-import kotlinx.coroutines.withContext
+import kotlinx.coroutines.flow.update
 import us.tractat.kuilt.core.CloseReason
 import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.PeerId
@@ -44,26 +47,46 @@ import kotlin.coroutines.CoroutineContext
  *
  * **Send:** [broadcast] wraps the payload in a [PlyFrame.Data] envelope and sends
  * over every live, non-torn ply. [sendTo] resolves the composite id to a
- * `(ply, transportId)` in send-preference order. Both run on [dispatcher] so they
- * never race reconcile's mutation of the live set.
+ * `(ply, transportId)` in send-preference order.
  *
  * **Receive:** Inbound [PlyFrame.Data] frames are de-duplicated and reordered per
  * origin by a [PlyInboundGate]; application payloads emerge as [Swatch] values.
  *
- * @param dispatcher Confines all internal state access (reconcile, rollup,
- *   announce, inbound pumps, send) to a single thread. Production uses the confined
- *   default ([Dispatchers.Default.limitedParallelism(1)]); tests inject
- *   [UnconfinedTestDispatcher] to drive reconciliation eagerly.
+ * **Thread-safety.** This type is correct under a *multi-threaded* dispatcher — the
+ * injected [dispatcher] is only the scope for the internal coroutines (the reconcile,
+ * rollup, announce, per-ply inbound and peers pumps); it is **not** a mutual-exclusion
+ * mechanism. The mutable state shared between caller threads (`broadcast`/`sendTo`) and
+ * those pumps — the live-ply map, the learned `(plyId, transportId) → compositeId`
+ * mapping, and the per-origin [PlyInboundGate] (itself documented single-collection) — is
+ * guarded by a single [reentrantLock]. The outbound sequence is an atomic counter and
+ * teardown is gated by an atomic single-shot flag. Suspending ply calls
+ * (`Seam.broadcast`/`sendTo`/`close`, `cancelAndJoin`) are NEVER invoked while the lock is
+ * held: callers snapshot the target plies under the lock, release, then send/close outside it.
+ *
+ * @param dispatcher The scope for the seam's internal coroutines (scheduling only — see the
+ *   thread-safety note above). Production callers pass `Dispatchers.Default`; test callers
+ *   pass a dispatcher derived from the test scheduler so the seam's pumps share the same
+ *   virtual clock as the test, driving reconciliation eagerly.
  */
 internal class CompositeSeam(
     initial: List<Pair<PlyId, Seam>>,
     private val rendezvous: Rendezvous,
     private val desired: StateFlow<List<Pair<PlyId, Loom>>>,
-    private val dispatcher: CoroutineContext = Dispatchers.Default.limitedParallelism(1),
+    private val dispatcher: CoroutineContext = Dispatchers.Default,
 ) : Seam {
     private val scope = CoroutineScope(SupervisorJob() + dispatcher)
     private val gate = PlyInboundGate()
-    private var outSeq = 0L
+
+    // Outbound envelope sequence. Stamped by concurrent broadcast/sendTo callers.
+    private val outSeq = atomic(0L)
+
+    // Single lock guarding `live`, `idMap`, and the inbound `gate`. Every read and mutation
+    // of those happens under it; suspending ply calls are always done OUTSIDE it (snapshot
+    // under the lock, act after releasing).
+    private val lock = reentrantLock()
+
+    // Atomic single-shot teardown gate so `close()` runs the seam-wide teardown exactly once.
+    private val closed = atomic(false)
 
     // Minted once from the initial set; never recomputed, so it survives ply churn.
     override val selfId: PeerId = mintCompositeId(initial)
@@ -74,7 +97,7 @@ internal class CompositeSeam(
     private val _plies = MutableStateFlow<Map<PlyId, SeamState>>(emptyMap())
     override val plies: StateFlow<Map<PlyId, SeamState>> = _plies.asStateFlow()
 
-    // (plyId, transport id) -> composite id; built as Announce frames arrive.
+    // (plyId, transport id) -> composite id; built as Announce frames arrive. Guarded by [lock].
     private val idMap = mutableMapOf<Pair<PlyId, PeerId>, PeerId>()
 
     private val _peers = MutableStateFlow(setOf(selfId))
@@ -84,7 +107,7 @@ internal class CompositeSeam(
     override val incoming: Flow<Swatch> = incomingChannel.receiveAsFlow()
 
     // PlyId -> live ply, in send-preference (insertion) order. A LinkedHashMap so
-    // broadcast/sendTo iterate most-preferred-first. Mutated only on [dispatcher].
+    // broadcast/sendTo iterate most-preferred-first. Guarded by [lock].
     private val live = LinkedHashMap<PlyId, PlyHandle>()
 
     private class PlyHandle(val seam: Seam, val job: Job)
@@ -108,10 +131,12 @@ internal class CompositeSeam(
     private suspend fun reconcile(desiredSet: List<Pair<PlyId, Loom>>) {
         val desiredIds = desiredSet.map { it.first }.toSet()
         // Detach: live plies no longer desired.
-        live.keys.toList().forEach { id -> if (id !in desiredIds) detachPly(id) }
+        val liveIds = lock.withLock { live.keys.toList() }
+        liveIds.forEach { id -> if (id !in desiredIds) detachPly(id) }
         // Attach: desired plies not yet live — weave their loom now.
         for ((id, loom) in desiredSet) {
-            if (id !in live) attachPly(id, loom.weave(rendezvous))
+            val alreadyLive = lock.withLock { id in live }
+            if (!alreadyLive) attachPly(id, loom.weave(rendezvous))
         }
     }
 
@@ -121,7 +146,7 @@ internal class CompositeSeam(
         val plyScope = CoroutineScope(scope.coroutineContext + job)
 
         seam.state
-            .onEach { s -> _plies.value = _plies.value + (id to s) }
+            .onEach { s -> _plies.update { it + (id to s) } }
             .launchIn(plyScope)
 
         // Re-announce on every Woven transition (cold start + recovery).
@@ -143,19 +168,20 @@ internal class CompositeSeam(
             }
             .launchIn(plyScope)
 
-        live[id] = PlyHandle(seam, job)
+        lock.withLock { live[id] = PlyHandle(seam, job) }
     }
 
     private suspend fun detachPly(id: PlyId) {
-        val handle = live.remove(id) ?: return
+        // Remove from the live map under the lock; the suspending teardown runs outside it.
+        val handle = lock.withLock { live.remove(id) } ?: return
         // Stop this ply's pumps FIRST so a resuming pump can't resurrect the
         // _plies/idMap entries we are about to purge.
         handle.job.cancelAndJoin()
         // Remove from the per-ply map (now safe) so the aggregate rolls up
         // without this ply — empty => Weaving, never a transient terminal Torn.
-        _plies.value = _plies.value - id
+        _plies.update { it - id }
         // Purge this ply's learned mappings so a re-attach starts clean.
-        idMap.keys.removeAll { it.first == id }
+        lock.withLock { idMap.keys.removeAll { it.first == id } }
         handle.seam.close(CloseReason.Normal)
         recomputePeers()
     }
@@ -173,12 +199,15 @@ internal class CompositeSeam(
             is PlyFrame.Announce -> {
                 // Announce keys idMap by (plyId, transport sender) → composite id.
                 val sender = swatch.sender ?: return
-                idMap[plyId to sender] = frame.compositeId
+                lock.withLock { idMap[plyId to sender] = frame.compositeId }
                 recomputePeers()
             }
             is PlyFrame.Data -> {
                 // Data uses the in-frame originId — the transport sender may be a gateway.
-                gate.accept(frame).forEach { payload ->
+                // The gate is single-collection by contract; the lock restores that invariant
+                // across the concurrent per-ply inbound pumps. trySend is channel-safe outside it.
+                val payloads = lock.withLock { gate.accept(frame) }
+                payloads.forEach { payload ->
                     incomingChannel.trySend(Swatch(payload = payload, sender = frame.originId))
                 }
             }
@@ -186,49 +215,66 @@ internal class CompositeSeam(
     }
 
     private fun recomputePeers() {
-        val reachable = buildSet {
-            add(selfId)
-            idMap.forEach { (key, compositeId) ->
-                val (plyId, transportId) = key
-                val seam = live[plyId]?.seam
-                if (seam != null && transportId in seam.peers.value) add(compositeId)
+        val reachable = lock.withLock {
+            buildSet {
+                add(selfId)
+                idMap.forEach { (key, compositeId) ->
+                    val (plyId, transportId) = key
+                    val seam = live[plyId]?.seam
+                    if (seam != null && transportId in seam.peers.value) add(compositeId)
+                }
             }
         }
         _peers.value = reachable
     }
 
-    override suspend fun broadcast(payload: ByteArray) = withContext(dispatcher) {
+    override suspend fun broadcast(payload: ByteArray) {
         check(state.value !is SeamState.Torn) { "seam is Torn" }
-        val bytes = PlyFrame.encode(PlyFrame.Data(selfId, outSeq++, payload))
-        live.values
+        val bytes = PlyFrame.encode(PlyFrame.Data(selfId, outSeq.getAndIncrement(), payload))
+        // Snapshot the live, non-torn plies under the lock, then send OUTSIDE it.
+        val targets = lock.withLock { live.values.toList() }
+        targets
             .filter { it.seam.state.value !is SeamState.Torn }
             .forEach { it.seam.broadcast(bytes) }
     }
 
-    override suspend fun sendTo(peer: PeerId, payload: ByteArray) = withContext(dispatcher) {
+    override suspend fun sendTo(peer: PeerId, payload: ByteArray) {
         check(state.value !is SeamState.Torn) { "seam is Torn" }
-        val bytes = PlyFrame.encode(PlyFrame.Data(selfId, outSeq++, payload))
+        val bytes = PlyFrame.encode(PlyFrame.Data(selfId, outSeq.getAndIncrement(), payload))
+        // Resolve (ply, transportId) in send-preference order under the lock; send OUTSIDE it.
+        val resolved = lock.withLock { resolveSendTarget(peer) }
+        if (resolved == null) throw PeerNotConnected(peer)
+        val (handle, transportId) = resolved
+        handle.seam.sendTo(transportId, bytes)
+    }
+
+    /** Find the most-preferred live ply that can reach [peer]. Must be called under [lock]. */
+    private fun resolveSendTarget(peer: PeerId): Pair<PlyHandle, PeerId>? {
         for ((plyId, handle) in live) {
             if (handle.seam.state.value is SeamState.Torn) continue
             val transportId = idMap.entries
                 .firstOrNull { (k, v) -> k.first == plyId && v == peer }
                 ?.key?.second
             if (transportId != null && transportId in handle.seam.peers.value) {
-                handle.seam.sendTo(transportId, bytes)
-                return@withContext
+                return handle to transportId
             }
         }
-        throw PeerNotConnected(peer)
+        return null
     }
 
     override suspend fun close(reason: CloseReason) {
-        withContext(dispatcher) {
-            scope.cancel()
-            live.values.forEach { it.seam.close(reason) }
+        // Single-shot: only the first caller publishes Torn and tears down.
+        if (!closed.compareAndSet(expect = false, update = true)) return
+        scope.cancel()
+        // Snapshot the plies to close under the lock; perform the suspending closes outside it.
+        val toClose = lock.withLock {
+            val snapshot = live.values.toList()
             live.clear()
-            _state.value = SeamState.Torn(reason)
-            incomingChannel.close()
+            snapshot
         }
+        _state.value = SeamState.Torn(reason)
+        incomingChannel.close()
+        toClose.forEach { it.seam.close(reason) }
     }
 
     private companion object {

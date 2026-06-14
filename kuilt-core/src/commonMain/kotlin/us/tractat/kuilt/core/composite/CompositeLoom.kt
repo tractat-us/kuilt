@@ -21,19 +21,20 @@ import kotlin.coroutines.CoroutineContext
  * See `docs/superpowers/specs/2026-06-04-dynamic-ply-attach-detach-design.md`.
  *
  * @param plies The desired ply set; emit a new value to reconcile (attach/detach).
- * @param dispatcher Forwarded to each [CompositeSeam] as its internal dispatcher.
- *   Production default ([Dispatchers.Default.limitedParallelism(1)]) confines all
- *   mutable state access to one thread; tests inject [UnconfinedTestDispatcher].
+ * @param dispatcher Forwarded to each [CompositeSeam] as the scope for its internal
+ *   coroutines (scheduling only — the woven seam's thread-safety is via a lock + atomics,
+ *   so it is correct under a multi-threaded dispatcher). Production default
+ *   ([Dispatchers.Default]); tests inject a dispatcher derived from the test scheduler.
  */
 public class CompositeLoom(
     private val plies: StateFlow<List<Pair<PlyId, Loom>>>,
-    private val dispatcher: CoroutineContext = Dispatchers.Default.limitedParallelism(1),
+    private val dispatcher: CoroutineContext = Dispatchers.Default,
 ) : Loom {
 
     /** Static convenience: a fixed ply set that never changes after `weave()`. */
     public constructor(
         plies: List<Pair<PlyId, Loom>>,
-        dispatcher: CoroutineContext = Dispatchers.Default.limitedParallelism(1),
+        dispatcher: CoroutineContext = Dispatchers.Default,
     ) : this(MutableStateFlow(plies), dispatcher)
 
     override suspend fun weave(rendezvous: Rendezvous): Seam {
