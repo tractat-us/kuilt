@@ -42,14 +42,15 @@ class ProprietaryRpcExampleTest {
 
     /**
      * The whole adapter: a byte-stream socket → a kuilt [Conn]. `framed()` adds
-     * length-prefix framing; `pumped()` makes the blocking reads a hot, re-collectable
-     * flow on an IO dispatcher (the single-reader glue `handshaking` requires).
+     * length-prefix framing; the resulting cold, single-collection `Conn` goes
+     * straight to [handshaking] — no hot-reader pump. `handshaking` consumes
+     * `incoming` with a single collection, so a stream RPC needs no extra glue.
      */
     private fun rpcConn(socket: Socket): Conn =
         framed(
             source = socket.getInputStream().asSource().buffered(),
             sink = socket.getOutputStream().asSink().buffered(),
-        ).pumped(Dispatchers.IO)
+        )
 
     /** Wrap a connected socket as a 2-peer kuilt [Seam], identity negotiated in-band. */
     private suspend fun weaveSeam(socket: Socket, selfId: PeerId): Seam =

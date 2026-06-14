@@ -1,31 +1,37 @@
 package us.tractat.kuilt.core.fabric
 
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.receiveAsFlow
+import kotlinx.coroutines.launch
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Seam
+import us.tractat.kuilt.core.runCatchingCancellable
 import kotlin.coroutines.CoroutineContext
 
 /**
  * A 2-peer [Seam] for transports that do NOT carry identity out of band.
  * Sends a [Hello] preamble as the first frame, awaits the peer's preamble,
- * then delegates to [identified] over a [PreambleStrippedConn] that presents
- * only the post-preamble frames to the inner seam. Suspends until the peer's
- * preamble arrives.
+ * then delegates to [identified] over the **same single collection** of
+ * [Conn.incoming]. Suspends until the peer's preamble arrives.
  *
- * **Single-collection assumption:** [Conn.incoming] must be collected exactly
- * once. This function calls [Conn.firstFrame] (which collects the first item
- * from [Conn.incoming]) before delegating to [identified], which installs its
- * own collector. Because [connPair] is [kotlinx.coroutines.channels.Channel]-backed
- * (hot/buffered), [firstFrame] consumes the Hello preamble from the underlying
- * channel, leaving application frames for [identified]'s collector. The
- * [PreambleStrippedConn] wrapper therefore presents [delegate.incoming] unchanged —
- * the preamble is already gone. If a future [Conn] implementation uses a cold or
- * replayable [Flow], revisit by buffering the preamble read instead.
+ * **Single-collection safe.** [Conn.incoming] is collected exactly once: a
+ * [SingleCollectionConn] starts one pump coroutine that drains the delegate's
+ * `incoming` into an internal channel. The preamble is read from that channel,
+ * and the post-preamble frames are handed to [identified] from the *same*
+ * channel — there is never a second `delegate.incoming.collect`. This makes
+ * `handshaking` correct over a cold, single-collection [Conn] (the shape a
+ * stream fabric's `framed()` produces) as well as over a hot channel-backed one
+ * ([connPair][us.tractat.kuilt.test.fabric.connPair]). Stream fabrics no longer
+ * need a hot-reader pump of their own.
  *
- * @param dispatcher Forwarded to [identified]; confines the underlying [LinkSeam]'s
- *   internal state. Production callers pass `Dispatchers.Default.limitedParallelism(1)`;
- *   test callers pass a dispatcher derived from the test scheduler so the seam's loops
- *   share the same virtual clock as the test's `withTimeout`.
+ * @param dispatcher Scopes both the single-collection pump and [identified]'s
+ *   read/write loops, so the preamble drain shares the seam's (and tests') clock.
+ *   Production callers pass `Dispatchers.Default.limitedParallelism(1)`; test
+ *   callers pass a dispatcher derived from the test scheduler.
  */
 public suspend fun handshaking(
     conn: Conn,
@@ -33,17 +39,45 @@ public suspend fun handshaking(
     dispatcher: CoroutineContext,
 ): Seam {
     conn.send(Hello.encode(selfId))
-    val remoteId = Hello.decode(conn.firstFrame())
-    return identified(PreambleStrippedConn(conn), selfId, remoteId, dispatcher)
+    val single = SingleCollectionConn(conn, dispatcher)
+    val remoteId = Hello.decode(single.firstFrame())
+    return identified(single, selfId, remoteId, dispatcher)
 }
 
 /**
- * Wraps a [Conn] to present only the post-preamble [incoming] flow to [identified].
- * For channel-backed [Conn] implementations, the preamble frame is already consumed
- * by [Conn.firstFrame] before this wrapper is used, so [incoming] is forwarded as-is.
+ * Adapts a [Conn] so its [incoming] can be consumed by both the preamble read and
+ * [identified]'s read loop over **one** upstream collection.
+ *
+ * One pump coroutine collects [delegate].incoming exactly once on [dispatcher] and
+ * republishes frames through an unbounded [Channel]. [firstFrame] takes the first
+ * frame off that channel; [incoming] exposes the remainder from the same channel.
+ * No consumer ever collects [delegate].incoming directly.
  */
-private class PreambleStrippedConn(private val delegate: Conn) : Conn {
+private class SingleCollectionConn(
+    private val delegate: Conn,
+    dispatcher: CoroutineContext,
+) : Conn {
+    private val scope = CoroutineScope(SupervisorJob() + dispatcher)
+    private val inbox = Channel<ByteArray>(Channel.UNLIMITED)
+
+    init {
+        scope.launch {
+            // A wire close (peer disconnect EOFs the read; local close cancels it) surfaces
+            // as a delegate completion or exception — treat end-of-stream as normal completion
+            // of incoming, but let CancellationException propagate.
+            runCatchingCancellable { delegate.incoming.collect { inbox.send(it) } }
+            inbox.close()
+        }
+    }
+
     override suspend fun send(frame: ByteArray) = delegate.send(frame)
-    override val incoming: Flow<ByteArray> = delegate.incoming
-    override suspend fun close() = delegate.close()
+
+    override val incoming: Flow<ByteArray> = inbox.receiveAsFlow()
+
+    // Best-effort teardown: cancel the pump, then close the delegate. close() is idempotent
+    // and must not propagate a delegate-close failure on an already-cancelled link.
+    override suspend fun close() {
+        scope.cancel()
+        runCatchingCancellable { delegate.close() }
+    }
 }
