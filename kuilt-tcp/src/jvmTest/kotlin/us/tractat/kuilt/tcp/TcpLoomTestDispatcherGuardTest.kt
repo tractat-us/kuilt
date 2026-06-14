@@ -1,3 +1,4 @@
+@file:Suppress("ForbiddenImport") // deliberate real dispatcher: this test verifies the TcpLoom guard that REJECTS a TestDispatcher, so it must construct the seam with a real one
 @file:OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 
 package us.tractat.kuilt.tcp
