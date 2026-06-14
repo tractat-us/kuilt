@@ -35,6 +35,8 @@ val next: GCounter = counter.piece(delta)        // apply the delta
 | Registers | `LWWRegister`, `MVRegister` | Last-write-wins or multi-value concurrent conflict |
 | Maps | `LWWMap`, `ORMap` | Key-level LWW or ORSet-keyed map |
 | Sequences | `Rga` | Ordered list with stable unique ids |
+| Composite | `JsonCrdt` | Recursive JSON document — ORMap objects, Rga arrays, MVRegister leaves |
+| Ephemeral | `EphemeralMap` | Per-replica presence slot, clock-ordered, with caller-driven TTL eviction |
 | Causal primitives | `Causal`, `DotContext`, `DotSet` | Causal-context-based remove/add reasoning |
 
 ## Live replication

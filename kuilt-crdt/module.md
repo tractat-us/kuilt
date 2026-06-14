@@ -23,6 +23,8 @@ delivery order or duplication.
 | `ORMap` | Per-key add-wins; values merge via `piece` | Yes |
 | `BoundedCounter` | Escrow-quota counter; spend within quota | Via transfer |
 | `Rga` | Op-log union; Lamport-ordered insert wins | Via tombstone |
+| `JsonCrdt` | Recursive JSON: ORMap objects, Rga arrays, MVRegister leaves | Via key remove |
+| `EphemeralMap` | Per-replica slot, higher clock wins; caller-driven TTL eviction | Via graceful leave |
 
 ## Replication
 

@@ -29,13 +29,15 @@ Import the BOM once to align all module versions, then add individual modules wi
 dependencies {
     implementation(platform("us.tractat.kuilt:kuilt-bom:0.4.0"))
 
-    implementation("us.tractat.kuilt:kuilt-core")
     implementation("us.tractat.kuilt:kuilt-websocket")  // WebSocket fabric
     implementation("us.tractat.kuilt:kuilt-raft")       // Raft consensus
     implementation("us.tractat.kuilt:kuilt-crdt")       // CRDT zoo
     implementation("us.tractat.kuilt:kuilt-session")    // membership / room
 }
 ```
+
+Every module re-exports the `kuilt-core` contract, so you only list `kuilt-core`
+directly if it's the sole thing you depend on.
 
 ### Without the BOM
 
@@ -62,8 +64,9 @@ Replace `0.4.0` with the [latest release](https://central.sonatype.com/artifact/
 | Module | Targets | What it gives you |
 |--------|---------|-------------------|
 | `kuilt-crdt` | all | Delta-state CRDT zoo (`GCounter`, `ORSet`, `LWWMap`, `Rga`, `JsonCrdt`, `EphemeralMap`, …) + `SeamReplicator` live replication. |
-| `kuilt-game` | all | Turn-based game facade over `kuilt-raft`: `TurnSequencer` + `IndexedAction`. |
-| `kuilt-raft` | all | Raft consensus — leader election, log replication, snapshots, dynamic membership. |
+| `kuilt-deal` | all | Cryptographically fair card dealing (`DealSession`, `SraScheme`) + dealer-less fair-random seed agreement (`FairRandom`). |
+| `kuilt-game` | all | Turn-based game facade over `kuilt-raft`: `TurnSequencer` + `IndexedAction` + `SpeculativeSequencer` (optimistic apply + rollback). |
+| `kuilt-raft` | all | Raft consensus — leader election, log replication, snapshots, dynamic membership, linearizable reads, leadership transfer. |
 | `kuilt-session` | all | Membership-aware `Room` (`SeamRoom`): handshake, roster, reconnect tokens, partition detection. |
 
 **Fabrics**

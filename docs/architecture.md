@@ -151,6 +151,17 @@ incoming `RequestVote` for a higher term without adopting that term, preventing 
 re-joining partitioned node from deposing a healthy leader the moment it regains
 connectivity.
 
+Beyond election and replication, `:kuilt-raft` exposes two further Raft
+refinements. **Linearizable reads** (`readIndex()`, §3.6/§3.7) let a leader serve
+a read that reflects all committed writes *without* appending a log entry: it
+records the current commit index, confirms it still holds a quorum via a
+heartbeat round, and the caller waits for its state machine to apply through that
+index (`awaitRead` packages the barrier). **Graceful leadership transfer**
+(`transferLeadership(target)`, §3.10) hands the lease to a named peer — the leader
+brings the target's log up to the commit index, sends `TimeoutNow` to trigger an
+immediate election there, and stops accepting new proposals until the handoff
+completes or `cancelTransfer()` aborts it.
+
 ## Session metadata convergence
 
 `kuilt-session` and `kuilt-crdt` compose to provide live-converging session
@@ -250,12 +261,19 @@ Genuinely out of scope for kuilt at every layer:
 ## Module boundary
 
 ```
-kuilt-core         the contract + InMemoryLoom + SeamConformanceSuite (depends on nothing fabric-specific)
-  ├── kuilt-raft        Raft consensus (election, log, snapshots, membership)  → depends on kuilt-core
-  │     └── kuilt-game  turn-based game facade (TurnSequencer / IndexedAction)  → depends on kuilt-raft
+kuilt-core         the contract + InMemoryLoom + MuxSeam + SeamConformanceSuite (depends on nothing fabric-specific)
+  ├── kuilt-raft        Raft consensus (election, log, snapshots, membership, reads, transfer)  → depends on kuilt-core
+  │     └── kuilt-game  turn-based game facade (TurnSequencer / SpeculativeSequencer)  → depends on kuilt-raft
+  ├── kuilt-crdt        delta-state CRDT zoo + SeamReplicator   → depends on kuilt-core
+  │     └── kuilt-deal  fair card dealing + fair-random (SRA / commit-reveal)  → depends on kuilt-crdt + kuilt-core
   ├── kuilt-session     membership/room layer (admit, roster, roles, resume)  → depends on kuilt-core
   ├── kuilt-websocket   Ktor WebSocket fabric (Far)            → depends on kuilt-core
+  ├── kuilt-multipeer   Apple Multipeer fabric (Near, iOS/macOS)  → depends on kuilt-core
+  ├── kuilt-nearby      Google Nearby fabric (Android)         → depends on kuilt-core
+  ├── kuilt-webrtc      WebRTC data-channel fabric (wasmJs)    → depends on kuilt-core
   └── kuilt-mdns        Bonjour discovery → WebSocket session  → depends on kuilt-core + kuilt-websocket
+
+kuilt-bom            Gradle/Maven platform constraining every module to one aligned version (not a code module)
 ```
 
 The dependency arrow only ever points *down* toward `kuilt-core`. Keeping

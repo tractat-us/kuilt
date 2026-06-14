@@ -11,7 +11,7 @@ kotlin {
 
     sourceSets {
         commonMain.dependencies {
-            implementation(project(":kuilt-core"))
+            api(project(":kuilt-core"))  // public API returns Seam from weave() — expose the contract transitively
             implementation(project(":kuilt-session"))
             implementation(libs.kotlinx.coroutines.core)
             implementation(libs.kotlin.logging)

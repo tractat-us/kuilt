@@ -6,28 +6,31 @@ conformance-test a fabric of your own. For the *why* behind the contract, read
 
 ## Add the dependency
 
-kuilt publishes to GitHub Packages under `us.tractat.kuilt:*`. Add the repository
-(it needs a GitHub token with `read:packages`) and depend on the modules you need:
+kuilt publishes to Maven Central under `us.tractat.kuilt:*`. Add the repository
+and depend on the modules you need — the BOM is the recommended way to keep every
+module on one aligned version:
 
 ```kotlin
 // settings.gradle.kts or build.gradle.kts
 repositories {
-    maven("https://maven.pkg.github.com/tractat-us/kuilt") {
-        credentials {
-            username = providers.gradleProperty("gpr.user").orElse(providers.environmentVariable("GITHUB_ACTOR")).orNull
-            password = providers.gradleProperty("gpr.key").orElse(providers.environmentVariable("GITHUB_TOKEN")).orNull
-        }
-    }
+    mavenCentral()
 }
 
 // build.gradle.kts
 dependencies {
-    implementation("us.tractat.kuilt:kuilt-core:0.1.+")
-    implementation("us.tractat.kuilt:kuilt-session:0.1.+")    // if you want the membership/room layer
-    implementation("us.tractat.kuilt:kuilt-websocket:0.1.+")  // if you want the WebSocket fabric
-    implementation("us.tractat.kuilt:kuilt-mdns:0.1.+")       // if you want LAN discovery
+    // Import the BOM once; then declare modules without version numbers.
+    implementation(platform("us.tractat.kuilt:kuilt-bom:VERSION"))
+
+    implementation("us.tractat.kuilt:kuilt-session")    // membership/room layer
+    implementation("us.tractat.kuilt:kuilt-websocket")  // WebSocket fabric
+    implementation("us.tractat.kuilt:kuilt-mdns")       // LAN discovery
 }
 ```
+
+Each module re-exports the `kuilt-core` contract (`Loom`/`Seam`/`Swatch`), so you
+don't list `kuilt-core` separately unless it's the *only* thing you depend on.
+Without the BOM, pin each module explicitly (`us.tractat.kuilt:kuilt-core:VERSION`).
+Replace `VERSION` with the [latest release](https://central.sonatype.com/artifact/us.tractat.kuilt/kuilt-core).
 
 The whole surface is `Loom` (make a session), `Seam` (use it), `Swatch` (the
 frames). Everything below is those three types over different wires.
