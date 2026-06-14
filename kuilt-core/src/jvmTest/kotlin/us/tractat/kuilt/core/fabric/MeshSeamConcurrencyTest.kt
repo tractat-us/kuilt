@@ -56,7 +56,7 @@ class MeshSeamConcurrencyTest {
         private val frames = Channel<ByteArray>(Channel.UNLIMITED)
 
         init {
-            frames.trySend(Hello.encode(remoteId))
+            frames.trySend(MeshHello.encode(remoteId, byteArrayOf(0)))
         }
 
         override val incoming: Flow<ByteArray> = frames.receiveAsFlow()
@@ -117,6 +117,50 @@ class MeshSeamConcurrencyTest {
             awaitTorn(seam)
             assertIs<SeamState.Torn>(seam.state.value, "teardown did not produce a clean Torn state")
             assertEquals(setOf(self), seam.peers.value, "peers corrupted by concurrent teardown")
+        }
+    }
+
+    /**
+     * #420 thread-safety: hammer [Mesh.addLink] from several threads while `close()` races it on a
+     * real multi-threaded dispatcher. The new `admitOrReject` lock path and conn-scoped
+     * `removePeer` must never corrupt the roster: the final state is exactly one clean
+     * [SeamState.Torn] with `peers == {self}`, and no `addLink` leaks a race exception (a clean
+     * closed-seam [IllegalStateException] once torn is the contract).
+     */
+    @Test
+    fun addLinkIsRaceFreeAgainstConcurrentClose() = runRealThreaded {
+        val iterations = 200
+        repeat(iterations) {
+            val seam = meshSeam(self, emptyList(), Dispatchers.Default)
+            coroutineScope {
+                val ready = CompletableDeferred<Unit>()
+                val joiners = (0 until 6).map { i ->
+                    async(Dispatchers.Default) {
+                        ready.await()
+                        runCatchingAdmit { seam.addLink(HelloConn(PeerId("late-$i"))) }
+                    }
+                }
+                val closer = async(Dispatchers.Default) {
+                    ready.await()
+                    seam.close()
+                }
+                ready.complete(Unit)
+                awaitAll(closer, *joiners.toTypedArray())
+            }
+            awaitTorn(seam)
+            assertIs<SeamState.Torn>(seam.state.value, "teardown did not produce a clean Torn state")
+            assertEquals(setOf(self), seam.peers.value, "peers corrupted by concurrent addLink/close")
+        }
+    }
+
+    /** Run [admit]; fail loudly on a race exception, accept the clean closed-seam signal. */
+    private suspend fun runCatchingAdmit(admit: suspend () -> Unit) {
+        try {
+            admit()
+        } catch (e: ConcurrentModificationException) {
+            throw AssertionError("addLink leaked a ConcurrentModificationException; the links map is not thread-safe", e)
+        } catch (e: IllegalStateException) {
+            // Clean closed-seam signal — acceptable once the seam is torn.
         }
     }
 
