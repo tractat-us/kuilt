@@ -162,20 +162,40 @@ jobs:
           echo "JSTACK_PID=$!" >> "$GITHUB_ENV"
 
       - name: Build and test all targets
-        # Cap workers at 2 (below the runner's 4 CPUs). gradle.properties sets
-        # workers.max=16 for publish (upload-bound). On CI, concurrent Kotlin
-        # daemons + JVM test forks + wasmJs-browser Chrome OOM the 16 GB runner —
-        # worst on COLD builds (e.g. a build-logic change busts every module's
-        # cache), where compile-daemon heaps are still resident when the test
-        # phase forks. 4 was enough for cache-hit builds but still OOMed cold
-        # builds (killed ~14 min into the test phase); 2 keeps peak memory in
-        # budget. Cache-hit builds barely notice (little left to do).
+        # Two coordinated levers keep peak memory inside the 16 GB runner.
+        #
+        # 1. --max-workers=2 caps the *additive* peak — concurrent Gradle worker
+        #    processes (forked test JVMs, some compile/native workers). Below the
+        #    runner's 4 CPUs.
+        #
+        # 2. CI-only daemon-heap caps (-Dorg.gradle.jvmargs / -Dkotlin.daemon.jvmargs
+        #    below) cap the *dominant* floor. gradle.properties keeps -Xmx4g each
+        #    for local dev (fine on a workstation), but on the 16 GB runner the two
+        #    long-lived daemons (Gradle + Kotlin) reserve 8 GB of heap that stays
+        #    resident regardless of --max-workers. On a COLD build (a catalog or
+        #    build-logic change busts every module's cache) those daemon heaps are
+        #    at their high-water mark from compilation just as the test phase forks
+        #    JVMs and launches Binaryen wasm-opt + a Karma headless Chrome — the
+        #    concurrent committed footprint then exceeds 16 GB, the runner VM
+        #    thrashes, and the hosted-compute layer reclaims it (SIGTERM → exit 143,
+        #    "The runner has received a shutdown signal"). This is load-dependent:
+        #    a cache-hit build never grows the daemons, so it never trips. An
+        #    earlier --max-workers=4→2 step reduced but did not remove it because it
+        #    left the 8 GB daemon floor untouched. Capping each daemon to 3 GB drops
+        #    the floor to 6 GB, restoring ~2 GB of headroom for the cold-build peak.
+        #    Verified by a controlled experiment: two -Xmx4g JVMs that commit their
+        #    heaps are OOM-killed in a 7 GB cgroup every run, while -Xmx3g/-Xmx2g
+        #    pairs survive; a full cold build at 3 GB/3 GB completes with no
+        #    OutOfMemoryError and no GC-overhead, same wall time as 4 GB/4 GB.
         #
         # koverXmlReport rides on the same invocation so the JVM test tasks it
         # depends on run once: build executes them, then the report aggregates
         # the coverage data into build/reports/kover/report.xml (collected as an
         # artifact below; no external coverage service).
-        run: ./gradlew build koverXmlReport --max-workers=2
+        run: >-
+          ./gradlew build koverXmlReport --max-workers=2
+          -Dorg.gradle.jvmargs="-Xmx3g -Dfile.encoding=UTF-8"
+          -Dkotlin.daemon.jvmargs="-Xmx3g"
 
       - name: Kill jstack heartbeat
         # Stop the background watchdog. Runs if: always() so the orphaned loop is
