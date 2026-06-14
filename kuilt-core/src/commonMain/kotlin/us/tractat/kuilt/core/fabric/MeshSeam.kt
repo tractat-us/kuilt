@@ -129,10 +129,12 @@ private class MeshSeam(
 
     override suspend fun broadcast(payload: ByteArray): Unit = withContext(dispatcher) {
         check(!closed) { "MeshSeam for $selfId is closed" }
-        links.forEach { (remoteId, conn) ->
+        val failed = mutableListOf<PeerId>()
+        links.entries.toList().forEach { (remoteId, conn) ->
             runCatchingLink { conn.send(payload) }
-                .onFailure { removePeer(remoteId) }
+                .onFailure { failed.add(remoteId) }
         }
+        failed.forEach { removePeer(it) }
     }
 
     override suspend fun sendTo(peer: PeerId, payload: ByteArray): Unit = withContext(dispatcher) {
