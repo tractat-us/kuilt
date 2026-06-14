@@ -150,13 +150,23 @@ tests as the `MDNS_MULTICAST_TESTS` env var (see `kuilt-mdns/build.gradle.kts`).
     `GlobalScope`). The rare deliberate real-threading harness (a true-parallelism stress test,
     a callback-thread regression test, a `runBlocking` benchmark) carries an inline
     `@Suppress` with a one-line reason.
-  - **Thread-safety of scope-owning types:** the library is single-event-loop-per-session
-    (`incoming` is single-collection), so serial dispatch is a load-bearing invariant — but a
-    type must *own* that invariant, not assume it. Follow one of the two templates: **own a
-    confinement dispatcher** (`CompositeSeam` → `limitedParallelism(1)` + `withContext`), or
-    **guard shared mutable state with a lock** (`SeamReplicator`/`SeamRoom` → atomicfu
-    `reentrantLock`, with suspend calls kept *outside* the locked section). Don't leak an
-    unguarded mutable field across coroutines and rely on the caller's dispatcher being serial.
+  - **Thread-safety of scope-owning types — use real primitives, never single-thread confinement.**
+    kuilt is a genuinely multi-threaded library: a scope-owning type (`Seam`/`Loom`/`Room` impl) MUST be
+    correct under a **multi-threaded** dispatcher. Guard shared mutable state (`var`s, mutable collections)
+    with **explicit, local primitives** — atomicfu `reentrantLock` (suspend calls kept *outside* the locked
+    section) or `kotlinx.atomicfu` atomics, or genuinely thread-safe structures (`Channel`, `MutableStateFlow`).
+    **Do NOT use `Dispatchers.X.limitedParallelism(1)` + `withContext` as a substitute for mutual exclusion.**
+    Relying on single-threaded dispatch to serialize access to otherwise-unguarded state is a banned *retreat*:
+    it conflates scheduling with locking, masks races under test dispatchers (everything is serial under
+    `runTest`), and breaks the instant the type runs on a real multi-threaded scope. Correctness must be a
+    local, explicit property of each field — never an emergent property of where coroutines happen to run.
+    The review question: *"is this still correct if the dispatcher is multi-threaded?"* If no, it needs a
+    lock/atomic. **Still legitimate** (proper primitives, not confinement crutches): a single dedicated writer
+    coroutine draining a `Channel` for FIFO ordering; the single-collection `incoming` contract (ADR-034, one
+    event loop per session); running coroutines on an injected dispatcher purely for *scheduling*. The line: a
+    dispatcher may decide *where* work runs, but must never be the *only* thing preventing a data race.
+    Exemplars: `SeamReplicator`/`SeamRoom` (lock-guarded). The older `CompositeSeam`/`CompositeLoom`
+    `limitedParallelism(1)` confinement is **legacy being migrated to primitives** — do not copy it.
 
 - **Exception discipline — never swallow cancellation.** In any `suspend`/coroutine context,
   use `runCatchingCancellable { … }` (in `:kuilt-core`), **not** bare `runCatching` — the latter
