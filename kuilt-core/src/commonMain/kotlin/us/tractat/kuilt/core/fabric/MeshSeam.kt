@@ -1,5 +1,8 @@
 package us.tractat.kuilt.core.fabric
 
+import kotlinx.atomicfu.atomic
+import kotlinx.atomicfu.locks.reentrantLock
+import kotlinx.atomicfu.locks.withLock
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
@@ -13,15 +16,14 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.receiveAsFlow
-import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import us.tractat.kuilt.core.CloseReason
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.PeerNotConnected
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.Swatch
+import us.tractat.kuilt.core.runCatchingCancellable
 import kotlin.coroutines.CoroutineContext
 
 /**
@@ -42,19 +44,15 @@ import kotlin.coroutines.CoroutineContext
  * is removed from [Seam.peers] and the mesh continues operating. The seam
  * remains [SeamState.Woven] until [Seam.close] is called.
  *
- * **State confinement:** all mutable state is confined to [dispatcher] via
- * [withContext] (the [CompositeSeam] pattern). Production uses
- * `Dispatchers.Default.limitedParallelism(1)`; tests inject a test dispatcher.
- *
  * @param selfId This peer's identity. Sent as the [Hello] preamble on each conn.
  * @param conns Raw [Conn]s to each prospective peer, one per peer. These must be
  *   fresh and unread — [meshSeam] reads the first frame from each as the [Hello]
  *   preamble (channel-backed conns as produced by [us.tractat.kuilt.test.fabric.connPair]
  *   satisfy this requirement).
- * @param dispatcher Confines all mutable mesh state. Never accessed concurrently.
- *   Production callers pass `Dispatchers.Default.limitedParallelism(1)`; test callers
- *   pass a dispatcher derived from the test scheduler so that seam internals share the
- *   same virtual clock as the test's `withTimeout`.
+ * @param dispatcher The scope for the per-link `readLoop` coroutines (scheduling only — see
+ *   the thread-safety note on the returned seam). Production callers pass
+ *   `Dispatchers.Default`; test callers pass a dispatcher derived from the test scheduler so
+ *   that seam internals share the same virtual clock as the test's `withTimeout`.
  */
 public suspend fun meshSeam(
     selfId: PeerId,
@@ -98,11 +96,16 @@ public suspend fun meshSeam(
 private class MeshSeam(
     override val selfId: PeerId,
     initialLinks: Map<PeerId, Conn>,
-    private val dispatcher: CoroutineContext,
+    dispatcher: CoroutineContext,
 ) : Seam {
     private val scope = CoroutineScope(SupervisorJob() + dispatcher)
 
-    // Mutable state: all access via withContext(dispatcher).
+    // `links` is shared between `broadcast`/`sendTo` (caller threads) and each `readLoop`'s
+    // teardown / per-link send-failure removal (dispatcher threads). It is guarded by `lock`:
+    // every read and mutation happens under the lock. Suspending `conn.send`/`conn.close` are
+    // NEVER invoked while the lock is held — callers snapshot the target conn(s) under the lock,
+    // release, then send/close outside it.
+    private val lock = reentrantLock()
     private val links = mutableMapOf<PeerId, Conn>()
 
     private val _peers = MutableStateFlow(setOf(selfId))
@@ -114,13 +117,17 @@ private class MeshSeam(
     private val inbox = Channel<Swatch>(Channel.UNLIMITED)
     override val incoming: Flow<Swatch> = inbox.receiveAsFlow()
 
-    private var closed = false
-    private var seq = 0L
+    // Atomic single-shot teardown gate. `close()` and each `readLoop`'s `finally` race to flip it
+    // false→true; whoever wins runs the seam-wide teardown, the loser is a no-op — so the seam
+    // tears down exactly once regardless of which thread arrives first.
+    private val closed = atomic(false)
+
+    // Incremented from MULTIPLE per-link readLoops concurrently — must be atomic.
+    private val seq = atomic(0L)
 
     init {
-        // Populate the link map synchronously before any coroutine can observe this object.
-        // Safe because no other coroutine has started yet and the constructor is single-threaded.
-        initialLinks.forEach { (remoteId, conn) -> links[remoteId] = conn }
+        // Populate the link map before any readLoop can observe it. No coroutine has started yet.
+        links.putAll(initialLinks)
         _peers.value = buildPeerSet()
 
         // Launch a supervised reader for each initial link.
@@ -129,75 +136,78 @@ private class MeshSeam(
         }
     }
 
-    override suspend fun broadcast(payload: ByteArray): Unit = withContext(dispatcher) {
-        check(!closed) { "MeshSeam for $selfId is closed" }
-        val failed = mutableListOf<PeerId>()
-        links.entries.toList().forEach { (remoteId, conn) ->
-            runCatchingLink { conn.send(payload) }
-                .onFailure { failed.add(remoteId) }
+    private val closedMessage get() = "MeshSeam for $selfId is closed"
+
+    override suspend fun broadcast(payload: ByteArray) {
+        check(!closed.value) { closedMessage }
+        // Snapshot the live links under the lock, then send OUTSIDE it.
+        val targets = lock.withLock { links.toList() }
+        targets.forEach { (remoteId, conn) ->
+            runCatchingCancellable { conn.send(payload) }
+                .onFailure { removePeer(remoteId) }
         }
-        failed.forEach { removePeer(it) }
     }
 
-    override suspend fun sendTo(peer: PeerId, payload: ByteArray): Unit = withContext(dispatcher) {
-        check(!closed) { "MeshSeam for $selfId is closed" }
-        val conn = links[peer] ?: throw PeerNotConnected(peer)
-        runCatchingLink { conn.send(payload) }
+    override suspend fun sendTo(peer: PeerId, payload: ByteArray) {
+        check(!closed.value) { closedMessage }
+        val conn = lock.withLock { links[peer] } ?: throw PeerNotConnected(peer)
+        runCatchingCancellable { conn.send(payload) }
             .onFailure { removePeer(peer) }
     }
 
-    override suspend fun close(reason: CloseReason) = withContext(dispatcher) {
-        if (closed) return@withContext
-        closed = true
-        _state.value = SeamState.Torn(reason)
-        links.values.forEach { conn -> runCatchingLink { conn.close() } }
-        links.clear()
-        _peers.value = setOf(selfId)
-        inbox.close()
-        scope.cancel()
+    override suspend fun close(reason: CloseReason) {
+        // Snapshot the conns to close under the lock; perform the suspending closes outside it.
+        val toClose = tearDown(reason) ?: return
+        toClose.forEach { conn -> runCatchingCancellable { conn.close() } }
     }
 
     private suspend fun readLoop(remoteId: PeerId, conn: Conn) {
         try {
             conn.incoming.collect { bytes ->
-                val swatch = withContext(dispatcher) {
-                    if (closed) return@withContext null
-                    Swatch(payload = bytes, sender = remoteId, sequence = ++seq)
+                if (!closed.value) {
+                    inbox.trySend(Swatch(payload = bytes, sender = remoteId, sequence = seq.incrementAndGet()))
                 }
-                if (swatch != null) inbox.trySend(swatch)
             }
         } catch (e: CancellationException) {
             throw e
         } catch (_: Exception) {
             // Conn errored — treat as remote disconnect.
         } finally {
-            withContext(dispatcher) { removePeer(remoteId) }
+            removePeer(remoteId)
         }
-    }
-
-    /** Remove a peer from the live link map and update the peer set. Must be called on [dispatcher]. */
-    private fun removePeer(remoteId: PeerId) {
-        if (links.remove(remoteId) != null) {
-            _peers.value = buildPeerSet()
-        }
-    }
-
-    private fun buildPeerSet(): Set<PeerId> = buildSet {
-        add(selfId)
-        addAll(links.keys)
     }
 
     /**
-     * Run a link operation, catching non-cancellation exceptions.
-     * Used for best-effort sends where a dropped link should not tear the seam.
+     * Single-shot seam teardown. Only the first caller (CAS winner) publishes [SeamState.Torn],
+     * clears the links, closes the inbox and cancels the scope; it returns the conns to close.
+     * Every later caller returns `null`. The suspending `conn.close()` happens OUTSIDE the lock,
+     * in the caller. `scope.cancel()` cancels every `readLoop`, whose `finally` calls back into
+     * [removePeer] — a no-op once `links` is cleared.
      */
-    private inline fun runCatchingLink(block: () -> Unit): Result<Unit> =
-        try {
-            block()
-            Result.success(Unit)
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            Result.failure(e)
+    private fun tearDown(reason: CloseReason): List<Conn>? {
+        if (!closed.compareAndSet(expect = false, update = true)) return null
+        val conns = lock.withLock {
+            val snapshot = links.values.toList()
+            links.clear()
+            snapshot
         }
+        _state.value = SeamState.Torn(reason)
+        _peers.value = setOf(selfId)
+        inbox.close()
+        scope.cancel()
+        return conns
+    }
+
+    /** Remove a single peer from the live link map and update the peer set. Thread-safe. */
+    private fun removePeer(remoteId: PeerId) {
+        val removed = lock.withLock { links.remove(remoteId) != null }
+        if (removed) _peers.value = buildPeerSet()
+    }
+
+    private fun buildPeerSet(): Set<PeerId> = lock.withLock {
+        buildSet {
+            add(selfId)
+            addAll(links.keys)
+        }
+    }
 }
