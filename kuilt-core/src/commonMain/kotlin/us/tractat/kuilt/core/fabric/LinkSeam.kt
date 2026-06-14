@@ -2,7 +2,6 @@ package us.tractat.kuilt.core.fabric
 
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
@@ -26,14 +25,16 @@ import kotlin.coroutines.CoroutineContext
  * or [close]. Concurrent sends are serialized through an internal channel + single
  * writer so wire order matches call order.
  *
- * @param dispatcher confines internal state; production uses the confined default,
- *   tests inject `UnconfinedTestDispatcher(testScheduler)`.
+ * @param dispatcher Confines internal state. Production callers pass
+ *   `Dispatchers.Default.limitedParallelism(1)`; test callers pass a
+ *   `TestCoroutineDispatcher` derived from the test scheduler so that the seam's
+ *   read/write loops share the same virtual clock as the test's `withTimeout`.
  */
 public fun identified(
     conn: Conn,
     selfId: PeerId,
     remoteId: PeerId,
-    dispatcher: CoroutineContext = Dispatchers.Default.limitedParallelism(1),
+    dispatcher: CoroutineContext,
 ): Seam = LinkSeam(conn, selfId, remoteId, dispatcher)
 
 internal class LinkSeam(

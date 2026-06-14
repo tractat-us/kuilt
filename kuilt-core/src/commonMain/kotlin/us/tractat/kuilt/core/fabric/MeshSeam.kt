@@ -2,7 +2,6 @@ package us.tractat.kuilt.core.fabric
 
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -53,11 +52,14 @@ import kotlin.coroutines.CoroutineContext
  *   preamble (channel-backed conns as produced by [us.tractat.kuilt.test.fabric.connPair]
  *   satisfy this requirement).
  * @param dispatcher Confines all mutable mesh state. Never accessed concurrently.
+ *   Production callers pass `Dispatchers.Default.limitedParallelism(1)`; test callers
+ *   pass a dispatcher derived from the test scheduler so that seam internals share the
+ *   same virtual clock as the test's `withTimeout`.
  */
 public suspend fun meshSeam(
     selfId: PeerId,
     conns: List<Conn>,
-    dispatcher: CoroutineContext = Dispatchers.Default.limitedParallelism(1),
+    dispatcher: CoroutineContext,
 ): Seam {
     // Send Hello on every conn, then await the remote Hello — all concurrently.
     val handshaked: List<Pair<PeerId, Conn>> = coroutineScope {

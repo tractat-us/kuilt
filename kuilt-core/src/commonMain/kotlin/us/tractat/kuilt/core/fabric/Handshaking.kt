@@ -1,6 +1,5 @@
 package us.tractat.kuilt.core.fabric
 
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Seam
@@ -22,11 +21,16 @@ import kotlin.coroutines.CoroutineContext
  * [PreambleStrippedConn] wrapper therefore presents [delegate.incoming] unchanged —
  * the preamble is already gone. If a future [Conn] implementation uses a cold or
  * replayable [Flow], revisit by buffering the preamble read instead.
+ *
+ * @param dispatcher Forwarded to [identified]; confines the underlying [LinkSeam]'s
+ *   internal state. Production callers pass `Dispatchers.Default.limitedParallelism(1)`;
+ *   test callers pass a dispatcher derived from the test scheduler so the seam's loops
+ *   share the same virtual clock as the test's `withTimeout`.
  */
 public suspend fun handshaking(
     conn: Conn,
     selfId: PeerId,
-    dispatcher: CoroutineContext = Dispatchers.Default.limitedParallelism(1),
+    dispatcher: CoroutineContext,
 ): Seam {
     conn.send(Hello.encode(selfId))
     val remoteId = Hello.decode(conn.firstFrame())

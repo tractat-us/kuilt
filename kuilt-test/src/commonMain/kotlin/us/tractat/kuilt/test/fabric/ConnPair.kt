@@ -1,6 +1,7 @@
 package us.tractat.kuilt.test.fabric
 
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.receiveAsFlow
 import us.tractat.kuilt.core.Loom
@@ -10,6 +11,7 @@ import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.fabric.Conn
 import us.tractat.kuilt.core.fabric.handshaking
 import us.tractat.kuilt.core.fabric.identified
+import kotlin.coroutines.ContinuationInterceptor
 
 /** Two Conns whose sends cross to each other's `incoming`. In-memory, no network. */
 public fun connPair(): Pair<Conn, Conn> {
@@ -44,7 +46,8 @@ private class ConnLoom(
     private val remote: PeerId,
     private val conn: Conn,
 ) : Loom {
-    override suspend fun weave(rendezvous: Rendezvous): Seam = identified(conn, self, remote)
+    override suspend fun weave(rendezvous: Rendezvous): Seam =
+        identified(conn, self, remote, currentCoroutineContext()[ContinuationInterceptor]!!)
 }
 
 /**
@@ -63,5 +66,6 @@ public fun handshakingLoomPair(): Pair<Loom, Loom> {
 }
 
 private class HandshakeLoom(private val self: PeerId, private val conn: Conn) : Loom {
-    override suspend fun weave(rendezvous: Rendezvous): Seam = handshaking(conn, self)
+    override suspend fun weave(rendezvous: Rendezvous): Seam =
+        handshaking(conn, self, currentCoroutineContext()[ContinuationInterceptor]!!)
 }

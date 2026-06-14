@@ -3,10 +3,12 @@ package us.tractat.kuilt.test.fabric
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.fabric.Conn
 import us.tractat.kuilt.core.fabric.meshSeam
+import kotlin.coroutines.ContinuationInterceptor
 
 /**
  * Build a fully-connected in-memory mesh of [n] peers using [connPair] links.
@@ -34,6 +36,6 @@ public suspend fun inMemoryMeshOfSize(n: Int): List<Seam> = coroutineScope {
 
     // Launch all meshSeam calls concurrently — Hello exchanges must interleave.
     (0 until n).map { i ->
-        async { meshSeam(selfId = peerIds[i], conns = connsByPeer[i]) }
+        async { meshSeam(selfId = peerIds[i], conns = connsByPeer[i], dispatcher = currentCoroutineContext()[ContinuationInterceptor]!!) }
     }.awaitAll()
 }
