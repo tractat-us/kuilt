@@ -1,0 +1,39 @@
+package us.tractat.kuilt.test.fabric
+
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.core.Seam
+import us.tractat.kuilt.core.fabric.Conn
+import us.tractat.kuilt.core.fabric.meshSeam
+
+/**
+ * Build a fully-connected in-memory mesh of [n] peers using [connPair] links.
+ *
+ * For each unordered pair (i, j) one [connPair] is created. Peer i gets the
+ * first end, peer j gets the second. All [meshSeam] calls run concurrently so
+ * the [Hello] preambles cross in parallel (required — serial would deadlock).
+ *
+ * Returns one [Seam] per peer in index order. All inter-peer handshakes are
+ * complete before this function returns.
+ */
+public suspend fun inMemoryMeshOfSize(n: Int): List<Seam> = coroutineScope {
+    val peerIds = (0 until n).map { PeerId("peer-$it") }
+
+    // connsByPeer[i] = list of Conns this peer should handshake over.
+    val connsByPeer: Array<MutableList<Conn>> = Array(n) { mutableListOf() }
+
+    for (i in 0 until n) {
+        for (j in i + 1 until n) {
+            val (connI, connJ) = connPair()
+            connsByPeer[i].add(connI)
+            connsByPeer[j].add(connJ)
+        }
+    }
+
+    // Launch all meshSeam calls concurrently — Hello exchanges must interleave.
+    (0 until n).map { i ->
+        async { meshSeam(selfId = peerIds[i], conns = connsByPeer[i]) }
+    }.awaitAll()
+}
