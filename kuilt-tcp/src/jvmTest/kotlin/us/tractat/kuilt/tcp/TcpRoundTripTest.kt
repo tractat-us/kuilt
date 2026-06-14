@@ -7,7 +7,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import us.tractat.kuilt.core.PeerId
 import java.net.ServerSocket as JvmServerSocket
@@ -30,7 +30,7 @@ class TcpRoundTripTest {
     private var port: Int = 0
 
     @BeforeTest
-    fun setUp() {
+    fun setUp() = runBlocking {
         port = JvmServerSocket(0).use { it.localPort }
         serverSocket = aSocket(selector).tcp().bind("127.0.0.1", port)
     }
@@ -41,8 +41,10 @@ class TcpRoundTripTest {
         selector.close()
     }
 
+    // runBlocking, not runTest: this drives real sockets, so it must run on real time.
+    // A withTimeout guards against a hang without coupling to a virtual clock.
     @Test
-    fun framesTravelInBothDirections() = runTest {
+    fun framesTravelInBothDirections() = runBlocking {
         val hostLoom = TcpLoom.host(serverSocket, PeerId("host"), selector)
         val joinerLoom = TcpLoom.join(PeerId("joiner"), selector)
 

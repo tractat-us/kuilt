@@ -35,7 +35,7 @@ class TcpConformanceTest : SeamConformanceSuite() {
     private var port: Int = 0
 
     @BeforeTest
-    fun setUp() {
+    fun setUp() = runBlocking {
         port = JvmServerSocket(0).use { it.localPort }
         serverSocket = aSocket(selector).tcp().bind("127.0.0.1", port)
     }
