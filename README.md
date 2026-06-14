@@ -29,13 +29,15 @@ Import the BOM once to align all module versions, then add individual modules wi
 dependencies {
     implementation(platform("us.tractat.kuilt:kuilt-bom:0.4.0"))
 
-    implementation("us.tractat.kuilt:kuilt-core")
     implementation("us.tractat.kuilt:kuilt-websocket")  // WebSocket fabric
     implementation("us.tractat.kuilt:kuilt-raft")       // Raft consensus
     implementation("us.tractat.kuilt:kuilt-crdt")       // CRDT zoo
     implementation("us.tractat.kuilt:kuilt-session")    // membership / room
 }
 ```
+
+Every module re-exports the `kuilt-core` contract, so you only list `kuilt-core`
+directly if it's the sole thing you depend on.
 
 ### Without the BOM
 

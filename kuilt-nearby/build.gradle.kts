@@ -5,7 +5,7 @@ plugins {
 kotlin {
     sourceSets {
         commonMain.dependencies {
-            implementation(project(":kuilt-core"))
+            api(project(":kuilt-core"))  // public API exposes Loom/PeerId — expose the contract transitively
             implementation(libs.kotlinx.coroutines.core)
             implementation(libs.kotlin.logging)
         }

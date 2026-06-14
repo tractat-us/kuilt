@@ -20,7 +20,6 @@ The recommended way is the **BOM** — import it once to align every module on a
 dependencies {
     implementation(platform("us.tractat.kuilt:kuilt-bom:VERSION"))
 
-    implementation("us.tractat.kuilt:kuilt-core")       // always — the contract
     implementation("us.tractat.kuilt:kuilt-websocket")  // WebSocket fabric
     implementation("us.tractat.kuilt:kuilt-crdt")       // CRDT zoo
     implementation("us.tractat.kuilt:kuilt-raft")       // Raft consensus
@@ -28,9 +27,9 @@ dependencies {
 }
 ```
 
-Without the BOM, pin each module explicitly (`us.tractat.kuilt:kuilt-core:VERSION`). Replace `VERSION` with the [latest release](https://central.sonatype.com/artifact/us.tractat.kuilt/kuilt-core).
+Without the BOM, pin each module explicitly (`us.tractat.kuilt:kuilt-crdt:VERSION`). Replace `VERSION` with the [latest release](https://central.sonatype.com/artifact/us.tractat.kuilt/kuilt-core).
 
-Pick only the modules you actually use — each depends on `kuilt-core` and nothing unnecessary. A project that only needs in-memory message passing depends only on `kuilt-core`.
+Every module re-exports the `kuilt-core` contract (`Loom`/`Seam`/`Swatch`), so you don't list it separately — pick only the modules you actually use. A project that only needs in-memory message passing depends on `kuilt-core` alone.
 
 ## Local iteration with `includeBuild`
 

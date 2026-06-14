@@ -19,17 +19,18 @@ repositories {
 // build.gradle.kts
 dependencies {
     // Import the BOM once; then declare modules without version numbers.
-    implementation(platform("us.tractat.kuilt:kuilt-bom:0.4.0"))
+    implementation(platform("us.tractat.kuilt:kuilt-bom:VERSION"))
 
-    implementation("us.tractat.kuilt:kuilt-core")
     implementation("us.tractat.kuilt:kuilt-session")    // membership/room layer
     implementation("us.tractat.kuilt:kuilt-websocket")  // WebSocket fabric
     implementation("us.tractat.kuilt:kuilt-mdns")       // LAN discovery
 }
 ```
 
-Without the BOM, pin each module explicitly (e.g. `us.tractat.kuilt:kuilt-core:0.4.0`).
-Replace `0.4.0` with the [latest release](https://central.sonatype.com/artifact/us.tractat.kuilt/kuilt-core).
+Each module re-exports the `kuilt-core` contract (`Loom`/`Seam`/`Swatch`), so you
+don't list `kuilt-core` separately unless it's the *only* thing you depend on.
+Without the BOM, pin each module explicitly (`us.tractat.kuilt:kuilt-core:VERSION`).
+Replace `VERSION` with the [latest release](https://central.sonatype.com/artifact/us.tractat.kuilt/kuilt-core).
 
 The whole surface is `Loom` (make a session), `Seam` (use it), `Swatch` (the
 frames). Everything below is those three types over different wires.

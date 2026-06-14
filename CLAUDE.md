@@ -202,12 +202,23 @@ soon as `ci-required` is green.
 
 ## Versioning & publishing
 
-The version is parameterized by `kuiltVersionLine` in `gradle.properties`
-(currently `0.4`). Both `build.gradle.kts` (which sets the local default to
-`${kuiltVersionLine}.0-dev`) and `publish.yml` (which publishes
-`${kuiltVersionLine}.<run_number>` on every main push) read it, so a
-breaking-API release is a **one-line PR bumping the line**. Group is
-`us.tractat.kuilt`.
+The `major.minor` version line lives in `kuiltVersionLine` in `gradle.properties`;
+the full version is `<line>.<patch>`. Group is `us.tractat.kuilt`. Two axes move
+independently:
+
+- **Patch → internal.** Every push to `main` publishes a Tigris snapshot at
+  `${kuiltVersionLine}.<run_number>` — the patch is just the CI run number, so it
+  advances on its own with no PR. These are the continuous internal builds
+  consumers iterate against; nobody hand-edits the patch.
+- **Minor → external.** A Maven Central / external release **bumps the minor**
+  (`0.4.x` → `0.5.0`) — a deliberate one-line PR to `kuiltVersionLine` plus a
+  `v<x.y.z>` tag. The minor is the externally-meaningful number; the patch is
+  internal churn.
+
+So: don't pin a concrete `0.4.0`-style number in prose or examples (it dates the
+moment a snapshot publishes) — describe the line, and link consumers to the
+"latest release". `build.gradle.kts` sets the local default to
+`${kuiltVersionLine}.0-dev`.
 
 There are **two publish channels**, by trigger:
 
@@ -227,13 +238,15 @@ pattern sidesteps it entirely. Consumers reading from Tigris hit the same
 Gradle s3:// transport for GETs, but GETs don't set those headers so the read
 path works.
 
-**Maven Central releases — on a `v<x.y.z>` tag** (or a manual dispatch with
-`release_to_central=true`), **never** on a plain main push. The `maven-central`
-job derives the version from the tag (`v0.4.0` → `0.4.0`), publishes signed
-artifacts as a **PENDING** deployment to the Central Portal that a human then
-releases by hand at central.sonatype.com, and commits the README version bump
-back to `main`. This is the consumer-facing channel — the README's
-`mavenCentral()` setup and version badge resolve here.
+**Maven Central releases — on a `v<x.y.z>` tag** (a minor bump; or a manual
+dispatch with `release_to_central=true`), **never** on a plain main push. The
+`maven-central` job derives the version from the tag (`v<x.y.z>` → `<x.y.z>`),
+publishes signed artifacts as a **PENDING** deployment to the Central Portal that
+a human then releases by hand at central.sonatype.com, and commits the README
+version bump back to `main` (so the README is the one place a concrete version
+number is allowed — it's release-managed, not hand-edited). This is the
+consumer-facing channel — the README's `mavenCentral()` setup and version badge
+resolve here.
 
 GitHub Packages still hosts the historical 0.1.x and 0.3.x artifacts
 (read-only — consumers can still resolve them from

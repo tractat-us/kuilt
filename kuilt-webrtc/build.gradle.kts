@@ -6,7 +6,7 @@ plugins {
 kotlin {
     sourceSets {
         commonMain.dependencies {
-            implementation(project(":kuilt-core"))
+            api(project(":kuilt-core"))  // public API returns Seam from Pattern — expose the contract transitively
             implementation(libs.kotlinx.coroutines.core)
             implementation(libs.kotlinx.serialization.json)
             implementation(libs.kotlin.logging)

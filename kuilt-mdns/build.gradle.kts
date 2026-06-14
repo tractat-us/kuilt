@@ -23,7 +23,7 @@ if (mdnsFlag != null) {
 kotlin {
     sourceSets {
         commonMain.dependencies {
-            implementation(project(":kuilt-core"))
+            api(project(":kuilt-core"))  // public API exposes PeerId/Tag/Loom — expose the contract transitively
             implementation(project(":kuilt-crdt"))
             implementation(libs.kotlinx.coroutines.core)
         }
