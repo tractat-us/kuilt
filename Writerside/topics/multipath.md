@@ -11,6 +11,11 @@ Because the result is an ordinary `Seam`, everything layered above — `kuilt-ra
 contract, so a path failing over is invisible to consensus and replication: no
 election, no membership churn, no full-state resync.
 
+`CompositeLoom` bonds **finished** `Seam`s (the `Seam → Seam` direction). Its
+mirror image is [`meshSeam()`](fabric-kit.md#meshseam-an-n-peer-mesh), which
+*builds* a `Seam` out of raw point-to-point links (`Conn → Seam`) — see
+[Composing a Seam](composing-a-seam.md) for how the two relate.
+
 ## Bonding two transports
 
 Give `CompositeLoom` a list of `(PlyId, Loom)` and `weave()`/`host()`/`join()`
