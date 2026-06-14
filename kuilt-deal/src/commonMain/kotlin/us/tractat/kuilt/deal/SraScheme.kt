@@ -65,11 +65,11 @@ public class SraScheme : CommutativeScheme {
         }
     }
 
-    private fun modPow(base: ByteArray, exponent: ByteArray): ByteArray {
-        val m = BigInteger.fromByteArray(base, Sign.POSITIVE)
-        val e = BigInteger.fromByteArray(exponent, Sign.POSITIVE)
-        return m.toModularBigInteger(PRIME).pow(e).toBigInteger().toByteArray()
-    }
+    // Delegates the 2048-bit modular exponentiation to the per-platform [sraModPow]
+    // (native java.math on JVM/Android, ionspin elsewhere), then canonicalizes so the
+    // wire bytes are identical across platforms regardless of which path produced them.
+    private fun modPow(base: ByteArray, exponent: ByteArray): ByteArray =
+        sraModPowCanonical(base, exponent, PRIME_BYTES)
 
     public companion object {
         // RFC 7919 ffdhe2048 — a 2048-bit safe prime where (p-1)/2 is also prime.
@@ -88,6 +88,10 @@ public class SraScheme : CommutativeScheme {
             "886B423861285C97FFFFFFFFFFFFFFFF",
             16,
         )
+
+        // The modulus as an unsigned big-endian magnitude, handed to the per-platform
+        // [sraModPow]. Computed once; the native java.math path re-parses it per call.
+        private val PRIME_BYTES: ByteArray = PRIME.toByteArray()
     }
 }
 
