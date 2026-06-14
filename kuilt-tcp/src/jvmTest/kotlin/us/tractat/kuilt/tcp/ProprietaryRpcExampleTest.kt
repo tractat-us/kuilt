@@ -1,3 +1,5 @@
+@file:Suppress("ForbiddenImport") // real-socket example — blocking reads need a real IO dispatcher
+
 package us.tractat.kuilt.tcp
 
 import kotlinx.coroutines.Dispatchers
