@@ -1,9 +1,11 @@
 package us.tractat.kuilt.core.fabric
 
+import kotlinx.atomicfu.atomic
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.channels.ClosedSendChannelException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -17,6 +19,7 @@ import us.tractat.kuilt.core.PeerNotConnected
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.Swatch
+import us.tractat.kuilt.core.runCatchingCancellable
 import kotlin.coroutines.CoroutineContext
 
 /**
@@ -25,7 +28,17 @@ import kotlin.coroutines.CoroutineContext
  * or [close]. Concurrent sends are serialized through an internal channel + single
  * writer so wire order matches call order.
  *
- * @param dispatcher Confines internal state. Production callers pass
+ * **Thread-safety.** This type is correct under a *multi-threaded* dispatcher — the
+ * injected [dispatcher] is only the scope for the read/write loops (scheduling); it is
+ * **not** a mutual-exclusion mechanism. Teardown is gated by an atomic single-shot flag
+ * ([LinkSeam.closed]) so `close` and `readLoop`'s `finally` tear down exactly once
+ * regardless of which thread arrives first. `broadcast`/`sendTo` read that flag and, since
+ * the suspending `outbox.send()` is an inherent check-then-send TOCTOU against a concurrent
+ * teardown that closes the channel, convert a `ClosedSendChannelException` into the same
+ * clean closed-seam [IllegalStateException] the pre-check produces — a closed seam never
+ * leaks a raw channel exception.
+ *
+ * @param dispatcher The scope for the seam's read/write loops. Production callers pass
  *   `Dispatchers.Default.limitedParallelism(1)`; test callers pass a
  *   `TestCoroutineDispatcher` derived from the test scheduler so that the seam's
  *   read/write loops share the same virtual clock as the test's `withTimeout`.
@@ -58,7 +71,12 @@ internal class LinkSeam(
     // one coroutine drains in FIFO order to conn.send.
     private val outbox = Channel<ByteArray>(Channel.UNLIMITED)
 
-    private var closed = false
+    // Atomic single-shot teardown gate. `close()` and `readLoop`'s `finally` race to flip it
+    // false→true; whoever wins runs teardown, the loser is a no-op — so teardown happens exactly
+    // once regardless of thread. `broadcast`/`sendTo` read `closed.value`.
+    private val closed = atomic(false)
+
+    // Confined to readLoop's single collector; not shared across threads.
     private var seq = 0L
 
     init {
@@ -66,24 +84,29 @@ internal class LinkSeam(
         scope.launch { readLoop() }
     }
 
+    private val closedMessage get() = "Seam for $selfId is closed"
+
     override suspend fun broadcast(payload: ByteArray) {
-        check(!closed) { "Seam for $selfId is closed" }
-        outbox.send(payload)
+        check(!closed.value) { closedMessage }
+        enqueue(payload)
     }
 
     override suspend fun sendTo(peer: PeerId, payload: ByteArray) {
-        check(!closed) { "Seam for $selfId is closed" }
+        check(!closed.value) { closedMessage }
         if (peer !in _peers.value) throw PeerNotConnected(peer)
-        outbox.send(payload)
+        enqueue(payload)
+    }
+
+    // `outbox.send()` stays outside any guard (it suspends), so a concurrent teardown can close
+    // the channel between the pre-check and the send. Convert that into the same clean closed-seam
+    // error the pre-check produces; never leak a raw ClosedSendChannelException.
+    private suspend fun enqueue(payload: ByteArray) {
+        runCatchingCancellable { outbox.send(payload) }
+            .onFailure { if (it is ClosedSendChannelException) throw IllegalStateException(closedMessage) else throw it }
     }
 
     override suspend fun close(reason: CloseReason) {
-        if (closed) return
-        closed = true
-        _peers.update { setOf(selfId) }
-        _state.value = SeamState.Torn(reason)
-        outbox.close()
-        inbox.close()
+        tearDown(reason)
         conn.close()
     }
 
@@ -94,20 +117,23 @@ internal class LinkSeam(
     private suspend fun readLoop() {
         try {
             conn.incoming.collect { bytes ->
-                if (!closed) inbox.trySend(Swatch(payload = bytes, sender = remoteId, sequence = ++seq))
+                if (!closed.value) inbox.trySend(Swatch(payload = bytes, sender = remoteId, sequence = ++seq))
             }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             // remote dropped — fall through to teardown
         } finally {
-            if (!closed) {
-                closed = true
-                _peers.update { setOf(selfId) }
-                _state.value = SeamState.Torn(CloseReason.RemoteRequested)
-                inbox.close()
-                outbox.close()
-            }
+            tearDown(CloseReason.RemoteRequested)
         }
+    }
+
+    // Single-shot: only the coroutine that wins the CAS publishes Torn and closes the channels.
+    private fun tearDown(reason: CloseReason) {
+        if (!closed.compareAndSet(expect = false, update = true)) return
+        _peers.update { setOf(selfId) }
+        _state.value = SeamState.Torn(reason)
+        outbox.close()
+        inbox.close()
     }
 }
