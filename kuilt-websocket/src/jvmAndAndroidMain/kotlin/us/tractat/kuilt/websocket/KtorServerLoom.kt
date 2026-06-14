@@ -7,9 +7,7 @@ import io.ktor.server.routing.routing
 import io.ktor.server.websocket.WebSockets
 import io.ktor.server.websocket.webSocket
 import kotlinx.coroutines.CoroutineDispatcher
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.first
 import us.tractat.kuilt.core.Loom
@@ -34,8 +32,9 @@ import kotlin.uuid.Uuid
  *    [KtorClientLoom.join]. Connections without a `peer=` parameter are assigned
  *    an `anon-<uuid>` placeholder.
  *
- * @param dispatcher Dispatcher for each per-connection [CoroutineScope]. Production
- *   default is [Dispatchers.IO]; tests inject [kotlinx.coroutines.test.UnconfinedTestDispatcher].
+ * @param dispatcher Scheduler for each per-connection seam's read/write loops; the loom
+ *   confines it to a single thread via `limitedParallelism(1)`. Production default is
+ *   [Dispatchers.IO]; tests inject [kotlinx.coroutines.test.UnconfinedTestDispatcher].
  */
 @OptIn(ExperimentalUuidApi::class)
 public class KtorServerLoom(
@@ -55,13 +54,12 @@ public class KtorServerLoom(
                     clientPeerValue
                         ?.let { PeerId(it) }
                         ?: PeerId("anon-${Uuid.random()}")
-                val scope = CoroutineScope(dispatcher + SupervisorJob())
                 val seam =
                     WebSocketSeam(
                         selfId = selfPeerId,
                         remoteId = clientPeerId,
                         session = this,
-                        scope = scope,
+                        dispatcher = dispatcher.limitedParallelism(1),
                     )
                 connectionChannel.send(seam)
                 // Keep the WebSocket handler alive while the seam has the remote peer.
