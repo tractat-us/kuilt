@@ -20,6 +20,7 @@ import javax.jmdns.ServiceTypeListener
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 /**
  * Tests for [MDNSServiceDiscoverer].
@@ -29,14 +30,15 @@ import kotlin.test.assertNull
  *
  * [MDNSServiceDiscovererFlowTest] tests the [Flow] mechanics using [FakeEventJmDNS].
  */
-private const val TEST_SERVICE_TYPE = "_kuilt-test._tcp.local."
+private val TEST_SERVICE_TYPE = MDNSServiceType("_kuilt-test._tcp")
+private const val TEST_SERVICE_TYPE_JVM = "_kuilt-test._tcp.local."
 
 class MDNSServiceDiscovererParserTest {
     private val discoverer = MDNSServiceDiscoverer(TEST_SERVICE_TYPE, CapturingJmDNS())
 
     @Test
     fun `toAdvertisement maps peerId port and wsPath correctly`() {
-        val info = serviceInfoWithTxt("Game1", 19300, peerId = "peer-parser-1", wsPath = "/ws")
+        val info = serviceInfoWithTxt("Session1", 19300, peerId = "peer-parser-1", wsPath = "/ws")
 
         val result = discoverer.toAdvertisement(info, "10.0.0.1")
 
@@ -50,7 +52,7 @@ class MDNSServiceDiscovererParserTest {
     fun `toAdvertisement returns null when peerId TXT entry is absent`() {
         val info =
             ServiceInfo.create(
-                TEST_SERVICE_TYPE,
+                TEST_SERVICE_TYPE_JVM,
                 "NoPeerId",
                 19301,
                 0,
@@ -67,7 +69,7 @@ class MDNSServiceDiscovererParserTest {
     fun `toAdvertisement uses DEFAULT_WS_PATH when wsPath TXT is absent`() {
         val info =
             ServiceInfo.create(
-                TEST_SERVICE_TYPE,
+                TEST_SERVICE_TYPE_JVM,
                 "NoWsPath",
                 19302,
                 0,
@@ -95,7 +97,7 @@ class MDNSServiceDiscovererParserTest {
     fun `toAdvertisement parses all v2 fields when present`() {
         val info =
             serviceInfoWithTxt(
-                name = "V2Game",
+                name = "V2Session",
                 port = 19310,
                 peerId = "peer-v2",
                 extraTxt =
@@ -103,8 +105,6 @@ class MDNSServiceDiscovererParserTest {
                         MDNSAdvertisement.TXT_KEY_HOST_OS to "jvm",
                         MDNSAdvertisement.TXT_KEY_FABRICS to "ws,mc",
                         MDNSAdvertisement.TXT_KEY_MC_PEER to "MCPeer-xyz",
-                        MDNSAdvertisement.TXT_KEY_GAME_MIN_VERSION to "1",
-                        MDNSAdvertisement.TXT_KEY_GAME_MAX_VERSION to "3",
                     ),
             )
 
@@ -113,16 +113,29 @@ class MDNSServiceDiscovererParserTest {
         assertEquals(MDNSAdvertisement.HostOs.Jvm, result?.hostOs)
         assertEquals("ws,mc", result?.fabrics)
         assertEquals("MCPeer-xyz", result?.mcPeer)
-        assertEquals(1, result?.gameMinVersion)
-        assertEquals(3, result?.gameMaxVersion)
+    }
+
+    @Test
+    fun `toAdvertisement collects unknown TXT keys into txtExtensions`() {
+        val info =
+            serviceInfoWithTxt(
+                name = "ExtSession",
+                port = 19315,
+                peerId = "peer-ext",
+                extraTxt = mapOf("appVersion" to "7", "roomId" to "room-42"),
+            )
+
+        val result = discoverer.toAdvertisement(info, "10.0.0.9")
+
+        assertEquals(mapOf("appVersion" to "7", "roomId" to "room-42"), result?.txtExtensions)
     }
 
     @Test
     fun `toAdvertisement tolerates v1 record without v2 keys — backward compatibility`() {
         val info =
             ServiceInfo.create(
-                TEST_SERVICE_TYPE,
-                "V1Game",
+                TEST_SERVICE_TYPE_JVM,
+                "V1Session",
                 19311,
                 0,
                 0,
@@ -142,15 +155,14 @@ class MDNSServiceDiscovererParserTest {
         assertNull(result.hostOs)
         assertNull(result.fabrics)
         assertNull(result.mcPeer)
-        assertNull(result.gameMinVersion)
-        assertNull(result.gameMaxVersion)
+        assertTrue(result.txtExtensions.isEmpty())
     }
 
     @Test
     fun `toAdvertisement handles unknown hostOs value gracefully`() {
         val info =
             serviceInfoWithTxt(
-                name = "UnknownOsGame",
+                name = "UnknownOsSession",
                 port = 19312,
                 peerId = "peer-unknown-os",
                 extraTxt = mapOf(MDNSAdvertisement.TXT_KEY_HOST_OS to "windows"),
@@ -159,26 +171,6 @@ class MDNSServiceDiscovererParserTest {
         val result = checkNotNull(discoverer.toAdvertisement(info, "10.0.0.7"))
 
         assertNull(result.hostOs, "Unknown hostOs value should parse to null, not throw")
-    }
-
-    @Test
-    fun `toAdvertisement handles non-integer game version gracefully`() {
-        val info =
-            serviceInfoWithTxt(
-                name = "BadVersionGame",
-                port = 19313,
-                peerId = "peer-bad-version",
-                extraTxt =
-                    mapOf(
-                        MDNSAdvertisement.TXT_KEY_GAME_MIN_VERSION to "not-a-number",
-                        MDNSAdvertisement.TXT_KEY_GAME_MAX_VERSION to "also-not-a-number",
-                    ),
-            )
-
-        val result = checkNotNull(discoverer.toAdvertisement(info, "10.0.0.8"))
-
-        assertNull(result.gameMinVersion)
-        assertNull(result.gameMaxVersion)
     }
 }
 
@@ -411,7 +403,7 @@ private fun serviceInfoWithTxt(
     extraTxt: Map<String, String> = emptyMap(),
 ): ServiceInfo =
     ServiceInfo.create(
-        TEST_SERVICE_TYPE,
+        TEST_SERVICE_TYPE_JVM,
         name,
         port,
         0,
@@ -444,7 +436,7 @@ private fun serviceInfoWithHost(
         }
     val delegate =
         ServiceInfo.create(
-            TEST_SERVICE_TYPE,
+            TEST_SERVICE_TYPE_JVM,
             name,
             port,
             0,

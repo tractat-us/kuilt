@@ -5,6 +5,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 class MDNSAdvertisementTest {
     @Test
@@ -39,9 +40,9 @@ class MDNSAdvertisementTest {
                 host = "10.0.0.1",
                 port = 7777,
                 serverPeerId = PeerId("my-peer"),
-                displayName = "My Game",
+                displayName = "My Session",
             )
-        assertEquals("My Game", ad.displayName)
+        assertEquals("My Session", ad.displayName)
     }
 
     @Test
@@ -51,7 +52,7 @@ class MDNSAdvertisementTest {
                 host = "10.0.0.1",
                 port = 7777,
                 serverPeerId = PeerId("my-peer"),
-                displayName = "My Game",
+                displayName = "My Session",
             )
         assertEquals(PeerId("my-peer"), ad.serverPeerId)
     }
@@ -95,8 +96,6 @@ class MDNSAdvertisementTest {
         assertEquals("hostOs", MDNSAdvertisement.TXT_KEY_HOST_OS)
         assertEquals("fabrics", MDNSAdvertisement.TXT_KEY_FABRICS)
         assertEquals("mcPeer", MDNSAdvertisement.TXT_KEY_MC_PEER)
-        assertEquals("gameMinVersion", MDNSAdvertisement.TXT_KEY_GAME_MIN_VERSION)
-        assertEquals("gameMaxVersion", MDNSAdvertisement.TXT_KEY_GAME_MAX_VERSION)
     }
 
     @Test
@@ -118,8 +117,7 @@ class MDNSAdvertisementTest {
         assertNull(ad.hostOs)
         assertNull(ad.fabrics)
         assertNull(ad.mcPeer)
-        assertNull(ad.gameMinVersion)
-        assertNull(ad.gameMaxVersion)
+        assertTrue(ad.txtExtensions.isEmpty())
     }
 
     @Test
@@ -133,14 +131,12 @@ class MDNSAdvertisementTest {
                 hostOs = MDNSAdvertisement.HostOs.Jvm,
                 fabrics = "ws,mc",
                 mcPeer = "MCPeer-abc123",
-                gameMinVersion = 1,
-                gameMaxVersion = 3,
+                txtExtensions = mapOf("appVersion" to "2"),
             )
         assertEquals(MDNSAdvertisement.HostOs.Jvm, ad.hostOs)
         assertEquals("ws,mc", ad.fabrics)
         assertEquals("MCPeer-abc123", ad.mcPeer)
-        assertEquals(1, ad.gameMinVersion)
-        assertEquals(3, ad.gameMaxVersion)
+        assertEquals(mapOf("appVersion" to "2"), ad.txtExtensions)
     }
 
     // ── HostOs enum ───────────────────────────────────────────────────────────

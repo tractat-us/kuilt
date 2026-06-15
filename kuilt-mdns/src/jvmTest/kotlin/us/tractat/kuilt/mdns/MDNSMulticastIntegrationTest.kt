@@ -88,9 +88,10 @@ class MDNSMulticastIntegrationTest {
         val advertiserJmdns = requireNotNull(advertiserJmdns)
         val discovererJmdns = requireNotNull(discovererJmdns)
 
+        val serviceType = MDNSServiceType("_kuilt-test._tcp")
         val advertiser =
             MDNSServiceAdvertiser(
-                serviceType = "_kuilt-test._tcp.local.",
+                serviceType = serviceType,
                 jmdns = advertiserJmdns,
                 displayName = "MulticastIntegrationTest",
                 port = port,
@@ -103,7 +104,7 @@ class MDNSMulticastIntegrationTest {
             val discovered =
                 runBlocking {
                     withTimeout(10_000) {
-                        MDNSServiceDiscoverer("_kuilt-test._tcp.local.", discovererJmdns)
+                        MDNSServiceDiscoverer(serviceType, discovererJmdns)
                             .discoveries()
                             .first { it.serverPeerId == selfId }
                     }

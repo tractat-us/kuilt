@@ -15,6 +15,13 @@ import us.tractat.kuilt.core.Tag
  * [PROTOCOL_VERSION] is `"2"` (v2 schema). v1 readers silently ignore the new
  * keys per DNS-SD rules; v2 readers tolerate missing optional keys.
  *
+ * ## Application extensions
+ *
+ * Callers may carry arbitrary application-specific metadata via [txtExtensions].
+ * Each entry is written as an additional TXT record key–value pair. kuilt does
+ * not interpret these values — they round-trip opaquely through the discover path
+ * and arrive in the [MDNSAdvertisement] emitted by [MDNSServiceDiscoverer].
+ *
  * @property host IP address or hostname of the advertising peer.
  * @property port TCP port the advertising peer's WebSocket server listens on.
  * @property serverPeerId The advertising peer's [PeerId].
@@ -23,8 +30,10 @@ import us.tractat.kuilt.core.Tag
  * @property hostOs OS family of the advertising host — for fabric selection.
  * @property fabrics Comma-separated transports the host accepts (e.g. `"ws,mc"`).
  * @property mcPeer Opaque MultipeerConnectivity handle — present only when `"mc"` is in [fabrics].
- * @property gameMinVersion Minimum game-protocol version this host accepts.
- * @property gameMaxVersion Maximum game-protocol version this host accepts.
+ * @property txtExtensions Arbitrary application-supplied TXT record key–value pairs.
+ *   These are written into the mDNS TXT record alongside the kuilt-owned fields and
+ *   recovered verbatim by [MDNSServiceDiscoverer]. Keys must not collide with the
+ *   kuilt-reserved constants in [Companion].
  */
 public data class MDNSAdvertisement(
     val host: String,
@@ -35,8 +44,7 @@ public data class MDNSAdvertisement(
     val hostOs: HostOs? = null,
     val fabrics: String? = null,
     val mcPeer: String? = null,
-    val gameMinVersion: Int? = null,
-    val gameMaxVersion: Int? = null,
+    val txtExtensions: Map<String, String> = emptyMap(),
 ) : Tag {
     /** The server's stable peer ID — unique across all mDNS advertisements. */
     override val peerKey: String get() = serverPeerId.value
@@ -70,8 +78,6 @@ public data class MDNSAdvertisement(
         public const val TXT_KEY_HOST_OS: String = "hostOs"
         public const val TXT_KEY_FABRICS: String = "fabrics"
         public const val TXT_KEY_MC_PEER: String = "mcPeer"
-        public const val TXT_KEY_GAME_MIN_VERSION: String = "gameMinVersion"
-        public const val TXT_KEY_GAME_MAX_VERSION: String = "gameMaxVersion"
 
         public const val PROTOCOL_VERSION: String = "2"
 

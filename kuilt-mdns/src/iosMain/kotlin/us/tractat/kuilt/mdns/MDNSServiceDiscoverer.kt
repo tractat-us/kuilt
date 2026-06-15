@@ -39,12 +39,12 @@ private const val RESOLVE_TIMEOUT_S = 5.0
  * The browser is scheduled on [NSRunLoop.mainRunLoop] so callbacks fire
  * regardless of which dispatcher collects the flow.
  *
- * @param serviceType The mDNS service type to browse for, without the `local.` domain suffix
- *   (e.g. `"_myapp._tcp."`). Callers must supply an application-specific type — no default
- *   is provided.
+ * @param serviceType The mDNS service type. Supply the canonical base form
+ *   (e.g. `MDNSServiceType("_myapp._tcp")`) — [NSNetServiceBrowser] receives the
+ *   type without the `local.` domain (which is passed separately to [NSNetServiceBrowser.searchForServicesOfType]).
  */
 public class MDNSServiceDiscoverer(
-    private val serviceType: String,
+    private val serviceType: MDNSServiceType,
 ) : PeerDiscoverySource {
     override val kind: DiscoveryKind = DiscoveryKind.Mdns
 
@@ -54,7 +54,7 @@ public class MDNSServiceDiscoverer(
             val browser = NSNetServiceBrowser()
             browser.setDelegate(delegate)
             browser.scheduleInRunLoop(NSRunLoop.mainRunLoop(), forMode = NSRunLoopCommonModes)
-            browser.searchForServicesOfType(serviceType, inDomain = "local.")
+            browser.searchForServicesOfType(serviceType.forNsNetServiceBrowser(), inDomain = "local.")
 
             awaitClose {
                 browser.stop()
@@ -63,6 +63,16 @@ public class MDNSServiceDiscoverer(
             }
         }.flowOn(Dispatchers.Main)
 }
+
+private val kuiltReservedTxtKeys: Set<String> =
+    setOf(
+        MDNSAdvertisement.TXT_KEY_PEER_ID,
+        MDNSAdvertisement.TXT_KEY_WS_PATH,
+        MDNSAdvertisement.TXT_KEY_PROTOCOL_VERSION,
+        MDNSAdvertisement.TXT_KEY_HOST_OS,
+        MDNSAdvertisement.TXT_KEY_FABRICS,
+        MDNSAdvertisement.TXT_KEY_MC_PEER,
+    )
 
 private class ServiceDelegate(
     private val onDiscovered: (MDNSAdvertisement) -> Unit,
@@ -99,6 +109,8 @@ private class ServiceDelegate(
             dict[MDNSAdvertisement.TXT_KEY_WS_PATH]?.toUtf8String()
                 ?: MDNSAdvertisement.DEFAULT_WS_PATH
 
+        val extensions = extractExtensions(dict)
+
         onDiscovered(
             MDNSAdvertisement(
                 host = host,
@@ -112,8 +124,7 @@ private class ServiceDelegate(
                         ?.let { MDNSAdvertisement.HostOs.fromTxt(it) },
                 fabrics = dict[MDNSAdvertisement.TXT_KEY_FABRICS]?.toUtf8String(),
                 mcPeer = dict[MDNSAdvertisement.TXT_KEY_MC_PEER]?.toUtf8String(),
-                gameMinVersion = dict[MDNSAdvertisement.TXT_KEY_GAME_MIN_VERSION]?.toUtf8String()?.toIntOrNull(),
-                gameMaxVersion = dict[MDNSAdvertisement.TXT_KEY_GAME_MAX_VERSION]?.toUtf8String()?.toIntOrNull(),
+                txtExtensions = extensions,
             ),
         )
     }
@@ -123,6 +134,17 @@ private class ServiceDelegate(
         didNotResolve: Map<Any?, *>,
     ) {}
 }
+
+private fun extractExtensions(dict: Map<Any?, NSData?>): Map<String, String> =
+    dict
+        .entries
+        .mapNotNull { (key, value) ->
+            val k = key as? String ?: return@mapNotNull null
+            if (k in kuiltReservedTxtKeys) return@mapNotNull null
+            val v = value?.toUtf8String() ?: return@mapNotNull null
+            k to v
+        }
+        .toMap()
 
 private fun NSData.toUtf8String(): String? {
     if (length == 0UL) return null

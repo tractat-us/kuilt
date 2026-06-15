@@ -27,7 +27,7 @@ import us.tractat.kuilt.core.PeerId
  *   [DEFAULT_RECONNECT_WINDOW_MS] (60 s).
  * @param clock Injected clock returning epoch-millis. Must never be wired to
  *   `System.currentTimeMillis()` from commonMain production code; the JVM
- *   wiring layer (Koin, DI) passes `{ System.currentTimeMillis() }`.
+ *   wiring layer (your dependency injection container) passes `{ System.currentTimeMillis() }`.
  *   Tests pass a fixed or advancing value so no wall-clock coupling escapes.
  * @param scope Coroutine scope that owns per-peer timer jobs. Must outlive this
  *   controller; typically the Room's scope.

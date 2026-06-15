@@ -34,8 +34,9 @@ import javax.jmdns.JmDNS
  * **Lifecycle:** the [jmdns] instance is shared and not closed by this factory.
  * Callers are responsible for closing it when all sessions are done.
  *
- * @param serviceType The mDNS service type to register/browse under (e.g. `"_myapp._tcp.local."`).
- *   Callers must supply an application-specific type — no default is provided.
+ * @param serviceType The mDNS service type. Supply the canonical base form
+ *   (e.g. `MDNSServiceType("_myapp._tcp")`) — platform-specific suffixes are
+ *   applied internally by the advertiser and discoverer.
  * @param application Ktor [Application] to mount the WebSocket server route on
  *   (only needed for the [open] path).
  * @param jmdns JmDNS instance used for service registration/discovery.
@@ -46,7 +47,7 @@ import javax.jmdns.JmDNS
  *   the joiner side. Callers supply this so they control the client lifecycle.
  */
 public class MDNSPeerLinkFactory(
-    private val serviceType: String,
+    private val serviceType: MDNSServiceType,
     private val application: Application,
     private val jmdns: JmDNS,
     private val port: Int,
