@@ -1,10 +1,28 @@
 # kuilt
 
-kuilt is a peer-symmetric, multiplatform networking library. It moves opaque byte frames between peers over interchangeable *fabrics* — WebSocket, mDNS-discovered LAN, Apple Multipeer Connectivity, WebRTC, Android Nearby — behind one contract.
+kuilt is a peer-symmetric, multiplatform networking library for Kotlin Multiplatform
+(JVM, Android, iOS, macOS, wasmJs). It moves frames between peers over interchangeable
+*fabrics* — WebSocket, mDNS-discovered LAN, Apple Multipeer Connectivity, WebRTC,
+Android Nearby — behind one contract.
 
-**kuilt knows nothing about your application.** It carries bytes. What those bytes mean is the consumer's business.
+The library has three distinct value propositions:
 
-Kotlin Multiplatform: JVM, Android, iOS, macOS, wasmJs.
+- **Fabrics** — the missing network pieces you keep having to write from scratch.
+  `Loom` and `Seam` give you a uniform send/receive/membership surface across every
+  transport. Your application layer is identical whether the connection is WebSocket,
+  Bluetooth, or WebRTC; swap the loom and nothing else changes.
+
+- **CRDTs** — data structure building blocks you can use in isolation, with or without
+  the network layer. `LWWMap`, `ORSet`, `JsonCrdt`, and the rest are plain serializable
+  value types. Add `SeamReplicator` when you want live delta propagation; leave it out
+  when your transport is HTTP or a message queue.
+
+- **Raft** — the foundation your network-aware coordination code wishes it was built on.
+  `kuilt-raft` gives you a correct, tested Raft implementation over any kuilt `Seam`.
+  `TurnSequencer` (from `kuilt-game`) wraps it in terms a turn-based game understands,
+  hiding every Raft concept that doesn't belong in your game logic.
+
+→ [Getting started: two peers, one session](getting-started.md)
 
 ## The fabric metaphor
 

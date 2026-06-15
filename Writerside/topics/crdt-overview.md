@@ -1,30 +1,27 @@
 # CRDT zoo
 
-`kuilt-crdt` provides a set of **delta-state CRDTs** — data structures that converge to the same value across replicas without coordination. Any two replicas that have seen the same set of updates will agree, regardless of the order those updates arrived.
+`kuilt-crdt` provides a set of data structures that converge to the same value
+across replicas without coordination. Any two replicas that have seen the same
+set of updates will agree, regardless of the order those updates arrived.
 
-## The `Quilted` interface
+All types are plain serializable value objects — use them with any transport,
+or without a network at all. Add `SeamReplicator` when you want live
+propagation over a kuilt `Seam`.
 
-Every CRDT implements `Quilted<S>`:
+## Pick by use case
 
-```kotlin
-interface Quilted<S : Quilted<S>> {
-    fun piece(other: S): S  // merge — idempotent, commutative, associative
-}
-```
-
-`piece` is the join in the join-semilattice. Calling it with the same argument twice produces the same result as calling it once (idempotent). Order doesn't matter (commutative). Multiple calls can be grouped in any order (associative). These three laws guarantee convergence.
-
-**Delta state.** Instead of shipping the entire current state on every update, CRDTs here emit a *delta* — a minimal patch that represents only what changed. Merging a delta into the current state advances it the same way merging the full state would. `SeamReplicator` exploits this to send small delta messages over the wire and ship the full state only to late joiners.
-
-## The `Patch` wrapper
-
-Mutations return a `Patch<S>` rather than directly mutating state. Applying the patch to the current state produces the next state:
-
-```kotlin
-val counter = GCounter.ZERO
-val delta: GCounter = counter.inc(replica, 3L)  // a delta, not the full state
-val next: GCounter = counter.piece(delta)        // apply the delta
-```
+| What you're building | Type |
+|----------------------|------|
+| Chat / shared message log | `Rga` — an ordered list where inserts from any peer land in a stable position |
+| Collaborative document or JSON config | `JsonCrdt` — recursive JSON with ORMap objects, Rga arrays, and MVRegister leaves |
+| User presence, live cursors, typing indicators | `EphemeralMap` — per-replica slots with TTL; departed peers expire automatically |
+| Tags, followers, members, shopping cart | `ORSet` — add/remove set with add-wins on concurrent edits |
+| User settings or feature flags | `LWWMap` — last-writer-wins map; each key converges to the most-recent write |
+| Page views, upvotes, event counts | `GCounter` — grow-only counter; every replica contributes its own tally |
+| Like/dislike counts, inventory deltas | `PNCounter` — positive and negative increments, one slot per replica |
+| Rate limiting, resource allocation, load management | `BoundedCounter` — counter with a cap that can only be raised by rebalancing |
+| Audit trail, append-only event log | `GSet` — grow-only set; elements are never removed |
+| One field edited by many (show conflicts) | `MVRegister` — retains all concurrent values until one replica resolves them |
 
 ## Structure at a glance
 
