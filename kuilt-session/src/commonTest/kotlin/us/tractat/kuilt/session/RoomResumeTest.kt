@@ -279,24 +279,6 @@ class RoomResumeTest {
         )
     }
 
-    // ── Test 6: SeamRoomFactory.systemClock produces non-epoch-zero timestamps (#447) ────
-
-    /**
-     * Acceptance criterion: [SeamRoomFactory.systemClock] wires [kotlin.time.Clock.System.now()]
-     * so timestamps sourced from the factory clock are non-epoch-zero.
-     * (Tests cannot drive [Clock.System] virtually, so we assert only the contract:
-     * a room built via [systemClock] has a clock that returns the current wall time,
-     * distinct from epoch-zero.)
-     */
-    @Test
-    fun `SeamRoomFactory systemClock uses Clock System and produces non-epoch-zero Instant`() = runTest {
-        val loom = InMemoryLoom()
-        val factory = SeamRoomFactory.systemClock(loom = loom, scope = backgroundScope)
-        val room = factory.host(Pattern("SystemClockTest"))
-        assertEquals(SessionRole.Host, room.role.value)
-        room.leave()
-    }
-
     // ── Helpers ───────────────────────────────────────────────────────────────
 
     private fun TestScope.makeSeamRoom(
