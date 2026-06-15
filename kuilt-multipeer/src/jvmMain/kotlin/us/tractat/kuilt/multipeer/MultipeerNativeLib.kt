@@ -6,12 +6,12 @@ import com.sun.jna.Native
 import com.sun.jna.Pointer
 
 /**
- * JNA façade over `libfireworks_mc.dylib` — the macOS-only Kotlin/Native
+ * JNA façade over `libkuilt.dylib` — the macOS-only Kotlin/Native
  * shared library that exposes Apple's MultipeerConnectivity to the JVM.
  *
  * The dylib is built from the macOS K/N targets of this same module
  * (see `binaries.sharedLib` in `build.gradle.kts`) and bundled inside the
- * JVM jar at `darwin-aarch64/libfireworks_mc.dylib`. JNA picks the right
+ * JVM jar at `darwin-aarch64/libkuilt.dylib`. JNA picks the right
  * architecture automatically when [Native.load] runs from inside a Mac JVM.
  *
  * **Loading is platform-gated**: [load] returns `null` on non-macOS hosts
@@ -20,7 +20,7 @@ import com.sun.jna.Pointer
  */
 internal interface MultipeerNativeLib : Library {
     @Suppress("ktlint:standard:function-naming")
-    fun fireworks_mc_protocol_version(): Int
+    fun kuilt_protocol_version(): Int
 
     /**
      * Creates a `MultipeerPeerLinkFactory` and returns its opaque handle.
@@ -231,7 +231,7 @@ internal interface MultipeerNativeLib : Library {
     ): Int
 
     companion object {
-        const val LIBRARY_NAME: String = "fireworks_mc"
+        const val LIBRARY_NAME: String = "kuilt"
 
         /**
          * Bridge ABI version that this Kotlin code expects. Must match the

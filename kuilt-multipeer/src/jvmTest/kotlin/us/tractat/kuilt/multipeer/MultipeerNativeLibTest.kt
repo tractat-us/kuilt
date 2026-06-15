@@ -8,9 +8,9 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 /**
- * Smoke-tests that the macOS K/N-built `libfireworks_mc.dylib` is bundled
+ * Smoke-tests that the macOS K/N-built `libkuilt.dylib` is bundled
  * inside the JVM jar at the JNA-conventional resource path and that the
- * cdecl `fireworks_mc_protocol_version` symbol is reachable.
+ * cdecl `kuilt_protocol_version` symbol is reachable.
  *
  * The test gates on `os.name == "Mac OS X"` (and adjacent strings) because
  * the dylib is only built and bundled for macOS architectures —
@@ -20,7 +20,7 @@ class MultipeerNativeLibTest {
     @Test
     fun `dylib loads and reports the expected protocol version on macOS`() {
         assumeTrue(
-            "libfireworks_mc.dylib is macOS-only; this test no-ops elsewhere.",
+            "libkuilt.dylib is macOS-only; this test no-ops elsewhere.",
             isMacOs(),
         )
 
@@ -28,7 +28,7 @@ class MultipeerNativeLibTest {
         assertNotNull(lib, "Native.load returned null on macOS — dylib missing or wrong arch on classpath")
         assertEquals(
             MultipeerNativeLib.EXPECTED_PROTOCOL_VERSION,
-            lib.fireworks_mc_protocol_version(),
+            lib.kuilt_protocol_version(),
             "Bridge ABI mismatch: dylib reports a different protocol version than the JVM side expects",
         )
     }
@@ -36,7 +36,7 @@ class MultipeerNativeLibTest {
     @Test
     fun `runtime create + display-name round-trip + destroy on macOS`() {
         assumeTrue(
-            "libfireworks_mc.dylib is macOS-only; this test no-ops elsewhere.",
+            "libkuilt.dylib is macOS-only; this test no-ops elsewhere.",
             isMacOs(),
         )
         val lib = MultipeerNativeLib.load()
@@ -81,7 +81,7 @@ class MultipeerNativeLibTest {
     @Test
     fun `mc_browser_set_peer_lost_callback symbol is reachable on macOS`() {
         assumeTrue(
-            "libfireworks_mc.dylib is macOS-only; this test no-ops elsewhere.",
+            "libkuilt.dylib is macOS-only; this test no-ops elsewhere.",
             isMacOs(),
         )
         val lib = MultipeerNativeLib.load()
@@ -98,7 +98,7 @@ class MultipeerNativeLibTest {
     @Test
     fun `host session lifecycle on macOS`() {
         assumeTrue(
-            "libfireworks_mc.dylib is macOS-only; this test no-ops elsewhere.",
+            "libkuilt.dylib is macOS-only; this test no-ops elsewhere.",
             isMacOs(),
         )
         val lib = MultipeerNativeLib.load()

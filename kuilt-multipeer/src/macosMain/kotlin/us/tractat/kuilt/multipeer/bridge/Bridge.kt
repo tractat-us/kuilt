@@ -1,11 +1,10 @@
 /*
  * macOS-only: top-level cdecl symbols exported from the
- * `libfireworks_mc.dylib` shared library so the JVM target can call into
+ * `libkuilt.dylib` shared library so the JVM target can call into
  * MultipeerConnectivity over JNA.
  *
  * Naming: K/N normalises hyphens in the binary name, so the artefact is
- * `libfireworks_mc.dylib` (not `libfireworks-mc.dylib`). JNA loads it via
- * `Native.load("fireworks_mc", …)`.
+ * `libkuilt.dylib`. JNA loads it via `Native.load("kuilt", …)`.
  *
  * `@CName` must be on top-level functions, requires the
  * `ExperimentalNativeApi` opt-in, and survives K/N release-mode optimisation
@@ -23,9 +22,9 @@ import kotlin.native.CName
  * dylib (e.g. from a stale Compose Desktop bundle).
  */
 @OptIn(ExperimentalForeignApi::class, ExperimentalNativeApi::class)
-@CName("fireworks_mc_protocol_version")
+@CName("kuilt_protocol_version")
 @Suppress("ktlint:standard:function-naming")
-public fun fireworks_mc_protocol_version(): Int = PROTOCOL_VERSION
+public fun kuilt_protocol_version(): Int = PROTOCOL_VERSION
 
 /**
  * Bridge ABI version. The JVM side expects `1`; mismatch is a build error.

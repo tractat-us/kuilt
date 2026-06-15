@@ -11,7 +11,7 @@ import us.tractat.kuilt.core.Seam
  * Common API only — implementations live in the platform-specific source sets.
  * `appleMain` provides the real implementation against
  * `platform.MultipeerConnectivity.*`; `jvmMain` wraps a
- * `libfireworks-mc.dylib` over JNA so macOS desktop builds can talk to
+ * `libkuilt.dylib` over JNA so macOS desktop builds can talk to
  * iPhones.
  *
  * The factory is **stateful** — it owns the underlying `MCPeerID`/`MCSession`

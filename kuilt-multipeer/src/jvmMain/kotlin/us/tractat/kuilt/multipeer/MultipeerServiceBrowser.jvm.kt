@@ -15,7 +15,7 @@ import us.tractat.kuilt.core.discovery.PeerDiscoverySource
 
 /**
  * JVM-side `MultipeerServiceBrowser`, backed by [MultipeerNativeLib] and
- * the macOS K/N `libfireworks_mc.dylib`.
+ * the macOS K/N `libkuilt.dylib`.
  *
  * `discoveries()` returns a cold `Flow` that opens a real MC browse
  * session under the covers, forwards every `foundPeer` event from the

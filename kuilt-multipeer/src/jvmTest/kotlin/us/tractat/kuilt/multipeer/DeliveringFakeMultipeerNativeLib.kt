@@ -45,7 +45,7 @@ internal class DeliveringFakeMultipeerNativeLib(
     private var hostPeerStateCallback: MultipeerNativeLib.PeerStateCallback? = null
     private var joinerPeerStateCallback: MultipeerNativeLib.PeerStateCallback? = null
 
-    override fun fireworks_mc_protocol_version(): Int = MultipeerNativeLib.EXPECTED_PROTOCOL_VERSION
+    override fun kuilt_protocol_version(): Int = MultipeerNativeLib.EXPECTED_PROTOCOL_VERSION
 
     override fun mc_runtime_create(displayName: String, serviceType: String): Pointer = FAKE_RUNTIME
 
