@@ -50,8 +50,7 @@ seam.close()
 ## Step 2: Add a chat (replicated data)
 
 Chat messages need to arrive in the same order on every device. Add `kuilt-crdt`
-and use `Rga` (RGA — Replicated Growable Array) — an ordered list where inserts
-from any peer land in a stable, consistent position:
+and use `Rga` (RGA — Replicated Growable Array):
 
 ```kotlin
 // build.gradle.kts
@@ -60,13 +59,8 @@ implementation("us.tractat.kuilt:kuilt-crdt")
 
 ```kotlin
 val replica = ReplicaId("alice")
-val replicator = SeamReplicator(
-    replica = replica,
-    seam = seam,
-    initial = Rga.empty<String>(),
-    messageSerializer = ReplicatorMessage.serializer(Rga.serializer(String.serializer())),
-    scope = scope,
-)
+val msgSerializer = ReplicatorMessage.serializer(Rga.serializer(String.serializer()))
+val replicator = SeamReplicator(replica, seam, Rga.empty<String>(), msgSerializer, scope)
 
 // Send a message — appended to the shared list, propagated to all peers
 val current = replicator.state.value
@@ -75,20 +69,6 @@ replicator.apply(Patch(Rga.empty<String>().apply(op)))
 
 // Render the live chat log
 replicator.state.collect { messages -> chatView.items = messages.toList() }
-```
-
-**Without kuilt networking.** `Rga` is a plain value object — you can use it
-without a `Seam` at all. Serialize it, send it over HTTP or a message queue,
-and call `piece` to merge on the other side:
-
-```kotlin
-var log = Rga.empty<String>()
-val (next, op) = log.insertAt(log.size, replica, "hello")
-log = log.apply(op)
-
-// Received from another peer via any transport:
-val remote: Rga<String> = cbor.decodeFromByteArray(Rga.serializer(String.serializer()), bytes)
-log = log.piece(remote)   // always safe, always convergent
 ```
 
 → [Replicated data structures](crdt-overview.md)
@@ -123,16 +103,6 @@ scope.launch { game.committed.collect { (_, move) -> board.apply(move) } }
 game.propose(Move(row = 1, col = 1))
 ```
 
-**Without kuilt networking.** `RaftTransport` is an interface — you can
-implement it over gRPC, a message queue, or any other messaging layer and use
-`kuilt-raft` without any kuilt fabric module:
-
-```kotlin
-class MyGrpcRaftTransport : RaftTransport { ... }
-
-val node = scope.raftNode(cluster, MyGrpcRaftTransport(), storage)
-```
-
 → [Contract](contract.md)
 
 ---
@@ -144,10 +114,10 @@ The chat and game code above only use `seam.broadcast`, `seam.incoming`, and
 
 ```kotlin
 val loom: Loom = when {
-    isApple   -> MultipeerLoom(...)          // iPhone/Mac — no server
-    isAndroid -> NearbyLoom(...)             // Bluetooth/Wi-Fi Direct
-    isBrowser -> WebRTCPeerLinkFactory(...)  // browser-to-browser
-    else      -> KtorClientLoom(httpClient)  // WebSocket relay (default above)
+    isApple   -> MultipeerPeerLinkFactory(displayName = "alice", serviceType = "com.example.app")
+    isAndroid -> NearbyLoom(api = GmsNearbyApi(context), serviceId = "com.example.app")
+    isBrowser -> WebRTCPeerLinkFactory(signaling = WebSocketSignalingChannel(wsUrl), room = "myroom")
+    else      -> KtorClientLoom(httpClient)
 }
 val seam: Seam = loom.join(tag)
 ```
