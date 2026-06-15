@@ -6,14 +6,19 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.yield
 import us.tractat.kuilt.core.CloseReason
+import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.core.Rendezvous
+import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.session.Room
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
@@ -87,4 +92,43 @@ class KtorRoomHostTest {
             }
         }
 
+    /**
+     * #449 regression guard: a non-cancellation error from the accept loop must
+     * propagate out of [KtorRoomHost.start], not be swallowed or cause a silent
+     * return.
+     *
+     * Uses the internal loom-injection constructor to inject a [FailingLoom] stub
+     * whose [Loom.host] always throws [IllegalStateException]. The first iteration
+     * of the accept loop calls [us.tractat.kuilt.session.SeamRoomFactory.host],
+     * which in turn calls [Loom.host]. With the pre-fix `break` behaviour, [start]
+     * would return normally (silently swallowing the error). With the fix (`throw e`),
+     * it rethrows — this test is RED against a hypothetical revert to `break` and
+     * GREEN with the current `throw e` production code.
+     */
+    @Test
+    fun `accept loop non-cancellation error propagates out of start`() =
+        runBlocking {
+            val error = IllegalStateException("loom accept failed")
+            val host = KtorRoomHost(
+                path = serverPath,
+                pattern = serverPattern,
+                loom = FailingLoom(error),
+            )
+            val result = runCatching {
+                coroutineScope {
+                    host.start { awaitCancellation() }
+                }
+            }
+            val thrown = result.exceptionOrNull()
+            assertIs<IllegalStateException>(
+                thrown,
+                "start() must rethrow the accept-loop failure, not return normally",
+            )
+            assertEquals(error.message, thrown.message)
+        }
+}
+
+/** Test stub: always throws [error] from [Loom.weave], simulating an accept-loop failure. */
+private class FailingLoom(private val error: Throwable) : Loom {
+    override suspend fun weave(rendezvous: Rendezvous): Seam = throw error
 }

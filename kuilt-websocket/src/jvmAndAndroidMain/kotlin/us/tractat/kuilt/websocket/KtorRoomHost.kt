@@ -7,6 +7,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.runCatchingCancellable
@@ -32,21 +33,30 @@ private val log = KotlinLogging.logger {}
  * don't serialize.
  *
  */
-public class KtorRoomHost(
-    application: Application,
+public class KtorRoomHost internal constructor(
     private val path: String,
-    serverPeerId: PeerId,
     private val pattern: Pattern,
+    private val loom: Loom,
 ) : AutoCloseable {
+    /**
+     * Production constructor. Pre-constructs a [KtorServerLoom] synchronously
+     * so the WebSocket route is mounted on [application] before any client
+     * tries to connect. Deferring into [start]'s launched coroutine would
+     * race-condition route registration against early connecting clients.
+     */
+    public constructor(
+        application: Application,
+        path: String,
+        serverPeerId: PeerId,
+        pattern: Pattern,
+    ) : this(
+        path = path,
+        pattern = pattern,
+        loom = KtorServerLoom(application, path, serverPeerId),
+    )
+
     private val startMutex = Mutex()
     private var started = false
-
-    // Pre-construct the Loom synchronously so the WebSocket route is mounted
-    // on `application` before any client tries to connect. Deferring into
-    // `start()`'s launched coroutine race-conditions route registration
-    // against early connecting clients.
-    private val loom: KtorServerLoom =
-        KtorServerLoom(application, path, serverPeerId)
 
     /**
      * Run the accept loop. Each call to [SeamRoomFactory.host] suspends until
