@@ -77,7 +77,7 @@ jobs:
           if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ github.event.inputs.version }}" ]; then
             VERSION="${{ github.event.inputs.version }}"
           else
-            VERSION="${VERSION_LINE}.${{ github.run_number }}"  # main push or dispatch fallback
+            VERSION="${VERSION_LINE}.0-dev.${{ github.run_number }}"  # main push or dispatch fallback
           fi
           echo "Publishing version: $VERSION (line: $VERSION_LINE)"
           echo "PUBLISH_VERSION=$VERSION" >> "$GITHUB_ENV"
