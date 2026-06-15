@@ -11,7 +11,10 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.yield
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
+import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.Pattern
+import us.tractat.kuilt.core.Rendezvous
+import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -27,7 +30,8 @@ import kotlin.test.assertTrue
  */
 class SeamRoomTest {
     private fun loom() = InMemoryLoom()
-    private fun factory(loom: InMemoryLoom, scope: CoroutineScope) = SeamRoomFactory(loom, scope)
+    private fun factory(loom: InMemoryLoom, scope: CoroutineScope) =
+        SeamRoomFactory(loom, scope, clock = { kotlin.time.Instant.fromEpochMilliseconds(0L) })
 
     // ── Role ──────────────────────────────────────────────────────────────────
 
@@ -323,5 +327,35 @@ class SeamRoomTest {
             collectJob.cancel()
             assertEquals(Liveness.Connected, event.member.liveness)
         }
+
+    // ── #449: SeamRoomFactory.host propagates loom failures ──────────────────
+
+    /**
+     * #449: when the underlying [Loom.host] throws a non-cancellation exception,
+     * [SeamRoomFactory.host] must propagate it — callers that drive an accept loop
+     * (e.g. [us.tractat.kuilt.websocket.KtorRoomHost]) can then surface the error.
+     *
+     * This test uses a [FailingLoom] stub that always throws [IllegalStateException]
+     * from [Loom.weave]. [SeamRoomFactory.host] must NOT catch and swallow it.
+     */
+    @Test
+    fun `SeamRoomFactory host propagates loom failure to caller`() =
+        runTest {
+            val clock: () -> kotlin.time.Instant = { kotlin.time.Instant.fromEpochMilliseconds(0L) }
+            val failingLoom = FailingLoom(IllegalStateException("loom closed"))
+            val factory = SeamRoomFactory(failingLoom, backgroundScope, clock)
+
+            val result = runCatching { factory.host(Pattern("Alice")) }
+
+            assertIs<IllegalStateException>(
+                result.exceptionOrNull(),
+                "SeamRoomFactory.host must propagate non-cancellation Loom failures to its caller",
+            )
+        }
+}
+
+/** Test stub: [Loom] that always throws the given [error] from [weave]. */
+private class FailingLoom(private val error: Throwable) : Loom {
+    override suspend fun weave(rendezvous: Rendezvous): Seam = throw error
 }
 

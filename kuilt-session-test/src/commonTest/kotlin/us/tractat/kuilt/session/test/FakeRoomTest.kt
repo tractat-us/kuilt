@@ -158,10 +158,11 @@ class FakeRoomTest {
     @Test
     fun `openWindow emits WindowOpened`() = runTest {
         val room = FakeRoom()
+        val expiresAt = Instant.fromEpochMilliseconds(9999L)
         val eventDeferred = async { room.events.first() }
-        room.openWindow(PeerId("alice"), expiresAt = 9999L)
+        room.openWindow(PeerId("alice"), expiresAt = expiresAt)
         assertEquals(
-            MembershipEvent.WindowOpened(PeerId("alice"), expiresAt = 9999L),
+            MembershipEvent.WindowOpened(PeerId("alice"), expiresAt = expiresAt),
             eventDeferred.await(),
         )
     }

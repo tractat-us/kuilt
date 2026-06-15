@@ -7,8 +7,10 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.session.LeaveReason
 import us.tractat.kuilt.session.Room
 import us.tractat.kuilt.session.SeamRoomFactory
@@ -31,27 +33,46 @@ private val log = KotlinLogging.logger {}
  * don't serialize.
  *
  */
-public class KtorRoomHost(
-    application: Application,
+public class KtorRoomHost internal constructor(
     private val path: String,
-    serverPeerId: PeerId,
     private val pattern: Pattern,
+    private val loom: Loom,
 ) : AutoCloseable {
+    /**
+     * Production constructor. Pre-constructs a [KtorServerLoom] synchronously
+     * so the WebSocket route is mounted on [application] before any client
+     * tries to connect. Deferring into [start]'s launched coroutine would
+     * race-condition route registration against early connecting clients.
+     */
+    public constructor(
+        application: Application,
+        path: String,
+        serverPeerId: PeerId,
+        pattern: Pattern,
+    ) : this(
+        path = path,
+        pattern = pattern,
+        loom = KtorServerLoom(application, path, serverPeerId),
+    )
+
     private val startMutex = Mutex()
     private var started = false
-
-    // Pre-construct the Loom synchronously so the WebSocket route is mounted
-    // on `application` before any client tries to connect. Deferring into
-    // `start()`'s launched coroutine race-conditions route registration
-    // against early connecting clients.
-    private val loom: KtorServerLoom =
-        KtorServerLoom(application, path, serverPeerId)
 
     /**
      * Run the accept loop. Each call to [SeamRoomFactory.host] suspends until
      * the next WebSocket connection arrives, then yields a fully-built [Room].
      * Each room is dispatched to [onRoom] in a child coroutine; the loop
-     * continues accepting until the calling scope is cancelled.
+     * continues accepting until the calling scope is cancelled or the underlying
+     * accept fails.
+     *
+     * **Error signalling.** A non-cancellation failure from [SeamRoomFactory.host]
+     * (e.g. the server loom stops accepting) is logged and rethrown — [start]
+     * propagates the exception to the caller. Callers can wrap [start] in
+     * `runCatching` or a `try/catch` to observe the failure and decide whether
+     * to restart or surface the error.
+     *
+     * [CancellationException] (structured-concurrency cancellation) propagates
+     * unchanged, as required.
      *
      * @throws IllegalStateException if called while already running.
      */
@@ -62,7 +83,7 @@ public class KtorRoomHost(
         }
         log.info { "ws.room.start path=$path displayName=${pattern.displayName}" }
         coroutineScope {
-            val factory = SeamRoomFactory(loom = loom, scope = this)
+            val factory = SeamRoomFactory.systemClock(loom = loom, scope = this)
             while (true) {
                 val room: Room =
                     try {
@@ -71,7 +92,7 @@ public class KtorRoomHost(
                         throw e
                     } catch (e: Throwable) {
                         log.warn(e) { "ws.room.accept failure: ${e.message}" }
-                        break
+                        throw e
                     }
                 launch {
                     try {
@@ -81,7 +102,7 @@ public class KtorRoomHost(
                     } catch (e: Throwable) {
                         log.warn(e) { "ws.room.onRoom failure: ${e.message}" }
                     } finally {
-                        runCatching { room.leave(LeaveReason.Normal) }
+                        runCatchingCancellable { room.leave(LeaveReason.Normal) }
                     }
                 }
             }

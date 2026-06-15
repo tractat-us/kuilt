@@ -19,8 +19,10 @@ import us.tractat.kuilt.session.partition.ResumeResult
 import us.tractat.kuilt.session.partition.ResumeToken
 import us.tractat.kuilt.session.partition.RoomId
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
+import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Instant
 
@@ -238,6 +240,43 @@ class RoomResumeTest {
 
         val result = joinerRoom.resume(token)
         assertIs<ResumeResult.WindowClosed>(result)
+    }
+
+    // ── Test 5: WindowOpened.expiresAt is Instant (#461) ─────────────────────
+
+    /**
+     * Acceptance criterion: [MembershipEvent.WindowOpened.expiresAt] is a [kotlin.time.Instant],
+     * not a raw epoch-millis Long. The value must equal the epoch-millis in the internal
+     * [us.tractat.kuilt.session.partition.JoinerReconnectEvent.WindowOpened] converted to [Instant].
+     */
+    @Test
+    fun `WindowOpened expiresAt is Instant converted from internal epoch-millis`() = runTest {
+        var clockMs = 0L
+        val clock: () -> Instant = { Instant.fromEpochMilliseconds(clockMs) }
+        val loom = InMemoryLoom()
+        val faultyHostSeam = FaultySeam(loom.host(Pattern("Alice")), backgroundScope, FaultProfile.Healthy)
+        val hostRoom = makeSeamRoom(faultyHostSeam, SessionRole.Host, "Alice", clock, RoomId("room-461"))
+        makeSeamRoom(loom.join(InMemoryTag("Bob")), SessionRole.Joiner, "Bob", clock)
+
+        hostRoom.roster.first { it.size == 1 }
+
+        val windowOpened = async {
+            hostRoom.events.filterIsInstance<MembershipEvent.WindowOpened>().first()
+        }
+
+        faultyHostSeam.setFaultProfile(FaultProfile.DropAll(Direction.Both))
+
+        clockMs += 100L; advanceTimeBy(100L)
+        clockMs += 100L; advanceTimeBy(100L)
+        clockMs += 100L; advanceTimeBy(100L)
+        clockMs += 100L; advanceTimeBy(100L)
+
+        val event = windowOpened.await()
+        // expiresAt must be an Instant (type assertion via smartcast / member access)
+        assertTrue(
+            event.expiresAt > Instant.fromEpochMilliseconds(0L),
+            "expiresAt must be a non-epoch-zero Instant derived from the internal controller's expiry",
+        )
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
