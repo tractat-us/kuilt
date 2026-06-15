@@ -215,6 +215,17 @@ pre-1.0 posture). Auto-merge is enabled and head branches are deleted on merge,
 so the normal flow is: open PR → `gh pr merge <n> --auto --squash` → it lands as
 soon as `ci-required` is green.
 
+**Merge-poll gotcha — a drafted-then-readied PR keeps a STALE `ci-required`
+FAILURE in `statusCheckRollup`.** Opening a PR as Draft skips the `build-jvm` /
+`build-native` jobs, so the `ci-required` aggregator records a `FAILURE` for that
+draft run. Marking the PR ready starts a fresh run, but GitHub leaves **both**
+entries under the `ci-required` name. A poll loop that scans the rollup for the
+substring `FAILURE` then false-alarms on every iteration while the real post-ready
+build is still green/pending. Key the verdict to the **latest run** (max run id in
+the check's `detailsUrl`) or treat a later `SUCCESS` as authoritative
+(`FAILURE,SUCCESS` for one check name ⇒ pass) — never a bare presence-of-`FAILURE`
+scan. (Open the PR ready when you can to avoid the stale draft run entirely.)
+
 ## Versioning & publishing
 
 The `major.minor` version line lives in `kuiltVersionLine` in `gradle.properties`;
