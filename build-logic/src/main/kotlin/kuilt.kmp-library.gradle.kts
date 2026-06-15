@@ -85,7 +85,18 @@ afterEvaluate {
         kmpExtension.sourceSets
             .filter { it.name.endsWith("Main") }
             .forEach { kmpSs ->
-                dokkaSourceSets.register(kmpSs.name) {
+                // Use maybeCreate so this is idempotent: when the root build script
+                // declares kotlin plugins with `apply false`, Dokka's KotlinAdapter
+                // can now find KotlinBasePlugin in the shared classloader and
+                // auto-registers the source sets — a second register() call would
+                // throw "already exists". Named().configure() handles both cases.
+                val existing = dokkaSourceSets.findByName(kmpSs.name)
+                val sourceSetProvider = if (existing != null) {
+                    dokkaSourceSets.named(kmpSs.name)
+                } else {
+                    dokkaSourceSets.register(kmpSs.name)
+                }
+                sourceSetProvider.configure {
                     sourceRoots.from(kmpSs.kotlin.srcDirs)
                     if (samplesDir.exists()) samples.from(samplesDir)
                     if (moduleMd.exists()) includes.from(moduleMd)
