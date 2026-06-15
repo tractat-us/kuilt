@@ -6,7 +6,7 @@ tasks.withType<Test>().configureEach {
 }
 
 kotlin {
-    val macosLibName = "fireworks-mc"   // FROZEN for 1e — do NOT rename to kuilt-mc (interlocking ABI: basename ↔ LIBRARY_NAME ↔ C-symbol prefix ↔ resource path)
+    val macosLibName = "kuilt"
     macosArm64 { binaries.sharedLib { baseName = macosLibName } }
 
     sourceSets {
@@ -39,7 +39,7 @@ val nativeBinariesDir = layout.buildDirectory.dir("native-binaries-jvm")
 val packageMacosNatives = tasks.register<Copy>("packageMacosNatives") {
     group = "build"
     from(layout.buildDirectory.dir("bin/macosArm64/releaseShared")) {
-        include("libfireworks_mc.dylib"); into("darwin-aarch64")
+        include("libkuilt.dylib"); into("darwin-aarch64")
     }
     into(nativeBinariesDir); dependsOn("linkReleaseSharedMacosArm64")
 }

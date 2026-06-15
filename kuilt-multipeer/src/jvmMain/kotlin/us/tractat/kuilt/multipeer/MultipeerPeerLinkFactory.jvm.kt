@@ -13,7 +13,7 @@ import us.tractat.kuilt.multipeer.internal.BridgePeerLink
 
 /**
  * JVM-side `MultipeerPeerLinkFactory`, backed by [MultipeerNativeLib] and
- * the macOS K/N `libfireworks_mc.dylib`.
+ * the macOS K/N `libkuilt.dylib`.
  *
  * Single-session per factory instance (matches the Apple-side semantics).
  * Calling [open] twice without an intervening `close` throws.

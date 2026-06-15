@@ -21,7 +21,7 @@ internal class FakeMultipeerNativeLib : MultipeerNativeLib {
         capturedCallback?.invoke(handle, displayName)
     }
 
-    override fun fireworks_mc_protocol_version(): Int = MultipeerNativeLib.EXPECTED_PROTOCOL_VERSION
+    override fun kuilt_protocol_version(): Int = MultipeerNativeLib.EXPECTED_PROTOCOL_VERSION
 
     override fun mc_runtime_create(
         displayName: String,
