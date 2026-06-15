@@ -1362,7 +1362,7 @@ internal class RaftEngine(
      * it does NOT touch [pending]/[_committed]/[proposeStartTimes].
      *
      * Called by [onChangeMembership] (learner-set-only Simple entry) and by [onConfigCommitted]
-     * (PR B: the C_new Simple entry after a Joint commits).
+     * (the C_new Simple entry that finalises a Joint after it commits).
      */
     private suspend fun appendConfigEntry(payload: ConfigPayload) {
         val index = lastLogIndex + 1L
@@ -1461,7 +1461,7 @@ internal class RaftEngine(
             debug { "onConfigCommitted: Simple committed — completing pendingConfigChange with $result" }
             pendingConfigChange?.complete(result)
             pendingConfigChange = null
-            // §6.4.1: if self is not in the new voter set, step down (removed-leader case — PR B path).
+            // §6.4.1: if self is not in the new voter set, step down (removed-leader case).
             if (_role.value is RaftRole.Leader && transport.selfId !in payload.new.voters) {
                 debug { "onConfigCommitted: self not in new voters — stepping down (RemovedFromConfig)" }
                 stepDownToFollower(StepDownReason.RemovedFromConfig)
