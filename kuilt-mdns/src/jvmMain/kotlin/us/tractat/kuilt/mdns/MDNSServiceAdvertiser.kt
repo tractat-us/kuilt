@@ -8,7 +8,6 @@ import javax.jmdns.ServiceInfo
  * Registers a peer as a Bonjour / mDNS service so that other peers
  * on the same LAN can discover it.
  *
- * The service type is [MDNSAdvertisement.SERVICE_TYPE] (`_fireworks._tcp.local.`).
  * TXT records carry the peer's [PeerId], WebSocket path, protocol version
  * (v2), and the v2 fabric-correlation keys — so that discoverers can build a
  * full [MDNSAdvertisement] without any out-of-band configuration.
@@ -17,6 +16,8 @@ import javax.jmdns.ServiceInfo
  * the session. Both are blocking JmDNS calls and should be called from an
  * IO dispatcher.
  *
+ * @param serviceType The mDNS service type to register under (e.g. `"_myapp._tcp.local."`).
+ *   Callers must supply an application-specific type — no default is provided.
  * @param jmdns The [JmDNS] instance to register on.
  * @param displayName Human-readable service name (shown in Bonjour browsers).
  * @param port TCP port the local WebSocket server listens on.
@@ -29,6 +30,7 @@ import javax.jmdns.ServiceInfo
  * @param gameMaxVersion Maximum game-protocol version this host accepts.
  */
 public class MDNSServiceAdvertiser(
+    private val serviceType: String,
     private val jmdns: JmDNS,
     private val displayName: String,
     private val port: Int,
@@ -57,7 +59,7 @@ public class MDNSServiceAdvertiser(
 
     private fun buildServiceInfo(): ServiceInfo =
         ServiceInfo.create(
-            MDNSAdvertisement.SERVICE_TYPE,
+            serviceType,
             displayName,
             port,
             0,

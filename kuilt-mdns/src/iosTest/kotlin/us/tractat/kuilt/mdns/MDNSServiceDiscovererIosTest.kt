@@ -98,7 +98,7 @@ class MDNSServiceDiscovererIosTest {
 
         var discovered: MDNSAdvertisement? = null
         testScope.launch {
-            MDNSServiceDiscoverer()
+            MDNSServiceDiscoverer(SERVICE_TYPE_WITHOUT_DOMAIN)
                 .discoveries()
                 .collect { ad ->
                     if (ad.serverPeerId == expectedPeerId) {
@@ -190,7 +190,7 @@ class MDNSServiceDiscovererIosTest {
          * Service type for `NSNetService` init — without the trailing `local.`
          * domain. The [NSNetServiceBrowser] searches for this type in `"local."`.
          */
-        const val SERVICE_TYPE_WITHOUT_DOMAIN = "_fireworks._tcp."
+        const val SERVICE_TYPE_WITHOUT_DOMAIN = "_kuilt-test._tcp."
 
         const val TEST_PORT: Int = 19500
         const val DISCOVERY_TIMEOUT_MS: Long = 15_000L

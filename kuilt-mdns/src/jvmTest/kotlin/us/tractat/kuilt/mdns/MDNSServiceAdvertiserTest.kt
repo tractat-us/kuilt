@@ -24,6 +24,7 @@ class MDNSServiceAdvertiserTest {
         val fake = CapturingJmDNS()
         val advertiser =
             MDNSServiceAdvertiser(
+                serviceType = "_kuilt-test._tcp.local.",
                 jmdns = fake,
                 displayName = "TestGame",
                 port = 19001,
@@ -34,7 +35,7 @@ class MDNSServiceAdvertiserTest {
 
         val info = fake.lastRegistered
         assertNotNull(info, "registerService should have been called")
-        assertEquals(MDNSAdvertisement.SERVICE_TYPE, info.type)
+        assertEquals("_kuilt-test._tcp.local.", info.type)
     }
 
     @Test
@@ -42,6 +43,7 @@ class MDNSServiceAdvertiserTest {
         val fake = CapturingJmDNS()
         val advertiser =
             MDNSServiceAdvertiser(
+                serviceType = "_kuilt-test._tcp.local.",
                 jmdns = fake,
                 displayName = "MyGame",
                 port = 19002,
@@ -58,6 +60,7 @@ class MDNSServiceAdvertiserTest {
         val fake = CapturingJmDNS()
         val advertiser =
             MDNSServiceAdvertiser(
+                serviceType = "_kuilt-test._tcp.local.",
                 jmdns = fake,
                 displayName = "PortGame",
                 port = 19003,
@@ -74,6 +77,7 @@ class MDNSServiceAdvertiserTest {
         val fake = CapturingJmDNS()
         val advertiser =
             MDNSServiceAdvertiser(
+                serviceType = "_kuilt-test._tcp.local.",
                 jmdns = fake,
                 displayName = "PeerGame",
                 port = 19004,
@@ -91,6 +95,7 @@ class MDNSServiceAdvertiserTest {
         val fake = CapturingJmDNS()
         val advertiser =
             MDNSServiceAdvertiser(
+                serviceType = "_kuilt-test._tcp.local.",
                 jmdns = fake,
                 displayName = "PathGame",
                 port = 19005,
@@ -109,6 +114,7 @@ class MDNSServiceAdvertiserTest {
         val fake = CapturingJmDNS()
         val advertiser =
             MDNSServiceAdvertiser(
+                serviceType = "_kuilt-test._tcp.local.",
                 jmdns = fake,
                 displayName = "VersionGame",
                 port = 19006,
@@ -128,6 +134,7 @@ class MDNSServiceAdvertiserTest {
         val fake = CapturingJmDNS()
         val advertiser =
             MDNSServiceAdvertiser(
+                serviceType = "_kuilt-test._tcp.local.",
                 jmdns = fake,
                 displayName = "HostOsGame",
                 port = 19010,
@@ -146,6 +153,7 @@ class MDNSServiceAdvertiserTest {
         val fake = CapturingJmDNS()
         val advertiser =
             MDNSServiceAdvertiser(
+                serviceType = "_kuilt-test._tcp.local.",
                 jmdns = fake,
                 displayName = "NoHostOs",
                 port = 19011,
@@ -163,6 +171,7 @@ class MDNSServiceAdvertiserTest {
         val fake = CapturingJmDNS()
         val advertiser =
             MDNSServiceAdvertiser(
+                serviceType = "_kuilt-test._tcp.local.",
                 jmdns = fake,
                 displayName = "FabricsGame",
                 port = 19012,
@@ -181,6 +190,7 @@ class MDNSServiceAdvertiserTest {
         val fake = CapturingJmDNS()
         val advertiser =
             MDNSServiceAdvertiser(
+                serviceType = "_kuilt-test._tcp.local.",
                 jmdns = fake,
                 displayName = "McPeerGame",
                 port = 19013,
@@ -200,6 +210,7 @@ class MDNSServiceAdvertiserTest {
         val fake = CapturingJmDNS()
         val advertiser =
             MDNSServiceAdvertiser(
+                serviceType = "_kuilt-test._tcp.local.",
                 jmdns = fake,
                 displayName = "VersionRangeGame",
                 port = 19014,
@@ -221,6 +232,7 @@ class MDNSServiceAdvertiserTest {
         val fake = CapturingJmDNS()
         val advertiser =
             MDNSServiceAdvertiser(
+                serviceType = "_kuilt-test._tcp.local.",
                 jmdns = fake,
                 displayName = "MinimalGame",
                 port = 19015,
@@ -243,6 +255,7 @@ class MDNSServiceAdvertiserTest {
         val fake = CapturingJmDNS()
         val advertiser =
             MDNSServiceAdvertiser(
+                serviceType = "_kuilt-test._tcp.local.",
                 jmdns = fake,
                 displayName = "TeardownGame",
                 port = 19007,
@@ -261,6 +274,7 @@ class MDNSServiceAdvertiserTest {
         val fake = CapturingJmDNS()
         val advertiser =
             MDNSServiceAdvertiser(
+                serviceType = "_kuilt-test._tcp.local.",
                 jmdns = fake,
                 displayName = "NeverRegistered",
                 port = 19008,

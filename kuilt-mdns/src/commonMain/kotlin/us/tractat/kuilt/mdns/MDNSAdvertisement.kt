@@ -60,7 +60,6 @@ public data class MDNSAdvertisement(
 
     public companion object {
         public const val DEFAULT_WS_PATH: String = "/peer"
-        public const val SERVICE_TYPE: String = "_fireworks._tcp.local."
 
         // v1 TXT keys (required)
         public const val TXT_KEY_PEER_ID: String = "peerId"

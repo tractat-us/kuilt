@@ -12,8 +12,7 @@ import javax.jmdns.ServiceInfo
 import javax.jmdns.ServiceListener
 
 /**
- * Discovers peers advertising [MDNSAdvertisement.SERVICE_TYPE] via
- * Bonjour / mDNS.
+ * Discovers peers on the local network via Bonjour / mDNS.
  *
  * Exposes a cold [Flow] of [MDNSAdvertisement]s: each emission is a newly
  * resolved service. The flow stays open until the collector's scope is
@@ -27,9 +26,12 @@ import javax.jmdns.ServiceListener
  * apply a suitable timeout or use `take(n)` when a bounded number of peers is
  * expected in tests.
  *
+ * @param serviceType The mDNS service type to listen for (e.g. `"_myapp._tcp.local."`).
+ *   Callers must supply an application-specific type — no default is provided.
  * @param jmdns The [JmDNS] instance to listen on.
  */
 public class MDNSServiceDiscoverer(
+    private val serviceType: String,
     private val jmdns: JmDNS,
 ) : PeerDiscoverySource {
     override val kind: DiscoveryKind = DiscoveryKind.Mdns
@@ -64,9 +66,9 @@ public class MDNSServiceDiscoverer(
                     }
                 }
 
-            jmdns.addServiceListener(MDNSAdvertisement.SERVICE_TYPE, listener)
+            jmdns.addServiceListener(serviceType, listener)
 
-            awaitClose { jmdns.removeServiceListener(MDNSAdvertisement.SERVICE_TYPE, listener) }
+            awaitClose { jmdns.removeServiceListener(serviceType, listener) }
         }
 
     /**
@@ -91,9 +93,9 @@ public class MDNSServiceDiscoverer(
                     }
                 }
 
-            jmdns.addServiceListener(MDNSAdvertisement.SERVICE_TYPE, listener)
+            jmdns.addServiceListener(serviceType, listener)
 
-            awaitClose { jmdns.removeServiceListener(MDNSAdvertisement.SERVICE_TYPE, listener) }
+            awaitClose { jmdns.removeServiceListener(serviceType, listener) }
         }
 
     /**

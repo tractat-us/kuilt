@@ -29,8 +29,10 @@ import kotlin.test.assertNull
  *
  * [MDNSServiceDiscovererFlowTest] tests the [Flow] mechanics using [FakeEventJmDNS].
  */
+private const val TEST_SERVICE_TYPE = "_kuilt-test._tcp.local."
+
 class MDNSServiceDiscovererParserTest {
-    private val discoverer = MDNSServiceDiscoverer(CapturingJmDNS())
+    private val discoverer = MDNSServiceDiscoverer(TEST_SERVICE_TYPE, CapturingJmDNS())
 
     @Test
     fun `toAdvertisement maps peerId port and wsPath correctly`() {
@@ -48,7 +50,7 @@ class MDNSServiceDiscovererParserTest {
     fun `toAdvertisement returns null when peerId TXT entry is absent`() {
         val info =
             ServiceInfo.create(
-                MDNSAdvertisement.SERVICE_TYPE,
+                TEST_SERVICE_TYPE,
                 "NoPeerId",
                 19301,
                 0,
@@ -65,7 +67,7 @@ class MDNSServiceDiscovererParserTest {
     fun `toAdvertisement uses DEFAULT_WS_PATH when wsPath TXT is absent`() {
         val info =
             ServiceInfo.create(
-                MDNSAdvertisement.SERVICE_TYPE,
+                TEST_SERVICE_TYPE,
                 "NoWsPath",
                 19302,
                 0,
@@ -119,7 +121,7 @@ class MDNSServiceDiscovererParserTest {
     fun `toAdvertisement tolerates v1 record without v2 keys — backward compatibility`() {
         val info =
             ServiceInfo.create(
-                MDNSAdvertisement.SERVICE_TYPE,
+                TEST_SERVICE_TYPE,
                 "V1Game",
                 19311,
                 0,
@@ -184,7 +186,7 @@ class MDNSServiceDiscovererFlowTest {
     @Test
     fun `discoveries emits an MDNSAdvertisement when serviceResolved fires`() {
         val fake = FakeEventJmDNS()
-        val discoverer = MDNSServiceDiscoverer(fake)
+        val discoverer = MDNSServiceDiscoverer(TEST_SERVICE_TYPE, fake)
 
         val info =
             serviceInfoWithHost(
@@ -218,7 +220,7 @@ class MDNSServiceDiscovererFlowTest {
     @Test
     fun `discoveries drops ServiceInfo with no peerId`() {
         val fake = FakeEventJmDNS()
-        val discoverer = MDNSServiceDiscoverer(fake)
+        val discoverer = MDNSServiceDiscoverer(TEST_SERVICE_TYPE, fake)
 
         val malformedInfo =
             serviceInfoWithHost(
@@ -255,7 +257,7 @@ class MDNSServiceDiscovererFlowTest {
     @Test
     fun `discoveries removes listener when flow collection is cancelled`() {
         val fake = FakeEventJmDNS()
-        val discoverer = MDNSServiceDiscoverer(fake)
+        val discoverer = MDNSServiceDiscoverer(TEST_SERVICE_TYPE, fake)
 
         runBlocking {
             val flow = discoverer.discoveries()
@@ -409,7 +411,7 @@ private fun serviceInfoWithTxt(
     extraTxt: Map<String, String> = emptyMap(),
 ): ServiceInfo =
     ServiceInfo.create(
-        MDNSAdvertisement.SERVICE_TYPE,
+        TEST_SERVICE_TYPE,
         name,
         port,
         0,
@@ -442,7 +444,7 @@ private fun serviceInfoWithHost(
         }
     val delegate =
         ServiceInfo.create(
-            MDNSAdvertisement.SERVICE_TYPE,
+            TEST_SERVICE_TYPE,
             name,
             port,
             0,
