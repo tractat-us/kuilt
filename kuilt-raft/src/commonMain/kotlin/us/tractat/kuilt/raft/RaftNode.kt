@@ -81,7 +81,6 @@
  *
  * @see RaftNode for the runtime interface
  * @see CoroutineScope.raftNode for the construction entry point
- * @see docs/superpowers/specs/2026-06-05-raft-design.md for the design spec
  */
 package us.tractat.kuilt.raft
 
@@ -233,16 +232,17 @@ public interface RaftNode {
      * If [target].voters equals the current voter set (a **learner-set-only** change),
      * a single `Simple(target)` config entry is appended — quorum is unchanged.
      * If the voter set differs (a **voter-set change**), the transition goes through
-     * §6 joint consensus (PR B — voter-set changes are rejected with
-     * [IllegalArgumentException] until PR B implements joint consensus).
+     * §6 joint consensus. Note: voter-set changes are not yet supported; passing a
+     * [target] whose voter set differs from the current one throws [IllegalArgumentException]
+     * until joint-consensus support is added.
      *
      * ## Failure modes
      *
      * - [NotLeaderException] — this node is not the leader.
      * - [MembershipChangeInProgressException] — a config entry is already uncommitted;
      *   only one change may be in flight at a time.
-     * - [IllegalArgumentException] — [target].voters is empty, or (in PR A) the voter
-     *   set differs from the current voter set.
+     * - [IllegalArgumentException] — [target].voters is empty, or the voter
+     *   set differs from the current voter set (voter-set changes are not yet supported).
      * - [LeadershipLostException] — leadership was lost mid-transition; the change may
      *   or may not have committed on some nodes.
      */

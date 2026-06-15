@@ -30,7 +30,7 @@ internal sealed interface MembershipState {
     /**
      * Joint configuration C_{old,new}: a cluster mid-transition via §6 joint consensus.
      * Commit and election both require independent majorities of [old].voters AND [new].voters.
-     * Appended by the leader at the start of a voter-set change; used in PR B.
+     * Appended by the leader at the start of a voter-set change.
      */
     data class Joint(val old: ClusterConfig, val new: ClusterConfig) : MembershipState
 
@@ -135,8 +135,8 @@ internal sealed interface MembershipState {
      *
      * Simple: delegates to [majorityCommitIndex] (existing primitive) with conditional
      *   self-credit: the leader counts itself only when `self ∈ config.voters`.
-     *   On the PR-A learner-change path the leader is always a voter, so the
-     *   behavior is identical to today.
+     *   On a learner-set-only change the leader is always a voter, so the
+     *   quorum accounting is unchanged.
      *
      * Joint: minimum of the committed index for old.voters and new.voters independently.
      *   An entry is cluster-committed only when BOTH majorities hold it.
@@ -208,7 +208,7 @@ internal sealed interface MembershipState {
             return if (leaderIsVoter) {
                 majorityCommitIndex(peerMatches, peerQuorum, leaderLastIndex)
             } else {
-                // Leader is not in this voter set (removed-leader case — PR B path).
+                // Leader is not in this voter set (removed-leader case).
                 // It does not count toward the quorum; use a pure peer count.
                 if (peerMatches.size < peerQuorum) return null
                 if (peerQuorum == 0) return if (peerMatches.isNotEmpty()) peerMatches.max() else null

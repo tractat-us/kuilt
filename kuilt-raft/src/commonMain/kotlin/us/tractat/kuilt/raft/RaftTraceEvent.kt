@@ -222,8 +222,7 @@ public enum class StepDownReason {
 
     /**
      * The leader stepped down after C_new committed and the leader itself is not a member of
-     * C_new.voters (§6.4.1 — the removed-leader case). Used in PR B; added now so the enum
-     * is stable across the PR stack.
+     * C_new.voters (§6.4.1 — the removed-leader case).
      */
     RemovedFromConfig,
 }

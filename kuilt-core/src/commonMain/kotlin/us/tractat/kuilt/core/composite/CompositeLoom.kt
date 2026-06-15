@@ -17,8 +17,9 @@ import kotlin.coroutines.CoroutineContext
  *
  * The ply set may change while the session is live: construct with a
  * [StateFlow] of the **desired** set and push a new list to attach or detach
- * plies. The list constructor is the degenerate case of a never-changing flow.
- * See `docs/superpowers/specs/2026-06-04-dynamic-ply-attach-detach-design.md`.
+ * plies. Each emission is reconciled against the current live set — new entries
+ * are woven in, removed entries are detached. The list constructor is the
+ * degenerate case of a never-changing flow.
  *
  * @param plies The desired ply set; emit a new value to reconcile (attach/detach).
  * @param dispatcher Forwarded to each [CompositeSeam] as the scope for its internal
