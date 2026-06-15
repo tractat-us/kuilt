@@ -79,9 +79,10 @@ class TwoCrdtChannelIsolationTest {
     fun `GCounter and LWWMap converge independently over distinct channels`() =
         runTest(UnconfinedTestDispatcher()) {
             val loom = InMemoryLoom()
+            val testClock: () -> kotlin.time.Instant = { kotlin.time.Instant.fromEpochMilliseconds(0L) }
 
-            val hostRoom = SeamRoomFactory(loom, backgroundScope).host(Pattern("Host"))
-            val joinerRoom = SeamRoomFactory(loom, backgroundScope).join(InMemoryTag("Joiner"))
+            val hostRoom = SeamRoomFactory(loom, backgroundScope, testClock).host(Pattern("Host"))
+            val joinerRoom = SeamRoomFactory(loom, backgroundScope, testClock).join(InMemoryTag("Joiner"))
 
             hostRoom.roster.first { it.size == 1 }
             joinerRoom.roster.first { it.isNotEmpty() }
@@ -143,9 +144,10 @@ class TwoCrdtChannelIsolationTest {
     fun `channel frames do not leak between counter and map channels`() =
         runTest(UnconfinedTestDispatcher()) {
             val loom = InMemoryLoom()
+            val testClock: () -> kotlin.time.Instant = { kotlin.time.Instant.fromEpochMilliseconds(0L) }
 
-            val hostRoom = SeamRoomFactory(loom, backgroundScope).host(Pattern("Host"))
-            val joinerRoom = SeamRoomFactory(loom, backgroundScope).join(InMemoryTag("Joiner"))
+            val hostRoom = SeamRoomFactory(loom, backgroundScope, testClock).host(Pattern("Host"))
+            val joinerRoom = SeamRoomFactory(loom, backgroundScope, testClock).join(InMemoryTag("Joiner"))
 
             hostRoom.roster.first { it.size == 1 }
             joinerRoom.roster.first { it.isNotEmpty() }

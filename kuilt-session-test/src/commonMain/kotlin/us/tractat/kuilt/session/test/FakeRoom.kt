@@ -176,9 +176,9 @@ public class FakeRoom(
 
     /**
      * Emit [MembershipEvent.WindowOpened] (host-side signal that a joiner's
-     * reconnect window has opened, expiring at epoch-millis [expiresAt]).
+     * reconnect window has opened, expiring at [expiresAt]).
      */
-    public suspend fun openWindow(peerId: PeerId, expiresAt: Long) {
+    public suspend fun openWindow(peerId: PeerId, expiresAt: Instant) {
         eventsChannel.send(MembershipEvent.WindowOpened(peerId, expiresAt))
     }
 

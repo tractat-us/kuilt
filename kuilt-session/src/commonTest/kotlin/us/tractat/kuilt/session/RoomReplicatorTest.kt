@@ -35,8 +35,9 @@ class RoomReplicatorTest {
     fun `RoomReplicator converges identically to hand-wired SeamReplicator`() =
         runTest(UnconfinedTestDispatcher()) {
             val loom = InMemoryLoom()
-            val hostRoom = SeamRoomFactory(loom, backgroundScope).host(Pattern("Alice"))
-            val joinerRoom = SeamRoomFactory(loom, backgroundScope).join(InMemoryTag("Bob"))
+            val testClock: () -> kotlin.time.Instant = { kotlin.time.Instant.fromEpochMilliseconds(0L) }
+            val hostRoom = SeamRoomFactory(loom, backgroundScope, testClock).host(Pattern("Alice"))
+            val joinerRoom = SeamRoomFactory(loom, backgroundScope, testClock).join(InMemoryTag("Bob"))
 
             hostRoom.roster.first { it.size == 1 }
             joinerRoom.roster.first { it.isNotEmpty() }

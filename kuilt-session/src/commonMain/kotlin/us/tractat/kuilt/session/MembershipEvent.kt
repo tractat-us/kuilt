@@ -28,10 +28,8 @@ public data class RoomFrame(
 /**
  * Events emitted by [Room] describing changes to member membership and liveness.
  *
- * The [Partitioned], [Recovered], and [HostLost] events carry [at: Instant] timestamps
- * sourced from the injected clock — never [kotlin.time.Clock.System.now()].
- *
- * TODO(1D): [Resumed] driven by [us.tractat.kuilt.session.partition.JoinerReconnectController].
+ * All events that carry timestamps use [kotlin.time.Instant] sourced from the
+ * injected clock — never [kotlin.time.Clock.System.now()] directly.
  */
 public sealed interface MembershipEvent {
     /** A new peer completed the admit handshake and entered the roster. */
@@ -60,11 +58,11 @@ public sealed interface MembershipEvent {
      * The host opened a reconnect window for a partitioned joiner.
      *
      * Emitted on the **host's** events stream when a joiner goes unresponsive and
-     * a reconnect window opens. The window expires at epoch-millis [expiresAt].
-     * If the joiner resumes before [expiresAt], [Resumed] follows; otherwise [Left]
-     * with [LeaveReason.PartitionExpired].
+     * a reconnect window opens. [expiresAt] is the wall-clock instant at which
+     * the window closes. If the joiner resumes before [expiresAt], [Resumed]
+     * follows; otherwise [Left] with [LeaveReason.PartitionExpired].
      */
-    public data class WindowOpened(val peerId: PeerId, val expiresAt: Long) : MembershipEvent
+    public data class WindowOpened(val peerId: PeerId, val expiresAt: Instant) : MembershipEvent
 
     /**
      * A partitioned joiner successfully resumed via [Room.resume].

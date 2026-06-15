@@ -9,6 +9,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.session.LeaveReason
 import us.tractat.kuilt.session.Room
 import us.tractat.kuilt.session.SeamRoomFactory
@@ -51,7 +52,17 @@ public class KtorRoomHost(
      * Run the accept loop. Each call to [SeamRoomFactory.host] suspends until
      * the next WebSocket connection arrives, then yields a fully-built [Room].
      * Each room is dispatched to [onRoom] in a child coroutine; the loop
-     * continues accepting until the calling scope is cancelled.
+     * continues accepting until the calling scope is cancelled or the underlying
+     * accept fails.
+     *
+     * **Error signalling.** A non-cancellation failure from [SeamRoomFactory.host]
+     * (e.g. the server loom stops accepting) is logged and rethrown — [start]
+     * propagates the exception to the caller. Callers can wrap [start] in
+     * `runCatching` or a `try/catch` to observe the failure and decide whether
+     * to restart or surface the error.
+     *
+     * [CancellationException] (structured-concurrency cancellation) propagates
+     * unchanged, as required.
      *
      * @throws IllegalStateException if called while already running.
      */
@@ -62,7 +73,7 @@ public class KtorRoomHost(
         }
         log.info { "ws.room.start path=$path displayName=${pattern.displayName}" }
         coroutineScope {
-            val factory = SeamRoomFactory(loom = loom, scope = this)
+            val factory = SeamRoomFactory.systemClock(loom = loom, scope = this)
             while (true) {
                 val room: Room =
                     try {
@@ -71,7 +82,7 @@ public class KtorRoomHost(
                         throw e
                     } catch (e: Throwable) {
                         log.warn(e) { "ws.room.accept failure: ${e.message}" }
-                        break
+                        throw e
                     }
                 launch {
                     try {
@@ -81,7 +92,7 @@ public class KtorRoomHost(
                     } catch (e: Throwable) {
                         log.warn(e) { "ws.room.onRoom failure: ${e.message}" }
                     } finally {
-                        runCatching { room.leave(LeaveReason.Normal) }
+                        runCatchingCancellable { room.leave(LeaveReason.Normal) }
                     }
                 }
             }

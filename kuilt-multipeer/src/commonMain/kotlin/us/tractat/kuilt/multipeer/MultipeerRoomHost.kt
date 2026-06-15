@@ -8,6 +8,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.Pattern
+import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.session.LeaveReason
 import us.tractat.kuilt.session.Room
 import us.tractat.kuilt.session.SeamRoomFactory
@@ -58,7 +59,7 @@ public class MultipeerRoomHost(
         }
         log.info { "mp.room.start displayName=${sessionConfig.displayName}" }
         coroutineScope {
-            val factory = SeamRoomFactory(loom = loom, scope = this)
+            val factory = SeamRoomFactory.systemClock(loom = loom, scope = this)
             val room: Room = factory.host(sessionConfig)
             try {
                 onRoom(room)
@@ -67,7 +68,7 @@ public class MultipeerRoomHost(
                 throw e
             } finally {
                 log.info { "mp.room.close displayName=${sessionConfig.displayName}" }
-                runCatching { room.leave(LeaveReason.Normal) }
+                runCatchingCancellable { room.leave(LeaveReason.Normal) }
             }
         }
     }

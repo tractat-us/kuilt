@@ -64,8 +64,9 @@ class MemberMetadataConvergenceTest {
     fun `display names set by each peer converge live without explicit merge`() =
         runTest(UnconfinedTestDispatcher()) {
             val loom = InMemoryLoom()
-            val hostRoom = SeamRoomFactory(loom, backgroundScope).host(Pattern("Alice"))
-            val joinerRoom = SeamRoomFactory(loom, backgroundScope).join(InMemoryTag("Bob"))
+            val testClock: () -> kotlin.time.Instant = { kotlin.time.Instant.fromEpochMilliseconds(0L) }
+            val hostRoom = SeamRoomFactory(loom, backgroundScope, testClock).host(Pattern("Alice"))
+            val joinerRoom = SeamRoomFactory(loom, backgroundScope, testClock).join(InMemoryTag("Bob"))
 
             // Wait for the admit handshake on both sides before starting replication.
             hostRoom.roster.first { it.size == 1 }

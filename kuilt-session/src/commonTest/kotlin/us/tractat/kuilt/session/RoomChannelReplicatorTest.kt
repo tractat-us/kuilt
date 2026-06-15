@@ -96,8 +96,9 @@ class RoomChannelReplicatorTest {
     fun `GCounter converges over room channel in 2-peer room`() =
         runTest(UnconfinedTestDispatcher()) {
             val loom = InMemoryLoom()
-            val hostRoom = SeamRoomFactory(loom, backgroundScope).host(Pattern("Alice"))
-            val joinerRoom = SeamRoomFactory(loom, backgroundScope).join(InMemoryTag("Bob"))
+            val testClock: () -> kotlin.time.Instant = { kotlin.time.Instant.fromEpochMilliseconds(0L) }
+            val hostRoom = SeamRoomFactory(loom, backgroundScope, testClock).host(Pattern("Alice"))
+            val joinerRoom = SeamRoomFactory(loom, backgroundScope, testClock).join(InMemoryTag("Bob"))
 
             // Wait for admit handshake on both sides
             hostRoom.roster.first { it.size == 1 }
@@ -131,7 +132,8 @@ class RoomChannelReplicatorTest {
     fun `replicator never targets unadmitted peers via channel peers`() =
         runTest(UnconfinedTestDispatcher()) {
             val loom = InMemoryLoom()
-            val hostRoom = SeamRoomFactory(loom, backgroundScope).host(Pattern("Alice"))
+            val testClock: () -> kotlin.time.Instant = { kotlin.time.Instant.fromEpochMilliseconds(0L) }
+            val hostRoom = SeamRoomFactory(loom, backgroundScope, testClock).host(Pattern("Alice"))
 
             // Connect a raw seam that never sends Hello (never admitted)
             val unadmitted = loom.join(InMemoryTag("Unadmitted"))
@@ -173,7 +175,8 @@ class RoomChannelReplicatorTest {
     fun `replicator never delivers FullState to unadmitted transport peer`() =
         runTest(UnconfinedTestDispatcher()) {
             val loom = InMemoryLoom()
-            val hostRoom = SeamRoomFactory(loom, backgroundScope).host(Pattern("Alice"))
+            val testClock: () -> kotlin.time.Instant = { kotlin.time.Instant.fromEpochMilliseconds(0L) }
+            val hostRoom = SeamRoomFactory(loom, backgroundScope, testClock).host(Pattern("Alice"))
 
             // Connect a raw seam that never sends Hello (never admitted).
             val unadmitted = loom.join(InMemoryTag("Unadmitted"))

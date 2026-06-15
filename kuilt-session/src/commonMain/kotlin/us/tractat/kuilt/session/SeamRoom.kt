@@ -36,6 +36,7 @@ import us.tractat.kuilt.session.partition.PartitionEvent
 import us.tractat.kuilt.session.partition.ResumeResult
 import us.tractat.kuilt.session.partition.ResumeToken
 import us.tractat.kuilt.session.partition.RoomId
+import kotlin.time.Clock
 import kotlin.time.Instant
 
 /**
@@ -58,13 +59,19 @@ import kotlin.time.Instant
  * `Dispatchers.Default`. Suspend calls (sends, broadcasts) are always performed
  * outside the lock.
  *
- * [clock] is injected (never [kotlin.time.Clock.System]) so tests can use virtual
- * time. [heartbeatConfig] controls partition-detection timing.
+ * [clock] is required (not defaulted) so callers must make an explicit choice:
+ * use [SeamRoomFactory.systemClock] for production wall-clock time or supply
+ * a virtual clock in tests. An accidental epoch-zero default would ship wrong
+ * timestamps silently.
+ *
+ * [heartbeatConfig] controls partition-detection timing.
+ *
+ * @see SeamRoomFactory.systemClock for the production convenience constructor.
  */
 public class SeamRoomFactory(
     private val loom: Loom,
     private val scope: CoroutineScope,
-    private val clock: () -> Instant = { Instant.fromEpochMilliseconds(0L) },
+    private val clock: () -> Instant,
     private val heartbeatConfig: HeartbeatConfig = HeartbeatConfig(),
 ) : RoomFactory {
     override suspend fun host(pattern: Pattern): Room {
@@ -92,6 +99,26 @@ public class SeamRoomFactory(
             heartbeatConfig = heartbeatConfig,
             roomId = null,
         ).also { room -> room.start() }
+    }
+
+    public companion object {
+        /**
+         * Production convenience constructor that wires [kotlin.time.Clock.System.now()]
+         * as the clock. Use this for real deployments where wall-clock timestamps are needed.
+         *
+         * Tests should construct [SeamRoomFactory] directly with a virtual clock so
+         * timestamps are deterministic and test-controlled.
+         */
+        public fun systemClock(
+            loom: Loom,
+            scope: CoroutineScope,
+            heartbeatConfig: HeartbeatConfig = HeartbeatConfig(),
+        ): SeamRoomFactory = SeamRoomFactory(
+            loom = loom,
+            scope = scope,
+            clock = { Clock.System.now() },
+            heartbeatConfig = heartbeatConfig,
+        )
     }
 }
 
@@ -361,7 +388,12 @@ internal class SeamRoom(
         ctrl.events.collect { event ->
             when (event) {
                 is JoinerReconnectEvent.WindowOpened ->
-                    _events.tryEmit(MembershipEvent.WindowOpened(event.peerId, event.expiresAt))
+                    _events.tryEmit(
+                        MembershipEvent.WindowOpened(
+                            event.peerId,
+                            Instant.fromEpochMilliseconds(event.expiresAt),
+                        ),
+                    )
                 is JoinerReconnectEvent.Resumed ->
                     handleReconnectResumed(event.peerId)
                 is JoinerReconnectEvent.WindowExpired -> {

@@ -66,10 +66,11 @@ class ThreePeerLateJoinerConvergenceTest {
     fun `three simultaneous peers converge GCounter to sum of all increments`() =
         runTest(UnconfinedTestDispatcher()) {
             val loom = InMemoryLoom()
+            val testClock: () -> kotlin.time.Instant = { kotlin.time.Instant.fromEpochMilliseconds(0L) }
 
-            val hostRoom = SeamRoomFactory(loom, backgroundScope).host(Pattern("Host"))
-            val joiner1Room = SeamRoomFactory(loom, backgroundScope).join(InMemoryTag("Joiner1"))
-            val joiner2Room = SeamRoomFactory(loom, backgroundScope).join(InMemoryTag("Joiner2"))
+            val hostRoom = SeamRoomFactory(loom, backgroundScope, testClock).host(Pattern("Host"))
+            val joiner1Room = SeamRoomFactory(loom, backgroundScope, testClock).join(InMemoryTag("Joiner1"))
+            val joiner2Room = SeamRoomFactory(loom, backgroundScope, testClock).join(InMemoryTag("Joiner2"))
 
             hostRoom.roster.first { it.size == 2 }
             joiner1Room.roster.first { it.isNotEmpty() }
@@ -113,10 +114,11 @@ class ThreePeerLateJoinerConvergenceTest {
     fun `late joiner converges via gap-fill resend when it missed initial deltas`() =
         runTest(UnconfinedTestDispatcher()) {
             val loom = InMemoryLoom()
+            val testClock: () -> kotlin.time.Instant = { kotlin.time.Instant.fromEpochMilliseconds(0L) }
 
             // ── Phase 1: two-peer convergence ─────────────────────────────────
-            val hostRoom = SeamRoomFactory(loom, backgroundScope).host(Pattern("Host"))
-            val joiner1Room = SeamRoomFactory(loom, backgroundScope).join(InMemoryTag("Joiner1"))
+            val hostRoom = SeamRoomFactory(loom, backgroundScope, testClock).host(Pattern("Host"))
+            val joiner1Room = SeamRoomFactory(loom, backgroundScope, testClock).join(InMemoryTag("Joiner1"))
 
             hostRoom.roster.first { it.size == 1 }
             joiner1Room.roster.first { it.isNotEmpty() }
@@ -133,7 +135,7 @@ class ThreePeerLateJoinerConvergenceTest {
             assertEquals(8L, repJoiner1.state.value.value, "joiner1 must converge to 8 before late join")
 
             // ── Phase 2: late joiner + new deltas trigger gap-fill ────────────
-            val joiner2Room = SeamRoomFactory(loom, backgroundScope).join(InMemoryTag("Joiner2"))
+            val joiner2Room = SeamRoomFactory(loom, backgroundScope, testClock).join(InMemoryTag("Joiner2"))
             val repJoiner2 = gcounterReplicator(joiner2Room, backgroundScope)
 
             hostRoom.roster.first { it.size == 2 }

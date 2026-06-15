@@ -39,7 +39,8 @@ import kotlin.test.assertTrue
 class RoomChannelTest {
 
     private fun loom() = InMemoryLoom()
-    private fun factory(loom: InMemoryLoom, scope: CoroutineScope) = SeamRoomFactory(loom, scope)
+    private fun factory(loom: InMemoryLoom, scope: CoroutineScope) =
+        SeamRoomFactory(loom, scope, clock = { kotlin.time.Instant.fromEpochMilliseconds(0L) })
 
     // ── Helper ─────────────────────────────────────────────────────────────────
 
