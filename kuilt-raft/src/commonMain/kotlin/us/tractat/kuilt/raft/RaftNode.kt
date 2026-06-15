@@ -232,17 +232,18 @@ public interface RaftNode {
      * If [target].voters equals the current voter set (a **learner-set-only** change),
      * a single `Simple(target)` config entry is appended — quorum is unchanged.
      * If the voter set differs (a **voter-set change**), the transition goes through
-     * §6 joint consensus. Note: voter-set changes are not yet supported; passing a
-     * [target] whose voter set differs from the current one throws [IllegalArgumentException]
-     * until joint-consensus support is added.
+     * joint consensus: a `Joint(C_old, C_new)` entry is appended first (both old and
+     * new majorities are required for commit and election during this phase), and once
+     * it commits a final `Simple(C_new)` entry is appended. The call suspends until that
+     * `Simple(C_new)` commits. If this leader is not a voter in C_new, it steps down once
+     * C_new is durable.
      *
      * ## Failure modes
      *
      * - [NotLeaderException] — this node is not the leader.
      * - [MembershipChangeInProgressException] — a config entry is already uncommitted;
      *   only one change may be in flight at a time.
-     * - [IllegalArgumentException] — [target].voters is empty, or the voter
-     *   set differs from the current voter set (voter-set changes are not yet supported).
+     * - [IllegalArgumentException] — [target].voters is empty.
      * - [LeadershipLostException] — leadership was lost mid-transition; the change may
      *   or may not have committed on some nodes.
      */
