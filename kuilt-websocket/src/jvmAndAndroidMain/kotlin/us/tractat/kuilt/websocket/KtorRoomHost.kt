@@ -37,8 +37,8 @@ private val log = KotlinLogging.logger {}
 public class KtorRoomHost(
     application: Application,
     private val path: String,
-    serverPeerId: PeerId = PeerId("live-game-server"),
-    private val pattern: Pattern = Pattern("live-game"),
+    serverPeerId: PeerId,
+    private val pattern: Pattern,
 ) : AutoCloseable {
     private val startMutex = Mutex()
     private var started = false

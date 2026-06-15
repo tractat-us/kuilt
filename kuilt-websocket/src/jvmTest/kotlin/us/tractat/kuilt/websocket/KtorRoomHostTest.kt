@@ -9,6 +9,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.yield
 import us.tractat.kuilt.core.CloseReason
+import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.session.Room
 import kotlin.test.Test
@@ -23,6 +24,7 @@ import kotlin.test.assertTrue
 class KtorRoomHostTest {
     private val serverPath = "/ws/room-test"
     private val serverPeerId = PeerId("test-room-server")
+    private val serverPattern = Pattern("test-room")
 
     @Test
     fun `accepted WS connection produces a Room with serverPeerId`() =
@@ -32,6 +34,7 @@ class KtorRoomHostTest {
                     application = application,
                     path = serverPath,
                     serverPeerId = serverPeerId,
+                    pattern = serverPattern,
                 )
             val clientLoom = KtorClientLoom(createClient { install(ClientWebSockets) })
             val firstRoom = CompletableDeferred<Room>()
@@ -55,7 +58,7 @@ class KtorRoomHostTest {
     @Test
     fun `start a second time on same host throws IllegalStateException`() =
         testApplication {
-            val host = KtorRoomHost(application, serverPath, serverPeerId)
+            val host = KtorRoomHost(application, serverPath, serverPeerId, serverPattern)
             coroutineScope {
                 val job = launch { host.start { awaitCancellation() } }
                 // Yield twice so the launched coroutine reaches `withLock`.
@@ -74,7 +77,7 @@ class KtorRoomHostTest {
     @Test
     fun `accept loop tears down cleanly when scope is cancelled`() =
         testApplication {
-            val host = KtorRoomHost(application, serverPath, serverPeerId)
+            val host = KtorRoomHost(application, serverPath, serverPeerId, serverPattern)
             coroutineScope {
                 val job = launch { host.start { awaitCancellation() } }
                 yield()
