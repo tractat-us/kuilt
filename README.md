@@ -27,7 +27,7 @@ Import the BOM once to align all module versions, then add individual modules wi
 ```kotlin
 // build.gradle.kts
 dependencies {
-    implementation(platform("us.tractat.kuilt:kuilt-bom:0.4.0"))
+    implementation(platform("us.tractat.kuilt:kuilt-bom:0.5.0"))
 
     implementation("us.tractat.kuilt:kuilt-websocket")  // WebSocket fabric
     implementation("us.tractat.kuilt:kuilt-raft")       // Raft consensus
@@ -44,8 +44,8 @@ directly if it's the sole thing you depend on.
 ```kotlin
 // build.gradle.kts — pick the modules you need, specifying versions explicitly
 dependencies {
-    implementation("us.tractat.kuilt:kuilt-core:0.4.0")
-    implementation("us.tractat.kuilt:kuilt-websocket:0.4.0")
+    implementation("us.tractat.kuilt:kuilt-core:0.5.0")
+    implementation("us.tractat.kuilt:kuilt-websocket:0.5.0")
 }
 ```
 
