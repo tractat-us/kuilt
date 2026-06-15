@@ -26,12 +26,13 @@ import javax.jmdns.ServiceListener
  * apply a suitable timeout or use `take(n)` when a bounded number of peers is
  * expected in tests.
  *
- * @param serviceType The mDNS service type to listen for (e.g. `"_myapp._tcp.local."`).
- *   Callers must supply an application-specific type — no default is provided.
+ * @param serviceType The mDNS service type. Supply the canonical base form
+ *   (e.g. `MDNSServiceType("_myapp._tcp")`) — the JmDNS-required `.local.`
+ *   suffix is appended internally.
  * @param jmdns The [JmDNS] instance to listen on.
  */
 public class MDNSServiceDiscoverer(
-    private val serviceType: String,
+    private val serviceType: MDNSServiceType,
     private val jmdns: JmDNS,
 ) : PeerDiscoverySource {
     override val kind: DiscoveryKind = DiscoveryKind.Mdns
@@ -66,9 +67,9 @@ public class MDNSServiceDiscoverer(
                     }
                 }
 
-            jmdns.addServiceListener(serviceType, listener)
+            jmdns.addServiceListener(serviceType.forJmDns(), listener)
 
-            awaitClose { jmdns.removeServiceListener(serviceType, listener) }
+            awaitClose { jmdns.removeServiceListener(serviceType.forJmDns(), listener) }
         }
 
     /**
@@ -93,9 +94,9 @@ public class MDNSServiceDiscoverer(
                     }
                 }
 
-            jmdns.addServiceListener(serviceType, listener)
+            jmdns.addServiceListener(serviceType.forJmDns(), listener)
 
-            awaitClose { jmdns.removeServiceListener(serviceType, listener) }
+            awaitClose { jmdns.removeServiceListener(serviceType.forJmDns(), listener) }
         }
 
     /**
@@ -104,6 +105,9 @@ public class MDNSServiceDiscoverer(
      * Returns `null` if the required [MDNSAdvertisement.TXT_KEY_PEER_ID] TXT entry
      * is absent. Exposed as `internal` so unit tests can verify parsing logic
      * without needing a real network-registered [ServiceInfo].
+     *
+     * Any TXT keys not recognized by kuilt are collected into
+     * [MDNSAdvertisement.txtExtensions], preserving arbitrary caller-supplied metadata.
      */
     internal fun toAdvertisement(
         info: ServiceInfo,
@@ -113,6 +117,7 @@ public class MDNSServiceDiscoverer(
         val wsPath =
             info.getPropertyString(MDNSAdvertisement.TXT_KEY_WS_PATH)
                 ?: MDNSAdvertisement.DEFAULT_WS_PATH
+        val extensions = extractExtensions(info)
         return MDNSAdvertisement(
             host = host,
             port = info.port,
@@ -125,8 +130,16 @@ public class MDNSServiceDiscoverer(
                     ?.let { MDNSAdvertisement.HostOs.fromTxt(it) },
             fabrics = info.getPropertyString(MDNSAdvertisement.TXT_KEY_FABRICS),
             mcPeer = info.getPropertyString(MDNSAdvertisement.TXT_KEY_MC_PEER),
-            gameMinVersion = info.getPropertyString(MDNSAdvertisement.TXT_KEY_GAME_MIN_VERSION)?.toIntOrNull(),
-            gameMaxVersion = info.getPropertyString(MDNSAdvertisement.TXT_KEY_GAME_MAX_VERSION)?.toIntOrNull(),
+            txtExtensions = extensions,
         )
     }
+
+    private fun extractExtensions(info: ServiceInfo): Map<String, String> {
+        val reserved = kuiltReservedTxtKeys
+        return info.propertyNames.asSequence()
+            .filter { it !in reserved }
+            .mapNotNull { key -> info.getPropertyString(key)?.let { key to it } }
+            .toMap()
+    }
 }
+

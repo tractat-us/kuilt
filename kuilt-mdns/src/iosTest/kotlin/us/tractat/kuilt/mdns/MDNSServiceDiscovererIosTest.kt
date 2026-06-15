@@ -98,7 +98,7 @@ class MDNSServiceDiscovererIosTest {
 
         var discovered: MDNSAdvertisement? = null
         testScope.launch {
-            MDNSServiceDiscoverer(SERVICE_TYPE_WITHOUT_DOMAIN)
+            MDNSServiceDiscoverer(MDNSServiceType(SERVICE_TYPE_CANONICAL))
                 .discoveries()
                 .collect { ad ->
                     if (ad.serverPeerId == expectedPeerId) {
@@ -135,7 +135,7 @@ class MDNSServiceDiscovererIosTest {
         val ns =
             NSNetService(
                 domain = "local.",
-                type = SERVICE_TYPE_WITHOUT_DOMAIN,
+                type = MDNSServiceType(SERVICE_TYPE_CANONICAL).forNsNetServiceBrowser(),
                 name = "MDNSDiscovererIosTest",
                 port = TEST_PORT,
             )
@@ -187,10 +187,10 @@ class MDNSServiceDiscovererIosTest {
         const val GATE_ENV_VAR = "MDNS_MULTICAST_TESTS"
 
         /**
-         * Service type for `NSNetService` init — without the trailing `local.`
-         * domain. The [NSNetServiceBrowser] searches for this type in `"local."`.
+         * Canonical service type (no suffix) — passed to [MDNSServiceType].
+         * The platform-specific suffix (`"."`) is applied by [MDNSServiceType.forNsNetServiceBrowser].
          */
-        const val SERVICE_TYPE_WITHOUT_DOMAIN = "_kuilt-test._tcp."
+        const val SERVICE_TYPE_CANONICAL = "_kuilt-test._tcp"
 
         const val TEST_PORT: Int = 19500
         const val DISCOVERY_TIMEOUT_MS: Long = 15_000L

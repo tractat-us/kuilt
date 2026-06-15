@@ -18,11 +18,13 @@ import us.tractat.kuilt.core.PeerId
  * **TXT records:** all v1 + v2 keys from [MDNSAdvertisement] are written so
  * that both v1 and v2 peers can parse the advertisement.
  *
- * @param serviceType The DNS-SD service type (NsdManager format — no trailing `.local.`,
- *   e.g. `"_myapp._tcp."`). Must match the browse type used by [MDNSServiceDiscoverer].
- *   Callers must supply an application-specific type — no default is provided.
+ * @param serviceType The mDNS service type. Supply the canonical base form
+ *   (e.g. `MDNSServiceType("_myapp._tcp")`) — the NsdManager-required trailing
+ *   `.` suffix is appended internally. Must match the browse type used by
+ *   [MDNSServiceDiscoverer].
  * @param nsdManager The system NSD manager — obtain via
- *   `context.getSystemService(NsdManager::class.java)` and inject via Koin.
+ *   `context.getSystemService(NsdManager::class.java)` and inject via your
+ *   dependency injection container.
  * @param displayName Human-readable service name (shown in NSD browsers).
  * @param port TCP port the local WebSocket server listens on.
  * @param selfId This peer's [PeerId] — embedded in TXT records for joiners.
@@ -30,11 +32,11 @@ import us.tractat.kuilt.core.PeerId
  * @param hostOs OS family of this host — written as [MDNSAdvertisement.TXT_KEY_HOST_OS].
  *   Defaults to [MDNSAdvertisement.HostOs.Android].
  * @param fabrics Comma-separated transport labels this host accepts (e.g. `"ws"`).
- * @param gameMinVersion Minimum game-protocol version this host accepts.
- * @param gameMaxVersion Maximum game-protocol version this host accepts.
+ * @param txtExtensions Arbitrary application-supplied TXT record key–value pairs that are
+ *   written alongside the kuilt-reserved fields and recovered by [MDNSServiceDiscoverer].
  */
 public class MDNSServiceAdvertiser(
-    private val serviceType: String,
+    private val serviceType: MDNSServiceType,
     private val nsdManager: NsdManager,
     private val displayName: String,
     private val port: Int,
@@ -42,8 +44,7 @@ public class MDNSServiceAdvertiser(
     private val wsPath: String = MDNSAdvertisement.DEFAULT_WS_PATH,
     private val hostOs: MDNSAdvertisement.HostOs? = MDNSAdvertisement.HostOs.Android,
     private val fabrics: String? = null,
-    private val gameMinVersion: Int? = null,
-    private val gameMaxVersion: Int? = null,
+    private val txtExtensions: Map<String, String> = emptyMap(),
 ) {
     private var registrationListener: NsdManager.RegistrationListener? = null
 
@@ -99,12 +100,11 @@ public class MDNSServiceAdvertiser(
     private fun buildServiceInfo(): NsdServiceInfo =
         NsdServiceInfo().apply {
             serviceName = displayName
-            serviceType = this@MDNSServiceAdvertiser.serviceType
+            serviceType = this@MDNSServiceAdvertiser.serviceType.forNsd()
             port = this@MDNSServiceAdvertiser.port
-            buildTxtMap(selfId, wsPath, hostOs, fabrics, gameMinVersion, gameMaxVersion)
+            buildTxtMap(selfId, wsPath, hostOs, fabrics, txtExtensions)
                 .forEach { (key, value) -> setAttribute(key, value) }
         }
-
 }
 
 /** Thrown when [NsdManager] reports registration failure. */

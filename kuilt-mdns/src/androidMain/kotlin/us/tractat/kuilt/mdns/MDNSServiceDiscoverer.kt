@@ -17,15 +17,16 @@ import us.tractat.kuilt.core.discovery.PeerDiscoverySource
  * [NsdManager.resolveService] can only handle one resolution at a time; this
  * implementation serialises resolution requests through an in-memory queue.
  *
- * @param serviceType The DNS-SD service type to browse for (NsdManager format —
- *   no trailing `.local.`, e.g. `"_myapp._tcp."`). Must match the type used by
- *   [MDNSServiceAdvertiser]. Callers must supply an application-specific type —
- *   no default is provided.
+ * @param serviceType The mDNS service type. Supply the canonical base form
+ *   (e.g. `MDNSServiceType("_myapp._tcp")`) — the NsdManager-required trailing
+ *   `.` suffix is appended internally. Must match the type used by
+ *   [MDNSServiceAdvertiser].
  * @param nsdManager The system NSD manager — obtain via
- *   `context.getSystemService(NsdManager::class.java)` and inject via Koin.
+ *   `context.getSystemService(NsdManager::class.java)` and inject via your
+ *   dependency injection container.
  */
 public class MDNSServiceDiscoverer(
-    private val serviceType: String,
+    private val serviceType: MDNSServiceType,
     private val nsdManager: NsdManager,
 ) : PeerDiscoverySource {
     override val kind: DiscoveryKind = DiscoveryKind.Mdns
@@ -81,14 +82,7 @@ public class MDNSServiceDiscoverer(
                                             mcPeer =
                                                 attrs[MDNSAdvertisement.TXT_KEY_MC_PEER]
                                                     ?.decodeToString(),
-                                            gameMinVersion =
-                                                attrs[MDNSAdvertisement.TXT_KEY_GAME_MIN_VERSION]
-                                                    ?.decodeToString()
-                                                    ?.toIntOrNull(),
-                                            gameMaxVersion =
-                                                attrs[MDNSAdvertisement.TXT_KEY_GAME_MAX_VERSION]
-                                                    ?.decodeToString()
-                                                    ?.toIntOrNull(),
+                                            txtExtensions = extractExtensions(attrs),
                                         ),
                                     )
                                 }
@@ -126,7 +120,7 @@ public class MDNSServiceDiscoverer(
                 }
 
             nsdManager.discoverServices(
-                serviceType,
+                serviceType.forNsd(),
                 NsdManager.PROTOCOL_DNS_SD,
                 listener,
             )
@@ -136,3 +130,9 @@ public class MDNSServiceDiscoverer(
             }
         }
 }
+
+private fun extractExtensions(attrs: Map<String, ByteArray?>): Map<String, String> =
+    attrs
+        .filterKeys { it !in kuiltReservedTxtKeys }
+        .mapNotNull { (key, value) -> value?.decodeToString()?.let { key to it } }
+        .toMap()
