@@ -42,7 +42,7 @@ class MultipeerNativeLibTest {
         val lib = MultipeerNativeLib.load()
         assertNotNull(lib, "Native.load returned null on macOS")
 
-        val handle = lib.mc_runtime_create("Test Mac", "fireworks-mc")
+        val handle = lib.mc_runtime_create("Test Mac", "kuilt-test")
         assertNotNull(handle, "mc_runtime_create returned null for valid args")
         try {
             // Round-trip the display name through the cdecl ABI: should equal "Test Mac".
@@ -67,7 +67,7 @@ class MultipeerNativeLibTest {
         val factory =
             MultipeerPeerLinkFactory(
                 displayName = "Browser Smoke",
-                serviceType = "fireworks-mc",
+                serviceType = "kuilt-test",
             )
         val browser = MultipeerServiceBrowser(factory)
         // Construct the discoveries flow and verify it surfaces no immediate
@@ -104,7 +104,7 @@ class MultipeerNativeLibTest {
         val lib = MultipeerNativeLib.load()
         assertNotNull(lib, "Native.load returned null on macOS")
 
-        val runtime = lib.mc_runtime_create("Host Smoke", "fireworks-mc")
+        val runtime = lib.mc_runtime_create("Host Smoke", "kuilt-test")
         assertNotNull(runtime, "mc_runtime_create returned null")
         try {
             // Open a host session — starts advertising on the LAN. We don't

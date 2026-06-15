@@ -23,12 +23,13 @@ import us.tractat.kuilt.core.Seam
  * @param displayName Local display name surfaced to remote peers as the
  *   `MCPeerID.displayName`. Keep it short and recognisable (device name is the
  *   conventional choice).
- * @param serviceType MultipeerConnectivity service-type string. Default:
- *   [MultipeerService.SERVICE_TYPE].
+ * @param serviceType MultipeerConnectivity service-type string. Must be 1–15 ASCII letters,
+ *   digits, or hyphens (same rules as Bonjour `_service._tcp.` minus underscores).
+ *   Callers supply their own value; kuilt does not provide a default.
  */
 public expect class MultipeerPeerLinkFactory(
     displayName: String,
-    serviceType: String = MultipeerService.SERVICE_TYPE,
+    serviceType: String,
 ) : Loom {
     override suspend fun weave(rendezvous: Rendezvous): Seam
 

@@ -19,7 +19,7 @@ import us.tractat.kuilt.core.Tag
  * @property displayName Human-readable name as broadcast by the advertising
  *   peer (matches its `MCPeerID.displayName`).
  * @property serviceType MultipeerConnectivity service type string the peer
- *   advertised under (e.g. [MultipeerService.SERVICE_TYPE]).
+ *   advertised under (matches the `serviceType` passed to [MultipeerPeerLinkFactory]).
  */
 public data class MultipeerAdvertisement(
     val handle: String,

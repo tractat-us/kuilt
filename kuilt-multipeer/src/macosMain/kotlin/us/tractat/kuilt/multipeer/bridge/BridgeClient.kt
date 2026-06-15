@@ -39,7 +39,6 @@ import platform.posix.memcpy
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.multipeer.MultipeerAdvertisement
 import us.tractat.kuilt.multipeer.MultipeerPeerLinkFactory
-import us.tractat.kuilt.multipeer.MultipeerService
 import kotlin.experimental.ExperimentalNativeApi
 import kotlin.native.CName
 
@@ -81,7 +80,7 @@ public fun mc_runtime_join(
         MultipeerAdvertisement(
             handle = handleStr,
             displayName = handleStr,
-            serviceType = factory.serviceType.ifBlank { MultipeerService.SERVICE_TYPE },
+            serviceType = factory.serviceType,
         )
     val link =
         runCatching {

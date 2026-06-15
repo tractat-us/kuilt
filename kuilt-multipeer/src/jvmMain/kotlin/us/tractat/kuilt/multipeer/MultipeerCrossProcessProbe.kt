@@ -39,12 +39,13 @@ public object MultipeerCrossProcessProbe {
      */
     public fun runHost(
         displayName: String,
+        serviceType: String,
         timeoutMs: Long = 5L * 60L * 1000L,
         nowMs: () -> Long = System::currentTimeMillis,
         log: (String) -> Unit = ::println,
     ): Result {
-        log("[host] starting factory displayName=$displayName serviceType=${MultipeerService.SERVICE_TYPE}")
-        val factory = MultipeerPeerLinkFactory(displayName)
+        log("[host] starting factory displayName=$displayName serviceType=$serviceType")
+        val factory = MultipeerPeerLinkFactory(displayName, serviceType)
         val t0 = nowMs()
         return try {
             runBlocking {
@@ -94,6 +95,7 @@ public object MultipeerCrossProcessProbe {
      */
     public fun runJoinFirst(
         displayName: String,
+        serviceType: String,
         targetPrefix: String,
         discoveryTimeoutMs: Long = 30L * 1000L,
         joinTimeoutMs: Long = 15L * 1000L,
@@ -103,9 +105,9 @@ public object MultipeerCrossProcessProbe {
     ): Result {
         log(
             "[joiner] starting factory displayName=$displayName targetPrefix=$targetPrefix " +
-                "serviceType=${MultipeerService.SERVICE_TYPE}",
+                "serviceType=$serviceType",
         )
-        val factory = MultipeerPeerLinkFactory(displayName)
+        val factory = MultipeerPeerLinkFactory(displayName, serviceType)
         val browser = MultipeerServiceBrowser(factory)
         val t0 = nowMs()
         return try {
