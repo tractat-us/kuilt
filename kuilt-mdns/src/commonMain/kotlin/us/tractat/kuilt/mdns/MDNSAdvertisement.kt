@@ -91,3 +91,14 @@ public data class MDNSAdvertisement(
         public const val FABRIC_NEARBY: String = "nearby"
     }
 }
+
+/** TXT keys owned by kuilt — excluded from [MDNSAdvertisement.txtExtensions]. */
+internal val kuiltReservedTxtKeys: Set<String> =
+    setOf(
+        MDNSAdvertisement.TXT_KEY_PEER_ID,
+        MDNSAdvertisement.TXT_KEY_WS_PATH,
+        MDNSAdvertisement.TXT_KEY_PROTOCOL_VERSION,
+        MDNSAdvertisement.TXT_KEY_HOST_OS,
+        MDNSAdvertisement.TXT_KEY_FABRICS,
+        MDNSAdvertisement.TXT_KEY_MC_PEER,
+    )

@@ -1,5 +1,7 @@
 package us.tractat.kuilt.mdns
 
+import kotlin.jvm.JvmInline
+
 /**
  * Platform-neutral mDNS service-type wrapper.
  *
@@ -28,9 +30,8 @@ package us.tractat.kuilt.mdns
  *
  * @property value The canonical base form (e.g. `"_myapp._tcp"`).
  */
-public data class MDNSServiceType(
-    public val value: String,
-) {
+@JvmInline
+public value class MDNSServiceType(public val value: String) {
     /**
      * Returns the service type in JmDNS format: `"_myapp._tcp.local."`.
      *

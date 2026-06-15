@@ -64,16 +64,6 @@ public class MDNSServiceDiscoverer(
         }.flowOn(Dispatchers.Main)
 }
 
-private val kuiltReservedTxtKeys: Set<String> =
-    setOf(
-        MDNSAdvertisement.TXT_KEY_PEER_ID,
-        MDNSAdvertisement.TXT_KEY_WS_PATH,
-        MDNSAdvertisement.TXT_KEY_PROTOCOL_VERSION,
-        MDNSAdvertisement.TXT_KEY_HOST_OS,
-        MDNSAdvertisement.TXT_KEY_FABRICS,
-        MDNSAdvertisement.TXT_KEY_MC_PEER,
-    )
-
 private class ServiceDelegate(
     private val onDiscovered: (MDNSAdvertisement) -> Unit,
 ) : NSObject(),
