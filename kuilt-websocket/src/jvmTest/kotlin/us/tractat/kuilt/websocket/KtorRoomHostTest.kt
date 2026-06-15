@@ -14,6 +14,7 @@ import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.session.Room
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
@@ -85,5 +86,29 @@ class KtorRoomHostTest {
                 // Job must complete promptly; if it hangs, the loop is stuck.
                 withTimeout(2_000) { job.join() }
             }
+        }
+
+    /**
+     * #449: a non-cancellation error from the accept loop must propagate out of [start],
+     * not be swallowed silently. The caller must be able to observe the failure.
+     *
+     * Verified by closing the server loom before calling [start]: the very first
+     * [SeamRoomFactory.host] call fails with a non-cancellation exception, and [start]
+     * must rethrow it so the coroutine observes the failure.
+     */
+    @Test
+    fun `accept loop error propagates out of start`() =
+        testApplication {
+            val host = KtorRoomHost(application, serverPath, serverPeerId, serverPattern)
+            // Close the underlying loom so factory.host(...) throws on the first accept.
+            host.close()
+            val result = runCatching {
+                coroutineScope {
+                    host.start { awaitCancellation() }
+                }
+            }
+            // start() must complete with a non-cancellation failure, not return silently.
+            assertTrue(result.isFailure, "start() must propagate accept-loop failure")
+            assertIs<Throwable>(result.exceptionOrNull())
         }
 }
