@@ -12,7 +12,7 @@ propagation over a kuilt `Seam`.
 
 | What you're building | Type |
 |----------------------|------|
-| Chat / shared message log | `Rga` — an ordered list where inserts from any peer land in a stable position |
+| Chat / shared message log | `Rga` (RGA) — an ordered list where inserts from any peer land in a stable position |
 | Collaborative document or JSON config | `JsonCrdt` — recursive JSON with ORMap objects, Rga arrays, and MVRegister leaves |
 | User presence, live cursors, typing indicators | `EphemeralMap` — per-replica slots with TTL; departed peers expire automatically |
 | Tags, followers, members, shopping cart | `ORSet` — add/remove set with add-wins on concurrent edits |
@@ -31,7 +31,7 @@ propagation over a kuilt `Seam`.
 | Sets | `GSet`, `ORSet`, `TwoPhaseSet` | Set union / observe-remove semantics |
 | Registers | `LWWRegister`, `MVRegister` | Last-write-wins or multi-value concurrent conflict |
 | Maps | `LWWMap`, `ORMap` | Key-level LWW or ORSet-keyed map |
-| Sequences | `Rga` | Ordered list with stable unique ids |
+| Sequences | `Rga` (RGA) | Ordered list with stable unique ids |
 | Composite | `JsonCrdt` | Recursive JSON document — ORMap objects, Rga arrays, MVRegister leaves |
 | Ephemeral | `EphemeralMap` | Per-replica presence slot, clock-ordered, with caller-driven TTL eviction |
 | Causal primitives | `Causal`, `DotContext`, `DotSet` | Causal-context-based remove/add reasoning |

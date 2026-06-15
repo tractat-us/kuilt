@@ -50,8 +50,8 @@ seam.close()
 ## Step 2: Add a chat (replicated data)
 
 Chat messages need to arrive in the same order on every device. Add `kuilt-crdt`
-and use `Rga` — a replicated ordered list where inserts from any peer land
-in a stable, consistent position:
+and use `Rga` (RGA — Replicated Growable Array) — an ordered list where inserts
+from any peer land in a stable, consistent position:
 
 ```kotlin
 // build.gradle.kts
@@ -70,7 +70,7 @@ val replicator = SeamReplicator(
 
 // Send a message — appended to the shared list, propagated to all peers
 val current = replicator.state.value
-val (_, op) = current.insertAfter(current.tail, replica, "hello from alice")
+val (_, op) = current.insertAt(current.size, replica, "hello from alice")
 replicator.apply(Patch(Rga.empty<String>().apply(op)))
 
 // Render the live chat log
@@ -83,7 +83,7 @@ and call `piece` to merge on the other side:
 
 ```kotlin
 var log = Rga.empty<String>()
-val (next, op) = log.insertAfter(log.tail, replica, "hello")
+val (next, op) = log.insertAt(log.size, replica, "hello")
 log = log.apply(op)
 
 // Received from another peer via any transport:
