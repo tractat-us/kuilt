@@ -8,9 +8,9 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 /**
- * Smoke-tests that the macOS K/N-built `libkuilt.dylib` is bundled
+ * Smoke-tests that the macOS K/N-built `libfireworks_mc.dylib` is bundled
  * inside the JVM jar at the JNA-conventional resource path and that the
- * cdecl `kuilt_protocol_version` symbol is reachable.
+ * cdecl `fireworks_mc_protocol_version` symbol is reachable.
  *
  * The test gates on `os.name == "Mac OS X"` (and adjacent strings) because
  * the dylib is only built and bundled for macOS architectures —
