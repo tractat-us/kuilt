@@ -30,9 +30,6 @@ private val log = KotlinLogging.logger {}
  * dispatching each to `onRoom` in a child coroutine so concurrent connections
  * don't serialize.
  *
- * Replaces the fireworks-side `KtorLeaderListener`. The cycle that previously
- * kept the listener fireworks-side (its dependency on `LiveLeaderListener`)
- * is gone after ADR-035 Phase 2 S5 retired `LiveLeaderListener`.
  */
 public class KtorRoomHost(
     application: Application,
@@ -44,10 +41,9 @@ public class KtorRoomHost(
     private var started = false
 
     // Pre-construct the Loom synchronously so the WebSocket route is mounted
-    // on `application` before any client tries to connect. Deferring this
-    // into `start()`'s launched coroutine race-conditions route registration
-    // against early test clients (the same issue the fireworks
-    // `KtorLeaderListener` documented in its KDoc).
+    // on `application` before any client tries to connect. Deferring into
+    // `start()`'s launched coroutine race-conditions route registration
+    // against early connecting clients.
     private val loom: KtorServerLoom =
         KtorServerLoom(application, path, serverPeerId)
 
