@@ -29,19 +29,23 @@ import us.tractat.kuilt.core.discovery.PeerDiscoverySource
 // NWBrowser browsing is available in K/N 2.3.x but `nw_browse_result_enumerate` (required to
 // iterate over the result set) is missing from the generated platform bindings. NSNetServiceBrowser
 // has complete K/N Foundation bindings and is used as the practical alternative.
-private const val SERVICE_TYPE = "_fireworks._tcp."
 private const val RESOLVE_TIMEOUT_S = 5.0
 
 /**
- * Discovers peers advertising [MDNSAdvertisement.SERVICE_TYPE] via
- * mDNS / Bonjour using [NSNetServiceBrowser] on iOS.
+ * Discovers peers on the local network via mDNS / Bonjour using [NSNetServiceBrowser] on iOS.
  *
  * Browse-only: hosting remains JVM-only via [MDNSServiceAdvertiser] / JmDNS.
  *
  * The browser is scheduled on [NSRunLoop.mainRunLoop] so callbacks fire
  * regardless of which dispatcher collects the flow.
+ *
+ * @param serviceType The mDNS service type to browse for, without the `local.` domain suffix
+ *   (e.g. `"_myapp._tcp."`). Callers must supply an application-specific type — no default
+ *   is provided.
  */
-public class MDNSServiceDiscoverer : PeerDiscoverySource {
+public class MDNSServiceDiscoverer(
+    private val serviceType: String,
+) : PeerDiscoverySource {
     override val kind: DiscoveryKind = DiscoveryKind.Mdns
 
     override fun discoveries(): Flow<MDNSAdvertisement> =
@@ -50,7 +54,7 @@ public class MDNSServiceDiscoverer : PeerDiscoverySource {
             val browser = NSNetServiceBrowser()
             browser.setDelegate(delegate)
             browser.scheduleInRunLoop(NSRunLoop.mainRunLoop(), forMode = NSRunLoopCommonModes)
-            browser.searchForServicesOfType(SERVICE_TYPE, inDomain = "local.")
+            browser.searchForServicesOfType(serviceType, inDomain = "local.")
 
             awaitClose {
                 browser.stop()

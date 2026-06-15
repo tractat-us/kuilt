@@ -15,13 +15,12 @@ import us.tractat.kuilt.core.PeerId
  * - [unregister] removes the registration. Safe to call if [register] was
  *   never called or has already failed.
  *
- * **Service type:** [SERVICE_TYPE] (`_fireworks._tcp.` — NsdManager format,
- * no trailing `.local.`). This matches the browse type used by
- * [MDNSServiceDiscoverer].
- *
  * **TXT records:** all v1 + v2 keys from [MDNSAdvertisement] are written so
  * that both v1 and v2 peers can parse the advertisement.
  *
+ * @param serviceType The DNS-SD service type (NsdManager format — no trailing `.local.`,
+ *   e.g. `"_myapp._tcp."`). Must match the browse type used by [MDNSServiceDiscoverer].
+ *   Callers must supply an application-specific type — no default is provided.
  * @param nsdManager The system NSD manager — obtain via
  *   `context.getSystemService(NsdManager::class.java)` and inject via Koin.
  * @param displayName Human-readable service name (shown in NSD browsers).
@@ -35,6 +34,7 @@ import us.tractat.kuilt.core.PeerId
  * @param gameMaxVersion Maximum game-protocol version this host accepts.
  */
 public class MDNSServiceAdvertiser(
+    private val serviceType: String,
     private val nsdManager: NsdManager,
     private val displayName: String,
     private val port: Int,
@@ -99,17 +99,12 @@ public class MDNSServiceAdvertiser(
     private fun buildServiceInfo(): NsdServiceInfo =
         NsdServiceInfo().apply {
             serviceName = displayName
-            serviceType = SERVICE_TYPE
+            serviceType = this@MDNSServiceAdvertiser.serviceType
             port = this@MDNSServiceAdvertiser.port
             buildTxtMap(selfId, wsPath, hostOs, fabrics, gameMinVersion, gameMaxVersion)
                 .forEach { (key, value) -> setAttribute(key, value) }
         }
 
-    public companion object {
-        // NsdManager expects the type without a trailing .local. suffix.
-        // This matches the browse type used by MDNSServiceDiscoverer on Android.
-        public const val SERVICE_TYPE: String = "_fireworks._tcp."
-    }
 }
 
 /** Thrown when [NsdManager] reports registration failure. */

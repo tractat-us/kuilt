@@ -69,11 +69,6 @@ class MDNSAdvertisementTest {
     }
 
     @Test
-    fun `SERVICE_TYPE has expected value`() {
-        assertEquals("_fireworks._tcp.local.", MDNSAdvertisement.SERVICE_TYPE)
-    }
-
-    @Test
     fun `TXT key for peerId is stable`() {
         assertEquals("peerId", MDNSAdvertisement.TXT_KEY_PEER_ID)
     }

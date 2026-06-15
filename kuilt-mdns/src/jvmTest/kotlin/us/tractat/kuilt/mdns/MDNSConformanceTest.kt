@@ -67,6 +67,7 @@ class MDNSConformanceTest : SeamConformanceSuite() {
         port = ServerSocket(0).use { it.localPort }
         server = embeddedServer(Netty, port = port) {
             hostFactory = MDNSPeerLinkFactory(
+                serviceType = "_kuilt-test._tcp.local.",
                 application = this,
                 jmdns = CapturingJmDNS(),
                 port = port,
@@ -107,6 +108,7 @@ class MDNSConformanceTest : SeamConformanceSuite() {
     override fun newLoomPair(): Pair<Loom, Loom> {
         val joinerClient = freshJoinerClient()
         val joinerFactory = MDNSPeerLinkFactory(
+            serviceType = "_kuilt-test._tcp.local.",
             application = server.application,
             jmdns = CapturingJmDNS(),
             port = port,

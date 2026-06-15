@@ -10,18 +10,22 @@ import us.tractat.kuilt.core.discovery.DiscoveryKind
 import us.tractat.kuilt.core.discovery.PeerDiscoverySource
 
 /**
- * Discovers peers advertising [MDNSAdvertisement.SERVICE_TYPE] via
- * mDNS / Bonjour using Android's [NsdManager].
+ * Discovers peers on the local network via mDNS / Bonjour using Android's [NsdManager].
  *
  * Browse-only: hosting remains JVM-only via [MDNSServiceAdvertiser] / JmDNS.
  *
  * [NsdManager.resolveService] can only handle one resolution at a time; this
  * implementation serialises resolution requests through an in-memory queue.
  *
+ * @param serviceType The DNS-SD service type to browse for (NsdManager format —
+ *   no trailing `.local.`, e.g. `"_myapp._tcp."`). Must match the type used by
+ *   [MDNSServiceAdvertiser]. Callers must supply an application-specific type —
+ *   no default is provided.
  * @param nsdManager The system NSD manager — obtain via
  *   `context.getSystemService(NsdManager::class.java)` and inject via Koin.
  */
 public class MDNSServiceDiscoverer(
+    private val serviceType: String,
     private val nsdManager: NsdManager,
 ) : PeerDiscoverySource {
     override val kind: DiscoveryKind = DiscoveryKind.Mdns
@@ -122,7 +126,7 @@ public class MDNSServiceDiscoverer(
                 }
 
             nsdManager.discoverServices(
-                SERVICE_TYPE,
+                serviceType,
                 NsdManager.PROTOCOL_DNS_SD,
                 listener,
             )
@@ -131,10 +135,4 @@ public class MDNSServiceDiscoverer(
                 runCatching { nsdManager.stopServiceDiscovery(listener) }
             }
         }
-
-    public companion object {
-        // NsdManager expects the type without a trailing dot-local suffix but
-        // with a trailing dot on the protocol component.
-        private const val SERVICE_TYPE = "_fireworks._tcp."
-    }
 }
