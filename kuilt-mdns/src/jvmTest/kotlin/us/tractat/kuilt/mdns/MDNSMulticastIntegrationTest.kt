@@ -63,8 +63,8 @@ class MDNSMulticastIntegrationTest {
                     return
                 }
 
-        advertiserJmdns = JmDNS.create(address, "fireworks-advertiser")
-        discovererJmdns = JmDNS.create(address, "fireworks-discoverer")
+        advertiserJmdns = JmDNS.create(address, "kuilt-advertiser")
+        discovererJmdns = JmDNS.create(address, "kuilt-discoverer")
     }
 
     @After

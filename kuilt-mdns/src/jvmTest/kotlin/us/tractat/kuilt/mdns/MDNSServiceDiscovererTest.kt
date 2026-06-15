@@ -82,11 +82,11 @@ class MDNSServiceDiscovererParserTest {
 
     @Test
     fun `toAdvertisement sets displayName from ServiceInfo name`() {
-        val info = serviceInfoWithTxt("Fireworks LAN", 19303, peerId = "peer-display")
+        val info = serviceInfoWithTxt("Kuilt LAN", 19303, peerId = "peer-display")
 
         val result = discoverer.toAdvertisement(info, "10.0.0.4")
 
-        assertEquals("Fireworks LAN", result?.displayName)
+        assertEquals("Kuilt LAN", result?.displayName)
     }
 
     // ── v2 TXT field parsing ──────────────────────────────────────────────────
