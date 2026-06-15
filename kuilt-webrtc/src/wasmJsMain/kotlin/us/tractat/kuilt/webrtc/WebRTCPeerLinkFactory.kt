@@ -28,7 +28,7 @@ import kotlin.random.Random
  * (used to label the remote peer); its `peerKey` is informational —
  * the room is already pinned by this factory.
  *
- * Wasm-only at launch — see ADR-019 §7.
+ * Wasm-only at launch.
  */
 public class WebRTCPeerLinkFactory
     internal constructor(
@@ -36,12 +36,14 @@ public class WebRTCPeerLinkFactory
         private val room: String,
         private val iceConfig: IceConfig = IceConfig.DefaultStun,
         private val facadeFactory: RtcPeerConnectionFacadeFactory,
+        private val random: Random = Random.Default,
     ) : Loom {
         public constructor(
             signaling: SignalingChannel,
             room: String,
             iceConfig: IceConfig = IceConfig.DefaultStun,
-        ) : this(signaling, room, iceConfig, BrowserRtcFacadeFactory())
+            random: Random = Random.Default,
+        ) : this(signaling, room, iceConfig, BrowserRtcFacadeFactory(), random)
 
         override suspend fun weave(rendezvous: Rendezvous): Seam =
             when (rendezvous) {
@@ -118,13 +120,13 @@ public class WebRTCPeerLinkFactory
          * consumed via [Channel.receive] directly so the rest of [incoming] remains
          * collectible by [HandshakeRunner].
          *
-         * Use this instead of [open]/[join] for symmetric peers (e.g. Quick Play)
-         * where neither tab knows in advance which role it should take.
+         * Use this instead of [open]/[join] for symmetric peers (e.g. a peer-to-peer
+         * session) where neither tab knows in advance which role it should take.
          *
          * Prefer [openWithServerRoleResult] when the caller needs both the assigned
          * role and the link — it avoids a second signaling session.
          */
-        public suspend fun openWithServerRole(config: Pattern = Pattern("quickplay")): Seam = openWithServerRoleResult(config).second
+        public suspend fun openWithServerRole(config: Pattern): Seam = openWithServerRoleResult(config).second
 
         /**
          * Like [openWithServerRole] but surfaces the relay-assigned role alongside
@@ -135,24 +137,20 @@ public class WebRTCPeerLinkFactory
          * room before the partner connects. This method avoids that by reading the
          * role frame and completing the WebRTC handshake on the same session.
          *
-         * Returns `Pair<isHost, Seam>` where `isHost == true` means this peer
-         * should run `LiveLeader` (the
-         * authoritative host), and `false` means it should run
-         * `LiveSessionRuntime` as a
-         * client joiner. Used by `LiveDemoModule.wasmJs` to branch the host-leader
-         * vs client-joiner paths (ADR-027 §3).
+         * Returns `Pair<isHost, Seam>` where `isHost == true` means this peer took
+         * the host role and `false` means it took the joiner role. The caller is
+         * responsible for branching behaviour accordingly.
          *
          * Requires [signaling] to be a [WebSocketSignalingChannel].
          *
          * @param handshakeTimeoutMs overall deadline for the WebRTC offer/answer/ICE
-         *   exchange. Defaults to [DEFAULT_HANDSHAKE_TIMEOUT_MS] (30 s). On WASM, the
-         *   peer tab may take 30–60 s to boot before connecting, so the WASM Quick Play
-         *   path passes a larger value (90 s) to avoid timing out before the partner
-         *   has had a chance to join the room. Passing a short value in tests enables
-         *   fast timeout-failure coverage.
+         *   exchange. Defaults to [DEFAULT_HANDSHAKE_TIMEOUT_MS] (30 s). Increase for
+         *   environments where the peer tab may take longer to boot before joining the
+         *   room (e.g. 90 s on a slow connection). Passing a short value in tests
+         *   enables fast timeout-failure coverage.
          */
         public suspend fun openWithServerRoleResult(
-            config: Pattern = Pattern("quickplay"),
+            config: Pattern,
             handshakeTimeoutMs: Long = DEFAULT_HANDSHAKE_TIMEOUT_MS,
         ): Pair<Boolean, Seam> {
             val wsChannel =
@@ -178,6 +176,6 @@ public class WebRTCPeerLinkFactory
             buildString {
                 append(prefix)
                 append('-')
-                repeat(8) { append(('a' + Random.nextInt(26))) }
+                repeat(8) { append(('a' + random.nextInt(26))) }
             }
     }

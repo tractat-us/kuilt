@@ -164,8 +164,8 @@ class HandshakeRunnerTest {
      * [kotlinx.coroutines.CancellationException] from `inbound.cancel()` was
      * processed. Because [kotlinx.coroutines.channels.ClosedReceiveChannelException]
      * is not a [kotlinx.coroutines.CancellationException], `coroutineScope`
-     * propagated it as a real failure, surfacing as `'Channel was closed'` in
-     * `LiveSessionRuntime.runOneAttempt()` and triggering a spurious retry.
+     * propagated it as a real failure, surfacing as `'Channel was closed'` at the
+     * caller and triggering a spurious reconnect attempt.
      *
      * The fix: drop `inbound.cancel()`. `signaling.close()` closes
      * `inboundChannel`, which terminates the `receiveAsFlow()` collector
@@ -176,10 +176,7 @@ class HandshakeRunnerTest {
      * the test dispatcher serializes coroutines cooperatively, eliminating the
      * scheduling window where [kotlinx.coroutines.channels.ClosedReceiveChannelException]
      * can escape before the [kotlinx.coroutines.CancellationException] is processed.
-     * The real-time regression guard is `QuickPlayBrowserIntegrationTest
-     * .both_tabs_complete_webrtc_pairing_and_reach_shared_lobby` (in `:server`),
-     * which runs the full WASM bundle in headless Chromium under the browser's
-     * real JS event loop. This unit test verifies the happy-path shape of the fix.
+     * This unit test verifies the happy-path shape of the fix.
      */
     @Test
     fun handshakeReturnsNormallyAfterDataChannelOpens() =

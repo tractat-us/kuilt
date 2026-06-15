@@ -15,8 +15,8 @@ private val log = KotlinLogging.logger {}
  * Default deadline for the offer/answer/ICE exchange to bring a data channel up.
  *
  * On WASM, the two tabs may stagger by 30–60 s during bundle load, so callers that
- * know the peer may be slow-booting (e.g. Quick Play on WASM) should pass a larger
- * [handshakeTimeoutMs] to [HandshakeRunner.runHost] / [HandshakeRunner.runJoiner].
+ * know the peer may be slow-booting should pass a larger [handshakeTimeoutMs] to
+ * [HandshakeRunner.runHost] / [HandshakeRunner.runJoiner].
  */
 internal const val DEFAULT_HANDSHAKE_TIMEOUT_MS = 30_000L
 
@@ -24,8 +24,8 @@ internal const val DEFAULT_HANDSHAKE_TIMEOUT_MS = 30_000L
  * Runs the WebRTC offer / answer / trickle-ICE exchange to bring a
  * [RtcPeerConnectionFacade] from constructed to "data channel open".
  *
- * Implements the state machine described in the design spec:
- * docs/superpowers/specs/2026-05-23-kuilt-webrtc-design.md
+ * Drives the offer/answer SDP exchange and trickle-ICE candidate forwarding until
+ * the RTCDataChannel transitions to open, then returns.
  */
 internal object HandshakeRunner {
     /**
