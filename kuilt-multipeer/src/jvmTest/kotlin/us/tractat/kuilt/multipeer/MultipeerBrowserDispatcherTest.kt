@@ -61,7 +61,7 @@ class MultipeerBrowserDispatcherTest {
         val factory =
             MultipeerPeerLinkFactory(
                 displayName = "test-device",
-                serviceType = "fireworks-mc",
+                serviceType = "kuilt-test",
                 injectedLib = fakeLib,
                 injectedRuntimeHandle = Pointer(0x42L),
             )
