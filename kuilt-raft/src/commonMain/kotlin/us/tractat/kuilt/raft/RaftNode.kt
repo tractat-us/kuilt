@@ -77,7 +77,8 @@
  *
  * Nodes listed in [ClusterConfig.learners] are non-voting replicas. They receive
  * all log entries from the leader but never vote and never lead. [RaftNode.propose]
- * always throws [NotLeaderException] on a learner node.
+ * on a learner node forwards the command to the current leader (Raft §8) like any
+ * non-leader; the committed entry replicates back through normal AppendEntries.
  *
  * @see RaftNode for the runtime interface
  * @see CoroutineScope.raftNode for the construction entry point
@@ -193,11 +194,25 @@ public interface RaftNode {
      * Proposes [command] for replication and suspends until a quorum commits it.
      *
      * Returns the committed [LogEntry] (which carries the assigned [LogEntry.index]
-     * and [LogEntry.term]). Only the leader can propose; all other roles throw
-     * immediately.
+     * and [LogEntry.term]).
      *
-     * @throws NotLeaderException if this node is not currently the leader (including learners).
-     * @throws LeadershipLostException if leadership is lost while waiting for commitment.
+     * May be called from **any** node in the cluster (Raft §8):
+     * - The **leader** appends the entry directly.
+     * - Every other role (**Follower**, **Candidate**, **Learner**) forwards the command
+     *   to the current leader and suspends until the leader commits it. The committed
+     *   entry then replicates back to the calling node through the normal AppendEntries path.
+     * - If no leader is known yet (during an election), the call waits, cancellably, until
+     *   a leader is elected and then forwards.
+     *
+     * **Cancellation is best-effort.** A forward that is still queued when the caller cancels
+     * is guaranteed not to be sent. However, a command already forwarded to — or appended by —
+     * the leader may still commit even if the caller cancels; Raft does not support revocation
+     * of in-flight proposals.
+     *
+     * @throws LeadershipLostException if a forwarded proposal is rejected by the target leader
+     *   (e.g. the leader stepped down); the caller may retry on the new leader.
+     * @throws NotLeaderException only in terminal cases: the node is [close]d, or the leader
+     *   is rejecting proposals because a leadership transfer is in flight.
      */
     public suspend fun propose(command: ByteArray): LogEntry
 
