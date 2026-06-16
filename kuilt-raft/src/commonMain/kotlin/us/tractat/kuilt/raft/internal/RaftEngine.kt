@@ -1245,15 +1245,14 @@ internal class RaftEngine(
     // ── propose() ─────────────────────────────────────────────────────────────
 
     private suspend fun onPropose(command: ByteArray, response: CompletableDeferred<LogEntry>) {
-        if (_role.value is RaftRole.Learner) {
-            response.completeExceptionally(NotLeaderException())
-            return
-        }
         if (_role.value !is RaftRole.Leader) {
-            // Follower: forward to the leader (Raft §8). Wait, cancellably, if none is known yet.
+            // Follower/Candidate/Learner: forward to the leader (Raft §8). Wait, cancellably,
+            // if none is known yet. Cleanup of cancelled entries is handled on the actor loop
+            // in flushWaitingForLeader (isCompleted check) and failForwardedProposals (finally).
+            // Do NOT use invokeOnCompletion to mutate forwardedProposals — that runs on the
+            // caller's thread and races the actor loop, which is the sole owner of the map.
             val id = nextForwardId++
             forwardedProposals[id] = response to command
-            response.invokeOnCompletion { forwardedProposals.remove(id) } // cancellation/cleanup
             val leaderId = _leader.value
             if (leaderId != null && leaderId != transport.selfId) {
                 send(leaderId, RaftMessage.Forward(id, command))
@@ -1290,7 +1289,16 @@ internal class RaftEngine(
         } catch (_: ClosedSendChannelException) {
             throw NotLeaderException("node is closed")
         }
-        return d.await()
+        try {
+            return d.await()
+        } finally {
+            // If this coroutine was cancelled before the deferred completed, mark the deferred
+            // cancelled so the actor loop's flushWaitingForLeader sees isCompleted==true and
+            // drops it rather than forwarding a cancelled request. This is the only mutation of
+            // d that touches the caller's thread; all other map/state mutations stay on the actor.
+            // cancel() on an already-completed deferred is a harmless no-op.
+            d.cancel()
+        }
     }
 
     override suspend fun readIndex(): Long {
@@ -1699,7 +1707,11 @@ internal class RaftEngine(
         val batch = waitingForLeader.toList()
         waitingForLeader.clear()
         for (id in batch) {
-            val pair = forwardedProposals[id] ?: continue  // caller cancelled meanwhile
+            val pair = forwardedProposals[id] ?: continue
+            if (pair.first.isCompleted) {            // cancelled or already completed → drop, never send
+                forwardedProposals.remove(id)
+                continue
+            }
             if (amLeader) {
                 forwardedProposals.remove(id)              // leader path completes via `pending`
                 onPropose(pair.second, pair.first)

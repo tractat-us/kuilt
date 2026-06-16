@@ -6,6 +6,8 @@ package us.tractat.kuilt.raft
  * Only voters ever hold [Leader], [Follower], or [Candidate]. A node listed
  * in [ClusterConfig.learners] is permanently [Learner] — it receives log
  * replication from the leader but never votes and never stands for election.
+ * A learner can still call [RaftNode.propose]; the call forwards to the current
+ * leader like any non-leader role, and the committed entry replicates back.
  */
 public sealed interface RaftRole {
     /**
@@ -38,7 +40,10 @@ public sealed interface RaftRole {
      * never votes and never leads.
      *
      * Learners appear in [ClusterConfig.learners], not [ClusterConfig.voters].
-     * [RaftNode.propose] always throws [NotLeaderException] on a learner.
+     * [RaftNode.propose] on a learner forwards the command to the current leader
+     * (Raft §8) exactly like a [Follower] or [Candidate] would; the learner is
+     * never the appender. The committed entry replicates back to the learner
+     * through the normal AppendEntries path.
      */
     public data object Learner : RaftRole
 }

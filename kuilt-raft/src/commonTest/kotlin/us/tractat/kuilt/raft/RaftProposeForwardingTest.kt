@@ -6,11 +6,13 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeout
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNotNull
+import kotlin.time.Duration.Companion.seconds
 
 /**
  * Tests for follower → leader proposal forwarding (Raft §8).
@@ -119,6 +121,72 @@ class RaftProposeForwardingTest {
         val entry = proposalDeferred.await()
         assertContentEquals(byteArrayOf(55), entry.command)
         harness.awaitCommit(entry.index)
+    }
+
+    // ── Change 1: learner forwarding ──────────────────────────────────────────
+
+    @Test
+    fun learnerPropose_forwardsToLeader_andCommits() = raftRunTest(timeout = 10.seconds) {
+        // 3 voters + 1 learner. Propose on the learner — must forward and commit.
+        val voterIds = setOf(NodeId("v1"), NodeId("v2"), NodeId("v3"))
+        val learnerId = NodeId("learner")
+        val clusterConfig = ClusterConfig(voters = voterIds, learners = setOf(learnerId))
+        val sim = RaftSimulation(
+            nodeIds = voterIds.toList() + learnerId,
+            scope = this,
+            raftConfig = FAST_RAFT_CONFIG,
+            nodeScope = backgroundScope,
+            nodeFactory = { _, transport, storage, nodeScope ->
+                nodeScope.raftNode(clusterConfig, transport, storage, FAST_RAFT_CONFIG)
+            },
+        )
+        awaitLeader(sim)
+        val learner = sim.nodes.getValue(learnerId)
+
+        val entry = learner.propose("from-learner".encodeToByteArray())
+
+        assertEquals("from-learner", entry.command.decodeToString())
+        // All voter nodes plus the learner must commit the entry.
+        sim.awaitCommit(entry.index, on = voterIds.toList() + learnerId)
+        sim.checkInvariants()
+    }
+
+    // ── Change 2: cancellation cleanup ────────────────────────────────────────
+
+    /**
+     * A forward that is cancelled while still queued (no leader known) must never commit later.
+     * The guarantee comes from [flushWaitingForLeader] skipping entries whose deferred
+     * [kotlinx.coroutines.CompletableDeferred.isCompleted] is true.
+     */
+    @Test
+    fun cancelledForwardingPropose_doesNotCommitLater() = raftRunTest(timeout = 10.seconds) {
+        val sim = raftSim(this, backgroundScope)
+        val v1 = sim.nodeIds[0]
+        val v2 = sim.nodeIds[1]
+        val v3 = sim.nodeIds[2]
+        // Isolate v1 so it has no leader and forwards queue.
+        sim.partition(setOf(v1), setOf(v2, v3))
+        delay(30)
+
+        val job = launch { sim.nodes.getValue(v1).propose(byteArrayOf(77)) }
+        sim.settle()
+        // Cancel the proposal while it is still queued waiting for a leader.
+        job.cancel()
+        job.join()
+
+        // Heal. The queued forward must have been dropped; subsequent proposals commit normally.
+        sim.heal()
+        val newLeader = sim.awaitLeader(setOf(v2, v3))
+        val entry = newLeader.propose(byteArrayOf(99))
+        sim.awaitCommit(entry.index)
+        // The cancelled command (77) must never appear in any node's committed log.
+        val allCommands = sim.nodeIds.flatMap { id ->
+            sim.storages.getValue(id).entries().filter { !it.isNoOp }.map { it.command }
+        }
+        assert(allCommands.none { it.contentEquals(byteArrayOf(77)) }) {
+            "Cancelled forwarded proposal must never commit"
+        }
+        sim.checkInvariants()
     }
 
     // ── Task 4: cancellation cleanup ───────────────────────────────────────────
