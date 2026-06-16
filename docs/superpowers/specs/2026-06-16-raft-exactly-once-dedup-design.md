@@ -74,26 +74,50 @@ cost when nobody dedups is one counter bump plus a small key on the wire.
 ### Identity — a `RaftNode` construction parameter
 
 ```kotlin
-/** Opaque, stable-per-owner client identity. A GUID by default. */
+/**
+ * Opaque, comparable client identity for Raft §8 dedup. The auto form is `"$nodeId-$randomHex"`
+ * (see [ClientId.auto]); a caller may pass any stable opaque string instead. Raft never parses it.
+ */
 @Serializable
-public value class ClientId(public val value: String)
+public value class ClientId(public val value: String) {
+    public companion object {
+        /** Auto identity: the node's id scoped by a per-incarnation random suffix from [random]. */
+        public fun auto(nodeId: NodeId, random: Random): ClientId { /* "$nodeId-$randomHex" */ }
+    }
+}
 
 public fun CoroutineScope.raftNode(
     clusterConfig: ClusterConfig,
     transport: RaftTransport,
     storage: RaftStorage,
     raftConfig: RaftConfig = RaftConfig(),
-    clientId: ClientId? = null,   // null → engine mints an ephemeral GUID from raftConfig.random
+    clientId: ClientId? = null,   // null → engine mints ClientId.auto(thisNodeId, raftConfig.random)
     onMetric: ((RaftMetric) -> Unit)? = null,
 ): RaftNode
 ```
 
-- **Auto (default, `clientId = null`):** the engine mints a **fresh GUID per
-  incarnation** from `raftConfig.random` (the same injected, test-seeded RNG used
-  for election timeouts — never the global `Random`). Ephemeral: it dies with the
-  process. Gives exactly-once for **in-process** retries; **fails safe to
-  at-least-once** across a proposer crash (a restarted node is a *new* client, so
+- **Auto (default, `clientId = null`):** the engine mints
+  `ClientId.auto(thisNodeId, raftConfig.random)` — the node's own id **prefixed** to a
+  per-incarnation random hex suffix drawn from the same injected, test-seeded RNG used
+  for election timeouts (never the global `Random`). Ephemeral: the suffix dies with
+  the process. Gives exactly-once for **in-process** retries; **fails safe to
+  at-least-once** across a proposer crash (the new incarnation draws a new suffix, so
   its `requestId` can't alias the dead incarnation's serials).
+  - **Why `NodeId`-prefixed, not a bare random GUID.** Because the RNG is an injected
+    dependency, tests seed it — and two nodes constructed with the *same* seed would
+    mint the *identical* "random" id, a guaranteed collision in every multi-node test.
+    Prefixing the (cluster-unique) `NodeId` makes seeded nodes differ by construction.
+    It also makes the id readable in logs ("which session belongs to which node").
+    A formal v8 UUID was considered and rejected: embedding a variable-length `NodeId`
+    into 128 fixed bits forces a lossy hash that destroys both the readability and the
+    collision-freedom, for no consumer that needs to parse it as a UUID.
+  - **Cost note.** `ClientId` is a short opaque string hashed/compared a few times per
+    committed entry (leader cache, session table, collision check). That cost is
+    nanoseconds — `String.hashCode` is cached per instance on JVM — and is dwarfed by
+    the serialize/replicate/persist/quorum cost of the entry it rides on. The only real
+    size axis is wire/storage bytes (~40/entry), modest and compressible. If a profile
+    ever flags it, the escape hatch is a fixed 128-bit `ClientId(hi, lo)` — not worth
+    the lost readability pre-1.0.
 - **Durable (caller passes a stable `ClientId`):** a client that knows its prior
   iteration is dead **takes ownership** of its retries by reusing the same id. This
   gives true cross-crash exactly-once **and** keeps the session table bounded (its
@@ -107,10 +131,36 @@ way — so a nullable default is tuning, not the banned functional-path toggle.
 A *stable* clientId paired with a *non-durable* (in-memory, reset-on-restart)
 counter is **worse than no dedup**: incarnation 2's `reqId=1` aliases incarnation
 1's committed `reqId=1`, so the leader returns the *old* result and the new command
-is **silently dropped**. The fresh-GUID-per-incarnation default disarms this: each
+is **silently dropped**. The per-incarnation random suffix disarms this: each
 incarnation is a distinct client, so a reused low serial can never alias. The only
 way to safely reuse a serial across a crash is to *also* carry a stable clientId and
-a durable high-water-mark — the explicit durable rung.
+a durable high-water-mark — the explicit durable rung. The residual case (a node
+restarting under the *same* seeded RNG, so it redraws the same suffix) is caught by
+**collision detection**, below.
+
+### Collision detection (passive, exact)
+
+A node mints its own keys, so it knows exactly which serials it has issued, and it
+observes every committed entry (it drives `committed`). So on each commit it checks:
+
+```
+if (entry.dedupKey?.clientId == myClientId && entry.dedupKey.requestId > myMaxIssuedSerial)
+    → another writer is stamping under MY identity → collision (zero false positives)
+```
+
+A node can never legitimately see its own `clientId` paired with a serial higher than
+it has issued, so this is a provable signal that two live writers share one identity —
+the one residual hazard that would otherwise silently corrupt a client's serial space.
+It also catches the same-seed-restart residue noted above. Reaction follows
+fail-loud discipline:
+
+- **Durable/stable id** — surfaces loudly (a `ClientIdCollisionException`, or an
+  emitted collision event the consumer must handle). A collision here is an
+  *operational* error: two processes were handed one durable identity. Silently
+  re-minting would abandon the cross-crash guarantee the operator asked for.
+- **Auto/ephemeral id** — the engine may re-mint a fresh suffix and continue, but
+  **warns** (the collision still implies an RNG-seeding mistake or an astronomically
+  unlikely draw worth surfacing).
 
 ### Proposal serials
 
@@ -164,7 +214,7 @@ table is the backstop for the cold-cache window.
 
 ## Session lifecycle — no GC in v1 (documented)
 
-The auto/ephemeral path mints a never-reused GUID per incarnation, so the consumer's
+The auto/ephemeral path mints a never-reused suffix per incarnation, so the consumer's
 table gains a dead entry per restart, forever — unbounded over a long-lived cluster.
 v1 **does not** garbage-collect it. Rationale:
 
@@ -188,9 +238,11 @@ size/age cap is a post-1.0 follow-up issue, not a v1 blocker.
 | Leader change, cold cache, consumer does **not** enforce | Duplicate appends and applies; acceptable only for idempotent consumers. |
 | Proposer crash, auto/ephemeral id | New incarnation = new client; in-flight straddling command may double-apply (at-least-once). Never a silent drop. |
 | Proposer crash, durable stable id + replayed serial | True exactly-once across the crash. |
+| Two live writers share one clientId (seeded-RNG / op error) | Detected on commit (`requestId > maxIssued`); durable id fails loud, auto id re-mints + warns. |
 
 The cardinal invariant: the system **never** degrades to silently dropping a real
-command. Every failure mode degrades, at worst, to at-least-once.
+command. Every failure mode degrades, at worst, to at-least-once — and a shared
+identity, which would otherwise silently corrupt serials, is detected, not tolerated.
 
 ## Out of scope (v1)
 
@@ -213,6 +265,11 @@ command. Every failure mode degrades, at worst, to at-least-once.
   across a simulated restart.
 - **Forward threading:** assert the `dedupKey` arriving at the leader byte-equals the
   one stamped at the proposer (no re-stamp across hops).
+- **Collision detection:** two nodes constructed with the same stable `clientId` →
+  committing the second writer's entry under that id with a serial above the first's
+  max-issued surfaces a collision (durable → throws/event; auto → re-mint + warn).
+- **Seeded-RNG safety:** two nodes with the same seeded `RaftConfig.random` but distinct
+  `NodeId`s mint distinct auto `ClientId`s (no spurious collision).
 - **Snapshot carry:** install a snapshot into a fresh follower → its consumer table
   reflects `lastAppliedSerial`; a stale retry is recognised post-install.
 - All raft tests stay on `StandardTestDispatcher` + `FakeRaftNode`; RNG is seeded.
