@@ -3,6 +3,7 @@
 package us.tractat.kuilt.raft.internal
 
 import io.github.oshai.kotlinlogging.KotlinLogging
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
@@ -1685,7 +1686,7 @@ internal class RaftEngine(
                 val e = d.await()
                 ForwardOutcome.Committed(e.index, e.term)
             } catch (e: Throwable) {
-                if (e is kotlinx.coroutines.CancellationException) throw e
+                if (e is CancellationException) throw e
                 if (e is NotLeaderException || e is LeadershipLostException) ForwardOutcome.NotLeader
                 else ForwardOutcome.Failed
             }

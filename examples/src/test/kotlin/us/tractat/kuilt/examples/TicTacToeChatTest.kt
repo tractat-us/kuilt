@@ -5,6 +5,7 @@
 
 package us.tractat.kuilt.examples
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelAndJoin
@@ -215,7 +216,7 @@ class TicTacToeChatTest {
                         result.complete(committed.toList())
                         // Cancel this coroutine to break out of collect.
                         // CancellationException propagates to complete the Job cleanly.
-                        throw kotlinx.coroutines.CancellationException("game over")
+                        throw CancellationException("game over")
                     }
                     val turnIndex = committed.size // index of the next (not-yet-played) turn
                     if (isMine(turnIndex) && scriptIndex < script.size) {
