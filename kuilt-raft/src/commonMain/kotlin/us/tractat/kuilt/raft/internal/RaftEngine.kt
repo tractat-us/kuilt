@@ -1245,6 +1245,10 @@ internal class RaftEngine(
     // ── propose() ─────────────────────────────────────────────────────────────
 
     private suspend fun onPropose(command: ByteArray, response: CompletableDeferred<LogEntry>) {
+        if (_role.value is RaftRole.Learner) {
+            response.completeExceptionally(NotLeaderException())
+            return
+        }
         if (_role.value !is RaftRole.Leader) {
             // Follower: forward to the leader (Raft §8). Wait, cancellably, if none is known yet.
             val id = nextForwardId++
