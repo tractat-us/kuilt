@@ -55,8 +55,9 @@ Public surface that *does* change:
 
 - `RaftNode.propose` — behaviour + KDoc: now succeeds from any node.
 - `NotLeaderException` — no longer thrown merely because "this node is a
-  follower"; reserved for terminal cases (node closed; no leader electable
-  within the call's lifetime if we choose fail-fast — see Open question).
+  follower"; reserved for terminal cases (node closed). A follower with no
+  leader yet **waits** (see Behaviour decisions), so absence of a leader is not
+  an error.
 - `TurnSequencer` — `NotYourTurnException` becomes vestigial and is **removed**.
   It was the original mis-naming (Raft leadership dressed up as a game turn);
   with forwarding there is no "not your turn" at the Raft layer.
@@ -79,7 +80,7 @@ log entries and what `committed` delivers are unchanged.
 
 1. Allocate a `clientRequestId`; register a `CompletableDeferred<LogEntry>`.
 2. Determine the current leader. If none is known yet (election in flight),
-   wait until one is (cancellable) — see Open question for fail-fast vs wait.
+   **wait** until one is, cancellably (see Behaviour decisions).
 3. `sendTo(leader, Forward(id, command))`.
 4. On `ForwardResponse(id, Committed(index, term))` → complete with
    `LogEntry(index, term, command)` and return it. Suspends until commit, same
@@ -134,13 +135,14 @@ semantics the library does not own.
   coroutine-determinism rules. No real dispatchers, no wall-clock waits.
 - **Example integration test** as described above.
 
-## Open question (for review)
+## Behaviour decisions
 
-**No-leader behaviour of a follower `propose`:** wait until a leader is elected
-(cancellable; matches "suspend until committed"), or fail fast with a retryable
-exception and let the caller poll? Recommendation: **wait**, bounded by the
-caller's `withTimeout`/cancellation — one clean contract ("propose suspends
-until the command commits or you cancel").
+**No-leader behaviour of a follower `propose`: wait (cancellable).** When no
+leader is known yet (election in flight), `propose` suspends until a leader
+emerges, then forwards — bounded only by the caller's `withTimeout` /
+cancellation. One clean contract: *propose suspends until the command commits or
+you cancel.* Absence of a leader is a transient state it waits through, never an
+error.
 
 ## Deferred (follow-ups, not this work)
 
