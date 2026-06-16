@@ -17,7 +17,7 @@ import kotlinx.coroutines.launch
  * 1. The action is applied immediately to [speculativeState] (optimistic apply).
  * 2. The action is appended to a **pending-input buffer**.
  * 3. The underlying [TurnSequencer.propose] is called and suspends until a quorum commits.
- * 4. If propose throws ([NotYourTurnException] or [TurnLostInFlightException]), the
+ * 4. If propose throws (e.g. [us.tractat.kuilt.raft.LeadershipLostException]), the
  *    speculative apply is rolled back — the action is removed from the pending buffer
  *    and [speculativeState] is restored to the authoritative snapshot + remaining pending.
  *
@@ -55,8 +55,7 @@ import kotlinx.coroutines.launch
  * // Propose a local player's move (suspends until quorum confirms):
  * try {
  *     speculative.propose(myMove)
- * } catch (e: NotYourTurnException) { /* redirect */ }
- *   catch (e: TurnLostInFlightException) { /* retry */ }
+ * } catch (e: LeadershipLostException) { /* retry */ }
  * ```
  *
  * @param sequencer The backing [TurnSequencer]. Lifetime is owned by the caller.
@@ -111,11 +110,10 @@ public class SpeculativeSequencer<S, A>(
      * the speculative apply is rolled back — [speculativeState] reverts to the authoritative
      * snapshot plus any remaining pending inputs.
      *
-     * @throws NotYourTurnException if this node is not the current turn leader.
-     * @throws TurnLostInFlightException if leadership is lost while awaiting commit.
-     *   The action is removed from the pending buffer and speculative state is rolled back.
-     *   The outcome of the underlying proposal is unknown — the caller must treat it as lost
-     *   and retry with an idempotent action or deduplication key.
+     * @throws [us.tractat.kuilt.raft.LeadershipLostException] if the leader steps down while
+     *   awaiting commit. The action is removed from the pending buffer and speculative state
+     *   is rolled back. The outcome of the underlying proposal is unknown — the caller must
+     *   treat it as lost and retry with an idempotent action or deduplication key.
      */
     public suspend fun propose(action: A): IndexedAction<A> {
         applySpeculatively(action)

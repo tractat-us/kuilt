@@ -16,6 +16,7 @@ import kotlinx.serialization.cbor.Cbor
 import kotlinx.serialization.serializer
 import us.tractat.kuilt.raft.LeadershipLostException
 import us.tractat.kuilt.raft.LogEntry
+import us.tractat.kuilt.raft.NotLeaderException
 import us.tractat.kuilt.raft.RaftRole
 import us.tractat.kuilt.raft.test.FakeRaftNode
 import kotlin.test.Test
@@ -200,11 +201,11 @@ class SpeculativeSequencerTest {
     // ── Propose failure does not corrupt speculative state ────────────────────
 
     @Test
-    fun notYourTurnRejectionDoesNotApplySpeculativeState() = runTest(timeout = 5.seconds) {
-        val node = FakeRaftNode() // Follower — rejects
+    fun notLeaderRejectionDoesNotApplySpeculativeState() = runTest(timeout = 5.seconds) {
+        val node = FakeRaftNode() // Follower — FakeRaftNode throws NotLeaderException
         val seq = speculative(node, scope = CoroutineScope(UnconfinedTestDispatcher(testScheduler)))
 
-        assertFailsWith<NotYourTurnException> {
+        assertFailsWith<NotLeaderException> {
             seq.propose(Move(player = 1, value = 99))
         }
 
@@ -213,14 +214,14 @@ class SpeculativeSequencerTest {
     }
 
     @Test
-    fun turnLostRejectionDoesNotLeavePhantomPendingInput() = runTest(timeout = 5.seconds) {
+    fun leadershipLostRejectionDoesNotLeavePhantomPendingInput() = runTest(timeout = 5.seconds) {
         val node = FakeRaftNode()
         node.setRole(RaftRole.Leader)
         val raftCause = LeadershipLostException("lost during test")
         node.proposeBehavior = { _ -> throw raftCause }
         val seq = speculative(node, scope = CoroutineScope(UnconfinedTestDispatcher(testScheduler)))
 
-        assertFailsWith<TurnLostInFlightException> {
+        assertFailsWith<LeadershipLostException> {
             seq.propose(Move(player = 1, value = 42))
         }
 
