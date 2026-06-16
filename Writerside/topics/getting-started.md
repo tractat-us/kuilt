@@ -59,12 +59,12 @@ implementation("us.tractat.kuilt:kuilt-crdt")
 
 ```kotlin
 val replica = ReplicaId("alice")
-val msgSerializer = ReplicatorMessage.serializer(Rga.serializer(String.serializer()))
+val msgSerializer = ReplicatorMessage.serializer(Rga.wireSerializer(String.serializer()))
 val replicator = SeamReplicator(replica, seam, Rga.empty<String>(), msgSerializer, scope)
 
 // Send a message — appended to the shared list, propagated to all peers
 val current = replicator.state.value
-val (_, op) = current.insertAt(current.size, replica, "hello from alice")
+val (_, op) = current.insertAt(replica, current.size, "hello from alice")
 replicator.apply(Patch(Rga.empty<String>().apply(op)))
 
 // Render the live chat log
