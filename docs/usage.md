@@ -340,14 +340,11 @@ scope.launch {
     node.committed.collect { entry -> applyToStateMachine(entry.command) }
 }
 
-// 6. Propose on the leader.
+// 6. Propose from any node — forwards to the leader automatically (Raft §8).
 scope.launch {
-    node.awaitLeadership()
     try {
         val committed = node.propose("set x=1".encodeToByteArray())
         println("committed at index ${committed.index}")
-    } catch (e: NotLeaderException) {
-        // redirect to node.leader
     } catch (e: LeadershipLostException) {
         // retry with idempotent key
     }

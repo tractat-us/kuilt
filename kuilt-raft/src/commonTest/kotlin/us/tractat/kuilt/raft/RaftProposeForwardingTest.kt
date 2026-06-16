@@ -12,6 +12,7 @@ import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNotNull
+import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.seconds
 
 /**
@@ -183,9 +184,10 @@ class RaftProposeForwardingTest {
         val allCommands = sim.nodeIds.flatMap { id ->
             sim.storages.getValue(id).entries().filter { !it.isNoOp }.map { it.command }
         }
-        assert(allCommands.none { it.contentEquals(byteArrayOf(77)) }) {
-            "Cancelled forwarded proposal must never commit"
-        }
+        assertTrue(
+            allCommands.none { it.contentEquals(byteArrayOf(77)) },
+            "Cancelled forwarded proposal must never commit",
+        )
         sim.checkInvariants()
     }
 

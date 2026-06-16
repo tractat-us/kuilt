@@ -15,10 +15,10 @@
  *    SQLite/IndexedDB-backed implementation for production (durable across restarts).
  * 4. **Call [CoroutineScope.raftNode]** — the node starts running inside the given
  *    scope. Its lifetime is tied to the scope's cancellation.
- * 5. **Observe [RaftNode.role]** to know when this node becomes [RaftRole.Leader].
- * 6. **Propose** by calling [RaftNode.propose] on the leader — it suspends until
- *    a quorum commits the entry and returns the committed [LogEntry].
- * 7. **Apply** by collecting [RaftNode.committed] on every node — committed
+ * 5. **Propose** from **any** node by calling [RaftNode.propose] — non-leaders forward
+ *    the command to the current leader (Raft §8); the call suspends until a quorum
+ *    commits the entry and returns the committed [LogEntry].
+ * 6. **Apply** by collecting [RaftNode.committed] on every node — committed
  *    instructions appear here in index order as [Committed] values.
  * 8. **(Optional) Compact** by publishing a state-machine snapshot into
  *    [RaftNode.snapshots]; raft discards the covered log prefix and catches lagging
@@ -49,16 +49,13 @@
  *     }
  * }
  *
- * // Propose on the leader
+ * // Propose from any node — the leader appends directly; followers/candidates/learners forward (Raft §8)
  * scope.launch {
- *     node.awaitLeadership()   // suspend until this node is the leader
  *     try {
  *         val committed = node.propose("set x=1".encodeToByteArray())
  *         println("committed at index ${committed.index}")
- *     } catch (e: NotLeaderException) {
- *         // stepped down between the check and the propose — redirect to node.leader
  *     } catch (e: LeadershipLostException) {
- *         // leadership lost mid-flight — outcome unknown, retry with idempotent key
+ *         // leader stepped down mid-flight — outcome unknown, retry with idempotent key
  *     }
  * }
  * ```
@@ -114,7 +111,8 @@ public interface RaftNode {
      * The [NodeId] of the node this node currently believes to be the leader,
      * or `null` if no leader is known (e.g. during an election).
      *
-     * Useful for redirecting [propose] calls when this node is not the leader.
+     * Informational; [propose] automatically forwards to the leader — callers
+     * do not need to redirect manually.
      */
     public val leader: StateFlow<NodeId?>
 
