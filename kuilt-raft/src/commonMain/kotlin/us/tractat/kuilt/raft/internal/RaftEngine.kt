@@ -22,6 +22,7 @@ import kotlinx.coroutines.launch
 import kotlinx.serialization.decodeFromByteArray
 import kotlinx.serialization.encodeToByteArray
 import kotlinx.serialization.cbor.Cbor
+import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.raft.ClusterConfig
 import us.tractat.kuilt.raft.Committed
 import us.tractat.kuilt.raft.ConfigPayload
@@ -1669,6 +1670,14 @@ internal class RaftEngine(
 
     /** Leader handles a forwarded proposal: run the normal propose path, reply with its fate. */
     private suspend fun onForward(from: NodeId, m: RaftMessage.Forward) {
+        if (_role.value !is RaftRole.Leader) {
+            // We are not the leader (stepped down, or stale Forward arrived). Reply NotLeader so
+            // the originator's onForwardResponse fails with LeadershipLostException and the caller
+            // can retry. Do NOT re-forward or queue — that would create a silent second hop and
+            // leave the originator's deferred owned by two mechanisms.
+            send(from, RaftMessage.ForwardResponse(m.clientRequestId, ForwardOutcome.NotLeader))
+            return
+        }
         val d = CompletableDeferred<LogEntry>()
         onPropose(m.command, d)
         scope.launch {
@@ -1680,7 +1689,8 @@ internal class RaftEngine(
                 if (e is NotLeaderException || e is LeadershipLostException) ForwardOutcome.NotLeader
                 else ForwardOutcome.Failed
             }
-            send(from, RaftMessage.ForwardResponse(m.clientRequestId, outcome))
+            // Best-effort reply; transport may be tearing down on close.
+            runCatchingCancellable { send(from, RaftMessage.ForwardResponse(m.clientRequestId, outcome)) }
         }
     }
 
