@@ -68,18 +68,8 @@ implementation("us.tractat.kuilt:kuilt-crdt")
 ```
 
 ```kotlin
-val replica = ReplicaId("alice")
-val msgSerializer = QuiltMessage.serializer(Rga.wireSerializer(String.serializer()))
-val replicator = Quilter(replica, seam, Rga.empty<String>(), msgSerializer, scope)
-
-// Send a message — appended to the shared list, propagated to all peers
-val current = replicator.state.value
-val (_, op) = current.insertAt(replica, current.size, "hello from alice")
-replicator.apply(Patch(Rga.empty<String>().apply(op)))
-
-// Render the live chat log
-replicator.state.collect { messages -> chatView.items = messages.toList() }
 ```
+{ src="../../kuilt-quilter/src/commonSamples/kotlin/us/tractat/kuilt/quilter/QuilterSamples.kt" include-symbol="sampleRgaChatReplicator" }
 
 → [Replicated data structures](crdt-overview.md)
 
@@ -100,21 +90,8 @@ implementation("us.tractat.kuilt:kuilt-game")
 ```
 
 ```kotlin
-@Serializable data class Move(val row: Int, val col: Int)
-
-val node = scope.raftNode(
-    ClusterConfig.ofVoters(listOf(NodeId("alice"), NodeId("bob"))),
-    SeamRaftTransport(seam),
-    InMemoryRaftStorage(),   // use a persistent impl in production
-)
-val game = TurnSequencer(node, Move.serializer())
-
-// Both peers apply the same committed move sequence, in order
-scope.launch { game.committed.collect { (_, move) -> board.apply(move) } }
-
-// Active player proposes a move — suspends until both peers commit it
-game.propose(Move(row = 1, col = 1))
 ```
+{ src="../../kuilt-game/src/commonSamples/kotlin/us/tractat/kuilt/game/GameSamples.kt" include-symbol="sampleTurnSequencer" }
 
 → [Contract](contract.md)
 
