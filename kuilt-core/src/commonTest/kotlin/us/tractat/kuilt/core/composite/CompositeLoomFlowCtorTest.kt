@@ -26,6 +26,8 @@ class CompositeLoomFlowCtorTest {
 
         assertIs<SeamState.Woven>(seam.state.value, "single in-memory ply is woven immediately")
         assertEquals(setOf(PlyId("mem")), seam.plies.value.keys)
+
+        seam.close()
     }
 
     @Test

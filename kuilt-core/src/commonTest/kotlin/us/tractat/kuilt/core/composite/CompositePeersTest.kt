@@ -26,5 +26,8 @@ class CompositePeersTest {
         assertEquals(2, hostPeers.size)
         assertEquals(true, host.selfId in hostPeers)
         assertEquals(true, joiner.selfId in hostPeers)
+
+        host.close()
+        joiner.close()
     }
 }

@@ -30,6 +30,9 @@ class CompositeSendReceiveTest {
         host.broadcast(byteArrayOf(7, 8, 9))
         val got = joiner.incoming.first()
         assertTrue(byteArrayOf(7, 8, 9).contentEquals(got.payload))
+
+        host.close()
+        joiner.close()
     }
 
     @Test
@@ -38,6 +41,8 @@ class CompositeSendReceiveTest {
         val loom = CompositeLoom(listOf(PlyId("mem") to mem), dispatcher = UnconfinedTestDispatcher(testScheduler))
         val host = loom.host(Pattern("host"))
         assertFailsWith<PeerNotConnected> { host.sendTo(PeerId("nobody"), byteArrayOf(1)) }
+
+        host.close()
     }
 
     /**
@@ -65,5 +70,8 @@ class CompositeSendReceiveTest {
         // No second frame — the gate deduplicated the ply-b copy.
         val second = withTimeoutOrNull(200) { joiner.incoming.first() }
         assertNull(second, "expected exactly one frame but gate delivered a duplicate")
+
+        host.close()
+        joiner.close()
     }
 }
