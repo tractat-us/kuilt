@@ -91,7 +91,7 @@ unchanged. What it does underneath:
 
 Why this matters for the layers above: because the bonding lives **below** the
 `Seam`, the consensus and CRDT layers never see it. Hand the composite `Seam` to
-`SeamRaftTransport` or `SeamReplicator` and Raft sees one `NodeId`, the replicator
+`SeamRaftTransport` or `Quilter` and Raft sees one `NodeId`, the replicator
 tracks one peer, and a WebSocket→TCP failover reaches them as nothing at all — no
 election, no membership churn, no full-state resync. That is the whole point of
 keeping multipath at the transport layer rather than teaching each consumer about
@@ -242,16 +242,16 @@ metadata without a separate replication protocol. The three-layer chain is:
 2. **`Room.channel(id)`** (`kuilt-session`) — a `Seam` view scoped to admitted
    members only. Its `peers` is the live admitted roster, so a replicator
    running over it never sends state to unadmitted peers.
-3. **`SeamReplicator<LWWMap<PeerId, String>>`** (`kuilt-crdt`) — runs over
+3. **`Quilter<LWWMap<PeerId, String>>`** (`kuilt-crdt`) — runs over
    `room.channel("member-metadata")` to converge display names live across
    all admitted members with no explicit `merge()` call.
 
 ```kotlin
-val rep = SeamReplicator<LWWMap<PeerId, String>>(
+val rep = Quilter<LWWMap<PeerId, String>>(
     replica = ReplicaId(room.selfId.value),
     seam = room.channel("member-metadata"),
     initial = LWWMap.empty(),
-    messageSerializer = ReplicatorMessage.serializer(
+    messageSerializer = QuiltMessage.serializer(
         LWWMap.serializer(PeerId.serializer(), String.serializer())
     ),
     scope = scope,
@@ -278,7 +278,7 @@ are resolved by a total precedence rule (`Object > Array > Leaf`). The losing
 subtree is silently discarded; see `JsonNode` KDoc for the v1 rationale.
 
 `JsonCrdt` overrides `causalDots()` to recurse through all embedded `Rga`
-arrays, so `SeamReplicator`'s causal-stability GC barrier fires correctly for
+arrays, so `Quilter`'s causal-stability GC barrier fires correctly for
 nested array tombstones.
 
 ## Presence/awareness CRDT (`kuilt-crdt`)
@@ -334,7 +334,7 @@ Genuinely out of scope for kuilt at every layer:
 kuilt-core         the contract + InMemoryLoom + MuxSeam + SeamConformanceSuite (depends on nothing fabric-specific)
   ├── kuilt-raft        Raft consensus (election, log, snapshots, membership, reads, transfer)  → depends on kuilt-core
   │     └── kuilt-game  turn-based game facade (TurnSequencer / SpeculativeSequencer)  → depends on kuilt-raft
-  ├── kuilt-crdt        delta-state CRDT zoo + SeamReplicator   → depends on kuilt-core
+  ├── kuilt-crdt        delta-state CRDT zoo + Quilter   → depends on kuilt-core
   │     └── kuilt-deal  fair card dealing + fair-random (SRA / commit-reveal)  → depends on kuilt-crdt + kuilt-core
   ├── kuilt-session     membership/room layer (admit, roster, roles, resume)  → depends on kuilt-core
   ├── kuilt-websocket   Ktor WebSocket fabric (Far)            → depends on kuilt-core

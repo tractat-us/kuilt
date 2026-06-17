@@ -220,11 +220,11 @@ composite straight into the layers above:
 
 ```kotlin
 // Same wiring as any other Seam — Raft/CRDT never know there are two transports.
-val replicator = SeamReplicator(
+val replicator = Quilter(
     replica = ReplicaId(seam.selfId.value),
     seam = seam,
     initial = GCounter.ZERO,
-    messageSerializer = ReplicatorMessage.serializer(GCounter.serializer()),
+    messageSerializer = QuiltMessage.serializer(GCounter.serializer()),
     scope = coroutineScope,
 )
 ```
@@ -278,7 +278,7 @@ are the only required fields).
 
 ## Live-converging state (`kuilt-crdt`)
 
-`kuilt-crdt` provides the delta-state CRDT zoo and `SeamReplicator`, which
+`kuilt-crdt` provides the delta-state CRDT zoo and `Quilter`, which
 propagates any `Quilted<S>` over a `Seam` with no application-level merge
 calls. For collaborative JSON documents, use `JsonCrdt`:
 

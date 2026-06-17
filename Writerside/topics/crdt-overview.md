@@ -14,7 +14,7 @@ interface Quilted<S : Quilted<S>> {
 
 `piece` is the join in the join-semilattice. Calling it with the same argument twice produces the same result as calling it once (idempotent). Order doesn't matter (commutative). Multiple calls can be grouped in any order (associative). These three laws guarantee convergence.
 
-**Delta state.** Instead of shipping the entire current state on every update, CRDTs here emit a *delta* — a minimal patch that represents only what changed. Merging a delta into the current state advances it the same way merging the full state would. `SeamReplicator` exploits this to send small delta messages over the wire and ship the full state only to late joiners.
+**Delta state.** Instead of shipping the entire current state on every update, CRDTs here emit a *delta* — a minimal patch that represents only what changed. Merging a delta into the current state advances it the same way merging the full state would. `Quilter` exploits this to send small delta messages over the wire and ship the full state only to late joiners.
 
 ## The `Patch` wrapper
 
@@ -41,10 +41,10 @@ val next: GCounter = counter.piece(delta)        // apply the delta
 
 ## Live replication
 
-`SeamReplicator<S>` runs over a `Seam` and keeps a CRDT replica live: it ships deltas to all peers as you apply updates, and merges inbound deltas as they arrive. `state` is a `StateFlow<S>` — always the current converged value.
+`Quilter<S>` runs over a `Seam` and keeps a CRDT replica live: it ships deltas to all peers as you apply updates, and merges inbound deltas as they arrive. `state` is a `StateFlow<S>` — always the current converged value.
 
-See [SeamReplicator](crdt-seamreplicator.md) for usage and the `MuxSeam` multiplexing pattern that lets multiple replicators share one transport.
+See [Quilter](crdt-quilter.md) for usage and the `MuxSeam` multiplexing pattern that lets multiple replicators share one transport.
 
 ## Serialization
 
-Every CRDT type is `@Serializable`. Wire transport (CBOR by default, via `SeamReplicator`) and JSON round-trips both work. Each type's serializer is accessible via `T.serializer()` or `T.serializer(elementSerializer)`.
+Every CRDT type is `@Serializable`. Wire transport (CBOR by default, via `Quilter`) and JSON round-trips both work. Each type's serializer is accessible via `T.serializer()` or `T.serializer(elementSerializer)`.

@@ -35,7 +35,7 @@ abstraction, not a tweak to either.
 - `Conn`, `identified()`, and `meshSeam()` — the [Fabric kit](fabric-kit.md).
 - `CompositeLoom` and bonding several transports — [Multipath](multipath.md).
 - `MuxSeam` channel multiplexing — see
-  [SeamReplicator](crdt-seamreplicator.md), which uses it to let several
+  [Quilter](crdt-quilter.md), which uses it to let several
   replicators share one transport.
 - Writing the `Conn` SPI for your own transport — the implementer tutorial
   `docs/extending-fabrics.md` in the repository.

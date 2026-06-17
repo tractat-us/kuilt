@@ -11,7 +11,7 @@ every `Insert` and every tombstoned `Remove` accumulates forever.
 `Rga.kt` is explicit that tombstone GC is out of scope; there is also
 no convergent equivalent of `MutableSharedFlow(replay = N, DROP_OLDEST)`.
 
-`SeamReplicator` already tracks exactly the causal-stability signal
+`Quilter` already tracks exactly the causal-stability signal
 needed for GC: `ackedThrough[peer]` records the highest delta seq
 each known peer has acknowledged, and `gcPendingDeltas` computes
 `universalAck = knownPeers.minOf { ackedThrough[peer] ?: 0L }` —
@@ -26,7 +26,7 @@ they cannot pin the watermark forever.
 GC and windowing logic lives in a new coordinator type,
 `RgaGcCoordinator`, following the `BoundedCounterTransferCoordinator`
 precedent. `Rga` gains a single new primitive (`compact(watermark)`).
-`SeamReplicator` is unchanged except for one new `StateFlow<Long>`.
+`Quilter` is unchanged except for one new `StateFlow<Long>`.
 
 **Rationale.** Three alternatives considered:
 
@@ -34,7 +34,7 @@ precedent. `Rga` gains a single new primitive (`compact(watermark)`).
   it would need to accept an externally-derived watermark anyway,
   making the primitive context-aware. `compact(watermark)` is the
   right primitive; the decision of *when* to call it belongs outside.
-- *In `SeamReplicator` (generic GC hook):* `SeamReplicator` is typed
+- *In `Quilter` (generic GC hook):* `Quilter` is typed
   over `Quilted<S>`; teaching it to compact `Rga` specifically breaks
   the generic boundary. A GC hook parameterized by watermark would
   work but couples replication policy to structural knowledge of one
@@ -83,7 +83,7 @@ receives it removes those ids from its own op-log (no-op if already
 absent). `piece` for `Compact` is union of the `ids` sets.
 
 **Late joiner and eviction safety.** A returning peer (previously
-evicted) receives a `FullState` from `SeamReplicator`. That state
+evicted) receives a `FullState` from `Quilter`. That state
 already reflects compaction — GC'd ops are absent. The returning peer
 cannot re-introduce them. `Compact` ops themselves are retained in the
 log as lightweight "GC tombstones" to make `FullState` merges
@@ -91,13 +91,13 @@ idempotent; their total size is bounded by the number of compaction
 events, not the number of elements ever inserted.
 
 **Watermark derivation.** `RgaGcCoordinator` consumes
-`SeamReplicator.universalAckFlow` (see Decision 3). When it advances,
+`Quilter.universalAckFlow` (see Decision 3). When it advances,
 the coordinator calls `compact(watermark)`, passes the patch to the
 replicator's `apply`, and the delta propagates normally.
 
-### 3. `SeamReplicator.universalAckFlow` — permanent public API
+### 3. `Quilter.universalAckFlow` — permanent public API
 
-`SeamReplicator` exposes a new deliberate, permanent public property:
+`Quilter` exposes a new deliberate, permanent public property:
 
 ```kotlin
 public val universalAckFlow: StateFlow<Long>
@@ -168,7 +168,7 @@ design does not foreclose this path.
 | # | Question | Resolution |
 |---|----------|------------|
 | Op typing | `Compact` as `RgaOp<Nothing>` or a parallel `RgaControl` sealed type? | `RgaOp<Nothing>` — single hierarchy, one serializer. |
-| Watermark API | Internal accessor or public `StateFlow<Long>`? | `public val universalAckFlow: StateFlow<Long>` on `SeamReplicator` — deliberate, permanent. |
+| Watermark API | Internal accessor or public `StateFlow<Long>`? | `public val universalAckFlow: StateFlow<Long>` on `Quilter` — deliberate, permanent. |
 | Window-policy coordination | Room-uniform enforcement or per-peer divergence? | Per-peer divergence allowed; "most-aggressive-window-wins" set-union is expected convergent behaviour. |
 
 ## Sub-issue decomposition
@@ -179,17 +179,17 @@ clock fake harness, and must be green on wasmJs + iOS.
 | # | Title | Acceptance |
 |---|-------|------------|
 | A | `Rga.compact(watermark)` — tombstone GC primitive | `compact` removes causally stable tombstones satisfying the predecessor-safety check; `Compact: RgaOp<Nothing>` op merges idempotently; existing `RgaTest` battery stays green |
-| B | `SeamReplicator.universalAckFlow` — expose causal-stability watermark | New `public val universalAckFlow: StateFlow<Long>` advances monotonically; deterministic test with fake seam + ≥3 peers confirms it tracks the minimum ack |
+| B | `Quilter.universalAckFlow` — expose causal-stability watermark | New `public val universalAckFlow: StateFlow<Long>` advances monotonically; deterministic test with fake seam + ≥3 peers confirms it tracks the minimum ack |
 | C | `RgaGcCoordinator` — drives compaction from replicator ack state | Coordinator triggers `compact` when watermark advances; delta propagates normally; 3-peer integration test converges to bounded op-log under continuous insert + remove |
 | D | History windowing — `WindowPolicy.byCount(n)` | Late joiner over a 3-peer room with `byCount(10)` converges to the windowed state via `FullState`, not full-history replay; per-peer policy divergence resolves by set-union |
 
 ## Consequences
 
 - `Rga` gains `compact(watermark)` and a `Compact: RgaOp<Nothing>` op variant.
-- `SeamReplicator` gains one new public `StateFlow<Long>`
+- `Quilter` gains one new public `StateFlow<Long>`
   (`universalAckFlow`); no other changes.
 - New `RgaGcCoordinator` class (similar scope to
-  `BoundedCounterTransferCoordinator`) in `kuilt-crdt/replicator/`.
+  `BoundedCounterTransferCoordinator`) in `kuilt-quilter/`.
 - No changes to `MuxSeam`, `Room.channel`, or any fabric module.
 - The coordinator pattern is confirmed as the right model for
   CRDT-specific replication side-channels.

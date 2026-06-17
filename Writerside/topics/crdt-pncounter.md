@@ -6,7 +6,7 @@ A positive/negative counter: the simplest extension of `GCounter` that allows bo
 
 ## Worked example — live vote tally over two peers
 
-`PNCounter` + `SeamReplicator` is the natural fit for a vote tally: each peer owns its own slot, increments record upvotes, decrements record downvotes. Deltas propagate automatically; both replicas converge to the same net count.
+`PNCounter` + `Quilter` is the natural fit for a vote tally: each peer owns its own slot, increments record upvotes, decrements record downvotes. Deltas propagate automatically; both replicas converge to the same net count.
 
 <!-- verbatim from examples/src/test/kotlin/us/tractat/kuilt/examples/VoteTallyTest.kt#upvotes and downvotes from two peers converge to the correct net tally -->
 ```kotlin
@@ -16,9 +16,9 @@ val loom = InMemoryLoom()
 val seamAlice = loom.host(Pattern("vote-tally"))
 val seamBob = loom.join(InMemoryTag("bob"))
 
-val replicatorCfg = SeamReplicatorConfig(expectVirtualTime = true)
-val aliceTally = SeamReplicator(seamAlice, PNCounter.ZERO, PNCounter.serializer(), backgroundScope, config = replicatorCfg)
-val bobTally = SeamReplicator(seamBob, PNCounter.ZERO, PNCounter.serializer(), backgroundScope, config = replicatorCfg)
+val replicatorCfg = QuilterConfig(expectVirtualTime = true)
+val aliceTally = Quilter(seamAlice, PNCounter.ZERO, PNCounter.serializer(), backgroundScope, config = replicatorCfg)
+val bobTally = Quilter(seamBob, PNCounter.ZERO, PNCounter.serializer(), backgroundScope, config = replicatorCfg)
 
 delay(1) // let collectors subscribe under StandardTestDispatcher
 
