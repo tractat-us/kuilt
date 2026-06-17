@@ -11,6 +11,7 @@ dependencies {
     testImplementation(project(":kuilt-quilter"))
     testImplementation(project(":kuilt-core"))
     testImplementation(project(":kuilt-session"))
+    testImplementation(project(":kuilt-cluster"))
     testImplementation(project(":kuilt-websocket"))
     testImplementation(libs.kotlinx.coroutines.test)
     testImplementation(libs.kotlin.test)
