@@ -63,3 +63,31 @@ internal fun sampleFabricAvailability() {
         is FabricAvailability.Unavailable -> error("Fabric not usable: ${avail.reason}")
     }
 }
+
+// ── MuxSeam ───────────────────────────────────────────────────────────────────
+
+/**
+ * Split one [Seam] into N independent logical channels via [MuxSeam].
+ *
+ * [Seam.incoming] is single-collection per the kuilt contract. [MuxSeam] takes
+ * sole ownership of that collection and fans the stream out to per-channel views,
+ * each prefixed with a 1-byte tag. Use this whenever two independent consumers
+ * (e.g. a [us.tractat.kuilt.quilter.Quilter] and a Raft transport) must share
+ * one underlying seam.
+ */
+@Suppress("unused")
+internal fun sampleMuxSeamChannels() = runTest {
+    val loom = InMemoryLoom()
+    val seam = loom.host(Pattern("mux-demo"))
+
+    val mux = MuxSeam(seam, this)
+
+    // Each channel gets a typed Seam view that strips the tag on reads and
+    // prepends it on writes — the rest of your code sees a plain Seam.
+    val replicatorSeam: Seam = mux.channel(0x00.toByte())
+    val coordinatorSeam: Seam = mux.channel(0x01.toByte())
+
+    // channel() is idempotent — calling it again with the same tag returns the same Seam.
+    check(mux.channel(0x00.toByte()) === replicatorSeam)
+    check(replicatorSeam !== coordinatorSeam)
+}

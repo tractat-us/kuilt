@@ -246,18 +246,7 @@ metadata without a separate replication protocol. The three-layer chain is:
    `room.channel("member-metadata")` to converge display names live across
    all admitted members with no explicit `merge()` call.
 
-```kotlin
-val rep = Quilter<LWWMap<PeerId, String>>(
-    replica = ReplicaId(room.selfId.value),
-    seam = room.channel("member-metadata"),
-    initial = LWWMap.empty(),
-    messageSerializer = QuiltMessage.serializer(
-        LWWMap.serializer(PeerId.serializer(), String.serializer())
-    ),
-    scope = scope,
-)
-// rep.state is the live-converging display-name map.
-```
+See the [session-metadata example](https://tractat-us.github.io/kuilt/guide/crdt-quilter.html#session-metadata-convergence) in the Quilter guide.
 
 `MemberMetadata` remains a pure value type; the replication wiring sits above it.
 
