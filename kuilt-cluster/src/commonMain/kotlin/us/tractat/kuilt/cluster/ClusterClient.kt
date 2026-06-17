@@ -5,12 +5,6 @@
  * proposes commands through the leader (forwarding is handled by the engine), and
  * exposes a stable API for tier-(a) failover tests.
  *
- * The production relay-room wiring (connecting a Seam, managing Seam-level reconnect
- * through [us.tractat.kuilt.session.partition.ServerClusterReconnect], re-wiring a
- * [us.tractat.kuilt.raft.SeamRaftTransport] on tear) is S3b work — it requires a
- * dynamically re-backed transport adapter. This slice (S3a) establishes the API,
- * the module scaffold, and the tier-(a) behavioural tests against `FakeRaftNode`.
- *
  * See `module.md` for the full scope and S3a/S3b/S3c breakdown.
  */
 package us.tractat.kuilt.cluster
@@ -18,16 +12,21 @@ package us.tractat.kuilt.cluster
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import us.tractat.kuilt.core.Loom
+import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.Tag
 import us.tractat.kuilt.raft.ClientId
 import us.tractat.kuilt.raft.ClusterConfig
 import us.tractat.kuilt.raft.Committed
+import us.tractat.kuilt.raft.InMemoryRaftStorage
 import us.tractat.kuilt.raft.LogEntry
 import us.tractat.kuilt.raft.NodeId
 import us.tractat.kuilt.raft.RaftConfig
 import us.tractat.kuilt.raft.RaftNode
 import us.tractat.kuilt.raft.RaftRole
+import us.tractat.kuilt.raft.raftNode
 import us.tractat.kuilt.session.partition.EndpointSelector
 import us.tractat.kuilt.session.partition.RoundRobinEndpointSelector
 import us.tractat.kuilt.session.partition.ServerClusterReconnect
@@ -148,13 +147,29 @@ public data class ClusterEndpoints(
 }
 
 /**
- * S3b placeholder: constructs a [ClusterClient] connected to the relay-room cluster.
+ * Constructs a [ClusterClient] connected to the relay-room cluster.
  *
- * This extension will manage the full connect → use → reconnect lifecycle once the
- * Seam-reconnect transport adapter (`ManagedRaftTransport`) lands in S3b. In S3a it is
- * declared here so consumers can compile against the expected public API surface.
+ * Manages the full connect → use → reconnect lifecycle:
+ * 1. Connects to the initial endpoint via [loom].
+ * 2. Backs a [ManagedRaftTransport] with the resulting [us.tractat.kuilt.core.Seam].
+ * 3. Constructs a single [RaftNode] over that transport — it lives for the [ClusterClient]
+ *    lifetime, across reconnects.
+ * 4. On transport tear: advances [ServerClusterReconnect] to the next endpoint,
+ *    re-joins via [loom], and swaps the backing [us.tractat.kuilt.core.Seam] in the
+ *    [ManagedRaftTransport] — the [RaftNode] is **not** recreated.
  *
- * **S3a: NOT YET IMPLEMENTED** — calling this will throw [UnsupportedOperationException].
+ * ## Cross-server resume
+ *
+ * A cross-server failover always requires a fresh join (proven by #532): each server's
+ * reconnect-window registry is in-memory and per-room-instance, so `ResumeResult.WindowClosed`
+ * is the invariable response. This extension therefore always performs a plain `loom.join()`
+ * on every reconnect — there is no optimistic resume attempt at the Seam level.
+ *
+ * ## Dispatcher injection
+ *
+ * The [CoroutineScope] receiver IS the dispatcher injection point. All background work
+ * (reconnect loop, relay coroutines inside [ManagedRaftTransport]) runs on the caller's
+ * dispatcher. No real-clock defaults are introduced.
  *
  * @param loom The [Loom] fabric for connecting to server endpoints.
  * @param clusterEndpoints Endpoint list and rotation policy.
@@ -164,6 +179,7 @@ public data class ClusterEndpoints(
  * @param clientId Optional stable [ClientId] for cross-crash exactly-once. `null` mints one.
  * @param clock Injected clock for session resume-token timestamps. **Required** — no real-clock
  *   default (prevents silent virtual-time breakage per the "optional ≠ tuning" policy).
+ *   Reserved for future session-layer resume; currently unused at the Seam level.
  */
 public fun CoroutineScope.clusterClient(
     loom: Loom,
@@ -172,13 +188,69 @@ public fun CoroutineScope.clusterClient(
     clusterConfig: ClusterConfig,
     raftConfig: RaftConfig,
     clientId: ClientId? = null,
-    clock: () -> Instant,
+    @Suppress("UNUSED_PARAMETER") clock: () -> Instant,
 ): ClusterClient {
-    // S3b: wire ServerClusterReconnect + SeamRaftTransport + reconnect-on-tear loop.
-    // That requires a RaftTransport whose backing Seam can be swapped on transport tear
-    // without recreating the RaftNode. See module.md §S3a limitations and issue #513.
-    throw UnsupportedOperationException(
-        "clusterClient() relay-room wiring is S3b work (issue #513). " +
-            "Use clusterClientWithNode() with a caller-managed RaftNode for S3a.",
+    val reconnect = clusterEndpoints.toReconnect()
+    return buildClusterClient(
+        scope = this,
+        loom = loom,
+        reconnect = reconnect,
+        clientNodeId = clientNodeId,
+        clusterConfig = clusterConfig,
+        raftConfig = raftConfig,
+        clientId = clientId,
     )
+}
+
+/**
+ * Internal wiring: creates the [ManagedRaftTransport], the [RaftNode], and the reconnect loop.
+ *
+ * Separated from the public extension so tests can inject a pre-configured [ServerClusterReconnect].
+ *
+ * ## Startup sequence
+ *
+ * [ManagedRaftTransport] starts with no backing [us.tractat.kuilt.core.Seam] — [peers] is
+ * empty and [us.tractat.kuilt.raft.RaftTransport.sendTo] drops frames silently until
+ * [ManagedRaftTransport.swapSeam] is first called. The [RaftNode] is constructed immediately
+ * (non-suspend), then the reconnect loop (launched in [scope]) performs the first `loom.join()`
+ * and installs the Seam.
+ */
+internal fun buildClusterClient(
+    scope: CoroutineScope,
+    loom: Loom,
+    reconnect: ServerClusterReconnect,
+    clientNodeId: NodeId,
+    clusterConfig: ClusterConfig,
+    raftConfig: RaftConfig,
+    clientId: ClientId?,
+): ClusterClient {
+    val transport = ManagedRaftTransport(scope = scope, selfId = clientNodeId)
+    val raftNode = scope.raftNode(
+        clusterConfig = clusterConfig,
+        transport = transport,
+        storage = InMemoryRaftStorage(),
+        raftConfig = raftConfig,
+        clientId = clientId,
+    )
+
+    // Reconnect loop: connect → install → await tear → rotate → re-join → swap → repeat.
+    scope.launch {
+        var currentSeam = reconnect.connect(loom)
+        transport.swapSeam(currentSeam)
+
+        while (true) {
+            // Wait for the current Seam to tear.
+            currentSeam.state.first { it is SeamState.Torn }
+
+            // Rotate to the next endpoint. Cross-server resume is always WindowClosed
+            // per #532 so we skip the resume attempt and always do a fresh join.
+            reconnect.onTransportTear()
+
+            val newSeam = reconnect.connect(loom)
+            transport.swapSeam(newSeam)
+            currentSeam = newSeam
+        }
+    }
+
+    return ClusterClient(raftNode)
 }
