@@ -18,26 +18,9 @@ Every element gets a globally unique id = `(lamportTimestamp, replicaId)`. Inser
 
 For long-running sequences (e.g. a chat log), the `RgaGcCoordinator` + `WindowPolicy.byCount(n)` combination drops the leading visible prefix beyond `n` elements via a `Compact` operation. The op-log is bounded to the window size:
 
-<!-- verbatim from kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/replicator/RgaWindowByCountIntegrationTest.kt#byCountDropsLeadingPrefixAndWindowRenders -->
 ```kotlin
-// Source: https://github.com/tractat-us/kuilt/blob/main/kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/replicator/RgaWindowByCountIntegrationTest.kt
-// Test: byCountDropsLeadingPrefixAndWindowRenders
-runTest(UnconfinedTestDispatcher()) {
-    val loom = InMemoryLoom()
-    val seamA = loom.host(Pattern("win-render"))
-    val seamB = loom.join(InMemoryTag("b"))
-
-    val repA = wire(seamA, backgroundScope, WindowPolicy.byCount(3))
-    wire(seamB, backgroundScope, WindowPolicy.byCount(3))
-    testScheduler.advanceUntilIdle()
-
-    (0..5).forEach { repA.append(it); testScheduler.advanceUntilIdle() }
-
-    // Window keeps the last 3 visible; the leading prefix {0,1,2} is dropped.
-    assertEquals(listOf(3, 4, 5), repA.state.value.toList())
-    assertTrue(repA.state.value.sequence.size == 3)
-}
 ```
+{ src="../../kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/replicator/RgaWindowByCountIntegrationTest.kt" include-symbol="byCountDropsLeadingPrefixAndWindowRenders" }
 
 A late joiner receives the windowed state via `FullState` and never materialises the dropped prefix — the op-log stays bounded.
 
