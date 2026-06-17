@@ -27,6 +27,7 @@ import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.Swatch
+import us.tractat.kuilt.core.runCatchingCancellable
 import kotlin.coroutines.CoroutineContext
 
 /**
@@ -149,9 +150,16 @@ internal class CompositeSeam(
             .onEach { s -> _plies.update { it + (id to s) } }
             .launchIn(plyScope)
 
-        // Re-announce on every Woven transition (cold start + recovery).
+        // Re-announce on every Woven transition (cold start + recovery). Best-effort: the
+        // ply may tear between this Woven emission and the send (the Seam contract throws
+        // IllegalStateException on a Torn send), and the far side re-learns the mapping on
+        // the next Woven/peers event regardless — so swallow a failed announce (#535).
         seam.state
-            .onEach { if (it is SeamState.Woven) seam.broadcast(PlyFrame.encode(PlyFrame.Announce(selfId))) }
+            .onEach {
+                if (it is SeamState.Woven) {
+                    runCatchingCancellable { seam.broadcast(PlyFrame.encode(PlyFrame.Announce(selfId))) }
+                }
+            }
             .launchIn(plyScope)
 
         seam.incoming
@@ -163,7 +171,8 @@ internal class CompositeSeam(
             .onEach { newPeers ->
                 recomputePeers()
                 if (newPeers.size > 1 && seam.state.value is SeamState.Woven) {
-                    seam.broadcast(PlyFrame.encode(PlyFrame.Announce(selfId)))
+                    // Best-effort re-announce to newcomers — swallow a torn-ply send (#535).
+                    runCatchingCancellable { seam.broadcast(PlyFrame.encode(PlyFrame.Announce(selfId))) }
                 }
             }
             .launchIn(plyScope)
