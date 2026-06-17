@@ -23,6 +23,10 @@ import kotlinx.serialization.Serializable
  *   consensus). Like [isNoOp], config entries are replicated and persisted but
  *   withheld from [RaftNode.committed] — they carry cluster membership, not
  *   application data. A `null` value means this is a normal application entry.
+ * @param dedupKey The Raft §8 client-serial dedup identity stamped by the
+ *   proposer. Non-null for stamped application entries; `null` for internal
+ *   no-op/config entries and for legacy entries decoded before this field
+ *   existed.
  */
 @Serializable
 public data class LogEntry(
@@ -31,18 +35,19 @@ public data class LogEntry(
     val command: ByteArray,
     val isNoOp: Boolean = false,
     val config: ConfigPayload? = null,
+    val dedupKey: DedupKey? = null,
 ) {
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
         if (other !is LogEntry) return false
         return index == other.index && term == other.term &&
             command.contentEquals(other.command) && isNoOp == other.isNoOp &&
-            config == other.config
+            config == other.config && dedupKey == other.dedupKey
     }
     override fun hashCode(): Int {
         var r = index.hashCode(); r = 31 * r + term.hashCode()
         r = 31 * r + command.contentHashCode(); r = 31 * r + isNoOp.hashCode()
-        r = 31 * r + config.hashCode(); return r
+        r = 31 * r + config.hashCode(); r = 31 * r + dedupKey.hashCode(); return r
     }
 }
 
