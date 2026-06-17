@@ -2,6 +2,12 @@
 
 Your app logic should not care whether peers are connected by WebSocket, LAN discovery, or direct radio. In kuilt, every fabric implements `Loom` and yields a `Seam`, so you can swap transports without rewriting the layer above.
 
+## Pick a fabric by deployment shape
+
+- Use **WebSocket** when you want the fastest path to cross-platform connectivity.
+- Use **mDNS** when peers need local-network discovery before connecting.
+- Use **Near fabrics** when you want direct device-to-device links.
+
 ## WebSocket fabric (`kuilt-websocket`)
 
 WebSocket is the easiest way to get a cross-platform session running. Setup is role-split (server accepts, client connects), but once connected both peers use the same symmetric `Seam` API. The split is:
@@ -48,9 +54,10 @@ val host = MDNSPeerLinkFactory(application, jmdns, port = 8080, httpClientFactor
 val hostSeam = host.host(Pattern("alice's game"))
 
 // Joiner: discover then join.
+val joiner = MDNSPeerLinkFactory(application, jmdns, port = 8080, httpClientFactory = { HttpClient { } })
 val discoverer = MDNSServiceDiscoverer(jmdns)
 val ad = discoverer.discoveries().first()
-val joinerSeam = host.join(ad)
+val joinerSeam = joiner.join(ad)
 ```
 
 Bound your collection with a timeout or `take(n)` — `discoveries()` emits indefinitely.
@@ -63,7 +70,10 @@ If you want direct device-to-device links, use the Near fabrics. `kuilt-multipee
 
 ## Writing your own fabric
 
-When your transport is not packaged yet, implement `Loom` (and a private `Seam`) and prove it behaves like every other kuilt fabric by subclassing `SeamConformanceSuite`:
+When your transport is not packaged yet, implement `Loom` (and a private `Seam`) and prove it behaves like every other kuilt fabric by subclassing `SeamConformanceSuite`.
+
+**Why this matters:** conformance tests keep your custom fabric from surprising
+the layers above it.
 
 ```kotlin
 class MyFabricLoom : Loom {

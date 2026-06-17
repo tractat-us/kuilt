@@ -4,7 +4,11 @@ Use `kuilt-raft` when your feature needs strict agreement, not best-effort merge
 It gives every node the same strongly consistent, totally ordered log so each
 peer applies exactly the same decisions in exactly the same order.
 
-Formally, `kuilt-raft` implements the [Raft consensus algorithm](https://raft.github.io) for Kotlin Multiplatform.
+Use it for coordination decisions (turn order, locks, durable workflow steps)
+where two peers disagreeing would be a correctness bug.
+
+Formally, `kuilt-raft` implements the Raft consensus algorithm for Kotlin
+Multiplatform.
 
 ## Transport independence
 
@@ -56,7 +60,9 @@ val entry: LogEntry = node.propose("set x=1".encodeToByteArray())
 
 ## Turn-based game facade
 
-`kuilt-game`'s `TurnSequencer` wraps a `RaftNode` and hides all Raft machinery behind a typed action/committed-stream API. See [kuilt-game](https://github.com/tractat-us/kuilt/tree/main/kuilt-game) for details.
+`kuilt-game`'s `TurnSequencer` wraps a `RaftNode` and hides Raft mechanics
+behind a typed action/committed-stream API, so game code can focus on domain
+rules instead of consensus plumbing.
 
 ## Storage
 

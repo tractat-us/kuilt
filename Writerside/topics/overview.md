@@ -1,12 +1,12 @@
 # kuilt
 
-kuilt is for one job: keep peer-to-peer app code stable while transports,
+kuilt has one job: keep peer-to-peer app code stable while transports,
 platforms, and network conditions change underneath it.
 
-It is a peer-symmetric, multiplatform networking library for Kotlin
-Multiplatform (JVM, Android, iOS, macOS, wasmJs). It moves frames between peers
-over interchangeable *fabrics* — WebSocket, mDNS-discovered LAN, Apple
-Multipeer Connectivity, WebRTC, Android Nearby — behind one contract.
+It is a peer-symmetric networking library for Kotlin Multiplatform (JVM,
+Android, iOS, macOS, wasmJs). It moves byte frames between peers over
+interchangeable *fabrics* — WebSocket, mDNS-discovered LAN, Apple Multipeer
+Connectivity, WebRTC, Android Nearby — behind one contract.
 
 The library has three distinct value propositions:
 
@@ -24,6 +24,15 @@ The library has three distinct value propositions:
   `kuilt-raft` gives you a correct, tested Raft implementation over any kuilt `Seam`.
   `TurnSequencer` (from `kuilt-game`) wraps it in terms a turn-based game understands,
   hiding every Raft concept that doesn't belong in your game logic.
+
+## Choose by the guarantee you need
+
+- Use a **fabric** when you need peers connected and frames moving.
+- Add a **CRDT** when state should converge without central coordination.
+- Add **Raft** when every peer must apply the same decisions in the same order.
+
+Start with the weakest guarantee that still keeps your product correct, then
+layer stronger constructs only where needed.
 
 → [Getting started: two peers, one session](getting-started.md)
 

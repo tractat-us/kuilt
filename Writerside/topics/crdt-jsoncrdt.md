@@ -1,10 +1,10 @@
 # JsonCrdt
 
-A recursive CRDT over an arbitrary JSON document. It composes three lower-level CRDTs: objects are an [ORMap](crdt-ormap.md), arrays are an [Rga](crdt-rga.md), and scalar leaves are an [MVRegister](crdt-mvregister.md). Concurrent edits at any depth merge structurally and converge.
+A recursive CRDT over an arbitrary JSON document. It composes three lower-level CRDTs: objects are an [ORMap](crdt-ormap.md), arrays use [RGA (`Rga`)](crdt-rga.md), and scalar leaves are an [MVRegister](crdt-mvregister.md). Concurrent edits at any depth merge structurally and converge.
 
 **Converges to:** the same document on every replica — concurrently-added keys are all preserved (add-wins), array elements keep a stable order by insertion id, and concurrent scalar writes surface together as a multi-value the caller resolves.
 
-## Structure: ORMap + Rga + MVRegister
+## Structure: ORMap + RGA + MVRegister
 
 ```
 JsonNode = Object(ORMap<String, JsonNode>)   // add-wins keys, recursive values

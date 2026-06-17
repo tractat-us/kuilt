@@ -6,6 +6,8 @@ steps, each adding one kuilt module without changing your application shape.
 
 ## Step 1: Two peers over WebSocket
 
+**Why this step:** prove your send/receive path first, before layering state or ordering.
+
 Start with the smallest useful milestone: two peers exchanging frames over one
 `Seam`.
 
@@ -54,9 +56,11 @@ seam.close()
 
 ## Step 2: Add a chat (replicated data)
 
+**Why this step:** transport alone moves bytes; CRDTs make the shared state converge.
+
 Now make the shared state itself converge. For chat, that means everyone sees
 the same message list in the same order, even with concurrent sends. Add
-`kuilt-crdt` and use `Rga` (RGA — Replicated Growable Array):
+`kuilt-crdt` and use RGA (Replicated Growable Array) via the `Rga` class:
 
 ```kotlin
 // build.gradle.kts
@@ -82,6 +86,8 @@ replicator.state.collect { messages -> chatView.items = messages.toList() }
 ---
 
 ## Step 3: Add tic-tac-toe (consensus and leadership)
+
+**Why this step:** some decisions are not mergeable and need one agreed order.
 
 Some state needs stronger guarantees than mergeable data. Tic-tac-toe moves are
 an ordered log: both players must agree on exactly who moved where, in order,
@@ -115,6 +121,8 @@ game.propose(Move(row = 1, col = 1))
 ---
 
 ## Step 4: Run on more platforms
+
+**Why this step:** portability comes from swapping the `Loom`, not rewriting app logic.
 
 Your chat/game logic above only depends on `seam.broadcast`, `seam.incoming`,
 and `seam.peers`. Swap the `Loom` that produced the `Seam` and keep the rest of

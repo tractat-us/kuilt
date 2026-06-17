@@ -1,7 +1,7 @@
 # Install
 
-Install only what your feature needs, then add modules as your requirements grow.
-kuilt publishes to Maven Central under the `us.tractat.kuilt` group.
+Install only what your feature needs, then add modules as your requirements
+grow. kuilt publishes to Maven Central under the `us.tractat.kuilt` group.
 
 ## Add the repository
 
@@ -16,6 +16,9 @@ repositories {
 
 The recommended path is the **BOM**: align all kuilt modules to one version,
 then opt into only the capabilities you need:
+
+**Why use the BOM:** it prevents version drift between kuilt modules as your app
+grows.
 
 ```kotlin
 // build.gradle.kts
@@ -32,6 +35,10 @@ dependencies {
 Without the BOM, pin each module explicitly (`us.tractat.kuilt:kuilt-crdt:VERSION`). Replace `VERSION` with the [latest release](https://central.sonatype.com/artifact/us.tractat.kuilt/kuilt-core).
 
 Every module re-exports the `kuilt-core` contract (`Loom`/`Seam`/`Swatch`), so you don't list it separately — pick only the modules you actually use. A project that only needs in-memory message passing depends on `kuilt-core` alone.
+
+If you're unsure where to start, begin with one transport module
+(`kuilt-websocket` is usually the easiest), then add `kuilt-crdt`,
+`kuilt-session`, or `kuilt-raft` only when the feature needs those guarantees.
 
 ## Local iteration with `includeBuild`
 

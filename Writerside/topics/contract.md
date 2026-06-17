@@ -4,6 +4,18 @@ The point of kuilt's contract is to keep your app code stable while transports
 change underneath it. You learn eight types once, then reuse them across every
 fabric.
 
+## Why this contract exists
+
+Different fabrics fail in different ways (discovery delays, dropped links,
+platform-specific APIs). The contract narrows that variation to one application
+surface:
+
+- open or join a session (`Loom`),
+- send and receive opaque frames (`Seam` + `Swatch`),
+- react to membership changes (`peers`).
+
+That keeps transport-specific complexity out of app logic.
+
 | Type | Role |
 |------|------|
 | `Loom` | Factory — `weave(Rendezvous): Seam`; convenience wrappers `host(Pattern)` and `join(Tag)` |
@@ -31,7 +43,14 @@ suspend fun host(pattern: Pattern): Seam = weave(Rendezvous.New(pattern))
 suspend fun join(tag: Tag): Seam = weave(Rendezvous.Existing(tag))
 ```
 
-`availability()` reports whether the fabric is usable on this runtime. A fabric that is *absent* on a given platform (e.g. a Multipeer fabric on wasmJs) simply isn't on the classpath — it doesn't return `Unavailable`. `Unavailable(reason)` is for a runtime capability that is missing *now*, such as Play Services absent on an AOSP build. A host composing fabrics uses:
+`availability()` reports whether the fabric is usable on this runtime.
+
+- A fabric that is *absent* on a platform (for example, Multipeer on wasmJs)
+  simply is not on the classpath.
+- `Unavailable(reason)` is for a capability that exists in principle but is
+  missing *right now* (for example, Play Services absent on an AOSP build).
+
+A host composing fabrics can pick the first available loom:
 
 ```kotlin
 val activeLoom = looms.first { it.availability() is FabricAvailability.Available }

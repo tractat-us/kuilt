@@ -4,6 +4,10 @@ If you're using a fabric, your real goal is to share application data across pee
 
 That is exactly what the types in `kuilt-crdt` are for.
 
+If you're deciding between constructs: CRDTs are for *convergence without
+central ordering*. If your feature needs strict, globally ordered decisions, use
+Raft for that part.
+
 Formally, these are **C**onflict-free **R**eplicated **D**ata **T**ypes (CRDTs): data structures that replicas can update independently and later merge deterministically. If two peers have seen the same set of updates, they converge to the same value regardless of update order.
 
 `kuilt-crdt` provides fourteen types, grouped by what they model.
@@ -15,7 +19,7 @@ Because they're plain value objects with clean APIs, **`kuilt-crdt` depends on n
 | What you're building | Type |
 |---|---|
 | Event tally, vote count, metric | [`GCounter`](crdt-gcounter.md) — grow-only; each replica owns its slot |
-| Like/dislike, upvote/downvote | [`PNCounter`](crdt-pncounter.md) — increment and decrement; never goes negative in aggregate |
+| Like/dislike, upvote/downvote | [`PNCounter`](crdt-pncounter.md) — increment and decrement; value may be negative |
 | Collaborative tag cloud, ever-growing log | [`GSet`](crdt-gset.md) — add-only; simple and fast |
 | Collaborative labels where items can be archived | [`TwoPhaseSet`](crdt-twophaseset.md) — add once, remove once; removal is permanent |
 | Collaborative labels where items can be re-added | [`ORSet`](crdt-orset.md) — add-wins on concurrent conflict |
@@ -25,7 +29,7 @@ Because they're plain value objects with clean APIs, **`kuilt-crdt` depends on n
 | Presence / roster (key → nested CRDT value) | [`ORMap`](crdt-ormap.md) — add-wins key set; values merge via their own CRDT |
 | Seat or inventory reservation (can't oversell) | [`BoundedCounter`](crdt-bounded-counter.md) — quota-per-replica; total spend can never exceed budget |
 | Collaborative text / ordered list | [`Rga`](crdt-rga.md) — stable insertion ids; converges to same order everywhere |
-| JSON document sync | [`JsonCrdt`](crdt-jsoncrdt.md) — ORMap objects + Rga arrays + MVRegister leaves, recursive |
+| JSON document sync | [`JsonCrdt`](crdt-jsoncrdt.md) — ORMap objects + RGA arrays + MVRegister leaves, recursive |
 | Ephemeral presence (cursors, typing indicators) | [`EphemeralMap`](crdt-ephemeralmap.md) — per-replica slot; TTL eviction |
 | Causal stability / building your own CRDT | [`Causal` primitives](crdt-causal.md) — `DotContext`, `DotSet`, `DotFun`, `DotMap` |
 
@@ -33,12 +37,12 @@ Because they're plain value objects with clean APIs, **`kuilt-crdt` depends on n
 
 | Group | Types | Convergence property |
 |-------|-------|----------------------|
-| Counters | `GCounter`, `PNCounter`, `BoundedCounter` | Monotone integer; element-wise max per replica slot |
+| Counters | `GCounter`, `PNCounter`, `BoundedCounter` | Per-replica monotone internals; deterministic integer result after merge |
 | Sets | `GSet`, `ORSet`, `TwoPhaseSet` | Set union / observe-remove semantics |
 | Registers | `LWWRegister`, `MVRegister` | Last-write-wins or multi-value concurrent conflict |
 | Maps | `LWWMap`, `ORMap` | Key-level LWW or ORSet-keyed map |
-| Sequences | `Rga` (RGA) | Ordered list with stable unique ids |
-| Composite | `JsonCrdt` | Recursive JSON document — ORMap objects, Rga arrays, MVRegister leaves |
+| Sequences | `Rga` (RGA, Replicated Growable Array) | Ordered list with stable unique ids |
+| Composite | `JsonCrdt` | Recursive JSON document — ORMap objects, RGA arrays, MVRegister leaves |
 | Ephemeral | `EphemeralMap` | Per-replica presence slot, clock-ordered, with caller-driven TTL eviction |
 | Causal primitives | `Causal`, `DotContext`, `DotSet` | Causal-context-based remove/add reasoning |
 
