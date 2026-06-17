@@ -204,7 +204,7 @@ internal class SeamRoom(
      *
      * Updated in lock-step with [_roster] by [syncRosterPeers]. Used by [RoomChannelSeam.peers]
      * to provide the admit-gated peer set to consumers such as
-     * [us.tractat.kuilt.crdt.replicator.SeamReplicator].
+     * [us.tractat.kuilt.quilter.Quilter].
      */
     private val _rosterPeers = MutableStateFlow<Set<PeerId>>(setOf(selfId))
     internal val rosterPeers: StateFlow<Set<PeerId>> = _rosterPeers.asStateFlow()

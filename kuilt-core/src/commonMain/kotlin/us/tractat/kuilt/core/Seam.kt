@@ -68,7 +68,7 @@ public interface Seam {
      * **Termination contract:** this flow **completes** (the collection terminates normally)
      * once the seam reaches [SeamState.Torn] — whether via a local [close] call or a
      * remote disconnect. Consumers that own resources tied to the incoming stream (e.g.
-     * [us.tractat.kuilt.crdt.replicator.SeamReplicator]) use `.onCompletion { }` to
+     * [us.tractat.kuilt.quilter.Quilter]) use `.onCompletion { }` to
      * self-clean when the seam tears, without requiring the caller to call their own
      * `close()` explicitly. Every [Loom] implementation must honour this contract.
      */

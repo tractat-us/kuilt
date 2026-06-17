@@ -196,7 +196,7 @@ the replicator wiring (#268–270); they are stated here because they belong to 
   `(frontiers, retainedFrontier)` pair and publish it in one assignment), never as
   two separately-published mutations.
 
-- **(W2) Single-coroutine confinement of matrix-clock mutations.** `SeamReplicator`
+- **(W2) Single-coroutine confinement of matrix-clock mutations.** `Quilter`
   runs its three `launchIn(scope)` collectors over **lock-free** state; the
   matrix-clock fields (`frontiers`, `retainedFrontier`, `knownPeers`) are safe today
   **only because every mutation to them is confined to one coroutine context**. The
@@ -348,7 +348,7 @@ noSuccessor      = id !in { op.after : op in localInserts }    // condition 4
 gc(id)           = frontierComplete && stable && noSuccessor
 ```
 
-`SeamReplicator` additions over v2:
+`Quilter` additions over v2:
 - `retainedFrontier: Map<ReplicaId, Long>` — updated in `evictStalePeers` (retain
   rule §4.3) and normalised on every matrix update (release rule §4.4).
 - `frontierMax` StateFlow now emits `max(F_live, retainedFrontier)`.
@@ -367,8 +367,8 @@ Makes `apply` and `piece` agree: once compacted, always compacted.
 
 | Surface | Disposition |
 |---|---|
-| `SeamReplicator.universalAckFlow` | **Keep** — delta-buffer GC only; **not** the RGA GC watermark. |
-| `SeamReplicator.nextSeqFlow` | **Remove** — sole consumer (`seqToLamport`) deleted. |
+| `Quilter.universalAckFlow` | **Keep** — delta-buffer GC only; **not** the RGA GC watermark. |
+| `Quilter.nextSeqFlow` | **Remove** — sole consumer (`seqToLamport`) deleted. |
 | `Rga.compact(watermark: Long)` | **Remove** — unsound; replaced by 3-arg VV form. |
 | `RgaId` wire format | **Break** — add dense `seq`. Cheap pre-1.0 / pre-consumption. |
 | `Rga.apply` | **Fix** — consult `compactedIds`. |

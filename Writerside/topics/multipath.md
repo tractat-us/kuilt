@@ -80,11 +80,11 @@ Because a composite is just a `Seam`, hand it to consensus or replication exactl
 as you would any other:
 
 ```kotlin
-val replicator = SeamReplicator(
+val replicator = Quilter(
     replica = ReplicaId(seam.selfId.value),
     seam = seam,                 // the composite Seam
     initial = GCounter.ZERO,
-    messageSerializer = ReplicatorMessage.serializer(GCounter.serializer()),
+    messageSerializer = QuiltMessage.serializer(GCounter.serializer()),
     scope = coroutineScope,
 )
 ```

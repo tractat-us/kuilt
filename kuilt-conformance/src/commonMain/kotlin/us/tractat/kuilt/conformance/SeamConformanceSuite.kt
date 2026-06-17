@@ -273,7 +273,7 @@ public abstract class SeamConformanceSuite {
     // ── (11) incoming completes when the seam reaches Torn ───────────────────
     //
     // Contract from Seam.incoming KDoc: the flow terminates once the seam is Torn,
-    // whether via local close() or remote disconnect. Consumers (e.g. SeamReplicator)
+    // whether via local close() or remote disconnect. Consumers (e.g. Quilter)
     // rely on this to self-close via onCompletion without requiring an explicit caller.
     //
     // `open` so a fabric that does not yet honour the contract can override this with

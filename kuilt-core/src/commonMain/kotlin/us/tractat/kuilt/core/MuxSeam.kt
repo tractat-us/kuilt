@@ -30,7 +30,7 @@ import kotlinx.coroutines.flow.shareIn
  *
  * The shared upstream is started with `replay = 0`. Frames emitted before a
  * channel view begins collecting are **not** replayed — this is best-effort
- * delivery, suitable for [SeamReplicator] (which heals gaps via FullState +
+ * delivery, suitable for [Quilter] (which heals gaps via FullState +
  * resend) but **not** suitable for raw at-least-once consumers.
  *
  * ## Channel identity

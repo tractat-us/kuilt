@@ -20,16 +20,16 @@ import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.Swatch
 import us.tractat.kuilt.crdt.GCounter
 import us.tractat.kuilt.crdt.ReplicaId
-import us.tractat.kuilt.crdt.replicator.ReplicatorMessage
-import us.tractat.kuilt.crdt.replicator.SeamReplicator
-import us.tractat.kuilt.crdt.replicator.SeamReplicatorConfig
+import us.tractat.kuilt.quilter.QuiltMessage
+import us.tractat.kuilt.quilter.Quilter
+import us.tractat.kuilt.quilter.QuilterConfig
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
- * Integration: a [SeamReplicator] running over [Room.channel] converges correctly
+ * Integration: a [Quilter] running over [Room.channel] converges correctly
  * in a 2-peer room, and the admit-gating property holds — the replicator never
  * directs FullState, Ack, or Resend to unadmitted peers.
  *
@@ -37,7 +37,7 @@ import kotlin.test.assertTrue
  *
  * [Room.channel] exposes a [us.tractat.kuilt.core.Seam] whose
  * [us.tractat.kuilt.core.Seam.peers] is the **admitted roster** (not raw transport
- * peers). The [SeamReplicator] uses `Seam.peers` for its membership book
+ * peers). The [Quilter] uses `Seam.peers` for its membership book
  * (`knownPeers`), so:
  *
  * - **FullState** — sent via `seam.sendTo` only to peers in `knownPeers` (admitted
@@ -57,11 +57,11 @@ import kotlin.test.assertTrue
  */
 class RoomChannelReplicatorTest {
 
-    private val replicatorConfig = SeamReplicatorConfig(expectVirtualTime = true)
-    private val messageSer = ReplicatorMessage.serializer(GCounter.serializer())
+    private val replicatorConfig = QuilterConfig(expectVirtualTime = true)
+    private val messageSer = QuiltMessage.serializer(GCounter.serializer())
 
-    private fun gcounterReplicator(room: Room, scope: CoroutineScope): SeamReplicator<GCounter> =
-        SeamReplicator(
+    private fun gcounterReplicator(room: Room, scope: CoroutineScope): Quilter<GCounter> =
+        Quilter(
             replica = ReplicaId(room.selfId.value),
             seam = room.channel("crdt-test"),
             initial = GCounter.ZERO,
@@ -77,10 +77,10 @@ class RoomChannelReplicatorTest {
     }
 
     /**
-     * Strip 3-byte channel framing and decode as [ReplicatorMessage].
+     * Strip 3-byte channel framing and decode as [QuiltMessage].
      * Returns null if the bytes are not a recognizable channel-framed replicator message.
      */
-    private fun decodeChannelFrame(payload: ByteArray): ReplicatorMessage<GCounter>? {
+    private fun decodeChannelFrame(payload: ByteArray): QuiltMessage<GCounter>? {
         if (!RoomChannel.isChannelFrame(payload)) return null
         val inner = payload.copyOfRange(3, payload.size)
         return runCatching { Cbor.decodeFromByteArray(messageSer, inner) }.getOrNull()
@@ -193,22 +193,22 @@ class RoomChannelReplicatorTest {
 
             // Deltas are broadcast and therefore do arrive — that is the documented behaviour.
             assertTrue(
-                replicatorMessages.any { it is ReplicatorMessage.Delta },
+                replicatorMessages.any { it is QuiltMessage.Delta },
                 "at least one broadcast Delta should be observable on the raw transport seam",
             )
 
             // FullState, Ack, and Resend are sendTo operations gated on admitted peers.
             // None of them should ever reach an unadmitted transport peer.
             assertFalse(
-                replicatorMessages.any { it is ReplicatorMessage.FullState },
-                "FullState must never be sent to an unadmitted peer: ${replicatorMessages.filterIsInstance<ReplicatorMessage.FullState<GCounter>>()}",
+                replicatorMessages.any { it is QuiltMessage.FullState },
+                "FullState must never be sent to an unadmitted peer: ${replicatorMessages.filterIsInstance<QuiltMessage.FullState<GCounter>>()}",
             )
             assertFalse(
-                replicatorMessages.any { it is ReplicatorMessage.Ack },
+                replicatorMessages.any { it is QuiltMessage.Ack },
                 "Ack must never be sent to an unadmitted peer",
             )
             assertFalse(
-                replicatorMessages.any { it is ReplicatorMessage.Resend },
+                replicatorMessages.any { it is QuiltMessage.Resend },
                 "Resend must never be sent to an unadmitted peer",
             )
 

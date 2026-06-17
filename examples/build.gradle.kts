@@ -8,6 +8,7 @@ dependencies {
     testImplementation(project(":kuilt-raft-test"))
     testImplementation(project(":kuilt-raft"))
     testImplementation(project(":kuilt-crdt"))
+    testImplementation(project(":kuilt-quilter"))
     testImplementation(project(":kuilt-core"))
     testImplementation(project(":kuilt-session"))
     testImplementation(project(":kuilt-websocket"))

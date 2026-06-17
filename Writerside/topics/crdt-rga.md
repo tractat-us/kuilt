@@ -20,7 +20,7 @@ For long-running sequences (e.g. a chat log), the `RgaGcCoordinator` + `WindowPo
 
 ```kotlin
 ```
-{ src="../../kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/replicator/RgaWindowByCountIntegrationTest.kt" include-symbol="byCountDropsLeadingPrefixAndWindowRenders" }
+{ src="../../kuilt-quilter/src/commonTest/kotlin/us/tractat/kuilt/quilter/RgaWindowByCountIntegrationTest.kt" include-symbol="byCountDropsLeadingPrefixAndWindowRenders" }
 
 A late joiner receives the windowed state via `FullState` and never materialises the dropped prefix — the op-log stays bounded.
 

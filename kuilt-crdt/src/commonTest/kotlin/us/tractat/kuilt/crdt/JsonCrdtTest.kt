@@ -251,10 +251,10 @@ class JsonCrdtTest {
         assertEquals(crdt, json.decodeFromString(ser, json.encodeToString(ser, crdt)))
     }
 
-    // ---- Tests: serialization round-trips — CBOR (the SeamReplicator wire format) ----
+    // ---- Tests: serialization round-trips — CBOR (the Quilter wire format) ----
 
     /**
-     * CBOR is the format used by [SeamReplicator] on the wire. The custom
+     * CBOR is the format used by [Quilter] on the wire. The custom
      * [JsonNodeSerializer] was specifically written to handle the recursive
      * [ORMap] and [Rga] element types that fail with the compiler-generated
      * serializer under CBOR. These tests verify that the hand-rolled descriptor
@@ -422,7 +422,7 @@ class JsonCrdtTest {
 
     /**
      * A [JsonCrdt] containing a nested [JsonNode.Array] must expose the embedded
-     * [Rga]'s causal dots via [causalDots], so [SeamReplicator] can build the
+     * [Rga]'s causal dots via [causalDots], so [Quilter] can build the
      * correct causal-stability frontier. An empty set here would suppress GC for
      * all nested Rga tombstones.
      */
