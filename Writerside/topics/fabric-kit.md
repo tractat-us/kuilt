@@ -10,51 +10,42 @@ fabrics](fabrics.md)): a small set of `kuilt-core` primitives that assemble a
 
 Three pieces, two of them topology builders:
 
-- **`Conn`** — the SPI one duplex link implements.
-- **`identified()`** — one `Conn` → a 2-peer `Seam`.
-- **`meshSeam()`** — N `Conn`s → one fully-connected N-peer `Seam`.
+- **`Connection`** — the SPI one duplex link implements.
+- **`identified()`** — one `Connection` → a 2-peer `Seam`.
+- **`meshSeam()`** — N `Connection`s → one fully-connected N-peer `Seam`.
 
 See [Composing a Seam](composing-a-seam.md) for how these sit alongside
 `CompositeLoom` (multipath) and `MuxSeam` (channel splitting) on the
-`Conn`↔`Seam` axis.
+`Connection`↔`Seam` axis.
 
-## `Conn` — the point-to-point SPI
+## `Connection` — the point-to-point SPI
 
-A `Conn` is a duplex, message-framed link between **exactly two** peers. It is
+A `Connection` is a duplex, message-framed link between **exactly two** peers. It is
 the minimal contract a message transport (WebSocket, a gRPC bidi stream,
 Multipeer, Nearby) implements to become a kuilt fabric — it is **not** a `Seam`
 itself:
 
 ```kotlin
-public interface Conn {
-    // Send one whole message. Suspends until the transport accepts it (backpressure).
-    public suspend fun send(frame: ByteArray)
-
-    // Whole messages received from the peer, in order. Single-collection.
-    public val incoming: Flow<ByteArray>
-
-    // Close the link. Idempotent. Completes incoming.
-    public suspend fun close()
-}
 ```
+{ src="../../kuilt-core/src/commonMain/kotlin/us/tractat/kuilt/core/fabric/Connection.kt" include-symbol="Connection" }
 
 Each frame is a whole message; the link preserves frame boundaries and FIFO
-order. Stream transports (TCP) don't implement `Conn` directly — they expose a
-kotlinx-io `Source`/`Sink` and use `framed()` to obtain one. Writing a `Conn`
+order. Stream transports (TCP) don't implement `Connection` directly — they expose a
+kotlinx-io `Source`/`Sink` and use `framed()` to obtain one. Writing a `Connection`
 for your own transport is the subject of the implementer tutorial
 (`docs/extending-fabrics.md` in the repository); this page is about *consuming*
-the kit once you have `Conn`s in hand.
+the kit once you have `Connection`s in hand.
 
 ## `identified()` — a 2-peer link
 
 When you already know **both** identities on a single link, `identified()`
 presents it as a 2-peer `Seam`. There is no handshake and no discovery — you
 supply `selfId` and `remoteId` directly. The result is `Woven` at construction,
-`broadcast` is the same as `sendTo(remoteId)`, and it goes `Torn` on the conn's
+`broadcast` is the same as `sendTo(remoteId)`, and it goes `Torn` on the connection's
 EOF/error or on `close()`:
 
 ```kotlin
-val seam: Seam = identified(conn, selfId = me, remoteId = peer, dispatcher)
+val seam: Seam = identified(connection, selfId = me, remoteId = peer, dispatcher)
 ```
 
 The `dispatcher` is **required** — it is the scope for the seam's read/write
@@ -66,12 +57,12 @@ and delivery from the remote, proven by the contract test:
 ```
 { src="../../kuilt-core/src/commonTest/kotlin/us/tractat/kuilt/core/fabric/LinkSeamTest.kt" include-symbol="wovenAtConstructionAndDeliversFromRemote" }
 
-(`connPair()` is a test helper that returns the two ends of an in-memory `Conn`;
+(`connectionPair()` is a test helper that returns the two ends of an in-memory `Connection`;
 production supplies a real link.)
 
 ## `meshSeam()` — an N-peer mesh
 
-Given one `Conn` to each prospective peer, `meshSeam()` weaves them into a single
+Given one `Connection` to each prospective peer, `meshSeam()` weaves them into a single
 fully-connected N-peer `Seam`. Unlike `identified()` it does **not** need you to
 name the remotes: it exchanges a short preamble on each link to learn the remote
 `PeerId`, and dedups duplicate links from a simultaneous dial by a canonical,
@@ -79,7 +70,7 @@ order-independent nonce both ends agree on — so two peers that dial each other
 the same moment converge on the same single link with no coordination.
 
 ```kotlin
-val mesh: Mesh = meshSeam(selfId = me, conns = listOf(connToB, connToC), dispatcher)
+val mesh: Mesh = meshSeam(selfId = me, connections = listOf(connectionToB, connectionToC), dispatcher)
 ```
 
 `meshSeam()` suspends until every handshake completes, then returns a `Mesh` (a
@@ -103,7 +94,7 @@ subclassing `MeshConformanceSuite`.)
 
 A peer that errors or disconnects is dropped from `peers` and the mesh keeps
 running — it stays `Woven` until you call `close()`. A peer that dials in *after*
-construction is admitted live with `Mesh.addLink(conn)`, which runs the same
+construction is admitted live with `Mesh.addLink(connection)`, which runs the same
 preamble exchange and dedup before adding it to the roster.
 
 ## Beyond two topologies
@@ -111,6 +102,6 @@ preamble exchange and dedup before adding it to the roster.
 - To bond several **finished** `Seam`s for one peer-set into a single multipath
   `Seam`, see [Multipath](multipath.md) — that's the `Seam → Seam` direction, the
   mirror of the mesh builder.
-- To prove your own `Conn`/`Loom` against the contract, subclass
+- To prove your own `Connection`/`Loom` against the contract, subclass
   `SeamConformanceSuite` (or `MeshConformanceSuite` for a mesh binding) — see
   [Fabrics](fabrics.md#writing-your-own-fabric).

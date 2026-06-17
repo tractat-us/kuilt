@@ -14,7 +14,7 @@ import kotlinx.io.asSource
 import kotlinx.io.buffered
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Seam
-import us.tractat.kuilt.core.fabric.Conn
+import us.tractat.kuilt.core.fabric.Connection
 import us.tractat.kuilt.core.fabric.handshaking
 import us.tractat.kuilt.stream.framed
 import java.net.ServerSocket
@@ -26,7 +26,7 @@ import kotlin.time.Duration.Companion.seconds
 /**
  * The headline of the pluggable fabric kit, told without Ktor: a **proprietary,
  * in-house stream RPC** — here a plain [java.net.Socket] — becomes a kuilt
- * [Seam] with the *same* adapter [TcpConn] uses.
+ * [Seam] with the *same* adapter [TcpConnection] uses.
  *
  * The transport-specific code is just this: take whatever byte duplex your RPC
  * exposes (here `socket.inputStream` / `socket.outputStream`), wrap it as a
@@ -41,12 +41,12 @@ import kotlin.time.Duration.Companion.seconds
 class ProprietaryRpcExampleTest {
 
     /**
-     * The whole adapter: a byte-stream socket → a kuilt [Conn]. `framed()` adds
-     * length-prefix framing; the resulting cold, single-collection `Conn` goes
+     * The whole adapter: a byte-stream socket → a kuilt [Connection]. `framed()` adds
+     * length-prefix framing; the resulting cold, single-collection `Connection` goes
      * straight to [handshaking] — no hot-reader pump. `handshaking` consumes
      * `incoming` with a single collection, so a stream RPC needs no extra glue.
      */
-    private fun rpcConn(socket: Socket): Conn =
+    private fun rpcConnection(socket: Socket): Connection =
         framed(
             source = socket.getInputStream().asSource().buffered(),
             sink = socket.getOutputStream().asSink().buffered(),
@@ -54,7 +54,7 @@ class ProprietaryRpcExampleTest {
 
     /** Wrap a connected socket as a 2-peer kuilt [Seam], identity negotiated in-band. */
     private suspend fun weaveSeam(socket: Socket, selfId: PeerId): Seam =
-        handshaking(rpcConn(socket), selfId, Dispatchers.IO)
+        handshaking(rpcConnection(socket), selfId, Dispatchers.IO)
 
     @Test
     fun aProprietarySocketRpcBecomesAKuiltSeam() = runBlocking {

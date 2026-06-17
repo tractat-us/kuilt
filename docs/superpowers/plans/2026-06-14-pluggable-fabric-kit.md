@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Provide reusable `Seam` implementations (`Conn` SPI, `identified`/`handshaking` 2-peer seams, `framed()` stream helper, `MeshSeam`) so a consumer adapts a proprietary RPC into a first-class kuilt fabric in ~30 lines — demonstrated end-to-end by a `:kuilt-tcp` fabric and a docs tutorial.
+**Goal:** Provide reusable `Seam` implementations (`Connection` SPI, `identified`/`handshaking` 2-peer seams, `framed()` stream helper, `MeshSeam`) so a consumer adapts a proprietary RPC into a first-class kuilt fabric in ~30 lines — demonstrated end-to-end by a `:kuilt-tcp` fabric and a docs tutorial.
 
-**Architecture:** A point-to-point `Conn` abstraction sits beneath the existing `Seam` contract. `identified` is the byte-transparent 2-peer primitive; `handshaking` wraps it via a one-shot `Hello` preamble; `framed()` adapts a kotlinx-io `Source`/`Sink` into a `Conn`; `MeshSeam` aggregates many handshaked point-to-point links into one N-peer seam. No change to `Seam`/`Loom`/`Swatch`.
+**Architecture:** A point-to-point `Connection` abstraction sits beneath the existing `Seam` contract. `identified` is the byte-transparent 2-peer primitive; `handshaking` wraps it via a one-shot `Hello` preamble; `framed()` adapts a kotlinx-io `Source`/`Sink` into a `Connection`; `MeshSeam` aggregates many handshaked point-to-point links into one N-peer seam. No change to `Seam`/`Loom`/`Swatch`.
 
 **Tech Stack:** Kotlin Multiplatform, coroutines (`StateFlow`/`Channel`/`Flow`), kotlinx-io (stream module only), Ktor `network` (TCP fabric), the existing `SeamConformanceSuite`.
 
@@ -16,16 +16,16 @@
 
 | Path | Responsibility |
 |------|----------------|
-| `kuilt-core/.../core/fabric/Conn.kt` | The `Conn` message SPI |
+| `kuilt-core/.../core/fabric/Connection.kt` | The `Connection` message SPI |
 | `kuilt-core/.../core/fabric/Hello.kt` | `Hello` preamble value + encode/decode |
 | `kuilt-core/.../core/fabric/LinkSeam.kt` | `identified(...)` primitive 2-peer seam + internal writer |
 | `kuilt-core/.../core/fabric/Handshaking.kt` | `handshaking(...)` — preamble then delegate to `identified` |
 | `kuilt-core/.../core/fabric/MeshSeam.kt` | `meshSeam(...)` N-peer aggregation + dedup |
-| `kuilt-test/.../test/fabric/ConnPair.kt` | In-memory wired `Conn` pair + `ConnLoom` test harness |
+| `kuilt-test/.../test/fabric/ConnectionPair.kt` | In-memory wired `Connection` pair + `ConnectionLoom` test harness |
 | `kuilt-conformance/.../IdentifiedConformanceTest.kt` | Runs `SeamConformanceSuite` over `identified` |
 | `kuilt-conformance/.../HandshakingConformanceTest.kt` | Runs the suite over `handshaking` |
 | `kuilt-conformance/.../MeshConformanceSuite.kt` + `MeshConformanceTest.kt` | N-peer contract suite + run |
-| `kuilt-stream/` (new module) | `framed(source, sink, maxFrameSize): Conn` + length-prefix codec |
+| `kuilt-stream/` (new module) | `framed(source, sink, maxFrameSize): Connection` + length-prefix codec |
 | `kuilt-tcp/` (new module) | TCP `Loom` (dial/accept) + worked proprietary-RPC example |
 | `docs/extending-fabrics.md` | Tutorial: implement a custom RPC fabric, step by step |
 
@@ -33,10 +33,10 @@ Package root for new core code: `us.tractat.kuilt.core.fabric`.
 
 ---
 
-## Task 1: `Conn` SPI
+## Task 1: `Connection` SPI
 
 **Files:**
-- Create: `kuilt-core/src/commonMain/kotlin/us/tractat/kuilt/core/fabric/Conn.kt`
+- Create: `kuilt-core/src/commonMain/kotlin/us/tractat/kuilt/core/fabric/Connection.kt`
 
 - [ ] **Step 1: Write the interface**
 
@@ -51,11 +51,11 @@ import kotlinx.coroutines.flow.Flow
  * The minimal SPI a message transport (WebSocket, gRPC bidi stream, Multipeer,
  * Nearby) implements to become a kuilt fabric. Stream transports (TCP) do not
  * implement this directly — they provide a kotlinx-io Source/Sink and use
- * `:kuilt-stream`'s `framed()` to obtain a `Conn`.
+ * `:kuilt-stream`'s `framed()` to obtain a `Connection`.
  *
  * Each frame is a whole message; the link preserves frame boundaries and FIFO order.
  */
-public interface Conn {
+public interface Connection {
     /** Send one whole message. Suspends until the transport accepts it (backpressure). */
     public suspend fun send(frame: ByteArray)
 
@@ -75,25 +75,25 @@ Expected: BUILD SUCCESSFUL (explicitApi satisfied — every member is `public`).
 - [ ] **Step 3: Commit**
 
 ```bash
-git add kuilt-core/src/commonMain/kotlin/us/tractat/kuilt/core/fabric/Conn.kt
-git commit -m "feat(kuilt-core): add Conn point-to-point message SPI"
+git add kuilt-core/src/commonMain/kotlin/us/tractat/kuilt/core/fabric/Connection.kt
+git commit -m "feat(kuilt-core): add Connection point-to-point message SPI"
 ```
 
 ---
 
-## Task 2: In-memory `Conn` pair + `ConnLoom` test harness
+## Task 2: In-memory `Connection` pair + `ConnectionLoom` test harness
 
-A wired pair of `Conn`s (each end's `send` feeds the other's `incoming`) and a `Loom`
+A wired pair of `Connection`s (each end's `send` feeds the other's `incoming`) and a `Loom`
 that wraps them in `identified` seams, so the conformance suite (which tests `Loom`s)
 can drive the new seams. Lives in `:kuilt-test` so conformance and unit tests reuse it.
 
 **Files:**
-- Create: `kuilt-test/src/commonMain/kotlin/us/tractat/kuilt/test/fabric/ConnPair.kt`
+- Create: `kuilt-test/src/commonMain/kotlin/us/tractat/kuilt/test/fabric/ConnectionPair.kt`
 
 - [ ] **Step 1: Write the test (round-trip through the pair)**
 
 ```kotlin
-// kuilt-test/src/commonTest/.../fabric/ConnPairTest.kt
+// kuilt-test/src/commonTest/.../fabric/ConnectionPairTest.kt
 package us.tractat.kuilt.test.fabric
 
 import kotlinx.coroutines.flow.first
@@ -101,22 +101,22 @@ import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 
-class ConnPairTest {
+class ConnectionPairTest {
     @Test
     fun framesCrossToTheOtherEnd() = runTest {
-        val (a, b) = connPair()
+        val (a, b) = connectionPair()
         a.send(byteArrayOf(1, 2, 3))
         assertContentEquals(byteArrayOf(1, 2, 3), b.incoming.first())
     }
 }
 ```
 
-- [ ] **Step 2: Run it; expect failure (`connPair` unresolved)**
+- [ ] **Step 2: Run it; expect failure (`connectionPair` unresolved)**
 
-Run: `./gradlew :kuilt-test:jvmTest --tests "*ConnPairTest*"`
-Expected: FAIL — unresolved reference `connPair`.
+Run: `./gradlew :kuilt-test:jvmTest --tests "*ConnectionPairTest*"`
+Expected: FAIL — unresolved reference `connectionPair`.
 
-- [ ] **Step 3: Implement `connPair()` and `ConnLoom`**
+- [ ] **Step 3: Implement `connectionPair()` and `ConnectionLoom`**
 
 ```kotlin
 package us.tractat.kuilt.test.fabric
@@ -124,19 +124,19 @@ package us.tractat.kuilt.test.fabric
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.receiveAsFlow
-import us.tractat.kuilt.core.fabric.Conn
+import us.tractat.kuilt.core.fabric.Connection
 
 /** Two Conns whose sends cross to each other's `incoming`. In-memory, no network. */
-public fun connPair(): Pair<Conn, Conn> {
+public fun connectionPair(): Pair<Connection, Connection> {
     val aToB = Channel<ByteArray>(Channel.UNLIMITED)
     val bToA = Channel<ByteArray>(Channel.UNLIMITED)
-    return ChannelConn(out = aToB, inn = bToA) to ChannelConn(out = bToA, inn = aToB)
+    return ChannelConnection(out = aToB, inn = bToA) to ChannelConnection(out = bToA, inn = aToB)
 }
 
-private class ChannelConn(
+private class ChannelConnection(
     private val out: Channel<ByteArray>,
     private val inn: Channel<ByteArray>,
-) : Conn {
+) : Connection {
     override suspend fun send(frame: ByteArray) { out.send(frame) }
     override val incoming: Flow<ByteArray> = inn.receiveAsFlow()
     override suspend fun close() { out.close() }
@@ -145,15 +145,15 @@ private class ChannelConn(
 
 - [ ] **Step 4: Run test; expect PASS**
 
-Run: `./gradlew :kuilt-test:jvmTest --tests "*ConnPairTest*"`
+Run: `./gradlew :kuilt-test:jvmTest --tests "*ConnectionPairTest*"`
 Expected: PASS.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add kuilt-test/src/commonMain/kotlin/us/tractat/kuilt/test/fabric/ConnPair.kt \
-        kuilt-test/src/commonTest/kotlin/us/tractat/kuilt/test/fabric/ConnPairTest.kt
-git commit -m "test(kuilt-test): in-memory Conn pair fixture"
+git add kuilt-test/src/commonMain/kotlin/us/tractat/kuilt/test/fabric/ConnectionPair.kt \
+        kuilt-test/src/commonTest/kotlin/us/tractat/kuilt/test/fabric/ConnectionPairTest.kt
+git commit -m "test(kuilt-test): in-memory Connection pair fixture"
 ```
 
 ---
@@ -176,7 +176,7 @@ import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.SeamState
-import us.tractat.kuilt.test.fabric.connPair
+import us.tractat.kuilt.test.fabric.connectionPair
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -188,7 +188,7 @@ class LinkSeamTest {
 
     @Test
     fun wovenAtConstructionAndDeliversFromRemote() = runTest {
-        val (mine, theirs) = connPair()
+        val (mine, theirs) = connectionPair()
         val seam = identified(mine, self, remote, UnconfinedTestDispatcher(testScheduler))
         assertIs<SeamState.Woven>(seam.state.value)
         assertEquals(setOf(self, remote), seam.peers.value)
@@ -200,7 +200,7 @@ class LinkSeamTest {
 
     @Test
     fun concurrentBroadcastsArriveInSendOrder() = runTest {
-        val (mine, theirs) = connPair()
+        val (mine, theirs) = connectionPair()
         val seam = identified(mine, self, remote, UnconfinedTestDispatcher(testScheduler))
         repeat(3) { seam.broadcast(byteArrayOf(it.toByte())) }
         val got = theirs.incoming.take(3).toList().map { it.single() }
@@ -240,8 +240,8 @@ import us.tractat.kuilt.core.Swatch
 import kotlin.coroutines.CoroutineContext
 
 /**
- * A byte-transparent 2-peer [Seam] over a [Conn] whose two identities are known.
- * `broadcast` == `sendTo(remoteId)`. Woven at construction; Torn on conn EOF/error
+ * A byte-transparent 2-peer [Seam] over a [Connection] whose two identities are known.
+ * `broadcast` == `sendTo(remoteId)`. Woven at construction; Torn on connection EOF/error
  * or [close]. Concurrent sends are serialized through an internal channel + single
  * writer so wire order matches call order.
  *
@@ -249,14 +249,14 @@ import kotlin.coroutines.CoroutineContext
  *   tests inject `UnconfinedTestDispatcher(testScheduler)`.
  */
 public fun identified(
-    conn: Conn,
+    connection: Connection,
     selfId: PeerId,
     remoteId: PeerId,
     dispatcher: CoroutineContext = Dispatchers.Default.limitedParallelism(1),
-): Seam = LinkSeam(conn, selfId, remoteId, dispatcher)
+): Seam = LinkSeam(connection, selfId, remoteId, dispatcher)
 
 internal class LinkSeam(
-    private val conn: Conn,
+    private val connection: Connection,
     override val selfId: PeerId,
     private val remoteId: PeerId,
     dispatcher: CoroutineContext,
@@ -273,7 +273,7 @@ internal class LinkSeam(
     override val incoming: Flow<Swatch> = inbox.receiveAsFlow()
 
     // Single-writer outbound queue: concurrent broadcast/sendTo enqueue here;
-    // one coroutine drains in FIFO order to conn.send.
+    // one coroutine drains in FIFO order to connection.send.
     private val outbox = Channel<ByteArray>(Channel.UNLIMITED)
 
     private var closed = false
@@ -302,16 +302,16 @@ internal class LinkSeam(
         _state.value = SeamState.Torn(reason)
         outbox.close()
         inbox.close()
-        conn.close()
+        connection.close()
     }
 
     private suspend fun writeLoop() {
-        for (frame in outbox) conn.send(frame)
+        for (frame in outbox) connection.send(frame)
     }
 
     private suspend fun readLoop() {
         try {
-            conn.incoming.collect { bytes ->
+            connection.incoming.collect { bytes ->
                 if (!closed) inbox.trySend(Swatch(payload = bytes, sender = remoteId, sequence = ++seq))
             }
         } catch (e: CancellationException) {
@@ -350,12 +350,12 @@ git commit -m "feat(kuilt-core): identified() byte-transparent 2-peer Seam"
 
 **Files:**
 - Create: `kuilt-conformance/src/commonTest/kotlin/us/tractat/kuilt/conformance/IdentifiedConformanceTest.kt`
-- Modify: `kuilt-test/.../fabric/ConnPair.kt` — add `identifiedLoomPair()` helper
+- Modify: `kuilt-test/.../fabric/ConnectionPair.kt` — add `identifiedLoomPair()` helper
 
 - [ ] **Step 1: Add the `Loom` pair helper to `:kuilt-test`**
 
 ```kotlin
-// append to ConnPair.kt
+// append to ConnectionPair.kt
 import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Rendezvous
@@ -363,23 +363,23 @@ import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.fabric.identified
 
 /**
- * A host/joiner Loom pair wired by one in-memory [connPair]: host weaves an
+ * A host/joiner Loom pair wired by one in-memory [connectionPair]: host weaves an
  * `identified` seam over one end, joiner over the other. For driving
  * `SeamConformanceSuite` against the LinkSeam primitive.
  */
 public fun identifiedLoomPair(): Pair<Loom, Loom> {
-    val (hostConn, joinerConn) = connPair()
-    val host = ConnLoom(PeerId("host"), PeerId("joiner"), hostConn)
-    val joiner = ConnLoom(PeerId("joiner"), PeerId("host"), joinerConn)
+    val (hostConnection, joinerConnection) = connectionPair()
+    val host = ConnectionLoom(PeerId("host"), PeerId("joiner"), hostConnection)
+    val joiner = ConnectionLoom(PeerId("joiner"), PeerId("host"), joinerConnection)
     return host to joiner
 }
 
-private class ConnLoom(
+private class ConnectionLoom(
     private val self: PeerId,
     private val remote: PeerId,
-    private val conn: Conn,
+    private val connection: Connection,
 ) : Loom {
-    override suspend fun weave(rendezvous: Rendezvous): Seam = identified(conn, self, remote)
+    override suspend fun weave(rendezvous: Rendezvous): Seam = identified(connection, self, remote)
 }
 ```
 
@@ -405,12 +405,12 @@ Expected: PASS — every contract invariant green. If `incomingCompletesWhenSeam
 - [ ] **Step 4: Commit**
 
 ```bash
-git add kuilt-test/src/commonMain/kotlin/us/tractat/kuilt/test/fabric/ConnPair.kt \
+git add kuilt-test/src/commonMain/kotlin/us/tractat/kuilt/test/fabric/ConnectionPair.kt \
         kuilt-conformance/src/commonTest/kotlin/us/tractat/kuilt/conformance/IdentifiedConformanceTest.kt
 git commit -m "test(kuilt-conformance): identified passes SeamConformanceSuite"
 ```
 
-> **Slice 1 (sub-issue) ends here** — `Conn` + `identified` + conformance. Foundation green before fan-out.
+> **Slice 1 (sub-issue) ends here** — `Connection` + `identified` + conformance. Foundation green before fan-out.
 
 ---
 
@@ -484,7 +484,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.PeerId
-import us.tractat.kuilt.test.fabric.connPair
+import us.tractat.kuilt.test.fabric.connectionPair
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -492,7 +492,7 @@ import kotlin.test.assertEquals
 class HandshakingTest {
     @Test
     fun learnsRemoteIdThenCarriesPayload() = runTest {
-        val (a, b) = connPair()
+        val (a, b) = connectionPair()
         val seamA = async { handshaking(a, PeerId("A")) }
         val seamB = async { handshaking(b, PeerId("B")) }
         val sa = seamA.await(); val sb = seamB.await()
@@ -505,7 +505,7 @@ class HandshakingTest {
 
 - [ ] **Step 2: Run; expect failure** — `./gradlew :kuilt-core:jvmTest --tests "*HandshakingTest*"`
 
-- [ ] **Step 3: Implement — send preamble, await peer preamble, wrap the remaining conn in `identified`**
+- [ ] **Step 3: Implement — send preamble, await peer preamble, wrap the remaining connection in `identified`**
 
 ```kotlin
 package us.tractat.kuilt.core.fabric
@@ -523,36 +523,36 @@ import kotlin.coroutines.CoroutineContext
  * over the post-preamble connection. Suspends until the peer's preamble arrives.
  */
 public suspend fun handshaking(
-    conn: Conn,
+    connection: Connection,
     selfId: PeerId,
     dispatcher: CoroutineContext = Dispatchers.Default.limitedParallelism(1),
 ): Seam {
-    conn.send(Hello.encode(selfId))
-    val remoteId = Hello.decode(conn.firstFrame())
-    return identified(PreambleStrippedConn(conn), selfId, remoteId, dispatcher)
+    connection.send(Hello.encode(selfId))
+    val remoteId = Hello.decode(connection.firstFrame())
+    return identified(PreambleStrippedConnection(connection), selfId, remoteId, dispatcher)
 }
 
 /** The peer's preamble is frame 0; app payloads are everything after it. */
-private class PreambleStrippedConn(private val delegate: Conn) : Conn {
+private class PreambleStrippedConnection(private val delegate: Connection) : Connection {
     override suspend fun send(frame: ByteArray) = delegate.send(frame)
     override val incoming: Flow<ByteArray> = delegate.incoming.drop(1)
     override suspend fun close() = delegate.close()
 }
 ```
 
-Add the `firstFrame()` helper next to the `Conn` interface in `Conn.kt`:
+Add the `firstFrame()` helper next to the `Connection` interface in `Connection.kt`:
 
 ```kotlin
 import kotlinx.coroutines.flow.first
 /** Await the first inbound frame (the identity preamble). */
-internal suspend fun Conn.firstFrame(): ByteArray = incoming.first()
+internal suspend fun Connection.firstFrame(): ByteArray = incoming.first()
 ```
 
 > **Note for the worker:** `incoming` is single-collection. `firstFrame()` consumes
-> emission 0; `PreambleStrippedConn` `drop(1)` makes the delegated `identified` seam's
-> collector start at emission 1. Because `connPair` is `Channel`-backed (hot/buffered),
+> emission 0; `PreambleStrippedConnection` `drop(1)` makes the delegated `identified` seam's
+> collector start at emission 1. Because `connectionPair` is `Channel`-backed (hot/buffered),
 > the dropped first emission is the peer's `Hello` and nothing races. If a future
-> `Conn` is cold/non-buffered, revisit by buffering the preamble read instead of
+> `Connection` is cold/non-buffered, revisit by buffering the preamble read instead of
 > double-collecting. Document this assumption in the KDoc.
 
 - [ ] **Step 4: Run; expect PASS** — `./gradlew :kuilt-core:jvmTest --tests "*HandshakingTest*"`
@@ -561,7 +561,7 @@ internal suspend fun Conn.firstFrame(): ByteArray = incoming.first()
 
 ```bash
 git add kuilt-core/src/commonMain/kotlin/us/tractat/kuilt/core/fabric/Handshaking.kt \
-        kuilt-core/src/commonMain/kotlin/us/tractat/kuilt/core/fabric/Conn.kt \
+        kuilt-core/src/commonMain/kotlin/us/tractat/kuilt/core/fabric/Connection.kt \
         kuilt-core/src/commonTest/kotlin/us/tractat/kuilt/core/fabric/HandshakingTest.kt
 git commit -m "feat(kuilt-core): handshaking() wraps identified via Hello preamble"
 ```
@@ -571,22 +571,22 @@ git commit -m "feat(kuilt-core): handshaking() wraps identified via Hello preamb
 ## Task 7: `handshaking` conformance
 
 **Files:**
-- Modify: `kuilt-test/.../fabric/ConnPair.kt` — add `handshakingLoomPair()`
+- Modify: `kuilt-test/.../fabric/ConnectionPair.kt` — add `handshakingLoomPair()`
 - Create: `kuilt-conformance/src/commonTest/kotlin/us/tractat/kuilt/conformance/HandshakingConformanceTest.kt`
 
 - [ ] **Step 1: Add `handshakingLoomPair()` (each Loom weaves a handshaking seam over its end; the suite calls host/join concurrently so both preambles cross)**
 
 ```kotlin
-// append to ConnPair.kt
+// append to ConnectionPair.kt
 import us.tractat.kuilt.core.fabric.handshaking
 
 public fun handshakingLoomPair(): Pair<Loom, Loom> {
-    val (hostConn, joinerConn) = connPair()
-    return HandshakeLoom(PeerId("host"), hostConn) to HandshakeLoom(PeerId("joiner"), joinerConn)
+    val (hostConnection, joinerConnection) = connectionPair()
+    return HandshakeLoom(PeerId("host"), hostConnection) to HandshakeLoom(PeerId("joiner"), joinerConnection)
 }
 
-private class HandshakeLoom(private val self: PeerId, private val conn: Conn) : Loom {
-    override suspend fun weave(rendezvous: Rendezvous): Seam = handshaking(conn, self)
+private class HandshakeLoom(private val self: PeerId, private val connection: Connection) : Loom {
+    override suspend fun weave(rendezvous: Rendezvous): Seam = handshaking(connection, self)
 }
 ```
 
@@ -614,7 +614,7 @@ class HandshakingConformanceTest : SeamConformanceSuite() {
 - [ ] **Step 4: Commit**
 
 ```bash
-git add kuilt-test/src/commonMain/kotlin/us/tractat/kuilt/test/fabric/ConnPair.kt \
+git add kuilt-test/src/commonMain/kotlin/us/tractat/kuilt/test/fabric/ConnectionPair.kt \
         kuilt-conformance/src/commonTest/kotlin/us/tractat/kuilt/conformance/HandshakingConformanceTest.kt
 git commit -m "test(kuilt-conformance): handshaking passes SeamConformanceSuite"
 ```
@@ -679,17 +679,17 @@ class FramedTest {
     @Test
     fun framesRoundTripThroughLengthPrefix() = runTest {
         val wire = Buffer()                 // shared in-memory pipe (sink writes, source reads)
-        val conn = framed(source = wire, sink = wire, maxFrameSize = 1024)
-        conn.send(byteArrayOf(1, 2, 3))
-        assertContentEquals(byteArrayOf(1, 2, 3), conn.incoming.first())
+        val connection = framed(source = wire, sink = wire, maxFrameSize = 1024)
+        connection.send(byteArrayOf(1, 2, 3))
+        assertContentEquals(byteArrayOf(1, 2, 3), connection.incoming.first())
     }
 
     @Test
     fun rejectsOversizePrefixWithoutAllocating() = runTest {
         val wire = Buffer()
         wire.writeInt(Int.MAX_VALUE)        // a hostile length prefix
-        val conn = framed(source = wire, sink = wire, maxFrameSize = 16)
-        assertFailsWith<FrameTooLargeException> { conn.incoming.toList() }
+        val connection = framed(source = wire, sink = wire, maxFrameSize = 16)
+        assertFailsWith<FrameTooLargeException> { connection.incoming.toList() }
     }
 }
 ```
@@ -708,7 +708,7 @@ import kotlinx.io.Sink
 import kotlinx.io.Source
 import kotlinx.io.EOFException
 import kotlinx.io.readByteArray
-import us.tractat.kuilt.core.fabric.Conn
+import us.tractat.kuilt.core.fabric.Connection
 
 public class FrameTooLargeException(size: Int, max: Int) :
     Exception("frame length $size exceeds max $max")
@@ -716,7 +716,7 @@ public class FrameTooLargeException(size: Int, max: Int) :
 public const val DEFAULT_MAX_FRAME_SIZE: Int = 16 * 1024 * 1024
 
 /**
- * Adapt a kotlinx-io [Source]/[Sink] byte duplex into a message [Conn] using a
+ * Adapt a kotlinx-io [Source]/[Sink] byte duplex into a message [Connection] using a
  * 4-byte big-endian length prefix per frame. Owns reassembly (the Source blocks
  * until N bytes are available), a [maxFrameSize] cap (the prefix is validated
  * before any allocation), and partial-frame-at-EOF detection (loud, not silent).
@@ -725,13 +725,13 @@ public fun framed(
     source: Source,
     sink: Sink,
     maxFrameSize: Int = DEFAULT_MAX_FRAME_SIZE,
-): Conn = FramedConn(source, sink, maxFrameSize)
+): Connection = FramedConnection(source, sink, maxFrameSize)
 
-private class FramedConn(
+private class FramedConnection(
     private val source: Source,
     private val sink: Sink,
     private val maxFrameSize: Int,
-) : Conn {
+) : Connection {
     override suspend fun send(frame: ByteArray) {
         require(frame.size <= maxFrameSize) { "frame ${frame.size} exceeds max $maxFrameSize" }
         sink.writeInt(frame.size)
@@ -766,7 +766,7 @@ private class FramedConn(
 
 ```bash
 git add settings.gradle.kts gradle/libs.versions.toml kuilt-stream/
-git commit -m "feat(kuilt-stream): framed() adapts kotlinx-io Source/Sink to a Conn"
+git commit -m "feat(kuilt-stream): framed() adapts kotlinx-io Source/Sink to a Connection"
 ```
 
 > **Slice 3 (sub-issue) ends here** — `:kuilt-stream` + `framed()`.
@@ -780,16 +780,16 @@ git commit -m "feat(kuilt-stream): framed() adapts kotlinx-io Source/Sink to a C
 - Modify: `gradle/libs.versions.toml` — add `ktor-network`
 - Create: `kuilt-tcp/build.gradle.kts`
 - Create: `kuilt-tcp/src/commonMain/kotlin/us/tractat/kuilt/tcp/TcpLoom.kt`
-- Create: `kuilt-tcp/src/jvmMain/kotlin/us/tractat/kuilt/tcp/TcpConn.kt` (adapts a Ktor socket to kotlinx-io Source/Sink → `framed()`)
+- Create: `kuilt-tcp/src/jvmMain/kotlin/us/tractat/kuilt/tcp/TcpConnection.kt` (adapts a Ktor socket to kotlinx-io Source/Sink → `framed()`)
 - Test: `kuilt-tcp/src/jvmTest/kotlin/us/tractat/kuilt/tcp/TcpConformanceTest.kt` (loopback host/joiner)
 - Test: `kuilt-tcp/src/jvmTest/kotlin/us/tractat/kuilt/tcp/TcpRoundTripTest.kt`
 
 - [ ] **Step 1:** Register module + add `ktor-network` to the catalog (reuse the existing `ktor` version ref).
 - [ ] **Step 2:** `build.gradle.kts` — `api(project(":kuilt-core"))`, `api(project(":kuilt-stream"))`, `jvmMain` gets `libs.ktor.network`; targets JVM (+Android) where raw TCP sockets exist.
 - [ ] **Step 3:** Write a **loopback conformance test** first: `TcpConformanceTest : SeamConformanceSuite()` whose `newLoomPair()` binds a server socket on an ephemeral port, returns a host `Loom` (accepts one connection → `handshaking`) and a joiner `Loom` (connects → `handshaking`). Run: `./gradlew :kuilt-tcp:jvmTest --tests "*TcpConformanceTest*"` — expect FAIL (types missing).
-- [ ] **Step 4:** Implement `TcpConn` (Ktor `aSocket(...).tcp()` → `openReadChannel()`/`openWriteChannel()` adapted to kotlinx-io `Source`/`Sink`, fed to `framed()`) and `TcpLoom.host`/`join` (accept/connect → `handshaking(framed(...), selfId)`). Keep transport-specific code minimal — this line count is the headline metric.
+- [ ] **Step 4:** Implement `TcpConnection` (Ktor `aSocket(...).tcp()` → `openReadChannel()`/`openWriteChannel()` adapted to kotlinx-io `Source`/`Sink`, fed to `framed()`) and `TcpLoom.host`/`join` (accept/connect → `handshaking(framed(...), selfId)`). Keep transport-specific code minimal — this line count is the headline metric.
 - [ ] **Step 5:** Run conformance + round-trip; expect PASS. Run full `./gradlew :kuilt-tcp:build`.
-- [ ] **Step 6:** Add a runnable `proprietary-rpc-example` source (a `main()` or test) that stands in a fake "in-house RPC" (a plain socket) and shows the same `Conn`-or-`framed()` adapter producing a working seam — the artifact the tutorial cites.
+- [ ] **Step 6:** Add a runnable `proprietary-rpc-example` source (a `main()` or test) that stands in a fake "in-house RPC" (a plain socket) and shows the same `Connection`-or-`framed()` adapter producing a working seam — the artifact the tutorial cites.
 - [ ] **Step 7: Commit** each of (conformance test) → (impl) → (example) separately.
 
 > **Worker note:** size the slice. If the Ktor-socket↔kotlinx-io adapter balloons,
@@ -810,7 +810,7 @@ git commit -m "feat(kuilt-stream): framed() adapts kotlinx-io Source/Sink to a C
 - Modify: `CLAUDE.md` — add the guide to the doc pointers (optional)
 
 - [ ] **Step 1:** Write the tutorial as a narrative with two tracks, each a copy-pasteable progression:
-  - **Message-RPC track:** implement `Conn` (3 methods) → wrap in `handshaking` → write a dialing/accepting `Loom`. Show the full code.
+  - **Message-RPC track:** implement `Connection` (3 methods) → wrap in `handshaking` → write a dialing/accepting `Loom`. Show the full code.
   - **Stream-RPC track (TCP):** provide a kotlinx-io `Source`/`Sink` → `framed()` → `handshaking` → `Loom`. Reference the real `:kuilt-tcp` code by `file:line`.
   - Cover the three gotchas explicitly: framing (stream only — `framed()` handles it), identity (out-of-band → `identified`; in-band → `handshaking`), lifecycle (`Woven`/`Torn` mapping).
   - End with "prove it" — subclass `SeamConformanceSuite`, implement `newLoomPair()`, go green. Show the `:kuilt-tcp` conformance test as the template.
@@ -838,12 +838,12 @@ git commit -m "docs: tutorial — implement a custom RPC fabric"
 **Files:**
 - Create: `kuilt-core/src/commonMain/kotlin/us/tractat/kuilt/core/fabric/MeshSeam.kt`
 - Create: `kuilt-conformance/src/commonMain/kotlin/us/tractat/kuilt/conformance/MeshConformanceSuite.kt`
-- Create: `kuilt-conformance/src/commonTest/.../MeshConformanceTest.kt` (in-memory `connPair`-backed N-peer harness)
+- Create: `kuilt-conformance/src/commonTest/.../MeshConformanceTest.kt` (in-memory `connectionPair`-backed N-peer harness)
 - Create: TCP cluster example in `:kuilt-tcp`
 
 - [ ] **Step 1:** `MeshConformanceSuite` — abstract `newMeshOfSize(n: Int): List<Seam>`; tests: every peer's `peers` converges to the other n−1; `broadcast` from one reaches all; `sendTo` routes to exactly one; a peer leaving updates every survivor's roster; two simultaneous dials between the same pair dedup to one link (lower `PeerId` wins). Write these RED first.
-- [ ] **Step 2:** Implement `meshSeam(selfId, dialer, acceptor, seeds, dispatcher)` — `Map<PeerId, Conn>` of handshaked links; `Hello` per link to learn ids; dedup lower-`PeerId`-wins; `peers` derived from live links; `broadcast` fans out, `sendTo` looks up; per-link error drops one peer (seam stays live); all state confined to the injected dispatcher. Follow `CompositeSeam.kt` for the confinement pattern.
-- [ ] **Step 3:** Build an in-memory mesh harness over `connPair` for the conformance run; go green on JVM, then `allTests`.
+- [ ] **Step 2:** Implement `meshSeam(selfId, dialer, acceptor, seeds, dispatcher)` — `Map<PeerId, Connection>` of handshaked links; `Hello` per link to learn ids; dedup lower-`PeerId`-wins; `peers` derived from live links; `broadcast` fans out, `sendTo` looks up; per-link error drops one peer (seam stays live); all state confined to the injected dispatcher. Follow `CompositeSeam.kt` for the confinement pattern.
+- [ ] **Step 3:** Build an in-memory mesh harness over `connectionPair` for the conformance run; go green on JVM, then `allTests`.
 - [ ] **Step 4:** TCP cluster example + extend `docs/extending-fabrics.md` cluster section.
 - [ ] **Step 5: Commit** per RED→GREEN cycle; one behaviour per commit.
 
@@ -857,8 +857,8 @@ git commit -m "docs: tutorial — implement a custom RPC fabric"
 > byte-transparent wire by using `identified` (out-of-band identity), so this is a
 > no-wire-change cleanup that deletes `WebSocketSeam`'s hand-rolled receive loop.
 
-- [ ] **Step 1:** Implement a `WebSocketConn : Conn` wrapping `DefaultWebSocketSession` (binary frames in/out; the receive loop becomes the `Conn.incoming` flow).
-- [ ] **Step 2:** Replace `WebSocketSeam`'s body with `identified(WebSocketConn(session), selfId, remoteId)`. Keep `KtorClientLoom`/`KtorServerLoom` unchanged externally.
+- [ ] **Step 1:** Implement a `WebSocketConnection : Connection` wrapping `DefaultWebSocketSession` (binary frames in/out; the receive loop becomes the `Connection.incoming` flow).
+- [ ] **Step 2:** Replace `WebSocketSeam`'s body with `identified(WebSocketConnection(session), selfId, remoteId)`. Keep `KtorClientLoom`/`KtorServerLoom` unchanged externally.
 - [ ] **Step 3:** Existing `WebSocketConformanceTest` + round-trip stay green with no edits — that is the proof the refactor preserved behaviour. Run `./gradlew :kuilt-websocket:build`.
 - [ ] **Step 4: Commit.**
 

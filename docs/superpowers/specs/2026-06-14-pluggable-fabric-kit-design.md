@@ -40,19 +40,19 @@ frame type.
   are therefore **byte-transparent** — zero per-frame and zero per-link overhead.
 - `handshaking` links send/await the preamble once at connect, then are byte-transparent.
 
-Relay/multiplexed links (one `Conn` carrying frames from many peers) are **out of
+Relay/multiplexed links (one `Connection` carrying frames from many peers) are **out of
 scope**; that is the existing `core/composite/` + `PlyFrame` machinery
 (`CompositeSeam.kt`). `MeshSeam` here is point-to-point dial-mesh only.
 
 ## Components
 
-### `Conn` — the message SPI (`:kuilt-core`)
+### `Connection` — the message SPI (`:kuilt-core`)
 
 The interface a message-oriented transport (WebSocket, gRPC bidi stream, Multipeer,
 Nearby) implements directly, because it already has message boundaries.
 
 ```kotlin
-public interface Conn {
+public interface Connection {
     public suspend fun send(frame: ByteArray)   // one whole message
     public val incoming: Flow<ByteArray>        // whole messages, single-collection
     public suspend fun close()
@@ -68,12 +68,12 @@ implementer).
 ### `identified` — the primitive 2-peer Seam (`:kuilt-core`)
 
 ```kotlin
-public fun identified(conn: Conn, selfId: PeerId, remoteId: PeerId): Seam
+public fun identified(connection: Connection, selfId: PeerId, remoteId: PeerId): Seam
 ```
 
-A byte-transparent 2-peer `Seam` over a `Conn` where both identities are known.
+A byte-transparent 2-peer `Seam` over a `Connection` where both identities are known.
 Owns: the receive loop, `SeamState` lifecycle (`Woven` at construction; `Torn` on
-`conn` EOF/error or local `close`), receiver-local sequence stamping, the
+`connection` EOF/error or local `close`), receiver-local sequence stamping, the
 `peers = {selfId, remoteId}` set, and **write serialization** — an internal
 `Channel<ByteArray>` drained by a single writer coroutine, so concurrent
 `broadcast`/`sendTo` from the app produce ordered frames on the wire.
@@ -84,10 +84,10 @@ Ktor lifted out (~80 lines).
 ### `handshaking` — wraps `identified` (`:kuilt-core`)
 
 ```kotlin
-public suspend fun handshaking(conn: Conn, selfId: PeerId): Seam {
-    conn.send(Hello(selfId).encode())                       // send preamble
-    val remoteId = Hello.decode(conn.firstFrame())          // await peer preamble
-    return identified(conn.afterPreamble(), selfId, remoteId)  // delegate
+public suspend fun handshaking(connection: Connection, selfId: PeerId): Seam {
+    connection.send(Hello(selfId).encode())                       // send preamble
+    val remoteId = Hello.decode(connection.firstFrame())          // await peer preamble
+    return identified(connection.afterPreamble(), selfId, remoteId)  // delegate
 }
 ```
 
@@ -104,10 +104,10 @@ placeholder path (`KtorServerLoom.kt:52`) could opt in to learn the client's rea
 
 For stream-oriented transports (TCP, Unix socket, QUIC) that provide a raw byte
 duplex with no message boundaries. Adapts a `kotlinx-io` `Source`/`Sink` pair into a
-`Conn` via a length-prefix codec:
+`Connection` via a length-prefix codec:
 
 ```kotlin
-public fun framed(source: Source, sink: Sink, maxFrameSize: Int = DEFAULT_MAX): Conn
+public fun framed(source: Source, sink: Sink, maxFrameSize: Int = DEFAULT_MAX): Connection
 ```
 
 Pull-based (`Source`) because framing is a pull-shaped problem: read the length
@@ -118,7 +118,7 @@ construction. The codec owns everything error-prone:
 - a **`maxFrameSize` cap** — reject the prefix before allocating (OOM-DoS guard);
 - **partial-frame-at-EOF** → loud error, never silent truncation.
 
-`framed()` returns a `Conn` (kuilt's own type), so the `kotlinx-io` dependency is an
+`framed()` returns a `Connection` (kuilt's own type), so the `kotlinx-io` dependency is an
 *input convenience* on the stream path, never part of the contract surface. It is
 fenced to `:kuilt-stream` so `:kuilt-core` stays dependency-pure (coroutines +
 serialization only) and message-transport implementers never see it.
@@ -128,14 +128,14 @@ serialization only) and message-transport implementers never see it.
 ```kotlin
 public fun meshSeam(
     selfId: PeerId,
-    dialer: suspend (address) -> Conn,   // obtain a link to a seed peer
-    acceptor: Flow<Conn>,                // inbound links
+    dialer: suspend (address) -> Connection,   // obtain a link to a seed peer
+    acceptor: Flow<Connection>,                // inbound links
     seeds: Set<address>,
     dispatcher: CoroutineContext = Dispatchers.Default.limitedParallelism(1),
 ): Seam
 ```
 
-Holds a `Map<PeerId, Conn>` of point-to-point links. Each dialed or accepted `Conn`
+Holds a `Map<PeerId, Connection>` of point-to-point links. Each dialed or accepted `Connection`
 runs the `Hello` preamble to learn its remote id, then behaves as an identified link.
 The mesh adds:
 - **roster** — `peers` derived from connected links' learned ids, reactive to link
@@ -157,7 +157,7 @@ buffering for not-yet-connected peers.
   dispatcher (`Dispatchers.Default.limitedParallelism(1)`), injectable as
   `UnconfinedTestDispatcher(testScheduler)` for tests — per the `CompositeSeam`
   precedent and `docs/testing-coroutine-determinism.md`.
-- **Errors — fail loud.** `conn.send` throw / read EOF: `identified`/`handshaking`
+- **Errors — fail loud.** `connection.send` throw / read EOF: `identified`/`handshaking`
   → `Torn`; `MeshSeam` → drop that one peer, Seam stays live. No swallowed exceptions;
   `CancellationException` always rethrown.
 - **Conformance.** `identified` and `handshaking` pass the existing 2-peer
@@ -169,19 +169,19 @@ buffering for not-yet-connected peers.
 
 | Module | Adds |
 |--------|------|
-| `:kuilt-core` | `Conn`, `Hello`, `identified`, `handshaking`, `MeshSeam`, `MeshConformanceSuite` |
+| `:kuilt-core` | `Connection`, `Hello`, `identified`, `handshaking`, `MeshSeam`, `MeshConformanceSuite` |
 | `:kuilt-stream` *(new)* | `framed()` + length-prefix codec over `kotlinx-io` |
 | `:kuilt-tcp` *(new)* | TCP `Loom` (dial/accept) + the proprietary-RPC worked example |
 | `:kuilt-websocket` | *(optional)* refactor `WebSocketSeam` onto `identified` |
 
 ## Scope
 
-**In scope (v1):** `Conn`, `identified`, `handshaking`, `framed()`, `:kuilt-tcp`
+**In scope (v1):** `Connection`, `identified`, `handshaking`, `framed()`, `:kuilt-tcp`
 fabric + example (the primary goal). `MeshSeam` as an explicit second phase.
 
 **Out of scope:** transitive membership gossip; reconnect/link-flap policy (`Torn`
 is terminal — reconnect is the `:kuilt-session` resume-token layer's job, possibly a
-`ReconnectingConn` wrapper later); relay/multiplexed links (use `core/composite/`);
+`ReconnectingConnection` wrapper later); relay/multiplexed links (use `core/composite/`);
 NAT traversal.
 
 ## Epic decomposition
@@ -191,7 +191,7 @@ North star is the `:kuilt-tcp` example; slices 1–4 are the critical path to it
 | # | Slice | Module | Depends on |
 |---|-------|--------|-----------|
 | **0** | **Planning** — land this spec + impl plan (design PR; `Closes #<this sub-issue>`) | docs | — |
-| 1 | `Conn` SPI + `identified`; passes 2-peer `SeamConformanceSuite` | `:kuilt-core` | foundation |
+| 1 | `Connection` SPI + `identified`; passes 2-peer `SeamConformanceSuite` | `:kuilt-core` | foundation |
 | 2 | `Hello` preamble + `handshaking` (wraps #1) | `:kuilt-core` | 1 |
 | 3 | `framed()` over `kotlinx-io` (reassembly, size-cap, EOF) | `:kuilt-stream` | 1 |
 | 4 | **`:kuilt-tcp` fabric + proprietary-RPC example/docs** — headline | `:kuilt-tcp` | 2, 3 |
@@ -209,7 +209,7 @@ language ("Part of #<epic>") everywhere.
 
 A new reader can implement a kuilt fabric over a hypothetical proprietary
 point-to-point RPC by:
-1. implementing `Conn` (message RPC) **or** providing a `kotlinx-io` `Source`/`Sink`
+1. implementing `Connection` (message RPC) **or** providing a `kotlinx-io` `Source`/`Sink`
    and calling `framed()` (stream RPC);
 2. writing a `Loom` that dials/accepts and wraps each connection in `handshaking`;
 

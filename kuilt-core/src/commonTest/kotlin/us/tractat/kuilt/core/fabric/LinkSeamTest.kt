@@ -9,7 +9,7 @@ import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.SeamState
-import us.tractat.kuilt.test.fabric.connPair
+import us.tractat.kuilt.test.fabric.connectionPair
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -21,7 +21,7 @@ class LinkSeamTest {
 
     @Test
     fun wovenAtConstructionAndDeliversFromRemote() = runTest {
-        val (mine, theirs) = connPair()
+        val (mine, theirs) = connectionPair()
         val seam = identified(mine, self, remote, UnconfinedTestDispatcher(testScheduler))
         assertIs<SeamState.Woven>(seam.state.value)
         assertEquals(setOf(self, remote), seam.peers.value)
@@ -33,7 +33,7 @@ class LinkSeamTest {
 
     @Test
     fun concurrentBroadcastsArriveInSendOrder() = runTest {
-        val (mine, theirs) = connPair()
+        val (mine, theirs) = connectionPair()
         val seam = identified(mine, self, remote, UnconfinedTestDispatcher(testScheduler))
         repeat(3) { seam.broadcast(byteArrayOf(it.toByte())) }
         val got = theirs.incoming.take(3).toList().map { it.single() }

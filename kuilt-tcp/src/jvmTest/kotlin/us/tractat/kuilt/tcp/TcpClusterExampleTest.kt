@@ -12,7 +12,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import us.tractat.kuilt.core.PeerId
-import us.tractat.kuilt.core.fabric.Conn
+import us.tractat.kuilt.core.fabric.Connection
 import us.tractat.kuilt.core.fabric.meshSeam
 import java.net.ServerSocket as JvmServerSocket
 import kotlin.test.AfterTest
@@ -49,8 +49,8 @@ class TcpClusterExampleTest {
                 val c = PeerId("peer-c")
 
                 // One real loopback socket pair per spoke. accept() yields A's end; connect() B's/C's.
-                val (aToB, bToA) = tcpConnPair()
-                val (aToC, cToA) = tcpConnPair()
+                val (aToB, bToA) = tcpConnectionPair()
+                val (aToC, cToA) = tcpConnectionPair()
 
                 // Hub A weaves a mesh to B; B weaves its own single-link mesh to A. Run concurrently
                 // so the MeshHello preambles cross in parallel (serial would deadlock).
@@ -91,16 +91,16 @@ class TcpClusterExampleTest {
     }
 
     /**
-     * Open one real loopback TCP connection and return both ends as [Conn]s (each `framed()` by
-     * `:kuilt-stream` via [tcpConn]). The accepting end is `.first`, the dialing end `.second`.
+     * Open one real loopback TCP connection and return both ends as [Connection]s (each `framed()` by
+     * `:kuilt-stream` via [tcpConnection]). The accepting end is `.first`, the dialing end `.second`.
      */
-    private suspend fun tcpConnPair(): Pair<Conn, Conn> = coroutineScope {
+    private suspend fun tcpConnectionPair(): Pair<Connection, Connection> = coroutineScope {
         val port = JvmServerSocket(0).use { it.localPort }
         val server = aSocket(selector).tcp().bind("127.0.0.1", port)
         val acceptedDeferred = async { server.accept() }
         val client: Socket = aSocket(selector).tcp().connect("127.0.0.1", port)
         val accepted = acceptedDeferred.await()
         server.close()
-        tcpConn(accepted, Dispatchers.IO) to tcpConn(client, Dispatchers.IO)
+        tcpConnection(accepted, Dispatchers.IO) to tcpConnection(client, Dispatchers.IO)
     }
 }

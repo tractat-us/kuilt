@@ -14,12 +14,12 @@ import kotlin.coroutines.CoroutineContext
  * extend [DefaultWebSocketSession].
  *
  * The seam itself is the shared [identified] 2-peer fabric; this factory only adapts the
- * Ktor session into a [WebSocketConn] and supplies the known identities. The receive loop,
+ * Ktor session into a [WebSocketConnection] and supplies the known identities. The receive loop,
  * outbound serialization, sequence numbering and single-shot teardown all live in `identified`.
  *
  * **Wire format:** byte-transparent. Each binary WebSocket frame's payload is delivered
  * verbatim as [us.tractat.kuilt.core.Swatch.payload]; no framing prefix, no in-band
- * handshake (see [WebSocketConn]).
+ * handshake (see [WebSocketConnection]).
  *
  * **PeerId discovery:** both [selfId] and [remoteId] are supplied at construction time by
  * the calling factory. Identity is exchanged out of band — the client passes its [PeerId]
@@ -35,4 +35,4 @@ internal fun WebSocketSeam(
     remoteId: PeerId,
     session: DefaultWebSocketSession,
     dispatcher: CoroutineContext,
-): Seam = identified(WebSocketConn(session), selfId, remoteId, dispatcher)
+): Seam = identified(WebSocketConnection(session), selfId, remoteId, dispatcher)

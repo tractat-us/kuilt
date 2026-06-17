@@ -18,21 +18,21 @@ import kotlin.coroutines.CoroutineContext
  * A [Loom] backed by a raw TCP socket — the headline of the pluggable fabric kit.
  *
  * A proprietary stream RPC becomes a kuilt fabric in a handful of transport lines:
- * obtain a connected [io.ktor.network.sockets.Socket], adapt it to a [Conn] with
- * [tcpConn] (Ktor channel → kotlinx-io Source/Sink → `framed()`), then hand that to
+ * obtain a connected [io.ktor.network.sockets.Socket], adapt it to a [Connection] with
+ * [tcpConnection] (Ktor channel → kotlinx-io Source/Sink → `framed()`), then hand that to
  * [handshaking] to negotiate identity in-band and yield a 2-peer [Seam].
  *
  * Construct with [host] (accepts one connection on a bound [ServerSocket]) or
  * [join] (dials a [TcpAddress]). The dispatcher that schedules the seam's read/write
  * loops is a real production dispatcher — TCP is real-network IO with no virtual clock;
  * the seam is thread-safe via atomics/locks, so the dispatcher is the scheduler, not a
- * mutex. Blocking socket reads run on [ioDispatcher] (see [tcpConn]), so the scheduling
+ * mutex. Blocking socket reads run on [ioDispatcher] (see [tcpConnection]), so the scheduling
  * dispatcher only serialises seam state, never blocks on the wire.
  *
  * [weave] guards against accidental virtual-time construction: building this real-IO seam
  * under a `kotlinx.coroutines.test.TestDispatcher` fails loudly (see
  * [checkNotUnderTestDispatcher]) — under virtual time the blocking socket IO would never
- * advance, deadlocking the test silently. Use an in-memory `connPair()`-backed seam (or
+ * advance, deadlocking the test silently. Use an in-memory `connectionPair()`-backed seam (or
  * `handshaking`/`meshSeam` over in-memory conns) for virtual-time tests instead.
  */
 public class TcpLoom private constructor(
@@ -49,7 +49,7 @@ public class TcpLoom private constructor(
         checkNotUnderTestDispatcher(
             scope = CoroutineScope(seamDispatcher),
             typeName = "TcpLoom",
-            substitute = "an in-memory connPair()/identified() seam",
+            substitute = "an in-memory connectionPair()/identified() seam",
             strict = true,
             expectVirtualTime = false,
         )
@@ -63,7 +63,7 @@ public class TcpLoom private constructor(
                 aSocket(selector).tcp().connect(address.host, address.port)
             }
         }
-        return handshaking(tcpConn(socket, ioDispatcher), selfId, seamDispatcher)
+        return handshaking(tcpConnection(socket, ioDispatcher), selfId, seamDispatcher)
     }
 
     public companion object {

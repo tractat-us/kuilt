@@ -40,8 +40,8 @@ class LinkSeamConcurrencyTest {
     private val self = PeerId("self")
     private val remote = PeerId("remote")
 
-    /** A [Conn] whose `incoming` EOFs exactly when [eof] is invoked. `send` is a no-op sink. */
-    private class ControllableConn : Conn {
+    /** A [Connection] whose `incoming` EOFs exactly when [eof] is invoked. `send` is a no-op sink. */
+    private class ControllableConnection : Connection {
         private val frames = Channel<ByteArray>(Channel.UNLIMITED)
         override val incoming: Flow<ByteArray> = frames.receiveAsFlow()
         override suspend fun send(frame: ByteArray) { /* discard — wire output is irrelevant here */ }
@@ -68,7 +68,7 @@ class LinkSeamConcurrencyTest {
         val broadcasters = 4
         repeat(iterations) {
             val dispatcher = Dispatchers.Default.limitedParallelism(1)
-            val conn = ControllableConn()
+            val conn = ControllableConnection()
             val seam = identified(conn, self, remote, dispatcher)
 
             // Several broadcasters spin tight sends while the conn EOFs concurrently. The teardown's
