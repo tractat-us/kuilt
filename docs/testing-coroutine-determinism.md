@@ -37,6 +37,33 @@ A system whose timers perpetually re-arm (election + heartbeat loops) never beco
 
 The fix (PR #82) injected `UnconfinedTestDispatcher(testScheduler)` into the composite tests; deterministic on all targets since.
 
+## Diagnosing a cross-test `UncaughtExceptionsBeforeTest` (the #535 class)
+
+A scope-owning type whose scope **outlives `runTest`** (a `CompositeLoom`/`SeamReplicator`/`SeamRoom` the test never `close()`s) can leak an uncaught coroutine exception. `runTest` doesn't lose it — it reports it as `kotlinx.coroutines.test.UncaughtExceptionsBeforeTest` against **whatever test happens to run next**. The symptom is a test that "fails flakily" with no obvious connection to its own body, and that passed minutes earlier on unrelated commits. The named test is the *victim*, not the culprit.
+
+**Do not trust the symptom test.** The real cause is in the `<failure>` element's **suppressed** exception in the report XML, which names the actual throwing site:
+
+```
+<failure message="...UncaughtExceptionsBeforeTest...">
+  ...
+  Suppressed: java.lang.IllegalStateException: Seam for PeerId(value=peer-1) is closed
+    at us.tractat.kuilt.core.InMemorySeam.broadcast(InMemoryLoom.kt:128)
+    at us.tractat.kuilt.core.composite.CompositeSeam$attachPly$2.invokeSuspend(CompositeSeam.kt:154)   ← the real culprit
+```
+
+How to read it:
+
+- The console / Gradle summary only shows `N tests completed, 1 failed` — pull the real message from the report XML (`**/build/test-results/<target>Test/TEST-*.xml`). The `$attachPly$2`-style frame names the exact pump and line.
+- On a **red `main`**, download the *failed attempt's* artifacts — a re-run replaces them, and `gh api .../artifacts/<id>/zip` 404s. Use `gh run download <run-id> --repo <org>/<repo>` for the latest, and `gh api repos/<org>/<repo>/actions/runs/<run-id>/attempts/1 --jq .conclusion` to confirm which attempt failed.
+
+The root-cause class is almost always a **best-effort fabric send on a fabric that tore underneath the sender**. The `Seam` contract throws `IllegalStateException` on a send while `Torn`, and a ply/transport can tear at any time — from a remote disconnect, not just local `close()`. Any internal send a scope-owning type makes that is *not* directly requested by the caller (announces, heartbeats, re-broadcasts) MUST be wrapped:
+
+```kotlin
+runCatchingCancellable { seam.broadcast(frame) }   // rethrows cancellation, swallows the torn-ply throw
+```
+
+A `seam.state.value is Woven` guard before the send is **not** sufficient — it's a TOCTOU: the ply can tear between the guard and the send. Tolerate the throw at the send site. (#535 fixed `CompositeSeam`'s two announce pumps this way; PR #538.)
+
 ## Practical guards (given CI does not run native)
 
 - **Run native locally before merging** anything touching coroutine-scoped components: `./gradlew build` on a Mac runs the Apple targets. Use `--rerun-tasks` to defeat cached-green masking when verifying a suspected flake.
