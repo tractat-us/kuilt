@@ -35,6 +35,7 @@ import us.tractat.kuilt.raft.RaftStorage
 import us.tractat.kuilt.raft.RaftTransport
 import us.tractat.kuilt.raft.raftNode
 import us.tractat.kuilt.session.LeaveReason
+import us.tractat.kuilt.session.Room
 import us.tractat.kuilt.websocket.KtorRoomHost
 import kotlin.time.Duration.Companion.seconds
 
@@ -100,54 +101,80 @@ public class ServerCluster internal constructor(
     public val committed: Flow<Committed> get() = mesh.committed
 
     /**
-     * Run the relay accept loop. Each accepted connection is admitted as a learner.
+     * Run the primary relay accept loop ([host]). Each accepted connection is admitted
+     * as a learner. Convenience for the single-relay deployment; equivalent to
+     * `runRelay(host)`.
      *
      * Suspends until the scope is cancelled or an unrecoverable accept failure occurs.
      * Invoke from a `launch` in the owning scope.
      */
-    public suspend fun start() {
-        host.start { room ->
-            val admittedSet = try {
-                withTimeout(10.seconds) { room.roster.first { it.isNotEmpty() } }
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Throwable) {
-                log.warn(e) { "server-cluster: roster wait failed" }
-                runCatchingCancellable { room.leave(LeaveReason.Normal) }
-                return@start
-            }
+    public suspend fun start(): Unit = runRelay(host)
 
-            val admittedPeer = admittedSet.first()
-            val learnerId = NodeId(admittedPeer.id.value)
-            log.info { "server-cluster: admitting learner $learnerId" }
+    /**
+     * Run the relay accept loop for [relayHost], admitting each accepted connection as a
+     * learner into this cluster's **shared** voter mesh and [LearnerRouter].
+     *
+     * Multiple relay hosts can front one voter cluster: mount each by launching
+     * `runRelay(host)` in its own coroutine. Because the accept loop's lifecycle is owned
+     * by the launching scope (see [KtorRoomHost.start]), cancelling that coroutine stops
+     * **just that relay endpoint** — its rooms tear (so connected learners reconnect to
+     * another endpoint) while the voter mesh and sibling relays keep running. This is the
+     * server-side half of cross-relay failover (#544): a learner re-admitted on a surviving
+     * relay keeps the same [NodeId] and resumes proposing against the same Raft log.
+     *
+     * @param relayHost The [KtorRoomHost] whose accepted connections become learners.
+     */
+    public suspend fun runRelay(relayHost: KtorRoomHost) {
+        relayHost.start { room -> admitLearner(room) }
+    }
 
-            // Register the room Seam so voter transports can route Raft messages
-            // to and from the learner over the WebSocket. Must happen before
-            // changeMembership so the leader can start sending AppendEntries
-            // as soon as the config change is applied.
-            val seamChannel = room.channel("raft")
-            router.addLearner(learnerId, seamChannel, serverScope)
+    /**
+     * Admit one accepted [room] connection as a learner: wait for the roster, derive the
+     * learner [NodeId], register its Seam in the shared [LearnerRouter], add it to cluster
+     * membership via the leader, then hold the room open until the connection closes or the
+     * relay scope cancels. The `finally` deregisters the learner route on disconnect.
+     */
+    private suspend fun admitLearner(room: Room) {
+        val admittedSet = try {
+            withTimeout(10.seconds) { room.roster.first { it.isNotEmpty() } }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            log.warn(e) { "server-cluster: roster wait failed" }
+            runCatchingCancellable { room.leave(LeaveReason.Normal) }
+            return
+        }
 
-            val leader = mesh.awaitLeader()
-            val withLearner = ClusterConfig(
-                voters = voterConfig.voters,
-                learners = voterConfig.learners + learnerId,
-            )
-            try {
-                leader.changeMembership(withLearner)
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Throwable) {
-                log.warn(e) { "server-cluster: changeMembership failed for $learnerId" }
-            }
+        val admittedPeer = admittedSet.first()
+        val learnerId = NodeId(admittedPeer.id.value)
+        log.info { "server-cluster: admitting learner $learnerId" }
 
-            // Hold the room open until the connection closes or scope cancels.
-            // The finally block removes the learner route when the WebSocket closes.
-            try {
-                awaitCancellation()
-            } finally {
-                router.removeLearner(learnerId)
-            }
+        // Register the room Seam so voter transports can route Raft messages
+        // to and from the learner over the WebSocket. Must happen before
+        // changeMembership so the leader can start sending AppendEntries
+        // as soon as the config change is applied.
+        val seamChannel = room.channel("raft")
+        router.addLearner(learnerId, seamChannel, serverScope)
+
+        val leader = mesh.awaitLeader()
+        val withLearner = ClusterConfig(
+            voters = voterConfig.voters,
+            learners = voterConfig.learners + learnerId,
+        )
+        try {
+            leader.changeMembership(withLearner)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            log.warn(e) { "server-cluster: changeMembership failed for $learnerId" }
+        }
+
+        // Hold the room open until the connection closes or scope cancels.
+        // The finally block removes the learner route when the WebSocket closes.
+        try {
+            awaitCancellation()
+        } finally {
+            router.removeLearner(learnerId)
         }
     }
 
