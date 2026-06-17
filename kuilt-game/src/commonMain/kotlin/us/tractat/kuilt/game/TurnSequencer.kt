@@ -10,7 +10,6 @@ import kotlinx.serialization.KSerializer
 import kotlinx.serialization.cbor.Cbor
 import us.tractat.kuilt.raft.Committed
 import us.tractat.kuilt.raft.LeadershipLostException
-import us.tractat.kuilt.raft.NotLeaderException
 import us.tractat.kuilt.raft.RaftNode
 
 private val DEFAULT_FORMAT: BinaryFormat = Cbor
@@ -39,7 +38,7 @@ private val DEFAULT_FORMAT: BinaryFormat = Cbor
  *     }
  * }
  *
- * // On the leader — propose the local player's move:
+ * // On any node — propose the local player's move (forwarded to the leader if needed):
  * val indexed = sequencer.propose(Move(player = 0, card = 3))
  * println("Move committed at index ${indexed.index}")
  * ```
@@ -89,23 +88,20 @@ public class TurnSequencer<A>(
     /**
      * Proposes [action] for replication and suspends until a quorum commits it.
      *
+     * Callable from any node: the leader appends directly; a follower or candidate
+     * forwards the proposal to the current leader and awaits commit there. Suspends
+     * cancellably if no leader is known yet.
+     *
      * Returns the [IndexedAction] carrying [action] and its assigned log index.
      * The returned object re-wraps the caller's [action] directly rather than
      * decoding the committed bytes — this avoids a redundant serialization
      * round-trip since the action is already in hand.
      *
-     * @throws NotYourTurnException if this node is not the current turn leader.
-     * @throws TurnLostInFlightException if turn leadership is lost while waiting
-     *   for a quorum to commit the proposal.
+     * @throws [LeadershipLostException] if a forwarded proposal is rejected because
+     *   the leader stepped down mid-flight. The caller may retry.
      */
     public suspend fun propose(action: A): IndexedAction<A> {
-        val entry = try {
-            node.propose(encode(action))
-        } catch (e: NotLeaderException) {
-            throw NotYourTurnException("not the current turn leader", e)
-        } catch (e: LeadershipLostException) {
-            throw TurnLostInFlightException("turn leadership lost while proposal was in flight", e)
-        }
+        val entry = node.propose(encode(action))
         // Re-wrap the caller's action object (avoids a redundant decode round-trip).
         return IndexedAction(entry.index, action)
     }

@@ -143,4 +143,44 @@ internal sealed interface RaftMessage {
         val term: Long,
         val leaderId: NodeId,
     ) : RaftMessage
+
+    /**
+     * Client-proposal forwarding (Raft paper §8): a follower relays a `propose` command to the
+     * current leader, which appends it on the follower's behalf. [clientRequestId] is the
+     * follower-local correlation nonce echoed back in [ForwardResponse]; it is NOT written to the
+     * log, so committed entries are unchanged.
+     */
+    @Serializable
+    data class Forward(
+        val clientRequestId: Long,
+        val command: ByteArray,
+    ) : RaftMessage {
+        // command is a ByteArray (reference equals in generated equals); this is a transport
+        // envelope only — identity equality is never meaningful (same rationale as AppendEntries).
+        override fun equals(other: Any?): Boolean = this === other
+        override fun hashCode(): Int = clientRequestId.hashCode()
+    }
+
+    /** Leader's reply to [Forward]: the proposal's fate, correlated by [clientRequestId]. */
+    @Serializable
+    data class ForwardResponse(
+        val clientRequestId: Long,
+        val outcome: ForwardOutcome,
+    ) : RaftMessage
+}
+
+/** Outcome of a forwarded proposal, carried in [RaftMessage.ForwardResponse]. */
+@Serializable
+internal sealed interface ForwardOutcome {
+    /** Committed at [index] in [term]. */
+    @Serializable
+    data class Committed(val index: Long, val term: Long) : ForwardOutcome
+
+    /** The target was not (or no longer) the leader; the caller should retry. */
+    @Serializable
+    data object NotLeader : ForwardOutcome
+
+    /** The proposal failed for a non-retryable reason. */
+    @Serializable
+    data object Failed : ForwardOutcome
 }

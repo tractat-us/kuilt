@@ -15,10 +15,10 @@
  *    SQLite/IndexedDB-backed implementation for production (durable across restarts).
  * 4. **Call [CoroutineScope.raftNode]** — the node starts running inside the given
  *    scope. Its lifetime is tied to the scope's cancellation.
- * 5. **Observe [RaftNode.role]** to know when this node becomes [RaftRole.Leader].
- * 6. **Propose** by calling [RaftNode.propose] on the leader — it suspends until
- *    a quorum commits the entry and returns the committed [LogEntry].
- * 7. **Apply** by collecting [RaftNode.committed] on every node — committed
+ * 5. **Propose** from **any** node by calling [RaftNode.propose] — non-leaders forward
+ *    the command to the current leader (Raft §8); the call suspends until a quorum
+ *    commits the entry and returns the committed [LogEntry].
+ * 6. **Apply** by collecting [RaftNode.committed] on every node — committed
  *    instructions appear here in index order as [Committed] values.
  * 8. **(Optional) Compact** by publishing a state-machine snapshot into
  *    [RaftNode.snapshots]; raft discards the covered log prefix and catches lagging
@@ -49,16 +49,13 @@
  *     }
  * }
  *
- * // Propose on the leader
+ * // Propose from any node — the leader appends directly; followers/candidates/learners forward (Raft §8)
  * scope.launch {
- *     node.awaitLeadership()   // suspend until this node is the leader
  *     try {
  *         val committed = node.propose("set x=1".encodeToByteArray())
  *         println("committed at index ${committed.index}")
- *     } catch (e: NotLeaderException) {
- *         // stepped down between the check and the propose — redirect to node.leader
  *     } catch (e: LeadershipLostException) {
- *         // leadership lost mid-flight — outcome unknown, retry with idempotent key
+ *         // leader stepped down mid-flight — outcome unknown, retry with idempotent key
  *     }
  * }
  * ```
@@ -77,7 +74,8 @@
  *
  * Nodes listed in [ClusterConfig.learners] are non-voting replicas. They receive
  * all log entries from the leader but never vote and never lead. [RaftNode.propose]
- * always throws [NotLeaderException] on a learner node.
+ * on a learner node forwards the command to the current leader (Raft §8) like any
+ * non-leader; the committed entry replicates back through normal AppendEntries.
  *
  * @see RaftNode for the runtime interface
  * @see CoroutineScope.raftNode for the construction entry point
@@ -113,7 +111,8 @@ public interface RaftNode {
      * The [NodeId] of the node this node currently believes to be the leader,
      * or `null` if no leader is known (e.g. during an election).
      *
-     * Useful for redirecting [propose] calls when this node is not the leader.
+     * Informational; [propose] automatically forwards to the leader — callers
+     * do not need to redirect manually.
      */
     public val leader: StateFlow<NodeId?>
 
@@ -193,11 +192,25 @@ public interface RaftNode {
      * Proposes [command] for replication and suspends until a quorum commits it.
      *
      * Returns the committed [LogEntry] (which carries the assigned [LogEntry.index]
-     * and [LogEntry.term]). Only the leader can propose; all other roles throw
-     * immediately.
+     * and [LogEntry.term]).
      *
-     * @throws NotLeaderException if this node is not currently the leader (including learners).
-     * @throws LeadershipLostException if leadership is lost while waiting for commitment.
+     * May be called from **any** node in the cluster (Raft §8):
+     * - The **leader** appends the entry directly.
+     * - Every other role (**Follower**, **Candidate**, **Learner**) forwards the command
+     *   to the current leader and suspends until the leader commits it. The committed
+     *   entry then replicates back to the calling node through the normal AppendEntries path.
+     * - If no leader is known yet (during an election), the call waits, cancellably, until
+     *   a leader is elected and then forwards.
+     *
+     * **Cancellation is best-effort.** A forward that is still queued when the caller cancels
+     * is guaranteed not to be sent. However, a command already forwarded to — or appended by —
+     * the leader may still commit even if the caller cancels; Raft does not support revocation
+     * of in-flight proposals.
+     *
+     * @throws LeadershipLostException if a forwarded proposal is rejected by the target leader
+     *   (e.g. the leader stepped down); the caller may retry on the new leader.
+     * @throws NotLeaderException only in terminal cases: the node is [close]d, or the leader
+     *   is rejecting proposals because a leadership transfer is in flight.
      */
     public suspend fun propose(command: ByteArray): LogEntry
 

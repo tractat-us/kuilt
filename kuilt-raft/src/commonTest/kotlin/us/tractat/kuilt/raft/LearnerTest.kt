@@ -13,7 +13,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
-import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
@@ -57,10 +56,12 @@ class LearnerTest {
     }
 
     @Test
-    fun learner_propose_throws_NotLeaderException() = raftRunTest {
+    fun learner_propose_forwardsToLeaderAndCommits() = raftRunTest {
+        // Learner propose forwards to the leader (Raft §8) rather than throwing.
         val sim = simWithLearner()
         awaitLeader(sim)
-        assertFailsWith<NotLeaderException> { sim.nodes[learnerId]!!.propose(byteArrayOf(1)) }
+        val entry = sim.nodes[learnerId]!!.propose(byteArrayOf(1))
+        sim.awaitCommit(entry.index, on = voterIds.toList() + learnerId)
     }
 
     @Test

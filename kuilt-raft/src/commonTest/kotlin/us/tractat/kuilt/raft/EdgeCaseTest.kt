@@ -7,7 +7,6 @@ import kotlinx.coroutines.launch
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
-import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
 
@@ -99,11 +98,12 @@ class EdgeCaseTest {
     }
 
     /**
-     * A voter-follower (not a learner) must throw NotLeaderException when propose() is called.
-     * Distinct from the learner case in LearnerTest — this confirms voters enforce the same rule.
+     * A voter-follower forwards propose() to the leader and commits.
+     * Leader forwarding (Raft §8): any non-leader role (Follower, Candidate, Learner)
+     * forwards the command to the current leader rather than throwing.
      */
     @Test
-    fun voterFollower_propose_throwsNotLeaderException() = raftRunTest {
+    fun voterFollower_propose_forwardsToLeaderAndCommits() = raftRunTest {
         val ids = listOf(NodeId("f1"), NodeId("f2"), NodeId("f3"))
         val config = ClusterConfig(voters = ids.toSet())
         val sim = RaftSimulation(ids, backgroundScope, fastConfig) { _, transport, storage, nodeScope ->
@@ -112,7 +112,8 @@ class EdgeCaseTest {
         awaitLeader(sim)
         val follower = sim.followers().first()
         assertIs<RaftRole.Follower>(follower.role.value)
-        assertFailsWith<NotLeaderException> { follower.propose(byteArrayOf(1)) }
+        val entry = follower.propose(byteArrayOf(1))
+        sim.awaitCommit(entry.index)
     }
 
     /**

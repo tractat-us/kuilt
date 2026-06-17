@@ -11,13 +11,11 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.cbor.Cbor
 import kotlinx.serialization.serializer
 import us.tractat.kuilt.raft.LeadershipLostException
-import us.tractat.kuilt.raft.NotLeaderException
 import us.tractat.kuilt.raft.RaftRole
 import us.tractat.kuilt.raft.test.FakeRaftNode
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
-import kotlin.test.assertIs
 import kotlin.time.Duration.Companion.seconds
 
 class TurnSequencerTest {
@@ -118,28 +116,29 @@ class TurnSequencerTest {
     }
 
     @Test
-    fun proposeWrapsNotLeaderExceptionAsNotYourTurnException() = runTest(timeout = 5.seconds) {
+    fun propose_fromForwardingFollower_commits() = runTest(timeout = 5.seconds) {
         val node = FakeRaftNode()
-        // Default role is Follower — propose will throw NotLeaderException
+        // Simulate forwarding: follower node succeeds (as a real forwarding RaftNode would)
+        node.proposeBehavior = { command -> node.pushCommitted(command) }
         val seq = sequencer(node)
 
-        val ex = assertFailsWith<NotYourTurnException> {
-            seq.propose(Move(player = 1, card = 1))
-        }
-        assertIs<NotLeaderException>(ex.cause)
+        val indexed = seq.propose(Move(player = 1, card = 7))
+
+        assertEquals(Move(player = 1, card = 7), indexed.action)
+        assertEquals(1L, indexed.index)
     }
 
     @Test
-    fun proposeWrapsLeadershipLostExceptionAsTurnLostInFlightException() = runTest(timeout = 5.seconds) {
+    fun propose_onLeadershipLost_propagatesLeadershipLostException() = runTest(timeout = 5.seconds) {
         val node = FakeRaftNode()
         node.setRole(RaftRole.Leader)
         val raftCause = LeadershipLostException("lost during test")
         node.proposeBehavior = { _ -> throw raftCause }
         val seq = sequencer(node)
 
-        val ex = assertFailsWith<TurnLostInFlightException> {
+        val ex = assertFailsWith<LeadershipLostException> {
             seq.propose(Move(player = 1, card = 1))
         }
-        assertEquals(raftCause, ex.cause)
+        assertEquals(raftCause, ex)
     }
 }

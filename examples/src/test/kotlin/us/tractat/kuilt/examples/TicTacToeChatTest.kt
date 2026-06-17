@@ -5,10 +5,12 @@
 
 package us.tractat.kuilt.examples
 
-import kotlinx.coroutines.async
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.take
-import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.Serializable
@@ -24,12 +26,13 @@ import us.tractat.kuilt.crdt.RgaId
 import us.tractat.kuilt.crdt.replicator.ReplicatorMessage
 import us.tractat.kuilt.crdt.replicator.SeamReplicator
 import us.tractat.kuilt.crdt.replicator.SeamReplicatorConfig
+import us.tractat.kuilt.game.IndexedAction
 import us.tractat.kuilt.game.TurnSequencer
 import us.tractat.kuilt.raft.ClusterConfig
 import us.tractat.kuilt.raft.InMemoryRaftStorage
+import us.tractat.kuilt.raft.LeadershipLostException
 import us.tractat.kuilt.raft.NodeId
 import us.tractat.kuilt.raft.RaftConfig
-import us.tractat.kuilt.raft.RaftRole
 import us.tractat.kuilt.raft.SeamRaftTransport
 import us.tractat.kuilt.raft.raftNode
 import kotlin.random.Random
@@ -41,6 +44,19 @@ import kotlin.time.Duration.Companion.seconds
 /**
  * Integration example: tic-tac-toe (consensus via real [raftNode]) **and** side chat
  * ([Rga] + [SeamReplicator]) over a single shared [InMemoryLoom] fabric. Two peers.
+ *
+ * ## Why this example matters — the forwarding litmus test
+ *
+ * In a 2-peer cluster, exactly one peer is the Raft leader at any time. Both
+ * players must be able to propose moves. Leader-forwarding (issue #479) makes
+ * [us.tractat.kuilt.raft.RaftNode.propose] callable from any peer: the leader
+ * appends directly; a follower forwards to the leader and awaits commit.
+ *
+ * Raft leadership and turn ownership are deliberately ORTHOGONAL: turns are
+ * derived from the count of committed moves (even = X/alice, odd = O/bob);
+ * which peer is the Raft leader is irrelevant to whose turn it is. Each peer
+ * proposes its own moves via its own [TurnSequencer], and the non-leader's
+ * proposals exercise the forwarding path.
  *
  * ## API-leakage inventory (issue #479 probe)
  *
@@ -60,6 +76,8 @@ import kotlin.time.Duration.Companion.seconds
  */
 class TicTacToeChatTest {
 
+    private enum class Mark { X, O }
+
     @Serializable
     private data class Move(val row: Int, val col: Int)
 
@@ -73,6 +91,46 @@ class TicTacToeChatTest {
 
     private val chatCfg = SeamReplicatorConfig(expectVirtualTime = true)
     private val chatMsgSer = ReplicatorMessage.serializer(Rga.wireSerializer(serializer<String>()))
+
+    private fun winner(board: Map<Move, Mark>): Mark? {
+        val lines = listOf(
+            listOf(Move(0, 0), Move(0, 1), Move(0, 2)),
+            listOf(Move(1, 0), Move(1, 1), Move(1, 2)),
+            listOf(Move(2, 0), Move(2, 1), Move(2, 2)),
+            listOf(Move(0, 0), Move(1, 0), Move(2, 0)),
+            listOf(Move(0, 1), Move(1, 1), Move(2, 1)),
+            listOf(Move(0, 2), Move(1, 2), Move(2, 2)),
+            listOf(Move(0, 0), Move(1, 1), Move(2, 2)),
+            listOf(Move(0, 2), Move(1, 1), Move(2, 0)),
+        )
+        for (line in lines) {
+            val marks = line.map { board[it] }
+            if (marks[0] != null && marks.all { it == marks[0] }) return marks[0]
+        }
+        return null
+    }
+
+    private fun isOver(board: Map<Move, Mark>) = winner(board) != null || board.size == 9
+
+    private fun buildBoard(moves: List<Move>): Map<Move, Mark> =
+        moves.foldIndexed(emptyMap()) { i, board, move ->
+            board + (move to if (i % 2 == 0) Mark.X else Mark.O)
+        }
+
+    /**
+     * Proposes [move] via [game], retrying on [LeadershipLostException] (leader stepped
+     * down mid-flight). [propose] re-awaits a new leader before forwarding on each retry.
+     */
+    private suspend fun proposeWithRetry(game: TurnSequencer<Move>, move: Move) {
+        while (true) {
+            try {
+                game.propose(move)
+                return
+            } catch (e: LeadershipLostException) {
+                delay(1)
+            }
+        }
+    }
 
     @Test
     fun `game moves and chat log both converge across two real peers`() =
@@ -119,24 +177,79 @@ class TicTacToeChatTest {
                 config = chatCfg,
             )
 
-            // Collect the first 2 committed moves on both nodes before proposing.
-            val aliceMoves = async { aliceGame.committed.take(2).toList().map { it.action } }
-            val bobMoves = async { bobGame.committed.take(2).toList().map { it.action } }
-            delay(1) // let collectors subscribe under StandardTestDispatcher
+            // Scripted moves: X wins by filling the top row.
+            // X (alice, even turns 0, 2, 4): (0,0) → (0,1) → (0,2)
+            // O (bob,   odd  turns 1, 3):    (1,0) → (1,1)
+            //
+            // Raft leadership is orthogonal to turns. Whichever peer is NOT the Raft
+            // leader will forward its proposals via RaftNode.propose() — that is the
+            // central behaviour this test validates.
+            val aliceScript = listOf(Move(0, 0), Move(0, 1), Move(0, 2))
+            val bobScript = listOf(Move(1, 0), Move(1, 1))
 
-            // Wait for leader by advancing virtual time 1 ms per step.
-            while (aliceNode.role.value !is RaftRole.Leader && bobNode.role.value !is RaftRole.Leader) {
-                delay(1)
+            // Each play loop:
+            //   - Collects committed moves until the game is over.
+            //   - After each commit, if it is this peer's turn, proposes the next scripted move.
+            //   - The first move (aliceScript[0]) is proposed externally below; the loop skips it.
+            //   - Signals completion via a CompletableDeferred<List<Move>>.
+            //
+            // The loop runs in a Job that is cancelled once the result is delivered, so it
+            // does not linger as an uncompleted coroutine under runTest.
+            val aliceResult = CompletableDeferred<List<Move>>()
+            val bobResult = CompletableDeferred<List<Move>>()
+
+            fun launchPlayLoop(
+                game: TurnSequencer<Move>,
+                script: List<Move>,
+                isMine: (turnIndex: Int) -> Boolean,
+                result: CompletableDeferred<List<Move>>,
+                // The first move is proposed externally; skip it in the loop.
+                skipFirstProposal: Boolean,
+            ): Job = launch {
+                val committed = mutableListOf<Move>()
+                // Skip script index 0 if this peer's first proposal was made externally.
+                var scriptIndex = if (skipFirstProposal) 1 else 0
+                game.committed.collect { (_, move): IndexedAction<Move> ->
+                    committed.add(move)
+                    val board = buildBoard(committed)
+                    if (isOver(board)) {
+                        result.complete(committed.toList())
+                        // Cancel this coroutine to break out of collect.
+                        // CancellationException propagates to complete the Job cleanly.
+                        throw CancellationException("game over")
+                    }
+                    val turnIndex = committed.size // index of the next (not-yet-played) turn
+                    if (isMine(turnIndex) && scriptIndex < script.size) {
+                        proposeWithRetry(game, script[scriptIndex++])
+                    }
+                }
             }
 
-            val leader = if (aliceNode.role.value is RaftRole.Leader) aliceGame else bobGame
-            leader.propose(Move(0, 0))
-            leader.propose(Move(1, 1))
-            delay(10) // let raft replicate; both committed flows deliver
+            val aliceLoop = launchPlayLoop(aliceGame, aliceScript, isMine = { it % 2 == 0 }, aliceResult, skipFirstProposal = true)
+            val bobLoop = launchPlayLoop(bobGame, bobScript, isMine = { it % 2 == 1 }, bobResult, skipFirstProposal = false)
+            delay(1) // let collectors subscribe under StandardTestDispatcher
 
-            val expectedMoves = listOf(Move(0, 0), Move(1, 1))
-            assertEquals(expectedMoves, aliceMoves.await())
-            assertEquals(expectedMoves, bobMoves.await())
+            // Kick off the game with alice's first move.
+            // propose() suspends until a leader is elected — if alice is not the leader,
+            // the proposal is forwarded automatically. Both play loops then handle all
+            // subsequent moves, with whichever peer is the non-leader forwarding its proposals.
+            proposeWithRetry(aliceGame, aliceScript[0])
+            delay(50) // advance virtual time to drive replication and remaining play turns
+
+            val committedMovesAlice = aliceResult.await()
+            val committedMovesBob = bobResult.await()
+
+            aliceLoop.cancelAndJoin()
+            bobLoop.cancelAndJoin()
+
+            val finalBoardAlice = buildBoard(committedMovesAlice)
+            val finalBoardBob = buildBoard(committedMovesBob)
+
+            // X (alice) should win with a top-row run; both peers must see identical committed
+            // sequences (the core Raft consensus guarantee).
+            assertEquals(Mark.X, winner(finalBoardAlice))
+            assertEquals(finalBoardAlice, finalBoardBob)
+            assertEquals(committedMovesAlice, committedMovesBob)
 
             // Both peers send a chat message and the RGA logs must converge.
             fun SeamReplicator<Rga<String>>.chat(msg: String) {

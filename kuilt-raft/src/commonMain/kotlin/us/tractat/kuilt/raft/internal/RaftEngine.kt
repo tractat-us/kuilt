@@ -3,6 +3,7 @@
 package us.tractat.kuilt.raft.internal
 
 import io.github.oshai.kotlinlogging.KotlinLogging
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
@@ -22,6 +23,7 @@ import kotlinx.coroutines.launch
 import kotlinx.serialization.decodeFromByteArray
 import kotlinx.serialization.encodeToByteArray
 import kotlinx.serialization.cbor.Cbor
+import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.raft.ClusterConfig
 import us.tractat.kuilt.raft.Committed
 import us.tractat.kuilt.raft.ConfigPayload
@@ -327,6 +329,7 @@ internal class RaftEngine(
         scope.launch {
             try {
                 for (c in cmd) {
+                    val closing = c is EngineCommand.Close
                     when (c) {
                         is EngineCommand.IncomingMessage  -> onMessage(c.from, c.message)
                         is EngineCommand.Propose          -> onPropose(c.command, c.response)
@@ -343,6 +346,7 @@ internal class RaftEngine(
                         is EngineCommand.TransferTimeout  -> onTransferTimeout()
                         is EngineCommand.Close            -> { cmd.close(); break }
                     }
+                    if (!closing) flushWaitingForLeader()
                 }
             } finally {
                 // Complete any in-flight proposals and config changes so their callers don't hang.
@@ -351,6 +355,7 @@ internal class RaftEngine(
                 failPendingConfigChange(cause)
                 failPendingReads(cause)
                 failPendingTransfer(LeadershipTransferException("node scope cancelled"))
+                failForwardedProposals(cause)
             }
         }
     }
@@ -389,6 +394,13 @@ internal class RaftEngine(
         pendingReads.forEach { it.deferred.completeExceptionally(cause) }
         pendingReads.clear()
         pendingNoOpGate.clear()
+    }
+
+    /** Fail all forwarded proposals awaiting a leader or a ForwardResponse, and clear the maps. */
+    private fun failForwardedProposals(cause: Throwable) {
+        forwardedProposals.values.forEach { (deferred, _) -> deferred.completeExceptionally(cause) }
+        forwardedProposals.clear()
+        waitingForLeader.clear()
     }
 
     /**
@@ -1236,7 +1248,19 @@ internal class RaftEngine(
 
     private suspend fun onPropose(command: ByteArray, response: CompletableDeferred<LogEntry>) {
         if (_role.value !is RaftRole.Leader) {
-            response.completeExceptionally(NotLeaderException())
+            // Follower/Candidate/Learner: forward to the leader (Raft §8). Wait, cancellably,
+            // if none is known yet. Cleanup of cancelled entries is handled on the actor loop
+            // in flushWaitingForLeader (isCompleted check) and failForwardedProposals (finally).
+            // Do NOT use invokeOnCompletion to mutate forwardedProposals — that runs on the
+            // caller's thread and races the actor loop, which is the sole owner of the map.
+            val id = nextForwardId++
+            forwardedProposals[id] = response to command
+            val leaderId = _leader.value
+            if (leaderId != null && leaderId != transport.selfId) {
+                send(leaderId, RaftMessage.Forward(id, command))
+            } else {
+                waitingForLeader += id
+            }
             return
         }
         // §3.10: while a leadership transfer is in flight, reject new proposals so the target can
@@ -1267,7 +1291,16 @@ internal class RaftEngine(
         } catch (_: ClosedSendChannelException) {
             throw NotLeaderException("node is closed")
         }
-        return d.await()
+        try {
+            return d.await()
+        } finally {
+            // If this coroutine was cancelled before the deferred completed, mark the deferred
+            // cancelled so the actor loop's flushWaitingForLeader sees isCompleted==true and
+            // drops it rather than forwarding a cancelled request. This is the only mutation of
+            // d that touches the caller's thread; all other map/state mutations stay on the actor.
+            // cancel() on an already-completed deferred is a harmless no-op.
+            d.cancel()
+        }
     }
 
     override suspend fun readIndex(): Long {
@@ -1625,6 +1658,80 @@ internal class RaftEngine(
         startRealElection()
     }
 
+    // ── Client-proposal forwarding (§8) ──────────────────────────────────────
+
+    /** Monotonic correlation nonce for outbound forwards. */
+    private var nextForwardId: Long = 0L
+
+    /** reqId -> (caller's deferred, original command) for forwards awaiting a ForwardResponse. */
+    private val forwardedProposals = mutableMapOf<Long, Pair<CompletableDeferred<LogEntry>, ByteArray>>()
+
+    /** reqIds queued because no leader was known yet; flushed when a leader appears. */
+    private val waitingForLeader = mutableListOf<Long>()
+
+    /** Leader handles a forwarded proposal: run the normal propose path, reply with its fate. */
+    private suspend fun onForward(from: NodeId, m: RaftMessage.Forward) {
+        if (_role.value !is RaftRole.Leader) {
+            // We are not the leader (stepped down, or stale Forward arrived). Reply NotLeader so
+            // the originator's onForwardResponse fails with LeadershipLostException and the caller
+            // can retry. Do NOT re-forward or queue — that would create a silent second hop and
+            // leave the originator's deferred owned by two mechanisms.
+            send(from, RaftMessage.ForwardResponse(m.clientRequestId, ForwardOutcome.NotLeader))
+            return
+        }
+        val d = CompletableDeferred<LogEntry>()
+        onPropose(m.command, d)
+        scope.launch {
+            val outcome = try {
+                val e = d.await()
+                ForwardOutcome.Committed(e.index, e.term)
+            } catch (e: Throwable) {
+                if (e is CancellationException) throw e
+                if (e is NotLeaderException || e is LeadershipLostException) ForwardOutcome.NotLeader
+                else ForwardOutcome.Failed
+            }
+            // Best-effort reply; transport may be tearing down on close.
+            runCatchingCancellable { send(from, RaftMessage.ForwardResponse(m.clientRequestId, outcome)) }
+        }
+    }
+
+    /** Follower handles the leader's reply to a forward it sent. */
+    private fun onForwardResponse(from: NodeId, m: RaftMessage.ForwardResponse) {
+        val (deferred, command) = forwardedProposals.remove(m.clientRequestId) ?: return
+        when (val o = m.outcome) {
+            is ForwardOutcome.Committed -> deferred.complete(LogEntry(o.index, o.term, command))
+            ForwardOutcome.NotLeader, ForwardOutcome.Failed ->
+                deferred.completeExceptionally(LeadershipLostException("forwarded proposal was not committed; retry"))
+        }
+    }
+
+    /**
+     * Drain forwards queued while no leader was known. If we are now the leader, propose them
+     * locally; otherwise send them to the current leader. No-op when nothing is queued or no
+     * leader is known yet.
+     */
+    private suspend fun flushWaitingForLeader() {
+        if (waitingForLeader.isEmpty()) return
+        val leaderId = _leader.value
+        val amLeader = _role.value is RaftRole.Leader
+        if (!amLeader && (leaderId == null || leaderId == transport.selfId)) return
+        val batch = waitingForLeader.toList()
+        waitingForLeader.clear()
+        for (id in batch) {
+            val pair = forwardedProposals[id] ?: continue
+            if (pair.first.isCompleted) {            // cancelled or already completed → drop, never send
+                forwardedProposals.remove(id)
+                continue
+            }
+            if (amLeader) {
+                forwardedProposals.remove(id)              // leader path completes via `pending`
+                onPropose(pair.second, pair.first)
+            } else {
+                send(leaderId!!, RaftMessage.Forward(id, pair.second))
+            }
+        }
+    }
+
     // ── Message dispatcher ────────────────────────────────────────────────────
 
     private suspend fun onMessage(from: NodeId, m: RaftMessage) = when (m) {
@@ -1637,6 +1744,8 @@ internal class RaftEngine(
         is RaftMessage.PreVote                 -> onPreVote(from, m)
         is RaftMessage.PreVoteResponse         -> onPreVoteResponse(from, m)
         is RaftMessage.TimeoutNow              -> onTimeoutNow(from, m)
+        is RaftMessage.Forward                 -> onForward(from, m)
+        is RaftMessage.ForwardResponse         -> onForwardResponse(from, m)
     }
 
     private suspend fun send(peer: NodeId, m: RaftMessage) =
