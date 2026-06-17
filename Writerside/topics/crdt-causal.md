@@ -16,36 +16,15 @@ This rule gives add-wins semantics: a dot added by one replica and not yet obser
 
 **Add wins over concurrent remove (causal level):**
 
-<!-- verbatim from kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/CausalDotSetTest.kt#addWinsOverConcurrentRemove -->
 ```kotlin
-// Source: https://github.com/tractat-us/kuilt/blob/main/kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/CausalDotSetTest.kt
-// Test: addWinsOverConcurrentRemove
-// Alice removed the only dot she saw; her context still remembers (A,1).
-val alice = Causal(DotSet(emptySet()), DotContext.of(Dot(a, 1L)))
-// Bob concurrently added a fresh dot; he still holds both.
-val bob = Causal(
-    DotSet(setOf(Dot(a, 1L), Dot(b, 1L))),
-    DotContext.of(Dot(a, 1L), Dot(b, 1L)),
-)
-val merged = alice.piece(bob)
-// (A,1): Alice saw & dropped -> gone. (B,1): Alice never saw -> kept.
-assertEquals(setOf(Dot(b, 1L)), merged.store.dots)
-assertFalse(merged.store.isBottom) // present — add wins
 ```
+{ src="../../kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/CausalDotSetTest.kt" include-symbol="addWinsOverConcurrentRemove" }
 
 **Remove wins when the add was already seen:**
 
-<!-- verbatim from kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/CausalDotSetTest.kt#removeWinsWhenTheAddWasAlreadySeen -->
 ```kotlin
-// Source: https://github.com/tractat-us/kuilt/blob/main/kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/CausalDotSetTest.kt
-// Test: removeWinsWhenTheAddWasAlreadySeen
-val alice = Causal(DotSet(emptySet()), DotContext.of(Dot(a, 1L), Dot(b, 1L)))
-val bob = Causal(
-    DotSet(setOf(Dot(a, 1L), Dot(b, 1L))),
-    DotContext.of(Dot(a, 1L), Dot(b, 1L)),
-)
-assertTrue(alice.piece(bob).store.isBottom)
 ```
+{ src="../../kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/CausalDotSetTest.kt" include-symbol="removeWinsWhenTheAddWasAlreadySeen" }
 
 ## DotFun and DotMap
 
