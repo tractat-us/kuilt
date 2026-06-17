@@ -17,39 +17,21 @@ This is why add wins over a *concurrent* remove: a concurrent remove only witnes
 
 **Add then contains:**
 
-<!-- verbatim from kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/ORSetTest.kt#addThenContains -->
 ```kotlin
-// Source: https://github.com/tractat-us/kuilt/blob/main/kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/ORSetTest.kt
-// Test: addThenContains
-val s = ORSet.empty<String>().add(a, "card")
-assertTrue(s.contains("card"))
-assertEquals(setOf("card"), s.elements)
 ```
+{ src="../../kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/ORSetTest.kt" include-symbol="addThenContains" }
 
 **Add wins over concurrent remove:**
 
-<!-- verbatim from kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/ORSetTest.kt#addWinsOverConcurrentRemove -->
 ```kotlin
-// Source: https://github.com/tractat-us/kuilt/blob/main/kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/ORSetTest.kt
-// Test: addWinsOverConcurrentRemove
-val start = ORSet.empty<String>().add(a, "card")
-val alice = start.remove("card")     // Alice removes what she saw
-val bob = start.add(b, "card")       // Bob concurrently re-adds (new dot)
-val merged = alice.piece(bob)
-assertTrue(merged.contains("card"))  // add wins
 ```
+{ src="../../kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/ORSetTest.kt" include-symbol="addWinsOverConcurrentRemove" }
 
 **Remove wins when it observed the add:**
 
-<!-- verbatim from kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/ORSetTest.kt#removeWinsWhenNothingConcurrentlyAdded -->
 ```kotlin
-// Source: https://github.com/tractat-us/kuilt/blob/main/kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/ORSetTest.kt
-// Test: removeWinsWhenNothingConcurrentlyAdded
-val start = ORSet.empty<String>().add(a, "card")
-val alice = start.remove("card")
-val merged = alice.piece(start)     // Bob did nothing new
-assertFalse(merged.contains("card"))
 ```
+{ src="../../kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/ORSetTest.kt" include-symbol="removeWinsWhenNothingConcurrentlyAdded" }
 
 ## When to use
 

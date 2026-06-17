@@ -12,41 +12,25 @@ A `TwoPhaseSet` maintains two `GSet`s: an add-set `A` and a tombstone-set `R`. A
 
 **Add and remove:**
 
-<!-- verbatim from kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/TwoPhaseSetTest.kt#addThenContains / removeMakesAbsent -->
 ```kotlin
-// Source: https://github.com/tractat-us/kuilt/blob/main/kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/TwoPhaseSetTest.kt
-// Tests: addThenContains / removeMakesAbsent
-val s = TwoPhaseSet.empty<String>().let { it.piece(it.add("x")) }
-assertTrue(s.contains("x"))
-
-val gone = s.piece(s.remove("x"))
-assertFalse(gone.contains("x"))
 ```
+{ src="../../kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/TwoPhaseSetTest.kt" include-symbol="addThenContains" }
+
+```kotlin
+```
+{ src="../../kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/TwoPhaseSetTest.kt" include-symbol="removeMakesAbsent" }
 
 **Remove wins over concurrent re-add:**
 
-<!-- verbatim from kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/TwoPhaseSetTest.kt#removeWinsOverConcurrentReAdd -->
 ```kotlin
-// Source: https://github.com/tractat-us/kuilt/blob/main/kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/TwoPhaseSetTest.kt
-// Test: removeWinsOverConcurrentReAdd
-val start = TwoPhaseSet.empty<String>().let { it.piece(it.add("x")) }
-val alice = start.piece(start.remove("x"))
-val bob = start.piece(start.add("x"))
-assertFalse(alice.piece(bob).contains("x"))  // tombstone wins forever
 ```
+{ src="../../kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/TwoPhaseSetTest.kt" include-symbol="removeWinsOverConcurrentReAdd" }
 
 **Tombstone is permanent — resurrection is impossible:**
 
-<!-- verbatim from kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/TwoPhaseSetTest.kt#cannotResurrectARemovedElement -->
 ```kotlin
-// Source: https://github.com/tractat-us/kuilt/blob/main/kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/TwoPhaseSetTest.kt
-// Test: cannotResurrectARemovedElement
-val s = TwoPhaseSet.empty<String>()
-    .let { it.piece(it.add("x")) }
-    .let { it.piece(it.remove("x")) }
-val retried = s.piece(s.add("x"))
-assertFalse(retried.contains("x"))
 ```
+{ src="../../kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/TwoPhaseSetTest.kt" include-symbol="cannotResurrectARemovedElement" }
 
 ## When to use
 
