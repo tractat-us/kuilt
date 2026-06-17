@@ -11,11 +11,14 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.launch
+import us.tractat.kuilt.raft.ClientId
 import us.tractat.kuilt.raft.Committed
+import us.tractat.kuilt.raft.DedupKey
 import us.tractat.kuilt.raft.LogEntry
 import us.tractat.kuilt.raft.NodeId
 import us.tractat.kuilt.raft.NotLeaderException
 import us.tractat.kuilt.raft.RaftNode
+import kotlin.random.Random
 import us.tractat.kuilt.raft.RaftRole
 import us.tractat.kuilt.raft.RaftTraceEvent
 import us.tractat.kuilt.raft.Snapshot
@@ -51,7 +54,16 @@ public class FakeRaftNode(
     initialRole: RaftRole = RaftRole.Follower,
     initialLeader: NodeId? = null,
     initialCommitIndex: Long = 0L,
+    /**
+     * This node's Raft §8 dedup identity, stamped onto the [LogEntry] returned by [propose]. Defaults
+     * to a deterministic auto id derived from [selfId] (distinct per node id, stable per instance);
+     * pass a fixed [ClientId] to assert exact dedup keys.
+     */
+    public val clientId: ClientId = ClientId.auto(selfId, Random(selfId.value.hashCode())),
 ) : RaftNode {
+
+    /** Monotonic auto-serial for the no-requestId [propose] form. */
+    private var serial: Long = 0L
 
     private val _role = MutableStateFlow(initialRole)
     override val role: StateFlow<RaftRole> = _role.asStateFlow()
@@ -108,6 +120,9 @@ public class FakeRaftNode(
     private var _closed = false
     private var _nextIndex = initialCommitIndex + 1L
 
+    /** Dedup key the in-flight [propose] wants stamped onto its committed entry; null outside a propose. */
+    private var stampForNextCommit: DedupKey? = null
+
     /** All commands passed to [propose], in call order. */
     public val proposals: List<ByteArray> get() = _proposals.toList()
 
@@ -131,9 +146,26 @@ public class FakeRaftNode(
 
     // ── RaftNode interface ────────────────────────────────────────────────────
 
-    override suspend fun propose(command: ByteArray): LogEntry {
+    override suspend fun propose(command: ByteArray): LogEntry = proposeStamped(command, ++serial)
+
+    override suspend fun propose(command: ByteArray, requestId: Long): LogEntry =
+        proposeStamped(command, requestId)
+
+    /**
+     * Run [proposeBehavior] for [command] with `DedupKey(clientId, requestId)` stamped onto both the
+     * committed-stream entry (via [pushCommitted]'s [stampForNextCommit] hook) and the returned entry,
+     * so they stay equal. A custom [proposeBehavior] that bypasses [pushCommitted] still gets the key
+     * copied onto whatever entry it returns.
+     */
+    private suspend fun proposeStamped(command: ByteArray, requestId: Long): LogEntry {
         _proposals.add(command)
-        return proposeBehavior(command)
+        val key = DedupKey(clientId, requestId)
+        stampForNextCommit = key
+        return try {
+            proposeBehavior(command).copy(dedupKey = key)
+        } finally {
+            stampForNextCommit = null
+        }
     }
 
     override suspend fun close() {
@@ -201,7 +233,7 @@ public class FakeRaftNode(
      * ```
      */
     public suspend fun pushCommitted(command: ByteArray): LogEntry =
-        pushCommitted(LogEntry(index = _nextIndex++, term = 1L, command = command))
+        pushCommitted(LogEntry(index = _nextIndex++, term = 1L, command = command, dedupKey = stampForNextCommit))
 
     /**
      * Push [event] onto [trace].

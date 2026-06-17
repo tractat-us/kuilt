@@ -8,7 +8,8 @@ import us.tractat.kuilt.raft.Snapshot
 
 internal sealed interface EngineCommand {
     data class IncomingMessage(val from: NodeId, val message: RaftMessage) : EngineCommand
-    data class Propose(val command: ByteArray, val response: CompletableDeferred<LogEntry>) : EngineCommand
+    /** [requestId] is the caller-pinned Raft §8 serial, or `null` to draw the next auto-serial on the actor loop. */
+    data class Propose(val command: ByteArray, val requestId: Long?, val response: CompletableDeferred<LogEntry>) : EngineCommand
     data class ChangeMembership(val target: ClusterConfig, val response: CompletableDeferred<ClusterConfig>) : EngineCommand
     data object ElectionTimeout : EngineCommand
     data object HeartbeatTick : EngineCommand
