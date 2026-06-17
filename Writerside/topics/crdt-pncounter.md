@@ -16,20 +16,21 @@ val loom = InMemoryLoom()
 val seamAlice = loom.host(Pattern("vote-tally"))
 val seamBob = loom.join(InMemoryTag("bob"))
 
-val aliceTally = tallyReplicator(seamAlice, backgroundScope)
-val bobTally = tallyReplicator(seamBob, backgroundScope)
+val replicatorCfg = SeamReplicatorConfig(expectVirtualTime = true)
+val aliceTally = SeamReplicator(seamAlice, PNCounter.ZERO, PNCounter.serializer(), backgroundScope, config = replicatorCfg)
+val bobTally = SeamReplicator(seamBob, PNCounter.ZERO, PNCounter.serializer(), backgroundScope, config = replicatorCfg)
 
 delay(1) // let collectors subscribe under StandardTestDispatcher
 
 // Alice casts 3 upvotes for the post.
-aliceTally.apply(aliceTally.state.value.increment(aliceTally.replica, 3L))
+aliceTally.mutate { it.increment(aliceTally.replica, 3L) }
 
 // Bob casts 1 upvote and then 1 downvote (changed his mind).
-bobTally.apply(bobTally.state.value.increment(bobTally.replica, 1L))
-bobTally.apply(bobTally.state.value.decrement(bobTally.replica, 1L))
+bobTally.mutate { it.increment(bobTally.replica, 1L) }
+bobTally.mutate { it.decrement(bobTally.replica, 1L) }
 
 // Alice adds another upvote concurrently.
-aliceTally.apply(aliceTally.state.value.increment(aliceTally.replica, 2L))
+aliceTally.mutate { it.increment(aliceTally.replica, 2L) }
 
 delay(10) // advance virtual time so all delta broadcasts deliver
 
@@ -37,23 +38,6 @@ delay(10) // advance virtual time so all delta broadcasts deliver
 // alice: +3 +2 = 5 increments; bob: +1 -1 = 0 net → total = 5
 assertEquals(5L, aliceTally.state.value.value)
 assertEquals(aliceTally.state.value.value, bobTally.state.value.value)
-```
-
-Where `tallyReplicator` wraps `SeamReplicator<PNCounter>`:
-
-```kotlin
-val replicatorCfg = SeamReplicatorConfig(expectVirtualTime = true)
-val msgSer = ReplicatorMessage.serializer(PNCounter.serializer())
-
-fun tallyReplicator(seam: Seam, scope: CoroutineScope) =
-    SeamReplicator(
-        replica = ReplicaId(seam.selfId.value),
-        seam = seam,
-        initial = PNCounter.ZERO,
-        messageSerializer = msgSer,
-        scope = scope,
-        config = replicatorCfg,
-    )
 ```
 
 See the full test at [`VoteTallyTest.kt`](https://github.com/tractat-us/kuilt/blob/main/examples/src/test/kotlin/us/tractat/kuilt/examples/VoteTallyTest.kt).
