@@ -13,6 +13,21 @@ kotlin {
             implementation(libs.kotlinx.coroutines.core)
             implementation(libs.kotlinx.serialization.cbor)
         }
+
+        // jvmAndAndroidMain: ServerCluster uses KtorRoomHost which is JVM/Android-only.
+        // Mirrors the pattern in :kuilt-websocket. Adding a manual intermediate disables
+        // the plugin's hierarchy auto-wiring — no ios/macos/wasm intermediates are needed
+        // here since cluster has no platform-specific deps on those targets.
+        val jvmAndAndroidMain by creating {
+            dependsOn(commonMain.get())
+            dependencies {
+                api(project(":kuilt-websocket"))
+                implementation(libs.kotlin.logging)
+            }
+        }
+        jvmMain.get().dependsOn(jvmAndAndroidMain)
+        androidMain.get().dependsOn(jvmAndAndroidMain)
+
         commonTest.dependencies {
             implementation(project(":kuilt-raft-test"))
             implementation(project(":kuilt-test"))
