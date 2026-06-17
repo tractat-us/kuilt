@@ -2,6 +2,7 @@ package us.tractat.kuilt.raft.internal
 
 import kotlinx.serialization.Serializable
 import us.tractat.kuilt.raft.ConfigPayload
+import us.tractat.kuilt.raft.DedupKey
 import us.tractat.kuilt.raft.LogEntry
 import us.tractat.kuilt.raft.NodeId
 
@@ -148,12 +149,15 @@ internal sealed interface RaftMessage {
      * Client-proposal forwarding (Raft paper §8): a follower relays a `propose` command to the
      * current leader, which appends it on the follower's behalf. [clientRequestId] is the
      * follower-local correlation nonce echoed back in [ForwardResponse]; it is NOT written to the
-     * log, so committed entries are unchanged.
+     * log, so committed entries are unchanged. [dedupKey] is the separate end-to-end §8 client-serial
+     * identity stamped by the *originating* proposer; the leader appends it UNCHANGED (it never
+     * re-stamps), so a retried forward maps to the same key. `null` for an unkeyed/legacy proposal.
      */
     @Serializable
     data class Forward(
         val clientRequestId: Long,
         val command: ByteArray,
+        val dedupKey: DedupKey? = null,
     ) : RaftMessage {
         // command is a ByteArray (reference equals in generated equals); this is a transport
         // envelope only — identity equality is never meaningful (same rationale as AppendEntries).

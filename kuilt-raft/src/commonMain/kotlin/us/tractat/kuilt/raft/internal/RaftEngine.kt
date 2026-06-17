@@ -24,9 +24,12 @@ import kotlinx.serialization.decodeFromByteArray
 import kotlinx.serialization.encodeToByteArray
 import kotlinx.serialization.cbor.Cbor
 import us.tractat.kuilt.core.runCatchingCancellable
+import us.tractat.kuilt.raft.ClientId
+import us.tractat.kuilt.raft.ClientIdCollisionException
 import us.tractat.kuilt.raft.ClusterConfig
 import us.tractat.kuilt.raft.Committed
 import us.tractat.kuilt.raft.ConfigPayload
+import us.tractat.kuilt.raft.DedupKey
 import us.tractat.kuilt.raft.DenyReason
 import us.tractat.kuilt.raft.LeadershipLostException
 import us.tractat.kuilt.raft.LeadershipTransferAbandonReason
@@ -57,7 +60,24 @@ internal class RaftEngine(
     private val raftConfig: RaftConfig,
     private val scope: CoroutineScope,
     private val onMetric: ((RaftMetric) -> Unit)?,
+    clientId: ClientId? = null,
 ) : RaftNode {
+
+    // ── Raft §8 client-serial dedup ───────────────────────────────────────────
+    /** Whether the caller supplied a stable durable id (collision ⇒ fail loud) vs an auto id (re-mint). */
+    private val isDurableId: Boolean = clientId != null
+
+    /** This node's dedup identity. `var` because an auto id re-mints on a detected collision. */
+    private var myClientId: ClientId = clientId ?: ClientId.auto(transport.selfId, raftConfig.random)
+
+    /** Monotonic per-client serial for the auto [propose] form. Confined to the actor loop. */
+    private var serial: Long = 0L
+
+    /** Best-effort, non-durable leader-side dedup of recently-committed proposals. */
+    private val dedupCache = LeaderDedupCache()
+
+    /** Detects another live writer committing under [myClientId]. Replaced on auto-id re-mint. */
+    private var collisions = CollisionDetector(myClientId)
 
     private val cmd = Channel<EngineCommand>(Channel.UNLIMITED)
 
@@ -332,7 +352,7 @@ internal class RaftEngine(
                     val closing = c is EngineCommand.Close
                     when (c) {
                         is EngineCommand.IncomingMessage  -> onMessage(c.from, c.message)
-                        is EngineCommand.Propose          -> onPropose(c.command, c.response)
+                        is EngineCommand.Propose          -> onLocalPropose(c.command, c.requestId, c.response)
                         is EngineCommand.ChangeMembership -> onChangeMembership(c.target, c.response)
                         is EngineCommand.ElectionTimeout  -> onElectionTimeout()
                         is EngineCommand.HeartbeatTick    -> onHeartbeat()
@@ -398,7 +418,7 @@ internal class RaftEngine(
 
     /** Fail all forwarded proposals awaiting a leader or a ForwardResponse, and clear the maps. */
     private fun failForwardedProposals(cause: Throwable) {
-        forwardedProposals.values.forEach { (deferred, _) -> deferred.completeExceptionally(cause) }
+        forwardedProposals.values.forEach { it.deferred.completeExceptionally(cause) }
         forwardedProposals.clear()
         waitingForLeader.clear()
     }
@@ -713,6 +733,7 @@ internal class RaftEngine(
             failPendingReads(LeadershipLostException("lost leadership before read confirmed"))
             debug { "relinquishToFollower($reason): failed in-flight proposals, config change, and pending reads" }
             snapshotXfer.clear()   // leader-only transfer state — abandon any in-flight snapshot sends
+            dedupCache.clear()     // leader-only best-effort dedup cache — a new leader starts cold
             // Leadership transfer: a HigherTermObserved step-down while a transfer is active means the
             // target won its election — complete the transfer deferred successfully. Any other reason
             // (CheckQuorum, RemovedFromConfig) is an unrelated step-down — fail the transfer.
@@ -1167,8 +1188,12 @@ internal class RaftEngine(
                     // §5.4.2 no-op: advance commitIndex but withhold from application-facing flow.
                 }
                 else -> {
+                    detectCollision(entry)
                     emitProposeCommittedAndApplied(entry)
                     _committed.emit(Committed.Entry(entry))
+                    // Best-effort leader cache: record on the leader only (a follower would accumulate
+                    // entries it never serves; the cache is leader-scoped and cleared on step-down).
+                    if (_role.value is RaftRole.Leader) dedupCache.record(entry.dedupKey, entry)
                 }
             }
             _commitIndex.value = idx
@@ -1185,6 +1210,31 @@ internal class RaftEngine(
         }
         // Config-commit side effects AFTER commitIndex is bumped — safe to call appendConfigEntry.
         committedConfigEntry?.let { onConfigCommitted(it) }
+    }
+
+    /**
+     * §8 collision check on every committed application entry: a committed entry under [myClientId]
+     * bearing a serial this node never issued proves another live writer shares the identity. A
+     * **durable** id (caller-supplied) is an operational error — throw [ClientIdCollisionException]
+     * loud from the actor loop. An **auto** id silently re-mints (fresh suffix, reset serial +
+     * detector) and logs a warning; the in-flight writes already committed are unaffected.
+     */
+    private fun detectCollision(entry: LogEntry) {
+        if (!collisions.isForeign(entry.dedupKey)) return
+        if (isDurableId) {
+            throw ClientIdCollisionException(
+                "another writer committed under durable clientId '${myClientId.value}' " +
+                    "(foreign serial ${entry.dedupKey?.requestId} at index ${entry.index}); two processes share one id",
+            )
+        }
+        val old = myClientId
+        myClientId = ClientId.auto(transport.selfId, raftConfig.random)
+        serial = 0L
+        collisions = CollisionDetector(myClientId)
+        logger.warn {
+            "[raft:${transport.selfId}] clientId collision: auto id '${old.value}' seen with a foreign " +
+                "serial ${entry.dedupKey?.requestId} — re-minted as '${myClientId.value}'"
+        }
     }
 
     /**
@@ -1246,7 +1296,20 @@ internal class RaftEngine(
 
     // ── propose() ─────────────────────────────────────────────────────────────
 
-    private suspend fun onPropose(command: ByteArray, response: CompletableDeferred<LogEntry>) {
+    /**
+     * Actor-loop entry for a **local** proposal: stamp this node's own [DedupKey] (auto-serial when
+     * [requestId] is null, else the caller-pinned serial), record it as issued for collision detection,
+     * then hand off to [onPropose] which appends-or-forwards with the stamped key. Stamping here (not in
+     * [onPropose]) is deliberate: forwarded proposals reach [onPropose] via [onForward] carrying the
+     * *originator's* key, which must NOT be re-stamped and must NOT count as a serial this node issued.
+     */
+    private suspend fun onLocalPropose(command: ByteArray, requestId: Long?, response: CompletableDeferred<LogEntry>) {
+        val reqId = requestId ?: ++serial
+        collisions.issued(reqId)
+        onPropose(command, DedupKey(myClientId, reqId), response)
+    }
+
+    private suspend fun onPropose(command: ByteArray, dedupKey: DedupKey?, response: CompletableDeferred<LogEntry>) {
         if (_role.value !is RaftRole.Leader) {
             // Follower/Candidate/Learner: forward to the leader (Raft §8). Wait, cancellably,
             // if none is known yet. Cleanup of cancelled entries is handled on the actor loop
@@ -1254,10 +1317,10 @@ internal class RaftEngine(
             // Do NOT use invokeOnCompletion to mutate forwardedProposals — that runs on the
             // caller's thread and races the actor loop, which is the sole owner of the map.
             val id = nextForwardId++
-            forwardedProposals[id] = response to command
+            forwardedProposals[id] = PendingForward(response, command, dedupKey)
             val leaderId = _leader.value
             if (leaderId != null && leaderId != transport.selfId) {
-                send(leaderId, RaftMessage.Forward(id, command))
+                send(leaderId, RaftMessage.Forward(id, command, dedupKey))
             } else {
                 waitingForLeader += id
             }
@@ -1270,8 +1333,12 @@ internal class RaftEngine(
             response.completeExceptionally(NotLeaderException("leadership transfer in flight to ${transferTarget!!.value}"))
             return
         }
+        // §8 best-effort leader dedup: a retry of an already-committed key coalesces onto the recorded
+        // result instead of appending a second entry. The consumer's ClientSessionTable is the durable
+        // backstop; this only catches the common lost-ack retry on a still-leading node.
+        dedupCache.lookup(dedupKey)?.let { response.complete(it); return }
         val index = lastLogIndex + 1L
-        val entry = LogEntry(index, currentTerm, command)
+        val entry = LogEntry(index, currentTerm, command, dedupKey = dedupKey)
         log += entry
         storage.appendEntries(listOf(entry))
         emitTrace(RaftTraceEvent.ClientRequest(nextClock(), transport.selfId, index, currentTerm))
@@ -1284,10 +1351,15 @@ internal class RaftEngine(
         tryAdvanceLeaderCommit()
     }
 
-    override suspend fun propose(command: ByteArray): LogEntry {
+    override suspend fun propose(command: ByteArray): LogEntry = proposeWithRequestId(command, null)
+
+    override suspend fun propose(command: ByteArray, requestId: Long): LogEntry =
+        proposeWithRequestId(command, requestId)
+
+    private suspend fun proposeWithRequestId(command: ByteArray, requestId: Long?): LogEntry {
         val d = CompletableDeferred<LogEntry>()
         try {
-            cmd.send(EngineCommand.Propose(command, d))
+            cmd.send(EngineCommand.Propose(command, requestId, d))
         } catch (_: ClosedSendChannelException) {
             throw NotLeaderException("node is closed")
         }
@@ -1663,8 +1735,15 @@ internal class RaftEngine(
     /** Monotonic correlation nonce for outbound forwards. */
     private var nextForwardId: Long = 0L
 
-    /** reqId -> (caller's deferred, original command) for forwards awaiting a ForwardResponse. */
-    private val forwardedProposals = mutableMapOf<Long, Pair<CompletableDeferred<LogEntry>, ByteArray>>()
+    /** A forward awaiting its [RaftMessage.ForwardResponse]: the caller's deferred, the original command, and the proposer-stamped [dedupKey]. */
+    private data class PendingForward(
+        val deferred: CompletableDeferred<LogEntry>,
+        val command: ByteArray,
+        val dedupKey: DedupKey?,
+    )
+
+    /** reqId -> pending forward awaiting a ForwardResponse. */
+    private val forwardedProposals = mutableMapOf<Long, PendingForward>()
 
     /** reqIds queued because no leader was known yet; flushed when a leader appears. */
     private val waitingForLeader = mutableListOf<Long>()
@@ -1680,7 +1759,9 @@ internal class RaftEngine(
             return
         }
         val d = CompletableDeferred<LogEntry>()
-        onPropose(m.command, d)
+        // Append under the proposer's own dedupKey UNCHANGED — the leader must not re-stamp it (that
+        // would defeat exactly-once) and does not count it among the serials it issued itself.
+        onPropose(m.command, m.dedupKey, d)
         scope.launch {
             val outcome = try {
                 val e = d.await()
@@ -1697,11 +1778,12 @@ internal class RaftEngine(
 
     /** Follower handles the leader's reply to a forward it sent. */
     private fun onForwardResponse(from: NodeId, m: RaftMessage.ForwardResponse) {
-        val (deferred, command) = forwardedProposals.remove(m.clientRequestId) ?: return
+        val pf = forwardedProposals.remove(m.clientRequestId) ?: return
         when (val o = m.outcome) {
-            is ForwardOutcome.Committed -> deferred.complete(LogEntry(o.index, o.term, command))
+            // Re-wrap with the proposer's own dedupKey so the returned entry matches what the leader appended.
+            is ForwardOutcome.Committed -> pf.deferred.complete(LogEntry(o.index, o.term, pf.command, dedupKey = pf.dedupKey))
             ForwardOutcome.NotLeader, ForwardOutcome.Failed ->
-                deferred.completeExceptionally(LeadershipLostException("forwarded proposal was not committed; retry"))
+                pf.deferred.completeExceptionally(LeadershipLostException("forwarded proposal was not committed; retry"))
         }
     }
 
@@ -1718,16 +1800,16 @@ internal class RaftEngine(
         val batch = waitingForLeader.toList()
         waitingForLeader.clear()
         for (id in batch) {
-            val pair = forwardedProposals[id] ?: continue
-            if (pair.first.isCompleted) {            // cancelled or already completed → drop, never send
+            val pf = forwardedProposals[id] ?: continue
+            if (pf.deferred.isCompleted) {            // cancelled or already completed → drop, never send
                 forwardedProposals.remove(id)
                 continue
             }
             if (amLeader) {
                 forwardedProposals.remove(id)              // leader path completes via `pending`
-                onPropose(pair.second, pair.first)
+                onPropose(pf.command, pf.dedupKey, pf.deferred)
             } else {
-                send(leaderId!!, RaftMessage.Forward(id, pair.second))
+                send(leaderId!!, RaftMessage.Forward(id, pf.command, pf.dedupKey))
             }
         }
     }
