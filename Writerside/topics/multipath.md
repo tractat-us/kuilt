@@ -48,31 +48,9 @@ What the composite does underneath:
 A broadcast goes out over every ply, so the same frame arrives over both. The
 inbound gate delivers it exactly once:
 
-<!-- verbatim from kuilt-conformance/src/commonTest/kotlin/us/tractat/kuilt/conformance/CompositeMultiPlyTest.kt#frameOverTwoSharedPliesIsDeliveredExactlyOnce -->
 ```kotlin
-// Source: https://github.com/tractat-us/kuilt/blob/main/kuilt-conformance/src/commonTest/kotlin/us/tractat/kuilt/conformance/CompositeMultiPlyTest.kt
-// Test: frameOverTwoSharedPliesIsDeliveredExactlyOnce
-// Both plies shared by host and joiner: a broadcast goes over both plies.
-// The inbound gate must deduplicate, delivering exactly one copy.
-val plyA = DelayedWovenLoom()
-val plyB = DelayedWovenLoom()
-val loom = makeLoom(PlyId("a") to plyA, PlyId("b") to plyB)
-val host = loom.host(Pattern("host"))
-val joiner = loom.join(InMemoryTag("join"))
-
-// Mark all per-ply seams woven so identity reconciliation completes.
-plyA.wovenSeams.forEach { it.markWoven() }
-plyB.wovenSeams.forEach { it.markWoven() }
-
-// Wait for peers to be reconciled (Announce exchange must complete).
-host.peers.first { it.size == 2 }
-
-host.broadcast(byteArrayOf(5))
-
-val received = joiner.incoming.take(1).toList()
-assertEquals(1, received.size, "exactly one delivery despite two plies carrying it")
-assertEquals(5, received.single().payload.single())
 ```
+{ src="../../kuilt-conformance/src/commonTest/kotlin/us/tractat/kuilt/conformance/CompositeMultiPlyTest.kt" include-symbol="frameOverTwoSharedPliesIsDeliveredExactlyOnce" }
 
 (`makeLoom` builds a `CompositeLoom` over the two plies with an
 `UnconfinedTestDispatcher`; `DelayedWovenLoom` lets the test drive each ply's
@@ -84,32 +62,9 @@ Tear one ply and a peer still reachable on another stays present — the aggrega
 stays `Woven` and `peers` does not flap. Only the *last* surviving ply tearing
 drives the session `Torn`.
 
-<!-- verbatim from kuilt-conformance/src/commonTest/kotlin/us/tractat/kuilt/conformance/CompositeMultiPlyTest.kt#onePlyTearingDoesNotRemoveAPeerStillOnAnother -->
 ```kotlin
-// Source: https://github.com/tractat-us/kuilt/blob/main/kuilt-conformance/src/commonTest/kotlin/us/tractat/kuilt/conformance/CompositeMultiPlyTest.kt
-// Test: onePlyTearingDoesNotRemoveAPeerStillOnAnother
-val plyA = DelayedWovenLoom()
-val plyB = DelayedWovenLoom()
-val loom = makeLoom(PlyId("a") to plyA, PlyId("b") to plyB)
-val host = loom.host(Pattern("host"))
-val joiner = loom.join(InMemoryTag("join"))
-
-plyA.wovenSeams.forEach { it.markWoven() }
-plyB.wovenSeams.forEach { it.markWoven() }
-
-// Wait for both peers to be fully reconciled on both plies.
-val peers = host.peers.first { it.size == 2 }
-assertEquals(2, peers.size)
-
-// Tear the joiner's plyB link; the joiner is still reachable on plyA.
-// plyB.wovenSeams contains seams for both host and joiner. Close the joiner's
-// (the second one weaved on plyB).
-plyB.wovenSeams.last().close(CloseReason.RemoteRequested)
-
-// Membership must stay at 2 (no flap) and aggregate must stay Woven.
-assertEquals(2, host.peers.value.size, "joiner still reachable via plyA")
-assertIs<SeamState.Woven>(host.state.value, "aggregate stays Woven when one ply tears")
 ```
+{ src="../../kuilt-conformance/src/commonTest/kotlin/us/tractat/kuilt/conformance/CompositeMultiPlyTest.kt" include-symbol="onePlyTearingDoesNotRemoveAPeerStillOnAnother" }
 
 ## Attaching and detaching plies live
 

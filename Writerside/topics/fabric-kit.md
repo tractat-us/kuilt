@@ -61,19 +61,9 @@ loops, never a substitute for mutual exclusion. Production passes a real
 dispatcher; tests pass one derived from the test scheduler. Woven-at-construction
 and delivery from the remote, proven by the contract test:
 
-<!-- verbatim from kuilt-core/src/commonTest/kotlin/us/tractat/kuilt/core/fabric/LinkSeamTest.kt#wovenAtConstructionAndDeliversFromRemote -->
 ```kotlin
-// Source: https://github.com/tractat-us/kuilt/blob/main/kuilt-core/src/commonTest/kotlin/us/tractat/kuilt/core/fabric/LinkSeamTest.kt
-// Test: wovenAtConstructionAndDeliversFromRemote
-val (mine, theirs) = connPair()
-val seam = identified(mine, self, remote, UnconfinedTestDispatcher(testScheduler))
-assertIs<SeamState.Woven>(seam.state.value)
-assertEquals(setOf(self, remote), seam.peers.value)
-theirs.send(byteArrayOf(9))
-val swatch = seam.incoming.first()
-assertContentEquals(byteArrayOf(9), swatch.payload)
-assertEquals(remote, swatch.sender)
 ```
+{ src="../../kuilt-core/src/commonTest/kotlin/us/tractat/kuilt/core/fabric/LinkSeamTest.kt" include-symbol="wovenAtConstructionAndDeliversFromRemote" }
 
 (`connPair()` is a test helper that returns the two ends of an in-memory `Conn`;
 production supplies a real link.)
@@ -95,39 +85,16 @@ val mesh: Mesh = meshSeam(selfId = me, conns = listOf(connToB, connToC), dispatc
 `Seam` plus `addLink`). Each peer's roster includes itself and every reachable
 remote:
 
-<!-- verbatim from kuilt-conformance/src/commonMain/kotlin/us/tractat/kuilt/conformance/MeshConformanceSuite.kt#eachPeerSeesMeshSize -->
 ```kotlin
-// Source: https://github.com/tractat-us/kuilt/blob/main/kuilt-conformance/src/commonMain/kotlin/us/tractat/kuilt/conformance/MeshConformanceSuite.kt
-// Test: eachPeerSeesMeshSize
-val seams = newMeshOfSize(3)
-seams.forEach { seam ->
-    val allPeers = seam.peers.value
-    assertEquals(3, allPeers.size, "each peer must see all 3 peers (including self); got $allPeers on ${seam.selfId}")
-    assertTrue(seam.selfId in allPeers, "selfId must be in peers")
-}
 ```
+{ src="../../kuilt-conformance/src/commonMain/kotlin/us/tractat/kuilt/conformance/MeshConformanceSuite.kt" include-symbol="eachPeerSeesMeshSize" }
 
 A `broadcast` from any peer reaches every other peer, stamped with the
 broadcaster as `sender`:
 
-<!-- verbatim from kuilt-conformance/src/commonMain/kotlin/us/tractat/kuilt/conformance/MeshConformanceSuite.kt#broadcastReachesAllPeers -->
 ```kotlin
-// Source: https://github.com/tractat-us/kuilt/blob/main/kuilt-conformance/src/commonMain/kotlin/us/tractat/kuilt/conformance/MeshConformanceSuite.kt
-// Test: broadcastReachesAllPeers
-val seams = newMeshOfSize(3)
-coroutineScope {
-    val receivers = seams.drop(1).map { seam ->
-        async { seam.incoming.first() }
-    }
-    val payload = byteArrayOf(42, 43)
-    seams[0].broadcast(payload)
-    receivers.forEach { deferred ->
-        val swatch = deferred.await()
-        assertTrue(swatch.payload.contentEquals(payload), "payload must match")
-        assertEquals(seams[0].selfId, swatch.sender, "sender must be the broadcaster")
-    }
-}
 ```
+{ src="../../kuilt-conformance/src/commonMain/kotlin/us/tractat/kuilt/conformance/MeshConformanceSuite.kt" include-symbol="broadcastReachesAllPeers" }
 
 (`newMeshOfSize(n)` is the conformance harness that builds an `n`-peer in-memory
 mesh and returns one `Seam` per peer. Any mesh binding proves itself by

@@ -23,59 +23,17 @@ replicator.state.collect { counter -> println(counter.value) }
 
 ## Two-peer GCounter convergence
 
-<!-- verbatim from kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/replicator/SeamReplicatorTest.kt#twoPeerGCounterConverges -->
 ```kotlin
-// Source: https://github.com/tractat-us/kuilt/blob/main/kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/replicator/SeamReplicatorTest.kt
-// Test: twoPeerGCounterConverges
-runTest(UnconfinedTestDispatcher()) {
-    val loom = InMemoryLoom()
-    val seamA = loom.host(Pattern("test"))
-    val seamB = loom.join(InMemoryTag("b"))
-
-    val repA = gcounterReplicator(seamA, backgroundScope)
-    val repB = gcounterReplicator(seamB, backgroundScope)
-
-    repA.apply(repA.state.value.inc(repA.replica, 3L))
-    repA.apply(repA.state.value.inc(repA.replica, 2L))
-    repB.apply(repB.state.value.inc(repB.replica, 4L))
-
-    testScheduler.advanceUntilIdle()
-
-    assertEquals(9L, repA.state.value.value)
-    assertEquals(9L, repB.state.value.value)
-}
 ```
+{ src="../../kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/replicator/SeamReplicatorTest.kt" include-symbol="twoPeerGCounterConverges" }
 
 ## Late-joiner full-state sync
 
 When a peer joins after others have accumulated state, `SeamReplicator` sends a `FullState` message rather than replaying the delta history. The late joiner converges in one round-trip:
 
-<!-- verbatim from kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/replicator/SeamReplicatorTest.kt#lateJoinerReceivesFullState -->
 ```kotlin
-// Source: https://github.com/tractat-us/kuilt/blob/main/kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/replicator/SeamReplicatorTest.kt
-// Test: lateJoinerReceivesFullState
-runTest(UnconfinedTestDispatcher()) {
-    val loom = InMemoryLoom()
-    val seamA = loom.host(Pattern("test"))
-    val seamB = loom.join(InMemoryTag("b"))
-
-    val repA = gcounterReplicator(seamA, backgroundScope)
-    val repB = gcounterReplicator(seamB, backgroundScope)
-
-    repA.apply(repA.state.value.inc(repA.replica, 10L))
-    repB.apply(repB.state.value.inc(repB.replica, 5L))
-    testScheduler.advanceUntilIdle()
-
-    // C joins after A and B have already accumulated state.
-    val seamC = loom.join(InMemoryTag("c"))
-    val repC = gcounterReplicator(seamC, backgroundScope)
-
-    testScheduler.advanceUntilIdle()
-
-    assertEquals(15L, repA.state.value.value)
-    assertEquals(15L, repC.state.value.value)
-}
 ```
+{ src="../../kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/replicator/SeamReplicatorTest.kt" include-symbol="lateJoinerReceivesFullState" }
 
 ## Multiplexing multiple replicators over one Seam
 
