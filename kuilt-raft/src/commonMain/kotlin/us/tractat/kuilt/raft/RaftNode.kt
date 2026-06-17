@@ -96,6 +96,10 @@ import us.tractat.kuilt.raft.internal.RaftEngine
  * Obtain an instance via [CoroutineScope.raftNode]. The node starts running
  * immediately and remains active until [close] is called or the owning
  * [CoroutineScope] is cancelled.
+ *
+ * **Testing multi-node clusters?** Use `MultiNodeRaftSim` from `:kuilt-raft-test` — it handles
+ * the ceremony (in-process network, per-node seeded [RaftConfig.random] for symmetry-breaking,
+ * child scopes on `backgroundScope`, bounded await helpers) so you don't hand-roll it per test.
  */
 public interface RaftNode {
     /**
