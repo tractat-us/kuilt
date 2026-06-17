@@ -47,8 +47,9 @@ import kotlin.coroutines.CoroutineContext
  * map `(plyId, transportId) → compositeId`.
  *
  * **Send:** [broadcast] wraps the payload in a [PlyFrame.Data] envelope and sends
- * over every live, non-torn ply. [sendTo] resolves the composite id to a
- * `(ply, transportId)` in send-preference order.
+ * over every live, non-torn ply. [sendTo] resolves the composite id to every
+ * reachable `(ply, transportId)` in send-preference order and tries them in turn,
+ * falling through to the next when a ply tears mid-send.
  *
  * **Receive:** Inbound [PlyFrame.Data] frames are de-duplicated and reordered per
  * origin by a [PlyInboundGate]; application payloads emerge as [Swatch] values.
@@ -253,26 +254,34 @@ internal class CompositeSeam(
     override suspend fun sendTo(peer: PeerId, payload: ByteArray) {
         check(state.value !is SeamState.Torn) { "seam is Torn" }
         val bytes = PlyFrame.encode(PlyFrame.Data(selfId, outSeq.getAndIncrement(), payload))
-        // Resolve (ply, transportId) in send-preference order under the lock; send OUTSIDE it.
-        val resolved = lock.withLock { resolveSendTarget(peer) }
-        if (resolved == null) throw PeerNotConnected(peer)
-        val (handle, transportId) = resolved
-        handle.seam.sendTo(transportId, bytes)
+        // Resolve every (ply, transportId) that can reach `peer`, in send-preference order under the
+        // lock; send OUTSIDE it. A candidate can tear between the resolve and the send (the Seam
+        // contract throws on a Torn send) — the point of bonding plies is that one ply tearing must
+        // not fail a sendTo another ply can carry, so fall through to the next candidate (#542).
+        val candidates = lock.withLock { resolveSendTargets(peer) }
+        for ((handle, transportId) in candidates) {
+            val sent = runCatchingCancellable {
+                handle.seam.sendTo(transportId, bytes)
+                true
+            }.getOrDefault(false)
+            if (sent) return
+        }
+        throw PeerNotConnected(peer)
     }
 
-    /** Find the most-preferred live ply that can reach [peer]. Must be called under [lock]. */
-    private fun resolveSendTarget(peer: PeerId): Pair<PlyHandle, PeerId>? {
-        for ((plyId, handle) in live) {
-            if (handle.seam.state.value is SeamState.Torn) continue
-            val transportId = idMap.entries
-                .firstOrNull { (k, v) -> k.first == plyId && v == peer }
-                ?.key?.second
-            if (transportId != null && transportId in handle.seam.peers.value) {
-                return handle to transportId
+    /** Every live, non-torn ply that can reach [peer], in send-preference order. Call under [lock]. */
+    private fun resolveSendTargets(peer: PeerId): List<Pair<PlyHandle, PeerId>> =
+        buildList {
+            for ((plyId, handle) in live) {
+                if (handle.seam.state.value is SeamState.Torn) continue
+                val transportId = idMap.entries
+                    .firstOrNull { (k, v) -> k.first == plyId && v == peer }
+                    ?.key?.second
+                if (transportId != null && transportId in handle.seam.peers.value) {
+                    add(handle to transportId)
+                }
             }
         }
-        return null
-    }
 
     override suspend fun close(reason: CloseReason) {
         // Single-shot: only the first caller publishes Torn and tears down.
