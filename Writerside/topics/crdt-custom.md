@@ -43,7 +43,10 @@ val next: GCounter = counter.piece(delta)        // apply it
 replicator.apply(Patch(delta))
 ```
 
-## Minimal example
+## Your custom CRDT
+
+Start with a tiny type whose merge rule is obvious. `MaxInt` keeps the highest
+value seen so far, so every replica converges to the same answer.
 
 ```kotlin
 @Serializable
@@ -67,6 +70,35 @@ val replicator = SeamReplicator(
 replicator.apply(Patch(MaxInt(42)))
 ```
 
+## Tiny tutorial: using dots
+
+When your type needs add/remove behavior with causality (for example, “remove
+this item unless another peer added it concurrently”), build on **dots**.
+
+A dot is a unique event id: `(replicaId, counter)`. You assign fresh dots when
+you add data, track seen dots in `DotContext`, and let merge rules decide what
+survives.
+
+```kotlin
+// Conceptual sketch: one value tracked by dots
+@Serializable
+data class PresenceByDot(
+    val state: Causal<DotSet>
+) : Quilted<PresenceByDot> {
+    override fun piece(other: PresenceByDot): PresenceByDot =
+        PresenceByDot(state.piece(other.state))
+}
+
+// add: mint a fresh dot and put it in the store/context
+// remove: move seen dots into context so future merges can drop them
+```
+
+You usually do not need to start this low. Prefer higher-level types first
+(`ORSet`, `MVRegister`, `ORMap`), then reach for dots when you are designing a
+new structure with custom causal semantics.
+
+For the causal model and working tests, see [Causal primitives](crdt-causal.md).
+
 ## Conformance laws
 
 Test your implementation against the three laws before wiring it into a
@@ -83,3 +115,12 @@ fun <S : Quilted<S>> checkLaws(a: S, b: S, c: S) {
     check(a.piece(b).piece(c) == a.piece(b.piece(c)))
 }
 ```
+
+## External CRDT references
+
+If you want deeper background while designing custom types, these are solid
+starting points:
+
+- [A comprehensive study of Convergent and Commutative Replicated Data Types (Shapiro et al., 2011)](https://hal.inria.fr/inria-00555588/document)
+- [CRDTs website and bibliography](https://crdt.tech/)
+- [Riak Data Types: practical CRDT design notes](https://docs.riak.com/riak/kv/latest/developing/data-types/index.html)
