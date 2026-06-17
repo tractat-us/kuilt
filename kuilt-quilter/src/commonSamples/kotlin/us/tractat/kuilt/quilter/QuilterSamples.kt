@@ -208,3 +208,44 @@ internal fun sampleRgaChatReplicator() = runTest(
     assertEquals(2, aliceChat.state.value.toList().size)
 }
 
+// ── Doc-alias samples (camelCase mirrors of backtick-named test fns) ──────────
+
+/**
+ * Live vote tally over two peers using [PNCounter] + [Quilter].
+ *
+ * Each peer owns its own [ReplicaId] slot: increments record upvotes, decrements
+ * record downvotes. [Quilter] broadcasts deltas automatically; both replicas
+ * converge to the same net count regardless of which peer applied which vote.
+ *
+ * Alias for the `upvotes and downvotes from two peers converge to the correct net tally`
+ * test in `VoteTallyTest` — the backtick name can't be an `include-symbol` target.
+ */
+@Suppress("unused")
+internal fun sampleVoteTally() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    val loom = InMemoryLoom()
+    val seamAlice = loom.host(Pattern("vote-tally"))
+    val seamBob = loom.join(InMemoryTag("bob"))
+
+    val cfg = QuilterConfig(expectVirtualTime = true)
+    val aliceTally = Quilter(seamAlice, PNCounter.ZERO, PNCounter.serializer(), backgroundScope, config = cfg)
+    val bobTally = Quilter(seamBob, PNCounter.ZERO, PNCounter.serializer(), backgroundScope, config = cfg)
+
+    kotlinx.coroutines.delay(1) // let collectors subscribe under StandardTestDispatcher
+
+    // Alice casts 3 upvotes for the post.
+    aliceTally.mutate { it.increment(aliceTally.replica, 3L) }
+
+    // Bob casts 1 upvote and then 1 downvote (changed his mind).
+    bobTally.mutate { it.increment(bobTally.replica, 1L) }
+    bobTally.mutate { it.decrement(bobTally.replica, 1L) }
+
+    // Alice adds another upvote concurrently.
+    aliceTally.mutate { it.increment(aliceTally.replica, 2L) }
+
+    kotlinx.coroutines.delay(10) // advance virtual time so all delta broadcasts deliver
+
+    // Both replicas converge to the same net tally: alice +3+2=5, bob +1−1=0 → total 5.
+    assertEquals(5L, aliceTally.state.value.value)
+    assertEquals(aliceTally.state.value.value, bobTally.state.value.value)
+}
+

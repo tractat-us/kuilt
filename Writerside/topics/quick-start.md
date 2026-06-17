@@ -7,24 +7,9 @@ care about transport details.
 
 ## Host a session and broadcast a frame
 
-<!-- verbatim from kuilt-core/src/commonTest/kotlin/us/tractat/kuilt/core/InMemoryLoomTest.kt#broadcast from A causes B to receive the frame -->
-
 ```kotlin
-// Source: https://github.com/tractat-us/kuilt/blob/main/kuilt-core/src/commonTest/kotlin/us/tractat/kuilt/core/InMemoryLoomTest.kt
-// Test: `broadcast from A causes B to receive the frame`
-runTest {
-    val factory = InMemoryLoom()
-    val a = factory.host(Pattern("Alice"))
-    val b = factory.join(InMemoryTag("Bob"))
-
-    val receivedByB = async { b.incoming.first() }
-
-    a.broadcast(byteArrayOf(1, 2, 3))
-
-    val frame = receivedByB.await()
-    assertEquals(Swatch(byteArrayOf(1, 2, 3), sender = a.selfId, sequence = 1L), frame)
-}
 ```
+{ src="../../kuilt-core/src/commonSamples/kotlin/us/tractat/kuilt/core/LoomSamples.kt" include-symbol="sampleBroadcastReceived" }
 
 Three things to notice:
 
@@ -35,17 +20,8 @@ Three things to notice:
 ## Membership: peers join and leave
 
 ```kotlin
-// Source: https://github.com/tractat-us/kuilt/blob/main/kuilt-core/src/commonTest/kotlin/us/tractat/kuilt/core/InMemoryLoomTest.kt
-// Test: `join after open causes both peers to appear in each other's peer set`
-runTest {
-    val factory = InMemoryLoom()
-    val host = factory.host(Pattern("Alice"))
-    val joiner = factory.join(InMemoryTag("Bob"))
-
-    assertEquals(setOf(host.selfId, joiner.selfId), host.peers.value)
-    assertEquals(setOf(host.selfId, joiner.selfId), joiner.peers.value)
-}
 ```
+{ src="../../kuilt-core/src/commonSamples/kotlin/us/tractat/kuilt/core/LoomSamples.kt" include-symbol="sampleJoinPeerSet" }
 
 `peers` is a `StateFlow<Set<PeerId>>`. Both host and joiner see the same set — peer symmetry in action. When a peer closes, it disappears from every other peer's `peers` atomically.
 

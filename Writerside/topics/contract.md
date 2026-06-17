@@ -101,20 +101,8 @@ No text-frame variant. The wire layer never interprets the bytes — that is the
 Sending peers leave `sender` null and `sequence` zero. The receiving `Seam` stamps them:
 
 ```kotlin
-// Source: https://github.com/tractat-us/kuilt/blob/main/kuilt-core/src/commonTest/kotlin/us/tractat/kuilt/core/InMemoryLoomTest.kt
-// Test: `Swatch sender field on received broadcast equals sender PeerId`
-runTest {
-    val factory = InMemoryLoom()
-    val a = factory.host(Pattern("Alice"))
-    val b = factory.join(InMemoryTag("Bob"))
-
-    val deferred = async { b.incoming.first() }
-    a.broadcast(byteArrayOf(0))
-    val frame = deferred.await()
-
-    assertEquals(a.selfId, frame.sender)
-}
 ```
+{ src="../../kuilt-core/src/commonSamples/kotlin/us/tractat/kuilt/core/LoomSamples.kt" include-symbol="sampleSwatchSenderField" }
 
 ### No client/server split
 
@@ -125,16 +113,8 @@ A 2-peer WebSocket connection is the degenerate `peers.size == 2` case of the sy
 Calling `close()` twice must not throw:
 
 ```kotlin
-// Source: https://github.com/tractat-us/kuilt/blob/main/kuilt-core/src/commonTest/kotlin/us/tractat/kuilt/core/InMemoryLoomTest.kt
-// Test: `close is idempotent — calling twice does not throw`
-runTest {
-    val factory = InMemoryLoom()
-    val link = factory.host(Pattern("Alice"))
-
-    link.close()
-    link.close() // must not throw
-}
 ```
+{ src="../../kuilt-core/src/commonSamples/kotlin/us/tractat/kuilt/core/LoomSamples.kt" include-symbol="sampleCloseIsIdempotent" }
 
 When a peer closes, it is removed from every other peer's `peers` set atomically and sending to it becomes an error.
 
@@ -143,43 +123,13 @@ When a peer closes, it is removed from every other peer's `peers` set atomically
 `peers: StateFlow<Set<PeerId>>` always includes `selfId`. When peers join and leave, the flow emits the updated set on every `Seam` in the session:
 
 ```kotlin
-// Source: https://github.com/tractat-us/kuilt/blob/main/kuilt-core/src/commonTest/kotlin/us/tractat/kuilt/core/InMemoryLoomTest.kt
-// Test: `close removes the closing peer from every other peer's peers set`
-runTest {
-    val factory = InMemoryLoom()
-    val a = factory.host(Pattern("Alice"))
-    val b = factory.join(InMemoryTag("Bob"))
-    val c = factory.join(InMemoryTag("Charlie"))
-
-    b.close()
-
-    val expected = setOf(a.selfId, c.selfId)
-    assertEquals(expected, a.peers.value)
-    assertEquals(expected, c.peers.value)
-}
 ```
+{ src="../../kuilt-core/src/commonSamples/kotlin/us/tractat/kuilt/core/LoomSamples.kt" include-symbol="sampleCloseRemovesPeer" }
 
 ## Sequence numbers
 
 The receiving `Seam` assigns a monotonically increasing sequence number per receiver. Sequence numbers are receiver-local — A and B have independent counters:
 
 ```kotlin
-// Source: https://github.com/tractat-us/kuilt/blob/main/kuilt-core/src/commonTest/kotlin/us/tractat/kuilt/core/InMemoryLoomTest.kt
-// Test: `sequence on received frames is monotonically increasing starting from 1`
-runTest {
-    val factory = InMemoryLoom()
-    val a = factory.host(Pattern("Alice"))
-    val b = factory.join(InMemoryTag("Bob"))
-
-    val frames = async { b.incoming.take(3).toList() }
-
-    a.broadcast(byteArrayOf(1))
-    a.broadcast(byteArrayOf(2))
-    a.broadcast(byteArrayOf(3))
-
-    val received = frames.await()
-    assertEquals(1L, received[0].sequence)
-    assertEquals(2L, received[1].sequence)
-    assertEquals(3L, received[2].sequence)
-}
 ```
+{ src="../../kuilt-core/src/commonSamples/kotlin/us/tractat/kuilt/core/LoomSamples.kt" include-symbol="sampleSequenceMonotonicallyIncreasing" }
