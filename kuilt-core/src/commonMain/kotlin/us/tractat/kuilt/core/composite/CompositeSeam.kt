@@ -244,7 +244,10 @@ internal class CompositeSeam(
         val targets = lock.withLock { live.values.toList() }
         targets
             .filter { it.seam.state.value !is SeamState.Torn }
-            .forEach { it.seam.broadcast(bytes) }
+            // Best-effort per ply: a ply can tear between the filter and the send (the Seam
+            // contract throws on a Torn send), and the point of bonding plies is that one
+            // tearing must not fail a broadcast another ply can carry (#542).
+            .forEach { runCatchingCancellable { it.seam.broadcast(bytes) } }
     }
 
     override suspend fun sendTo(peer: PeerId, payload: ByteArray) {
