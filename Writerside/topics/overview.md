@@ -15,7 +15,7 @@ The library has three distinct value propositions:
   transport. Your application layer is identical whether the connection is WebSocket,
   Bluetooth, or WebRTC; swap the loom and nothing else changes.
 
-- **CRDTs** — data structure building blocks you can use in isolation, with or without
+- **Conflict-free Replicated Data Types** — CRDTs are data structure building blocks you can use in isolation, with or without
   the network layer. `LWWMap`, `ORSet`, `JsonCrdt`, and the rest are plain serializable
   value types. Add `SeamReplicator` when you want live delta propagation; leave it out
   when your transport is HTTP or a message queue.
