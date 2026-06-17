@@ -9,8 +9,14 @@ dependencies {
     testImplementation(project(":kuilt-raft"))
     testImplementation(project(":kuilt-crdt"))
     testImplementation(project(":kuilt-core"))
+    testImplementation(project(":kuilt-session"))
+    testImplementation(project(":kuilt-websocket"))
     testImplementation(libs.kotlinx.coroutines.test)
     testImplementation(libs.kotlin.test)
+    testImplementation(libs.ktor.serverTestHost)
+    testImplementation(libs.ktor.serverWebsockets)
+    testImplementation(libs.ktor.serverNetty)
+    testImplementation(libs.ktor.client.websockets)
     testRuntimeOnly(libs.logback)
 }
 
