@@ -27,6 +27,7 @@ import us.tractat.kuilt.raft.RaftConfig
 import us.tractat.kuilt.raft.RaftNode
 import us.tractat.kuilt.raft.RaftRole
 import us.tractat.kuilt.raft.raftNode
+import us.tractat.kuilt.session.SeamRoomFactory
 import us.tractat.kuilt.session.partition.EndpointSelector
 import us.tractat.kuilt.session.partition.RoundRobinEndpointSelector
 import us.tractat.kuilt.session.partition.ServerClusterReconnect
@@ -188,7 +189,7 @@ public fun CoroutineScope.clusterClient(
     clusterConfig: ClusterConfig,
     raftConfig: RaftConfig,
     clientId: ClientId? = null,
-    @Suppress("UNUSED_PARAMETER") clock: () -> Instant,
+    clock: () -> Instant,
 ): ClusterClient {
     val reconnect = clusterEndpoints.toReconnect()
     return buildClusterClient(
@@ -199,6 +200,7 @@ public fun CoroutineScope.clusterClient(
         clusterConfig = clusterConfig,
         raftConfig = raftConfig,
         clientId = clientId,
+        clock = clock,
     )
 }
 
@@ -212,8 +214,19 @@ public fun CoroutineScope.clusterClient(
  * [ManagedRaftTransport] starts with no backing [us.tractat.kuilt.core.Seam] — [peers] is
  * empty and [us.tractat.kuilt.raft.RaftTransport.sendTo] drops frames silently until
  * [ManagedRaftTransport.swapSeam] is first called. The [RaftNode] is constructed immediately
- * (non-suspend), then the reconnect loop (launched in [scope]) performs the first `loom.join()`
- * and installs the Seam.
+ * (non-suspend), then the reconnect loop (launched in [scope]) performs the first
+ * `SeamRoomFactory.join()` and installs the resulting `room.channel("raft")` seam.
+ *
+ * ## Room-level join
+ *
+ * Each connect uses [SeamRoomFactory] so the client participates in the admit handshake
+ * expected by [us.tractat.kuilt.websocket.KtorRoomHost] / [us.tractat.kuilt.cluster.ServerCluster].
+ * The Raft transport rides on [Room.channel] `"raft"`, which provides admit-gated message
+ * delivery. On transport tear [SeamState.Torn] propagates from the underlying seam through
+ * to the channel seam, triggering the reconnect loop.
+ *
+ * Cross-server resume is always [us.tractat.kuilt.session.partition.ResumeResult.WindowClosed]
+ * per #532 so fresh-join (no resume attempt) is used on every reconnect.
  */
 internal fun buildClusterClient(
     scope: CoroutineScope,
@@ -223,6 +236,7 @@ internal fun buildClusterClient(
     clusterConfig: ClusterConfig,
     raftConfig: RaftConfig,
     clientId: ClientId?,
+    clock: () -> Instant,
 ): ClusterClient {
     val transport = ManagedRaftTransport(scope = scope, selfId = clientNodeId)
     val raftNode = scope.raftNode(
@@ -233,20 +247,21 @@ internal fun buildClusterClient(
         clientId = clientId,
     )
 
-    // Reconnect loop: connect → install → await tear → rotate → re-join → swap → repeat.
+    // Reconnect loop: join (Room) → install channel → await tear → rotate → re-join → swap → repeat.
     scope.launch {
-        var currentSeam = reconnect.connect(loom)
+        val factory = SeamRoomFactory(loom = loom, scope = scope, clock = clock)
+        var currentSeam = roomChannel(factory, reconnect)
         transport.swapSeam(currentSeam)
 
         while (true) {
-            // Wait for the current Seam to tear.
+            // Wait for the current channel seam to tear (propagated from the underlying WS seam).
             currentSeam.state.first { it is SeamState.Torn }
 
             // Rotate to the next endpoint. Cross-server resume is always WindowClosed
             // per #532 so we skip the resume attempt and always do a fresh join.
             reconnect.onTransportTear()
 
-            val newSeam = reconnect.connect(loom)
+            val newSeam = roomChannel(factory, reconnect)
             transport.swapSeam(newSeam)
             currentSeam = newSeam
         }
@@ -254,3 +269,14 @@ internal fun buildClusterClient(
 
     return ClusterClient(raftNode)
 }
+
+/**
+ * Join the current [reconnect] endpoint via [factory] and return the `"raft"` channel seam.
+ *
+ * [SeamRoomFactory.join] performs the admit handshake required by [us.tractat.kuilt.websocket.KtorRoomHost].
+ * Raft messages ride on the `"raft"` sub-channel, keeping them isolated from session-layer frames.
+ */
+private suspend fun roomChannel(
+    factory: SeamRoomFactory,
+    reconnect: ServerClusterReconnect,
+) = factory.join(reconnect.currentEndpoint()).channel("raft")
