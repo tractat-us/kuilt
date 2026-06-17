@@ -146,6 +146,28 @@ tests as the `MDNS_MULTICAST_TESTS` env var (see `kuilt-mdns/build.gradle.kts`).
   loops, which switched to it in #383; `UnconfinedTestDispatcher(testScheduler)` is
   fine only where eager-inline ordering doesn't matter. See
   `docs/testing-coroutine-determinism.md`.
+  - **Multi-node / consensus tests run through the canonical simulation harness — never hand-roll
+    one.** A test that stands up more than one `RaftNode` (or any cluster of timer-driven peers)
+    under virtual time MUST drive them through the shared harness — `RaftSimulation` +
+    `InMemoryRaftNetwork` + `raftRunTest` in `:kuilt-raft`'s commonTest, or the published
+    `MultiNodeRaftSim` in `:kuilt-raft-test` for tests outside that module (e.g. `examples/`,
+    `:kuilt-cluster`). **Do not write your own cluster network or `while (true) { delay(1) }`
+    leader-wait** — that is how a non-converging cluster spins the scheduler CPU-bound and
+    **starves its own virtual timeout: the test HANGS, it does not fail** (a hand-rolled done-when
+    test once ran ~90 min this way before being killed). The harness encodes the only setup that
+    converges and fails fast:
+    - **`runTest(StandardTestDispatcher(), timeout = 5.seconds)`** — a *tight* timeout, never the
+      60 s default. Paired with the harness's `dumpState()`, a hang becomes a fast, legible failure.
+    - **Bounded `await*` / `settle()` only — NEVER `advanceUntilIdle()`.** Election/heartbeat timers
+      re-arm forever, so the idle state is never reached; advance virtual time in bounded steps.
+    - **Per-node seeded election RNG** so timeouts differ and a leader actually wins (symmetry-
+      breaking); seed every `RaftConfig.random` — never an unseeded `Random` in a test.
+    - Node coroutines live on `TestScope.backgroundScope` child scopes so the infinite election/
+      heartbeat loops cancel cleanly at teardown (no `UncompletedCoroutinesError`).
+    When running such a test from an agent, **fence the command too**: `timeout 90 ./gradlew
+    :<module>:test --tests "<oneTest>"`, one test at a time. **A hang/timeout is a STOP-and-re-plan
+    signal** — `jstack` the test JVM, name the spinning test, fix convergence; do NOT widen the
+    timeout and retry.
   - **No real-dispatcher defaults.** A factory/helper that owns a scope makes the
     `scope`/dispatcher a **required** parameter — never `= CoroutineScope(Dispatchers.Unconfined)`
     or similar. A default real dispatcher silently decouples the work from `runTest`'s
