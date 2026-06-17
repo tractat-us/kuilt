@@ -12,19 +12,13 @@ A grow-only set. Elements can be added but never removed. Merge is set union.
 
 **Add and merge:**
 
-<!-- verbatim from kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/GSetTest.kt#addProducesADeltaThatAddsAnElement / mergeIsUnion -->
 ```kotlin
-// Source: https://github.com/tractat-us/kuilt/blob/main/kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/GSetTest.kt
-// Tests: addProducesADeltaThatAddsAnElement / mergeIsUnion
-val empty = GSet.empty<String>()
-val delta = empty.add("x")
-val next = empty.piece(delta)
-assertTrue(next.contains("x"))
-
-val left = GSet.of("x", "y")
-val right = GSet.of("y", "z")
-assertEquals(setOf("x", "y", "z"), left.piece(right).elements)
 ```
+{ src="../../kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/GSetTest.kt" include-symbol="addProducesADeltaThatAddsAnElement" }
+
+```kotlin
+```
+{ src="../../kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/GSetTest.kt" include-symbol="mergeIsUnion" }
 
 ## When to use
 

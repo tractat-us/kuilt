@@ -22,55 +22,27 @@ A key added concurrently with a remove survives — the add wins. When two repli
 
 **Set and read a scalar:**
 
-<!-- verbatim from kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/JsonCrdtTest.kt#setThenGet -->
 ```kotlin
-// Source: https://github.com/tractat-us/kuilt/blob/main/kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/JsonCrdtTest.kt
-// Test: setThenGet
-val doc = JsonCrdt.empty(a).set("name", str("Alice"))
-assertIs<JsonNode.Leaf>(doc["name"])
-assertEquals(setOf(JsonValue.Str("Alice")), (doc["name"] as JsonNode.Leaf).register.values)
 ```
+{ src="../../kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/JsonCrdtTest.kt" include-symbol="setThenGet" }
 
 **Concurrent edits to a nested object both survive:**
 
-<!-- verbatim from kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/JsonCrdtTest.kt#nestedObjectMerge -->
 ```kotlin
-// Source: https://github.com/tractat-us/kuilt/blob/main/kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/JsonCrdtTest.kt
-// Test: nestedObjectMerge
-val base = JsonCrdt.empty(a).set("profile", JsonNode.Object(ORMap.empty()))
-val docA = base.set("profile", obj(a, "name" to str("Alice")))
-val docB = base.withReplica(b).set("profile", obj(b, "age" to num(30.0)))
-val merged = docA.piece(docB)
-val profile = assertIs<JsonNode.Object>(merged["profile"])
-assertEquals(setOf("name", "age"), profile.map.keys)
 ```
+{ src="../../kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/JsonCrdtTest.kt" include-symbol="nestedObjectMerge" }
 
 **A concurrent add wins over a remove:**
 
-<!-- verbatim from kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/JsonCrdtTest.kt#addWinsOverConcurrentRemove -->
 ```kotlin
-// Source: https://github.com/tractat-us/kuilt/blob/main/kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/JsonCrdtTest.kt
-// Test: addWinsOverConcurrentRemove
-val base = JsonCrdt.empty(a).set("x", str("hello"))
-val docA = base.remove("x")
-val docB = base.withReplica(b).set("x", str("world"))
-val merged = docA.piece(docB)
-assertContains(merged.keys, "x")
 ```
+{ src="../../kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/JsonCrdtTest.kt" include-symbol="addWinsOverConcurrentRemove" }
 
 **Concurrent scalar writes surface as a multi-value:**
 
-<!-- verbatim from kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/JsonCrdtTest.kt#concurrentScalarWritesProduceMultiValue -->
 ```kotlin
-// Source: https://github.com/tractat-us/kuilt/blob/main/kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/JsonCrdtTest.kt
-// Test: concurrentScalarWritesProduceMultiValue
-val base = JsonCrdt.empty(a)
-val docA = base.set("flag", JsonNode.Leaf(MVRegister.empty<JsonValue>().set(a, JsonValue.Str("x"))))
-val docB = base.withReplica(b).set("flag", JsonNode.Leaf(MVRegister.empty<JsonValue>().set(b, JsonValue.Str("y"))))
-val merged = docA.piece(docB)
-val leaf = assertIs<JsonNode.Leaf>(merged["flag"])
-assertEquals(setOf(JsonValue.Str("x"), JsonValue.Str("y")), leaf.register.values)
 ```
+{ src="../../kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/JsonCrdtTest.kt" include-symbol="concurrentScalarWritesProduceMultiValue" }
 
 ## When to use
 
