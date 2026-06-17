@@ -34,19 +34,69 @@ problem, not a Raft problem:
 The remaining work is **glue**: get learner-clients onto a cluster Seam, and
 round-robin them across server endpoints when an entry-server tears.
 
+## Topology & connectivity model
+
+The cluster is a **two-tier overlay** — a densely-connected core plus a sparse
+periphery — and naming it that way keeps "good connectivity" precise.
+
+```
+   voter core — complete graph K_m  (consensus lives ENTIRELY here)
+   ┌─────────────────────────────┐
+   │     S1 ──── S2 ──── S3       │   m = 1/3/5  (fault-tolerance dial)
+   │      \      │      /         │   every voter pair linked; leader replicates to all
+   └───────\─────┼─────/──────────┘
+            \    │    /  ╲
+   d=1 ──────C   │   C   C────── d=2   ← attachment degree = the "cross-link" axis
+  (star leaf,    │              (multi-homed: 2 disjoint paths to the core)
+   slice-1 dflt) C
+                 learner periphery — clients forward-to-propose, replicate-to-observe
+```
+
+- **Voter core — a complete graph `K_m`.** The `m` servers (m = 1/3/5) each hold a
+  link to every other voter. Election, quorum, and commitment live here and nowhere
+  else. "Fully connected" is a requirement of the **core only**.
+- **Learner periphery — sparse.** Many clients, each attached to the core by one or
+  more server links, never voting and never counting toward quorum. A complete graph
+  over *clients* would be the O(n²) cost the two-tier split exists to avoid.
+
+**Attachment degree `d` — the cross-link dial.** Each client attaches to the core
+with degree `d` = the number of distinct servers it holds a link to. Formally this
+is the client's **vertex connectivity** to the core: `d` vertex-disjoint attachment
+paths tolerate `d − 1` server removals.
+
+- **`d = 1` — star leaf.** One live link plus a static list of other endpoints to
+  **round-robin** to on tear. Slice 1's default; survives 0 *simultaneous* server
+  failures without a reconnect (it must fail over).
+- **`d > 1` — multi-homed leaf (cross-links).** `d` redundant links, so the client
+  rides out `d − 1` server failures with no reconnect at all. An **optional** later
+  dial (lower failover latency), not committed in slice 1.
+
+**Safety is topology-independent for clients.** Raft safety depends only on the
+voter quorum, so a client's attachment degree — even momentarily `0` during failover
+— can never threaten consistency. Client connectivity is purely an **availability /
+forward-latency** dial, not a correctness one. This is what makes the cross-link
+decision safe to defer: under-provisioning it costs reconnect latency, never wrong
+state.
+
+The two transport shapes in D1 are two ways to realise this periphery: the
+relay-room attaches leaves through a shared hub (logical all-to-all over a sparse
+physical star), the point-to-point star gives each leaf a direct `d = 1` link the
+server relays inward.
+
 ## Decisions
 
 ### D1 — Both transport shapes are in scope, relay-room first
 
-1. **Relay-room (Far) model — slice 1.** Servers run a relay (`KtorRoomHost`); a
-   client connecting to any one relay endpoint is logically a peer on the **shared**
-   cluster Seam, so propose-forwarding already routes it to the leader. Needs only
-   round-robin reconnect glue. *Lands first.*
-2. **Point-to-point star — slice 2.** Each client holds a 2-peer Seam to exactly
-   one server; servers mesh separately. The client's Seam can't address the leader,
-   so the connected server must **relay** the client's raft messages into the
-   cluster — a fabric-level multi-hop relay we don't have yet. Materially bigger;
-   gets its own sub-spec.
+1. **Relay-room (hub-attached periphery) — slice 1.** Servers run a relay
+   (`KtorRoomHost`); a leaf connecting to any one relay endpoint is logically a peer
+   on the **shared** cluster Seam, so propose-forwarding already routes it to the
+   leader. Logical all-to-all over a sparse physical star — needs only round-robin
+   reconnect glue. *Lands first.*
+2. **Point-to-point star (direct `d = 1` attachment) — slice 2.** Each client holds
+   a 2-peer Seam to exactly one server; the voter core meshes separately. The leaf's
+   Seam can't address the leader, so the attached server must **relay** the leaf's
+   raft messages into the core — a fabric-level multi-hop relay we don't have yet.
+   Materially bigger; gets its own sub-spec.
 
 ### D2 — Prove in examples first; extract `:kuilt-cluster` only once the shape is proven
 
