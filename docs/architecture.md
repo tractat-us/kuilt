@@ -353,12 +353,21 @@ connectivity is purely an **availability / forward-latency** dial, not a
 correctness one. Under-provisioning it costs reconnect latency, never wrong
 state.
 
-### Relay-room implementation
+### Point-to-point star implementation
 
-Servers run a `KtorRoomHost` relay. A client connecting to any server endpoint
-is logically a peer on the shared cluster `Seam`, so propose-forwarding routes
-its commands to the current leader without the client needing to know who the
-leader is.
+The `:kuilt-cluster` facade realises the **point-to-point star** (slice 2): the
+voter core meshes separately (in-process `Channel` transports under simulation,
+real WebSocket sockets in the M=3 E2E), and each client holds a strict **2-peer
+`Seam`** to exactly one server via `KtorRoomHost`. The client's Seam cannot
+address the leader, so the attached server **relays** the client's raft messages
+into the core — `LearnerRouter` routes each inbound learner frame to the current
+leader voter, and the client's `ManagedRaftTransport` always sends to its single
+relay peer. This lets a client keep committing through *any* relay endpoint
+regardless of which voter leads (the precondition for failover without moving
+leadership). The *relay-room* shape — where a client is logically a peer on one
+shared cluster `Seam` — is the separate `examples/` demo (slice 1), not this
+facade. See the [star relay sub-spec](superpowers/specs/2026-06-17-star-relay-sub-spec.md)
+for framing/addressing/back-pressure/resume details.
 
 Client onboarding is a `changeMembership` that adds the client as a learner in
 `ClusterConfig.learners`. Learner-set-only changes skip joint consensus — each
