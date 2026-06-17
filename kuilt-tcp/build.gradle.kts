@@ -6,7 +6,7 @@ kotlin {
     sourceSets {
         commonMain.dependencies {
             api(project(":kuilt-core")) // public API returns Loom/Seam — expose the contract transitively
-            api(project(":kuilt-stream")) // framed() adapts the socket's Source/Sink into a Conn
+            api(project(":kuilt-stream")) // framed() adapts the socket's Source/Sink into a Connection
             implementation(libs.kotlinx.coroutines.core)
         }
 

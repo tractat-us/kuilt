@@ -9,11 +9,11 @@ import kotlinx.coroutines.flow.first
  * The minimal SPI a message transport (WebSocket, gRPC bidi stream, Multipeer,
  * Nearby) implements to become a kuilt fabric. Stream transports (TCP) do not
  * implement this directly — they provide a kotlinx-io Source/Sink and use
- * `:kuilt-stream`'s `framed()` to obtain a `Conn`.
+ * `:kuilt-stream`'s `framed()` to obtain a `Connection`.
  *
  * Each frame is a whole message; the link preserves frame boundaries and FIFO order.
  */
-public interface Conn {
+public interface Connection {
     /** Send one whole message. Suspends until the transport accepts it (backpressure). */
     public suspend fun send(frame: ByteArray)
 
@@ -25,4 +25,4 @@ public interface Conn {
 }
 
 /** Await the first inbound frame (the identity preamble). */
-internal suspend fun Conn.firstFrame(): ByteArray = incoming.first()
+internal suspend fun Connection.firstFrame(): ByteArray = incoming.first()

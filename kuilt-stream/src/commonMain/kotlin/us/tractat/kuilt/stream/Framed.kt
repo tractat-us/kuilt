@@ -6,7 +6,7 @@ import kotlinx.io.EOFException
 import kotlinx.io.Sink
 import kotlinx.io.Source
 import kotlinx.io.readByteArray
-import us.tractat.kuilt.core.fabric.Conn
+import us.tractat.kuilt.core.fabric.Connection
 
 /** Default maximum frame size (16 MiB). */
 public const val DEFAULT_MAX_FRAME_SIZE: Int = 16 * 1024 * 1024
@@ -19,7 +19,7 @@ public class FrameTooLargeException(size: Int, max: Int) :
     Exception("frame length $size exceeds max $max")
 
 /**
- * Adapt a kotlinx-io [Source]/[Sink] byte-stream into a message [Conn] using a
+ * Adapt a kotlinx-io [Source]/[Sink] byte-stream into a message [Connection] using a
  * 4-byte big-endian length prefix per frame.
  *
  * - **Framing:** each `send` writes a 4-byte int (big-endian) followed by [frame.size] bytes.
@@ -38,13 +38,13 @@ public fun framed(
     source: Source,
     sink: Sink,
     maxFrameSize: Int = DEFAULT_MAX_FRAME_SIZE,
-): Conn = FramedConn(source, sink, maxFrameSize)
+): Connection = FramedConnection(source, sink, maxFrameSize)
 
-private class FramedConn(
+private class FramedConnection(
     private val source: Source,
     private val sink: Sink,
     private val maxFrameSize: Int,
-) : Conn {
+) : Connection {
     override suspend fun send(frame: ByteArray) {
         require(frame.size <= maxFrameSize) { "frame ${frame.size} exceeds max $maxFrameSize" }
         sink.writeInt(frame.size)

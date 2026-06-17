@@ -28,25 +28,25 @@ import kotlin.coroutines.CoroutineContext
 import kotlin.random.Random
 
 /**
- * A [Seam] over a fully-connected N-peer mesh of point-to-point [Conn]s, with support for
+ * A [Seam] over a fully-connected N-peer mesh of point-to-point [Connection]s, with support for
  * admitting links that arrive after construction.
  *
  * Obtain one from [meshSeam]. Beyond the [Seam] contract it adds [addLink] for dynamic peer-join.
  */
 public interface Mesh : Seam {
     /**
-     * Admit a [Conn] to a peer that dialed in after construction.
+     * Admit a [Connection] to a peer that dialed in after construction.
      *
      * Exchanges the mesh preamble to learn the remote [PeerId], dedups against existing links
      * using the same canonical rule as construction (see [meshSeam]), updates [peers], and
      * launches the link's read loop. Suspends until the preamble exchange completes.
      *
-     * @param conn A fresh, unread [Conn]. The mesh wraps it with [singleCollection] before reading,
-     *   so the preamble read and the read loop share ONE collection of [Conn.incoming] — a cold,
+     * @param conn A fresh, unread [Connection]. The mesh wraps it with [singleCollection] before reading,
+     *   so the preamble read and the read loop share ONE collection of [Connection.incoming] — a cold,
      *   single-collection conn (a stream fabric's `framed()`) works as well as a hot channel-backed
      *   one, exactly as construction does.
      */
-    public suspend fun addLink(conn: Conn)
+    public suspend fun addLink(conn: Connection)
 }
 
 /**
@@ -108,17 +108,17 @@ private fun ByteArray.readInt(offset: Int): Int =
 private fun ByteArray.toHex(): String = joinToString("") { (it.toInt() and 0xff).toString(16).padStart(2, '0') }
 
 /** A handshaked link: the remote peer, its conn, and the canonical link nonce both ends agree on. */
-private class Link(val remoteId: PeerId, val conn: Conn, val linkNonce: String)
+private class Link(val remoteId: PeerId, val conn: Connection, val linkNonce: String)
 
 /**
  * Build a fully-connected N-peer mesh [Seam] from a set of raw point-to-point connections.
  *
- * For each [Conn] in [conns], [meshSeam] exchanges a [MeshHello] preamble (this peer's id plus a
+ * For each [Connection] in [connections], [meshSeam] exchanges a [MeshHello] preamble (this peer's id plus a
  * random per-connection nonce) to learn the remote [PeerId]. Both sides of a link exchange their
- * preamble concurrently, so all exchanges in [conns] run in parallel — this function suspends
+ * preamble concurrently, so all exchanges in [connections] run in parallel — this function suspends
  * until every handshake completes.
  *
- * **Dedup (cross-node agreement):** if two conns resolve the same remote id (duplicate links from
+ * **Dedup (cross-node agreement):** if two connections resolve the same remote id (duplicate links from
  * a simultaneous dial), both ends keep the link with the lexicographically smallest *link nonce* —
  * a canonical, order-independent function of the two per-connection nonces. Because both ends see
  * both nonces, they derive the same survivor and close the same loser, with no coordination. The
@@ -132,11 +132,11 @@ private class Link(val remoteId: PeerId, val conn: Conn, val linkNonce: String)
  * **Dynamic join:** admit a link that arrives later via [Mesh.addLink].
  *
  * @param selfId This peer's identity. Sent in the [MeshHello] preamble on each conn.
- * @param conns Raw [Conn]s to each prospective peer. These must be fresh and unread. Each is
+ * @param connections Raw [Connection]s to each prospective peer. These must be fresh and unread. Each is
  *   wrapped with [singleCollection] before reading, so the preamble read and the per-link read
- *   loop share ONE collection of [Conn.incoming] — a cold, single-collection conn (a stream
+ *   loop share ONE collection of [Connection.incoming] — a cold, single-collection connection (a stream
  *   fabric's `framed()`) works as well as a hot channel-backed one
- *   ([us.tractat.kuilt.test.fabric.connPair]).
+ *   ([us.tractat.kuilt.test.fabric.connectionPair]).
  * @param dispatcher The scope for the per-link `readLoop` coroutines (scheduling only — see the
  *   thread-safety note on the returned seam). Production callers pass `Dispatchers.Default`; test
  *   callers pass a dispatcher derived from the test scheduler so seam internals share the same
@@ -146,12 +146,12 @@ private class Link(val remoteId: PeerId, val conn: Conn, val linkNonce: String)
  */
 public suspend fun meshSeam(
     selfId: PeerId,
-    conns: List<Conn>,
+    connections: List<Connection>,
     dispatcher: CoroutineContext,
     random: Random = Random.Default,
 ): Mesh {
     val links = coroutineScope {
-        conns.map { conn -> async { handshakeLink(selfId, conn, dispatcher, random) } }.awaitAll()
+        connections.map { conn -> async { handshakeLink(selfId, conn, dispatcher, random) } }.awaitAll()
     }
 
     // Dedup duplicate links to the same peer, keeping the canonical survivor on every node.
@@ -174,11 +174,11 @@ public suspend fun meshSeam(
  * Exchange the mesh preamble on [conn] and return the resulting [Link] with its canonical nonce.
  *
  * The conn is wrapped with [singleCollection] before the preamble read, so the read loop launched
- * later collects the SAME single upstream collection — cold, single-collection conns (a stream
+ * later collects the SAME single upstream collection — cold, single-collection connections (a stream
  * fabric's `framed()`) work, not just hot channel-backed ones. The wrapper conn is what the [Link]
  * carries, so dedup/teardown closes and the read loop all operate on it.
  */
-private suspend fun handshakeLink(selfId: PeerId, conn: Conn, dispatcher: CoroutineContext, random: Random): Link {
+private suspend fun handshakeLink(selfId: PeerId, conn: Connection, dispatcher: CoroutineContext, random: Random): Link {
     val single = conn.singleCollection(dispatcher)
     val myNonce = random.nextBytes(NONCE_BYTES)
     single.send(MeshHello.encode(selfId, myNonce))
@@ -236,7 +236,7 @@ private class MeshSeam(
 
     private val closedMessage get() = "MeshSeam for $selfId is closed"
 
-    override suspend fun addLink(conn: Conn) {
+    override suspend fun addLink(conn: Connection) {
         check(!closed.value) { closedMessage }
         val link = handshakeLink(selfId, conn, dispatcher, random)
         // Dedup against any existing link to the same peer using the canonical nonce, then publish.
@@ -251,7 +251,7 @@ private class MeshSeam(
      * incoming conn itself if it lost, the displaced existing conn if it won, or `null` if it is the
      * first link to that peer. Suspending closes happen in the caller, outside the lock.
      */
-    private fun admitOrReject(link: Link): Conn? = lock.withLock {
+    private fun admitOrReject(link: Link): Connection? = lock.withLock {
         if (closed.value) return@withLock link.conn
         val existing = links[link.remoteId]
         when {
@@ -279,12 +279,12 @@ private class MeshSeam(
     }
 
     override suspend fun close(reason: CloseReason) {
-        // Snapshot the conns to close under the lock; perform the suspending closes outside it.
+        // Snapshot the connections to close under the lock; perform the suspending closes outside it.
         val toClose = tearDown(reason) ?: return
         toClose.forEach { conn -> runCatchingCancellable { conn.close() } }
     }
 
-    private suspend fun readLoop(remoteId: PeerId, conn: Conn) {
+    private suspend fun readLoop(remoteId: PeerId, conn: Connection) {
         try {
             conn.incoming.collect { bytes ->
                 if (!closed.value) {
@@ -294,7 +294,7 @@ private class MeshSeam(
         } catch (e: CancellationException) {
             throw e
         } catch (_: Exception) {
-            // Conn errored — treat as remote disconnect.
+            // Connection errored — treat as remote disconnect.
         } finally {
             removePeer(remoteId, conn)
         }
@@ -302,12 +302,12 @@ private class MeshSeam(
 
     /**
      * Single-shot seam teardown. Only the first caller (CAS winner) publishes [SeamState.Torn],
-     * clears the links, closes the inbox and cancels the scope; it returns the conns to close.
+     * clears the links, closes the inbox and cancels the scope; it returns the connections to close.
      * Every later caller returns `null`. The suspending `conn.close()` happens OUTSIDE the lock,
      * in the caller. `scope.cancel()` cancels every `readLoop`, whose `finally` calls back into
      * [removePeer] — a no-op once `links` is cleared.
      */
-    private fun tearDown(reason: CloseReason): List<Conn>? {
+    private fun tearDown(reason: CloseReason): List<Connection>? {
         if (!closed.compareAndSet(expect = false, update = true)) return null
         val conns = lock.withLock {
             val snapshot = links.values.map { it.conn }
@@ -330,7 +330,7 @@ private class MeshSeam(
      * When [conn] is given, only remove the peer if the live link is THAT conn — so a stale
      * readLoop for a deduped/replaced link can't evict the surviving link to the same peer.
      */
-    private fun removePeer(remoteId: PeerId, conn: Conn? = null) {
+    private fun removePeer(remoteId: PeerId, conn: Connection? = null) {
         // buildPeerSet and _peers.value assignment are inside the same lock acquisition as the
         // remove so that tearDown's peers-collapse (also inside the lock) cannot be overwritten
         // by a stale buildPeerSet result computed before tearDown cleared links.

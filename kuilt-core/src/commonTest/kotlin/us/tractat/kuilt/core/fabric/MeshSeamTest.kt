@@ -8,7 +8,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.PeerId
-import us.tractat.kuilt.test.fabric.connPair
+import us.tractat.kuilt.test.fabric.connectionPair
 import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
@@ -45,17 +45,17 @@ class MeshSeamTest {
         val goodId = PeerId("peer-1")
         val badId = PeerId("peer-2")
 
-        // Bad link: wraps a connPair for the Hello handshake, then throws on every subsequent send.
+        // Bad link: wraps a connectionPair for the Hello handshake, then throws on every subsequent send.
         // Passed FIRST so badId enters the links LinkedHashMap first and is iterated first.
-        val (badMine, badTheirs) = connPair()
-        val failingConn = ThrowsOnSendAfterFirstConn(badMine)
+        val (badMine, badTheirs) = connectionPair()
+        val failingConnection = ThrowsOnSendAfterFirstConnection(badMine)
 
         // Good link: passed SECOND so goodId is iterated after the failing link throws.
-        val (goodMine, goodTheirs) = connPair()
+        val (goodMine, goodTheirs) = connectionPair()
 
-        // peer-0 constructs its mesh: failingConn first so badId is visited first in broadcast.
+        // peer-0 constructs its mesh: failingConnection first so badId is visited first in broadcast.
         val senderMeshDeferred = async {
-            meshSeam(selfId, listOf(failingConn, goodMine), dispatcher)
+            meshSeam(selfId, listOf(failingConnection, goodMine), dispatcher)
         }
 
         // Simulate peer-2 handshake (the failing conn — sends hello once, which succeeds).
@@ -116,8 +116,8 @@ class MeshSeamTest {
         val b = PeerId("peer-b")
 
         // Two independent physical links between the SAME pair (the simultaneous-dial race).
-        val (aX, bX) = connPair()
-        val (aY, bY) = connPair()
+        val (aX, bX) = connectionPair()
+        val (aY, bY) = connectionPair()
 
         // Each node feeds BOTH conns to its mesh. Seeded RNGs make the nonce draw deterministic
         // but the two sides draw DIFFERENT nonces (different seeds) — as on the wire.
@@ -164,7 +164,7 @@ class MeshSeamTest {
         val existing = PeerId("peer-1")
         val joiner = PeerId("peer-2")
 
-        val (mine1, theirs1) = connPair()
+        val (mine1, theirs1) = connectionPair()
         val mesh = async { meshSeam(self, listOf(mine1), dispatcher, Random(0)) }
         val peer1Handshake = async { handshakeRemote(theirs1, existing) }
 
@@ -173,7 +173,7 @@ class MeshSeamTest {
         assertEquals(setOf(self, existing), seam.peers.value, "before join: just self + peer-1")
 
         // peer-2 dials in late.
-        val (mine2, theirs2) = connPair()
+        val (mine2, theirs2) = connectionPair()
         val joinDeferred = async { seam.addLink(mine2) }
         val peer2Handshake = async { handshakeRemote(theirs2, joiner) }
         joinDeferred.await()
@@ -190,8 +190,8 @@ class MeshSeamTest {
         assertContentEquals(payload, onPeer2.await(), "late joiner must receive broadcast")
     }
 
-    /** Drive the far end of a [connPair] through the mesh handshake for [remoteId]. */
-    private suspend fun handshakeRemote(theirs: Conn, remoteId: PeerId) {
+    /** Drive the far end of a [connectionPair] through the mesh handshake for [remoteId]. */
+    private suspend fun handshakeRemote(theirs: Connection, remoteId: PeerId) {
         val helloFromMesh = theirs.incoming.first()
         val meshNonce = MeshHello.decode(helloFromMesh).nonce
         assertTrue(meshNonce.isNotEmpty(), "mesh preamble must carry a non-empty nonce")
@@ -199,12 +199,12 @@ class MeshSeamTest {
     }
 
     /**
-     * A [Conn] that delegates to a real [Conn] for its first [send] call (the Hello preamble),
+     * A [Connection] that delegates to a real [Connection] for its first [send] call (the Hello preamble),
      * then throws [RuntimeException] on every subsequent [send].
      *
      * Lets the [meshSeam] handshake succeed while simulating a link failure during broadcast.
      */
-    private class ThrowsOnSendAfterFirstConn(private val delegate: Conn) : Conn {
+    private class ThrowsOnSendAfterFirstConnection(private val delegate: Connection) : Connection {
         private var sendCount = 0
 
         override suspend fun send(frame: ByteArray) {

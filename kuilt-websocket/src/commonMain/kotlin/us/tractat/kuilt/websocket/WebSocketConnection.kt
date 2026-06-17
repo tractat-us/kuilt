@@ -5,11 +5,11 @@ import io.ktor.websocket.close
 import io.ktor.websocket.readBytes
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
-import us.tractat.kuilt.core.fabric.Conn
+import us.tractat.kuilt.core.fabric.Connection
 import io.ktor.websocket.Frame as KtorFrame
 
 /**
- * Adapts a Ktor [DefaultWebSocketSession] into a message [Conn] so a 2-peer
+ * Adapts a Ktor [DefaultWebSocketSession] into a message [Connection] so a 2-peer
  * WebSocket fabric is built on the shared [us.tractat.kuilt.core.fabric.identified]
  * seam rather than a hand-rolled receive loop.
  *
@@ -30,9 +30,9 @@ import io.ktor.websocket.Frame as KtorFrame
  * **close:** closes the underlying session. Idempotent — Ktor's
  * [io.ktor.websocket.close] is a no-op once the session is already closing.
  */
-internal class WebSocketConn(
+internal class WebSocketConnection(
     private val session: DefaultWebSocketSession,
-) : Conn {
+) : Connection {
     override suspend fun send(frame: ByteArray) {
         session.send(KtorFrame.Binary(fin = true, data = frame))
     }

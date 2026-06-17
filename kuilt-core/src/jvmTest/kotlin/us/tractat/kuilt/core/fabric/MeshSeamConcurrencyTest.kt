@@ -24,7 +24,7 @@ import kotlin.test.assertIs
  *
  * `MeshSeam` shares three pieces of mutable state across the caller thread
  * (`broadcast`/`sendTo`/`close`) and the per-link `readLoop` dispatcher threads:
- *  - `links` (a `mutableMapOf<PeerId, Conn>`) — read by `broadcast` while `readLoop`
+ *  - `links` (a `mutableMapOf<PeerId, Connection>`) — read by `broadcast` while `readLoop`
  *    teardown / a per-link send failure removes entries.
  *  - `closed` — flipped by `close()` and by `readLoop` teardown.
  *  - `seq` — incremented from MULTIPLE per-link `readLoop`s concurrently.
@@ -48,11 +48,11 @@ class MeshSeamConcurrencyTest {
     private val self = PeerId("aaa-self")
 
     /**
-     * A [Conn] that emits a single [Hello] frame for [remoteId] on first collection, then
+     * A [Connection] that emits a single [Hello] frame for [remoteId] on first collection, then
      * stays open until [eof] (which EOFs `incoming`, firing the owning `readLoop`'s teardown)
      * or [close]. `send` is a no-op sink — wire output is irrelevant to the race.
      */
-    private class HelloConn(private val remoteId: PeerId) : Conn {
+    private class HelloConnection(private val remoteId: PeerId) : Connection {
         private val frames = Channel<ByteArray>(Channel.UNLIMITED)
 
         init {
@@ -89,7 +89,7 @@ class MeshSeamConcurrencyTest {
         repeat(iterations) {
             // Real multi-threaded scheduling: NOT limitedParallelism(1).
             val dispatcher = Dispatchers.Default
-            val conns = (0 until peerCount).map { HelloConn(PeerId("peer-$it")) }
+            val conns = (0 until peerCount).map { HelloConnection(PeerId("peer-$it")) }
             val seam = meshSeam(self, conns, dispatcher)
 
             coroutineScope {
@@ -137,7 +137,7 @@ class MeshSeamConcurrencyTest {
                 val joiners = (0 until 6).map { i ->
                     async(Dispatchers.Default) {
                         ready.await()
-                        runCatchingAdmit { seam.addLink(HelloConn(PeerId("late-$i"))) }
+                        runCatchingAdmit { seam.addLink(HelloConnection(PeerId("late-$i"))) }
                     }
                 }
                 val closer = async(Dispatchers.Default) {

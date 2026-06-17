@@ -108,24 +108,24 @@ primary-ply-per-peer send — are tracked in
 
 Several `kuilt-core` types sit around the `Seam` boundary, and they are easy to
 confuse because they all "combine" something. The clarifying lens is **what each
-consumes and produces** — they line up on the `Conn`↔`Seam` axis:
+consumes and produces** — they line up on the `Connection`↔`Seam` axis:
 
 | Type | Direction | Role |
 |------|-----------|------|
-| `Conn` | — | The point-to-point SPI a transport implements: a duplex, message-framed link between *exactly two* peers. Not a `Seam`. |
-| `identified()` → `LinkSeam` | **Conn → Seam** | One link, both identities known, presented as a 2-peer `Seam` (`broadcast == sendTo(remote)`). |
-| `meshSeam()` → `Mesh` | **Conns → Seam** | *Topology builder.* N point-to-point links woven into one fully-connected N-peer `Seam`; learns each remote id via a mesh preamble (id + per-connection nonce) and dedups duplicate links from a simultaneous dial by a canonical, order-independent link nonce both ends agree on. Admits later joiners via `Mesh.addLink`. |
+| `Connection` | — | The point-to-point SPI a transport implements: a duplex, message-framed link between *exactly two* peers. Not a `Seam`. |
+| `identified()` → `LinkSeam` | **Connection → Seam** | One link, both identities known, presented as a 2-peer `Seam` (`broadcast == sendTo(remote)`). |
+| `meshSeam()` → `Mesh` | **Connections → Seam** | *Topology builder.* N point-to-point links woven into one fully-connected N-peer `Seam`; learns each remote id via a mesh preamble (id + per-connection nonce) and dedups duplicate links from a simultaneous dial by a canonical, order-independent link nonce both ends agree on. Admits later joiners via `Mesh.addLink`. |
 | `CompositeLoom` → `CompositeSeam` | **Seams → Seam** | *Transport multiplexer.* Several `Seam`s (plies) for the **same** logical session bonded into one multipath `Seam` (see [Multipath](#multipath-one-peer-several-transports)). |
 | `MuxSeam` | **Seam → Seams** | *Channel splitter.* One `Seam` fanned into several byte-tagged logical-channel `Seam` views over a single collection. |
 
 The two that invite the most confusion are **`MeshSeam` and `CompositeSeam`**:
-`MeshSeam` is a **topology builder (`Conn → Seam`)** — it *creates* a `Seam` out of
+`MeshSeam` is a **topology builder (`Connection → Seam`)** — it *creates* a `Seam` out of
 raw links; `CompositeSeam` is a **transport multiplexer (`Seam → Seam`)** — it
 *consumes* finished `Seam`s and bonds them. They sit on opposite sides of the
 `Seam` boundary, so they don't fight: `MeshSeam`'s only reserved frame is its
 `Hello` handshake, while `CompositeSeam`'s `PlyFrame` envelope wraps whatever its
 plies already carry. They also don't compose by type today (`meshSeam()` takes
-`List<Conn>`, not `List<Seam>`), so "a mesh whose every link is itself multipath"
+`List<Connection>`, not `List<Seam>`), so "a mesh whose every link is itself multipath"
 would be a *new* abstraction at the topology layer, not a change to either.
 
 ## The contract
@@ -203,7 +203,7 @@ depends on physical network conditions.
 To implement a new fabric — message-based or stream-based — see
 [`docs/extending-fabrics.md`](extending-fabrics.md) for a step-by-step tutorial
 with copy-pasteable Track A (message RPC) and Track B (stream RPC / TCP) paths,
-the cold-`Conn` pump gotcha, and a `SeamConformanceSuite` subclass template.
+the cold-`Connection` pump gotcha, and a `SeamConformanceSuite` subclass template.
 
 ## Consensus and leader election
 

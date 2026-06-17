@@ -23,7 +23,7 @@ import us.tractat.kuilt.core.runCatchingCancellable
 import kotlin.coroutines.CoroutineContext
 
 /**
- * A byte-transparent 2-peer [Seam] over a [Conn] whose two identities are known.
+ * A byte-transparent 2-peer [Seam] over a [Connection] whose two identities are known.
  * `broadcast` == `sendTo(remoteId)`. Woven at construction; Torn on conn EOF/error
  * or [close]. Concurrent sends are serialized through an internal channel + single
  * writer so wire order matches call order.
@@ -44,14 +44,14 @@ import kotlin.coroutines.CoroutineContext
  *   read/write loops share the same virtual clock as the test's `withTimeout`.
  */
 public fun identified(
-    conn: Conn,
+    conn: Connection,
     selfId: PeerId,
     remoteId: PeerId,
     dispatcher: CoroutineContext,
 ): Seam = LinkSeam(conn, selfId, remoteId, dispatcher)
 
 internal class LinkSeam(
-    private val conn: Conn,
+    private val conn: Connection,
     override val selfId: PeerId,
     private val remoteId: PeerId,
     dispatcher: CoroutineContext,

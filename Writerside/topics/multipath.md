@@ -14,7 +14,7 @@ election, no membership churn, no full-state resync.
 
 `CompositeLoom` bonds **finished** `Seam`s (the `Seam → Seam` direction). Its
 mirror image is [`meshSeam()`](fabric-kit.md#meshseam-an-n-peer-mesh), which
-*builds* a `Seam` out of raw point-to-point links (`Conn → Seam`) — see
+*builds* a `Seam` out of raw point-to-point links (`Connection → Seam`) — see
 [Composing a Seam](composing-a-seam.md) for how the two relate.
 
 ## Bonding two transports

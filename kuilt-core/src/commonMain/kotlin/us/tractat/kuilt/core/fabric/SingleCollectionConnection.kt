@@ -11,17 +11,17 @@ import us.tractat.kuilt.core.runCatchingCancellable
 import kotlin.coroutines.CoroutineContext
 
 /**
- * Adapt a [Conn] so its [incoming] can be consumed by *several* readers over a
+ * Adapt a [Connection] so its [incoming] can be consumed by *several* readers over a
  * single upstream collection.
  *
- * A raw fabric [Conn] is single-collection ([Conn.incoming] may only be collected
+ * A raw fabric [Connection] is single-collection ([Connection.incoming] may only be collected
  * once). Several call sites need two collections of the same conn: a preamble read
  * (`firstFrame`) followed by a read loop. Over a *hot* channel-backed conn the two
  * collections happen to coexist; over a *cold* single-collection conn (the shape a
  * stream fabric's `framed()` produces) the second collection hangs — or, if the conn
  * defends itself, throws.
  *
- * [singleCollection] resolves this by collecting [Conn.incoming] **exactly once** in a
+ * [singleCollection] resolves this by collecting [Connection.incoming] **exactly once** in a
  * pump coroutine that republishes frames through an unbounded [Channel]. Every reader
  * — the preamble read via [firstFrame] and the subsequent read loop — draws from that
  * one channel, so the upstream is never collected twice. Both `handshaking` (2-peer)
@@ -31,8 +31,8 @@ import kotlin.coroutines.CoroutineContext
  *   (and tests') clock. Production callers pass the seam's scheduling dispatcher; test
  *   callers pass a dispatcher derived from the test scheduler.
  */
-internal fun Conn.singleCollection(dispatcher: CoroutineContext): Conn =
-    SingleCollectionConn(this, dispatcher)
+internal fun Connection.singleCollection(dispatcher: CoroutineContext): Connection =
+    SingleCollectionConnection(this, dispatcher)
 
 /**
  * One pump coroutine collects [delegate].incoming exactly once on [dispatcher] and
@@ -40,10 +40,10 @@ internal fun Conn.singleCollection(dispatcher: CoroutineContext): Conn =
  * frame off that channel; [incoming] exposes the remainder from the same channel.
  * No consumer ever collects [delegate].incoming directly.
  */
-private class SingleCollectionConn(
-    private val delegate: Conn,
+private class SingleCollectionConnection(
+    private val delegate: Connection,
     dispatcher: CoroutineContext,
-) : Conn {
+) : Connection {
     private val scope = CoroutineScope(SupervisorJob() + dispatcher)
     private val inbox = Channel<ByteArray>(Channel.UNLIMITED)
 

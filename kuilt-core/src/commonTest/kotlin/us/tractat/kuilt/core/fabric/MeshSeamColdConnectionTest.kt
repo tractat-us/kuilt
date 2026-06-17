@@ -20,23 +20,23 @@ import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 
 /**
- * [meshSeam] (and [Mesh.addLink]) must work over a *cold, single-collection* [Conn] — the
+ * [meshSeam] (and [Mesh.addLink]) must work over a *cold, single-collection* [Connection] — the
  * shape a stream fabric's `framed()` produces — without a hot-reader pump. The mesh exchanges
  * a [MeshHello] preamble (`firstFrame`) AND launches a per-link `readLoop`; that is two
  * collections of the same conn, so over a cold conn it hangs unless the mesh wraps each link
  * with [singleCollection].
  *
- * [ColdConn.incoming] is a cold flow that throws on a second collection, so a double-collect
+ * [ColdConnection.incoming] is a cold flow that throws on a second collection, so a double-collect
  * (the bug) fails loudly instead of hanging. It emits the preamble then a payload then stays
  * open (the wire is live until [Seam.close]), so the read loop and roster are stable.
  */
-class MeshSeamColdConnTest {
+class MeshSeamColdConnectionTest {
 
     @Test
-    fun meshSeamWorksOverColdSingleCollectionConn() = runTest {
+    fun meshSeamWorksOverColdSingleCollectionConnection() = runTest {
         val dispatcher = currentCoroutineContext()[ContinuationInterceptor]!!
         val remote = PeerId("B")
-        val conn = ColdConn(remoteId = remote, payload = byteArrayOf(7))
+        val conn = ColdConnection(remoteId = remote, payload = byteArrayOf(7))
 
         val mesh = async { meshSeam(PeerId("A"), listOf(conn), dispatcher, Random(0)) }.await()
 
@@ -51,14 +51,14 @@ class MeshSeamColdConnTest {
     }
 
     @Test
-    fun addLinkWorksOverColdSingleCollectionConn() = runTest {
+    fun addLinkWorksOverColdSingleCollectionConnection() = runTest {
         val dispatcher = currentCoroutineContext()[ContinuationInterceptor]!!
         val joiner = PeerId("C")
-        val joinConn = ColdConn(remoteId = joiner, payload = byteArrayOf(9))
+        val joinConnection = ColdConnection(remoteId = joiner, payload = byteArrayOf(9))
 
         // Start with an empty mesh (no initial links), then admit the cold conn late.
         val mesh = async { meshSeam(PeerId("A"), emptyList(), dispatcher, Random(0)) }.await()
-        async { mesh.addLink(joinConn) }.await()
+        async { mesh.addLink(joinConnection) }.await()
 
         val frame = mesh.incoming.first()
         assertEquals(joiner, frame.sender)
@@ -72,9 +72,9 @@ class MeshSeamColdConnTest {
      * Emits the remote [MeshHello] preamble (with a non-empty nonce) then one payload frame, then
      * stays open ([awaitCancellation]) until the read loop is cancelled by [Seam.close] — so the
      * roster is stable and the link is not torn down by an end-of-stream. Rejects a second
-     * collection. Mirrors `HandshakingColdConnTest.ColdConn` for the mesh wire.
+     * collection. Mirrors `HandshakingColdConnectionTest.ColdConnection` for the mesh wire.
      */
-    private class ColdConn(remoteId: PeerId, payload: ByteArray) : Conn {
+    private class ColdConnection(remoteId: PeerId, payload: ByteArray) : Connection {
         private val frames = listOf(MeshHello.encode(remoteId, byteArrayOf(1, 2, 3, 4)), payload)
         private val collected = atomic(false)
         val sent = atomic(emptyList<ByteArray>())

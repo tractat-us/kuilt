@@ -6,7 +6,7 @@ A raw-TCP fabric — the headline of the pluggable fabric kit.
 
 `TcpLoom` is a `Loom` backed by a Ktor TCP socket. It shows how few lines a
 stream transport needs to become a kuilt fabric: obtain a connected socket, adapt
-it to a `Conn` with `tcpConn` (Ktor channels → kotlinx-io `Source`/`Sink` →
+it to a `Connection` with `tcpConnection` (Ktor channels → kotlinx-io `Source`/`Sink` →
 `:kuilt-stream`'s `framed()`), then hand that to `:kuilt-core`'s `handshaking` to
 negotiate identity in-band and yield a 2-peer `Seam`.
 
@@ -26,7 +26,7 @@ an IO dispatcher, so the scheduling dispatcher never blocks on the wire.
 `weave` guards against accidental virtual-time construction: building the seam
 under a `kotlinx.coroutines.test.TestDispatcher` fails loudly — under virtual time
 the blocking socket IO would never advance, deadlocking the test silently. For
-virtual-time tests, use an in-memory `connPair()`-backed seam instead.
+virtual-time tests, use an in-memory `connectionPair()`-backed seam instead.
 
 ## Beyond Ktor
 

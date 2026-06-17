@@ -17,17 +17,17 @@ import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 
 /**
- * `handshaking` must work over a *cold, single-collection* [Conn] — the shape a
+ * `handshaking` must work over a *cold, single-collection* [Connection] — the shape a
  * stream fabric's `framed()` produces — without a hot-reader pump. The preamble
  * read and the inner seam's read loop must share ONE collection of `incoming`.
  *
- * [ColdConn.incoming] is a cold flow that throws on a second collection, so a
+ * [ColdConnection.incoming] is a cold flow that throws on a second collection, so a
  * double-collect (the previous bug) fails loudly instead of hanging.
  */
-class HandshakingColdConnTest {
+class HandshakingColdConnectionTest {
     @Test
-    fun completesAndCarriesPayloadOverColdSingleCollectionConn() = runTest {
-        val conn = ColdConn(remoteId = PeerId("B"), payload = byteArrayOf(7))
+    fun completesAndCarriesPayloadOverColdSingleCollectionConnection() = runTest {
+        val conn = ColdConnection(remoteId = PeerId("B"), payload = byteArrayOf(7))
         val dispatcher = currentCoroutineContext()[ContinuationInterceptor]!!
 
         val seam = async { handshaking(conn, PeerId("A"), dispatcher) }.await()
@@ -39,7 +39,7 @@ class HandshakingColdConnTest {
     }
 
     /** Emits the remote Hello then one payload frame; rejects a second collection. */
-    private class ColdConn(remoteId: PeerId, payload: ByteArray) : Conn {
+    private class ColdConnection(remoteId: PeerId, payload: ByteArray) : Connection {
         private val frames = listOf(Hello.encode(remoteId), payload)
         private val collected = atomic(false)
         val sent = atomic(emptyList<ByteArray>())
