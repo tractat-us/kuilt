@@ -18,18 +18,18 @@ import us.tractat.kuilt.crdt.MVRegister
 import us.tractat.kuilt.crdt.ORMap
 import us.tractat.kuilt.crdt.Patch
 import us.tractat.kuilt.crdt.ReplicaId
-import us.tractat.kuilt.crdt.replicator.SeamReplicator
-import us.tractat.kuilt.crdt.replicator.SeamReplicatorConfig
+import us.tractat.kuilt.quilter.Quilter
+import us.tractat.kuilt.quilter.QuilterConfig
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.time.Duration.Companion.seconds
 
 /**
- * Example: collaborative JSON document sync using [JsonCrdt] + [SeamReplicator].
+ * Example: collaborative JSON document sync using [JsonCrdt] + [Quilter].
  *
  * Two peers edit different fields of a shared document concurrently. Each peer
- * mutates its own replica locally; [SeamReplicator] broadcasts the deltas and
+ * mutates its own replica locally; [Quilter] broadcasts the deltas and
  * both documents converge to a merged result that includes all edits.
  *
  * ## Why JsonCrdt fits
@@ -45,15 +45,15 @@ import kotlin.time.Duration.Companion.seconds
  * ## API surface exercised
  *
  * - [InMemoryLoom] + `host`/`join` for in-process transport
- * - [SeamReplicator] convenience factory with [JsonCrdt.serializer]
- * - [SeamReplicator.mutate] with [JsonCrdt.set] for field edits
+ * - [Quilter] convenience factory with [JsonCrdt.serializer]
+ * - [Quilter.mutate] with [JsonCrdt.set] for field edits
  * - [JsonCrdt.withReplica] to re-bind the local [ReplicaId] after the replicator
- *   provides the replica via [SeamReplicator.replica]
+ *   provides the replica via [Quilter.replica]
  * - Nested [JsonNode.Object] merge showing add-wins at the object level
  */
 class CollabDocTest {
 
-    private val replicatorCfg = SeamReplicatorConfig(expectVirtualTime = true)
+    private val replicatorCfg = QuilterConfig(expectVirtualTime = true)
 
     @Test
     fun `two peers editing different top-level fields converge`() =
@@ -62,14 +62,14 @@ class CollabDocTest {
             val seamAlice = loom.host(Pattern("collab-doc"))
             val seamBob = loom.join(InMemoryTag("bob"))
 
-            val aliceDoc = SeamReplicator(
+            val aliceDoc = Quilter(
                 seamAlice,
                 JsonCrdt.empty(ReplicaId(seamAlice.selfId.value)),
                 JsonCrdt.serializer(),
                 backgroundScope,
                 config = replicatorCfg,
             )
-            val bobDoc = SeamReplicator(
+            val bobDoc = Quilter(
                 seamBob,
                 JsonCrdt.empty(ReplicaId(seamBob.selfId.value)),
                 JsonCrdt.serializer(),
@@ -103,14 +103,14 @@ class CollabDocTest {
             val seamAlice = loom.host(Pattern("nested-doc"))
             val seamBob = loom.join(InMemoryTag("bob"))
 
-            val aliceDoc = SeamReplicator(
+            val aliceDoc = Quilter(
                 seamAlice,
                 JsonCrdt.empty(ReplicaId(seamAlice.selfId.value)),
                 JsonCrdt.serializer(),
                 backgroundScope,
                 config = replicatorCfg,
             )
-            val bobDoc = SeamReplicator(
+            val bobDoc = Quilter(
                 seamBob,
                 JsonCrdt.empty(ReplicaId(seamBob.selfId.value)),
                 JsonCrdt.serializer(),

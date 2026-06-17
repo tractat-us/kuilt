@@ -13,8 +13,8 @@ import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.crdt.BoundedCounter
 import us.tractat.kuilt.crdt.ReplicaId
-import us.tractat.kuilt.crdt.replicator.SeamReplicator
-import us.tractat.kuilt.crdt.replicator.SeamReplicatorConfig
+import us.tractat.kuilt.quilter.Quilter
+import us.tractat.kuilt.quilter.QuilterConfig
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
@@ -23,7 +23,7 @@ import kotlin.time.Duration.Companion.seconds
 
 /**
  * Example: a concert-seat reservation system that NEVER oversells, even under concurrent
- * bookings from two box-office replicas, using [BoundedCounter] + [SeamReplicator].
+ * bookings from two box-office replicas, using [BoundedCounter] + [Quilter].
  *
  * A fixed pool of seats (e.g. 10) is pre-divided into per-replica quotas. Each box office
  * can book seats up to its local quota without coordinating with the other. If one office
@@ -39,7 +39,7 @@ import kotlin.time.Duration.Companion.seconds
  * - Quota is pre-split so the hot path (book a seat) never requires cross-replica
  *   coordination. Only quota redistribution ([BoundedCounter.transfer]) talks to peers,
  *   and that is still an offline-safe, optimistic operation.
- * - [SeamReplicator] broadcasts deltas automatically; once both replicas have seen each
+ * - [Quilter] broadcasts deltas automatically; once both replicas have seen each
  *   other's spends, `totalSpent` and `totalBudget` converge to the same values.
  *
  * ## API surface exercised
@@ -47,13 +47,13 @@ import kotlin.time.Duration.Companion.seconds
  * - [InMemoryLoom] + `host`/`join` for in-process transport
  * - [BoundedCounter.init] to seed a fixed pool split across two [ReplicaId]s
  * - [BoundedCounter.trySpend] — returns a [us.tractat.kuilt.crdt.Patch] or `null` when over-quota
- * - [SeamReplicator.apply] to commit a spend patch and broadcast it
+ * - [Quilter.apply] to commit a spend patch and broadcast it
  * - [BoundedCounter.transfer] to move quota between replicas
- * - [SeamReplicator.state] (`StateFlow<BoundedCounter>`) to read the converged view
+ * - [Quilter.state] (`StateFlow<BoundedCounter>`) to read the converged view
  */
 class SeatReservationTest {
 
-    private val replicatorCfg = SeamReplicatorConfig(expectVirtualTime = true)
+    private val replicatorCfg = QuilterConfig(expectVirtualTime = true)
 
     private val north = ReplicaId("north-box-office")
     private val south = ReplicaId("south-box-office")
@@ -68,10 +68,10 @@ class SeatReservationTest {
             val seamNorth = loom.host(Pattern("seat-reservation"))
             val seamSouth = loom.join(InMemoryTag("south"))
 
-            val northCounter = SeamReplicator(
+            val northCounter = Quilter(
                 seamNorth, initialPool(), BoundedCounter.serializer(), backgroundScope, config = replicatorCfg,
             )
-            val southCounter = SeamReplicator(
+            val southCounter = Quilter(
                 seamSouth, initialPool(), BoundedCounter.serializer(), backgroundScope, config = replicatorCfg,
             )
 
@@ -102,10 +102,10 @@ class SeatReservationTest {
             val seamNorth = loom.host(Pattern("seat-reservation-deny"))
             val seamSouth = loom.join(InMemoryTag("south"))
 
-            val northCounter = SeamReplicator(
+            val northCounter = Quilter(
                 seamNorth, initialPool(), BoundedCounter.serializer(), backgroundScope, config = replicatorCfg,
             )
-            val southCounter = SeamReplicator(
+            val southCounter = Quilter(
                 seamSouth, initialPool(), BoundedCounter.serializer(), backgroundScope, config = replicatorCfg,
             )
 
@@ -134,10 +134,10 @@ class SeatReservationTest {
             val seamNorth = loom.host(Pattern("seat-reservation-transfer"))
             val seamSouth = loom.join(InMemoryTag("south"))
 
-            val northCounter = SeamReplicator(
+            val northCounter = Quilter(
                 seamNorth, initialPool(), BoundedCounter.serializer(), backgroundScope, config = replicatorCfg,
             )
-            val southCounter = SeamReplicator(
+            val southCounter = Quilter(
                 seamSouth, initialPool(), BoundedCounter.serializer(), backgroundScope, config = replicatorCfg,
             )
 

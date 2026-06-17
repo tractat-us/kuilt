@@ -8,6 +8,7 @@ kotlin {
         commonMain.dependencies {
             api(project(":kuilt-core"))
             implementation(project(":kuilt-crdt"))
+            implementation(project(":kuilt-quilter"))
             implementation(libs.kotlinx.atomicfu)
             implementation(libs.kotlinx.coroutines.core)
             implementation(libs.kotlinx.serialization.core)
@@ -16,6 +17,7 @@ kotlin {
         commonTest.dependencies {
             implementation(project(":kuilt-test"))
             implementation(project(":kuilt-crdt"))
+            implementation(project(":kuilt-quilter"))
             implementation(libs.kotlinx.coroutines.test)
         }
         // SLF4J backend for kotlin-logging on the JVM + Android unit-test variants.

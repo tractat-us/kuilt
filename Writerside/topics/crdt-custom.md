@@ -2,7 +2,7 @@
 
 If your app data model does not fit the built-in types, you can still get the
 same replication behavior by implementing your own type and wiring it into
-`SeamReplicator`.
+`Quilter`.
 
 ## The `Quilted` interface
 
@@ -28,7 +28,7 @@ of updates will converge to the same value, regardless of network order.
 
 Instead of shipping the entire state on every update, implementations emit a
 *delta* — a minimal value that represents only what changed. Merging a delta
-advances the state the same way merging the full state would; `SeamReplicator`
+advances the state the same way merging the full state would; `Quilter`
 exploits this to send small messages over the wire and ship the full state only
 to late joiners.
 
@@ -39,7 +39,7 @@ val counter = GCounter.ZERO
 val delta: GCounter = counter.inc(replica, 3L)  // only the increment, not the full counter
 val next: GCounter = counter.piece(delta)        // apply it
 
-// Pass to SeamReplicator:
+// Pass to Quilter:
 replicator.apply(Patch(delta))
 ```
 
@@ -60,11 +60,11 @@ val b = MaxInt(7)
 val merged = a.piece(b)  // MaxInt(7) — always the higher value, on every replica
 
 // Or live-replicate it:
-val replicator = SeamReplicator(
+val replicator = Quilter(
     replica = ReplicaId("node-1"),
     seam = seam,
     initial = MaxInt(0),
-    messageSerializer = ReplicatorMessage.serializer(MaxInt.serializer()),
+    messageSerializer = QuiltMessage.serializer(MaxInt.serializer()),
     scope = scope,
 )
 replicator.apply(Patch(MaxInt(42)))
@@ -102,7 +102,7 @@ For the causal model and working tests, see [Causal primitives](crdt-causal.md).
 ## Conformance laws
 
 Test your implementation against the three laws before wiring it into a
-`SeamReplicator`. A type that violates any law will silently diverge across
+`Quilter`. A type that violates any law will silently diverge across
 replicas:
 
 ```kotlin

@@ -15,8 +15,8 @@ import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.crdt.GCounter
 import us.tractat.kuilt.crdt.ORMap
 import us.tractat.kuilt.crdt.Patch
-import us.tractat.kuilt.crdt.replicator.SeamReplicator
-import us.tractat.kuilt.crdt.replicator.SeamReplicatorConfig
+import us.tractat.kuilt.quilter.Quilter
+import us.tractat.kuilt.quilter.QuilterConfig
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -25,7 +25,7 @@ import kotlin.time.Duration.Companion.seconds
 
 /**
  * Example: a member roster whose values are themselves CRDTs, replicated across two peers using
- * [ORMap]`<String, GCounter>` + [SeamReplicator].
+ * [ORMap]`<String, GCounter>` + [Quilter].
  *
  * The outer [ORMap] maintains observed-remove membership (add-wins on the key), while the inner
  * [GCounter] per member accumulates per-replica contributions — for example, a tally of
@@ -44,13 +44,13 @@ import kotlin.time.Duration.Companion.seconds
  * ## API surface exercised
  *
  * - [InMemoryLoom] + `host`/`join` for in-process transport
- * - [SeamReplicator] convenience factory with a two-type-param serializer
+ * - [Quilter] convenience factory with a two-type-param serializer
  * - `apply(Patch(...))` to broadcast `put` and `remove` mutations (ORMap returns new state, not Patch)
- * - [SeamReplicator.state] (`StateFlow<ORMap<String, GCounter>>`) to read the current roster
+ * - [Quilter.state] (`StateFlow<ORMap<String, GCounter>>`) to read the current roster
  */
 class MemberRosterORMapTest {
 
-    private val replicatorCfg = SeamReplicatorConfig(expectVirtualTime = true)
+    private val replicatorCfg = QuilterConfig(expectVirtualTime = true)
     private val mapSerializer = ORMap.serializer(String.serializer(), GCounter.serializer())
 
     @Test
@@ -60,8 +60,8 @@ class MemberRosterORMapTest {
             val seamAlice = loom.host(Pattern("member-roster"))
             val seamBob = loom.join(InMemoryTag("bob"))
 
-            val aliceRoster = SeamReplicator(seamAlice, ORMap.empty(), mapSerializer, backgroundScope, config = replicatorCfg)
-            val bobRoster = SeamReplicator(seamBob, ORMap.empty(), mapSerializer, backgroundScope, config = replicatorCfg)
+            val aliceRoster = Quilter(seamAlice, ORMap.empty(), mapSerializer, backgroundScope, config = replicatorCfg)
+            val bobRoster = Quilter(seamBob, ORMap.empty(), mapSerializer, backgroundScope, config = replicatorCfg)
 
             delay(1) // let collectors subscribe under StandardTestDispatcher
 
@@ -90,8 +90,8 @@ class MemberRosterORMapTest {
             val seamAlice = loom.host(Pattern("shared-counter"))
             val seamBob = loom.join(InMemoryTag("bob"))
 
-            val aliceRoster = SeamReplicator(seamAlice, ORMap.empty(), mapSerializer, backgroundScope, config = replicatorCfg)
-            val bobRoster = SeamReplicator(seamBob, ORMap.empty(), mapSerializer, backgroundScope, config = replicatorCfg)
+            val aliceRoster = Quilter(seamAlice, ORMap.empty(), mapSerializer, backgroundScope, config = replicatorCfg)
+            val bobRoster = Quilter(seamBob, ORMap.empty(), mapSerializer, backgroundScope, config = replicatorCfg)
 
             delay(1) // let collectors subscribe under StandardTestDispatcher
 
@@ -113,8 +113,8 @@ class MemberRosterORMapTest {
             val seamAlice = loom.host(Pattern("add-wins-roster"))
             val seamBob = loom.join(InMemoryTag("bob"))
 
-            val aliceRoster = SeamReplicator(seamAlice, ORMap.empty(), mapSerializer, backgroundScope, config = replicatorCfg)
-            val bobRoster = SeamReplicator(seamBob, ORMap.empty(), mapSerializer, backgroundScope, config = replicatorCfg)
+            val aliceRoster = Quilter(seamAlice, ORMap.empty(), mapSerializer, backgroundScope, config = replicatorCfg)
+            val bobRoster = Quilter(seamBob, ORMap.empty(), mapSerializer, backgroundScope, config = replicatorCfg)
 
             delay(1) // let collectors subscribe under StandardTestDispatcher
 

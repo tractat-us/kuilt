@@ -32,7 +32,7 @@ public interface Quilted<S : Quilted<S>> {
      * The causal [Dot]s this state has delivered — `(author, author-seq)` per op.
      *
      * This is the capability the causal-stability GC of ADR-003 addendum v3 (#262)
-     * needs without breaking [Quilted]'s genericity: a [SeamReplicator] generic over
+     * needs without breaking [Quilted]'s genericity: a [Quilter] generic over
      * `Quilted<S>` cannot know about any one CRDT's internal op identities, so the
      * CRDT exposes them here. The replicator folds these dots into a contiguous
      * **delivered** [VersionVector] (highest gap-free seq per author) and gossips it.

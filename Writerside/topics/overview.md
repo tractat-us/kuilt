@@ -17,7 +17,7 @@ The library has three distinct value propositions:
 
 - **Conflict-free Replicated Data Types** — CRDTs are data structure building blocks you can use in isolation, with or without
   the network layer. `LWWMap`, `ORSet`, `JsonCrdt`, and the rest are plain serializable
-  value types. Add `SeamReplicator` when you want live delta propagation; leave it out
+  value types. Add `Quilter` when you want live delta propagation; leave it out
   when your transport is HTTP or a message queue.
 
 - **Raft** — the foundation your network-aware coordination code wishes it was built on.
@@ -40,7 +40,7 @@ There is no client/server split in kuilt's contract. Every peer in a session hol
 | Module | What it gives you |
 |--------|-------------------|
 | `kuilt-core` | The contract (`Loom`/`Seam`/`Swatch`), `InMemoryLoom` reference impl, conformance suite |
-| `kuilt-crdt` | Delta-state CRDT zoo + `SeamReplicator` live replication |
+| `kuilt-crdt` | Delta-state CRDT zoo + `Quilter` live replication |
 | `kuilt-deal` | Cryptographically fair card dealing (`DealSession`) + dealer-less fair-random (`FairRandom`) |
 | `kuilt-game` | Turn-based game facade: `TurnSequencer` + `SpeculativeSequencer` (optimistic apply + rollback) |
 | `kuilt-raft` | Raft consensus — leader election, log replication, snapshots, dynamic membership, linearizable reads, leadership transfer |

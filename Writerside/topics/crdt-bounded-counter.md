@@ -52,6 +52,6 @@ Transfers move quota between replicas via a 2D matrix (one row per donor, one co
 
 ## Active rebalancing
 
-When a replica runs low on quota, it can request a transfer from peers via `BoundedCounterTransferCoordinator`. The coordinator sends a `TransferRequest` over a `MuxSeam` channel; donors evaluate their surplus and respond with a transfer delta over the existing `SeamReplicator` path. The request protocol is advisory — it cannot cause an overdraw, because `trySpend` always checks local quota before committing.
+When a replica runs low on quota, it can request a transfer from peers via `BoundedCounterTransferCoordinator`. The coordinator sends a `TransferRequest` over a `MuxSeam` channel; donors evaluate their surplus and respond with a transfer delta over the existing `Quilter` path. The request protocol is advisory — it cannot cause an overdraw, because `trySpend` always checks local quota before committing.
 
 See `docs/crdt/bounded-counter-rebalancing.md` in the repository for the full rebalancing design.

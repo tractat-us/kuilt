@@ -33,4 +33,4 @@ Each replica maintains a local Lamport counter. Minting a new op increments it. 
 
 ## Wire transport
 
-Ops are serializable (`@Serializable` on `RgaOp` and `RgaId`). They ride `SeamReplicator` like any other `Quilted<Rga<V>>` — `piece` merges the full op-log and the replicator ships `Delta`s (individual ops wrapped as `Rga` singletons) or `FullState` for new peers.
+Ops are serializable (`@Serializable` on `RgaOp` and `RgaId`). They ride `Quilter` like any other `Quilted<Rga<V>>` — `piece` merges the full op-log and the replicator ships `Delta`s (individual ops wrapped as `Rga` singletons) or `FullState` for new peers.

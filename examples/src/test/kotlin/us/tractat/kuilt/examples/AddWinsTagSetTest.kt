@@ -14,8 +14,8 @@ import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.crdt.ORSet
 import us.tractat.kuilt.crdt.Patch
-import us.tractat.kuilt.crdt.replicator.SeamReplicator
-import us.tractat.kuilt.crdt.replicator.SeamReplicatorConfig
+import us.tractat.kuilt.quilter.Quilter
+import us.tractat.kuilt.quilter.QuilterConfig
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -24,7 +24,7 @@ import kotlin.time.Duration.Companion.seconds
 
 /**
  * Example: an add-wins label set replicated across two peers using [ORSet]
- * + [SeamReplicator].
+ * + [Quilter].
  *
  * Two collaborators manage presence tags on a shared document. Tags can be added
  * and removed, and a concurrent add always wins over a concurrent remove — if one
@@ -44,7 +44,7 @@ import kotlin.time.Duration.Companion.seconds
  * ## Serializer note
  *
  * [ORSet] is a parameterised type. Its serializer requires an element serializer:
- * `ORSet.serializer(String.serializer())`. The convenience [SeamReplicator] factory
+ * `ORSet.serializer(String.serializer())`. The convenience [Quilter] factory
  * accepts this directly as `valueSerializer`.
  *
  * [ORSet.add] and [ORSet.remove] return a new full [ORSet] rather than a
@@ -54,13 +54,13 @@ import kotlin.time.Duration.Companion.seconds
  * ## API surface exercised
  *
  * - [InMemoryLoom] + `host`/`join` for in-process transport
- * - [SeamReplicator] convenience factory with a parameterised element serializer
- * - [SeamReplicator.mutate] wrapping [ORSet.add] / [ORSet.remove] in a [Patch]
- * - [SeamReplicator.state] (`StateFlow<ORSet<String>>`) to read converged elements
+ * - [Quilter] convenience factory with a parameterised element serializer
+ * - [Quilter.mutate] wrapping [ORSet.add] / [ORSet.remove] in a [Patch]
+ * - [Quilter.state] (`StateFlow<ORSet<String>>`) to read converged elements
  */
 class AddWinsTagSetTest {
 
-    private val replicatorCfg = SeamReplicatorConfig(expectVirtualTime = true)
+    private val replicatorCfg = QuilterConfig(expectVirtualTime = true)
 
     @Test
     fun `tags added by two peers converge to the union and removed tags disappear`() =
@@ -69,14 +69,14 @@ class AddWinsTagSetTest {
             val seamAlice = loom.host(Pattern("or-tags"))
             val seamBob = loom.join(InMemoryTag("bob"))
 
-            val aliceTags = SeamReplicator(
+            val aliceTags = Quilter(
                 seam = seamAlice,
                 initial = ORSet.empty<String>(),
                 valueSerializer = ORSet.serializer(String.serializer()),
                 scope = backgroundScope,
                 config = replicatorCfg,
             )
-            val bobTags = SeamReplicator(
+            val bobTags = Quilter(
                 seam = seamBob,
                 initial = ORSet.empty<String>(),
                 valueSerializer = ORSet.serializer(String.serializer()),
@@ -115,14 +115,14 @@ class AddWinsTagSetTest {
             val seamAlice = loom.host(Pattern("or-tags-add-wins"))
             val seamBob = loom.join(InMemoryTag("bob"))
 
-            val aliceTags = SeamReplicator(
+            val aliceTags = Quilter(
                 seam = seamAlice,
                 initial = ORSet.empty<String>(),
                 valueSerializer = ORSet.serializer(String.serializer()),
                 scope = backgroundScope,
                 config = replicatorCfg,
             )
-            val bobTags = SeamReplicator(
+            val bobTags = Quilter(
                 seam = seamBob,
                 initial = ORSet.empty<String>(),
                 valueSerializer = ORSet.serializer(String.serializer()),

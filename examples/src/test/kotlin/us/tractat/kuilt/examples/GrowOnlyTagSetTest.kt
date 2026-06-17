@@ -13,8 +13,8 @@ import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.crdt.GSet
-import us.tractat.kuilt.crdt.replicator.SeamReplicator
-import us.tractat.kuilt.crdt.replicator.SeamReplicatorConfig
+import us.tractat.kuilt.quilter.Quilter
+import us.tractat.kuilt.quilter.QuilterConfig
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -22,7 +22,7 @@ import kotlin.time.Duration.Companion.seconds
 
 /**
  * Example: a grow-only label set replicated across two peers using [GSet]
- * + [SeamReplicator].
+ * + [Quilter].
  *
  * Two collaborators tag a shared document. Each can only add tags — once a tag
  * exists it is permanent. Both peers' tag sets converge to the union of all
@@ -40,13 +40,13 @@ import kotlin.time.Duration.Companion.seconds
  * ## API surface exercised
  *
  * - [InMemoryLoom] + `host`/`join` for in-process transport
- * - [SeamReplicator] convenience factory with a parameterised element serializer
- * - [SeamReplicator.mutate] with [GSet.add] (returns a [us.tractat.kuilt.crdt.Patch])
- * - [SeamReplicator.state] (`StateFlow<GSet<String>>`) to read converged elements
+ * - [Quilter] convenience factory with a parameterised element serializer
+ * - [Quilter.mutate] with [GSet.add] (returns a [us.tractat.kuilt.crdt.Patch])
+ * - [Quilter.state] (`StateFlow<GSet<String>>`) to read converged elements
  */
 class GrowOnlyTagSetTest {
 
-    private val replicatorCfg = SeamReplicatorConfig(expectVirtualTime = true)
+    private val replicatorCfg = QuilterConfig(expectVirtualTime = true)
 
     @Test
     fun `tags added by two peers converge to the union`() =
@@ -55,14 +55,14 @@ class GrowOnlyTagSetTest {
             val seamAlice = loom.host(Pattern("doc-tags"))
             val seamBob = loom.join(InMemoryTag("bob"))
 
-            val aliceTags = SeamReplicator(
+            val aliceTags = Quilter(
                 seam = seamAlice,
                 initial = GSet.empty<String>(),
                 valueSerializer = GSet.serializer(String.serializer()),
                 scope = backgroundScope,
                 config = replicatorCfg,
             )
-            val bobTags = SeamReplicator(
+            val bobTags = Quilter(
                 seam = seamBob,
                 initial = GSet.empty<String>(),
                 valueSerializer = GSet.serializer(String.serializer()),
@@ -93,14 +93,14 @@ class GrowOnlyTagSetTest {
             val seamAlice = loom.host(Pattern("doc-tags-idempotent"))
             val seamBob = loom.join(InMemoryTag("bob"))
 
-            val aliceTags = SeamReplicator(
+            val aliceTags = Quilter(
                 seam = seamAlice,
                 initial = GSet.empty<String>(),
                 valueSerializer = GSet.serializer(String.serializer()),
                 scope = backgroundScope,
                 config = replicatorCfg,
             )
-            val bobTags = SeamReplicator(
+            val bobTags = Quilter(
                 seam = seamBob,
                 initial = GSet.empty<String>(),
                 valueSerializer = GSet.serializer(String.serializer()),

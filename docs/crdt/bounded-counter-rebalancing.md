@@ -22,21 +22,21 @@ Replica B (quota: 1)          Replica A (quota: 15)
       |                               |  transfer(A→B, 5) → patch
       |                               |  replicator.apply(patch)
       |                               |  delta broadcast
-      |<---delta (SeamReplicator)-----|
+      |<---delta (Quilter)-----|
       |  merges delta                 |
       |  quota(B) is now 6           |
       |                               |
       trySpend(B) → succeeds
 ```
 
-The transfer delta rides the existing `SeamReplicator` path — no separate
+The transfer delta rides the existing `Quilter` path — no separate
 response message is needed. Multiple donors can respond to the same request
 concurrently: each writes to its own row of the transfer matrix, so they compose
 without collision.
 
 ## Routing: how two logical channels share one Seam
 
-`Seam.incoming` is single-collection per the kuilt contract. `SeamReplicator`
+`Seam.incoming` is single-collection per the kuilt contract. `Quilter`
 already owns that collection. The coordinator needs its own incoming channel.
 
 Solution: **`MuxSeam`** (`kuilt-core`) wraps the underlying seam and owns the
@@ -45,7 +45,7 @@ provides an N-way channel split:
 
 | Tag  | Channel |
 |------|---------|
-| `0x00` | `SeamReplicator` (delta / ack / fullState / resend) |
+| `0x00` | `Quilter` (delta / ack / fullState / resend) |
 | `0x01` | `BoundedCounterTransferCoordinator` (transfer requests) |
 
 Each consumer calls `mux.channel(tag)` to get a typed `Seam` view that strips

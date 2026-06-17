@@ -105,7 +105,7 @@ public object RoomChannel {
  *
  * The shared upstream ([sharedRaw]) is started eagerly so that frames emitted before
  * [incoming] is first collected are not held in a buffer. Late subscribers use
- * `replay = 0` and may miss frames; this is safe for [us.tractat.kuilt.crdt.replicator.SeamReplicator]
+ * `replay = 0` and may miss frames; this is safe for [us.tractat.kuilt.quilter.Quilter]
  * (gaps heal via FullState + resend).
  *
  * Construction should go through [SeamRoom.channel], which caches instances by id.

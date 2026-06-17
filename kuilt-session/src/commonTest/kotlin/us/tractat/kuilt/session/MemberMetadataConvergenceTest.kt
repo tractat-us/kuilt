@@ -17,15 +17,15 @@ import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.crdt.LWWMap
 import us.tractat.kuilt.crdt.Patch
 import us.tractat.kuilt.crdt.ReplicaId
-import us.tractat.kuilt.crdt.replicator.ReplicatorMessage
-import us.tractat.kuilt.crdt.replicator.SeamReplicator
-import us.tractat.kuilt.crdt.replicator.SeamReplicatorConfig
+import us.tractat.kuilt.quilter.QuiltMessage
+import us.tractat.kuilt.quilter.Quilter
+import us.tractat.kuilt.quilter.QuilterConfig
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
 /**
  * Dog-fooding test: [MemberMetadata]'s backing type ([LWWMap]`<PeerId, String>`)
- * converges **live** across two admitted peers via a [SeamReplicator] wired over
+ * converges **live** across two admitted peers via a [Quilter] wired over
  * [Room.channel]`("member-metadata")` — no explicit [MemberMetadata.merge] call
  * is needed.
  *
@@ -36,8 +36,8 @@ import kotlin.test.assertEquals
  *
  * ## Precondition: one replicator per (replica, CRDT type)
  *
- * [SeamReplicator] requires **exactly one instance per `(replica, CRDT type)`
- * pair per process**. Running two `SeamReplicator<LWWMap<PeerId, String>>`
+ * [Quilter] requires **exactly one instance per `(replica, CRDT type)`
+ * pair per process**. Running two `Quilter<LWWMap<PeerId, String>>`
  * instances with the same [ReplicaId] concurrently breaks the delta-GC protocol:
  * both mint deltas starting at `seq = 1`, the recipient cannot distinguish them,
  * and replicas diverge permanently. Each [Room.channel] call already returns the
@@ -46,16 +46,16 @@ import kotlin.test.assertEquals
  */
 class MemberMetadataConvergenceTest {
 
-    private val replicatorConfig = SeamReplicatorConfig(expectVirtualTime = true)
+    private val replicatorConfig = QuilterConfig(expectVirtualTime = true)
 
     private fun memberMetadataReplicator(
         room: Room,
         scope: CoroutineScope,
-    ): SeamReplicator<LWWMap<PeerId, String>> = SeamReplicator(
+    ): Quilter<LWWMap<PeerId, String>> = Quilter(
         replica = ReplicaId(room.selfId.value),
         seam = room.channel("member-metadata"),
         initial = LWWMap.empty(),
-        messageSerializer = ReplicatorMessage.serializer(LWWMap.serializer(PeerId.serializer(), String.serializer())),
+        messageSerializer = QuiltMessage.serializer(LWWMap.serializer(PeerId.serializer(), String.serializer())),
         scope = scope,
         config = replicatorConfig,
     )

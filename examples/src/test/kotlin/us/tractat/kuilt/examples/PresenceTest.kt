@@ -15,8 +15,8 @@ import us.tractat.kuilt.crdt.EphemeralMap
 import us.tractat.kuilt.crdt.EphemeralMapTracker
 import us.tractat.kuilt.crdt.Patch
 import us.tractat.kuilt.crdt.ReplicaId
-import us.tractat.kuilt.crdt.replicator.SeamReplicator
-import us.tractat.kuilt.crdt.replicator.SeamReplicatorConfig
+import us.tractat.kuilt.quilter.Quilter
+import us.tractat.kuilt.quilter.QuilterConfig
 import kotlinx.serialization.builtins.serializer
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -25,7 +25,7 @@ import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.seconds
 
 /**
- * Example: live presence / "who's typing" indicator using [EphemeralMap] + [SeamReplicator].
+ * Example: live presence / "who's typing" indicator using [EphemeralMap] + [Quilter].
  *
  * Each peer publishes its own presence entry (e.g. which field it is currently editing).
  * A per-replica monotonic clock orders updates within a slot; a higher-clock entry
@@ -44,13 +44,13 @@ import kotlin.time.Duration.Companion.seconds
  * ## API surface exercised
  *
  * - [InMemoryLoom] + `host`/`join` for in-process transport
- * - [SeamReplicator] convenience factory with `EphemeralMap.serializer(String.serializer())`
- * - [SeamReplicator.mutate] with [EphemeralMap.put] / [EphemeralMap.leave]
+ * - [Quilter] convenience factory with `EphemeralMap.serializer(String.serializer())`
+ * - [Quilter.mutate] with [EphemeralMap.put] / [EphemeralMap.leave]
  * - [EphemeralMapTracker] with an injectable clock for deterministic TTL eviction
  */
 class PresenceTest {
 
-    private val replicatorCfg = SeamReplicatorConfig(expectVirtualTime = true)
+    private val replicatorCfg = QuilterConfig(expectVirtualTime = true)
 
     @Test
     fun `two peers publish presence and both entries are visible after sync`() =
@@ -62,14 +62,14 @@ class PresenceTest {
             val aliceReplica = ReplicaId(seamAlice.selfId.value)
             val bobReplica = ReplicaId(seamBob.selfId.value)
 
-            val aliceMap = SeamReplicator(
+            val aliceMap = Quilter(
                 seamAlice,
                 EphemeralMap.empty<String>(),
                 EphemeralMap.serializer(String.serializer()),
                 backgroundScope,
                 config = replicatorCfg,
             )
-            val bobMap = SeamReplicator(
+            val bobMap = Quilter(
                 seamBob,
                 EphemeralMap.empty<String>(),
                 EphemeralMap.serializer(String.serializer()),

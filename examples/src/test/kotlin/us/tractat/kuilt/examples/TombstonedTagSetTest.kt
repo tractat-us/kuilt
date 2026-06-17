@@ -13,8 +13,8 @@ import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.crdt.TwoPhaseSet
-import us.tractat.kuilt.crdt.replicator.SeamReplicator
-import us.tractat.kuilt.crdt.replicator.SeamReplicatorConfig
+import us.tractat.kuilt.quilter.Quilter
+import us.tractat.kuilt.quilter.QuilterConfig
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -23,7 +23,7 @@ import kotlin.time.Duration.Companion.seconds
 
 /**
  * Example: a tombstoned label set replicated across two peers using [TwoPhaseSet]
- * + [SeamReplicator].
+ * + [Quilter].
  *
  * Two moderators manage content-classification labels on a post. A label can be
  * added, but once removed it is permanently tombstoned — a later add has no effect.
@@ -42,7 +42,7 @@ import kotlin.time.Duration.Companion.seconds
  * ## Serializer note
  *
  * [TwoPhaseSet] is a parameterised type. Its serializer requires an element serializer:
- * `TwoPhaseSet.serializer(String.serializer())`. The convenience [SeamReplicator] factory
+ * `TwoPhaseSet.serializer(String.serializer())`. The convenience [Quilter] factory
  * accepts this directly as `valueSerializer`.
  *
  * [TwoPhaseSet.add] and [TwoPhaseSet.remove] return [us.tractat.kuilt.crdt.Patch] directly,
@@ -52,13 +52,13 @@ import kotlin.time.Duration.Companion.seconds
  * ## API surface exercised
  *
  * - [InMemoryLoom] + `host`/`join` for in-process transport
- * - [SeamReplicator] convenience factory with a parameterised element serializer
- * - [SeamReplicator.mutate] with [TwoPhaseSet.add] / [TwoPhaseSet.remove] (both return [us.tractat.kuilt.crdt.Patch])
- * - [SeamReplicator.state] (`StateFlow<TwoPhaseSet<String>>`) to read converged elements
+ * - [Quilter] convenience factory with a parameterised element serializer
+ * - [Quilter.mutate] with [TwoPhaseSet.add] / [TwoPhaseSet.remove] (both return [us.tractat.kuilt.crdt.Patch])
+ * - [Quilter.state] (`StateFlow<TwoPhaseSet<String>>`) to read converged elements
  */
 class TombstonedTagSetTest {
 
-    private val replicatorCfg = SeamReplicatorConfig(expectVirtualTime = true)
+    private val replicatorCfg = QuilterConfig(expectVirtualTime = true)
 
     @Test
     fun `labels added by two peers converge to the union and a removed label stays gone`() =
@@ -67,14 +67,14 @@ class TombstonedTagSetTest {
             val seamAlice = loom.host(Pattern("2p-tags"))
             val seamBob = loom.join(InMemoryTag("bob"))
 
-            val aliceTags = SeamReplicator(
+            val aliceTags = Quilter(
                 seam = seamAlice,
                 initial = TwoPhaseSet.empty<String>(),
                 valueSerializer = TwoPhaseSet.serializer(String.serializer()),
                 scope = backgroundScope,
                 config = replicatorCfg,
             )
-            val bobTags = SeamReplicator(
+            val bobTags = Quilter(
                 seam = seamBob,
                 initial = TwoPhaseSet.empty<String>(),
                 valueSerializer = TwoPhaseSet.serializer(String.serializer()),
@@ -112,14 +112,14 @@ class TombstonedTagSetTest {
             val seamAlice = loom.host(Pattern("2p-tags-tombstone"))
             val seamBob = loom.join(InMemoryTag("bob"))
 
-            val aliceTags = SeamReplicator(
+            val aliceTags = Quilter(
                 seam = seamAlice,
                 initial = TwoPhaseSet.empty<String>(),
                 valueSerializer = TwoPhaseSet.serializer(String.serializer()),
                 scope = backgroundScope,
                 config = replicatorCfg,
             )
-            val bobTags = SeamReplicator(
+            val bobTags = Quilter(
                 seam = seamBob,
                 initial = TwoPhaseSet.empty<String>(),
                 valueSerializer = TwoPhaseSet.serializer(String.serializer()),

@@ -97,7 +97,7 @@ public interface Room {
      *
      * ## Admit-gating guarantee for replicators
      *
-     * A [us.tractat.kuilt.crdt.replicator.SeamReplicator] running over this [Seam]
+     * A [us.tractat.kuilt.quilter.Quilter] running over this [Seam]
      * uses `peers` to maintain its membership book, so:
      *
      * - **FullState** (the convergence base) is sent via `sendTo` only to peers in
@@ -131,7 +131,7 @@ public interface Room {
      * ## Late-subscriber semantics
      *
      * The shared upstream uses `replay = 0`. Frames emitted before [incoming] is
-     * collected are dropped. Safe for [us.tractat.kuilt.crdt.replicator.SeamReplicator]
+     * collected are dropped. Safe for [us.tractat.kuilt.quilter.Quilter]
      * (gaps heal via FullState + resend) but **not** for raw at-least-once consumers.
      */
     public fun channel(id: String): Seam

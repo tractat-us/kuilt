@@ -1,6 +1,7 @@
 # Module kuilt-crdt
 
-A delta-state CRDT zoo built on the kuilt contract, plus a live replication layer.
+A dependency-free delta-state CRDT zoo. Provides `Quilted<S>` value types only —
+no transport dependency. Live replication over a `Seam` lives in `:kuilt-quilter`.
 
 ## The zoo
 
@@ -28,11 +29,11 @@ delivery order or duplication.
 
 ## Replication
 
-`SeamReplicator` streams deltas over a `Seam` — attach it to any `Quilted` state
-and every peer converges automatically.
+Live replication is in `:kuilt-quilter`. `Quilter<S>` streams deltas over a `Seam`
+and converges any `Quilted` state across peers automatically.
 
-`MuxSeam` multiplexes several CRDTs over one underlying `Seam`, routing
-frames by channel tag.
+`MuxSeam` (`:kuilt-core`) multiplexes several CRDTs over one underlying `Seam`,
+routing frames by channel tag.
 
 ## The `Causal` layer
 

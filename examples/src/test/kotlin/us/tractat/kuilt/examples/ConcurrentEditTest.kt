@@ -14,15 +14,15 @@ import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.crdt.MVRegister
 import us.tractat.kuilt.crdt.Patch
-import us.tractat.kuilt.crdt.replicator.SeamReplicator
-import us.tractat.kuilt.crdt.replicator.SeamReplicatorConfig
+import us.tractat.kuilt.quilter.Quilter
+import us.tractat.kuilt.quilter.QuilterConfig
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.time.Duration.Companion.seconds
 
 /**
  * Example: surfacing concurrent edits to a shared field using [MVRegister]
- * + [SeamReplicator].
+ * + [Quilter].
  *
  * A multi-value register retains **all** concurrently written values rather than
  * silently discarding the losers. The app sees a set with more than one element and
@@ -47,14 +47,14 @@ import kotlin.time.Duration.Companion.seconds
  * ## API-surface exercised
  *
  * - [InMemoryLoom] + `host`/`join` for in-process transport
- * - [SeamReplicator] convenience factory (value serializer, default replica)
- * - [SeamReplicator.mutate] to write a value and broadcast the delta
- * - [SeamReplicator.state] (`StateFlow<MVRegister<String>>`) to inspect the value set
+ * - [Quilter] convenience factory (value serializer, default replica)
+ * - [Quilter.mutate] to write a value and broadcast the delta
+ * - [Quilter.state] (`StateFlow<MVRegister<String>>`) to inspect the value set
  * - [MVRegister.values] — `Set<V>` with one element normally, multiple on conflict
  */
 class ConcurrentEditTest {
 
-    private val replicatorCfg = SeamReplicatorConfig(expectVirtualTime = true)
+    private val replicatorCfg = QuilterConfig(expectVirtualTime = true)
 
     @Test
     fun `concurrent writes from two peers are both retained until resolved`() =
@@ -63,8 +63,8 @@ class ConcurrentEditTest {
             val seamAlice = loom.host(Pattern("annotation"))
             val seamBob = loom.join(InMemoryTag("bob"))
 
-            val aliceNote = SeamReplicator(seamAlice, MVRegister.empty<String>(), MVRegister.serializer(String.serializer()), backgroundScope, config = replicatorCfg)
-            val bobNote = SeamReplicator(seamBob, MVRegister.empty<String>(), MVRegister.serializer(String.serializer()), backgroundScope, config = replicatorCfg)
+            val aliceNote = Quilter(seamAlice, MVRegister.empty<String>(), MVRegister.serializer(String.serializer()), backgroundScope, config = replicatorCfg)
+            val bobNote = Quilter(seamBob, MVRegister.empty<String>(), MVRegister.serializer(String.serializer()), backgroundScope, config = replicatorCfg)
 
             delay(1) // let collectors subscribe under StandardTestDispatcher
 
@@ -86,8 +86,8 @@ class ConcurrentEditTest {
             val seamAlice = loom.host(Pattern("annotation-resolve"))
             val seamBob = loom.join(InMemoryTag("bob"))
 
-            val aliceNote = SeamReplicator(seamAlice, MVRegister.empty<String>(), MVRegister.serializer(String.serializer()), backgroundScope, config = replicatorCfg)
-            val bobNote = SeamReplicator(seamBob, MVRegister.empty<String>(), MVRegister.serializer(String.serializer()), backgroundScope, config = replicatorCfg)
+            val aliceNote = Quilter(seamAlice, MVRegister.empty<String>(), MVRegister.serializer(String.serializer()), backgroundScope, config = replicatorCfg)
+            val bobNote = Quilter(seamBob, MVRegister.empty<String>(), MVRegister.serializer(String.serializer()), backgroundScope, config = replicatorCfg)
 
             delay(1) // let collectors subscribe under StandardTestDispatcher
 

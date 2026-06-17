@@ -12,18 +12,18 @@ import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.crdt.GCounter
-import us.tractat.kuilt.crdt.replicator.SeamReplicator
-import us.tractat.kuilt.crdt.replicator.SeamReplicatorConfig
+import us.tractat.kuilt.quilter.Quilter
+import us.tractat.kuilt.quilter.QuilterConfig
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.time.Duration.Companion.seconds
 
 /**
  * Example: a grow-only reaction tally replicated across two peers using [GCounter]
- * + [SeamReplicator].
+ * + [Quilter].
  *
  * Each peer owns its own [us.tractat.kuilt.crdt.ReplicaId] slot in the counter — increments
- * record reactions (e.g. 👍 clicks). Peers apply increments locally and [SeamReplicator]
+ * record reactions (e.g. 👍 clicks). Peers apply increments locally and [Quilter]
  * broadcasts deltas over the [us.tractat.kuilt.core.Seam] automatically. Both replicas
  * converge to the same total regardless of which peer received which clicks.
  *
@@ -39,14 +39,14 @@ import kotlin.time.Duration.Companion.seconds
  * ## API surface exercised
  *
  * - [InMemoryLoom] + `host`/`join` for in-process transport
- * - [SeamReplicator] convenience factory (value serializer, default replica)
- * - [SeamReplicator.mutate] to increment a slot and broadcast the delta
- * - [SeamReplicator.state] (`StateFlow<GCounter>`) to read the converged total
+ * - [Quilter] convenience factory (value serializer, default replica)
+ * - [Quilter.mutate] to increment a slot and broadcast the delta
+ * - [Quilter.state] (`StateFlow<GCounter>`) to read the converged total
  * - [GCounter.value] for the sum across all replicas
  */
 class GCounterReactionTallyTest {
 
-    private val replicatorCfg = SeamReplicatorConfig(expectVirtualTime = true)
+    private val replicatorCfg = QuilterConfig(expectVirtualTime = true)
 
     @Test
     fun `reaction clicks from two peers converge to the correct total`() =
@@ -55,8 +55,8 @@ class GCounterReactionTallyTest {
             val seamAlice = loom.host(Pattern("reactions"))
             val seamBob = loom.join(InMemoryTag("bob"))
 
-            val aliceTally = SeamReplicator(seamAlice, GCounter.ZERO, GCounter.serializer(), backgroundScope, config = replicatorCfg)
-            val bobTally = SeamReplicator(seamBob, GCounter.ZERO, GCounter.serializer(), backgroundScope, config = replicatorCfg)
+            val aliceTally = Quilter(seamAlice, GCounter.ZERO, GCounter.serializer(), backgroundScope, config = replicatorCfg)
+            val bobTally = Quilter(seamBob, GCounter.ZERO, GCounter.serializer(), backgroundScope, config = replicatorCfg)
 
             delay(1) // let collectors subscribe under StandardTestDispatcher
 
@@ -83,8 +83,8 @@ class GCounterReactionTallyTest {
             val seamAlice = loom.host(Pattern("reactions-slots"))
             val seamBob = loom.join(InMemoryTag("bob"))
 
-            val aliceTally = SeamReplicator(seamAlice, GCounter.ZERO, GCounter.serializer(), backgroundScope, config = replicatorCfg)
-            val bobTally = SeamReplicator(seamBob, GCounter.ZERO, GCounter.serializer(), backgroundScope, config = replicatorCfg)
+            val aliceTally = Quilter(seamAlice, GCounter.ZERO, GCounter.serializer(), backgroundScope, config = replicatorCfg)
+            val bobTally = Quilter(seamBob, GCounter.ZERO, GCounter.serializer(), backgroundScope, config = replicatorCfg)
 
             delay(1) // let collectors subscribe under StandardTestDispatcher
 

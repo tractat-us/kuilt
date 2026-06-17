@@ -8,6 +8,8 @@ Formally, these are **C**onflict-free **R**eplicated **D**ata **T**ypes (CRDTs):
 
 `kuilt-crdt` provides fourteen types, grouped by what they model.
 
+Because they're plain value objects with clean APIs, **`kuilt-crdt` depends on nothing else in kuilt** — not even `kuilt-core`. Add it to a project on its own and replicate state over whatever transport you already have; live replication over a `Seam` (via [`Quilter`](crdt-quilter.md) in `:kuilt-quilter`) is opt-in, not required.
+
 ## Pick by what you're building
 
 | What you're building | Type |
@@ -42,7 +44,7 @@ Formally, these are **C**onflict-free **R**eplicated **D**ata **T**ypes (CRDTs):
 
 ## Using the types without kuilt
 
-These types are plain serializable value objects. You do not need a `Seam`, a `Loom`, or any other kuilt module to use them. Apply updates by calling `.piece()` directly; serialize with `kotlinx.serialization`; ship the bytes over any transport you already have.
+These types are plain serializable value objects, and **`kuilt-crdt` declares no dependency on `kuilt-core` or any other kuilt module** — you can add it to a project entirely on its own. You do not need a `Seam`, a `Loom`, or any other kuilt module to use them. Apply updates by calling `.piece()` directly; serialize with `kotlinx.serialization`; ship the bytes over any transport you already have.
 
 ```kotlin
 var counter = GCounter.ZERO
@@ -51,17 +53,17 @@ counter = counter.piece(delta)             // apply locally
 // ship `delta` to peers; they apply it with their own .piece(delta)
 ```
 
-`SeamReplicator` automates this over a kuilt `Seam` — but it is optional. If you already have a messaging layer, wire the types to it yourself.
+`Quilter` automates this over a kuilt `Seam` — but it is optional. If you already have a messaging layer, wire the types to it yourself.
 
 ## Live replication
 
-`SeamReplicator<S>` runs over a `Seam` and keeps one replica live: it ships deltas to all peers as you apply updates, and merges inbound deltas as they arrive. `state` is a `StateFlow<S>` — always the current converged value.
+`Quilter<S>` runs over a `Seam` and keeps one replica live: it ships deltas to all peers as you apply updates, and merges inbound deltas as they arrive. `state` is a `StateFlow<S>` — always the current converged value.
 
-See [SeamReplicator](crdt-seamreplicator.md) for usage and the `MuxSeam` multiplexing pattern that lets multiple replicators share one transport.
+See [Quilter](crdt-quilter.md) for usage and the `MuxSeam` multiplexing pattern that lets multiple replicators share one transport.
 
 ## Serialization
 
-Every CRDT type is `@Serializable`. Wire transport (CBOR by default, via `SeamReplicator`) and JSON round-trips both work. Each type's serializer is accessible via `T.serializer()` or `T.serializer(elementSerializer)`.
+Every CRDT type is `@Serializable`. Wire transport (CBOR by default, via `Quilter`) and JSON round-trips both work. Each type's serializer is accessible via `T.serializer()` or `T.serializer(elementSerializer)`.
 
 ## How it works under the hood
 
@@ -77,7 +79,7 @@ interface Quilted<S : Quilted<S>> {
 
 `piece` is the join in the join-semilattice. Calling it with the same argument twice produces the same result as calling it once (idempotent). Order doesn't matter (commutative). Multiple calls can be grouped in any order (associative). These three laws guarantee convergence.
 
-**Delta state.** Instead of shipping the entire current state on every update, CRDTs here emit a *delta* — a minimal patch that represents only what changed. Merging a delta into the current state advances it the same way merging the full state would. `SeamReplicator` exploits this to send small delta messages over the wire and ship the full state only to late joiners.
+**Delta state.** Instead of shipping the entire current state on every update, CRDTs here emit a *delta* — a minimal patch that represents only what changed. Merging a delta into the current state advances it the same way merging the full state would. `Quilter` exploits this to send small delta messages over the wire and ship the full state only to late joiners.
 
 ### The `Patch` wrapper
 

@@ -65,8 +65,8 @@ implementation("us.tractat.kuilt:kuilt-crdt")
 
 ```kotlin
 val replica = ReplicaId("alice")
-val msgSerializer = ReplicatorMessage.serializer(Rga.wireSerializer(String.serializer()))
-val replicator = SeamReplicator(replica, seam, Rga.empty<String>(), msgSerializer, scope)
+val msgSerializer = QuiltMessage.serializer(Rga.wireSerializer(String.serializer()))
+val replicator = Quilter(replica, seam, Rga.empty<String>(), msgSerializer, scope)
 
 // Send a message — appended to the shared list, propagated to all peers
 val current = replicator.state.value

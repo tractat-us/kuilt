@@ -17,16 +17,16 @@ import us.tractat.kuilt.crdt.Rga
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.crdt.RgaId
 import us.tractat.kuilt.crdt.RgaOp
-import us.tractat.kuilt.crdt.replicator.ReplicatorMessage
-import us.tractat.kuilt.crdt.replicator.SeamReplicator
-import us.tractat.kuilt.crdt.replicator.SeamReplicatorConfig
+import us.tractat.kuilt.quilter.QuiltMessage
+import us.tractat.kuilt.quilter.Quilter
+import us.tractat.kuilt.quilter.QuilterConfig
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.time.Duration.Companion.seconds
 
 /**
  * Example: collaborative text editing replicated across two peers using [Rga]
- * + [SeamReplicator].
+ * + [Quilter].
  *
  * Two peers insert and delete characters at **arbitrary positions** concurrently.
  * The RGA sequence CRDT resolves concurrent inserts at the same position
@@ -43,35 +43,35 @@ import kotlin.time.Duration.Companion.seconds
  * - Insert at any position, not just HEAD — peers type at the cursor, not the end.
  * - Delete via [Rga.removeAt] — backing-up and correcting a character.
  * - Operations propagate automatically over the [us.tractat.kuilt.core.Seam]
- *   via [SeamReplicator]; neither peer calls [Rga.piece] manually.
+ *   via [Quilter]; neither peer calls [Rga.piece] manually.
  *
  * ## Serializer note
  *
- * [Rga] requires a **custom wire serializer** when used with [SeamReplicator].
+ * [Rga] requires a **custom wire serializer** when used with [Quilter].
  * The compiler-generated `Rga.serializer(...)` defaults to
  * `PolymorphicSerializer(Any::class)` for the element type [V] in
  * [RgaOp.Insert.value], which CBOR cannot encode. Use [Rga.wireSerializer]
  * (backed by [us.tractat.kuilt.crdt.RgaOpSerializer]) and pass the result to
- * `ReplicatorMessage.serializer(...)` to obtain the [messageSerializer] for
- * the full [SeamReplicator] constructor.
+ * `QuiltMessage.serializer(...)` to obtain the [messageSerializer] for
+ * the full [Quilter] constructor.
  *
  * ## API surface exercised
  *
  * - [InMemoryLoom] + `host`/`join` for in-process transport
- * - [SeamReplicator] full constructor with a custom [messageSerializer]
+ * - [Quilter] full constructor with a custom [messageSerializer]
  * - [Rga.insertAt] to insert at an arbitrary visible position
  * - [Rga.removeAt] to delete a character and broadcast the tombstone
- * - [SeamReplicator.apply] with `Patch(Rga.empty<Char>().apply(op))` — the
+ * - [Quilter.apply] with `Patch(Rga.empty<Char>().apply(op))` — the
  *   delta-broadcast pattern for op-based CRDTs
  * - [Rga.toList] to read the converged character sequence
  */
 class RgaCollabEditTest {
 
-    private val replicatorCfg = SeamReplicatorConfig(expectVirtualTime = true)
-    private val msgSerializer = ReplicatorMessage.serializer(Rga.wireSerializer(serializer<Char>()))
+    private val replicatorCfg = QuilterConfig(expectVirtualTime = true)
+    private val msgSerializer = QuiltMessage.serializer(Rga.wireSerializer(serializer<Char>()))
 
     private fun makeReplicator(seam: us.tractat.kuilt.core.Seam, scope: kotlinx.coroutines.CoroutineScope) =
-        SeamReplicator(
+        Quilter(
             replica = ReplicaId(seam.selfId.value),
             seam = seam,
             initial = Rga.empty<Char>(),
@@ -84,7 +84,7 @@ class RgaCollabEditTest {
      * Inserts [char] at visible position [index] on [rep] and broadcasts the delta.
      * Returns the [RgaId] of the newly inserted element so callers can reference it.
      */
-    private fun SeamReplicator<Rga<Char>>.insertAt(index: Int, char: Char): RgaId {
+    private fun Quilter<Rga<Char>>.insertAt(index: Int, char: Char): RgaId {
         val (_, op) = state.value.insertAt(replica, index, char)
         apply(Patch(Rga.empty<Char>().apply(op)))
         return op.id
@@ -93,7 +93,7 @@ class RgaCollabEditTest {
     /**
      * Removes the visible element at [index] on [rep] and broadcasts the tombstone.
      */
-    private fun SeamReplicator<Rga<Char>>.removeAt(index: Int) {
+    private fun Quilter<Rga<Char>>.removeAt(index: Int) {
         val result = state.value.removeAt(index) ?: return
         val (_, op) = result
         apply(Patch(Rga.empty<Char>().apply(op)))

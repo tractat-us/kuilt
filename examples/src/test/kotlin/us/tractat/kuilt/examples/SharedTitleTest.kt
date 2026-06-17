@@ -14,15 +14,15 @@ import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.crdt.LWWRegister
 import us.tractat.kuilt.crdt.Patch
-import us.tractat.kuilt.crdt.replicator.SeamReplicator
-import us.tractat.kuilt.crdt.replicator.SeamReplicatorConfig
+import us.tractat.kuilt.quilter.Quilter
+import us.tractat.kuilt.quilter.QuilterConfig
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.time.Duration.Companion.seconds
 
 /**
  * Example: a shared document title replicated across two peers using [LWWRegister]
- * + [SeamReplicator].
+ * + [Quilter].
  *
  * The title is a single mutable string owned by whoever wrote last. [LWWRegister]
  * resolves conflicts deterministically by comparing `(timestamp, replicaId)` tags,
@@ -48,13 +48,13 @@ import kotlin.time.Duration.Companion.seconds
  * ## API-surface exercised
  *
  * - [InMemoryLoom] + `host`/`join` for in-process transport
- * - [SeamReplicator] convenience factory (value serializer, default replica)
- * - [SeamReplicator.mutate] to apply a timestamped write and broadcast the delta
- * - [SeamReplicator.state] (`StateFlow<LWWRegister<String>>`) to read the winner
+ * - [Quilter] convenience factory (value serializer, default replica)
+ * - [Quilter.mutate] to apply a timestamped write and broadcast the delta
+ * - [Quilter.state] (`StateFlow<LWWRegister<String>>`) to read the winner
  */
 class SharedTitleTest {
 
-    private val replicatorCfg = SeamReplicatorConfig(expectVirtualTime = true)
+    private val replicatorCfg = QuilterConfig(expectVirtualTime = true)
 
     @Test
     fun `a later write overrides an earlier one and both replicas converge`() =
@@ -63,8 +63,8 @@ class SharedTitleTest {
             val seamAlice = loom.host(Pattern("doc-title"))
             val seamBob = loom.join(InMemoryTag("bob"))
 
-            val aliceTitle = SeamReplicator(seamAlice, LWWRegister.empty<String>(), LWWRegister.serializer(String.serializer()), backgroundScope, config = replicatorCfg)
-            val bobTitle = SeamReplicator(seamBob, LWWRegister.empty<String>(), LWWRegister.serializer(String.serializer()), backgroundScope, config = replicatorCfg)
+            val aliceTitle = Quilter(seamAlice, LWWRegister.empty<String>(), LWWRegister.serializer(String.serializer()), backgroundScope, config = replicatorCfg)
+            val bobTitle = Quilter(seamBob, LWWRegister.empty<String>(), LWWRegister.serializer(String.serializer()), backgroundScope, config = replicatorCfg)
 
             delay(1) // let collectors subscribe under StandardTestDispatcher
 
@@ -88,8 +88,8 @@ class SharedTitleTest {
             val seamAlice = loom.host(Pattern("doc-title-tie"))
             val seamBob = loom.join(InMemoryTag("bob"))
 
-            val aliceTitle = SeamReplicator(seamAlice, LWWRegister.empty<String>(), LWWRegister.serializer(String.serializer()), backgroundScope, config = replicatorCfg)
-            val bobTitle = SeamReplicator(seamBob, LWWRegister.empty<String>(), LWWRegister.serializer(String.serializer()), backgroundScope, config = replicatorCfg)
+            val aliceTitle = Quilter(seamAlice, LWWRegister.empty<String>(), LWWRegister.serializer(String.serializer()), backgroundScope, config = replicatorCfg)
+            val bobTitle = Quilter(seamBob, LWWRegister.empty<String>(), LWWRegister.serializer(String.serializer()), backgroundScope, config = replicatorCfg)
 
             delay(1) // let collectors subscribe under StandardTestDispatcher
 

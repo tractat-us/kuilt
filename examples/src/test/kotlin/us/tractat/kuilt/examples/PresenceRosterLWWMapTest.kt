@@ -14,15 +14,15 @@ import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.crdt.LWWMap
 import us.tractat.kuilt.crdt.Patch
-import us.tractat.kuilt.crdt.replicator.SeamReplicator
-import us.tractat.kuilt.crdt.replicator.SeamReplicatorConfig
+import us.tractat.kuilt.quilter.Quilter
+import us.tractat.kuilt.quilter.QuilterConfig
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
 import kotlin.time.Duration.Companion.seconds
 
 /**
- * Example: a presence/roster map replicated across two peers using [LWWMap] + [SeamReplicator].
+ * Example: a presence/roster map replicated across two peers using [LWWMap] + [Quilter].
  *
  * Each peer updates its own member's status in the map. [LWWMap] resolves concurrent writes to
  * the *same key* by last-writer-wins (the write with the highest timestamp survives). Writes to
@@ -40,9 +40,9 @@ import kotlin.time.Duration.Companion.seconds
  * ## API surface exercised
  *
  * - [InMemoryLoom] + `host`/`join` for in-process transport
- * - [SeamReplicator] convenience factory with a two-type-param serializer
+ * - [Quilter] convenience factory with a two-type-param serializer
  * - `apply(Patch(...))` to broadcast a `set` mutation (LWWMap.set returns a new state, not a Patch)
- * - [SeamReplicator.state] (`StateFlow<LWWMap<String, String>>`) to read the current roster
+ * - [Quilter.state] (`StateFlow<LWWMap<String, String>>`) to read the current roster
  *
  * ## Clock-skew note
  *
@@ -52,7 +52,7 @@ import kotlin.time.Duration.Companion.seconds
  */
 class PresenceRosterLWWMapTest {
 
-    private val replicatorCfg = SeamReplicatorConfig(expectVirtualTime = true)
+    private val replicatorCfg = QuilterConfig(expectVirtualTime = true)
     private val mapSerializer = LWWMap.serializer(String.serializer(), String.serializer())
 
     @Test
@@ -62,8 +62,8 @@ class PresenceRosterLWWMapTest {
             val seamAlice = loom.host(Pattern("presence-roster"))
             val seamBob = loom.join(InMemoryTag("bob"))
 
-            val aliceRoster = SeamReplicator(seamAlice, LWWMap.empty(), mapSerializer, backgroundScope, config = replicatorCfg)
-            val bobRoster = SeamReplicator(seamBob, LWWMap.empty(), mapSerializer, backgroundScope, config = replicatorCfg)
+            val aliceRoster = Quilter(seamAlice, LWWMap.empty(), mapSerializer, backgroundScope, config = replicatorCfg)
+            val bobRoster = Quilter(seamBob, LWWMap.empty(), mapSerializer, backgroundScope, config = replicatorCfg)
 
             delay(1) // let collectors subscribe under StandardTestDispatcher
 
@@ -88,8 +88,8 @@ class PresenceRosterLWWMapTest {
             val seamAlice = loom.host(Pattern("status-update"))
             val seamBob = loom.join(InMemoryTag("bob"))
 
-            val aliceRoster = SeamReplicator(seamAlice, LWWMap.empty(), mapSerializer, backgroundScope, config = replicatorCfg)
-            val bobRoster = SeamReplicator(seamBob, LWWMap.empty(), mapSerializer, backgroundScope, config = replicatorCfg)
+            val aliceRoster = Quilter(seamAlice, LWWMap.empty(), mapSerializer, backgroundScope, config = replicatorCfg)
+            val bobRoster = Quilter(seamBob, LWWMap.empty(), mapSerializer, backgroundScope, config = replicatorCfg)
 
             delay(1) // let collectors subscribe under StandardTestDispatcher
 

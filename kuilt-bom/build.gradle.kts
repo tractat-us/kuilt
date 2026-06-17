@@ -20,6 +20,7 @@ dependencies {
     constraints {
         api(project(":kuilt-core"))
         api(project(":kuilt-crdt"))
+        api(project(":kuilt-quilter"))
         api(project(":kuilt-deal"))
         api(project(":kuilt-deal-test"))
         api(project(":kuilt-game"))
