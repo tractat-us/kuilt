@@ -300,6 +300,94 @@ Key design decisions:
   zero will have its writes dropped until the stale high-clock entry TTL-evicts
   on each observer. Rejoin-visibility latency is bounded by `ttlMs`.
 
+## Server-cluster topology
+
+`:kuilt-cluster` packages the **server-cluster topology** — a small set of
+servers hosting consensus with many learner-clients that submit actions and
+observe state. This is the two-tier overlay model: a densely-connected voter
+core plus a sparse client periphery.
+
+### Two-tier overlay
+
+```
+   voter core — complete graph K_m  (consensus lives ENTIRELY here)
+   ┌─────────────────────────────┐
+   │     S1 ──── S2 ──── S3       │   m = 1/3/5  (fault-tolerance dial)
+   │      \      │      /         │   every voter pair linked; leader replicates to all
+   └───────\─────┼─────/──────────┘
+            \    │    /
+   d=1 ──────C   │   C   C────── d=1   (star leaf: one live link per client)
+  (single-link   │
+   clients)      C
+                 learner periphery — clients forward-to-propose, replicate-to-observe
+```
+
+- **Voter core — a complete graph `K_m`.** The `m` voter servers (m = 1/3/5)
+  each hold a link to every other voter. Election, quorum, and commitment live
+  here and nowhere else.
+- **Learner periphery — sparse.** Many clients, each attached to the core via
+  one or more server links, never voting and never counting toward quorum. A
+  complete graph over clients would be the O(n²) cost the two-tier split exists
+  to avoid.
+
+### Attachment degree `d`
+
+Each client holds `d` concurrent server links. `d` is the **attachment degree**
+— the client's vertex connectivity to the voter core:
+
+- **`d = 1` — star leaf (current).** One live link plus a static list of other
+  endpoints to round-robin to on tear. Survives 0 *simultaneous* server
+  failures without reconnect (it must fail over, but the failure is safe).
+- **`d > 1` — multi-homed leaf (future).** `d` redundant links; the client
+  rides out `d − 1` server failures with no reconnect at all. A later dial not
+  committed in the current facade.
+
+### Safety is topology-independent
+
+**A client's attachment degree can never threaten Raft safety.** Raft's
+consistency guarantee depends only on the voter quorum. A client that is
+momentarily disconnected during failover — attachment degree `0` — cannot
+produce stale reads or lost writes: proposals block until the client reconnects
+and the cluster commits them; committed entries are not retracted. Client
+connectivity is purely an **availability / forward-latency** dial, not a
+correctness one. Under-provisioning it costs reconnect latency, never wrong
+state.
+
+### Relay-room implementation
+
+Servers run a `KtorRoomHost` relay. A client connecting to any server endpoint
+is logically a peer on the shared cluster `Seam`, so propose-forwarding routes
+its commands to the current leader without the client needing to know who the
+leader is.
+
+Client onboarding is a `changeMembership` that adds the client as a learner in
+`ClusterConfig.learners`. Learner-set-only changes skip joint consensus — each
+join is a cheap simple config entry. The client is assigned a `NodeId` derived
+from its Seam `selfId` at join time; the server derives the same `NodeId` from
+the room roster — no explicit client identification step is needed.
+
+### Current limitations
+
+- **M=3 voter mesh is proven under simulation; M=1 is proven over real sockets
+  (`ServerClusterE2ETest`).** Real-socket M>1 E2E is a follow-up (see #545).
+- **Cross-server resume degrades to fresh-join** (see #532). Each server's
+  reconnect window registry is in-memory and per-room-instance; a `ResumeToken`
+  issued by server-A is unknown to server-B, so failover always produces
+  `ResumeResult.WindowClosed` and the client fresh-joins the new server.
+  This is correct and fast; it costs a re-snapshot on the client's Raft log.
+- **The `CoroutineScope.clusterClient()` production path** (relay-room, full
+  reconnect wiring) requires a stable client identity derived from the `Loom`'s
+  `Seam.selfId`. The current production entry point is `clusterClientWithNode()`
+  for caller-managed transport (see #544 for the pending stable-identity work).
+
+### `NodeId` ↔ `PeerId` alignment
+
+Each voter's `NodeId` must equal `NodeId(serverPeerId.value)` — that is, the
+server's `KtorRoomHost.serverPeerId` cast to a `NodeId`. The `LearnerRouter`
+stamps `Seam.broadcast`'s sender as `serverPeerId`; the client's
+`SeamRaftTransport` maps that sender to a `NodeId` for Raft message routing.
+Mismatched IDs cause silently dropped AppendEntries.
+
 ## What kuilt is *not* responsible for
 
 The `:kuilt-core` contract deliberately stops at moving bytes between connected
@@ -322,7 +410,8 @@ Genuinely out of scope for kuilt at every layer:
 ```
 kuilt-core         the contract + InMemoryLoom + MuxSeam + SeamConformanceSuite (depends on nothing fabric-specific)
   ├── kuilt-raft        Raft consensus (election, log, snapshots, membership, reads, transfer)  → depends on kuilt-core
-  │     └── kuilt-game  turn-based game facade (TurnSequencer / SpeculativeSequencer)  → depends on kuilt-raft
+  │     ├── kuilt-game  turn-based game facade (TurnSequencer / SpeculativeSequencer)  → depends on kuilt-raft
+  │     └── kuilt-cluster  server-cluster facade (ServerCluster / ClusterClient / VoterMesh)  → depends on kuilt-raft + kuilt-session + kuilt-websocket (JVM/Android)
   ├── kuilt-crdt        delta-state CRDT zoo + Quilter   → depends on kuilt-core
   │     └── kuilt-deal  fair card dealing + fair-random (SRA / commit-reveal)  → depends on kuilt-crdt + kuilt-core
   ├── kuilt-session     membership/room layer (admit, roster, roles, resume)  → depends on kuilt-core

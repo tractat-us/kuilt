@@ -353,3 +353,141 @@ scope.launch {
 
 See the KDoc on `RaftNode` and `ClusterConfig` for the full API, and
 `docs/superpowers/specs/2026-06-05-raft-design.md` for the design rationale.
+
+## Server-cluster topology (`kuilt-cluster`, JVM/Android)
+
+`:kuilt-cluster` packages the server-cluster topology as two high-level types:
+`ServerCluster` (the server side — a voter mesh plus a relay accept loop) and
+`ClusterClient` (the client side — a learner that proposes through the leader
+and observes the committed stream).
+
+Add the dependency:
+
+```kotlin
+implementation("us.tractat.kuilt:kuilt-cluster")
+```
+
+### Server side
+
+`CoroutineScope.serverCluster()` wires `m` voter `RaftNode`s in-process
+(complete-graph `K_m` channel transport) and mounts a `KtorRoomHost` relay
+accept loop that admits learner clients as they connect. Voter nodes start
+immediately; call `start()` in a `launch` to run the accept loop:
+
+```kotlin
+val host = KtorRoomHost(
+    application = application,
+    path = "/ws/cluster",
+    serverPeerId = PeerId("server-1"),
+    pattern = Pattern("cluster-room"),
+)
+
+val serverScope = CoroutineScope(coroutineContext + Job())
+val cluster = serverScope.serverCluster(
+    host = host,
+    voterIds = listOf(NodeId("server-1")),   // m=1 for single-server; use 3 or 5 for fault-tolerance
+    raftConfig = RaftConfig(/* … */),
+)
+
+serverScope.launch { cluster.start() }      // admit loop — runs until scope is cancelled
+
+// Wait for a leader before accepting clients, if you need the guarantee.
+val leader = cluster.awaitLeader()
+
+// Collect committed entries on the server side (optional).
+serverScope.launch {
+    cluster.committed.collect { committed ->
+        if (committed is Committed.Entry) applyToStateMachine(committed.entry.command)
+    }
+}
+```
+
+**NodeId ↔ PeerId alignment.** Each voter's `NodeId` must equal
+`NodeId(serverPeerId.value)`. The relay stamps the server's `PeerId` as the
+sender on every frame; the client's `SeamRaftTransport` maps that sender to a
+`NodeId` for Raft message routing. Mismatched IDs cause silently dropped
+AppendEntries.
+
+### Client side
+
+Clients use `clusterClientWithNode()` with a caller-managed `RaftNode` over a
+`SeamRaftTransport`. The convenience extension `CoroutineScope.clusterClient()`
+(relay-room with automatic reconnect) is declared but requires a stable client
+identity on the loom (see #544) before it is production-ready.
+
+```kotlin
+// Join the server relay room.
+val clientScope = CoroutineScope(coroutineContext + Job())
+val clientRoom = SeamRoomFactory.systemClock(loom = clientLoom, scope = clientScope)
+    .join(
+        WebSocketAdvertisement(
+            url = "ws://your-server-host/ws/cluster",
+            serverPeerId = PeerId("server-1"),
+            displayName = "my-client",
+        ),
+    )
+val clientSeam = clientRoom.channel("raft")
+
+// Derive the client's NodeId from the Seam selfId assigned at join time.
+// The ServerCluster admission loop derives the same NodeId from the room roster.
+val clientNodeId = NodeId(clientSeam.selfId.value)
+val learnerConfig = ClusterConfig(
+    voters = setOf(NodeId("server-1")),
+    learners = setOf(clientNodeId),
+)
+
+// Wait for the admit handshake before starting the RaftNode.
+withTimeout(5.seconds) { clientRoom.roster.first { it.isNotEmpty() } }
+
+val clientNode = clientScope.raftNode(
+    clusterConfig = learnerConfig,
+    transport = SeamRaftTransport(clientSeam),
+    storage = InMemoryRaftStorage(),
+    raftConfig = RaftConfig(/* … */),
+)
+val client: ClusterClient = clusterClientWithNode(clientNode)
+
+// Observe committed entries.
+clientScope.launch {
+    client.committed.collect { committed ->
+        if (committed is Committed.Entry) applyToStateMachine(committed.entry.command)
+    }
+}
+
+// Propose a command. Forwards to the leader; suspends until committed.
+val entry: LogEntry = client.propose("action:move=1".encodeToByteArray())
+println("committed at index ${entry.index}")
+
+// For cross-crash exactly-once semantics, persist the requestId and replay it on retry.
+val entry2: LogEntry = client.propose("action:move=2".encodeToByteArray(), requestId = 42L)
+
+client.close()
+```
+
+### Failover (round-robin endpoints)
+
+On transport tear, `ServerClusterReconnect` advances to the next endpoint from
+the ordered `ClusterEndpoints` list and reconnects. Cross-server resume always
+degrades to fresh-join (see #532): each server's reconnect-window registry is
+in-memory and per-room-instance, so a `ResumeToken` from server-A is unknown to
+server-B. `ClusterClient` treats this as a fall-back-to-fresh-join signal, not
+an error — reconnect is correct, it costs a re-snapshot on the learner's log.
+
+### Exactly-once proposals
+
+`propose(command)` auto-mints a monotonic `requestId`. `propose(command,
+requestId)` is the cross-crash exactly-once overload: persist `requestId` before
+calling, replay it after a crash or failover. The server's `ClientSessionTable`
+deduplicates retries transparently.
+
+### Current scope
+
+- M=3 voter mesh is proven under simulation; M=1 is proven over real sockets
+  (`ServerClusterE2ETest`, S3b-3 of #513). Real-socket M>1 E2E is #545.
+- Failover/resume across an entry-server change is unit-tested and
+  sim-proven; the production `clusterClient(loom, …)` reconnect path is
+  pending a stable client identity on the loom (see #544). Use
+  `clusterClientWithNode()` for caller-managed transport in the meantime.
+
+See `docs/architecture.md#server-cluster-topology` for the topology design and
+safety rationale.
