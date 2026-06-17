@@ -12,6 +12,7 @@ import us.tractat.kuilt.core.Tag
 import us.tractat.kuilt.raft.ClientId
 import us.tractat.kuilt.raft.ClientSessionTable
 import us.tractat.kuilt.raft.ClusterConfig
+import us.tractat.kuilt.raft.DedupKey
 import us.tractat.kuilt.raft.Committed
 import us.tractat.kuilt.raft.InMemoryRaftStorage
 import us.tractat.kuilt.raft.LeadershipLostException
@@ -31,6 +32,7 @@ import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
+import kotlin.test.fail
 
 /**
  * M=3 done-when integration test for epic #485, S1c-2.
@@ -51,10 +53,13 @@ import kotlin.test.assertTrue
  *
  * ## What is proven
  *
- * After the leader change, two committed entries carry the same
- * [us.tractat.kuilt.raft.DedupKey] (the new leader's cache is cold).
- * [ClientSessionTable.shouldApply] applied to the committed log applies the first
- * and skips the second — count on every surviving voter == 1.
+ * 1. **The hazard is real:** after the leader change, the raw committed log on each surviving
+ *    voter contains **exactly two** [us.tractat.kuilt.raft.LogEntry]s whose
+ *    [us.tractat.kuilt.raft.LogEntry.dedupKey] equals `DedupKey(ClientId("client"), 1L)`.
+ *    This confirms the duplicate-commit scenario actually occurs (the new leader's cache is cold).
+ *
+ * 2. **The guard works:** [ClientSessionTable.shouldApply] applied to that log applies the
+ *    action exactly once per surviving voter — the second entry is skipped.
  */
 class NoDoubleApplyFailoverTest {
 
@@ -128,9 +133,11 @@ class NoDoubleApplyFailoverTest {
         sim.awaitCommit(retried.index, on = survivingVoters)
         sim.awaitCommit(retried.index, on = setOf(clientId))
 
-        // ── Step 8: assert exactly-once on each surviving voter ───────────────
+        // ── Step 8: assert BOTH that the hazard is real AND the guard holds ──
+        val expectedDedupKey = DedupKey(ClientId("client"), 1L)
         for (voterId in survivingVoters) {
             val entries = replayEntries(sim.nodes.getValue(voterId), upToIndex = retried.index)
+            assertDuplicateCommitted(expectedDedupKey, entries, "voter $voterId")
             assertExactlyOnce(command, entries, "action:A on voter $voterId (no double-apply)")
         }
     }
@@ -213,6 +220,26 @@ class NoDoubleApplyFailoverTest {
                 item.entry.index < upToIndex
             }
             .toList()
+
+    /**
+     * Assert that [entries] contains **exactly two** entries whose [LogEntry.dedupKey] equals
+     * [expectedKey] — proving the duplicate-commit hazard actually materialized (the new leader's
+     * dedup cache was cold and committed the retry as a fresh log entry).
+     *
+     * If only one entry is found the scenario did not create the hazard (e.g. the retry coalesced
+     * on a warm-cache leader), and the test fails with a finding rather than a false green.
+     */
+    private fun assertDuplicateCommitted(expectedKey: DedupKey, entries: List<LogEntry>, context: String) {
+        val duplicates = entries.count { it.dedupKey == expectedKey }
+        if (duplicates != 2) {
+            fail(
+                "$context: expected exactly 2 committed entries with dedupKey=$expectedKey " +
+                    "(proving the cold-cache duplicate-commit hazard), but found $duplicates. " +
+                    "The failover scenario may not have produced the duplicate — " +
+                    "the test's no-double-apply guarantee cannot be confirmed.",
+            )
+        }
+    }
 
     /**
      * Apply [ClientSessionTable] to [entries] and assert [command] appears exactly once.
