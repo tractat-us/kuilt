@@ -1,10 +1,16 @@
 # Fabrics
 
-Every fabric implements `Loom` and a private `Seam`. Your application code only ever sees the contract — swap the `Loom` and the rest is unchanged.
+Your app logic should not care whether peers are connected by WebSocket, LAN discovery, or direct radio. In kuilt, every fabric implements `Loom` and yields a `Seam`, so you can swap transports without rewriting the layer above.
+
+## Pick a fabric by deployment shape
+
+- Use **WebSocket** when you want the fastest path to cross-platform connectivity.
+- Use **mDNS** when peers need local-network discovery before connecting.
+- Use **Near fabrics** when you want direct device-to-device links.
 
 ## WebSocket fabric (`kuilt-websocket`)
 
-WebSocket sessions have asymmetric setup (a server accepts, a client connects) but the resulting `Seam` is symmetric for both. The split is:
+WebSocket is the easiest way to get a cross-platform session running. Setup is role-split (server accepts, client connects), but once connected both peers use the same symmetric `Seam` API. The split is:
 
 - `KtorServerLoom` — JVM/Android. Supports only `host()`; `join()` throws.
 - `KtorClientLoom` — all targets. Supports only `join()`; `host()` throws.
@@ -38,7 +44,7 @@ The advertisement carries the server's `PeerId` so both ends arrive at the same 
 
 ## mDNS discovery (`kuilt-mdns`, JVM/Android)
 
-mDNS is rendezvous over the LAN — the actual session still runs over WebSocket. `MDNSPeerLinkFactory` registers an mDNS service on `host()` and resolves an `MDNSAdvertisement` to a WebSocket join on `join()`. Discover peers separately with `MDNSServiceDiscoverer`:
+mDNS helps peers find each other on a local network. It is discovery, not transport: the session still runs over WebSocket. `MDNSPeerLinkFactory` registers an mDNS service on `host()` and resolves an `MDNSAdvertisement` to a WebSocket join on `join()`. Discover peers separately with `MDNSServiceDiscoverer`:
 
 ```kotlin
 val jmdns = JmDNS.create()
@@ -48,22 +54,26 @@ val host = MDNSPeerLinkFactory(application, jmdns, port = 8080, httpClientFactor
 val hostSeam = host.host(Pattern("alice's game"))
 
 // Joiner: discover then join.
+val joiner = MDNSPeerLinkFactory(application, jmdns, port = 8080, httpClientFactory = { HttpClient { } })
 val discoverer = MDNSServiceDiscoverer(jmdns)
 val ad = discoverer.discoveries().first()
-val joinerSeam = host.join(ad)
+val joinerSeam = joiner.join(ad)
 ```
 
 Bound your collection with a timeout or `take(n)` — `discoveries()` emits indefinitely.
 
 ## Near fabrics
 
-`kuilt-multipeer` (iOS/macOS) and `kuilt-nearby` (Android) are Near fabrics — peer-to-peer, no relay server. They both implement `Loom` and return the same instance for host and join (one in-process mesh). Replace `InMemoryLoom` with one of these and your application code is unchanged.
+If you want direct device-to-device links, use the Near fabrics. `kuilt-multipeer` (iOS/macOS) and `kuilt-nearby` (Android) are peer-to-peer, no relay server. They both implement `Loom` and return the same instance for host and join (one in-process mesh). Replace `InMemoryLoom` with one of these and your application code is unchanged.
 
 `kuilt-webrtc` (wasmJs) provides a WebRTC data-channel fabric. WebRTC sessions involve a signaling handshake, but that is entirely inside the fabric implementation — callers see only `Loom`/`Seam`.
 
 ## Writing your own fabric
 
-Implement `Loom` (and a private `Seam`), then prove it conforms by subclassing `SeamConformanceSuite`:
+When your transport is not packaged yet, implement `Loom` (and a private `Seam`) and prove it behaves like every other kuilt fabric by subclassing `SeamConformanceSuite`.
+
+**Why this matters:** conformance tests keep your custom fabric from surprising
+the layers above it.
 
 ```kotlin
 class MyFabricLoom : Loom {
@@ -104,7 +114,7 @@ Keep real-network smoke tests in a separate test that is opt-in (e.g. `-Pmy.fabr
 
 ## The membership layer (`kuilt-session`)
 
-`Seam` is pure transport — `peers` is whoever the wire says is connected. When you need who has *identified themselves*, who is the host, or whether someone dropped and might reconnect, use `kuilt-session`.
+`Seam` is pure transport — `peers` is whoever the wire says is connected. When your product needs room semantics (identified members, host role, reconnect behavior), add `kuilt-session`.
 
 `SeamRoomFactory` wraps any `Loom` and produces `Room`s with an admit/identify handshake, a roster of admitted members, reconnect tokens, and partition detection:
 

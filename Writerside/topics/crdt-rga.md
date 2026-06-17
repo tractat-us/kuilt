@@ -1,6 +1,6 @@
-# Rga
+# RGA (`Rga`)
 
-A Replicated Growable Array — an ordered sequence CRDT for lists and collaborative text. Elements are inserted with stable unique identifiers; the order is determined by those ids, not by array indices.
+RGA (Replicated Growable Array) is an ordered-sequence CRDT for lists and collaborative text. Elements are inserted with stable unique identifiers; the order is determined by those ids, not by array indices.
 
 **Converges to:** the same ordered sequence on every replica, regardless of the order concurrent insertions and removals arrived.
 
@@ -32,4 +32,4 @@ See `docs/adr-003-rga-tombstone-gc-history-windowing.md` in the repository for t
 
 ## When to use
 
-`Rga` is appropriate for ordered sequences where concurrent insertions and deletions are possible — chat messages, command history, collaborative text. For unordered collections, prefer [ORSet](crdt-orset.md) or [GSet](crdt-gset.md).
+Use `Rga` (RGA) for ordered sequences where concurrent insertions and deletions are possible — chat messages, command history, collaborative text. For unordered collections, prefer [ORSet](crdt-orset.md) or [GSet](crdt-gset.md).

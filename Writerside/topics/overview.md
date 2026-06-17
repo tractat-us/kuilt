@@ -1,10 +1,40 @@
 # kuilt
 
-kuilt is a peer-symmetric, multiplatform networking library. It moves opaque byte frames between peers over interchangeable *fabrics* — WebSocket, mDNS-discovered LAN, Apple Multipeer Connectivity, WebRTC, Android Nearby — behind one contract.
+kuilt has one job: keep peer-to-peer app code stable while transports,
+platforms, and network conditions change underneath it.
 
-**kuilt knows nothing about your application.** It carries bytes. What those bytes mean is the consumer's business.
+It is a peer-symmetric networking library for Kotlin Multiplatform (JVM,
+Android, iOS, macOS, wasmJs). It moves byte frames between peers over
+interchangeable *fabrics* — WebSocket, mDNS-discovered LAN, Apple Multipeer
+Connectivity, WebRTC, Android Nearby — behind one contract.
 
-Kotlin Multiplatform: JVM, Android, iOS, macOS, wasmJs.
+The library has three distinct value propositions:
+
+- **Fabrics** — the missing network pieces you keep having to write from scratch.
+  `Loom` and `Seam` give you a uniform send/receive/membership surface across every
+  transport. Your application layer is identical whether the connection is WebSocket,
+  Bluetooth, or WebRTC; swap the loom and nothing else changes.
+
+- **Conflict-free Replicated Data Types** — CRDTs are data structure building blocks you can use in isolation, with or without
+  the network layer. `LWWMap`, `ORSet`, `JsonCrdt`, and the rest are plain serializable
+  value types. Add `Quilter` when you want live delta propagation; leave it out
+  when your transport is HTTP or a message queue.
+
+- **Raft** — the foundation your network-aware coordination code wishes it was built on.
+  `kuilt-raft` gives you a correct, tested Raft implementation over any kuilt `Seam`.
+  `TurnSequencer` (from `kuilt-game`) wraps it in terms a turn-based game understands,
+  hiding every Raft concept that doesn't belong in your game logic.
+
+## Choose by the guarantee you need
+
+- Use a **fabric** when you need peers connected and frames moving.
+- Add a **CRDT** when state should converge without central coordination.
+- Add **Raft** when every peer must apply the same decisions in the same order.
+
+Start with the weakest guarantee that still keeps your product correct, then
+layer stronger constructs only where needed.
+
+→ [Getting started: two peers, one session](getting-started.md)
 
 ## The fabric metaphor
 

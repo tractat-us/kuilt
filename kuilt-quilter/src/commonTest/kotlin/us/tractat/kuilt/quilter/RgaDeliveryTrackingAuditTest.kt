@@ -26,7 +26,7 @@ import kotlin.test.assertTrue
  *
  * Every probe here is expected to PASS — it pins a sound invariant. A failure means a
  * latent #284 sibling. The frontier helper [contiguousFrontier] is the same fold the
- * [us.tractat.kuilt.crdt.replicator.Quilter] uses for `deliveredLocal`.
+ * [us.tractat.kuilt.quilter.Quilter] uses for `deliveredLocal`.
  */
 class RgaDeliveryTrackingAuditTest {
 

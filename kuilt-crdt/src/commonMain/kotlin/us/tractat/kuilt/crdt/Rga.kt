@@ -144,7 +144,7 @@ public class Rga<V> private constructor(
     /**
      * The set of all [RgaId]s that have been tombstoned (and not yet compacted).
      *
-     * Exposed for [us.tractat.kuilt.crdt.replicator.WindowPolicy] implementations that need to
+     * Exposed for `WindowPolicy` (in :kuilt-quilter) implementations that need to
      * inspect the current tombstone set (e.g. `WindowPolicy.byCount`).
      */
     public val tombstones: Set<RgaId> by lazy {
@@ -178,7 +178,7 @@ public class Rga<V> private constructor(
      * The materialized sequence of all [RgaId]s in RGA order, including tombstones.
      * Computed lazily and cached.
      *
-     * Exposed for [us.tractat.kuilt.crdt.replicator.WindowPolicy] implementations that need to
+     * Exposed for `WindowPolicy` (in :kuilt-quilter) implementations that need to
      * inspect the full ordered sequence (e.g. `WindowPolicy.byCount`).
      */
     public val sequence: List<RgaId> by lazy { computeSequence() }

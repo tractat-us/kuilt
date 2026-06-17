@@ -4,14 +4,62 @@
 [![CI](https://github.com/tractat-us/kuilt/actions/workflows/ci.yml/badge.svg)](https://github.com/tractat-us/kuilt/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 
-A peer-symmetric, multiplatform networking library for moving opaque byte frames
-between peers over interchangeable *fabrics* — WebSocket, mDNS-discovered LAN,
-Multipeer, WebRTC — behind a single contract.
+A Kotlin Multiplatform networking library — one codebase, every domain.
 
-kuilt knows nothing about your application. It carries bytes; what those bytes
-mean is the consumer's business.
+Kotlin Multiplatform lets you share application logic across servers, browsers,
+and phones. kuilt extends that to the three parts of a connected app that are
+usually different on every platform:
 
-Kotlin Multiplatform: JVM, Android, iOS, macOS, wasmJs.
+### One network fabric — server, web, and phone
+
+WebSocket on a server, WebRTC in a browser, Multipeer Connectivity on iPhone,
+Nearby on Android: four different APIs for the same idea. kuilt replaces them
+with a single interface — host a session, join a session, send a frame, watch
+who's connected. Swap the underlying transport without changing your application
+code.
+
+### Replicated data structures
+
+When users on different devices edit shared state at the same time, something
+has to decide what wins. kuilt's [replicated data structures][crdt] converge
+automatically to the same result on every device — no custom merge logic, no
+"last save wins" bugs.
+
+The CRDT types (`LWWMap`, `ORSet`, `Rga`, `JsonCrdt`, …) are plain serializable
+value objects. You can use them with any transport you already have — or without
+any network at all. Live propagation via `SeamReplicator` is optional.
+
+[crdt]: https://tractat-us.github.io/kuilt/guide/crdt-overview.html
+
+### Consensus and leadership
+
+Collaborative and multiplayer apps need a reliable answer to "who goes next?"
+and "did that just happen?". kuilt's shared log — powered by
+[Raft][raft-guide] — gives every participant the same committed history, in
+the same order, even when connections drop and rejoin.
+
+`RaftTransport` is an interface — you can run the Raft implementation over
+your own messaging layer (gRPC, a queue, anything) without using any kuilt
+fabric module.
+
+[raft-guide]: https://tractat-us.github.io/kuilt/guide/
+
+---
+
+## Quick start
+
+```kotlin
+val loom = InMemoryLoom()                            // swap for any real fabric
+val host  = loom.host(Pattern(displayName = "alice"))
+val guest = loom.join(InMemoryTag("bob"))
+
+scope.launch { host.incoming.collect { println(it.payload.decodeToString()) } }
+guest.broadcast("hello".encodeToByteArray())
+```
+
+→ **[Getting started](https://tractat-us.github.io/kuilt/guide/getting-started.html)** — WebSocket hello world, then chat (replicated data) and tic-tac-toe (consensus and leadership) built on top.
+
+---
 
 ## Setup
 

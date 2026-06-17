@@ -1,10 +1,11 @@
 # Multipath
 
-A peer does not have to pick a single transport. `CompositeLoom` (`kuilt-core`,
-package `us.tractat.kuilt.core.composite`) is a `Loom` that bonds several other
-`Loom`s — its *plies* — into one logical session. A phone can reach the others
-over a relay WebSocket **and** a direct LAN link at the same time, and the two
-paths behave as one `Seam`.
+Your users should not notice when the network path changes. `CompositeLoom`
+(`kuilt-core`, package `us.tractat.kuilt.core.composite`) lets one peer use
+multiple transports at once and exposes them as one logical `Seam`.
+
+A phone can reach others over a relay WebSocket **and** a direct LAN link at
+the same time, while the app above still sees one session.
 
 Because the result is an ordinary `Seam`, everything layered above — `kuilt-raft`,
 `kuilt-crdt`, `kuilt-session` — is unchanged. The bonding lives *below* the

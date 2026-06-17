@@ -1,6 +1,11 @@
 # Causal primitives
 
-The causal layer (`Causal`, `DotContext`, `DotSet`, `DotFun`, `DotMap`) is the foundation that `ORSet`, `MVRegister`, and `ORMap` are built on. Understanding it is optional for most users, but it explains *why* these CRDTs have their convergence properties.
+Most users can ignore this page and use `ORSet`, `MVRegister`, and `ORMap` directly.
+Come here when you want to understand the data model underneath those types, or
+when you want to build your own CRDTs on the same foundation.
+
+The causal layer (`Causal`, `DotContext`, `DotSet`, `DotFun`, `DotMap`) is what
+gives those higher-level types their convergence behavior.
 
 ## The causal stability barrier
 
