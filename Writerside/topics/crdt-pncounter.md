@@ -56,48 +56,27 @@ There is no floor at zero. A replica can decrement without having incremented â€
 
 **Increment:**
 
-<!-- verbatim from kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/PNCounterTest.kt#incrementRaisesValue -->
 ```kotlin
-// Source: https://github.com/tractat-us/kuilt/blob/main/kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/PNCounterTest.kt
-// Test: incrementRaisesValue
-val pn = PNCounter.ZERO
-val next = pn.piece(pn.increment(a, 3L))
-assertEquals(3L, next.value)
 ```
+{ src="../../kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/PNCounterTest.kt" include-symbol="incrementRaisesValue" }
 
 **Decrement:**
 
-<!-- verbatim from kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/PNCounterTest.kt#decrementLowersValue -->
 ```kotlin
-// Source: https://github.com/tractat-us/kuilt/blob/main/kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/PNCounterTest.kt
-// Test: decrementLowersValue
-val pn = PNCounter.ZERO.piece(PNCounter.ZERO.increment(a, 5L))
-val next = pn.piece(pn.decrement(a, 2L))
-assertEquals(3L, next.value)
 ```
+{ src="../../kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/PNCounterTest.kt" include-symbol="decrementLowersValue" }
 
 **Concurrent increments from different replicas merge:**
 
-<!-- verbatim from kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/PNCounterTest.kt#concurrentIncAndDecFromDifferentReplicasMerge -->
 ```kotlin
-// Source: https://github.com/tractat-us/kuilt/blob/main/kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/PNCounterTest.kt
-// Test: concurrentIncAndDecFromDifferentReplicasMerge
-val zero = PNCounter.ZERO
-val aInc = zero.piece(zero.increment(a, 10L))
-val bDec = zero.piece(zero.decrement(b, 3L))
-val merged = aInc.piece(bDec)
-assertEquals(7L, merged.value)
 ```
+{ src="../../kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/PNCounterTest.kt" include-symbol="concurrentIncAndDecFromDifferentReplicasMerge" }
 
 **Value can go negative:**
 
-<!-- verbatim from kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/PNCounterTest.kt#valueCanGoNegative -->
 ```kotlin
-// Source: https://github.com/tractat-us/kuilt/blob/main/kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/PNCounterTest.kt
-// Test: valueCanGoNegative
-val pn = PNCounter.ZERO.piece(PNCounter.ZERO.decrement(a, 5L))
-assertEquals(-5L, pn.value)
 ```
+{ src="../../kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/PNCounterTest.kt" include-symbol="valueCanGoNegative" }
 
 ## When to use
 
