@@ -18,49 +18,27 @@ This is why merging doesn't double-count: the same increment, seen from two repl
 
 **Zero counter and summing across replicas:**
 
-<!-- verbatim from kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/GCounterTest.kt#zeroHasValueZero -->
 ```kotlin
-// Source: https://github.com/tractat-us/kuilt/blob/main/kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/GCounterTest.kt
-// Test: zeroHasValueZero / valueSumsAcrossReplicas
-assertEquals(0L, GCounter.ZERO.value)
-assertEquals(7L, GCounter.of(a to 2L, b to 5L).value)
 ```
+{ src="../../kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/GCounterTest.kt" include-symbol="zeroHasValueZero" }
 
 **Inc produces a delta:**
 
-<!-- verbatim from kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/GCounterTest.kt#incProducesADeltaThatRaisesTheCount -->
 ```kotlin
-// Source: https://github.com/tractat-us/kuilt/blob/main/kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/GCounterTest.kt
-// Test: incProducesADeltaThatRaisesTheCount
-val gc = GCounter.ZERO
-val delta = gc.inc(a, 3L)
-val next = gc.piece(delta)
-assertEquals(3L, next.value)
-assertEquals(3L, next.count(a))
 ```
+{ src="../../kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/GCounterTest.kt" include-symbol="incProducesADeltaThatRaisesTheCount" }
 
 **Merge is element-wise max, not sum:**
 
-<!-- verbatim from kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/GCounterTest.kt#pieceTakesElementwiseMaxNotSum -->
 ```kotlin
-// Source: https://github.com/tractat-us/kuilt/blob/main/kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/GCounterTest.kt
-// Test: pieceTakesElementwiseMaxNotSum
-assertEquals(
-    GCounter.of(a to 2L, b to 3L),
-    GCounter.of(a to 2L, b to 1L).piece(GCounter.of(a to 1L, b to 3L)),
-)
 ```
+{ src="../../kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/GCounterTest.kt" include-symbol="pieceTakesElementwiseMaxNotSum" }
 
 **JSON round-trip:**
 
-<!-- verbatim from kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/GCounterTest.kt#roundTripsThroughJson -->
 ```kotlin
-// Source: https://github.com/tractat-us/kuilt/blob/main/kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/GCounterTest.kt
-// Test: roundTripsThroughJson
-val gc = GCounter.of(a to 2L, b to 5L)
-val encoded = Json.encodeToString(GCounter.serializer(), gc)
-assertEquals(gc, Json.decodeFromString(GCounter.serializer(), encoded))
 ```
+{ src="../../kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/GCounterTest.kt" include-symbol="roundTripsThroughJson" }
 
 ## When to use
 
