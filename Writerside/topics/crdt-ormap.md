@@ -12,40 +12,21 @@ Key presence is an ORSet of presence dots. Value merging is the value type's own
 
 **Put and query:**
 
-<!-- verbatim from kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/ORMapTest.kt#putThenContains -->
 ```kotlin
-// Source: https://github.com/tractat-us/kuilt/blob/main/kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/ORMapTest.kt
-// Test: putThenContains
-val m = ORMap.empty<String, GCounter>().put(a, "votes", GCounter.of(a to 1L))
-assertTrue("votes" in m.keys)
-assertEquals(1L, m["votes"]?.value)
 ```
+{ src="../../kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/ORMapTest.kt" include-symbol="putThenContains" }
 
 **Values merge via their own `piece`:**
 
-<!-- verbatim from kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/ORMapTest.kt#valuesMergeViaTheirOwnPiece -->
 ```kotlin
-// Source: https://github.com/tractat-us/kuilt/blob/main/kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/ORMapTest.kt
-// Test: valuesMergeViaTheirOwnPiece
-val mA = ORMap.empty<String, GCounter>().put(a, "votes", GCounter.of(a to 3L))
-val mB = ORMap.empty<String, GCounter>().put(b, "votes", GCounter.of(b to 5L))
-val merged = mA.piece(mB)
-assertEquals(8L, merged["votes"]?.value)
 ```
+{ src="../../kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/ORMapTest.kt" include-symbol="valuesMergeViaTheirOwnPiece" }
 
 **Add wins over concurrent remove:**
 
-<!-- verbatim from kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/ORMapTest.kt#addWinsOverConcurrentRemove -->
 ```kotlin
-// Source: https://github.com/tractat-us/kuilt/blob/main/kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/ORMapTest.kt
-// Test: addWinsOverConcurrentRemove
-val start = ORMap.empty<String, GCounter>().put(a, "votes", GCounter.of(a to 1L))
-val alice = start.remove("votes")
-val bob = start.put(b, "votes", GCounter.of(b to 1L))
-val merged = alice.piece(bob)
-assertTrue("votes" in merged.keys)  // add wins
-assertEquals(2L, merged["votes"]?.value)
 ```
+{ src="../../kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/ORMapTest.kt" include-symbol="addWinsOverConcurrentRemove" }
 
 ## When to use
 
