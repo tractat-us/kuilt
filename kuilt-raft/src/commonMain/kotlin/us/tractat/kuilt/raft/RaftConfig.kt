@@ -56,8 +56,11 @@ import kotlin.time.Duration.Companion.milliseconds
  *   makes scheduling deterministic, but an unseeded RNG still injects non-determinism into
  *   the *durations* the engine waits. Production default is [Random.Default]. Tests that run
  *   under virtual time should inject a **seeded** `Random(<fixed seed>)` so every run draws
- *   identical election timeouts — making the whole engine deterministic. NEVER seed in
- *   production: a fixed seed defeats the split-vote avoidance that timeout randomisation exists for.
+ *   identical election timeouts — making the whole engine deterministic. Multi-node tests
+ *   must use **distinct seeds per node** so nodes draw different timeouts and symmetry-break
+ *   into a leader; use `MultiNodeRaftSim` from `:kuilt-raft-test` which handles this
+ *   automatically. NEVER seed in production: a fixed seed defeats the split-vote avoidance
+ *   that timeout randomisation exists for.
  */
 public data class RaftConfig(
     val electionTimeoutMin: Duration = 150.milliseconds,
