@@ -1,11 +1,12 @@
 # Fabric kit
 
-Most consumers never build a `Seam` by hand — they pick a packaged `Loom`
-([WebSocket, mDNS, a Near fabric](fabrics.md)) and let it weave one. The
-**fabric kit** is the layer *below* that: a small set of `kuilt-core` primitives
-that assemble a `Seam` from raw point-to-point links. Reach for it when you have
-a duplex byte link to each peer — a socket, a data channel, an OS transport —
-and want to present it as the standard `Seam` contract.
+Most users should start with packaged fabrics and never touch this page. Reach
+for the **fabric kit** when you already have raw peer links and want to expose
+them as a standard kuilt `Seam` without reinventing session semantics.
+
+It is the layer *below* packaged `Loom`s ([WebSocket, mDNS, Near
+fabrics](fabrics.md)): a small set of `kuilt-core` primitives that assemble a
+`Seam` from point-to-point links.
 
 Three pieces, two of them topology builders:
 

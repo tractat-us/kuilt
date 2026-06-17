@@ -1,6 +1,9 @@
 # Quick start
 
-The fastest way to get two peers exchanging frames is `InMemoryLoom`. It needs no network, no configuration, and no real fabric — every `Seam` it produces shares one in-memory mesh. It is the right tool for tests and for any layer of your application that lives above the wire.
+If you want to learn kuilt fast, start above the network. `InMemoryLoom` gives
+you two peers exchanging real `Seam` frames with no sockets, no radios, and no
+setup. It is ideal for tests and for building application behavior before you
+care about transport details.
 
 ## Host a session and broadcast a frame
 

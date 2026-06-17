@@ -1,9 +1,13 @@
 # Getting started
 
-Connect two peers, then build a chat and a game on top — each one adding a
-single kuilt module to the same foundation.
+Most network features start the same way: connect peers, share data, then add
+ordering only where strict agreement matters. This page walks that path in four
+steps, each adding one kuilt module without changing your application shape.
 
 ## Step 1: Two peers over WebSocket
+
+Start with the smallest useful milestone: two peers exchanging frames over one
+`Seam`.
 
 ```kotlin
 // build.gradle.kts
@@ -36,7 +40,8 @@ val seam: Seam = KtorClientLoom(HttpClient { install(WebSockets) }).join(
 )
 ```
 
-Both peers now hold an identical `Seam`. The rest of this page builds on it.
+Both peers now hold an identical `Seam`. This is your base transport surface;
+the rest of this page layers data and ordering on top.
 
 ```kotlin
 // Same API on every peer:
@@ -49,8 +54,9 @@ seam.close()
 
 ## Step 2: Add a chat (replicated data)
 
-Chat messages need to arrive in the same order on every device. Add `kuilt-crdt`
-and use `Rga` (RGA — Replicated Growable Array):
+Now make the shared state itself converge. For chat, that means everyone sees
+the same message list in the same order, even with concurrent sends. Add
+`kuilt-crdt` and use `Rga` (RGA — Replicated Growable Array):
 
 ```kotlin
 // build.gradle.kts
@@ -77,8 +83,9 @@ replicator.state.collect { messages -> chatView.items = messages.toList() }
 
 ## Step 3: Add tic-tac-toe (consensus and leadership)
 
-Tic-tac-toe needs strict turn ordering: both players must agree on who moved
-where, in what order, with no disputes. Add `kuilt-raft` and `kuilt-game`:
+Some state needs stronger guarantees than mergeable data. Tic-tac-toe moves are
+an ordered log: both players must agree on exactly who moved where, in order,
+with no disputes. Add `kuilt-raft` and `kuilt-game`:
 
 ```kotlin
 // build.gradle.kts
@@ -109,8 +116,9 @@ game.propose(Move(row = 1, col = 1))
 
 ## Step 4: Run on more platforms
 
-The chat and game code above only use `seam.broadcast`, `seam.incoming`, and
-`seam.peers`. Swap the `Loom` that produced the `Seam` and nothing else changes:
+Your chat/game logic above only depends on `seam.broadcast`, `seam.incoming`,
+and `seam.peers`. Swap the `Loom` that produced the `Seam` and keep the rest of
+the code unchanged:
 
 ```kotlin
 val loom: Loom = when {

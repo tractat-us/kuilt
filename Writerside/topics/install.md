@@ -1,5 +1,6 @@
 # Install
 
+Install only what your feature needs, then add modules as your requirements grow.
 kuilt publishes to Maven Central under the `us.tractat.kuilt` group.
 
 ## Add the repository
@@ -13,7 +14,8 @@ repositories {
 
 ## Depend on the modules you need
 
-The recommended way is the **BOM** — import it once to align every module on a single version, then declare modules without version numbers:
+The recommended path is the **BOM**: align all kuilt modules to one version,
+then opt into only the capabilities you need:
 
 ```kotlin
 // build.gradle.kts

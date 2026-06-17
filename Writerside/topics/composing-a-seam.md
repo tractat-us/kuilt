@@ -1,9 +1,8 @@
 # Composing a Seam
 
-Several `kuilt-core` types sit around the `Seam` boundary and all "combine"
-something, which makes them easy to confuse. The clarifying lens is **what each
-one consumes and what it produces** — they line up on a single `Conn`↔`Seam`
-axis:
+When building custom transport stacks, several `kuilt-core` APIs can look
+similar because they all "combine" something. The practical way to choose is:
+**what goes in, and what comes out**. They line up on one `Conn`↔`Seam` axis:
 
 | Type | Direction | Role |
 |------|-----------|------|

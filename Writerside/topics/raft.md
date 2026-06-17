@@ -1,6 +1,10 @@
 # Consensus (Raft)
 
-`kuilt-raft` implements the [Raft consensus algorithm](https://raft.github.io) for Kotlin Multiplatform. It gives a cluster of nodes a single, strongly-consistent, totally-ordered log — the foundation for any replicated state machine.
+Use `kuilt-raft` when your feature needs strict agreement, not best-effort merge.
+It gives every node the same strongly consistent, totally ordered log so each
+peer applies exactly the same decisions in exactly the same order.
+
+Formally, `kuilt-raft` implements the [Raft consensus algorithm](https://raft.github.io) for Kotlin Multiplatform.
 
 ## Transport independence
 

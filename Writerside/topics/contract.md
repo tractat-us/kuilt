@@ -1,6 +1,8 @@
 # The contract
 
-kuilt's type surface is small: eight types carry everything.
+The point of kuilt's contract is to keep your app code stable while transports
+change underneath it. You learn eight types once, then reuse them across every
+fabric.
 
 | Type | Role |
 |------|------|
@@ -15,7 +17,8 @@ kuilt's type surface is small: eight types carry everything.
 
 ## Loom
 
-`Loom` is a factory for sessions. Its single abstract method is:
+`Loom` is where sessions come from: host a new one or join an existing one.
+Formally, its single abstract method is:
 
 ```kotlin
 suspend fun weave(rendezvous: Rendezvous): Seam
@@ -40,7 +43,9 @@ runs several transports as one bonded session for the same peer. See
 
 ## Seam
 
-`Seam` is one peer's symmetric view of a multi-peer session. There is no client `Seam` and no server `Seam` — every peer holds the same interface.
+`Seam` is the API your app actually uses at runtime. It is one peer's symmetric
+view of a multi-peer session. There is no client `Seam` and no server `Seam` —
+every peer holds the same interface.
 
 ```kotlin
 interface Seam {

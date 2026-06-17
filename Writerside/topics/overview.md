@@ -1,9 +1,12 @@
 # kuilt
 
-kuilt is a peer-symmetric, multiplatform networking library for Kotlin Multiplatform
-(JVM, Android, iOS, macOS, wasmJs). It moves frames between peers over interchangeable
-*fabrics* — WebSocket, mDNS-discovered LAN, Apple Multipeer Connectivity, WebRTC,
-Android Nearby — behind one contract.
+kuilt is for one job: keep peer-to-peer app code stable while transports,
+platforms, and network conditions change underneath it.
+
+It is a peer-symmetric, multiplatform networking library for Kotlin
+Multiplatform (JVM, Android, iOS, macOS, wasmJs). It moves frames between peers
+over interchangeable *fabrics* — WebSocket, mDNS-discovered LAN, Apple
+Multipeer Connectivity, WebRTC, Android Nearby — behind one contract.
 
 The library has three distinct value propositions:
 
