@@ -359,6 +359,19 @@ public class SeamReplicator<S : Quilted<S>>(
         broadcastDelta(seq, patch.delta)
     }
 
+    /**
+     * Apply a local mutation expressed as a transform on the current state. Equivalent to
+     * `apply(state.value.let(transform))` but avoids reading [state].value at every call site.
+     *
+     * ```kotlin
+     * tally.mutate { it.increment(replica, 3L) }
+     * ```
+     *
+     * @sample us.tractat.kuilt.crdt.sampleSeamReplicatorConvenience
+     * @throws IllegalStateException if this replicator has been [close]d.
+     */
+    public fun mutate(transform: (S) -> Patch<S>): Unit = apply(state.value.let(transform))
+
     // ---- private helpers ----
 
     /**
@@ -720,4 +733,52 @@ private fun contiguousHighWater(seqs: Set<Long>): Long {
     while ((n + 1L) in seqs) n++
     return n
 }
+
+/**
+ * Convenience factory for [SeamReplicator] that derives the message serializer internally.
+ *
+ * The full constructor requires callers to wrap the value serializer manually via
+ * `ReplicatorMessage.serializer(valueSerializer)`. This factory does that wrapping for you,
+ * and defaults [replica] to `ReplicaId(seam.selfId.value)` — a safe default because each
+ * `Seam` has a unique [us.tractat.kuilt.core.Seam.selfId], satisfying the one-instance-per-
+ * `(replica, CRDT-type)` precondition as long as each peer creates exactly one replicator per
+ * CRDT type. Override [replica] when you need a custom id (e.g. a stable persistent id that
+ * survives reconnects with a different peer identity).
+ *
+ * ```kotlin
+ * val tally = SeamReplicator(seam, PNCounter.ZERO, PNCounter.serializer(), backgroundScope)
+ * tally.mutate { it.increment(tally.replica, 3L) }
+ * ```
+ *
+ * @param seam the [us.tractat.kuilt.core.Seam] to replicate over.
+ * @param initial the starting CRDT state (typically the zero/empty value).
+ * @param valueSerializer the [KSerializer] for [S]. The message serializer is derived automatically.
+ * @param scope the [CoroutineScope] whose [Job] parents the replicator's owned child job.
+ * @param replica this peer's [ReplicaId]; defaults to `ReplicaId(seam.selfId.value)`.
+ * @param config replication behaviour tuning.
+ * @param clock monotonic time source; override in tests.
+ * @param binaryFormat binary codec for wire frames; defaults to [kotlinx.serialization.cbor.Cbor].
+ *
+ * @sample us.tractat.kuilt.crdt.sampleSeamReplicatorConvenience
+ */
+@Suppress("LongParameterList")
+public fun <S : us.tractat.kuilt.crdt.Quilted<S>> SeamReplicator(
+    seam: us.tractat.kuilt.core.Seam,
+    initial: S,
+    valueSerializer: kotlinx.serialization.KSerializer<S>,
+    scope: CoroutineScope,
+    replica: us.tractat.kuilt.crdt.ReplicaId = us.tractat.kuilt.crdt.ReplicaId(seam.selfId.value),
+    config: SeamReplicatorConfig = SeamReplicatorConfig(),
+    clock: MonotonicMillis = SystemMonotonicMillis,
+    binaryFormat: kotlinx.serialization.BinaryFormat = kotlinx.serialization.cbor.Cbor,
+): SeamReplicator<S> = SeamReplicator(
+    replica = replica,
+    seam = seam,
+    initial = initial,
+    messageSerializer = ReplicatorMessage.serializer(valueSerializer),
+    scope = scope,
+    config = config,
+    clock = clock,
+    binaryFormat = binaryFormat,
+)
 
