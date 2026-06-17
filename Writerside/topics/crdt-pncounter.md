@@ -4,6 +4,60 @@ A positive/negative counter: the simplest extension of `GCounter` that allows bo
 
 **Converges to:** `inc.value - dec.value`, where each half is a `GCounter` that only ever grows.
 
+## Worked example — live vote tally over two peers
+
+`PNCounter` + `SeamReplicator` is the natural fit for a vote tally: each peer owns its own slot, increments record upvotes, decrements record downvotes. Deltas propagate automatically; both replicas converge to the same net count.
+
+<!-- verbatim from examples/src/test/kotlin/us/tractat/kuilt/examples/VoteTallyTest.kt#upvotes and downvotes from two peers converge to the correct net tally -->
+```kotlin
+// Source: https://github.com/tractat-us/kuilt/blob/main/examples/src/test/kotlin/us/tractat/kuilt/examples/VoteTallyTest.kt
+// Test: upvotes and downvotes from two peers converge to the correct net tally
+val loom = InMemoryLoom()
+val seamAlice = loom.host(Pattern("vote-tally"))
+val seamBob = loom.join(InMemoryTag("bob"))
+
+val aliceTally = tallyReplicator(seamAlice, backgroundScope)
+val bobTally = tallyReplicator(seamBob, backgroundScope)
+
+delay(1) // let collectors subscribe under StandardTestDispatcher
+
+// Alice casts 3 upvotes for the post.
+aliceTally.apply(aliceTally.state.value.increment(aliceTally.replica, 3L))
+
+// Bob casts 1 upvote and then 1 downvote (changed his mind).
+bobTally.apply(bobTally.state.value.increment(bobTally.replica, 1L))
+bobTally.apply(bobTally.state.value.decrement(bobTally.replica, 1L))
+
+// Alice adds another upvote concurrently.
+aliceTally.apply(aliceTally.state.value.increment(aliceTally.replica, 2L))
+
+delay(10) // advance virtual time so all delta broadcasts deliver
+
+// Both replicas must converge to the same net tally.
+// alice: +3 +2 = 5 increments; bob: +1 -1 = 0 net → total = 5
+assertEquals(5L, aliceTally.state.value.value)
+assertEquals(aliceTally.state.value.value, bobTally.state.value.value)
+```
+
+Where `tallyReplicator` wraps `SeamReplicator<PNCounter>`:
+
+```kotlin
+val replicatorCfg = SeamReplicatorConfig(expectVirtualTime = true)
+val msgSer = ReplicatorMessage.serializer(PNCounter.serializer())
+
+fun tallyReplicator(seam: Seam, scope: CoroutineScope) =
+    SeamReplicator(
+        replica = ReplicaId(seam.selfId.value),
+        seam = seam,
+        initial = PNCounter.ZERO,
+        messageSerializer = msgSer,
+        scope = scope,
+        config = replicatorCfg,
+    )
+```
+
+See the full test at [`VoteTallyTest.kt`](https://github.com/tractat-us/kuilt/blob/main/examples/src/test/kotlin/us/tractat/kuilt/examples/VoteTallyTest.kt).
+
 ## Merge rule
 
 A `PNCounter` is two independent `GCounter`s in a product lattice — one for increments (`inc`), one for decrements (`dec`). Joining two `PNCounter`s joins each half separately. Idempotent, commutative, associative by the same argument that holds for `GCounter`.
