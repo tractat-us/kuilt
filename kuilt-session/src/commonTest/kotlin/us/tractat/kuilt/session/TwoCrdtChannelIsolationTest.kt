@@ -17,9 +17,9 @@ import us.tractat.kuilt.crdt.GCounter
 import us.tractat.kuilt.crdt.LWWMap
 import us.tractat.kuilt.crdt.Patch
 import us.tractat.kuilt.crdt.ReplicaId
-import us.tractat.kuilt.quilter.ReplicatorMessage
-import us.tractat.kuilt.quilter.SeamReplicator
-import us.tractat.kuilt.quilter.SeamReplicatorConfig
+import us.tractat.kuilt.quilter.QuiltMessage
+import us.tractat.kuilt.quilter.Quilter
+import us.tractat.kuilt.quilter.QuilterConfig
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -38,31 +38,31 @@ import kotlin.test.assertNull
  * visible to a collector on a different channel.
  *
  * **Second hand-wired call site.** This test file is a second independent call site
- * that wires a `SeamReplicator` over a `Room.channel` (alongside
+ * that wires a `Quilter` over a `Room.channel` (alongside
  * `RoomChannelReplicatorTest`). Its existence directly justifies issue #243's
  * proposed convenience wrapper — the boilerplate is non-trivial and already repeated
  * twice.
  */
 class TwoCrdtChannelIsolationTest {
 
-    private val replicatorConfig = SeamReplicatorConfig(expectVirtualTime = true)
+    private val replicatorConfig = QuilterConfig(expectVirtualTime = true)
 
-    private fun gcounterReplicator(room: Room, scope: CoroutineScope): SeamReplicator<GCounter> =
-        SeamReplicator(
+    private fun gcounterReplicator(room: Room, scope: CoroutineScope): Quilter<GCounter> =
+        Quilter(
             replica = ReplicaId(room.selfId.value),
             seam = room.channel("counter"),
             initial = GCounter.ZERO,
-            messageSerializer = ReplicatorMessage.serializer(GCounter.serializer()),
+            messageSerializer = QuiltMessage.serializer(GCounter.serializer()),
             scope = scope,
             config = replicatorConfig,
         )
 
-    private fun lwwMapReplicator(room: Room, scope: CoroutineScope): SeamReplicator<LWWMap<String, String>> =
-        SeamReplicator(
+    private fun lwwMapReplicator(room: Room, scope: CoroutineScope): Quilter<LWWMap<String, String>> =
+        Quilter(
             replica = ReplicaId(room.selfId.value),
             seam = room.channel("map"),
             initial = LWWMap.empty(),
-            messageSerializer = ReplicatorMessage.serializer(LWWMap.serializer(String.serializer(), String.serializer())),
+            messageSerializer = QuiltMessage.serializer(LWWMap.serializer(String.serializer(), String.serializer())),
             scope = scope,
             config = replicatorConfig,
         )

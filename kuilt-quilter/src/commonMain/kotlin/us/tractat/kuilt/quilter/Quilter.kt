@@ -34,21 +34,21 @@ import kotlin.time.Duration
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
 
-private val logger = KotlinLogging.logger("us.tractat.kuilt.crdt.SeamReplicator")
+private val logger = KotlinLogging.logger("us.tractat.kuilt.crdt.Quilter")
 
 /**
- * Configuration for [SeamReplicator].
+ * Configuration for [Quilter].
  *
  * @param evictionAfter how long a peer can be absent from [Seam.peers] before it
  *   is evicted from [knownPeers]. Absent-and-silent peers pin the pending-delta
  *   buffer; eviction releases that pin. A peer that reappears after eviction
- *   will receive a fresh [ReplicatorMessage.FullState].
+ *   will receive a fresh [QuiltMessage.FullState].
  * @param antiEntropyInterval how often the background eviction check runs.
- * @param resendRetryInterval how long to wait before re-emitting a [ReplicatorMessage.Resend]
+ * @param resendRetryInterval how long to wait before re-emitting a [QuiltMessage.Resend]
  *   when the first Resend is itself dropped and no further inbound traffic triggers
  *   re-detection. The timer is cancelled when the gap closes. In a low-traffic system
  *   this is the only mechanism that heals a gap whose first Resend was lost.
- * @param fullStateRetryInterval how long to wait before re-sending a [ReplicatorMessage.FullState]
+ * @param fullStateRetryInterval how long to wait before re-sending a [QuiltMessage.FullState]
  *   to a peer when the initial snapshot may have been dropped. The timer is cancelled
  *   when any message from that peer is received, confirming it is alive and reachable.
  * @param fullStateRetryLimit maximum number of FullState retry attempts per peer before giving up.
@@ -59,7 +59,7 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.crdt.SeamReplicator"
  *   warning to stdout instead. Set to `true` in tests that want to assert the guard
  *   fires. Leave `false` in production — the guard is informational there.
  */
-public data class SeamReplicatorConfig(
+public data class QuilterConfig(
     val evictionAfter: Duration = 5.minutes,
     val antiEntropyInterval: Duration = 1.minutes,
     val resendRetryInterval: Duration = 30.seconds,
@@ -68,7 +68,7 @@ public data class SeamReplicatorConfig(
     val strictTestGuard: Boolean = false,
     /**
      * Suppresses the TestDispatcher warning for tests that intentionally run a real
-     * [SeamReplicator] under `UnconfinedTestDispatcher`. Has no effect in production.
+     * [Quilter] under `UnconfinedTestDispatcher`. Has no effect in production.
      * Default `false`: warn as usual. See [strictTestGuard].
      */
     val expectVirtualTime: Boolean = false,
@@ -96,43 +96,43 @@ private object SystemMonotonicMillis : MonotonicMillis {
  * multi-peer replication via a simple delta-propagation protocol.
  *
  * **Precondition — one instance per `(replica, CRDT type)` pair.** Running two
- * `SeamReplicator<S>` instances with the same [replica] concurrently in the
+ * `Quilter<S>` instances with the same [replica] concurrently in the
  * same process breaks the delta GC protocol: both will mint deltas starting at
  * `seq = 1`, colliding on sequence numbers. The recipient cannot distinguish
  * them and will silently drop or misorder deltas, leaving replicas permanently
  * diverged. This is the same class of collision that the `BoundedCounter`
  * single-dimension fix addressed in a prior release. Create exactly **one**
- * `SeamReplicator<S>` per `(replica, CRDT type)` per process.
+ * `Quilter<S>` per `(replica, CRDT type)` per process.
  *
  * ## Protocol
- * - **[apply]** applies a local mutation, updates [state], and broadcasts a [ReplicatorMessage.Delta]
+ * - **[apply]** applies a local mutation, updates [state], and broadcasts a [QuiltMessage.Delta]
  *   to all current peers. Each delta is tagged with a monotonic [seq].
- * - On receiving a [ReplicatorMessage.Delta], the state is joined and an [ReplicatorMessage.Ack]
+ * - On receiving a [QuiltMessage.Delta], the state is joined and an [QuiltMessage.Ack]
  *   is sent back to the original sender.
- * - On receiving an [ReplicatorMessage.Ack], the acker's progress is recorded; once every
+ * - On receiving an [QuiltMessage.Ack], the acker's progress is recorded; once every
  *   known peer has acked through a seq, all deltas at or below that seq are GC'd.
- * - On first contact with a new peer, a [ReplicatorMessage.FullState] is sent so the
+ * - On first contact with a new peer, a [QuiltMessage.FullState] is sent so the
  *   late joiner converges immediately without waiting for a delta replay.
  *
  * ## Gap detection (Rung 12b)
  * Per-sender receive-sequence tracking detects dropped or reordered deltas:
  * - Out-of-order deltas are buffered and applied in order once the gap is filled.
- * - Missing ranges trigger a [ReplicatorMessage.Resend] to the original sender.
+ * - Missing ranges trigger a [QuiltMessage.Resend] to the original sender.
  * - Duplicate or stale deltas are re-acked and silently dropped.
- * - [ReplicatorMessage.Resend] causes this replica to re-broadcast buffered pending
+ * - [QuiltMessage.Resend] causes this replica to re-broadcast buffered pending
  *   deltas for the requested range (if they haven't been GC'd yet).
  *
  * ## Peer eviction
- * Peers absent from [Seam.peers] beyond [SeamReplicatorConfig.evictionAfter] are
+ * Peers absent from [Seam.peers] beyond [QuilterConfig.evictionAfter] are
  * evicted from the known-peer set, releasing their buffer pin. They receive a fresh
- * [ReplicatorMessage.FullState] if they rejoin.
+ * [QuiltMessage.FullState] if they rejoin.
  *
  * @param replica this peer's [ReplicaId].
  * @param seam the [Seam] to ride. Collect [Seam.incoming] exactly once — this class
  *   takes sole ownership of the incoming stream.
  * @param initial the starting state (typically the CRDT's zero/empty value).
- * @param messageSerializer a [KSerializer] for [ReplicatorMessage]`<S>`, obtained via
- *   `ReplicatorMessage.serializer(stateSerializer)`.
+ * @param messageSerializer a [KSerializer] for [QuiltMessage]`<S>`, obtained via
+ *   `QuiltMessage.serializer(stateSerializer)`.
  * @param scope the [CoroutineScope] whose [Job] becomes the parent of the replicator's
  *   owned child job. In tests, pass `backgroundScope` from [kotlinx.coroutines.test.TestScope]
  *   so infinite-running collectors are cancelled cleanly at test end without raising
@@ -145,18 +145,18 @@ private object SystemMonotonicMillis : MonotonicMillis {
  * under virtual time those delays never advance automatically, causing tests to deadlock silently.
  * Either use `UnconfinedTestDispatcher` (delays execute eagerly) or advance virtual time via
  * `testScheduler.advanceTimeBy(…)` if you must use `StandardTestDispatcher`. Set
- * [SeamReplicatorConfig.strictTestGuard] to `true` to throw rather than warn.
+ * [QuilterConfig.strictTestGuard] to `true` to throw rather than warn.
  */
-public class SeamReplicator<S : Quilted<S>>(
+public class Quilter<S : Quilted<S>>(
     public val replica: ReplicaId,
     private val seam: Seam,
     initial: S,
-    private val messageSerializer: KSerializer<ReplicatorMessage<S>>,
+    private val messageSerializer: KSerializer<QuiltMessage<S>>,
     scope: CoroutineScope,
-    private val config: SeamReplicatorConfig = SeamReplicatorConfig(),
+    private val config: QuilterConfig = QuilterConfig(),
     private val clock: MonotonicMillis = SystemMonotonicMillis,
     /**
-     * Binary format used to encode and decode [ReplicatorMessage] frames.
+     * Binary format used to encode and decode [QuiltMessage] frames.
      * Defaults to plain [Cbor]. Override in tests or for CRDTs whose serializer
      * requires a custom [kotlinx.serialization.modules.SerializersModule]
      * (e.g. [us.tractat.kuilt.crdt.Rga] with a generic value type).
@@ -188,7 +188,7 @@ public class SeamReplicator<S : Quilted<S>>(
      * The causal-stability watermark: the highest sequence number that every currently
      * known peer has acknowledged. Advances monotonically — it never decreases.
      *
-     * A newly-joined peer receives a [ReplicatorMessage.FullState] that already reflects
+     * A newly-joined peer receives a [QuiltMessage.FullState] that already reflects
      * any compacted history, so it does not need to acknowledge old deltas before the
      * watermark can advance. Consequently a late-joiner's absence from [ackedThrough]
      * does not drag the watermark backward: the flow stays at its last value until the
@@ -209,7 +209,7 @@ public class SeamReplicator<S : Quilted<S>>(
      * in an author's dots truncates that author's high-water at the gap.
      *
      * This is the per-replica matrix-clock row of the causal-stability barrier
-     * (ADR-003 addendum v3, #262): it is gossiped via [ReplicatorMessage.Delivered]
+     * (ADR-003 addendum v3, #262): it is gossiped via [QuiltMessage.Delivered]
      * and folded into peers' matrices. Empty for CRDTs that expose no dots (the whole
      * delta-state zoo); populated for [us.tractat.kuilt.crdt.Rga].
      */
@@ -217,7 +217,7 @@ public class SeamReplicator<S : Quilted<S>>(
 
     /**
      * The matrix clock: `peer → that peer's last-gossiped delivered VV`. Populated by
-     * inbound [ReplicatorMessage.Delivered]; consumed by [recomputeCut] to derive the
+     * inbound [QuiltMessage.Delivered]; consumed by [recomputeCut] to derive the
      * stable cut and frontier. Mutated only under [lock] (ADR §4.6 W2 — see [recomputeCut] /
      * [evictStalePeers]).
      */
@@ -242,7 +242,7 @@ public class SeamReplicator<S : Quilted<S>>(
 
     /**
      * The causal-stability cut + frontier, recomputed on every matrix change (local
-     * apply, inbound delta, inbound [ReplicatorMessage.Delivered], join, eviction) and
+     * apply, inbound delta, inbound [QuiltMessage.Delivered], join, eviction) and
      * published **atomically** as a single [CutFrontier] (W1 of ADR §4.6). A
      * [us.tractat.kuilt.crdt.Rga] GC coordinator (#270) consumes this together with
      * [deliveredLocal] and feeds them to `Rga.compact(stableCut, frontierMax, delivered)`.
@@ -271,15 +271,15 @@ public class SeamReplicator<S : Quilted<S>>(
 
     /**
      * Pending retry jobs per sender: when a Resend is emitted, a [Job] is scheduled
-     * to re-fire after [SeamReplicatorConfig.resendRetryInterval]. The job is cancelled
+     * to re-fire after [QuilterConfig.resendRetryInterval]. The job is cancelled
      * when the gap closes or a new Resend supersedes it for the same sender.
      */
     private val pendingResendJobs: MutableMap<ReplicaId, Job> = mutableMapOf()
 
     /**
-     * Pending FullState retry jobs per peer: when a [ReplicatorMessage.FullState] is sent
+     * Pending FullState retry jobs per peer: when a [QuiltMessage.FullState] is sent
      * to a new peer, a [Job] is scheduled to re-send it after
-     * [SeamReplicatorConfig.fullStateRetryInterval] in case the initial snapshot was dropped.
+     * [QuilterConfig.fullStateRetryInterval] in case the initial snapshot was dropped.
      * The job is cancelled when any message from that peer arrives, confirming reachability.
      */
     private val pendingFullStateJobs: MutableMap<PeerId, Job> = mutableMapOf()
@@ -305,8 +305,8 @@ public class SeamReplicator<S : Quilted<S>>(
         // `this.scope` is the owned child scope inherited from ScopedCloseable.
         checkNotUnderTestDispatcher(
             scope = scope,
-            typeName = "SeamReplicator",
-            substitute = "a SeamReplicator under UnconfinedTestDispatcher or with manual testScheduler.advanceTimeBy(…)",
+            typeName = "Quilter",
+            substitute = "a Quilter under UnconfinedTestDispatcher or with manual testScheduler.advanceTimeBy(…)",
             strict = config.strictTestGuard,
             expectVirtualTime = config.expectVirtualTime,
         )
@@ -330,7 +330,7 @@ public class SeamReplicator<S : Quilted<S>>(
      * Called at most once, always before the coroutines stop.
      */
     override fun onClose() {
-        logger.debug { "[SeamReplicator/$replica] close() — anti-entropy ran $antiEntropyCount iteration(s)" }
+        logger.debug { "[Quilter/$replica] close() — anti-entropy ran $antiEntropyCount iteration(s)" }
         lock.withLock {
             pendingResendJobs.values.forEach { it.cancel() }
             pendingResendJobs.clear()
@@ -340,7 +340,7 @@ public class SeamReplicator<S : Quilted<S>>(
     }
 
     /**
-     * Apply a local mutation. Updates [state] synchronously; broadcasts a [ReplicatorMessage.Delta]
+     * Apply a local mutation. Updates [state] synchronously; broadcasts a [QuiltMessage.Delta]
      * to all current peers asynchronously (fire-and-forget within [scope]).
      *
      * **Thread-safe.** Safe to call from any thread or coroutine context — the state mutation is
@@ -351,7 +351,7 @@ public class SeamReplicator<S : Quilted<S>>(
      * @throws IllegalStateException if this replicator has been [close]d.
      */
     public fun apply(patch: Patch<S>): Unit = lock.withLock {
-        check(!closed) { "SeamReplicator($replica) is closed" }
+        check(!closed) { "Quilter($replica) is closed" }
         _state.update { it.piece(patch) }
         val seq = ++nextSeq
         pendingDeltas[seq] = patch.delta
@@ -367,7 +367,7 @@ public class SeamReplicator<S : Quilted<S>>(
      * tally.mutate { it.increment(replica, 3L) }
      * ```
      *
-     * @sample us.tractat.kuilt.crdt.sampleSeamReplicatorConvenience
+     * @sample us.tractat.kuilt.quilter.sampleQuilterConvenience
      * @throws IllegalStateException if this replicator has been [close]d.
      */
     public fun mutate(transform: (S) -> Patch<S>): Unit = apply(state.value.let(transform))
@@ -386,7 +386,7 @@ public class SeamReplicator<S : Quilted<S>>(
      * the fresh row so peers' matrix clocks (and hence the [cutFrontier] that drives RGA GC)
      * converge without waiting on the slow anti-entropy tick. A receiver that just delivered an
      * author's op is the timeliest witness of that delivery; gossiping here is what lets the
-     * stable cut rise as deltas land rather than only once per [SeamReplicatorConfig.antiEntropyInterval].
+     * stable cut rise as deltas land rather than only once per [QuilterConfig.antiEntropyInterval].
      */
     private fun recomputeDeliveredLocal() {
         val previous = _deliveredLocal.value
@@ -424,7 +424,7 @@ public class SeamReplicator<S : Quilted<S>>(
     }
 
     /**
-     * Gossips this replica's whole-room [deliveredLocal] as a [ReplicatorMessage.Delivered]
+     * Gossips this replica's whole-room [deliveredLocal] as a [QuiltMessage.Delivered]
      * broadcast. Fired on local [apply] and on the anti-entropy tick — its own cadence,
      * separate from the delta/ack path. Skipped while the vector is empty (nothing yet
      * delivered, so no peer's matrix row gains information).
@@ -432,7 +432,7 @@ public class SeamReplicator<S : Quilted<S>>(
     private fun gossipDelivered() {
         val vector = _deliveredLocal.value
         if (vector.entries.isEmpty()) return
-        val msg = ReplicatorMessage.Delivered<S>(sender = replica, vector = vector)
+        val msg = QuiltMessage.Delivered<S>(sender = replica, vector = vector)
         val bytes = encode(msg)
         scope.launch {
             runCatchingCancellable { seam.broadcast(bytes) }
@@ -451,7 +451,7 @@ public class SeamReplicator<S : Quilted<S>>(
             // Logged at DEBUG so virtual-time cycling is visible in the test/CI artifact:
             // normal production = one line per antiEntropyInterval; cycling = rapid-fire lines
             // with ascending iteration numbers, immediately distinguishing the #329 signature.
-            logger.debug { "[SeamReplicator/$replica] anti-entropy iteration=$n peers=${seam.peers.value.size}" }
+            logger.debug { "[Quilter/$replica] anti-entropy iteration=$n peers=${seam.peers.value.size}" }
             // Lock the state work, NOT the delay (which must stay a suspension point outside it).
             lock.withLock {
                 evictStalePeers()
@@ -494,7 +494,7 @@ public class SeamReplicator<S : Quilted<S>>(
     }
 
     private fun broadcastDelta(seq: Long, delta: S) {
-        val msg = ReplicatorMessage.Delta(sender = replica, seq = seq, delta = delta)
+        val msg = QuiltMessage.Delta(sender = replica, seq = seq, delta = delta)
         val bytes = encode(msg)
         scope.launch {
             runCatchingCancellable { seam.broadcast(bytes) }
@@ -513,7 +513,7 @@ public class SeamReplicator<S : Quilted<S>>(
     }
 
     private fun sendFullStateTo(peer: PeerId) {
-        val msg = ReplicatorMessage.FullState(sender = replica, state = _state.value)
+        val msg = QuiltMessage.FullState(sender = replica, state = _state.value)
         val bytes = encode(msg)
         scope.launch {
             runCatchingCancellable { seam.sendTo(peer, bytes) }
@@ -534,7 +534,7 @@ public class SeamReplicator<S : Quilted<S>>(
             // reschedule under the lock again — the lock is never held across `seam.sendTo`.
             val bytes = lock.withLock {
                 if (peer !in knownPeers) return@launch
-                encode(ReplicatorMessage.FullState(sender = replica, state = _state.value))
+                encode(QuiltMessage.FullState(sender = replica, state = _state.value))
             }
             runCatchingCancellable { seam.sendTo(peer, bytes) }
                 .onFailure { logger.debug { "fullStateRetry sendTo $peer failed: ${it.message}" } }
@@ -550,15 +550,15 @@ public class SeamReplicator<S : Quilted<S>>(
         cancelFullStateRetry(sender)
         val msg = runCatching { decode(payload) }.getOrNull() ?: return@withLock
         when (msg) {
-            is ReplicatorMessage.Delta -> onDelta(sender, msg)
-            is ReplicatorMessage.Ack -> onAck(msg)
-            is ReplicatorMessage.FullState -> onFullState(msg)
-            is ReplicatorMessage.Resend -> onResend(msg)
-            is ReplicatorMessage.Delivered -> onDelivered(sender, msg)
+            is QuiltMessage.Delta -> onDelta(sender, msg)
+            is QuiltMessage.Ack -> onAck(msg)
+            is QuiltMessage.FullState -> onFullState(msg)
+            is QuiltMessage.Resend -> onResend(msg)
+            is QuiltMessage.Delivered -> onDelivered(sender, msg)
         }
     }
 
-    private fun onDelta(sender: PeerId, msg: ReplicatorMessage.Delta<S>) {
+    private fun onDelta(sender: PeerId, msg: QuiltMessage.Delta<S>) {
         val senderReplica = msg.sender
         val expected = expectedReceiveSeq.getOrPut(senderReplica) { 1L }
 
@@ -608,7 +608,7 @@ public class SeamReplicator<S : Quilted<S>>(
     }
 
     private fun sendResend(to: PeerId, sender: ReplicaId, fromSeq: Long, toSeq: Long) {
-        val msg = ReplicatorMessage.Resend<S>(
+        val msg = QuiltMessage.Resend<S>(
             requester = replica,
             sender = sender,
             fromSeq = fromSeq,
@@ -643,7 +643,7 @@ public class SeamReplicator<S : Quilted<S>>(
     }
 
     private fun sendAck(to: PeerId, originalSender: ReplicaId, seq: Long) {
-        val msg = ReplicatorMessage.Ack<S>(acker = replica, sender = originalSender, seq = seq)
+        val msg = QuiltMessage.Ack<S>(acker = replica, sender = originalSender, seq = seq)
         val bytes = encode(msg)
         scope.launch {
             runCatchingCancellable { seam.sendTo(to, bytes) }
@@ -651,7 +651,7 @@ public class SeamReplicator<S : Quilted<S>>(
         }
     }
 
-    private fun onAck(msg: ReplicatorMessage.Ack<S>) {
+    private fun onAck(msg: QuiltMessage.Ack<S>) {
         if (msg.sender != replica) return
         val acker = PeerId(msg.acker.value)
         val current = ackedThrough[acker] ?: 0L
@@ -676,7 +676,7 @@ public class SeamReplicator<S : Quilted<S>>(
         pendingDeltas.keys.removeAll { it <= universalAck }
     }
 
-    private fun onFullState(msg: ReplicatorMessage.FullState<S>) {
+    private fun onFullState(msg: QuiltMessage.FullState<S>) {
         _state.update { it.piece(msg.state) }
         recomputeDeliveredLocal()
     }
@@ -686,12 +686,12 @@ public class SeamReplicator<S : Quilted<S>>(
      * recomputes the cut/frontier (the inbound knowledge can raise `F_live` and, via the
      * §4.4 release rule, discharge retained entries this peer now witnesses).
      */
-    private fun onDelivered(sender: PeerId, msg: ReplicatorMessage.Delivered<S>) {
+    private fun onDelivered(sender: PeerId, msg: QuiltMessage.Delivered<S>) {
         frontiers[sender] = msg.vector
         recomputeCut()
     }
 
-    private fun onResend(msg: ReplicatorMessage.Resend<S>) {
+    private fun onResend(msg: QuiltMessage.Resend<S>) {
         if (msg.sender != replica) return
         val requesterPeer = PeerId(msg.requester.value)
         val allPresent = (msg.fromSeq..msg.toSeq).all { seq -> seq in pendingDeltas }
@@ -705,10 +705,10 @@ public class SeamReplicator<S : Quilted<S>>(
         }
     }
 
-    private fun encode(msg: ReplicatorMessage<S>): ByteArray =
+    private fun encode(msg: QuiltMessage<S>): ByteArray =
         binaryFormat.encodeToByteArray(messageSerializer, msg)
 
-    private fun decode(bytes: ByteArray): ReplicatorMessage<S> =
+    private fun decode(bytes: ByteArray): QuiltMessage<S> =
         binaryFormat.decodeFromByteArray(messageSerializer, bytes)
 }
 
@@ -735,10 +735,10 @@ private fun contiguousHighWater(seqs: Set<Long>): Long {
 }
 
 /**
- * Convenience factory for [SeamReplicator] that derives the message serializer internally.
+ * Convenience factory for [Quilter] that derives the message serializer internally.
  *
  * The full constructor requires callers to wrap the value serializer manually via
- * `ReplicatorMessage.serializer(valueSerializer)`. This factory does that wrapping for you,
+ * `QuiltMessage.serializer(valueSerializer)`. This factory does that wrapping for you,
  * and defaults [replica] to `ReplicaId(seam.selfId.value)` — a safe default because each
  * `Seam` has a unique [us.tractat.kuilt.core.Seam.selfId], satisfying the one-instance-per-
  * `(replica, CRDT-type)` precondition as long as each peer creates exactly one replicator per
@@ -746,7 +746,7 @@ private fun contiguousHighWater(seqs: Set<Long>): Long {
  * survives reconnects with a different peer identity).
  *
  * ```kotlin
- * val tally = SeamReplicator(seam, PNCounter.ZERO, PNCounter.serializer(), backgroundScope)
+ * val tally = Quilter(seam, PNCounter.ZERO, PNCounter.serializer(), backgroundScope)
  * tally.mutate { it.increment(tally.replica, 3L) }
  * ```
  *
@@ -759,23 +759,23 @@ private fun contiguousHighWater(seqs: Set<Long>): Long {
  * @param clock monotonic time source; override in tests.
  * @param binaryFormat binary codec for wire frames; defaults to [kotlinx.serialization.cbor.Cbor].
  *
- * @sample us.tractat.kuilt.crdt.sampleSeamReplicatorConvenience
+ * @sample us.tractat.kuilt.quilter.sampleQuilterConvenience
  */
 @Suppress("LongParameterList")
-public fun <S : us.tractat.kuilt.crdt.Quilted<S>> SeamReplicator(
+public fun <S : us.tractat.kuilt.crdt.Quilted<S>> Quilter(
     seam: us.tractat.kuilt.core.Seam,
     initial: S,
     valueSerializer: kotlinx.serialization.KSerializer<S>,
     scope: CoroutineScope,
     replica: us.tractat.kuilt.crdt.ReplicaId = us.tractat.kuilt.crdt.ReplicaId(seam.selfId.value),
-    config: SeamReplicatorConfig = SeamReplicatorConfig(),
+    config: QuilterConfig = QuilterConfig(),
     clock: MonotonicMillis = SystemMonotonicMillis,
     binaryFormat: kotlinx.serialization.BinaryFormat = kotlinx.serialization.cbor.Cbor,
-): SeamReplicator<S> = SeamReplicator(
+): Quilter<S> = Quilter(
     replica = replica,
     seam = seam,
     initial = initial,
-    messageSerializer = ReplicatorMessage.serializer(valueSerializer),
+    messageSerializer = QuiltMessage.serializer(valueSerializer),
     scope = scope,
     config = config,
     clock = clock,

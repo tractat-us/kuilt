@@ -13,26 +13,26 @@ import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.crdt.GCounter
 import us.tractat.kuilt.crdt.ReplicaId
-import us.tractat.kuilt.quilter.ReplicatorMessage
-import us.tractat.kuilt.quilter.SeamReplicator
-import us.tractat.kuilt.quilter.SeamReplicatorConfig
+import us.tractat.kuilt.quilter.QuiltMessage
+import us.tractat.kuilt.quilter.Quilter
+import us.tractat.kuilt.quilter.QuilterConfig
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
 /**
  * Verifies that [RoomReplicator] produces identical convergence behaviour to the
- * hand-wired `room.channel(id)` + [SeamReplicator] pattern it replaces.
+ * hand-wired `room.channel(id)` + [Quilter] pattern it replaces.
  *
  * The acceptance criterion from issue #243: two peers, one using [RoomReplicator]
- * and one hand-wiring [SeamReplicator] directly, must reach the same converged CRDT
+ * and one hand-wiring [Quilter] directly, must reach the same converged CRDT
  * value — proving the wrapper introduces no behavioural difference.
  */
 class RoomReplicatorTest {
 
-    private val config = SeamReplicatorConfig(expectVirtualTime = true)
+    private val config = QuilterConfig(expectVirtualTime = true)
 
     @Test
-    fun `RoomReplicator converges identically to hand-wired SeamReplicator`() =
+    fun `RoomReplicator converges identically to hand-wired Quilter`() =
         runTest(UnconfinedTestDispatcher()) {
             val loom = InMemoryLoom()
             val testClock: () -> kotlin.time.Instant = { kotlin.time.Instant.fromEpochMilliseconds(0L) }
@@ -53,11 +53,11 @@ class RoomReplicatorTest {
             )
 
             // Joiner uses the hand-wired path that RoomReplicator replaces.
-            val repHandWired = SeamReplicator(
+            val repHandWired = Quilter(
                 replica = ReplicaId(joinerRoom.selfId.value),
                 seam = joinerRoom.channel("crdt-test"),
                 initial = GCounter.ZERO,
-                messageSerializer = ReplicatorMessage.serializer(GCounter.serializer()),
+                messageSerializer = QuiltMessage.serializer(GCounter.serializer()),
                 scope = backgroundScope,
                 config = config,
             )

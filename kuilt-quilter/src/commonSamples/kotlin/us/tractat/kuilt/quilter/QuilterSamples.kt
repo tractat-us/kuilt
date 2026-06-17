@@ -24,12 +24,12 @@ import kotlin.time.Duration.Companion.seconds
 // ── Quilter convenience API ───────────────────────────────────────────────────
 
 /**
- * Convenience [SeamReplicator] factory + [SeamReplicator.mutate]:
+ * Convenience [Quilter] factory + [Quilter.mutate]:
  * pass the value serializer directly; the message serializer is derived internally.
  * Replica id defaults to `ReplicaId(seam.selfId.value)`.
  */
 @Suppress("unused")
-internal fun sampleSeamReplicatorConvenience() = runTest(
+internal fun sampleQuilterConvenience() = runTest(
     StandardTestDispatcher(),
     timeout = 5.seconds,
 ) {
@@ -38,9 +38,9 @@ internal fun sampleSeamReplicatorConvenience() = runTest(
     val seamBob = loom.join(InMemoryTag("bob"))
 
     // No manual QuiltMessage.serializer(...) wrapping needed.
-    val cfg = SeamReplicatorConfig(expectVirtualTime = true)
-    val aliceTally = SeamReplicator(seamAlice, PNCounter.ZERO, PNCounter.serializer(), backgroundScope, config = cfg)
-    val bobTally = SeamReplicator(seamBob, PNCounter.ZERO, PNCounter.serializer(), backgroundScope, config = cfg)
+    val cfg = QuilterConfig(expectVirtualTime = true)
+    val aliceTally = Quilter(seamAlice, PNCounter.ZERO, PNCounter.serializer(), backgroundScope, config = cfg)
+    val bobTally = Quilter(seamBob, PNCounter.ZERO, PNCounter.serializer(), backgroundScope, config = cfg)
 
     kotlinx.coroutines.delay(1)
 

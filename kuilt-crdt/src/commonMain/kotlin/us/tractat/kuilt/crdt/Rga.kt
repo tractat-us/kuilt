@@ -350,7 +350,7 @@ public class Rga<V> private constructor(
      * (`id.dot = (replicaId, seq)`) **plus** every dot recorded in a `Compact` op.
      *
      * This is the [Quilted] capability the causal-stability GC barrier consumes
-     * (ADR-003 addendum v3, #262); the [SeamReplicator] folds it into a **contiguous**
+     * (ADR-003 addendum v3, #262); the [Quilter] folds it into a **contiguous**
      * delivered version vector. The per-author seq space is dense and defined by
      * `Insert`s, so the set must stay gap-free across GC:
      *
@@ -493,14 +493,14 @@ public class Rga<V> private constructor(
          * limitation of the compiler-generated `Rga$$serializer`.
          *
          * **Use this instead of `Rga.serializer(...)` when wiring [Rga] into a
-         * [us.tractat.kuilt.crdt.replicator.SeamReplicator]** — the generated serializer fails
+         * [us.tractat.kuilt.quilter.Quilter]** — the generated serializer fails
          * for CBOR transport because it defaults to `PolymorphicSerializer(Any::class)` for the
          * element type [V] in [RgaOp.Insert.value].
          *
          * Usage:
          * ```kotlin
-         * val msgSer = ReplicatorMessage.serializer(Rga.wireSerializer(serializer<String>()))
-         * val replicator = SeamReplicator(..., messageSerializer = msgSer)
+         * val msgSer = QuiltMessage.serializer(Rga.wireSerializer(serializer<String>()))
+         * val replicator = Quilter(..., messageSerializer = msgSer)
          * ```
          *
          * @param vSerializer the [kotlinx.serialization.KSerializer] for element type [V].

@@ -1,8 +1,8 @@
 /**
- * Replicator tests run a real [SeamReplicator] under `UnconfinedTestDispatcher`.
+ * Replicator tests run a real [Quilter] under `UnconfinedTestDispatcher`.
  * The contract mirrors `:kuilt-raft`'s `RaftTestFixtures.kt`: see issue #186.
  *
- * Tests inject [SeamReplicatorConfig] with `expectVirtualTime = true` so the
+ * Tests inject [QuilterConfig] with `expectVirtualTime = true` so the
  * TestDispatcher guard does not warn. Future replicator tests should follow
  * the same pattern, or use a fake replicator (planned in #186 Phase B).
  */
@@ -27,18 +27,18 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
-private fun gcounterSer() = ReplicatorMessage.serializer(GCounter.serializer())
+private fun gcounterSer() = QuiltMessage.serializer(GCounter.serializer())
 
 private fun orSetSer() =
-    ReplicatorMessage.serializer(ORSet.serializer(kotlinx.serialization.serializer<String>()))
+    QuiltMessage.serializer(ORSet.serializer(kotlinx.serialization.serializer<String>()))
 
 /** Default config for replicator tests: suppresses the TestDispatcher guard warning. */
-private val REPLICATOR_TEST_CONFIG = SeamReplicatorConfig(expectVirtualTime = true)
+private val REPLICATOR_TEST_CONFIG = QuilterConfig(expectVirtualTime = true)
 
 private fun gcounterReplicator(
     seam: us.tractat.kuilt.core.Seam,
     scope: CoroutineScope,
-) = SeamReplicator(
+) = Quilter(
     replica = ReplicaId(seam.selfId.value),
     seam = seam,
     initial = GCounter.ZERO,
@@ -47,7 +47,7 @@ private fun gcounterReplicator(
     config = REPLICATOR_TEST_CONFIG,
 )
 
-class SeamReplicatorTest {
+class QuilterTest {
 
     /**
      * Two peers independently increment their GCounter slots; after round-trip
@@ -85,7 +85,7 @@ class SeamReplicatorTest {
         val seamC = loom.join(InMemoryTag("c"))
 
         val msgSer = orSetSer()
-        fun orSetRep(seam: us.tractat.kuilt.core.Seam) = SeamReplicator(
+        fun orSetRep(seam: us.tractat.kuilt.core.Seam) = Quilter(
             replica = ReplicaId(seam.selfId.value),
             seam = seam,
             initial = ORSet.empty<String>(),

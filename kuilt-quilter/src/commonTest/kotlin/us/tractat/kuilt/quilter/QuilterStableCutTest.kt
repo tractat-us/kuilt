@@ -1,16 +1,16 @@
 /**
  * The causal-stability cut + frontier flows and the eviction-safe retained frontier
- * (#269, ADR-003 addendum v3 §4). A [SeamReplicator] over an [Rga] derives, from its own
- * [SeamReplicator.deliveredLocal] and the gossiped [frontiers] matrix:
+ * (#269, ADR-003 addendum v3 §4). A [Quilter] over an [Rga] derives, from its own
+ * [Quilter.deliveredLocal] and the gossiped [frontiers] matrix:
  *
  * - `stableCut S` = min over live peers ∪ self (monotonic),
  * - `frontierMax F` = max(F_live, retainedFrontier),
  *
- * published together as [SeamReplicator.cutFrontier]. Eviction folds a departing peer's
+ * published together as [Quilter.cutFrontier]. Eviction folds a departing peer's
  * frontier into `retainedFrontier` (retain-capture-before-drop, W1) so `F` never falls
  * below a known-to-exist dot the compactor has not delivered — the #275 refusal.
  *
- * Peers' claimed delivery is injected as crafted [ReplicatorMessage.Delivered] frames so a
+ * Peers' claimed delivery is injected as crafted [QuiltMessage.Delivered] frames so a
  * single replica's view can be driven deterministically (atomic [InMemoryLoom] broadcast
  * cannot otherwise produce "knows of a dot but has not delivered it").
  */
@@ -44,15 +44,15 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.milliseconds
 
-private val RGA_MSG_SER = ReplicatorMessage.serializer(Rga.wireSerializer(serializer<String>()))
+private val RGA_MSG_SER = QuiltMessage.serializer(Rga.wireSerializer(serializer<String>()))
 
 private fun rgaRep(
     seam: Seam,
     scope: CoroutineScope,
-    config: SeamReplicatorConfig = SeamReplicatorConfig(expectVirtualTime = true),
+    config: QuilterConfig = QuilterConfig(expectVirtualTime = true),
     clock: MonotonicMillis = FakeClock(), // frozen by default; eviction tests pass an advancing one
-): SeamReplicator<Rga<String>> =
-    SeamReplicator(
+): Quilter<Rga<String>> =
+    Quilter(
         replica = ReplicaId(seam.selfId.value),
         seam = seam,
         initial = Rga.empty(),
@@ -62,14 +62,14 @@ private fun rgaRep(
         clock = clock,
     )
 
-private fun SeamReplicator<Rga<String>>.insertHead(value: String) {
+private fun Quilter<Rga<String>>.insertHead(value: String) {
     val (_, op) = state.value.insertAfter(replica, RgaId.HEAD, value)
     apply(Patch(Rga.empty<String>().apply(op)))
 }
 
-/** Crafts a [ReplicatorMessage.Delivered] claiming [vector] and broadcasts it from [from]. */
+/** Crafts a [QuiltMessage.Delivered] claiming [vector] and broadcasts it from [from]. */
 private suspend fun craftDelivered(from: Seam, vector: VersionVector) {
-    val msg = ReplicatorMessage.Delivered<Rga<String>>(sender = ReplicaId(from.selfId.value), vector = vector)
+    val msg = QuiltMessage.Delivered<Rga<String>>(sender = ReplicaId(from.selfId.value), vector = vector)
     from.broadcast(Cbor.encodeToByteArray(RGA_MSG_SER, msg))
 }
 
@@ -84,7 +84,7 @@ private class FakeClock(private var t: Long = 0L) : MonotonicMillis {
     fun advanceBy(ms: Long) { t += ms }
 }
 
-class SeamReplicatorStableCutTest {
+class QuilterStableCutTest {
 
     @Test
     fun stableCutIsMinOverLivePeers() = runTest(UnconfinedTestDispatcher()) {
@@ -153,7 +153,7 @@ class SeamReplicatorStableCutTest {
         val repA = rgaRep(
             CutControllableSeam(seamA, controlledPeers),
             backgroundScope,
-            config = SeamReplicatorConfig(
+            config = QuilterConfig(
                 expectVirtualTime = true,
                 evictionAfter = 100.milliseconds,
                 antiEntropyInterval = 50.milliseconds,
@@ -200,7 +200,7 @@ class SeamReplicatorStableCutTest {
         val repA = rgaRep(
             CutControllableSeam(seamA, controlledPeers),
             backgroundScope,
-            config = SeamReplicatorConfig(
+            config = QuilterConfig(
                 expectVirtualTime = true,
                 evictionAfter = 100.milliseconds,
                 antiEntropyInterval = 50.milliseconds,

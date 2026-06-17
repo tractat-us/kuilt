@@ -27,16 +27,16 @@ import us.tractat.kuilt.test.ControllableLoom
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
-private val CFG = SeamReplicatorConfig(expectVirtualTime = true)
+private val CFG = QuilterConfig(expectVirtualTime = true)
 
 private fun gcounterReplicator(
     seam: us.tractat.kuilt.core.Seam,
     scope: kotlinx.coroutines.CoroutineScope,
-) = SeamReplicator(
+) = Quilter(
     replica = ReplicaId(seam.selfId.value),
     seam = seam,
     initial = GCounter.ZERO,
-    messageSerializer = ReplicatorMessage.serializer(GCounter.serializer()),
+    messageSerializer = QuiltMessage.serializer(GCounter.serializer()),
     scope = scope,
     config = CFG,
 )

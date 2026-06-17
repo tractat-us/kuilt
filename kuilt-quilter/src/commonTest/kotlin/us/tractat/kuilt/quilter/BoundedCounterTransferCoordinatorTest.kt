@@ -2,8 +2,8 @@
  * Tests for [BoundedCounterTransferCoordinator].
  *
  * All tests use [UnconfinedTestDispatcher] so coroutine launches are eager.
- * The [SeamReplicatorConfig.expectVirtualTime] suppresses the TestDispatcher
- * guard in [SeamReplicator].
+ * The [QuilterConfig.expectVirtualTime] suppresses the TestDispatcher
+ * guard in [Quilter].
  */
 @file:OptIn(
     kotlinx.serialization.ExperimentalSerializationApi::class,
@@ -28,11 +28,11 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.milliseconds
 
-private val REPLICATOR_CFG = SeamReplicatorConfig(expectVirtualTime = true)
-private val bcSer = ReplicatorMessage.serializer(BoundedCounter.serializer())
+private val REPLICATOR_CFG = QuilterConfig(expectVirtualTime = true)
+private val bcSer = QuiltMessage.serializer(BoundedCounter.serializer())
 
 /**
- * Creates a [SeamReplicator] + [BoundedCounterTransferCoordinator] pair wired together
+ * Creates a [Quilter] + [BoundedCounterTransferCoordinator] pair wired together
  * via a [MuxSeam]. Returns the replicator so the caller can apply patches and observe state.
  */
 private fun wireCoordinator(
@@ -41,9 +41,9 @@ private fun wireCoordinator(
     initial: BoundedCounter,
     coordConfig: BoundedCounterTransferConfig,
     scope: kotlinx.coroutines.CoroutineScope,
-): SeamReplicator<BoundedCounter> {
+): Quilter<BoundedCounter> {
     val mux = MuxSeam(rawSeam, scope)
-    val replicator = SeamReplicator(
+    val replicator = Quilter(
         replica = self,
         seam = mux.channel(0x00),
         initial = initial,

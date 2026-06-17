@@ -1,19 +1,19 @@
 /**
  * ADVERSARIAL AUDIT (#262) — RGA GC convergence + data-preservation through the
- * **live** SeamReplicator stack under reordered / held / partitioned delivery.
+ * **live** Quilter stack under reordered / held / partitioned delivery.
  *
  * The model-level predicate ([Rga.compact]) is proven by [us.tractat.kuilt.crdt.RgaCompactV3AdversarialProbeTest]
- * et al. This suite stresses the *wiring*: real [SeamReplicator]s exchanging real
+ * et al. This suite stresses the *wiring*: real [Quilter]s exchanging real
  * Delta/Ack/Delivered/FullState/Compact frames over a [ControllableLoom] that can
  * reorder, hold and partition.
  *
  * **Sound GC driver.** The VV-based coordinator (#270) is not on this base; the deprecated
  * seq-based [RgaGcCoordinator] is unsound by construction. So these probes drive the *sound*
  * compact path directly — exactly what #270's coordinator will do: observe each replicator's
- * published [SeamReplicator.cutFrontier] + [SeamReplicator.deliveredLocal] and call
+ * published [Quilter.cutFrontier] + [Quilter.deliveredLocal] and call
  * `Rga.compact(stableCut, frontierMax, delivered)`, feeding the resulting [RgaOp.Compact] back
- * through [SeamReplicator.apply] so it propagates as a delta. This is coordinator-independent:
- * it tests SeamReplicator's cut/frontier derivation + Compact propagation + FullState catch-up.
+ * through [Quilter.apply] so it propagates as a delta. This is coordinator-independent:
+ * it tests Quilter's cut/frontier derivation + Compact propagation + FullState catch-up.
  */
 @file:OptIn(
     kotlinx.serialization.ExperimentalSerializationApi::class,
@@ -41,15 +41,15 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
-private val MSG_SER = ReplicatorMessage.serializer(Rga.wireSerializer(serializer<String>()))
-private val CFG = SeamReplicatorConfig(expectVirtualTime = true)
+private val MSG_SER = QuiltMessage.serializer(Rga.wireSerializer(serializer<String>()))
+private val CFG = QuilterConfig(expectVirtualTime = true)
 
 /**
  * One peer: its replicator + a sound GC driver wired off the published flows.
  */
 private class GcPeer(
     val replica: ReplicaId,
-    val rep: SeamReplicator<Rga<String>>,
+    val rep: Quilter<Rga<String>>,
 ) {
     val list: List<String> get() = rep.state.value.toList()
     val tombstones get() = rep.state.value.tombstones
@@ -68,7 +68,7 @@ private suspend fun TestScope.gcPeer(
         loom.join(us.tractat.kuilt.core.InMemoryTag(rendezvousName))
     }
     val replica = ReplicaId(seam.selfId.value)
-    val rep = SeamReplicator(
+    val rep = Quilter(
         replica = replica,
         seam = seam,
         initial = Rga.empty(),
@@ -84,7 +84,7 @@ private suspend fun TestScope.gcPeer(
  * The sound GC driver: on every cut/frontier OR delivered change, run [Rga.compact] to
  * fixpoint and re-broadcast any [RgaOp.Compact] as a delta. Mirrors #270's intended coordinator.
  */
-private fun wireSoundGcDriver(rep: SeamReplicator<Rga<String>>, scope: CoroutineScope) {
+private fun wireSoundGcDriver(rep: Quilter<Rga<String>>, scope: CoroutineScope) {
     // NB: triggered on rep.state (NOT just cutFrontier+deliveredLocal). A `Remove` arriving
     // after its target dot is already causally stable changes neither the cut nor delivered
     // (Remove mints no dot — see Rga.causalDots), yet it is exactly the event that makes a

@@ -22,15 +22,15 @@ import kotlin.time.Duration.Companion.seconds
 
 /**
  * Verifies the FullState retry timer: when a late-joining peer's initial FullState snapshot
- * is dropped, the replicator must re-send it after [SeamReplicatorConfig.fullStateRetryInterval]
+ * is dropped, the replicator must re-send it after [QuilterConfig.fullStateRetryInterval]
  * without requiring any further inbound traffic.
  *
  * This is the same class of fix that the Resend retry (#180) applied — a unicast control
  * message without retry semantics is a silent-data-loss vector.
  */
-class SeamReplicatorFullStateRetryTest {
+class QuilterFullStateRetryTest {
 
-    private val gsetSer = ReplicatorMessage.serializer(
+    private val gsetSer = QuiltMessage.serializer(
         GSet.serializer(kotlinx.serialization.serializer<String>()),
     )
 
@@ -51,10 +51,10 @@ class SeamReplicatorFullStateRetryTest {
     private fun <S : us.tractat.kuilt.crdt.Quilted<S>> replicatorFor(
         seam: Seam,
         initial: S,
-        serializer: kotlinx.serialization.KSerializer<ReplicatorMessage<S>>,
+        serializer: kotlinx.serialization.KSerializer<QuiltMessage<S>>,
         scope: CoroutineScope,
-        config: SeamReplicatorConfig = SeamReplicatorConfig(),
-    ) = SeamReplicator(
+        config: QuilterConfig = QuilterConfig(),
+    ) = Quilter(
         replica = us.tractat.kuilt.crdt.ReplicaId(seam.selfId.value),
         seam = seam,
         initial = initial,
@@ -86,7 +86,7 @@ class SeamReplicatorFullStateRetryTest {
         val gatingSeamA = SendToGatingSeam(rawSeamA, unblockSendTo = false)
 
         val retryInterval = 200.milliseconds
-        val config = SeamReplicatorConfig(
+        val config = QuilterConfig(
             fullStateRetryInterval = retryInterval,
             expectVirtualTime = true,
         )
@@ -148,7 +148,7 @@ class SeamReplicatorFullStateRetryTest {
         val rawSeamB = loom.join(InMemoryTag("b"))
 
         val retryInterval = 500.milliseconds
-        val config = SeamReplicatorConfig(
+        val config = QuilterConfig(
             fullStateRetryInterval = retryInterval,
             expectVirtualTime = true,
         )

@@ -14,7 +14,7 @@ import us.tractat.kuilt.crdt.VersionVector
  *   **live or evicted-but-retained**, has told us exists. Drives condition 3:
  *   `delivered.dominates(F)` — self has delivered everything known to exist.
  *
- * The two are published **together**, in a single [SeamReplicator.cutFrontier]
+ * The two are published **together**, in a single [Quilter.cutFrontier]
  * emission, so a compactor can never observe an intermediate state in which `F` has
  * floored below a known-to-exist dot — wiring invariant **W1** of ADR §4.6. A
  * consumer must read the whole [CutFrontier], not re-derive the halves from separate

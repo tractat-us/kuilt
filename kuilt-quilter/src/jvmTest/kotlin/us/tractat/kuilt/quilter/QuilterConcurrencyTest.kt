@@ -37,11 +37,11 @@ import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 
 /**
- * Thread-safety probes for [SeamReplicator] (#288).
+ * Thread-safety probes for [Quilter] (#288).
  *
- * `SeamReplicator` keeps plain mutable state (`nextSeq`, `pendingDeltas`, `knownPeers`,
+ * `Quilter` keeps plain mutable state (`nextSeq`, `pendingDeltas`, `knownPeers`,
  * `expectedReceiveSeq`, `pendingInbound`, the matrix-clock fields, …) that four entry
- * points read-modify-write: public [SeamReplicator.apply] plus three `launchIn(scope)`
+ * points read-modify-write: public [Quilter.apply] plus three `launchIn(scope)`
  * collectors (`seam.incoming`, `seam.peers`, the anti-entropy loop). Correctness rested on
  * an undocumented single-coroutine-confinement assumption (ADR-003 §4.6 W2) — pass a
  * multithreaded scope and `apply` races the collectors over those maps with no happens-before.
@@ -58,11 +58,11 @@ import kotlin.time.Duration.Companion.seconds
  * `runTest`'s budget. The JVM gives fast, reliable real-thread coverage of the common-code lock,
  * so this suite lives in `jvmTest`.
  */
-class SeamReplicatorConcurrencyTest {
+class QuilterConcurrencyTest {
 
-    private val gsetSer = ReplicatorMessage.serializer(GSet.serializer(serializer<String>()))
+    private val gsetSer = QuiltMessage.serializer(GSet.serializer(serializer<String>()))
 
-    private fun gsetReplicator(seam: Seam, scope: CoroutineScope) = SeamReplicator(
+    private fun gsetReplicator(seam: Seam, scope: CoroutineScope) = Quilter(
         replica = ReplicaId(seam.selfId.value),
         seam = seam,
         initial = GSet.empty<String>(),
@@ -71,11 +71,11 @@ class SeamReplicatorConcurrencyTest {
         // Real-clock anti-entropy is fine: these tests run on real time, not virtual time.
         // 250ms gives in-flight deltas time to land before a gap triggers a resend, so the
         // system actually quiesces under the apply flood rather than generating a resend storm.
-        config = SeamReplicatorConfig(resendRetryInterval = 250.milliseconds),
+        config = QuilterConfig(resendRetryInterval = 250.milliseconds),
     )
 
     /**
-     * Hammer [SeamReplicator.apply] from many [Dispatchers.Default] coroutines while a churner
+     * Hammer [Quilter.apply] from many [Dispatchers.Default] coroutines while a churner
      * coroutine introduces fresh peers. Each new peer makes the `seam.peers` collector run
      * `onPeersChanged`, which **structurally grows** `knownPeers`; meanwhile every `apply` runs
      * `recomputeCut`, which **iterates** `knownPeers`. Grow-while-iterate with no happens-before
@@ -117,13 +117,13 @@ class SeamReplicatorConcurrencyTest {
                 // fullStateRetryLimit = 0 means a fresh peer schedules no retry coroutine, so the
                 // unbounded churn can't OOM. Real clock (default) + evictionAfter 0 ⇒ an absent
                 // peer is immediately stale.
-                val rep = SeamReplicator(
+                val rep = Quilter(
                     replica = ReplicaId(seam.selfId.value),
                     seam = seam,
                     initial = GSet.empty<String>(),
                     messageSerializer = gsetSer,
                     scope = scope,
-                    config = SeamReplicatorConfig(
+                    config = QuilterConfig(
                         evictionAfter = 0.milliseconds,
                         antiEntropyInterval = 1.milliseconds,
                         fullStateRetryLimit = 0,
@@ -174,7 +174,7 @@ class SeamReplicatorConcurrencyTest {
 
     /**
      * Two replicators on the same mesh, each hammered with unique [GSet] adds from many
-     * [Dispatchers.Default] coroutines. Local [SeamReplicator.apply] races its own
+     * [Dispatchers.Default] coroutines. Local [Quilter.apply] races its own
      * `seam.incoming` collector applying the peer's deltas. A dropped/torn delta leaves a
      * replica permanently short an element; under the lock both converge to the full union.
      */

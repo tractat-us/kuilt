@@ -31,12 +31,12 @@ import kotlin.test.assertFalse
  * irreducible: a dropped `add("b")` cannot be reconstructed from later deltas,
  * so a dropped delta causes observable divergence without gap recovery.
  */
-class SeamReplicatorGapTest {
+class QuilterGapTest {
 
-    private val gsetSer = ReplicatorMessage.serializer(
+    private val gsetSer = QuiltMessage.serializer(
         GSet.serializer(kotlinx.serialization.serializer<String>()),
     )
-    private val gcounterSer = ReplicatorMessage.serializer(GCounter.serializer())
+    private val gcounterSer = QuiltMessage.serializer(GCounter.serializer())
 
     /**
      * A [Seam] wrapper that intercepts outgoing [broadcast] calls and suppresses
@@ -59,10 +59,10 @@ class SeamReplicatorGapTest {
     private fun <S : us.tractat.kuilt.crdt.Quilted<S>> replicatorFor(
         seam: Seam,
         initial: S,
-        serializer: kotlinx.serialization.KSerializer<ReplicatorMessage<S>>,
+        serializer: kotlinx.serialization.KSerializer<QuiltMessage<S>>,
         scope: CoroutineScope,
-        config: SeamReplicatorConfig = SeamReplicatorConfig(expectVirtualTime = true),
-    ) = SeamReplicator(
+        config: QuilterConfig = QuilterConfig(expectVirtualTime = true),
+    ) = Quilter(
         replica = ReplicaId(seam.selfId.value),
         seam = seam,
         initial = initial,
@@ -126,7 +126,7 @@ class SeamReplicatorGapTest {
         assertEquals(5L, repB.state.value.value, "B should have received seq=1")
 
         // Re-broadcast seq=1 — simulates retransmit / network dup
-        val duplicateMsg = ReplicatorMessage.Delta(
+        val duplicateMsg = QuiltMessage.Delta(
             sender = repA.replica,
             seq = 1L,
             delta = GCounter.of(repA.replica to 5L),

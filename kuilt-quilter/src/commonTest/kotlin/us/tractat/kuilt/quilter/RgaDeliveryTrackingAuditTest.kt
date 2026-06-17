@@ -26,7 +26,7 @@ import kotlin.test.assertTrue
  *
  * Every probe here is expected to PASS — it pins a sound invariant. A failure means a
  * latent #284 sibling. The frontier helper [contiguousFrontier] is the same fold the
- * [us.tractat.kuilt.crdt.replicator.SeamReplicator] uses for `deliveredLocal`.
+ * [us.tractat.kuilt.crdt.replicator.Quilter] uses for `deliveredLocal`.
  */
 class RgaDeliveryTrackingAuditTest {
 
@@ -89,7 +89,7 @@ class RgaDeliveryTrackingAuditTest {
     @Test
     fun h2_fullStateReconstructionMatchesSenderFrontier() {
         // Sender: 3 inserts, middle GC'd. A peer reconstructs from the FullState (== the
-        // whole Rga value the replicator ships in ReplicatorMessage.FullState).
+        // whole Rga value the replicator ships in QuiltMessage.FullState).
         val (base, ids, _) = threeByA()
         val sender = gcOne(base, ids[1])
 

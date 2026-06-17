@@ -1,6 +1,6 @@
 /**
  * End-to-end acceptance tests for `WindowPolicy.byCount(n)` history windowing (#254) over the
- * **live replicator stack** — real [SeamReplicator]s + [RgaGcCoordinator]s, with the un-gated
+ * **live replicator stack** — real [Quilter]s + [RgaGcCoordinator]s, with the un-gated
  * windowing drop relying on reroot-to-HEAD (#254 PART 1).
  *
  * Covers the #254 acceptance criteria:
@@ -37,8 +37,8 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
-private val WIN_CFG = SeamReplicatorConfig(expectVirtualTime = true)
-private val WIN_MSG_SER = ReplicatorMessage.serializer(Rga.wireSerializer(serializer<Int>()))
+private val WIN_CFG = QuilterConfig(expectVirtualTime = true)
+private val WIN_MSG_SER = QuiltMessage.serializer(Rga.wireSerializer(serializer<Int>()))
 
 class RgaWindowByCountIntegrationTest {
 
@@ -46,8 +46,8 @@ class RgaWindowByCountIntegrationTest {
         seam: Seam,
         scope: CoroutineScope,
         policy: WindowPolicy = WindowPolicy.never(),
-    ): SeamReplicator<Rga<Int>> {
-        val replicator = SeamReplicator(
+    ): Quilter<Rga<Int>> {
+        val replicator = Quilter(
             replica = ReplicaId(seam.selfId.value),
             seam = seam,
             initial = Rga.empty(),
@@ -66,7 +66,7 @@ class RgaWindowByCountIntegrationTest {
         return replicator
     }
 
-    private fun SeamReplicator<Rga<Int>>.applyOp(op: RgaOp<Int>) =
+    private fun Quilter<Rga<Int>>.applyOp(op: RgaOp<Int>) =
         apply(Patch(Rga.empty<Int>().apply(op)))
 
     /**
@@ -85,7 +85,7 @@ class RgaWindowByCountIntegrationTest {
     }
 
     /** Append [value] at the tail of this replica's current visible sequence. */
-    private fun SeamReplicator<Rga<Int>>.append(value: Int): RgaId {
+    private fun Quilter<Rga<Int>>.append(value: Int): RgaId {
         val current = state.value
         val after = current.sequence.lastOrNull { it !in current.tombstones } ?: RgaId.HEAD
         val (_, op) = current.insertAfter(replica, after, value)

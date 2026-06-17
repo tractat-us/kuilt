@@ -16,23 +16,23 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
-class SeamReplicatorTestDispatcherGuardTest {
+class QuilterTestDispatcherGuardTest {
 
-    private val ser = ReplicatorMessage.serializer(GCounter.serializer())
+    private val ser = QuiltMessage.serializer(GCounter.serializer())
 
     /**
-     * When strictTestGuard=true, constructing SeamReplicator under a TestDispatcher
-     * must throw with an actionable message mentioning TestDispatcher and SeamReplicator.
+     * When strictTestGuard=true, constructing Quilter under a TestDispatcher
+     * must throw with an actionable message mentioning TestDispatcher and Quilter.
      */
     @Test
     fun seamReplicatorUnderTestDispatcher_throwsWithActionableMessage_whenStrictGuardEnabled() =
         runTest(UnconfinedTestDispatcher()) {
             val loom = InMemoryLoom()
             val seam = loom.host(Pattern("guard-strict"))
-            val config = SeamReplicatorConfig(strictTestGuard = true)
+            val config = QuilterConfig(strictTestGuard = true)
 
             val ex = assertFailsWith<IllegalStateException> {
-                SeamReplicator(
+                Quilter(
                     replica = ReplicaId(seam.selfId.value),
                     seam = seam,
                     initial = GCounter.ZERO,
@@ -47,8 +47,8 @@ class SeamReplicatorTestDispatcherGuardTest {
                 "Expected diagnostic to mention TestDispatcher or virtual time, got: ${ex.message}",
             )
             assertTrue(
-                "SeamReplicator" in ex.message!!,
-                "Expected diagnostic to mention SeamReplicator, got: ${ex.message}",
+                "Quilter" in ex.message!!,
+                "Expected diagnostic to mention Quilter, got: ${ex.message}",
             )
         }
 
@@ -61,10 +61,10 @@ class SeamReplicatorTestDispatcherGuardTest {
         runTest(UnconfinedTestDispatcher()) {
             val loom = InMemoryLoom()
             val seam = loom.host(Pattern("guard-default"))
-            val config = SeamReplicatorConfig() // strictTestGuard defaults to false
+            val config = QuilterConfig() // strictTestGuard defaults to false
 
             // Must not throw — just emits a warning log
-            SeamReplicator(
+            Quilter(
                 replica = ReplicaId(seam.selfId.value),
                 seam = seam,
                 initial = GCounter.ZERO,
@@ -83,13 +83,13 @@ class SeamReplicatorTestDispatcherGuardTest {
         runTest(UnconfinedTestDispatcher()) {
             val loom = InMemoryLoom()
             val seam = loom.host(Pattern("guard-suppress"))
-            val config = SeamReplicatorConfig(
+            val config = QuilterConfig(
                 strictTestGuard = true,    // would normally throw
                 expectVirtualTime = true,  // opt-out must take precedence
             )
 
             // Must not throw — expectVirtualTime = true short-circuits before the check.
-            val replicator = SeamReplicator(
+            val replicator = Quilter(
                 replica = ReplicaId(seam.selfId.value),
                 seam = seam,
                 initial = GCounter.ZERO,

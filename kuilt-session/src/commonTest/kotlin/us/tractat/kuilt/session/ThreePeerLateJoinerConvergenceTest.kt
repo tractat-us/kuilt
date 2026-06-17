@@ -14,38 +14,38 @@ import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.crdt.GCounter
 import us.tractat.kuilt.crdt.ReplicaId
-import us.tractat.kuilt.quilter.ReplicatorMessage
-import us.tractat.kuilt.quilter.SeamReplicator
-import us.tractat.kuilt.quilter.SeamReplicatorConfig
+import us.tractat.kuilt.quilter.QuiltMessage
+import us.tractat.kuilt.quilter.Quilter
+import us.tractat.kuilt.quilter.QuilterConfig
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
 
 /**
- * Integration: a [GCounter] [SeamReplicator] over [Room.channel] converges across
+ * Integration: a [GCounter] [Quilter] over [Room.channel] converges across
  * **three** members (1 host + 2 joiners), exercising two catch-up paths:
  *
  * 1. **Simultaneous join**: All three replicators are registered before any deltas
- *    are applied. On admit, [SeamReplicator] fires [ReplicatorMessage.FullState] to each
+ *    are applied. On admit, [Quilter] fires [QuiltMessage.FullState] to each
  *    new peer; subsequent deltas reach every peer directly.
  *
  * 2. **Late joiner with GC'd deltas (gap-fill → FullState fallback)**: Phase 1 two-peer
  *    convergence GC's the initial deltas. Joiner2 arrives after the GC. New deltas in
  *    Phase 2 trigger gap-detection; the Resend request can't be fulfilled from the
- *    now-empty delta buffer, so the sender falls back to [ReplicatorMessage.FullState].
+ *    now-empty delta buffer, so the sender falls back to [QuiltMessage.FullState].
  *    All three peers converge to the accumulated total.
  *
- * Both paths exercise the end-to-end [Room.channel] + [SeamReplicator] stack over
+ * Both paths exercise the end-to-end [Room.channel] + [Quilter] stack over
  * [InMemoryLoom] with virtual-time scheduling via [UnconfinedTestDispatcher].
  */
 class ThreePeerLateJoinerConvergenceTest {
 
-    private val replicatorConfig = SeamReplicatorConfig(expectVirtualTime = true)
-    private val messageSer = ReplicatorMessage.serializer(GCounter.serializer())
+    private val replicatorConfig = QuilterConfig(expectVirtualTime = true)
+    private val messageSer = QuiltMessage.serializer(GCounter.serializer())
 
-    private fun gcounterReplicator(room: Room, scope: CoroutineScope): SeamReplicator<GCounter> =
-        SeamReplicator(
+    private fun gcounterReplicator(room: Room, scope: CoroutineScope): Quilter<GCounter> =
+        Quilter(
             replica = ReplicaId(room.selfId.value),
             seam = room.channel("crdt-test"),
             initial = GCounter.ZERO,
@@ -59,7 +59,7 @@ class ThreePeerLateJoinerConvergenceTest {
      *
      * All three rooms and replicators are set up before any deltas are applied.
      * Exercises the 3-peer delta propagation path end-to-end over `Room.channel`:
-     * each admit fires [ReplicatorMessage.FullState] to the new peer; subsequent deltas
+     * each admit fires [QuiltMessage.FullState] to the new peer; subsequent deltas
      * propagate to all three.
      */
     @Test
@@ -106,8 +106,8 @@ class ThreePeerLateJoinerConvergenceTest {
      *
      * Phase 2: joiner2 joins after GC. Host and joiner1 each apply one more delta.
      * Joiner2 receives the new deltas (seq=2) but is missing seq=1 for each sender.
-     * Gap detection fires [ReplicatorMessage.Resend]; the senders can't fulfil it
-     * (seq=1 is GC'd), so they fall back to [ReplicatorMessage.FullState]. Joiner2
+     * Gap detection fires [QuiltMessage.Resend]; the senders can't fulfil it
+     * (seq=1 is GC'd), so they fall back to [QuiltMessage.FullState]. Joiner2
      * absorbs the FullState snapshots and converges to the total accumulated value.
      */
     @Test

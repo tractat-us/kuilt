@@ -18,7 +18,7 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.crdt.RgaGcCoordinato
 
 /**
  * Coordinator that drives tombstone GC (and optional history windowing) for an [Rga] CRDT
- * replicated via [SeamReplicator], gated by the **eviction-safe causal-stability barrier**
+ * replicated via [Quilter], gated by the **eviction-safe causal-stability barrier**
  * (ADR-003 addendum v3, #262).
  *
  * ## Role
@@ -28,13 +28,13 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.crdt.RgaGcCoordinato
  * minted by a *different* author may still exist undelivered — purging `I` would orphan `J`
  * everywhere (#262). The sound condition is **causal stability**, not a scalar watermark.
  *
- * [SeamReplicator] publishes the two version-vector quantities the barrier needs:
- * - [SeamReplicator.cutFrontier] — an atomically-published [CutFrontier] carrying both the
+ * [Quilter] publishes the two version-vector quantities the barrier needs:
+ * - [Quilter.cutFrontier] — an atomically-published [CutFrontier] carrying both the
  *   **stable cut** `S` (`min` over live peers — every peer has delivered everything at-or-below
  *   it) and the **frontier** `F = max(F_live, retainedFrontier)` (the highest dot any peer,
  *   live or evicted-but-retained, has told us exists). Published together (wiring invariant W1)
  *   so a compactor never observes a half-update where `F` has fallen below a known-to-exist dot.
- * - [SeamReplicator.deliveredLocal] — this replica's own contiguous **delivered** version vector.
+ * - [Quilter.deliveredLocal] — this replica's own contiguous **delivered** version vector.
  *
  * This coordinator observes [cutFrontier] and, on each emission, hands `S`, `F`, and the fresh
  * [delivered] value to [Rga.compact]`(stableCut, frontierMax, delivered)`. That method refuses GC
@@ -50,7 +50,7 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.crdt.RgaGcCoordinato
  *
  * On each cut emission the coordinator calls [Rga.compact] in a loop until it returns `null`.
  * This handles the two-pass chain case: removing a tombstone may unblock a structural
- * predecessor, making it eligible on the next pass. [SeamReplicator.apply] updates [state]
+ * predecessor, making it eligible on the next pass. [Quilter.apply] updates [state]
  * synchronously via `StateFlow.update`, so `state.value` reflects each [applyCompaction] before
  * the next loop iteration — `loop-until-null` is therefore safe.
  *
@@ -63,18 +63,18 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.crdt.RgaGcCoordinato
  * [windowPolicy] may return additional ids to truncate from the visible prefix (history
  * windowing). The default [WindowPolicy.never] does nothing beyond causal-stability GC.
  *
- * @param state live [Rga] state (updated by [SeamReplicator] on every incoming delta).
+ * @param state live [Rga] state (updated by [Quilter] on every incoming delta).
  * @param cutFrontier the atomically-published causal-stability cut + frontier from
- *   [SeamReplicator.cutFrontier].
- * @param delivered this replica's contiguous delivered VV from [SeamReplicator.deliveredLocal].
+ *   [Quilter.cutFrontier].
+ * @param delivered this replica's contiguous delivered VV from [Quilter.deliveredLocal].
  * @param applyCompaction called with each compaction [Patch]; the caller wires this to
- *   [SeamReplicator.apply] so the delta propagates to all peers.
+ *   [Quilter.apply] so the delta propagates to all peers.
  * @param windowPolicy optional history-windowing policy (default [WindowPolicy.never]).
  * @param scope the [CoroutineScope] for background coroutines.
  *
  * @see Rga.compact
- * @see SeamReplicator.cutFrontier
- * @see SeamReplicator.deliveredLocal
+ * @see Quilter.cutFrontier
+ * @see Quilter.deliveredLocal
  * @see WindowPolicy
  */
 public class RgaGcCoordinator<V>(
@@ -131,7 +131,7 @@ public class RgaGcCoordinator<V>(
      * reroot-to-HEAD, so it is safe even when the frontier is incomplete (#254). Keeping the gate
      * inside [Rga.compact] is what holds the two paths apart.
      *
-     * [SeamReplicator.apply] updates [StateFlow] synchronously via `StateFlow.update`, so
+     * [Quilter.apply] updates [StateFlow] synchronously via `StateFlow.update`, so
      * `state.value` reflects each compaction before the next loop iteration. This makes the
      * loop-until-null safe: each iteration reads fresh state and terminates when nothing
      * further can be compacted (windowing shrinks its own candidate set as it drops the prefix).

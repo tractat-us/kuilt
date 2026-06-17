@@ -1,11 +1,11 @@
 /**
- * 3-peer integration test for [RgaGcCoordinator] + [SeamReplicator].
+ * 3-peer integration test for [RgaGcCoordinator] + [Quilter].
  *
  * Asserts that continuous insert + remove across 3 peers converges to a
  * **bounded** op-log size once the causal-stability watermark catches up —
  * i.e. the op-log stops growing unboundedly after compaction.
  *
- * All tests use [UnconfinedTestDispatcher] with [SeamReplicatorConfig.expectVirtualTime] = true.
+ * All tests use [UnconfinedTestDispatcher] with [QuilterConfig.expectVirtualTime] = true.
  */
 @file:OptIn(
     kotlinx.serialization.ExperimentalSerializationApi::class,
@@ -32,20 +32,20 @@ import kotlin.test.assertTrue
 // Use Int as the value type.
 // Use Rga.wireSerializer (backed by RgaOpSerializer) instead of Rga.serializer —
 // the generated serializer uses PolymorphicSerializer(Any) for V which fails in CBOR.
-private val RGA_REP_CFG = SeamReplicatorConfig(expectVirtualTime = true)
-private val RGA_MSG_SER = ReplicatorMessage.serializer(Rga.wireSerializer(serializer<Int>()))
+private val RGA_REP_CFG = QuilterConfig(expectVirtualTime = true)
+private val RGA_MSG_SER = QuiltMessage.serializer(Rga.wireSerializer(serializer<Int>()))
 
 /**
- * Wires a [SeamReplicator]`<`[Rga]`<Int>>` + [RgaGcCoordinator] pair over a raw seam.
+ * Wires a [Quilter]`<`[Rga]`<Int>>` + [RgaGcCoordinator] pair over a raw seam.
  *
- * Returns the replicator so the caller can apply mutations and observe [SeamReplicator.state].
+ * Returns the replicator so the caller can apply mutations and observe [Quilter.state].
  */
 private fun wireRgaWithGc(
     rawSeam: us.tractat.kuilt.core.Seam,
     replica: ReplicaId,
     scope: kotlinx.coroutines.CoroutineScope,
-): SeamReplicator<Rga<Int>> {
-    val replicator = SeamReplicator(
+): Quilter<Rga<Int>> {
+    val replicator = Quilter(
         replica = replica,
         seam = rawSeam,
         initial = Rga.empty(),
@@ -147,7 +147,7 @@ class RgaGcCoordinator3PeerIntegrationTest {
     }
 
     /**
-     * A late-joining 4th peer receives a [ReplicatorMessage.FullState] that already reflects GC.
+     * A late-joining 4th peer receives a [QuiltMessage.FullState] that already reflects GC.
      * It converges to the same visible list as the existing 3 peers without re-introducing
      * GC'd ops.
      */

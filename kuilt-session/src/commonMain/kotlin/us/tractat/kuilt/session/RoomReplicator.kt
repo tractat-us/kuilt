@@ -6,21 +6,21 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.serialization.KSerializer
 import us.tractat.kuilt.crdt.Quilted
 import us.tractat.kuilt.crdt.ReplicaId
-import us.tractat.kuilt.quilter.ReplicatorMessage
-import us.tractat.kuilt.quilter.SeamReplicator
-import us.tractat.kuilt.quilter.SeamReplicatorConfig
+import us.tractat.kuilt.quilter.QuiltMessage
+import us.tractat.kuilt.quilter.Quilter
+import us.tractat.kuilt.quilter.QuilterConfig
 
 /**
- * Creates a [SeamReplicator] over [Room.channel]`(id)` in one call.
+ * Creates a [Quilter] over [Room.channel]`(id)` in one call.
  *
  * This is a thin convenience wrapper that eliminates the three-step wiring pattern:
  * ```kotlin
  * // Before:
- * SeamReplicator(
+ * Quilter(
  *     replica = ReplicaId(room.selfId.value),
  *     seam = room.channel(channelId),
  *     initial = initial,
- *     messageSerializer = ReplicatorMessage.serializer(stateSerializer),
+ *     messageSerializer = QuiltMessage.serializer(stateSerializer),
  *     scope = scope,
  *     config = config,
  * )
@@ -38,12 +38,12 @@ import us.tractat.kuilt.quilter.SeamReplicatorConfig
  *   2-peer room maps to the same logical channel.
  * @param initial the starting state (typically the CRDT's zero / empty value).
  * @param stateSerializer a [KSerializer] for [S]. The wrapper derives the
- *   [ReplicatorMessage] envelope serializer internally.
+ *   [QuiltMessage] envelope serializer internally.
  * @param scope the [CoroutineScope] for background replication coroutines. In tests pass
  *   `backgroundScope` from [kotlinx.coroutines.test.TestScope].
- * @param config optional tuning; defaults to [SeamReplicatorConfig] production defaults.
+ * @param config optional tuning; defaults to [QuilterConfig] production defaults.
  *
- * @return a fully wired [SeamReplicator]`<S>` whose [SeamReplicator.replica] is derived
+ * @return a fully wired [Quilter]`<S>` whose [Quilter.replica] is derived
  *   from [Room.selfId].
  */
 public fun <S : Quilted<S>> RoomReplicator(
@@ -52,12 +52,12 @@ public fun <S : Quilted<S>> RoomReplicator(
     initial: S,
     stateSerializer: KSerializer<S>,
     scope: CoroutineScope,
-    config: SeamReplicatorConfig = SeamReplicatorConfig(),
-): SeamReplicator<S> = SeamReplicator(
+    config: QuilterConfig = QuilterConfig(),
+): Quilter<S> = Quilter(
     replica = ReplicaId(room.selfId.value),
     seam = room.channel(id),
     initial = initial,
-    messageSerializer = ReplicatorMessage.serializer(stateSerializer),
+    messageSerializer = QuiltMessage.serializer(stateSerializer),
     scope = scope,
     config = config,
 )

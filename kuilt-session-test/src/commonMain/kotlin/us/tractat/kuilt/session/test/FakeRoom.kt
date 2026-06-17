@@ -242,7 +242,7 @@ public class FakeRoom(
 
     /**
      * Transition the seam state to [SeamState.Torn]. Channel views forward [state] from
-     * [_seamState], so tearing the seam winds down any [us.tractat.kuilt.crdt.replicator.SeamReplicator]
+     * [_seamState], so tearing the seam winds down any [us.tractat.kuilt.crdt.replicator.Quilter]
      * subscribed to the channel.
      */
     public fun tearSeam(reason: CloseReason = CloseReason.Normal) {

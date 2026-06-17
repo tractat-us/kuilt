@@ -23,9 +23,9 @@ import us.tractat.kuilt.crdt.Patch
 import us.tractat.kuilt.crdt.Rga
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.crdt.RgaId
-import us.tractat.kuilt.quilter.ReplicatorMessage
-import us.tractat.kuilt.quilter.SeamReplicator
-import us.tractat.kuilt.quilter.SeamReplicatorConfig
+import us.tractat.kuilt.quilter.QuiltMessage
+import us.tractat.kuilt.quilter.Quilter
+import us.tractat.kuilt.quilter.QuilterConfig
 import us.tractat.kuilt.game.IndexedAction
 import us.tractat.kuilt.game.TurnSequencer
 import us.tractat.kuilt.raft.ClusterConfig
@@ -43,7 +43,7 @@ import kotlin.time.Duration.Companion.seconds
 
 /**
  * Integration example: tic-tac-toe (consensus via real [raftNode]) **and** side chat
- * ([Rga] + [SeamReplicator]) over a single shared [InMemoryLoom] fabric. Two peers.
+ * ([Rga] + [Quilter]) over a single shared [InMemoryLoom] fabric. Two peers.
  *
  * ## Why this example matters — the forwarding litmus test
  *
@@ -68,9 +68,9 @@ import kotlin.time.Duration.Companion.seconds
  * - [InMemoryRaftStorage] — Raft log / term / vote durability
  * - [RaftConfig.expectVirtualTime] — test-guard suppression flag
  * - [MuxSeam] — multiplex raft and the replicator over the single-collection seam
- * - [SeamReplicatorConfig.expectVirtualTime] — test-guard suppression on the CRDT side
+ * - [QuilterConfig.expectVirtualTime] — test-guard suppression on the CRDT side
  * - [Rga.wireSerializer] — custom serializer required for CBOR; the generated one fails
- * - [Patch] / [Rga.empty] / [Rga.apply] — wrap a local op into a [Patch] for [SeamReplicator.apply]
+ * - [Patch] / [Rga.empty] / [Rga.apply] — wrap a local op into a [Patch] for [Quilter.apply]
  *
  * See follow-up issue #480 for a proposed facade that hides this surface.
  */
@@ -89,8 +89,8 @@ class TicTacToeChatTest {
         random = Random(42),
     )
 
-    private val chatCfg = SeamReplicatorConfig(expectVirtualTime = true)
-    private val chatMsgSer = ReplicatorMessage.serializer(Rga.wireSerializer(serializer<String>()))
+    private val chatCfg = QuilterConfig(expectVirtualTime = true)
+    private val chatMsgSer = QuiltMessage.serializer(Rga.wireSerializer(serializer<String>()))
 
     private fun winner(board: Map<Move, Mark>): Mark? {
         val lines = listOf(
@@ -159,8 +159,8 @@ class TicTacToeChatTest {
             val aliceGame = TurnSequencer(aliceNode, serializer<Move>())
             val bobGame = TurnSequencer(bobNode, serializer<Move>())
 
-            // Chat layer: SeamReplicator<Rga<String>> for each peer.
-            val aliceChat = SeamReplicator(
+            // Chat layer: Quilter<Rga<String>> for each peer.
+            val aliceChat = Quilter(
                 replica = ReplicaId(seamAlice.selfId.value),
                 seam = muxAlice.channel(1),
                 initial = Rga.empty(),
@@ -168,7 +168,7 @@ class TicTacToeChatTest {
                 scope = backgroundScope,
                 config = chatCfg,
             )
-            val bobChat = SeamReplicator(
+            val bobChat = Quilter(
                 replica = ReplicaId(seamBob.selfId.value),
                 seam = muxBob.channel(1),
                 initial = Rga.empty(),
@@ -252,7 +252,7 @@ class TicTacToeChatTest {
             assertEquals(committedMovesAlice, committedMovesBob)
 
             // Both peers send a chat message and the RGA logs must converge.
-            fun SeamReplicator<Rga<String>>.chat(msg: String) {
+            fun Quilter<Rga<String>>.chat(msg: String) {
                 val (_, op) = state.value.insertAfter(replica, RgaId.HEAD, msg)
                 apply(Patch(Rga.empty<String>().apply(op)))
             }

@@ -37,7 +37,7 @@ import kotlinx.serialization.encoding.Encoder
  * **Known limitations (v1):**
  * - *Move / subtree-reattachment* — not supported.
  * - *Nested [Rga] GC* — arrays embedded inside a JSON document do not participate
- *   in the [Rga.compact] / [us.tractat.kuilt.crdt.replicator.SeamReplicator] GC
+ *   in the [Rga.compact] / [us.tractat.kuilt.quilter.Quilter] GC
  *   path. Tombstones inside array elements accumulate without bound until an
  *   explicit compact is triggered by the caller.
  * - *Conflict-free re-typing* — concurrent changes of a key's type are resolved
@@ -106,7 +106,7 @@ public class JsonCrdt internal constructor(
     /**
      * Unions the [Rga.causalDots] of every [JsonNode.Array] reachable from the root,
      * recursing through [JsonNode.Object] values. This feeds the causal-stability GC
-     * barrier in [us.tractat.kuilt.crdt.replicator.SeamReplicator]: without this
+     * barrier in [us.tractat.kuilt.quilter.Quilter]: without this
      * override, embedded [Rga] tombstones in nested arrays would never be considered
      * for compaction because the delivered frontier would always be empty.
      */

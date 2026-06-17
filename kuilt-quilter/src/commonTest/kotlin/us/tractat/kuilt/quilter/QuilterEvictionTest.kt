@@ -27,9 +27,9 @@ import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.minutes
 
-class SeamReplicatorEvictionTest {
+class QuilterEvictionTest {
 
-    private val msgSer = ReplicatorMessage.serializer(GCounter.serializer())
+    private val msgSer = QuiltMessage.serializer(GCounter.serializer())
 
     /**
      * A controllable [MonotonicMillis] for tests: call [advanceBy] to simulate
@@ -55,9 +55,9 @@ class SeamReplicatorEvictionTest {
     private fun replicatorFor(
         seam: Seam,
         scope: CoroutineScope,
-        config: SeamReplicatorConfig,
+        config: QuilterConfig,
         clock: MonotonicMillis,
-    ) = SeamReplicator(
+    ) = Quilter(
         replica = ReplicaId(seam.selfId.value),
         seam = seam,
         initial = GCounter.ZERO,
@@ -79,7 +79,7 @@ class SeamReplicatorEvictionTest {
         val rawSeamA = loom.host(Pattern("evict-test"))
 
         val clock = FakeClock()
-        val config = SeamReplicatorConfig(
+        val config = QuilterConfig(
             evictionAfter = 100.milliseconds,
             antiEntropyInterval = 50.milliseconds,
             expectVirtualTime = true,
@@ -133,7 +133,7 @@ class SeamReplicatorEvictionTest {
         val seamB = loom.join(InMemoryTag("b"))
 
         val clock = FakeClock()
-        val config = SeamReplicatorConfig(
+        val config = QuilterConfig(
             evictionAfter = 10.milliseconds,
             antiEntropyInterval = 5.milliseconds,
             expectVirtualTime = true,
@@ -158,7 +158,7 @@ class SeamReplicatorEvictionTest {
     }
 
     /**
-     * After eviction, a rejoining peer receives a fresh [ReplicatorMessage.FullState]
+     * After eviction, a rejoining peer receives a fresh [QuiltMessage.FullState]
      * and converges — the replicator treats it as a new first-contact.
      */
     @Test
@@ -168,7 +168,7 @@ class SeamReplicatorEvictionTest {
         val rawSeamB = loom.join(InMemoryTag("b"))
 
         val clock = FakeClock()
-        val config = SeamReplicatorConfig(
+        val config = QuilterConfig(
             evictionAfter = 10.milliseconds,
             antiEntropyInterval = 5.milliseconds,
             expectVirtualTime = true,

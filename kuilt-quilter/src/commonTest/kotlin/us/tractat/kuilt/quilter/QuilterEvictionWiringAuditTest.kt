@@ -1,12 +1,12 @@
 /**
  * ADVERSARIAL AUDIT (#262 / #269) of the RGA-GC stable-cut / retained-frontier /
- * eviction LIVE wiring in [SeamReplicator]. The §4 model predicate was already
+ * eviction LIVE wiring in [Quilter]. The §4 model predicate was already
  * adversarially verified; these probes attack the *live wiring* — `recomputeCut`,
  * `evictStalePeers`, `onDelivered`, `onPeersChanged`, the atomic `cutFrontier`
  * publish — to find an interleaving that violates the safety the model proved.
  *
- * Technique mirrors [SeamReplicatorStableCutTest]: a real [SeamReplicator] over an
- * [Rga], driven by crafted [ReplicatorMessage.Delivered] frames and a peers-flow
+ * Technique mirrors [QuilterStableCutTest]: a real [Quilter] over an
+ * [Rga], driven by crafted [QuiltMessage.Delivered] frames and a peers-flow
  * the test can mutate, under [UnconfinedTestDispatcher] + [FakeClock] for
  * deterministic eviction timing.
  *
@@ -44,7 +44,7 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.milliseconds
 
-private val AUDIT_MSG_SER = ReplicatorMessage.serializer(Rga.wireSerializer(serializer<String>()))
+private val AUDIT_MSG_SER = QuiltMessage.serializer(Rga.wireSerializer(serializer<String>()))
 
 private class AuditFakeClock(private var t: Long = 0L) : MonotonicMillis {
     override fun now(): Long = t
@@ -61,13 +61,13 @@ private fun auditRep(
     seam: Seam,
     scope: CoroutineScope,
     clock: MonotonicMillis,
-    config: SeamReplicatorConfig = SeamReplicatorConfig(
+    config: QuilterConfig = QuilterConfig(
         expectVirtualTime = true,
         evictionAfter = 100.milliseconds,
         antiEntropyInterval = 50.milliseconds,
     ),
-): SeamReplicator<Rga<String>> =
-    SeamReplicator(
+): Quilter<Rga<String>> =
+    Quilter(
         replica = ReplicaId(seam.selfId.value),
         seam = seam,
         initial = Rga.empty(),
@@ -77,17 +77,17 @@ private fun auditRep(
         clock = clock,
     )
 
-private fun SeamReplicator<Rga<String>>.insertHead(value: String) {
+private fun Quilter<Rga<String>>.insertHead(value: String) {
     val (_, op) = state.value.insertAfter(replica, RgaId.HEAD, value)
     apply(Patch(Rga.empty<String>().apply(op)))
 }
 
 private suspend fun craftDelivered(from: Seam, vector: VersionVector) {
-    val msg = ReplicatorMessage.Delivered<Rga<String>>(sender = ReplicaId(from.selfId.value), vector = vector)
+    val msg = QuiltMessage.Delivered<Rga<String>>(sender = ReplicaId(from.selfId.value), vector = vector)
     from.broadcast(Cbor.encodeToByteArray(AUDIT_MSG_SER, msg))
 }
 
-class SeamReplicatorEvictionWiringAuditTest {
+class QuilterEvictionWiringAuditTest {
 
     // ---- Hypothesis 1: W1 under the REAL eviction path (anti-entropy tick) ----
 
@@ -343,7 +343,7 @@ class SeamReplicatorEvictionWiringAuditTest {
 
     /**
      * H5 VERDICT: SOUND. A real coordinator GC emits an [RgaOp.Compact] and feeds it
-     * back through [SeamReplicator.apply]. That `apply` runs the SAME
+     * back through [Quilter.apply]. That `apply` runs the SAME
      * `recomputeDeliveredLocal → recomputeCut` path as any other mutation. The probe
      * asserts the Compact does NOT churn S or F: `causalDots()` counts `Compact.ids`
      * as delivered (Rga §causalDots) so `deliveredLocal` stays put, and S/F do not
@@ -380,7 +380,7 @@ class SeamReplicatorEvictionWiringAuditTest {
         val deliveredBefore = repA.deliveredLocal.value
 
         // Build the sound compaction op directly (the #270 barrier form) and apply it,
-        // exactly as a coordinator's applyCompaction → SeamReplicator.apply would.
+        // exactly as a coordinator's applyCompaction → Quilter.apply would.
         val (_, compactOp) = repA.state.value.compact(
             stableCut = cutBefore.stableCut,
             frontierMax = cutBefore.frontierMax,
@@ -410,7 +410,7 @@ class SeamReplicatorEvictionWiringAuditTest {
      * H6 VERDICT: WIRING GAP (structural). The ADR §4.6 (W2) requires every mutation
      * of `frontiers` / `retainedFrontier` / `knownPeers` / the cut to be confined to
      * ONE coroutine context, and warns `scope` must not be multithreaded. The three
-     * `launchIn(scope)` collectors satisfy that — but [SeamReplicator.apply] is a
+     * `launchIn(scope)` collectors satisfy that — but [Quilter.apply] is a
      * PUBLIC method invoked by the consumer from an arbitrary context, and it mutates
      * the matrix SYNCHRONOUSLY on the caller's thread (apply → recomputeDeliveredLocal
      * → recomputeCut writes `monotonicStableCut`, `retainedFrontier`, `_cutFrontier`).

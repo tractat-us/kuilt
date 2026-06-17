@@ -24,18 +24,18 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.milliseconds
 
-class SeamReplicatorChaosTest {
+class QuilterChaosTest {
 
-    private val gcounterSer = ReplicatorMessage.serializer(GCounter.serializer())
+    private val gcounterSer = QuiltMessage.serializer(GCounter.serializer())
 
     // ---- helpers ----
 
     private fun gcounterReplicator(
         seam: Seam,
         scope: kotlinx.coroutines.CoroutineScope,
-        config: SeamReplicatorConfig = SeamReplicatorConfig(expectVirtualTime = true),
+        config: QuilterConfig = QuilterConfig(expectVirtualTime = true),
         clock: MonotonicMillis = MonotonicMillis { 0L },
-    ) = SeamReplicator(
+    ) = Quilter(
         replica = ReplicaId(seam.selfId.value),
         seam = seam,
         initial = GCounter.ZERO,
@@ -106,7 +106,7 @@ class SeamReplicatorChaosTest {
 
     // ---- scenario 2: reordered delivery ----
 
-    private val gSetSer = ReplicatorMessage.serializer(
+    private val gSetSer = QuiltMessage.serializer(
         GSet.serializer(kotlinx.serialization.serializer<String>()),
     )
 
@@ -129,21 +129,21 @@ class SeamReplicatorChaosTest {
         val chaosA = chaosWrap(rawA, ChaosConfig(reorderWindow = 5), backgroundScope, seed = 0xDEADBEEFL)
         val chaosB = chaosWrap(rawB, ChaosConfig(reorderWindow = 5), backgroundScope, seed = 0xFACEL)
 
-        val repA = SeamReplicator(
+        val repA = Quilter(
             replica = ReplicaId(rawA.selfId.value),
             seam = chaosA,
             initial = GSet.empty<String>(),
             messageSerializer = gSetSer,
             scope = backgroundScope,
-            config = SeamReplicatorConfig(expectVirtualTime = true),
+            config = QuilterConfig(expectVirtualTime = true),
         )
-        val repB = SeamReplicator(
+        val repB = Quilter(
             replica = ReplicaId(rawB.selfId.value),
             seam = chaosB,
             initial = GSet.empty<String>(),
             messageSerializer = gSetSer,
             scope = backgroundScope,
-            config = SeamReplicatorConfig(expectVirtualTime = true),
+            config = QuilterConfig(expectVirtualTime = true),
         )
 
         // 10 ops per peer — multiple of window=5, so both reorder buffers flush completely
@@ -354,7 +354,7 @@ class SeamReplicatorChaosTest {
 
     /**
      * Combines broadcast drop (creating delta gaps) with control-plane drop (Resend messages
-     * are themselves lost). The replicator's [SeamReplicatorConfig.resendRetryInterval] timer
+     * are themselves lost). The replicator's [QuilterConfig.resendRetryInterval] timer
      * must fire and re-issue the Resend, eventually reaching the sender, who retransmits
      * the missing delta. Both peers must converge.
      *
@@ -373,7 +373,7 @@ class SeamReplicatorChaosTest {
             controlPlaneDropProbability = 0.3,
         )
         // Short retry interval so virtual-time advancement is minimal.
-        val replicatorConfig = SeamReplicatorConfig(
+        val replicatorConfig = QuilterConfig(
             resendRetryInterval = 50.milliseconds,
             expectVirtualTime = true,
         )
@@ -477,7 +477,7 @@ class SeamReplicatorChaosTest {
 
         // Replace repA with a chaos-wrapped version (C will now be seen through chaosA's sendTo)
         val retryInterval = 50.milliseconds
-        val chaosConfig = SeamReplicatorConfig(
+        val chaosConfig = QuilterConfig(
             fullStateRetryInterval = retryInterval,
             expectVirtualTime = true,
         )
@@ -502,9 +502,9 @@ class SeamReplicatorChaosTest {
     // ---- scenario 6: eviction under partition, then FullState recovery ----
 
     /**
-     * B disappears from A's peer view for longer than [SeamReplicatorConfig.evictionAfter].
+     * B disappears from A's peer view for longer than [QuilterConfig.evictionAfter].
      * A evicts B. When B reappears, A treats it as first-contact and sends a fresh
-     * [ReplicatorMessage.FullState]. B converges despite having missed all deltas.
+     * [QuiltMessage.FullState]. B converges despite having missed all deltas.
      */
     @Test
     fun evictionUnderPartitionThenFullStateRecovery() = runTest(UnconfinedTestDispatcher()) {
@@ -516,7 +516,7 @@ class SeamReplicatorChaosTest {
             var time = 0L
             override fun now(): Long = time
         }
-        val config = SeamReplicatorConfig(
+        val config = QuilterConfig(
             evictionAfter = 100.milliseconds,
             antiEntropyInterval = 50.milliseconds,
             expectVirtualTime = true,
@@ -528,7 +528,7 @@ class SeamReplicatorChaosTest {
             override val peers = controlledPeers
         }
 
-        val repA = SeamReplicator(
+        val repA = Quilter(
             replica = ReplicaId(rawA.selfId.value),
             seam = controllableA,
             initial = GCounter.ZERO,

@@ -3,7 +3,7 @@
  * (ADR-003 addendum v3, #262).
  *
  * The coordinator consumes a [CutFrontier] (`stableCut` + `frontierMax`) and this replica's
- * contiguous `delivered` VV, exactly as [SeamReplicator] publishes them. These tests drive
+ * contiguous `delivered` VV, exactly as [Quilter] publishes them. These tests drive
  * those two flows directly as [MutableStateFlow]s (modelling the cut as version vectors, like
  * `RgaCompactEvictionSafeBarrierTest`) — no real replicator, no seq bridge.
  *

@@ -1,9 +1,9 @@
 /**
- * Delivered-vector gossip (#268): a [SeamReplicator] over an [Rga] derives its
+ * Delivered-vector gossip (#268): a [Quilter] over an [Rga] derives its
  * contiguous **delivered** version vector from applied ops and gossips it via
- * [ReplicatorMessage.Delivered]; peers absorb it into their matrix-clock [frontiers].
+ * [QuiltMessage.Delivered]; peers absorb it into their matrix-clock [frontiers].
  *
- * All tests use [UnconfinedTestDispatcher] with [SeamReplicatorConfig.expectVirtualTime] = true,
+ * All tests use [UnconfinedTestDispatcher] with [QuilterConfig.expectVirtualTime] = true,
  * per `docs/testing-coroutine-determinism.md`.
  */
 @file:OptIn(
@@ -30,11 +30,11 @@ import us.tractat.kuilt.crdt.VersionVector
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
-private val GOSSIP_CFG = SeamReplicatorConfig(expectVirtualTime = true)
-private val RGA_MSG_SER = ReplicatorMessage.serializer(Rga.wireSerializer(serializer<String>()))
+private val GOSSIP_CFG = QuilterConfig(expectVirtualTime = true)
+private val RGA_MSG_SER = QuiltMessage.serializer(Rga.wireSerializer(serializer<String>()))
 
-private fun rgaRep(seam: Seam, scope: CoroutineScope): SeamReplicator<Rga<String>> =
-    SeamReplicator(
+private fun rgaRep(seam: Seam, scope: CoroutineScope): Quilter<Rga<String>> =
+    Quilter(
         replica = ReplicaId(seam.selfId.value),
         seam = seam,
         initial = Rga.empty(),
@@ -44,13 +44,13 @@ private fun rgaRep(seam: Seam, scope: CoroutineScope): SeamReplicator<Rga<String
     )
 
 /** Inserts [value] at HEAD on [rep], broadcasting the resulting op as a delta. */
-private fun SeamReplicator<Rga<String>>.insertHead(value: String): RgaId {
+private fun Quilter<Rga<String>>.insertHead(value: String): RgaId {
     val (_, op) = state.value.insertAfter(replica, RgaId.HEAD, value)
     apply(Patch(Rga.empty<String>().apply(op)))
     return op.id
 }
 
-class SeamReplicatorDeliveredGossipTest {
+class QuilterDeliveredGossipTest {
 
     @Test
     fun deliveredLocalReflectsAppliedOps() = runTest(UnconfinedTestDispatcher()) {

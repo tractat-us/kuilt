@@ -22,29 +22,29 @@ import kotlin.test.Test
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
-private val TEST_CONFIG = SeamReplicatorConfig(expectVirtualTime = true)
+private val TEST_CONFIG = QuilterConfig(expectVirtualTime = true)
 
 // Uses a non-suspend [fakeSeamPair] seam so the TCK's non-suspend `create` can construct
 // the replicator (the real `loom.host` is a suspend call). The lifecycle tests only need a
 // working `incoming`/`peers`/`selfId`, which the fake provides.
-private fun makeReplicator(scope: CoroutineScope): SeamReplicator<GCounter> {
+private fun makeReplicator(scope: CoroutineScope): Quilter<GCounter> {
     val (seam, _) = fakeSeamPair(PeerId("self"), PeerId("other"))
-    return SeamReplicator(
+    return Quilter(
         replica = ReplicaId(seam.selfId.value),
         seam = seam,
         initial = GCounter.ZERO,
-        messageSerializer = ReplicatorMessage.serializer(GCounter.serializer()),
+        messageSerializer = QuiltMessage.serializer(GCounter.serializer()),
         scope = scope,
         config = TEST_CONFIG,
     )
 }
 
-class SeamReplicatorCloseTest : CloseableLifecycleConformanceSuite() {
+class QuilterCloseTest : CloseableLifecycleConformanceSuite() {
 
     override fun create(scope: CoroutineScope): ScopedCloseable = makeReplicator(scope)
 
     override fun backgroundJobsOf(instance: ScopedCloseable): List<Job> =
-        (instance as SeamReplicator<*>).backgroundJobsForTest
+        (instance as Quilter<*>).backgroundJobsForTest
 
     // ── Tier 2 — auto-close on seam teardown (re-entrancy proof) ─────────────
     //
@@ -57,11 +57,11 @@ class SeamReplicatorCloseTest : CloseableLifecycleConformanceSuite() {
     fun seamCloseTrigersAutoCloseViaOnCompletion() = runTest(UnconfinedTestDispatcher()) {
         val loom = InMemoryLoom()
         val seam = loom.host(Pattern("auto-close-test"))
-        val replicator = SeamReplicator(
+        val replicator = Quilter(
             replica = ReplicaId(seam.selfId.value),
             seam = seam,
             initial = GCounter.ZERO,
-            messageSerializer = ReplicatorMessage.serializer(GCounter.serializer()),
+            messageSerializer = QuiltMessage.serializer(GCounter.serializer()),
             scope = backgroundScope,
             config = TEST_CONFIG,
         )
@@ -83,11 +83,11 @@ class SeamReplicatorCloseTest : CloseableLifecycleConformanceSuite() {
         val loom = InMemoryLoom()
         val seam = loom.host(Pattern("fail-loud-test"))
         val replica = ReplicaId(seam.selfId.value)
-        val replicator = SeamReplicator(
+        val replicator = Quilter(
             replica = replica,
             seam = seam,
             initial = GCounter.ZERO,
-            messageSerializer = ReplicatorMessage.serializer(GCounter.serializer()),
+            messageSerializer = QuiltMessage.serializer(GCounter.serializer()),
             scope = backgroundScope,
             config = TEST_CONFIG,
         )

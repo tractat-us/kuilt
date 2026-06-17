@@ -6,7 +6,7 @@ import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.crdt.VersionVector
 
 /**
- * Wire messages exchanged between [SeamReplicator] instances.
+ * Wire messages exchanged between [Quilter] instances.
  *
  * [Delta] carries a lattice fragment tagged with the sender's monotonic sequence
  * number. [Ack] tells the sender that the acker has absorbed all deltas through
@@ -16,7 +16,7 @@ import us.tractat.kuilt.crdt.VersionVector
  * @param S the [us.tractat.kuilt.crdt.Quilted] state type.
  */
 @Serializable
-public sealed class ReplicatorMessage<S> {
+public sealed class QuiltMessage<S> {
 
     /**
      * A lattice delta broadcast by [sender], tagged with [sender]'s
@@ -28,7 +28,7 @@ public sealed class ReplicatorMessage<S> {
         public val sender: ReplicaId,
         public val seq: Long,
         public val delta: S,
-    ) : ReplicatorMessage<S>()
+    ) : QuiltMessage<S>()
 
     /**
      * Acknowledgement: [acker] has absorbed all deltas from [sender] through
@@ -40,7 +40,7 @@ public sealed class ReplicatorMessage<S> {
         public val acker: ReplicaId,
         public val sender: ReplicaId,
         public val seq: Long,
-    ) : ReplicatorMessage<S>()
+    ) : QuiltMessage<S>()
 
     /**
      * The complete current state — sent once on first contact with a peer that
@@ -51,7 +51,7 @@ public sealed class ReplicatorMessage<S> {
     public class FullState<S>(
         public val sender: ReplicaId,
         public val state: S,
-    ) : ReplicatorMessage<S>()
+    ) : QuiltMessage<S>()
 
     /**
      * Gap retransmission request: [requester] has detected that it is missing
@@ -65,7 +65,7 @@ public sealed class ReplicatorMessage<S> {
         public val sender: ReplicaId,
         public val fromSeq: Long,
         public val toSeq: Long,
-    ) : ReplicatorMessage<S>()
+    ) : QuiltMessage<S>()
 
     /**
      * A delivered-version-vector gossip from [sender] — [sender]'s whole-room
@@ -83,5 +83,5 @@ public sealed class ReplicatorMessage<S> {
     public class Delivered<S>(
         public val sender: ReplicaId,
         public val vector: VersionVector,
-    ) : ReplicatorMessage<S>()
+    ) : QuiltMessage<S>()
 }

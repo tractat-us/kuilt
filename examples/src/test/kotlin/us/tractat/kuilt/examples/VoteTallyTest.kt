@@ -12,18 +12,18 @@ import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.crdt.PNCounter
-import us.tractat.kuilt.quilter.SeamReplicator
-import us.tractat.kuilt.quilter.SeamReplicatorConfig
+import us.tractat.kuilt.quilter.Quilter
+import us.tractat.kuilt.quilter.QuilterConfig
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.time.Duration.Companion.seconds
 
 /**
  * Example: a live up/down vote tally replicated across two peers using [PNCounter]
- * + [SeamReplicator].
+ * + [Quilter].
  *
  * Each peer owns its own [us.tractat.kuilt.crdt.ReplicaId] slot in the counter — increments
- * record upvotes, decrements record downvotes. Peers apply mutations locally and [SeamReplicator]
+ * record upvotes, decrements record downvotes. Peers apply mutations locally and [Quilter]
  * broadcasts deltas over the [us.tractat.kuilt.core.Seam] automatically. Both replicas
  * converge to the same net tally regardless of which peer applied which vote.
  *
@@ -39,13 +39,13 @@ import kotlin.time.Duration.Companion.seconds
  * ## API-surface exercised
  *
  * - [InMemoryLoom] + `host`/`join` for in-process transport
- * - [SeamReplicator] convenience factory (value serializer, default replica)
- * - [SeamReplicator.mutate] to broadcast a mutation without repeating `state.value`
- * - [SeamReplicator.state] (`StateFlow<PNCounter>`) to read the current converged tally
+ * - [Quilter] convenience factory (value serializer, default replica)
+ * - [Quilter.mutate] to broadcast a mutation without repeating `state.value`
+ * - [Quilter.state] (`StateFlow<PNCounter>`) to read the current converged tally
  */
 class VoteTallyTest {
 
-    private val replicatorCfg = SeamReplicatorConfig(expectVirtualTime = true)
+    private val replicatorCfg = QuilterConfig(expectVirtualTime = true)
 
     @Test
     fun `upvotes and downvotes from two peers converge to the correct net tally`() =
@@ -54,8 +54,8 @@ class VoteTallyTest {
             val seamAlice = loom.host(Pattern("vote-tally"))
             val seamBob = loom.join(InMemoryTag("bob"))
 
-            val aliceTally = SeamReplicator(seamAlice, PNCounter.ZERO, PNCounter.serializer(), backgroundScope, config = replicatorCfg)
-            val bobTally = SeamReplicator(seamBob, PNCounter.ZERO, PNCounter.serializer(), backgroundScope, config = replicatorCfg)
+            val aliceTally = Quilter(seamAlice, PNCounter.ZERO, PNCounter.serializer(), backgroundScope, config = replicatorCfg)
+            val bobTally = Quilter(seamBob, PNCounter.ZERO, PNCounter.serializer(), backgroundScope, config = replicatorCfg)
 
             delay(1) // let collectors subscribe under StandardTestDispatcher
 
@@ -84,8 +84,8 @@ class VoteTallyTest {
             val seamAlice = loom.host(Pattern("controversial-post"))
             val seamBob = loom.join(InMemoryTag("bob"))
 
-            val aliceTally = SeamReplicator(seamAlice, PNCounter.ZERO, PNCounter.serializer(), backgroundScope, config = replicatorCfg)
-            val bobTally = SeamReplicator(seamBob, PNCounter.ZERO, PNCounter.serializer(), backgroundScope, config = replicatorCfg)
+            val aliceTally = Quilter(seamAlice, PNCounter.ZERO, PNCounter.serializer(), backgroundScope, config = replicatorCfg)
+            val bobTally = Quilter(seamBob, PNCounter.ZERO, PNCounter.serializer(), backgroundScope, config = replicatorCfg)
 
             delay(1) // let collectors subscribe under StandardTestDispatcher
 

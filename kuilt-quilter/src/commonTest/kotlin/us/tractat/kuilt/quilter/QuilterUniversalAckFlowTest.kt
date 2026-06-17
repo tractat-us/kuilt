@@ -1,7 +1,7 @@
 /**
- * Tests for [SeamReplicator.universalAckFlow] — the causal-stability watermark.
+ * Tests for [Quilter.universalAckFlow] — the causal-stability watermark.
  *
- * All tests use [UnconfinedTestDispatcher] with [SeamReplicatorConfig.expectVirtualTime] = true,
+ * All tests use [UnconfinedTestDispatcher] with [QuilterConfig.expectVirtualTime] = true,
  * per the coroutine-determinism convention in `docs/testing-coroutine-determinism.md`.
  */
 @file:OptIn(
@@ -26,12 +26,12 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.milliseconds
 
-private val UNIVERSAL_ACK_TEST_CONFIG = SeamReplicatorConfig(expectVirtualTime = true)
+private val UNIVERSAL_ACK_TEST_CONFIG = QuilterConfig(expectVirtualTime = true)
 
-private val MSG_SER = ReplicatorMessage.serializer(GCounter.serializer())
+private val MSG_SER = QuiltMessage.serializer(GCounter.serializer())
 
-private fun gcounterRep(seam: Seam, scope: kotlinx.coroutines.CoroutineScope, config: SeamReplicatorConfig = UNIVERSAL_ACK_TEST_CONFIG) =
-    SeamReplicator(
+private fun gcounterRep(seam: Seam, scope: kotlinx.coroutines.CoroutineScope, config: QuilterConfig = UNIVERSAL_ACK_TEST_CONFIG) =
+    Quilter(
         replica = ReplicaId(seam.selfId.value),
         seam = seam,
         initial = GCounter.ZERO,
@@ -46,7 +46,7 @@ private class ControllableSeam(
     override val peers: MutableStateFlow<Set<PeerId>>,
 ) : Seam by delegate
 
-class SeamReplicatorUniversalAckFlowTest {
+class QuilterUniversalAckFlowTest {
 
     /**
      * Three peers A, B, C: `universalAckFlow` on A tracks the lagging peer.
@@ -122,7 +122,7 @@ class SeamReplicatorUniversalAckFlowTest {
         val rawSeamA = loom.host(Pattern("evict-advance"))
 
         val clock = FakeMonotonicMillis()
-        val config = SeamReplicatorConfig(
+        val config = QuilterConfig(
             evictionAfter = 100.milliseconds,
             antiEntropyInterval = 50.milliseconds,
             expectVirtualTime = true,
@@ -135,7 +135,7 @@ class SeamReplicatorUniversalAckFlowTest {
         val seamB = loom.join(InMemoryTag("b"))
         val seamC = loom.join(InMemoryTag("c"))
 
-        val repA = SeamReplicator(
+        val repA = Quilter(
             replica = ReplicaId(rawSeamA.selfId.value),
             seam = seamA,
             initial = GCounter.ZERO,

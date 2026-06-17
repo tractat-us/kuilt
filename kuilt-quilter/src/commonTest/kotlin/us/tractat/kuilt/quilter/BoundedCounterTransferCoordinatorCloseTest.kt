@@ -16,7 +16,7 @@ import kotlin.test.Test
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
-private val CLOSE_TEST_REPLICATOR_CFG = SeamReplicatorConfig(expectVirtualTime = true)
+private val CLOSE_TEST_REPLICATOR_CFG = QuilterConfig(expectVirtualTime = true)
 
 private suspend fun makeCoordinator(
     scope: kotlinx.coroutines.CoroutineScope,
@@ -26,11 +26,11 @@ private suspend fun makeCoordinator(
     val mux = MuxSeam(rawSeam, scope)
     val replicaId = ReplicaId(rawSeam.selfId.value)
     val initial = BoundedCounter.init(mapOf(replicaId to 100L))
-    val replicator = SeamReplicator(
+    val replicator = Quilter(
         replica = replicaId,
         seam = mux.channel(0x00),
         initial = initial,
-        messageSerializer = ReplicatorMessage.serializer(BoundedCounter.serializer()),
+        messageSerializer = QuiltMessage.serializer(BoundedCounter.serializer()),
         scope = scope,
         config = CLOSE_TEST_REPLICATOR_CFG,
     )

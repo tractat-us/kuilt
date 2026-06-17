@@ -28,14 +28,14 @@ import kotlin.time.Duration.Companion.seconds
 
 /**
  * Verifies the Resend retry timer: when a peer detects a delta gap and its Resend is
- * itself dropped, the replicator must re-fire the Resend after [SeamReplicatorConfig.resendRetryInterval]
+ * itself dropped, the replicator must re-fire the Resend after [QuilterConfig.resendRetryInterval]
  * without requiring any further inbound traffic.
  *
  * This is the production robustness fix for issue #180.
  */
-class SeamReplicatorResendRetryTest {
+class QuilterResendRetryTest {
 
-    private val gsetSer = ReplicatorMessage.serializer(
+    private val gsetSer = QuiltMessage.serializer(
         GSet.serializer(kotlinx.serialization.serializer<String>()),
     )
 
@@ -56,10 +56,10 @@ class SeamReplicatorResendRetryTest {
     private fun <S : us.tractat.kuilt.crdt.Quilted<S>> replicatorFor(
         seam: Seam,
         initial: S,
-        serializer: kotlinx.serialization.KSerializer<ReplicatorMessage<S>>,
+        serializer: kotlinx.serialization.KSerializer<QuiltMessage<S>>,
         scope: CoroutineScope,
-        config: SeamReplicatorConfig = SeamReplicatorConfig(),
-    ) = SeamReplicator(
+        config: QuilterConfig = QuilterConfig(),
+    ) = Quilter(
         replica = ReplicaId(seam.selfId.value),
         seam = seam,
         initial = initial,
@@ -102,7 +102,7 @@ class SeamReplicatorResendRetryTest {
         val gatingSeamB = SendToGatingSeam(rawSeamB, unblockSendTo = false)
 
         val retryInterval = 200.milliseconds
-        val config = SeamReplicatorConfig(resendRetryInterval = retryInterval, expectVirtualTime = true)
+        val config = QuilterConfig(resendRetryInterval = retryInterval, expectVirtualTime = true)
 
         val repA = replicatorFor(droppingSeamA, GSet.empty<String>(), gsetSer, backgroundScope, config)
         val repB = replicatorFor(gatingSeamB, GSet.empty<String>(), gsetSer, backgroundScope, config)
@@ -166,7 +166,7 @@ class SeamReplicatorResendRetryTest {
         }
 
         val retryInterval = 500.milliseconds
-        val config = SeamReplicatorConfig(resendRetryInterval = retryInterval, expectVirtualTime = true)
+        val config = QuilterConfig(resendRetryInterval = retryInterval, expectVirtualTime = true)
 
         val repA = replicatorFor(gatingSeamA, GSet.empty<String>(), gsetSer, backgroundScope, config)
         val repB = replicatorFor(rawSeamB, GSet.empty<String>(), gsetSer, backgroundScope, config)

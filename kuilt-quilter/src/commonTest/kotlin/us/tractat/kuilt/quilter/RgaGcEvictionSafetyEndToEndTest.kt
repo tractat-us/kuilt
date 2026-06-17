@@ -1,9 +1,9 @@
 /**
  * End-to-end eviction-safety proof for RGA GC over the **live replicator stack** (#270).
  *
- * The model probes (`RgaCompactEvictionSafeBarrierTest`, `SeamReplicatorStableCutTest`) pin the
+ * The model probes (`RgaCompactEvictionSafeBarrierTest`, `QuilterStableCutTest`) pin the
  * #275 refusal at the predicate / matrix-clock level. This test runs the *whole* stack — real
- * [SeamReplicator]s + [RgaGcCoordinator]s over [ControllableLoom] — and proves the one property
+ * [Quilter]s + [RgaGcCoordinator]s over [ControllableLoom] — and proves the one property
  * that matters: a concurrent `Insert(J, after=I)` whose tombstoned predecessor `I` is a GC
  * candidate is **never orphaned**, even across a held partition and the eviction of `J`'s author.
  *
@@ -15,7 +15,7 @@
  * receive a live peer's gossip-ahead either, and a peer that has not delivered a dot cannot learn
  * the dot exists. The gossip-but-not-delta split is therefore **not expressible end-to-end** on
  * this control surface; it is covered at the predicate/matrix level by the model probes
- * (`RgaCompactEvictionSafeBarrierTest` §6.2, `SeamReplicatorStableCutTest`).
+ * (`RgaCompactEvictionSafeBarrierTest` §6.2, `QuilterStableCutTest`).
  *
  * What the FIFO *can* express end-to-end is the **delivered-successor** refusal (condition 4 of
  * the real predicate) under a genuine partition + author eviction: A inserts I; C mints
@@ -51,18 +51,18 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
-private val E2E_MSG_SER = ReplicatorMessage.serializer(Rga.wireSerializer(serializer<String>()))
+private val E2E_MSG_SER = QuiltMessage.serializer(Rga.wireSerializer(serializer<String>()))
 
 class RgaGcEvictionSafetyEndToEndTest {
 
-    private fun rep(seam: Seam, scope: CoroutineScope): SeamReplicator<Rga<String>> {
-        val replicator = SeamReplicator(
+    private fun rep(seam: Seam, scope: CoroutineScope): Quilter<Rga<String>> {
+        val replicator = Quilter(
             replica = ReplicaId(seam.selfId.value),
             seam = seam,
             initial = Rga.empty(),
             messageSerializer = E2E_MSG_SER,
             scope = scope,
-            config = SeamReplicatorConfig(expectVirtualTime = true),
+            config = QuilterConfig(expectVirtualTime = true),
         )
         RgaGcCoordinator(
             state = replicator.state,
@@ -74,7 +74,7 @@ class RgaGcEvictionSafetyEndToEndTest {
         return replicator
     }
 
-    private fun SeamReplicator<Rga<String>>.applyOp(op: RgaOp<String>) =
+    private fun Quilter<Rga<String>>.applyOp(op: RgaOp<String>) =
         apply(Patch(Rga.empty<String>().apply(op)))
 
     @Test

@@ -63,7 +63,7 @@ public data class BoundedCounterTransferConfig(
  * **Donor side:** on receiving a [BoundedCounterCoordMessage.TransferRequest], this replica
  * evaluates its own surplus (`quota(self) - surplusFloor`). If positive, it calls
  * [BoundedCounter.transfer] and passes the resulting [Patch] to [applyTransfer], which
- * broadcasts the state delta via [SeamReplicator]. The state update then propagates
+ * broadcasts the state delta via [Quilter]. The state update then propagates
  * via the existing delta-replication path — there is no explicit response message.
  *
  * ## Safety invariant
@@ -85,10 +85,10 @@ public data class BoundedCounterTransferConfig(
  * collection of the underlying seam's [Seam.incoming] flow (which is single-collection by contract).
  *
  * @param coordSeam a [us.tractat.kuilt.core.MuxSeam] channel — must be pre-wired by the caller.
- * @param state live [BoundedCounter] state (updated whenever [SeamReplicator] applies a patch).
+ * @param state live [BoundedCounter] state (updated whenever [Quilter] applies a patch).
  * @param self this replica's [ReplicaId].
  * @param applyTransfer called by the donor side with a transfer [Patch]; the caller is expected to
- *   invoke [SeamReplicator.apply] so the delta propagates to peers.
+ *   invoke [Quilter.apply] so the delta propagates to peers.
  * @param scope the [CoroutineScope] for background coroutines.
  * @param config tuning parameters.
  */
