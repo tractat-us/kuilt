@@ -12,8 +12,6 @@ import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.crdt.PNCounter
-import us.tractat.kuilt.crdt.ReplicaId
-import us.tractat.kuilt.crdt.replicator.ReplicatorMessage
 import us.tractat.kuilt.crdt.replicator.SeamReplicator
 import us.tractat.kuilt.crdt.replicator.SeamReplicatorConfig
 import kotlin.test.Test
@@ -24,8 +22,8 @@ import kotlin.time.Duration.Companion.seconds
  * Example: a live up/down vote tally replicated across two peers using [PNCounter]
  * + [SeamReplicator].
  *
- * Each peer owns its own [ReplicaId] slot in the counter — increments record upvotes,
- * decrements record downvotes. Peers apply mutations locally and [SeamReplicator]
+ * Each peer owns its own [us.tractat.kuilt.crdt.ReplicaId] slot in the counter — increments
+ * record upvotes, decrements record downvotes. Peers apply mutations locally and [SeamReplicator]
  * broadcasts deltas over the [us.tractat.kuilt.core.Seam] automatically. Both replicas
  * converge to the same net tally regardless of which peer applied which vote.
  *
@@ -41,25 +39,13 @@ import kotlin.time.Duration.Companion.seconds
  * ## API-surface exercised
  *
  * - [InMemoryLoom] + `host`/`join` for in-process transport
- * - [SeamReplicator] for live delta replication over a [us.tractat.kuilt.core.Seam]
- * - [PNCounter.increment] / [PNCounter.decrement] returning [us.tractat.kuilt.crdt.Patch]
- * - [SeamReplicator.apply] to broadcast a mutation
+ * - [SeamReplicator] convenience factory (value serializer, default replica)
+ * - [SeamReplicator.mutate] to broadcast a mutation without repeating `state.value`
  * - [SeamReplicator.state] (`StateFlow<PNCounter>`) to read the current converged tally
  */
 class VoteTallyTest {
 
     private val replicatorCfg = SeamReplicatorConfig(expectVirtualTime = true)
-    private val msgSer = ReplicatorMessage.serializer(PNCounter.serializer())
-
-    private fun tallyReplicator(seam: us.tractat.kuilt.core.Seam, scope: kotlinx.coroutines.CoroutineScope) =
-        SeamReplicator(
-            replica = ReplicaId(seam.selfId.value),
-            seam = seam,
-            initial = PNCounter.ZERO,
-            messageSerializer = msgSer,
-            scope = scope,
-            config = replicatorCfg,
-        )
 
     @Test
     fun `upvotes and downvotes from two peers converge to the correct net tally`() =
@@ -68,20 +54,20 @@ class VoteTallyTest {
             val seamAlice = loom.host(Pattern("vote-tally"))
             val seamBob = loom.join(InMemoryTag("bob"))
 
-            val aliceTally = tallyReplicator(seamAlice, backgroundScope)
-            val bobTally = tallyReplicator(seamBob, backgroundScope)
+            val aliceTally = SeamReplicator(seamAlice, PNCounter.ZERO, PNCounter.serializer(), backgroundScope, config = replicatorCfg)
+            val bobTally = SeamReplicator(seamBob, PNCounter.ZERO, PNCounter.serializer(), backgroundScope, config = replicatorCfg)
 
             delay(1) // let collectors subscribe under StandardTestDispatcher
 
             // Alice casts 3 upvotes for the post.
-            aliceTally.apply(aliceTally.state.value.increment(aliceTally.replica, 3L))
+            aliceTally.mutate { it.increment(aliceTally.replica, 3L) }
 
             // Bob casts 1 upvote and then 1 downvote (changed his mind).
-            bobTally.apply(bobTally.state.value.increment(bobTally.replica, 1L))
-            bobTally.apply(bobTally.state.value.decrement(bobTally.replica, 1L))
+            bobTally.mutate { it.increment(bobTally.replica, 1L) }
+            bobTally.mutate { it.decrement(bobTally.replica, 1L) }
 
             // Alice adds another upvote concurrently.
-            aliceTally.apply(aliceTally.state.value.increment(aliceTally.replica, 2L))
+            aliceTally.mutate { it.increment(aliceTally.replica, 2L) }
 
             delay(10) // advance virtual time so all delta broadcasts deliver
 
@@ -98,14 +84,14 @@ class VoteTallyTest {
             val seamAlice = loom.host(Pattern("controversial-post"))
             val seamBob = loom.join(InMemoryTag("bob"))
 
-            val aliceTally = tallyReplicator(seamAlice, backgroundScope)
-            val bobTally = tallyReplicator(seamBob, backgroundScope)
+            val aliceTally = SeamReplicator(seamAlice, PNCounter.ZERO, PNCounter.serializer(), backgroundScope, config = replicatorCfg)
+            val bobTally = SeamReplicator(seamBob, PNCounter.ZERO, PNCounter.serializer(), backgroundScope, config = replicatorCfg)
 
             delay(1) // let collectors subscribe under StandardTestDispatcher
 
             // Bob downvotes heavily; Alice upvotes once.
-            bobTally.apply(bobTally.state.value.decrement(bobTally.replica, 5L))
-            aliceTally.apply(aliceTally.state.value.increment(aliceTally.replica, 1L))
+            bobTally.mutate { it.decrement(bobTally.replica, 5L) }
+            aliceTally.mutate { it.increment(aliceTally.replica, 1L) }
 
             delay(10) // advance virtual time so all delta broadcasts deliver
 
