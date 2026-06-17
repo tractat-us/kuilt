@@ -39,49 +39,39 @@ import kotlin.time.Duration.Companion.seconds
 
 /**
  * End-to-end integration test for [us.tractat.kuilt.cluster.ServerCluster] with M=3 voters
- * over **real Ktor WebSocket sockets**, part of epic #485 (#545).
+ * over **real Ktor WebSocket sockets**, part of epic #485 (closes #545).
  *
- * ## Current status — blocked by production bug (#545)
+ * ## What this proves
  *
- * This test is a **diagnostic repro** for a production issue discovered while implementing
- * the M=3 E2E path. The test structure is correct; the failure reveals a `LearnerRouter`
- * bug that must be fixed before the assertion in `propose` can pass.
+ * - An M=3 [us.tractat.kuilt.cluster.ServerCluster] elects a leader, admits a learner client
+ *   via [us.tractat.kuilt.websocket.KtorRoomHost], and commits a proposal across all 3 voters.
+ * - [ClusterClient.propose] returns successfully: the commit appears on the client's
+ *   [ClusterClient.committed] and on every voter's committed stream.
+ * - This is the production correctness proof for the `LearnerRouter` leader-routing fix (#545).
  *
- * ## Root cause: LearnerRouter fans Forward messages to all voters
+ * ## The bug this test caught (#545)
  *
- * `LearnerRouter.addLearner` creates a relay coroutine that fans learner-incoming swatches
- * to ALL voter `MutableSharedFlow` inbounds:
- * ```
- * flows.forEach { flow -> flow.tryEmit(envelope) }
- * ```
- * When the learner's [RaftNode] sends a `Forward(command)` to the leader, this relay
- * delivers it to ALL 3 voter engines. The 2 non-leader followers immediately reply:
- * ```
- * send(from, RaftMessage.ForwardResponse(clientRequestId, ForwardOutcome.NotLeader))
- * ```
- * Because `LearnerRouter.sendToLearner` uses `seam.broadcast`, this `NotLeader` reply
- * arrives at the learner with `sender = serverPeerId = NodeId("cluster-server-m3")`. The
- * learner's `onForwardResponse` removes the pending forward and completes it exceptionally
- * with [LeadershipLostException] — racing and beating the leader's positive `Committed` reply.
+ * Before the fix, `LearnerRouter.addLearner` fanned ALL learner-inbound swatches to every
+ * voter's `MutableSharedFlow`. When the learner forwarded a command, all 3 voters received
+ * it — the 2 followers replied `NotLeader` immediately (via `seam.broadcast`, arriving at the
+ * learner as `sender = serverPeerId`). That `NotLeader` reply raced and beat the leader's
+ * `Committed` reply, causing [ClusterClient.propose] to throw [LeadershipLostException] at M≥2.
  *
- * At M=1 this is invisible: the single voter is always the leader, so its `onForward`
- * succeeds. At M≥2, any follower reaching `onForward` before the leader's `Committed`
- * reply causes [ClusterClient.propose] to throw.
- *
- * ## Production fix needed
- *
- * `LearnerRouter` must route learner-incoming messages to the **leader voter's inbound only**,
- * not to all voter inbounds. An alternative is for `RaftEngine.onForward` on a follower to
- * silently drop (not reply to) Forwards from learners when another voter is the known leader —
- * but that changes Raft semantics. The recommended fix is in the router: route to leader.
+ * The fix routes each learner envelope to the **current leader voter's inbound only**
+ * (see `LearnerRouter.addLearner`). Followers never receive the Forward and so never reply.
  *
  * ## NodeId ↔ serverPeerId alignment at M=3
  *
- * One additional wrinkle exists (see brief for #545): the learner's `LinkSeam` stamps
- * `sender = serverPeerId` on every inbound frame, so the learner attributes ALL Raft traffic
- * to `NodeId(serverPeerId.value)`. Once `LearnerRouter` is fixed, the aligned-voter approach
- * (pin one voter's id to `serverPeerId`, transfer leadership to it before client joins) will
- * handle the alignment at M=3.
+ * The learner's `LinkSeam` stamps `sender = serverPeerId` on every inbound Raft frame, so
+ * `SeamRaftTransport` maps all incoming messages to `NodeId(serverPeerId.value)`.
+ * Consequently:
+ * - `AppendEntries.leaderId` from the aligned voter equals `NodeId(serverPeerId.value)`.
+ * - The learner sets `currentLeader = alignedVoterId`, then sends `Forward` to `alignedVoterId`.
+ * - `seam.sendTo(PeerId(alignedVoterId.value))` matches the one peer in `seam.peers`.
+ *
+ * If a non-aligned voter were the leader, the learner would try `sendTo(NodeId("cluster-voter-2"))`
+ * which is not in `seam.peers` — so leadership must be on the aligned voter before the client
+ * joins. [pinLeadershipToAlignedVoter] handles this.
  *
  * ## Real-socket discipline
  *
