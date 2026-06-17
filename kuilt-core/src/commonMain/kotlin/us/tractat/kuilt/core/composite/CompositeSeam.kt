@@ -147,6 +147,15 @@ internal class CompositeSeam(
         val job = SupervisorJob(scope.coroutineContext[Job])
         val plyScope = CoroutineScope(scope.coroutineContext + job)
 
+        // Register in `live` BEFORE launching the pumps. The inbound pump can process an Announce
+        // the instant it starts (a fabric may deliver one as its first/buffered frame, and on a
+        // multi-threaded dispatcher the pump runs concurrently with this method) — if `live` were
+        // not yet populated, recomputePeers would store the mapping in idMap but drop it from the
+        // reachable set, leaving the peer unreachable until some later trigger. There is no
+        // suspension point between here and the launches, and attach/detach are serialized through
+        // the single reconcile collector, so no pump can observe a half-built or stale handle.
+        lock.withLock { live[id] = PlyHandle(seam, job) }
+
         seam.state
             .onEach { s -> _plies.update { it + (id to s) } }
             .launchIn(plyScope)
@@ -177,8 +186,6 @@ internal class CompositeSeam(
                 }
             }
             .launchIn(plyScope)
-
-        lock.withLock { live[id] = PlyHandle(seam, job) }
     }
 
     private suspend fun detachPly(id: PlyId) {
