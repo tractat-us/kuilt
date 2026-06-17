@@ -30,6 +30,7 @@ import us.tractat.kuilt.raft.NodeId
 import us.tractat.kuilt.raft.RaftConfig
 import us.tractat.kuilt.raft.RaftEnvelope
 import us.tractat.kuilt.raft.RaftNode
+import us.tractat.kuilt.raft.RaftRole
 import us.tractat.kuilt.raft.RaftStorage
 import us.tractat.kuilt.raft.RaftTransport
 import us.tractat.kuilt.raft.raftNode
@@ -203,18 +204,24 @@ public fun CoroutineScope.serverCluster(
  * via WebSocket [Seam]s.
  *
  * Maintains two directions per learner:
- * - **Inbound (learner → voters):** flows from the learner's Seam are multiplexed into
- *   each voter's [MutableSharedFlow] via relay coroutines launched on [addLearner].
+ * - **Inbound (learner → voters):** flows from the learner's Seam are routed to the
+ *   **current leader's** inbound [MutableSharedFlow] only. A learner never legitimately
+ *   addresses a follower (all messages are Forward/AppendEntriesResponse/InstallSnapshotResponse
+ *   directed at the leader). Fanning to all voters causes followers to reply `NotLeader`
+ *   inline, racing the leader's committed reply — a deterministic M>1 bug.
  * - **Outbound (voter → learner):** [sendToLearner] routes a voter's `sendTo(learnerId, ...)`
  *   call to the learner's Seam via [Seam.broadcast].
  *
  * ## Thread safety
  *
- * All mutable state ([learnerSeams], [inboundFlows], [learnerRelayJobs]) is guarded by
+ * All mutable state ([learnerSeams], [inboundByVoter], [learnerRelayJobs]) is guarded by
  * an atomicfu reentrant lock. Suspend calls are always issued *outside* the locked section.
+ * [RaftNode.role] reads and [MutableSharedFlow.tryEmit] calls are non-suspending and can
+ * run outside the lock after snapshot acquisition.
  *
- * [inboundFlows] is populated by [registerVoterInbound] from [buildVoterChannelMesh]
- * before any [addLearner] call — no ordering race between registration and first use.
+ * [inboundByVoter] and [voterNodes] are populated by [registerVoterInbound] /
+ * [bindVoterNodes] from [buildVoterChannelMesh] before any [addLearner] call —
+ * no ordering race between registration and first use.
  */
 internal class LearnerRouter {
 
@@ -223,46 +230,69 @@ internal class LearnerRouter {
     /** Learner NodeId → its WebSocket Seam. */
     private val learnerSeams: MutableMap<NodeId, Seam> = mutableMapOf()
 
-    /** Voter inbound SharedFlows — populated once at mesh construction, never mutated after. */
-    private val inboundFlows: MutableList<MutableSharedFlow<RaftEnvelope>> = mutableListOf()
+    /** Voter NodeId → that voter's inbound SharedFlow — populated once at mesh construction. */
+    private val inboundByVoter: MutableMap<NodeId, MutableSharedFlow<RaftEnvelope>> = mutableMapOf()
 
-    /** Learner NodeId → relay coroutine Job (seam.incoming → voter inbounds). */
+    /** Voter NodeId → RaftNode — bound after node construction so we can read [RaftNode.role]. */
+    private var voterNodes: Map<NodeId, RaftNode> = emptyMap()
+
+    /** Learner NodeId → relay coroutine Job (seam.incoming → leader voter inbound). */
     private val learnerRelayJobs: MutableMap<NodeId, Job> = mutableMapOf()
 
     /** Peers StateFlow — tracks connected learner NodeIds; used in voter transport peers. */
     val learnersFlow: MutableStateFlow<Set<NodeId>> = MutableStateFlow(emptySet())
 
     /**
-     * Register a voter's inbound [MutableSharedFlow] so [addLearner] can fan-in
-     * learner messages to it. Called once per voter during mesh construction.
+     * Register a voter's inbound [MutableSharedFlow] keyed by [voterId].
+     *
+     * Called once per voter during mesh construction, before any [addLearner] call.
      */
-    fun registerVoterInbound(flow: MutableSharedFlow<RaftEnvelope>) {
-        lock.withLock { inboundFlows.add(flow) }
+    fun registerVoterInbound(voterId: NodeId, flow: MutableSharedFlow<RaftEnvelope>) {
+        lock.withLock { inboundByVoter[voterId] = flow }
     }
 
     /**
-     * Register a learner's Seam and start relay coroutines.
+     * Bind the voter node map so the relay can read [RaftNode.role] to find the current leader.
      *
-     * Delivers learner messages (from the Seam's incoming flow) to every voter's
-     * inbound [MutableSharedFlow]. Learner NodeId is added to [learnersFlow] so
-     * voter transports report it in their `peers`.
+     * Called once after all voter nodes are constructed, before [addLearner].
+     */
+    fun bindVoterNodes(nodes: Map<NodeId, RaftNode>) {
+        lock.withLock { voterNodes = nodes }
+    }
+
+    /**
+     * Register a learner's Seam and start a relay coroutine.
+     *
+     * Each inbound envelope from the learner is delivered to the **current leader voter's**
+     * inbound [MutableSharedFlow] only. If no leader is currently known, the envelope is
+     * dropped — the learner's propose will retry after receiving [LeadershipLostException],
+     * which is acceptable. Falling back to fan-all would reintroduce the M>1 bug.
+     *
+     * Learner NodeId is added to [learnersFlow] so voter transports report it in their `peers`.
      *
      * @param learnerId The learner's [NodeId] (derived from the Seam's `selfId`).
      * @param seam The learner's room Seam — a two-peer WebSocket Seam.
      * @param scope Scope for the relay coroutine. Bound to the server scope.
      */
     fun addLearner(learnerId: NodeId, seam: Seam, scope: CoroutineScope) {
-        val flows = lock.withLock {
+        val (inboundSnapshot, nodesSnapshot) = lock.withLock {
             learnerSeams[learnerId] = seam
             learnersFlow.update { it + learnerId }
-            inboundFlows.toList()
+            inboundByVoter.toMap() to voterNodes
         }
         val relayJob = scope.launch {
             runCatchingCancellable {
                 seam.incoming.collect { swatch ->
                     val sender = swatch.sender ?: return@collect
                     val envelope = RaftEnvelope(NodeId(sender.value), swatch.payload)
-                    flows.forEach { flow -> flow.tryEmit(envelope) }
+                    val leaderId = nodesSnapshot.entries
+                        .firstOrNull { it.value.role.value is RaftRole.Leader }
+                        ?.key
+                    if (leaderId != null) {
+                        inboundSnapshot[leaderId]?.tryEmit(envelope)
+                    } else {
+                        log.debug { "server-cluster: no leader — dropping learner envelope from ${envelope.from}" }
+                    }
                 }
             }
         }
@@ -322,10 +352,10 @@ private fun buildVoterChannelMesh(
     val voterChannels = voterIds.associateWith { Channel<RaftEnvelope>(Channel.UNLIMITED) }
     val voterPeersFlow = MutableStateFlow(voterIds.toSet())
 
-    return voterIds.associateWith { id ->
+    val voterNodes = voterIds.associateWith { id ->
         // Fan-in SharedFlow: receives from both the voter channel relay and learner Seam relays.
         val inbound = MutableSharedFlow<RaftEnvelope>(extraBufferCapacity = Int.MAX_VALUE)
-        router.registerVoterInbound(inbound)
+        router.registerVoterInbound(id, inbound)
 
         // Relay the voter's own inbound channel into the SharedFlow.
         val childScope = CoroutineScope(scope.coroutineContext + Job(scope.coroutineContext[Job]))
@@ -337,6 +367,9 @@ private fun buildVoterChannelMesh(
         val storage = storageFactory(id)
         childScope.raftNode(clusterConfig, transport, storage, raftConfig)
     }
+    // Bind voter nodes so the router can read roles to route learner messages to the leader.
+    router.bindVoterNodes(voterNodes)
+    return voterNodes
 }
 
 private fun voterChannelTransport(
