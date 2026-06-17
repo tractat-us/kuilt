@@ -17,9 +17,9 @@ import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.crdt.LWWMap
 import us.tractat.kuilt.crdt.Patch
 import us.tractat.kuilt.crdt.ReplicaId
-import us.tractat.kuilt.crdt.replicator.ReplicatorMessage
-import us.tractat.kuilt.crdt.replicator.SeamReplicator
-import us.tractat.kuilt.crdt.replicator.SeamReplicatorConfig
+import us.tractat.kuilt.quilter.ReplicatorMessage
+import us.tractat.kuilt.quilter.SeamReplicator
+import us.tractat.kuilt.quilter.SeamReplicatorConfig
 import kotlin.test.Test
 import kotlin.test.assertEquals
 

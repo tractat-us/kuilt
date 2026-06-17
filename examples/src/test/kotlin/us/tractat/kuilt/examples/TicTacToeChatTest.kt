@@ -23,9 +23,9 @@ import us.tractat.kuilt.crdt.Patch
 import us.tractat.kuilt.crdt.Rga
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.crdt.RgaId
-import us.tractat.kuilt.crdt.replicator.ReplicatorMessage
-import us.tractat.kuilt.crdt.replicator.SeamReplicator
-import us.tractat.kuilt.crdt.replicator.SeamReplicatorConfig
+import us.tractat.kuilt.quilter.ReplicatorMessage
+import us.tractat.kuilt.quilter.SeamReplicator
+import us.tractat.kuilt.quilter.SeamReplicatorConfig
 import us.tractat.kuilt.game.IndexedAction
 import us.tractat.kuilt.game.TurnSequencer
 import us.tractat.kuilt.raft.ClusterConfig

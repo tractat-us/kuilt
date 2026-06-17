@@ -14,7 +14,7 @@ import kotlin.test.assertEquals
  * merges any two op-logs into an identical sequence regardless of order.
  *
  * In production, broadcast the [us.tractat.kuilt.crdt.RgaOp] values to peers
- * via [us.tractat.kuilt.crdt.replicator.SeamReplicator] over a
+ * via [us.tractat.kuilt.quilter.SeamReplicator] over a
  * [us.tractat.kuilt.core.Seam].
  */
 class ChatTest {

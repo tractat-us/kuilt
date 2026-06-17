@@ -6,9 +6,9 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.serialization.KSerializer
 import us.tractat.kuilt.crdt.Quilted
 import us.tractat.kuilt.crdt.ReplicaId
-import us.tractat.kuilt.crdt.replicator.ReplicatorMessage
-import us.tractat.kuilt.crdt.replicator.SeamReplicator
-import us.tractat.kuilt.crdt.replicator.SeamReplicatorConfig
+import us.tractat.kuilt.quilter.ReplicatorMessage
+import us.tractat.kuilt.quilter.SeamReplicator
+import us.tractat.kuilt.quilter.SeamReplicatorConfig
 
 /**
  * Creates a [SeamReplicator] over [Room.channel]`(id)` in one call.
