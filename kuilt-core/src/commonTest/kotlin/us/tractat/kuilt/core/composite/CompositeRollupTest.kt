@@ -23,6 +23,8 @@ class CompositeRollupTest {
         val seam = loom.host(Pattern("host"))
         assertIs<SeamState.Woven>(seam.state.first { it is SeamState.Woven })
         assertEquals(setOf(PlyId("a"), PlyId("b")), seam.plies.value.keys)
+
+        seam.close()
     }
 
     @Test
