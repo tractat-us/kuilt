@@ -12,39 +12,21 @@ A last-write-wins map: a per-key `LWWRegister`. Each key resolves concurrently a
 
 **Set and read:**
 
-<!-- verbatim from kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/LWWMapTest.kt#setReturnsTheValue -->
 ```kotlin
-// Source: https://github.com/tractat-us/kuilt/blob/main/kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/LWWMapTest.kt
-// Test: setReturnsTheValue
-val m = LWWMap.empty<String, String>().set(a, 10L, "lang", "en")
-assertEquals("en", m["lang"])
-assertEquals(mapOf("lang" to "en"), m.entries)
 ```
+{ src="../../kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/LWWMapTest.kt" include-symbol="setReturnsTheValue" }
 
 **Per-key LWW: later timestamp wins:**
 
-<!-- verbatim from kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/LWWMapTest.kt#perKeyLwwSemantics_laterWins -->
 ```kotlin
-// Source: https://github.com/tractat-us/kuilt/blob/main/kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/LWWMapTest.kt
-// Test: perKeyLwwSemantics_laterWins
-val m1 = LWWMap.empty<String, String>().set(a, 10L, "lang", "en")
-val m2 = LWWMap.empty<String, String>().set(b, 20L, "lang", "fr")
-assertEquals("fr", m1.piece(m2)["lang"])
-assertEquals("fr", m2.piece(m1)["lang"])  // commutative
 ```
+{ src="../../kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/LWWMapTest.kt" include-symbol="perKeyLwwSemantics_laterWins" }
 
 **Different keys compose independently:**
 
-<!-- verbatim from kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/LWWMapTest.kt#differentKeysComposeIndependently -->
 ```kotlin
-// Source: https://github.com/tractat-us/kuilt/blob/main/kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/LWWMapTest.kt
-// Test: differentKeysComposeIndependently
-val m1 = LWWMap.empty<String, String>().set(a, 10L, "lang", "en")
-val m2 = LWWMap.empty<String, String>().set(b, 5L, "tz", "UTC")
-val merged = m1.piece(m2)
-assertEquals("en", merged["lang"])
-assertEquals("UTC", merged["tz"])
 ```
+{ src="../../kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/LWWMapTest.kt" include-symbol="differentKeysComposeIndependently" }
 
 ## When to use
 

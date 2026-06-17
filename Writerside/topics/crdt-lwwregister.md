@@ -14,37 +14,21 @@ This is deterministic and commutative — two replicas starting from the same st
 
 **Set and read:**
 
-<!-- verbatim from kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/LWWRegisterTest.kt#setThenRead -->
 ```kotlin
-// Source: https://github.com/tractat-us/kuilt/blob/main/kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/LWWRegisterTest.kt
-// Test: setThenRead
-assertEquals("x", LWWRegister.empty<String>().set(a, 10L, "x").value)
 ```
+{ src="../../kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/LWWRegisterTest.kt" include-symbol="setThenRead" }
 
 **Later timestamp wins (commutative):**
 
-<!-- verbatim from kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/LWWRegisterTest.kt#laterTimestampWins -->
 ```kotlin
-// Source: https://github.com/tractat-us/kuilt/blob/main/kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/LWWRegisterTest.kt
-// Test: laterTimestampWins
-val r1 = LWWRegister.empty<String>().set(a, 10L, "x")
-val r2 = LWWRegister.empty<String>().set(b, 20L, "y")
-assertEquals("y", r1.piece(r2).value)
-assertEquals("y", r2.piece(r1).value)  // commutative
 ```
+{ src="../../kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/LWWRegisterTest.kt" include-symbol="laterTimestampWins" }
 
 **Tie-break on replica id:**
 
-<!-- verbatim from kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/LWWRegisterTest.kt#tieBreaksOnReplicaIdLexicographically -->
 ```kotlin
-// Source: https://github.com/tractat-us/kuilt/blob/main/kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/LWWRegisterTest.kt
-// Test: tieBreaksOnReplicaIdLexicographically
-// Same timestamp; "B" > "A" lexicographically → "y" wins.
-val r1 = LWWRegister.empty<String>().set(a, 10L, "x")
-val r2 = LWWRegister.empty<String>().set(b, 10L, "y")
-assertEquals("y", r1.piece(r2).value)
-assertEquals("y", r2.piece(r1).value)
 ```
+{ src="../../kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/LWWRegisterTest.kt" include-symbol="tieBreaksOnReplicaIdLexicographically" }
 
 ## When to use
 

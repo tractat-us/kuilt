@@ -12,36 +12,21 @@ A multi-value register: holds potentially multiple values when writes happen con
 
 **Set and read:**
 
-<!-- verbatim from kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/MVRegisterTest.kt#setThenRead -->
 ```kotlin
-// Source: https://github.com/tractat-us/kuilt/blob/main/kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/MVRegisterTest.kt
-// Test: setThenRead
-assertEquals(setOf("x"), MVRegister.empty<String>().set(a, "x").values)
 ```
+{ src="../../kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/MVRegisterTest.kt" include-symbol="setThenRead" }
 
 **Concurrent writes keep both values:**
 
-<!-- verbatim from kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/MVRegisterTest.kt#concurrentWritesKeepBothValues -->
 ```kotlin
-// Source: https://github.com/tractat-us/kuilt/blob/main/kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/MVRegisterTest.kt
-// Test: concurrentWritesKeepBothValues
-val base = MVRegister.empty<String>()
-val x = base.set(a, "x")
-val y = base.set(b, "y")
-assertEquals(setOf("x", "y"), x.piece(y).values)
 ```
+{ src="../../kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/MVRegisterTest.kt" include-symbol="concurrentWritesKeepBothValues" }
 
 **A later write resolves the conflict:**
 
-<!-- verbatim from kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/MVRegisterTest.kt#aLaterWriteResolvesTheConflict -->
 ```kotlin
-// Source: https://github.com/tractat-us/kuilt/blob/main/kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/MVRegisterTest.kt
-// Test: aLaterWriteResolvesTheConflict
-val base = MVRegister.empty<String>()
-val conflicted = base.set(a, "x").piece(base.set(b, "y")) // {x, y}
-val resolved = conflicted.set(a, "z")                     // observes both, supersedes
-assertEquals(setOf("z"), resolved.values)
 ```
+{ src="../../kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/MVRegisterTest.kt" include-symbol="aLaterWriteResolvesTheConflict" }
 
 ## When to use
 

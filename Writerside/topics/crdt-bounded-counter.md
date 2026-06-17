@@ -22,76 +22,33 @@ Transfers move quota between replicas via a 2D matrix (one row per donor, one co
 
 **Initialise — per-replica quotas:**
 
-<!-- verbatim from kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/BoundedCounterTest.kt#initSetsPerReplicaQuotas -->
 ```kotlin
-// Source: https://github.com/tractat-us/kuilt/blob/main/kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/BoundedCounterTest.kt
-// Test: initSetsPerReplicaQuotas
-val bc = BoundedCounter.init(mapOf(a to 5L, b to 5L))
-assertEquals(10L, bc.totalBudget)
-assertEquals(0L, bc.totalSpent)
-assertEquals(5L, bc.quota(a))
-assertEquals(5L, bc.quota(b))
-assertEquals(0L, bc.quota(ReplicaId("nobody")))
 ```
+{ src="../../kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/BoundedCounterTest.kt" include-symbol="initSetsPerReplicaQuotas" }
 
 **Spend within quota:**
 
-<!-- verbatim from kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/BoundedCounterTest.kt#trySpendWithinQuotaProducesADeltaThatDebitsTheReplica -->
 ```kotlin
-// Source: https://github.com/tractat-us/kuilt/blob/main/kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/BoundedCounterTest.kt
-// Test: trySpendWithinQuotaProducesADeltaThatDebitsTheReplica
-val bc = BoundedCounter.init(mapOf(a to 5L))
-val delta = bc.trySpend(a, 3L)
-assertNotNull(delta)
-val next = bc.piece(delta)
-assertEquals(2L, next.quota(a))
-assertEquals(3L, next.totalSpent)
-assertEquals(2L, next.totalBudget) // 5 received - 3 spent
 ```
+{ src="../../kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/BoundedCounterTest.kt" include-symbol="trySpendWithinQuotaProducesADeltaThatDebitsTheReplica" }
 
 **Spend over quota is denied:**
 
-<!-- verbatim from kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/BoundedCounterTest.kt#trySpendOverQuotaIsDenied -->
 ```kotlin
-// Source: https://github.com/tractat-us/kuilt/blob/main/kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/BoundedCounterTest.kt
-// Test: trySpendOverQuotaIsDenied
-val bc = BoundedCounter.init(mapOf(a to 5L))
-assertNull(bc.trySpend(a, 6L))
-assertEquals(5L, bc.quota(a))
-assertEquals(0L, bc.totalSpent)
 ```
+{ src="../../kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/BoundedCounterTest.kt" include-symbol="trySpendOverQuotaIsDenied" }
 
 **Transfer quota between replicas:**
 
-<!-- verbatim from kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/BoundedCounterTest.kt#transferMovesQuotaFromSenderToReceiver -->
 ```kotlin
-// Source: https://github.com/tractat-us/kuilt/blob/main/kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/BoundedCounterTest.kt
-// Test: transferMovesQuotaFromSenderToReceiver
-val bc = BoundedCounter.init(mapOf(a to 5L, b to 5L))
-val delta = bc.transfer(from = a, to = b, amount = 3L)!!
-val next = bc.piece(delta)
-assertEquals(2L, next.quota(a))   // 5 - 3
-assertEquals(8L, next.quota(b))   // 5 + 3
-assertEquals(10L, next.totalBudget)  // unchanged — transfers redistribute
 ```
+{ src="../../kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/BoundedCounterTest.kt" include-symbol="transferMovesQuotaFromSenderToReceiver" }
 
 **Two concurrent donors both succeed (the 2D matrix preserves both):**
 
-<!-- verbatim from kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/BoundedCounterTest.kt#concurrentMultiDonorTransfersConverge -->
 ```kotlin
-// Source: https://github.com/tractat-us/kuilt/blob/main/kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/BoundedCounterTest.kt
-// Test: concurrentMultiDonorTransfersConverge
-val a = ReplicaId("A"); val c = ReplicaId("C"); val b = ReplicaId("B")
-val start = BoundedCounter.init(mapOf(a to 5L, c to 5L))
-
-val aliceBranch = start.piece(start.transfer(from = a, to = b, amount = 3L)!!)
-val charlesBranch = start.piece(start.transfer(from = c, to = b, amount = 3L)!!)
-val merged = aliceBranch.piece(charlesBranch)
-
-assertEquals(6L, merged.quota(b))  // both 3-transfers survived
-assertEquals(2L, merged.quota(a))
-assertEquals(2L, merged.quota(c))
 ```
+{ src="../../kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/BoundedCounterTest.kt" include-symbol="concurrentMultiDonorTransfersConverge" }
 
 ## Active rebalancing
 
