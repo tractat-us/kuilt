@@ -7,8 +7,9 @@ package us.tractat.kuilt.session.partition
  * to use as the new current endpoint. The default implementation is
  * [RoundRobinEndpointSelector].
  *
- * Implementations must be thread-safe: [ServerClusterReconnect] calls [next]
- * under an atomicfu lock from potentially concurrent callers.
+ * [ServerClusterReconnect] always calls [next] under its own atomicfu lock, so
+ * an implementation's per-call state need not be independently synchronized —
+ * but [next] must not suspend or block.
  */
 public fun interface EndpointSelector {
     /**

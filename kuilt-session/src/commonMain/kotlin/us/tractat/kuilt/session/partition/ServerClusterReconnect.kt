@@ -2,7 +2,6 @@ package us.tractat.kuilt.session.partition
 
 import kotlinx.atomicfu.locks.reentrantLock
 import kotlinx.atomicfu.locks.withLock
-import kotlinx.coroutines.CoroutineScope
 import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.Tag
@@ -20,7 +19,6 @@ import us.tractat.kuilt.core.Tag
  * ```kotlin
  * val reconnect = ServerClusterReconnect(
  *     endpoints = listOf(tag0, tag1, tag2),
- *     scope = roomScope,
  * )
  *
  * // Initial connection:
@@ -43,17 +41,19 @@ import us.tractat.kuilt.core.Tag
  * ([connect]) are issued *outside* the locked section to comply with the
  * lock-discipline rule: no suspending code inside a locked region.
  *
+ * This helper is caller-orchestrated: it tracks the current endpoint and the
+ * pending [ResumeToken], and [connect] delegates straight to [Loom.join] on the
+ * calling coroutine. It launches no background work, so it owns no
+ * [kotlinx.coroutines.CoroutineScope]. If a future iteration makes it manage the
+ * connect → tear → reconnect loop itself, a required scope parameter is
+ * reintroduced then (and actually used).
+ *
  * @param endpoints Ordered list of server endpoint [Tag]s. Must be non-empty.
- * @param scope Coroutine scope that owns any background work launched by this
- *   helper. **Required** — callers must supply an appropriate scope; no default
- *   real-dispatcher scope is provided, in compliance with the no-real-dispatcher
- *   policy.
  * @param selector Strategy that determines which index to activate on each
  *   [advanceEndpoint] call. Default: deterministic round-robin starting at index 0.
  */
 public class ServerClusterReconnect(
     private val endpoints: List<Tag>,
-    @Suppress("UNUSED_PARAMETER") scope: CoroutineScope,
     private val selector: EndpointSelector = RoundRobinEndpointSelector(startIndex = 0),
 ) {
     init {

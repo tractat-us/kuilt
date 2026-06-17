@@ -51,7 +51,6 @@ class ServerClusterReconnectTest {
     fun `default selector starts at first endpoint`() = runTest {
         val reconnect = ServerClusterReconnect(
             endpoints = endpoints,
-            scope = backgroundScope,
         )
         assertEquals(endpoint0, reconnect.currentEndpoint())
     }
@@ -60,7 +59,6 @@ class ServerClusterReconnectTest {
     fun `rotation advances through all endpoints in order`() = runTest {
         val reconnect = ServerClusterReconnect(
             endpoints = endpoints,
-            scope = backgroundScope,
         )
         assertEquals(endpoint0, reconnect.currentEndpoint())
 
@@ -75,7 +73,6 @@ class ServerClusterReconnectTest {
     fun `rotation wraps around after last endpoint`() = runTest {
         val reconnect = ServerClusterReconnect(
             endpoints = endpoints,
-            scope = backgroundScope,
         )
         repeat(endpoints.size) { reconnect.advanceEndpoint() }
         assertEquals(endpoint0, reconnect.currentEndpoint())
@@ -98,7 +95,6 @@ class ServerClusterReconnectTest {
 
         val reconnect = ServerClusterReconnect(
             endpoints = endpoints,
-            scope = backgroundScope,
             selector = reverseSelector,
         )
 
@@ -115,7 +111,6 @@ class ServerClusterReconnectTest {
     fun `onTransportTear advances to next endpoint`() = runTest {
         val reconnect = ServerClusterReconnect(
             endpoints = endpoints,
-            scope = backgroundScope,
         )
 
         assertEquals(endpoint0, reconnect.currentEndpoint())
@@ -133,7 +128,6 @@ class ServerClusterReconnectTest {
 
         val reconnect = ServerClusterReconnect(
             endpoints = endpoints,
-            scope = backgroundScope,
         )
 
         val seam = reconnect.connect(loom)
@@ -148,7 +142,6 @@ class ServerClusterReconnectTest {
     fun `pendingToken is null before any token is set`() = runTest {
         val reconnect = ServerClusterReconnect(
             endpoints = endpoints,
-            scope = backgroundScope,
         )
         assertNull(reconnect.pendingToken())
     }
@@ -157,7 +150,6 @@ class ServerClusterReconnectTest {
     fun `pendingToken returns the registered token`() = runTest {
         val reconnect = ServerClusterReconnect(
             endpoints = endpoints,
-            scope = backgroundScope,
         )
 
         reconnect.setToken(token)
@@ -168,7 +160,6 @@ class ServerClusterReconnectTest {
     fun `pendingToken survives endpoint change`() = runTest {
         val reconnect = ServerClusterReconnect(
             endpoints = endpoints,
-            scope = backgroundScope,
         )
 
         reconnect.setToken(token)
@@ -182,7 +173,6 @@ class ServerClusterReconnectTest {
     fun `clearToken clears the pending token`() = runTest {
         val reconnect = ServerClusterReconnect(
             endpoints = endpoints,
-            scope = backgroundScope,
         )
 
         reconnect.setToken(token)
@@ -207,7 +197,6 @@ class ServerClusterReconnectTest {
 
         val reconnect = ServerClusterReconnect(
             endpoints = listOf(endpoint0, endpoint1),
-            scope = backgroundScope,
         )
 
         // Connect to endpoint-0 and register a token (simulates post-admit state).
@@ -233,7 +222,6 @@ class ServerClusterReconnectTest {
     fun `after clearToken second tear leaves no stale token`() = runTest {
         val reconnect = ServerClusterReconnect(
             endpoints = endpoints,
-            scope = backgroundScope,
         )
 
         reconnect.setToken(token)
@@ -250,7 +238,6 @@ class ServerClusterReconnectTest {
     fun `single endpoint always returns same endpoint after tear`() = runTest {
         val reconnect = ServerClusterReconnect(
             endpoints = listOf(endpoint0),
-            scope = backgroundScope,
         )
 
         reconnect.onTransportTear()
@@ -271,7 +258,6 @@ class ServerClusterReconnectTest {
 
         val reconnect = ServerClusterReconnect(
             endpoints = endpoints,
-            scope = scope,
         )
 
         repeat(99) {
