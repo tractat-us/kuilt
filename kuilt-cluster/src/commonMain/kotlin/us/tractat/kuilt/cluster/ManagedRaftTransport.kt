@@ -75,7 +75,16 @@ public class ManagedRaftTransport(
 
     override suspend fun sendTo(peer: NodeId, message: ByteArray) {
         val transport = lock.withLock { currentTransport } ?: return
-        runCatchingCancellable { transport.sendTo(peer, message) }
+        // Learner-over-relay addressing (#544): the backing seam is strictly 2-peer
+        // (this learner + one relay server). The Raft engine forwards a proposal to the
+        // *real* leader NodeId read from the AppendEntries body, which generally is not
+        // this relay's PeerId; addressing it directly would hit an absent peer and drop.
+        // The relay's LearnerRouter already routes each inbound frame to the current
+        // leader voter, so we always send to the single relay peer (peers − selfId) —
+        // letting the learner keep committing through any relay endpoint regardless of
+        // which voter leads, the precondition for failover without moving leadership.
+        val relayPeer = transport.peers.value.singleOrNull { it != selfId } ?: peer
+        runCatchingCancellable { transport.sendTo(relayPeer, message) }
             .onFailure { /* fire-and-forget: drop silently on tear */ }
     }
 

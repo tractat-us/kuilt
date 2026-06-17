@@ -72,6 +72,47 @@ class ClusterClientFailoverTest {
             assertTrue(transport.peers === transport.peers, "peers StateFlow reference is stable — same transport")
         }
 
+    // ── Single-relay-peer addressing (#544) ───────────────────────────────────
+
+    @Test
+    fun `sendTo addresses the single relay peer regardless of the computed leader NodeId`(): TestResult =
+        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+            // A learner's room seam is strictly 2-peer: { learner, relay }. The Raft engine
+            // forwards a proposal to the *real* leader NodeId (read from the AppendEntries body),
+            // which is generally NOT the relay's PeerId — so a naive seam.sendTo(leaderId) hits an
+            // absent peer and drops. ManagedRaftTransport must redirect every send to its single
+            // relay peer; the relay's LearnerRouter routes on to the current leader voter. This is
+            // the precondition for cross-relay failover without moving Raft leadership (#544).
+            val loom = InMemoryLoom()
+            val relaySeam = loom.join(InMemoryTag("relay"))
+            val learnerSeam = loom.join(InMemoryTag("relay"))
+
+            // selfId mirrors the learner's pinned fabric identity (clientNodeId == seam.selfId).
+            val transport = ManagedRaftTransport(
+                scope = backgroundScope,
+                selfId = NodeId(learnerSeam.selfId.value),
+            )
+            transport.swapSeam(learnerSeam)
+            testScheduler.runCurrent()
+
+            val received = mutableListOf<ByteArray>()
+            val collectJob = launch { relaySeam.incoming.collect { received.add(it.payload) } }
+            testScheduler.runCurrent()
+
+            // Address a voter that is NOT a peer on the learner's seam — models the real leader
+            // being a voter not aligned with this relay's serverPeerId.
+            val payload = "forward-to-leader".encodeToByteArray()
+            transport.sendTo(NodeId("distant-leader-voter"), payload)
+            testScheduler.runCurrent()
+            collectJob.cancel()
+
+            assertEquals(1, received.size, "the relay peer must receive the forwarded frame")
+            assertTrue(
+                received.single().contentEquals(payload),
+                "the relay receives the original payload",
+            )
+        }
+
     // ── Endpoint rotation order ────────────────────────────────────────────────
 
     @Test
