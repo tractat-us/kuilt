@@ -20,50 +20,27 @@ Writing `leave(replica, clock)` records a null value at a higher clock — a tom
 
 **Write a presence value:**
 
-<!-- verbatim from kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/EphemeralMapTest.kt#putAddsEntry -->
 ```kotlin
-// Source: https://github.com/tractat-us/kuilt/blob/main/kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/EphemeralMapTest.kt
-// Test: putAddsEntry
-val m = EphemeralMap.empty<String>().put(a, "cursor", clock = 1L)
-assertEquals("cursor", m.entries[a]?.value)
-assertEquals(1L, m.entries[a]?.clock)
 ```
+{ src="../../kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/EphemeralMapTest.kt" include-symbol="putAddsEntry" }
 
 **Later clock wins within a replica's slot:**
 
-<!-- verbatim from kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/EphemeralMapTest.kt#laterClockWins_sameReplica -->
 ```kotlin
-// Source: https://github.com/tractat-us/kuilt/blob/main/kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/EphemeralMapTest.kt
-// Test: laterClockWins_sameReplica
-val m1 = EphemeralMap.empty<String>().put(a, "old", clock = 1L)
-val m2 = EphemeralMap.empty<String>().put(a, "new", clock = 2L)
-assertEquals("new", m1.piece(m2).entries[a]?.value)
-assertEquals("new", m2.piece(m1).entries[a]?.value) // commutative
 ```
+{ src="../../kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/EphemeralMapTest.kt" include-symbol="laterClockWins_sameReplica" }
 
 **Rejoin beats a stale departure:**
 
-<!-- verbatim from kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/EphemeralMapTest.kt#presenceWithHigherClockWinsOverStaleDeparture -->
 ```kotlin
-// Source: https://github.com/tractat-us/kuilt/blob/main/kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/EphemeralMapTest.kt
-// Test: presenceWithHigherClockWinsOverStaleDeparture
-val departed = EphemeralMap.empty<String>().leave(a, clock = 1L)
-val rejoined = EphemeralMap.empty<String>().put(a, "back", clock = 3L)
-val merged = departed.piece(rejoined)
-assertEquals("back", merged.entries[a]?.value)
 ```
+{ src="../../kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/EphemeralMapTest.kt" include-symbol="presenceWithHigherClockWinsOverStaleDeparture" }
 
 **A stale entry is evicted from the live view:**
 
-<!-- verbatim from kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/EphemeralMapTest.kt#expiredEntryIsEvicted -->
 ```kotlin
-// Source: https://github.com/tractat-us/kuilt/blob/main/kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/EphemeralMapTest.kt
-// Test: expiredEntryIsEvicted
-val m = EphemeralMap.empty<String>().put(a, "stale", clock = 1L)
-val receiveTime = mapOf(a to 0L)
-val live = m.live(receiveTime, now = 6000L, ttlMs = 5000L)
-assertFalse(a in live)
 ```
+{ src="../../kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/EphemeralMapTest.kt" include-symbol="expiredEntryIsEvicted" }
 
 ## When to use
 
