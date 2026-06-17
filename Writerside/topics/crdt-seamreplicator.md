@@ -1,6 +1,10 @@
 # SeamReplicator
 
-`SeamReplicator<S>` keeps a CRDT replica live over a `Seam`. It collects the `Seam`'s `incoming` flow, merges inbound deltas, and broadcasts outbound deltas as you apply mutations. `state` is a `StateFlow<S>` — always the current converged value.
+If your app has shared state (scores, presence, settings, inventory), you need more than frame delivery — you need every peer to converge on the same value as updates happen.
+
+`SeamReplicator<S>` is the piece that does that over a `Seam`. You apply a local CRDT update once, it broadcasts the delta for you, merges inbound deltas from other peers, and keeps `state` as a `StateFlow<S>` with the latest converged value.
+
+Use it when you want live collaborative state without writing your own replication loop, sequencing, or re-sync logic.
 
 ## Basic setup
 

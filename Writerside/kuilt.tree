@@ -51,10 +51,10 @@
             <toc-element topic="crdt-rga.md"/>
             <toc-element topic="crdt-causal.md"/>
         </toc-element>
-        <toc-element toc-title="Composite">
+        <toc-element toc-title="JSON Documents">
             <toc-element topic="crdt-jsoncrdt.md"/>
         </toc-element>
-        <toc-element toc-title="Ephemeral">
+        <toc-element toc-title="Presence &amp; Activity">
             <toc-element topic="crdt-ephemeralmap.md"/>
         </toc-element>
         <toc-element toc-title="Replication">

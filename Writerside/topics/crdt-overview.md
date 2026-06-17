@@ -1,8 +1,12 @@
-# Replicated Data Types
+# Conflict-free Replicated Data Types (CRDTs)
 
-A **CRDT** (Conflict-free Replicated Data Type) is a data structure that any number of replicas can update independently — with no locking, no coordinator, and no custom merge logic — and still converge to the same value once they exchange updates. Two replicas that have seen the same set of updates will always agree, regardless of the order those updates arrived or whether any updates were temporarily dropped. There are no "last-write-wins" surprises and no conflicts to resolve by hand.
+If you're using a fabric, your real goal is to share application data across peers without making users think about sync. Counters should stay correct, lists should keep their order, and maps should settle to the same value everywhere — even when devices are offline, messages arrive late, or updates race.
 
-`kuilt-crdt` provides fourteen such types, grouped by what they model.
+That is exactly what the types in `kuilt-crdt` are for.
+
+Formally, these are **C**onflict-free **R**eplicated **D**ata **T**ypes (CRDTs): data structures that replicas can update independently and later merge deterministically. If two peers have seen the same set of updates, they converge to the same value regardless of update order.
+
+`kuilt-crdt` provides fourteen types, grouped by what they model.
 
 ## Pick by what you're building
 
@@ -38,7 +42,7 @@ A **CRDT** (Conflict-free Replicated Data Type) is a data structure that any num
 
 ## Using the types without kuilt
 
-The CRDT types are plain serializable value objects. You do not need a `Seam`, a `Loom`, or any other kuilt module to use them. Apply updates by calling `.piece()` directly; serialize with `kotlinx.serialization`; ship the bytes over any transport you already have.
+These types are plain serializable value objects. You do not need a `Seam`, a `Loom`, or any other kuilt module to use them. Apply updates by calling `.piece()` directly; serialize with `kotlinx.serialization`; ship the bytes over any transport you already have.
 
 ```kotlin
 var counter = GCounter.ZERO
@@ -51,7 +55,7 @@ counter = counter.piece(delta)             // apply locally
 
 ## Live replication
 
-`SeamReplicator<S>` runs over a `Seam` and keeps a CRDT replica live: it ships deltas to all peers as you apply updates, and merges inbound deltas as they arrive. `state` is a `StateFlow<S>` — always the current converged value.
+`SeamReplicator<S>` runs over a `Seam` and keeps one replica live: it ships deltas to all peers as you apply updates, and merges inbound deltas as they arrive. `state` is a `StateFlow<S>` — always the current converged value.
 
 See [SeamReplicator](crdt-seamreplicator.md) for usage and the `MuxSeam` multiplexing pattern that lets multiple replicators share one transport.
 

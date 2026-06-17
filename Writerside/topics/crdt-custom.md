@@ -1,7 +1,8 @@
 # Implementing your own CRDT
 
-If none of the built-in types fit your use case, you can implement a custom
-CRDT that works with `SeamReplicator` and the rest of the zoo.
+If your app data model does not fit the built-in types, you can still get the
+same replication behavior by implementing your own type and wiring it into
+`SeamReplicator`.
 
 ## The `Quilted` interface
 
@@ -13,7 +14,8 @@ interface Quilted<S : Quilted<S>> {
 }
 ```
 
-`piece` is the join in the join-semilattice. Three laws make it correct:
+`piece` is the merge operation that keeps replicas aligned. Formally, it is the
+join in a join-semilattice. Three laws make it correct:
 
 - **Idempotent** — calling it with the same argument twice gives the same result as once.
 - **Commutative** — order of the two arguments doesn't matter.
