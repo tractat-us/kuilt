@@ -32,8 +32,8 @@ class GameNodeTest {
         val (hostSeam, joinSeam) = seats(loom, 2)
         val voters = setOf(NodeId(hostSeam.selfId.value), NodeId(joinSeam.selfId.value))
 
-        val a = backgroundScope.gameNode(hostSeam, voters, raftConfig = fastRaftConfig(seed = 1L))
-        val b = backgroundScope.gameNode(joinSeam, voters, raftConfig = fastRaftConfig(seed = 2L))
+        val a = backgroundScope.gameNode(hostSeam, voters, raftConfig = fastRaftConfig(seed = 1L)).node
+        val b = backgroundScope.gameNode(joinSeam, voters, raftConfig = fastRaftConfig(seed = 2L)).node
 
         val leader = awaitEitherLeader(a, b)
         val proposed = TurnSequencer(leader, Int.serializer()).propose(42)
@@ -50,8 +50,8 @@ class GameNodeTest {
         // signal. The CoroutineScope receiver must be backgroundScope so the RaftNode lifetime is
         // tied to backgroundScope (not to the async block), allowing the async to complete once
         // the suspend work is done while nodes keep running on backgroundScope.
-        val hostDeferred = async { backgroundScope.gameHost(hostSeam, peerCount = 2, raftConfig = fastRaftConfig(seed = 1L)) }
-        val joinDeferred = async { backgroundScope.gameJoin(joinSeam, raftConfig = fastRaftConfig(seed = 2L)) }
+        val hostDeferred = async { backgroundScope.gameHost(hostSeam, peerCount = 2, raftConfig = fastRaftConfig(seed = 1L)).node }
+        val joinDeferred = async { backgroundScope.gameJoin(joinSeam, raftConfig = fastRaftConfig(seed = 2L)).node }
 
         val host = hostDeferred.await()
         val joiner = joinDeferred.await()
@@ -101,9 +101,9 @@ class GameNodeTest {
         // Launch all three concurrently: host's admit loop blocks until voters.size == 3;
         // both joiners must be running so they can receive the membership change commits.
         // Use backgroundScope receiver so RaftNode lifetime ties to backgroundScope, not async.
-        val hostDeferred = async { backgroundScope.gameHost(hostSeam, peerCount = 3, raftConfig = fastRaftConfig(seed = 1L)) }
-        val j1Deferred = async { backgroundScope.gameJoin(j1, raftConfig = fastRaftConfig(seed = 2L)) }
-        val j2Deferred = async { backgroundScope.gameJoin(j2, raftConfig = fastRaftConfig(seed = 3L)) }
+        val hostDeferred = async { backgroundScope.gameHost(hostSeam, peerCount = 3, raftConfig = fastRaftConfig(seed = 1L)).node }
+        val j1Deferred = async { backgroundScope.gameJoin(j1, raftConfig = fastRaftConfig(seed = 2L)).node }
+        val j2Deferred = async { backgroundScope.gameJoin(j2, raftConfig = fastRaftConfig(seed = 3L)).node }
 
         val host = hostDeferred.await()
         val joiner1 = j1Deferred.await()
@@ -148,8 +148,9 @@ class GameNodeTest {
      *
      * The supported contract is: pass the plain `Seam` to one of the three entry points
      * and never collect `seam.incoming` again. This test verifies that contract: a single
-     * cluster bootstrapped via `gameNode` (no MuxSeam — the simplest path) converges to
-     * a leader and commits an action without any second collector interfering.
+     * cluster bootstrapped via `gameNode` (which now wraps the seam in a `MuxSeam` — raft on
+     * tag 1, the app-envelope `NamedMux` on tag 3) converges to a leader and commits an action
+     * without any second collector interfering.
      *
      * The constraint is enforced by convention (KDoc on each entry point); the mechanism
      * is `MuxSeam.shareIn(SharingStarted.Eagerly)` which subscribes to the underlying
@@ -162,10 +163,10 @@ class GameNodeTest {
         val (hostSeam, joinSeam) = seats(loom, 2)
         val voters = setOf(NodeId(hostSeam.selfId.value), NodeId(joinSeam.selfId.value))
 
-        // gameNode uses the seam directly (no MuxSeam) — single-collection contract is satisfied.
+        // gameNode wraps the seam in a MuxSeam (sole collector) — single-collection contract satisfied.
         // This is the roster-given path; gameHost/gameJoin also satisfy the contract internally.
-        val a = backgroundScope.gameNode(hostSeam, voters, raftConfig = fastRaftConfig(seed = 1L))
-        val b = backgroundScope.gameNode(joinSeam, voters, raftConfig = fastRaftConfig(seed = 2L))
+        val a = backgroundScope.gameNode(hostSeam, voters, raftConfig = fastRaftConfig(seed = 1L)).node
+        val b = backgroundScope.gameNode(joinSeam, voters, raftConfig = fastRaftConfig(seed = 2L)).node
 
         // If the single-collection contract holds, the Raft engine receives all frames and
         // converges. A second collector on hostSeam.incoming running concurrently would steal
@@ -220,9 +221,9 @@ class GameNodeTest {
                 peerCount = 3,
                 returnAt = ReturnPolicy.Quorum,
                 raftConfig = fastRaftConfig(seed = 1L),
-            )
+            ).node
         }
-        val j1Deferred = async { backgroundScope.gameJoin(j1, raftConfig = fastRaftConfig(seed = 2L)) }
+        val j1Deferred = async { backgroundScope.gameJoin(j1, raftConfig = fastRaftConfig(seed = 2L)).node }
 
         // Host returns at quorum (2 voters) without waiting for the third peer.
         val host = hostDeferred.await()
@@ -234,7 +235,7 @@ class GameNodeTest {
 
         // The latecomer connects only now, after the host already returned, and joins.
         val j2 = loom.join(InMemoryTag("seat-2"))
-        val joiner2 = backgroundScope.gameJoin(j2, raftConfig = fastRaftConfig(seed = 3L))
+        val joiner2 = backgroundScope.gameJoin(j2, raftConfig = fastRaftConfig(seed = 3L)).node
 
         // The background admission loop promotes the latecomer; it replays the earlier action.
         fun appEntries(node: RaftNode) =
@@ -255,9 +256,9 @@ class GameNodeTest {
         val voters = seams.map { NodeId(it.selfId.value) }.toSet()
         val (s0, s1, s2) = seams
         val nodes = listOf(
-            backgroundScope.gameNode(s0, voters, raftConfig = fastRaftConfig(seed = 1L)),
-            backgroundScope.gameNode(s1, voters, raftConfig = fastRaftConfig(seed = 2L)),
-            backgroundScope.gameNode(s2, voters, raftConfig = fastRaftConfig(seed = 3L)),
+            backgroundScope.gameNode(s0, voters, raftConfig = fastRaftConfig(seed = 1L)).node,
+            backgroundScope.gameNode(s1, voters, raftConfig = fastRaftConfig(seed = 2L)).node,
+            backgroundScope.gameNode(s2, voters, raftConfig = fastRaftConfig(seed = 3L)).node,
         )
 
         val leader = awaitAnyLeader(nodes)

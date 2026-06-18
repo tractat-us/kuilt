@@ -7,6 +7,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import us.tractat.kuilt.core.MuxSeam
+import us.tractat.kuilt.core.NamedMux
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.raft.ClusterConfig
@@ -33,6 +34,17 @@ private const val RAFT_CHANNEL: Byte = 1
  * presence channel are silently discarded by the unsubscribed [MuxSeam] view.
  */
 private const val PRESENCE_CHANNEL: Byte = 2
+
+/**
+ * MuxSeam channel tag carrying the application-envelope [NamedMux] in every bootstrap path.
+ *
+ * Named application channels ([GameSession.appChannel]) are nested as a [NamedMux] under this
+ * single reserved tag, so the app wire-layout (`[3][len][name]…`) is identical across
+ * [gameNode], [gameHost], and [gameJoin]. The mux's 256-tag ceiling bounds only internal
+ * channels (raft/presence/app-envelope); application channels live in the unbounded [NamedMux]
+ * name namespace, never on a reserved tag.
+ */
+private const val APP_ENVELOPE_CHANNEL: Byte = 3
 
 /**
  * Thrown by [gameHost] when another peer on the same session has already declared itself host.
@@ -74,8 +86,15 @@ public enum class ReturnPolicy { FullMembership, Quorum }
  * peer's identity is known before the session starts. For the *appoint-the-host*
  * path (dynamic join without a fixed roster), see `gameHost`/`gameJoin`.
  *
+ * **Internal multiplexing.** [gameNode] wraps [seam] in a [MuxSeam] so Raft traffic (channel
+ * tag 1) and the application-envelope [NamedMux] (channel tag 3) share the one underlying
+ * [Seam]. This costs Raft one extra tag byte per frame versus an unmuxed seam — the accepted
+ * price of a uniform [GameSession] return type and ride-along app channels across all three
+ * bootstrap paths. Drive consensus through [GameSession.node]; ride extra traffic over
+ * [GameSession.appChannel].
+ *
  * **Do not collect `seam.incoming` after calling this.** Once the returned
- * [RaftNode] is running, `SeamRaftTransport` is the sole consumer of
+ * [GameSession] is running, the internal [MuxSeam] is the sole consumer of
  * `seam.incoming` (ADR-034 single-collection). A second collector races the
  * Raft engine and drops messages, causing silent liveness failures.
  *
@@ -99,22 +118,26 @@ public fun CoroutineScope.gameNode(
     voterIds: Set<NodeId>,
     storage: RaftStorage = InMemoryRaftStorage(),
     raftConfig: RaftConfig = RaftConfig(),
-): RaftNode {
+): GameSession {
     require(NodeId(seam.selfId.value) in voterIds) {
         "this peer (${seam.selfId.value}) must be in voterIds $voterIds"
     }
-    return raftNode(ClusterConfig.ofVoters(voterIds), SeamRaftTransport(seam), storage, raftConfig)
+    val mux = MuxSeam(seam, this)
+    val node = raftNode(ClusterConfig.ofVoters(voterIds), SeamRaftTransport(mux.channel(RAFT_CHANNEL)), storage, raftConfig)
+    val appMux = NamedMux(mux.channel(APP_ENVELOPE_CHANNEL), this)
+    return GameSession(node, seam, appMux)
 }
 
 /**
  * Host a game session over [seam]: check for duplicate hosts, bootstrap a
  * singleton-voter cluster, then admit each connecting peer as learner→voter until
- * the cluster reaches the [returnAt] watermark, then returns the leader [RaftNode].
+ * the cluster reaches the [returnAt] watermark, then returns a [GameSession] whose
+ * [GameSession.node] is the leader.
  *
  * **Return policy.** With the default [ReturnPolicy.FullMembership], [gameHost] suspends until all
  * [peerCount] voters have joined before returning. With [ReturnPolicy.Quorum] it returns as soon as
  * a majority (`peerCount / 2 + 1`) are present and continues admitting the remaining voters in the
- * background — see [ReturnPolicy] and [latecomerWindow].
+ * background — see [ReturnPolicy].
  *
  * **Precondition: exactly one `gameHost` per session.** This function detects a
  * duplicate host via lobby presence before bootstrapping Raft and throws
@@ -135,10 +158,11 @@ public fun CoroutineScope.gameNode(
  * any missing peer.
  *
  * **Internal multiplexing.** [gameHost] wraps [seam] in a [MuxSeam] so that Raft
- * traffic (channel tag 1) and lobby presence traffic (channel tag 2) share the
- * single underlying [Seam] without violating the ADR-034 single-collection contract.
- * [gameJoin] applies the same tags so both sides communicate on matching frames. The
- * caller passes a plain [Seam] in both cases — muxing is an internal implementation detail.
+ * traffic (channel tag 1), lobby presence traffic (channel tag 2), and the application-envelope
+ * [NamedMux] (channel tag 3) share the single underlying [Seam] without violating the ADR-034
+ * single-collection contract. [gameJoin] applies the same tags so both sides communicate on
+ * matching frames. The caller passes a plain [Seam] in both cases — muxing is an internal
+ * implementation detail; ride extra application traffic over [GameSession.appChannel].
  *
  * @param peerCount Total number of voters (including the host) the cluster must reach.
  * @param returnAt When to return the leader [RaftNode] — at [ReturnPolicy.FullMembership] (default)
@@ -169,12 +193,13 @@ public suspend fun CoroutineScope.gameHost(
     storage: RaftStorage = InMemoryRaftStorage(),
     raftConfig: RaftConfig = RaftConfig(),
     hostDeclarationTimeout: Duration = DEFAULT_HOST_DECLARATION_TIMEOUT,
-): RaftNode {
+): GameSession {
     require(peerCount >= 1) { "peerCount must be >= 1" }
 
     val mux = MuxSeam(seam, this)
     val raftSeam = mux.channel(RAFT_CHANNEL)
     val presenceSeam = mux.channel(PRESENCE_CHANNEL)
+    val appMux = NamedMux(mux.channel(APP_ENVELOPE_CHANNEL), this)
 
     checkNotDuplicateHost(presenceSeam, this, raftConfig.expectVirtualTime, hostDeclarationTimeout)
 
@@ -200,18 +225,19 @@ public suspend fun CoroutineScope.gameHost(
     if (voters.size < peerCount) {
         launch { admitUntil(node, seam, voters, target = peerCount) }
     }
-    return node
+    return GameSession(node, seam, appMux)
 }
 
 /**
  * Join a game session over [seam] hosted by exactly one [gameHost]. Starts as a non-voting
- * learner and waits until the host admits this peer as a voter. Returns the local [RaftNode]
- * once admitted.
+ * learner and waits until the host admits this peer as a voter. Returns the local [GameSession]
+ * (its [GameSession.node] is the admitted follower) once admitted.
  *
  * **Internal multiplexing.** [gameJoin] wraps [seam] in a [MuxSeam] and routes Raft traffic
- * on channel tag 1 and lobby presence on channel tag 2 — matching [gameHost]'s channels —
- * so both sides communicate on compatible frames. The caller passes a plain [Seam]; muxing
- * is internal.
+ * on channel tag 1, lobby presence on channel tag 2, and the application-envelope [NamedMux]
+ * on channel tag 3 — matching [gameHost]'s channels — so both sides communicate on compatible
+ * frames. The caller passes a plain [Seam]; muxing is internal. Ride extra application traffic
+ * over [GameSession.appChannel].
  *
  * **Presence announcement.** Before awaiting admission, this peer announces itself as a
  * non-host participant on the presence channel. This is what lets [gameHost]'s
@@ -228,10 +254,11 @@ public suspend fun CoroutineScope.gameJoin(
     seam: Seam,
     storage: RaftStorage = InMemoryRaftStorage(),
     raftConfig: RaftConfig = RaftConfig(),
-): RaftNode {
+): GameSession {
     val mux = MuxSeam(seam, this)
     val raftSeam = mux.channel(RAFT_CHANNEL)
     val presenceSeam = mux.channel(PRESENCE_CHANNEL)
+    val appMux = NamedMux(mux.channel(APP_ENVELOPE_CHANNEL), this)
 
     // Announce presence (non-host) so the host's convergence wait sees us promptly.
     GamePresence(presenceSeam, this, raftConfig.expectVirtualTime).declarePresent()
@@ -249,7 +276,7 @@ public suspend fun CoroutineScope.gameJoin(
     // RaftEngine.reevaluateSelfRole() fires on every recomputeMembership() and transitions
     // role from RaftRole.Learner to RaftRole.Follower once we appear in the voters set.
     node.role.first { it !is RaftRole.Learner }
-    return node
+    return GameSession(node, seam, appMux)
 }
 
 /**

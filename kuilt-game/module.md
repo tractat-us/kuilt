@@ -12,7 +12,7 @@ Every peer builds the identical `ClusterConfig.ofVoters` and calls `gameNode`; R
 own election picks the leader symmetrically — no pre-Raft coordination required.
 
 ```kotlin
-val node = backgroundScope.gameNode(seam, voterIds, raftConfig = raftConfig)
+val session = backgroundScope.gameNode(seam, voterIds, raftConfig = raftConfig)
 ```
 
 ### Appoint-the-host — `gameHost` / `gameJoin`
@@ -30,20 +30,40 @@ val host = backgroundScope.gameHost(seam, peerCount = 4)
 val joiner = backgroundScope.gameJoin(seam)
 ```
 
-Both calls suspend until the cluster reaches full membership, then return the local
-`RaftNode`. The caller passes a **plain `Seam`** in both cases — `gameHost` and
-`gameJoin` multiplex Raft traffic (channel tag 1) and lobby presence traffic (channel
-tag 2) internally via `MuxSeam`. Callers must not pre-mux.
+All three entry points return a `GameSession` — its `node` is the local `RaftNode`
+(`host.node` is the leader; `joiner.node` an admitted follower). The caller passes a
+**plain `Seam`** in every case — the entry points multiplex Raft traffic (channel tag 1),
+lobby presence (channel tag 2, `gameHost`/`gameJoin` only) and the application-envelope
+`NamedMux` (channel tag 3) internally via `MuxSeam`. Callers must not pre-mux.
+
+## Application channels — `GameSession.appChannel`
+
+Ride extra named application traffic (chat, cursors, voice signalling, …) over the **same
+fabric** as consensus. `session.appChannel(name)` returns a `Seam` for that name, nested as
+a `NamedMux` under the reserved app-envelope tag — so the app wire-layout is identical across
+all three bootstrap paths, and there is no second connection. The application owns the entire
+name namespace (no reserved names). Delivery is best-effort (`replay = 0`); layer your own
+reliability if you need at-least-once.
+
+```kotlin
+val chat = session.appChannel("chat")
+scope.launch { chat.incoming.collect { frame -> renderChat(frame.payload) } }
+chat.broadcast(message.encodeToByteArray())
+```
+
+`GameSession.close()` is a hard local teardown — it stops the node's loops, then closes the
+fabric (idempotent). It is **not** a graceful cluster departure; hand off leadership and/or
+change membership first for that.
 
 ## Driving the game — `TurnSequencer`
 
-`TurnSequencer<A>(node, serializer)` wraps a `RaftNode` with typed actions.
-`propose(A)` submits an action from any node and suspends until a quorum commits it;
-`committed` delivers every committed action in order on all nodes (leader and followers
-alike).
+`TurnSequencer<A>(node, serializer)` wraps a `RaftNode` with typed actions — pass
+`session.node`. `propose(A)` submits an action from any node and suspends until a quorum
+commits it; `committed` delivers every committed action in order on all nodes (leader and
+followers alike).
 
 ```kotlin
-val game = TurnSequencer(node, Move.serializer())
+val game = TurnSequencer(session.node, Move.serializer())
 val committed: Flow<IndexedAction<Move>> = game.committed
 val entry: IndexedAction<Move> = game.propose(Move(row = 0, col = 0))
 ```
