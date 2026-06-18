@@ -53,16 +53,42 @@ is the only shape that hits the wall.
 Election hits the wall; **appointment walks around it.** And every session
 already carries an appointment:
 
-> A `Seam` is symmetric, but the `Rendezvous` that created it is **not** — one
+> A `Seam` is symmetric, but the `Rendezvous` that created it need not be — one
 > peer called `weave(Rendezvous.New)` (created the session) and the rest called
-> `weave(Rendezvous.Existing)` (joined it). This is true on every fabric:
-> WebSocket host/client, mDNS advertise/discover, WebRTC offer/answer. There is
-> always a first mover, and the application already knows which it was.
+> `weave(Rendezvous.Existing)` (joined it).
 
 Appointing the session's creator as the seed gives everything the symmetric
 discover-and-elect path wanted — no roster up front, early start, latecomer
-admission — with **zero consensus round**, because there is exactly one creator
-by construction and therefore no two-seed race.
+admission — with **zero consensus round**, *provided there is exactly one
+creator.* That proviso is the whole game, and it is **not** free on every fabric
+(see [Host uniqueness](#host-uniqueness--exactly-one-declared-host) below). Where
+it holds, there is no two-seed race; where it doesn't, two `New`s would form two
+clusters — the unrecoverable case.
+
+## Host uniqueness — exactly one declared host
+
+`gameHost` has a **precondition: exactly one host per session.** Whether that is
+structural or a contract the application must uphold depends on whether the
+fabric's rendezvous is *arbitrated*:
+
+| Fabric | Rendezvous | One host? |
+|--------|-----------|-----------|
+| WebSocket relay ("Far") | `KtorClientLoom.weave(New)` **throws**; only `KtorServerLoom` hosts. Two servers = two URLs = two Tags = two separate sessions. | **Structural.** The relay server *is* the external coordinator the consensus literature requires — which is exactly why appointment is free here. |
+| Multipeer / Nearby / WebRTC / mDNS ("Near") | Symmetric Loom — every peer may `New` or `Existing`. Two advertisers of the same `Pattern`, or two simultaneous WebRTC offers (glare), can converge into **one** peer set. | **Not guaranteed.** Application must designate the host (the "Create Game" actor); standard single-advertiser usage gives one. |
+
+The consensus barrier did not vanish under appointment — it **relocated** to
+"ensure a single `New`," which arbitrated fabrics discharge for free and
+unarbitrated ones leave to the application. (CALM stays consistent: the truly
+symmetric, unarbitrated case still costs coordination.)
+
+**Defense in depth — detect before bootstrap.** `gameHost` does not
+bootstrap-then-discover; it watches the presence layer (below) for *another
+declared host* first. If it sees one before bootstrapping, it **fails fast** —
+surfacing the misuse — rather than silently forming a second cluster. A
+lowest-`NodeId`-among-hosts tiebreak is *possible* (it would pay the scoped
+consensus round among the contending hosts) but is **not built**: the design
+bets on one declared host and fails loud otherwise, per repo exception
+discipline.
 
 ## Decision: two entry points, drop the third shape
 
@@ -81,6 +107,10 @@ elects itself immediately, and admits each joiner as **learner → voter** via
 verbatim. Joiners never self-elect, so no rival cluster can form. No roster is
 needed up front; latecomers (even first-time-after-start) are admitted as they
 arrive. Maps directly to "create a game, share a code, others enter it."
+
+**Exactly one `gameHost` per session** (see [Host uniqueness](#host-uniqueness--exactly-one-declared-host)).
+`gameHost` checks the presence layer for another declared host before
+bootstrapping and fails fast if it finds one.
 
 ### (2) Symmetric — roster given _(when matchmaking provides it)_
 
@@ -109,13 +139,19 @@ quorum-`ACCEPT` round would be added.
 
 ## Presence / lobby layer (not consensus)
 
-`EphemeralMap<Ready>` replicated over a `Seam` by `Quilter` remains the right
-substrate for the **lobby view** — "who is here, who is ready" — *before* anyone
-calls `gameHost`/`gameJoin`: heartbeats, TTL-reaping of dropped peers, an
-app-level `ready` flag, a roster everyone converges on. It is a presence display,
-**not** the bootstrap mechanism. (This is the RedBlue split: presence is the
+`EphemeralMap<Ready>` replicated over a `Seam` by `Quilter` is the substrate for
+the **lobby view** — "who is here, who is ready" — *before* anyone calls
+`gameHost`/`gameJoin`: heartbeats, TTL-reaping of dropped peers, an app-level
+`ready` flag, a roster everyone converges on. It is a presence display, **not**
+the bootstrap mechanism. (This is the RedBlue split: presence is the
 coordination-free "blue" part; the seed appointment is the ordered "red" part,
-and appointment makes the red part a no-op.)
+and a single declared host makes the red part a no-op.)
+
+It also carries the **host-declaration flag** that `gameHost` uses for its
+fail-fast duplicate-host check — the one load-bearing job presence does in the
+bootstrap path. (A converged CRDT can't *prevent* two hosts — that's the same
+non-monotone barrier — but it reliably *surfaces* them, which is all fail-fast
+needs.)
 
 ## Recovery / partitions
 
@@ -150,6 +186,10 @@ covered here, identically for (1) and (2).
   home for any future open-membership-without-a-host requirement.
 - **Open lobby / dynamic `peerCount`** — (1) already admits latecomers; an
   unbounded open lobby (no target seat count) is a follow-on.
+- **Multi-host tiebreak** — lowest-`NodeId`-among-declared-hosts election for
+  unarbitrated fabrics that genuinely merge two advertisers. Deferred; the design
+  fails fast on duplicate hosts instead. This is the documented home if a fabric
+  ever needs auto-reconciliation rather than a precondition.
 - **Leadership re-balancing** — a host stays leader; `transferLeadership` exists
   if a consumer wants to move it. Not automated here.
 - **Persistent storage defaults** — consumer concern; `InMemoryRaftStorage` is
@@ -170,3 +210,6 @@ covered here, identically for (1) and (2).
   test-dispatcher guard warning is **not** suppressed.
 - **`incoming` guard:** a second collector of `seam.incoming` after `gameHost`
   drops Raft messages (documents the constraint).
+- **Duplicate-host fail-fast:** two `gameHost` calls on one (unarbitrated) Seam —
+  the second observes the first's host declaration in presence and fails fast
+  rather than forming a second cluster.
