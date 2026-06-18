@@ -96,4 +96,33 @@ class GamePresenceTest {
             h1.cancel()
         }
     }
+
+    /**
+     * #584: a *simultaneous* duplicate-host race is arbitrated deterministically by lowest
+     * NodeId, rather than every declared host throwing.
+     *
+     * [seats] assigns `peer-1` to the host seat and `peer-2` to the next — so `s1` holds the
+     * lower NodeId. With both peers calling [gameHost] concurrently, the lower-NodeId peer
+     * (`s1`) must *win* (proceed to bootstrap, never throw) while the higher-NodeId peer
+     * (`s2`) loses and fails fast with [DuplicateHostException]. Before #584 *both* threw,
+     * leaving the session with no host at all.
+     */
+    @Test
+    fun simultaneousHostsArbitrateToLowestNodeId() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        val loom = InMemoryLoom()
+        val (s1, s2) = seats(loom, 2)
+        val cfg = fastRaftConfig(seed = 1L)
+
+        supervisorScope {
+            val winner = async { backgroundScope.gameHost(s1, peerCount = 2, raftConfig = cfg) }
+            val loser = async { backgroundScope.gameHost(s2, peerCount = 2, raftConfig = cfg) }
+
+            // Higher-NodeId host loses arbitration and fails fast.
+            assertFailsWith<DuplicateHostException> { loser.await() }
+            // Lower-NodeId host won: it did not throw — it proceeded past the duplicate check
+            // and is now bootstrapping (blocked awaiting the second voter that never joins).
+            assertTrue(winner.isActive, "lowest-NodeId host must win arbitration and keep running")
+            winner.cancel()
+        }
+    }
 }
