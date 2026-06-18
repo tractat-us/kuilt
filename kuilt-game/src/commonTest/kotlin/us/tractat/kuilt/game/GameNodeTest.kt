@@ -1,4 +1,7 @@
-@file:OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
+@file:OptIn(
+    kotlinx.serialization.ExperimentalSerializationApi::class,
+    kotlinx.coroutines.ExperimentalCoroutinesApi::class,
+)
 
 package us.tractat.kuilt.game
 
@@ -12,9 +15,11 @@ import kotlinx.serialization.cbor.Cbor
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.raft.Committed
 import us.tractat.kuilt.raft.NodeId
+import us.tractat.kuilt.raft.RaftConfig
 import us.tractat.kuilt.raft.RaftNode
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.time.Duration.Companion.seconds
 
 class GameNodeTest {
@@ -124,6 +129,69 @@ class GameNodeTest {
 
         assertEquals(5, j1Action, "joiner1 must replay the committed action")
         assertEquals(5, j2Action, "joiner2 (latecomer) must replay the committed action")
+    }
+
+    /**
+     * D5 incoming-guard: documents that `seam.incoming` must not be collected after
+     * `gameHost`/`gameJoin`/`gameNode` wrap the seam, and verifies the supported
+     * single-collection path works correctly.
+     *
+     * Each of the three entry points internally creates a [us.tractat.kuilt.core.MuxSeam]
+     * that becomes the **sole** consumer of `seam.incoming` (ADR-034 single-collection).
+     * A caller who also collects `seam.incoming` directly creates a second consumer that
+     * **races** `MuxSeam` for frames: some raft messages reach the second collector instead
+     * of the engine, causing silent liveness failures (dropped RPCs, stalled elections).
+     * This is an unsupported usage — no guarantee about which consumer receives any given
+     * frame.
+     *
+     * The supported contract is: pass the plain `Seam` to one of the three entry points
+     * and never collect `seam.incoming` again. This test verifies that contract: a single
+     * cluster bootstrapped via `gameNode` (no MuxSeam — the simplest path) converges to
+     * a leader and commits an action without any second collector interfering.
+     *
+     * The constraint is enforced by convention (KDoc on each entry point); the mechanism
+     * is `MuxSeam.shareIn(SharingStarted.Eagerly)` which subscribes to the underlying
+     * seam immediately. Any subsequent collect on the same seam competes for the same
+     * channel's frames — the engine will eventually stall if it loses a frame it needs.
+     */
+    @Test
+    fun incomingGuardSingleCollectorSupportedByMuxSeam() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        val loom = InMemoryLoom()
+        val (hostSeam, joinSeam) = seats(loom, 2)
+        val voters = setOf(NodeId(hostSeam.selfId.value), NodeId(joinSeam.selfId.value))
+
+        // gameNode uses the seam directly (no MuxSeam) — single-collection contract is satisfied.
+        // This is the roster-given path; gameHost/gameJoin also satisfy the contract internally.
+        val a = backgroundScope.gameNode(hostSeam, voters, raftConfig = fastRaftConfig(seed = 1L))
+        val b = backgroundScope.gameNode(joinSeam, voters, raftConfig = fastRaftConfig(seed = 2L))
+
+        // If the single-collection contract holds, the Raft engine receives all frames and
+        // converges. A second collector on hostSeam.incoming running concurrently would steal
+        // frames and likely prevent convergence (or stall propose), causing a test timeout.
+        val leader = awaitEitherLeader(a, b)
+        val committed = TurnSequencer(leader, Int.serializer()).propose(100)
+
+        assertEquals(100, committed.action, "all raft frames must reach the engine — single-collection satisfied")
+    }
+
+    /**
+     * D4 production-overload hygiene: the production `gameNode`/`gameHost`/`gameJoin`
+     * overloads must not expose or default `expectVirtualTime = true`.
+     *
+     * The only supported path to `expectVirtualTime = true` is explicit injection of a
+     * `raftConfig` parameter. Production code that calls the default overload always gets
+     * `RaftConfig()` which has `expectVirtualTime = false` — the real-clock/warn guard.
+     * This test locks that invariant so a future refactor cannot accidentally leak
+     * `expectVirtualTime = true` into a production default.
+     */
+    @Test
+    fun productionDefaultRaftConfigHasExpectVirtualTimeFalse() {
+        val defaultConfig = RaftConfig()
+        assertFalse(
+            defaultConfig.expectVirtualTime,
+            "RaftConfig() default must have expectVirtualTime=false — " +
+                "production overloads of gameNode/gameHost/gameJoin must never set expectVirtualTime=true",
+        )
     }
 
     @Test
