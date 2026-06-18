@@ -96,16 +96,19 @@ public fun CoroutineScope.gameNode(
  * duplicate host via lobby presence before bootstrapping Raft and throws
  * [DuplicateHostException] if another peer already declared itself host.
  *
- * **Best-effort duplicate detection, not arbitration.** The check declares this peer as
- * host on the lobby presence channel, then waits — bounded by [hostDeclarationTimeout] —
- * until presence has converged with every peer connected at that moment (each peer, host or
- * joiner, announces itself), and only then inspects the declared-host set. This replaces an
- * earlier fixed 1 ms window that on a real fabric elapsed before any network round-trip,
- * silently passing two concurrent hosts. The wait closes that gap for a host that declared
- * before convergence completes; it does **not** arbitrate a *genuinely* simultaneous pair
- * whose declarations cross in flight — that requires a deterministic tiebreak (e.g. lowest
- * NodeId), which is deliberately deferred. Exactly-one-host therefore remains the caller's
- * precondition; when the window observes both declarations, *both* hosts throw.
+ * **Deterministic duplicate-host arbitration.** The check declares this peer as host on the
+ * lobby presence channel, then waits — bounded by [hostDeclarationTimeout] — until presence
+ * has converged with every peer connected at that moment (each peer, host or joiner, announces
+ * itself), and only then inspects the declared-host set. This replaces an earlier fixed 1 ms
+ * window that on a real fabric elapsed before any network round-trip, silently passing two
+ * concurrent hosts. When the converged set holds more than one declared host, the lowest-NodeId
+ * declarant is elected the canonical host and proceeds; every other declared host throws
+ * [DuplicateHostException]. Because every peer has converged on the same set, they independently
+ * agree on the winner with no extra round-trip — a *genuinely* simultaneous race therefore
+ * resolves to exactly one host instead of collapsing the session (the earlier behaviour, where
+ * every declarant threw). Exactly-one-`gameHost` remains the caller's precondition: a losing
+ * host still fails loud, and if it was needed to reach [peerCount] the winner blocks on it like
+ * any missing peer.
  *
  * **Internal multiplexing.** [gameHost] wraps [seam] in a [MuxSeam] so that Raft
  * traffic (channel tag 1) and lobby presence traffic (channel tag 2) share the
@@ -209,7 +212,7 @@ public suspend fun CoroutineScope.gameJoin(
 /**
  * Declares this peer as host via [GamePresence] on [presenceSeam], waits — bounded by
  * [timeout] — until presence has converged with every peer connected at declaration time,
- * then checks for duplicate declarations.
+ * then arbitrates duplicate declarations by lowest NodeId.
  *
  * The convergence signal is honest under both clocks: it suspends until [GamePresence.announced]
  * contains an entry for every currently-connected peer (each peer announces itself — host via
@@ -220,7 +223,11 @@ public suspend fun CoroutineScope.gameJoin(
  * [timeout]), the wait falls through after [timeout] and the check proceeds on whatever has
  * converged — weaker detection, never a stuck host.
  *
- * @throws DuplicateHostException if any other replica has also declared host after convergence.
+ * When more than one host has declared, the lowest-NodeId declarant wins (returns normally to
+ * proceed as the canonical host) and every other declared host throws (#584). Because every peer
+ * converges on the same declared-host set, they agree on the winner without coordination.
+ *
+ * @throws DuplicateHostException if another replica with a lower NodeId has also declared host.
  */
 private suspend fun checkNotDuplicateHost(
     presenceSeam: Seam,
@@ -236,8 +243,16 @@ private suspend fun checkNotDuplicateHost(
         presence.announced.first { announced -> connectedNow.all { it in announced } }
     }
 
-    val others = presence.declaredHosts() - presence.replica
-    if (others.isNotEmpty()) throw DuplicateHostException()
+    val declaredHosts = presence.declaredHosts()
+    if (declaredHosts.size <= 1) return // this peer is the only declared host — proceed.
+
+    // Deterministic arbitration (#584): every peer has converged on the same declared-host set,
+    // so each independently elects the lowest-NodeId declarant as the canonical host with no
+    // extra round-trip. The winner proceeds; every other declared host fails fast. This replaces
+    // the earlier all-or-nothing behaviour where a simultaneous race left the session with no
+    // host at all (every declarant threw).
+    val winner = declaredHosts.minByOrNull { it.value }
+    if (presence.replica != winner) throw DuplicateHostException()
 }
 
 /**
