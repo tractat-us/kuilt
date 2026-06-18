@@ -6,6 +6,7 @@
 package us.tractat.kuilt.game
 
 import kotlinx.coroutines.async
+import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
@@ -52,12 +53,16 @@ class GamePresenceTest {
         val (s1, s2) = seats(loom, 2)
         val cfg = fastRaftConfig(seed = 1L)
 
-        val h1 = async { backgroundScope.gameHost(s1, peerCount = 2, raftConfig = cfg) }
-        val h2 = async { backgroundScope.gameHost(s2, peerCount = 2, raftConfig = cfg) }
+        // supervisorScope prevents a failing async child from cancelling the test scope
+        // before assertFailsWith can catch the DuplicateHostException.
+        supervisorScope {
+            val h1 = async { backgroundScope.gameHost(s1, peerCount = 2, raftConfig = cfg) }
+            val h2 = async { backgroundScope.gameHost(s2, peerCount = 2, raftConfig = cfg) }
 
-        val ex = assertFailsWith<DuplicateHostException> { h2.await() }
-        assertTrue(ex.message!!.contains("host"), "message should mention 'host': ${ex.message}")
+            val ex = assertFailsWith<DuplicateHostException> { h2.await() }
+            assertTrue(ex.message!!.contains("host"), "message should mention 'host': ${ex.message}")
 
-        h1.cancel()
+            h1.cancel()
+        }
     }
 }
