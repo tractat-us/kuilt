@@ -1,9 +1,16 @@
+@file:OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+
 package us.tractat.kuilt.game
 
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.merge
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.Seam
+import us.tractat.kuilt.raft.RaftNode
+import us.tractat.kuilt.raft.RaftRole
 
 /**
  * Stand up [n] connected [InMemoryLoom] seats for a virtual-time bootstrap test.
@@ -27,3 +34,23 @@ internal suspend fun seats(loom: InMemoryLoom, n: Int): List<Seam> {
     val joiners = (1 until n).map { i -> loom.join(InMemoryTag("seat-$i")) }
     return listOf(host) + joiners
 }
+
+/**
+ * Suspends until any node in [nodes] becomes leader, then returns that node.
+ *
+ * Races all nodes' role flows; the first [RaftRole.Leader] emission identifies the winner.
+ * After the race, exactly one node has `role.value is RaftRole.Leader`.
+ */
+internal suspend fun awaitAnyLeader(nodes: List<RaftNode>): RaftNode {
+    val roleFlows: Array<Flow<RaftRole>> = nodes.map { it.role }.toTypedArray()
+    merge(*roleFlows).first { role -> role is RaftRole.Leader }
+    return nodes.first { node -> node.role.value is RaftRole.Leader }
+}
+
+/**
+ * Suspends until either [a] or [b] becomes leader, then returns the winning node.
+ *
+ * Convenience wrapper over [awaitAnyLeader] for the common 2-node case.
+ */
+internal suspend fun awaitEitherLeader(a: RaftNode, b: RaftNode): RaftNode =
+    awaitAnyLeader(listOf(a, b))
