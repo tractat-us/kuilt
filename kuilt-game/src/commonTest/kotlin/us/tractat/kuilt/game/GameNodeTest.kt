@@ -9,8 +9,6 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.mapNotNull
 import kotlinx.coroutines.test.StandardTestDispatcher
-import kotlinx.coroutines.test.advanceTimeBy
-import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.cbor.Cbor
@@ -24,7 +22,6 @@ import us.tractat.kuilt.raft.RaftNode
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
-import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 
 class GameNodeTest {
@@ -203,8 +200,12 @@ class GameNodeTest {
      * Return-at-quorum (D2): `gameHost(returnAt = ReturnPolicy.Quorum)` returns the leader as soon
      * as a **majority** of `peerCount` voters are present (here 2 of 3), without blocking on the
      * slowest/absent peer. A proposal made at quorum commits, and a latecomer that connects *after*
-     * the host has already returned is admitted by the background admission loop and replays the
-     * earlier action — no restart.
+     * the host has already returned — and after the action was committed — is admitted by the
+     * background admission loop and replays the earlier action — no restart.
+     *
+     * The background loop carries no time bound: it stays open for the life of the session until the
+     * roster reaches `peerCount`, so the latecomer joins however late it connects. (A peer arriving
+     * once the roster is already full is the separate, deferred concern in #587.)
      */
     @Test
     fun quorumModeReturnsAtQuorumThenAdmitsLatecomer() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
@@ -245,41 +246,6 @@ class GameNodeTest {
             }
 
         assertEquals(5, appEntries(joiner2).first(), "latecomer admitted in the background must replay the committed action")
-    }
-
-    /**
-     * Return-at-quorum latecomer window: when a peer never arrives, the background admission loop
-     * stops after [latecomerWindow] instead of admitting forever. The cluster keeps its quorum and
-     * stays live — the abandoned admission must not crash the host's scope (the window expiring is a
-     * normal outcome, not an error).
-     */
-    @Test
-    fun quorumModeLatecomerWindowExpiresWithoutCrash() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
-        val loom = InMemoryLoom()
-        val hostSeam = loom.host(Pattern("game-bootstrap"))
-        val j1 = loom.join(InMemoryTag("seat-1"))
-
-        val hostDeferred = async {
-            backgroundScope.gameHost(
-                hostSeam,
-                peerCount = 3,
-                returnAt = ReturnPolicy.Quorum,
-                latecomerWindow = 50.milliseconds,
-                raftConfig = fastRaftConfig(seed = 1L),
-            )
-        }
-        val j1Deferred = async { backgroundScope.gameJoin(j1, raftConfig = fastRaftConfig(seed = 2L)) }
-
-        val host = hostDeferred.await()
-        j1Deferred.await()
-
-        // No third peer ever arrives; let the latecomer window elapse in virtual time.
-        advanceTimeBy(100.milliseconds)
-        runCurrent()
-
-        // Background admission abandoned cleanly: the cluster still has quorum and commits.
-        val entry = TurnSequencer(host, Int.serializer()).propose(9)
-        assertEquals(9, entry.action, "cluster keeps quorum and stays live after the latecomer window expires")
     }
 
     @Test

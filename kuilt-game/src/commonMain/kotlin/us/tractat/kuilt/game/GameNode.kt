@@ -53,7 +53,11 @@ public class DuplicateHostException(
  * - [Quorum] returns as soon as a **majority** of `peerCount` voters are present
  *   (`peerCount / 2 + 1`), so the game can start without blocking on the slowest or absent peer.
  *   [gameHost] then keeps admitting the remaining ("latecomer") voters in the background on the
- *   caller's scope, bounded by `latecomerWindow`.
+ *   caller's scope for the life of the session — the admission door stays open until the roster
+ *   reaches `peerCount`, so a latecomer joins and is promoted *whenever* it connects, however late.
+ *   Its `gameJoin` only ever suspends in the normal learner-waiting-for-promotion sense, which
+ *   always resolves; there is no window after which a join is silently dead. (A peer connecting
+ *   once the roster is already full is the separate, deferred concern in #587.)
  *
  * This is an explicit functional mode — which path runs decides whether the host blocks on full
  * membership — so it is a named enum rather than a boolean flag (per the optional≠tuning convention).
@@ -138,13 +142,11 @@ public fun CoroutineScope.gameNode(
  *
  * @param peerCount Total number of voters (including the host) the cluster must reach.
  * @param returnAt When to return the leader [RaftNode] — at [ReturnPolicy.FullMembership] (default)
- *   or at [ReturnPolicy.Quorum]. See [ReturnPolicy].
- * @param latecomerWindow In [ReturnPolicy.Quorum] mode only, the upper bound on how long background
- *   admission keeps waiting for the remaining voters after the host has returned. When a voter never
- *   arrives within the window, background admission stops and the quorum-sized cluster stays live;
- *   the window-expiring is a normal outcome, not an error. Ignored in [ReturnPolicy.FullMembership]
- *   mode (the host blocks on full membership before returning, so there is no background phase). The
- *   semantics of a peer that connects *after* the window are out of scope here — see #587.
+ *   or at [ReturnPolicy.Quorum]. See [ReturnPolicy]. In [ReturnPolicy.Quorum] mode the remaining
+ *   voters are admitted in the background, on this scope, for the life of the session — the
+ *   admission door stays open until the roster reaches [peerCount], so a latecomer joins whenever
+ *   it connects, however late. A peer arriving once the roster is already full is the separate,
+ *   deferred concern in #587.
  * @param storage Durable Raft state. Defaults to [InMemoryRaftStorage].
  * @param raftConfig Timing and behaviour parameters. Tests pass
  *   `RaftConfig(expectVirtualTime = true)` — this is the only supported path to
@@ -164,7 +166,6 @@ public suspend fun CoroutineScope.gameHost(
     seam: Seam,
     peerCount: Int,
     returnAt: ReturnPolicy = ReturnPolicy.FullMembership,
-    latecomerWindow: Duration = DEFAULT_LATECOMER_WINDOW,
     storage: RaftStorage = InMemoryRaftStorage(),
     raftConfig: RaftConfig = RaftConfig(),
     hostDeclarationTimeout: Duration = DEFAULT_HOST_DECLARATION_TIMEOUT,
@@ -190,18 +191,14 @@ public suspend fun CoroutineScope.gameHost(
     val voters = mutableSetOf(self)
     admitUntil(node, seam, voters, target = returnThreshold)
 
-    // Quorum mode: keep admitting the remaining voters in the background, bounded by the latecomer
-    // window. The loop runs on the caller's scope (this), so a give-up failure propagates to the
-    // caller (fail-loud, no swallow) and scope-cancellation tears admission down. The window
-    // expiring is a normal outcome — withTimeoutOrNull returns null and the loop simply stops,
-    // leaving the quorum-sized cluster live. After this point only the background coroutine touches
-    // `voters`, so no synchronization is needed.
+    // Quorum mode: keep admitting the remaining voters in the background for the life of the
+    // session. The loop runs on the caller's scope (this), so it stays alive until the roster
+    // reaches peerCount or the scope is cancelled at session end — the admission door does not close
+    // on a timer, so a latecomer is admitted whenever it connects, however late. A give-up failure
+    // propagates to the caller (fail-loud, no swallow); cancellation tears admission down. After
+    // this point only the background coroutine touches `voters`, so no synchronization is needed.
     if (voters.size < peerCount) {
-        launch {
-            withTimeoutOrNull(latecomerWindow) {
-                admitUntil(node, seam, voters, target = peerCount)
-            }
-        }
+        launch { admitUntil(node, seam, voters, target = peerCount) }
     }
     return node
 }
@@ -307,14 +304,6 @@ private suspend fun checkNotDuplicateHost(
  * connected peers. Exposed as the [gameHost] `hostDeclarationTimeout` parameter for tuning.
  */
 private val DEFAULT_HOST_DECLARATION_TIMEOUT = 2.seconds
-
-/**
- * Default latecomer window for [ReturnPolicy.Quorum] background admission — the upper bound on how
- * long [gameHost] keeps admitting the remaining voters after returning at quorum. Sized generously
- * for a human lobby where stragglers may take a moment to connect; tune via [gameHost]'s
- * `latecomerWindow`.
- */
-private val DEFAULT_LATECOMER_WINDOW = 30.seconds
 
 /**
  * Admit connecting peers as learner→voter until the cluster reaches [target] voters.
