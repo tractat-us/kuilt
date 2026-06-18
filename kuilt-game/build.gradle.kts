@@ -8,6 +8,8 @@ kotlin {
         commonMain.dependencies {
             api(project(":kuilt-core"))
             api(project(":kuilt-raft"))
+            implementation(project(":kuilt-quilter"))
+            implementation(project(":kuilt-crdt"))
             implementation(libs.kotlinx.coroutines.core)
             implementation(libs.kotlinx.serialization.core)
             implementation(libs.kotlinx.serialization.cbor)
