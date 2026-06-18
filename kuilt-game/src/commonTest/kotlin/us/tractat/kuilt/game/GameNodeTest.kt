@@ -1,5 +1,7 @@
 package us.tractat.kuilt.game
 
+import kotlinx.coroutines.async
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.builtins.serializer
@@ -23,6 +25,32 @@ class GameNodeTest {
         val leader = awaitEitherLeader(a, b)
         val proposed = TurnSequencer(leader, Int.serializer()).propose(42)
         assertEquals(42, proposed.action)
+    }
+
+    @Test
+    fun hostAdmitsOneJoiner() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        val loom = InMemoryLoom()
+        val (hostSeam, joinSeam) = seats(loom, 2)
+
+        // gameHost and gameJoin both suspend until membership settles — launch them
+        // concurrently so the host's admit loop can process the joiner while the joiner
+        // awaits its admission signal.
+        val hostDeferred = backgroundScope.async {
+            gameHost(hostSeam, peerCount = 2, raftConfig = fastRaftConfig(seed = 1L))
+        }
+        val joinDeferred = backgroundScope.async {
+            gameJoin(joinSeam, raftConfig = fastRaftConfig(seed = 2L))
+        }
+
+        val host = hostDeferred.await()
+        val joiner = joinDeferred.await()
+
+        // Host is the leader; propose an action and confirm both nodes see it.
+        val entry = TurnSequencer(host, Int.serializer()).propose(99)
+        assertEquals(99, entry.action)
+
+        val onJoiner = TurnSequencer(joiner, Int.serializer()).committed.first()
+        assertEquals(99, onJoiner.action)
     }
 
     @Test
