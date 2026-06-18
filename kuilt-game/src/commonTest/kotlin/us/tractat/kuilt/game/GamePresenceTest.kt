@@ -5,12 +5,17 @@
 
 package us.tractat.kuilt.game
 
+import kotlinx.coroutines.async
+import kotlinx.coroutines.supervisorScope
+import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.crdt.ReplicaId
 import kotlin.test.Test
 import kotlin.test.assertContains
+import kotlin.test.assertFailsWith
+import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.seconds
 
 class GamePresenceTest {
@@ -32,5 +37,32 @@ class GamePresenceTest {
         testScheduler.advanceUntilIdle()
 
         assertContains(p2.declaredHosts(), ReplicaId(s1.selfId.value))
+    }
+
+    /**
+     * A second [gameHost] on the same session detects the first host's declaration and
+     * throws [DuplicateHostException] before bootstrapping Raft.
+     *
+     * Both hosts are launched concurrently so their presence channels are set up
+     * simultaneously — the Quilter full-state exchange then propagates s1's declaration
+     * to s2 before either checks, making the detection deterministic under virtual time.
+     */
+    @Test
+    fun secondHostFailsFast() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        val loom = InMemoryLoom()
+        val (s1, s2) = seats(loom, 2)
+        val cfg = fastRaftConfig(seed = 1L)
+
+        // supervisorScope prevents a failing async child from cancelling the test scope
+        // before assertFailsWith can catch the DuplicateHostException.
+        supervisorScope {
+            val h1 = async { backgroundScope.gameHost(s1, peerCount = 2, raftConfig = cfg) }
+            val h2 = async { backgroundScope.gameHost(s2, peerCount = 2, raftConfig = cfg) }
+
+            val ex = assertFailsWith<DuplicateHostException> { h2.await() }
+            assertTrue(ex.message!!.contains("host"), "message should mention 'host': ${ex.message}")
+
+            h1.cancel()
+        }
     }
 }
