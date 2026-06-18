@@ -4,6 +4,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import us.tractat.kuilt.core.MuxSeam
 import us.tractat.kuilt.core.Seam
@@ -43,6 +44,21 @@ private const val PRESENCE_CHANNEL: Byte = 2
 public class DuplicateHostException(
     message: String = "another peer already declared host for this session — exactly one gameHost per session is required",
 ) : IllegalStateException(message)
+
+/**
+ * Controls when [gameHost] returns the leader [RaftNode] to the caller.
+ *
+ * - [FullMembership] (the default) suspends until **all** `peerCount` voters have joined; the
+ *   leader is returned only once the roster is complete. This is the original bootstrap behaviour.
+ * - [Quorum] returns as soon as a **majority** of `peerCount` voters are present
+ *   (`peerCount / 2 + 1`), so the game can start without blocking on the slowest or absent peer.
+ *   [gameHost] then keeps admitting the remaining ("latecomer") voters in the background on the
+ *   caller's scope, bounded by `latecomerWindow`.
+ *
+ * This is an explicit functional mode — which path runs decides whether the host blocks on full
+ * membership — so it is a named enum rather than a boolean flag (per the optional≠tuning convention).
+ */
+public enum class ReturnPolicy { FullMembership, Quorum }
 
 /**
  * Constructs a [RaftNode] over [seam] for a session whose full voter roster is
@@ -89,8 +105,12 @@ public fun CoroutineScope.gameNode(
 /**
  * Host a game session over [seam]: check for duplicate hosts, bootstrap a
  * singleton-voter cluster, then admit each connecting peer as learner→voter until
- * the cluster reaches [peerCount] voters. Suspends until the cluster is at full
- * membership, then returns the leader [RaftNode].
+ * the cluster reaches the [returnAt] watermark, then returns the leader [RaftNode].
+ *
+ * **Return policy.** With the default [ReturnPolicy.FullMembership], [gameHost] suspends until all
+ * [peerCount] voters have joined before returning. With [ReturnPolicy.Quorum] it returns as soon as
+ * a majority (`peerCount / 2 + 1`) are present and continues admitting the remaining voters in the
+ * background — see [ReturnPolicy] and [latecomerWindow].
  *
  * **Precondition: exactly one `gameHost` per session.** This function detects a
  * duplicate host via lobby presence before bootstrapping Raft and throws
@@ -117,6 +137,14 @@ public fun CoroutineScope.gameNode(
  * caller passes a plain [Seam] in both cases — muxing is an internal implementation detail.
  *
  * @param peerCount Total number of voters (including the host) the cluster must reach.
+ * @param returnAt When to return the leader [RaftNode] — at [ReturnPolicy.FullMembership] (default)
+ *   or at [ReturnPolicy.Quorum]. See [ReturnPolicy].
+ * @param latecomerWindow In [ReturnPolicy.Quorum] mode only, the upper bound on how long background
+ *   admission keeps waiting for the remaining voters after the host has returned. When a voter never
+ *   arrives within the window, background admission stops and the quorum-sized cluster stays live;
+ *   the window-expiring is a normal outcome, not an error. Ignored in [ReturnPolicy.FullMembership]
+ *   mode (the host blocks on full membership before returning, so there is no background phase). The
+ *   semantics of a peer that connects *after* the window are out of scope here — see #587.
  * @param storage Durable Raft state. Defaults to [InMemoryRaftStorage].
  * @param raftConfig Timing and behaviour parameters. Tests pass
  *   `RaftConfig(expectVirtualTime = true)` — this is the only supported path to
@@ -135,6 +163,8 @@ public fun CoroutineScope.gameNode(
 public suspend fun CoroutineScope.gameHost(
     seam: Seam,
     peerCount: Int,
+    returnAt: ReturnPolicy = ReturnPolicy.FullMembership,
+    latecomerWindow: Duration = DEFAULT_LATECOMER_WINDOW,
     storage: RaftStorage = InMemoryRaftStorage(),
     raftConfig: RaftConfig = RaftConfig(),
     hostDeclarationTimeout: Duration = DEFAULT_HOST_DECLARATION_TIMEOUT,
@@ -151,11 +181,27 @@ public suspend fun CoroutineScope.gameHost(
     val node = raftNode(ClusterConfig.ofVoters(setOf(self)), SeamRaftTransport(raftSeam), storage, raftConfig)
     node.awaitLeadership()
 
+    // Admit synchronously up to the return watermark: the full roster in FullMembership mode, a
+    // majority in Quorum mode.
+    val returnThreshold = when (returnAt) {
+        ReturnPolicy.FullMembership -> peerCount
+        ReturnPolicy.Quorum -> peerCount / 2 + 1
+    }
     val voters = mutableSetOf(self)
-    while (voters.size < peerCount) {
-        val joinerId = nextPeer(seam, voters)
-        admitLearnerThenVoter(node, voters, joinerId)
-        voters += joinerId
+    admitUntil(node, seam, voters, target = returnThreshold)
+
+    // Quorum mode: keep admitting the remaining voters in the background, bounded by the latecomer
+    // window. The loop runs on the caller's scope (this), so a give-up failure propagates to the
+    // caller (fail-loud, no swallow) and scope-cancellation tears admission down. The window
+    // expiring is a normal outcome — withTimeoutOrNull returns null and the loop simply stops,
+    // leaving the quorum-sized cluster live. After this point only the background coroutine touches
+    // `voters`, so no synchronization is needed.
+    if (voters.size < peerCount) {
+        launch {
+            withTimeoutOrNull(latecomerWindow) {
+                admitUntil(node, seam, voters, target = peerCount)
+            }
+        }
     }
     return node
 }
@@ -261,6 +307,28 @@ private suspend fun checkNotDuplicateHost(
  * connected peers. Exposed as the [gameHost] `hostDeclarationTimeout` parameter for tuning.
  */
 private val DEFAULT_HOST_DECLARATION_TIMEOUT = 2.seconds
+
+/**
+ * Default latecomer window for [ReturnPolicy.Quorum] background admission — the upper bound on how
+ * long [gameHost] keeps admitting the remaining voters after returning at quorum. Sized generously
+ * for a human lobby where stragglers may take a moment to connect; tune via [gameHost]'s
+ * `latecomerWindow`.
+ */
+private val DEFAULT_LATECOMER_WINDOW = 30.seconds
+
+/**
+ * Admit connecting peers as learner→voter until the cluster reaches [target] voters.
+ *
+ * Drives the shared admit loop used by both the synchronous return-watermark phase and the
+ * background latecomer phase of [gameHost]. Mutates [voters] in place as each peer is promoted.
+ */
+private suspend fun admitUntil(node: RaftNode, seam: Seam, voters: MutableSet<NodeId>, target: Int) {
+    while (voters.size < target) {
+        val joinerId = nextPeer(seam, voters)
+        admitLearnerThenVoter(node, voters, joinerId)
+        voters += joinerId
+    }
+}
 
 /** Suspends until a peer appears in [seam.peers] that is not already in [admitted]. */
 private suspend fun nextPeer(seam: Seam, admitted: Set<NodeId>): NodeId {
