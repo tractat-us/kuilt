@@ -27,6 +27,16 @@ Any `TestDispatcher` constructed with no explicit scheduler binds to the enclosi
 
 A system whose timers perpetually re-arm (election + heartbeat loops) never becomes idle — `advanceUntilIdle()` would spin forever. Use bounded `advanceTimeBy` steps or the `RaftSimulation.await*` helpers instead; they drive time in fixed increments and fail fast with a state dump if the cluster doesn't converge.
 
+### `advanceTimeBy(largeSpan)` over an always-on timer is O(span/interval) real work
+
+Even bounded, `advanceTimeBy` is not free over a re-arming timer loop. Virtual time is cheap only because *nothing happens between* scheduled tasks — but an always-on timer (a heartbeat every `interval`) schedules a task at *every* multiple of `interval` across the span. Advancing a large span forces the scheduler to run **every** intervening fire: the cost is `span / interval` actual continuations of real CPU work, not a constant-time clock bump. With a 2 ms test heartbeat, `advanceTimeBy(5.minutes)` is ~150 000 heartbeat iterations — enough to blow `runTest`'s wall-clock dispatch timeout and surface as `UncompletedCoroutinesError: the test body did not run to completion` (a *wall-clock* timeout, not a virtual-time one). The symptom looks like a hang; the cause is "I asked the scheduler to do 150k iterations of work."
+
+Guidance:
+
+- **Advance the smallest span that proves the property.** If a test only needs "some time passed," advance one or two timer intervals, not minutes. Most properties don't depend on the *magnitude* of elapsed virtual time at all — advancing time to "prove" something that has no timer behind it is inert (and pure cost). Reach for `advanceTimeBy` only when a specific timer must fire.
+- **Prefer event-driven waits over time-driven ones.** Await the state you actually want (`role.first { … }`, `RaftSimulation.await*`) rather than advancing a large span and hoping. The await converges in the minimum virtual time and skips the intervening churn.
+- **A timeout here means "too much scheduled work," not "deadlock."** Before widening the `runTest` timeout, check whether an `advanceTimeBy(largeSpan)` (or an `advanceUntilIdle()`) is grinding through a re-arming timer. Shrink the span; don't widen the timeout. (Receipt: a #586 return-at-quorum test advanced 5 virtual minutes purely to "show time passed" with no timer behind the assertion — it hung CI at the 2 ms heartbeat and was deleted, the property documented instead.)
+
 ## Why — post-mortem (native flakiness, May 2026)
 
 `CompositeSeam` owns a scope running per-ply collectors. Its early tests constructed it with the production real-thread dispatcher. On JVM the background reconciliation usually completed before assertions; on Kotlin/Native the timing differed and `CompositeSendReceiveTest` intermittently failed with "expected exactly one frame but got none." It slipped to `main` because:
