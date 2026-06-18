@@ -3,9 +3,9 @@
 package us.tractat.kuilt.game
 
 import kotlinx.coroutines.async
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.produceIn
 import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.builtins.serializer
 import us.tractat.kuilt.core.InMemoryLoom
@@ -24,6 +24,10 @@ import kotlin.time.Duration.Companion.seconds
  *
  * Virtual time via [StandardTestDispatcher]; consensus is driven through the canonical [seats]
  * harness with per-node seeded [fastRaftConfig].
+ *
+ * App-channel delivery is best-effort (`replay = 0`): a frame sent before the receiver subscribes
+ * is lost. Each test subscribes via [produceIn] on [backgroundScope] and pumps the scheduler with
+ * `runCurrent()` so the receiver is collecting *before* the broadcast — deterministic, no race.
  */
 class GameSessionTest {
 
@@ -37,10 +41,10 @@ class GameSessionTest {
         val host = hostDeferred.await()
         val joiner = joinDeferred.await()
 
-        // An app frame on "chat" round-trips host → joiner over the same fabric as consensus.
-        val received = async { joiner.appChannel("chat").incoming.first() }
+        val chat = joiner.appChannel("chat").incoming.produceIn(backgroundScope)
+        runCurrent()
         host.appChannel("chat").broadcast(byteArrayOf(7, 8, 9))
-        assertTrue(received.await().payload.contentEquals(byteArrayOf(7, 8, 9)), "chat frame must round-trip")
+        assertTrue(chat.receive().payload.contentEquals(byteArrayOf(7, 8, 9)), "chat frame must round-trip")
 
         // Consensus still works alongside the app traffic.
         val move = TurnSequencer(host.node, Int.serializer()).propose(42)
@@ -67,9 +71,10 @@ class GameSessionTest {
         // App traffic after election still flows between the two sessions.
         val leader = if (leaderNode === a.node) a else b
         val other = if (leader === a) b else a
-        val received = async { other.appChannel("chat").incoming.first() }
+        val received = other.appChannel("chat").incoming.produceIn(backgroundScope)
+        runCurrent()
         leader.appChannel("chat").broadcast(byteArrayOf(55))
-        assertTrue(received.await().payload.contentEquals(byteArrayOf(55)))
+        assertTrue(received.receive().payload.contentEquals(byteArrayOf(55)))
     }
 
     @Test
@@ -81,15 +86,14 @@ class GameSessionTest {
         val a = backgroundScope.gameNode(hostSeam, voters, raftConfig = fastRaftConfig(seed = 1L))
         val b = backgroundScope.gameNode(joinSeam, voters, raftConfig = fastRaftConfig(seed = 2L))
 
-        // Subscribe to a name b never receives on; it must stay empty.
-        val cursors = b.appChannel("cursors").incoming.produceIn(this)
+        // Subscribe both names on b before any broadcast; "cursors" must stay empty.
+        val cursors = b.appChannel("cursors").incoming.produceIn(backgroundScope)
+        val chat = b.appChannel("chat").incoming.produceIn(backgroundScope)
+        runCurrent()
 
-        val chat = async { b.appChannel("chat").incoming.first() }
         a.appChannel("chat").broadcast(byteArrayOf(1))
-        assertTrue(chat.await().payload.contentEquals(byteArrayOf(1)), "same name converges across peers")
-
+        assertTrue(chat.receive().payload.contentEquals(byteArrayOf(1)), "same name converges across peers")
         assertTrue(cursors.tryReceive().isFailure, "a frame on \"chat\" must not reach \"cursors\"")
-        cursors.cancel()
     }
 
     @Test

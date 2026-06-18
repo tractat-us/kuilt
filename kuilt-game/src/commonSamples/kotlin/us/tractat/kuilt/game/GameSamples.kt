@@ -3,6 +3,7 @@
 package us.tractat.kuilt.game
 
 import kotlinx.coroutines.async
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.test.StandardTestDispatcher
@@ -32,13 +33,14 @@ import kotlin.time.Duration.Companion.seconds
  * [gameHost] and [gameJoin] over an [InMemoryLoom]: appoint-the-host bootstrap path.
  *
  * Exactly one peer calls [gameHost]; the rest call [gameJoin]. Both suspend until the
- * cluster reaches [gameHost]'s requested [peerCount] voters, then return the local
- * [us.tractat.kuilt.raft.RaftNode]. Pass a plain [us.tractat.kuilt.core.Seam] in both
- * cases — muxing (Raft channel tag 1, presence channel tag 2) is internal.
+ * cluster reaches [gameHost]'s requested [peerCount] voters, then return a [GameSession].
+ * Pass a plain [us.tractat.kuilt.core.Seam] in both cases — muxing (Raft channel tag 1,
+ * presence channel tag 2, app-envelope channel tag 3) is internal.
  *
- * After the calls return, drive the game through [TurnSequencer]: any node may
- * [TurnSequencer.propose]; commits are delivered in order on every node via
- * [TurnSequencer.committed].
+ * After the calls return, drive the game through [TurnSequencer] over [GameSession.node]: any
+ * node may [TurnSequencer.propose]; commits are delivered in order on every node via
+ * [TurnSequencer.committed]. Ride extra application traffic (chat, cursors, …) over
+ * [GameSession.appChannel]; tear the session down with [GameSession.close].
  *
  * **Do not collect `seam.incoming` after calling [gameHost] or [gameJoin].** Each wraps
  * the seam in a [us.tractat.kuilt.core.MuxSeam] that becomes the sole consumer of
@@ -71,8 +73,8 @@ internal fun sampleGameHostJoin() = runTest(StandardTestDispatcher(), timeout = 
 
     // Both nodes are voters. propose() may be called on any node —
     // followers forward to the leader transparently.
-    val hostGame = TurnSequencer(host, Int.serializer())
-    val joinerGame = TurnSequencer(joiner, Int.serializer())
+    val hostGame = TurnSequencer(host.node, Int.serializer())
+    val joinerGame = TurnSequencer(joiner.node, Int.serializer())
 
     val move = hostGame.propose(1)
     assertEquals(1, move.action)
@@ -81,8 +83,17 @@ internal fun sampleGameHostJoin() = runTest(StandardTestDispatcher(), timeout = 
     val joinerMove = joinerGame.propose(2)
     assertEquals(2, joinerMove.action)
 
+    // Ride an application channel (chat, cursors, …) over the same fabric as consensus.
+    val incoming = async { joiner.appChannel("chat").incoming.first() }
+    host.appChannel("chat").broadcast(byteArrayOf(0x68, 0x69)) // "hi"
+    assertEquals(2, incoming.await().payload.size)
+
     // Collect committed turns on any node in the game loop:
     // scope.launch { joinerGame.committed.collect { (index, action) -> applyMove(index, action) } }
+
+    // Tear the session down when done (stops the node, then closes the fabric).
+    host.close()
+    joiner.close()
 }
 
 // ── TurnSequencer ─────────────────────────────────────────────────────────────
