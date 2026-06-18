@@ -150,10 +150,13 @@ class NamedMuxTest {
         muxA.channel("cursors").broadcast(byteArrayOf(2))
         muxA.channel("voice").broadcast(byteArrayOf(3))
 
+        val swatchX = recvX.await()
+        val swatchY = recvY.await()
+        val swatchZ = recvZ.await()
         assertAll(
-            { assertTrue(recvX.await().payload.contentEquals(byteArrayOf(1)), "chat payload") },
-            { assertTrue(recvY.await().payload.contentEquals(byteArrayOf(2)), "cursors payload") },
-            { assertTrue(recvZ.await().payload.contentEquals(byteArrayOf(3)), "voice payload") },
+            { assertTrue(swatchX.payload.contentEquals(byteArrayOf(1)), "chat payload") },
+            { assertTrue(swatchY.payload.contentEquals(byteArrayOf(2)), "cursors payload") },
+            { assertTrue(swatchZ.payload.contentEquals(byteArrayOf(3)), "voice payload") },
         )
     }
 
