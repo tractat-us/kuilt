@@ -28,8 +28,8 @@ class RaftEngineDedupStampTest {
         val h = singleVoterNode(backgroundScope)
         h.node.awaitLeadership()
         val committed = h.node.propose("x".encodeToByteArray())
-        // Auto id is "$nodeId-$hex"; the single-voter harness names the node "solo".
-        assertTrue(committed.dedupKey!!.clientId.value.startsWith("solo-"))
+        // Auto id is "auto:$nodeId-$hex"; the single-voter harness names the node "solo".
+        assertTrue(committed.dedupKey!!.clientId.value.startsWith("auto:solo-"))
         assertEquals(1L, committed.dedupKey!!.requestId)
     }
 }

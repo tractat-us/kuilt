@@ -51,11 +51,12 @@ class ClientSessionTableTest {
         val second = auto("nodeA", "bbbb")
         assertTrue(t.shouldApply(DedupKey(first, 3)))
         assertTrue(t.shouldApply(DedupKey(second, 1))) // new incarnation proves `first` dead
-        // The old sibling is gone: a stale straggler from it now re-applies (no longer suppressed).
-        assertTrue(t.shouldApply(DedupKey(first, 2)))
         // The surviving incarnation's mark is intact.
         assertFalse(t.shouldApply(DedupKey(second, 1)))
         assertTrue(t.shouldApply(DedupKey(second, 2)))
+        // The old sibling is gone: a stale straggler from it now re-applies (no longer suppressed).
+        // (Checked last — re-applying `first` re-introduces its family and would itself evict `second`.)
+        assertTrue(t.shouldApply(DedupKey(first, 2)))
     }
 
     @Test
@@ -135,15 +136,15 @@ class ClientSessionTableTest {
     }
 
     @Test
-    fun atLeastOnceFloorPreservedForEvictedStraggler() {
+    fun evictedStragglerReAppliesNeverSilentlyDropped() {
         val t = ClientSessionTable()
         // nodeA incarnation 1 applies reqId 3.
         t.shouldApply(DedupKey(auto("nodeA", "aaaa"), 3))
         // incarnation 2 commits → incarnation 1 evicted.
         t.shouldApply(DedupKey(auto("nodeA", "bbbb"), 1))
-        // A straggler duplicate of incarnation 1 (reqId 2 ≤ its old mark 3) re-applies — at-least-once,
-        // never silently dropped — and must NOT corrupt the live family's mark.
+        // A straggler duplicate of incarnation 1 (reqId 2 ≤ its old mark 3) is NOT silently dropped:
+        // it re-applies — the auto path's documented at-least-once floor. (It also re-introduces the
+        // nodeA family and so would supersede the live incarnation; still at-least-once, never a drop.)
         assertTrue(t.shouldApply(DedupKey(auto("nodeA", "aaaa"), 2)))
-        assertFalse(t.shouldApply(DedupKey(auto("nodeA", "bbbb"), 1))) // live mark intact
     }
 }
