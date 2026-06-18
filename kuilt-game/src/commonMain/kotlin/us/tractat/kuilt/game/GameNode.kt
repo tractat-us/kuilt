@@ -106,6 +106,8 @@ public fun CoroutineScope.gameNode(
  *   virtual-time execution (D4).
  * @throws IllegalArgumentException if [peerCount] < 1.
  * @throws DuplicateHostException if another peer on the same session already declared host.
+ *
+ * @sample us.tractat.kuilt.game.sampleGameHostJoin
  */
 public suspend fun CoroutineScope.gameHost(
     seam: Seam,

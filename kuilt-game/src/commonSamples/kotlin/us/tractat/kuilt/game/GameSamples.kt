@@ -2,11 +2,18 @@
 
 package us.tractat.kuilt.game
 
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.serializer
+import us.tractat.kuilt.core.InMemoryLoom
+import us.tractat.kuilt.core.InMemoryTag
+import us.tractat.kuilt.core.Pattern
+import us.tractat.kuilt.raft.RaftConfig
 import us.tractat.kuilt.raft.RaftRole
 import us.tractat.kuilt.raft.test.FakeRaftNode
 import kotlin.test.assertEquals
@@ -18,6 +25,65 @@ import kotlin.time.Duration.Companion.seconds
  * Every function here is compiled as part of commonTest so a typo or API
  * change will break the build, not silently produce stale documentation.
  */
+
+// ── gameHost / gameJoin ───────────────────────────────────────────────────────
+
+/**
+ * [gameHost] and [gameJoin] over an [InMemoryLoom]: appoint-the-host bootstrap path.
+ *
+ * Exactly one peer calls [gameHost]; the rest call [gameJoin]. Both suspend until the
+ * cluster reaches [gameHost]'s requested [peerCount] voters, then return the local
+ * [us.tractat.kuilt.raft.RaftNode]. Pass a plain [us.tractat.kuilt.core.Seam] in both
+ * cases — muxing (Raft channel tag 1, presence channel tag 2) is internal.
+ *
+ * After the calls return, drive the game through [TurnSequencer]: any node may
+ * [TurnSequencer.propose]; commits are delivered in order on every node via
+ * [TurnSequencer.committed].
+ *
+ * **Do not collect `seam.incoming` after calling [gameHost] or [gameJoin].** Each wraps
+ * the seam in a [us.tractat.kuilt.core.MuxSeam] that becomes the sole consumer of
+ * `seam.incoming` (ADR-034 single-collection). A second collector races the Raft engine.
+ */
+@Suppress("unused")
+internal fun sampleGameHostJoin() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    val loom = InMemoryLoom()
+    val hostSeam = loom.host(Pattern("tic-tac-toe"))
+    val joinSeam = loom.join(InMemoryTag("player-2"))
+
+    // Launch concurrently: gameHost suspends while admitting joiners;
+    // gameJoin suspends until the host promotes it to voter.
+    val hostDeferred = async {
+        backgroundScope.gameHost(
+            hostSeam,
+            peerCount = 2,
+            raftConfig = RaftConfig(expectVirtualTime = true),
+        )
+    }
+    val joinDeferred = async {
+        backgroundScope.gameJoin(
+            joinSeam,
+            raftConfig = RaftConfig(expectVirtualTime = true),
+        )
+    }
+
+    val host = hostDeferred.await()
+    val joiner = joinDeferred.await()
+
+    // Both nodes are voters. propose() may be called on any node —
+    // followers forward to the leader transparently.
+    val hostGame = TurnSequencer(host, Int.serializer())
+    val joinerGame = TurnSequencer(joiner, Int.serializer())
+
+    val move = hostGame.propose(1)
+    assertEquals(1, move.action)
+
+    // Any node may propose; the joiner's call is forwarded to the host (leader).
+    val joinerMove = joinerGame.propose(2)
+    assertEquals(2, joinerMove.action)
+
+    // Collect committed turns on any node in the game loop:
+    // scope.launch { joinerGame.committed.collect { (index, action) -> applyMove(index, action) } }
+}
 
 // ── TurnSequencer ─────────────────────────────────────────────────────────────
 
