@@ -4,8 +4,10 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withTimeoutOrNull
 import us.tractat.kuilt.core.MuxSeam
 import us.tractat.kuilt.core.Seam
+import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.raft.ClusterConfig
 import us.tractat.kuilt.raft.InMemoryRaftStorage
 import us.tractat.kuilt.raft.MembershipChangeInProgressException
@@ -16,7 +18,9 @@ import us.tractat.kuilt.raft.RaftRole
 import us.tractat.kuilt.raft.RaftStorage
 import us.tractat.kuilt.raft.SeamRaftTransport
 import us.tractat.kuilt.raft.raftNode
+import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.Duration.Companion.seconds
 
 /** MuxSeam channel tag for the Raft consensus traffic in [gameHost] and [gameJoin]. */
 private const val RAFT_CHANNEL: Byte = 1
@@ -92,18 +96,34 @@ public fun CoroutineScope.gameNode(
  * duplicate host via lobby presence before bootstrapping Raft and throws
  * [DuplicateHostException] if another peer already declared itself host.
  *
+ * **Best-effort duplicate detection, not arbitration.** The check declares this peer as
+ * host on the lobby presence channel, then waits — bounded by [hostDeclarationTimeout] —
+ * until presence has converged with every peer connected at that moment (each peer, host or
+ * joiner, announces itself), and only then inspects the declared-host set. This replaces an
+ * earlier fixed 1 ms window that on a real fabric elapsed before any network round-trip,
+ * silently passing two concurrent hosts. The wait closes that gap for a host that declared
+ * before convergence completes; it does **not** arbitrate a *genuinely* simultaneous pair
+ * whose declarations cross in flight — that requires a deterministic tiebreak (e.g. lowest
+ * NodeId), which is deliberately deferred. Exactly-one-host therefore remains the caller's
+ * precondition; when the window observes both declarations, *both* hosts throw.
+ *
  * **Internal multiplexing.** [gameHost] wraps [seam] in a [MuxSeam] so that Raft
  * traffic (channel tag 1) and lobby presence traffic (channel tag 2) share the
  * single underlying [Seam] without violating the ADR-034 single-collection contract.
- * [gameJoin] applies the same tag to its Raft channel so both sides communicate on
- * matching frames. The caller passes a plain [Seam] in both cases — muxing is an
- * internal implementation detail.
+ * [gameJoin] applies the same tags so both sides communicate on matching frames. The
+ * caller passes a plain [Seam] in both cases — muxing is an internal implementation detail.
  *
  * @param peerCount Total number of voters (including the host) the cluster must reach.
  * @param storage Durable Raft state. Defaults to [InMemoryRaftStorage].
  * @param raftConfig Timing and behaviour parameters. Tests pass
  *   `RaftConfig(expectVirtualTime = true)` — this is the only supported path to
  *   virtual-time execution (D4).
+ * @param hostDeclarationTimeout Upper bound on the presence-convergence wait before the
+ *   duplicate-host check proceeds regardless. This is genuine tuning, not a functional
+ *   switch: a connected-but-silent peer (or a real fabric whose round-trip exceeds the
+ *   bound) only weakens detection, never disables the host. The default is sized to clear a
+ *   typical WAN round-trip; raise it on high-latency fabrics, lower it where joiners are
+ *   known-local.
  * @throws IllegalArgumentException if [peerCount] < 1.
  * @throws DuplicateHostException if another peer on the same session already declared host.
  *
@@ -114,6 +134,7 @@ public suspend fun CoroutineScope.gameHost(
     peerCount: Int,
     storage: RaftStorage = InMemoryRaftStorage(),
     raftConfig: RaftConfig = RaftConfig(),
+    hostDeclarationTimeout: Duration = DEFAULT_HOST_DECLARATION_TIMEOUT,
 ): RaftNode {
     require(peerCount >= 1) { "peerCount must be >= 1" }
 
@@ -121,7 +142,7 @@ public suspend fun CoroutineScope.gameHost(
     val raftSeam = mux.channel(RAFT_CHANNEL)
     val presenceSeam = mux.channel(PRESENCE_CHANNEL)
 
-    checkNotDuplicateHost(presenceSeam, this, raftConfig.expectVirtualTime)
+    checkNotDuplicateHost(presenceSeam, this, raftConfig.expectVirtualTime, hostDeclarationTimeout)
 
     val self = NodeId(seam.selfId.value)
     val node = raftNode(ClusterConfig.ofVoters(setOf(self)), SeamRaftTransport(raftSeam), storage, raftConfig)
@@ -142,8 +163,14 @@ public suspend fun CoroutineScope.gameHost(
  * once admitted.
  *
  * **Internal multiplexing.** [gameJoin] wraps [seam] in a [MuxSeam] and routes Raft traffic
- * on channel tag 1 — matching [gameHost]'s Raft channel — so both sides communicate on
- * compatible frames. The caller passes a plain [Seam]; muxing is internal.
+ * on channel tag 1 and lobby presence on channel tag 2 — matching [gameHost]'s channels —
+ * so both sides communicate on compatible frames. The caller passes a plain [Seam]; muxing
+ * is internal.
+ *
+ * **Presence announcement.** Before awaiting admission, this peer announces itself as a
+ * non-host participant on the presence channel. This is what lets [gameHost]'s
+ * duplicate-host convergence wait observe contact with each connected joiner instead of
+ * blocking on it until the timeout elapses.
  *
  * **Do not collect `seam.incoming` after calling this** (ADR-034 single-collection).
  *
@@ -158,6 +185,10 @@ public suspend fun CoroutineScope.gameJoin(
 ): RaftNode {
     val mux = MuxSeam(seam, this)
     val raftSeam = mux.channel(RAFT_CHANNEL)
+    val presenceSeam = mux.channel(PRESENCE_CHANNEL)
+
+    // Announce presence (non-host) so the host's convergence wait sees us promptly.
+    GamePresence(presenceSeam, this, raftConfig.expectVirtualTime).declarePresent()
 
     val self = NodeId(seam.selfId.value)
     // Start as a learner with no known voters. The host's changeMembership will commit a
@@ -176,31 +207,45 @@ public suspend fun CoroutineScope.gameJoin(
 }
 
 /**
- * Declares this peer as host via [GamePresence] on [presenceSeam], waits a bounded
- * interval for presence to converge, then checks for duplicate declarations.
+ * Declares this peer as host via [GamePresence] on [presenceSeam], waits — bounded by
+ * [timeout] — until presence has converged with every peer connected at declaration time,
+ * then checks for duplicate declarations.
  *
- * The convergence window ([PRESENCE_CONVERGENCE_DELAY]) is short: under virtual time it
- * lets all queued Quilter coroutines (full-state exchange, delta delivery) run before the
- * check. Under real time it is negligible.
+ * The convergence signal is honest under both clocks: it suspends until [GamePresence.announced]
+ * contains an entry for every currently-connected peer (each peer announces itself — host via
+ * `declareHost`, joiner via `declarePresent`), so the check inspects a genuinely-exchanged view
+ * rather than a fixed time window. Under virtual time this completes as soon as the queued
+ * Quilter coroutines deliver; under real time it waits for the actual round-trip. If a connected
+ * peer never announces (e.g. it crashed mid-handshake, or a real-fabric round-trip exceeds
+ * [timeout]), the wait falls through after [timeout] and the check proceeds on whatever has
+ * converged — weaker detection, never a stuck host.
  *
  * @throws DuplicateHostException if any other replica has also declared host after convergence.
  */
-private suspend fun checkNotDuplicateHost(presenceSeam: Seam, scope: CoroutineScope, expectVirtualTime: Boolean) {
+private suspend fun checkNotDuplicateHost(
+    presenceSeam: Seam,
+    scope: CoroutineScope,
+    expectVirtualTime: Boolean,
+    timeout: Duration,
+) {
     val presence = GamePresence(presenceSeam, scope, expectVirtualTime)
     presence.declareHost()
-    delay(PRESENCE_CONVERGENCE_DELAY)
+
+    val connectedNow = (presenceSeam.peers.value - presenceSeam.selfId).map { ReplicaId(it.value) }.toSet()
+    withTimeoutOrNull(timeout) {
+        presence.announced.first { announced -> connectedNow.all { it in announced } }
+    }
+
     val others = presence.declaredHosts() - presence.replica
     if (others.isNotEmpty()) throw DuplicateHostException()
 }
 
 /**
- * Bounded convergence window for the lobby presence check in [checkNotDuplicateHost].
- *
- * Under virtual time (StandardTestDispatcher), this delay yields the coroutine and allows
- * all queued presence coroutines (Quilter startup, full-state exchange, delta delivery) to
- * run before the duplicate-host check. Under real time the 1 ms wait is negligible.
+ * Default upper bound on [gameHost]'s presence-convergence wait. Sized to clear a typical WAN
+ * round-trip; the wait normally returns much sooner, the moment presence has converged with the
+ * connected peers. Exposed as the [gameHost] `hostDeclarationTimeout` parameter for tuning.
  */
-private val PRESENCE_CONVERGENCE_DELAY = 1.milliseconds
+private val DEFAULT_HOST_DECLARATION_TIMEOUT = 2.seconds
 
 /** Suspends until a peer appears in [seam.peers] that is not already in [admitted]. */
 private suspend fun nextPeer(seam: Seam, admitted: Set<NodeId>): NodeId {

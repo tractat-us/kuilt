@@ -10,12 +10,15 @@ import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
+import us.tractat.kuilt.core.FaultProfile
+import us.tractat.kuilt.core.FaultySeam
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.crdt.ReplicaId
 import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
+import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 
 class GamePresenceTest {
@@ -62,6 +65,34 @@ class GamePresenceTest {
             val ex = assertFailsWith<DuplicateHostException> { h2.await() }
             assertTrue(ex.message!!.contains("host"), "message should mention 'host': ${ex.message}")
 
+            h1.cancel()
+        }
+    }
+
+    /**
+     * Regression for #580: the duplicate-host check must wait for presence to *actually*
+     * converge with the connected peers, not a fixed wall-clock window.
+     *
+     * Each peer's frames are delayed 50 ms (virtual time) via [FaultySeam] — far longer than
+     * the old fixed 1 ms convergence window. Under that old code each host would check at
+     * t≈1 ms, see no other declaration (it arrives at t≈50 ms), and both would bootstrap
+     * singleton clusters that can never merge. The bounded convergence wait instead suspends
+     * until it has heard every connected peer's presence declaration, so the second host's
+     * declaration is observed and [DuplicateHostException] is thrown.
+     */
+    @Test
+    fun secondHostDetectedDespiteDeliveryLatency() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        val loom = InMemoryLoom()
+        val (raw1, raw2) = seats(loom, 2)
+        val s1 = FaultySeam(raw1, backgroundScope, FaultProfile.DelayAll(50.milliseconds))
+        val s2 = FaultySeam(raw2, backgroundScope, FaultProfile.DelayAll(50.milliseconds))
+        val cfg = fastRaftConfig(seed = 1L)
+
+        supervisorScope {
+            val h1 = async { backgroundScope.gameHost(s1, peerCount = 2, raftConfig = cfg) }
+            val h2 = async { backgroundScope.gameHost(s2, peerCount = 2, raftConfig = cfg) }
+
+            assertFailsWith<DuplicateHostException> { h2.await() }
             h1.cancel()
         }
     }
