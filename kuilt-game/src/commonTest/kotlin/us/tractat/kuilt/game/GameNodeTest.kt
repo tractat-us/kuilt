@@ -13,6 +13,8 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.cbor.Cbor
 import us.tractat.kuilt.core.InMemoryLoom
+import us.tractat.kuilt.core.InMemoryTag
+import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.raft.Committed
 import us.tractat.kuilt.raft.NodeId
 import us.tractat.kuilt.raft.RaftConfig
@@ -192,6 +194,58 @@ class GameNodeTest {
             "RaftConfig() default must have expectVirtualTime=false — " +
                 "production overloads of gameNode/gameHost/gameJoin must never set expectVirtualTime=true",
         )
+    }
+
+    /**
+     * Return-at-quorum (D2): `gameHost(returnAt = ReturnPolicy.Quorum)` returns the leader as soon
+     * as a **majority** of `peerCount` voters are present (here 2 of 3), without blocking on the
+     * slowest/absent peer. A proposal made at quorum commits, and a latecomer that connects *after*
+     * the host has already returned — and after the action was committed — is admitted by the
+     * background admission loop and replays the earlier action — no restart.
+     *
+     * The background loop carries no time bound: it stays open for the life of the session until the
+     * roster reaches `peerCount`, so the latecomer joins however late it connects. (A peer arriving
+     * once the roster is already full is the separate, deferred concern in #587.)
+     */
+    @Test
+    fun quorumModeReturnsAtQuorumThenAdmitsLatecomer() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        val loom = InMemoryLoom()
+        // Only the host and one joiner are present initially: 2 of peerCount=3 = quorum.
+        val hostSeam = loom.host(Pattern("game-bootstrap"))
+        val j1 = loom.join(InMemoryTag("seat-1"))
+
+        val hostDeferred = async {
+            backgroundScope.gameHost(
+                hostSeam,
+                peerCount = 3,
+                returnAt = ReturnPolicy.Quorum,
+                raftConfig = fastRaftConfig(seed = 1L),
+            )
+        }
+        val j1Deferred = async { backgroundScope.gameJoin(j1, raftConfig = fastRaftConfig(seed = 2L)) }
+
+        // Host returns at quorum (2 voters) without waiting for the third peer.
+        val host = hostDeferred.await()
+        val joiner1 = j1Deferred.await()
+
+        // Quorum present: a proposal commits even though the third voter has not joined yet.
+        val entry = TurnSequencer(host, Int.serializer()).propose(5)
+        assertEquals(5, entry.action)
+
+        // The latecomer connects only now, after the host already returned, and joins.
+        val j2 = loom.join(InMemoryTag("seat-2"))
+        val joiner2 = backgroundScope.gameJoin(j2, raftConfig = fastRaftConfig(seed = 3L))
+
+        // The background admission loop promotes the latecomer; it replays the earlier action.
+        fun appEntries(node: RaftNode) =
+            node.committedFrom(1).mapNotNull { committed ->
+                if (committed !is Committed.Entry) return@mapNotNull null
+                val logEntry = committed.entry
+                if (logEntry.isNoOp || logEntry.config != null) return@mapNotNull null
+                Cbor.decodeFromByteArray(Int.serializer(), logEntry.command)
+            }
+
+        assertEquals(5, appEntries(joiner2).first(), "latecomer admitted in the background must replay the committed action")
     }
 
     @Test
