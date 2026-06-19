@@ -361,6 +361,13 @@ TTL eviction is the sole recovery mechanism after a peer restart — see
 when you need strongly-consistent, replicated state across multiple nodes —
 for example, a shared game state machine or a distributed lock.
 
+For **turn-based games**, prefer the `kuilt-game` facade
+(`gameNode` / `gameHost` / `gameJoin`): it returns a `GameSession` that hides the
+cluster / transport / storage wiring shown below and layers a typed
+`TurnSequencer` on top. Reach for the raw `kuilt-raft` API directly for non-game
+coordination — distributed locks, durable workflow steps — or when you need to
+drive `RaftNode` internals yourself.
+
 ```kotlin
 // 1. Describe the cluster.
 val cluster = ClusterConfig.ofVoters(listOf(NodeId("a"), NodeId("b"), NodeId("c")))

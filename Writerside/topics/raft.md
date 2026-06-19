@@ -73,8 +73,9 @@ connection), and return a `GameSession`:
   reaches `peerCount`.
 - `gameJoin(seam)` — all other peers; announces itself, then waits to be promoted
   from learner to voter.
-- `gameNode(seam, voterIds)` — low-level bootstrap for when the caller manages
-  membership itself (all voters known up-front).
+- `gameNode(seam, voterIds)` — roster-given bootstrap: every peer passes the same
+  voter set (known up-front, e.g. from matchmaking) and Raft elects the leader
+  symmetrically, with no appoint-the-host step.
 
 `GameSession` carries the `RaftNode` (for consensus) and `appChannel(name)`
 (for best-effort application traffic — chat, cursors, voice signalling — sharing
