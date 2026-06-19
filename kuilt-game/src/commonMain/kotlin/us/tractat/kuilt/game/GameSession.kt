@@ -44,6 +44,7 @@ public class GameSession internal constructor(
      * fan out with `shareIn` if needed.
      *
      * @throws IllegalArgumentException if [name]'s UTF-8 encoding is empty or exceeds 255 bytes.
+     * @sample us.tractat.kuilt.game.sampleGameChat
      */
     public fun appChannel(name: String): Seam = appMux.channel(name)
 

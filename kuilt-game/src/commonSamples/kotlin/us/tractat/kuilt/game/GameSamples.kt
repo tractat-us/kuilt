@@ -3,6 +3,7 @@
 package us.tractat.kuilt.game
 
 import kotlinx.coroutines.async
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.flow.toList
@@ -14,6 +15,13 @@ import kotlinx.serialization.serializer
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
+import us.tractat.kuilt.crdt.Patch
+import us.tractat.kuilt.crdt.Rga
+import us.tractat.kuilt.crdt.ReplicaId
+import us.tractat.kuilt.crdt.RgaId
+import us.tractat.kuilt.quilter.QuiltMessage
+import us.tractat.kuilt.quilter.Quilter
+import us.tractat.kuilt.quilter.QuilterConfig
 import us.tractat.kuilt.raft.NodeId
 import us.tractat.kuilt.raft.RaftConfig
 import us.tractat.kuilt.raft.RaftRole
@@ -214,4 +222,66 @@ internal fun sampleTurnSequencer() = runTest(timeout = 5.seconds) {
 
     val committed = game.committed.take(3).toList().map { it.action }
     assertEquals(listOf(Move(0, 0), Move(1, 1), Move(0, 1)), committed)
+}
+
+// ── chat over appChannel ──────────────────────────────────────────────────────
+
+/**
+ * Convergent CRDT chat log over [GameSession.appChannel], sharing the consensus fabric.
+ *
+ * Two peers each build a [Quilter]`<`[Rga]`<String>>` on `appChannel("chat")`. Because
+ * [appChannel] is a named view within the mux already owned by the session, chat frames
+ * travel over the same [us.tractat.kuilt.core.Seam] as Raft — no second connection. The
+ * application owns the entire name namespace; there are no reserved names.
+ *
+ * Delivery is **best-effort** (`replay = 0`): a delta sent before the peer subscribes is
+ * not replayed. Layer your own reliability on top if you need at-least-once delivery.
+ */
+@Suppress("unused")
+internal fun sampleGameChat() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    val loom = InMemoryLoom()
+    val seamAlice = loom.host(Pattern("my-game"))
+    val seamBob = loom.join(InMemoryTag("bob"))
+
+    val id1 = NodeId(seamAlice.selfId.value)
+    val id2 = NodeId(seamBob.selfId.value)
+    val voterIds = setOf(id1, id2)
+
+    val alice = backgroundScope.gameNode(seamAlice, voterIds, raftConfig = RaftConfig(expectVirtualTime = true))
+    val bob = backgroundScope.gameNode(seamBob, voterIds, raftConfig = RaftConfig(expectVirtualTime = true))
+
+    // Both peers attach a Quilter<Rga<String>> to the "chat" app channel.
+    val chatMsgSer = QuiltMessage.serializer(Rga.wireSerializer(serializer<String>()))
+    val aliceChat = Quilter(
+        replica = ReplicaId(seamAlice.selfId.value),
+        seam = alice.appChannel("chat"),
+        initial = Rga.empty(),
+        messageSerializer = chatMsgSer,
+        scope = backgroundScope,
+        config = QuilterConfig(expectVirtualTime = true),
+    )
+    val bobChat = Quilter(
+        replica = ReplicaId(seamBob.selfId.value),
+        seam = bob.appChannel("chat"),
+        initial = Rga.empty(),
+        messageSerializer = chatMsgSer,
+        scope = backgroundScope,
+        config = QuilterConfig(expectVirtualTime = true),
+    )
+
+    // Each peer appends a message to its local RGA replica, then broadcasts the delta.
+    fun Quilter<Rga<String>>.chat(msg: String) {
+        val (_, op) = state.value.insertAfter(replica, RgaId.HEAD, msg)
+        apply(Patch(Rga.empty<String>().apply(op)))
+    }
+    aliceChat.chat("alice: hello")
+    bobChat.chat("bob: hello")
+    delay(10) // advance virtual time so delta broadcasts deliver to both peers
+
+    // Both RGAs converge to the same ordered log of two messages.
+    assertEquals(aliceChat.state.value.toList(), bobChat.state.value.toList())
+    assertEquals(2, aliceChat.state.value.toList().size)
+
+    alice.close()
+    bob.close()
 }
