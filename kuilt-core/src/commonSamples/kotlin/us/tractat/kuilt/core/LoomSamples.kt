@@ -5,6 +5,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
 import kotlin.test.assertEquals
 
@@ -91,6 +92,43 @@ internal fun sampleMuxSeamChannels() = runTest {
     // channel() is idempotent — calling it again with the same tag returns the same Seam.
     check(mux.channel(0x00.toByte()) === replicatorSeam)
     check(replicatorSeam !== coordinatorSeam)
+}
+
+// ── NamedMux ──────────────────────────────────────────────────────────────────
+
+/**
+ * Split one [Seam] into string-keyed logical channels via [NamedMux].
+ *
+ * [NamedMux] is the unbounded-namespace sibling of [MuxSeam]: frames carry a
+ * UTF-8 name prefix (1–255 bytes). Use it for application namespaces where the
+ * fixed 256-slot ceiling of a byte tag is too small. The two compose by nesting:
+ * a [MuxSeam] byte-tag can carry a whole [NamedMux] subtree.
+ *
+ * [NamedMux.channel] is idempotent — the same name always returns the same [Seam]
+ * instance — and thread-safe.
+ */
+@Suppress("unused")
+@OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+internal fun sampleNamedMuxChannels() = runTest(UnconfinedTestDispatcher()) {
+    val loom = InMemoryLoom()
+    val rawA = loom.host(Pattern("named-mux-demo"))
+    val rawB = loom.join(InMemoryTag("b"))
+
+    val muxA = NamedMux(rawA, backgroundScope)
+    val muxB = NamedMux(rawB, backgroundScope)
+
+    val chatA: Seam = muxA.channel("chat")
+    val chatB: Seam = muxB.channel("chat")
+    val cursorA: Seam = muxA.channel("cursors")
+
+    // channel() is idempotent — same name returns the same Seam instance.
+    check(muxA.channel("chat") === chatA)
+    check(chatA !== cursorA)
+
+    // Frames sent on "chat" arrive only on the matching channel view.
+    val received = async { chatB.incoming.first() }
+    chatA.broadcast("hello".encodeToByteArray())
+    check(received.await().payload.decodeToString() == "hello")
 }
 
 // ── Doc-alias samples (camelCase mirrors of backtick-named InMemoryLoomTest fns) ──

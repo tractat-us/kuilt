@@ -116,7 +116,8 @@ consumes and produces** — they line up on the `Connection`↔`Seam` axis:
 | `identified()` → `LinkSeam` | **Connection → Seam** | One link, both identities known, presented as a 2-peer `Seam` (`broadcast == sendTo(remote)`). |
 | `meshSeam()` → `Mesh` | **Connections → Seam** | *Topology builder.* N point-to-point links woven into one fully-connected N-peer `Seam`; learns each remote id via a mesh preamble (id + per-connection nonce) and dedups duplicate links from a simultaneous dial by a canonical, order-independent link nonce both ends agree on. Admits later joiners via `Mesh.addLink`. |
 | `CompositeLoom` → `CompositeSeam` | **Seams → Seam** | *Transport multiplexer.* Several `Seam`s (plies) for the **same** logical session bonded into one multipath `Seam` (see [Multipath](#multipath-one-peer-several-transports)). |
-| `MuxSeam` | **Seam → Seams** | *Channel splitter.* One `Seam` fanned into several byte-tagged logical-channel `Seam` views over a single collection. |
+| `MuxSeam` | **Seam → Seams** | *Channel splitter (byte-tagged).* One `Seam` fanned into up to 256 byte-tagged logical-channel `Seam` views over a single collection. |
+| `NamedMux` | **Seam → Seams** | *Channel splitter (string-keyed).* Unbounded-namespace sibling of `MuxSeam` — frames carry a UTF-8 name prefix (1–255 bytes) instead of a 1-byte tag. Compose by nesting: a `MuxSeam` tag can carry a whole `NamedMux` subtree. |
 
 The two that invite the most confusion are **`MeshSeam` and `CompositeSeam`**:
 `MeshSeam` is a **topology builder (`Connection → Seam`)** — it *creates* a `Seam` out of
@@ -417,7 +418,7 @@ Genuinely out of scope for kuilt at every layer:
 ## Module boundary
 
 ```
-kuilt-core         the contract + InMemoryLoom + MuxSeam + SeamConformanceSuite (depends on nothing fabric-specific)
+kuilt-core         the contract + InMemoryLoom + MuxSeam + NamedMux + CompositeLoom + SeamConformanceSuite (depends on nothing fabric-specific)
   ├── kuilt-raft        Raft consensus (election, log, snapshots, membership, reads, transfer)  → depends on kuilt-core
   │     ├── kuilt-game  turn-based game facade (TurnSequencer / SpeculativeSequencer)  → depends on kuilt-raft
   │     └── kuilt-cluster  server-cluster facade (ServerCluster / ClusterClient / VoterMesh)  → depends on kuilt-raft + kuilt-session + kuilt-websocket (JVM/Android)
