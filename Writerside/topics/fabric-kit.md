@@ -36,6 +36,19 @@ for your own transport is the subject of the implementer tutorial
 (`docs/extending-fabrics.md` in the repository); this page is about *consuming*
 the kit once you have `Connection`s in hand.
 
+### Stream transports: `:kuilt-stream` and `:kuilt-tcp`
+
+**`:kuilt-stream`** provides `framed(source, sink)`, which adapts a kotlinx-io
+`Source`/`Sink` byte-stream into a `Connection` using a 4-byte big-endian length
+prefix per frame. Oversize prefixes throw `FrameTooLargeException` before any
+allocation; a clean EOF at a frame boundary completes `incoming` normally.
+
+**`:kuilt-tcp`** (`TcpLoom.host` / `TcpLoom.join`, JVM/Android only) is the worked
+example: it wires a Ktor socket's channels through `framed()` into a `Connection`,
+then hands that to `handshaking` for in-band identity negotiation, yielding a
+2-peer `Seam`. The pattern — obtain a socket, call `framed()`, call `handshaking` —
+is everything a stream transport needs to become a kuilt fabric.
+
 ## `identified()` — a 2-peer link
 
 When you already know **both** identities on a single link, `identified()`
