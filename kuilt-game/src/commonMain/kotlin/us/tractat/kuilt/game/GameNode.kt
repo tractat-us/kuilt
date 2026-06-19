@@ -112,6 +112,8 @@ public enum class ReturnPolicy { FullMembership, Quorum }
  *   `expectVirtualTime` as its own parameter (D4).
  *
  * @throws IllegalArgumentException if this peer's [NodeId] is not in [voterIds].
+ *
+ * @sample us.tractat.kuilt.game.sampleGameNode
  */
 public fun CoroutineScope.gameNode(
     seam: Seam,
@@ -249,6 +251,8 @@ public suspend fun CoroutineScope.gameHost(
  * @param storage Durable Raft state. Defaults to [InMemoryRaftStorage].
  * @param raftConfig Timing and behaviour parameters. Tests pass
  *   `RaftConfig(expectVirtualTime = true)` (D4).
+ *
+ * @sample us.tractat.kuilt.game.sampleGameHostJoin
  */
 public suspend fun CoroutineScope.gameJoin(
     seam: Seam,

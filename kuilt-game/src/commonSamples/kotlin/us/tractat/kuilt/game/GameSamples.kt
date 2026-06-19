@@ -14,6 +14,7 @@ import kotlinx.serialization.serializer
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
+import us.tractat.kuilt.raft.NodeId
 import us.tractat.kuilt.raft.RaftConfig
 import us.tractat.kuilt.raft.RaftRole
 import us.tractat.kuilt.raft.test.FakeRaftNode
@@ -94,6 +95,93 @@ internal fun sampleGameHostJoin() = runTest(StandardTestDispatcher(), timeout = 
     // Tear the session down when done (stops the node, then closes the fabric).
     host.close()
     joiner.close()
+}
+
+// ── gameNode ──────────────────────────────────────────────────────────────────
+
+/**
+ * [gameNode] over an [InMemoryLoom]: roster-given bootstrap path.
+ *
+ * Every peer builds the same [NodeId] set and calls [gameNode]; Raft's own election
+ * picks the leader symmetrically — no pre-Raft coordination step required.
+ * Returns a [GameSession] immediately (no waiting for other peers).
+ *
+ * Use this path when all participating peers' identities are known before the
+ * session starts (e.g. from matchmaking). For the appoint-the-host path (dynamic
+ * join without a fixed roster) see [sampleGameHostJoin].
+ */
+@Suppress("unused")
+internal fun sampleGameNode() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    val loom = InMemoryLoom()
+    val seam1 = loom.host(Pattern("my-game"))
+    val seam2 = loom.join(InMemoryTag("player-2"))
+
+    val id1 = NodeId(seam1.selfId.value)
+    val id2 = NodeId(seam2.selfId.value)
+    val voterIds = setOf(id1, id2)
+
+    // Both peers call gameNode with the same voter set. Raft elects one leader.
+    val session1 = backgroundScope.gameNode(seam1, voterIds, raftConfig = RaftConfig(expectVirtualTime = true))
+    val session2 = backgroundScope.gameNode(seam2, voterIds, raftConfig = RaftConfig(expectVirtualTime = true))
+
+    // Both sessions are live. Drive the game through TurnSequencer over either node:
+    // propose() is forwarded to the leader transparently by Raft.
+    // For a concrete propose + committed example see sampleGameHostJoin.
+    TurnSequencer(session1.node, Int.serializer())
+    TurnSequencer(session2.node, Int.serializer())
+
+    // Ride named application channels (chat, cursors, …) over the same fabric.
+    val chatIncoming = async { session2.appChannel("chat").incoming.first() }
+    session1.appChannel("chat").broadcast(byteArrayOf(0x68, 0x69)) // "hi"
+    assertEquals(2, chatIncoming.await().payload.size)
+
+    session1.close()
+    session2.close()
+}
+
+// ── SpeculativeSequencer ──────────────────────────────────────────────────────
+
+/**
+ * [SpeculativeSequencer] for a simple counter game.
+ *
+ * Optimistically applies local moves before the Raft quorum commits them, then
+ * rolls back and replays if the committed order differs from what was predicted.
+ * The [SpeculativeGame] implementation must be **pure and deterministic** — replay
+ * correctness depends on it.
+ *
+ * [speculativeState][SpeculativeSequencer.speculativeState] is always current (with
+ * optimistically applied local moves on top); the UI can observe it directly.
+ */
+@Suppress("unused")
+internal fun sampleSpeculativeSequencer() = runTest(timeout = 5.seconds) {
+    // A trivially pure game: state is a list of committed integers.
+    val counterGame = object : SpeculativeGame<List<Int>, Int> {
+        override fun apply(state: List<Int>, action: Int): List<Int> = state + action
+        override fun snapshot(state: List<Int>): List<Int> = state.toList()
+        override fun restore(snapshot: List<Int>): List<Int> = snapshot.toList()
+    }
+
+    val node = FakeRaftNode()
+    node.setRole(RaftRole.Leader)
+    val sequencer = TurnSequencer(node, Int.serializer())
+
+    val speculative = SpeculativeSequencer(
+        sequencer = sequencer,
+        game = counterGame,
+        initialState = emptyList(),
+        scope = backgroundScope,
+    )
+
+    // Optimistic apply: speculativeState reflects 42 immediately, before quorum.
+    val proposed = async { speculative.propose(42) }
+    assertEquals(listOf(42), speculative.speculativeState.value)
+
+    // Once quorum confirms, pending count drops to 0.
+    val indexed = proposed.await()
+    assertEquals(42, indexed.action)
+    speculative.awaitConfirmedCount(1)
+    assertEquals(0, speculative.pendingCount)
+    assertEquals(listOf(42), speculative.speculativeState.value)
 }
 
 // ── TurnSequencer ─────────────────────────────────────────────────────────────
