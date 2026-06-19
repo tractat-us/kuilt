@@ -46,6 +46,7 @@ import kotlinx.coroutines.flow.shareIn
  *
  * @param delegate the underlying [Seam] whose [Seam.incoming] this class owns.
  * @param scope a [CoroutineScope] for the shared upstream collector.
+ * @sample us.tractat.kuilt.core.sampleNamedMuxChannels
  */
 public class NamedMux(
     private val delegate: Seam,

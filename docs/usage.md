@@ -235,6 +235,46 @@ come into proximity), construct `CompositeLoom` from a
 [architecture.md](architecture.md#multipath-one-peer-several-transports) for the
 design and [`ply-roadmap.md`](ply-roadmap.md) for what is deliberately deferred.
 
+## Splitting one Seam into logical channels
+
+`incoming` is single-collection per the kuilt contract — a second concurrent
+collector races and is unsupported. When several independent consumers (e.g. a
+`Quilter` and a Raft transport) must share one underlying `Seam`, use a channel
+splitter to fan the flow out safely.
+
+**`MuxSeam` — byte-tagged, up to 256 channels.** Each channel is a `Seam` view
+prefixed with a 1-byte tag. `channel()` is idempotent and thread-safe.
+
+```kotlin
+import us.tractat.kuilt.core.MuxSeam
+
+val mux = MuxSeam(seam, scope)
+val raftSeam: Seam = mux.channel(0x00.toByte())
+val crdtSeam: Seam = mux.channel(0x01.toByte())
+```
+
+**`NamedMux` — string-keyed, unbounded namespace.** Frames carry a UTF-8 name
+prefix (1–255 bytes). Use it when the 256-slot ceiling of a byte tag is too
+small — for example, for open-ended application channel names. `NamedMux` and
+`MuxSeam` compose by nesting: assign one `MuxSeam` byte-tag to the `NamedMux`
+subtree so only that subtree pays the wider header.
+
+```kotlin
+import us.tractat.kuilt.core.NamedMux
+
+// Nest NamedMux under MuxSeam byte-tag 0x03.
+val mux = MuxSeam(seam, scope)
+val named = NamedMux(mux.channel(0x03.toByte()), scope)
+
+val chatSeam: Seam = named.channel("chat")
+val cursorSeam: Seam = named.channel("cursors")
+```
+
+Both splitters use `replay = 0` — frames emitted before a channel view starts
+collecting are not replayed. They are suitable for `Quilter`-grade consumers
+(which heal gaps via FullState + resend) but require application-level
+reliability for raw at-least-once consumers.
+
 ## Writing your own fabric
 
 Implement `Loom` (and a private `Seam`), then **prove it conforms** by
