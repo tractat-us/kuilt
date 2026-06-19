@@ -21,7 +21,9 @@ import us.tractat.kuilt.raft.RaftConfig
 import us.tractat.kuilt.raft.RaftNode
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 
 class GameNodeTest {
@@ -264,5 +266,76 @@ class GameNodeTest {
         val leader = awaitAnyLeader(nodes)
         val entry = TurnSequencer(leader, Int.serializer()).propose(7)
         assertEquals(7, entry.action)
+    }
+
+    /**
+     * #587: a peer that calls [gameJoin] after the roster is already full must receive
+     * [RosterFullException] immediately — not suspend indefinitely waiting for a promotion
+     * that will never come.
+     *
+     * The host uses [ReturnPolicy.Quorum] with `peerCount = 2` so the admission loop
+     * launches in the background and then exits once both seats are filled. A third peer
+     * connecting after that exit point must be rejected loud and fast.
+     */
+    @Test
+    fun joinAfterRosterFullThrowsRosterFullException() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        val loom = InMemoryLoom()
+        val (hostSeam, j1Seam) = seats(loom, 2)
+
+        // Fill both seats: host + one joiner. The background admit loop exits once voters == 2.
+        val hostDeferred = async {
+            backgroundScope.gameHost(
+                hostSeam,
+                peerCount = 2,
+                returnAt = ReturnPolicy.Quorum,
+                raftConfig = fastRaftConfig(seed = 1L),
+            )
+        }
+        val j1Deferred = async { backgroundScope.gameJoin(j1Seam, raftConfig = fastRaftConfig(seed = 2L)) }
+        hostDeferred.await()
+        j1Deferred.await()
+
+        // Third peer arrives after the roster is full — must throw, not hang.
+        val j2Seam = loom.join(InMemoryTag("seat-2"))
+        assertFailsWith<RosterFullException> {
+            backgroundScope.gameJoin(j2Seam, raftConfig = fastRaftConfig(seed = 3L))
+        }
+    }
+
+    /**
+     * #587 backstop: a [gameJoin] against a host that never admits and never signals
+     * [admissionClosed] must throw [JoinTimeoutException] after the bounded wait expires,
+     * not suspend indefinitely. Uses a tight injected [joinAdmissionTimeout] so virtual
+     * time reaches the bound quickly.
+     */
+    @Test
+    fun joinWithNoAdmissionSignalThrowsJoinTimeoutException() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        val loom = InMemoryLoom()
+        // Only host seam — host is bootstrapped as a 1-node cluster with peerCount=2
+        // but no second peer is launched, so the admission loop blocks indefinitely
+        // and never publishes admissionClosed. The joiner's backstop must fire first.
+        val hostSeam = loom.host(Pattern("game-bootstrap"))
+        val joinSeam = loom.join(InMemoryTag("seat-1"))
+
+        // Host runs but never fills the roster (no other joiner) so admissionClosed never fires.
+        val hostDeferred = async {
+            backgroundScope.gameHost(
+                hostSeam,
+                peerCount = 2,
+                returnAt = ReturnPolicy.Quorum,
+                raftConfig = fastRaftConfig(seed = 1L),
+            )
+        }
+
+        // Joiner uses a tight backstop so the test does not hang — virtual time advances to it.
+        assertFailsWith<JoinTimeoutException> {
+            backgroundScope.gameJoin(
+                joinSeam,
+                raftConfig = fastRaftConfig(seed = 2L),
+                joinAdmissionTimeout = 20.milliseconds,
+            )
+        }
+
+        hostDeferred.cancel()
     }
 }
