@@ -26,6 +26,16 @@ private const val PRESENT_DECLARED = "present"
 private const val SPECTATE_DECLARED = "spectate"
 
 /**
+ * Marker value stored under a replica's slot to declare "I am voluntarily leaving".
+ *
+ * Published by a voter that calls [GameSession.leave] to signal a graceful departure to the
+ * host. The host observes this via [vacaters] and immediately evicts the voter via
+ * [RaftNode.changeMembership] without waiting the [HeartbeatConfig.reconnectWindow] — the
+ * vacate signal is the explicit path; the dead-man's-switch timeout is the crash-only fallback.
+ */
+private const val VACATE_DECLARED = "vacate"
+
+/**
  * Prefix for the value stored under the host's slot when admission is closed.
  *
  * The full value is `"$ADMISSION_CLOSED_PREFIX<id1>,<id2>,…"` — the final voter set
@@ -137,6 +147,19 @@ public class GamePresence(
     public fun declareSpectate(): Unit = declare(SPECTATE_DECLARED)
 
     /**
+     * Declare that this voter is voluntarily leaving the session.
+     *
+     * The host observes this via [vacaters] and immediately evicts the voter via
+     * [RaftNode.changeMembership], without waiting the reconnect window. Call this from
+     * [GameSession.leave] before closing the session so the seat is freed promptly.
+     *
+     * The vacate signal coexists with [PRESENT_DECLARED]: after calling this the replica's
+     * slot holds [VACATE_DECLARED], overwriting [PRESENT_DECLARED]. The [Quilter] delivers
+     * the delta to the host.
+     */
+    public fun declareVacate(): Unit = declare(VACATE_DECLARED)
+
+    /**
      * Publishes the admission-closed signal on the host's presence slot, replacing
      * the `"host"` marker with an encoded form that carries the final voter set.
      *
@@ -176,6 +199,32 @@ public class GamePresence(
         quilter.state.value.entries
             .filterValues { entry -> entry.value == SPECTATE_DECLARED }
             .keys
+
+    /**
+     * The converged set of replicas that have declared a voluntary departure via [declareVacate].
+     *
+     * The host observes this to trigger immediate eviction without waiting the reconnect window.
+     * Returns replicas whose current slot value equals [VACATE_DECLARED].
+     */
+    public fun vacaters(): Set<ReplicaId> =
+        quilter.state.value.entries
+            .filterValues { entry -> entry.value == VACATE_DECLARED }
+            .keys
+
+    /**
+     * Re-opens admission by reverting the host's slot to [HOST_DECLARED].
+     *
+     * Called by the host after evicting a voter so that new [gameJoin] callers see
+     * [admissionClosed] == `null` again and wait for the next admission rather than
+     * immediately throwing [RosterFullException].
+     *
+     * This is safe to call multiple times — it is idempotent if the host slot already
+     * holds [HOST_DECLARED].
+     */
+    public fun declareAdmissionOpen() {
+        val current = quilter.state.value.entries[quilter.replica]?.value
+        if (current != HOST_DECLARED) declare(HOST_DECLARED)
+    }
 
     private fun declare(value: String) {
         val nextClock = (quilter.state.value.entries[quilter.replica]?.clock ?: 0L) + 1L

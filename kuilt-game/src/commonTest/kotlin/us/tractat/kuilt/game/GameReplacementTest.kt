@@ -27,6 +27,7 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
+import kotlin.time.Instant
 
 /**
  * Acceptance tests for freed-seat voter replacement after a permanent departure (#594).
@@ -54,6 +55,8 @@ class GameReplacementTest {
         val (hostRaw, j1Raw, deadRaw) = seats(loom, 3)
 
         val livenessConfig = fastLivenessConfig()
+        var nowMs = 0L
+        val clock = { Instant.fromEpochMilliseconds(nowMs) }
 
         val hostDeferred = async {
             backgroundScope.gameHost(
@@ -61,6 +64,7 @@ class GameReplacementTest {
                 peerCount = 3,
                 raftConfig = fastRaftConfig(seed = 1L),
                 livenessConfig = livenessConfig,
+                clock = clock,
             )
         }
         val j1Deferred = async { backgroundScope.gameJoin(j1Raw, raftConfig = fastRaftConfig(seed = 2L)) }
@@ -68,19 +72,19 @@ class GameReplacementTest {
 
         val host = hostDeferred.await()
         j1Deferred.await()
-        val dead = deadDeferred.await()
+        deadDeferred.await()
 
         // Commit an action at full quorum before the peer departs.
         TurnSequencer(host.node, Int.serializer()).propose(1)
 
-        // Simulate permanent departure: dead peer closes its session.
-        dead.close()
-        runCurrent()
-
-        // Advance well past timeout + reconnect window so PeerLost fires.
+        // Simulate permanent departure: advance virtual clock so the HeartbeatPartitionDetector
+        // observes silence >= timeout + reconnectWindow and emits PeerLost.
+        // The dead peer's session stays open so the Raft transport still reaches it — only
+        // heartbeat channel 4 pings go unanswered (the peer doesn't subscribe to that channel).
         val windowMs = livenessConfig.timeout.inWholeMilliseconds +
             livenessConfig.reconnectWindow.inWholeMilliseconds +
             livenessConfig.interval.inWholeMilliseconds * 4
+        nowMs = windowMs
         advanceTimeBy(windowMs)
         runCurrent()
 
@@ -110,6 +114,8 @@ class GameReplacementTest {
         val (hostRaw, j1Raw, leavingRaw) = seats(loom, 3)
 
         val livenessConfig = fastLivenessConfig()
+        var nowMs = 0L
+        val clock = { Instant.fromEpochMilliseconds(nowMs) }
 
         val hostDeferred = async {
             backgroundScope.gameHost(
@@ -117,6 +123,7 @@ class GameReplacementTest {
                 peerCount = 3,
                 raftConfig = fastRaftConfig(seed = 1L),
                 livenessConfig = livenessConfig,
+                clock = clock,
             )
         }
         val j1Deferred = async { backgroundScope.gameJoin(j1Raw, raftConfig = fastRaftConfig(seed = 2L)) }
@@ -126,16 +133,25 @@ class GameReplacementTest {
         j1Deferred.await()
         val leaving = leavingDeferred.await()
 
-        // Graceful leave — must free the seat immediately (before the reconnect window).
+        // Graceful leave — must free the seat without waiting the full reconnect window.
         leaving.leave()
         runCurrent()
 
-        // Verify eviction happened BEFORE the reconnect window elapses — advance only half.
-        advanceTimeBy(livenessConfig.reconnectWindow.inWholeMilliseconds / 2)
+        // Advance only a small amount — just enough for Raft heartbeats to propagate the
+        // changeMembership commit. The vacate signal bypasses the reconnect window entirely.
+        val halfWindowMs = livenessConfig.reconnectWindow.inWholeMilliseconds / 2
+        nowMs = halfWindowMs
+        advanceTimeBy(halfWindowMs)
         runCurrent()
 
         // Cluster shrinks to 2 voters within half the reconnect window.
         awaitVoterCount(host.node, expectedCount = 2)
+
+        // Wait for the host's admissionClosed to reset to null — confirms declareAdmissionOpen()
+        // has been called and broadcast. Without this gate a race exists between the host's
+        // HOST_DECLARED broadcast reaching j1 and the replacement's Quilter receiving j1's
+        // FullState: j1's stale FullState with admission-closed:... would cause RosterFullException.
+        host.presence!!.admissionClosed.first { it == null }
 
         // A replacement can immediately take the freed seat.
         val replacementRaw = loom.join(InMemoryTag("replacement"))
@@ -163,6 +179,8 @@ class GameReplacementTest {
         val (hostRaw, j1Raw, blipRaw) = seats(loom, 3)
 
         val livenessConfig = fastLivenessConfig()
+        var nowMs = 0L
+        val clock = { Instant.fromEpochMilliseconds(nowMs) }
 
         val hostDeferred = async {
             backgroundScope.gameHost(
@@ -170,6 +188,7 @@ class GameReplacementTest {
                 peerCount = 3,
                 raftConfig = fastRaftConfig(seed = 1L),
                 livenessConfig = livenessConfig,
+                clock = clock,
             )
         }
         val j1Deferred = async { backgroundScope.gameJoin(j1Raw, raftConfig = fastRaftConfig(seed = 2L)) }
@@ -177,18 +196,16 @@ class GameReplacementTest {
 
         val host = hostDeferred.await()
         j1Deferred.await()
-        val blip = blipDeferred.await()
+        blipDeferred.await()
 
-        // Close the blipping peer — this triggers PeerUnresponsive immediately.
-        blip.close()
-        runCurrent()
-
-        // Advance INSIDE the reconnect window: past timeout but before the window expires.
-        // PeerLost has not fired; no eviction should occur.
+        // Simulate a transient blip: advance the clock past the timeout so PeerUnresponsive fires
+        // but not past the full reconnect window — the peer's session stays open so the Raft
+        // transport still reaches it; only heartbeat channel 4 pings go unanswered.
         val insideWindowMs = livenessConfig.reconnectWindow.inWholeMilliseconds / 2
         check(insideWindowMs > livenessConfig.timeout.inWholeMilliseconds) {
             "insideWindowMs must be past timeout so PeerUnresponsive fired but PeerLost has not"
         }
+        nowMs = insideWindowMs
         advanceTimeBy(insideWindowMs)
         runCurrent()
 
@@ -211,6 +228,7 @@ class GameReplacementTest {
         val (hostRaw, j1Raw) = seats(loom, 2)
 
         val livenessConfig = fastLivenessConfig()
+        val clock = { Instant.fromEpochMilliseconds(0L) }
 
         val hostDeferred = async {
             backgroundScope.gameHost(
@@ -219,6 +237,7 @@ class GameReplacementTest {
                 returnAt = ReturnPolicy.Quorum,
                 raftConfig = fastRaftConfig(seed = 1L),
                 livenessConfig = livenessConfig,
+                clock = clock,
             )
         }
         val j1Deferred = async { backgroundScope.gameJoin(j1Raw, raftConfig = fastRaftConfig(seed = 2L)) }
@@ -242,6 +261,7 @@ class GameReplacementTest {
         val (hostRaw, j1Raw, spectateRaw) = seats(loom, 3)
 
         val livenessConfig = fastLivenessConfig()
+        val clock = { Instant.fromEpochMilliseconds(0L) }
 
         val hostDeferred = async {
             backgroundScope.gameHost(
@@ -251,6 +271,7 @@ class GameReplacementTest {
                 maxSpectators = 1,
                 raftConfig = fastRaftConfig(seed = 1L),
                 livenessConfig = livenessConfig,
+                clock = clock,
             )
         }
         val j1Deferred = async { backgroundScope.gameJoin(j1Raw, raftConfig = fastRaftConfig(seed = 2L)) }

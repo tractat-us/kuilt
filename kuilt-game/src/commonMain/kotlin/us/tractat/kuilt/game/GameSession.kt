@@ -28,6 +28,14 @@ public class GameSession internal constructor(
     public val node: RaftNode,
     private val seam: Seam,
     private val appMux: NamedMux,
+    /**
+     * Presence channel for this peer, non-null when this session was bootstrapped via
+     * [gameJoin] or [gameHost]. Null for [gameNode] (roster-given path — no presence channel).
+     *
+     * Held to support [leave]: the departing peer publishes a vacate signal on the presence
+     * channel so the host can evict immediately without waiting the reconnect window.
+     */
+    internal val presence: GamePresence? = null,
 ) {
     /**
      * Returns the application [Seam] for the channel named [name], idempotent per name.
@@ -40,6 +48,29 @@ public class GameSession internal constructor(
     public fun appChannel(name: String): Seam = appMux.channel(name)
 
     /**
+     * Signals a voluntary departure from the game session.
+     *
+     * Publishes a vacate marker on the presence channel so the host immediately evicts this
+     * voter via [RaftNode.changeMembership] without waiting the reconnect window. This frees
+     * the seat for a replacement peer to join promptly.
+     *
+     * **Distinct from [close].** [leave] is a graceful cluster departure: it signals the
+     * host and then returns; the caller is responsible for calling [close] afterward to tear
+     * down the local session. [close] is always a hard local teardown with no cluster
+     * signalling.
+     *
+     * **Spectators and roster-given sessions.** Calling [leave] on a spectator or on a session
+     * created by [gameNode] (no presence channel) is a no-op — those sessions are not voter
+     * seats and cannot be "vacated" in the lobby-presence sense.
+     *
+     * **Reconnect-after-PeerLost** (resuming the old seat) is out of scope — a peer that
+     * returns after eviction joins as a new voter via a fresh [gameJoin] into the freed seat.
+     */
+    public fun leave() {
+        presence?.declareVacate()
+    }
+
+    /**
      * Local teardown: stops the consensus [node]'s loops, then closes the underlying fabric.
      * Idempotent — a second call is a no-op.
      *
@@ -47,7 +78,8 @@ public class GameSession internal constructor(
      * closed seam mid-shutdown. This is a **hard local teardown**, not a graceful cluster
      * departure — to leave a cluster cleanly, hand off leadership
      * ([RaftNode.transferLeadership]) and/or remove this peer from membership
-     * ([RaftNode.changeMembership]) first.
+     * ([RaftNode.changeMembership]) first. For a voluntary voter departure use [leave] before
+     * calling [close].
      */
     public suspend fun close(reason: CloseReason = CloseReason.Normal) {
         node.close()
