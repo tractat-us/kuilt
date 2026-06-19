@@ -22,6 +22,9 @@ private const val HOST_DECLARED = "host"
 /** Marker value stored under a replica's slot to declare "I am present (a non-host participant)". */
 private const val PRESENT_DECLARED = "present"
 
+/** Marker value stored under a replica's slot to declare "I intend to spectate (non-voting learner)". */
+private const val SPECTATE_DECLARED = "spectate"
+
 /**
  * Prefix for the value stored under the host's slot when admission is closed.
  *
@@ -29,6 +32,15 @@ private const val PRESENT_DECLARED = "present"
  * encoded as a comma-separated list of [NodeId] string values.
  */
 private const val ADMISSION_CLOSED_PREFIX = "admission-closed:"
+
+/**
+ * Suffix appended to the host's slot value when the spectator gallery is closed.
+ *
+ * Applied to whatever the current host slot holds (e.g. `"host"`, `"admission-closed:…"`)
+ * to indicate that no further spectators will be admitted. The suffix is chosen to be
+ * structurally distinct from all other marker values.
+ */
+private const val SPECTATORS_CLOSED_SUFFIX = ":sc"
 
 /**
  * Lobby presence over [seam], backed by an [EphemeralMap] replicated by [Quilter].
@@ -91,6 +103,18 @@ public class GamePresence(
             .map { map -> admissionClosedFrom(map) }
             .stateIn(presenceScope, SharingStarted.Eagerly, admissionClosedFrom(quilter.state.value))
 
+    /**
+     * `true` once the host has signalled that the spectator gallery is closed — either because
+     * spectators are disabled or because [maxSpectators] has been reached.
+     *
+     * Driven by [declareSpectatorsClosed] on the host side; observed by [gameSpectate] to detect
+     * and throw [SpectatorsClosedException]. `false` until then; once `true`, never reverts.
+     */
+    public val spectatorsClosed: StateFlow<Boolean> =
+        quilter.state
+            .map { map -> spectatorsClosedFrom(map) }
+            .stateIn(presenceScope, SharingStarted.Eagerly, spectatorsClosedFrom(quilter.state.value))
+
     /** Declare this peer as the game host. */
     public fun declareHost(): Unit = declare(HOST_DECLARED)
 
@@ -104,6 +128,15 @@ public class GamePresence(
     public fun declarePresent(): Unit = declare(PRESENT_DECLARED)
 
     /**
+     * Declare this peer as a spectator (permanent non-voting learner).
+     *
+     * The host observes this declaration and either admits the replica as a learner-only
+     * cluster member or rejects it if spectators are disabled or the cap is reached.
+     * Call this instead of [declarePresent] from [gameSpectate].
+     */
+    public fun declareSpectate(): Unit = declare(SPECTATE_DECLARED)
+
+    /**
      * Publishes the admission-closed signal on the host's presence slot, replacing
      * the `"host"` marker with an encoded form that carries the final voter set.
      *
@@ -114,9 +147,35 @@ public class GamePresence(
      * via [admissionClosed].
      */
     public fun declareAdmissionClosed(voters: Set<NodeId>) {
-        val encoded = ADMISSION_CLOSED_PREFIX + voters.joinToString(",") { it.value }
+        val scSuffix = if (spectatorsClosedFrom(quilter.state.value)) SPECTATORS_CLOSED_SUFFIX else ""
+        val encoded = ADMISSION_CLOSED_PREFIX + voters.joinToString(",") { it.value } + scSuffix
         declare(encoded)
     }
+
+    /**
+     * Publishes the spectators-closed signal on the host's presence slot.
+     *
+     * Call this when spectators are disabled ([gameHost] `allowSpectators = false`) or when
+     * [maxSpectators] has been reached. Appends [SPECTATORS_CLOSED_SUFFIX] to whatever value
+     * the host's slot currently holds, so the signal coexists with [admissionClosed].
+     *
+     * The signal is monotone — once published it is never retracted.
+     */
+    public fun declareSpectatorsClosed() {
+        val current = quilter.state.value.entries[quilter.replica]?.value ?: HOST_DECLARED
+        if (!current.endsWith(SPECTATORS_CLOSED_SUFFIX)) declare(current + SPECTATORS_CLOSED_SUFFIX)
+    }
+
+    /**
+     * The converged set of replicas that have declared themselves as spectators.
+     *
+     * Returns replicas whose current slot value equals [SPECTATE_DECLARED]. Analogous to
+     * [declaredHosts] but for the spectate path.
+     */
+    public fun spectators(): Set<ReplicaId> =
+        quilter.state.value.entries
+            .filterValues { entry -> entry.value == SPECTATE_DECLARED }
+            .keys
 
     private fun declare(value: String) {
         val nextClock = (quilter.state.value.entries[quilter.replica]?.clock ?: 0L) + 1L
@@ -140,9 +199,13 @@ public class GamePresence(
         map.entries.values
             .firstOrNull { entry -> entry.value?.startsWith(ADMISSION_CLOSED_PREFIX) == true }
             ?.value
+            ?.removeSuffix(SPECTATORS_CLOSED_SUFFIX)
             ?.removePrefix(ADMISSION_CLOSED_PREFIX)
             ?.split(",")
             ?.filter { it.isNotEmpty() }
             ?.map { NodeId(it) }
             ?.toSet()
+
+    private fun spectatorsClosedFrom(map: EphemeralMap<String>): Boolean =
+        map.entries.values.any { entry -> entry.value?.endsWith(SPECTATORS_CLOSED_SUFFIX) == true }
 }

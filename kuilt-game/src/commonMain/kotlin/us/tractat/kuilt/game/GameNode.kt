@@ -4,6 +4,9 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.merge
@@ -83,6 +86,31 @@ public class RosterFullException(
  */
 public class JoinTimeoutException(
     message: String = "timed out waiting for the host to admit or reject this peer",
+) : IllegalStateException(message)
+
+/**
+ * Thrown by [gameSpectate] when the host's spectator gallery is closed — either because
+ * the host did not enable spectators (`allowSpectators = false`, the default) or because
+ * [maxSpectators] has already been reached.
+ *
+ * Distinct from [SpectateTimeoutException] so callers can diagnose "spectators are disabled
+ * or the gallery is full" vs "host gone / crashed mid-handshake". Surface this as a
+ * user-visible error (e.g. "spectating is not allowed for this game") rather than retrying.
+ */
+public class SpectatorsClosedException(
+    message: String = "spectators are not allowed or the spectator cap has been reached",
+) : IllegalStateException(message)
+
+/**
+ * Thrown by [gameSpectate] when the host never signals spectator admission or rejection
+ * within the [gameSpectate] `spectateAdmissionTimeout` bound.
+ *
+ * Distinct from [SpectatorsClosedException] so callers can diagnose "host gone / crashed
+ * mid-handshake" from "spectators are disabled / gallery full". On timeout, the caller may
+ * retry [gameSpectate] (the host may still be starting up) or surface a connectivity error.
+ */
+public class SpectateTimeoutException(
+    message: String = "timed out waiting for the host to admit or reject this spectator",
 ) : IllegalStateException(message)
 
 /**
@@ -201,6 +229,13 @@ public fun CoroutineScope.gameNode(
  *   admission door stays open until the roster reaches [peerCount], so a latecomer joins whenever
  *   it connects, however late. A peer arriving once the roster is already full is the separate,
  *   deferred concern in #587.
+ * @param allowSpectators Whether to admit peers that call [gameSpectate]. Disabled by default —
+ *   a [gameSpectate] call when spectators are off is rejected immediately with
+ *   [SpectatorsClosedException] rather than hanging. Spectators are permanent non-voting learners;
+ *   see [gameSpectate].
+ * @param maxSpectators Maximum number of spectators to admit. Ignored when [allowSpectators] is
+ *   `false`. Once this cap is reached, additional [gameSpectate] calls throw
+ *   [SpectatorsClosedException]. Must be ≥ 0.
  * @param storage Durable Raft state. Defaults to [InMemoryRaftStorage].
  * @param raftConfig Timing and behaviour parameters. Tests pass
  *   `RaftConfig(expectVirtualTime = true)` — this is the only supported path to
@@ -211,7 +246,7 @@ public fun CoroutineScope.gameNode(
  *   bound) only weakens detection, never disables the host. The default is sized to clear a
  *   typical WAN round-trip; raise it on high-latency fabrics, lower it where joiners are
  *   known-local.
- * @throws IllegalArgumentException if [peerCount] < 1.
+ * @throws IllegalArgumentException if [peerCount] < 1 or [maxSpectators] < 0.
  * @throws DuplicateHostException if another peer on the same session already declared host.
  *
  * @sample us.tractat.kuilt.game.sampleGameHostJoin
@@ -220,11 +255,14 @@ public suspend fun CoroutineScope.gameHost(
     seam: Seam,
     peerCount: Int,
     returnAt: ReturnPolicy = ReturnPolicy.FullMembership,
+    allowSpectators: Boolean = false,
+    maxSpectators: Int = 0,
     storage: RaftStorage = InMemoryRaftStorage(),
     raftConfig: RaftConfig = RaftConfig(),
     hostDeclarationTimeout: Duration = DEFAULT_HOST_DECLARATION_TIMEOUT,
 ): GameSession {
     require(peerCount >= 1) { "peerCount must be >= 1" }
+    require(maxSpectators >= 0) { "maxSpectators must be >= 0" }
 
     val mux = MuxSeam(seam, this)
     val raftSeam = mux.channel(RAFT_CHANNEL)
@@ -244,7 +282,9 @@ public suspend fun CoroutineScope.gameHost(
         ReturnPolicy.Quorum -> peerCount / 2 + 1
     }
     val voters = mutableSetOf(self)
-    admitUntil(node, seam, voters, target = returnThreshold)
+    // spectatorIds tracks NodeIds admitted as spectators so the voter loop skips them.
+    val spectatorIds = mutableSetOf<NodeId>()
+    admitVotersUntil(node, seam, voters, spectatorIds, target = returnThreshold, presence)
 
     // Quorum mode: keep admitting the remaining voters in the background for the life of the
     // session. The loop runs on the caller's scope (this), so it stays alive until the roster
@@ -254,7 +294,7 @@ public suspend fun CoroutineScope.gameHost(
     // this point only the background coroutine touches `voters`, so no synchronization is needed.
     if (voters.size < peerCount) {
         launch {
-            admitUntil(node, seam, voters, target = peerCount)
+            admitVotersUntil(node, seam, voters, spectatorIds, target = peerCount, presence)
             presence.declareAdmissionClosed(voters)
         }
     } else {
@@ -263,6 +303,31 @@ public suspend fun CoroutineScope.gameHost(
         // detect the full roster immediately without waiting for the background loop.
         presence.declareAdmissionClosed(voters)
     }
+
+    // Reactive spectator management — runs persistently in the background. On every new spectator
+    // declaration:
+    //   - If spectators are enabled and the cap is not yet reached → admit the peer as a permanent
+    //     learner.
+    //   - Otherwise → publish spectators-closed and exit.
+    //
+    // Rejection is REACTIVE, not proactive: the `:sc` signal is only published AFTER a would-be
+    // spectator has declared, guaranteeing that its Quilter is already subscribed and will receive
+    // the rejection Delta. Publishing `:sc` eagerly (before any declaration) would race against the
+    // peer's MuxSeam setup and silently lose the frame under StandardTestDispatcher.
+    launch {
+        var admitted = spectatorIds.size
+        while (true) {
+            val spectatorId = nextSpectatorPeer(presence, seam, spectatorIds)
+            if (!allowSpectators || admitted >= maxSpectators) {
+                presence.declareSpectatorsClosed()
+                break
+            }
+            admitSpectatorLearner(node, voters, spectatorIds, spectatorId)
+            spectatorIds += spectatorId
+            admitted++
+        }
+    }
+
     return GameSession(node, seam, appMux)
 }
 
@@ -338,6 +403,121 @@ public suspend fun CoroutineScope.gameJoin(
 
     awaitAdmissionOrThrow(node, presence, self, joinAdmissionTimeout)
     return GameSession(node, seam, appMux)
+}
+
+/**
+ * Join a game session over [seam] as a **permanent, non-voting spectator learner**.
+ *
+ * A spectator receives the full committed log (log replication + chunked InstallSnapshot)
+ * and follows the game live, but **never votes** and **never counts toward quorum**. The
+ * session's voter quorum is unaffected by how many spectators are present — two voters can
+ * still commit with a spectator watching.
+ *
+ * **Host opt-in required.** The host must call [gameHost] with `allowSpectators = true` and
+ * `maxSpectators >= 1`. If spectators are disabled (the default) or the cap is already reached,
+ * [gameSpectate] throws [SpectatorsClosedException] immediately — never a silent hang.
+ *
+ * **Permanent role — no promotion.** A spectator's [GameSession.node] role is permanently
+ * [RaftRole.Learner]. There is no promotion-to-voter path in this entry point; that is a
+ * separate concern (see issue #594).
+ *
+ * **Internal multiplexing.** [gameSpectate] wraps [seam] in a [MuxSeam] and routes Raft
+ * traffic on channel tag 1, lobby presence on channel tag 2, and the application-envelope
+ * [NamedMux] on channel tag 3 — matching [gameHost]'s channels. The caller passes a plain
+ * [Seam]; muxing is internal. Ride extra application traffic over [GameSession.appChannel].
+ *
+ * **Do not collect `seam.incoming` after calling this** (ADR-034 single-collection).
+ *
+ * @param storage Durable Raft state. Defaults to [InMemoryRaftStorage].
+ * @param raftConfig Timing and behaviour parameters. Tests pass
+ *   `RaftConfig(expectVirtualTime = true)` (D4).
+ * @param spectateAdmissionTimeout Upper bound on waiting for the host to either admit this
+ *   spectator or signal spectators-closed. If this bound expires before either signal arrives,
+ *   [gameSpectate] throws [SpectateTimeoutException]. The default is sized to clear a typical
+ *   WAN round-trip; lower it in tests where you want the backstop to fire quickly.
+ * @throws SpectatorsClosedException if the host has spectators disabled or the cap is full.
+ * @throws SpectateTimeoutException if neither admission nor a spectators-closed signal arrives
+ *   within [spectateAdmissionTimeout].
+ */
+public suspend fun CoroutineScope.gameSpectate(
+    seam: Seam,
+    storage: RaftStorage = InMemoryRaftStorage(),
+    raftConfig: RaftConfig = RaftConfig(),
+    spectateAdmissionTimeout: Duration = DEFAULT_SPECTATE_ADMISSION_TIMEOUT,
+): GameSession {
+    val mux = MuxSeam(seam, this)
+    val raftSeam = mux.channel(RAFT_CHANNEL)
+    val presenceSeam = mux.channel(PRESENCE_CHANNEL)
+    val appMux = NamedMux(mux.channel(APP_ENVELOPE_CHANNEL), this)
+
+    val self = NodeId(seam.selfId.value)
+
+    // Announce spectate intent so the host can enumerate spectator-intending replicas.
+    val presence = GamePresence(presenceSeam, this, raftConfig.expectVirtualTime)
+    presence.declareSpectate()
+
+    // Start as a learner with no known voters. The host will commit a config that includes
+    // this peer in the learners set; the spectator never leaves Learner role.
+    val node = raftNode(
+        ClusterConfig(voters = emptySet(), learners = setOf(self)),
+        SeamRaftTransport(raftSeam),
+        storage,
+        raftConfig,
+    )
+
+    awaitSpectatorAdmissionOrThrow(node, presence, spectateAdmissionTimeout)
+    return GameSession(node, seam, appMux)
+}
+
+/**
+ * Races spectator admission against the spectators-closed signal, with a backstop timeout.
+ *
+ * Returns normally when the node's [RaftNode.commitIndex] advances past zero — this is the
+ * first AppendEntries from the host after the spectator has been added to the cluster config.
+ * Throws [SpectatorsClosedException] if [presence] signals spectators-closed.
+ * Throws [SpectateTimeoutException] if [timeout] elapses before either signal arrives.
+ *
+ * **Why `commitIndex > 0` signals admission:** a spectator node starts in a vacuous cluster
+ * (`voters = {}`) and receives no AppendEntries until the host's leader commits a membership
+ * change that adds the spectator to its learner set. The first replication the spectator
+ * receives advances its `commitIndex` beyond zero. Config entries are withheld from
+ * `_committed` / `committedFrom()`, so role and committed-log observation are not viable
+ * signals here — `commitIndex` is.
+ */
+private suspend fun awaitSpectatorAdmissionOrThrow(
+    node: RaftNode,
+    presence: GamePresence,
+    timeout: Duration,
+) {
+    val admitted = withTimeoutOrNull(timeout) {
+        merge(
+            node.commitIndex.asSpectatorAdmissionFlow(),
+            presence.spectatorsClosed.asSpectatorRejectionFlow(),
+        ).first()
+    } ?: throw SpectateTimeoutException()
+
+    if (!admitted) throw SpectatorsClosedException()
+}
+
+/**
+ * Maps the commit-index flow to a Boolean emission: `true` once the index advances past zero.
+ *
+ * This is the spectator admission signal: `commitIndex > 0` means the host has committed the
+ * membership change that adds this spectator to the cluster learner set and is replicating.
+ */
+private fun StateFlow<Long>.asSpectatorAdmissionFlow(): Flow<Boolean> = flow {
+    first { index -> index > 0L }
+    emit(true)
+}
+
+/**
+ * Maps the spectators-closed flow to a Boolean emission: `false` once the signal is `true`.
+ *
+ * Emits nothing while spectators are still open.
+ */
+private fun Flow<Boolean>.asSpectatorRejectionFlow(): Flow<Boolean> = flow {
+    first { closed -> closed }
+    emit(false)
 }
 
 /**
@@ -449,27 +629,93 @@ private val DEFAULT_HOST_DECLARATION_TIMEOUT = 2.seconds
 private val DEFAULT_JOIN_ADMISSION_TIMEOUT = 10.seconds
 
 /**
- * Admit connecting peers as learner→voter until the cluster reaches [target] voters.
+ * Default backstop for [gameSpectate]'s admission wait. Sized similarly to [gameJoin]'s.
+ * Exposed as the [gameSpectate] `spectateAdmissionTimeout` parameter for tuning.
+ */
+private val DEFAULT_SPECTATE_ADMISSION_TIMEOUT = 10.seconds
+
+/**
+ * Admit connecting voter peers as learner→voter until the cluster reaches [target] voters.
  *
  * Drives the shared admit loop used by both the synchronous return-watermark phase and the
  * background latecomer phase of [gameHost]. Mutates [voters] in place as each peer is promoted.
+ * Skips any peer whose NodeId appears in [spectatorIds] — those are permanent learners that
+ * must not consume a voter seat.
  */
-private suspend fun admitUntil(node: RaftNode, seam: Seam, voters: MutableSet<NodeId>, target: Int) {
+private suspend fun admitVotersUntil(
+    node: RaftNode,
+    seam: Seam,
+    voters: MutableSet<NodeId>,
+    spectatorIds: Set<NodeId>,
+    target: Int,
+    presence: GamePresence,
+) {
     while (voters.size < target) {
-        val joinerId = nextPeer(seam, voters)
+        val joinerId = nextVoterPeer(seam, voters, spectatorIds, presence)
         admitLearnerThenVoter(node, voters, joinerId)
         voters += joinerId
     }
 }
 
-/** Suspends until a peer appears in [seam.peers] that is not already in [admitted]. */
-private suspend fun nextPeer(seam: Seam, admitted: Set<NodeId>): NodeId {
-    val newPeers = seam.peers.first { peerSet ->
-        peerSet.any { peerId -> NodeId(peerId.value) !in admitted }
+/**
+ * Suspends until a voter-intending peer appears in [seam.peers] that is neither in [admitted]
+ * nor in [spectatorIds], then returns that peer's [NodeId].
+ *
+ * Spectator NodeIds are excluded: they are identified by checking [presence.spectators] and
+ * mapping to [NodeId]. This ensures a spectator peer connecting to the mesh never consumes
+ * a voter seat — the voter loop simply waits past it for the next non-spectator peer.
+ */
+private suspend fun nextVoterPeer(
+    seam: Seam,
+    admitted: Set<NodeId>,
+    spectatorIds: Set<NodeId>,
+    presence: GamePresence,
+): NodeId {
+    // Combine peers and announced so the exclusion set refreshes whenever either changes:
+    // a spectator that declares just before connecting is still excluded.
+    return combine(seam.peers, presence.announced) { peerSet, _ ->
+        val currentSpectators = presence.spectators().map { NodeId(it.value) }.toSet()
+        val allExcluded = admitted + spectatorIds + currentSpectators
+        peerSet.map { NodeId(it.value) }.firstOrNull { it !in allExcluded }
     }
-    return newPeers
-        .map { NodeId(it.value) }
-        .first { it !in admitted }
+        .filterNotNull()
+        .first()
+}
+
+/**
+ * Suspends until a new spectator-intending peer appears in [presence.spectators] whose NodeId
+ * is not already in [admitted], then returns that peer's [NodeId].
+ *
+ * Matches presence declarations to connected peers via [seam.peers] to ensure the declaring
+ * replica is actually reachable before trying to admit it.
+ */
+private suspend fun nextSpectatorPeer(
+    presence: GamePresence,
+    seam: Seam,
+    admitted: Set<NodeId>,
+): NodeId {
+    // Combine presence announcements with connected peers so the result stays fresh as
+    // new spectator declarations arrive or new peers connect.
+    return combine(presence.announced, seam.peers) { _, peerSet ->
+        val spectatorNodeIds = presence.spectators().map { NodeId(it.value) }.toSet()
+        val connectedPeerIds = peerSet.map { NodeId(it.value) }.toSet()
+        (spectatorNodeIds intersect connectedPeerIds - admitted).firstOrNull()
+    }
+        .filterNotNull()
+        .first()
+}
+
+/** Admit [spectatorId] as a permanent learner (never voter) in the cluster. */
+private suspend fun admitSpectatorLearner(
+    node: RaftNode,
+    currentVoters: Set<NodeId>,
+    currentLearners: Set<NodeId>,
+    spectatorId: NodeId,
+) {
+    changeMembershipWithRetry(
+        node,
+        ClusterConfig(voters = currentVoters, learners = currentLearners + spectatorId),
+    )
 }
 
 /** Admit [joiner] first as a learner, then promote to voter, using bounded retry. */
