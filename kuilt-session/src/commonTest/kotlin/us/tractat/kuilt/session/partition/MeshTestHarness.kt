@@ -12,6 +12,9 @@ import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.Swatch
 import us.tractat.kuilt.core.Pattern
+import us.tractat.kuilt.liveness.HeartbeatConfig
+import us.tractat.kuilt.liveness.HeartbeatPartitionDetector
+import us.tractat.kuilt.liveness.PartitionEvent
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant

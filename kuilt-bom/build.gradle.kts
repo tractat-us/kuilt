@@ -19,6 +19,7 @@ mavenPublishing {
 dependencies {
     constraints {
         api(project(":kuilt-core"))
+        api(project(":kuilt-liveness"))
         api(project(":kuilt-crdt"))
         api(project(":kuilt-quilter"))
         api(project(":kuilt-deal"))

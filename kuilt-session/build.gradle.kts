@@ -7,6 +7,7 @@ kotlin {
     sourceSets {
         commonMain.dependencies {
             api(project(":kuilt-core"))
+            implementation(project(":kuilt-liveness"))
             implementation(project(":kuilt-crdt"))
             implementation(project(":kuilt-quilter"))
             implementation(libs.kotlinx.atomicfu)

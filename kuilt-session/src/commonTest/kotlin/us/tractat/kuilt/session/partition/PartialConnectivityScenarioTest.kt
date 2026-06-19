@@ -12,6 +12,8 @@ import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.Direction
 import us.tractat.kuilt.core.FaultProfile
 import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.liveness.HeartbeatConfig
+import us.tractat.kuilt.liveness.PartitionEvent
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals

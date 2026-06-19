@@ -14,7 +14,7 @@ import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.Swatch
 import us.tractat.kuilt.session.admit.AdmitMessage
-import us.tractat.kuilt.session.partition.HeartbeatConfig
+import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertFalse

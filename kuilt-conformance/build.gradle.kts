@@ -11,6 +11,7 @@ kotlin {
     sourceSets {
         commonMain.dependencies {
             api(project(":kuilt-core"))
+            api(project(":kuilt-liveness"))
             api(project(":kuilt-session"))
             api(project(":kuilt-raft"))
             api(project(":kuilt-crdt"))
