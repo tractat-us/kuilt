@@ -1,29 +1,26 @@
 # kuilt
 
-kuilt has one job: keep peer-to-peer app code stable while transports,
-platforms, and network conditions change underneath it.
+kuilt has one job: keep your peer-to-peer app code stable while transports,
+platforms, and network conditions change.
 
-It is a peer-symmetric networking library for Kotlin Multiplatform (JVM,
-Android, iOS, macOS, wasmJs). It moves byte frames between peers over
-interchangeable *fabrics* — WebSocket, mDNS-discovered LAN, Apple Multipeer
-Connectivity, WebRTC, Android Nearby — behind one contract.
+It is a networking library for Kotlin Multiplatform (JVM, Android, iOS,
+macOS, wasmJs). It moves byte frames between peers over interchangeable
+*fabrics* (WebSocket, mDNS-discovered LAN, Apple Multipeer Connectivity,
+WebRTC, Android Nearby) behind one contract.
 
-The library has three distinct value propositions:
+The library has three main parts:
 
-- **Fabrics** — the missing network pieces you keep having to write from scratch.
-  `Loom` and `Seam` give you a uniform send/receive/membership surface across every
-  transport. Your application layer is identical whether the connection is WebSocket,
-  Bluetooth, or WebRTC; swap the loom and nothing else changes.
+- **Fabrics** — reusable transport integrations.
+  `Loom` and `Seam` give you one send/receive/membership API across transports.
+  Your application code stays the same when you swap transports.
 
-- **Conflict-free Replicated Data Types** — CRDTs are data structure building blocks you can use in isolation, with or without
-  the network layer. `LWWMap`, `ORSet`, `JsonCrdt`, and the rest are plain serializable
-  value types. Add `Quilter` when you want live delta propagation; leave it out
-  when your transport is HTTP or a message queue.
+- **Conflict-free Replicated Data Types** — data structures that converge across peers.
+  You can use `LWWMap`, `ORSet`, `JsonCrdt`, and others with or without kuilt's
+  network layer. Add `Quilter` when you want live delta propagation.
 
-- **Raft** — the foundation your network-aware coordination code wishes it was built on.
-  `kuilt-raft` gives you a correct, tested Raft implementation over any kuilt `Seam`.
-  `TurnSequencer` (from `kuilt-game`) wraps it in terms a turn-based game understands,
-  hiding every Raft concept that doesn't belong in your game logic.
+- **Raft** — strong ordering and agreement.
+  `kuilt-raft` provides a tested Raft implementation over any kuilt `Seam`.
+  `TurnSequencer` (from `kuilt-game`) wraps it for turn-based game logic.
 
 ## Choose by the guarantee you need
 
@@ -31,25 +28,31 @@ The library has three distinct value propositions:
 - Add a **CRDT** when state should converge without central coordination.
 - Add **Raft** when every peer must apply the same decisions in the same order.
 
-Start with the weakest guarantee that still keeps your product correct, then
-layer stronger constructs only where needed.
+Start with the weakest guarantee that keeps your product correct, then add
+stronger guarantees only where needed.
 
 → [Getting started: two peers, one session](getting-started.md)
 
 ## The fabric metaphor
 
-A **loom** is a factory for sessions. A **seam** is one peer's view of a live session. A **swatch** is a frame of bytes. Every fabric — WebSocket, Multipeer, Nearby, WebRTC — implements these three types and is done. Your application code never sees a socket, a peer-connection, or a Bluetooth peripheral.
+A **loom** creates sessions. A **seam** is one peer's view of a live session.
+A **swatch** is a frame of bytes. Every fabric (WebSocket, Multipeer, Nearby,
+WebRTC) implements these three types. Your app code does not need to handle
+socket APIs, peer-connection objects, or Bluetooth internals directly.
 
 ## Peer symmetry
 
-There is no client/server split in kuilt's contract. Every peer in a session holds an identical `Seam`. A 2-peer WebSocket connection is just the degenerate `peers.size == 2` case of the symmetric model. This means the same application code runs whether your session has two peers or twenty, and whether the fabric is a relay server or a direct radio link.
+There is no client/server split in kuilt's contract. Every peer in a session
+uses the same `Seam` interface. A 2-peer WebSocket connection is just
+`peers.size == 2` of the same model. The same app code can run with two peers
+or twenty, and over relay or direct links.
 
 ## Modules at a glance
 
 | Module | What it gives you |
 |--------|-------------------|
 | `kuilt-core` | The contract (`Loom`/`Seam`/`Swatch`), `InMemoryLoom` reference impl, `MuxSeam` + `NamedMux` channel splitters |
-| `kuilt-crdt` | Delta-state CRDT zoo (`GCounter`, `ORSet`, `LWWMap`, `JsonCrdt`, …) |
+| `kuilt-crdt` | Delta-state CRDT library (`GCounter`, `ORSet`, `LWWMap`, `JsonCrdt`, …) |
 | `kuilt-quilter` | Live CRDT replication over a `Seam`: `Quilter` drives delta-exchange and anti-entropy |
 | `kuilt-deal` | Cryptographically fair card dealing (`DealSession`) + dealer-less fair-random (`FairRandom`) |
 | `kuilt-game` | Turn-based game facade: `gameHost`/`gameJoin`/`gameNode` → `GameSession`, `TurnSequencer`, `SpeculativeSequencer` |
@@ -71,7 +74,10 @@ kuilt fabrics fall into two topologies:
 - **Far** — client → server relay (`kuilt-websocket`, whether the server is on-LAN or remote).
 - **Near** — peer ↔ peer (`kuilt-multipeer`, `kuilt-nearby`, `kuilt-webrtc`).
 
-Discovery is orthogonal to this cut. mDNS, Multipeer browsing, and WebRTC signaling are rendezvous mechanisms — they tell you who is out there and how to reach them. They feed a fabric; they are not fabrics themselves. An mDNS-discovered game still connects over WebSocket (Far), which is why `kuilt-mdns` depends on `kuilt-websocket` and not the other way around.
+Discovery is separate from transport. mDNS, Multipeer browsing, and WebRTC
+signaling help peers find each other and exchange connection info. They feed a
+fabric; they are not fabrics themselves. An mDNS-discovered game still connects
+over WebSocket (Far), which is why `kuilt-mdns` depends on `kuilt-websocket`.
 
 ## What kuilt is not
 

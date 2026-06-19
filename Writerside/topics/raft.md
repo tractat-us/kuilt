@@ -1,25 +1,28 @@
 # Consensus (Raft)
 
-Use `kuilt-raft` when your feature needs strict agreement, not best-effort merge.
-It gives every node the same strongly consistent, totally ordered log so each
-peer applies exactly the same decisions in exactly the same order.
+Use `kuilt-raft` when your feature needs strict agreement, not best-effort
+merge. It gives every node the same strongly consistent, totally ordered log,
+so each peer applies the same decisions in the same order.
 
 Use it for coordination decisions (turn order, locks, durable workflow steps)
-where two peers disagreeing would be a correctness bug.
+where peer disagreement would be a correctness bug.
 
 Formally, `kuilt-raft` implements the Raft consensus algorithm for Kotlin
 Multiplatform.
 
 ## Transport independence
 
-`RaftTransport` is a plain interface. Raft runs over your own messaging layer without needing any other kuilt module. The bundled `SeamRaftTransport` wraps a kuilt `Seam` for the common case:
+`RaftTransport` is a plain interface. Raft can run over your own messaging
+layer without any other kuilt module. The bundled `SeamRaftTransport` wraps a
+kuilt `Seam` for the common case:
 
 ```kotlin
 val seam: Seam = loom.host(Pattern("raft-cluster"))
 val transport = SeamRaftTransport(seam)
 ```
 
-Implement `RaftTransport` directly to plug in WebRTC, gRPC, or anything else.
+Implement `RaftTransport` directly to plug in WebRTC, gRPC, or another
+transport.
 
 ## What's included
 
@@ -56,7 +59,8 @@ scope.launch {
 val entry: LogEntry = node.propose("set x=1".encodeToByteArray())
 ```
 
-`raftNode` is a `CoroutineScope` extension — the node's lifetime is tied to the scope.
+`raftNode` is a `CoroutineScope` extension, so the node's lifetime is tied to
+the scope.
 
 ## Turn-based game facade
 
@@ -64,9 +68,9 @@ val entry: LogEntry = node.propose("set x=1".encodeToByteArray())
 
 **Bootstrap — `gameHost` / `gameJoin` / `gameNode`**
 
-These three functions are the recommended entry point. They wrap a plain `Seam`,
-set up internal multiplexing (Raft channel + app-envelope channel over one
-connection), and return a `GameSession`:
+These three functions are the recommended entry point. They wrap a plain
+`Seam`, set up internal multiplexing (Raft channel + app-envelope channel over
+one connection), and return a `GameSession`:
 
 - `gameHost(seam, peerCount)` — one peer per session; detects duplicate hosts,
   bootstraps a singleton-voter cluster, and admits each joiner until the roster
@@ -78,16 +82,15 @@ connection), and return a `GameSession`:
   symmetrically, with no appoint-the-host step.
 
 `GameSession` carries the `RaftNode` (for consensus) and `appChannel(name)`
-(for best-effort application traffic — chat, cursors, voice signalling — sharing
-the same fabric without a second connection):
+(for best-effort app traffic such as chat, cursors, or voice signalling,
+sharing the same fabric without a second connection):
 
 ```kotlin
 ```
 { src="../../kuilt-game/src/commonSamples/kotlin/us/tractat/kuilt/game/GameSamples.kt" include-symbol="sampleGameHostJoin" }
 
-**`TurnSequencer`** wraps a `RaftNode` and hides Raft mechanics
-behind a typed action/committed-stream API, so game code can focus on domain
-rules instead of consensus plumbing.
+**`TurnSequencer`** wraps a `RaftNode` and hides Raft mechanics behind a typed
+action/committed-stream API, so game code can focus on domain rules.
 
 ## Storage
 

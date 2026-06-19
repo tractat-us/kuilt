@@ -1,7 +1,7 @@
 # Install
 
 Install only what your feature needs, then add modules as your requirements
-grow. kuilt publishes to Maven Central under the `us.tractat.kuilt` group.
+grow. kuilt is published to Maven Central under the `us.tractat.kuilt` group.
 
 ## Add the repository
 
@@ -14,27 +14,26 @@ repositories {
 
 ## Depend on the modules you need
 
-The recommended path is the **BOM**: align all kuilt modules to one version,
-then opt into only the capabilities you need:
+The recommended path is the **BOM**: it keeps all kuilt modules on one version,
+while you add only the modules you need:
 
-**Why use the BOM:** it prevents version drift between kuilt modules as your app
-grows.
+**Why use the BOM:** it prevents version drift between kuilt modules.
 
 ```kotlin
 // build.gradle.kts
 dependencies {
     implementation(platform("us.tractat.kuilt:kuilt-bom:VERSION"))
 
-    implementation("us.tractat.kuilt:kuilt-websocket")  // WebSocket fabric
-    implementation("us.tractat.kuilt:kuilt-crdt")       // CRDT zoo
+    implementation("us.tractat.kuilt:kuilt-websocket")  // WebSocket transport
+    implementation("us.tractat.kuilt:kuilt-crdt")       // CRDT data types
     implementation("us.tractat.kuilt:kuilt-raft")       // Raft consensus
-    implementation("us.tractat.kuilt:kuilt-session")    // membership / room
+    implementation("us.tractat.kuilt:kuilt-session")    // Room membership
 }
 ```
 
-Without the BOM, pin each module explicitly (`us.tractat.kuilt:kuilt-crdt:VERSION`). Replace `VERSION` with the [latest release](https://central.sonatype.com/artifact/us.tractat.kuilt/kuilt-core).
+Without the BOM, pin each module explicitly (for example, `us.tractat.kuilt:kuilt-crdt:VERSION`). Replace `VERSION` with the [latest release](https://central.sonatype.com/artifact/us.tractat.kuilt/kuilt-core).
 
-Every module re-exports the `kuilt-core` contract (`Loom`/`Seam`/`Swatch`), so you don't list it separately — pick only the modules you actually use. A project that only needs in-memory message passing depends on `kuilt-core` alone.
+Every module re-exports the `kuilt-core` contract (`Loom`/`Seam`/`Swatch`), so you do not need to list `kuilt-core` separately when using those modules. If you only need in-memory message passing, `kuilt-core` alone is enough.
 
 If you're unsure where to start, begin with one transport module
 (`kuilt-websocket` is usually the easiest), then add `kuilt-crdt`,
@@ -42,18 +41,18 @@ If you're unsure where to start, begin with one transport module
 
 ## Local iteration with `includeBuild`
 
-When you are developing kuilt and a consumer side by side, a presence-gated `includeBuild` substitutes the local sources for the published artifact with zero latency:
+When you are developing kuilt and a consumer side by side, you can use `includeBuild` so Gradle uses your local kuilt source instead of the published artifact:
 
 ```kotlin
 // consumer's settings.gradle.kts
 if (file("../kuilt").exists()) includeBuild("../kuilt")
 ```
 
-When the `kuilt/` directory is absent (CI, ephemeral worktrees), Gradle resolves the published coordinates as normal. The public API and Maven coordinates are the compatibility surface — the `includeBuild` shortcut is for local iteration only.
+When the `kuilt/` directory is absent (CI, temporary worktrees), Gradle falls back to the published artifact automatically. `includeBuild` is only a local development shortcut.
 
 ## Test utilities
 
-Two modules exist purely to support testing code built on kuilt:
+Two modules are available for testing code built on kuilt:
 
 ```kotlin
 // commonTest
@@ -61,4 +60,4 @@ testImplementation("us.tractat.kuilt:kuilt-test:VERSION")        // fakes + test
 testImplementation("us.tractat.kuilt:kuilt-conformance:VERSION") // SeamConformanceSuite
 ```
 
-`kuilt-conformance` ships `SeamConformanceSuite`, which proves any `Loom` implementation correct. See [Fabrics](fabrics.md) for how to use it.
+`kuilt-conformance` includes `SeamConformanceSuite`, which verifies that a `Loom` implementation follows the kuilt contract. See [Fabrics](fabrics.md) for usage.
