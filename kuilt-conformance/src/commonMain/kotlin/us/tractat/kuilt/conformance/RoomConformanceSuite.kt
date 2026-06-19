@@ -22,7 +22,7 @@ import us.tractat.kuilt.session.MembershipEvent
 import us.tractat.kuilt.session.RoomFactory
 import us.tractat.kuilt.session.SeamRoomFactory
 import us.tractat.kuilt.session.SessionRole
-import us.tractat.kuilt.session.partition.HeartbeatConfig
+import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.session.partition.ResumeResult
 import kotlin.test.Test
 import kotlin.test.assertEquals
