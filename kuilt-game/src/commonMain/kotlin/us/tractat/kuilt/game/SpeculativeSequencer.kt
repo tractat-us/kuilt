@@ -63,6 +63,8 @@ import kotlinx.coroutines.launch
  * @param initialState The authoritative starting state (before any actions).
  * @param scope The [CoroutineScope] that owns the background committed-event collector.
  *   Cancel this scope to stop the collector.
+ *
+ * @sample us.tractat.kuilt.game.sampleSpeculativeSequencer
  */
 public class SpeculativeSequencer<S, A>(
     private val sequencer: TurnSequencer<A>,

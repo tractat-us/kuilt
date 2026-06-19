@@ -30,6 +30,23 @@ val host = backgroundScope.gameHost(seam, peerCount = 4)
 val joiner = backgroundScope.gameJoin(seam)
 ```
 
+#### Return policy — `ReturnPolicy`
+
+`gameHost` accepts a `returnAt: ReturnPolicy` parameter (default `FullMembership`)
+that controls when it returns to the caller:
+
+- **`ReturnPolicy.FullMembership`** — suspends until all `peerCount` voters have
+  joined. The classic "wait for the full lobby" behaviour.
+- **`ReturnPolicy.Quorum`** — returns as soon as a majority (`peerCount / 2 + 1`)
+  of voters are present so the game can start without the slowest peer. Background
+  admission continues on the caller's scope until the roster reaches `peerCount`, so
+  a latecomer is promoted whenever it connects, however late.
+
+```kotlin
+// Start with a majority; latecomers join in the background.
+val host = backgroundScope.gameHost(seam, peerCount = 4, returnAt = ReturnPolicy.Quorum)
+```
+
 All three entry points return a `GameSession` — its `node` is the local `RaftNode`
 (`host.node` is the leader; `joiner.node` an admitted follower). The caller passes a
 **plain `Seam`** in every case — the entry points multiplex Raft traffic (channel tag 1),
@@ -67,6 +84,42 @@ val game = TurnSequencer(session.node, Move.serializer())
 val committed: Flow<IndexedAction<Move>> = game.committed
 val entry: IndexedAction<Move> = game.propose(Move(row = 0, col = 0))
 ```
+
+## Optimistic UI — `SpeculativeSequencer` and `SpeculativeGame`
+
+`SpeculativeSequencer<S, A>` wraps a `TurnSequencer` and applies local actions
+*optimistically* before a quorum commits them, then rolls back and replays if the
+committed order differs from what was predicted.
+
+```kotlin
+val speculative = SpeculativeSequencer(
+    sequencer = TurnSequencer(session.node, Move.serializer()),
+    game = myGame,           // SpeculativeGame<GameState, Move>
+    initialState = state0,
+    scope = viewModelScope,
+)
+
+// Observe for UI — always up to date, including speculative moves:
+speculative.speculativeState.collect { render(it) }
+
+// Propose a local move (optimistically applied immediately, quorum-confirmed later):
+try {
+    speculative.propose(myMove)
+} catch (e: LeadershipLostException) { /* retry */ }
+```
+
+`SpeculativeGame<S, A>` is the consumer-owned state-machine contract the sequencer
+calls:
+
+| Method | Role |
+|--------|------|
+| `apply(state, action): S` | Advance the state by one action — must be **pure and deterministic**. |
+| `snapshot(state): S` | Capture an independent checkpoint (deep-copy if [S] is mutable). |
+| `restore(snapshot): S` | Reinstate a snapshot before replaying the pending buffer. |
+
+**Constraints:** `apply` must be deterministic and pure — replay correctness depends on
+it. Log compaction (`Committed.Install`) is not yet supported; the pending buffer would be
+invalidated by a snapshot install.
 
 ## Single-collection constraint
 
