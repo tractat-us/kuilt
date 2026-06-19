@@ -97,7 +97,7 @@ dependencies {
 }
 ```
 
-Replace `0.4.0` with the [latest release](https://central.sonatype.com/artifact/us.tractat.kuilt/kuilt-core).
+Replace `0.6.0` with the [latest release](https://central.sonatype.com/artifact/us.tractat.kuilt/kuilt-core).
 
 ## Modules
 
