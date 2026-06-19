@@ -14,6 +14,7 @@ import us.tractat.kuilt.crdt.Patch
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.quilter.Quilter
 import us.tractat.kuilt.quilter.QuilterConfig
+import us.tractat.kuilt.raft.NodeId
 
 /** Marker value stored under a replica's slot to declare "I am the host". */
 private const val HOST_DECLARED = "host"
@@ -22,10 +23,19 @@ private const val HOST_DECLARED = "host"
 private const val PRESENT_DECLARED = "present"
 
 /**
+ * Prefix for the value stored under the host's slot when admission is closed.
+ *
+ * The full value is `"$ADMISSION_CLOSED_PREFIX<id1>,<id2>,…"` — the final voter set
+ * encoded as a comma-separated list of [NodeId] string values.
+ */
+private const val ADMISSION_CLOSED_PREFIX = "admission-closed:"
+
+/**
  * Lobby presence over [seam], backed by an [EphemeralMap] replicated by [Quilter].
  *
  * Carries each peer's host-declaration flag so the game host entry point can fail
- * fast when a duplicate host is detected.
+ * fast when a duplicate host is detected, and the host's admission-closed signal so
+ * [gameJoin] can throw [RosterFullException] when the roster is already full.
  *
  * **Dedicated seam required.** Pass a [us.tractat.kuilt.core.MuxSeam] channel, not the
  * Raft seam — [Seam.incoming] is single-collection (ADR-034). Task 6 wires this to
@@ -41,14 +51,14 @@ private const val PRESENT_DECLARED = "present"
  */
 public class GamePresence(
     seam: Seam,
-    scope: CoroutineScope,
+    private val presenceScope: CoroutineScope,
     expectVirtualTime: Boolean = false,
 ) {
     private val quilter: Quilter<EphemeralMap<String>> = Quilter(
         seam = seam,
         initial = EphemeralMap.empty(),
         valueSerializer = EphemeralMap.serializer(String.serializer()),
-        scope = scope,
+        scope = presenceScope,
         config = QuilterConfig(expectVirtualTime = expectVirtualTime),
     )
 
@@ -67,7 +77,19 @@ public class GamePresence(
     public val announced: StateFlow<Set<ReplicaId>> =
         quilter.state
             .map { it.entries.keys }
-            .stateIn(scope, SharingStarted.Eagerly, quilter.state.value.entries.keys)
+            .stateIn(presenceScope, SharingStarted.Eagerly, quilter.state.value.entries.keys)
+
+    /**
+     * The final voter set once admission has closed on this presence channel, `null` until then.
+     *
+     * Driven by [declareAdmissionClosed] on the host side; observed by [gameJoin] to detect
+     * roster-full rejections. The value is `null` while the admission loop is still running or
+     * has not yet converged. Once it becomes non-null it never reverts — the signal is monotone.
+     */
+    public val admissionClosed: StateFlow<Set<NodeId>?> =
+        quilter.state
+            .map { map -> admissionClosedFrom(map) }
+            .stateIn(presenceScope, SharingStarted.Eagerly, admissionClosedFrom(quilter.state.value))
 
     /** Declare this peer as the game host. */
     public fun declareHost(): Unit = declare(HOST_DECLARED)
@@ -80,6 +102,21 @@ public class GamePresence(
      * would otherwise hold the host's duplicate-host check open until its timeout elapses.
      */
     public fun declarePresent(): Unit = declare(PRESENT_DECLARED)
+
+    /**
+     * Publishes the admission-closed signal on the host's presence slot, replacing
+     * the `"host"` marker with an encoded form that carries the final voter set.
+     *
+     * Call this once the host's admission loop reaches `peerCount` and exits — both
+     * in [ReturnPolicy.FullMembership] mode (synchronous path) and in
+     * [ReturnPolicy.Quorum] mode (background loop). The signal converges to every
+     * connected peer via the [Quilter] delta-exchange, where [gameJoin] observes it
+     * via [admissionClosed].
+     */
+    public fun declareAdmissionClosed(voters: Set<NodeId>) {
+        val encoded = ADMISSION_CLOSED_PREFIX + voters.joinToString(",") { it.value }
+        declare(encoded)
+    }
 
     private fun declare(value: String) {
         val nextClock = (quilter.state.value.entries[quilter.replica]?.clock ?: 0L) + 1L
@@ -98,4 +135,14 @@ public class GamePresence(
         quilter.state.value.entries
             .filterValues { entry -> entry.value == HOST_DECLARED }
             .keys
+
+    private fun admissionClosedFrom(map: EphemeralMap<String>): Set<NodeId>? =
+        map.entries.values
+            .firstOrNull { entry -> entry.value?.startsWith(ADMISSION_CLOSED_PREFIX) == true }
+            ?.value
+            ?.removePrefix(ADMISSION_CLOSED_PREFIX)
+            ?.split(",")
+            ?.filter { it.isNotEmpty() }
+            ?.map { NodeId(it) }
+            ?.toSet()
 }

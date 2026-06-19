@@ -303,29 +303,20 @@ class GameNodeTest {
     }
 
     /**
-     * #587 backstop: a [gameJoin] against a host that never admits and never signals
-     * [admissionClosed] must throw [JoinTimeoutException] after the bounded wait expires,
-     * not suspend indefinitely. Uses a tight injected [joinAdmissionTimeout] so virtual
-     * time reaches the bound quickly.
+     * #587 backstop: a [gameJoin] with no host present (nobody to admit or signal roster-full)
+     * must throw [JoinTimeoutException] after the bounded wait expires, not suspend indefinitely.
+     * Uses a tight injected [joinAdmissionTimeout] so virtual time reaches the bound quickly.
+     *
+     * No host is started — the joiner's presence channel never receives any Quilter state from a
+     * peer, so [GamePresence.admissionClosed] stays `null` and the node stays in [RaftRole.Learner].
+     * Neither flow fires; the backstop must be the only signal.
      */
     @Test
     fun joinWithNoAdmissionSignalThrowsJoinTimeoutException() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
         val loom = InMemoryLoom()
-        // Only host seam — host is bootstrapped as a 1-node cluster with peerCount=2
-        // but no second peer is launched, so the admission loop blocks indefinitely
-        // and never publishes admissionClosed. The joiner's backstop must fire first.
-        val hostSeam = loom.host(Pattern("game-bootstrap"))
-        val joinSeam = loom.join(InMemoryTag("seat-1"))
-
-        // Host runs but never fills the roster (no other joiner) so admissionClosed never fires.
-        val hostDeferred = async {
-            backgroundScope.gameHost(
-                hostSeam,
-                peerCount = 2,
-                returnAt = ReturnPolicy.Quorum,
-                raftConfig = fastRaftConfig(seed = 1L),
-            )
-        }
+        // The joiner's seam connects to an empty loom — no host, so nobody ever admits it
+        // or publishes admissionClosed. The backstop is the only signal.
+        val joinSeam = loom.host(Pattern("game-bootstrap"))
 
         // Joiner uses a tight backstop so the test does not hang — virtual time advances to it.
         assertFailsWith<JoinTimeoutException> {
@@ -335,7 +326,5 @@ class GameNodeTest {
                 joinAdmissionTimeout = 20.milliseconds,
             )
         }
-
-        hostDeferred.cancel()
     }
 }
