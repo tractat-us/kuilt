@@ -48,18 +48,20 @@ There is no client/server split in kuilt's contract. Every peer in a session hol
 
 | Module | What it gives you |
 |--------|-------------------|
-| `kuilt-core` | The contract (`Loom`/`Seam`/`Swatch`), `InMemoryLoom` reference impl, conformance suite |
-| `kuilt-crdt` | Delta-state CRDT zoo + `Quilter` live replication |
+| `kuilt-core` | The contract (`Loom`/`Seam`/`Swatch`), `InMemoryLoom` reference impl, `MuxSeam` + `NamedMux` channel splitters |
+| `kuilt-crdt` | Delta-state CRDT zoo (`GCounter`, `ORSet`, `LWWMap`, `JsonCrdt`, …) |
+| `kuilt-quilter` | Live CRDT replication over a `Seam`: `Quilter` drives delta-exchange and anti-entropy |
 | `kuilt-deal` | Cryptographically fair card dealing (`DealSession`) + dealer-less fair-random (`FairRandom`) |
-| `kuilt-game` | Turn-based game facade: `TurnSequencer` + `SpeculativeSequencer` (optimistic apply + rollback) |
+| `kuilt-game` | Turn-based game facade: `gameHost`/`gameJoin`/`gameNode` → `GameSession`, `TurnSequencer`, `SpeculativeSequencer` |
 | `kuilt-raft` | Raft consensus — leader election, log replication, snapshots, dynamic membership, linearizable reads, leadership transfer |
+| `kuilt-cluster` | Server-cluster overlay: `ServerCluster` (voter mesh + relay accept loop) + `ClusterClient` (propose + observe) |
 | `kuilt-session` | Membership-aware `Room`: admit/identify handshake, roster, reconnect tokens |
 | `kuilt-websocket` | Ktor WebSocket fabric (`KtorClientLoom` + `KtorServerLoom`) |
 | `kuilt-mdns` | Bonjour/mDNS discovery feeding a WebSocket connection |
 | `kuilt-multipeer` | Apple Multipeer Connectivity fabric (iOS/macOS) |
 | `kuilt-nearby` | Google Nearby Connections fabric (Android) |
 | `kuilt-webrtc` | WebRTC data-channel fabric (wasmJs) |
-| `kuilt-conformance` | `SeamConformanceSuite` — proves any fabric implementation correct |
+| `kuilt-conformance` | `SeamConformanceSuite` + `RoomConformanceSuite` — prove any fabric or room implementation correct |
 
 ## Near and Far
 

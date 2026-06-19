@@ -60,7 +60,31 @@ val entry: LogEntry = node.propose("set x=1".encodeToByteArray())
 
 ## Turn-based game facade
 
-`kuilt-game`'s `TurnSequencer` wraps a `RaftNode` and hides Raft mechanics
+`kuilt-game` provides two layers on top of `RaftNode`:
+
+**Bootstrap — `gameHost` / `gameJoin` / `gameNode`**
+
+These three functions are the recommended entry point. They wrap a plain `Seam`,
+set up internal multiplexing (Raft channel + app-envelope channel over one
+connection), and return a `GameSession`:
+
+- `gameHost(seam, peerCount)` — one peer per session; detects duplicate hosts,
+  bootstraps a singleton-voter cluster, and admits each joiner until the roster
+  reaches `peerCount`.
+- `gameJoin(seam)` — all other peers; announces itself, then waits to be promoted
+  from learner to voter.
+- `gameNode(seam, voterIds)` — low-level bootstrap for when the caller manages
+  membership itself (all voters known up-front).
+
+`GameSession` carries the `RaftNode` (for consensus) and `appChannel(name)`
+(for best-effort application traffic — chat, cursors, voice signalling — sharing
+the same fabric without a second connection):
+
+```kotlin
+```
+{ src="../../kuilt-game/src/commonSamples/kotlin/us/tractat/kuilt/game/GameSamples.kt" include-symbol="sampleGameHostJoin" }
+
+**`TurnSequencer`** wraps a `RaftNode` and hides Raft mechanics
 behind a typed action/committed-stream API, so game code can focus on domain
 rules instead of consensus plumbing.
 
