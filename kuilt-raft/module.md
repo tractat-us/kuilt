@@ -45,9 +45,16 @@ bearing a serial it never issued proves another live writer shares the identity.
 handed one id — an operational error; do not retry under it). An **auto** id
 silently re-mints a fresh suffix and logs a warning.
 
-**No GC (v1).** The session table never evicts: ephemeral clients accumulate dead
-entries. The remedy is self-bounding — long-lived clients reuse a stable
-`ClientId` so their entry updates in place rather than growing the map.
+**Bounding (v2 — supersession prune).** The table is self-bounding without any
+clock, horizon, or heuristic. A `NodeId` is cluster-unique, so two incarnations
+of one node are never live at once — the arrival of a new `auto:$nodeId-…` entry
+proves every prior sibling is dead. `shouldApply` therefore evicts every same-family
+auto sibling in the same apply step, so the table holds at most one entry per live
+auto family plus the durable ids. Durable/stable ids are never pruned and keep
+their cross-crash exactly-once. Long-lived clients should reuse a stable `ClientId`
+so their entry updates in place.
 
-See `docs/superpowers/specs/2026-06-16-raft-exactly-once-dedup-design.md` for the
-full design rationale.
+**Explicit close.** `closeSession(clientId)` drops a client's high-water-mark
+from the table. Drive it from the apply loop when a committed close op signals that
+a logical client is finished. A subsequent request from that client re-opens at
+mark 0 — the same at-least-once floor, never a silent drop.

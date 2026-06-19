@@ -25,8 +25,7 @@ Wraps a Raft learner `RaftNode` and exposes:
 - **`close()`** — cancels the underlying `RaftNode`.
 
 Obtain an instance via `clusterClientWithNode(raftNode)` (tests / caller-managed
-transport) or via `CoroutineScope.clusterClient()` (relay-room — see [Current
-scope](#current-scope)).
+transport) or via `CoroutineScope.clusterClient()` (production relay-room path).
 
 @sample us.tractat.kuilt.cluster.samples.ClusterClientSample.connectAndPropose
 
@@ -103,11 +102,10 @@ No arrow points back into `:kuilt-core`. `:kuilt-session` does NOT depend on
 
 On transport tear `ServerClusterReconnect` advances to the next endpoint from
 the `ClusterEndpoints` list and reconnects. Cross-server resume always degrades
-to fresh-join (proven by #532): each server's `JoinerReconnectController` is
-in-memory and per-host-room, so server-B has no window state for a token issued
-by server-A. `ClusterClient` treats `ResumeResult.WindowClosed` as a
-fall-back-to-fresh-join signal — reconnect is correct, it costs a re-snapshot on
-the learner's log.
+to fresh-join: each server's reconnect-window registry is in-memory and
+per-host-room, so server-B has no window state for a token issued by server-A.
+`ClusterClient` treats `ResumeResult.WindowClosed` as a fall-back-to-fresh-join
+signal — reconnect is correct, it costs a re-snapshot on the learner's log.
 
 ## Exactly-once proposals
 
@@ -123,17 +121,5 @@ Each voter's `NodeId` must equal `NodeId(serverPeerId.value)` — the server's
 `Seam.broadcast`'s sender as `serverPeerId`; the client's `SeamRaftTransport`
 maps that sender to a `NodeId` for Raft message routing. Mismatched IDs cause
 silently dropped AppendEntries.
-
-## Current scope
-
-- **M=3 voter mesh** is proven under simulation (#541). **M=1** is proven over
-  real Ktor WebSocket sockets (`ServerClusterE2ETest`, S3b-3 of #513). Real-socket
-  M>1 E2E is a follow-up (see #545).
-- **`CoroutineScope.clusterClient()`** is declared and wires the full reconnect
-  loop but requires a stable client identity on the loom (see #544). Use
-  `clusterClientWithNode()` with a caller-managed `RaftNode` + `SeamRaftTransport`
-  for the production relay-room path in the meantime.
-- **Cross-server resume** degrades to fresh-join (see #532); see the Failover
-  model section above.
 
 See `docs/architecture.md#server-cluster-topology` and `docs/usage.md#server-cluster-topology-kuilt-cluster-jvmandroid`.
