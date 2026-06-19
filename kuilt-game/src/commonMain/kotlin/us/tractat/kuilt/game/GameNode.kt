@@ -3,7 +3,10 @@ package us.tractat.kuilt.game
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import us.tractat.kuilt.core.MuxSeam
@@ -55,6 +58,31 @@ private const val APP_ENVELOPE_CHANNEL: Byte = 3
  */
 public class DuplicateHostException(
     message: String = "another peer already declared host for this session — exactly one gameHost per session is required",
+) : IllegalStateException(message)
+
+/**
+ * Thrown by [gameJoin] when the host signals that admission is closed and this peer is not
+ * in the final voter set.
+ *
+ * This is the roster-full case: the host's admission loop reached `peerCount` and exited before
+ * this peer called [gameJoin]. There are no available seats. The caller should surface this as a
+ * user-visible error (e.g. "game is full") rather than retrying — the roster is a committed Raft
+ * cluster config and cannot be grown without the host's cooperation.
+ */
+public class RosterFullException(
+    message: String = "the game roster is full — all seats were filled before this peer joined",
+) : IllegalStateException(message)
+
+/**
+ * Thrown by [gameJoin] when the host never signals admission (neither admits nor closes the roster)
+ * within the [gameJoin] `joinAdmissionTimeout` bound.
+ *
+ * Distinct from [RosterFullException] so callers can diagnose "host gone / crashed mid-handshake"
+ * vs "roster was full" without inspecting the message string. On timeout, the caller may retry
+ * [gameJoin] (the host may still be starting up) or surface a connectivity-problem message.
+ */
+public class JoinTimeoutException(
+    message: String = "timed out waiting for the host to admit or reject this peer",
 ) : IllegalStateException(message)
 
 /**
@@ -203,7 +231,7 @@ public suspend fun CoroutineScope.gameHost(
     val presenceSeam = mux.channel(PRESENCE_CHANNEL)
     val appMux = NamedMux(mux.channel(APP_ENVELOPE_CHANNEL), this)
 
-    checkNotDuplicateHost(presenceSeam, this, raftConfig.expectVirtualTime, hostDeclarationTimeout)
+    val presence = checkNotDuplicateHost(presenceSeam, this, raftConfig.expectVirtualTime, hostDeclarationTimeout)
 
     val self = NodeId(seam.selfId.value)
     val node = raftNode(ClusterConfig.ofVoters(setOf(self)), SeamRaftTransport(raftSeam), storage, raftConfig)
@@ -225,7 +253,15 @@ public suspend fun CoroutineScope.gameHost(
     // propagates to the caller (fail-loud, no swallow); cancellation tears admission down. After
     // this point only the background coroutine touches `voters`, so no synchronization is needed.
     if (voters.size < peerCount) {
-        launch { admitUntil(node, seam, voters, target = peerCount) }
+        launch {
+            admitUntil(node, seam, voters, target = peerCount)
+            presence.declareAdmissionClosed(voters)
+        }
+    } else {
+        // FullMembership mode (or Quorum with peerCount == 1): the roster is already full.
+        // Publish the signal synchronously so any joiner that arrives after this point can
+        // detect the full roster immediately without waiting for the background loop.
+        presence.declareAdmissionClosed(voters)
     }
     return GameSession(node, seam, appMux)
 }
@@ -234,6 +270,17 @@ public suspend fun CoroutineScope.gameHost(
  * Join a game session over [seam] hosted by exactly one [gameHost]. Starts as a non-voting
  * learner and waits until the host admits this peer as a voter. Returns the local [GameSession]
  * (its [GameSession.node] is the admitted follower) once admitted.
+ *
+ * **Roster-full detection.** If the host has already filled all `peerCount` seats and published
+ * an admission-closed signal, [gameJoin] throws [RosterFullException] instead of suspending
+ * indefinitely. This is the host-authoritative path: the signal travels over the same presence
+ * channel as the duplicate-host check, so it converges deterministically under virtual time.
+ *
+ * **Backstop timeout.** If neither admission nor an admission-closed signal arrives within
+ * [joinAdmissionTimeout], [gameJoin] throws [JoinTimeoutException] — distinct from
+ * [RosterFullException] so callers can tell "host gone / crashed" from "roster was full". The
+ * backstop is a fallback for real-fabric scenarios (host crashed mid-handshake, network partition);
+ * the structural signal is the primary path. Under virtual time the backstop fires promptly.
  *
  * **Internal multiplexing.** [gameJoin] wraps [seam] in a [MuxSeam] and routes Raft traffic
  * on channel tag 1, lobby presence on channel tag 2, and the application-envelope [NamedMux]
@@ -251,6 +298,15 @@ public suspend fun CoroutineScope.gameHost(
  * @param storage Durable Raft state. Defaults to [InMemoryRaftStorage].
  * @param raftConfig Timing and behaviour parameters. Tests pass
  *   `RaftConfig(expectVirtualTime = true)` (D4).
+ * @param joinAdmissionTimeout Upper bound on waiting for the host to either admit this peer or
+ *   signal admission-closed. If this bound expires before either signal arrives, [gameJoin]
+ *   throws [JoinTimeoutException]. The default is sized to clear a typical WAN round-trip and
+ *   a full Raft election cycle; lower it in test scenarios where you want the backstop to fire
+ *   quickly under virtual time.
+ * @throws RosterFullException if the host has already filled all seats and this peer is not in
+ *   the final voter set.
+ * @throws JoinTimeoutException if neither admission nor a roster-full signal arrives within
+ *   [joinAdmissionTimeout].
  *
  * @sample us.tractat.kuilt.game.sampleGameHostJoin
  */
@@ -258,16 +314,19 @@ public suspend fun CoroutineScope.gameJoin(
     seam: Seam,
     storage: RaftStorage = InMemoryRaftStorage(),
     raftConfig: RaftConfig = RaftConfig(),
+    joinAdmissionTimeout: Duration = DEFAULT_JOIN_ADMISSION_TIMEOUT,
 ): GameSession {
     val mux = MuxSeam(seam, this)
     val raftSeam = mux.channel(RAFT_CHANNEL)
     val presenceSeam = mux.channel(PRESENCE_CHANNEL)
     val appMux = NamedMux(mux.channel(APP_ENVELOPE_CHANNEL), this)
 
-    // Announce presence (non-host) so the host's convergence wait sees us promptly.
-    GamePresence(presenceSeam, this, raftConfig.expectVirtualTime).declarePresent()
-
     val self = NodeId(seam.selfId.value)
+
+    // Announce presence (non-host) so the host's convergence wait sees us promptly.
+    val presence = GamePresence(presenceSeam, this, raftConfig.expectVirtualTime)
+    presence.declarePresent()
+
     // Start as a learner with no known voters. The host's changeMembership will commit a
     // config that promotes us to voter; recomputeMembership then transitions role to Follower.
     val node = raftNode(
@@ -276,11 +335,52 @@ public suspend fun CoroutineScope.gameJoin(
         storage,
         raftConfig,
     )
-    // Suspend until the host commits the config entry that promotes us from Learner to voter.
-    // RaftEngine.reevaluateSelfRole() fires on every recomputeMembership() and transitions
-    // role from RaftRole.Learner to RaftRole.Follower once we appear in the voters set.
-    node.role.first { it !is RaftRole.Learner }
+
+    awaitAdmissionOrThrow(node, presence, self, joinAdmissionTimeout)
     return GameSession(node, seam, appMux)
+}
+
+/**
+ * Races admission against roster-full signal, with a backstop timeout.
+ *
+ * Returns normally if [node] leaves [RaftRole.Learner] (admitted). Throws [RosterFullException]
+ * if [presence] signals admission-closed and [self] is not in the final voter set. Throws
+ * [JoinTimeoutException] if [timeout] elapses before either signal arrives.
+ */
+private suspend fun awaitAdmissionOrThrow(
+    node: RaftNode,
+    presence: GamePresence,
+    self: NodeId,
+    timeout: Duration,
+) {
+    val admitted = withTimeoutOrNull(timeout) {
+        merge(
+            node.role.asAdmissionFlow(),
+            presence.admissionClosed.asRejectionFlow(self),
+        ).first()
+    } ?: throw JoinTimeoutException()
+
+    if (!admitted) throw RosterFullException()
+}
+
+/**
+ * Maps the role flow to a Boolean emission: `true` when this peer leaves [RaftRole.Learner]
+ * (i.e. has been admitted as a voter).
+ */
+private fun Flow<RaftRole>.asAdmissionFlow(): Flow<Boolean> = flow {
+    first { it !is RaftRole.Learner }
+    emit(true)
+}
+
+/**
+ * Maps the admission-closed flow to a Boolean emission: `false` when admission is closed and
+ * [self] is not in the final voter set (i.e. this peer is rejected).
+ *
+ * Emits nothing if `self` IS in the final voter set — the admission flow wins in that case.
+ */
+private fun Flow<Set<NodeId>?>.asRejectionFlow(self: NodeId): Flow<Boolean> = flow {
+    val closedVoters = first { voters -> voters != null && self !in voters }
+    if (closedVoters != null) emit(false)
 }
 
 /**
@@ -301,6 +401,9 @@ public suspend fun CoroutineScope.gameJoin(
  * proceed as the canonical host) and every other declared host throws (#584). Because every peer
  * converges on the same declared-host set, they agree on the winner without coordination.
  *
+ * Returns the [GamePresence] instance so the caller can publish further signals (e.g.
+ * [GamePresence.declareAdmissionClosed]) on the same presence channel after this check.
+ *
  * @throws DuplicateHostException if another replica with a lower NodeId has also declared host.
  */
 private suspend fun checkNotDuplicateHost(
@@ -308,7 +411,7 @@ private suspend fun checkNotDuplicateHost(
     scope: CoroutineScope,
     expectVirtualTime: Boolean,
     timeout: Duration,
-) {
+): GamePresence {
     val presence = GamePresence(presenceSeam, scope, expectVirtualTime)
     presence.declareHost()
 
@@ -318,7 +421,7 @@ private suspend fun checkNotDuplicateHost(
     }
 
     val declaredHosts = presence.declaredHosts()
-    if (declaredHosts.size <= 1) return // this peer is the only declared host — proceed.
+    if (declaredHosts.size <= 1) return presence // this peer is the only declared host — proceed.
 
     // Deterministic arbitration (#584): every peer has converged on the same declared-host set,
     // so each independently elects the lowest-NodeId declarant as the canonical host with no
@@ -327,6 +430,7 @@ private suspend fun checkNotDuplicateHost(
     // host at all (every declarant threw).
     val winner = declaredHosts.minByOrNull { it.value }
     if (presence.replica != winner) throw DuplicateHostException()
+    return presence
 }
 
 /**
@@ -335,6 +439,14 @@ private suspend fun checkNotDuplicateHost(
  * connected peers. Exposed as the [gameHost] `hostDeclarationTimeout` parameter for tuning.
  */
 private val DEFAULT_HOST_DECLARATION_TIMEOUT = 2.seconds
+
+/**
+ * Default backstop for [gameJoin]'s admission wait. Sized to clear a typical WAN round-trip
+ * plus a full Raft election cycle. The structural signal ([GamePresence.admissionClosed]) is
+ * the primary path; this fires only when the host crashes or the network partitions. Exposed
+ * as the [gameJoin] `joinAdmissionTimeout` parameter for tuning (lower it in tests).
+ */
+private val DEFAULT_JOIN_ADMISSION_TIMEOUT = 10.seconds
 
 /**
  * Admit connecting peers as learner→voter until the cluster reaches [target] voters.
