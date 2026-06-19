@@ -10,7 +10,8 @@ similar because they all "combine" something. The practical way to choose is:
 | [`identified()`](fabric-kit.md#identified-a-2-peer-link) → `LinkSeam` | **Connection → Seam** | One link whose two identities are known, presented as a 2-peer `Seam` (`broadcast == sendTo(remote)`). |
 | [`meshSeam()`](fabric-kit.md#meshseam-an-n-peer-mesh) → `Mesh` | **Connections → Seam** | *Topology builder.* N point-to-point links woven into one fully-connected N-peer `Seam`. |
 | [`CompositeLoom`](multipath.md) → `CompositeSeam` | **Seams → Seam** | *Transport multiplexer.* Several `Seam`s (plies) for the **same** logical session, bonded into one multipath `Seam`. |
-| `MuxSeam` | **Seam → Seams** | *Channel splitter.* One `Seam` fanned into several byte-tagged logical-channel `Seam` views over a single collection. |
+| `MuxSeam` | **Seam → Seams** | *Channel splitter (byte-tagged).* One `Seam` fanned into several `Seam` views, each keyed by a 1-byte tag (hard ceiling: 256 channels). Fixed internal channels; single upstream collection. |
+| `NamedMux` | **Seam → Seams** | *Channel splitter (string-keyed).* Like `MuxSeam` but frames carry a UTF-8 name prefix — effectively unlimited application namespace. Used by `gameHost`/`gameJoin` to multiplex the Raft channel + app envelope over one session. |
 
 ## Mesh vs. composite — opposite sides of the boundary
 
@@ -36,5 +37,6 @@ abstraction, not a tweak to either.
 - `MuxSeam` channel multiplexing — see
   [Quilter](crdt-quilter.md), which uses it to let several
   replicators share one transport.
+- `NamedMux` — used internally by `gameHost`/`gameJoin`/`gameNode` (see [Consensus (Raft)](raft.md)) to multiplex the application-envelope channel over the game session's single `Seam`. Consumers access it via `GameSession.appChannel(name)`.
 - Writing the `Connection` SPI for your own transport — the implementer tutorial
   `docs/extending-fabrics.md` in the repository.
