@@ -2,20 +2,31 @@ package us.tractat.kuilt.game
 
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
+import us.tractat.kuilt.core.CloseReason
 import us.tractat.kuilt.core.MuxSeam
 import us.tractat.kuilt.core.NamedMux
+import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Seam
+import us.tractat.kuilt.core.SeamState
+import us.tractat.kuilt.core.Swatch
 import us.tractat.kuilt.crdt.ReplicaId
+import us.tractat.kuilt.liveness.HeartbeatConfig
+import us.tractat.kuilt.liveness.HeartbeatPartitionDetector
+import us.tractat.kuilt.liveness.PartitionEvent
 import us.tractat.kuilt.raft.ClusterConfig
 import us.tractat.kuilt.raft.InMemoryRaftStorage
 import us.tractat.kuilt.raft.MembershipChangeInProgressException
@@ -26,9 +37,11 @@ import us.tractat.kuilt.raft.RaftRole
 import us.tractat.kuilt.raft.RaftStorage
 import us.tractat.kuilt.raft.SeamRaftTransport
 import us.tractat.kuilt.raft.raftNode
+import kotlin.time.Clock
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
+import kotlin.time.Instant
 
 /** MuxSeam channel tag for the Raft consensus traffic in [gameHost] and [gameJoin]. */
 private const val RAFT_CHANNEL: Byte = 1
@@ -51,6 +64,42 @@ private const val PRESENCE_CHANNEL: Byte = 2
  * name namespace, never on a reserved tag.
  */
 private const val APP_ENVELOPE_CHANNEL: Byte = 3
+
+/**
+ * MuxSeam channel tag for heartbeat ping/pong frames used by [HeartbeatPartitionDetector]
+ * in voter liveness monitoring.
+ *
+ * One [HeartbeatPartitionDetector] per remote voter shares this channel (distinguishing peers
+ * by [PeerId] in its internal filtering). Heartbeat frames never reach the application layer —
+ * they are consumed by the detectors' inner collection loops, which subscribe to the per-peer
+ * [GamePerPeerSeam] views that filter the channel's shared incoming flow.
+ */
+private const val HEARTBEAT_CHANNEL: Byte = 4
+
+/**
+ * A thin [Seam] adapter that presents only frames from [targetPeerId] via [rawShared].
+ *
+ * Analogous to `PerPeerSeam` in [kuilt-session][us.tractat.kuilt.session.SeamRoom]: because
+ * [Seam.incoming] is single-collection (ADR-034), [gameHost] fans the liveness channel's
+ * incoming stream into a [MutableSharedFlow] and each [HeartbeatPartitionDetector] subscribes
+ * to a filtered view via this class — one instance per monitored voter.
+ *
+ * [broadcast] and [sendTo] delegate to [delegate] unchanged so the detector can still send
+ * ping frames directly. [close] is a no-op — lifecycle is owned by [gameHost], not this view.
+ */
+private class GamePerPeerSeam(
+    private val delegate: Seam,
+    private val targetPeerId: PeerId,
+    private val rawShared: MutableSharedFlow<Swatch>,
+) : Seam {
+    override val selfId: PeerId get() = delegate.selfId
+    override val peers: StateFlow<Set<PeerId>> get() = delegate.peers
+    override val state: StateFlow<SeamState> get() = delegate.state
+    override val incoming: Flow<Swatch> get() = rawShared.filter { it.sender == targetPeerId }
+    override suspend fun broadcast(payload: ByteArray): Unit = delegate.broadcast(payload)
+    override suspend fun sendTo(peer: PeerId, payload: ByteArray): Unit = delegate.sendTo(peer, payload)
+    override suspend fun close(reason: CloseReason): Unit = Unit
+}
 
 /**
  * Thrown by [gameHost] when another peer on the same session has already declared itself host.
@@ -240,6 +289,17 @@ public fun CoroutineScope.gameNode(
  * @param raftConfig Timing and behaviour parameters. Tests pass
  *   `RaftConfig(expectVirtualTime = true)` — this is the only supported path to
  *   virtual-time execution (D4).
+ * @param livenessConfig Optional configuration for per-voter [HeartbeatPartitionDetector]s.
+ *   When non-null, [gameHost] launches one detector per admitted voter and — on the leader —
+ *   automatically evicts a voter whose [HeartbeatConfig.reconnectWindow] expires without
+ *   recovery ([PartitionEvent.PeerLost]), then re-opens the admission loop so a replacement
+ *   can join. When null (the default) no liveness monitoring is performed; callers that need
+ *   automatic seat reclamation must pass a [HeartbeatConfig]. This is an explicit opt-in
+ *   because the feature carries observable timing state; omitting it for sessions that have
+ *   their own membership management (e.g. `gameNode`) is a supported use case.
+ * @param clock Clock for heartbeat liveness measurements. Production callers use the default
+ *   ([kotlin.time.Clock.System.now]); tests inject a controllable clock so virtual time drives
+ *   all timing without wall-clock dependency. Ignored when [livenessConfig] is null.
  * @param hostDeclarationTimeout Upper bound on the presence-convergence wait before the
  *   duplicate-host check proceeds regardless. This is genuine tuning, not a functional
  *   switch: a connected-but-silent peer (or a real fabric whose round-trip exceeds the
@@ -259,6 +319,8 @@ public suspend fun CoroutineScope.gameHost(
     maxSpectators: Int = 0,
     storage: RaftStorage = InMemoryRaftStorage(),
     raftConfig: RaftConfig = RaftConfig(),
+    livenessConfig: HeartbeatConfig? = null,
+    clock: () -> Instant = { Clock.System.now() },
     hostDeclarationTimeout: Duration = DEFAULT_HOST_DECLARATION_TIMEOUT,
 ): GameSession {
     require(peerCount >= 1) { "peerCount must be >= 1" }
@@ -328,7 +390,14 @@ public suspend fun CoroutineScope.gameHost(
         }
     }
 
-    return GameSession(node, seam, appMux)
+    // Voter liveness monitoring — optional; enabled when the caller supplies a [livenessConfig].
+    // The leader observes PeerLost events and evicts the dead voter, then re-opens the admission
+    // loop for a replacement. Graceful leave (vacate signal) is also handled here.
+    if (livenessConfig != null) {
+        monitorVoterLiveness(node, seam, mux, voters, spectatorIds, peerCount, presence, livenessConfig, clock)
+    }
+
+    return GameSession(node, seam, appMux, presence)
 }
 
 /**
@@ -402,7 +471,7 @@ public suspend fun CoroutineScope.gameJoin(
     )
 
     awaitAdmissionOrThrow(node, presence, self, joinAdmissionTimeout)
-    return GameSession(node, seam, appMux)
+    return GameSession(node, seam, appMux, presence)
 }
 
 /**
@@ -752,4 +821,205 @@ private suspend fun changeMembershipWithRetry(
         }
     }
     error("changeMembership gave up after $maxAttempts attempts for config=$config")
+}
+
+// ── Voter liveness monitoring (#594) ─────────────────────────────────────────
+
+/**
+ * Launches voter liveness monitoring on the caller's [CoroutineScope].
+ *
+ * For each currently-admitted voter (excluding self), starts a [HeartbeatPartitionDetector].
+ * All detectors share the [HEARTBEAT_CHANNEL] seam for send (pings), but each subscribes to
+ * a per-peer filtered view ([GamePerPeerSeam]) of a single shared [MutableSharedFlow], satisfying
+ * the ADR-034 single-collection contract.
+ *
+ * On [PartitionEvent.PeerLost] (leader only): evicts the dead voter via [changeMembershipWithRetry],
+ * re-opens admission, runs [admitVotersUntil] for one replacement, then starts a fresh detector for
+ * the new voter. Graceful leave ([GamePresence.vacaters]) triggers eviction immediately without
+ * waiting the reconnect window.
+ *
+ * Non-leader nodes receive [PartitionEvent.PeerLost] but take no action — Raft's commit-majority
+ * gate means only the leader can commit the membership change.
+ *
+ * @param node The leader [RaftNode] (may or may not currently hold the leader role).
+ * @param seam The game seam (used for [PeerId] extraction and [nextVoterPeer]).
+ * @param mux The [MuxSeam] wrapping [seam]; the liveness channel ([HEARTBEAT_CHANNEL]) is a view on it.
+ * @param voters The mutable live voter set (shared with the admission loop; mutations are serialised
+ *   by the single background eviction coroutine).
+ * @param spectatorIds The mutable spectator NodeId set (passed to [ClusterConfig] to preserve learners).
+ * @param peerCount Total configured voter count; used to re-open admission to exactly one replacement.
+ * @param presence The [GamePresence] instance; used to detect vacaters and re-open/re-close admission.
+ * @param config [HeartbeatConfig] driving ping interval, timeout, and reconnect window.
+ * @param clock Clock for liveness measurements; injected for virtual-time test determinism.
+ */
+private fun CoroutineScope.monitorVoterLiveness(
+    node: RaftNode,
+    seam: Seam,
+    mux: MuxSeam,
+    voters: MutableSet<NodeId>,
+    spectatorIds: MutableSet<NodeId>,
+    peerCount: Int,
+    presence: GamePresence,
+    config: HeartbeatConfig,
+    clock: () -> Instant,
+) {
+    val self = NodeId(seam.selfId.value)
+    val heartbeatSeam = mux.channel(HEARTBEAT_CHANNEL)
+
+    // Fan the liveness channel's incoming stream into a shared flow so multiple per-peer
+    // [GamePerPeerSeam] instances can each subscribe independently — satisfying single-collection.
+    val rawLiveness = MutableSharedFlow<Swatch>(extraBufferCapacity = 256)
+    launch { heartbeatSeam.incoming.collect { rawLiveness.emit(it) } }
+
+    // Serialised evictions: detector coroutines send lost NodeIds here; the eviction loop
+    // processes them one at a time on this scope. Channel.UNLIMITED so detector jobs never block.
+    val evictions = Channel<NodeId>(Channel.UNLIMITED)
+
+    // Active detector job per voter; updated as voters leave and replacements join.
+    val detectorJobs = mutableMapOf<NodeId, Job>()
+
+    // Start one detector per initial admitted voter (excluding self).
+    voters.filter { it != self }.forEach { voterId ->
+        detectorJobs[voterId] = launchDetectorFor(voterId, heartbeatSeam, rawLiveness, evictions, config, clock)
+    }
+
+    // Graceful-leave watcher: vacate signals bypass the reconnect window.
+    launch {
+        watchVacaters(node, seam, voters, spectatorIds, peerCount, presence, evictions, detectorJobs, heartbeatSeam, rawLiveness, config, clock, self)
+    }
+
+    // Eviction loop: process one PeerLost at a time.
+    launch {
+        evictAndReopenAdmission(node, seam, voters, spectatorIds, peerCount, presence, evictions, detectorJobs, heartbeatSeam, rawLiveness, config, clock, self)
+    }
+}
+
+/**
+ * Launches a [HeartbeatPartitionDetector] for [voterId] and returns its [Job].
+ *
+ * On [PartitionEvent.PeerLost], sends [voterId] to [evictions] and stops.
+ * [PartitionEvent.PeerUnresponsive] and [PartitionEvent.PeerRecovered] are no-ops at this layer
+ * (Raft's own replication tracks liveness; the eviction gate is [PeerLost] only).
+ */
+private fun CoroutineScope.launchDetectorFor(
+    voterId: NodeId,
+    heartbeatSeam: Seam,
+    rawLiveness: MutableSharedFlow<Swatch>,
+    evictions: Channel<NodeId>,
+    config: HeartbeatConfig,
+    clock: () -> Instant,
+): Job {
+    val peerId = PeerId(voterId.value)
+    val perPeerSeam = GamePerPeerSeam(heartbeatSeam, peerId, rawLiveness)
+    val detector = HeartbeatPartitionDetector(perPeerSeam, peerId, config, clock)
+    detector.start(this)
+    return launch {
+        detector.events.collect { event ->
+            if (event is PartitionEvent.PeerLost) {
+                evictions.trySend(voterId)
+            }
+        }
+    }
+}
+
+/**
+ * Watches for graceful-leave vacate signals on [presence] and triggers immediate eviction.
+ *
+ * Polls [presence.vacaters] on every Quilter state change (announced flow). When a new vacater
+ * is seen that is a current voter, sends its [NodeId] to [evictions] to bypass the reconnect window.
+ */
+private suspend fun watchVacaters(
+    node: RaftNode,
+    seam: Seam,
+    voters: MutableSet<NodeId>,
+    spectatorIds: MutableSet<NodeId>,
+    peerCount: Int,
+    presence: GamePresence,
+    evictions: Channel<NodeId>,
+    detectorJobs: MutableMap<NodeId, Job>,
+    heartbeatSeam: Seam,
+    rawLiveness: MutableSharedFlow<Swatch>,
+    config: HeartbeatConfig,
+    clock: () -> Instant,
+    self: NodeId,
+) {
+    val seenVacaters = mutableSetOf<NodeId>()
+    presence.announced.collect {
+        val newVacaters = presence.vacaters()
+            .map { NodeId(it.value) }
+            .filter { it in voters && it !in seenVacaters && it != self }
+        newVacaters.forEach { vacaterId ->
+            seenVacaters += vacaterId
+            // Cancel the detector job for this voter — it's leaving voluntarily.
+            detectorJobs.remove(vacaterId)?.cancel()
+            evictions.trySend(vacaterId)
+        }
+    }
+}
+
+/**
+ * Processes evictions from [evictions]: removes the dead voter, re-opens admission for one
+ * replacement, then starts a fresh detector for the replacement.
+ *
+ * Only the Raft **leader** calls [changeMembershipWithRetry]; non-leaders return early.
+ * If leadership has transferred by the time eviction fires, the new leader's own loop handles
+ * the eviction — or the evicted peer's seat remains open until another PeerLost fires.
+ */
+private suspend fun CoroutineScope.evictAndReopenAdmission(
+    node: RaftNode,
+    seam: Seam,
+    voters: MutableSet<NodeId>,
+    spectatorIds: MutableSet<NodeId>,
+    peerCount: Int,
+    presence: GamePresence,
+    evictions: Channel<NodeId>,
+    detectorJobs: MutableMap<NodeId, Job>,
+    heartbeatSeam: Seam,
+    rawLiveness: MutableSharedFlow<Swatch>,
+    config: HeartbeatConfig,
+    clock: () -> Instant,
+    self: NodeId,
+) {
+    // Peers that have been evicted from the voter set — excluded from re-admission so a gracefully
+    // departing peer (still connected) is not immediately re-admitted to its own freed seat.
+    val evictedVoterIds = mutableSetOf<NodeId>()
+
+    for (lostId in evictions) {
+        // Skip if not leader — only the leader can commit membership changes.
+        if (node.role.value !is RaftRole.Leader) continue
+        // Skip if already evicted (e.g. duplicate signal from detector + vacate).
+        if (lostId !in voters) continue
+
+        // Cancel the stale detector job (if still running — vacate path cancels it first).
+        detectorJobs.remove(lostId)?.cancel()
+
+        // Remove the dead voter and commit the shrunken config.
+        voters.remove(lostId)
+        evictedVoterIds += lostId
+        changeMembershipWithRetry(node, ClusterConfig(voters = voters.toSet(), learners = spectatorIds.toSet()))
+
+        // Re-open admission so a new gameJoin can take the freed seat.
+        presence.declareAdmissionOpen()
+
+        // Admit exactly one replacement voter, excluding evicted peers so a gracefully-departing
+        // peer (still connected) cannot immediately reclaim its own freed seat.
+        val votersBeforeAdmit = voters.toSet()
+        admitVotersUntil(
+            node,
+            seam,
+            voters,
+            spectatorIds + evictedVoterIds,
+            target = votersBeforeAdmit.size + 1,
+            presence,
+        )
+
+        // Re-close admission with the refreshed voter set.
+        presence.declareAdmissionClosed(voters)
+
+        // Start a liveness detector for the replacement voter (the one not in votersBeforeAdmit).
+        val newVoterId = voters.firstOrNull { it !in votersBeforeAdmit }
+        if (newVoterId != null) {
+            detectorJobs[newVoterId] = launchDetectorFor(newVoterId, heartbeatSeam, rawLiveness, evictions, config, clock)
+        }
+    }
 }
