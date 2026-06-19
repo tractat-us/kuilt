@@ -1,6 +1,8 @@
 # Fabrics
 
-Your app logic should not care whether peers are connected by WebSocket, LAN discovery, or direct radio. In kuilt, every fabric implements `Loom` and yields a `Seam`, so you can swap transports without rewriting the layer above.
+Your app logic should not need to care whether peers are connected by WebSocket,
+LAN discovery, or direct radio. In kuilt, every fabric implements `Loom` and
+returns a `Seam`, so you can swap transports without rewriting app logic.
 
 ## Pick a fabric by deployment shape
 
@@ -10,7 +12,9 @@ Your app logic should not care whether peers are connected by WebSocket, LAN dis
 
 ## WebSocket fabric (`kuilt-websocket`)
 
-WebSocket is the easiest way to get a cross-platform session running. Setup is role-split (server accepts, client connects), but once connected both peers use the same symmetric `Seam` API. The split is:
+WebSocket is usually the quickest path to a cross-platform session. Setup is
+role-split (server accepts, client connects), but once connected both peers use
+the same `Seam` API. The split is:
 
 - `KtorServerLoom` — JVM/Android. Supports only `host()`; `join()` throws.
 - `KtorClientLoom` — all targets. Supports only `join()`; `host()` throws.
@@ -40,11 +44,16 @@ val seam = client.join(
 )
 ```
 
-The advertisement carries the server's `PeerId` so both ends arrive at the same membership view without an in-band handshake.
+The advertisement includes the server's `PeerId`, so both ends get the same
+membership view without an extra handshake message.
 
 ## mDNS discovery (`kuilt-mdns`, JVM/Android)
 
-mDNS helps peers find each other on a local network. It is discovery, not transport: the session still runs over WebSocket. `MDNSPeerLinkFactory` registers an mDNS service on `host()` and resolves an `MDNSAdvertisement` to a WebSocket join on `join()`. Discover peers separately with `MDNSServiceDiscoverer`:
+mDNS helps peers find each other on a local network. It is discovery, not
+transport: the session still runs over WebSocket. `MDNSPeerLinkFactory`
+registers an mDNS service on `host()` and resolves an `MDNSAdvertisement` to a
+WebSocket join on `join()`. Discover peers separately with
+`MDNSServiceDiscoverer`:
 
 ```kotlin
 val jmdns = JmDNS.create()
@@ -60,13 +69,20 @@ val ad = discoverer.discoveries().first()
 val joinerSeam = joiner.join(ad)
 ```
 
-Bound your collection with a timeout or `take(n)` — `discoveries()` emits indefinitely.
+Limit your collection with a timeout or `take(n)`, because `discoveries()`
+keeps emitting.
 
 ## Near fabrics
 
-If you want direct device-to-device links, use the Near fabrics. `kuilt-multipeer` (iOS/macOS) and `kuilt-nearby` (Android) are peer-to-peer, no relay server. They both implement `Loom` and return the same instance for host and join (one in-process mesh). Replace `InMemoryLoom` with one of these and your application code is unchanged.
+If you want direct device-to-device links, use the Near fabrics.
+`kuilt-multipeer` (iOS/macOS) and `kuilt-nearby` (Android) are peer-to-peer
+with no relay server. They both implement `Loom` and use the same instance for
+host and join (one in-process mesh). Replace `InMemoryLoom` with one of these
+and your app code is unchanged.
 
-`kuilt-webrtc` (wasmJs) provides a WebRTC data-channel fabric. WebRTC sessions involve a signaling handshake, but that is entirely inside the fabric implementation — callers see only `Loom`/`Seam`.
+`kuilt-webrtc` (wasmJs) provides a WebRTC data-channel fabric. WebRTC sessions
+need signaling, but that stays inside the fabric implementation — callers only
+see `Loom`/`Seam`.
 
 ## Writing your own fabric
 
@@ -96,7 +112,11 @@ class MyFabricConformanceTest : SeamConformanceSuite() {
 }
 ```
 
-`newLoomPair()` returns `(hostLoom, joinerLoom)`. In-process radio fabrics return the same instance twice (shared mesh). Role-split fabrics (WebSocket, mDNS, WebRTC) return distinct host and joiner instances wired to each other. The suite runs `host()` and `join()` concurrently — this matters for WebSocket-style fabrics where `host()` suspends until a client connects.
+`newLoomPair()` returns `(hostLoom, joinerLoom)`. In-process radio fabrics
+return the same instance twice (shared mesh). Role-split fabrics (WebSocket,
+mDNS, WebRTC) return distinct host and joiner instances wired together. The
+suite runs `host()` and `join()` concurrently, which matters for WebSocket-style
+fabrics where `host()` suspends until a client connects.
 
 The suite tests:
 - `weave(Rendezvous.New(...))` returns a `Seam` with a non-empty `selfId`.
@@ -110,11 +130,15 @@ Keep real-network smoke tests in a separate test that is opt-in (e.g. `-Pmy.fabr
 
 ## `Tag` and custom discovery
 
-`Tag` is an open interface. Each fabric defines its own (`WebSocketAdvertisement`, `MDNSAdvertisement`, …). A custom fabric supplies its own `Tag` carrying whatever its `join()` needs.
+`Tag` is an open interface. Each fabric defines its own (`WebSocketAdvertisement`,
+`MDNSAdvertisement`, …). A custom fabric provides a `Tag` with whatever its
+`join()` call needs.
 
 ## The membership layer (`kuilt-session`)
 
-`Seam` is pure transport — `peers` is whoever the wire says is connected. When your product needs room semantics (identified members, host role, reconnect behavior), add `kuilt-session`.
+`Seam` is pure transport — `peers` reflects whoever the wire says is connected.
+When your product needs room semantics (identified members, host role,
+reconnect behavior), add `kuilt-session`.
 
 `SeamRoomFactory` wraps any `Loom` and produces `Room`s with an admit/identify handshake, a roster of admitted members, reconnect tokens, and partition detection:
 
