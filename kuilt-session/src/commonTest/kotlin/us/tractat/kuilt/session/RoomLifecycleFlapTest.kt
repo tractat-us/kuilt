@@ -17,7 +17,7 @@ import us.tractat.kuilt.core.FlakyLifecycleLoom
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
-import us.tractat.kuilt.session.partition.HeartbeatConfig
+import us.tractat.kuilt.liveness.HeartbeatConfig
 import kotlin.test.Test
 import kotlin.test.assertFalse
 import kotlin.test.assertIs

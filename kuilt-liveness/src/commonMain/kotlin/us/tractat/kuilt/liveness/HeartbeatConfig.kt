@@ -1,4 +1,4 @@
-package us.tractat.kuilt.session.partition
+package us.tractat.kuilt.liveness
 
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds

@@ -1,4 +1,4 @@
-package us.tractat.kuilt.session.partition
+package us.tractat.kuilt.liveness
 
 import us.tractat.kuilt.core.PeerId
 import kotlin.time.Instant

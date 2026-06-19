@@ -1,4 +1,4 @@
-package us.tractat.kuilt.session.partition
+package us.tractat.kuilt.liveness
 
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi

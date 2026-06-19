@@ -1,4 +1,4 @@
-package us.tractat.kuilt.session.partition
+package us.tractat.kuilt.liveness
 
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -187,10 +187,10 @@ public class HeartbeatPartitionDetector(
 
     public companion object {
         /** Reserved prefix for kuilt heartbeat ping frames. Applications must not use this namespace. */
-        internal const val PING_PREFIX = "kuilt.heartbeat.ping"
+        public const val PING_PREFIX: String = "kuilt.heartbeat.ping"
 
         /** Reserved prefix for kuilt heartbeat pong frames. Applications must not use this namespace. */
-        internal const val PONG_PREFIX = "kuilt.heartbeat.pong"
+        public const val PONG_PREFIX: String = "kuilt.heartbeat.pong"
 
         internal fun pingPayload(): ByteArray = PING_PREFIX.encodeToByteArray()
 
