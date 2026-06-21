@@ -4,7 +4,10 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import us.tractat.kuilt.raft.ClientSessionTable
+import us.tractat.kuilt.raft.DedupKey
 
 /**
  * A wrapper over [TurnSequencer] that applies local actions optimistically before
@@ -22,12 +25,15 @@ import kotlinx.coroutines.launch
  *    and [speculativeState] is restored to the authoritative snapshot + remaining pending.
  *
  * On each [TurnEvent.Committed] emission received by the background collector:
- * - **Match** (committed action equals oldest pending): the pending entry is confirmed
- *   and discarded. The authoritative snapshot advances to include the confirmed action.
+ * - **Duplicate key** (same [DedupKey] as a previously applied entry): the entry is skipped
+ *   entirely — the [ClientSessionTable] gate prevents double-apply to the authoritative
+ *   snapshot. The confirmed count still advances.
+ * - **Match** (committed action equals oldest pending, first-apply): the pending entry is
+ *   confirmed and discarded. The authoritative snapshot advances to include the confirmed action.
  *   No rollback is needed.
- * - **Mismatch** (foreign peer's action, or reorder): the authoritative snapshot advances
- *   to include the committed action. All remaining pending inputs are replayed on top to
- *   produce the new [speculativeState].
+ * - **Mismatch** (foreign peer's action, or reorder, first-apply): the authoritative snapshot
+ *   advances to include the committed action. All remaining pending inputs are replayed on top
+ *   to produce the new [speculativeState].
  *
  * ## Constraints
  *
@@ -56,6 +62,11 @@ import kotlinx.coroutines.launch
  * try {
  *     speculative.propose(myMove)
  * } catch (e: LeadershipLostException) { /* retry */ }
+ *
+ * // Durable propose with a caller-owned request ID for cross-crash exactly-once:
+ * try {
+ *     speculative.propose(myMove, requestId = nextSerial)
+ * } catch (e: LeadershipLostException) { /* retry with same requestId */ }
  * ```
  *
  * @param sequencer The backing [TurnSequencer]. Lifetime is owned by the caller.
@@ -78,8 +89,18 @@ public class SpeculativeSequencer<S, A>(
     /** The last confirmed authoritative state (snapshot after each confirmed commit). */
     private var authoritativeSnapshot: S = game.snapshot(initialState)
 
-    /** The number of committed events processed — used by tests to synchronize assertions. */
-    private var confirmedCount = 0
+    /** Internal exactly-once dedup table: prevents double-apply of forwarded/retry duplicates. */
+    private val dedupTable = ClientSessionTable()
+
+    private val _confirmedCount = MutableStateFlow(0)
+
+    /**
+     * The number of committed events processed by the background collector.
+     *
+     * Exposed as a [StateFlow] so tests and consumers can suspend until a threshold is reached
+     * without busy-waiting. Replaces the prior `while (cond) yield()` spin in [awaitConfirmedCount].
+     */
+    public val confirmedCount: StateFlow<Int> = _confirmedCount.asStateFlow()
 
     private val _speculativeState = MutableStateFlow(initialState)
 
@@ -122,7 +143,30 @@ public class SpeculativeSequencer<S, A>(
         return try {
             sequencer.propose(action)
         } catch (e: Throwable) {
-            rollbackSpeculative(action)
+            rollbackSpeculative()
+            throw e
+        }
+    }
+
+    /**
+     * Proposes [action] with a caller-pinned [requestId] for cross-crash exactly-once, then
+     * returns after a quorum commits it (same semantics as [propose]).
+     *
+     * Mirrors [TurnSequencer.propose]`(action, requestId)`: replay the *same* [requestId] on a
+     * post-crash retry and the consumer's [ClientSessionTable] (and this sequencer's internal
+     * table) will skip the duplicate. [requestId] must be a per-client monotonic serial the
+     * caller owns — do not pass a log index or a random value.
+     *
+     * @throws [us.tractat.kuilt.raft.LeadershipLostException] if the leader steps down while
+     *   awaiting commit. The speculative apply is rolled back. The caller may retry with the
+     *   same [requestId].
+     */
+    public suspend fun propose(action: A, requestId: Long): IndexedAction<A> {
+        applySpeculatively(action)
+        return try {
+            sequencer.propose(action, requestId)
+        } catch (e: Throwable) {
+            rollbackSpeculative()
             throw e
         }
     }
@@ -134,7 +178,7 @@ public class SpeculativeSequencer<S, A>(
         _speculativeState.value = game.apply(_speculativeState.value, action)
     }
 
-    private fun rollbackSpeculative(action: A) {
+    private fun rollbackSpeculative() {
         pendingBuffer.removeLastOrNull()
         _speculativeState.value = replayPendingOnSnapshot()
     }
@@ -144,7 +188,7 @@ public class SpeculativeSequencer<S, A>(
     private suspend fun collectCommitted() {
         sequencer.events.collect { event ->
             when (event) {
-                is TurnEvent.Committed -> onCommit(event.indexed.action)
+                is TurnEvent.Committed -> onCommit(event.indexed)
                 // SpeculativeSequencer's pending buffer + authoritative snapshot are in-memory and
                 // cannot be reconciled against a Raft snapshot install. Per its no-compaction
                 // constraint (see class KDoc), fail loud rather than silently corrupt state.
@@ -157,18 +201,36 @@ public class SpeculativeSequencer<S, A>(
         }
     }
 
-    // No exactly-once dedup here by design: the in-memory pending buffer + authoritative snapshot
-    // cannot participate in cross-crash dedup (they are lost on crash). A consumer that needs
-    // exactly-once folds TurnEvent.Committed.indexed.dedupKey through a ClientSessionTable at the
-    // TurnSequencer.events layer instead. (Deferred enhancement: internal dedup + compaction.)
-    private fun onCommit(committed: A) {
+    /**
+     * Processes one committed action, gating **every** commit through the internal exactly-once
+     * [dedupTable].
+     *
+     * Folding every key through [dedupTable] (not just the foreign path) is load-bearing: a
+     * locally-proposed action confirmed via the pending buffer must still record its key, otherwise a
+     * later forwarded/reconnect duplicate of that same key — which arrives with no matching pending
+     * entry and so takes the foreign path — would slip through and **double-apply** to the
+     * authoritative snapshot. A `false` result means the key was already applied: drop it. If a
+     * duplicate also sits at the head of the pending buffer (a retry under the same key of a
+     * still-pending local proposal), pop that stale twin so the buffer doesn't leak and the
+     * speculative state stays consistent.
+     *
+     * Distinct legitimate actions never collide here: the auto-serial [propose] draws a fresh serial
+     * per call, so only an explicit same-`requestId` retry shares a key — exactly what dedup drops.
+     */
+    private fun onCommit(indexed: IndexedAction<A>) {
+        val fresh = dedupTable.shouldApply(indexed.dedupKey)
         val oldest = pendingBuffer.firstOrNull()
-        if (oldest != null && actionsMatch(oldest, committed)) {
-            confirmOldestPending(committed)
-        } else {
-            applyForeignAndReplay(committed)
+        val matchesPending = oldest != null && actionsMatch(oldest, indexed.action)
+        when {
+            !fresh -> if (matchesPending) {
+                // Already-applied duplicate that still has a stale pending twin — drop the twin.
+                pendingBuffer.removeFirst()
+                _speculativeState.value = replayPendingOnSnapshot()
+            }
+            matchesPending -> confirmOldestPending(indexed.action)
+            else -> applyForeignAndReplay(indexed.action)
         }
-        confirmedCount++
+        _confirmedCount.value++
     }
 
     /**
@@ -226,8 +288,6 @@ public class SpeculativeSequencer<S, A>(
      * a separate test module to keep the surface minimal.
      */
     public suspend fun awaitConfirmedCount(count: Int) {
-        while (confirmedCount < count) {
-            kotlinx.coroutines.yield()
-        }
+        confirmedCount.first { it >= count }
     }
 }

@@ -9,6 +9,8 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
@@ -16,6 +18,8 @@ import kotlinx.serialization.BinaryFormat
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.cbor.Cbor
 import kotlinx.serialization.serializer
+import us.tractat.kuilt.raft.ClientId
+import us.tractat.kuilt.raft.DedupKey
 import us.tractat.kuilt.raft.LeadershipLostException
 import us.tractat.kuilt.raft.LogEntry
 import us.tractat.kuilt.raft.NotLeaderException
@@ -252,13 +256,15 @@ class SpeculativeSequencerTest {
 
         assertEquals(16, seq.speculativeState.value.total)
 
-        // Foreign commit #1: rollback, replay all 3 pending
-        node.pushCommitted(encodeMove(Move(player = 3, value = 1)))
+        // Push foreign commits with explicit distinct dedup keys so they don't collide with
+        // in-flight proposal keys (FakeRaftNode stamps stampForNextCommit on foreign pushes
+        // during the proposal window; explicit LogEntry bypasses that).
+        val foreignClient = ClientId("peer-2")
+        node.pushCommitted(LogEntry(index = node.commitIndex.value + 1, term = 1L, command = encodeMove(Move(player = 3, value = 1)), dedupKey = DedupKey(foreignClient, 1L)))
         seq.awaitConfirmedCount(1)
         assertEquals(17, seq.speculativeState.value.total) // 1 + 5+3+8
 
-        // Foreign commit #2: rollback again, replay all 3 pending
-        node.pushCommitted(encodeMove(Move(player = 3, value = 2)))
+        node.pushCommitted(LogEntry(index = node.commitIndex.value + 1, term = 1L, command = encodeMove(Move(player = 3, value = 2)), dedupKey = DedupKey(foreignClient, 2L)))
         seq.awaitConfirmedCount(2)
         assertEquals(19, seq.speculativeState.value.total) // 1+2 + 5+3+8
 
@@ -307,5 +313,148 @@ class SpeculativeSequencerTest {
 
         val error = caught.await()
         assertTrue(error is IllegalStateException, "Reset must surface as IllegalStateException, got $error")
+    }
+
+    // ── Part 1: Internal exactly-once dedup ───────────────────────────────────
+
+    @Test
+    fun duplicateDedupKeyAppliedOnlyOnce() = runTest(timeout = 5.seconds) {
+        val node = FakeRaftNode()
+        val seq = speculative(node, scope = CoroutineScope(UnconfinedTestDispatcher(testScheduler)))
+
+        // Push the same dedup key twice — simulating a duplicate forwarded commit
+        val clientId = ClientId("test-client")
+        val key = DedupKey(clientId, requestId = 1L)
+        val entry1 = LogEntry(index = 1L, term = 1L, command = encodeMove(Move(player = 1, value = 10)), dedupKey = key)
+        val entry2 = LogEntry(index = 2L, term = 1L, command = encodeMove(Move(player = 1, value = 10)), dedupKey = key)
+
+        node.pushCommitted(entry1)
+        seq.awaitConfirmedCount(1)
+        node.pushCommitted(entry2)
+        seq.awaitConfirmedCount(2)
+
+        // Despite two commits, only applied once
+        assertEquals(10, seq.speculativeState.value.total)
+    }
+
+    @Test
+    fun distinctDedupKeysAreEachApplied() = runTest(timeout = 5.seconds) {
+        val node = FakeRaftNode()
+        val seq = speculative(node, scope = CoroutineScope(UnconfinedTestDispatcher(testScheduler)))
+
+        val clientId = ClientId("test-client")
+        val entry1 = LogEntry(index = 1L, term = 1L, command = encodeMove(Move(player = 1, value = 5)), dedupKey = DedupKey(clientId, 1L))
+        val entry2 = LogEntry(index = 2L, term = 1L, command = encodeMove(Move(player = 1, value = 7)), dedupKey = DedupKey(clientId, 2L))
+
+        node.pushCommitted(entry1)
+        seq.awaitConfirmedCount(1)
+        node.pushCommitted(entry2)
+        seq.awaitConfirmedCount(2)
+
+        // Both distinct serials applied: 5 + 7 = 12
+        assertEquals(12, seq.speculativeState.value.total)
+    }
+
+    @Test
+    fun localPendingConfirmsCorrectlyWithDedup() = runTest(timeout = 5.seconds) {
+        val node = FakeRaftNode()
+        node.setRole(RaftRole.Leader)
+        val seq = speculative(node, scope = CoroutineScope(UnconfinedTestDispatcher(testScheduler)))
+
+        // Local propose: FakeRaftNode auto-stamps a dedup key, commits once
+        seq.propose(Move(player = 1, value = 42))
+
+        // Confirmed exactly once — state = 42, no phantom double-apply
+        assertEquals(42, seq.speculativeState.value.total)
+        assertEquals(0, seq.pendingCount)
+    }
+
+    @Test
+    fun foreignDuplicateOfLocallyConfirmedKeyIsNotDoubleApplied() = runTest(timeout = 5.seconds) {
+        // Regression: a locally-proposed action confirmed via the pending buffer must still record
+        // its key in the dedup table, so a later forwarded duplicate of that SAME key (arriving with
+        // no matching pending entry → foreign path) is dropped, not double-applied.
+        val node = FakeRaftNode(clientId = ClientId("durable-x"))
+        node.setRole(RaftRole.Leader)
+        val seq = speculative(node, scope = CoroutineScope(UnconfinedTestDispatcher(testScheduler)))
+
+        // Local propose under a known key (clientId durable-x, requestId 1) → confirmed via pending.
+        seq.propose(Move(player = 1, value = 5), requestId = 1L)
+        seq.awaitConfirmedCount(1)
+        assertEquals(5, seq.speculativeState.value.total)
+
+        // A forwarded/reconnect duplicate of the SAME key commits again (separate log entry).
+        node.pushCommitted(
+            LogEntry(
+                index = 99L,
+                term = 1L,
+                command = encodeMove(Move(player = 1, value = 5)),
+                dedupKey = DedupKey(ClientId("durable-x"), 1L),
+            ),
+        )
+        seq.awaitConfirmedCount(2)
+
+        // Still 5, not 10 — the duplicate was deduped despite the original being a local confirm.
+        assertEquals(5, seq.speculativeState.value.total)
+    }
+
+    // ── Part 2: propose(action, requestId) overload ───────────────────────────
+
+    @Test
+    fun proposeWithRequestIdSucceeds() = runTest(timeout = 5.seconds) {
+        val node = FakeRaftNode()
+        node.setRole(RaftRole.Leader)
+        val seq = speculative(node, scope = CoroutineScope(UnconfinedTestDispatcher(testScheduler)))
+
+        val indexed = seq.propose(Move(player = 1, value = 99), requestId = 1L)
+
+        assertEquals(99, indexed.action.value)
+        assertEquals(99, seq.speculativeState.value.total)
+        assertEquals(0, seq.pendingCount)
+    }
+
+    @Test
+    fun proposeWithRequestIdRollsBackOnFailure() = runTest(timeout = 5.seconds) {
+        val node = FakeRaftNode()
+        node.setRole(RaftRole.Leader)
+        val cause = LeadershipLostException("lost")
+        node.proposeBehavior = { _ -> throw cause }
+        val seq = speculative(node, scope = CoroutineScope(UnconfinedTestDispatcher(testScheduler)))
+
+        assertFailsWith<LeadershipLostException> {
+            seq.propose(Move(player = 1, value = 77), requestId = 1L)
+        }
+
+        assertEquals(0, seq.speculativeState.value.total)
+        assertEquals(0, seq.pendingCount)
+    }
+
+    // ── Part 4: awaitConfirmedCount uses StateFlow suspension ─────────────────
+
+    @Test
+    fun confirmedCountExposedAsStateFlow() = runTest(timeout = 5.seconds) {
+        val node = FakeRaftNode()
+        val seq = speculative(node, scope = CoroutineScope(UnconfinedTestDispatcher(testScheduler)))
+
+        // confirmedCount is a StateFlow — verify it starts at 0 and advances
+        assertEquals(0, seq.confirmedCount.value)
+
+        node.pushCommitted(encodeMove(Move(player = 1, value = 1)))
+        seq.confirmedCount.first { it >= 1 }
+
+        assertEquals(1, seq.confirmedCount.value)
+    }
+
+    @Test
+    fun awaitConfirmedCountSuspendsUntilThresholdReached() = runTest(timeout = 5.seconds) {
+        val node = FakeRaftNode()
+        val seq = speculative(node, scope = CoroutineScope(UnconfinedTestDispatcher(testScheduler)))
+
+        // Push two commits; awaitConfirmedCount(2) must suspend until both arrive
+        node.pushCommitted(encodeMove(Move(player = 1, value = 3)))
+        node.pushCommitted(encodeMove(Move(player = 2, value = 4)))
+        seq.awaitConfirmedCount(2)
+
+        assertEquals(7, seq.speculativeState.value.total)
     }
 }
