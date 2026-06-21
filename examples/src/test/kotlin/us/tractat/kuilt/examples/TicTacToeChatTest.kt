@@ -10,6 +10,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.filterIsInstance
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runTest
@@ -22,7 +23,7 @@ import us.tractat.kuilt.crdt.Patch
 import us.tractat.kuilt.crdt.Rga
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.crdt.RgaId
-import us.tractat.kuilt.game.IndexedAction
+import us.tractat.kuilt.game.TurnEvent
 import us.tractat.kuilt.game.TurnSequencer
 import us.tractat.kuilt.game.gameNode
 import us.tractat.kuilt.quilter.QuiltMessage
@@ -162,7 +163,8 @@ class TicTacToeChatTest {
             ): Job = launch {
                 val committed = mutableListOf<Move>()
                 var scriptIndex = if (skipFirstProposal) 1 else 0
-                game.committed.collect { (_, move): IndexedAction<Move> ->
+                game.events.filterIsInstance<TurnEvent.Committed<Move>>().collect { event ->
+                    val move = event.indexed.action
                     committed.add(move)
                     val board = buildBoard(committed)
                     if (isOver(board)) {

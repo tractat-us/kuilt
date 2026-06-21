@@ -6,7 +6,9 @@
 package us.tractat.kuilt.game
 
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
@@ -18,10 +20,12 @@ import us.tractat.kuilt.raft.LeadershipLostException
 import us.tractat.kuilt.raft.LogEntry
 import us.tractat.kuilt.raft.NotLeaderException
 import us.tractat.kuilt.raft.RaftRole
+import us.tractat.kuilt.raft.Snapshot
 import us.tractat.kuilt.raft.test.FakeRaftNode
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.seconds
 
 /**
@@ -285,5 +289,23 @@ class SpeculativeSequencerTest {
         // so equal totals at different steps won't re-emit.
         // Expected: 0 → 5 → 8 (propose applies then commit matches, so no rollback change)
         assertEquals(listOf(0, 5, 8), emissions)
+    }
+
+    // ── Snapshot install (Reset) is unsupported — fail loud ───────────────────
+
+    @Test
+    fun snapshotInstallResetCausesCollectorToThrow() = runTest(timeout = 5.seconds) {
+        val node = FakeRaftNode()
+        val caught = CompletableDeferred<Throwable>()
+        val handler = CoroutineExceptionHandler { _, e -> caught.complete(e) }
+        val scope = CoroutineScope(UnconfinedTestDispatcher(testScheduler) + handler + Job())
+        speculative(node, scope = scope) // launches the committed-event collector
+
+        // SpeculativeSequencer cannot replay across a snapshot install (no-compaction constraint),
+        // so a TurnEvent.Reset must fail loud rather than silently corrupt the pending buffer.
+        node.pushInstall(Snapshot(throughIndex = 1L, state = byteArrayOf(1, 2, 3)))
+
+        val error = caught.await()
+        assertTrue(error is IllegalStateException, "Reset must surface as IllegalStateException, got $error")
     }
 }

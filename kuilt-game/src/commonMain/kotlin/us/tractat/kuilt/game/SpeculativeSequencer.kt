@@ -21,7 +21,7 @@ import kotlinx.coroutines.launch
  *    speculative apply is rolled back — the action is removed from the pending buffer
  *    and [speculativeState] is restored to the authoritative snapshot + remaining pending.
  *
- * On each [TurnSequencer.committed] emission received by the background collector:
+ * On each [TurnEvent.Committed] emission received by the background collector:
  * - **Match** (committed action equals oldest pending): the pending entry is confirmed
  *   and discarded. The authoritative snapshot advances to include the confirmed action.
  *   No rollback is needed.
@@ -33,11 +33,11 @@ import kotlinx.coroutines.launch
  *
  * - [SpeculativeGame.apply] must be **deterministic and pure** — replay correctness depends
  *   on it. See [SpeculativeGame] KDoc.
- * - **No log compaction.** Inherits [TurnSequencer]'s assumption that `Committed.Install`
- *   events are dropped. A snapshot install from Raft would invalidate the pending buffer.
- *   See [SpeculativeGame] for the boundary note.
- * - **Single collector.** The [TurnSequencer.committed] flow must not be collected elsewhere
- *   — the collector backing [speculativeState] is the single consumer of committed events.
+ * - **No log compaction.** A snapshot install from Raft would invalidate the pending buffer, so a
+ *   [TurnEvent.Reset] on the backing [TurnSequencer.events] stream **throws** here (fail-loud) rather
+ *   than being silently absorbed. See [SpeculativeGame] for the boundary note.
+ * - **Single collector.** The [TurnSequencer.events] flow must not be collected elsewhere
+ *   — the collector backing [speculativeState] is the single consumer of turn events.
  *
  * ## Usage
  *
@@ -142,9 +142,25 @@ public class SpeculativeSequencer<S, A>(
     // ── Private: committed-event collector ───────────────────────────────────
 
     private suspend fun collectCommitted() {
-        sequencer.committed.collect { indexed -> onCommit(indexed.action) }
+        sequencer.events.collect { event ->
+            when (event) {
+                is TurnEvent.Committed -> onCommit(event.indexed.action)
+                // SpeculativeSequencer's pending buffer + authoritative snapshot are in-memory and
+                // cannot be reconciled against a Raft snapshot install. Per its no-compaction
+                // constraint (see class KDoc), fail loud rather than silently corrupt state.
+                is TurnEvent.Reset -> throw IllegalStateException(
+                    "SpeculativeSequencer does not support snapshot installs (log compaction is " +
+                        "enabled): received TurnEvent.Reset(${event.snapshot}). Disable compaction " +
+                        "for this session or drive TurnSequencer directly with snapshot rehydration.",
+                )
+            }
+        }
     }
 
+    // No exactly-once dedup here by design: the in-memory pending buffer + authoritative snapshot
+    // cannot participate in cross-crash dedup (they are lost on crash). A consumer that needs
+    // exactly-once folds TurnEvent.Committed.indexed.dedupKey through a ClientSessionTable at the
+    // TurnSequencer.events layer instead. (Deferred enhancement: internal dedup + compaction.)
     private fun onCommit(committed: A) {
         val oldest = pendingBuffer.firstOrNull()
         if (oldest != null && actionsMatch(oldest, committed)) {

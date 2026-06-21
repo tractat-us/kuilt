@@ -27,12 +27,13 @@ package us.tractat.kuilt.game
  *
  * ## Log compaction
  *
- * [SpeculativeSequencer] inherits [TurnSequencer]'s no-compaction assumption:
- * [TurnSequencer.committed] drops `Committed.Install` snapshot installs. A Raft
- * snapshot install would invalidate the pending-input buffer (the install resets the
- * committed log to a point the buffer may pre-date). Supporting snapshot installs
- * is out of scope here; if log compaction is enabled, the pending buffer must be
- * cleared and [restore] called with the install's embedded state at that point.
+ * [SpeculativeSequencer] does not support log compaction. A Raft snapshot install would
+ * invalidate the pending-input buffer (the install resets the committed log to a point the
+ * buffer may pre-date), and the in-memory buffer cannot be reconciled against it. The install
+ * surfaces on [TurnSequencer.events] as a [TurnEvent.Reset], and [SpeculativeSequencer] **fails
+ * loud** on it (throws) rather than silently corrupting state. Supporting snapshot installs is
+ * out of scope here; if log compaction is enabled, drive [TurnSequencer] directly and rehydrate
+ * via [restore] from the install's embedded state.
  *
  * @param S The game-state type.
  * @param A The action type.
