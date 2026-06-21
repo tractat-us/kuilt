@@ -18,6 +18,7 @@ import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.Tag
 import us.tractat.kuilt.raft.ClientId
+import us.tractat.kuilt.raft.ClientIdentity
 import us.tractat.kuilt.raft.ClusterConfig
 import us.tractat.kuilt.raft.Committed
 import us.tractat.kuilt.raft.InMemoryRaftStorage
@@ -177,7 +178,9 @@ public data class ClusterEndpoints(
  * @param clientNodeId Stable [NodeId] for this client — must be in [ClusterConfig.learners].
  * @param clusterConfig Full cluster membership (voters + this learner).
  * @param raftConfig Raft timing and dedup configuration.
- * @param clientId Optional stable [ClientId] for cross-crash exactly-once. `null` mints one.
+ * @param identity How this client obtains its Raft §8 dedup id. [ClientIdentity.Auto] (default)
+ *   mints a per-incarnation id; pass [ClientIdentity.Durable] with a stable [ClientId] for
+ *   cross-crash exactly-once.
  * @param clock Injected clock for session resume-token timestamps. **Required** — no real-clock
  *   default (prevents silent virtual-time breakage per the "optional ≠ tuning" policy).
  *   Reserved for future session-layer resume; currently unused at the Seam level.
@@ -188,7 +191,7 @@ public fun CoroutineScope.clusterClient(
     clientNodeId: NodeId,
     clusterConfig: ClusterConfig,
     raftConfig: RaftConfig,
-    clientId: ClientId? = null,
+    identity: ClientIdentity = ClientIdentity.Auto,
     clock: () -> Instant,
 ): ClusterClient {
     val reconnect = clusterEndpoints.toReconnect()
@@ -199,7 +202,7 @@ public fun CoroutineScope.clusterClient(
         clientNodeId = clientNodeId,
         clusterConfig = clusterConfig,
         raftConfig = raftConfig,
-        clientId = clientId,
+        identity = identity,
         clock = clock,
     )
 }
@@ -235,7 +238,7 @@ internal fun buildClusterClient(
     clientNodeId: NodeId,
     clusterConfig: ClusterConfig,
     raftConfig: RaftConfig,
-    clientId: ClientId?,
+    identity: ClientIdentity,
     clock: () -> Instant,
 ): ClusterClient {
     val transport = ManagedRaftTransport(scope = scope, selfId = clientNodeId)
@@ -244,7 +247,7 @@ internal fun buildClusterClient(
         transport = transport,
         storage = InMemoryRaftStorage(),
         raftConfig = raftConfig,
-        clientId = clientId,
+        identity = identity,
     )
 
     // Reconnect loop: join (Room) → install channel → await tear → rotate → re-join → swap → repeat.

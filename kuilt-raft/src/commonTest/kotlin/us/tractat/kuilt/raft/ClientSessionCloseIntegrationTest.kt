@@ -60,7 +60,7 @@ class ClientSessionCloseIntegrationTest {
     @Test
     fun clientReOpensAfterCloseOp() = raftRunTest {
         val clientId = ClientId("durable-client")
-        val h = singleVoterNode(backgroundScope, clientId = clientId)
+        val h = singleVoterNode(backgroundScope, identity = ClientIdentity.Durable(clientId))
         h.node.awaitLeadership()
 
         val table = ClientSessionTable()

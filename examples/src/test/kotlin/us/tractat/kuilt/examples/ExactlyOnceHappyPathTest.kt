@@ -11,6 +11,7 @@ import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestResult
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.raft.ClientId
+import us.tractat.kuilt.raft.ClientIdentity
 import us.tractat.kuilt.raft.ClientSessionTable
 import us.tractat.kuilt.raft.ClusterConfig
 import us.tractat.kuilt.raft.Committed
@@ -80,7 +81,7 @@ class ExactlyOnceHappyPathTest {
                 raftConfig = MULTI_NODE_SIM_BASE_CONFIG.copy(
                     random = Random(MULTI_NODE_SIM_SEED + sim.nodeIds.size),
                 ),
-                clientId = ClientId(clientId.value),
+                identity = ClientIdentity.Durable(ClientId(clientId.value)),
             )
 
             val leader = sim.awaitLeader()
@@ -151,6 +152,6 @@ private fun voterAndLearnerFactory(
         transport = transport,
         storage = storage,
         raftConfig = nodeConfig,
-        clientId = ClientId(id.value),
+        identity = ClientIdentity.Durable(ClientId(id.value)),
     )
 }

@@ -10,6 +10,7 @@ import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.flow.transformWhile
 import us.tractat.kuilt.core.Tag
 import us.tractat.kuilt.raft.ClientId
+import us.tractat.kuilt.raft.ClientIdentity
 import us.tractat.kuilt.raft.ClientSessionTable
 import us.tractat.kuilt.raft.ClusterConfig
 import us.tractat.kuilt.raft.DedupKey
@@ -75,7 +76,7 @@ class NoDoubleApplyFailoverTest {
             transport = sim.network.transport(clientId),
             storage = InMemoryRaftStorage(),
             raftConfig = MULTI_NODE_SIM_BASE_CONFIG.copy(random = Random(485L + 99)),
-            clientId = ClientId("client"),
+            identity = ClientIdentity.Durable(ClientId("client")),
         )
         // Register so sim.awaitCommit(on = setOf(clientId)) works.
         sim.nodes[clientId] = clientNode
