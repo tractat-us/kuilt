@@ -1,6 +1,6 @@
 # JsonCrdt
 
-A recursive CRDT over an arbitrary JSON document. It composes three lower-level CRDTs: objects are an [ORMap](crdt-ormap.md), arrays use [RGA (`Rga`)](crdt-rga.md), and scalar leaves are an [MVRegister](crdt-mvregister.md). Concurrent edits at any depth merge structurally and converge.
+A full JSON document that merges. Objects use [ORMap](crdt-ormap.md) (add-wins keys), arrays use [Rga](crdt-rga.md) (stable insertion order), and scalar values use [MVRegister](crdt-mvregister.md) (surfaces conflicts). Concurrent edits at any depth — nested objects, array items, scalar fields — all resolve automatically.
 
 **Converges to:** the same document on every replica — concurrently-added keys are all preserved (add-wins), array elements keep a stable order by insertion id, and concurrent scalar writes surface together as a multi-value the caller resolves.
 

@@ -1,6 +1,6 @@
 # GSet
 
-A grow-only set. Elements can be added but never removed. Merge is set union.
+A set that only grows. Elements can be added but never removed. Merging two `GSet`s is just set union.
 
 **Converges to:** the union of all elements ever added across all replicas.
 

@@ -1,20 +1,14 @@
 # The contract
 
-The point of kuilt's contract is to keep your app code stable while transports
-change underneath it. You learn eight types once, then reuse them across every
-fabric.
+kuilt's contract is a small, stable API that sits in front of every network fabric. Learn it once; your app code stays the same when you swap WebSocket for Bluetooth or LAN.
 
-## Why this contract exists
+The whole thing is three things:
 
-Different fabrics fail in different ways (discovery delays, dropped links,
-platform-specific APIs). The contract narrows that variation to one application
-surface:
+- **open or join a session** (`Loom`),
+- **send and receive frames** (`Seam` + `Swatch`),
+- **react when peers join or leave** (`peers`).
 
-- open or join a session (`Loom`),
-- send and receive opaque frames (`Seam` + `Swatch`),
-- react to membership changes (`peers`).
-
-That keeps transport-specific complexity out of app logic.
+Different transports fail in different ways. The contract keeps those differences out of your app code.
 
 | Type | Role |
 |------|------|

@@ -1,6 +1,6 @@
 # TwoPhaseSet
 
-A two-phase set: elements can be added once and removed once. Removal is permanent — once an element is tombstoned, it can never be re-added. **Remove wins** over a concurrent re-add.
+A set where removal is final. Elements can be added and removed, but once removed they can never come back. When an add and a remove happen at the same time, **remove wins**.
 
 **Converges to:** the set of elements that have been added and not yet tombstoned, where tombstones are permanent.
 

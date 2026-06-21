@@ -1,14 +1,10 @@
-# Consensus (Raft)
+# Consensus
 
-Use `kuilt-raft` when your feature needs strict agreement, not best-effort
-merge. It gives every node the same strongly consistent, totally ordered log,
-so each peer applies the same decisions in the same order.
+Use `kuilt-raft` when every peer must apply the same decisions in the same order. It gives every node a strongly-consistent, totally-ordered log.
 
-Use it for coordination decisions (turn order, locks, durable workflow steps)
-where peer disagreement would be a correctness bug.
+Use it for turn order, locks, and durable workflow steps — situations where peers disagreeing would be a correctness bug, not just an inconvenience.
 
-Formally, `kuilt-raft` implements the Raft consensus algorithm for Kotlin
-Multiplatform.
+Under the hood this is the **Raft** consensus algorithm, a well-studied approach to leader election and log replication across a cluster of peers.
 
 ## Transport independence
 

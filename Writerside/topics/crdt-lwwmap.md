@@ -1,6 +1,6 @@
 # LWWMap
 
-A last-write-wins map: a per-key `LWWRegister`. Each key resolves concurrently according to timestamp; keys are independent.
+A map where each key is an `LWWRegister`. Concurrent writes to the same key are resolved by timestamp — the later write wins. Keys are independent, so a conflict on one key never affects another.
 
 **Converges to:** a map where each key holds the value written at the highest `(timestamp, replicaId)` for that key.
 

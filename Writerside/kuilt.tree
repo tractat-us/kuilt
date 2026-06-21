@@ -15,7 +15,7 @@
         <toc-element topic="quick-start.md"/>
     </toc-element>
 
-    <toc-element toc-title="Fabric">
+    <toc-element toc-title="Network Fabric">
         <toc-element topic="contract.md"/>
         <toc-element topic="fabrics.md"/>
         <toc-element topic="fabric-kit.md"/>
@@ -23,13 +23,13 @@
         <toc-element topic="composing-a-seam.md"/>
     </toc-element>
 
-    <toc-element toc-title="Consensus (Raft)">
+    <toc-element toc-title="Consensus">
         <toc-element topic="raft.md"/>
         <toc-element topic="game-bootstrap.md"/>
         <toc-element topic="cluster-server-client.md"/>
     </toc-element>
 
-    <toc-element toc-title="Replicated Data Types">
+    <toc-element toc-title="Replicated Data">
         <toc-element topic="crdt-overview.md"/>
         <toc-element toc-title="Counters">
             <toc-element topic="crdt-gcounter.md"/>

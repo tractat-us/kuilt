@@ -1,18 +1,14 @@
-# Conflict-free Replicated Data Types (CRDTs)
+# Replicated Data
 
-If you're using a fabric, your real goal is to share application data across peers without making users think about sync. Counters should stay correct, lists should keep their order, and maps should settle to the same value everywhere — even when devices are offline, messages arrive late, or updates race.
+Your app's shared state — counters, lists, maps, documents — should stay correct whether devices are online, offline, or editing at the same time. `kuilt-crdt` gives you data structures that automatically merge when two peers have made conflicting edits, so no change is ever lost.
 
-That is exactly what the types in `kuilt-crdt` are for.
+These are called **CRDTs** (Conflict-free Replicated Data Types): structures where any two peers that have seen the same set of updates will always hold the same value, regardless of the order updates arrived.
 
-If you're deciding between constructs: CRDTs are for *convergence without
-central ordering*. If your feature needs strict, globally ordered decisions, use
-Raft for that part.
-
-Formally, these are **C**onflict-free **R**eplicated **D**ata **T**ypes (CRDTs): data structures that replicas can update independently and later merge deterministically. If two peers have seen the same set of updates, they converge to the same value regardless of update order.
+Use CRDTs when you want convergence without a central coordinator. If your feature needs strict, globally ordered decisions instead (like turn order in a game), use Consensus for that part.
 
 `kuilt-crdt` provides fourteen types, grouped by what they model.
 
-Because they're plain value objects with clean APIs, **`kuilt-crdt` depends on nothing else in kuilt** — not even `kuilt-core`. Add it to a project on its own and replicate state over whatever transport you already have; live replication over a `Seam` (via [`Quilter`](crdt-quilter.md) in `:kuilt-quilter`) is opt-in, not required.
+**`kuilt-crdt` depends on nothing else in kuilt** — not even `kuilt-core`. Add it to any project on its own and replicate over whatever transport you already have. Live replication over a `Seam` (via [`Quilter`](crdt-quilter.md)) is opt-in, not required.
 
 ## Pick by what you're building
 

@@ -1,6 +1,6 @@
 # ORMap
 
-An observe-remove map: key presence is tracked by an ORSet (add-wins on concurrent remove/re-add), and values merge via their own `Quilted` CRDT. The key set and the value for each key are independent lattices.
+A map where keys can be added and removed, and values can be any CRDT. When two devices edit at the same time — one removes a key, another writes to it — the key survives (add-wins). The value at that key merges normally using its own type's rules.
 
 **Converges to:** a map where key presence follows ORSet semantics (add-wins on conflict) and each value converges according to its own `piece` rule.
 

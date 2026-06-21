@@ -1,6 +1,6 @@
 # RGA (`Rga`)
 
-RGA (Replicated Growable Array) is an ordered-sequence CRDT for lists and collaborative text. Elements are inserted with stable unique identifiers; the order is determined by those ids, not by array indices.
+An ordered list for collaborative text and sequences. Every element gets a stable unique id, so concurrent insertions from different devices always resolve to the same final order — no index collisions, no lost edits.
 
 **Converges to:** the same ordered sequence on every replica, regardless of the order concurrent insertions and removals arrived.
 
