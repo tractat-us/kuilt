@@ -1,6 +1,6 @@
 # PNCounter
 
-A positive/negative counter: the simplest extension of `GCounter` that allows both increments and decrements.
+A counter that can go up or down. Two `GCounter`s under the hood — one for increments, one for decrements. The current value is the difference.
 
 **Converges to:** `inc.value - dec.value`, where each half is a `GCounter` that only ever grows.
 

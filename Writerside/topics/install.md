@@ -1,7 +1,6 @@
 # Install
 
-Install only what your feature needs, then add modules as your requirements
-grow. kuilt is published to Maven Central under the `us.tractat.kuilt` group.
+Add only what your feature needs. kuilt is published to Maven Central under `us.tractat.kuilt`.
 
 ## Add the repository
 

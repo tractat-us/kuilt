@@ -1,6 +1,6 @@
 # LWWRegister
 
-A last-write-wins register: holds a single value; concurrent writes are resolved by timestamp. The write with the higher timestamp wins. Replica id breaks ties lexicographically.
+Holds one value. When two devices write at the same time, the one with the later timestamp wins. Ties are broken by device id. The result is always a single agreed value — conflicts are silently resolved.
 
 **Converges to:** the value written at the highest `(timestamp, replicaId)` across all replicas.
 

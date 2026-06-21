@@ -1,6 +1,6 @@
 # ORSet
 
-An observe-remove set. Elements can be added and removed. When an add and a remove happen concurrently, **add wins**.
+A set where elements can be added and removed. When two devices edit at the same time — one adds an item, another removes it — **add wins**. The item stays in.
 
 **Converges to:** a set containing exactly the elements whose add operations have not been *causally dominated* by a subsequent remove from a replica that observed that add.
 

@@ -1,6 +1,6 @@
 # MVRegister
 
-A multi-value register: holds potentially multiple values when writes happen concurrently. A subsequent write that observes all concurrent values resolves them.
+Holds one value, but surfaces conflicts instead of silently picking a winner. When two devices write at the same time, both values are kept. The next write — one that has seen both — resolves them back to one.
 
 **Converges to:** the set of values written concurrently at the causal frontier — a single value when writes are sequential, multiple values when they are truly concurrent.
 

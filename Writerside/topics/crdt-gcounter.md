@@ -1,6 +1,6 @@
 # GCounter
 
-A grow-only counter. The value can only increase. Each replica owns its own slot; the total is the sum of all slots. Merge is element-wise maximum.
+A counter that only goes up. Each device owns its own slot; the total is the sum across all devices. On merge each slot keeps whichever value is larger — so the same increment seen from two devices is never double-counted.
 
 **Converges to:** the total number of increments applied across all replicas, with no replica able to affect another's slot.
 

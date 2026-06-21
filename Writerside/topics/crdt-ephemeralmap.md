@@ -1,6 +1,6 @@
 # EphemeralMap
 
-A presence/awareness CRDT for transient per-replica state — cursor positions, "who's online", typing indicators. Each replica owns exactly one slot, ordered by a per-replica clock, and entries expire when a caller-supplied TTL lapses without a refresh.
+For transient presence data — cursor positions, "who's typing", online indicators. Each device owns one slot. Entries expire after a caller-supplied TTL if not refreshed, so stale presence disappears automatically.
 
 **Converges to:** a map where each replica's slot holds the value carried by the highest clock that replica has emitted (or a tombstone if it left gracefully), with stale slots dropped locally once their TTL elapses.
 

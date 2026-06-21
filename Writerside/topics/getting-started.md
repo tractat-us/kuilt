@@ -1,8 +1,6 @@
 # Getting started
 
-Most network features follow the same path: connect peers, share data, then add
-strict ordering only where needed. This page walks through that in four steps,
-adding one kuilt module at a time without changing your app structure.
+Connect peers, share data, then add strict ordering only where needed. This page walks through that in four steps, adding one kuilt module at a time without changing your app code.
 
 ## Step 1: Two peers over WebSocket
 
@@ -56,11 +54,9 @@ seam.close()
 
 ## Step 2: Add a chat (replicated data)
 
-**Why this step:** transport moves bytes; CRDTs help shared state converge.
+**Why this step:** transport moves bytes; replicated data keeps state consistent across peers.
 
-Now make shared state converge. For chat, that means everyone sees the same
-message list in the same order, even with concurrent sends. Add
-`kuilt-crdt` and use RGA (Replicated Growable Array) via the `Rga` class:
+Now make shared state converge. For chat, that means everyone sees the same message list in the same order, even with concurrent sends. Add `kuilt-crdt` and use `Rga` — a replicated list where concurrent insertions are ordered deterministically:
 
 ```kotlin
 // build.gradle.kts
@@ -71,17 +67,15 @@ implementation("us.tractat.kuilt:kuilt-crdt")
 ```
 { src="../../kuilt-quilter/src/commonSamples/kotlin/us/tractat/kuilt/quilter/QuilterSamples.kt" include-symbol="sampleRgaChatReplicator" }
 
-→ [Replicated data structures](crdt-overview.md)
+→ [Replicated data](crdt-overview.md)
 
 ---
 
-## Step 3: Add tic-tac-toe (consensus and leadership)
+## Step 3: Add tic-tac-toe (consensus)
 
-**Why this step:** some decisions are not mergeable and need one agreed order.
+**Why this step:** some decisions can't be merged — they need one agreed order.
 
-Some state needs stronger guarantees than mergeable data. Tic-tac-toe moves are
-an ordered log: both players must agree on exactly who moved where, in order.
-Add `kuilt-raft` and `kuilt-game`:
+Tic-tac-toe moves are an ordered log: both players must agree on exactly who moved where, in order. That's not mergeable — it requires consensus. Add `kuilt-raft` and `kuilt-game`:
 
 ```kotlin
 // build.gradle.kts
@@ -93,13 +87,13 @@ implementation("us.tractat.kuilt:kuilt-game")
 ```
 { src="../../kuilt-game/src/commonSamples/kotlin/us/tractat/kuilt/game/GameSamples.kt" include-symbol="sampleTurnSequencer" }
 
-→ [Contract](contract.md)
+→ [Consensus](raft.md)
 
 ---
 
 ## Step 4: Run on more platforms
 
-**Why this step:** portability comes from swapping the `Loom`, not rewriting app logic.
+**Why this step:** portability is a `Loom` swap — your app logic stays unchanged.
 
 Your chat/game logic above only depends on `seam.broadcast`, `seam.incoming`,
 and `seam.peers`. Swap the `Loom` that produced the `Seam` and keep the rest of
@@ -115,7 +109,7 @@ val loom: Loom = when {
 val seam: Seam = loom.join(tag)
 ```
 
-→ [Fabrics](fabrics.md)
+→ [Network Fabric](fabrics.md)
 
 ---
 

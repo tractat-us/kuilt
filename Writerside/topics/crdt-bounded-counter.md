@@ -1,6 +1,6 @@
 # BoundedCounter
 
-A shared budget counter where no replica can spend more than it has been allocated. Unlike `PNCounter`, the total spent can never exceed the total budget.
+A counter with a hard budget — no device can spend more than it has been allocated. Unlike `PNCounter`, total spend across all devices can never exceed the total budget, even with concurrent spends.
 
 **Converges to:** a state where `totalSpent + totalBudget == sum of initial allocations` at all times, with each replica constrained to spend only its own quota.
 

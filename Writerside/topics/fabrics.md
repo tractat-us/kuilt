@@ -1,8 +1,8 @@
-# Fabrics
+# Network Fabric
 
-Your app logic should not need to care whether peers are connected by WebSocket,
-LAN discovery, or direct radio. In kuilt, every fabric implements `Loom` and
-returns a `Seam`, so you can swap transports without rewriting app logic.
+A fabric is a transport wrapped in kuilt's `Loom`/`Seam` contract. Every fabric works the same way from your app's point of view — swap the `Loom` you create and everything else stays the same.
+
+Your app logic never needs to know whether peers are connected by WebSocket, LAN discovery, or direct radio.
 
 ## Pick a fabric by deployment shape
 
