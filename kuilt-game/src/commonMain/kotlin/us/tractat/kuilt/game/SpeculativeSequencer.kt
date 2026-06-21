@@ -202,22 +202,33 @@ public class SpeculativeSequencer<S, A>(
     }
 
     /**
-     * Processes one committed action through the pending-buffer match/mismatch logic,
-     * guarded by the internal exactly-once dedup table for the foreign-apply path.
+     * Processes one committed action, gating **every** commit through the internal exactly-once
+     * [dedupTable].
      *
-     * The dedup table is only consulted on the **foreign** (mismatch) path — when the
-     * committed action doesn't match the oldest pending input. Local pending inputs are
-     * already confirmed exactly-once by the pending buffer: the same action can only
-     * match once (it's removed from the buffer on confirmation). Applying dedup to the
-     * pending-match path would incorrectly skip re-committed proposals on the mismatch
-     * path after a rollback.
+     * Folding every key through [dedupTable] (not just the foreign path) is load-bearing: a
+     * locally-proposed action confirmed via the pending buffer must still record its key, otherwise a
+     * later forwarded/reconnect duplicate of that same key — which arrives with no matching pending
+     * entry and so takes the foreign path — would slip through and **double-apply** to the
+     * authoritative snapshot. A `false` result means the key was already applied: drop it. If a
+     * duplicate also sits at the head of the pending buffer (a retry under the same key of a
+     * still-pending local proposal), pop that stale twin so the buffer doesn't leak and the
+     * speculative state stays consistent.
+     *
+     * Distinct legitimate actions never collide here: the auto-serial [propose] draws a fresh serial
+     * per call, so only an explicit same-`requestId` retry shares a key — exactly what dedup drops.
      */
     private fun onCommit(indexed: IndexedAction<A>) {
+        val fresh = dedupTable.shouldApply(indexed.dedupKey)
         val oldest = pendingBuffer.firstOrNull()
-        if (oldest != null && actionsMatch(oldest, indexed.action)) {
-            confirmOldestPending(indexed.action)
-        } else if (dedupTable.shouldApply(indexed.dedupKey)) {
-            applyForeignAndReplay(indexed.action)
+        val matchesPending = oldest != null && actionsMatch(oldest, indexed.action)
+        when {
+            !fresh -> if (matchesPending) {
+                // Already-applied duplicate that still has a stale pending twin — drop the twin.
+                pendingBuffer.removeFirst()
+                _speculativeState.value = replayPendingOnSnapshot()
+            }
+            matchesPending -> confirmOldestPending(indexed.action)
+            else -> applyForeignAndReplay(indexed.action)
         }
         _confirmedCount.value++
     }

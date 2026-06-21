@@ -369,6 +369,35 @@ class SpeculativeSequencerTest {
         assertEquals(0, seq.pendingCount)
     }
 
+    @Test
+    fun foreignDuplicateOfLocallyConfirmedKeyIsNotDoubleApplied() = runTest(timeout = 5.seconds) {
+        // Regression: a locally-proposed action confirmed via the pending buffer must still record
+        // its key in the dedup table, so a later forwarded duplicate of that SAME key (arriving with
+        // no matching pending entry → foreign path) is dropped, not double-applied.
+        val node = FakeRaftNode(clientId = ClientId("durable-x"))
+        node.setRole(RaftRole.Leader)
+        val seq = speculative(node, scope = CoroutineScope(UnconfinedTestDispatcher(testScheduler)))
+
+        // Local propose under a known key (clientId durable-x, requestId 1) → confirmed via pending.
+        seq.propose(Move(player = 1, value = 5), requestId = 1L)
+        seq.awaitConfirmedCount(1)
+        assertEquals(5, seq.speculativeState.value.total)
+
+        // A forwarded/reconnect duplicate of the SAME key commits again (separate log entry).
+        node.pushCommitted(
+            LogEntry(
+                index = 99L,
+                term = 1L,
+                command = encodeMove(Move(player = 1, value = 5)),
+                dedupKey = DedupKey(ClientId("durable-x"), 1L),
+            ),
+        )
+        seq.awaitConfirmedCount(2)
+
+        // Still 5, not 10 — the duplicate was deduped despite the original being a local confirm.
+        assertEquals(5, seq.speculativeState.value.total)
+    }
+
     // ── Part 2: propose(action, requestId) overload ───────────────────────────
 
     @Test
