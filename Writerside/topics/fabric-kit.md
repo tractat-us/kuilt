@@ -117,4 +117,4 @@ preamble exchange and dedup before adding it to the roster.
   mirror of the mesh builder.
 - To prove your own `Connection`/`Loom` against the contract, subclass
   `SeamConformanceSuite` (or `MeshConformanceSuite` for a mesh binding) — see
-  [Fabrics](fabrics.md#writing-your-own-fabric).
+  [Connections](fabrics.md#writing-your-own-fabric).

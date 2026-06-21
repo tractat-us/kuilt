@@ -54,6 +54,6 @@ This pattern is the same for every fabric: swap the `Loom`, keep the app code.
 
 ## Next steps
 
-- [The contract](contract.md) — deep dive into `Loom`, `Seam`, `Swatch`, and the rules.
-- [Fabrics](fabrics.md) — using WebSocket, mDNS, and writing your own.
-- [Replicated data](crdt-overview.md) — data structures that automatically merge across peers.
+- [How connections work](contract.md) — deep dive into `Loom`, `Seam`, `Swatch`, and the rules.
+- [Connections](fabrics.md) — using WebSocket, mDNS, and writing your own.
+- [Replication](crdt-overview.md) — data structures that automatically merge across peers.

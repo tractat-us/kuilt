@@ -59,4 +59,4 @@ testImplementation("us.tractat.kuilt:kuilt-test:VERSION")        // fakes + test
 testImplementation("us.tractat.kuilt:kuilt-conformance:VERSION") // SeamConformanceSuite
 ```
 
-`kuilt-conformance` includes `SeamConformanceSuite`, which verifies that a `Loom` implementation follows the kuilt contract. See [Fabrics](fabrics.md) for usage.
+`kuilt-conformance` includes `SeamConformanceSuite`, which verifies that a `Loom` implementation follows the kuilt contract. See [Connections](fabrics.md) for usage.

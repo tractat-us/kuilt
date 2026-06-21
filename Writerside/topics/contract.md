@@ -1,8 +1,8 @@
-# The contract
+# How connections work
 
-kuilt's contract is a small, stable API that sits in front of every network fabric. Learn it once; your app code stays the same when you swap WebSocket for Bluetooth or LAN.
+kuilt's connection contract is a small, stable API that sits in front of every fabric. Learn it once; your app code stays the same when you swap WebSocket for Bluetooth or LAN.
 
-The whole thing is three things:
+At a high level, it is three things:
 
 - **open or join a session** (`Loom`),
 - **send and receive frames** (`Seam` + `Swatch`),

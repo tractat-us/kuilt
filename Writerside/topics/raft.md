@@ -1,6 +1,8 @@
-# Consensus
+# Consensus and Leader Election
 
-Use `kuilt-raft` when every peer must apply the same decisions in the same order. It gives every node a strongly-consistent, totally-ordered log.
+Use `kuilt-raft` when every peer must agree on what happens next, in exactly the same order.
+
+At a high level, this gives your session one current leader and a shared decision log that every node applies in lockstep.
 
 Use it for turn order, locks, and durable workflow steps — situations where peers disagreeing would be a correctness bug, not just an inconvenience.
 

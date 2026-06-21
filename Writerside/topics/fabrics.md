@@ -1,14 +1,14 @@
-# Network Fabric
+# Connections
 
-A fabric is a transport wrapped in kuilt's `Loom`/`Seam` contract. Every fabric works the same way from your app's point of view — swap the `Loom` you create and everything else stays the same.
+Connections are how peers reach each other. In kuilt, each connection implementation is called a **fabric**.
 
-Your app logic never needs to know whether peers are connected by WebSocket, LAN discovery, or direct radio.
+Every fabric is wrapped in the same `Loom`/`Seam` contract, so from your app's point of view the workflow stays the same. Your app logic never needs to know whether peers are connected by WebSocket, LAN discovery, or direct radio.
 
-## Pick a fabric by deployment shape
+## Pick a connection path by deployment shape
 
 - Use **WebSocket** when you want the fastest path to cross-platform connectivity.
 - Use **mDNS** when peers need local-network discovery before connecting.
-- Use **Near fabrics** when you want direct device-to-device links.
+- Use **direct device links** when you want peer-to-peer connectivity without a relay server.
 
 ## WebSocket fabric (`kuilt-websocket`)
 
@@ -72,9 +72,9 @@ val joinerSeam = joiner.join(ad)
 Limit your collection with a timeout or `take(n)`, because `discoveries()`
 keeps emitting.
 
-## Near fabrics
+## Direct device links
 
-If you want direct device-to-device links, use the Near fabrics.
+If you want direct device-to-device links, use these peer-to-peer fabrics.
 `kuilt-multipeer` (iOS/macOS) and `kuilt-nearby` (Android) are peer-to-peer
 with no relay server. They both implement `Loom` and use the same instance for
 host and join (one in-process mesh). Replace `InMemoryLoom` with one of these

@@ -52,9 +52,9 @@ seam.close()
 
 ---
 
-## Step 2: Add a chat (replicated data)
+## Step 2: Add a chat (replication)
 
-**Why this step:** transport moves bytes; replicated data keeps state consistent across peers.
+**Why this step:** transport moves bytes; replication keeps shared state consistent across peers.
 
 Now make shared state converge. For chat, that means everyone sees the same message list in the same order, even with concurrent sends. Add `kuilt-crdt` and use `Rga` — a replicated list where concurrent insertions are ordered deterministically:
 
@@ -67,11 +67,11 @@ implementation("us.tractat.kuilt:kuilt-crdt")
 ```
 { src="../../kuilt-quilter/src/commonSamples/kotlin/us/tractat/kuilt/quilter/QuilterSamples.kt" include-symbol="sampleRgaChatReplicator" }
 
-→ [Replicated data](crdt-overview.md)
+→ [Replication](crdt-overview.md)
 
 ---
 
-## Step 3: Add tic-tac-toe (consensus)
+## Step 3: Add tic-tac-toe (consensus and leadership)
 
 **Why this step:** some decisions can't be merged — they need one agreed order.
 
@@ -87,7 +87,7 @@ implementation("us.tractat.kuilt:kuilt-game")
 ```
 { src="../../kuilt-game/src/commonSamples/kotlin/us/tractat/kuilt/game/GameSamples.kt" include-symbol="sampleTurnSequencer" }
 
-→ [Consensus](raft.md)
+→ [Consensus and leader election](raft.md)
 
 ---
 
@@ -109,7 +109,7 @@ val loom: Loom = when {
 val seam: Seam = loom.join(tag)
 ```
 
-→ [Network Fabric](fabrics.md)
+→ [Connections](fabrics.md)
 
 ---
 

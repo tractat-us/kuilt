@@ -1,26 +1,26 @@
 # kuilt
 
-kuilt connects peers and keeps their data in sync — across WebSocket, LAN, Bluetooth, and WebRTC — without changing your app code when you swap transports.
+kuilt stitches peers together and keeps their shared data in sync — across WebSocket, LAN, Bluetooth, and WebRTC — without changing your app code when you swap connection paths.
 
 It is a Kotlin Multiplatform library (JVM, Android, iOS, macOS, wasmJs).
 
-## Three parts — pick what you need
+## Three building blocks — pick what you need
 
-- **Network Fabric** — one API for sending messages between devices.
-  `Loom` opens a session; `Seam` is your send/receive handle on that session.
+- **Connections** — one API for devices to find each other and exchange messages.
+  kuilt calls this the network fabric (`Loom`/`Seam`).
   Swap WebSocket for LAN discovery or Bluetooth without touching your app logic.
 
-- **Replicated Data** — data structures that automatically merge when two devices edit at the same time.
-  `LWWMap`, `ORSet`, `Rga`, `JsonCrdt`, and eleven others from `kuilt-crdt`.
+- **Replication** — shared data stays in sync, even when devices edit offline or at the same time.
+  Under the hood this uses CRDT data types such as `LWWMap`, `ORSet`, `Rga`, and `JsonCrdt` from `kuilt-crdt`.
   Add `Quilter` to propagate changes live over a `Seam`.
 
-- **Consensus** — when every peer must agree on the same order of decisions (turns in a game, locks, durable steps), this picks a leader and keeps everyone in sync.
-  `kuilt-raft` is a full Raft implementation. `TurnSequencer` (from `kuilt-game`) wraps it for turn-based games.
+- **Consensus** — when every peer must agree on one order of decisions (turns in a game, locks, durable steps), this keeps one leader and everyone aligned.
+  Under the hood this is `kuilt-raft`. `TurnSequencer` (from `kuilt-game`) wraps it for turn-based games.
 
 ## Pick by the guarantee you need
 
 - **Connect and send bytes** → add a fabric only.
-- **Shared state that survives offline edits and concurrent updates** → add Replicated Data.
+- **Shared state that survives offline edits and concurrent updates** → add Replication.
 - **Strict turn order or globally-agreed decisions** → add Consensus on top.
 
 Start with the weakest guarantee that keeps your product correct. Add stronger guarantees only where needed.
@@ -29,7 +29,7 @@ Start with the weakest guarantee that keeps your product correct. Add stronger g
 
 ## How it fits together
 
-A **loom** creates sessions. A **seam** is one peer's view of a live session. A **swatch** is a frame of bytes. Every fabric (WebSocket, Multipeer, Nearby, WebRTC) implements these three types. Your app code never deals with socket APIs, Bluetooth internals, or peer-connection objects directly.
+Think of a quilt: a **loom** creates sessions, a **seam** is one peer's view of a live session, and a **swatch** is one frame of bytes. Every fabric (WebSocket, Multipeer, Nearby, WebRTC) implements these three types. Your app code never deals with socket APIs, Bluetooth internals, or peer-connection objects directly.
 
 Every peer in a session uses the same `Seam` interface — there is no client/server split at this layer. The same app code runs with two peers or twenty, and over relay or direct links.
 
@@ -38,7 +38,7 @@ Every peer in a session uses the same `Seam` interface — there is no client/se
 | Module | What it gives you |
 |--------|-------------------|
 | `kuilt-core` | The contract (`Loom`/`Seam`/`Swatch`), `InMemoryLoom` reference impl, `MuxSeam` + `NamedMux` channel splitters |
-| `kuilt-crdt` | Replicated data structures (`GCounter`, `ORSet`, `LWWMap`, `JsonCrdt`, …) |
+| `kuilt-crdt` | Replication data structures (`GCounter`, `ORSet`, `LWWMap`, `JsonCrdt`, …) |
 | `kuilt-quilter` | Live replication over a `Seam`: `Quilter` propagates deltas and merges inbound changes |
 | `kuilt-deal` | Cryptographically fair card dealing (`DealSession`) + dealer-less fair-random (`FairRandom`) |
 | `kuilt-game` | Turn-based game facade: `gameHost`/`gameJoin`/`gameNode` → `GameSession`, `TurnSequencer`, `SpeculativeSequencer` |
