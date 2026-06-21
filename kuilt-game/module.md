@@ -76,12 +76,15 @@ change membership first for that.
 
 `TurnSequencer<A>(node, serializer)` wraps a `RaftNode` with typed actions — pass
 `session.node`. `propose(A)` submits an action from any node and suspends until a quorum
-commits it; `committed` delivers every committed action in order on all nodes (leader and
-followers alike).
+commits it (use `propose(A, requestId)` for cross-crash exactly-once); `events` delivers every
+turn event in order on all nodes (leader and followers alike): committed actions as
+`TurnEvent.Committed` and, with log compaction on, snapshot installs as `TurnEvent.Reset`. Each
+`TurnEvent.Committed.indexed` carries a non-null `dedupKey` — fold it through a
+`ClientSessionTable` to preserve exactly-once.
 
 ```kotlin
 val game = TurnSequencer(session.node, Move.serializer())
-val committed: Flow<IndexedAction<Move>> = game.committed
+val events: Flow<TurnEvent<Move>> = game.events
 val entry: IndexedAction<Move> = game.propose(Move(row = 0, col = 0))
 ```
 

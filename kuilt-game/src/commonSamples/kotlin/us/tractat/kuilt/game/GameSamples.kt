@@ -4,7 +4,9 @@ package us.tractat.kuilt.game
 
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.filterIsInstance
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.test.StandardTestDispatcher
@@ -48,7 +50,7 @@ import kotlin.time.Duration.Companion.seconds
  *
  * After the calls return, drive the game through [TurnSequencer] over [GameSession.node]: any
  * node may [TurnSequencer.propose]; commits are delivered in order on every node via
- * [TurnSequencer.committed]. Ride extra application traffic (chat, cursors, …) over
+ * [TurnSequencer.events]. Ride extra application traffic (chat, cursors, …) over
  * [GameSession.appChannel]; tear the session down with [GameSession.close].
  *
  * **Do not collect `seam.incoming` after calling [gameHost] or [gameJoin].** Each wraps
@@ -98,7 +100,14 @@ internal fun sampleGameHostJoin() = runTest(StandardTestDispatcher(), timeout = 
     assertEquals(2, incoming.await().payload.size)
 
     // Collect committed turns on any node in the game loop:
-    // scope.launch { joinerGame.committed.collect { (index, action) -> applyMove(index, action) } }
+    // scope.launch {
+    //     joinerGame.events.collect { event ->
+    //         when (event) {
+    //             is TurnEvent.Committed -> applyMove(event.indexed.index, event.indexed.action)
+    //             is TurnEvent.Reset -> resetStateMachine(event.snapshot)
+    //         }
+    //     }
+    // }
 
     // Tear the session down when done (stops the node, then closes the fabric).
     host.close()
@@ -198,8 +207,8 @@ internal fun sampleSpeculativeSequencer() = runTest(timeout = 5.seconds) {
  * [TurnSequencer] for a tic-tac-toe game.
  *
  * Hides all Raft machinery — [propose] submits a typed action and suspends
- * until a quorum commits it; [TurnSequencer.committed] delivers every
- * committed action in order on all nodes (leader and followers alike).
+ * until a quorum commits it; [TurnSequencer.events] delivers every committed
+ * action ([TurnEvent.Committed]) in order on all nodes (leader and followers alike).
  *
  * In production, replace [FakeRaftNode] with a real `raftNode(...)` connected
  * to peers over a [us.tractat.kuilt.core.Seam].
@@ -220,7 +229,11 @@ internal fun sampleTurnSequencer() = runTest(timeout = 5.seconds) {
     game.propose(Move(row = 1, col = 1))  // O centre
     game.propose(Move(row = 0, col = 1))  // X top-centre
 
-    val committed = game.committed.take(3).toList().map { it.action }
+    val committed = game.events
+        .filterIsInstance<TurnEvent.Committed<Move>>()
+        .map { it.indexed.action }
+        .take(3)
+        .toList()
     assertEquals(listOf(Move(0, 0), Move(1, 1), Move(0, 1)), committed)
 }
 

@@ -27,6 +27,7 @@ import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.liveness.HeartbeatPartitionDetector
 import us.tractat.kuilt.liveness.PartitionEvent
+import us.tractat.kuilt.raft.ClientIdentity
 import us.tractat.kuilt.raft.ClusterConfig
 import us.tractat.kuilt.raft.InMemoryRaftStorage
 import us.tractat.kuilt.raft.MembershipChangeInProgressException
@@ -215,6 +216,10 @@ public enum class ReturnPolicy { FullMembership, Quorum }
  *   `RaftConfig(expectVirtualTime = true)` — this is the *only* supported path
  *   to virtual-time execution; `gameNode` deliberately does not expose
  *   `expectVirtualTime` as its own parameter (D4).
+ * @param identity How this peer obtains its Raft §8 dedup id. [ClientIdentity.Auto] (default) mints
+ *   a per-incarnation auto id (at-least-once forwarding, no cross-crash dedup). A **durable** peer
+ *   passes [ClientIdentity.Durable] with a stable id it persists itself and replays the same
+ *   `requestId` on [TurnSequencer.propose] after a restart. See [us.tractat.kuilt.raft.ClientSessionTable].
  *
  * @throws IllegalArgumentException if this peer's [NodeId] is not in [voterIds].
  *
@@ -225,12 +230,13 @@ public fun CoroutineScope.gameNode(
     voterIds: Set<NodeId>,
     storage: RaftStorage = InMemoryRaftStorage(),
     raftConfig: RaftConfig = RaftConfig(),
+    identity: ClientIdentity = ClientIdentity.Auto,
 ): GameSession {
     require(NodeId(seam.selfId.value) in voterIds) {
         "this peer (${seam.selfId.value}) must be in voterIds $voterIds"
     }
     val mux = MuxSeam(seam, this)
-    val node = raftNode(ClusterConfig.ofVoters(voterIds), SeamRaftTransport(mux.channel(RAFT_CHANNEL)), storage, raftConfig)
+    val node = raftNode(ClusterConfig.ofVoters(voterIds), SeamRaftTransport(mux.channel(RAFT_CHANNEL)), storage, raftConfig, identity)
     val appMux = NamedMux(mux.channel(APP_ENVELOPE_CHANNEL), this)
     return GameSession(node, seam, appMux)
 }
@@ -306,6 +312,10 @@ public fun CoroutineScope.gameNode(
  *   bound) only weakens detection, never disables the host. The default is sized to clear a
  *   typical WAN round-trip; raise it on high-latency fabrics, lower it where joiners are
  *   known-local.
+ * @param identity How this host obtains its Raft §8 dedup id. [ClientIdentity.Auto] (default) mints
+ *   a per-incarnation auto id (at-least-once forwarding, no cross-crash dedup). A **durable** host
+ *   passes [ClientIdentity.Durable] with a stable id it persists itself and replays the same
+ *   `requestId` on [TurnSequencer.propose] after a restart. See [us.tractat.kuilt.raft.ClientSessionTable].
  * @throws IllegalArgumentException if [peerCount] < 1 or [maxSpectators] < 0.
  * @throws DuplicateHostException if another peer on the same session already declared host.
  *
@@ -322,6 +332,7 @@ public suspend fun CoroutineScope.gameHost(
     livenessConfig: HeartbeatConfig? = null,
     clock: () -> Instant = { Clock.System.now() },
     hostDeclarationTimeout: Duration = DEFAULT_HOST_DECLARATION_TIMEOUT,
+    identity: ClientIdentity = ClientIdentity.Auto,
 ): GameSession {
     require(peerCount >= 1) { "peerCount must be >= 1" }
     require(maxSpectators >= 0) { "maxSpectators must be >= 0" }
@@ -334,7 +345,7 @@ public suspend fun CoroutineScope.gameHost(
     val presence = checkNotDuplicateHost(presenceSeam, this, raftConfig.expectVirtualTime, hostDeclarationTimeout)
 
     val self = NodeId(seam.selfId.value)
-    val node = raftNode(ClusterConfig.ofVoters(setOf(self)), SeamRaftTransport(raftSeam), storage, raftConfig)
+    val node = raftNode(ClusterConfig.ofVoters(setOf(self)), SeamRaftTransport(raftSeam), storage, raftConfig, identity)
     node.awaitLeadership()
 
     // Admit synchronously up to the return watermark: the full roster in FullMembership mode, a
@@ -437,6 +448,10 @@ public suspend fun CoroutineScope.gameHost(
  *   throws [JoinTimeoutException]. The default is sized to clear a typical WAN round-trip and
  *   a full Raft election cycle; lower it in test scenarios where you want the backstop to fire
  *   quickly under virtual time.
+ * @param identity How this joiner obtains its Raft §8 dedup id. [ClientIdentity.Auto] (default)
+ *   mints a per-incarnation auto id (at-least-once forwarding, no cross-crash dedup). A **durable**
+ *   joiner passes [ClientIdentity.Durable] with a stable id it persists itself and replays the same
+ *   `requestId` on [TurnSequencer.propose] after a restart. See [us.tractat.kuilt.raft.ClientSessionTable].
  * @throws RosterFullException if the host has already filled all seats and this peer is not in
  *   the final voter set.
  * @throws JoinTimeoutException if neither admission nor a roster-full signal arrives within
@@ -449,6 +464,7 @@ public suspend fun CoroutineScope.gameJoin(
     storage: RaftStorage = InMemoryRaftStorage(),
     raftConfig: RaftConfig = RaftConfig(),
     joinAdmissionTimeout: Duration = DEFAULT_JOIN_ADMISSION_TIMEOUT,
+    identity: ClientIdentity = ClientIdentity.Auto,
 ): GameSession {
     val mux = MuxSeam(seam, this)
     val raftSeam = mux.channel(RAFT_CHANNEL)
@@ -468,6 +484,7 @@ public suspend fun CoroutineScope.gameJoin(
         SeamRaftTransport(raftSeam),
         storage,
         raftConfig,
+        identity,
     )
 
     awaitAdmissionOrThrow(node, presence, self, joinAdmissionTimeout)
@@ -504,6 +521,9 @@ public suspend fun CoroutineScope.gameJoin(
  *   spectator or signal spectators-closed. If this bound expires before either signal arrives,
  *   [gameSpectate] throws [SpectateTimeoutException]. The default is sized to clear a typical
  *   WAN round-trip; lower it in tests where you want the backstop to fire quickly.
+ * @param identity How this spectator obtains its Raft §8 dedup id. [ClientIdentity.Auto] (default)
+ *   mints a per-incarnation auto id. A spectator never proposes, so this is rarely needed; accepted
+ *   for symmetry with the other bootstrap paths. See [us.tractat.kuilt.raft.ClientSessionTable].
  * @throws SpectatorsClosedException if the host has spectators disabled or the cap is full.
  * @throws SpectateTimeoutException if neither admission nor a spectators-closed signal arrives
  *   within [spectateAdmissionTimeout].
@@ -513,6 +533,7 @@ public suspend fun CoroutineScope.gameSpectate(
     storage: RaftStorage = InMemoryRaftStorage(),
     raftConfig: RaftConfig = RaftConfig(),
     spectateAdmissionTimeout: Duration = DEFAULT_SPECTATE_ADMISSION_TIMEOUT,
+    identity: ClientIdentity = ClientIdentity.Auto,
 ): GameSession {
     val mux = MuxSeam(seam, this)
     val raftSeam = mux.channel(RAFT_CHANNEL)
@@ -532,6 +553,7 @@ public suspend fun CoroutineScope.gameSpectate(
         SeamRaftTransport(raftSeam),
         storage,
         raftConfig,
+        identity,
     )
 
     awaitSpectatorAdmissionOrThrow(node, presence, spectateAdmissionTimeout)

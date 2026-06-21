@@ -15,6 +15,8 @@ import kotlinx.serialization.cbor.Cbor
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
+import us.tractat.kuilt.raft.ClientId
+import us.tractat.kuilt.raft.ClientIdentity
 import us.tractat.kuilt.raft.Committed
 import us.tractat.kuilt.raft.NodeId
 import us.tractat.kuilt.raft.RaftConfig
@@ -27,6 +29,26 @@ import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 
 class GameNodeTest {
+
+    @Test
+    fun gameNodeThreadsDurableIdentityIntoProposalDedupKey() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        // The bootstrap `identity` parameter must reach the engine so proposals are stamped under
+        // the supplied durable ClientId — the propose-side half of #616's exactly-once guarantee.
+        val loom = InMemoryLoom()
+        val seam = loom.host(Pattern("solo"))
+        val self = NodeId(seam.selfId.value)
+
+        val session = backgroundScope.gameNode(
+            seam,
+            voterIds = setOf(self), // single voter ⇒ this node is always leader
+            raftConfig = fastRaftConfig(seed = 1L),
+            identity = ClientIdentity.Durable(ClientId("durable-x")),
+        )
+        session.node.awaitLeadership()
+
+        val indexed = TurnSequencer(session.node, Int.serializer()).propose(7)
+        assertEquals(ClientId("durable-x"), indexed.dedupKey.clientId)
+    }
 
     @Test
     fun rosterGivenTwoPeersConverge() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
