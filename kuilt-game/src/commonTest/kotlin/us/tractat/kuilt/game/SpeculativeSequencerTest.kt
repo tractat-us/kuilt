@@ -6,9 +6,7 @@
 package us.tractat.kuilt.game
 
 import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -29,7 +27,6 @@ import us.tractat.kuilt.raft.test.FakeRaftNode
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
-import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.seconds
 
 /**
@@ -297,22 +294,92 @@ class SpeculativeSequencerTest {
         assertEquals(listOf(0, 5, 8), emissions)
     }
 
-    // ── Snapshot install (Reset) is unsupported — fail loud ───────────────────
+    // ── Snapshot install (Reset) rehydrates from the embedded state ───────────
+
+    /** Encodes a [GameState] as a snapshot envelope — here the whole blob is the state's total. */
+    private fun encodeSnapshotState(state: GameState): ByteArray =
+        format.encodeToByteArray(serializer<Int>(), state.total)
+
+    /** A [SpeculativeGame] that can rebuild its [GameState] from snapshot bytes. */
+    private val rehydratingHarness = object : SpeculativeGame<GameState, Move> {
+        override fun apply(state: GameState, action: Move): GameState =
+            GameState(state.total + action.value)
+
+        override fun snapshot(state: GameState): GameState = state.copy()
+
+        override fun restore(snapshot: GameState): GameState = snapshot
+
+        override fun fromSnapshot(bytes: ByteArray): GameState =
+            GameState(format.decodeFromByteArray(serializer<Int>(), bytes))
+    }
+
+    private fun rehydrating(
+        node: FakeRaftNode,
+        initial: GameState = GameState(0),
+        scope: CoroutineScope,
+    ): SpeculativeSequencer<GameState, Move> = SpeculativeSequencer(
+        sequencer = TurnSequencer(node, serializer<Move>(), format),
+        game = rehydratingHarness,
+        initialState = initial,
+        scope = scope,
+    )
 
     @Test
-    fun snapshotInstallResetCausesCollectorToThrow() = runTest(timeout = 5.seconds) {
+    fun snapshotInstallResetRehydratesAuthoritativeState() = runTest(timeout = 5.seconds) {
         val node = FakeRaftNode()
-        val caught = CompletableDeferred<Throwable>()
-        val handler = CoroutineExceptionHandler { _, e -> caught.complete(e) }
-        val scope = CoroutineScope(UnconfinedTestDispatcher(testScheduler) + handler + Job())
-        speculative(node, scope = scope) // launches the committed-event collector
+        val seq = rehydrating(node, initial = GameState(0), scope = CoroutineScope(UnconfinedTestDispatcher(testScheduler)))
 
-        // SpeculativeSequencer cannot replay across a snapshot install (no-compaction constraint),
-        // so a TurnEvent.Reset must fail loud rather than silently corrupt the pending buffer.
-        node.pushInstall(Snapshot(throughIndex = 1L, state = byteArrayOf(1, 2, 3)))
+        // A foreign commit advances state to 4, then a snapshot install replaces it wholesale with 100.
+        node.pushCommitted(encodeMove(Move(player = 1, value = 4)))
+        seq.awaitConfirmedCount(1)
+        assertEquals(4, seq.speculativeState.value.total)
 
-        val error = caught.await()
-        assertTrue(error is IllegalStateException, "Reset must surface as IllegalStateException, got $error")
+        node.pushInstall(Snapshot(throughIndex = 5L, state = encodeSnapshotState(GameState(100))))
+        seq.awaitConfirmedCount(2)
+
+        // State is the snapshot's embedded value — the prior 4 is discarded, not added to.
+        assertEquals(100, seq.speculativeState.value.total)
+        assertEquals(0, seq.pendingCount)
+    }
+
+    @Test
+    fun snapshotInstallResetClearsPendingBuffer() = runTest(timeout = 5.seconds) {
+        val node = FakeRaftNode()
+        node.setRole(RaftRole.Leader)
+
+        // Hold a propose in-flight so a pending entry exists when the install arrives.
+        val commitGate = CompletableDeferred<LogEntry>()
+        node.proposeBehavior = { _ -> commitGate.await() }
+        val seq = rehydrating(node, scope = CoroutineScope(UnconfinedTestDispatcher(testScheduler)))
+
+        launch(UnconfinedTestDispatcher(testScheduler)) { seq.propose(Move(player = 1, value = 10)) }
+        assertEquals(10, seq.speculativeState.value.total)
+        assertEquals(1, seq.pendingCount)
+
+        node.pushInstall(Snapshot(throughIndex = 3L, state = encodeSnapshotState(GameState(50))))
+        seq.awaitConfirmedCount(1)
+
+        // The pending optimistic apply is discarded; state is purely the rehydrated snapshot.
+        assertEquals(50, seq.speculativeState.value.total)
+        assertEquals(0, seq.pendingCount)
+
+        commitGate.complete(makeLogEntry(4L, Move(player = 1, value = 10)))
+    }
+
+    @Test
+    fun commitsAfterSnapshotInstallApplyOnTopOfRehydratedState() = runTest(timeout = 5.seconds) {
+        val node = FakeRaftNode()
+        val seq = rehydrating(node, scope = CoroutineScope(UnconfinedTestDispatcher(testScheduler)))
+
+        node.pushInstall(Snapshot(throughIndex = 5L, state = encodeSnapshotState(GameState(100))))
+        seq.awaitConfirmedCount(1)
+        assertEquals(100, seq.speculativeState.value.total)
+
+        // Subsequent committed actions fold onto the rehydrated baseline.
+        node.pushCommitted(encodeMove(Move(player = 2, value = 7)))
+        seq.awaitConfirmedCount(2)
+        assertEquals(107, seq.speculativeState.value.total)
+        assertEquals(0, seq.pendingCount)
     }
 
     // ── Part 1: Internal exactly-once dedup ───────────────────────────────────

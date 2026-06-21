@@ -27,13 +27,13 @@ package us.tractat.kuilt.game
  *
  * ## Log compaction
  *
- * [SpeculativeSequencer] does not support log compaction. A Raft snapshot install would
- * invalidate the pending-input buffer (the install resets the committed log to a point the
- * buffer may pre-date), and the in-memory buffer cannot be reconciled against it. The install
- * surfaces on [TurnSequencer.events] as a [TurnEvent.Reset], and [SpeculativeSequencer] **fails
- * loud** on it (throws) rather than silently corrupting state. Supporting snapshot installs is
- * out of scope here; if log compaction is enabled, drive [TurnSequencer] directly and rehydrate
- * via [restore] from the install's embedded state.
+ * When Raft installs a compacted snapshot to catch a lagging node up, the install surfaces on
+ * [TurnSequencer.events] as a [TurnEvent.Reset]. [SpeculativeSequencer] handles it by
+ * **rehydrating**: it discards its pending-input buffer (the install resets the committed log to a
+ * point the buffer may pre-date) and rebuilds the authoritative state from the snapshot via
+ * [fromSnapshot]. Subsequent committed actions fold on top of the rehydrated baseline. Implement
+ * [fromSnapshot] if your session enables log compaction; the default throws, which fails loud the
+ * first time a snapshot install arrives rather than silently corrupting state.
  *
  * @param S The game-state type.
  * @param A The action type.
@@ -68,4 +68,26 @@ public interface SpeculativeGame<S, A> {
      * corrupt the stored snapshot.
      */
     public fun restore(snapshot: S): S
+
+    /**
+     * Rebuilds the authoritative game state from a Raft snapshot install's embedded [bytes].
+     *
+     * Called by [SpeculativeSequencer] on a [TurnEvent.Reset] (log compaction): the sequencer
+     * discards its pending buffer and replaces its authoritative state with the value this returns,
+     * then folds later committed actions on top.
+     *
+     * [bytes] is the consumer's **own** snapshot envelope ([TurnEvent.Reset]'s
+     * [us.tractat.kuilt.raft.Snapshot.state]) — the game state is typically a *sub-field*, not the
+     * whole blob, so extract it rather than decoding [bytes] wholesale as [S].
+     *
+     * The default throws: a consumer that never enables log compaction need not implement this, and
+     * one that does but forgets will **fail loud** the first time a snapshot install arrives rather
+     * than silently corrupting state.
+     */
+    public fun fromSnapshot(bytes: ByteArray): S =
+        throw UnsupportedOperationException(
+            "This SpeculativeGame does not support log compaction: a TurnEvent.Reset (snapshot " +
+                "install) arrived but fromSnapshot() is not implemented. Override fromSnapshot() to " +
+                "rebuild state from the snapshot envelope, or disable compaction for this session.",
+        )
 }

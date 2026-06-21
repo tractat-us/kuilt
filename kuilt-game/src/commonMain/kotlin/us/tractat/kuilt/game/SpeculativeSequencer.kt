@@ -8,6 +8,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import us.tractat.kuilt.raft.ClientSessionTable
 import us.tractat.kuilt.raft.DedupKey
+import us.tractat.kuilt.raft.Snapshot
 
 /**
  * A wrapper over [TurnSequencer] that applies local actions optimistically before
@@ -39,9 +40,10 @@ import us.tractat.kuilt.raft.DedupKey
  *
  * - [SpeculativeGame.apply] must be **deterministic and pure** — replay correctness depends
  *   on it. See [SpeculativeGame] KDoc.
- * - **No log compaction.** A snapshot install from Raft would invalidate the pending buffer, so a
- *   [TurnEvent.Reset] on the backing [TurnSequencer.events] stream **throws** here (fail-loud) rather
- *   than being silently absorbed. See [SpeculativeGame] for the boundary note.
+ * - **Log compaction rehydrates.** A snapshot install from Raft surfaces as a [TurnEvent.Reset] on
+ *   the backing [TurnSequencer.events] stream; the pending buffer is discarded and the authoritative
+ *   state is rebuilt via [SpeculativeGame.fromSnapshot] (which must be implemented for compaction-
+ *   enabled sessions). See [SpeculativeGame] for the boundary note.
  * - **Single collector.** The [TurnSequencer.events] flow must not be collected elsewhere
  *   — the collector backing [speculativeState] is the single consumer of turn events.
  *
@@ -189,16 +191,30 @@ public class SpeculativeSequencer<S, A>(
         sequencer.events.collect { event ->
             when (event) {
                 is TurnEvent.Committed -> onCommit(event.indexed)
-                // SpeculativeSequencer's pending buffer + authoritative snapshot are in-memory and
-                // cannot be reconciled against a Raft snapshot install. Per its no-compaction
-                // constraint (see class KDoc), fail loud rather than silently corrupt state.
-                is TurnEvent.Reset -> throw IllegalStateException(
-                    "SpeculativeSequencer does not support snapshot installs (log compaction is " +
-                        "enabled): received TurnEvent.Reset(${event.snapshot}). Disable compaction " +
-                        "for this session or drive TurnSequencer directly with snapshot rehydration.",
-                )
+                is TurnEvent.Reset -> onReset(event.snapshot)
             }
         }
+    }
+
+    /**
+     * Rehydrates from a Raft snapshot install ([TurnEvent.Reset]).
+     *
+     * The pending-input buffer is invalidated — the install resets the committed log to a point the
+     * buffer may pre-date — so it is **discarded**, and the authoritative state is rebuilt from the
+     * snapshot's embedded bytes via [SpeculativeGame.fromSnapshot]. Speculative state then equals the
+     * rehydrated snapshot (no pending remains); later commits fold on top.
+     *
+     * The internal [dedupTable] is left **untouched** (monotonic): clearing it would drop
+     * high-water-marks for live clients and let a stale retry re-apply. The residual is the dedup
+     * path's existing at-least-once floor — a straggler duplicate of a commit folded into the
+     * snapshot but never seen by this lagging node can double-apply, because this node cannot recover
+     * the marks embedded in the consumer's opaque snapshot envelope.
+     */
+    private fun onReset(snapshot: Snapshot) {
+        pendingBuffer.clear()
+        authoritativeSnapshot = game.snapshot(game.fromSnapshot(snapshot.state))
+        _speculativeState.value = replayPendingOnSnapshot()
+        _confirmedCount.value++
     }
 
     /**
