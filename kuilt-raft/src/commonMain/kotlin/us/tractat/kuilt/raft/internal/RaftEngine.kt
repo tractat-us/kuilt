@@ -26,6 +26,7 @@ import kotlinx.serialization.cbor.Cbor
 import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.raft.ClientId
 import us.tractat.kuilt.raft.ClientIdCollisionException
+import us.tractat.kuilt.raft.ClientIdentity
 import us.tractat.kuilt.raft.ClusterConfig
 import us.tractat.kuilt.raft.Committed
 import us.tractat.kuilt.raft.ConfigPayload
@@ -60,15 +61,18 @@ internal class RaftEngine(
     private val raftConfig: RaftConfig,
     private val scope: CoroutineScope,
     private val onMetric: ((RaftMetric) -> Unit)?,
-    clientId: ClientId? = null,
+    identity: ClientIdentity = ClientIdentity.Auto,
 ) : RaftNode {
 
     // ── Raft §8 client-serial dedup ───────────────────────────────────────────
     /** Whether the caller supplied a stable durable id (collision ⇒ fail loud) vs an auto id (re-mint). */
-    private val isDurableId: Boolean = clientId != null
+    private val isDurableId: Boolean = identity is ClientIdentity.Durable
 
     /** This node's dedup identity. `var` because an auto id re-mints on a detected collision. */
-    private var myClientId: ClientId = clientId ?: ClientId.auto(transport.selfId, raftConfig.random)
+    private var myClientId: ClientId = when (identity) {
+        is ClientIdentity.Durable -> identity.clientId
+        ClientIdentity.Auto -> ClientId.auto(transport.selfId, raftConfig.random)
+    }
 
     /** Monotonic per-client serial for the auto [propose] form. Confined to the actor loop. */
     private var serial: Long = 0L

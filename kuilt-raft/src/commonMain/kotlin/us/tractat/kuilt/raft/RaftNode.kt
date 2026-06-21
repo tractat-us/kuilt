@@ -377,10 +377,11 @@ public suspend fun RaftNode.awaitRead(applied: StateFlow<Long>): Long {
  * @param storage Durable state for this node's term, vote, and log.
  * @param raftConfig Timing parameters. Defaults are suitable for LAN; adjust
  *   for high-latency or test environments.
- * @param clientId Optional stable client identity for Raft §8 dedup. `null` (default) mints
- *   `ClientId.auto(thisNodeId, raftConfig.random)` — a per-incarnation id that gives at-least-once
- *   forwarding without cross-crash dedup. Pass a **stable** [ClientId] the caller persists itself for
- *   exactly-once across process restarts (replay the same `requestId` on retry). See [ClientSessionTable].
+ * @param identity How this node obtains its Raft §8 dedup [ClientId]. [ClientIdentity.Auto] (default)
+ *   mints `ClientId.auto(thisNodeId, raftConfig.random)` — a per-incarnation id giving at-least-once
+ *   forwarding without cross-crash dedup, re-minted on collision. Pass
+ *   [ClientIdentity.Durable] with a **stable** [ClientId] the caller persists itself for exactly-once
+ *   across process restarts (replay the same `requestId` on retry). See [ClientSessionTable].
  * @param onMetric Optional callback invoked on the engine's coroutine at each [RaftMetric]
  *   transition. Use to route metrics to Prometheus, StatsD, OpenTelemetry, or a test
  *   assertion. **Must not block** — the callback runs synchronously on the engine actor;
@@ -392,7 +393,7 @@ public fun CoroutineScope.raftNode(
     transport: RaftTransport,
     storage: RaftStorage,
     raftConfig: RaftConfig = RaftConfig(),
-    clientId: ClientId? = null,
+    identity: ClientIdentity = ClientIdentity.Auto,
     onMetric: ((RaftMetric) -> Unit)? = null,
 ): RaftNode {
     checkNotUnderTestDispatcher(
@@ -402,5 +403,5 @@ public fun CoroutineScope.raftNode(
         strict = raftConfig.strictTestGuard,
         expectVirtualTime = raftConfig.expectVirtualTime,
     )
-    return RaftEngine(clusterConfig, transport, storage, raftConfig, this, onMetric, clientId)
+    return RaftEngine(clusterConfig, transport, storage, raftConfig, this, onMetric, identity)
 }

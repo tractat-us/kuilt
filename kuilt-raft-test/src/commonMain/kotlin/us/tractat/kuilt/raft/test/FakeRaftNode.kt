@@ -123,6 +123,16 @@ public class FakeRaftNode(
     /** Dedup key the in-flight [propose] wants stamped onto its committed entry; null outside a propose. */
     private var stampForNextCommit: DedupKey? = null
 
+    /**
+     * Synthetic identity + monotonic serial for entries injected by the command-only [pushCommitted]
+     * convenience outside a [propose]. A real committed application entry is *always* stamped (the
+     * engine stamps the auto-serial path too), so the double stamps these "foreign" commits under a
+     * distinct foreign [ClientId] — keeping the no-null invariant without colliding with this node's
+     * own propose serials. Tests that need an exact key push an explicit [LogEntry] instead.
+     */
+    private val foreignClientId = ClientId("foreign:${selfId.value}")
+    private var foreignSerial: Long = 0L
+
     /** All commands passed to [propose], in call order. */
     public val proposals: List<ByteArray> get() = _proposals.toList()
 
@@ -233,7 +243,16 @@ public class FakeRaftNode(
      * ```
      */
     public suspend fun pushCommitted(command: ByteArray): LogEntry =
-        pushCommitted(LogEntry(index = _nextIndex++, term = 1L, command = command, dedupKey = stampForNextCommit))
+        pushCommitted(
+            LogEntry(
+                index = _nextIndex++,
+                term = 1L,
+                command = command,
+                // Within a propose, use that propose's key; otherwise stamp a foreign key so the
+                // injected entry is stamped like every real committed application entry.
+                dedupKey = stampForNextCommit ?: DedupKey(foreignClientId, ++foreignSerial),
+            ),
+        )
 
     /**
      * Push [event] onto [trace].

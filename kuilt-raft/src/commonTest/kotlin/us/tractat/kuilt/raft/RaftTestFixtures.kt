@@ -106,13 +106,13 @@ internal suspend fun SingleVoterHarness.awaitCommit(index: Long, within: Duratio
 internal fun singleVoterNode(
     scope: CoroutineScope,
     storage: InMemoryRaftStorage = InMemoryRaftStorage(),
-    clientId: ClientId? = null,
+    identity: ClientIdentity = ClientIdentity.Auto,
 ): SingleVoterHarness {
     val self = NodeId("solo")
     val cluster = ClusterConfig(voters = setOf(self))
     val network = InMemoryRaftNetwork()
     val transport = network.transport(self)
-    val node = scope.raftNode(cluster, transport, storage, FAST_RAFT_CONFIG, clientId)
+    val node = scope.raftNode(cluster, transport, storage, FAST_RAFT_CONFIG, identity)
     return SingleVoterHarness(node, storage)
 }
 
