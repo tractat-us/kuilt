@@ -119,10 +119,13 @@ calls:
 | `apply(state, action): S` | Advance the state by one action — must be **pure and deterministic**. |
 | `snapshot(state): S` | Capture an independent checkpoint (deep-copy if [S] is mutable). |
 | `restore(snapshot): S` | Reinstate a snapshot before replaying the pending buffer. |
+| `fromSnapshot(bytes): S` | Rebuild state from a Raft snapshot install — only needed with log compaction. |
 
 **Constraints:** `apply` must be deterministic and pure — replay correctness depends on
-it. Log compaction (`Committed.Install`) is not yet supported; the pending buffer would be
-invalidated by a snapshot install.
+it. With log compaction enabled, a snapshot install surfaces as `TurnEvent.Reset`: the
+sequencer discards its pending buffer and rehydrates the authoritative state via
+`fromSnapshot`, then folds later commits on top. Implement `fromSnapshot` for
+compaction-enabled sessions; the default throws (fail-loud) the first time an install arrives.
 
 ## Single-collection constraint
 
