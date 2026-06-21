@@ -15,7 +15,7 @@
         <toc-element topic="quick-start.md"/>
     </toc-element>
 
-    <toc-element toc-title="Network Fabric">
+    <toc-element toc-title="Connections">
         <toc-element topic="contract.md"/>
         <toc-element topic="fabrics.md"/>
         <toc-element topic="fabric-kit.md"/>
@@ -29,7 +29,7 @@
         <toc-element topic="cluster-server-client.md"/>
     </toc-element>
 
-    <toc-element toc-title="Replicated Data">
+    <toc-element toc-title="Replication">
         <toc-element topic="crdt-overview.md"/>
         <toc-element toc-title="Counters">
             <toc-element topic="crdt-gcounter.md"/>
@@ -59,7 +59,7 @@
         <toc-element toc-title="Presence &amp; Activity">
             <toc-element topic="crdt-ephemeralmap.md"/>
         </toc-element>
-        <toc-element toc-title="Replication">
+        <toc-element toc-title="Live Replication">
             <toc-element topic="crdt-quilter.md"/>
         </toc-element>
         <toc-element topic="crdt-custom.md"/>

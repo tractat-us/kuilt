@@ -1,10 +1,13 @@
-# Replicated Data
+# Replication
 
-Your app's shared state — counters, lists, maps, documents — should stay correct whether devices are online, offline, or editing at the same time. `kuilt-crdt` gives you data structures that automatically merge when two peers have made conflicting edits, so no change is ever lost.
+Replication keeps your app's shared state — counters, lists, maps, documents — in sync across devices, even when people edit at the same time or spend time offline.
+`kuilt-crdt` gives you data structures that merge those edits automatically, so no change is quietly lost.
 
-These are called **CRDTs** (Conflict-free Replicated Data Types): structures where any two peers that have seen the same set of updates will always hold the same value, regardless of the order updates arrived.
+Think of each update as a quilt patch: patches can arrive in different orders and still sew into the same final pattern.
 
-Use CRDTs when you want convergence without a central coordinator. If your feature needs strict, globally ordered decisions instead (like turn order in a game), use Consensus for that part.
+The technical name for these structures is **CRDTs** (Conflict-free Replicated Data Types): any two peers that have seen the same set of updates will always hold the same value, regardless of arrival order.
+
+Use replication when you want convergence without a central coordinator. If your feature needs strict, globally ordered decisions instead (like turn order in a game), use [Consensus](raft.md) for that part.
 
 `kuilt-crdt` provides fourteen types, grouped by what they model.
 
@@ -65,7 +68,7 @@ See [Quilter](crdt-quilter.md) for usage and the `MuxSeam` multiplexing pattern 
 
 Every CRDT type is `@Serializable`. Wire transport (CBOR by default, via `Quilter`) and JSON round-trips both work. Each type's serializer is accessible via `T.serializer()` or `T.serializer(elementSerializer)`.
 
-## How it works under the hood
+## How it works (CRDT basics)
 
 ### The `Quilted` interface
 
