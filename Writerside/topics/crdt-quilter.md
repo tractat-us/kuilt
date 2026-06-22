@@ -40,6 +40,26 @@ Each consumer gets a typed `Seam` view that strips the tag on reads and prepends
 ```
 { src="../../kuilt-quilter/src/commonSamples/kotlin/us/tractat/kuilt/quilter/QuilterSamples.kt" include-symbol="sampleQuilterSessionMetadata" }
 
+## Scaling to many peers
+
+By default Quilter garbage-collects against every peer in the room, which is fine for
+a handful of peers. For dozens-to-hundreds, replicate over a
+[`GossipSeam`](partial-mesh.md) and point `deltaTargets` at its active-neighbour view:
+
+```kotlin
+val quilter = Quilter(
+    seam = gossip,                              // a GossipSeam wrapping your base seam
+    initial = GCounter.ZERO,
+    valueSerializer = GCounter.serializer(),
+    scope = scope,
+    deltaTargets = { gossip.activePeers.value },
+)
+```
+
+This keeps the pending-delta buffer and acknowledgement tracking flat as the group
+grows, while Quilter's anti-entropy reconcile still converges every peer. See
+[Scaling to many peers](partial-mesh.md) for the full picture.
+
 ## `AutoCloseable` lifecycle
 
 `Quilter` implements `AutoCloseable`. Call `close()` to cancel the background collection and release resources. In a `use {}` block or a scope that is cancelled, the replicator shuts down cleanly.

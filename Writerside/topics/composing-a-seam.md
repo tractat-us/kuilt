@@ -12,6 +12,7 @@ similar because they all "combine" something. The practical way to choose is:
 | [`CompositeLoom`](multipath.md) → `CompositeSeam` | **Seams → Seam** | *Transport multiplexer.* Several `Seam`s (plies) for the **same** logical session, bonded into one multipath `Seam`. |
 | `MuxSeam` | **Seam → Seams** | *Channel splitter (byte-tagged).* One `Seam` fanned into several `Seam` views, each keyed by a 1-byte tag (hard ceiling: 256 channels). Fixed internal channels; single upstream collection. |
 | `NamedMux` | **Seam → Seams** | *Channel splitter (string-keyed).* Like `MuxSeam` but frames carry a UTF-8 name prefix — effectively unlimited application namespace. Used by `gameHost`/`gameJoin` to multiplex the Raft channel + app envelope over one session. |
+| [`GossipSeam`](partial-mesh.md) | **Seam → Seam** | *Partial-mesh overlay.* Wraps a full-membership `Seam` so `broadcast` floods only to ~k neighbours and disseminates across the room — the O(N)→O(k) scaling decorator for large sessions. |
 
 ## Mesh vs. composite — opposite sides of the boundary
 
@@ -38,5 +39,6 @@ abstraction, not a tweak to either.
   [Quilter](crdt-quilter.md), which uses it to let several
   replicators share one transport.
 - `NamedMux` — used internally by `gameHost`/`gameJoin`/`gameNode` (see [Consensus (Raft)](raft.md)) to multiplex the application-envelope channel over the game session's single `Seam`. Consumers access it via `GameSession.appChannel(name)`.
+- `GossipSeam` and scaling to many peers — [Scaling to many peers](partial-mesh.md).
 - Writing the `Connection` SPI for your own transport — the implementer tutorial
   `docs/extending-fabrics.md` in the repository.
