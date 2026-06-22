@@ -270,24 +270,37 @@ public class BoundedCounterTransferCoordinator(
         val excess = myQuota - fairShare
         if (excess <= cfg.minImbalanceThreshold) return
 
-        val lowestPeer = lowestQuotaPeer(bc, reachablePeers, cfg) ?: return
-        val patch = bc.transfer(from = self, to = ReplicaId(lowestPeer.value), amount = excess)
+        // Power-of-two-choices: sample two random reachable peers and pick the lower-quota
+        // one. Randomised target selection (rather than always the single global minimum)
+        // stops many over-share peers from thundering onto the same recipient in one round.
+        val recipient = powerOfTwoLowest(bc, reachablePeers, cfg) ?: return
+        val recipientDeficit = fairShare - bc.quota(ReplicaId(recipient.value))
+        if (recipientDeficit <= 0L) return // chosen peer isn't below its share — skip this round
+
+        // Cap the transfer so neither side crosses the fair share: a single step can't push
+        // self below, or the recipient above, fairShare — so it cannot overshoot. Convergence
+        // is monotone toward the fair share rather than oscillating.
+        val amount = minOf(excess, recipientDeficit)
+        val patch = bc.transfer(from = self, to = ReplicaId(recipient.value), amount = amount)
             ?: return
         applyTransfer(patch)
     }
 
     /**
-     * Returns the reachable peer with the lowest quota. Ties are broken by a single
-     * shuffle using [BoundedCounterEqualizerConfig.random] before sorting, ensuring a
-     * consistent comparison function.
+     * Power-of-two-choices recipient selection: samples up to two distinct reachable peers
+     * (using [BoundedCounterEqualizerConfig.random]) and returns the one with the lower quota.
+     * Spreading targets across rounds prevents the thundering-herd overshoot a single-global-
+     * minimum pick would cause when several peers rebalance concurrently. Returns null only
+     * if [reachable] is empty (the caller already guards against that).
      */
-    private fun lowestQuotaPeer(
+    private fun powerOfTwoLowest(
         bc: BoundedCounter,
         reachable: Set<PeerId>,
         cfg: BoundedCounterEqualizerConfig,
     ): PeerId? =
         reachable
             .shuffled(cfg.random)
+            .take(2)
             .minByOrNull { peer -> bc.quota(ReplicaId(peer.value)) }
 
     private fun encode(msg: BoundedCounterCoordMessage): ByteArray =
