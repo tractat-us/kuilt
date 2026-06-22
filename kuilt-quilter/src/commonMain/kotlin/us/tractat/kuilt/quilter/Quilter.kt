@@ -174,6 +174,14 @@ public class Quilter<S : Quilted<S>>(
      * the delta-target set still converge via the anti-entropy backstop, never via acks.
      */
     private val deltaTargets: (Set<PeerId>) -> Set<PeerId> = { it },
+    /**
+     * RNG for anti-entropy peer selection. Each reconcile round picks one random peer from
+     * full membership to merge full state with. Defaults to [kotlin.random.Random.Default]
+     * in production; tests inject a **seeded** [kotlin.random.Random] so the peer sequence is
+     * deterministic (the convergence outcome is RNG-independent — full-state merge is
+     * idempotent — but the choice of peer per round must be reproducible under virtual time).
+     */
+    private val random: kotlin.random.Random = kotlin.random.Random.Default,
 ) : ScopedCloseable(scope) {
     /**
      * Guards every mutation of the plain replicator state (`nextSeq`, `pendingDeltas`,
@@ -468,7 +476,33 @@ public class Quilter<S : Quilted<S>>(
             lock.withLock {
                 evictStalePeers()
                 gossipDelivered()
+                reconcileWithRandomPeer()
             }
+        }
+    }
+
+    /**
+     * The anti-entropy convergence backstop. Each round picks one random peer from full
+     * membership ([knownPeers]) and pushes a full-state snapshot to it. Because every
+     * delta-state CRDT is a join-semilattice, [onFullState]'s merge is idempotent and
+     * order-independent, so a peer that missed a delta — it sat outside the sender's
+     * delta-target set, or a relayed delta was dropped — still converges on the next round.
+     *
+     * This is the guarantee that makes GC-against-a-sparse-delta-target-set ([deltaTargets])
+     * safe: convergence no longer depends on every peer acking every delta. Full-state-first
+     * is the simple, always-correct reconcile; a version-vector/digest diff is a later
+     * optimization for large CRDTs. The send is fire-and-forget (not the joiner
+     * [sendFullStateTo] retry loop) — the next round is the retry.
+     *
+     * Must be called under [lock]; the actual send is launched on [scope] outside the lock.
+     */
+    private fun reconcileWithRandomPeer() {
+        if (knownPeers.isEmpty()) return
+        val peer = knownPeers.elementAt(random.nextInt(knownPeers.size))
+        val bytes = encode(QuiltMessage.FullState(sender = replica, state = _state.value))
+        scope.launch {
+            runCatchingCancellable { seam.sendTo(peer, bytes) }
+                .onFailure { logger.debug { "antiEntropy reconcile to $peer failed: ${it.message}" } }
         }
     }
 
