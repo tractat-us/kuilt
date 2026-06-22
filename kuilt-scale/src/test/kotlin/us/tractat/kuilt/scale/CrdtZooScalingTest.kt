@@ -701,6 +701,108 @@ class BoundedCounterScalingTest {
     }
 }
 
+// ---- BoundedCounter O(N) targeted-borrow (post-#632 redesign) -------------------------
+
+/**
+ * BoundedCounter targeted-borrow scaling: after the #632 redesign the coordinator
+ * sends a [us.tractat.kuilt.quilter.BoundedCounterCoordMessage.TransferRequest] to a
+ * SINGLE target (the highest-surplus peer) instead of broadcasting to all N-1 peers.
+ *
+ * Expected message cost per low-quota event:
+ *   1. Requester → single target: 1 sendTo.
+ *   2. Donor applies transfer and Quilter broadcasts delta: 1 broadcast → N-1 deliveries.
+ *   3. Acks: N-1 acks from receivers → O(N) total.
+ *
+ * Total: Θ(N). Sending grows at most proportionally with N — the ratio between
+ * sends(N=10) and sends(N=3) must be strictly below 4× (the quadratic gate in the
+ * baseline test). Linear ratio is ~3.3×; we require < 4× as the O(N) guard.
+ */
+class BoundedCounterTargetedBorrowScalingTest {
+
+    /**
+     * After the #632 targeted-borrow redesign: a single low-quota event produces O(N)
+     * coordination messages, not O(N²).
+     *
+     * The assertion is the same setup as [BoundedCounterScalingTest.boundedCounterTransferBaseline_quadraticInN]
+     * but inverted: sends(N=10) / sends(N=3) < 4× (linear growth, not quadratic).
+     */
+    @Test
+    fun targetedBorrowSendsGrowLinearly() = runTest(UnconfinedTestDispatcher()) {
+        val results = MESH_SIZES.map { n ->
+            val mesh = buildInMemoryMesh(n)
+            val replicas = mesh.seams.map { seam -> ReplicaId(seam.selfId.value) }
+
+            // Peer-0 starts with 1 unit (will spend to 0 and trigger borrow);
+            // all other peers start with 21 so there is a clear surplus target.
+            val quotas = replicas.mapIndexed { i, r -> r to if (i == 0) 1L else 21L }.toMap()
+            val initial = BoundedCounter.init(quotas)
+
+            val quilters = mesh.seams.map { seam ->
+                bcQuilter(seam, ReplicaId(seam.selfId.value), initial, backgroundScope)
+            }
+
+            // Settle the initial FullState exchange first.
+            testScheduler.advanceUntilIdle()
+            val before = mesh.clusterMetrics()
+
+            // Trigger one low-quota event: peer-0 spends its only unit.
+            val spendPatch = quilters.first().state.value.trySpend(replicas.first())
+                ?: error("BoundedCounter N=$n: peer-0 should have 1 unit to spend")
+            quilters.first().apply(spendPatch)
+            testScheduler.advanceUntilIdle()
+
+            val after = mesh.clusterMetrics()
+            val totalSends = after.totalSends - before.totalSends
+
+            // Needy peer must have received quota.
+            val needyQuota = quilters.first().state.value.quota(replicas.first())
+            assertTrue(
+                needyQuota > 0L,
+                "BoundedCounter N=$n: needy peer must receive quota via targeted borrow, got $needyQuota",
+            )
+
+            // Conservation must hold.
+            val totalInitialQuota = quotas.values.sum()
+            quilters.forEach { q ->
+                val s = q.state.value
+                assertEquals(
+                    totalInitialQuota,
+                    s.totalBudget + s.totalSpent,
+                    "BoundedCounter N=$n: conservation invariant violated on ${q.replica}",
+                )
+            }
+
+            mesh.close()
+            ScalingResult(n, totalSends, after.totalFramesIn - before.totalFramesIn, convergenceRounds = 1)
+        }
+
+        println("\n=== BoundedCounter O(N) targeted-borrow scaling (post-#632 redesign) ===")
+        println("  Protocol: sendTo(max-surplus-peer) → 1 targeted request → O(N) delta acks")
+        results.forEach { println("  $it") }
+
+        // Linear guard: sends(N=10) / sends(N=3) must be < 4×.
+        // Quadratic would give ~11×; linear gives ~3.3×. Allowing up to 4× is generous.
+        val sendsAtN3 = results.first { it.n == 3 }.totalSends
+        val sendsAtN10 = results.first { it.n == 10 }.totalSends
+        val ratio = if (sendsAtN3 > 0) sendsAtN10.toDouble() / sendsAtN3 else Double.MAX_VALUE
+        assertTrue(
+            ratio < 4.0,
+            "BoundedCounter targeted-borrow: sends should grow linearly with N — " +
+                "sends(N=10)=$sendsAtN10 / sends(N=3)=$sendsAtN3 = ${"%.2f".format(ratio)}× " +
+                "(must be < 4.0×; quadratic would be ~11×)",
+        )
+
+        // Monotonicity: more peers = more messages (still grows, just not quadratically).
+        results.zipWithNext().forEach { (a, b) ->
+            assertTrue(
+                b.totalSends >= a.totalSends,
+                "BoundedCounter targeted-borrow: sends should not shrink with N " +
+                    "(N=${a.n}: ${a.totalSends}, N=${b.n}: ${b.totalSends})",
+            )
+        }
+    }
+}
+
 // ---- helpers ---------------------------------------------------------------------------
 
 private fun Double.format(digits: Int): String = "%.${digits}f".format(this)
