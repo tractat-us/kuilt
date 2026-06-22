@@ -26,9 +26,11 @@ import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.crdt.GCounter
 import us.tractat.kuilt.crdt.ReplicaId
+import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
+import kotlin.time.Duration.Companion.milliseconds
 
 private val DELTA_TARGET_CONFIG = QuilterConfig(expectVirtualTime = true)
 
@@ -91,6 +93,65 @@ class QuilterDeltaTargetGcTest {
             repA.pendingDeltasForTest.isEmpty(),
             "pending delta must be GC'd against the delta-target set {B} without phantom C's ack " +
                 "(pending=${repA.pendingDeltasForTest.keys})",
+        )
+    }
+
+    /**
+     * The pending-delta buffer stays bounded under sustained updates even though a
+     * full-membership peer (phantom C) never acks. Under full-membership GC the buffer
+     * would grow without bound (C pins the watermark at 0); with the delta-target set
+     * restricted to {B}, B's acks drain the buffer continuously.
+     *
+     * Anti-entropy rounds fire throughout (interval crossed repeatedly) — confirming the
+     * backstop's full-state sends don't interfere with GC of the outbound buffer.
+     */
+    @Test
+    fun pendingDeltasStayBoundedUnderSustainedUpdates() = runTest(UnconfinedTestDispatcher()) {
+        val loom = InMemoryLoom()
+        val rawSeamA = loom.host(Pattern("bounded-buffer"))
+        val seamB = loom.join(InMemoryTag("b"))
+
+        val phantomC = PeerId("c-phantom")
+        val controlledPeers = MutableStateFlow(loom.peers.value + phantomC)
+        val seamA = ControllablePeersSeam(rawSeamA, controlledPeers)
+
+        val config = QuilterConfig(antiEntropyInterval = 50.milliseconds, expectVirtualTime = true)
+
+        val repA = Quilter(
+            replica = ReplicaId(rawSeamA.selfId.value),
+            seam = seamA,
+            initial = GCounter.ZERO,
+            messageSerializer = MSG_SER,
+            scope = backgroundScope,
+            config = config,
+            deltaTargets = { peers -> peers.filterTo(mutableSetOf()) { it == seamB.selfId } },
+            random = Random(7),
+        )
+        Quilter(
+            replica = ReplicaId(seamB.selfId.value),
+            seam = seamB,
+            initial = GCounter.ZERO,
+            messageSerializer = MSG_SER,
+            scope = backgroundScope,
+            config = config,
+        )
+
+        val updates = 50
+        repeat(updates) {
+            repA.apply(repA.state.value.inc(repA.replica, 1L))
+            // 10ms steps cross the 50ms anti-entropy interval repeatedly, so reconcile
+            // rounds run concurrently with the sustained update stream.
+            testScheduler.advanceTimeBy(10)
+            testScheduler.runCurrent()
+        }
+        testScheduler.advanceTimeBy(config.antiEntropyInterval.inWholeMilliseconds + 1)
+        testScheduler.runCurrent()
+
+        assertEquals(updates.toLong(), repA.universalAckFlow.value)
+        assertTrue(
+            repA.pendingDeltasForTest.size <= 1,
+            "pendingDeltas must stay bounded under $updates sustained updates " +
+                "(was ${repA.pendingDeltasForTest.size})",
         )
     }
 }
