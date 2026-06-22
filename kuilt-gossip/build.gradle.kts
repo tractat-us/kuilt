@@ -8,6 +8,7 @@ kotlin {
             api(project(":kuilt-core"))
             api(project(":kuilt-liveness"))
             implementation(libs.kotlinx.coroutines.core)
+            implementation(libs.kotlinx.atomicfu)
         }
         commonTest.dependencies {
             implementation(project(":kuilt-test"))
