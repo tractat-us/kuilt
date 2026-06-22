@@ -19,6 +19,7 @@ dependencies {
     testImplementation(project(":kuilt-raft"))
     testImplementation(project(":kuilt-raft-test"))
     testImplementation(project(":kuilt-quilter"))
+    testImplementation(project(":kuilt-gossip"))
     testImplementation(project(":kuilt-crdt"))
     testImplementation(project(":kuilt-tcp"))
     testImplementation(project(":kuilt-stream"))

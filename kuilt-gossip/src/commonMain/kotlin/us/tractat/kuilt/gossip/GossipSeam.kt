@@ -3,10 +3,12 @@ package us.tractat.kuilt.gossip
 import kotlinx.atomicfu.locks.reentrantLock
 import kotlinx.atomicfu.locks.withLock
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.launch
 import us.tractat.kuilt.core.CloseReason
 import us.tractat.kuilt.core.PeerId
@@ -17,6 +19,7 @@ import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.liveness.HeartbeatPartitionDetector
 import kotlin.random.Random
+import kotlin.time.Duration
 import kotlin.time.Instant
 
 /**
@@ -60,6 +63,8 @@ import kotlin.time.Instant
  * @param base the underlying full-membership seam.
  * @param random seeded RNG, seeded per-peer by the caller (drives view selection + jitter).
  * @param clock injected time source for the per-neighbour detectors; never the wall clock.
+ * @param jitter per-peer view-recompute jitter window (see [GossipView]); a zero range
+ *   makes recompute synchronous, which deterministic tests rely on.
  * @param initialTtl hop budget stamped on a locally-originated broadcast. Dedup is
  *   what terminates the flood; this is only a generous hard cap, comfortably above
  *   the overlay diameter at the tens–low-hundreds target scale.
@@ -70,13 +75,19 @@ public class GossipSeam(
     clock: () -> Instant,
     config: HeartbeatConfig = HeartbeatConfig(),
     spareCount: Int = GossipView.DEFAULT_SPARE_COUNT,
+    jitter: ClosedRange<Duration> = GossipView.DEFAULT_JITTER,
     private val initialTtl: Int = DEFAULT_TTL,
 ) : Seam {
     // Broadcast bus for raw inbound frames; per-neighbour detectors subscribe here
     // so they never contend for the single-consumer base.incoming channel.
     private val rawIncoming = MutableSharedFlow<Swatch>(extraBufferCapacity = RAW_BUFFER)
 
-    private val _incoming = MutableSharedFlow<Swatch>(extraBufferCapacity = APP_BUFFER)
+    // Application frames delivered to the single [incoming] collector. A buffered
+    // channel (not a SharedFlow): it never drops a frame for a collector that
+    // subscribes after a send, and — closed when the inbound loop ends (base seam
+    // Torn) — its receiveAsFlow **completes**, honouring the Seam termination
+    // contract that consumers like Quilter rely on to self-clean.
+    private val _incoming = Channel<Swatch>(Channel.UNLIMITED)
 
     // Per-origin broadcast sequence counter. Guarded by a lock (not dispatcher
     // confinement) so concurrent broadcast() callers get distinct sequence numbers
@@ -101,6 +112,7 @@ public class GossipSeam(
             clock = clock,
             config = config,
             spareCount = spareCount,
+            jitter = jitter,
         )
 
     /** The active-neighbour view — deltas/GC target set. Strict subset of [peers]. */
@@ -117,7 +129,7 @@ public class GossipSeam(
     override val state: StateFlow<SeamState> get() = base.state
 
     /** Application frames only — heartbeat ping/pong frames are filtered out. */
-    override val incoming: Flow<Swatch> = _incoming.asSharedFlow()
+    override val incoming: Flow<Swatch> = _incoming.receiveAsFlow()
 
     /**
      * Starts the inbound loop (sole collector of `base.incoming`) and the
@@ -126,7 +138,14 @@ public class GossipSeam(
     public fun start(scope: CoroutineScope) {
         view.start(scope)
         scope.launch {
-            base.incoming.collect { swatch -> dispatchInbound(swatch) }
+            // Sole collector of base.incoming (ADR-034). When the base seam tears its
+            // incoming completes, the collect returns, and we close [_incoming] so this
+            // seam's own [incoming] completes too — propagating Torn to our consumers.
+            try {
+                base.incoming.collect { swatch -> dispatchInbound(swatch) }
+            } finally {
+                _incoming.close()
+            }
         }
     }
 
@@ -143,7 +162,7 @@ public class GossipSeam(
         val frame = GossipFrame.tryDecode(swatch)
         if (frame == null) {
             // A raw point-to-point sendTo frame (or any non-gossip frame): deliver as-is.
-            _incoming.emit(swatch)
+            _incoming.trySend(swatch)
             return
         }
         // Our own broadcast looped back along the overlay — we already have it.
@@ -151,7 +170,7 @@ public class GossipSeam(
         // Already delivered + relayed this broadcast; dedup terminates the flood.
         if (!seen.add(frame.id)) return
 
-        _incoming.emit(Swatch(payload = frame.payload, sender = frame.origin, sequence = frame.seq))
+        _incoming.trySend(Swatch(payload = frame.payload, sender = frame.origin, sequence = frame.seq))
         // Re-flood to our own active neighbours minus the peer it arrived from,
         // until the hop budget runs out.
         if (frame.ttl > 1) flood(frame.decremented(), except = swatch.sender)
@@ -205,7 +224,6 @@ public class GossipSeam(
 
     private companion object {
         const val RAW_BUFFER = 256
-        const val APP_BUFFER = 64
 
         // Generous default hop budget. Dedup terminates the flood; this only caps
         // pathological loops. Comfortably above the diameter of a k-regular overlay
