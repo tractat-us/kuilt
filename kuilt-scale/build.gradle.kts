@@ -18,6 +18,8 @@ dependencies {
     testImplementation(project(":kuilt-test"))
     testImplementation(project(":kuilt-raft"))
     testImplementation(project(":kuilt-raft-test"))
+    testImplementation(project(":kuilt-quilter"))
+    testImplementation(project(":kuilt-crdt"))
     testImplementation(project(":kuilt-tcp"))
     testImplementation(project(":kuilt-stream"))
     testImplementation(libs.kotlin.test)
