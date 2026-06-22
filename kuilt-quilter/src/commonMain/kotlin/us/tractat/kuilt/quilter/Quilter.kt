@@ -164,22 +164,27 @@ public class Quilter<S : Quilted<S>>(
      */
     private val binaryFormat: BinaryFormat = Cbor,
     /**
-     * Selects the **delta-target set** — the peers this replica pushes deltas to and
-     * GCs its `pendingDeltas` against — from the current full membership (`knownPeers`).
+     * Narrows the peers this replica pushes deltas *to* and GCs *against*, out of the
+     * full membership. The default — identity, i.e. all of `knownPeers` — preserves
+     * existing behaviour for a `MeshSeam` or `LinkSeam`.
      *
-     * Defaults to the identity (full membership), so a `MeshSeam`/`LinkSeam` GCs against
-     * everyone exactly as before. A sparse-mesh `GossipSeam` supplies a strict subset (the
-     * ~k active neighbours), at which point the GC watermark is `min(ackedThrough)` over
-     * O(k) peers instead of O(N) — the partial-mesh scaling unlock (#654). Peers outside
-     * the delta-target set still converge via the anti-entropy backstop, never via acks.
+     * Supply a sparse selector (e.g. the ~k active neighbours from a `GossipSeam`) to
+     * reduce the GC watermark from `min over N` to `min over k`. Peers excluded from this
+     * set never pin the pending-delta buffer; they still converge because the anti-entropy
+     * backstop ([reconcileWithRandomPeer]) periodically merges the full state into every
+     * peer in full membership. Convergence no longer depends on every peer acking every
+     * delta.
      */
     private val deltaTargets: (Set<PeerId>) -> Set<PeerId> = { it },
     /**
      * RNG for anti-entropy peer selection. Each reconcile round picks one random peer from
-     * full membership to merge full state with. Defaults to [kotlin.random.Random.Default]
-     * in production; tests inject a **seeded** [kotlin.random.Random] so the peer sequence is
-     * deterministic (the convergence outcome is RNG-independent — full-state merge is
-     * idempotent — but the choice of peer per round must be reproducible under virtual time).
+     * the full membership and pushes the current post-merge full state to it. The merge is
+     * idempotent (join-semilattice), so the order or frequency of reconcile rounds does
+     * not affect the final converged value.
+     *
+     * Defaults to [kotlin.random.Random.Default] in production. Inject a **seeded**
+     * [kotlin.random.Random] in tests so the peer-selection sequence is reproducible under
+     * virtual time.
      */
     private val random: kotlin.random.Random = kotlin.random.Random.Default,
 ) : ScopedCloseable(scope) {
@@ -482,19 +487,19 @@ public class Quilter<S : Quilted<S>>(
     }
 
     /**
-     * The anti-entropy convergence backstop. Each round picks one random peer from full
-     * membership ([knownPeers]) and pushes a full-state snapshot to it. Because every
-     * delta-state CRDT is a join-semilattice, [onFullState]'s merge is idempotent and
-     * order-independent, so a peer that missed a delta — it sat outside the sender's
-     * delta-target set, or a relayed delta was dropped — still converges on the next round.
+     * Picks one peer at random from the full membership and sends it the current merged
+     * state. This is the convergence backstop: a peer that missed a delta — it sat outside
+     * [deltaTargets], or a relayed delivery was dropped — merges the full state on the next
+     * round and converges without replaying the missing deltas.
      *
-     * This is the guarantee that makes GC-against-a-sparse-delta-target-set ([deltaTargets])
-     * safe: convergence no longer depends on every peer acking every delta. Full-state-first
-     * is the simple, always-correct reconcile; a version-vector/digest diff is a later
-     * optimization for large CRDTs. The send is fire-and-forget (not the joiner
-     * [sendFullStateTo] retry loop) — the next round is the retry.
+     * The merge at the receiver is idempotent and order-independent (every delta-state CRDT
+     * is a join-semilattice), so the same full state can be sent any number of times safely.
+     * This is what makes GC against a sparse [deltaTargets] set correct: convergence does
+     * not depend on every peer acking every delta. Full-state-first is always correct; a
+     * version-vector or digest diff is a later optimization for large CRDTs.
      *
-     * Must be called under [lock]; the actual send is launched on [scope] outside the lock.
+     * The send is fire-and-forget — the next anti-entropy round is the natural retry. Must
+     * be called under [lock]; the actual `seam.sendTo` is launched on [scope] outside it.
      */
     private fun reconcileWithRandomPeer() {
         if (knownPeers.isEmpty()) return
@@ -706,14 +711,16 @@ public class Quilter<S : Quilted<S>>(
     }
 
     /**
-     * Recomputes `min(ackedThrough over the delta-target set)` and updates [universalAckFlow]
-     * monotonically (never decreases). Also GCs pending deltas up to the new watermark.
+     * Advances the GC watermark and prunes the pending-delta buffer.
      *
-     * The watermark mins over [deltaTargets] applied to [knownPeers], **not** the full
-     * membership: a peer outside the delta-target set (one this replica does not push deltas
-     * to) cannot pin GC — it converges via the anti-entropy backstop instead. When the
-     * selector is the identity (the default), this is exactly `min over knownPeers` and
-     * behaviour is unchanged. No-op when the delta-target set is empty.
+     * Computes `min(ackedThrough)` over [deltaTargets]`(knownPeers)` — the peers this
+     * replica actually pushes deltas to — and updates [universalAckFlow] monotonically.
+     * Any pending delta at or below the new watermark is removed.
+     *
+     * Peers outside the delta-target set cannot pin the watermark; they converge via the
+     * anti-entropy backstop ([reconcileWithRandomPeer]) rather than acks. When
+     * [deltaTargets] is the identity (the default), this is `min over knownPeers` — the
+     * same behaviour as before Phase 1. No-op when the delta-target set is empty.
      */
     private fun recomputeUniversalAck() {
         val targets = deltaTargets(knownPeers)
@@ -815,6 +822,7 @@ private fun contiguousHighWater(seqs: Set<Long>): Long {
  *   Inject a seeded instance in tests for a reproducible reconcile-peer sequence.
  *
  * @sample us.tractat.kuilt.quilter.sampleQuilterConvenience
+ * @sample us.tractat.kuilt.quilter.sampleQuilterSparseDeltaTargets
  */
 @Suppress("LongParameterList")
 public fun <S : us.tractat.kuilt.crdt.Quilted<S>> Quilter(
