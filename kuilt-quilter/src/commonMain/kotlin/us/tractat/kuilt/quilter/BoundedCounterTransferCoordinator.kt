@@ -249,7 +249,11 @@ public class BoundedCounterTransferCoordinator(
         scope.launch {
             while (true) {
                 delay(cfg.cadence)
-                equalizeTick(cfg)
+                // A transient transfer/broadcast failure in one tick must not kill the
+                // periodic loop; runCatchingCancellable still rethrows CancellationException
+                // so the loop cancels cleanly on close(). Rebalance retries next tick.
+                runCatchingCancellable { equalizeTick(cfg) }
+                    .onFailure { /* transient rebalance failure — retry next tick */ }
             }
         }
 
