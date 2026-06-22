@@ -4,15 +4,6 @@ import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Swatch
 
 /**
- * Globally-unique identity of one broadcast, used for relay dedup: the
- * **origin** peer that first emitted it plus that origin's monotonically
- * increasing per-broadcast [seq]. Every relayed copy of the same broadcast
- * carries the same [GossipMessageId], so a node can recognise a frame it has
- * already seen and refuse to re-flood it.
- */
-internal data class GossipMessageId(val origin: PeerId, val seq: Long)
-
-/**
  * A disseminated broadcast frame as it travels the partial-mesh overlay
  * (`docs/gossip-mesh-design.md` Phase 3 — eager-flood-to-neighbours with dedup).
  *
@@ -20,7 +11,7 @@ internal data class GossipMessageId(val origin: PeerId, val seq: Long)
  * [GossipFrame], stamping it with its own id as [origin], the next [seq], and an
  * initial [ttl]; it then floods the encoded frame to its active neighbours. A
  * receiver decodes the frame, delivers [payload] to the application once (keyed
- * by [id]), and — if [ttl] permits — decrements the hop budget and re-floods to
+ * by `(origin, seq)`), and — if [ttl] permits — decrements the hop budget and re-floods to
  * *its own* active neighbours minus the peer it arrived from. Anti-entropy
  * (Phase 1) backstops anything a flood drops, so the [ttl] is only a hard cap
  * against pathological loops; dedup is what actually terminates the flood.
@@ -43,8 +34,6 @@ internal class GossipFrame private constructor(
     /** The application payload, with the gossip header stripped. */
     val payload: ByteArray,
 ) {
-    val id: GossipMessageId get() = GossipMessageId(origin, seq)
-
     /** A copy with the hop budget decremented by one, for re-flooding. */
     fun decremented(): GossipFrame = GossipFrame(origin, seq, ttl - 1, payload)
 

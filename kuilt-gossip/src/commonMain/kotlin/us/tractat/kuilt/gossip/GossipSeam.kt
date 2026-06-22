@@ -39,7 +39,7 @@ import kotlin.time.Instant
  * [GossipFrame] (origin id + per-origin sequence + a hop-budget TTL) and
  * eager-floods it to the active neighbours. On receive, [incoming] decodes the
  * frame, delivers the payload to the application **once** — keyed by the
- * `(origin, seq)` [GossipMessageId] in a [seen] set — and, while the TTL permits,
+ * `(origin, seq)` pair in a bounded [GossipDedup] — and, while the TTL permits,
  * decrements the budget and re-floods to *this* node's active neighbours minus
  * the peer the frame arrived from. So a broadcast reaches the whole overlay
  * device-to-device along ~k-regular edges, dedup terminates the flood (a node
@@ -95,12 +95,11 @@ public class GossipSeam(
     private val seqLock = reentrantLock()
     private var seqCounter = 0L
 
-    // Dedup set of every relay frame already delivered + re-flooded. Mutated only
-    // inside the single base.incoming collector (ADR-034 single-collection), so it
-    // needs no lock. Grows with distinct broadcasts seen; bounding it (per-origin
-    // high-water mark) is a documented v1 follow-up — at the target scale the set
-    // stays small relative to live CRDT state.
-    private val seen = mutableSetOf<GossipMessageId>()
+    // Dedup of relay frames already delivered + re-flooded — terminates the flood (a
+    // node relays each message at most once). Bounded to O(origins) via a per-origin
+    // contiguous high-water mark plus a small reorder window (#675). Mutated only inside
+    // the single base.incoming collector (ADR-034 single-collection), so it needs no lock.
+    private val dedup = GossipDedup()
 
     private val view =
         GossipView(
@@ -168,7 +167,7 @@ public class GossipSeam(
         // Our own broadcast looped back along the overlay — we already have it.
         if (frame.origin == selfId) return
         // Already delivered + relayed this broadcast; dedup terminates the flood.
-        if (!seen.add(frame.id)) return
+        if (!dedup.markSeenIfNew(frame.origin, frame.seq)) return
 
         _incoming.trySend(Swatch(payload = frame.payload, sender = frame.origin, sequence = frame.seq))
         // Re-flood to our own active neighbours minus the peer it arrived from,
@@ -208,6 +207,9 @@ public class GossipSeam(
     }
 
     private fun nextSeq(): Long = seqLock.withLock { ++seqCounter }
+
+    /** Tracked relay-dedup entries — O(origins). Test-only window onto the bound (#675). */
+    internal val trackedDedupEntries: Int get() = dedup.trackedEntryCount
 
     override suspend fun sendTo(
         peer: PeerId,
