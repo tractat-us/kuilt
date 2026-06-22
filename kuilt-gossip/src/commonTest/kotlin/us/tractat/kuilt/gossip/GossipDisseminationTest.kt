@@ -169,6 +169,46 @@ class GossipDisseminationTest {
         }
 
     @Test
+    fun reorderStormDeliversEachPayloadOnceAndStaysBounded() =
+        runTest {
+            val (base, seam) = gossipSeam(members(12), seed = 7)
+            seam.start(backgroundScope)
+            settle()
+
+            val received = mutableListOf<Swatch>()
+            backgroundScope.launch { seam.incoming.toList(received) }
+            runCurrent()
+
+            val sender = seam.activePeers.value.first()
+            val origin = PeerId("origin-x")
+            // A storm of 50 distinct broadcasts from one origin, arriving in a shuffled
+            // order with every frame duplicated — exactly the relay-reorder-plus-dup case.
+            val seqs = (1..50L).shuffled(kotlin.random.Random(99))
+            for (seq in seqs + seqs) {
+                base.deliver(sender, GossipFrame.origin(origin, seq, ttl = 5, byteArrayOf(seq.toByte())).encode())
+            }
+            runCurrent()
+
+            assertAll(
+                { assertEquals(50, received.size, "each distinct broadcast surfaces exactly once despite reorder + dups") },
+                {
+                    assertEquals(
+                        (1..50L).map { it.toByte() }.toSet(),
+                        received.map { it.toByteArray().single() }.toSet(),
+                        "every payload 1..50 delivered, none missed",
+                    )
+                },
+                {
+                    assertTrue(
+                        seam.trackedDedupEntries <= 2,
+                        "dedup memory stays O(origins) — one origin's high-water — not O(messages) " +
+                            "(was ${seam.trackedDedupEntries})",
+                    )
+                },
+            )
+        }
+
+    @Test
     fun deliversNonGossipFrameRaw() =
         runTest {
             val (base, seam) = gossipSeam(members(6), seed = 6)
