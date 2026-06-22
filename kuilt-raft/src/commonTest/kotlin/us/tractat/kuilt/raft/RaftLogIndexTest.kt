@@ -126,12 +126,12 @@ class RaftLogIndexTest {
     @Test
     fun logSliceFrom_noCompaction_fromBeyondEnd_returnsEmpty() {
         val log = logFrom(firstIndex = 1L, count = 4)
-        assertEquals(emptyList(), logSliceFrom(log, snapshotIndex = 0L, fromIndex = 5L))
+        assertEquals(emptyList<LogEntry>(), logSliceFrom(log, snapshotIndex = 0L, fromIndex = 5L))
     }
 
     @Test
     fun logSliceFrom_noCompaction_emptyLog_returnsEmpty() {
-        assertEquals(emptyList(), logSliceFrom(emptyList(), snapshotIndex = 0L, fromIndex = 1L))
+        assertEquals(emptyList<LogEntry>(), logSliceFrom(emptyList(), snapshotIndex = 0L, fromIndex = 1L))
     }
 
     // ── logSliceFrom — post-compaction ────────────────────────────────────────
@@ -158,11 +158,11 @@ class RaftLogIndexTest {
     @Test
     fun logSliceFrom_postCompaction_fromBeyondEnd_returnsEmpty() {
         val log = logFrom(firstIndex = 11L, count = 5)
-        assertEquals(emptyList(), logSliceFrom(log, snapshotIndex = 10L, fromIndex = 16L))
+        assertEquals(emptyList<LogEntry>(), logSliceFrom(log, snapshotIndex = 10L, fromIndex = 16L))
     }
 
     @Test
     fun logSliceFrom_postCompaction_emptyLog_returnsEmpty() {
-        assertEquals(emptyList(), logSliceFrom(emptyList(), snapshotIndex = 20L, fromIndex = 15L))
+        assertEquals(emptyList<LogEntry>(), logSliceFrom(emptyList(), snapshotIndex = 20L, fromIndex = 15L))
     }
 }

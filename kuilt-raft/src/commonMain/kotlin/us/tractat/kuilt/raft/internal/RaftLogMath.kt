@@ -55,6 +55,53 @@ internal fun nextIndexAfterFailure(
 }
 
 /**
+ * O(1) log lookup: the entry at the given Raft log [index], or null if [index] falls outside the
+ * live log window.
+ *
+ * The live log is the contiguous suffix that begins at `snapshotIndex + 1` — all earlier entries
+ * have been compacted into a snapshot. Because indices are monotonically increasing and there are
+ * no gaps, the offset from the base is exactly `index - (snapshotIndex + 1)`.
+ *
+ * Returns null when:
+ * - [log] is empty (all entries are in a snapshot, or the cluster just started)
+ * - [index] ≤ [snapshotIndex] (compacted away)
+ * - [index] > last entry's index (not yet appended)
+ *
+ * @param log the in-memory log suffix (entries at indices `snapshotIndex + 1 .. lastLogIndex`)
+ * @param snapshotIndex the last index covered by the most-recently-installed snapshot (0 if none)
+ * @param index the 1-based Raft log index to look up
+ */
+internal fun logEntryAt(log: List<LogEntry>, snapshotIndex: Long, index: Long): LogEntry? {
+    if (log.isEmpty()) return null
+    val offset = index - (snapshotIndex + 1L)
+    if (offset < 0L || offset >= log.size) return null
+    return log[offset.toInt()]
+}
+
+/**
+ * O(1) log slice: the entries at indices `[fromIndex, lastLogIndex]`, as a [List.subList] view.
+ *
+ * Clamps [fromIndex] to the log base (`snapshotIndex + 1`) when it falls below it — i.e. all
+ * entries in the live window are included. Returns an empty list when [fromIndex] is beyond the
+ * last entry or [log] is empty.
+ *
+ * The returned list is a subList view (backed by the original list); callers must not mutate the
+ * backing log while iterating it.
+ *
+ * @param log the in-memory log suffix (entries at indices `snapshotIndex + 1 .. lastLogIndex`)
+ * @param snapshotIndex the last index covered by the most-recently-installed snapshot (0 if none)
+ * @param fromIndex the first Raft log index to include in the slice
+ */
+internal fun logSliceFrom(log: List<LogEntry>, snapshotIndex: Long, fromIndex: Long): List<LogEntry> {
+    if (log.isEmpty()) return emptyList()
+    val baseIndex = snapshotIndex + 1L
+    val clampedFrom = maxOf(fromIndex, baseIndex)
+    val offset = (clampedFrom - baseIndex).toInt()
+    if (offset >= log.size) return emptyList()
+    return log.subList(offset, log.size)
+}
+
+/**
  * Highest index replicated to a voter-majority in the current term, or null if none advances commit.
  *
  * The leader always counts itself, so [voterMatchIndices] must contain only the *other* voters'
