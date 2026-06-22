@@ -16,6 +16,7 @@ import us.tractat.kuilt.test.assertAll
 import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
@@ -120,6 +121,28 @@ class GossipSeamTest {
                 },
                 { assertTrue(sent.all { it.second.origin == seam.selfId }, "frames are stamped with this node as origin") },
             )
+        }
+
+    @Test
+    fun incomingCompletesWhenBaseSeamTears() =
+        runTest {
+            val peers = members(4)
+            val (base, seam) = gossipSeam(peers, seed = 5)
+            seam.start(backgroundScope)
+            settle()
+
+            var completed = false
+            backgroundScope.launch {
+                seam.incoming.collect { }
+                completed = true
+            }
+            runCurrent()
+            assertFalse(completed, "incoming must stay open while the base seam is Woven")
+
+            base.close()
+            runCurrent()
+
+            assertTrue(completed, "incoming must complete once the base seam tears (Seam termination contract)")
         }
 
     @Test
