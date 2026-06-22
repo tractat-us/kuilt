@@ -3,9 +3,29 @@ package us.tractat.kuilt.core
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotEquals
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 class SwatchTest {
+
+    // ── payload allocation guarantee ─────────────────────────────────────────
+
+    @Test
+    fun `payload returns backing array directly for a full-array swatch`() {
+        val arr = byteArrayOf(1, 2, 3)
+        // No copy must occur — same reference.
+        assertSame(arr, Swatch(arr).payload)
+    }
+
+    @Test
+    fun `payload materialises a fresh copy for a dropFirst view`() {
+        val raw = byteArrayOf(0xAA.toByte(), 10, 20, 30)
+        val viewed = Swatch(raw).dropFirst(1)
+        val payloadCopy = viewed.payload
+        assertTrue(payloadCopy.contentEquals(byteArrayOf(10, 20, 30)))
+        // Must be a distinct array — not the backing raw array.
+        assertTrue(payloadCopy !== raw)
+    }
 
     // ── Offset-view: a sliced Swatch equals a freshly-copied one ─────────────
 

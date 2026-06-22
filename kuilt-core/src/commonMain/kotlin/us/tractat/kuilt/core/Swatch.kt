@@ -12,8 +12,9 @@ package us.tractat.kuilt.core
  *
  * Internally, a [Swatch] may be backed by a larger array with an [offset],
  * so that header-stripping in [MuxSeam] and [NamedMux] creates a view rather
- * than a copy. The [payload] property always returns a fresh [ByteArray]
- * containing only the logical bytes. [equals] and [hashCode] compare the
+ * than a copy. The [payload] property returns the backing array directly for
+ * a full-array [Swatch] (zero allocation), and a fresh [ByteArray] of the
+ * logical slice for a [dropFirst] view. [equals] and [hashCode] compare the
  * logical slice, so a viewed [Swatch] equals a freshly-copied one of the
  * same bytes.
  */
@@ -39,12 +40,18 @@ public class Swatch internal constructor(
     ) : this(data = payload, offset = 0, length = payload.size, sender = sender, sequence = sequence)
 
     /**
-     * The logical payload bytes. Each access allocates a fresh [ByteArray]
-     * containing exactly the logical slice. For hot paths that only need
-     * byte-level access (index, length, comparison), prefer [byteAt] and
-     * [payloadSize] to avoid the allocation.
+     * The logical payload bytes.
+     *
+     * For a full-array [Swatch] (the common case, constructed via the primary
+     * constructor) this returns the backing array directly — zero allocation,
+     * same behaviour as the old data-class stored field. For a sub-view created
+     * by [dropFirst] (offset != 0) this materialises a fresh [ByteArray]
+     * containing exactly the logical slice, which is unavoidable and rare.
+     *
+     * For hot paths that only need byte-level access (index, length, comparison)
+     * prefer [byteAt] and [payloadSize] to avoid any allocation even on views.
      */
-    public val payload: ByteArray get() = data.copyOfRange(offset, offset + length)
+    public val payload: ByteArray get() = if (offset == 0 && length == data.size) data else data.copyOfRange(offset, offset + length)
 
     /** The number of logical payload bytes. Does not allocate. */
     public val payloadSize: Int get() = length
