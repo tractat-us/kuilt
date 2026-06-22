@@ -19,6 +19,7 @@ import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.liveness.HeartbeatPartitionDetector
 import kotlin.random.Random
+import kotlin.time.Duration
 import kotlin.time.Instant
 
 /**
@@ -62,6 +63,8 @@ import kotlin.time.Instant
  * @param base the underlying full-membership seam.
  * @param random seeded RNG, seeded per-peer by the caller (drives view selection + jitter).
  * @param clock injected time source for the per-neighbour detectors; never the wall clock.
+ * @param jitter per-peer view-recompute jitter window (see [GossipView]); a zero range
+ *   makes recompute synchronous, which deterministic tests rely on.
  * @param initialTtl hop budget stamped on a locally-originated broadcast. Dedup is
  *   what terminates the flood; this is only a generous hard cap, comfortably above
  *   the overlay diameter at the tens–low-hundreds target scale.
@@ -72,6 +75,7 @@ public class GossipSeam(
     clock: () -> Instant,
     config: HeartbeatConfig = HeartbeatConfig(),
     spareCount: Int = GossipView.DEFAULT_SPARE_COUNT,
+    jitter: ClosedRange<Duration> = GossipView.DEFAULT_JITTER,
     private val initialTtl: Int = DEFAULT_TTL,
 ) : Seam {
     // Broadcast bus for raw inbound frames; per-neighbour detectors subscribe here
@@ -108,6 +112,7 @@ public class GossipSeam(
             clock = clock,
             config = config,
             spareCount = spareCount,
+            jitter = jitter,
         )
 
     /** The active-neighbour view — deltas/GC target set. Strict subset of [peers]. */

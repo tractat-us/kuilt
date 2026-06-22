@@ -8,6 +8,7 @@ import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.withTimeout
 import kotlin.time.Duration.Companion.seconds
 import kotlinx.coroutines.test.TestResult
+import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.FabricAvailability
 import us.tractat.kuilt.core.InMemoryTag
@@ -71,6 +72,20 @@ public abstract class SeamConformanceSuite {
      */
     public abstract fun newLoomPair(): Pair<Loom, Loom>
 
+    /**
+     * Scope-aware variant used by every [runTest]-based test below. Stateless fabrics
+     * ignore [testScope] — the default delegates to the no-arg [newLoomPair].
+     *
+     * **Started/stateful seam implementations override this** to start their background
+     * work (inbound loops, timers, view managers) on `testScope.backgroundScope`, whose
+     * coroutines are cancelled before `runTest`'s terminal time-advance. Starting such a
+     * seam on the test's structured scope would either block the test (structured-
+     * concurrency join) or spin its terminal `advanceUntilIdle` on a re-arming timer; the
+     * `backgroundScope` is the only correct home. A seam started here may also read virtual
+     * time from `testScope.testScheduler`.
+     */
+    public open fun newLoomPair(testScope: TestScope): Pair<Loom, Loom> = newLoomPair()
+
     /** The advertisement the joiner uses. Defaults to the in-memory tag. */
     public open fun joinTag(): Tag = InMemoryTag("joiner")
 
@@ -82,7 +97,7 @@ public abstract class SeamConformanceSuite {
             // Establish a real connection: a role-split server/handshake Loom's host()
             // suspends until a joiner connects, so this test must drive host()/join()
             // concurrently (radio fabrics returning (loom, loom) are unaffected).
-            val (hostLoom, joinerLoom) = newLoomPair()
+            val (hostLoom, joinerLoom) = newLoomPair(this)
             coroutineScope {
                 val hostDeferred = async { hostLoom.host(Pattern("host")) }
                 val joinerDeferred = async { joinerLoom.join(joinTag()) }
@@ -98,7 +113,7 @@ public abstract class SeamConformanceSuite {
     @Test
     public fun broadcastFromHostDeliversToJoinedPeer(): TestResult =
         runTest {
-            val (hostLoom, joinerLoom) = newLoomPair()
+            val (hostLoom, joinerLoom) = newLoomPair(this)
             coroutineScope {
                 val hostDeferred = async { hostLoom.host(Pattern("host")) }
                 val joinerDeferred = async { joinerLoom.join(joinTag()) }
@@ -122,7 +137,7 @@ public abstract class SeamConformanceSuite {
     @Test
     public fun incomingPreservesSendOrderToSingleCollector(): TestResult =
         runTest {
-            val (hostLoom, joinerLoom) = newLoomPair()
+            val (hostLoom, joinerLoom) = newLoomPair(this)
             coroutineScope {
                 val hostDeferred = async { hostLoom.host(Pattern("host")) }
                 val joinerDeferred = async { joinerLoom.join(joinTag()) }
@@ -144,7 +159,7 @@ public abstract class SeamConformanceSuite {
     @Test
     public fun peersReportsSelfIdAndAtLeastTwoAfterJoin(): TestResult =
         runTest {
-            val (hostLoom, joinerLoom) = newLoomPair()
+            val (hostLoom, joinerLoom) = newLoomPair(this)
             coroutineScope {
                 val hostDeferred = async { hostLoom.host(Pattern("host")) }
                 val joinerDeferred = async { joinerLoom.join(joinTag()) }
@@ -165,7 +180,7 @@ public abstract class SeamConformanceSuite {
             // Connect concurrently (see hostYieldsUsableSeamWithNonEmptySelfId): a server
             // Loom's host() blocks until a joiner connects, so close the host seam of a
             // genuinely-established connection rather than an unconnected one.
-            val (hostLoom, joinerLoom) = newLoomPair()
+            val (hostLoom, joinerLoom) = newLoomPair(this)
             coroutineScope {
                 val hostDeferred = async { hostLoom.host(Pattern("host")) }
                 val joinerDeferred = async { joinerLoom.join(joinTag()) }
@@ -195,7 +210,7 @@ public abstract class SeamConformanceSuite {
     @Test
     public fun stateIsWovenAfterConnect(): TestResult =
         runTest {
-            val (hostLoom, joinerLoom) = newLoomPair()
+            val (hostLoom, joinerLoom) = newLoomPair(this)
             coroutineScope {
                 val hostDeferred = async { hostLoom.host(Pattern("host")) }
                 val joinerDeferred = async { joinerLoom.join(joinTag()) }
@@ -219,7 +234,7 @@ public abstract class SeamConformanceSuite {
     @Test
     public fun hostStateIsWovenEvenAlone(): TestResult =
         runTest {
-            val (hostLoom, joinerLoom) = newLoomPair()
+            val (hostLoom, joinerLoom) = newLoomPair(this)
             coroutineScope {
                 val hostDeferred = async { hostLoom.host(Pattern("host")) }
                 val joinerDeferred = async { joinerLoom.join(joinTag()) }
@@ -238,7 +253,7 @@ public abstract class SeamConformanceSuite {
     @Test
     public fun closeDrivesStateTornNormal(): TestResult =
         runTest {
-            val (hostLoom, joinerLoom) = newLoomPair()
+            val (hostLoom, joinerLoom) = newLoomPair(this)
             coroutineScope {
                 val hostDeferred = async { hostLoom.host(Pattern("host")) }
                 val joinerDeferred = async { joinerLoom.join(joinTag()) }
@@ -256,7 +271,7 @@ public abstract class SeamConformanceSuite {
     @Test
     public fun sendToAbsentPeerThrowsPeerNotConnected(): TestResult =
         runTest {
-            val (hostLoom, joinerLoom) = newLoomPair()
+            val (hostLoom, joinerLoom) = newLoomPair(this)
             coroutineScope {
                 val hostDeferred = async { hostLoom.host(Pattern("host")) }
                 val joinerDeferred = async { joinerLoom.join(joinTag()) }
@@ -283,7 +298,7 @@ public abstract class SeamConformanceSuite {
     @Test
     public open fun incomingCompletesWhenSeamCloses(): TestResult =
         runTest {
-            val (hostLoom, joinerLoom) = newLoomPair()
+            val (hostLoom, joinerLoom) = newLoomPair(this)
             coroutineScope {
                 val hostDeferred = async { hostLoom.host(Pattern("host")) }
                 val joinerDeferred = async { joinerLoom.join(joinTag()) }
