@@ -208,6 +208,61 @@ internal fun sampleRgaChatReplicator() = runTest(
     assertEquals(2, aliceChat.state.value.toList().size)
 }
 
+// ── Sparse delta-target set (Phase-1 gossip mesh) ────────────────────────────
+
+/**
+ * [Quilter] with a sparse [deltaTargets] selector and a seeded [random].
+ *
+ * In a partial-mesh topology each peer only pushes deltas to its handful of
+ * active neighbours. Pass a `deltaTargets` lambda that returns that subset so
+ * the GC watermark tracks only those neighbours' acks — not the whole room.
+ * Peers left out of the target set still converge via the periodic anti-entropy
+ * full-state reconcile; they just don't participate in ack-based GC.
+ *
+ * Inject a seeded [Random] in tests so anti-entropy's peer selection is
+ * reproducible under virtual time.
+ */
+@Suppress("unused")
+internal fun sampleQuilterSparseDeltaTargets() = runTest(
+    StandardTestDispatcher(),
+    timeout = 5.seconds,
+) {
+    val loom = InMemoryLoom()
+    val seamA = loom.host(Pattern("sparse-mesh"))
+    val seamB = loom.join(InMemoryTag("b"))
+
+    // In a real GossipSeam this would be the active-neighbour view (~k peers).
+    // Here we restrict A's delta targets to B only — C (a hypothetical third peer)
+    // would converge via anti-entropy rather than blocking GC.
+    val activeNeighbours: Set<PeerId> = setOf(seamB.selfId)
+
+    val cfg = QuilterConfig(expectVirtualTime = true)
+    val repA = Quilter(
+        seam = seamA,
+        initial = GCounter.ZERO,
+        valueSerializer = GCounter.serializer(),
+        scope = backgroundScope,
+        config = cfg,
+        deltaTargets = { _ -> activeNeighbours },  // GC against neighbours only
+        random = kotlin.random.Random(seed = 42),   // reproducible anti-entropy order
+    )
+    val repB = Quilter(
+        seam = seamB,
+        initial = GCounter.ZERO,
+        valueSerializer = GCounter.serializer(),
+        scope = backgroundScope,
+        config = cfg,
+    )
+
+    kotlinx.coroutines.delay(1)
+    repA.mutate { it.inc(repA.replica, 5L) }
+    kotlinx.coroutines.delay(10)
+
+    // B converges via the normal delta path (it is in activeNeighbours).
+    assertEquals(5L, repA.state.value.value)
+    assertEquals(repA.state.value.value, repB.state.value.value)
+}
+
 // ── Doc-alias samples (camelCase mirrors of backtick-named test fns) ──────────
 
 /**

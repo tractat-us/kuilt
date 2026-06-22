@@ -1,10 +1,10 @@
 # Partial-mesh gossip — design
 
-> Status: **draft design** for the partial-mesh gossip epic (#652). Revised
-> 2026-06-22 after an architect review of the first cut, which found the original
-> "drop acks, rely on anti-entropy" plan unsound and reframed where the real
-> O(N²) cost lives. Implementation is phased; Phase 1 is the prerequisite and
-> where work starts.
+> Status: **Phase 1 implemented** (PR #662). Revised 2026-06-22 after an
+> architect review of the first cut, which found the original "drop acks, rely
+> on anti-entropy" plan unsound and reframed where the real O(N²) cost lives.
+> Phases 2–5 remain design-only. Implementation is phased; Phase 1 is the
+> prerequisite and where work starts.
 
 ## What this is, in plain terms
 
@@ -129,15 +129,69 @@ flood-with-filter (low volume once per-delta acks are neighbour-scoped).
 - All timers take a **required injected dispatcher/scope**; all randomness uses an
   **injected seeded RNG** (repo time-and-randomness discipline).
 
+## Phase 1 as shipped
+
+Phase 1 landed in PR #662 in `:kuilt-quilter`, with no new modules required. It
+adds two constructor parameters to `Quilter` and a background loop, keeping all
+defaults backward-compatible.
+
+### Delta-target set
+
+`Quilter` accepts a `deltaTargets: (Set<PeerId>) -> Set<PeerId>` parameter
+(defaulting to the identity). `recomputeUniversalAck()` now mins `ackedThrough`
+over `deltaTargets(knownPeers)` rather than the full membership. A `GossipSeam`
+will supply the ~k active neighbours here; with a full `MeshSeam` or `LinkSeam`
+the default identity means behaviour is unchanged. The practical effect: the GC
+watermark is `min over k` peers instead of `min over N`, eliminating the O(N²)
+delta-buffer growth that prevented sparse-mesh deployment.
+
+### Anti-entropy backstop
+
+`runAntiEntropy()` now calls `reconcileWithRandomPeer()` each tick. It picks one
+peer uniformly at random from the full membership (`knownPeers`) and sends the
+current post-merge full state via `sendTo`. The receiver merges idempotently
+(join-semilattice), so delivery is order-independent and the send may safely be
+repeated. This is full-state-first reconcile — a version-vector or Merkle-digest
+diff is a later optimization.
+
+### GC safety contract
+
+GC'ing a delta once only the k delta-target neighbours have acked is safe because
+the anti-entropy backstop guarantees every peer eventually receives the post-merge
+full state. Convergence for peers outside the delta-target set no longer depends on
+those peers acking every delta; they converge within one anti-entropy round after
+a missed delivery. The backstop also heals dropped deltas within the neighbour set:
+the next reconcile re-delivers the merged result regardless of what was lost.
+
+### Named follow-ups
+
+**(i) Digest-gated reconcile** (trigger: avg CRDT state exceeds a practical
+threshold, e.g. >10 KB per round-trip). Full-state-every-round is O(state size)
+per anti-entropy tick. The standard path — taken by mature anti-entropy systems
+(Riak AAE, Cassandra repair) — is to send a compact version-vector or Merkle
+digest first and ship only the diff. Add a `QuiltMessage.Digest` message and a
+matching `onDigest` handler in `Quilter`; keep the full-state fallback for peers
+that don't support the new message type. Tracked as #663 (act when CRDT sizes in
+production justify the work).
+
+**(ii) Anti-entropy fanout / scheduling** (trigger: room sizes where tail
+convergence latency matters at scale). With fanout=1 and N peers, a single peer
+that has only been reached via anti-entropy (never via a direct delta) needs O(N
+log N) rounds on average before every peer has seen its state — the coupon-
+collector tail. Mitigations: fanout > 1 (contact f random peers per round,
+reducing the tail to O(N log N / f)), or round-robin over non-target peers to
+guarantee every peer is covered within ⌈N/f⌉ rounds. Tracked as #664 (act when
+measured convergence latency at large N justifies the added complexity).
+
 ## Phases
 
 Phase 1 lives in `:kuilt-quilter` and stands alone; Phases 2–5 build `:kuilt-gossip`.
 Each phase is its own PR, validated on the `:kuilt-scale` harness.
 
 - **Phase 0 — Planning** (#653): this design doc.
-- **Phase 1 — Delta-GC stability** (#654, **start here**): decouple delta-GC from
-  full membership (GC against a *delta-target set* that defaults to full
-  membership) + add a periodic random-peer anti-entropy reconcile (full-state
+- **Phase 1 — Delta-GC stability** (#654, **implemented** PR #662): decouple
+  delta-GC from full membership (GC against a *delta-target set* that defaults to
+  full membership) + add a periodic random-peer anti-entropy reconcile (full-state
   first). Defaults preserve today's behaviour; improves the current full mesh.
 - **Phase 2 — Membership/overlay**: the active-neighbour view + healing — a
   roster-derived k-regular view (favoured) or HyParView views, over
