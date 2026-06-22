@@ -44,7 +44,7 @@ class MeshSeamColdConnectionTest {
         // post-preamble payload frame surfaces (a double-collect would throw "collected twice").
         val frame = mesh.incoming.first()
         assertEquals(remote, frame.sender)
-        assertContentEquals(byteArrayOf(7), frame.payload)
+        assertContentEquals(byteArrayOf(7), frame.toByteArray())
         assertEquals(setOf(PeerId("A"), remote), mesh.peers.value, "remote must be in the roster")
 
         mesh.close(CloseReason.Normal)
@@ -62,7 +62,7 @@ class MeshSeamColdConnectionTest {
 
         val frame = mesh.incoming.first()
         assertEquals(joiner, frame.sender)
-        assertContentEquals(byteArrayOf(9), frame.payload)
+        assertContentEquals(byteArrayOf(9), frame.toByteArray())
         assertEquals(setOf(PeerId("A"), joiner), mesh.peers.value, "late joiner must be in the roster")
 
         mesh.close(CloseReason.Normal)

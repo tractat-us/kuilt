@@ -27,7 +27,7 @@ class LinkSeamTest {
         assertEquals(setOf(self, remote), seam.peers.value)
         theirs.send(byteArrayOf(9))
         val swatch = seam.incoming.first()
-        assertContentEquals(byteArrayOf(9), swatch.payload)
+        assertContentEquals(byteArrayOf(9), swatch.toByteArray())
         assertEquals(remote, swatch.sender)
     }
 

@@ -32,7 +32,7 @@ internal fun sampleHostAndJoin() = runTest {
     joiner.broadcast("hello".encodeToByteArray())
     val frame = receivedByHost.await()
 
-    check(frame.payload.decodeToString() == "hello")
+    check(frame.decodeToString() == "hello")
     check(frame.sender == joiner.selfId)
 
     host.close()
@@ -128,7 +128,7 @@ internal fun sampleNamedMuxChannels() = runTest(UnconfinedTestDispatcher()) {
     // Frames sent on "chat" arrive only on the matching channel view.
     val received = async { chatB.incoming.first() }
     chatA.broadcast("hello".encodeToByteArray())
-    check(received.await().payload.decodeToString() == "hello")
+    check(received.await().decodeToString() == "hello")
 }
 
 // ── Doc-alias samples (camelCase mirrors of backtick-named InMemoryLoomTest fns) ──

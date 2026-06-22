@@ -153,7 +153,7 @@ class RoomChannelTest {
             val received = mutableListOf<ByteArray>()
             val collectJob = launch {
                 host.channel("data").incoming.collect { swatch ->
-                    received += swatch.payload
+                    received += swatch.toByteArray()
                 }
             }
 
@@ -177,7 +177,7 @@ class RoomChannelTest {
             val received = mutableListOf<ByteArray>()
             val collectJob = launch {
                 host.channel("data").incoming.collect { swatch ->
-                    received += swatch.payload
+                    received += swatch.toByteArray()
                 }
             }
 
@@ -208,7 +208,7 @@ class RoomChannelTest {
             val receivedOnB = mutableListOf<ByteArray>()
             val collectJob = launch {
                 host.channel("channelB").incoming.collect { swatch ->
-                    receivedOnB += swatch.payload
+                    receivedOnB += swatch.toByteArray()
                 }
             }
 

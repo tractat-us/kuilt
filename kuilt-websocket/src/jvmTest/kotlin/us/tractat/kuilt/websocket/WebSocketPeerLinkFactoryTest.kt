@@ -128,7 +128,7 @@ class WebSocketPeerLinkFactoryTest {
                     withTimeout(2_000) { received.await() }
                 }
 
-            assertTrue(frame.payload.contentEquals(payload))
+            assertTrue(frame.toByteArray().contentEquals(payload))
             assertEquals(clientLink.selfId, frame.sender)
 
             clientLink.close()
@@ -150,7 +150,7 @@ class WebSocketPeerLinkFactoryTest {
                     withTimeout(2_000) { received.await() }
                 }
 
-            assertTrue(frame.payload.contentEquals(payload))
+            assertTrue(frame.toByteArray().contentEquals(payload))
             assertEquals(serverLink.selfId, frame.sender)
 
             clientLink.close()
@@ -174,7 +174,7 @@ class WebSocketPeerLinkFactoryTest {
                     withTimeout(2_000) { received.await() }
                 }
 
-            assertTrue(frame.payload.contentEquals(payload))
+            assertTrue(frame.toByteArray().contentEquals(payload))
             assertEquals(clientLink.selfId, frame.sender)
 
             clientLink.close()
@@ -293,10 +293,10 @@ class WebSocketPeerLinkFactoryTest {
                 }
 
             assertTrue(
-                frame.payload.contentEquals(cborLikePayload),
-                "Expected payload ${cborLikePayload.toList()}, got ${frame.payload.toList()}",
+                frame.toByteArray().contentEquals(cborLikePayload),
+                "Expected payload ${cborLikePayload.toList()}, got ${frame.toByteArray().toList()}",
             )
-            assertEquals(cborLikePayload.size, frame.payload.size, "No bytes added or removed by transport")
+            assertEquals(cborLikePayload.size, frame.payloadSize, "No bytes added or removed by transport")
 
             clientLink.close()
         }
@@ -319,8 +319,8 @@ class WebSocketPeerLinkFactoryTest {
                     withTimeout(2_000) { frames.await() }
                 }
 
-            assertTrue(received[0].payload.contentEquals(byteArrayOf(10)))
-            assertTrue(received[1].payload.contentEquals(byteArrayOf(20)))
+            assertTrue(received[0].toByteArray().contentEquals(byteArrayOf(10)))
+            assertTrue(received[1].toByteArray().contentEquals(byteArrayOf(20)))
 
             clientLink.close()
         }

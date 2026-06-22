@@ -189,7 +189,7 @@ class SeamRoomTest {
             val frame = frameJob.await()
             assertAll(
                 { assertEquals(hostRoom.selfId, frame.sender) },
-                { assertTrue(payload.contentEquals(frame.payload)) },
+                { assertTrue(payload.contentEquals(frame.toByteArray())) },
             )
 
             joinerRoom.leave()
@@ -213,7 +213,7 @@ class SeamRoomTest {
             val frame = frameJob.await()
             assertAll(
                 { assertEquals(hostRoom.selfId, frame.sender) },
-                { assertTrue(payload.contentEquals(frame.payload)) },
+                { assertTrue(payload.contentEquals(frame.toByteArray())) },
             )
 
             joinerRoom.leave()
@@ -259,7 +259,7 @@ class SeamRoomTest {
             joinerRoom.broadcast(appPayload)
 
             val frame = frameJob.await()
-            assertTrue(appPayload.contentEquals(frame.payload))
+            assertTrue(appPayload.contentEquals(frame.toByteArray()))
 
             joinerRoom.leave()
             hostRoom.leave()

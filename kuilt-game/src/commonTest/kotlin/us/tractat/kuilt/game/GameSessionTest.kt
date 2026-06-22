@@ -44,7 +44,7 @@ class GameSessionTest {
         val chat = joiner.appChannel("chat").incoming.produceIn(backgroundScope)
         runCurrent()
         host.appChannel("chat").broadcast(byteArrayOf(7, 8, 9))
-        assertTrue(chat.receive().payload.contentEquals(byteArrayOf(7, 8, 9)), "chat frame must round-trip")
+        assertTrue(chat.receive().toByteArray().contentEquals(byteArrayOf(7, 8, 9)), "chat frame must round-trip")
 
         // Consensus still works alongside the app traffic.
         val move = TurnSequencer(host.node, Int.serializer()).propose(42)
@@ -74,7 +74,7 @@ class GameSessionTest {
         val received = other.appChannel("chat").incoming.produceIn(backgroundScope)
         runCurrent()
         leader.appChannel("chat").broadcast(byteArrayOf(55))
-        assertTrue(received.receive().payload.contentEquals(byteArrayOf(55)))
+        assertTrue(received.receive().toByteArray().contentEquals(byteArrayOf(55)))
     }
 
     @Test
@@ -92,7 +92,7 @@ class GameSessionTest {
         runCurrent()
 
         a.appChannel("chat").broadcast(byteArrayOf(1))
-        assertTrue(chat.receive().payload.contentEquals(byteArrayOf(1)), "same name converges across peers")
+        assertTrue(chat.receive().toByteArray().contentEquals(byteArrayOf(1)), "same name converges across peers")
         assertTrue(cursors.tryReceive().isFailure, "a frame on \"chat\" must not reach \"cursors\"")
     }
 

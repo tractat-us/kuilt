@@ -126,7 +126,7 @@ class CompositeResilienceTest {
             val frames = received.await()
             assertAll(
                 { assertEquals(1, frames.size, "exactly one frame must be delivered after recovery") },
-                { assertTrue(frames[0].payload.contentEquals(byteArrayOf(42)), "payload must match") },
+                { assertTrue(frames[0].toByteArray().contentEquals(byteArrayOf(42)), "payload must match") },
             )
         } finally {
             host?.close(CloseReason.Normal)
@@ -158,7 +158,7 @@ class CompositeResilienceTest {
             // Collect all frames delivered to the joiner.
             val deliveredPayloads = mutableListOf<Byte>()
             val collectJob = launch {
-                joiner.incoming.collect { swatch -> deliveredPayloads.add(swatch.payload[0]) }
+                joiner.incoming.collect { swatch -> deliveredPayloads.add(swatch.byteAt(0)) }
             }
 
             // Drive both plies under independent deterministic flap schedules.

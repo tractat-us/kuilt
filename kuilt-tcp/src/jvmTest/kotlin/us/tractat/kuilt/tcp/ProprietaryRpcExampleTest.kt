@@ -76,7 +76,7 @@ class ProprietaryRpcExampleTest {
 
                         assertEquals(
                             "hello from the in-house RPC",
-                            clientReceives.await().payload.decodeToString(),
+                            clientReceives.await().decodeToString(),
                         )
                     }
                 }

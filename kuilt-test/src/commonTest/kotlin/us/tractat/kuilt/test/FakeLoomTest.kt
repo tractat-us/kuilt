@@ -34,7 +34,7 @@ class FakeLoomTest {
         host.broadcast(byteArrayOf(1, 2, 3))
         val frame = received.await()
         assertEquals(PeerId("host"), frame.sender)
-        assertContentEquals(byteArrayOf(1, 2, 3), frame.payload)
+        assertContentEquals(byteArrayOf(1, 2, 3), frame.toByteArray())
     }
 
     @Test
@@ -44,7 +44,7 @@ class FakeLoomTest {
         joiner.broadcast(byteArrayOf(9, 8, 7))
         val frame = received.await()
         assertEquals(PeerId("joiner"), frame.sender)
-        assertContentEquals(byteArrayOf(9, 8, 7), frame.payload)
+        assertContentEquals(byteArrayOf(9, 8, 7), frame.toByteArray())
     }
 
     @Test
@@ -66,9 +66,9 @@ class FakeLoomTest {
         host.broadcast(byteArrayOf(2))
         host.broadcast(byteArrayOf(3))
         val received = frames.await()
-        assertContentEquals(byteArrayOf(1), received[0].payload)
-        assertContentEquals(byteArrayOf(2), received[1].payload)
-        assertContentEquals(byteArrayOf(3), received[2].payload)
+        assertContentEquals(byteArrayOf(1), received[0].toByteArray())
+        assertContentEquals(byteArrayOf(2), received[1].toByteArray())
+        assertContentEquals(byteArrayOf(3), received[2].toByteArray())
     }
 
     @Test

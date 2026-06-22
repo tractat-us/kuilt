@@ -58,7 +58,7 @@ class CompositeSendToctouTest {
 
         val got = withTimeoutOrNull(2_000) { joiner.incoming.first() }
         assertNotNull(got, "good ply should have delivered the frame despite the bad ply tearing")
-        assertTrue(byteArrayOf(7, 8, 9).contentEquals(got.payload))
+        assertTrue(byteArrayOf(7, 8, 9).contentEquals(got.toByteArray()))
 
         host.close(CloseReason.Normal)
         joiner.close(CloseReason.Normal)

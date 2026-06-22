@@ -54,7 +54,7 @@ class WebRTCPeerLinkFactoryTest {
 
                 host.broadcast("from-host".encodeToByteArray())
                 val received = joiner.incoming.first()
-                assertContentEquals("from-host".encodeToByteArray(), received.payload)
+                assertContentEquals("from-host".encodeToByteArray(), received.toByteArray())
             }
         }
 

@@ -24,6 +24,6 @@ class HandshakingTest {
         val sb = seamB.await()
         assertEquals(setOf(PeerId("A"), PeerId("B")), sa.peers.value)
         sa.broadcast(byteArrayOf(7))
-        assertContentEquals(byteArrayOf(7), sb.incoming.first().payload)
+        assertContentEquals(byteArrayOf(7), sb.incoming.first().toByteArray())
     }
 }

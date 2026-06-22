@@ -42,7 +42,7 @@ class NamedMuxTest {
         muxA.channel("chat").broadcast(payload)
 
         val swatch = received.await()
-        assertTrue(swatch.payload.contentEquals(payload), "payload must survive round-trip stripped of name header")
+        assertTrue(swatch.toByteArray().contentEquals(payload), "payload must survive round-trip stripped of name header")
     }
 
     @Test
@@ -60,7 +60,7 @@ class NamedMuxTest {
         muxA.channel("cursors").sendTo(rawB.selfId, payload)
 
         val swatch = received.await()
-        assertTrue(swatch.payload.contentEquals(payload), "payload must survive sendTo round-trip stripped of name header")
+        assertTrue(swatch.toByteArray().contentEquals(payload), "payload must survive sendTo round-trip stripped of name header")
     }
 
     /** Delivered payload must start at offset 0 — a fresh array, not a view into the framed buffer. */
@@ -79,8 +79,8 @@ class NamedMuxTest {
 
         val swatch = received.await()
         assertAll(
-            { assertEquals(payload.size, swatch.payload.size, "delivered payload must be exactly the original length") },
-            { assertEquals(7.toByte(), swatch.payload[0], "delivered payload must start at offset 0") },
+            { assertEquals(payload.size, swatch.payloadSize, "delivered payload must be exactly the original length") },
+            { assertEquals(7.toByte(), swatch.byteAt(0), "delivered payload must start at offset 0") },
         )
     }
 
@@ -154,9 +154,9 @@ class NamedMuxTest {
         val swatchY = recvY.await()
         val swatchZ = recvZ.await()
         assertAll(
-            { assertTrue(swatchX.payload.contentEquals(byteArrayOf(1)), "chat payload") },
-            { assertTrue(swatchY.payload.contentEquals(byteArrayOf(2)), "cursors payload") },
-            { assertTrue(swatchZ.payload.contentEquals(byteArrayOf(3)), "voice payload") },
+            { assertTrue(swatchX.toByteArray().contentEquals(byteArrayOf(1)), "chat payload") },
+            { assertTrue(swatchY.toByteArray().contentEquals(byteArrayOf(2)), "cursors payload") },
+            { assertTrue(swatchZ.toByteArray().contentEquals(byteArrayOf(3)), "voice payload") },
         )
     }
 
@@ -238,9 +238,9 @@ class NamedMuxTest {
         val received = async { muxB.channel("chat").incoming.first() }
         muxA.channel("chat").broadcast(byteArrayOf(1))
 
-        assertTrue(received.await().payload.contentEquals(byteArrayOf(1)), "chat frame must arrive")
+        assertTrue(received.await().toByteArray().contentEquals(byteArrayOf(1)), "chat frame must arrive")
         // The "voice" frame must not have leaked into "chat".
-        assertTrue(chatIncoming.tryReceive().let { it.isFailure || it.getOrNull()?.payload?.contentEquals(byteArrayOf(1)) == true })
+        assertTrue(chatIncoming.tryReceive().let { it.isFailure || it.getOrNull()?.toByteArray()?.contentEquals(byteArrayOf(1)) == true })
         chatIncoming.cancel()
     }
 
@@ -293,9 +293,9 @@ class NamedMuxTest {
 
         val received = frames.await()
         assertAll(
-            { assertTrue(received[0].payload.contentEquals(byteArrayOf(10)), "first frame") },
-            { assertTrue(received[1].payload.contentEquals(byteArrayOf(20)), "second frame") },
-            { assertTrue(received[2].payload.contentEquals(byteArrayOf(30)), "third frame") },
+            { assertTrue(received[0].toByteArray().contentEquals(byteArrayOf(10)), "first frame") },
+            { assertTrue(received[1].toByteArray().contentEquals(byteArrayOf(20)), "second frame") },
+            { assertTrue(received[2].toByteArray().contentEquals(byteArrayOf(30)), "third frame") },
         )
     }
 }

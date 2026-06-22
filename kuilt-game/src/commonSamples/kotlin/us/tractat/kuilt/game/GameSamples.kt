@@ -97,7 +97,7 @@ internal fun sampleGameHostJoin() = runTest(StandardTestDispatcher(), timeout = 
     // Ride an application channel (chat, cursors, …) over the same fabric as consensus.
     val incoming = async { joiner.appChannel("chat").incoming.first() }
     host.appChannel("chat").broadcast(byteArrayOf(0x68, 0x69)) // "hi"
-    assertEquals(2, incoming.await().payload.size)
+    assertEquals(2, incoming.await().payloadSize)
 
     // Collect committed turns on any node in the game loop:
     // scope.launch {
@@ -150,7 +150,7 @@ internal fun sampleGameNode() = runTest(StandardTestDispatcher(), timeout = 5.se
     // Ride named application channels (chat, cursors, …) over the same fabric.
     val chatIncoming = async { session2.appChannel("chat").incoming.first() }
     session1.appChannel("chat").broadcast(byteArrayOf(0x68, 0x69)) // "hi"
-    assertEquals(2, chatIncoming.await().payload.size)
+    assertEquals(2, chatIncoming.await().payloadSize)
 
     session1.close()
     session2.close()

@@ -71,7 +71,7 @@ class RoomLifecycleFlapTest {
         // After recovery, a broadcast still reaches the joiner.
         hostRoom.broadcast(byteArrayOf(42))
         val frame = joinerRoom.incoming.first()
-        assertTrue(frame.payload.contentEquals(byteArrayOf(42)), "delivery resumes after the flap")
+        assertTrue(frame.toByteArray().contentEquals(byteArrayOf(42)), "delivery resumes after the flap")
     }
 
     /**

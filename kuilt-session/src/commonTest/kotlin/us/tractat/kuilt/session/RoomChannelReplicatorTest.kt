@@ -189,7 +189,7 @@ class RoomChannelReplicatorTest {
             testScheduler.advanceUntilIdle()
             collectJob.cancel()
 
-            val replicatorMessages = rawFrames.mapNotNull { decodeChannelFrame(it.payload) }
+            val replicatorMessages = rawFrames.mapNotNull { decodeChannelFrame(it.toByteArray()) }
 
             // Deltas are broadcast and therefore do arrive — that is the documented behaviour.
             assertTrue(

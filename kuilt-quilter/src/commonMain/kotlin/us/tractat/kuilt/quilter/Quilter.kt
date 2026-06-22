@@ -22,6 +22,7 @@ import kotlinx.serialization.cbor.Cbor
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.ScopedCloseable
+import us.tractat.kuilt.core.Swatch
 import us.tractat.kuilt.core.checkNotUnderTestDispatcher
 import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.crdt.Dot
@@ -312,7 +313,7 @@ public class Quilter<S : Quilted<S>>(
         )
 
         val incomingJob = seam.incoming
-            .onEach { swatch -> swatch.sender?.let { touch(it); dispatch(it, swatch.payload) } }
+            .onEach { swatch -> swatch.sender?.let { touch(it); dispatch(it, swatch) } }
             .onCompletion { close() }   // seam torn ⇒ incoming completes ⇒ replicator closes itself
             .launchIn(this.scope)
 
@@ -546,9 +547,9 @@ public class Quilter<S : Quilted<S>>(
         pendingFullStateJobs.remove(peer)?.cancel()
     }
 
-    private fun dispatch(sender: PeerId, payload: ByteArray): Unit = lock.withLock {
+    private fun dispatch(sender: PeerId, swatch: Swatch): Unit = lock.withLock {
         cancelFullStateRetry(sender)
-        val msg = runCatching { decode(payload) }.getOrNull() ?: return@withLock
+        val msg = runCatching { swatch.decode(binaryFormat, messageSerializer) }.getOrNull() ?: return@withLock
         when (msg) {
             is QuiltMessage.Delta -> onDelta(sender, msg)
             is QuiltMessage.Ack -> onAck(msg)
@@ -708,8 +709,6 @@ public class Quilter<S : Quilted<S>>(
     private fun encode(msg: QuiltMessage<S>): ByteArray =
         binaryFormat.encodeToByteArray(messageSerializer, msg)
 
-    private fun decode(bytes: ByteArray): QuiltMessage<S> =
-        binaryFormat.decodeFromByteArray(messageSerializer, bytes)
 }
 
 /**

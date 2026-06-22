@@ -46,7 +46,7 @@ class MuxSeamTest {
         muxA.channel(tag).broadcast(payload)
 
         val swatch = received.await()
-        assertTrue(swatch.payload.contentEquals(payload), "payload must survive round-trip stripped of tag")
+        assertTrue(swatch.toByteArray().contentEquals(payload), "payload must survive round-trip stripped of tag")
     }
 
     /**
@@ -69,7 +69,7 @@ class MuxSeamTest {
         muxA.channel(tag).sendTo(rawB.selfId, payload)
 
         val swatch = received.await()
-        assertTrue(swatch.payload.contentEquals(payload), "payload must survive sendTo round-trip stripped of tag")
+        assertTrue(swatch.toByteArray().contentEquals(payload), "payload must survive sendTo round-trip stripped of tag")
     }
 
     // ── Channel isolation: frames don't leak across tags ──────────────────────
@@ -162,9 +162,9 @@ class MuxSeamTest {
         val swatchZ = recvZ.await()
 
         assertAll(
-            { assertTrue(swatchX.payload.contentEquals(byteArrayOf(1)), "tagX payload") },
-            { assertTrue(swatchY.payload.contentEquals(byteArrayOf(2)), "tagY payload") },
-            { assertTrue(swatchZ.payload.contentEquals(byteArrayOf(3)), "tagZ payload") },
+            { assertTrue(swatchX.toByteArray().contentEquals(byteArrayOf(1)), "tagX payload") },
+            { assertTrue(swatchY.toByteArray().contentEquals(byteArrayOf(2)), "tagY payload") },
+            { assertTrue(swatchZ.toByteArray().contentEquals(byteArrayOf(3)), "tagZ payload") },
         )
     }
 
@@ -227,9 +227,9 @@ class MuxSeamTest {
 
         val received = frames.await()
         assertAll(
-            { assertTrue(received[0].payload.contentEquals(byteArrayOf(10)), "first frame") },
-            { assertTrue(received[1].payload.contentEquals(byteArrayOf(20)), "second frame") },
-            { assertTrue(received[2].payload.contentEquals(byteArrayOf(30)), "third frame") },
+            { assertTrue(received[0].toByteArray().contentEquals(byteArrayOf(10)), "first frame") },
+            { assertTrue(received[1].toByteArray().contentEquals(byteArrayOf(20)), "second frame") },
+            { assertTrue(received[2].toByteArray().contentEquals(byteArrayOf(30)), "third frame") },
         )
     }
 

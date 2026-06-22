@@ -18,7 +18,7 @@ import kotlin.coroutines.CoroutineContext
  * outbound serialization, sequence numbering and single-shot teardown all live in `identified`.
  *
  * **Wire format:** byte-transparent. Each binary WebSocket frame's payload is delivered
- * verbatim as [us.tractat.kuilt.core.Swatch.payload]; no framing prefix, no in-band
+ * verbatim as the [us.tractat.kuilt.core.Swatch]'s logical bytes; no framing prefix, no in-band
  * handshake (see [WebSocketConnection]).
  *
  * **PeerId discovery:** both [selfId] and [remoteId] are supplied at construction time by

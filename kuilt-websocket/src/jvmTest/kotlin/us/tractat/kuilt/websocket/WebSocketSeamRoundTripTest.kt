@@ -43,7 +43,7 @@ class WebSocketSeamRoundTripTest {
                     withTimeout(2_000) { received.await() }
                 }
 
-            assertContentEquals(payload, swatch.payload)
+            assertContentEquals(payload, swatch.toByteArray())
             assertEquals(clientLink.selfId, swatch.sender)
 
             clientLink.close(CloseReason.Normal)
@@ -67,7 +67,7 @@ class WebSocketSeamRoundTripTest {
                     withTimeout(2_000) { received.await() }
                 }
 
-            assertContentEquals(payload, swatch.payload)
+            assertContentEquals(payload, swatch.toByteArray())
             assertEquals(serverLink.selfId, swatch.sender)
 
             clientLink.close(CloseReason.Normal)

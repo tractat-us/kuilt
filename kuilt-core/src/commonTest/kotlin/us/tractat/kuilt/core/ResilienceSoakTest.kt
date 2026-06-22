@@ -45,7 +45,7 @@ class ResilienceSoakTest {
             a.blip(weavingFor = 50.milliseconds)
         }
 
-        val frames = received.await().map { it.payload.single().toInt() }
+        val frames = received.await().map { it.byteAt(0).toInt() }
         assertEquals(listOf(1, 2, 3, 4, 5), frames, "all Woven-sent frames converge in order")
     }
 
@@ -91,7 +91,7 @@ class ResilienceSoakTest {
 
         driveJob.cancel()
         historyJob.cancel()
-        val frames = received.await().map { it.payload.single().toInt() }
+        val frames = received.await().map { it.byteAt(0).toInt() }
 
         assertAll(
             // (a) All 3 frames arrived in order.

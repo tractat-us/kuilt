@@ -137,7 +137,7 @@ class MeshSeamTest {
         val payload = byteArrayOf(5, 6, 7)
         meshA.sendTo(b, payload)
         val swatch = received.await()
-        assertContentEquals(payload, swatch.payload, "B must receive A's frame over the agreed link")
+        assertContentEquals(payload, swatch.toByteArray(), "B must receive A's frame over the agreed link")
         assertEquals(a, swatch.sender)
 
         // And the reverse direction, proving the agreed link is duplex and not crossed.
@@ -145,7 +145,7 @@ class MeshSeamTest {
         val reply = byteArrayOf(8, 9)
         meshB.sendTo(a, reply)
         val backSwatch = receivedBack.await()
-        assertContentEquals(reply, backSwatch.payload, "A must receive B's reply over the agreed link")
+        assertContentEquals(reply, backSwatch.toByteArray(), "A must receive B's reply over the agreed link")
         assertEquals(b, backSwatch.sender)
     }
 

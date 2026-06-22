@@ -445,7 +445,7 @@ internal class SeamRoom(
 
     private fun dispatchIncoming(swatch: Swatch) {
         val sender = swatch.sender ?: return
-        val bytes = swatch.payload
+        val bytes = swatch.toByteArray()
         when {
             HeartbeatPartitionDetector.isHeartbeatFrame(bytes) -> {
                 // Heartbeat frames are consumed by per-peer detectors via rawIncoming.

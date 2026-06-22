@@ -212,7 +212,7 @@ internal class CompositeSeam(
         }
 
     private fun onPlyFrame(plyId: PlyId, swatch: Swatch) {
-        when (val frame = PlyFrame.decode(swatch.payload)) {
+        when (val frame = PlyFrame.decode(swatch.toByteArray())) {
             is PlyFrame.Announce -> {
                 // Announce keys idMap by (plyId, transport sender) → composite id.
                 val sender = swatch.sender ?: return

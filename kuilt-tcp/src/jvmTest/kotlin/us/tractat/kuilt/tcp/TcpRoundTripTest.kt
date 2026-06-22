@@ -62,8 +62,8 @@ class TcpRoundTripTest {
                 host.broadcast("from-host".encodeToByteArray())
                 joiner.broadcast("from-joiner".encodeToByteArray())
 
-                assertEquals("from-host", joinerReceives.await().payload.decodeToString())
-                assertEquals("from-joiner", hostReceives.await().payload.decodeToString())
+                assertEquals("from-host", joinerReceives.await().decodeToString())
+                assertEquals("from-joiner", hostReceives.await().decodeToString())
 
                 host.close(us.tractat.kuilt.core.CloseReason.Normal)
                 joiner.close(us.tractat.kuilt.core.CloseReason.Normal)

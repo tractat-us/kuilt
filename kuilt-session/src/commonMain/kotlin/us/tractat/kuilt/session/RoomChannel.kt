@@ -75,9 +75,17 @@ public object RoomChannel {
     internal fun isChannelFrame(bytes: ByteArray): Boolean =
         bytes.size >= 3 && bytes[0] == CHANNEL_PREFIX
 
+    /** Returns `true` if [swatch] carries a channel frame. Does not allocate. */
+    internal fun isChannelFrame(swatch: Swatch): Boolean =
+        swatch.payloadSize >= 3 && swatch.byteAt(0) == CHANNEL_PREFIX
+
     /** Extracts the sub-id from a channel frame (bytes 1–2). Requires [isChannelFrame]. */
     internal fun subIdOf(bytes: ByteArray): Short =
         ((bytes[1].toInt() and 0xFF) shl 8 or (bytes[2].toInt() and 0xFF)).toShort()
+
+    /** Extracts the sub-id from a channel frame (bytes 1–2). Does not allocate. */
+    internal fun subIdOf(swatch: Swatch): Short =
+        ((swatch.byteAt(1).toInt() and 0xFF) shl 8 or (swatch.byteAt(2).toInt() and 0xFF)).toShort()
 
     /** Wraps [payload] in channel framing for sub-id [subId]. */
     internal fun frame(subId: Short, payload: ByteArray): ByteArray {
@@ -134,8 +142,8 @@ internal class RoomChannelSeam(
      */
     override val incoming: Flow<Swatch> = sharedRaw
         .filter { swatch ->
-            RoomChannel.isChannelFrame(swatch.payload) &&
-                RoomChannel.subIdOf(swatch.payload) == subId &&
+            RoomChannel.isChannelFrame(swatch) &&
+                RoomChannel.subIdOf(swatch) == subId &&
                 room.isAdmitted(swatch.sender)
         }
         .map { swatch -> RoomChannel.stripped(swatch) }

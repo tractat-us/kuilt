@@ -35,7 +35,7 @@ public class MeteredSeam(private val delegate: Seam) : Seam {
 
     override val incoming: Flow<Swatch> = delegate.incoming.onEach { swatch ->
         _framesIn.incrementAndGet()
-        _bytesIn.addAndGet(swatch.payload.size.toLong())
+        _bytesIn.addAndGet(swatch.payloadSize.toLong())
     }
 
     override suspend fun broadcast(payload: ByteArray) {

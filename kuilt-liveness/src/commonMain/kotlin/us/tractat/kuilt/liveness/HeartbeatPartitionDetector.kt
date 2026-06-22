@@ -196,9 +196,9 @@ public class HeartbeatPartitionDetector(
 
         internal fun pongPayload(): ByteArray = PONG_PREFIX.encodeToByteArray()
 
-        internal fun isPingFrame(frame: Swatch): Boolean = frame.payload.decodeToString().startsWith(PING_PREFIX)
+        internal fun isPingFrame(frame: Swatch): Boolean = frame.decodeToString().startsWith(PING_PREFIX)
 
-        internal fun isPongFrame(frame: Swatch): Boolean = frame.payload.decodeToString().startsWith(PONG_PREFIX)
+        internal fun isPongFrame(frame: Swatch): Boolean = frame.decodeToString().startsWith(PONG_PREFIX)
 
         /**
          * Returns true if [bytes] is a heartbeat frame (ping or pong).
