@@ -170,7 +170,7 @@ public class Rga<V> private constructor(
     /**
      * All ids that have been garbage-collected by any [RgaOp.Compact] in this op-log.
      */
-    private val compactedIds: Set<RgaId> by lazy {
+    internal val compactedIds: Set<RgaId> by lazy {
         cache?.compactedIds ?: computeCompactedIds()
     }
 
@@ -210,7 +210,7 @@ public class Rga<V> private constructor(
      * Collisions are impossible: a given id's [RgaOp.Insert.after] is fixed at insert time,
      * so two [RgaOp.Compact] ops can carry the same key only with the same value.
      */
-    private val compactPositions: Map<RgaId, RgaId> by lazy {
+    internal val compactPositions: Map<RgaId, RgaId> by lazy {
         cache?.compactPositions ?: computeCompactPositions()
     }
 
@@ -434,7 +434,17 @@ public class Rga<V> private constructor(
     ): Rga<V> {
         val newCache = RgaCache(
             insertsById = insertsById - gcIds,
-            maxSeqByReplica = maxSeqByReplica,
+            // Recompute from the purged ops so the cache stays equal to fromOps(newOps).
+            // A compaction can purge a replica's highest-seq insert, and maxSeqByReplica is
+            // @Transient (reconstructed from ops on deserialize). Carrying the old high-water
+            // mark forward would make a live object diverge from a serialize→deserialize
+            // round-trip and risk nextSeqFor reusing a sequence. See RgaCacheRoundTripTest.
+            maxSeqByReplica = buildMap<ReplicaId, Long> {
+                for (op in newOps) if (op is RgaOp.Insert) {
+                    val id = op.id
+                    if ((this[id.replicaId] ?: 0L) < id.seq) put(id.replicaId, id.seq)
+                }
+            },
             tombstones = tombstones - gcIds,
             compactedIds = compactedIds + gcIds,
             compactPositions = compactPositions + compactOp.positions,
