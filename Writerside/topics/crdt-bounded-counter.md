@@ -52,6 +52,45 @@ Transfers move quota between replicas via a 2D matrix (one row per donor, one co
 
 ## Active rebalancing
 
-When a replica runs low on quota, it can request a transfer from peers via `BoundedCounterTransferCoordinator`. The coordinator sends a `TransferRequest` over a `MuxSeam` channel; donors evaluate their surplus and respond with a transfer delta over the existing `Quilter` path. The request protocol is advisory — it cannot cause an overdraw, because `trySpend` always checks local quota before committing.
+Devices lend each other spending room automatically. When one replica's quota falls low, it asks the peer with the most spare quota to top it up. The peer checks its own balance, transfers what it can spare, and the delta propagates via the existing replication path — no broadcast to the whole group, no global coordination.
 
-See `docs/crdt/bounded-counter-rebalancing.md` in the repository for the full rebalancing design.
+This is handled by `BoundedCounterTransferCoordinator`, wired alongside a `Quilter`. When quota for the local replica drops to or below `lowWaterThreshold`, the coordinator:
+
+1. Looks at the currently connected peers (`Seam.peers`) and reads their surplus from the local `BoundedCounter` state — no network round-trip needed.
+2. Picks the top-N peers by surplus (up to two as a small fan-out fallback), excluding those with no surplus above the configured floor.
+3. Sends a `TransferRequest` directly to those peers via `Seam.sendTo`.
+
+A donor that receives the request checks its own surplus and, if positive, calls `BoundedCounter.transfer` and passes the resulting patch to `Quilter.apply`. The state delta then propagates to all peers via the normal delta-replication path. There is no explicit response message.
+
+**Partition and partial-mesh safety.** The coordinator only contacts peers present in `Seam.peers` at the moment of the request. Unreachable peers are simply skipped; the coordinator retries with exponential backoff, and if quota is still low after all retries, `trySpend` continues denying locally until state updates arrive.
+
+**No overdraw is possible.** The `TransferRequest` is advisory. `trySpend` always enforces local quota from the merged CRDT state — a transfer that hasn't propagated yet cannot unlock a spend.
+
+**Concurrent donors compose cleanly.** Two peers responding to the same request each write their own row of the 2D transfer matrix. The requester simply ends up with more quota than it asked for, which is safe.
+
+**End-to-end example** — a low replica obtains quota from a targeted peer and can spend again:
+
+<!-- verbatim from kuilt-quilter/src/commonTest/kotlin/us/tractat/kuilt/quilter/BoundedCounterTransferCoordinatorTest.kt#spendSucceedsAfterTransferArrivesFromPeer -->
+```kotlin
+// A has plenty; B starts with only 1 quota
+val initial = BoundedCounter.init(mapOf(replicaA to 20L, replicaB to 1L))
+
+val coordConfig = BoundedCounterTransferConfig(
+    lowWaterThreshold = 1L, // triggers when quota <= 1
+    requestedAmount = 5L,
+    surplusFloor = 5L,      // A keeps at least 5 for itself
+    maxRetries = 2,
+    initialRetryDelay = 10.milliseconds,
+)
+
+// B uses its 1 unit of quota
+val firstSpend = repB.state.value.trySpend(replicaB)
+repB.apply(firstSpend!!)
+testScheduler.advanceUntilIdle()
+
+// B is now at 0. Coordinator fires, contacts A (highest surplus), A donates, delta propagates.
+val secondSpend = repB.state.value.trySpend(replicaB)
+assertNotNull(secondSpend, "B should have received quota transfer and be able to spend")
+```
+
+> **Planned:** a proactive background equalizer that redistributes surplus evenly without waiting for a low-water event is tracked in issue [#644](https://github.com/tractat-us/kuilt/issues/644).
