@@ -163,6 +163,25 @@ public class Quilter<S : Quilted<S>>(
      * (e.g. [us.tractat.kuilt.crdt.Rga] with a generic value type).
      */
     private val binaryFormat: BinaryFormat = Cbor,
+    /**
+     * Selects the **delta-target set** — the peers this replica pushes deltas to and
+     * GCs its `pendingDeltas` against — from the current full membership (`knownPeers`).
+     *
+     * Defaults to the identity (full membership), so a `MeshSeam`/`LinkSeam` GCs against
+     * everyone exactly as before. A sparse-mesh `GossipSeam` supplies a strict subset (the
+     * ~k active neighbours), at which point the GC watermark is `min(ackedThrough)` over
+     * O(k) peers instead of O(N) — the partial-mesh scaling unlock (#654). Peers outside
+     * the delta-target set still converge via the anti-entropy backstop, never via acks.
+     */
+    private val deltaTargets: (Set<PeerId>) -> Set<PeerId> = { it },
+    /**
+     * RNG for anti-entropy peer selection. Each reconcile round picks one random peer from
+     * full membership to merge full state with. Defaults to [kotlin.random.Random.Default]
+     * in production; tests inject a **seeded** [kotlin.random.Random] so the peer sequence is
+     * deterministic (the convergence outcome is RNG-independent — full-state merge is
+     * idempotent — but the choice of peer per round must be reproducible under virtual time).
+     */
+    private val random: kotlin.random.Random = kotlin.random.Random.Default,
 ) : ScopedCloseable(scope) {
     /**
      * Guards every mutation of the plain replicator state (`nextSeq`, `pendingDeltas`,
@@ -457,7 +476,33 @@ public class Quilter<S : Quilted<S>>(
             lock.withLock {
                 evictStalePeers()
                 gossipDelivered()
+                reconcileWithRandomPeer()
             }
+        }
+    }
+
+    /**
+     * The anti-entropy convergence backstop. Each round picks one random peer from full
+     * membership ([knownPeers]) and pushes a full-state snapshot to it. Because every
+     * delta-state CRDT is a join-semilattice, [onFullState]'s merge is idempotent and
+     * order-independent, so a peer that missed a delta — it sat outside the sender's
+     * delta-target set, or a relayed delta was dropped — still converges on the next round.
+     *
+     * This is the guarantee that makes GC-against-a-sparse-delta-target-set ([deltaTargets])
+     * safe: convergence no longer depends on every peer acking every delta. Full-state-first
+     * is the simple, always-correct reconcile; a version-vector/digest diff is a later
+     * optimization for large CRDTs. The send is fire-and-forget (not the joiner
+     * [sendFullStateTo] retry loop) — the next round is the retry.
+     *
+     * Must be called under [lock]; the actual send is launched on [scope] outside the lock.
+     */
+    private fun reconcileWithRandomPeer() {
+        if (knownPeers.isEmpty()) return
+        val peer = knownPeers.elementAt(random.nextInt(knownPeers.size))
+        val bytes = encode(QuiltMessage.FullState(sender = replica, state = _state.value))
+        scope.launch {
+            runCatchingCancellable { seam.sendTo(peer, bytes) }
+                .onFailure { logger.debug { "antiEntropy reconcile to $peer failed: ${it.message}" } }
         }
     }
 
@@ -661,13 +706,19 @@ public class Quilter<S : Quilted<S>>(
     }
 
     /**
-     * Recomputes `min(ackedThrough over knownPeers)` and updates [universalAckFlow]
+     * Recomputes `min(ackedThrough over the delta-target set)` and updates [universalAckFlow]
      * monotonically (never decreases). Also GCs pending deltas up to the new watermark.
-     * No-op when [knownPeers] is empty.
+     *
+     * The watermark mins over [deltaTargets] applied to [knownPeers], **not** the full
+     * membership: a peer outside the delta-target set (one this replica does not push deltas
+     * to) cannot pin GC — it converges via the anti-entropy backstop instead. When the
+     * selector is the identity (the default), this is exactly `min over knownPeers` and
+     * behaviour is unchanged. No-op when the delta-target set is empty.
      */
     private fun recomputeUniversalAck() {
-        if (knownPeers.isEmpty()) return
-        val candidate = knownPeers.minOfOrNull { peer -> ackedThrough[peer] ?: 0L } ?: return
+        val targets = deltaTargets(knownPeers)
+        if (targets.isEmpty()) return
+        val candidate = targets.minOfOrNull { peer -> ackedThrough[peer] ?: 0L } ?: return
         val next = maxOf(_universalAckFlow.value, candidate)
         _universalAckFlow.value = next
         gcPendingDeltas(next)
@@ -757,6 +808,11 @@ private fun contiguousHighWater(seqs: Set<Long>): Long {
  * @param config replication behaviour tuning.
  * @param clock monotonic time source; override in tests.
  * @param binaryFormat binary codec for wire frames; defaults to [kotlinx.serialization.cbor.Cbor].
+ * @param deltaTargets selects the delta-target set (peers GC'd against) from full membership;
+ *   defaults to the identity (full membership). A sparse-mesh `GossipSeam` supplies the ~k
+ *   active neighbours — the partial-mesh GC scaling unlock (#654).
+ * @param random RNG for anti-entropy peer selection; defaults to [kotlin.random.Random.Default].
+ *   Inject a seeded instance in tests for a reproducible reconcile-peer sequence.
  *
  * @sample us.tractat.kuilt.quilter.sampleQuilterConvenience
  */
@@ -770,6 +826,8 @@ public fun <S : us.tractat.kuilt.crdt.Quilted<S>> Quilter(
     config: QuilterConfig = QuilterConfig(),
     clock: MonotonicMillis = SystemMonotonicMillis,
     binaryFormat: kotlinx.serialization.BinaryFormat = kotlinx.serialization.cbor.Cbor,
+    deltaTargets: (Set<PeerId>) -> Set<PeerId> = { it },
+    random: kotlin.random.Random = kotlin.random.Random.Default,
 ): Quilter<S> = Quilter(
     replica = replica,
     seam = seam,
@@ -779,5 +837,7 @@ public fun <S : us.tractat.kuilt.crdt.Quilted<S>> Quilter(
     config = config,
     clock = clock,
     binaryFormat = binaryFormat,
+    deltaTargets = deltaTargets,
+    random = random,
 )
 
