@@ -808,6 +808,11 @@ private fun contiguousHighWater(seqs: Set<Long>): Long {
  * @param config replication behaviour tuning.
  * @param clock monotonic time source; override in tests.
  * @param binaryFormat binary codec for wire frames; defaults to [kotlinx.serialization.cbor.Cbor].
+ * @param deltaTargets selects the delta-target set (peers GC'd against) from full membership;
+ *   defaults to the identity (full membership). A sparse-mesh `GossipSeam` supplies the ~k
+ *   active neighbours — the partial-mesh GC scaling unlock (#654).
+ * @param random RNG for anti-entropy peer selection; defaults to [kotlin.random.Random.Default].
+ *   Inject a seeded instance in tests for a reproducible reconcile-peer sequence.
  *
  * @sample us.tractat.kuilt.quilter.sampleQuilterConvenience
  */
@@ -821,6 +826,8 @@ public fun <S : us.tractat.kuilt.crdt.Quilted<S>> Quilter(
     config: QuilterConfig = QuilterConfig(),
     clock: MonotonicMillis = SystemMonotonicMillis,
     binaryFormat: kotlinx.serialization.BinaryFormat = kotlinx.serialization.cbor.Cbor,
+    deltaTargets: (Set<PeerId>) -> Set<PeerId> = { it },
+    random: kotlin.random.Random = kotlin.random.Random.Default,
 ): Quilter<S> = Quilter(
     replica = replica,
     seam = seam,
@@ -830,5 +837,7 @@ public fun <S : us.tractat.kuilt.crdt.Quilted<S>> Quilter(
     config = config,
     clock = clock,
     binaryFormat = binaryFormat,
+    deltaTargets = deltaTargets,
+    random = random,
 )
 
