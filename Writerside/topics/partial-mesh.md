@@ -5,9 +5,9 @@ every other one. That stops working as the group grows: with a hundred peers,
 "everyone talks to everyone" means each device juggles a hundred connections and
 every change is sent a hundred times.
 
-**Gossip** fixes this. Each device keeps in touch with only a small **handful** of
-others — its neighbours — and updates spread from neighbour to neighbour until they
-reach everyone, the way news travels through a crowd. The work each device does
+**Gossip** fixes this — and it works just like gossip does. Each device keeps in
+touch with only a small **handful** of others — its neighbours — and updates spread
+from neighbour to neighbour until they reach everyone. The work each device does
 grows with the size of its handful, not with the size of the whole group. In a small
 session it makes no difference; in a large one it's the difference between practical
 and not.
