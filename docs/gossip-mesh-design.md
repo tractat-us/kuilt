@@ -196,9 +196,9 @@ Each phase is its own PR, validated on the `:kuilt-scale` harness.
 - **Phase 2 — Membership/overlay** (#657, **decided: roster-derived k-regular**):
   the active-neighbour view + healing, over `:kuilt-liveness` via the composer
   above. See "Phase 2 decision" below.
-- **Phase 3 — Dissemination**: eager-flood-to-neighbours with dedup (gossip header
-  + seen-set + TTL); Plumtree only if a measured win justifies it. Plus the gossip
-  sim harness.
+- **Phase 3 — Dissemination** (#658, **implemented**): eager-flood-to-neighbours
+  with dedup (gossip header + seen-set + TTL) + the gossip sim harness. Plumtree
+  rejected — see "Phase 3 as shipped" below.
 - **Phase 4 — GossipSeam**: wrap Phases 2–3 as a `Seam` exposing both views; pass
   `SeamConformanceSuite`; measure O(N) broadcast vs the full-mesh baseline.
 - **Phase 5 — Quilter integration**: wire Quilter onto the GossipSeam's two views;
@@ -241,6 +241,49 @@ failure detector; Erdős–Rényi connectivity):
 Phase 2's first slice (the pure `PartialView` selection + `recommendedActiveViewSize`,
 with a union-connectivity property test) lands separately; the `GossipView`
 manager (liveness composition + jittered healing) and `GossipSeam` follow.
+
+## Phase 3 as shipped: eager-flood dissemination + sim harness
+
+The `needs-design` choice for #658 — Plumtree vs eager-flood — is settled in
+favour of **eager-flood-to-neighbours with dedup**. Plumtree's tree-repair
+(eager push along a spanning tree + lazy IHAVE GRAFT to recover) earns its
+complexity only when the broadcast layer must be *reliable on its own*. It needn't
+be here: anti-entropy (Phase 1) already guarantees convergence, so the flood only
+has to be *usually* effective, and GRAFT-storm suppression + overlay-partition
+recovery fall away (anti-entropy heals partitions once connectivity returns). At
+the tens–low-hundreds target the flood's redundant sends are bounded by k, not N.
+
+- **Frame.** `GossipSeam.broadcast` wraps the payload in a `GossipFrame`:
+  `[MAGIC][version][ttl][origin][seq][payload]`. The message id is `(origin, seq)`
+  — the origin's id plus a per-origin monotonic sequence — identical across every
+  relayed copy.
+- **Flood + relay.** The origin floods the frame to its ~k active neighbours. A
+  receiver delivers the payload to the app **once** (keyed by message id in a
+  seen-set), attributes it to the *origin* (not the relay hop), and — while
+  `ttl > 1` — decrements the budget and re-floods to *its own* active neighbours
+  **minus the peer it arrived from**. So the broadcast walks the overlay
+  device-to-device along k-regular edges.
+- **Termination.** Dedup is what stops the flood: a node relays each message at
+  most once. The TTL (default 16, well above the k-regular overlay diameter) is
+  only a hard cap against pathological loops. A node also drops its *own* broadcast
+  echoed back.
+- **`sendTo` stays unwrapped** — point-to-point, no header, no relay (a full-mesh
+  base reaches any peer directly). A receiver tells a relay frame from a raw
+  `sendTo` frame (and from a heartbeat ping/pong, a distinct text prefix) by the
+  frame magic + structural decode.
+- **Cost.** Per broadcast, total relay sends are ≈ N·k (each of N nodes floods to
+  ~k neighbours once) — sub-quadratic vs the full-mesh N·(N−1). The sim harness
+  asserts this bound and single-delivery convergence.
+- **Sim harness.** `GossipSimulation` (in `:kuilt-gossip` commonTest) is the
+  `RaftSimulation` analogue: N in-memory peers over a full-mesh
+  `InMemoryGossipNetwork`, per-peer seeded RNG, the test clock, bounded
+  `awaitTrue`/`settle` that fail fast with a state dump — **never**
+  `advanceUntilIdle` (heartbeat timers re-arm). It proves broadcast-reaches-all,
+  the O(N·k) message bound, and re-formation + dissemination after churn.
+
+Deferred: the seen-set is currently unbounded (grows with distinct broadcasts
+seen); a per-origin high-water-mark bound is a v1 follow-up — at the target scale
+the set stays small relative to live CRDT state.
 
 ## Out of scope / deferred
 
