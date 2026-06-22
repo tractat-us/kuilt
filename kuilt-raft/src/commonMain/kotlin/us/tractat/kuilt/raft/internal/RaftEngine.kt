@@ -463,7 +463,7 @@ internal class RaftEngine(
 
     // ── Log helpers ───────────────────────────────────────────────────────────
 
-    private fun entryAt(index: Long): LogEntry? = log.firstOrNull { it.index == index }
+    private fun entryAt(index: Long): LogEntry? = logEntryAt(log, snapshotIndex, index)
 
     private val lastLogIndex: Long get() = log.lastOrNull()?.index ?: snapshotIndex
 
@@ -836,7 +836,7 @@ internal class RaftEngine(
         }
         val prevIndex = ni - 1L
         val prevTerm = if (prevIndex == snapshotIndex) snapshotTerm else entryAt(prevIndex)?.term ?: 0L
-        val entries = log.filter { it.index >= ni }
+        val entries = logSliceFrom(log, snapshotIndex, ni)
         debug { "sendAppendEntries($peer): ni=$ni prevIndex=$prevIndex prevTerm=$prevTerm entries=${entries.size} commit=$currentCommitIndex" }
         emitTrace(
             RaftTraceEvent.AppendEntries(
@@ -1272,7 +1272,8 @@ internal class RaftEngine(
         val install = if (c.fromIndex <= snapshotIndex && snapshotIndex > 0L)
             storage.loadSnapshot()?.let { Snapshot(it.meta.lastIncludedIndex, it.state) } else null
         val from = maxOf(c.fromIndex, snapshotIndex + 1)
-        val replay = log.filter { it.index in from..currentCommitIndex && !it.isNoOp }
+        val replay = logSliceFrom(log, snapshotIndex, from)
+            .filter { it.index <= currentCommitIndex && !it.isNoOp }
         c.response.complete(CommitCutResult(replay, currentCommitIndex, install))
     }
 
