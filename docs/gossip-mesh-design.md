@@ -1,182 +1,161 @@
 # Partial-mesh gossip — design
 
-> Status: **draft design**, under review. Captures the partial-mesh design agreed
-> during brainstorming on 2026-06-22. Implementation is phased (below) and not yet
-> started. Part of the performance epic.
+> Status: **draft design** for the partial-mesh gossip epic (#652). Revised
+> 2026-06-22 after an architect review of the first cut, which found the original
+> "drop acks, rely on anti-entropy" plan unsound and reframed where the real
+> O(N²) cost lives. Implementation is phased; Phase 1 is the prerequisite and
+> where work starts.
 
 ## What this is, in plain terms
 
-Today, when a group of devices shares data, **every device connects to every
-other device.** With a handful of devices that's fine. With dozens, the number of
-connections — and the number of copies of each update flying around — grows with
-the *square* of the group size. The scaling measurements bear this out: a single
-update can fan out into hundreds of messages once the group passes ~10 members.
+When a group of devices shares data, the simple approach has **every device
+connected to every other.** Fine for a handful; with dozens, the connections —
+and the copies of each update flying around — grow with the *square* of the group
+size, so large groups stop being practical.
 
 This design lets each device connect to only a **handful** of others and still
-have every update reach everyone, by **relaying** updates device-to-device — the
-way news spreads through a crowd rather than everyone shouting to everyone. The
-result: the work per update grows roughly *in line with* the group size instead of
-its square, so larger groups stay practical.
+have every update reach everyone, the way news spreads through a crowd rather than
+everyone shouting to everyone. Two things move between devices: small **updates**
+go to your handful of direct neighbours, and, in the background, devices
+occasionally compare their **full picture** with a random other device to catch
+anything that didn't make it. The first keeps things fast; the second guarantees
+everyone eventually agrees.
 
-It applies to the **shared-data** path (the CRDT replication layer). The
-**agreement** path (consensus) is deliberately left alone — it keeps its small,
-fully-connected core, because agreement needs every participant reliably in the
-loop and that core is tiny anyway.
+This applies only to the **shared-data** path (CRDT replication). The
+**agreement** path (consensus) is left alone — it keeps its small, fully-connected
+core, because agreement needs every participant reliably in the loop and that core
+is tiny anyway.
 
-## Why (the measured problem)
+## The reframe: broadcast was never the hard part
 
-The `:kuilt-scale` harness measured a full mesh (`MeshSeam`): broadcast fan-out
-and per-event message counts grow as **O(N²)** in the peer count (e.g. CRDT-zoo
-sends grew ~linearly per peer × N peers; BoundedCounter's reactive rebalancing
-grew ~10× from N=3→10 before #643). A full mesh also costs `N·(N-1)/2`
-connections and `N-1` sockets per peer. For the replicated-data path this caps
-practical group size well below where the consistency model would otherwise allow.
+The first design assumed the win was a cleverer *broadcast* (a gossip tree) and
+that per-delta acks could simply be dropped. An architect review against the code
+showed that's backwards:
 
-Consensus stays on the complete voter core: a Raft cluster needs reliable,
-ordered delivery to every voter, the voter set is small (3–7), and `:kuilt-cluster`
-already pairs that complete core with a sparse learner periphery. Partial mesh is
-the answer for *gossip-tolerant* replication, not for consensus.
+- **Quilter's delta garbage-collection depends entirely on acks.** A delta is held
+  in `pendingDeltas` until acked, and the only thing that prunes it is
+  `onAck → recomputeUniversalAck → gcPendingDeltas`, whose watermark is
+  `min(ackedThrough)` over the **full membership** (`seam.peers`). There is **no**
+  anti-entropy digest fallback for the delta-state zoo — `gossipDelivered` is
+  RGA-only. So "drop acks" is an unbounded memory leak, not graceful eventual
+  consistency.
+- **That full-membership, per-delta ack is the actual O(N²) driver** for the
+  delta-state zoo — not the broadcast fan-out. A partial-mesh *broadcast* on its
+  own changes nothing about it.
 
-## Architecture
+So the real prerequisite is **redesigning delta-GC stability for sparse
+membership.** That is Phase 1, and it improves the *current* full mesh too.
 
-```
-   Quilter (CRDT replication)        gossip-mode: no per-delta acks
-   ─────────────────────────
-   GossipSeam : Seam                 broadcast = Plumtree ; sendTo = flood-with-filter
-   ─────────────────────────
-   Plumtree           |  HyParView view-management
-   (broadcast tree)   |  (active / passive views + shuffle)
-   GRAFT/PRUNE/IHAVE  |
-   ─────────────────────────
-   :kuilt-liveness  (PartitionDetector)   ← the failure-detection half, REUSED
-   ─────────────────────────
-   :kuilt-core  (Seam / Connection / Swatch)
-```
+## The mechanism: deltas to neighbours, full-state to the rest
 
-New module **`:kuilt-gossip`** → depends on `:kuilt-core` + `:kuilt-liveness`;
-exposes a `GossipSeam : Seam` so consumers (Quilter) need no structural change —
-only the reliability-mode adjustment in §5.
+The unlock (and the resolution of the review's blocker) is to split replication
+into two channels:
 
-### 1. Target — replicated-data layer only
+1. **Deltas → active neighbours only.** A peer only *owes* deltas to its ~k
+   neighbours, so it only needs **acks from those k neighbours** to GC. The GC
+   watermark drops from `min over N` to **`min over k`** — the O(N²) term is gone.
+2. **Anti-entropy → one random peer per round (the backstop).** Each round a peer
+   reconciles with a single randomly-chosen peer by merging state. Because every
+   delta-state CRDT is a join-semilattice, merging a full state is idempotent and
+   order-independent, so a peer that missed a relayed delta **still converges** on
+   the next reconcile. Anti-entropy is the *convergence guarantee*; the delta push
+   is just the fast path. Start with full-state transfer (simple, correct, great
+   for counters/small sets); a version-vector/digest diff is the later
+   optimization for large CRDTs (RGA, big maps).
 
-The gossip mesh serves Quilter/CRDTs, where eventual delivery is acceptable
-because anti-entropy heals any gaps. Raft is out of scope and stays complete-graph.
+This is the standard delta-state-CRDT + anti-entropy pairing. It has three nice
+consequences:
 
-### 2. Dissemination — Plumtree
+- **It resolves the `peers` dual-meaning.** GC and delta-push key off the
+  **active-neighbour view**; anti-entropy picks from the **full-membership view**.
+  Two different uses, two different views — see the `GossipSeam` contract below.
+- **It de-risks the overlay.** Once anti-entropy guarantees convergence, the
+  broadcast layer no longer has to be perfectly reliable, so **eager-flood to
+  neighbours is sufficient and Plumtree's tree-repair sophistication becomes
+  optional** (the review flagged HyParView+Plumtree as likely over-engineered for
+  the tens–low-hundreds target). Reliability lives in anti-entropy, not the tree.
+- **It bounds the delta buffer** even on today's full mesh — a standalone win.
 
-Plumtree (the "epidemic broadcast trees" algorithm) disseminates each broadcast
-along a **self-pruning spanning tree**: the message is *eager-pushed* to a peer's
-eager-set and announced as a lazy `IHAVE` (message id only) to the rest. On
-receiving a new message a peer delivers it, eager-forwards to its other eager
-peers, and lazy-announces to the rest; a duplicate arriving eagerly triggers a
-`PRUNE` (demote that link to lazy). A peer that sees an `IHAVE` for a message it
-hasn't received starts a timer and, on expiry, `GRAFT`s (requests the payload and
-promotes the link to eager) — this is also how the tree **self-heals** when a
-branch dies. Steady state is ~O(N) eager messages per broadcast; the lazy layer is
-cheap (ids only) and provides redundancy/recovery.
+Caveat to keep honest: BoundedCounter's targeted borrow (#643) relies on the
+transfer *delta* arriving. Under this model a dropped transfer-delta is healed by
+the next anti-entropy round — so it degrades to *higher latency*, not the silent
+deny the review worried about. Worth a dedicated test.
 
-A small **gossip header** (origin id + monotonic sequence) wraps each app `Swatch`
-for message identity; a bounded **seen-set** drops duplicates; a TTL bounds loops.
+## The `GossipSeam` — views into the endpoints
 
-### 3. Membership — HyParView views on top of `:kuilt-liveness`
+The clean abstraction is a `GossipSeam : Seam` that **provides two views of the
+endpoints**:
 
-Plumtree is defined relative to a peer-sampling service that supplies each peer's
-neighbor set and up/down events. HyParView is the canonical such service, but it
-bundles **two** concerns that kuilt keeps separate:
+- **active-neighbour view** — the ~k peers you push deltas to and GC against.
+- **full-membership view** — everyone in the room, the pool anti-entropy samples.
 
-- **Failure detection** — "is this neighbor alive?" kuilt **already owns this** in
-  `:kuilt-liveness` (`PartitionDetector` → `PartitionEvent`), the single failure
-  detector shared across session/game.
-- **View management** — a small **active view** (the gossip neighbor set, ~log N)
-  + a larger **passive view**, kept fresh by periodic **shuffle**, with promotion
-  from passive → active when an active neighbor drops.
+For a regular `MeshSeam`/`LinkSeam` the two views are identical (every peer is a
+neighbour), so Quilter's behaviour is unchanged there. A `GossipSeam` makes the
+neighbour view a strict subset, and the scaling win materializes. Open question
+(Phase 4): whether the neighbour view is a small addition to the `Seam` contract
+(e.g. `activePeers` defaulting to `peers`) or injected into Quilter — decided when
+the GossipSeam lands. Phase 1 only needs the *delta-target set* as a parameter
+that defaults to full membership.
 
-So kuilt builds **only the view-management half** and **consumes** `:kuilt-liveness`
-for the neighbor-down signal — HyParView does *not* re-implement keepalive, and
-liveness is *not* replaced. This keeps one failure detector for the whole library
-(no duplicate heartbeating) and is the decomposition that makes the integration
-clean rather than bolted-on.
+`GossipSeam` otherwise honours the `Seam` contract: single-collection `incoming`
+(ADR-034), `broadcast`, `availability`; `sendTo` to a non-neighbour uses
+flood-with-filter (low volume once per-delta acks are neighbour-scoped).
 
-**Integration seam:** `:kuilt-liveness` must monitor the *dynamic active-view
-subset* (the peers you're actually connected to), not the full roster — you are
-deliberately not connected to everyone. If `HeartbeatPartitionDetector` currently
-assumes the roster/Seam peer set, generalising it to "watch this changing set of
-peers" is the one prerequisite touch.
+## Findings from the review, carried forward
 
-### 4. Unicast (`sendTo`) — flood-with-filter
+- **Liveness reuse is a composer, not a tweak.** `HeartbeatPartitionDetector` is
+  per-link and collects `link.incoming`; reusing it per-neighbour needs a
+  SeamRoom-style composer that runs/teardowns detectors over a shared `incoming`
+  fan-out as the active view churns. It belongs in `:kuilt-gossip`, not in
+  `:kuilt-liveness`.
+- **Firewall "neighbour-edge down" from "peer gone."** A live peer can lose its
+  edge to me; that `PartitionEvent` must drive overlay repair, not logical-room
+  membership.
+- **A `:kuilt-gossip` virtual-time sim harness is required** (analogous to
+  `RaftSimulation`/`MultiNodeRaftSim`): all gossip/anti-entropy timers injected,
+  seeded RNG, bounded time-advance — never `advanceUntilIdle` (timers re-arm).
+- **GRAFT-storm suppression + overlay-partition recovery** must be designed if a
+  tree-based disseminator is used; with eager-flood + anti-entropy they largely
+  fall away (anti-entropy heals partitions once connectivity returns).
+- **Justify any tree sophistication** against a k-regular-flood baseline; don't
+  assume Plumtree pays at the target scale.
 
-Unstructured gossip overlays broadcast well but route poorly (no structure for
-key-based routing). After §5 removes high-volume acks, the remaining `sendTo`
-traffic is **rare control messages** (e.g. BoundedCounter targeted borrow, #643).
-These use **flood-with-filter**: a dest-tagged message rides the Plumtree
-machinery; only the target delivers it to the app, everyone else just relays. The
-HyParView overlay is connected, so it always reaches the target. Cost is O(N) per
-unicast — acceptable for rare events, and it adds zero new mechanism. A proper
-next-hop routing layer is a possible future optimization, explicitly **not** in
-scope (it routes worst over a churny unstructured overlay).
+## Module & discipline
 
-### 5. Reliability — anti-entropy-primary
+- **`:kuilt-gossip`** (all targets) → depends on `:kuilt-core` + `:kuilt-liveness`;
+  exposes `GossipSeam : Seam`, the membership/view manager, the disseminator, and
+  the per-neighbour liveness composer. Layering verified clean (no back-edge into
+  core).
+- All timers take a **required injected dispatcher/scope**; all randomness uses an
+  **injected seeded RNG** (repo time-and-randomness discipline).
 
-A gossip substrate **cannot be fully transparent to Quilter.** Today Quilter,
-after broadcasting a delta, has every peer `sendTo` an ack back to the origin —
-which on a gossip mesh would be (N-1) acks × O(N) flood = **O(N²)**, silently
-re-creating the blowup the mesh removes.
+## Phases
 
-The fix is the natural one for an eventually-consistent mesh: on a `GossipSeam`,
-Quilter **drops per-delta unicast acks**; reliability and stability come instead
-from **Plumtree's in-tree delivery + `GRAFT` recovery** and **Quilter's existing
-anti-entropy digests** (which already drive reconciliation and GC). This is what
-delivers true end-to-end O(N) — the Plumtree tree alone does not.
+Phase 1 lives in `:kuilt-quilter` and stands alone; Phases 2–5 build `:kuilt-gossip`.
+Each phase is its own PR, validated on the `:kuilt-scale` harness.
 
-Mechanism: a **Seam capability flag** (e.g. `Seam` reports whether it is a
-broadcast-gossip substrate) that Quilter keys off to select anti-entropy-primary
-mode. Quilter's public API is unchanged; only its internal reliability strategy
-adapts to the substrate.
+- **Phase 0 — Planning** (#653): this design doc.
+- **Phase 1 — Delta-GC stability** (#654, **start here**): decouple delta-GC from
+  full membership (GC against a *delta-target set* that defaults to full
+  membership) + add a periodic random-peer anti-entropy reconcile (full-state
+  first). Defaults preserve today's behaviour; improves the current full mesh.
+- **Phase 2 — Membership/overlay**: the active-neighbour view + healing — a
+  roster-derived k-regular view (favoured) or HyParView views, over
+  `:kuilt-liveness` via the composer above.
+- **Phase 3 — Dissemination**: eager-flood-to-neighbours with dedup (gossip header
+  + seen-set + TTL); Plumtree only if a measured win justifies it. Plus the gossip
+  sim harness.
+- **Phase 4 — GossipSeam**: wrap Phases 2–3 as a `Seam` exposing both views; pass
+  `SeamConformanceSuite`; measure O(N) broadcast vs the full-mesh baseline.
+- **Phase 5 — Quilter integration**: wire Quilter onto the GossipSeam's two views;
+  prove end-to-end ~O(N) replication at higher N on the harness.
 
-> **Open risk under review:** this hinges on Quilter's anti-entropy alone
-> providing every guarantee the acks currently provide (delta GC / causal
-> stability / BoundedCounter transfer confirmation). The design review must
-> confirm what acks are load-bearing for before this is locked.
-
-## Module & contract
-
-- **`:kuilt-gossip`** (all targets): `GossipSeam : Seam`, the membership view
-  manager, the Plumtree engine. Depends on `:kuilt-core` + `:kuilt-liveness`.
-- `GossipSeam` honors the `Seam` contract: `peers` = all logical members (not just
-  neighbors), `broadcast` = Plumtree, `sendTo` = flood-with-filter, `incoming`
-  single-collection (ADR-034), `availability` reports usability.
-- All timers (lazy-push, shuffle, GRAFT) take an **injected dispatcher/scope**
-  (required, no real-clock default) per the repo's time-is-a-dependency rule;
-  any randomness (neighbor selection, shuffle) uses an injected seeded RNG.
-
-## Implementation phases
-
-Each phase is its own PR, validated on the `:kuilt-scale` harness (the
-topology-pluggable mesh builder was built for exactly this):
-
-- **P1 — Membership.** HyParView active/passive views + shuffle over
-  `:kuilt-liveness`; generalise liveness to watch the dynamic active-view subset.
-  Output: a peer-sampling/membership-view service.
-- **P2 — Plumtree.** Eager/lazy broadcast (GRAFT/PRUNE/IHAVE, lazy timers) over
-  the active view, with the gossip header + seen-set.
-- **P3 — GossipSeam.** Wrap P1+P2 as a `Seam`; pass `SeamConformanceSuite`;
-  measure O(N) broadcast vs the full-mesh baseline at higher N on the harness.
-- **P4 — Quilter gossip-mode.** Seam capability flag → drop per-delta acks; prove
-  end-to-end O(N) CRDT replication on the harness; confirm GC/stability intact.
+Phases 2–5 are filed as the design firms (they may shift with the Phase-1
+outcome). Docs fold into each phase.
 
 ## Out of scope / deferred
 
-- Next-hop unicast routing over the overlay (flood-with-filter suffices for now).
-- Demand-weighted or structured (DHT) overlays.
+- Next-hop unicast routing over the overlay (flood-with-filter suffices).
+- Digest/version-vector anti-entropy diff (full-state first; diff is the Phase-1.5
+  optimization for large CRDTs).
 - Gossip for the consensus path (Raft stays complete-graph).
-
-## Open questions (for review)
-
-1. What exactly are Quilter's per-delta acks load-bearing for, and does
-   anti-entropy alone preserve those guarantees? (§5 — highest risk.)
-2. Does `:kuilt-liveness` already expose per-peer down events and dynamic-subset
-   monitoring, or how large is that generalisation? (§3.)
-3. Is full HyParView (active+passive+shuffle) warranted at the tens–low-hundreds
-   target scale, or does a roster-derived k-regular view suffice? (§3.)
-4. `peers` semantics on a partial mesh: does any Quilter per-peer logic assume
-   direct reachability? (§Module.)
