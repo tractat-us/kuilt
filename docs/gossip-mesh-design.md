@@ -172,7 +172,9 @@ per anti-entropy tick. The standard path — taken by mature anti-entropy system
 digest first and ship only the diff. Add a `QuiltMessage.Digest` message and a
 matching `onDigest` handler in `Quilter`; keep the full-state fallback for peers
 that don't support the new message type. Tracked as #663 (act when CRDT sizes in
-production justify the work).
+production justify the work). **Measured & deferred** (`GossipAntiEntropyMeasurementTest`,
+#679): reconcile cost is O(state), not O(change) — ~78 B/round for a 1-element CRDT,
+~6.5 KB for 200 elements; negligible at the small-CRDT target scale, so deferred.
 
 **(ii) Anti-entropy fanout / scheduling** (trigger: room sizes where tail
 convergence latency matters at scale). With fanout=1 and N peers, a single peer
@@ -182,6 +184,10 @@ collector tail. Mitigations: fanout > 1 (contact f random peers per round,
 reducing the tail to O(N log N / f)), or round-robin over non-target peers to
 guarantee every peer is covered within ⌈N/f⌉ rounds. Tracked as #664 (act when
 measured convergence latency at large N justifies the added complexity).
+**Measured & deferred** (`GossipAntiEntropyMeasurementTest`, #679): fanout=1
+first-contact latency follows the coupon-collector tail ≈ N·H(N) — 29/80/166 rounds
+at N=10/20/40 — but only on the backstop path; the eager flood reaches everyone in
+O(k), so deferred at the target scale.
 
 ## Phases
 
@@ -283,9 +289,11 @@ the tens–low-hundreds target the flood's redundant sends are bounded by k, not
   `advanceUntilIdle` (heartbeat timers re-arm). It proves broadcast-reaches-all,
   the O(N·k) message bound, and re-formation + dissemination after churn.
 
-Deferred: the seen-set is currently unbounded (grows with distinct broadcasts
-seen); a per-origin high-water-mark bound is a v1 follow-up — at the target scale
-the set stays small relative to live CRDT state.
+Bounded seen-set (#675, shipped): the relay dedup is `GossipDedup` — a per-origin
+contiguous high-water mark plus a small bounded reorder window, so memory is
+O(origins), not O(total broadcasts). A persistent gap (a flood drop that
+anti-entropy recovers, never re-broadcast) is capped by forcing the frontier past
+the gap; anything abandoned that way is backstopped by anti-entropy.
 
 ## Phase 4 as shipped: GossipSeam through the TCK + the O(k) broadcast measurement
 

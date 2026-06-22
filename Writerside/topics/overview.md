@@ -12,7 +12,7 @@ It is a Kotlin Multiplatform library (JVM, Android, iOS, macOS, wasmJs).
 
 - **Replication** — shared data stays in sync, even when devices edit offline or at the same time.
   Under the hood this uses CRDT data types such as `LWWMap`, `ORSet`, `Rga`, and `JsonCrdt` from `kuilt-crdt`.
-  Add `Quilter` to propagate changes live over a `Seam`.
+  Add `Quilter` to propagate changes live over a `Seam`. For large sessions, a `GossipSeam` keeps the cost flat as peers grow.
 
 - **Consensus** — when every peer must agree on one order of decisions (turns in a game, locks, durable steps), this keeps one leader and everyone aligned.
   Under the hood this is `kuilt-raft`. `TurnSequencer` (from `kuilt-game`) wraps it for turn-based games.
@@ -40,6 +40,7 @@ Every peer in a session uses the same `Seam` interface — there is no client/se
 | `kuilt-core` | The contract (`Loom`/`Seam`/`Swatch`), `InMemoryLoom` reference impl, `MuxSeam` + `NamedMux` channel splitters |
 | `kuilt-crdt` | Replication data structures (`GCounter`, `ORSet`, `LWWMap`, `JsonCrdt`, …) |
 | `kuilt-quilter` | Live replication over a `Seam`: `Quilter` propagates deltas and merges inbound changes |
+| `kuilt-gossip` | Partial-mesh overlay (`GossipSeam`): gossip with ~k neighbours so large sessions scale O(k), not O(N) |
 | `kuilt-deal` | Cryptographically fair card dealing (`DealSession`) + dealer-less fair-random (`FairRandom`) |
 | `kuilt-game` | Turn-based game facade: `gameHost`/`gameJoin`/`gameNode` → `GameSession`, `TurnSequencer`, `SpeculativeSequencer` |
 | `kuilt-raft` | Raft consensus — leader election, log replication, snapshots, dynamic membership, linearizable reads, leadership transfer |

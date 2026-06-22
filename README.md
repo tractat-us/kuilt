@@ -112,6 +112,7 @@ Replace `0.6.0` with the [latest release](https://central.sonatype.com/artifact/
 | Module | Targets | What it gives you |
 |--------|---------|-------------------|
 | `kuilt-crdt` | all | Delta-state CRDT zoo (`GCounter`, `ORSet`, `LWWMap`, `Rga`, `JsonCrdt`, `EphemeralMap`, …) + `Quilter` live replication. |
+| `kuilt-gossip` | all | Partial-mesh overlay (`GossipSeam`): each peer gossips with ~k neighbours so broadcast and GC scale O(k), not O(N), for large sessions. |
 | `kuilt-deal` | all | Cryptographically fair card dealing (`DealSession`, `SraScheme`) + dealer-less fair-random seed agreement (`FairRandom`). |
 | `kuilt-game` | all | Turn-based game facade over `kuilt-raft`: `TurnSequencer` + `IndexedAction` + `SpeculativeSequencer` (optimistic apply + rollback). |
 | `kuilt-raft` | all | Raft consensus — leader election, log replication, snapshots, dynamic membership, linearizable reads, leadership transfer. |
