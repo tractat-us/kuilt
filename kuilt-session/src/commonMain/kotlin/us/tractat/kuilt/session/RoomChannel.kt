@@ -90,8 +90,7 @@ public object RoomChannel {
     }
 
     /** Strips the 3-byte channel header from [swatch], returning the payload-only [Swatch]. */
-    internal fun stripped(swatch: Swatch): Swatch =
-        swatch.copy(payload = swatch.payload.copyOfRange(3, swatch.payload.size))
+    internal fun stripped(swatch: Swatch): Swatch = swatch.dropFirst(3)
 }
 
 /**
