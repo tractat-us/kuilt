@@ -99,7 +99,11 @@ class GossipSeamTest {
             seam.broadcast(payload)
             runCurrent()
 
-            val recipients = base.directed.filter { it.second.contentEquals(payload) }.map { it.first }.toSet()
+            // broadcast wraps the payload in an origin-stamped GossipFrame (Phase 3).
+            val sent = base.directed.mapNotNull { (peer, bytes) ->
+                GossipFrame.tryDecode(Swatch(bytes))?.let { peer to it }
+            }
+            val recipients = sent.map { it.first }.toSet()
             assertAll(
                 { assertEquals(active, recipients, "broadcast reaches exactly the active neighbours") },
                 {
@@ -108,6 +112,13 @@ class GossipSeamTest {
                         "broadcast does not fan out to the full membership",
                     )
                 },
+                {
+                    assertTrue(
+                        sent.all { it.second.payload.contentEquals(payload) },
+                        "each neighbour gets the application payload, header-wrapped",
+                    )
+                },
+                { assertTrue(sent.all { it.second.origin == seam.selfId }, "frames are stamped with this node as origin") },
             )
         }
 

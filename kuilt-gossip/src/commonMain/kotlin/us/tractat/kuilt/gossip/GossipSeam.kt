@@ -1,5 +1,7 @@
 package us.tractat.kuilt.gossip
 
+import kotlinx.atomicfu.locks.reentrantLock
+import kotlinx.atomicfu.locks.withLock
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -28,9 +30,21 @@ import kotlin.time.Instant
  *
  * For a full-mesh base seam the active view is a strict subset, so [broadcast]
  * floods only to the ~k active neighbours rather than the whole room — the
- * O(N)-fan-out win. (Multi-hop relay + dedup is Phase 3; this slice does the
- * one-hop eager flood to neighbours.) [sendTo] is delegated to [base], which on a
- * full-mesh transport can reach any connected peer directly.
+ * O(N)-fan-out win.
+ *
+ * **Relayed dissemination (Phase 3).** [broadcast] wraps the payload in a
+ * [GossipFrame] (origin id + per-origin sequence + a hop-budget TTL) and
+ * eager-floods it to the active neighbours. On receive, [incoming] decodes the
+ * frame, delivers the payload to the application **once** — keyed by the
+ * `(origin, seq)` [GossipMessageId] in a [seen] set — and, while the TTL permits,
+ * decrements the budget and re-floods to *this* node's active neighbours minus
+ * the peer the frame arrived from. So a broadcast reaches the whole overlay
+ * device-to-device along ~k-regular edges, dedup terminates the flood (a node
+ * relays each message at most once), and the TTL is only a hard cap against
+ * pathological loops. Anything a flood drops is backstopped by anti-entropy
+ * (Phase 1), so the overlay need only be *usually* connected. [sendTo] is
+ * delegated straight to [base] (point-to-point, unwrapped), which on a full-mesh
+ * transport can reach any connected peer directly.
  *
  * **Single-collection [incoming] (ADR-034).** [GossipSeam] is the *single*
  * collector of `base.incoming`. Its [start] loop fans every inbound [Swatch] to
@@ -46,6 +60,9 @@ import kotlin.time.Instant
  * @param base the underlying full-membership seam.
  * @param random seeded RNG, seeded per-peer by the caller (drives view selection + jitter).
  * @param clock injected time source for the per-neighbour detectors; never the wall clock.
+ * @param initialTtl hop budget stamped on a locally-originated broadcast. Dedup is
+ *   what terminates the flood; this is only a generous hard cap, comfortably above
+ *   the overlay diameter at the tens–low-hundreds target scale.
  */
 public class GossipSeam(
     private val base: Seam,
@@ -53,12 +70,26 @@ public class GossipSeam(
     clock: () -> Instant,
     config: HeartbeatConfig = HeartbeatConfig(),
     spareCount: Int = GossipView.DEFAULT_SPARE_COUNT,
+    private val initialTtl: Int = DEFAULT_TTL,
 ) : Seam {
     // Broadcast bus for raw inbound frames; per-neighbour detectors subscribe here
     // so they never contend for the single-consumer base.incoming channel.
     private val rawIncoming = MutableSharedFlow<Swatch>(extraBufferCapacity = RAW_BUFFER)
 
     private val _incoming = MutableSharedFlow<Swatch>(extraBufferCapacity = APP_BUFFER)
+
+    // Per-origin broadcast sequence counter. Guarded by a lock (not dispatcher
+    // confinement) so concurrent broadcast() callers get distinct sequence numbers
+    // even under a multi-threaded dispatcher.
+    private val seqLock = reentrantLock()
+    private var seqCounter = 0L
+
+    // Dedup set of every relay frame already delivered + re-flooded. Mutated only
+    // inside the single base.incoming collector (ADR-034 single-collection), so it
+    // needs no lock. Grows with distinct broadcasts seen; bounding it (per-origin
+    // high-water mark) is a documented v1 follow-up — at the target scale the set
+    // stays small relative to live CRDT state.
+    private val seen = mutableSetOf<GossipMessageId>()
 
     private val view =
         GossipView(
@@ -95,27 +126,69 @@ public class GossipSeam(
     public fun start(scope: CoroutineScope) {
         view.start(scope)
         scope.launch {
-            base.incoming.collect { swatch ->
-                rawIncoming.emit(swatch)
-                if (!swatch.isHeartbeat()) _incoming.emit(swatch)
-            }
+            base.incoming.collect { swatch -> dispatchInbound(swatch) }
         }
+    }
+
+    /**
+     * Routes one inbound frame: fan it to the per-neighbour detectors, drop
+     * heartbeats, pass non-gossip frames straight through, and dedup + relay
+     * gossip frames. Runs only on the single `base.incoming` collector, so the
+     * [seen] set is accessed without a lock.
+     */
+    private suspend fun dispatchInbound(swatch: Swatch) {
+        rawIncoming.emit(swatch)
+        if (swatch.isHeartbeat()) return
+
+        val frame = GossipFrame.tryDecode(swatch)
+        if (frame == null) {
+            // A raw point-to-point sendTo frame (or any non-gossip frame): deliver as-is.
+            _incoming.emit(swatch)
+            return
+        }
+        // Our own broadcast looped back along the overlay — we already have it.
+        if (frame.origin == selfId) return
+        // Already delivered + relayed this broadcast; dedup terminates the flood.
+        if (!seen.add(frame.id)) return
+
+        _incoming.emit(Swatch(payload = frame.payload, sender = frame.origin, sequence = frame.seq))
+        // Re-flood to our own active neighbours minus the peer it arrived from,
+        // until the hop budget runs out.
+        if (frame.ttl > 1) flood(frame.decremented(), except = swatch.sender)
     }
 
     /**
      * Eager-flood to the active neighbours only. A defined no-op when the active
      * view is empty (alone in the session), matching the [Seam] broadcast contract.
      *
+     * The payload is wrapped in a fresh origin-stamped [GossipFrame] so receivers
+     * can dedup and relay it across the overlay (see the class KDoc).
+     */
+    override suspend fun broadcast(payload: ByteArray) {
+        flood(GossipFrame.origin(selfId, nextSeq(), initialTtl, payload), except = null)
+    }
+
+    /**
+     * Send [frame] to every active neighbour except [except] (the peer it arrived
+     * from, or `null` for a locally-originated broadcast).
+     *
      * Best-effort per neighbour: a send that fails (e.g. a neighbour that just left
      * the base roster) is swallowed so one stale edge can't drop the broadcast to
      * the rest — anti-entropy (Phase 1) re-delivers anything missed. Cancellation
      * still propagates ([runCatchingCancellable]).
      */
-    override suspend fun broadcast(payload: ByteArray) {
+    private suspend fun flood(
+        frame: GossipFrame,
+        except: PeerId?,
+    ) {
+        val encoded = frame.encode()
         for (peer in view.active.value) {
-            runCatchingCancellable { base.sendTo(peer, payload) }
+            if (peer == except) continue
+            runCatchingCancellable { base.sendTo(peer, encoded) }
         }
     }
+
+    private fun nextSeq(): Long = seqLock.withLock { ++seqCounter }
 
     override suspend fun sendTo(
         peer: PeerId,
@@ -133,5 +206,10 @@ public class GossipSeam(
     private companion object {
         const val RAW_BUFFER = 256
         const val APP_BUFFER = 64
+
+        // Generous default hop budget. Dedup terminates the flood; this only caps
+        // pathological loops. Comfortably above the diameter of a k-regular overlay
+        // at tens–low-hundreds peers (k ≈ 4–7 ⇒ diameter ≲ 4).
+        const val DEFAULT_TTL = 16
     }
 }
