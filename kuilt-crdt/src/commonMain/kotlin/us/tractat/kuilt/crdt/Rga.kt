@@ -2,6 +2,7 @@ package us.tractat.kuilt.crdt
 
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.Transient
 
 /**
  * A unique, totally-ordered identity for a single RGA element.
@@ -98,6 +99,32 @@ public sealed interface RgaOp<out V> {
 }
 
 /**
+ * Incrementally-maintained derived state, threaded forward across mutations to avoid
+ * O(ops) rescans on every [Rga.insertAfter], [Rga.apply], and [Rga.piece] call.
+ *
+ * Passed via the `@Transient` [Rga.cache] parameter so the kotlinx-serialization
+ * plugin does not include it in the wire format. Deserialization always reconstructs
+ * these from the op-log via [Rga.fromOps].
+ */
+internal data class RgaCache<V>(
+    val insertsById: Map<RgaId, RgaOp.Insert<V>>,
+    val maxSeqByReplica: Map<ReplicaId, Long>,
+    val tombstones: Set<RgaId>,
+    val compactedIds: Set<RgaId>,
+    val compactPositions: Map<RgaId, RgaId>,
+) {
+    companion object {
+        fun <V> empty(): RgaCache<V> = RgaCache(
+            insertsById = emptyMap(),
+            maxSeqByReplica = emptyMap(),
+            tombstones = emptySet(),
+            compactedIds = emptySet(),
+            compactPositions = emptyMap(),
+        )
+    }
+}
+
+/**
  * A Replicated Growable Array (RGA): an op-based sequence CRDT for ordered
  * collections such as chat messages or collaborative text.
  *
@@ -131,14 +158,20 @@ public class Rga<V> private constructor(
     internal val ops: Set<RgaOp<V>>,
     /** This replica's current Lamport timestamp (max seen + 1 after any op). */
     public val lamport: Long,
+    /**
+     * Pre-computed derived state. When non-null (all mutation paths), the fields are
+     * used directly instead of scanning [ops]. When null (deserialization via
+     * [fromOps]), each field is computed from [ops] on first access.
+     * Excluded from the wire format by [@Transient].
+     */
+    @Transient private val cache: RgaCache<V>? = null,
 ) : Quilted<Rga<V>> {
 
     /**
      * All ids that have been garbage-collected by any [RgaOp.Compact] in this op-log.
      */
     private val compactedIds: Set<RgaId> by lazy {
-        ops.filterIsInstance<RgaOp.Compact>()
-            .flatMapTo(mutableSetOf()) { it.positions.keys }
+        cache?.compactedIds ?: computeCompactedIds()
     }
 
     /**
@@ -148,17 +181,26 @@ public class Rga<V> private constructor(
      * inspect the current tombstone set (e.g. `WindowPolicy.byCount`).
      */
     public val tombstones: Set<RgaId> by lazy {
-        ops.filterIsInstance<RgaOp.Remove<V>>()
-            .mapTo(mutableSetOf()) { it.id }
-            .apply { removeAll(compactedIds) }
+        cache?.tombstones ?: computeTombstones()
     }
 
     /**
      * Map from each [RgaId] to its insert op, for O(1) lookup by id.
      * Excludes compacted ids — their Insert ops have been removed from the log.
+     * Threaded forward by mutations to avoid O(ops) rescans.
+     * Exposed as `internal` for test verification; consumers should use [toList]/[sequence].
      */
-    private val insertsById: Map<RgaId, RgaOp.Insert<V>> by lazy {
-        ops.filterIsInstance<RgaOp.Insert<V>>().associateBy { it.id }
+    internal val insertsById: Map<RgaId, RgaOp.Insert<V>> by lazy {
+        cache?.insertsById ?: computeInsertsById()
+    }
+
+    /**
+     * Ceiling of the [RgaId.seq] seen per [ReplicaId], incremented O(1) on each
+     * insert and merged on [piece]. Powers [nextSeqFor] without scanning the op-log.
+     * Exposed as `internal` for test verification.
+     */
+    internal val maxSeqByReplica: Map<ReplicaId, Long> by lazy {
+        cache?.maxSeqByReplica ?: computeMaxSeqByReplica()
     }
 
     /**
@@ -169,9 +211,7 @@ public class Rga<V> private constructor(
      * so two [RgaOp.Compact] ops can carry the same key only with the same value.
      */
     private val compactPositions: Map<RgaId, RgaId> by lazy {
-        ops.filterIsInstance<RgaOp.Compact>()
-            .flatMap { it.positions.entries }
-            .associate { (k, v) -> k to v }
+        cache?.compactPositions ?: computeCompactPositions()
     }
 
     /**
@@ -195,7 +235,7 @@ public class Rga<V> private constructor(
     /**
      * The number of visible elements.
      */
-    public val size: Int get() = toList().size
+    public val size: Int get() = sequence.count { it !in tombstones }
 
     /**
      * Insert [value] immediately after the element with [after] id, minting a
@@ -213,23 +253,22 @@ public class Rga<V> private constructor(
         val id = RgaId(lamport = newLamport, replicaId = replica, seq = seq)
         val op = RgaOp.Insert(id = id, value = value, after = after)
         val newOps = ops + op
-        return Rga(newOps, newLamport) to op
+        val newCache = RgaCache(
+            insertsById = insertsById + (id to op),
+            maxSeqByReplica = maxSeqByReplica + (replica to seq),
+            tombstones = tombstones,
+            compactedIds = compactedIds,
+            compactPositions = compactPositions,
+        )
+        return Rga(newOps, newLamport, newCache) to op
     }
 
     /**
-     * The next dense per-author [RgaId.seq] for [replica], derived from the op-log:
-     * one past the highest [RgaId.seq] this replica has already authored. No external
-     * counter — the op-log is the source of truth, so a replica reconstructed from its
-     * ops mints the correct next seq.
+     * The next dense per-author [RgaId.seq] for [replica], derived from the
+     * incrementally-maintained [maxSeqByReplica] map: O(1) lookup instead of
+     * scanning the entire op-log.
      */
-    private fun nextSeqFor(replica: ReplicaId): Long {
-        val highest = ops.asSequence()
-            .filterIsInstance<RgaOp.Insert<V>>()
-            .map { it.id }
-            .filter { it.replicaId == replica }
-            .maxOfOrNull { it.seq } ?: 0L
-        return highest + 1L
-    }
+    private fun nextSeqFor(replica: ReplicaId): Long = (maxSeqByReplica[replica] ?: 0L) + 1L
 
     /**
      * Insert [value] at visible position [index] (0 = prepend before first
@@ -264,7 +303,14 @@ public class Rga<V> private constructor(
         val id = visible[index]
         val op = RgaOp.Remove<V>(id = id)
         val newOps = ops + op
-        return Rga(newOps, lamport) to op
+        val newCache = RgaCache(
+            insertsById = insertsById,
+            maxSeqByReplica = maxSeqByReplica,
+            tombstones = tombstones + id,
+            compactedIds = compactedIds,
+            compactPositions = compactPositions,
+        )
+        return Rga(newOps, lamport, newCache) to op
     }
 
     /**
@@ -312,7 +358,7 @@ public class Rga<V> private constructor(
         val positions = gcIds.associateWith { id -> insertsById.getValue(id).after }
         val compactOp = RgaOp.Compact(positions)
         val newOps = purgeAndRecord(ops, gcIds, compactOp)
-        return Rga(newOps, lamport) to compactOp
+        return withCompactCaches(newOps, gcIds, compactOp) to compactOp
     }
 
     /**
@@ -340,9 +386,60 @@ public class Rga<V> private constructor(
      * compacted (ADR-003 addendum v3, #262).
      */
     public fun apply(op: RgaOp<V>): Rga<V> = when (op) {
-        is RgaOp.Insert -> if (op.id in compactedIds) this else Rga(ops + op, maxOf(lamport, op.id.lamport))
-        is RgaOp.Remove -> if (op.id in compactedIds) this else Rga(ops + op, lamport)
-        is RgaOp.Compact -> Rga(purgeAndRecord(ops, op.positions.keys, op), lamport)
+        is RgaOp.Insert -> applyInsert(op)
+        is RgaOp.Remove -> applyRemove(op)
+        is RgaOp.Compact -> applyCompact(op)
+    }
+
+    private fun applyInsert(op: RgaOp.Insert<V>): Rga<V> {
+        if (op.id in compactedIds) return this
+        val newOps = ops + op
+        val newLamport = maxOf(lamport, op.id.lamport)
+        val newCache = RgaCache(
+            insertsById = insertsById + (op.id to op),
+            maxSeqByReplica = updateMaxSeq(maxSeqByReplica, op.id),
+            tombstones = tombstones,
+            compactedIds = compactedIds,
+            compactPositions = compactPositions,
+        )
+        return Rga(newOps, newLamport, newCache)
+    }
+
+    private fun applyRemove(op: RgaOp.Remove<V>): Rga<V> {
+        if (op.id in compactedIds) return this
+        val newOps = ops + op
+        val newCache = RgaCache(
+            insertsById = insertsById,
+            maxSeqByReplica = maxSeqByReplica,
+            tombstones = tombstones + op.id,
+            compactedIds = compactedIds,
+            compactPositions = compactPositions,
+        )
+        return Rga(newOps, lamport, newCache)
+    }
+
+    private fun applyCompact(op: RgaOp.Compact): Rga<V> {
+        val newOps = purgeAndRecord(ops, op.positions.keys, op)
+        return withCompactCaches(newOps, op.positions.keys, op)
+    }
+
+    /**
+     * Build a new [Rga] whose caches reflect a compact operation that purges [gcIds].
+     * Shared by [compact] (self-initiated) and [applyCompact] (remote-received).
+     */
+    private fun withCompactCaches(
+        newOps: Set<RgaOp<V>>,
+        gcIds: Set<RgaId>,
+        compactOp: RgaOp.Compact,
+    ): Rga<V> {
+        val newCache = RgaCache(
+            insertsById = insertsById - gcIds,
+            maxSeqByReplica = maxSeqByReplica,
+            tombstones = tombstones - gcIds,
+            compactedIds = compactedIds + gcIds,
+            compactPositions = compactPositions + compactOp.positions,
+        )
+        return Rga(newOps, lamport, newCache)
     }
 
     /**
@@ -392,14 +489,30 @@ public class Rga<V> private constructor(
      *
      * Any [RgaOp.Compact] ops in the union are applied eagerly so that Insert/Remove
      * ops already GC'd on one peer do not re-inflate the op-log on merge.
+     *
+     * Derived caches are merged incrementally — no full O(ops) rescan on the merged result.
      */
     override fun piece(other: Rga<V>): Rga<V> {
         val rawUnion = ops + other.ops
         val mergedLamport = maxOf(lamport, other.lamport)
-        val allCompactedIds = rawUnion.filterIsInstance<RgaOp.Compact>()
-            .flatMapTo(mutableSetOf()) { it.positions.keys }
-        val mergedOps = if (allCompactedIds.isEmpty()) rawUnion else purge(rawUnion, allCompactedIds)
-        return Rga(mergedOps, mergedLamport)
+        val mergedCompactedIds = compactedIds + other.compactedIds
+        val mergedCompactPositions = compactPositions + other.compactPositions
+        val rawInsertsById = insertsById + other.insertsById
+        val mergedInsertsById = if (mergedCompactedIds.isEmpty()) rawInsertsById
+            else rawInsertsById.filterKeys { it !in mergedCompactedIds }
+        val rawTombstones = tombstones + other.tombstones
+        val mergedTombstones = if (mergedCompactedIds.isEmpty()) rawTombstones
+            else rawTombstones.filterTo(mutableSetOf()) { it !in mergedCompactedIds }
+        val mergedMaxSeq = mergeMaxSeq(maxSeqByReplica, other.maxSeqByReplica)
+        val mergedOps = if (mergedCompactedIds.isEmpty()) rawUnion else purge(rawUnion, mergedCompactedIds)
+        val newCache = RgaCache(
+            insertsById = mergedInsertsById,
+            maxSeqByReplica = mergedMaxSeq,
+            tombstones = mergedTombstones,
+            compactedIds = mergedCompactedIds,
+            compactPositions = mergedCompactPositions,
+        )
+        return Rga(mergedOps, mergedLamport, newCache)
     }
 
     override fun equals(other: Any?): Boolean =
@@ -412,6 +525,40 @@ public class Rga<V> private constructor(
     // ---- Private helpers ----
 
     private fun visibleSequence(): List<RgaId> = sequence.filter { it !in tombstones }
+
+    /** Compute the insertsById map from the op-log (fallback when no cache is provided). */
+    private fun computeInsertsById(): Map<RgaId, RgaOp.Insert<V>> =
+        ops.filterIsInstance<RgaOp.Insert<V>>().associateBy { it.id }
+
+    /** Compute the maxSeqByReplica map from the op-log (fallback when no cache is provided). */
+    private fun computeMaxSeqByReplica(): Map<ReplicaId, Long> {
+        val result = mutableMapOf<ReplicaId, Long>()
+        for (op in ops) {
+            if (op is RgaOp.Insert) {
+                val id = op.id
+                val current = result[id.replicaId]
+                if (current == null || id.seq > current) result[id.replicaId] = id.seq
+            }
+        }
+        return result
+    }
+
+    /** Compute compactedIds from the op-log (fallback when no cache is provided). */
+    private fun computeCompactedIds(): Set<RgaId> =
+        ops.filterIsInstance<RgaOp.Compact>()
+            .flatMapTo(mutableSetOf()) { it.positions.keys }
+
+    /** Compute tombstones from the op-log (fallback when no cache is provided). */
+    private fun computeTombstones(): Set<RgaId> =
+        ops.filterIsInstance<RgaOp.Remove<V>>()
+            .mapTo(mutableSetOf()) { it.id }
+            .apply { removeAll(compactedIds) }
+
+    /** Compute compactPositions from the op-log (fallback when no cache is provided). */
+    private fun computeCompactPositions(): Map<RgaId, RgaId> =
+        ops.filterIsInstance<RgaOp.Compact>()
+            .flatMap { it.positions.entries }
+            .associate { (k, v) -> k to v }
 
     /**
      * Materializes the sequence from the op-log using the classic RGA ordering:
@@ -479,13 +626,19 @@ public class Rga<V> private constructor(
 
     public companion object {
         /** The empty sequence with no ops. */
-        public fun <V> empty(): Rga<V> = Rga(ops = emptySet(), lamport = 0L)
+        public fun <V> empty(): Rga<V> = Rga(
+            ops = emptySet(),
+            lamport = 0L,
+            cache = RgaCache.empty(),
+        )
 
         /**
          * Package-internal factory for deserialization via [RgaSerializer].
-         * Uses the private constructor directly.
+         * Uses the private constructor with no cache; derived state is computed
+         * from the op-log lazily on first access.
          */
-        internal fun <V> fromOps(ops: Set<RgaOp<V>>, lamport: Long): Rga<V> = Rga(ops, lamport)
+        internal fun <V> fromOps(ops: Set<RgaOp<V>>, lamport: Long): Rga<V> =
+            Rga(ops, lamport)
 
         /**
          * Returns a [kotlinx.serialization.KSerializer] for [Rga]`<V>` that correctly threads
@@ -535,5 +688,22 @@ public class Rga<V> private constructor(
                 }
             }
 
+        /** Update [map] with a single new [id], returning a new map only if the seq is higher. */
+        private fun updateMaxSeq(map: Map<ReplicaId, Long>, id: RgaId): Map<ReplicaId, Long> {
+            val current = map[id.replicaId]
+            return if (current != null && id.seq <= current) map else map + (id.replicaId to id.seq)
+        }
+
+        /** Merge two maxSeqByReplica maps, taking the max per replica. */
+        private fun mergeMaxSeq(a: Map<ReplicaId, Long>, b: Map<ReplicaId, Long>): Map<ReplicaId, Long> {
+            if (a.isEmpty()) return b
+            if (b.isEmpty()) return a
+            val result = a.toMutableMap()
+            for ((replica, seq) in b) {
+                val current = result[replica]
+                if (current == null || seq > current) result[replica] = seq
+            }
+            return result
+        }
     }
 }
