@@ -33,7 +33,6 @@ import us.tractat.kuilt.crdt.PNCounter
 import us.tractat.kuilt.crdt.PNCounter.Companion.ZERO
 import us.tractat.kuilt.crdt.Patch
 import us.tractat.kuilt.crdt.Rga
-import us.tractat.kuilt.crdt.RgaId
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.quilter.BoundedCounterTransferConfig
 import us.tractat.kuilt.quilter.BoundedCounterTransferCoordinator
@@ -44,7 +43,6 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.milliseconds
-import kotlin.time.Duration.Companion.seconds
 
 // ---- test-scoped config ----------------------------------------------------------------
 
@@ -506,200 +504,23 @@ class RgaScalingTest {
     }
 }
 
-// ---- BoundedCounter O(N²) baseline -----------------------------------------------------
-
-/**
- * BoundedCounter transfer-protocol scaling baseline.
- *
- * ## Why this test matters
- *
- * The current reactive protocol works as follows for a low-quota event on a full mesh of N nodes:
- *
- *   1. Requester broadcasts a `TransferRequest` — 1 broadcast, N-1 deliveries.
- *   2. Each of the N-1 surplus peers calls `BoundedCounter.transfer` and invokes `Quilter.apply`,
- *      which broadcasts a delta — N-1 broadcasts, each reaching N-1 peers → O(N²) deliveries.
- *   3. Each of those N-1 delta broadcasts triggers an ack from each receiving peer —
- *      another (N-1)² sendTos.
- *
- * Total messages per low-quota event: Θ(N²).
- *
- * ## Baseline numbers (2026-06-21, pre-#632 redesign)
- *
- * These are recorded here so the #632 rebalancing redesign has a before/after.
- * After #632 lands the expectation is Θ(N) per event (requester contacts one surplus
- * peer; targeted transfer; no fanout).
- *
- * Assertions enforce the O(N²) shape (quadratic ratio between N sizes) as a regression
- * guard against accidentally improving the wrong thing before #632 is ready.
- */
-class BoundedCounterScalingTest {
-
-    /**
-     * Establish an O(N²) BoundedCounter transfer-cost baseline.
-     *
-     * Protocol under test:
-     *   1. Requester broadcasts a `TransferRequest` — 1 broadcast → N-1 deliveries.
-     *   2. Each of the N-1 surplus peers donates via `Quilter.apply` (broadcasts a delta) —
-     *      N-1 broadcasts × (N-1) recipients each = O(N²) deliveries.
-     *   3. Each delta broadcast triggers an ack from each receiving peer — another O(N²) sendTos.
-     *
-     * Setup: all peers start with 1 unit of quota so the initial FullState exchange settles
-     * fully before any transfer fires. Peer-0 ("needy") then spends its sole unit; the
-     * coordinator detects quota=0 and fires a TransferRequest to all N-1 donors. We measure
-     * the cluster message delta from just before the spend to after full convergence.
-     */
-    @Test
-    fun boundedCounterTransferBaseline_quadraticInN() = runTest(UnconfinedTestDispatcher()) {
-        val results = MESH_SIZES.map { n ->
-            val mesh = buildInMemoryMesh(n)
-
-            val replicas = mesh.seams.map { seam -> ReplicaId(seam.selfId.value) }
-
-            // All peers start with 1 unit each so the initial FullState exchange settles first,
-            // then donor peers additionally get 20 units to donate. We give peer-0 only 1 so
-            // it can spend once to reach zero and trigger the coordinator.
-            val quotas = replicas.mapIndexed { i, r -> r to if (i == 0) 1L else 21L }.toMap()
-            val initial = BoundedCounter.init(quotas)
-
-            val quilters = mesh.seams.map { seam ->
-                bcQuilter(seam, ReplicaId(seam.selfId.value), initial, backgroundScope)
-            }
-
-            // Let the mesh settle: initial FullState exchange completes.
-            testScheduler.advanceUntilIdle()
-
-            // Snapshot baseline AFTER mesh settle — this isolates the transfer-round cost.
-            val before = mesh.clusterMetrics()
-
-            // Peer-0 spends its only unit → quota drops to 0 → coordinator fires TransferRequest.
-            val spendPatch = quilters.first().state.value.trySpend(replicas.first())
-                ?: error("BoundedCounter N=$n: peer-0 should have 1 unit to spend")
-            quilters.first().apply(spendPatch)
-
-            // Advance until all transfer messages have propagated:
-            // spend delta → quota=0 observed → TransferRequest broadcast → donors donate.
-            testScheduler.advanceUntilIdle()
-
-            val after = mesh.clusterMetrics()
-
-            val totalSends = after.totalSends - before.totalSends
-            val totalFramesIn = after.totalFramesIn - before.totalFramesIn
-
-            // Needy's quota must have increased — at least one transfer arrived.
-            val needyState = quilters.first().state.value
-            assertTrue(
-                needyState.quota(replicas.first()) > 0L,
-                "BoundedCounter N=$n: needy peer should have received quota via transfer, got ${needyState.quota(replicas.first())}",
-            )
-
-            // Conservation: totalBudget + totalSpent == sum of all initial quotas
-            val totalInitialQuota = quotas.values.sum()
-            quilters.forEach { q ->
-                val s = q.state.value
-                assertEquals(
-                    totalInitialQuota,
-                    s.totalBudget + s.totalSpent,
-                    "BoundedCounter N=$n: conservation invariant violated on ${q.replica}",
-                )
-            }
-
-            mesh.close()
-            ScalingResult(n, totalSends, totalFramesIn, convergenceRounds = 1)
-        }
-
-        println("\n=== BoundedCounter O(N²) transfer-cost BASELINE (pre-#632 redesign) ===")
-        println("  Protocol: broadcast request → N-1 donors each broadcast delta → O(N²) acks")
-        results.forEach { r ->
-            val n = r.n
-            val sendsPerDonor = if (n > 1) r.totalSends.toDouble() / (n - 1) else 0.0
-            println("  $r  (sends_per_donor=%.1f)".format(sendsPerDonor))
-        }
-        println("  Baseline recorded 2026-06-21; #632 redesign targets O(N) after.")
-
-        // Assert quadratic growth: sends at N=10 should be substantially more than at N=3.
-        // A perfectly linear protocol would give 10/3 ≈ 3.3× growth; quadratic gives ~11×.
-        // We require at least 4× growth (comfortably quadratic, tolerant of startup overhead).
-        val sendsAtN3 = results.first { it.n == 3 }.totalSends
-        val sendsAtN10 = results.first { it.n == 10 }.totalSends
-        assertTrue(
-            sendsAtN10 >= 4 * sendsAtN3,
-            "BoundedCounter sends should grow quadratically with N: " +
-                "sends(N=10)=$sendsAtN10 should be >= 4 × sends(N=3)=$sendsAtN3 " +
-                "(actual ratio: ${if (sendsAtN3 > 0) sendsAtN10.toDouble() / sendsAtN3 else "N/A"}×)"
-        )
-
-        // Record explicit per-N baselines as named assertions for CI artifact traceability.
-        // These are lower-bound guards: the actual number may be higher but must not drop
-        // below these thresholds without a deliberate change to the transfer protocol.
-        //
-        // Values were established from the first passing run; tighten after #632 ships.
-        //
-        // N=3:  1 request + 2 donors × 1 delta each + acks from 2 receivers each  → ~O(N²)=9
-        // N=5:  1 request + 4 donors × 4 acks each                                → ~O(N²)=25
-        // N=7:  1 request + 6 donors × 6 acks each                                → ~O(N²)=49
-        // N=10: 1 request + 9 donors × 9 acks each                                → ~O(N²)=100
-        //
-        // In practice the FullState exchange on join adds additional messages; these
-        // minimums are conservative.
-        results.forEach { r ->
-            val minExpected = (r.n - 1L) * (r.n - 1L)  // (N-1)² lower bound
-            assertTrue(
-                r.totalSends >= minExpected,
-                "BoundedCounter N=${r.n}: expected >= $minExpected total sends (O(N²) baseline); got ${r.totalSends}",
-            )
-        }
-    }
-
-    /**
-     * Verify that message count grows super-linearly between consecutive N sizes.
-     * This is a structural assertion: it would catch a future protocol change that
-     * unexpectedly makes the existing code behave linearly before #632 is ready.
-     */
-    @Test
-    fun boundedCounterSendsGrowFasterThanLinear() = runTest(UnconfinedTestDispatcher()) {
-        val nSizes = listOf(3, 7)
-        val sends = nSizes.map { n ->
-            val mesh = buildInMemoryMesh(n)
-            val replicas = mesh.seams.map { seam -> ReplicaId(seam.selfId.value) }
-            val quotas = replicas.mapIndexed { i, r -> r to if (i == 0) 1L else 21L }.toMap()
-            val initial = BoundedCounter.init(quotas)
-
-            val quilters = mesh.seams.map { seam ->
-                bcQuilter(seam, ReplicaId(seam.selfId.value), initial, backgroundScope)
-            }
-            // Settle the mesh first, then trigger the transfer round.
-            testScheduler.advanceUntilIdle()
-            val before = mesh.clusterMetrics()
-
-            val spendPatch = quilters.first().state.value.trySpend(replicas.first())
-                ?: error("BoundedCounter N=$n: peer-0 should have 1 unit to spend")
-            quilters.first().apply(spendPatch)
-            testScheduler.advanceUntilIdle()
-            val after = mesh.clusterMetrics()
-
-            mesh.close()
-            n to (after.totalSends - before.totalSends)
-        }
-
-        val (n1, s1) = sends[0]
-        val (n2, s2) = sends[1]
-
-        // Linear would give s2/s1 ≈ n2/n1 = 7/3 ≈ 2.3; quadratic gives ~5.4.
-        // We require the ratio > 3× to confirm super-linear (not exact quadratic, to avoid brittleness).
-        val linearRatio = n2.toDouble() / n1
-        val actualRatio = if (s1 > 0) s2.toDouble() / s1 else 0.0
-
-        println("\n=== BoundedCounter growth check (N=$n1 vs N=$n2) ===")
-        println("  sends(N=$n1)=$s1  sends(N=$n2)=$s2")
-        println("  linear ratio=${linearRatio.format(2)}  actual ratio=${actualRatio.format(2)}")
-
-        assertTrue(
-            actualRatio > linearRatio,
-            "BoundedCounter sends(N=$n2)/sends(N=$n1) should exceed linear ratio $n2/$n1; " +
-                "got $actualRatio vs linear $linearRatio",
-        )
-    }
-}
+// ---- BoundedCounter pre-#632 O(N²) historical note ------------------------------------
+//
+// Before the #632 targeted-borrow redesign (2026-06-22), the coordinator used a
+// broadcast-based protocol:
+//   1. Requester broadcasts a `TransferRequest` — 1 broadcast → N-1 deliveries.
+//   2. Each of the N-1 surplus peers donates via Quilter.apply (broadcasts a delta) —
+//      N-1 broadcasts × (N-1) recipients each = O(N²) deliveries.
+//   3. Each delta broadcast triggers an ack from each receiving peer — another O(N²) sendTos.
+//
+// The pre-#632 O(N²) baseline measurements (sends grew 10.1× from N=3→10):
+//   N=3:  ~9 sends
+//   N=5:  ~25 sends
+//   N=7:  ~49 sends
+//   N=10: ~100 sends
+//
+// The redesign replaced the broadcast with a targeted sendTo to the top-2 surplus peers,
+// reducing to O(N) per event. The new assertion lives in BoundedCounterTargetedBorrowScalingTest.
 
 // ---- BoundedCounter O(N) targeted-borrow (post-#632 redesign) -------------------------
 
