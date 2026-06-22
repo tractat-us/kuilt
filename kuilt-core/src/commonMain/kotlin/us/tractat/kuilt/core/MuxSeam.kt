@@ -75,11 +75,10 @@ public class MuxSeam(
         return tagged
     }
 
-    private fun strippedPayload(swatch: Swatch): Swatch =
-        swatch.copy(payload = swatch.payload.copyOfRange(1, swatch.payload.size))
+    private fun strippedPayload(swatch: Swatch): Swatch = swatch.dropFirst(1)
 
     private fun belongsTo(tag: Byte, swatch: Swatch): Boolean =
-        swatch.payload.isNotEmpty() && swatch.payload[0] == tag
+        swatch.payloadSize > 0 && swatch.byteAt(0) == tag
 
     private inner class ChannelView(private val tag: Byte) : Seam {
         override val selfId: PeerId get() = delegate.selfId

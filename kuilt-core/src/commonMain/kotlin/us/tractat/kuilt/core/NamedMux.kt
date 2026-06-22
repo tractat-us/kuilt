@@ -92,10 +92,10 @@ public class NamedMux(
 
     /** Header length (`1 + nameLen`) of [swatch], or `-1` if it is too short to carry a name. */
     private fun headerLength(swatch: Swatch): Int {
-        if (swatch.payload.isEmpty()) return -1
-        val nameLen = swatch.payload[0].toInt() and 0xFF
+        if (swatch.payloadSize == 0) return -1
+        val nameLen = swatch.byteAt(0).toInt() and 0xFF
         val header = 1 + nameLen
-        return if (swatch.payload.size >= header) header else -1
+        return if (swatch.payloadSize >= header) header else -1
     }
 
     private fun belongsTo(nameBytes: ByteArray, swatch: Swatch): Boolean {
@@ -103,13 +103,12 @@ public class NamedMux(
         if (header < 0) return false
         if (header - 1 != nameBytes.size) return false
         for (i in nameBytes.indices) {
-            if (swatch.payload[1 + i] != nameBytes[i]) return false
+            if (swatch.byteAt(1 + i) != nameBytes[i]) return false
         }
         return true
     }
 
-    private fun strippedPayload(swatch: Swatch): Swatch =
-        swatch.copy(payload = swatch.payload.copyOfRange(headerLength(swatch), swatch.payload.size))
+    private fun strippedPayload(swatch: Swatch): Swatch = swatch.dropFirst(headerLength(swatch))
 
     private inner class ChannelView(
         private val nameBytes: ByteArray,

@@ -6,6 +6,40 @@ import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 
 class SwatchTest {
+
+    // ── Offset-view: a sliced Swatch equals a freshly-copied one ─────────────
+
+    @Test
+    fun `dropFirst view equals a freshly-copied swatch of the same logical bytes`() {
+        // header byte 0xAA + payload bytes 1,2,3
+        val raw = Swatch(byteArrayOf(0xAA.toByte(), 1, 2, 3))
+        val viewed = raw.dropFirst(1)
+        val copied = Swatch(byteArrayOf(1, 2, 3))
+        assertEquals(copied, viewed)
+    }
+
+    @Test
+    fun `dropFirst view has the same hash code as an equal freshly-copied swatch`() {
+        val raw = Swatch(byteArrayOf(0xBB.toByte(), 10, 20))
+        val viewed = raw.dropFirst(1)
+        val copied = Swatch(byteArrayOf(10, 20))
+        assertEquals(copied.hashCode(), viewed.hashCode())
+    }
+
+    @Test
+    fun `payload property of a dropFirst view returns only the logical bytes`() {
+        val raw = Swatch(byteArrayOf(0xFF.toByte(), 42, 43, 44))
+        val viewed = raw.dropFirst(1)
+        assertTrue(viewed.payload.contentEquals(byteArrayOf(42, 43, 44)))
+    }
+
+    @Test
+    fun `dropFirst preserves sender and sequence`() {
+        val raw = Swatch(byteArrayOf(0x01, 5, 6), sender = PeerId("alice"), sequence = 7L)
+        val viewed = raw.dropFirst(1)
+        assertEquals(PeerId("alice"), viewed.sender)
+        assertEquals(7L, viewed.sequence)
+    }
     @Test
     fun `equal frames with same byte content are equal`() {
         val a = Swatch(byteArrayOf(1, 2, 3))

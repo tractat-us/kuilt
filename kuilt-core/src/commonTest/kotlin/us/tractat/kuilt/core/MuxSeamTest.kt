@@ -252,6 +252,36 @@ class MuxSeamTest {
         assertTrue(swatch.sender == rawA.selfId, "sender PeerId must be preserved through MuxSeam")
     }
 
+    // ── Zero-copy strip: received Swatch is an offset view, not a fresh copy ───
+
+    /**
+     * The Swatch delivered to a channel view must share the same backing array as
+     * the one delivered to the raw delegate — i.e. the strip is a view, not a copy.
+     */
+    @Test
+    fun receivedSwatchIsOffsetViewNotCopy() = runTest(UnconfinedTestDispatcher()) {
+        val loom = InMemoryLoom()
+        val rawA = loom.host(Pattern("mux-zerocopy"))
+        val rawB = loom.join(InMemoryTag("b"))
+
+        val muxA = MuxSeam(rawA, backgroundScope)
+        val muxB = MuxSeam(rawB, backgroundScope)
+
+        val tag = 0x07.toByte()
+        val payload = byteArrayOf(1, 2, 3)
+
+        val received = async { muxB.channel(tag).incoming.first() }
+        muxA.channel(tag).broadcast(payload)
+
+        val swatch = received.await()
+        // The backing array of the stripped Swatch must be larger than the
+        // payload length — proving the strip is a view, not a fresh copy.
+        assertTrue(
+            swatchIsOffsetView(swatch),
+            "stripped Swatch must be an offset view (backing array larger than payload length)",
+        )
+    }
+
     // ── concurrent channel() calls are race-free ──────────────────────────────
 
     /**
