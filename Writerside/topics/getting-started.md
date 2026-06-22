@@ -45,7 +45,7 @@ of this page layers shared data and ordering on top.
 
 ```kotlin
 // Same API on every peer:
-scope.launch { seam.incoming.collect { println(it.payload.decodeToString()) } }
+scope.launch { seam.incoming.collect { println(it.decodeToString()) } }
 seam.broadcast("hello".encodeToByteArray())
 seam.close()
 ```

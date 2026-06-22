@@ -14,7 +14,7 @@ Different transports fail in different ways. The contract keeps those difference
 |------|------|
 | `Loom` | Factory — `weave(Rendezvous): Seam`; convenience wrappers `host(Pattern)` and `join(Tag)` |
 | `Seam` | One peer's symmetric view of a live session |
-| `Swatch` | Opaque binary frame — `payload: ByteArray`, `sender: PeerId?`, `sequence: Long` |
+| `Swatch` | Immutable binary frame — `payloadSize: Int`, `sender: PeerId?`, `sequence: Long`; read bytes zero-copy via `byteAt` / `decodeToString` / `decode`; copy explicitly with `toByteArray()` |
 | `Rendezvous` | Sum type: `New(pattern)` to host, `Existing(tag)` to join |
 | `Pattern` | Config for opening a session: display name, max peers |
 | `Tag` | Discovery handle for joining a session (`WebSocketAdvertisement`, `MDNSAdvertisement`, …) |

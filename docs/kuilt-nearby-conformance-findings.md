@@ -11,7 +11,7 @@ blocks the roadmap's "one suite, all fabrics pass" invariant until addressed.
 
 ## Strain 1 — bounded payload / chunking ✅ contract unchanged
 
-`Swatch.payload` is an unbounded `ByteArray`; Nearby `BYTES` caps at ~32 KB. The
+A `Swatch` payload is unbounded (`payloadSize` can be any value); Nearby `BYTES` caps at ~32 KB. The
 adapter absorbs the bound with an 8-byte-header chunk codec (`ChunkCodec`:
 `msgId:Int, chunkIndex:UShort, chunkCount:UShort`), splitting on send and
 reassembling per-endpoint by `msgId`. All chunks ride the one ordered/reliable
