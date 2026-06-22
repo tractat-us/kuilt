@@ -1,10 +1,10 @@
 # Partial-mesh gossip — design
 
-> Status: **Phase 1 implemented** (PR #662). Revised 2026-06-22 after an
-> architect review of the first cut, which found the original "drop acks, rely
-> on anti-entropy" plan unsound and reframed where the real O(N²) cost lives.
-> Phases 2–5 remain design-only. Implementation is phased; Phase 1 is the
-> prerequisite and where work starts.
+> Status: **Phases 1–4 implemented**; Phase 5 (Quilter integration) is the
+> remaining work. Originally revised 2026-06-22 after an architect review of the
+> first cut, which found the original "drop acks, rely on anti-entropy" plan
+> unsound and reframed where the real O(N²) cost lives. Implementation is phased;
+> Phase 1 was the prerequisite. See the per-phase "as shipped" sections below.
 
 ## What this is, in plain terms
 
@@ -91,11 +91,11 @@ endpoints**:
 
 For a regular `MeshSeam`/`LinkSeam` the two views are identical (every peer is a
 neighbour), so Quilter's behaviour is unchanged there. A `GossipSeam` makes the
-neighbour view a strict subset, and the scaling win materializes. Open question
-(Phase 4): whether the neighbour view is a small addition to the `Seam` contract
-(e.g. `activePeers` defaulting to `peers`) or injected into Quilter — decided when
-the GossipSeam lands. Phase 1 only needs the *delta-target set* as a parameter
-that defaults to full membership.
+neighbour view a strict subset, and the scaling win materializes. The Phase-4
+open question — whether the neighbour view is a small addition to the `Seam`
+contract (e.g. `activePeers` defaulting to `peers`) or injected into Quilter — is
+**decided in favour of injection**; see "Phase 4 as shipped" below. Phase 1 only
+needs the *delta-target set* as a parameter that defaults to full membership.
 
 `GossipSeam` otherwise honours the `Seam` contract: single-collection `incoming`
 (ADR-034), `broadcast`, `availability`; `sendTo` to a non-neighbour uses
@@ -199,8 +199,9 @@ Each phase is its own PR, validated on the `:kuilt-scale` harness.
 - **Phase 3 — Dissemination** (#658, **implemented**): eager-flood-to-neighbours
   with dedup (gossip header + seen-set + TTL) + the gossip sim harness. Plumtree
   rejected — see "Phase 3 as shipped" below.
-- **Phase 4 — GossipSeam**: wrap Phases 2–3 as a `Seam` exposing both views; pass
-  `SeamConformanceSuite`; measure O(N) broadcast vs the full-mesh baseline.
+- **Phase 4 — GossipSeam** (#659, **implemented**): wrap Phases 2–3 as a `Seam`
+  exposing both views; pass `SeamConformanceSuite`; measure O(N)→O(k) broadcast vs
+  the full-mesh baseline. See "Phase 4 as shipped" below.
 - **Phase 5 — Quilter integration**: wire Quilter onto the GossipSeam's two views;
   prove end-to-end ~O(N) replication at higher N on the harness.
 
@@ -284,6 +285,50 @@ the tens–low-hundreds target the flood's redundant sends are bounded by k, not
 Deferred: the seen-set is currently unbounded (grows with distinct broadcasts
 seen); a per-origin high-water-mark bound is a v1 follow-up — at the target scale
 the set stays small relative to live CRDT state.
+
+## Phase 4 as shipped: GossipSeam through the TCK + the O(k) broadcast measurement
+
+Phase 4 wraps Phases 2–3 as a conforming `Seam` and measures the broadcast win.
+
+- **Seam termination contract.** `GossipSeam.incoming` now **completes when the base
+  seam tears** (`Torn`): the app-frame surface is a buffered channel closed when the
+  single `base.incoming` collector ends, not a never-completing `SharedFlow`. This
+  satisfies the `Seam.incoming` contract that consumers (e.g. Quilter) rely on to
+  self-clean — and incidentally fixes a latent drop of frames delivered before a
+  collector subscribed.
+- **Passes `SeamConformanceSuite`.** Verified over a real `InMemoryLoom` base (genuine
+  `Torn`/`close`/`PeerNotConnected` lifecycle), via a test-only `GossipLoom` adapter that
+  wraps each woven base seam in a started `GossipSeam`. The base is deliberately *not* the
+  simulation-only `InMemoryGossipNetwork` (its mesh seam reports a constant `Woven` state
+  with a no-op `close`, so it can't exercise the lifecycle invariants). Two pieces of
+  plumbing let a started, timer-driven seam fit a TCK built for stateless fabrics: the
+  suite gained a backward-compatible `newLoomPair(testScope)` overload (started seams run
+  their background work on `backgroundScope`, cancelled before `runTest`'s terminal
+  advance so the heartbeat timers don't spin it), and `GossipSeam` gained a `jitter`
+  parameter the harness sets to zero for synchronous view convergence.
+- **O(k) broadcast, measured.** On the `:kuilt-scale` harness, one broadcast's per-node
+  relay fan-out stays bounded by *k* as N grows — N=10/20/40 ⇒ max per-node fan-out
+  5/5/6 (= k), total relay sends 44/95/237 (≤ N·k), reaching all peers — versus a
+  full-mesh flood's per-node N−1 (9/19/39). This is the Phase-3 `relaySendCount ≤ N·k`
+  bound on the published harness.
+
+### Phase 4 decision: Quilter wiring — inject, don't widen the contract
+
+The deferred Phase-4 question (neighbour view as a `Seam`-contract addition vs injected
+into Quilter) is **decided in favour of injection**, reusing the mechanism Phase 1 already
+built:
+
+- **The rule.** Phase 5 wires `Quilter(seam = gossipSeam, deltaTargets = { gossipSeam.activePeers.value })`.
+  Anti-entropy continues to sample full membership (`seam.peers` / `knownPeers`). The
+  "two views" are consumed as: deltas/GC against `activePeers`, anti-entropy over `peers`.
+- **Why not add `activePeers` to the `Seam` contract.** It would widen `:kuilt-core` with
+  an overlay-specific concept for a single consumer, and permanently commit the contract to
+  a feature still settling pre-1.0. The dependency arrow stays clean — only `:kuilt-gossip`
+  knows about partial views; `:kuilt-core` never learns of gossip.
+- **Reactivity is sufficient.** `Quilter.recomputeUniversalAck` calls `deltaTargets(knownPeers)`
+  afresh on every ack, so a lambda returning `activePeers.value` tracks the live active view
+  without needing a `StateFlow` on the contract. A full `MeshSeam`/`LinkSeam` keeps the
+  default identity `deltaTargets` and is unchanged.
 
 ## Out of scope / deferred
 
