@@ -44,7 +44,7 @@ val seam: Seam = loom.host(Pattern(displayName = "alice", maxPeers = 4))
 // 2. Collect incoming frames EXACTLY ONCE. Fan out with shareIn if you need to.
 scope.launch {
     seam.incoming.collect { swatch ->
-        println("from ${swatch.sender}: ${swatch.payload.decodeToString()}")
+        println("from ${swatch.sender}: ${swatch.decodeToString()}")
     }
 }
 

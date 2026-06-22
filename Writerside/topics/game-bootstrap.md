@@ -111,7 +111,7 @@ lives alongside the game — chat, cursor positions, voice signalling:
 ```kotlin
 val chat = session.appChannel("chat")
 // On the receiver:
-scope.launch { chat.incoming.collect { frame -> renderChat(frame.payload) } }
+scope.launch { chat.incoming.collect { frame -> renderChat(frame.decodeToString()) } }
 // On the sender:
 chat.broadcast(message.encodeToByteArray())
 ```

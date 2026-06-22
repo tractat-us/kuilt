@@ -153,7 +153,11 @@ interface Seam {
     suspend fun close(reason: CloseReason = CloseReason.Normal)
 }
 
-data class Swatch(val payload: ByteArray, val sender: PeerId? = null, val sequence: Long = 0)
+// Swatch — immutable; no public ByteArray field. Read bytes zero-copy:
+//   swatch.byteAt(i), swatch.payloadSize, swatch.decodeToString(), swatch.decode(format, deserializer)
+//   swatch.toByteArray()  — explicit copy (only allocating path)
+//   swatch.dropFirst(n)   — zero-copy view for mux/framing layers
+class Swatch(payload: ByteArray, val sender: PeerId? = null, val sequence: Long = 0)
 ```
 
 ### Rules the contract enforces
@@ -171,8 +175,10 @@ the type system won't catch:
   `Seam`. If multiple consumers need it, wrap it with `shareIn`/`MutableSharedFlow`
   yourself — the `Seam` does not fan out. A second concurrent collector races and
   is unsupported.
-- **`Swatch` is binary-only.** No text-frame variant. The wire layer never
-  interprets the bytes — that is the consumer's job.
+- **`Swatch` is binary-only and immutable.** No text-frame variant. The wire layer never
+  interprets the bytes — that is the consumer's job. Frames are read zero-copy via
+  `byteAt` / `decodeToString` / `decode`; getting a `ByteArray` out is an explicit
+  `toByteArray()` copy — the name makes the allocation visible at the call site.
 - **`sender` / `sequence` are stamped on receipt.** Senders leave them unset
   (null sender, zero sequence); the receiving `Seam` fills them in on dispatch.
 - **`availability()` means present-but-not-usable-now.** A fabric scoped out by
@@ -412,7 +418,7 @@ module over `:kuilt-core`, not part of the transport contract):
 
 Genuinely out of scope for kuilt at every layer:
 
-- **Application message semantics** — what the `Swatch.payload` / `RoomFrame`
+- **Application message semantics** — what the `Swatch` bytes / `RoomFrame`
   bytes mean is the consumer's job.
 
 ## Module boundary
