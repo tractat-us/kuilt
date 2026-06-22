@@ -201,7 +201,7 @@ class FakeRoomTest {
         val frame = received.await()
         assertAll(
             { assertEquals(PeerId("alice"), frame.sender) },
-            { assertContentEquals(byteArrayOf(1, 2, 3), frame.toByteArray()) },
+            { assertContentEquals(byteArrayOf(1, 2, 3), frame.payload) },
         )
     }
 
@@ -212,7 +212,7 @@ class FakeRoomTest {
         val room = FakeRoom()
         room.deliver(PeerId("bob"), byteArrayOf(42))
         val frame = room.incoming.first()
-        assertContentEquals(byteArrayOf(42), frame.toByteArray())
+        assertContentEquals(byteArrayOf(42), frame.payload)
     }
 
     @Test
@@ -223,9 +223,9 @@ class FakeRoomTest {
         room.deliver(PeerId("alice"), byteArrayOf(3))
         val frames = room.incoming.take(3).toList()
         assertAll(
-            { assertContentEquals(byteArrayOf(1), frames[0].toByteArray()) },
-            { assertContentEquals(byteArrayOf(2), frames[1].toByteArray()) },
-            { assertContentEquals(byteArrayOf(3), frames[2].toByteArray()) },
+            { assertContentEquals(byteArrayOf(1), frames[0].payload) },
+            { assertContentEquals(byteArrayOf(2), frames[1].payload) },
+            { assertContentEquals(byteArrayOf(3), frames[2].payload) },
         )
     }
 

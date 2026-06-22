@@ -158,7 +158,7 @@ public abstract class RoomConformanceSuite {
 
             val frame = frameDeferred.await()
             assertEquals(hostRoom.selfId, frame.sender, "frame sender must be the host's selfId")
-            assertTrue(payload.contentEquals(frame.toByteArray()), "frame payload must match")
+            assertTrue(payload.contentEquals(frame.payload), "frame payload must match")
 
             joinerRoom.leave()
             hostRoom.leave()
