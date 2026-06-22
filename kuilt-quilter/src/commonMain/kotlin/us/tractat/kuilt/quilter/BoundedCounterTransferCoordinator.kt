@@ -90,13 +90,27 @@ public data class BoundedCounterTransferConfig(
  * view that carries only frames tagged with its assigned byte prefix. This avoids a second
  * collection of the underlying seam's [Seam.incoming] flow (which is single-collection by contract).
  *
+ * ## Proactive equalizer (optional)
+ *
+ * When [equalizerConfig] is non-null, a periodic background task fires on each tick and
+ * transfers surplus quota to the single lowest-quota reachable peer. The equalizer's goal
+ * is to keep quotas near the fair share (`bound / liveN`) so low-water events rarely fire
+ * under stable load. It skips ticks where this replica's surplus over the fair share is
+ * within [BoundedCounterEqualizerConfig.minImbalanceThreshold] — avoiding idle noise.
+ *
+ * The equalizer is **optional = tuning**, not a functional gate: passing `null` (the
+ * default) leaves the reactive targeted-borrow path fully correct. The equalizer only
+ * reduces how often reactive borrows fire.
+ *
  * @param coordSeam a [us.tractat.kuilt.core.MuxSeam] channel — must be pre-wired by the caller.
  * @param state live [BoundedCounter] state (updated whenever [Quilter] applies a patch).
  * @param self this replica's [ReplicaId].
  * @param applyTransfer called by the donor side with a transfer [Patch]; the caller is expected to
  *   invoke [Quilter.apply] so the delta propagates to peers.
- * @param scope the [CoroutineScope] for background coroutines.
- * @param config tuning parameters.
+ * @param scope the [CoroutineScope] for background coroutines. The periodic equalizer loop
+ *   uses [delay] on this scope's dispatcher — inject a test dispatcher for virtual-time control.
+ * @param config reactive-borrow tuning parameters.
+ * @param equalizerConfig proactive equalizer parameters, or `null` to disable the equalizer.
  */
 public class BoundedCounterTransferCoordinator(
     private val coordSeam: Seam,
@@ -105,6 +119,7 @@ public class BoundedCounterTransferCoordinator(
     private val applyTransfer: (Patch<BoundedCounter>) -> Unit,
     private val scope: CoroutineScope,
     private val config: BoundedCounterTransferConfig = BoundedCounterTransferConfig(),
+    private val equalizerConfig: BoundedCounterEqualizerConfig? = null,
 ) : AutoCloseable {
     private val serializer = BoundedCounterCoordMessage.serializer()
     private val lock = reentrantLock()
@@ -117,7 +132,8 @@ public class BoundedCounterTransferCoordinator(
     init {
         val quotaJob = observeQuota()
         val incomingJob = observeIncoming()
-        backgroundJobs = listOf(quotaJob, incomingJob)
+        val equalizerJob = equalizerConfig?.let { startEqualizer(it) }
+        backgroundJobs = listOfNotNull(quotaJob, incomingJob, equalizerJob)
     }
 
     /**
@@ -217,6 +233,62 @@ public class BoundedCounterTransferCoordinator(
         val patch = bc.transfer(from = self, to = msg.requester, amount = grant) ?: return
         applyTransfer(patch)
     }
+
+    /**
+     * Starts the proactive equalizer background loop.
+     *
+     * Each tick: if `quota(self)` exceeds the fair share (`bound / liveN`) by more than
+     * [BoundedCounterEqualizerConfig.minImbalanceThreshold], transfers the excess to the
+     * single lowest-quota reachable peer. Only one bilateral transfer is issued per tick
+     * (fire-and-forget — propagates as a normal CRDT delta via [applyTransfer]).
+     *
+     * Uses [BoundedCounterEqualizerConfig.random] for tie-breaking when multiple peers
+     * share the minimum quota.
+     */
+    private fun startEqualizer(cfg: BoundedCounterEqualizerConfig): Job =
+        scope.launch {
+            while (true) {
+                delay(cfg.cadence)
+                // A transient transfer/broadcast failure in one tick must not kill the
+                // periodic loop; runCatchingCancellable still rethrows CancellationException
+                // so the loop cancels cleanly on close(). Rebalance retries next tick.
+                runCatchingCancellable { equalizeTick(cfg) }
+                    .onFailure { /* transient rebalance failure — retry next tick */ }
+            }
+        }
+
+    private fun equalizeTick(cfg: BoundedCounterEqualizerConfig) {
+        val bc = state.value
+        val reachablePeers = coordSeam.peers.value - PeerId(self.value)
+        if (reachablePeers.isEmpty()) return
+
+        val liveN = reachablePeers.size + 1 // peers + self
+        val bound = bc.totalBudget + bc.totalSpent
+        val fairShare = bound / liveN
+
+        val myQuota = bc.quota(self)
+        val excess = myQuota - fairShare
+        if (excess <= cfg.minImbalanceThreshold) return
+
+        val lowestPeer = lowestQuotaPeer(bc, reachablePeers, cfg) ?: return
+        val patch = bc.transfer(from = self, to = ReplicaId(lowestPeer.value), amount = excess)
+            ?: return
+        applyTransfer(patch)
+    }
+
+    /**
+     * Returns the reachable peer with the lowest quota. Ties are broken by a single
+     * shuffle using [BoundedCounterEqualizerConfig.random] before sorting, ensuring a
+     * consistent comparison function.
+     */
+    private fun lowestQuotaPeer(
+        bc: BoundedCounter,
+        reachable: Set<PeerId>,
+        cfg: BoundedCounterEqualizerConfig,
+    ): PeerId? =
+        reachable
+            .shuffled(cfg.random)
+            .minByOrNull { peer -> bc.quota(ReplicaId(peer.value)) }
 
     private fun encode(msg: BoundedCounterCoordMessage): ByteArray =
         Cbor.encodeToByteArray(serializer, msg)
