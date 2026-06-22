@@ -163,6 +163,17 @@ public class Quilter<S : Quilted<S>>(
      * (e.g. [us.tractat.kuilt.crdt.Rga] with a generic value type).
      */
     private val binaryFormat: BinaryFormat = Cbor,
+    /**
+     * Selects the **delta-target set** — the peers this replica pushes deltas to and
+     * GCs its `pendingDeltas` against — from the current full membership (`knownPeers`).
+     *
+     * Defaults to the identity (full membership), so a `MeshSeam`/`LinkSeam` GCs against
+     * everyone exactly as before. A sparse-mesh `GossipSeam` supplies a strict subset (the
+     * ~k active neighbours), at which point the GC watermark is `min(ackedThrough)` over
+     * O(k) peers instead of O(N) — the partial-mesh scaling unlock (#654). Peers outside
+     * the delta-target set still converge via the anti-entropy backstop, never via acks.
+     */
+    private val deltaTargets: (Set<PeerId>) -> Set<PeerId> = { it },
 ) : ScopedCloseable(scope) {
     /**
      * Guards every mutation of the plain replicator state (`nextSeq`, `pendingDeltas`,
@@ -661,13 +672,19 @@ public class Quilter<S : Quilted<S>>(
     }
 
     /**
-     * Recomputes `min(ackedThrough over knownPeers)` and updates [universalAckFlow]
+     * Recomputes `min(ackedThrough over the delta-target set)` and updates [universalAckFlow]
      * monotonically (never decreases). Also GCs pending deltas up to the new watermark.
-     * No-op when [knownPeers] is empty.
+     *
+     * The watermark mins over [deltaTargets] applied to [knownPeers], **not** the full
+     * membership: a peer outside the delta-target set (one this replica does not push deltas
+     * to) cannot pin GC — it converges via the anti-entropy backstop instead. When the
+     * selector is the identity (the default), this is exactly `min over knownPeers` and
+     * behaviour is unchanged. No-op when the delta-target set is empty.
      */
     private fun recomputeUniversalAck() {
-        if (knownPeers.isEmpty()) return
-        val candidate = knownPeers.minOfOrNull { peer -> ackedThrough[peer] ?: 0L } ?: return
+        val targets = deltaTargets(knownPeers)
+        if (targets.isEmpty()) return
+        val candidate = targets.minOfOrNull { peer -> ackedThrough[peer] ?: 0L } ?: return
         val next = maxOf(_universalAckFlow.value, candidate)
         _universalAckFlow.value = next
         gcPendingDeltas(next)
