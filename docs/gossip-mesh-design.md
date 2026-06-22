@@ -193,9 +193,9 @@ Each phase is its own PR, validated on the `:kuilt-scale` harness.
   delta-GC from full membership (GC against a *delta-target set* that defaults to
   full membership) + add a periodic random-peer anti-entropy reconcile (full-state
   first). Defaults preserve today's behaviour; improves the current full mesh.
-- **Phase 2 — Membership/overlay**: the active-neighbour view + healing — a
-  roster-derived k-regular view (favoured) or HyParView views, over
-  `:kuilt-liveness` via the composer above.
+- **Phase 2 — Membership/overlay** (#657, **decided: roster-derived k-regular**):
+  the active-neighbour view + healing, over `:kuilt-liveness` via the composer
+  above. See "Phase 2 decision" below.
 - **Phase 3 — Dissemination**: eager-flood-to-neighbours with dedup (gossip header
   + seen-set + TTL); Plumtree only if a measured win justifies it. Plus the gossip
   sim harness.
@@ -206,6 +206,41 @@ Each phase is its own PR, validated on the `:kuilt-scale` harness.
 
 Phases 2–5 are filed as the design firms (they may shift with the Phase-1
 outcome). Docs fold into each phase.
+
+## Phase 2 decision: roster-derived k-regular view
+
+The `needs-design` choice for #657 — roster-derived k-regular vs HyParView — is
+settled in favour of **roster-derived k-regular**, validated against the
+literature (HyParView paper; Montresor's gossip survey; Akka Cluster's ring+roster
+failure detector; Erdős–Rényi connectivity):
+
+- **Why not HyParView.** Its premise is the *absence* of a global roster, at N in
+  the thousands — it builds a connected overlay with no node knowing full
+  membership, paying for that with a shuffle/forward-join/passive-view protocol.
+  kuilt already has a roster (`Room.roster` / the underlying `Seam.peers`) and
+  targets tens–low-hundreds of peers, so HyParView's value proposition is absent
+  and its complexity unjustified.
+- **The rule.** Each peer derives its active view as a **seeded random k-out
+  sample** of the roster (excluding self) — `partialView(self, roster, k, …)` in
+  `:kuilt-gossip`. Random k-out (not a hash ring) is robust against skewed peer-id
+  distributions. The union of every peer's k-out edges is connected with high
+  probability once `k ≳ ln N` (Erdős–Rényi threshold).
+- **k.** `recommendedActiveViewSize(N) = max(4, ⌈ln N⌉ + 2)` ⇒ k ≈ 4–7 for the
+  target range. The `+2` is redundancy against simultaneous failures; the floor of
+  4 keeps small rooms robust.
+- **Healing.** Recompute the view on roster change, with **per-peer jitter**
+  (50–200 ms) to avoid a synchronized recompute churn-storm. For a neighbour that
+  crashes *before* its roster tombstone propagates, keep a small ordered **spare
+  list** (the one piece of HyParView worth borrowing) for immediate reactive
+  substitution. Anti-entropy (Phase 1) covers any residual gap.
+- **Failure signal.** The per-link `HeartbeatPartitionDetector` from
+  `:kuilt-liveness`, composed per-neighbour. SWIM-style indirect probing / phi-
+  accrual are deliberately *not* adopted now — revisit only for lossy/high-jitter
+  WAN topologies.
+
+Phase 2's first slice (the pure `PartialView` selection + `recommendedActiveViewSize`,
+with a union-connectivity property test) lands separately; the `GossipView`
+manager (liveness composition + jittered healing) and `GossipSeam` follow.
 
 ## Out of scope / deferred
 
