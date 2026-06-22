@@ -16,6 +16,8 @@ dependencies {
 
     testImplementation(project(":kuilt-core"))
     testImplementation(project(":kuilt-test"))
+    testImplementation(project(":kuilt-raft"))
+    testImplementation(project(":kuilt-raft-test"))
     testImplementation(project(":kuilt-tcp"))
     testImplementation(project(":kuilt-stream"))
     testImplementation(libs.kotlin.test)
