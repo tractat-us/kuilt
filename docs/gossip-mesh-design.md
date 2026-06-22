@@ -1,10 +1,10 @@
 # Partial-mesh gossip — design
 
-> Status: **Phases 1–4 implemented**; Phase 5 (Quilter integration) is the
-> remaining work. Originally revised 2026-06-22 after an architect review of the
-> first cut, which found the original "drop acks, rely on anti-entropy" plan
-> unsound and reframed where the real O(N²) cost lives. Implementation is phased;
-> Phase 1 was the prerequisite. See the per-phase "as shipped" sections below.
+> Status: **Phases 1–5 implemented** — the partial-mesh gossip epic is complete.
+> Originally revised 2026-06-22 after an architect review of the first cut, which
+> found the original "drop acks, rely on anti-entropy" plan unsound and reframed
+> where the real O(N²) cost lives. Implementation is phased; Phase 1 was the
+> prerequisite. See the per-phase "as shipped" sections below.
 
 ## What this is, in plain terms
 
@@ -202,8 +202,9 @@ Each phase is its own PR, validated on the `:kuilt-scale` harness.
 - **Phase 4 — GossipSeam** (#659, **implemented**): wrap Phases 2–3 as a `Seam`
   exposing both views; pass `SeamConformanceSuite`; measure O(N)→O(k) broadcast vs
   the full-mesh baseline. See "Phase 4 as shipped" below.
-- **Phase 5 — Quilter integration**: wire Quilter onto the GossipSeam's two views;
-  prove end-to-end ~O(N) replication at higher N on the harness.
+- **Phase 5 — Quilter integration** (#660, **implemented**): wire Quilter onto the
+  GossipSeam's two views; prove end-to-end convergence and an O(k)-not-O(N) GC ack-set
+  at higher N on the harness. See "Phase 5 as shipped" below.
 
 Phases 2–5 are filed as the design firms (they may shift with the Phase-1
 outcome). Docs fold into each phase.
@@ -329,6 +330,41 @@ built:
   afresh on every ack, so a lambda returning `activePeers.value` tracks the live active view
   without needing a `StateFlow` on the contract. A full `MeshSeam`/`LinkSeam` keeps the
   default identity `deltaTargets` and is unchanged.
+
+## Phase 5 as shipped: Quilter over the GossipSeam, end-to-end
+
+Phase 5 composes the two real components — a `Quilter` driven over a live
+`GossipSeam` — and proves the integration on the published `:kuilt-scale` harness.
+The wiring is exactly the Phase-4 decision, no contract change:
+
+```kotlin
+Quilter(seam = gossipSeam, deltaTargets = { gossipSeam.activePeers.value }, …)
+```
+
+- **End-to-end convergence** (`GossipQuilterConvergenceTest`). N=16 peers over a
+  full-mesh base, each wrapped in a `GossipSeam`; each runs a `GCounter` `Quilter`
+  GCing only against its ~k neighbours. Every peer applies one increment and **all
+  converge** to the full sum — deltas ride `gossipSeam.broadcast` (eager-flood +
+  relay across the k-regular overlay), acks and the anti-entropy full-state backstop
+  ride `sendTo`. Each origin's GC watermark clears from only k neighbour acks (k=5,
+  a strict subset of N−1=15).
+- **GC ack-set is O(k), not O(N)** (`GossipQuilterScalingTest`). Across N=10/20/40
+  the GC ack-set (`deltaTargets`) stays ≈ k — **5/5/6** — while full membership grows
+  **9/19/39**; every replica still converges and every watermark still clears. The
+  ack-set grew +1 as N quadrupled vs +30 for full membership: the `min over N` → `min
+  over k` reframe, measured end-to-end through the real overlay.
+- **The mechanism, by controlled experiment.** With one peer *outside the origin's
+  active view* silent (it relays at the overlay layer but runs no replicator, so it
+  never acks), the same system is run under two ack-set policies that differ in
+  nothing else: `deltaTargets = active view (k)` ⇒ the watermark **clears** (the
+  silent non-neighbour isn't a GC target); `deltaTargets = full membership (N−1)` ⇒
+  the watermark **stalls at 0**, pinned by that one silent peer. Flipping the single
+  variable flips the behaviour deterministically — the O(N²)-GC driver, isolated.
+
+Determinism throughout: `UnconfinedTestDispatcher`, per-peer seeded RNG, heartbeats
+pushed past the measurement window, `jitter = ZERO` for synchronous view convergence,
+bounded virtual-time advance — never `advanceUntilIdle` (the view/anti-entropy timers
+re-arm forever).
 
 ## Out of scope / deferred
 
