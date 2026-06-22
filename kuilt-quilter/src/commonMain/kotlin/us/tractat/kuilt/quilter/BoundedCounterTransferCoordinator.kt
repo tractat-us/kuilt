@@ -23,11 +23,14 @@ import kotlin.math.min
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
 
+/** Number of surplus peers to contact in parallel on a single low-quota event. */
+private const val BORROW_FAN_OUT = 2
+
 /**
  * Configuration for [BoundedCounterTransferCoordinator].
  *
  * @param lowWaterThreshold when [BoundedCounter.quota] for the local replica drops to or below
- *   this value, a [BoundedCounterCoordMessage.TransferRequest] is broadcast to all peers.
+ *   this value, a [BoundedCounterCoordMessage.TransferRequest] is sent to the top surplus peer(s).
  * @param requestedAmount how many quota units to request in each [BoundedCounterCoordMessage.TransferRequest].
  * @param surplusFloor the minimum quota a donor will retain after a transfer.
  *   A donor with `quota(self) <= surplusFloor` will not donate.
@@ -54,10 +57,13 @@ public data class BoundedCounterTransferConfig(
  *
  * ## Protocol
  *
- * **Requester side:** when [BoundedCounter.quota] for [self] drops to or below
+ * **Requester side (targeted borrow):** when [BoundedCounter.quota] for [self] drops to or below
  * [BoundedCounterTransferConfig.lowWaterThreshold], a [BoundedCounterCoordMessage.TransferRequest]
- * is broadcast to all current peers. The coordinator retries up to [BoundedCounterTransferConfig.maxRetries]
- * times with exponential backoff. If no transfer arrives, the requester degrades gracefully —
+ * is sent via [Seam.sendTo] to the top-[BORROW_FAN_OUT] surplus peers, computed locally from
+ * `BoundedCounter.quota(peerId)` over the connected peer set — so it is partition-safe and needs
+ * no global roster. Only reachable peers (in [Seam.peers]) are considered.
+ * The coordinator retries up to [BoundedCounterTransferConfig.maxRetries] times with exponential
+ * backoff. If no transfer arrives, the requester degrades gracefully —
  * [BoundedCounter.trySpend] continues to deny locally.
  *
  * **Donor side:** on receiving a [BoundedCounterCoordMessage.TransferRequest], this replica
@@ -155,10 +161,13 @@ public class BoundedCounterTransferCoordinator(
         val encoded = encode(msg)
         var delay = config.initialRetryDelay
         repeat(config.maxRetries) { attempt ->
-            val peersAttempt = coordSeam.peers.value - PeerId(self.value)
-            if (peersAttempt.isEmpty()) return
-            runCatchingCancellable { coordSeam.broadcast(encoded) }
-                .onFailure { /* send failed — retry or degrade on next iteration */ }
+            val reachable = coordSeam.peers.value - PeerId(self.value)
+            if (reachable.isEmpty()) return
+            val targets = topSurplusPeers(state.value, reachable)
+            targets.forEach { target ->
+                runCatchingCancellable { coordSeam.sendTo(target, encoded) }
+                    .onFailure { /* send failed — retry or degrade on next iteration */ }
+            }
             // check if quota improved (a donor may have responded already)
             if (state.value.quota(self) > config.lowWaterThreshold) return
             if (attempt < config.maxRetries - 1) {
@@ -168,6 +177,21 @@ public class BoundedCounterTransferCoordinator(
         }
         // exhausted retries — degrade to "deny locally" (trySpend returns null until state updates)
     }
+
+    /**
+     * Returns the top [BORROW_FAN_OUT] peers (from [reachable]) sorted by descending surplus
+     * (`quota(peer) - surplusFloor`). Peers with no surplus are excluded.
+     *
+     * Computed locally from the current [BoundedCounter] state — no network round-trip needed.
+     * Filtering to the [reachable] set makes this partition-safe.
+     */
+    private fun topSurplusPeers(bc: BoundedCounter, reachable: Set<PeerId>): List<PeerId> =
+        reachable
+            .map { peer -> peer to (bc.quota(ReplicaId(peer.value)) - config.surplusFloor) }
+            .filter { (_, surplus) -> surplus > 0L }
+            .sortedByDescending { (_, surplus) -> surplus }
+            .take(BORROW_FAN_OUT)
+            .map { (peer, _) -> peer }
 
     private fun observeIncoming(): Job =
         coordSeam.incoming
@@ -185,7 +209,7 @@ public class BoundedCounterTransferCoordinator(
         msg: BoundedCounterCoordMessage.TransferRequest,
         sender: PeerId,
     ) {
-        if (msg.requester == self) return // ignore own broadcast reflected back
+        if (msg.requester == self) return // safety: ignore requests from self
         val bc = state.value
         val surplus = bc.quota(self) - config.surplusFloor
         if (surplus <= 0L) return
