@@ -29,7 +29,7 @@ class CompositeSendReceiveTest {
 
         host.broadcast(byteArrayOf(7, 8, 9))
         val got = joiner.incoming.first()
-        assertTrue(byteArrayOf(7, 8, 9).contentEquals(got.payload))
+        assertTrue(byteArrayOf(7, 8, 9).contentEquals(got.toByteArray()))
 
         host.close()
         joiner.close()
@@ -65,7 +65,7 @@ class CompositeSendReceiveTest {
         // First frame must arrive.
         val first = withTimeoutOrNull(2_000) { joiner.incoming.first() }
         assertNotNull(first, "expected exactly one frame but got none")
-        assertTrue(byteArrayOf(7).contentEquals(first.payload), "payload mismatch: ${first.payload.toList()}")
+        assertTrue(byteArrayOf(7).contentEquals(first.toByteArray()), "payload mismatch: ${first.toByteArray().toList()}")
 
         // No second frame — the gate deduplicated the ply-b copy.
         val second = withTimeoutOrNull(200) { joiner.incoming.first() }

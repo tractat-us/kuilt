@@ -112,7 +112,7 @@ public abstract class SeamConformanceSuite {
 
                 val frames = received.await()
                 assertEquals(1, frames.size)
-                assertTrue(frames[0].payload.contentEquals(payload), "payload must match")
+                assertTrue(frames[0].toByteArray().contentEquals(payload), "payload must match")
                 assertEquals(host.selfId, frames[0].sender)
             }
         }
@@ -135,7 +135,7 @@ public abstract class SeamConformanceSuite {
 
                 val frames = received.await()
                 assertEquals(5, frames.size)
-                frames.forEachIndexed { i, f -> assertTrue(f.payload.contentEquals(byteArrayOf(i.toByte())), "frame $i payload") }
+                frames.forEachIndexed { i, f -> assertTrue(f.toByteArray().contentEquals(byteArrayOf(i.toByte())), "frame $i payload") }
             }
         }
 

@@ -34,7 +34,7 @@ class HandshakingColdConnectionTest {
 
         val frame = seam.incoming.first()
         assertEquals(PeerId("B"), frame.sender)
-        assertContentEquals(byteArrayOf(7), frame.payload)
+        assertContentEquals(byteArrayOf(7), frame.toByteArray())
         assertContentEquals(Hello.encode(PeerId("A")), conn.sent.value.single())
     }
 

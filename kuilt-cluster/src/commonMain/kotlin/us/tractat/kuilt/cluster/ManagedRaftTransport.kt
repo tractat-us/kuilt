@@ -116,7 +116,7 @@ public class ManagedRaftTransport(
             runCatchingCancellable {
                 seam.incoming.collect { swatch ->
                     val sender = swatch.sender ?: return@collect
-                    _incoming.emit(RaftEnvelope(NodeId(sender.value), swatch.payload))
+                    _incoming.emit(RaftEnvelope(NodeId(sender.value), swatch.toByteArray()))
                 }
             }
         }

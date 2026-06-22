@@ -136,8 +136,8 @@ class InMemoryLoomTest {
 
             assertEquals(a.selfId, frameB.sender)
             assertEquals(a.selfId, frameC.sender)
-            assertTrue(frameB.payload.contentEquals(byteArrayOf(99)))
-            assertTrue(frameC.payload.contentEquals(byteArrayOf(99)))
+            assertTrue(frameB.toByteArray().contentEquals(byteArrayOf(99)))
+            assertTrue(frameC.toByteArray().contentEquals(byteArrayOf(99)))
         }
 
     @Test
@@ -190,8 +190,8 @@ class InMemoryLoomTest {
             a.broadcast(byteArrayOf(2))
 
             val received = frames.await()
-            assertTrue(received[0].payload.contentEquals(byteArrayOf(1)))
-            assertTrue(received[1].payload.contentEquals(byteArrayOf(2)))
+            assertTrue(received[0].toByteArray().contentEquals(byteArrayOf(1)))
+            assertTrue(received[1].toByteArray().contentEquals(byteArrayOf(2)))
         }
 
     // ── SendTo ───────────────────────────────────────────────────────────────
@@ -210,7 +210,7 @@ class InMemoryLoomTest {
 
             val frame = receivedByB.await()
             assertEquals(a.selfId, frame.sender)
-            assertTrue(frame.payload.contentEquals(byteArrayOf(42)))
+            assertTrue(frame.toByteArray().contentEquals(byteArrayOf(42)))
 
             // C should have received nothing — advance virtual time so the launched
             // coroutine actually gets a chance to collect; then cancel it.
@@ -264,8 +264,8 @@ class InMemoryLoomTest {
             a.sendTo(b.selfId, byteArrayOf(20))
 
             val received = frames.await()
-            assertTrue(received[0].payload.contentEquals(byteArrayOf(10)))
-            assertTrue(received[1].payload.contentEquals(byteArrayOf(20)))
+            assertTrue(received[0].toByteArray().contentEquals(byteArrayOf(10)))
+            assertTrue(received[1].toByteArray().contentEquals(byteArrayOf(20)))
         }
 
     // ── Sequence stamping ────────────────────────────────────────────────────

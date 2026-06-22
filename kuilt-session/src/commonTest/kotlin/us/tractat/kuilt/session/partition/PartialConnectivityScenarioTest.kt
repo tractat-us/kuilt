@@ -196,8 +196,8 @@ class PartialConnectivityScenarioTest {
             assertAll(
                 { assertEquals(mesh.host.selfId, f1.sender) },
                 { assertEquals(mesh.host.selfId, f2.sender) },
-                { assertTrue(f1.payload.contentEquals(byteArrayOf(42))) },
-                { assertTrue(f2.payload.contentEquals(byteArrayOf(42))) },
+                { assertTrue(f1.toByteArray().contentEquals(byteArrayOf(42))) },
+                { assertTrue(f2.toByteArray().contentEquals(byteArrayOf(42))) },
             )
         }
 
@@ -230,12 +230,12 @@ class PartialConnectivityScenarioTest {
             val atJ1 = framesAtJ1.await()
             val atJ2 = framesAtJ2.await()
             assertAll(
-                { assertTrue(atJ1[0].payload.contentEquals(byteArrayOf(1))) },
-                { assertTrue(atJ1[1].payload.contentEquals(byteArrayOf(2))) },
-                { assertTrue(atJ1[2].payload.contentEquals(byteArrayOf(3))) },
-                { assertTrue(atJ2[0].payload.contentEquals(byteArrayOf(1))) },
-                { assertTrue(atJ2[1].payload.contentEquals(byteArrayOf(2))) },
-                { assertTrue(atJ2[2].payload.contentEquals(byteArrayOf(3))) },
+                { assertTrue(atJ1[0].toByteArray().contentEquals(byteArrayOf(1))) },
+                { assertTrue(atJ1[1].toByteArray().contentEquals(byteArrayOf(2))) },
+                { assertTrue(atJ1[2].toByteArray().contentEquals(byteArrayOf(3))) },
+                { assertTrue(atJ2[0].toByteArray().contentEquals(byteArrayOf(1))) },
+                { assertTrue(atJ2[1].toByteArray().contentEquals(byteArrayOf(2))) },
+                { assertTrue(atJ2[2].toByteArray().contentEquals(byteArrayOf(3))) },
             )
         }
 
@@ -258,7 +258,7 @@ class PartialConnectivityScenarioTest {
             val frame = receivedByJ1.await()
             assertAll(
                 { assertEquals(mesh.host.selfId, frame.sender) },
-                { assertTrue(frame.payload.contentEquals(byteArrayOf(99))) },
+                { assertTrue(frame.toByteArray().contentEquals(byteArrayOf(99))) },
             )
         }
 

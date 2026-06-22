@@ -66,7 +66,7 @@ public object MultipeerCrossProcessProbe {
                     launch {
                         link.incoming.collect { frame ->
                             log(
-                                "[host] frame from=${frame.sender?.value} bytes=${frame.payload.size} " +
+                                "[host] frame from=${frame.sender?.value} bytes=${frame.payloadSize} " +
                                     "(elapsed ${nowMs() - t0}ms)",
                             )
                         }
@@ -164,7 +164,7 @@ public object MultipeerCrossProcessProbe {
                     launch {
                         link.incoming.collect { frame ->
                             log(
-                                "[joiner] frame from=${frame.sender?.value} bytes=${frame.payload.size} " +
+                                "[joiner] frame from=${frame.sender?.value} bytes=${frame.payloadSize} " +
                                     "(elapsed ${nowMs() - t0}ms)",
                             )
                         }

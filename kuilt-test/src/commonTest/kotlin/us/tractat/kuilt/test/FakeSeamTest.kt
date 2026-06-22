@@ -152,8 +152,8 @@ class FakeSeamTest {
         assertEquals(bob, frames[0].sender)
         assertEquals(bob, frames[1].sender)
         assertTrue(frames[0].sequence < frames[1].sequence)
-        assertTrue(frames[0].payload.contentEquals(byteArrayOf(10)))
-        assertTrue(frames[1].payload.contentEquals(byteArrayOf(20)))
+        assertTrue(frames[0].toByteArray().contentEquals(byteArrayOf(10)))
+        assertTrue(frames[1].toByteArray().contentEquals(byteArrayOf(20)))
     }
 
     @Test
@@ -162,7 +162,7 @@ class FakeSeamTest {
         seam.deliver(PeerId("bob"), byteArrayOf(42))
         // collect AFTER delivery
         val received = seam.incoming.first()
-        assertTrue(received.payload.contentEquals(byteArrayOf(42)))
+        assertTrue(received.toByteArray().contentEquals(byteArrayOf(42)))
     }
 
     @Test
@@ -173,9 +173,9 @@ class FakeSeamTest {
         seam.deliver(bob, byteArrayOf(2))
         seam.deliver(bob, byteArrayOf(3))
         val frames = seam.incoming.take(3).toList()
-        assertContentEquals(byteArrayOf(1), frames[0].payload)
-        assertContentEquals(byteArrayOf(2), frames[1].payload)
-        assertContentEquals(byteArrayOf(3), frames[2].payload)
+        assertContentEquals(byteArrayOf(1), frames[0].toByteArray())
+        assertContentEquals(byteArrayOf(2), frames[1].toByteArray())
+        assertContentEquals(byteArrayOf(3), frames[2].toByteArray())
     }
 
     // ── broadcast send semantics ──────────────────────────────────────────────

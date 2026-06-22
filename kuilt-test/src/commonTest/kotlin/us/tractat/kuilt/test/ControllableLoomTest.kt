@@ -70,8 +70,8 @@ class ControllableLoomTest {
 
         a.broadcast(byteArrayOf(1, 2))
 
-        assertContentEquals(byteArrayOf(1, 2), frameB.await().payload)
-        assertContentEquals(byteArrayOf(1, 2), frameC.await().payload)
+        assertContentEquals(byteArrayOf(1, 2), frameB.await().toByteArray())
+        assertContentEquals(byteArrayOf(1, 2), frameC.await().toByteArray())
     }
 
     @Test
@@ -101,9 +101,9 @@ class ControllableLoomTest {
         a.broadcast(byteArrayOf(3))
 
         val received = frames.await()
-        assertContentEquals(byteArrayOf(1), received[0].payload)
-        assertContentEquals(byteArrayOf(2), received[1].payload)
-        assertContentEquals(byteArrayOf(3), received[2].payload)
+        assertContentEquals(byteArrayOf(1), received[0].toByteArray())
+        assertContentEquals(byteArrayOf(2), received[1].toByteArray())
+        assertContentEquals(byteArrayOf(3), received[2].toByteArray())
     }
 
     @Test
@@ -148,8 +148,8 @@ class ControllableLoomTest {
         loom.releaseDelivery(b.selfId)
 
         val received = frames.await()
-        assertContentEquals(byteArrayOf(1), received[0].payload)
-        assertContentEquals(byteArrayOf(2), received[1].payload)
+        assertContentEquals(byteArrayOf(1), received[0].toByteArray())
+        assertContentEquals(byteArrayOf(2), received[1].toByteArray())
         assertEquals(0, loom.bufferedCount(b.selfId))
     }
 
@@ -164,7 +164,7 @@ class ControllableLoomTest {
 
         val frame = async { b.incoming.first() }
         a.broadcast(byteArrayOf(55))
-        assertContentEquals(byteArrayOf(55), frame.await().payload)
+        assertContentEquals(byteArrayOf(55), frame.await().toByteArray())
     }
 
     @Test
@@ -180,7 +180,7 @@ class ControllableLoomTest {
         a.broadcast(byteArrayOf(7))
 
         // c receives immediately despite b being held
-        assertContentEquals(byteArrayOf(7), cFrame.await().payload)
+        assertContentEquals(byteArrayOf(7), cFrame.await().toByteArray())
         assertEquals(1, loom.bufferedCount(b.selfId))
     }
 
@@ -201,7 +201,7 @@ class ControllableLoomTest {
         val delivered = loom.deliverNext(b.selfId)
 
         assertTrue(delivered)
-        assertContentEquals(byteArrayOf(10), firstFrame.await().payload)
+        assertContentEquals(byteArrayOf(10), firstFrame.await().toByteArray())
         assertEquals(2, loom.bufferedCount(b.selfId))
     }
 

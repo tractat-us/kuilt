@@ -72,7 +72,7 @@ class WebSocketPeerLinkRealNetworkTest {
                         clientLink.broadcast(payload)
                         deferred.await()
                     }
-                assertTrue(received.payload.contentEquals(payload))
+                assertTrue(received.toByteArray().contentEquals(payload))
                 assertEquals(clientLink.selfId, received.sender)
                 clientLink.close()
             } finally {
@@ -97,9 +97,9 @@ class WebSocketPeerLinkRealNetworkTest {
                         clientLink.broadcast(byteArrayOf(3))
                         frames.await()
                     }
-                assertTrue(received[0].payload.contentEquals(byteArrayOf(1)))
-                assertTrue(received[1].payload.contentEquals(byteArrayOf(2)))
-                assertTrue(received[2].payload.contentEquals(byteArrayOf(3)))
+                assertTrue(received[0].toByteArray().contentEquals(byteArrayOf(1)))
+                assertTrue(received[1].toByteArray().contentEquals(byteArrayOf(2)))
+                assertTrue(received[2].toByteArray().contentEquals(byteArrayOf(3)))
                 clientLink.close()
             } finally {
                 client.close()

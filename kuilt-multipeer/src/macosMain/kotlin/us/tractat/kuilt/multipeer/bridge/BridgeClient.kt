@@ -113,7 +113,7 @@ public fun mc_session_set_data_callback(
             state.link.incoming.collect { frame ->
                 memScoped {
                     val senderPtr = (frame.sender?.value ?: "").cstr.ptr
-                    if (frame.payload.isEmpty()) {
+                    if (frame.payloadSize == 0) {
                         val emptyBuf = ByteArray(1).pin()
                         try {
                             cb.invoke(senderPtr, emptyBuf.addressOf(0), 0)
@@ -121,8 +121,8 @@ public fun mc_session_set_data_callback(
                             emptyBuf.unpin()
                         }
                     } else {
-                        frame.payload.usePinned { pinned ->
-                            cb.invoke(senderPtr, pinned.addressOf(0), frame.payload.size)
+                        frame.toByteArray().usePinned { pinned ->
+                            cb.invoke(senderPtr, pinned.addressOf(0), frame.payloadSize)
                         }
                     }
                 }

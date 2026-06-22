@@ -343,7 +343,7 @@ internal class LearnerRouter {
             runCatchingCancellable {
                 seam.incoming.collect { swatch ->
                     val sender = swatch.sender ?: return@collect
-                    val envelope = RaftEnvelope(NodeId(sender.value), swatch.payload)
+                    val envelope = RaftEnvelope(NodeId(sender.value), swatch.toByteArray())
                     val leaderId = nodesSnapshot.entries
                         .firstOrNull { it.value.role.value is RaftRole.Leader }
                         ?.key

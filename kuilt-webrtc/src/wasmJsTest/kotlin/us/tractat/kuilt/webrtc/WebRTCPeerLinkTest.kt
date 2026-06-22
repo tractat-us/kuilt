@@ -39,7 +39,7 @@ class WebRTCPeerLinkTest {
 
             joiner.sendBytes("ping".encodeToByteArray())
             val frame = hostLink.incoming.first()
-            assertContentEquals("ping".encodeToByteArray(), frame.payload)
+            assertContentEquals("ping".encodeToByteArray(), frame.toByteArray())
             assertEquals(remoteId, frame.sender)
             assertTrue(frame.sequence >= 0)
         }

@@ -117,7 +117,7 @@ class Mesh(
                 joiners.forEach { joiner ->
                     scope.launch {
                         joiner.incoming.collect { frame ->
-                            val text = frame.payload.decodeToString()
+                            val text = frame.decodeToString()
                             val sender = frame.sender
                             if (sender != null && text.startsWith(HeartbeatPartitionDetector.PING_PREFIX)) {
                                 runCatching {

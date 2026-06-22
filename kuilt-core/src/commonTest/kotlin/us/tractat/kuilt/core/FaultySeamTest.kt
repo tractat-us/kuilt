@@ -41,9 +41,9 @@ class FaultySeamTest {
             val frames = received.await()
             assertAll(
                 { assertEquals(3, frames.size) },
-                { assertTrue(frames[0].payload.contentEquals(byteArrayOf(1))) },
-                { assertTrue(frames[1].payload.contentEquals(byteArrayOf(2))) },
-                { assertTrue(frames[2].payload.contentEquals(byteArrayOf(3))) },
+                { assertTrue(frames[0].toByteArray().contentEquals(byteArrayOf(1))) },
+                { assertTrue(frames[1].toByteArray().contentEquals(byteArrayOf(2))) },
+                { assertTrue(frames[2].toByteArray().contentEquals(byteArrayOf(3))) },
             )
         }
 
@@ -119,7 +119,7 @@ class FaultySeamTest {
             a.broadcast(byteArrayOf(42))
 
             val frame = received.await()
-            assertTrue(frame.payload.contentEquals(byteArrayOf(42)))
+            assertTrue(frame.toByteArray().contentEquals(byteArrayOf(42)))
         }
 
     // ── Partition / heal ──────────────────────────────────────────────────────
@@ -139,7 +139,7 @@ class FaultySeamTest {
             val received = async { b.incoming.first() }
             a.broadcast(byteArrayOf(99))
             val frame = received.await()
-            assertTrue(frame.payload.contentEquals(byteArrayOf(99)))
+            assertTrue(frame.toByteArray().contentEquals(byteArrayOf(99)))
         }
 
     // ── DropProbabilistic ─────────────────────────────────────────────────────
@@ -208,9 +208,9 @@ class FaultySeamTest {
             val frames = received.await()
             assertAll(
                 { assertEquals(3, frames.size) },
-                { assertTrue(frames[0].payload.contentEquals(byteArrayOf(1))) },
-                { assertTrue(frames[1].payload.contentEquals(byteArrayOf(3))) },
-                { assertTrue(frames[2].payload.contentEquals(byteArrayOf(4))) },
+                { assertTrue(frames[0].toByteArray().contentEquals(byteArrayOf(1))) },
+                { assertTrue(frames[1].toByteArray().contentEquals(byteArrayOf(3))) },
+                { assertTrue(frames[2].toByteArray().contentEquals(byteArrayOf(4))) },
             )
         }
 
@@ -231,9 +231,9 @@ class FaultySeamTest {
             val frames = received.await()
             assertAll(
                 { assertEquals(3, frames.size) },
-                { assertTrue(frames[0].payload.contentEquals(byteArrayOf(0))) },
-                { assertTrue(frames[1].payload.contentEquals(byteArrayOf(2))) },
-                { assertTrue(frames[2].payload.contentEquals(byteArrayOf(4))) },
+                { assertTrue(frames[0].toByteArray().contentEquals(byteArrayOf(0))) },
+                { assertTrue(frames[1].toByteArray().contentEquals(byteArrayOf(2))) },
+                { assertTrue(frames[2].toByteArray().contentEquals(byteArrayOf(4))) },
             )
         }
 
@@ -260,7 +260,7 @@ class FaultySeamTest {
             testScheduler.runCurrent()
 
             val frame = received.await()
-            assertTrue(frame.payload.contentEquals(byteArrayOf(7)))
+            assertTrue(frame.toByteArray().contentEquals(byteArrayOf(7)))
             assertEquals(1L, a.framesDelayed)
         }
 
@@ -283,7 +283,7 @@ class FaultySeamTest {
             testScheduler.runCurrent()
 
             val frame = received.await()
-            assertTrue(frame.payload.contentEquals(byteArrayOf(7)))
+            assertTrue(frame.toByteArray().contentEquals(byteArrayOf(7)))
         }
 
     // ── ReorderWindow ─────────────────────────────────────────────────────────
@@ -298,7 +298,7 @@ class FaultySeamTest {
                 sender.setFaultProfile(FaultProfile.ReorderWindow(windowSize = 4, seed = 42L))
                 val received = async { receiver.incoming.take(4).toList() }
                 repeat(4) { sender.broadcast(byteArrayOf(it.toByte())) }
-                return received.await().map { it.payload[0].toInt() }
+                return received.await().map { it.byteAt(0).toInt() }
             }
 
             val run1 = collectPayloads(backgroundScope)
@@ -382,7 +382,7 @@ class FaultySeamTest {
             val frames = received.await()
             assertAll(
                 { assertEquals(1, frames.size) },
-                { assertTrue(frames[0].payload.contentEquals(byteArrayOf(10))) },
+                { assertTrue(frames[0].toByteArray().contentEquals(byteArrayOf(10))) },
             )
 
             // A is no longer in B's peer set after close
@@ -410,7 +410,7 @@ class FaultySeamTest {
             val receivedByA = async { a.incoming.first() }
             b.broadcast(byteArrayOf(99))
             val frame = receivedByA.await()
-            assertTrue(frame.payload.contentEquals(byteArrayOf(99)))
+            assertTrue(frame.toByteArray().contentEquals(byteArrayOf(99)))
         }
 
     @Test
@@ -442,7 +442,7 @@ class FaultySeamTest {
             val receivedByA = async { a.incoming.first() }
             b.broadcast(byteArrayOf(9))
             val frameA = receivedByA.await()
-            assertTrue(frameA.payload.contentEquals(byteArrayOf(9)))
+            assertTrue(frameA.toByteArray().contentEquals(byteArrayOf(9)))
         }
 
     // ── Composite ────────────────────────────────────────────────────────────
@@ -496,7 +496,7 @@ class FaultySeamTest {
             testScheduler.runCurrent()
 
             val frame = received.await()
-            assertTrue(frame.payload.contentEquals(byteArrayOf(7)))
+            assertTrue(frame.toByteArray().contentEquals(byteArrayOf(7)))
         }
 
     // ── FaultyLoom — default profile propagation ─────────────────────────────

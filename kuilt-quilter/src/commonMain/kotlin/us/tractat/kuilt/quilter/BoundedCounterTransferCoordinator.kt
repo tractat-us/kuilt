@@ -175,7 +175,7 @@ public class BoundedCounterTransferCoordinator(
             .launchIn(scope)
 
     private fun dispatch(sender: PeerId, swatch: Swatch) {
-        val msg = runCatching { decode(swatch.payload) }.getOrNull() ?: return
+        val msg = runCatching { swatch.decode(Cbor, serializer) }.getOrNull() ?: return
         when (msg) {
             is BoundedCounterCoordMessage.TransferRequest -> onTransferRequest(msg, sender)
         }
@@ -196,7 +196,4 @@ public class BoundedCounterTransferCoordinator(
 
     private fun encode(msg: BoundedCounterCoordMessage): ByteArray =
         Cbor.encodeToByteArray(serializer, msg)
-
-    private fun decode(bytes: ByteArray): BoundedCounterCoordMessage =
-        Cbor.decodeFromByteArray(serializer, bytes)
 }

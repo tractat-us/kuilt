@@ -64,7 +64,7 @@ public abstract class MeshConformanceSuite {
             seams[0].broadcast(payload)
             receivers.forEach { deferred ->
                 val swatch = deferred.await()
-                assertTrue(swatch.payload.contentEquals(payload), "payload must match")
+                assertTrue(swatch.toByteArray().contentEquals(payload), "payload must match")
                 assertEquals(seams[0].selfId, swatch.sender, "sender must be the broadcaster")
             }
         }
@@ -93,7 +93,7 @@ public abstract class MeshConformanceSuite {
             sender.sendTo(target.selfId, directPayload)
 
             val targetSwatch = targetReceived.await()
-            assertTrue(targetSwatch.payload.contentEquals(directPayload), "target must receive the direct payload")
+            assertTrue(targetSwatch.toByteArray().contentEquals(directPayload), "target must receive the direct payload")
             assertEquals(sender.selfId, targetSwatch.sender)
 
             // Now broadcast a sentinel — bystander must see this as its FIRST frame,
@@ -103,7 +103,7 @@ public abstract class MeshConformanceSuite {
 
             val bystanderSwatch = bystanderReceived.await()
             assertTrue(
-                bystanderSwatch.payload.contentEquals(sentinel),
+                bystanderSwatch.toByteArray().contentEquals(sentinel),
                 "bystander's first frame must be the broadcast sentinel, not the sendTo payload",
             )
         }

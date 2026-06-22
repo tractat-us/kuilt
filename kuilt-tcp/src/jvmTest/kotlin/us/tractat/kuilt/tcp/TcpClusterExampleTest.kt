@@ -78,8 +78,8 @@ class TcpClusterExampleTest {
 
                 val bFrame = onB.await()
                 val cFrame = onC.await()
-                assertContentEquals(payload, bFrame.payload, "B receives the cluster broadcast")
-                assertContentEquals(payload, cFrame.payload, "C receives the cluster broadcast")
+                assertContentEquals(payload, bFrame.toByteArray(), "B receives the cluster broadcast")
+                assertContentEquals(payload, cFrame.toByteArray(), "C receives the cluster broadcast")
                 assertEquals(a, bFrame.sender, "B attributes the frame to A")
                 assertEquals(a, cFrame.sender, "C attributes the frame to A")
 

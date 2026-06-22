@@ -9,7 +9,6 @@ import kotlinx.coroutines.launch
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.cbor.Cbor
-import kotlinx.serialization.decodeFromByteArray
 import kotlinx.serialization.encodeToByteArray
 import org.kotlincrypto.hash.sha2.SHA256
 import us.tractat.kuilt.core.PeerId
@@ -102,7 +101,7 @@ public class FairRandom(
             seam.incoming.collect { swatch ->
                 val sender = swatch.sender ?: return@collect
                 val msg = try {
-                    Cbor.decodeFromByteArray<FairRandomMessage>(swatch.payload)
+                    swatch.decode(Cbor, FairRandomMessage.serializer())
                 } catch (e: CancellationException) {
                     throw e
                 } catch (_: SerializationException) {

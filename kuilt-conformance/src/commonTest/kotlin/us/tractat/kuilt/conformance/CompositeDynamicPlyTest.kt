@@ -55,7 +55,7 @@ class CompositeDynamicPlyTest {
         // A broadcast now rides both plies but must be delivered exactly once.
         host.broadcast(byteArrayOf(7))
         val received = joiner.incoming.first()
-        assertEquals(7, received.payload.single())
+        assertEquals(7, received.byteAt(0))
     }
 
     @Test
@@ -127,7 +127,7 @@ class CompositeDynamicPlyTest {
         host.peers.first { it.size == 2 }
         host.broadcast(byteArrayOf(9))
         val received = joiner.incoming.first()
-        assertEquals(9, received.payload.single())
+        assertEquals(9, received.byteAt(0))
         assertEquals(setOf(PlyId("relay"), PlyId("overlay")), host.plies.value.keys)
     }
 
@@ -143,7 +143,7 @@ class CompositeDynamicPlyTest {
         host.peers.first { it.size == 2 }
 
         host.broadcast(byteArrayOf(3))
-        assertEquals(3, joiner.incoming.first().payload.single())
+        assertEquals(3, joiner.incoming.first().byteAt(0))
         assertEquals(setOf(PlyId("mem")), host.plies.value.keys)
     }
 }

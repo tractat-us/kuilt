@@ -96,7 +96,7 @@ class ClusterClientFailoverTest {
             testScheduler.runCurrent()
 
             val received = mutableListOf<ByteArray>()
-            val collectJob = launch { relaySeam.incoming.collect { received.add(it.payload) } }
+            val collectJob = launch { relaySeam.incoming.collect { received.add(it.toByteArray()) } }
             testScheduler.runCurrent()
 
             // Address a voter that is NOT a peer on the learner's seam — models the real leader

@@ -154,7 +154,7 @@ class FlakyLifecycleSeamTest {
             val frames = received.await()
             assertAll(
                 { assertEquals(1, frames.size) },
-                { assertTrue(frames[0].payload.contentEquals(byteArrayOf(99))) },
+                { assertTrue(frames[0].toByteArray().contentEquals(byteArrayOf(99))) },
             )
         }
 
@@ -177,9 +177,9 @@ class FlakyLifecycleSeamTest {
             val frames = received.await()
             assertAll(
                 { assertEquals(3, frames.size) },
-                { assertTrue(frames[0].payload.contentEquals(byteArrayOf(10))) },
-                { assertTrue(frames[1].payload.contentEquals(byteArrayOf(20))) },
-                { assertTrue(frames[2].payload.contentEquals(byteArrayOf(30))) },
+                { assertTrue(frames[0].toByteArray().contentEquals(byteArrayOf(10))) },
+                { assertTrue(frames[1].toByteArray().contentEquals(byteArrayOf(20))) },
+                { assertTrue(frames[2].toByteArray().contentEquals(byteArrayOf(30))) },
             )
         }
 

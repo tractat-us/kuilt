@@ -38,8 +38,8 @@ class LifecycleContractTest {
 
         val frames = received.await()
         assertAll(
-            { assertTrue(frames[0].payload.contentEquals(byteArrayOf(1)), "first Woven frame must arrive") },
-            { assertTrue(frames[1].payload.contentEquals(byteArrayOf(2)), "99 (sent while Weaving) must not arrive; only 2 arrives") },
+            { assertTrue(frames[0].toByteArray().contentEquals(byteArrayOf(1)), "first Woven frame must arrive") },
+            { assertTrue(frames[1].toByteArray().contentEquals(byteArrayOf(2)), "99 (sent while Weaving) must not arrive; only 2 arrives") },
         )
     }
 
@@ -57,7 +57,7 @@ class LifecycleContractTest {
         a.broadcast(byteArrayOf(42))
 
         val frames = received.await()
-        assertTrue(frames[0].payload.contentEquals(byteArrayOf(42)), "post-blip broadcast must be delivered")
+        assertTrue(frames[0].toByteArray().contentEquals(byteArrayOf(42)), "post-blip broadcast must be delivered")
     }
 }
 

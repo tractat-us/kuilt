@@ -163,7 +163,7 @@ class ManagedRaftTransportTest {
 
             val receivedByPeer = mutableListOf<ByteArray>()
             val collectJob = launch(backgroundScope.coroutineContext) {
-                seamPeer.incoming.collect { receivedByPeer.add(it.payload) }
+                seamPeer.incoming.collect { receivedByPeer.add(it.toByteArray()) }
             }
 
             val targetId = us.tractat.kuilt.raft.NodeId(seamPeer.selfId.value)

@@ -13,7 +13,6 @@ import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.update
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.cbor.Cbor
-import kotlinx.serialization.decodeFromByteArray
 import kotlinx.serialization.encodeToByteArray
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.ScopedCloseable
@@ -50,7 +49,7 @@ public class DealSession(
     private val incomingJob: Job = seam.incoming
         .onEach { swatch ->
             val frame = try {
-                Cbor.decodeFromByteArray<IndexedCardOp>(swatch.payload)
+                swatch.decode(Cbor, IndexedCardOp.serializer())
             } catch (e: CancellationException) {
                 throw e
             } catch (_: Exception) {

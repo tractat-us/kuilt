@@ -62,7 +62,7 @@ class DelayedWovenLoomTest {
             val frames = received.await()
             assertIs<SeamState.Woven>(joiner.state.value)
             assertTrue(frames.size == 1, "Expected 1 frame, got ${frames.size}")
-            assertTrue(frames[0].payload.contentEquals(byteArrayOf(42)), "Payload mismatch")
+            assertTrue(frames[0].toByteArray().contentEquals(byteArrayOf(42)), "Payload mismatch")
         }
 
     @Test

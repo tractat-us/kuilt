@@ -53,5 +53,5 @@ public class SeamRaftTransport(private val seam: Seam) : RaftTransport {
     override val incoming: Flow<RaftEnvelope> =
         seam.incoming
             .filter { it.sender != null }
-            .map { RaftEnvelope(NodeId(it.sender!!.value), it.payload) }
+            .map { RaftEnvelope(NodeId(it.sender!!.value), it.toByteArray()) }
 }

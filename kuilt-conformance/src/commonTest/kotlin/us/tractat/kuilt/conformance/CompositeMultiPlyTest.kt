@@ -71,7 +71,7 @@ class CompositeMultiPlyTest {
 
         val received = joiner.incoming.take(1).toList()
         assertEquals(1, received.size, "exactly one delivery despite two plies carrying it")
-        assertEquals(5, received.single().payload.single())
+        assertEquals(5, received.single().byteAt(0))
     }
 
     @Test
