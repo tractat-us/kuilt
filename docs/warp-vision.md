@@ -21,7 +21,7 @@ mesh of devices runs it.
 
 ```kotlin
 val warp   = warp(seam)                                  // the cluster, from one connection
-val scores = warp.parMap(corpus) { doc -> score(query, doc) }   // runs across every peer
+val scores = warp.shuttle(corpus) { doc -> score(query, doc) }  // runs across every peer
                  .aggregate()                            // answers weave together as they arrive
 ```
 
@@ -53,7 +53,7 @@ So `:kuilt-warp` is a *thin reframing*, not a new engine:
 
 ```kotlin
 class Warp(seam: Seam)                       // the grid — N parallel lanes across the peers
-class Weft<R>(/* in-flight results */)       // work cast across the warp; aggregate() weaves the cloth
+class Weft<R>(/* in-flight results */)       // weft shuttled across the warp; aggregate() weaves the cloth
 // queue  = ORSet<Task>          (already have)
 // place  = the equalizer         (already have, aimed at depth)
 // results = ORMap<Id, R>         (already have)
@@ -63,8 +63,9 @@ class Weft<R>(/* in-flight results */)       // work cast across the warp; aggre
 The textile metaphor finishes itself. A loom holds the **warp** — the parallel
 threads under tension. You throw the **weft** across them, and the two weave into
 cloth. Here the warp is the set of parallel compute lanes spread over the peers;
-each task is a weft thread thrown across it; the results weave into one answer.
-`warp.parMap(...)` casts the weft; `.aggregate()` beats it into cloth.
+each task is a weft thread, and the **shuttle** carries it across — so
+`warp.shuttle(...)` throws the weft across the warp, and `.aggregate()` beats it
+into cloth. The three nouns and the one verb are the whole vocabulary.
 
 ## The reduction to simplicity
 
@@ -80,7 +81,7 @@ one is already solved inside kuilt and already invisible — so the surface that
 remains is:
 
 ```kotlin
-warp.parMap(corpus) { score(query, it) }.aggregate()
+warp.shuttle(corpus) { score(query, it) }.aggregate()
 ```
 
 That collapse *is* the product. The documentation should walk the reader down the
@@ -111,7 +112,7 @@ The beautiful move is to make that boundary the **one visible seam in the cloth*
 
 ```kotlin
 val ranked : CoordinationFree<Ranking<DocId>> =          // monotone — zero coordination
-    warp.parMap(corpus) { score(query, it) }.aggregate()
+    warp.shuttle(corpus) { score(query, it) }.aggregate()
 
 val winner : Coordinated<DocId> = ranked.top()           // argmax is non-monotone → type flips
 val chosen : DocId              = winner.commit(raft)     // the ONLY consensus in the program
@@ -119,7 +120,7 @@ val chosen : DocId              = winner.commit(raft)     // the ONLY consensus 
 
 Two properties make this lovely rather than burdensome:
 
-1. **You never write a proof.** `parMap` and `aggregate` are coordination-free *by
+1. **You never write a proof.** `shuttle` and `aggregate` are coordination-free *by
    construction* — they are the library's vetted monotone combinators. The CALM
    theory isn't on your screen; it retreated into the combinators where it can't be
    gotten wrong. (Earlier in the dream we imagined forcing the user to *prove*
@@ -137,7 +138,7 @@ thing looks like exactly one expensive line.
 ## What is real, and what is a dream
 
 - **Real, and the only thing we might build:** the spike in #680 — wire the
-  existing pieces into a minimal `Warp`, run one `parMap`/`aggregate` over the
+  existing pieces into a minimal `Warp`, run one `shuttle`/`aggregate` over the
   simulation harness, and write down where the CALM seam actually bites. Throwaway
   by default. Never wired into the default target set or the public API without a
   separate, deliberate decision.
