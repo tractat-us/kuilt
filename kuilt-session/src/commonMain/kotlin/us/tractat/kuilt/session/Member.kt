@@ -8,11 +8,17 @@ import us.tractat.kuilt.core.PeerId
  * A peer is a [Member] only after completing the admit/identify handshake.
  * Raw [Seam][us.tractat.kuilt.core.Seam] peers that have connected but not yet
  * identified are not members.
+ *
+ * [identity] is *self-asserted* by the peer in its `Hello`; [principal] is the
+ * host's *verified* identity for the connection (when the fabric authenticates it —
+ * see [PrincipalAttested]). It is `null` for unauthenticated connections and on the
+ * joiner side (a joiner does not verify the host).
  */
 public data class Member(
     val id: PeerId,
     val identity: MemberIdentity,
     val liveness: Liveness,
+    val principal: Principal? = null,
 )
 
 /**
