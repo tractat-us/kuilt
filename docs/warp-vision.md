@@ -5,6 +5,10 @@
 > thing `:kuilt-warp` could be, written so we can decide whether any of it is
 > worth a throwaway spike (#680). Part of the research epic #665. Nothing here
 > implies code will be written; if it ever is, only a small experiment.
+>
+> This page is the **walk** — read it top to bottom. The machinery (how code
+> ships, how the system plans and observes itself, the AI applications) lives in
+> the companion, [`warp-deeper.md`](warp-deeper.md), for after the relief.
 
 ## The one idea
 
@@ -86,100 +90,13 @@ A loom holds the **warp**: the parallel threads under tension. You load a
 - **embroidery** — the deliberate finishing stitched onto the cloth *by hand*,
   where consensus is unavoidable (its own section below). (We pointedly avoid
   calling it a *seam*: `Seam` is already the core contract type.)
-- **bobbin / creel** — *(only in the code-mobility fantasy)* a **bobbin** is one
-  shippable code kernel — the wound thread the shuttle draws from; the **creel**
-  is the lazily-gossiped cache of them. See "Lazy bobbins" below.
 
 ![One loom, three layers: the draft (recipe) is woven into coordination-free cloth by the warp, weft and shuttle, then the embroidery — consensus — is stitched on top by hand.](images/warp/loom.svg)
 
-## How the method actually travels
-
-A fair question kills most compute-grid dreams: *how does `score` even get to the
-other peers and run there?* The honest answer shapes everything, so the doc states
-it plainly instead of hand-waving "runs on whoever has capacity."
-
-**You never ship the function. You ship a name and its arguments.** kuilt moves
-opaque bytes between peers that might be a JVM server, an iPhone (Kotlin/Native),
-and a browser (wasmJs). A Kotlin lambda compiled to JVM bytecode cannot execute on
-Native or wasm — there is no portable, runtime-shippable representation of Kotlin
-code across those targets. So what crosses the fabric is a tiny **task
-descriptor** — `{ op: "score", arg: ⟦query⟧, item: docId }` — dropped into the
-**`TaskQueue`** (a thin wrapper over an `ORSet`). A peer claims it, looks `"score"`
-up in a **local operation registry** that every node populated at startup from the
-same compiled binary, and
-runs *its own copy* on local data. The result merges back as a CRDT. The function
-never moved; only its name did.
-
-![How a method crosses the fabric, in five steps: shuttle splits the work into descriptors; a CRDT work-queue replicates them; the equalizer places them; each peer runs its own registered copy; results merge back. On the wire: names and data, never the function.](images/warp/on-the-wire.svg)
-
-That implies one honest constraint, stated up front: **a homogeneous binary with
-symbolic dispatch.** Every peer runs the same build; the grid distributes
-*decisions about where data is processed*, not the processing code. The
-`shuttle { … }` block is therefore sugar for "reference a registered operation" —
-a compiler plugin (KSP) could auto-register the ops it sees so it still *reads*
-like an ordinary lambda.
-
-### The fantasy: shipping real code anyway
-
-Named ops can only run code already in the deployed binary. If we ever wanted to
-ship *new* computations at runtime — true code mobility — there is exactly one
-substrate that works across kuilt's targets, and the surprise is that it isn't
-native code:
-
-- **① Named ops — the default.** Ship `(opId, args)`; the code is already
-  everywhere. Works on every target. Limit: no new code at runtime.
-- **③ WASM kernels — the fantasy.** Ship a compiled `.wasm` blob *as* the method.
-  It's the same bytes on every platform; it's a capability **sandbox** (decisive —
-  you'd be running code other peers sent you); and the browser runs it natively.
-  Under the hood the desktop/server runtimes (wasmtime/wasmer) JIT it to native via
-  Cranelift/LLVM, so near-native speed comes for free. The one hard constraint:
-  **iOS forbids runtime JIT**, so on iPhone you *interpret* the wasm (wasm3) —
-  slower, but real and portable.
-- **Not LLVM IR on the wire.** The tempting "ship LLVM bitcode for native speed"
-  path is a trap: bitcode isn't portable (Google tried it — PNaCl — and retired it
-  in favour of WebAssembly), it needs the JIT iOS bans, and it's unsandboxed. LLVM
-  keeps its rightful job — *inside* the wasm runtime, the thing that makes wasm
-  fast — not as a distribution format.
-
-The lovely inversion: the part that *sounds* like science fiction (live code
-crossing a phone, a server, and a browser at once) rides on the most ordinary
-substrate we already half-target — while the path that *sounds* like the
-performance win (native/LLVM) is the dead end. Code mobility is a tier, not a
-switch: names by default, sandboxed wasm kernels when you genuinely must ship code,
-never raw native.
-
-![Code mobility as a ladder: named ops are the default; WASM kernels are the fantasy — same bytes everywhere, sandboxed, browser-native, JIT'd to native via Cranelift where allowed and interpreted on iOS where JIT is banned; shipping LLVM IR on the wire is the trap PNaCl already proved a dead end.](images/warp/code-mobility.svg)
-
-### Lazy bobbins: gossiping the code
-
-Shipping a kernel raises its own question — push every kernel to every peer up
-front? No. You let it spread the way everything else here spreads: **eventually**.
-A kernel is a **bobbin**, the wound thread the shuttle draws from; a peer can't run
-an op until the right bobbin is loaded, so bobbins gossip across the mesh lazily,
-on demand. The rack of loaded bobbins is the **creel**.
-
-The structure is exactly the CRDT-cache shape — a **content-addressed store with a
-CRDT manifest over the keys**, *keys known, values lazy*:
-
-- **Keys** are content hashes. The op-id in a descriptor *is* `hash(kernel)`. The
-  set of known bobbin-hashes is a grow-only `GSet<Hash>` (the zoo's `EphemeralMap`
-  gives the cache-with-eviction variant) — cheap to gossip, always converges.
-  Every peer agrees which bobbins exist.
-- **Values** are the immutable kernel bytes, fetched on first use. Content-
-  addressing makes the value-merge *trivially* conflict-free: because the key is
-  `hash(value)`, any two peers holding the same key hold byte-identical bytes —
-  "merge" is just "same bytes," and each value sits in a one-step lattice
-  `Absent ⊏ Present`. You gossip availability and pull on demand.
-
-A peer assigned an op whose bobbin it lacks asks a neighbour, pulls the bytes,
-re-hashes to verify, caches, and runs; new peers warm their creel lazily.
-
-One honest line: the key-set converging is **safety** (the CRDT guarantees it); the
-bytes being *fetchable* is **liveness** (it does not). Pin each bobbin on ≥ k peers,
-like any peer-to-peer content store. The shape has a name — a **Merkle-CRDT**:
-CRDT state addressed by hash, advertised eagerly and fetched lazily.
-
-![Lazy bobbins: the op-id is the content-hash of a kernel; the creel is a CRDT GSet of hashes that every peer converges on (keys known), while the kernel bytes are a content-addressed cache each peer holds a subset of and fetches on demand (values lazy). Content-addressing makes every fetch conflict-free; the one caveat is that availability is a liveness property, so pin each bobbin on several peers.](images/warp/bobbins.svg)
+*(How does a function actually reach other peers, when a phone, a server, and a
+browser can't share compiled code? You ship a **name**, not the code — and the
+deeper machinery, including the **bobbin/creel** code cache that ships real
+kernels lazily, lives in the companion, [`warp-deeper.md`](warp-deeper.md).)*
 
 ## The reduction to simplicity
 
@@ -257,73 +174,22 @@ Two properties make this lovely rather than burdensome:
 So the surface tells the truth: everything cheap looks local; the one expensive
 thing looks like exactly one expensive line.
 
-## Query planning: optimize for coordination, not IO
+## Horizons — the fantasy, last
 
-The **draft** is already a declarative dataflow value — which means it is also a
-*query plan*, and the planner is just a **`Draft → Draft`** rewrite that runs
-before the shuttle moves a byte. The familiar optimizer moves all apply, and CALM
-hands the planner an unusual gift:
+Everything above is the walk. Past it the dream keeps going, and the companion,
+[`warp-deeper.md`](warp-deeper.md), follows it down the mountain:
 
-- **Pushdown** — run `filter`/projection on the peer that holds the data; less
-  crosses the wire.
-- **Reorder & fuse** — monotone operators *commute*, so the planner may freely
-  reorder, fuse, and parallelize them. (Most planners must *prove* a reordering is
-  safe; here it is safe by construction.)
-- **Defer coordination** — push the one embroidery as *late and as small* as
-  possible.
+- **Live code mobility.** Ship a sandboxed **WASM kernel** as the method itself, so
+  the same bytes run on a phone, a server, and a browser — with *compiler nodes*
+  tiering it from interpreted to native across the mesh.
+- **It plans and watches itself.** The draft is a query plan the grid optimizes for
+  *coordination* rather than IO; logs, metrics, and traces fall out of the same
+  CRDTs — a trace DAG you *infer* from causality instead of instrumenting.
+- **Federated & parallel ML.** A brokerless, multiplatform substrate for federated
+  learning, distributed inference, hyperparameter search, and sharded retrieval —
+  exactly the aggregation-shaped ML the CALM boundary blesses.
 
-The twist is the **cost model**. A conventional planner minimizes IO. This one
-minimizes **coordination** — consensus rounds — because in a peer-to-peer mesh a
-Raft round is the expensive thing, not bytes or CPU. The optimizer's objective
-function counts embroidery stitches.
-
-And the recognitions cascade:
-
-- **Statistics are CRDTs.** Cardinalities are mergeable HyperLogLog sketches —
-  i.e. CRDTs — gossiped on the same anti-entropy. The stats layer is the zoo again.
-- **Planning is itself ~coordination-free.** Each peer plans locally from the
-  convergent draft + gossiped stats; no central optimizer. (Need one canonical
-  plan? Electing it is just another embroidery stitch.)
-- **It's incremental.** Monotone ⇒ results refine as data arrives; the query
-  *converges* rather than *finishes*, and a threshold-read observes it whenever.
-
-![Query planning as a Draft → Draft rewrite: the planner pushes filters down to the data, freely reorders and fuses the monotone stages because CALM lets them commute, and defers the single consensus step to be as late and small as possible. Its cost model minimizes coordination rounds rather than IO; its statistics are CRDTs (HyperLogLog), and planning itself is coordination-free.](images/warp/query-planner.svg)
-
-### Observability falls out too
-
-Point the same move at the *running system* and the whole observability stack
-appears with no new subsystem — just more of the zoo on the same gossip:
-
-- **Logs** — an append-only distributed log *is* an `Rga`: a convergent, ordered,
-  append-only sequence. Every peer appends; the merges interleave into one order.
-- **Metrics** — counters are `GCounter`/`PNCounter`, gauges are `LWWRegister`,
-  unique-cardinality is HyperLogLog. All mergeable, all gossiped.
-- **Traces** — causal dependency structure is exactly what the zoo's `Causal`
-  carrier already tracks.
-
-That last point is the deep one: **you don't instrument the trace, you infer it.**
-Conventional tracing makes you propagate context and declare every parent/child
-link by hand. But the `Causal` carrier already records *happens-before* for every
-operation as it propagates — so the trace DAG can be **derived from the causality
-that data movement already wrote down**. The links were never missing; they were a
-byproduct. One honest qualifier: causal metadata captures *potential* causality
-(A *could* have influenced B) — the full dependency cone, which is a superset of
-hand-curated semantic spans. That superset is a gift for debugging (you see every
-real dependency, not just the ones someone remembered to annotate) and can be
-narrowed with explicit annotations where you want precision.
-
-**Bolting in OpenTelemetry**, then, is a thin adapter, not a rewrite. OTel
-supplies the vocabulary (spans, trace/span ids, metric instruments) and the
-dashboards; kuilt supplies a coordination-free, offline-first transport. Three
-seams: (1) a CRDT-backed `SpanExporter`/`MetricExporter`/`LogRecordExporter` that
-writes into the `Rga`/counter/`Causal` structures instead of POSTing OTLP — and
-OTel *cumulative* metric temporality maps cleanly onto monotone CRDT counters;
-(2) propagate W3C `traceparent` inside the **task descriptor**, so a trace follows
-the work as the shuttle carries it across peers — yet within the mesh the span
-links can be *read off the causal DAG* rather than hand-propagated; (3) an edge
-collector drains the converged CRDTs to OTLP for Jaeger/Prometheus/etc. You keep
-standard instrumentation and backends; you trade real-time delivery for
-eventually-consistent, brokerless convergence.
+These are dessert. The main course is the three lines.
 
 ## What is real, and what is a dream
 
@@ -332,10 +198,10 @@ eventually-consistent, brokerless convergence.
   simulation harness, and write down where the CALM boundary actually bites.
   Throwaway by default. Never wired into the default target set or the public API
   without a separate, deliberate decision.
-- **A dream:** everything else on this page — the polished
+- **A dream:** everything else here and in the companion — the polished
   `warp`/`weft`/`shuttle`/`draft`/`embroidery` surface, the
-  `CoordinationFree`/`Coordinated` types, the wasm-kernel code mobility, the
-  three-act documentation. It exists to give the spike a north star and to be
+  `CoordinationFree`/`Coordinated` types, wasm-kernel code mobility, the
+  descent-shaped documentation. It exists to give the spike a north star and to be
   enjoyed, not to be scheduled.
 
 The hero example here is search-and-rank because it contains both halves (a
@@ -360,12 +226,13 @@ the same order:
    allowed to leak, and *why* the mathematics makes it so.
 5. **The fantasy, last** — code mobility, the WASM trick — dessert, not the main.
 
-The four diagrams on this page (`descent`, `loom`, `on-the-wire`, `code-mobility`)
-are the visual spine of that walk; a future guide can reuse them verbatim. The
-reason to capture this now, while it is only a dream, is that an AI- or
-contributor-authored rewrite tends to re-derive the docs from the *technical*
-baseline — leading with `CoordinationFree`, lattices, and Raft — and the walk is
-lost. **The walk is the product as much as the API is.** Preserve the descent.
+The diagrams that carry the walk (`descent`, `loom`, `recognition-map`) live here;
+the companion carries the deeper ones (`on-the-wire`, `code-mobility`, `bobbins`,
+`query-planner`). The reason to capture this now, while it is only a dream, is that
+an AI- or contributor-authored rewrite tends to re-derive the docs from the
+*technical* baseline — leading with `CoordinationFree`, lattices, and Raft — and
+the walk is lost. **The walk is the product as much as the API is.** Preserve the
+descent.
 
 ## The precedent
 
