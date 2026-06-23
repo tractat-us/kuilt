@@ -53,3 +53,10 @@ keep asking is: *what else does this primitive already pay for?*
 The split also mirrors the dream's own shape — the engine is more *recognition*
 (it's already built), the externalities more *fantasy* (where it could reach).
 Each leaf links back here and to the [walk](warp-vision.md).
+
+## If we ever build it
+
+The bridge from dream to execution: **[Epic slices](warp-slices.md)** decomposes
+the work into seven slices with a dependency map and a phased roadmap — and is
+honest that only one (the offline exporter) is real near-term, while everything
+else hangs off the throwaway spike (#680).
