@@ -102,6 +102,15 @@ Honest limits, stated up front:
   needs auth/encryption so a peer can't forge or read another's metrics. A later
   concern, but a real one.
 
+**Why this one is different from the rest of the tree.** Everything else here is
+gated on building `warp`. This is not. The exporter rides only on kuilt's
+*existing* CRDT + gossip + anti-entropy, so it is buildable **today**, against a
+real consumer, with no compute grid in sight — and it solves a problem real
+multiplatform apps actually have: a product whose users are spread across many
+endpoints (phones, browsers, desktops) currently has no good way to **reconcile
+logs across all of them**. That makes the offline exporter the natural *first real
+test* of these ideas — useful on its own, independent of the dream.
+
 ## Possible upstream contributions
 
 If this ever became real, the same intersection suggests genuine OpenTelemetry
