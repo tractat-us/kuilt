@@ -1,0 +1,71 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 820 540" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif">
+  <style>
+    .title{fill:#e5e7eb;font-size:19px;font-weight:700}
+    .sub{fill:#7f848e;font-size:12.5px}
+    .ph{font-size:12px;font-weight:700;letter-spacing:.4px}
+    .node{font-size:11.5px;font-weight:600}
+    .small{font-size:10px;fill:#7f848e}
+    .lk{stroke:#3a4150;stroke-width:2;fill:none;marker-end:url(#a)}
+    .rule{font-size:11.5px;fill:#cdd3de}
+    .ruleh{font-size:12px;font-weight:700;fill:#e5c07b}
+  </style>
+  <marker id="a" markerWidth="9" markerHeight="9" refX="6" refY="3" orient="auto"><path d="M0 0 L6 3 L0 6 z" fill="#3a4150"/></marker>
+  <rect fill="#161a22" width="820" height="540"/>
+  <text class="title" x="40" y="34">Query planning — a Draft → Draft rewrite that minimizes coordination</text>
+  <text class="sub" x="40" y="56">The draft is already a declarative dataflow value. The planner rewrites it before the shuttle ever moves.</text>
+
+  <!-- INPUT DRAFT -->
+  <rect x="40" y="74" width="210" height="306" rx="12" fill="#1e2127" stroke="#2c313a" stroke-width="1.5"/>
+  <text class="ph" x="56" y="96" fill="#9aa0ab">INPUT DRAFT</text>
+  <g class="node" text-anchor="middle">
+    <rect x="70" y="108" width="150" height="30" rx="7" fill="#16202b" stroke="#61afef55"/><text x="145" y="127" fill="#9ecbf0">source(corpus)</text>
+    <rect x="70" y="150" width="150" height="30" rx="7" fill="#16202b" stroke="#61afef55"/><text x="145" y="169" fill="#9ecbf0">filter(lang=en)</text>
+    <rect x="70" y="192" width="150" height="30" rx="7" fill="#16201a" stroke="#98c37955"/><text x="145" y="211" fill="#98c379">shuttle(score)</text>
+    <rect x="70" y="234" width="150" height="30" rx="7" fill="#16201a" stroke="#98c37955"/><text x="145" y="253" fill="#98c379">weave()</text>
+    <rect x="70" y="276" width="150" height="30" rx="7" fill="#16201a" stroke="#98c37955"/><text x="145" y="295" fill="#98c379">top(argmax)</text>
+    <rect x="70" y="318" width="150" height="30" rx="7" fill="#241f17" stroke="#e5c07b88"/><text x="145" y="337" fill="#e5c07b">commit(raft)</text>
+  </g>
+  <path class="lk" d="M145 138 V150 M145 180 V192 M145 222 V234 M145 264 V276 M145 306 V318"/>
+
+  <!-- PLANNER -->
+  <rect x="300" y="74" width="220" height="306" rx="12" fill="#211c17" stroke="#e5c07b66" stroke-width="1.5"/>
+  <text class="ph" x="316" y="96" fill="#e5c07b">PLANNER · rewrite rules</text>
+  <g>
+    <text class="ruleh" x="316" y="124">↓ pushdown</text>
+    <text class="rule" x="316" y="141">run filter/projection on the</text>
+    <text class="rule" x="316" y="156">peer holding the data — fewer bytes move.</text>
+    <text class="ruleh" x="316" y="190">⇄ reorder &amp; fuse</text>
+    <text class="rule" x="316" y="207">monotone ops commute (CALM), so</text>
+    <text class="rule" x="316" y="222">the planner is free to fuse/parallelize.</text>
+    <text class="ruleh" x="316" y="256">⊙ defer coordination</text>
+    <text class="rule" x="316" y="273">push the one embroidery as LATE</text>
+    <text class="rule" x="316" y="288">and SMALL as possible.</text>
+    <text class="rule" x="316" y="324" fill="#98c379">cost model = consensus rounds,</text>
+    <text class="rule" x="316" y="339" fill="#98c379">not CPU/IO.</text>
+  </g>
+
+  <path class="lk" d="M250 220 H300" /><path class="lk" d="M520 220 H570"/>
+
+  <!-- OPTIMIZED -->
+  <rect x="570" y="74" width="210" height="306" rx="12" fill="#1e2127" stroke="#98c37966" stroke-width="1.5"/>
+  <text class="ph" x="586" y="96" fill="#98c379">OPTIMIZED PLAN</text>
+  <g class="node" text-anchor="middle">
+    <rect x="600" y="118" width="150" height="40" rx="7" fill="#16202b" stroke="#61afef55"/><text x="675" y="135" fill="#9ecbf0">source + filter</text><text class="small" x="675" y="150">fused, at the data</text>
+    <rect x="600" y="178" width="150" height="40" rx="7" fill="#16201a" stroke="#98c37955"/><text x="675" y="195" fill="#98c379">shuttle(score)</text><text class="small" x="675" y="210">runs where data lives</text>
+    <rect x="600" y="238" width="150" height="40" rx="7" fill="#16201a" stroke="#98c37955"/><text x="675" y="255" fill="#98c379">weave()</text><text class="small" x="675" y="270">incremental as it arrives</text>
+    <rect x="615" y="298" width="120" height="34" rx="7" fill="#241f17" stroke="#e5c07b88"/><text x="675" y="319" fill="#e5c07b">commit · tiny, last</text>
+  </g>
+  <path class="lk" d="M675 158 V178 M675 218 V238 M675 278 V298"/>
+
+  <!-- insight badges -->
+  <rect x="40" y="400" width="740" height="42" rx="10" fill="#16201a" stroke="#98c37944"/>
+  <text x="410" y="426" text-anchor="middle" font-size="13" font-weight="600" fill="#98c379">Most planners minimize IO. This one minimizes coordination — because in a mesh, consensus is the expensive thing.</text>
+  <rect x="40" y="450" width="365" height="56" rx="10" fill="#1e2127" stroke="#2c313a"/>
+  <text x="58" y="472" font-size="12" font-weight="700" fill="#61afef">Statistics are CRDTs</text>
+  <text x="58" y="491" font-size="11.5" fill="#abb2bf">cardinalities = mergeable HyperLogLog sketches,</text>
+  <text x="58" y="504" font-size="11.5" fill="#abb2bf">gossiped on the same machinery. Recognition again.</text>
+  <rect x="415" y="450" width="365" height="56" rx="10" fill="#1e2127" stroke="#2c313a"/>
+  <text x="433" y="472" font-size="12" font-weight="700" fill="#56b6c2">Planning is itself ~coordination-free</text>
+  <text x="433" y="491" font-size="11.5" fill="#abb2bf">each peer plans locally from the convergent draft +</text>
+  <text x="433" y="504" font-size="11.5" fill="#abb2bf">gossiped stats. No central optimizer.</text>
+</svg>

@@ -257,6 +257,74 @@ Two properties make this lovely rather than burdensome:
 So the surface tells the truth: everything cheap looks local; the one expensive
 thing looks like exactly one expensive line.
 
+## Query planning: optimize for coordination, not IO
+
+The **draft** is already a declarative dataflow value — which means it is also a
+*query plan*, and the planner is just a **`Draft → Draft`** rewrite that runs
+before the shuttle moves a byte. The familiar optimizer moves all apply, and CALM
+hands the planner an unusual gift:
+
+- **Pushdown** — run `filter`/projection on the peer that holds the data; less
+  crosses the wire.
+- **Reorder & fuse** — monotone operators *commute*, so the planner may freely
+  reorder, fuse, and parallelize them. (Most planners must *prove* a reordering is
+  safe; here it is safe by construction.)
+- **Defer coordination** — push the one embroidery as *late and as small* as
+  possible.
+
+The twist is the **cost model**. A conventional planner minimizes IO. This one
+minimizes **coordination** — consensus rounds — because in a peer-to-peer mesh a
+Raft round is the expensive thing, not bytes or CPU. The optimizer's objective
+function counts embroidery stitches.
+
+And the recognitions cascade:
+
+- **Statistics are CRDTs.** Cardinalities are mergeable HyperLogLog sketches —
+  i.e. CRDTs — gossiped on the same anti-entropy. The stats layer is the zoo again.
+- **Planning is itself ~coordination-free.** Each peer plans locally from the
+  convergent draft + gossiped stats; no central optimizer. (Need one canonical
+  plan? Electing it is just another embroidery stitch.)
+- **It's incremental.** Monotone ⇒ results refine as data arrives; the query
+  *converges* rather than *finishes*, and a threshold-read observes it whenever.
+
+![Query planning as a Draft → Draft rewrite: the planner pushes filters down to the data, freely reorders and fuses the monotone stages because CALM lets them commute, and defers the single consensus step to be as late and small as possible. Its cost model minimizes coordination rounds rather than IO; its statistics are CRDTs (HyperLogLog), and planning itself is coordination-free.](images/warp/query-planner.svg)
+
+### Observability falls out too
+
+Point the same move at the *running system* and the whole observability stack
+appears with no new subsystem — just more of the zoo on the same gossip:
+
+- **Logs** — an append-only distributed log *is* an `Rga`: a convergent, ordered,
+  append-only sequence. Every peer appends; the merges interleave into one order.
+- **Metrics** — counters are `GCounter`/`PNCounter`, gauges are `LWWRegister`,
+  unique-cardinality is HyperLogLog. All mergeable, all gossiped.
+- **Traces** — causal dependency structure is exactly what the zoo's `Causal`
+  carrier already tracks.
+
+That last point is the deep one: **you don't instrument the trace, you infer it.**
+Conventional tracing makes you propagate context and declare every parent/child
+link by hand. But the `Causal` carrier already records *happens-before* for every
+operation as it propagates — so the trace DAG can be **derived from the causality
+that data movement already wrote down**. The links were never missing; they were a
+byproduct. One honest qualifier: causal metadata captures *potential* causality
+(A *could* have influenced B) — the full dependency cone, which is a superset of
+hand-curated semantic spans. That superset is a gift for debugging (you see every
+real dependency, not just the ones someone remembered to annotate) and can be
+narrowed with explicit annotations where you want precision.
+
+**Bolting in OpenTelemetry**, then, is a thin adapter, not a rewrite. OTel
+supplies the vocabulary (spans, trace/span ids, metric instruments) and the
+dashboards; kuilt supplies a coordination-free, offline-first transport. Three
+seams: (1) a CRDT-backed `SpanExporter`/`MetricExporter`/`LogRecordExporter` that
+writes into the `Rga`/counter/`Causal` structures instead of POSTing OTLP — and
+OTel *cumulative* metric temporality maps cleanly onto monotone CRDT counters;
+(2) propagate W3C `traceparent` inside the **task descriptor**, so a trace follows
+the work as the shuttle carries it across peers — yet within the mesh the span
+links can be *read off the causal DAG* rather than hand-propagated; (3) an edge
+collector drains the converged CRDTs to OTLP for Jaeger/Prometheus/etc. You keep
+standard instrumentation and backends; you trade real-time delivery for
+eventually-consistent, brokerless convergence.
+
 ## What is real, and what is a dream
 
 - **Real, and the only thing we might build:** the spike in #680 — wire the
