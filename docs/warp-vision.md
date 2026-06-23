@@ -60,12 +60,75 @@ class Weft<R>(/* in-flight results */)       // weft shuttled across the warp; a
 // move   = Quilter anti-entropy  (already have)
 ```
 
-The textile metaphor finishes itself. A loom holds the **warp** — the parallel
-threads under tension. You throw the **weft** across them, and the two weave into
-cloth. Here the warp is the set of parallel compute lanes spread over the peers;
-each task is a weft thread, and the **shuttle** carries it across — so
-`warp.shuttle(...)` throws the weft across the warp, and `.aggregate()` beats it
-into cloth. The three nouns and the one verb are the whole vocabulary.
+The textile metaphor finishes itself — and it stretches across the whole design.
+A loom holds the **warp**: the parallel threads under tension. You load a
+**shuttle** with the **weft** and throw it across, and the two weave into
+**cloth**. Mapped onto the grid:
+
+- **warp** — the parallel compute lanes spread across the peers (`warp(seam)`).
+- **weft / shuttle** — `warp.shuttle(...)` throws each task across the warp;
+  `.aggregate()` beats the returning threads into **cloth**, the woven,
+  coordination-free result.
+- **draft** — the *recipe*: how warp and weft interlace, declarable as a value
+  before anything runs. (The natural word, *pattern*, is already a core type —
+  `weave(Rendezvous.New(pattern))` — so the recipe takes the weaver's other word,
+  **draft**.)
+- **embroidery** — the deliberate finishing stitched onto the cloth *by hand*,
+  where consensus is unavoidable (its own section below). (We pointedly avoid
+  calling it a *seam*: `Seam` is already the core contract type.)
+
+## How the method actually travels
+
+A fair question kills most compute-grid dreams: *how does `score` even get to the
+other peers and run there?* The honest answer shapes everything, so the doc states
+it plainly instead of hand-waving "runs on whoever has capacity."
+
+**You never ship the function. You ship a name and its arguments.** kuilt moves
+opaque bytes between peers that might be a JVM server, an iPhone (Kotlin/Native),
+and a browser (wasmJs). A Kotlin lambda compiled to JVM bytecode cannot execute on
+Native or wasm — there is no portable, runtime-shippable representation of Kotlin
+code across those targets. So what crosses the fabric is a tiny **task
+descriptor** — `{ op: "score", arg: ⟦query⟧, item: docId }` — dropped into the
+CRDT work-queue. A peer claims it, looks `"score"` up in a **local operation
+registry** that every node populated at startup from the same compiled binary, and
+runs *its own copy* on local data. The result merges back as a CRDT. The function
+never moved; only its name did.
+
+That implies one honest constraint, stated up front: **a homogeneous binary with
+symbolic dispatch.** Every peer runs the same build; the grid distributes
+*decisions about where data is processed*, not the processing code. The
+`shuttle { … }` block is therefore sugar for "reference a registered operation" —
+a compiler plugin (KSP) could auto-register the ops it sees so it still *reads*
+like an ordinary lambda.
+
+### The fantasy: shipping real code anyway
+
+Named ops can only run code already in the deployed binary. If we ever wanted to
+ship *new* computations at runtime — true code mobility — there is exactly one
+substrate that works across kuilt's targets, and the surprise is that it isn't
+native code:
+
+- **① Named ops — the default.** Ship `(opId, args)`; the code is already
+  everywhere. Works on every target. Limit: no new code at runtime.
+- **③ WASM kernels — the fantasy.** Ship a compiled `.wasm` blob *as* the method.
+  It's the same bytes on every platform; it's a capability **sandbox** (decisive —
+  you'd be running code other peers sent you); and the browser runs it natively.
+  Under the hood the desktop/server runtimes (wasmtime/wasmer) JIT it to native via
+  Cranelift/LLVM, so near-native speed comes for free. The one hard constraint:
+  **iOS forbids runtime JIT**, so on iPhone you *interpret* the wasm (wasm3) —
+  slower, but real and portable.
+- **Not LLVM IR on the wire.** The tempting "ship LLVM bitcode for native speed"
+  path is a trap: bitcode isn't portable (Google tried it — PNaCl — and retired it
+  in favour of WebAssembly), it needs the JIT iOS bans, and it's unsandboxed. LLVM
+  keeps its rightful job — *inside* the wasm runtime, the thing that makes wasm
+  fast — not as a distribution format.
+
+The lovely inversion: the part that *sounds* like science fiction (live code
+crossing a phone, a server, and a browser at once) rides on the most ordinary
+substrate we already half-target — while the path that *sounds* like the
+performance win (native/LLVM) is the dead end. Code mobility is a tier, not a
+switch: names by default, sandboxed wasm kernels when you genuinely must ship code,
+never raw native.
 
 ## The reduction to simplicity
 
@@ -90,10 +153,12 @@ piece already lives (the table) → here is what's left for you to type (three
 lines). The feeling we are selling is **relief**: "oh — I don't have to think
 about any of that."
 
-## The one seam you can see
+## Embroidery: the one place you stitch by hand
 
 There is exactly one place the simplicity is *allowed* to leak, and it leaks for a
-deep reason, not a missing feature.
+deep reason, not a missing feature. The woven cloth is cheap and mechanical; the
+**embroidery** is the deliberate finishing you work onto it by hand, with a
+different tool, where the value concentrates.
 
 Some questions can be answered with no coordination at all: *how many?*, *what's
 the running total?*, *merge everyone's partial rankings*. These only ever grow —
@@ -108,15 +173,19 @@ A late arrival can change a winner, so the peers must stop and agree. CALM says
 this isn't pessimism or a weak implementation — it is a hard boundary. Crossing it
 costs a round of consensus, every time, for everyone.
 
-The beautiful move is to make that boundary the **one visible seam in the cloth**:
+The beautiful move is to make that boundary the cloth's **embroidery** — the one
+part worked by hand, on top, where the type itself flips from woven to stitched:
 
 ```kotlin
-val ranked : CoordinationFree<Ranking<DocId>> =          // monotone — zero coordination
+val ranked : CoordinationFree<Ranking<DocId>> =          // woven cloth — zero coordination
     warp.shuttle(corpus) { score(query, it) }.aggregate()
 
 val winner : Coordinated<DocId> = ranked.top()           // argmax is non-monotone → type flips
-val chosen : DocId              = winner.commit(raft)     // the ONLY consensus in the program
+val chosen : DocId              = winner.commit(raft)     // the ONLY consensus — the hand-stitch
 ```
+
+`commit` is the needle going in: `embroider { top().commit(raft) }` reads as one
+deliberate stitch, and it is the only place a Raft round is ever spent.
 
 Two properties make this lovely rather than burdensome:
 
@@ -139,12 +208,14 @@ thing looks like exactly one expensive line.
 
 - **Real, and the only thing we might build:** the spike in #680 — wire the
   existing pieces into a minimal `Warp`, run one `shuttle`/`aggregate` over the
-  simulation harness, and write down where the CALM seam actually bites. Throwaway
-  by default. Never wired into the default target set or the public API without a
-  separate, deliberate decision.
-- **A dream:** everything else on this page — the polished `warp`/`weft` surface,
-  the `CoordinationFree`/`Coordinated` types, the three-act documentation. It
-  exists to give the spike a north star and to be enjoyed, not to be scheduled.
+  simulation harness, and write down where the CALM boundary actually bites.
+  Throwaway by default. Never wired into the default target set or the public API
+  without a separate, deliberate decision.
+- **A dream:** everything else on this page — the polished
+  `warp`/`weft`/`shuttle`/`draft`/`embroidery` surface, the
+  `CoordinationFree`/`Coordinated` types, the wasm-kernel code mobility, the
+  three-act documentation. It exists to give the spike a north star and to be
+  enjoyed, not to be scheduled.
 
 The hero example here is search-and-rank because it contains both halves (a
 monotone aggregate and a non-monotone winner); any embarrassingly-parallel +
