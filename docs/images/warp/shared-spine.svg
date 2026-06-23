@@ -1,0 +1,90 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 560" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif">
+  <style>
+    .title{fill:#e5e7eb;font-size:20px;font-weight:700}
+    .sub{fill:#7f848e;font-size:13px}
+    .role{font-size:13px;font-weight:700}
+    .use{font-size:10.5px;fill:#9aa0ab}
+    .prim{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:10.5px;fill:#98c379}
+    .ships{font-size:9px;fill:#6f9a5a}
+    .axis{font-size:12px;font-weight:700;letter-spacing:.5px}
+    .axisd{font-size:10.5px;fill:#7f848e}
+    .conn{stroke:#3a4150;stroke-width:1.5}
+    .wraps{font-size:9px;fill:#7f848e;letter-spacing:.5px}
+  </style>
+  <defs>
+    <marker id="ar" markerWidth="11" markerHeight="11" refX="7" refY="4" orient="auto"><path d="M0 0 L8 4 L0 8 z" fill="#56b6c2"/></marker>
+    <marker id="ad" markerWidth="11" markerHeight="11" refX="7" refY="4" orient="auto"><path d="M0 0 L8 4 L0 8 z" fill="#61afef"/></marker>
+  </defs>
+  <rect fill="#161a22" width="960" height="560"/>
+  <text class="title" x="40" y="38">The shared spine — two axes of one design</text>
+  <text class="sub" x="40" y="60">Vertical = recognition (the role, then the primitive under it). Horizontal = payoff (one substrate, many uses).</text>
+
+  <!-- VERTICAL AXIS (recognition / depth) -->
+  <line x1="50" y1="108" x2="50" y2="392" stroke="#61afef" stroke-width="2" marker-end="url(#ad)"/>
+  <text class="axis" fill="#61afef" transform="translate(34,300) rotate(-90)" text-anchor="middle">RECOGNITION ↓ depth</text>
+  <text class="axisd" transform="translate(48,300) rotate(-90)" text-anchor="middle">name the role · reveal the primitive</text>
+
+  <!-- six payoff columns -->
+  <!-- engine (blue) cols 1-3 ; externality (amber) cols 4-6 -->
+  <g text-anchor="middle">
+    <!-- col template: card, role, use, wraps, primitive box, ships -->
+    <!-- 1 Replication -->
+    <rect x="78"  y="104" width="124" height="300" rx="11" fill="#16202b" stroke="#61afef55"/>
+    <text class="role" x="140" y="132" fill="#9ecbf0">Replication</text><text class="use" x="140" y="148">the core, today</text>
+    <text class="wraps" x="140" y="226">— wraps —</text>
+    <rect x="92" y="300" width="96" height="74" rx="8" fill="#10130f" stroke="#98c37944"/>
+    <text class="prim" x="140" y="332">Quilter</text><text class="ships" x="140" y="358">already ships ✓</text>
+
+    <!-- 2 Compute -->
+    <rect x="214" y="104" width="124" height="300" rx="11" fill="#16202b" stroke="#61afef55"/>
+    <text class="role" x="276" y="132" fill="#9ecbf0">Compute</text><text class="use" x="276" y="148">work + results</text>
+    <text class="wraps" x="276" y="226">— wraps —</text>
+    <rect x="228" y="300" width="96" height="74" rx="8" fill="#10130f" stroke="#98c37944"/>
+    <text class="prim" x="276" y="328">ORSet +</text><text class="prim" x="276" y="342">ORMap</text><text class="ships" x="276" y="362">already ships ✓</text>
+
+    <!-- 3 Planning -->
+    <rect x="350" y="104" width="124" height="300" rx="11" fill="#16202b" stroke="#61afef55"/>
+    <text class="role" x="412" y="132" fill="#9ecbf0">Planning</text><text class="use" x="412" y="148">query stats</text>
+    <text class="wraps" x="412" y="226">— wraps —</text>
+    <rect x="364" y="300" width="96" height="74" rx="8" fill="#10130f" stroke="#98c37944"/>
+    <text class="prim" x="412" y="332">HyperLogLog</text><text class="ships" x="412" y="358">already ships ✓</text>
+
+    <!-- 4 Observability (amber) -->
+    <rect x="486" y="104" width="124" height="300" rx="11" fill="#211c17" stroke="#e5c07b55"/>
+    <text class="role" x="548" y="132" fill="#e5c07b">Observability</text><text class="use" x="548" y="148">logs/metrics/traces</text>
+    <text class="wraps" x="548" y="226">— wraps —</text>
+    <rect x="500" y="300" width="96" height="74" rx="8" fill="#10130f" stroke="#98c37944"/>
+    <text class="prim" x="548" y="324">Rga · counters</text><text class="prim" x="548" y="338">· Causal</text><text class="ships" x="548" y="360">already ships ✓</text>
+
+    <!-- 5 Telemetry (amber) -->
+    <rect x="622" y="104" width="124" height="300" rx="11" fill="#211c17" stroke="#e5c07b55"/>
+    <text class="role" x="684" y="132" fill="#e5c07b">Telemetry</text><text class="use" x="684" y="148">offline-first</text>
+    <text class="wraps" x="684" y="226">— wraps —</text>
+    <rect x="636" y="300" width="96" height="74" rx="8" fill="#10130f" stroke="#98c37944"/>
+    <text class="prim" x="684" y="324">durable buffer</text><text class="prim" x="684" y="338">+ idempotent merge</text><text class="ships" x="684" y="360">~ships ✓</text>
+
+    <!-- 6 Federated ML (amber) -->
+    <rect x="758" y="104" width="124" height="300" rx="11" fill="#211c17" stroke="#e5c07b55"/>
+    <text class="role" x="820" y="132" fill="#e5c07b">Federated ML</text><text class="use" x="820" y="148">FedAvg</text>
+    <text class="wraps" x="820" y="226">— wraps —</text>
+    <rect x="772" y="300" width="96" height="74" rx="8" fill="#10130f" stroke="#98c37944"/>
+    <text class="prim" x="820" y="332">Σ counters</text><text class="ships" x="820" y="358">already ships ✓</text>
+  </g>
+
+  <!-- connectors into the spine -->
+  <g class="conn">
+    <line x1="140" y1="404" x2="140" y2="430"/><line x1="276" y1="404" x2="276" y2="430"/>
+    <line x1="412" y1="404" x2="412" y2="430"/><line x1="548" y1="404" x2="548" y2="430"/>
+    <line x1="684" y1="404" x2="684" y2="430"/><line x1="820" y1="404" x2="820" y2="430"/>
+  </g>
+
+  <!-- THE SPINE -->
+  <rect x="78" y="430" width="804" height="56" rx="12" fill="#16201a" stroke="#98c379" stroke-width="2"/>
+  <text x="480" y="456" text-anchor="middle" font-size="14" font-weight="700" fill="#98c379">THE SHARED SUBSTRATE</text>
+  <text x="480" y="476" text-anchor="middle" font-size="12" fill="#cdd3de">CRDTs · gossip · anti-entropy — built once</text>
+
+  <!-- HORIZONTAL AXIS (payoff / breadth) -->
+  <line x1="78" y1="508" x2="882" y2="508" stroke="#56b6c2" stroke-width="2" marker-end="url(#ar)"/>
+  <text class="axis" x="80" y="530" fill="#56b6c2">PAYOFF → breadth</text>
+  <text class="axisd" x="882" y="530" text-anchor="end">one substrate, six uses · engine (blue) → externalities (amber)</text>
+</svg>

@@ -40,6 +40,8 @@ anti-entropy over a mergeable lattice cashes out everywhere:
 - it buffers and reconciles **offline telemetry** — the [offline exporter](warp-observability.md).
 - it aggregates **federated-learning updates** — [AI & modelling](warp-ml.md).
 
+![The shared spine on two axes: the vertical axis is recognition (each payoff names a role, then reveals the kuilt primitive it wraps); the horizontal axis is payoff (one substrate fans out to six uses — replication, compute, planning, observability, telemetry, federated ML — engine in blue, externalities in amber). Every column roots in one shared substrate: CRDTs, gossip, and anti-entropy, built once.](images/warp/shared-spine.svg)
+
 That is the horizontal payoff: one piece of work pays off in six places. It holds a
 level down, too — the **task descriptor** is one envelope doing three jobs (it
 routes work, names the code [by content hash](warp-execution.md), and can carry the
