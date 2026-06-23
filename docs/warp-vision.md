@@ -96,7 +96,7 @@ A loom holds the **warp**: the parallel threads under tension. You load a
 *(How does a function actually reach other peers, when a phone, a server, and a
 browser can't share compiled code? You ship a **name**, not the code — and the
 deeper machinery, including the **bobbin/creel** code cache that ships real
-kernels lazily, lives in the companion, [`warp-deeper.md`](warp-deeper.md).)*
+kernels lazily, lives in [`warp-execution.md`](warp-execution.md).)*
 
 ## The reduction to simplicity
 
@@ -176,18 +176,20 @@ thing looks like exactly one expensive line.
 
 ## Horizons — the fantasy, last
 
-Everything above is the walk. Past it the dream keeps going, and the companion,
-[`warp-deeper.md`](warp-deeper.md), follows it down the mountain:
+Everything above is the walk. Past it the dream keeps going, mapped by the
+[deeper-waters index](warp-deeper.md):
 
-- **Live code mobility.** Ship a sandboxed **WASM kernel** as the method itself, so
-  the same bytes run on a phone, a server, and a browser — with *compiler nodes*
-  tiering it from interpreted to native across the mesh.
-- **It plans and watches itself.** The draft is a query plan the grid optimizes for
-  *coordination* rather than IO; logs, metrics, and traces fall out of the same
-  CRDTs — a trace DAG you *infer* from causality instead of instrumenting.
-- **Federated & parallel ML.** A brokerless, multiplatform substrate for federated
-  learning, distributed inference, hyperparameter search, and sharded retrieval —
-  exactly the aggregation-shaped ML the CALM boundary blesses.
+- **Live code mobility** ([execution](warp-execution.md)). Ship a sandboxed **WASM
+  kernel** as the method itself, so the same bytes run on a phone, a server, and a
+  browser — with *compiler nodes* tiering it from interpreted to native.
+- **It plans and watches itself** ([planning](warp-planning.md),
+  [observability](warp-observability.md)). The draft is a query plan the grid
+  optimizes for *coordination* rather than IO; logs, metrics, and traces fall out
+  of the same CRDTs — a trace DAG you *infer* from causality instead of instrumenting.
+- **Federated & parallel ML** ([AI & modelling](warp-ml.md)). A brokerless,
+  multiplatform substrate for federated learning, distributed inference,
+  hyperparameter search, and sharded retrieval — the aggregation-shaped ML the CALM
+  boundary blesses.
 
 These are dessert. The main course is the three lines.
 
