@@ -238,6 +238,36 @@ someone who has never heard of CRDTs, Raft, or consensus — at the **top of eve
 The test: could a curious non-engineer read the first screen and understand *what kuilt is for*?
 If the first screen needs a CS background, the page is wrong — move the depth down.
 
+### The descent: narrative shape for vision & design docs
+
+Accessible-first (above) is the *rule*; this is the *shape* it takes in a longer narrative doc —
+a design doc, an ADR's motivation, a vision page. Exemplar: [`docs/warp-vision.md`](docs/warp-vision.md).
+When a doc has room to tell a story, walk the reader **down the mountain**, in this order:
+
+1. **One idea, in plain language** — a single concrete "what if…" a non-engineer gets on the first
+   screen.
+2. **Recognition** — show the thing is mostly already built; point at the pieces that exist.
+3. **The reduction** — let a terrifying list of machinery visibly *collapse* into a few lines of
+   surface. The feeling to engineer is **relief**.
+4. **The honest seam** — the one place the simplicity is *allowed* to leak, and *why* (the
+   constraint, not a missing feature).
+5. **The fantasy, last** — the most exciting/speculative capability is dessert, never the opener.
+
+Two devices that carry it:
+
+- **Name the role, reveal the primitive under it.** Every time a low-level type appears, lead with
+  the domain term and reveal the kuilt primitive as the thin wrapper: "a `TaskScheduler` *is* the
+  `BoundedCounter` equalizer," "a work-queue *is* an `ORSet`." The domain layer reads as
+  *vocabulary, not machinery* — and the recognition lands on every mention, not once.
+- **Diagrams are the visual spine of the walk**, not decoration. Author them as committed,
+  dark-themed SVGs under `docs/images/<topic>/` (they render natively on GitHub and stay diff-able
+  text); embed one per beat of the descent.
+
+Why this is written down: an AI- or contributor-authored rewrite re-derives a doc from the
+*technical* baseline — leading with type names, lattices, and consensus — and the walk is the first
+thing lost. **The walk is the product as much as the API is.** When you touch a narrative doc,
+re-read it top-to-bottom and confirm the descent still survives.
+
 ### Keeping docs in sync with code
 
 **`@sample` functions are compiled as part of `commonTest`** (wired by the `kuilt.kmp-library` convention plugin — any `src/commonSamples/kotlin/` directory is added to `commonTest` source roots). A typo or API change that breaks a sample breaks the build. Treat sample functions as load-bearing.
