@@ -40,7 +40,7 @@
     <rect class="panel" x="40" y="362" width="720" height="62" rx="11"/>
     <circle class="num" cx="74" cy="393" r="16"/><text class="numt" x="74" y="398" text-anchor="middle">5</text>
     <text class="h" x="104" y="388">the result merges back</text>
-    <text class="mono" x="104" y="410"><tspan class="grn">ORMap&lt;Id, R&gt;</tspan><tspan class="cm"> — </tspan><tspan class="tl">aggregate()</tspan><tspan class="cm"> is the lattice join. (embroidery only if you pick a single winner.)</tspan></text>
+    <text class="mono" x="104" y="410"><tspan class="grn">ORMap&lt;Id, R&gt;</tspan><tspan class="cm"> — </tspan><tspan class="tl">weave()</tspan><tspan class="cm"> is the lattice join. (embroidery only if you pick a single winner.)</tspan></text>
   </g>
   <path class="link" d="M74 120 V134 M74 196 V210 M74 272 V286 M74 348 V362"/>
 

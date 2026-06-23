@@ -19,7 +19,7 @@
   <!-- DRAFT -->
   <text class="lbl blue" x="240" y="78">THE DRAFT · the recipe</text>
   <rect x="240" y="86" width="320" height="40" rx="9" fill="#16202b" stroke="#61afef66" stroke-width="1.5"/>
-  <text class="mono" x="258" y="111"><tspan class="tl">draft</tspan> { <tspan class="tl">shuttle</tspan>(::score).<tspan class="tl">aggregate</tspan>() }</text>
+  <text class="mono" x="258" y="111"><tspan class="tl">draft</tspan> { <tspan class="tl">shuttle</tspan>(::score).<tspan class="tl">weave</tspan>() }</text>
   <text class="note" x="240" y="146">declared as a value — how warp &amp; weft interlace. Nothing has run yet.</text>
   <path class="arrow" d="M400 156 L400 180"/>
 
@@ -35,7 +35,7 @@
   <line x1="140" y1="292" x2="660" y2="292" stroke="#98c379" stroke-width="2.5"/>
   <ellipse cx="392" cy="292" rx="20" ry="8" fill="#56b6c2"/>
   <text x="392" y="296" text-anchor="middle" font-size="10" font-weight="700" fill="#0d1b1b">shuttle</text>
-  <text class="note" x="140" y="372"><tspan fill="#56b6c2">warp</tspan> = parallel lanes across peers · the <tspan fill="#56b6c2">shuttle</tspan> throws the <tspan fill="#98c379">weft</tspan> · <tspan fill="#56b6c2">aggregate</tspan> beats it into cloth</text>
+  <text class="note" x="140" y="372"><tspan fill="#56b6c2">warp</tspan> = parallel lanes across peers · the <tspan fill="#56b6c2">shuttle</tspan> throws the <tspan fill="#98c379">weft</tspan> · <tspan fill="#56b6c2">weave</tspan> gathers it into cloth</text>
 
   <!-- embroidery stitches on the cloth -->
   <g stroke="#e5c07b" stroke-width="2.5" stroke-linecap="round">

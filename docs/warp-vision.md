@@ -22,7 +22,7 @@ mesh of devices runs it.
 ```kotlin
 val warp   = warp(seam)                                  // the cluster, from one connection
 val scores = warp.shuttle(corpus) { doc -> score(query, doc) }  // runs across every peer
-                 .aggregate()                            // answers weave together as they arrive
+                 .weave()                                // returning threads weave into cloth
 ```
 
 That's the whole pitch. Everything below is the story of why those three lines
@@ -53,7 +53,7 @@ So `:kuilt-warp` is a *thin reframing*, not a new engine:
 
 ```kotlin
 class Warp(seam: Seam)                       // the grid — N parallel lanes across the peers
-class Weft<R>(/* in-flight results */)       // weft shuttled across the warp; aggregate() weaves the cloth
+class Weft<R>(/* in-flight results */)       // weft shuttled across the warp; weave() gathers the cloth
 // queue  = ORSet<Task>          (already have)
 // place  = the equalizer         (already have, aimed at depth)
 // results = ORMap<Id, R>         (already have)
@@ -67,8 +67,9 @@ A loom holds the **warp**: the parallel threads under tension. You load a
 
 - **warp** — the parallel compute lanes spread across the peers (`warp(seam)`).
 - **weft / shuttle** — `warp.shuttle(...)` throws each task across the warp;
-  `.aggregate()` beats the returning threads into **cloth**, the woven,
-  coordination-free result.
+  `.weave()` gathers the returning threads into **cloth**, the woven,
+  coordination-free result. (`weave` *is* the reduce — a lattice join — but the
+  metaphor-word earns its place over a generic `aggregate`.)
 - **draft** — the *recipe*: how warp and weft interlace, declarable as a value
   before anything runs. (The natural word, *pattern*, is already a core type —
   `weave(Rendezvous.New(pattern))` — so the recipe takes the weaver's other word,
@@ -150,7 +151,7 @@ one is already solved inside kuilt and already invisible — so the surface that
 remains is:
 
 ```kotlin
-warp.shuttle(corpus) { score(query, it) }.aggregate()
+warp.shuttle(corpus) { score(query, it) }.weave()
 ```
 
 That collapse *is* the product. The documentation should walk the reader down the
@@ -186,7 +187,7 @@ part worked by hand, on top, where the type itself flips from woven to stitched:
 
 ```kotlin
 val ranked : CoordinationFree<Ranking<DocId>> =          // woven cloth — zero coordination
-    warp.shuttle(corpus) { score(query, it) }.aggregate()
+    warp.shuttle(corpus) { score(query, it) }.weave()
 
 val winner : Coordinated<DocId> = ranked.top()           // argmax is non-monotone → type flips
 val chosen : DocId              = winner.commit(raft)     // the ONLY consensus — the hand-stitch
@@ -197,7 +198,7 @@ deliberate stitch, and it is the only place a Raft round is ever spent.
 
 Two properties make this lovely rather than burdensome:
 
-1. **You never write a proof.** `shuttle` and `aggregate` are coordination-free *by
+1. **You never write a proof.** `shuttle` and `weave` are coordination-free *by
    construction* — they are the library's vetted monotone combinators. The CALM
    theory isn't on your screen; it retreated into the combinators where it can't be
    gotten wrong. (Earlier in the dream we imagined forcing the user to *prove*
@@ -215,7 +216,7 @@ thing looks like exactly one expensive line.
 ## What is real, and what is a dream
 
 - **Real, and the only thing we might build:** the spike in #680 — wire the
-  existing pieces into a minimal `Warp`, run one `shuttle`/`aggregate` over the
+  existing pieces into a minimal `Warp`, run one `shuttle`/`weave` over the
   simulation harness, and write down where the CALM boundary actually bites.
   Throwaway by default. Never wired into the default target set or the public API
   without a separate, deliberate decision.
@@ -226,8 +227,33 @@ thing looks like exactly one expensive line.
   enjoyed, not to be scheduled.
 
 The hero example here is search-and-rank because it contains both halves (a
-monotone aggregate and a non-monotone winner); any embarrassingly-parallel +
+monotone weave and a non-monotone winner); any embarrassingly-parallel +
 reduce + decide workload tells the same story and is freely swappable.
+
+## The walk is part of the dream
+
+If `:kuilt-warp` is ever real, **its documentation should take the reader on the
+exact walk this page just took** — that is itself a design goal, not a nicety.
+The product's landing page, README, and guide should descend the same mountain, in
+the same order:
+
+1. **One idea, in plain language** — "what if running your code across a roomful of
+   machines felt like running it on one?" A curious non-engineer understands the
+   first screen. (This is already kuilt's house rule: accessible first, technical
+   depth only deeper.)
+2. **Recognition** — it's mostly already built; here is where each piece lives.
+3. **The reduction** — watch the terrifying list collapse to three lines. The
+   feeling is *relief*.
+4. **The honest seam** — the one place (embroidery / consensus) the simplicity is
+   allowed to leak, and *why* the mathematics makes it so.
+5. **The fantasy, last** — code mobility, the WASM trick — dessert, not the main.
+
+The four diagrams on this page (`descent`, `loom`, `on-the-wire`, `code-mobility`)
+are the visual spine of that walk; a future guide can reuse them verbatim. The
+reason to capture this now, while it is only a dream, is that an AI- or
+contributor-authored rewrite tends to re-derive the docs from the *technical*
+baseline — leading with `CoordinationFree`, lattices, and Raft — and the walk is
+lost. **The walk is the product as much as the API is.** Preserve the descent.
 
 ## The precedent
 

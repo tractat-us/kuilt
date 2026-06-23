@@ -52,7 +52,7 @@
   <rect class="code" x="210" y="322" width="380" height="116"/>
   <text class="mono" x="230" y="350"><tspan class="tl">warp</tspan><tspan class="cm">.</tspan><tspan class="tl">shuttle</tspan><tspan class="cm">(corpus) {</tspan></text>
   <text class="mono" x="230" y="372"><tspan class="cm">    </tspan><tspan class="grn">score</tspan><tspan class="cm">(query, it)</tspan></text>
-  <text class="mono" x="230" y="394"><tspan class="cm">}.</tspan><tspan class="tl">aggregate</tspan><tspan class="cm">()</tspan></text>
+  <text class="mono" x="230" y="394"><tspan class="cm">}.</tspan><tspan class="tl">weave</tspan><tspan class="cm">()</tspan></text>
   <text class="mono am" x="230" y="424">  .embroider { top().commit(raft) }</text>
 
   <text class="cap" x="400" y="470" text-anchor="middle">the collapse is the product — relief.</text>
