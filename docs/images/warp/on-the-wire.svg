@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 540" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif">
+  <style>
+    .title{fill:#e5e7eb;font-size:20px;font-weight:700}
+    .sub{fill:#56b6c2;font-size:13.5px;font-weight:600}
+    .panel{fill:#1e2127;stroke:#2c313a;stroke-width:1.5}
+    .num{fill:#0d6efd}
+    .numt{fill:#fff;font-size:14px;font-weight:700}
+    .h{fill:#fff;font-size:14px;font-weight:600}
+    .mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px}
+    .cm{fill:#7f848e}.tl{fill:#56b6c2}.grn{fill:#98c379}.am{fill:#e5c07b}.blue{fill:#61afef}
+    .link{stroke:#3a4150;stroke-width:2.5;fill:none}
+    .wire{fill:#10130f;stroke:#56b6c2;stroke-width:1.5;stroke-dasharray:6 4}
+  </style>
+  <rect fill="#161a22" width="800" height="540"/>
+  <text class="title" x="40" y="38">How a method crosses the fabric</text>
+
+  <!-- step rows -->
+  <g>
+    <!-- 1 -->
+    <rect class="panel" x="40" y="58" width="720" height="62" rx="11"/>
+    <circle class="num" cx="74" cy="89" r="16"/><text class="numt" x="74" y="94" text-anchor="middle">1</text>
+    <text class="h" x="104" y="84">shuttle splits the work into descriptors</text>
+    <text class="mono" x="104" y="106"><tspan class="tl">warp.shuttle</tspan><tspan class="cm">(corpus) { score(query, it) }  →  one tiny descriptor per item</tspan></text>
+    <!-- 2 -->
+    <rect class="panel" x="40" y="134" width="720" height="62" rx="11"/>
+    <circle class="num" cx="74" cy="165" r="16"/><text class="numt" x="74" y="170" text-anchor="middle">2</text>
+    <text class="h" x="104" y="160">into a CRDT work-queue, replicated everywhere</text>
+    <text class="mono" x="104" y="182"><tspan class="grn">ORSet&lt;Task&gt;</tspan><tspan class="cm"> — Quilter + gossip carry it to every peer. No broker.</tspan></text>
+    <!-- 3 -->
+    <rect class="panel" x="40" y="210" width="720" height="62" rx="11"/>
+    <circle class="num" cx="74" cy="241" r="16"/><text class="numt" x="74" y="246" text-anchor="middle">3</text>
+    <text class="h" x="104" y="236">the equalizer places it — the scheduler we already built</text>
+    <text class="mono" x="104" y="258"><tspan class="blue">BoundedCounter</tspan><tspan class="cm"> balances by queue-depth: idle peers claim work (work-stealing).</tspan></text>
+    <!-- 4 -->
+    <rect class="panel" x="40" y="286" width="720" height="62" rx="11"/>
+    <circle class="num" cx="74" cy="317" r="16"/><text class="numt" x="74" y="322" text-anchor="middle">4</text>
+    <text class="h" x="104" y="312">the peer runs its OWN copy — the function never moved</text>
+    <text class="mono" x="104" y="334"><tspan class="cm">registry[</tspan><tspan class="am">"score"</tspan><tspan class="cm">] = ::score   // registered at boot, on every node, same binary</tspan></text>
+    <!-- 5 -->
+    <rect class="panel" x="40" y="362" width="720" height="62" rx="11"/>
+    <circle class="num" cx="74" cy="393" r="16"/><text class="numt" x="74" y="398" text-anchor="middle">5</text>
+    <text class="h" x="104" y="388">the result merges back</text>
+    <text class="mono" x="104" y="410"><tspan class="grn">ORMap&lt;Id, R&gt;</tspan><tspan class="cm"> — </tspan><tspan class="tl">aggregate()</tspan><tspan class="cm"> is the lattice join. (embroidery only if you pick a single winner.)</tspan></text>
+  </g>
+  <path class="link" d="M74 120 V134 M74 196 V210 M74 272 V286 M74 348 V362"/>
+
+  <!-- wire banner -->
+  <rect class="wire" x="40" y="446" width="720" height="64" rx="11"/>
+  <text class="sub" x="60" y="472">ON THE WIRE</text>
+  <text class="mono" x="60" y="494"><tspan class="am">{ op: "score", arg: ⟦query⟧, item: docId }</tspan><tspan class="cm">  and results — </tspan><tspan class="grn">names + data, never the function.</tspan></text>
+</svg>

@@ -77,6 +77,8 @@ A loom holds the **warp**: the parallel threads under tension. You load a
   where consensus is unavoidable (its own section below). (We pointedly avoid
   calling it a *seam*: `Seam` is already the core contract type.)
 
+![One loom, three layers: the draft (recipe) is woven into coordination-free cloth by the warp, weft and shuttle, then the embroidery — consensus — is stitched on top by hand.](images/warp/loom.svg)
+
 ## How the method actually travels
 
 A fair question kills most compute-grid dreams: *how does `score` even get to the
@@ -93,6 +95,8 @@ CRDT work-queue. A peer claims it, looks `"score"` up in a **local operation
 registry** that every node populated at startup from the same compiled binary, and
 runs *its own copy* on local data. The result merges back as a CRDT. The function
 never moved; only its name did.
+
+![How a method crosses the fabric, in five steps: shuttle splits the work into descriptors; a CRDT work-queue replicates them; the equalizer places them; each peer runs its own registered copy; results merge back. On the wire: names and data, never the function.](images/warp/on-the-wire.svg)
 
 That implies one honest constraint, stated up front: **a homogeneous binary with
 symbolic dispatch.** Every peer runs the same build; the grid distributes
@@ -130,6 +134,8 @@ performance win (native/LLVM) is the dead end. Code mobility is a tier, not a
 switch: names by default, sandboxed wasm kernels when you genuinely must ship code,
 never raw native.
 
+![Code mobility as a ladder: named ops are the default; WASM kernels are the fantasy — same bytes everywhere, sandboxed, browser-native, JIT'd to native via Cranelift where allowed and interpreted on iOS where JIT is banned; shipping LLVM IR on the wire is the trap PNaCl already proved a dead end.](images/warp/code-mobility.svg)
+
 ## The reduction to simplicity
 
 This is the heart of the vision, and the part the documentation must *dramatize*.
@@ -152,6 +158,8 @@ mountain: here is everything a grid needs (the scary list) → here is where eac
 piece already lives (the table) → here is what's left for you to type (three
 lines). The feeling we are selling is **relief**: "oh — I don't have to think
 about any of that."
+
+![The descent: a terrifying list of everything a distributed grid needs collapses, tier by tier, into the pieces kuilt already ships, and finally into the three lines of code you actually type. The collapse is the product — relief.](images/warp/descent.svg)
 
 ## Embroidery: the one place you stitch by hand
 

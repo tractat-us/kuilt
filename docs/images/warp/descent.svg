@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 500" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif">
+  <style>
+    .bg{fill:#161a22}
+    .panel{fill:#1e2127;stroke:#2c313a;stroke-width:1.5;rx:12}
+    .title{fill:#e5e7eb;font-size:20px;font-weight:700}
+    .lbl{fill:#7f848e;font-size:13px;font-weight:600;letter-spacing:.4px}
+    .pill{rx:11}
+    .ptxt{font-size:12px;font-weight:600}
+    .scary{fill:#2a1a1a;stroke:#e06c7566;stroke-width:1}
+    .scaryt{fill:#f0b3b3}
+    .have{fill:#16202b;stroke:#61afef66;stroke-width:1}
+    .havet{fill:#9ecbf0}
+    .code{fill:#10130f;stroke:#98c37966;stroke-width:1.5;rx:10}
+    .mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px}
+    .grn{fill:#98c379}.tl{fill:#56b6c2}.cm{fill:#7f848e}.am{fill:#e5c07b}
+    .cap{fill:#98c379;font-size:14px;font-weight:600}
+    .chev{stroke:#3a4150;stroke-width:3;fill:none;stroke-linecap:round}
+  </style>
+  <rect class="bg" x="0" y="0" width="800" height="500"/>
+  <text class="title" x="40" y="40">The descent — from a terrifying list to three lines</text>
+
+  <!-- Tier A: the scary list -->
+  <rect class="panel" x="40" y="62" width="720" height="104" rx="12"/>
+  <text class="lbl" x="56" y="84">EVERYTHING A DISTRIBUTED GRID NEEDS</text>
+  <g class="ptxt">
+    <rect class="pill scary" x="56"  y="98" width="118" height="24"/><text class="scaryt" x="115" y="114" text-anchor="middle">membership</text>
+    <rect class="pill scary" x="184" y="98" width="132" height="24"/><text class="scaryt" x="250" y="114" text-anchor="middle">failure detection</text>
+    <rect class="pill scary" x="326" y="98" width="86"  height="24"/><text class="scaryt" x="369" y="114" text-anchor="middle">gossip</text>
+    <rect class="pill scary" x="422" y="98" width="120" height="24"/><text class="scaryt" x="482" y="114" text-anchor="middle">anti-entropy</text>
+    <rect class="pill scary" x="552" y="98" width="150" height="24"/><text class="scaryt" x="627" y="114" text-anchor="middle">convergent state</text>
+    <rect class="pill scary" x="56"  y="130" width="138" height="24"/><text class="scaryt" x="125" y="146" text-anchor="middle">load balancing</text>
+    <rect class="pill scary" x="204" y="130" width="100" height="24"/><text class="scaryt" x="254" y="146" text-anchor="middle">consensus</text>
+    <rect class="pill scary" x="314" y="130" width="146" height="24"/><text class="scaryt" x="387" y="146" text-anchor="middle">exactly-once delivery</text>
+    <rect class="pill scary" x="470" y="130" width="120" height="24"/><text class="scaryt" x="530" y="146" text-anchor="middle">placement</text>
+  </g>
+
+  <path class="chev" d="M384 176 l16 16 l16 -16"/>
+
+  <!-- Tier B: already in kuilt -->
+  <rect class="panel" x="120" y="206" width="560" height="76" rx="12"/>
+  <text class="lbl" x="136" y="228">…EACH PIECE ALREADY LIVES IN kuilt</text>
+  <g class="ptxt">
+    <rect class="pill have" x="136" y="242" width="124" height="26"/><text class="havet" x="198" y="259" text-anchor="middle">:kuilt-liveness</text>
+    <rect class="pill have" x="268" y="242" width="92"  height="26"/><text class="havet" x="314" y="259" text-anchor="middle">Quilter</text>
+    <rect class="pill have" x="368" y="242" width="150" height="26"/><text class="havet" x="443" y="259" text-anchor="middle">BoundedCounter eq.</text>
+    <rect class="pill have" x="526" y="242" width="100" height="26"/><text class="havet" x="576" y="259" text-anchor="middle">:kuilt-raft</text>
+  </g>
+
+  <path class="chev" d="M384 292 l16 16 l16 -16"/>
+
+  <!-- Tier C: the three lines -->
+  <rect class="code" x="210" y="322" width="380" height="116"/>
+  <text class="mono" x="230" y="350"><tspan class="tl">warp</tspan><tspan class="cm">.</tspan><tspan class="tl">shuttle</tspan><tspan class="cm">(corpus) {</tspan></text>
+  <text class="mono" x="230" y="372"><tspan class="cm">    </tspan><tspan class="grn">score</tspan><tspan class="cm">(query, it)</tspan></text>
+  <text class="mono" x="230" y="394"><tspan class="cm">}.</tspan><tspan class="tl">aggregate</tspan><tspan class="cm">()</tspan></text>
+  <text class="mono am" x="230" y="424">  .embroider { top().commit(raft) }</text>
+
+  <text class="cap" x="400" y="470" text-anchor="middle">the collapse is the product — relief.</text>
+</svg>
