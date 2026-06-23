@@ -27,7 +27,9 @@ function counts embroidery stitches.
 And the recognitions cascade:
 
 - **Statistics are CRDTs.** Cardinalities are mergeable HyperLogLog sketches —
-  i.e. CRDTs — gossiped on the same anti-entropy. The stats layer is the zoo again.
+  i.e. CRDTs — gossiped on the same anti-entropy. The stats layer is the zoo again;
+  and the *same* gossiped sketches are also your
+  [metrics and telemetry](warp-observability.md) — paid for once, spent twice.
 - **Planning is itself ~coordination-free.** Each peer plans locally from the
   convergent draft + gossiped stats; no central optimizer. (Need one canonical
   plan? Electing it is just another embroidery stitch.)

@@ -29,6 +29,11 @@ hand-curated semantic spans. That superset is a gift for debugging (you see ever
 real dependency, not just the ones someone remembered to annotate) and can be
 narrowed with explicit annotations where you want precision.
 
+The horizontal payoff is stark: the `Causal` carrier is the *same* metadata that
+makes CRDTs converge in the first place. Convergence and distributed tracing turn
+out to be one mechanism read two ways — you don't build a tracer, you read the one
+you already run.
+
 ## Bolting in OpenTelemetry
 
 Bolting in OpenTelemetry is a thin adapter, not a rewrite. OTel supplies the
@@ -38,9 +43,9 @@ supplies a coordination-free, offline-first transport. Three seams:
 1. A CRDT-backed `SpanExporter`/`MetricExporter`/`LogRecordExporter` that writes
    into the `Rga`/counter/`Causal` structures instead of POSTing OTLP — and OTel
    *cumulative* metric temporality maps cleanly onto monotone CRDT counters.
-2. Propagate W3C `traceparent` inside the **task descriptor**, so a trace follows
-   the work as the shuttle carries it across peers — yet within the mesh the span
-   links can be *read off the causal DAG* rather than hand-propagated.
+2. Propagate W3C `traceparent` inside the [**task descriptor**](warp-execution.md),
+   so a trace follows the work as the shuttle carries it across peers — yet within
+   the mesh the span links can be *read off the causal DAG* rather than hand-propagated.
 3. An edge collector drains the converged CRDTs to OTLP for Jaeger/Prometheus/etc.
 
 You keep standard instrumentation and backends; you trade real-time delivery for

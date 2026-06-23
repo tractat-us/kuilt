@@ -17,8 +17,9 @@ it's CALM telling you which workloads can run coordination-free.
 
 - **Federated learning / analytics — the standout.** FedAvg is a count-normalized
   sum of model updates: accumulate `(Σweights, Σcount)` as monotone counters and
-  divide at read — that's a *weave*. Brokerless, data stays on-device, no central
-  server. kuilt already reaches phones, browsers, and servers, so a peer-symmetric
+  divide at read — that's a *weave*, on the *same* counters that carry
+  [metrics](warp-observability.md). Federated averaging and metric aggregation are
+  one merge. Brokerless, data stays on-device, no central server. kuilt already reaches phones, browsers, and servers, so a peer-symmetric
   *multiplatform* federated substrate is genuinely differentiated — most federated
   frameworks are server-orchestrated, and most can't reach the browser or iOS at
   all. Secure aggregation rides the same monotone accumulation.

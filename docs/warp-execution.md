@@ -21,6 +21,12 @@ up in a **local operation registry** that every node populated at startup from t
 same compiled binary, and runs *its own copy* on local data. The result merges back
 as a CRDT. The function never moved; only its name did.
 
+That single descriptor turns out to be a workhorse — one envelope doing three jobs:
+it **routes the work**, its `op` doubles as the **bobbin's content hash** (see *Lazy
+bobbins* below) once you ship real code, and it can carry a W3C `traceparent` so a
+trace [follows the work](warp-observability.md) across peers. Design the envelope
+once; it pays off three ways.
+
 ![How a method crosses the fabric, in five steps: shuttle splits the work into descriptors; a CRDT work-queue replicates them; the equalizer places them; each peer runs its own registered copy; results merge back. On the wire: names and data, never the function.](images/warp/on-the-wire.svg)
 
 That implies one honest constraint, stated up front: **a homogeneous binary with
