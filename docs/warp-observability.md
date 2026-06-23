@@ -46,11 +46,73 @@ supplies a coordination-free, offline-first transport. Three seams:
 You keep standard instrumentation and backends; you trade real-time delivery for
 eventually-consistent, brokerless convergence.
 
+## The offline-first exporter (sketch)
+
+The most *landable* version of all this is a single artifact: a **kuilt-backed,
+offline-first OpenTelemetry exporter** for Kotlin Multiplatform — the platform
+(wasm/iOS) and the capability (durable offline buffering) that OTel is thinnest on
+today. The surface is deliberately small; the cleverness is all in the substrate.
+
+```kotlin
+// A kuilt-backed, offline-first OpenTelemetry exporter (Kotlin Multiplatform).
+class WarpTelemetry(
+    seam: Seam,            // the kuilt fabric — gossip + anti-entropy
+    store: DurableStore,   // local WAL: SQLite (JVM/Android), IndexedDB (wasm), platform (iOS)
+) {
+    // The OTel SDK plugs these in as its exporters — standard instrumentation, unchanged:
+    val spans  : SpanExporter        // span records → ORSet<Span> keyed by spanId  (idempotent union)
+    val metrics: MetricExporter      // cumulative temporality → mergeable counters  (no double-count)
+    val logs   : LogRecordExporter   // → Rga<LogRecord> (append-only, ordered)
+}
+
+// On any connected node, a bridge drains converged telemetry to a real backend:
+class WarpOtlpBridge(seam: Seam, otlp: OtlpExporter)   // converged CRDTs → OTLP → Collector
+```
+
+The **key inversion**: each exporter's `export()` returns success the moment the
+data is *durably written locally* — not when it's delivered. Delivery is the
+fabric's job (gossip + anti-entropy), and it happens whenever connectivity allows,
+possibly hours later. Reconnection isn't a blind queue replay; producer and
+collector **reconcile by digest** — only the missing deltas move, which is kind to
+a link that may drop again mid-sync.
+
+![The offline-first exporter data path: an app's standard OTel SDK feeds kuilt-backed Span/Metric/Log exporters that persist into a durable local store as CRDTs (spans→ORSet, metrics→counter, logs→Rga); export() returns on the durable write, not on delivery; the kuilt fabric gossips and reconciles by digest on reconnect; an edge bridge drains the converged CRDTs to OTLP for a Collector and backends like Jaeger and Prometheus.](images/warp/offline-exporter.svg)
+
+The CRDT representations are what make this correct rather than merely buffered:
+spans are an `ORSet` keyed by `spanId` (resend = set union = automatic dedup);
+metrics are mergeable cumulative counters (resend merges idempotently — the
+delta-temporality double-count-under-retry bug *cannot occur*); logs are an `Rga`
+ordered by producer sequence. **A resend can never corrupt the data**, which is the
+property a flaky link otherwise destroys.
+
+Honest limits, stated up front:
+
+- **Clocks.** A long-offline device has its own possibly-skewed clock. You carry
+  the producer's local timestamp and estimate an offset on reconnect (HLC helps
+  order across producers), but you cannot recover ground truth.
+- **Late traces.** A trace straddling an offline and an online producer only
+  assembles when the offline half syncs; backends accept late spans only within an
+  assembly window. Eventually-complete, with a latency ceiling.
+- **Bounded buffer.** Offline-forever can't buffer forever — but the degradation is
+  asymmetric: metrics compress losslessly (a counter is O(1) regardless of how many
+  increments happened offline), while logs/traces degrade gracefully under a cap
+  (windowed TTL, reservoir sampling) — and the exporter *logs what it dropped*,
+  never silently truncating.
+- **Trust.** On-device buffered telemetry is sensitive, and peer-relayed telemetry
+  needs auth/encryption so a peer can't forge or read another's metrics. A later
+  concern, but a real one.
+
 ## Possible upstream contributions
 
 If this ever became real, the same intersection suggests genuine OpenTelemetry
-contributions (roughly best-fit first): an **OTel for Kotlin Multiplatform /
-wasm / iOS** SDK + exporter (the KMP story is thin today); an **offline-first /
-store-and-forward** telemetry path where idempotent CRDT-counter merge fixes
-double-counting under retry; an OTEP for **causality-inferred span links**; and
-**hybrid-logical-clock** ordering for spans under wall-clock skew.
+contributions (roughly best-fit, most-landable first):
+
+1. The **offline-first KMP exporter sketched above** — covers the missing platform
+   (wasm/iOS) *and* the missing capability (durable offline buffering), and the
+   idempotent CRDT-counter merge is a principled fix for retry double-counting.
+   Mostly shippable code plus a short semantics note. The strongest first move.
+2. An OTEP for **causality-inferred span links** — derive the trace DAG from the
+   `Causal` happens-before metadata instead of hand-propagating context. A
+   data-model change (higher bar; socialise in the tracing SIG first).
+3. **Hybrid-logical-clock** ordering for spans under wall-clock skew — a contained,
+   valuable companion to either of the above.

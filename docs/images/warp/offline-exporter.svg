@@ -1,0 +1,62 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 460" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif">
+  <style>
+    .title{fill:#e5e7eb;font-size:19px;font-weight:700}
+    .zone{font-size:11px;font-weight:700;letter-spacing:.5px}
+    .box{font-size:12px;font-weight:600;fill:#cdd3de}
+    .small{font-size:10.5px;fill:#7f848e}
+    .lk{stroke:#3a4150;stroke-width:2;fill:none;marker-end:url(#a)}
+    .mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px}
+  </style>
+  <marker id="a" markerWidth="9" markerHeight="9" refX="6" refY="3" orient="auto"><path d="M0 0 L6 3 L0 6 z" fill="#3a4150"/></marker>
+  <rect fill="#161a22" width="880" height="460"/>
+  <text class="title" x="40" y="34">The offline-first exporter — data path</text>
+
+  <!-- PRODUCER zone -->
+  <rect x="32" y="56" width="300" height="332" rx="12" fill="#16202b" stroke="#61afef55" stroke-width="1.5"/>
+  <text class="zone" x="48" y="78" fill="#61afef">PRODUCER · phone / browser / edge (offline-capable)</text>
+  <g text-anchor="middle">
+    <rect x="92" y="90" width="180" height="30" rx="7" fill="#1e2127" stroke="#2c313a"/><text class="box" x="182" y="110">app</text>
+    <rect x="92" y="134" width="180" height="30" rx="7" fill="#1e2127" stroke="#2c313a"/><text class="box" x="182" y="154">OTel SDK (standard)</text>
+    <rect x="64" y="178" width="236" height="46" rx="7" fill="#16201a" stroke="#98c37955"/>
+    <text class="box" x="182" y="196" fill="#98c379">Warp exporters</text>
+    <text class="small" x="182" y="212">SpanExporter · MetricExporter · LogRecordExporter</text>
+    <rect x="64" y="238" width="236" height="62" rx="7" fill="#10130f" stroke="#98c37944"/>
+    <text class="small" x="182" y="256" fill="#98c379">DurableStore (WAL: SQLite / IndexedDB)</text>
+    <text class="mono" x="182" y="274" fill="#9ecbf0">spans→ORSet · metrics→counter · logs→Rga</text>
+    <text class="small" x="182" y="290">survives restart / crash / long offline</text>
+  </g>
+  <path class="lk" d="M182 120 V134 M182 164 V178 M182 224 V238"/>
+  <rect x="48" y="316" width="268" height="60" rx="8" fill="#241f17" stroke="#e5c07b66"/>
+  <text class="small" x="60" y="336" fill="#e5c07b" font-weight="700">the key inversion</text>
+  <text class="mono" x="60" y="354" fill="#cdd3de">export() succeeds on the DURABLE WRITE,</text>
+  <text class="mono" x="60" y="368" fill="#cdd3de">not on delivery. The fabric delivers later.</text>
+
+  <!-- FABRIC zone -->
+  <rect x="348" y="56" width="170" height="332" rx="12" fill="#1b1c22" stroke="#56b6c255" stroke-width="1.5"/>
+  <text class="zone" x="364" y="78" fill="#56b6c2">kuilt FABRIC</text>
+  <g text-anchor="middle">
+    <rect x="364" y="150" width="138" height="44" rx="7" fill="#1e2127" stroke="#2c313a"/>
+    <text class="box" x="433" y="168" fill="#7fd4e0">Seam</text><text class="small" x="433" y="184">gossip + anti-entropy</text>
+  </g>
+  <text class="small" x="433" y="232" text-anchor="middle">reconnect =</text>
+  <text class="small" x="433" y="248" text-anchor="middle">reconcile by digest,</text>
+  <text class="small" x="433" y="264" text-anchor="middle">not blind replay</text>
+  <path class="lk" d="M332 200 H362"/>
+  <path class="lk" d="M504 200 H538"/>
+
+  <!-- EDGE zone -->
+  <rect x="540" y="56" width="308" height="332" rx="12" fill="#16201a" stroke="#98c37955" stroke-width="1.5"/>
+  <text class="zone" x="556" y="78" fill="#98c379">EDGE · a connected node</text>
+  <g text-anchor="middle">
+    <rect x="572" y="150" width="244" height="46" rx="7" fill="#1e2127" stroke="#2c313a"/>
+    <text class="box" x="694" y="168">WarpOtlpBridge</text><text class="small" x="694" y="184">drains converged CRDTs → OTLP</text>
+    <rect x="572" y="214" width="244" height="30" rx="7" fill="#1e2127" stroke="#2c313a"/><text class="box" x="694" y="234">OTel Collector</text>
+    <rect x="572" y="258" width="116" height="44" rx="7" fill="#1e2127" stroke="#2c313a"/><text class="small" x="630" y="284">Jaeger</text>
+    <rect x="700" y="258" width="116" height="44" rx="7" fill="#1e2127" stroke="#2c313a"/><text class="small" x="758" y="284">Prometheus</text>
+  </g>
+  <path class="lk" d="M694 196 V214 M694 244 V258 M660 280 H660 M694 248 L630 258 M694 248 L758 258"/>
+
+  <!-- bottom guarantee -->
+  <rect x="32" y="404" width="816" height="42" rx="10" fill="#10130f" stroke="#98c37944"/>
+  <text x="440" y="430" text-anchor="middle" font-size="13" font-weight="600" fill="#98c379">Idempotent CRDT merge ⇒ a resend can't double-count: metrics are cumulative, spans dedup by id, logs merge by sequence.</text>
+</svg>
