@@ -24,13 +24,13 @@
     <!-- 2 -->
     <rect class="panel" x="40" y="134" width="720" height="62" rx="11"/>
     <circle class="num" cx="74" cy="165" r="16"/><text class="numt" x="74" y="170" text-anchor="middle">2</text>
-    <text class="h" x="104" y="160">into a CRDT work-queue, replicated everywhere</text>
-    <text class="mono" x="104" y="182"><tspan class="grn">ORSet&lt;Task&gt;</tspan><tspan class="cm"> — Quilter + gossip carry it to every peer. No broker.</tspan></text>
+    <text class="h" x="104" y="160">into the TaskQueue, replicated everywhere</text>
+    <text class="mono" x="104" y="182"><tspan class="tl">TaskQueue</tspan><tspan class="cm"> = a thin wrapper over an </tspan><tspan class="grn">ORSet</tspan><tspan class="cm"> — Quilter + gossip carry it to every peer.</tspan></text>
     <!-- 3 -->
     <rect class="panel" x="40" y="210" width="720" height="62" rx="11"/>
     <circle class="num" cx="74" cy="241" r="16"/><text class="numt" x="74" y="246" text-anchor="middle">3</text>
-    <text class="h" x="104" y="236">the equalizer places it — the scheduler we already built</text>
-    <text class="mono" x="104" y="258"><tspan class="blue">BoundedCounter</tspan><tspan class="cm"> balances by queue-depth: idle peers claim work (work-stealing).</tspan></text>
+    <text class="h" x="104" y="236">the TaskScheduler places it — the scheduler we already built</text>
+    <text class="mono" x="104" y="258"><tspan class="tl">TaskScheduler</tspan><tspan class="cm"> = the </tspan><tspan class="blue">BoundedCounter</tspan><tspan class="cm"> equalizer, balancing by queue-depth (work-stealing).</tspan></text>
     <!-- 4 -->
     <rect class="panel" x="40" y="286" width="720" height="62" rx="11"/>
     <circle class="num" cx="74" cy="317" r="16"/><text class="numt" x="74" y="322" text-anchor="middle">4</text>
@@ -39,8 +39,8 @@
     <!-- 5 -->
     <rect class="panel" x="40" y="362" width="720" height="62" rx="11"/>
     <circle class="num" cx="74" cy="393" r="16"/><text class="numt" x="74" y="398" text-anchor="middle">5</text>
-    <text class="h" x="104" y="388">the result merges back</text>
-    <text class="mono" x="104" y="410"><tspan class="grn">ORMap&lt;Id, R&gt;</tspan><tspan class="cm"> — </tspan><tspan class="tl">weave()</tspan><tspan class="cm"> is the lattice join. (embroidery only if you pick a single winner.)</tspan></text>
+    <text class="h" x="104" y="388">the result merges back into Results</text>
+    <text class="mono" x="104" y="410"><tspan class="tl">Results</tspan><tspan class="cm"> = a thin wrapper over an </tspan><tspan class="grn">ORMap</tspan><tspan class="cm">; </tspan><tspan class="tl">weave()</tspan><tspan class="cm"> is the lattice join. (embroidery if you pick a winner.)</tspan></text>
   </g>
   <path class="link" d="M74 120 V134 M74 196 V210 M74 272 V286 M74 348 V362"/>
 

@@ -46,19 +46,26 @@ things, and kuilt already ships all four. The vision is not "build a grid." It i
 The fourth row is the quiet punchline. The `BoundedCounter` equalizer we built to
 keep quotas balanced is, mathematically, a **decentralized work-stealing
 scheduler** — diffusive load balancing and power-of-two-choices, the exact
-algorithms a grid uses to place tasks. We built a scheduler in disguise. `warp`
-just points it at queue-depth instead of quota.
+algorithms a grid uses to place tasks. We built a scheduler in disguise: rename
+`BoundedCounter` to **`TaskScheduler`**, aim it at queue-depth instead of quota,
+and *nothing else changes*.
 
-So `:kuilt-warp` is a *thin reframing*, not a new engine:
+So `:kuilt-warp` is a *thin reframing*, not a new engine. Every compute type is a
+trivial wrapper around a primitive kuilt already ships:
 
 ```kotlin
-class Warp(seam: Seam)                       // the grid — N parallel lanes across the peers
-class Weft<R>(/* in-flight results */)       // weft shuttled across the warp; weave() gathers the cloth
-// queue  = ORSet<Task>          (already have)
-// place  = the equalizer         (already have, aimed at depth)
-// results = ORMap<Id, R>         (already have)
-// move   = Quilter anti-entropy  (already have)
+class Warp(seam: Seam)                          // the grid — parallel lanes across the peers
+class TaskQueue<T>(q: ORSet<Task<T>>)           // the work-queue   — a thin wrapper over an ORSet
+class TaskScheduler(eq: BoundedCounter)         // places the work  — the equalizer, aimed at depth
+class Results<R>(r: ORMap<Id, R>)               // the result store — a thin wrapper over an ORMap
+// movement: Quilter anti-entropy already carries both the queue and the results.
 ```
+
+That is the whole trick, and the doc keeps doing it on purpose: **name the grid
+role, then reveal the CRDT under it.** A `TaskScheduler` is the equalizer; a
+`TaskQueue` is an `ORSet`; `Results` is an `ORMap`. The compute layer is
+*vocabulary*, not machinery — which is exactly why the only thing to build is the
+thin wrappers.
 
 The textile metaphor finishes itself — and it stretches across the whole design.
 A loom holds the **warp**: the parallel threads under tension. You load a
@@ -92,8 +99,9 @@ and a browser (wasmJs). A Kotlin lambda compiled to JVM bytecode cannot execute 
 Native or wasm — there is no portable, runtime-shippable representation of Kotlin
 code across those targets. So what crosses the fabric is a tiny **task
 descriptor** — `{ op: "score", arg: ⟦query⟧, item: docId }` — dropped into the
-CRDT work-queue. A peer claims it, looks `"score"` up in a **local operation
-registry** that every node populated at startup from the same compiled binary, and
+**`TaskQueue`** (a thin wrapper over an `ORSet`). A peer claims it, looks `"score"`
+up in a **local operation registry** that every node populated at startup from the
+same compiled binary, and
 runs *its own copy* on local data. The result merges back as a CRDT. The function
 never moved; only its name did.
 
