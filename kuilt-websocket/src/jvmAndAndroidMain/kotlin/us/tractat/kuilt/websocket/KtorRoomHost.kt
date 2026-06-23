@@ -13,6 +13,7 @@ import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.session.LeaveReason
 import us.tractat.kuilt.session.Room
+import us.tractat.kuilt.session.RoomHost
 import us.tractat.kuilt.session.SeamRoomFactory
 
 private val log = KotlinLogging.logger {}
@@ -37,7 +38,7 @@ public class KtorRoomHost internal constructor(
     private val path: String,
     private val pattern: Pattern,
     private val loom: Loom,
-) : AutoCloseable {
+) : RoomHost {
     /**
      * Production constructor. Pre-constructs a [KtorServerLoom] synchronously
      * so the WebSocket route is mounted on [application] before any client
@@ -76,7 +77,7 @@ public class KtorRoomHost internal constructor(
      *
      * @throws IllegalStateException if called while already running.
      */
-    public suspend fun start(onRoom: suspend (Room) -> Unit) {
+    override suspend fun start(onRoom: suspend (Room) -> Unit) {
         startMutex.withLock {
             check(!started) { "KtorRoomHost.start already running" }
             started = true

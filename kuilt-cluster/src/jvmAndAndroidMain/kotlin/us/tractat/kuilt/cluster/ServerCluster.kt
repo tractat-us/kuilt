@@ -38,7 +38,7 @@ import us.tractat.kuilt.raft.RaftTransport
 import us.tractat.kuilt.raft.raftNode
 import us.tractat.kuilt.session.LeaveReason
 import us.tractat.kuilt.session.Room
-import us.tractat.kuilt.websocket.KtorRoomHost
+import us.tractat.kuilt.session.RoomHost
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 
@@ -46,7 +46,7 @@ private val log = KotlinLogging.logger {}
 
 /**
  * Server-side cluster facade: an M-voter [VoterMesh] plus a relay accept loop that
- * admits learner clients via [KtorRoomHost].
+ * admits learner clients via [RoomHost].
  *
  * ## Construction
  *
@@ -88,7 +88,7 @@ private val log = KotlinLogging.logger {}
 public class ServerCluster internal constructor(
     /** The underlying voter mesh — exposes [VoterMesh.voterNodes] and [VoterMesh.awaitLeader]. */
     public val mesh: VoterMesh,
-    private val host: KtorRoomHost,
+    private val host: RoomHost,
     private val voterConfig: ClusterConfig,
     private val router: LearnerRouter,
     private val serverScope: CoroutineScope,
@@ -119,15 +119,15 @@ public class ServerCluster internal constructor(
      *
      * Multiple relay hosts can front one voter cluster: mount each by launching
      * `runRelay(host)` in its own coroutine. Because the accept loop's lifecycle is owned
-     * by the launching scope (see [KtorRoomHost.start]), cancelling that coroutine stops
+     * by the launching scope (see [RoomHost.start]), cancelling that coroutine stops
      * **just that relay endpoint** — its rooms tear (so connected learners reconnect to
      * another endpoint) while the voter mesh and sibling relays keep running. This is the
      * server-side half of cross-relay failover (#544): a learner re-admitted on a surviving
      * relay keeps the same [NodeId] and resumes proposing against the same Raft log.
      *
-     * @param relayHost The [KtorRoomHost] whose accepted connections become learners.
+     * @param relayHost The [RoomHost] whose accepted connections become learners.
      */
-    public suspend fun runRelay(relayHost: KtorRoomHost) {
+    public suspend fun runRelay(relayHost: RoomHost) {
         relayHost.start { room -> admitLearner(room) }
     }
 
@@ -230,13 +230,13 @@ public class ServerCluster internal constructor(
  * Voter nodes start immediately. Call [ServerCluster.awaitLeader] before accepting clients,
  * then call [ServerCluster.start] (in a `launch`) to run the relay accept loop.
  *
- * @param host The [KtorRoomHost] for accepting learner connections.
+ * @param host The [RoomHost] for accepting learner connections.
  * @param voterIds Ordered list of voter [NodeId]s. Non-empty; odd count recommended.
  * @param raftConfig Raft timing and virtual-time flags. **Required** — no default.
  * @param storageFactory Per-voter [RaftStorage] factory. Defaults to [InMemoryRaftStorage].
  */
 public fun CoroutineScope.serverCluster(
-    host: KtorRoomHost,
+    host: RoomHost,
     voterIds: List<NodeId>,
     raftConfig: RaftConfig,
     storageFactory: (NodeId) -> RaftStorage = { InMemoryRaftStorage() },
