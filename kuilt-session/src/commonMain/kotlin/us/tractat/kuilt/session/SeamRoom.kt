@@ -516,7 +516,12 @@ internal class SeamRoom(
             sessionId = hello.sessionId,
             deviceId = hello.deviceId,
         )
-        val member = Member(id = joinerPeerId, identity = identity, liveness = Liveness.Connected)
+        val member = Member(
+            id = joinerPeerId,
+            identity = identity,
+            liveness = Liveness.Connected,
+            principal = (seam as? PrincipalAttested)?.principal,
+        )
 
         // Snapshot current members and mutate roster under lock; no I/O inside.
         val existingMembers = lock.withLock {

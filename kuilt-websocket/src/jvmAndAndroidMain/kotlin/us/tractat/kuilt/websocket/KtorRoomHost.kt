@@ -2,6 +2,7 @@ package us.tractat.kuilt.websocket
 
 import io.github.oshai.kotlinlogging.KotlinLogging
 import io.ktor.server.application.Application
+import io.ktor.server.application.ApplicationCall
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
@@ -12,6 +13,7 @@ import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.session.LeaveReason
+import us.tractat.kuilt.session.Principal
 import us.tractat.kuilt.session.Room
 import us.tractat.kuilt.session.RoomHost
 import us.tractat.kuilt.session.SeamRoomFactory
@@ -50,10 +52,11 @@ public class KtorRoomHost internal constructor(
         path: String,
         serverPeerId: PeerId,
         pattern: Pattern,
+        principalExtractor: (ApplicationCall) -> Principal? = { null },
     ) : this(
         path = path,
         pattern = pattern,
-        loom = KtorServerLoom(application, path, serverPeerId),
+        loom = KtorServerLoom(application, path, serverPeerId, principalExtractor = principalExtractor),
     )
 
     private val startMutex = Mutex()

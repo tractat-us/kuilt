@@ -3,6 +3,7 @@ package us.tractat.kuilt.websocket
 import io.ktor.client.plugins.websocket.WebSockets as ClientWebSockets
 import io.ktor.server.testing.testApplication
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
@@ -15,6 +16,8 @@ import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.Seam
+import us.tractat.kuilt.session.Principal
+import us.tractat.kuilt.session.PrincipalAttested
 import us.tractat.kuilt.session.Room
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -57,6 +60,34 @@ class KtorRoomHostTest {
                 assertEquals(serverPeerId, room.selfId)
                 clientLink.close(CloseReason.Normal)
                 hostJob.cancel()
+            }
+        }
+
+    @Test
+    fun `verified principal from the call rides the accepted connection`() =
+        testApplication {
+            val loom =
+                KtorServerLoom(
+                    application = application,
+                    path = serverPath,
+                    selfPeerId = serverPeerId,
+                    principalExtractor = { Principal("device-9") },
+                )
+            val clientLoom = KtorClientLoom(createClient { install(ClientWebSockets) })
+
+            coroutineScope {
+                val seamDeferred = async { loom.nextLink() }
+                val advertisement =
+                    WebSocketAdvertisement(
+                        url = "ws://localhost$serverPath",
+                        serverPeerId = serverPeerId,
+                        displayName = "client",
+                    )
+                val clientLink = clientLoom.join(advertisement)
+                val seam = withTimeout(5_000) { seamDeferred.await() }
+                assertIs<PrincipalAttested>(seam, "accepted seam must carry the verified principal")
+                assertEquals(Principal("device-9"), seam.principal)
+                clientLink.close(CloseReason.Normal)
             }
         }
 
