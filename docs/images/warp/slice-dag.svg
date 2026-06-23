@@ -43,13 +43,13 @@
   <!-- 0 row -->
   <g>
     <text class="row" x="46" y="224">slice 0</text>
-    <rect x="92"  y="214" width="36" height="22" rx="5" fill="#16202b" stroke="#61afef66"/><text class="chip" x="110" y="229" text-anchor="middle">0a</text>
-    <rect x="134" y="214" width="36" height="22" rx="5" fill="#16202b" stroke="#61afef66"/><text class="chip" x="152" y="229" text-anchor="middle">0b</text>
-    <rect x="176" y="214" width="36" height="22" rx="5" fill="#16202b" stroke="#61afef66"/><text class="chip" x="194" y="229" text-anchor="middle">0c</text>
-    <rect x="238" y="214" width="44" height="22" rx="5" fill="#16202b" stroke="#61afef66"/><text class="chip" x="260" y="229" text-anchor="middle">0d</text>
-    <rect x="306" y="211" width="86" height="28" rx="6" fill="#16202b" stroke="#61afef" stroke-width="1.6"/><text class="chip" x="349" y="229" text-anchor="middle" fill="#9ecbf0">0e · #680</text>
+    <rect x="92"  y="214" width="46" height="22" rx="5" fill="#16202b" stroke="#61afef66"/><text class="chip" x="115" y="229" text-anchor="middle" font-size="8.5">queue</text>
+    <rect x="144" y="214" width="46" height="22" rx="5" fill="#16202b" stroke="#61afef66"/><text class="chip" x="167" y="229" text-anchor="middle" font-size="8.5">sched</text>
+    <rect x="196" y="214" width="50" height="22" rx="5" fill="#16202b" stroke="#61afef66"/><text class="chip" x="221" y="229" text-anchor="middle" font-size="8.5">results</text>
+    <rect x="276" y="214" width="54" height="22" rx="5" fill="#16202b" stroke="#61afef66"/><text class="chip" x="303" y="229" text-anchor="middle" font-size="8.5">shuttle</text>
+    <rect x="360" y="211" width="84" height="28" rx="6" fill="#16202b" stroke="#61afef" stroke-width="1.6"/><text class="chip" x="402" y="229" text-anchor="middle" fill="#9ecbf0" font-size="9">spike · #680</text>
   </g>
-  <path class="e" d="M212 225 H238"/><path class="e" d="M282 225 H306"/>
+  <path class="e" d="M246 225 H276"/><path class="e" d="M330 225 H360"/>
   <!-- B row -->
   <g>
     <text class="row" x="46" y="266">slice B</text>
@@ -92,12 +92,12 @@
   <!-- PLANNING cluster -->
   <rect x="740" y="182" width="266" height="150" rx="11" fill="#13171f" stroke="#61afef88" stroke-width="1.6"/>
   <text class="cl" x="752" y="200" fill="#9ecbf0">PLANNING · E</text>
-  <rect x="752" y="212" width="44" height="22" rx="5" fill="#16202b" stroke="#61afef66"/><text class="chip" x="774" y="227" text-anchor="middle">E1</text>
+  <rect x="752" y="212" width="50" height="22" rx="5" fill="#16202b" stroke="#61afef66"/><text class="chip" x="777" y="227" text-anchor="middle">draft</text>
   <rect x="812" y="212" width="60" height="22" rx="5" fill="#16202b" stroke="#61afef66"/><text class="chip" x="842" y="227" text-anchor="middle">E2 rewrite</text>
   <rect x="888" y="212" width="58" height="22" rx="5" fill="#16202b" stroke="#61afef66"/><text class="chip" x="917" y="227" text-anchor="middle">E3 cost</text>
   <rect x="752" y="248" width="80" height="22" rx="5" fill="#16202b" stroke="#61afef66"/><text class="chip" x="792" y="263" text-anchor="middle">E4 HLL stats</text>
   <rect x="844" y="248" width="92" height="22" rx="5" fill="#16202b" stroke="#61afef66"/><text class="chip" x="890" y="263" text-anchor="middle">E5 incremental</text>
-  <path class="e" d="M796 223 H812"/><path class="e" d="M872 223 H888"/>
+  <path class="e" d="M802 223 H812"/><path class="e" d="M872 223 H888"/>
   <text class="row" x="752" y="296">E1 also needs B1 (the type seam)</text>
 
   <!-- ML cluster -->
@@ -110,8 +110,8 @@
   <path class="e" d="M838 435 H850"/><path class="e" d="M844 401 C 868 408, 876 416, 882 424"/>
 
   <!-- inter-cluster GATES -->
-  <path class="gate" d="M392 225 C 560 210, 640 200, 740 207"/>
-  <text class="gl" x="560" y="198">0e gates E</text>
-  <path class="gate" d="M392 232 C 560 300, 640 400, 740 400"/>
+  <path class="gate" d="M444 225 C 580 210, 650 200, 740 207"/>
+  <text class="gl" x="572" y="198">spike gates E</text>
+  <path class="gate" d="M444 234 C 580 300, 650 400, 740 400"/>
   <text class="gl" x="556" y="372">0e → F1 · C2 → F2</text>
 </svg>
