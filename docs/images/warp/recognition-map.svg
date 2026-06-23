@@ -1,0 +1,69 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 520" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif">
+  <style>
+    .title{fill:#e5e7eb;font-size:20px;font-weight:700}
+    .sub{fill:#7f848e;font-size:13px}
+    .role{font-size:14.5px;font-weight:700}
+    .roles{font-size:11px;fill:#9aa0ab}
+    .prim{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px}
+    .note{font-size:11px;fill:#7f848e}
+    .wrap{fill:#7f848e;font-size:10.5px;font-weight:600;letter-spacing:.3px}
+    .lk{stroke:#3a4150;stroke-width:2;fill:none;marker-end:url(#a)}
+  </style>
+  <marker id="a" markerWidth="9" markerHeight="9" refX="6" refY="3" orient="auto"><path d="M0 0 L6 3 L0 6 z" fill="#3a4150"/></marker>
+  <rect fill="#161a22" width="800" height="520"/>
+  <text class="title" x="40" y="36">The recognition map — every grid role is a thin wrapper</text>
+  <text class="sub" x="40" y="58">Name the role on the left; the machinery on the right already ships. Only the wrappers are new.</text>
+
+  <!-- column headers -->
+  <text class="wrap" x="40" y="84" fill="#56b6c2">GRID ROLE (vocabulary)</text>
+  <text class="wrap" x="470" y="84" fill="#98c379">ALREADY SHIPS (machinery)</text>
+
+  <!-- rows -->
+  <g>
+    <!-- helper geometry repeated per row -->
+    <!-- row 1 -->
+    <rect x="40" y="96" width="250" height="46" rx="10" fill="#16202b" stroke="#56b6c266"/>
+    <text class="role" x="58" y="118" fill="#7fd4e0">TaskQueue</text><text class="roles" x="58" y="134">the work-queue</text>
+    <path class="lk" d="M300 119 H452"/><text class="wrap" x="376" y="113" text-anchor="middle">thin wrapper</text>
+    <rect x="462" y="96" width="298" height="46" rx="10" fill="#16201a" stroke="#98c37966"/>
+    <text class="prim" x="480" y="118"><tspan fill="#98c379">ORSet&lt;Task&gt;</tspan> <tspan fill="#98c379">✓</tspan></text><text class="note" x="480" y="134">grow-only set of pending work</text>
+
+    <!-- row 2 -->
+    <rect x="40" y="154" width="250" height="46" rx="10" fill="#16202b" stroke="#56b6c266"/>
+    <text class="role" x="58" y="176" fill="#7fd4e0">TaskScheduler</text><text class="roles" x="58" y="192">places the work</text>
+    <path class="lk" d="M300 177 H452"/><text class="wrap" x="376" y="171" text-anchor="middle">thin wrapper</text>
+    <rect x="462" y="154" width="298" height="46" rx="10" fill="#16201a" stroke="#98c37966"/>
+    <text class="prim" x="480" y="176"><tspan fill="#98c379">BoundedCounter</tspan> equalizer <tspan fill="#98c379">✓</tspan></text><text class="note" x="480" y="192">diffusion / work-stealing, aimed at depth</text>
+
+    <!-- row 3 -->
+    <rect x="40" y="212" width="250" height="46" rx="10" fill="#16202b" stroke="#56b6c266"/>
+    <text class="role" x="58" y="234" fill="#7fd4e0">Results</text><text class="roles" x="58" y="250">the result store</text>
+    <path class="lk" d="M300 235 H452"/><text class="wrap" x="376" y="229" text-anchor="middle">thin wrapper</text>
+    <rect x="462" y="212" width="298" height="46" rx="10" fill="#16201a" stroke="#98c37966"/>
+    <text class="prim" x="480" y="234"><tspan fill="#98c379">ORMap&lt;Id, R&gt;</tspan> <tspan fill="#98c379">✓</tspan></text><text class="note" x="480" y="250">weave() = the lattice join</text>
+
+    <!-- row 4 -->
+    <rect x="40" y="270" width="250" height="46" rx="10" fill="#241f17" stroke="#e5c07b66"/>
+    <text class="role" x="58" y="292" fill="#e5c07b">Bobbin creel</text><text class="roles" x="58" y="308">lazy code cache</text>
+    <path class="lk" d="M300 293 H452"/><text class="wrap" x="376" y="287" text-anchor="middle">thin wrapper</text>
+    <rect x="462" y="270" width="298" height="46" rx="10" fill="#16201a" stroke="#98c37966"/>
+    <text class="prim" x="480" y="292"><tspan fill="#98c379">GSet&lt;Hash&gt;</tspan> + <tspan fill="#98c379">EphemeralMap</tspan> <tspan fill="#98c379">✓</tspan></text><text class="note" x="480" y="308">keys converge; bytes fetched lazily (Merkle-CRDT)</text>
+
+    <!-- row 5 -->
+    <rect x="40" y="328" width="250" height="46" rx="10" fill="#16202b" stroke="#61afef66"/>
+    <text class="role" x="58" y="350" fill="#9ecbf0">Transport</text><text class="roles" x="58" y="366">carries everything</text>
+    <path class="lk" d="M300 351 H452"/><text class="wrap" x="376" y="345" text-anchor="middle">already is</text>
+    <rect x="462" y="328" width="298" height="46" rx="10" fill="#16201a" stroke="#98c37966"/>
+    <text class="prim" x="480" y="350"><tspan fill="#98c379">Quilter</tspan> anti-entropy <tspan fill="#98c379">✓</tspan></text><text class="note" x="480" y="366">moves queue, results &amp; bobbins</text>
+
+    <!-- row 6 -->
+    <rect x="40" y="386" width="250" height="46" rx="10" fill="#241f17" stroke="#e5c07b88"/>
+    <text class="role" x="58" y="408" fill="#e5c07b">Commit · embroidery</text><text class="roles" x="58" y="424">the one consensus</text>
+    <path class="lk" d="M300 409 H452"/><text class="wrap" x="376" y="403" text-anchor="middle">delegates to</text>
+    <rect x="462" y="386" width="298" height="46" rx="10" fill="#16201a" stroke="#98c37966"/>
+    <text class="prim" x="480" y="408"><tspan fill="#98c379">:kuilt-raft</tspan> <tspan fill="#98c379">✓</tspan></text><text class="note" x="480" y="424">the non-monotone CALM boundary</text>
+  </g>
+
+  <rect x="40" y="450" width="720" height="44" rx="10" fill="#16201a" stroke="#98c37944"/>
+  <text x="400" y="477" text-anchor="middle" font-size="13.5" font-weight="600" fill="#98c379">New code = just the wrappers. The compute layer is vocabulary, not machinery.</text>
+</svg>

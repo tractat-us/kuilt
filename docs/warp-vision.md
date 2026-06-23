@@ -67,6 +67,8 @@ role, then reveal the CRDT under it.** A `TaskScheduler` is the equalizer; a
 *vocabulary*, not machinery — which is exactly why the only thing to build is the
 thin wrappers.
 
+![The recognition map: each grid role (TaskQueue, TaskScheduler, Results, the bobbin creel, transport, commit) is a thin wrapper over a kuilt primitive that already ships (ORSet, the BoundedCounter equalizer, ORMap, GSet+EphemeralMap, Quilter, :kuilt-raft). New code is just the wrappers.](images/warp/recognition-map.svg)
+
 The textile metaphor finishes itself — and it stretches across the whole design.
 A loom holds the **warp**: the parallel threads under tension. You load a
 **shuttle** with the **weft** and throw it across, and the two weave into
@@ -84,6 +86,9 @@ A loom holds the **warp**: the parallel threads under tension. You load a
 - **embroidery** — the deliberate finishing stitched onto the cloth *by hand*,
   where consensus is unavoidable (its own section below). (We pointedly avoid
   calling it a *seam*: `Seam` is already the core contract type.)
+- **bobbin / creel** — *(only in the code-mobility fantasy)* a **bobbin** is one
+  shippable code kernel — the wound thread the shuttle draws from; the **creel**
+  is the lazily-gossiped cache of them. See "Lazy bobbins" below.
 
 ![One loom, three layers: the draft (recipe) is woven into coordination-free cloth by the warp, weft and shuttle, then the embroidery — consensus — is stitched on top by hand.](images/warp/loom.svg)
 
@@ -144,6 +149,37 @@ switch: names by default, sandboxed wasm kernels when you genuinely must ship co
 never raw native.
 
 ![Code mobility as a ladder: named ops are the default; WASM kernels are the fantasy — same bytes everywhere, sandboxed, browser-native, JIT'd to native via Cranelift where allowed and interpreted on iOS where JIT is banned; shipping LLVM IR on the wire is the trap PNaCl already proved a dead end.](images/warp/code-mobility.svg)
+
+### Lazy bobbins: gossiping the code
+
+Shipping a kernel raises its own question — push every kernel to every peer up
+front? No. You let it spread the way everything else here spreads: **eventually**.
+A kernel is a **bobbin**, the wound thread the shuttle draws from; a peer can't run
+an op until the right bobbin is loaded, so bobbins gossip across the mesh lazily,
+on demand. The rack of loaded bobbins is the **creel**.
+
+The structure is exactly the CRDT-cache shape — a **content-addressed store with a
+CRDT manifest over the keys**, *keys known, values lazy*:
+
+- **Keys** are content hashes. The op-id in a descriptor *is* `hash(kernel)`. The
+  set of known bobbin-hashes is a grow-only `GSet<Hash>` (the zoo's `EphemeralMap`
+  gives the cache-with-eviction variant) — cheap to gossip, always converges.
+  Every peer agrees which bobbins exist.
+- **Values** are the immutable kernel bytes, fetched on first use. Content-
+  addressing makes the value-merge *trivially* conflict-free: because the key is
+  `hash(value)`, any two peers holding the same key hold byte-identical bytes —
+  "merge" is just "same bytes," and each value sits in a one-step lattice
+  `Absent ⊏ Present`. You gossip availability and pull on demand.
+
+A peer assigned an op whose bobbin it lacks asks a neighbour, pulls the bytes,
+re-hashes to verify, caches, and runs; new peers warm their creel lazily.
+
+One honest line: the key-set converging is **safety** (the CRDT guarantees it); the
+bytes being *fetchable* is **liveness** (it does not). Pin each bobbin on ≥ k peers,
+like any peer-to-peer content store. The shape has a name — a **Merkle-CRDT**:
+CRDT state addressed by hash, advertised eagerly and fetched lazily.
+
+![Lazy bobbins: the op-id is the content-hash of a kernel; the creel is a CRDT GSet of hashes that every peer converges on (keys known), while the kernel bytes are a content-addressed cache each peer holds a subset of and fetches on demand (values lazy). Content-addressing makes every fetch conflict-free; the one caveat is that availability is a liveness property, so pin each bobbin on several peers.](images/warp/bobbins.svg)
 
 ## The reduction to simplicity
 
