@@ -28,9 +28,49 @@ else hangs off the throwaway spike (#680).
 
 ![Epic slices as a dependency graph: slice A (the offline OTel exporter) sits detached in a 'reality' band because it needs no warp and builds today; the spike #680 is the root of a 'dream' cluster that everything else hangs off — B (type seam), C (code mobility) and E (query planning) depend on the spike, D (compiler nodes) and F (federated ML) depend on C. Arrows mean 'needs'.](images/warp/slice-map.svg)
 
-## The phased roadmap
+## Provisional issues — the full mapping
 
-![Epic slices as a phased roadmap: a top 'reality' lane holds slice A running in parallel, needing no warp; below it a sequential 'dream' lane runs Phase 0 (the spike) → Phase 1 (the type seam) → Phase 2 (code mobility, then compiler nodes) → Phase 3 (query planning) → Phase 4 (federated ML). Each phase is one epic sub-issue with its own green checkpoint.](images/warp/slice-phases.svg)
+One node per shippable sub-issue, **split finer where the work is genuinely
+different** (the per-target wasm runtimes; the per-platform durable store; the two
+compiler toolchains). Grouped by the spine payoff each one backs — that grouping
+*is* the spine's [third axis](warp-deeper.md).
+
+**Compute engine** — slices 0 / B / C / D
+- `0a` TaskQueue (ORSet) · `0b` TaskScheduler (equalizer @ depth) · `0c` Results
+  (ORMap) → `0d` shuttle/weave surface → `0e` sim-harness CALM measurement **(#680)**
+- `B1` Coordination(Free/-ated) types → `B2` embroider/commit(raft) · `B3` vetted
+  monotone combinators
+- `C1` op registry + KSP → `C2` task-descriptor envelope → wasm runtimes
+  (**split per target**): `C3·browser` (native) · `C3·jvm` (Chicory) · `C3·macos`
+  (wasmtime JIT) · `C3·ios` (wasm3 interpret) ; `C4` bobbin + creel → `C5` lazy
+  bobbin gossip
+- `D1` compile op → `D2` bobbin variants → `D3` tiered compilation ; toolchains
+  (**split**): `D4·kwasm` (Kotlin/Wasm authoring) · `D4·graal` (GraalWasm node)
+
+**Planning**
+- `E1` Draft reified → `E2` rewrite rules → `E3` coordination-cost model ; `E4`
+  HyperLogLog stats gossip · `E5` incremental / threshold-read execution
+
+**Observability** *(part of A)*
+- `A2` SpanExporter (ORSet) · `A4` LogRecordExporter (Rga) · `A8` causal-trace
+  inference
+
+**Telemetry — offline** *(part of A, the real one)*
+- `A1` DurableStore abstraction (**+3 platform WALs**: SQLite / IndexedDB / native)
+  → `A3` MetricExporter (cumulative) · `A5` WarpOtlpBridge ; `A6` bounded-buffer
+  eviction · `A7` KMP + OTel SDK glue
+
+**Federated ML**
+- `F1` FedAvg counter-weave · `F2` model-as-wasm-kernel → `F4` end-to-end demo ;
+  `F3` secure aggregation *(optional)*
+
+**Cross-group gates** (what binds the DAG): `0e` gates every dream cluster;
+`0e + B1 → E1`; `C2 → F2`; `0e → F1`; `C` (via `C2`) → `D1`. The **A cluster is its
+own connected component** — gated on nothing.
+
+## The full issue DAG
+
+![The full provisional-issue dependency graph, grouped into clusters by the spine payoff each issue backs: a detached green Reality cluster (the offline exporter — A1 store → A2/A3/A4 exporters → A5 bridge, plus A6/A7/A8) gated on nothing; and the dream clusters Compute (0 → B → C → D, with the wasm runtime split per target and the toolchains split in two), Planning (E), and Federated ML (F). Bold inter-cluster arrows show the gates: the #680 spike gates every dream cluster, and C2 gates the model kernel F2.](images/warp/slice-dag.svg)
 
 ## Reading the slices
 
