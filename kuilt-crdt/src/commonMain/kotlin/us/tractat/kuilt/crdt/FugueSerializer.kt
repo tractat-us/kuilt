@@ -41,18 +41,13 @@ internal class FugueSerializer<V>(vSerializer: KSerializer<V>) : KSerializer<Fug
      * holding the same logical state (same op set, different delivery order) produce
      * identical bytes. [FugueId] is [Comparable] — ascending lamport, then replicaId.
      *
-     * Both [FugueOp.Insert] and [FugueOp.Remove] carry an `id` field; for removes
-     * the id is the tombstoned element, which also serves as a stable sort key.
+     * [FugueOp.id] is available on the sealed interface, so the sort key is uniform
+     * regardless of op variant.
      */
     override fun serialize(encoder: Encoder, value: Fugue<V>): Unit = encoder.encodeStructure(descriptor) {
-        val sortedOps = value.ops.sortedWith(compareBy { opId(it) })
+        val sortedOps = value.ops.sortedWith(compareBy { it.id })
         encodeSerializableElement(descriptor, 0, opsListSerializer, sortedOps)
         encodeLongElement(descriptor, 1, value.lamport)
-    }
-
-    private fun opId(op: FugueOp<V>): FugueId = when (op) {
-        is FugueOp.Insert -> op.id
-        is FugueOp.Remove -> op.id
     }
 
     override fun deserialize(decoder: Decoder): Fugue<V> = decoder.decodeStructure(descriptor) {

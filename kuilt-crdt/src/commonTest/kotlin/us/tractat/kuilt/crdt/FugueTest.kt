@@ -327,6 +327,36 @@ class FugueTest {
         )
     }
 
+    // ── equals and hashCode ───────────────────────────────────────────────────
+
+    /**
+     * Two converged replicas that received the same ops in different orders are equal.
+     * The Lamport high-water mark must NOT affect equality: one replica may have a
+     * higher clock if it advanced it by observing a duplicate insert (which is a no-op
+     * to the op set). equals() must be op-set only.
+     */
+    @Test
+    fun convergedReplicasWithDifferentLamportAreEqual() {
+        val (fA, opA) = Fugue.empty<String>().insertAt(a, 0, "x")
+        val (fB, opB) = Fugue.empty<String>().insertAt(b, 0, "y")
+
+        // replica1: saw opA first (lamport advanced to opA.id.lamport), then opB
+        val replica1 = fA.apply(opB)
+        // replica2: saw opB first, then opA
+        val replica2 = fB.apply(opA)
+
+        // Same op sets, but replicas may have different internal lamport values
+        // after receiving a duplicate. Both must be equal.
+        assertEquals(replica1, replica2)
+        assertEquals(replica1.hashCode(), replica2.hashCode())
+    }
+
+    @Test
+    fun equalFugueHasEqualHashCode() {
+        val (f, _) = Fugue.empty<String>().insertAt(a, 0, "x")
+        assertEquals(f.hashCode(), f.hashCode())
+    }
+
     // ── apply and piece consistency ──────────────────────────────────────────
 
     @Test
