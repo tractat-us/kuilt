@@ -27,7 +27,7 @@ delta-temporality retry bug is structurally impossible.
 @sample us.tractat.kuilt.otel.sampleWarpTelemetry
 ```
 
-## What's here (slice A1 + A2 + WAL-JVM)
+## What's here (slices A1–A4 + WAL-JVM)
 
 | Type | What it does |
 |---|---|
@@ -35,15 +35,16 @@ delta-temporality retry bug is structurally impossible.
 | [InMemoryDurableStore] | Non-durable, test-safe store. |
 | [FileChannelDurableStore] | Crash-safe JVM/Android WAL: temp-write + `force(true)` + atomic rename. |
 | [WarpSpanExporter] | CRDT-backed span buffer (ORSet). Idempotent export + merge. |
+| [WarpLogRecordExporter] | CRDT-backed log buffer (Rga). Ordered, idempotent export + merge. |
 | [WarpTelemetry] | Facade that composes all exporters under one surface. |
 | [SpanRecord] | OTLP-shaped span data model. |
+| [LogRecord] | OTLP-shaped log-record data model with optional trace correlation. |
 | [ExportResult] | Typed result of `export()` / `merge()`. |
 | [BufferPolicy] | Bounded-buffer eviction strategy (always logs what it drops). |
 
 ## Deferred (follow-up PRs)
 
 - **A3 MetricExporter** — cumulative `GCounter`/`PNCounter` + `HyperLogLog` for cardinality.
-- **A4 LogRecordExporter** — `Rga<LogRecord>` ordered append-only log.
 - **A5 WarpOtlpBridge** — drains converged CRDTs to a real OTLP endpoint.
 - **Platform WALs** — NSFileManager (iOS/macOS, #802), IndexedDB (wasmJs, #801).
 
