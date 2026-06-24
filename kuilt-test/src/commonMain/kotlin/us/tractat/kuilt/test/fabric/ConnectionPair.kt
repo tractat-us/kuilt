@@ -1,31 +1,39 @@
 package us.tractat.kuilt.test.fabric
 
-import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.receiveAsFlow
+import us.tractat.kuilt.core.DeliveryPolicy
 import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.Seam
+import us.tractat.kuilt.core.Spool
 import us.tractat.kuilt.core.fabric.Connection
 import us.tractat.kuilt.core.fabric.handshaking
 import us.tractat.kuilt.core.fabric.identified
 import kotlin.coroutines.ContinuationInterceptor
 
-/** Two Connections whose sends cross to each other's `incoming`. In-memory, no network. */
-public fun connectionPair(): Pair<Connection, Connection> {
-    val aToB = Channel<ByteArray>(Channel.UNLIMITED)
-    val bToA = Channel<ByteArray>(Channel.UNLIMITED)
+/**
+ * Two Connections whose sends cross to each other's `incoming`. In-memory, no network.
+ *
+ * Each direction is a bounded [Spool] (default [DeliveryPolicy.Reliable]); there is no
+ * `Channel.UNLIMITED` path. `Spool<ByteArray>` because a [Connection] carries raw byte frames,
+ * a layer below the Swatch/Seam abstraction.
+ */
+public fun connectionPair(
+    policy: DeliveryPolicy = DeliveryPolicy.Reliable,
+): Pair<Connection, Connection> {
+    val aToB = Spool<ByteArray>(policy)
+    val bToA = Spool<ByteArray>(policy)
     return ChannelConnection(out = aToB, inn = bToA) to ChannelConnection(out = bToA, inn = aToB)
 }
 
 private class ChannelConnection(
-    private val out: Channel<ByteArray>,
-    private val inn: Channel<ByteArray>,
+    private val out: Spool<ByteArray>,
+    private val inn: Spool<ByteArray>,
 ) : Connection {
-    override suspend fun send(frame: ByteArray) { out.send(frame) }
-    override val incoming: Flow<ByteArray> = inn.receiveAsFlow()
+    override suspend fun send(frame: ByteArray) { out.deliver(frame) }
+    override val incoming: Flow<ByteArray> = inn.incoming
     override suspend fun close() { out.close() }
 }
 
