@@ -184,4 +184,44 @@ class CountMinSketchTest {
             Json.decodeFromString(CountMinSketch.serializer(), badJson)
         }
     }
+
+    // ── ByteArray overloads (#727) ────────────────────────────────────────────
+
+    @Test
+    fun byteArrayAddProducesSameResultAsStringAdd() {
+        val key = "rate-limit-key"
+        val encoded = key.encodeToByteArray()
+        var sketchStr = CountMinSketch.empty(width = 64, depth = 4)
+        var sketchBytes = CountMinSketch.empty(width = 64, depth = 4)
+        repeat(5) {
+            sketchStr = sketchStr.piece(sketchStr.add(key))
+            sketchBytes = sketchBytes.piece(sketchBytes.add(encoded))
+        }
+        assertEquals(sketchStr, sketchBytes)
+    }
+
+    @Test
+    fun byteArrayEstimateMatchesStringEstimate() {
+        val key = "event-type"
+        val encoded = key.encodeToByteArray()
+        var sketch = CountMinSketch.empty(width = 64, depth = 4)
+        repeat(7) { sketch = sketch.piece(sketch.add(key)) }
+        assertEquals(sketch.estimate(key), sketch.estimate(encoded))
+    }
+
+    @Test
+    fun cachedEncodingIsIdempotent() {
+        // Simulates a caller who caches the ByteArray and reuses it across calls.
+        val key = "hot-path-key"
+        val encoded = key.encodeToByteArray()
+        var sketch = CountMinSketch.empty(width = 32, depth = 4)
+        val patch1 = sketch.add(encoded)
+        sketch = sketch.piece(patch1)
+        val patch2 = sketch.add(encoded)
+        sketch = sketch.piece(patch2)
+        // max-merge: re-delivery of patch1 must not inflate beyond 2
+        sketch = sketch.piece(patch1)
+        assertEquals(2L, sketch.estimate(encoded))
+    }
+
 }

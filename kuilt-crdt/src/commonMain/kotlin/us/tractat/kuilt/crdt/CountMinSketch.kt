@@ -69,16 +69,51 @@ public class CountMinSketch private constructor(
     }
 
     /**
-     * Add one occurrence of [item] to this sketch. Returns a [Patch] carrying
-     * the incremented delta; the receiver is unchanged.
+     * Add one occurrence of [encodedItem] to this sketch. Returns a [Patch]
+     * carrying the incremented delta; the receiver is unchanged.
+     *
+     * Use this overload when the caller already holds or can cache the UTF-8
+     * encoding of the key — it avoids the `ByteArray` allocation that
+     * [add(String)][add] performs on every call.
      */
-    public fun add(item: String): Patch<CountMinSketch> {
+    public fun add(encodedItem: ByteArray): Patch<CountMinSketch> {
         val delta = zeroCells(width, depth)
         for (row in 0 until depth) {
-            val col = columnFor(item, row, width)
+            val col = columnFor(encodedItem, row, width)
             delta[row][col] = cells[row][col] + 1L
         }
         return Patch(CountMinSketch(width, depth, delta))
+    }
+
+    /**
+     * Add one occurrence of [item] to this sketch. Returns a [Patch] carrying
+     * the incremented delta; the receiver is unchanged.
+     *
+     * For high-frequency hot paths where the same key is added many times,
+     * prefer [add(ByteArray)][add] with a cached encoding to avoid per-call allocation.
+     */
+    public fun add(item: String): Patch<CountMinSketch> = add(item.encodeToByteArray())
+
+    /**
+     * Estimate the number of times [encodedItem] has been added.
+     *
+     * Use this overload when the caller already holds or can cache the UTF-8
+     * encoding of the key — it avoids the `ByteArray` allocation that
+     * [estimate(String)][estimate] performs on every call.
+     *
+     * Because replicas merge via element-wise maximum, a merged sketch reflects
+     * the replica that observed the item most — it is NOT the sum across
+     * replicas. The estimate is always ≥ the true count seen by any single
+     * merged replica, and within the Count-Min error bound with high probability.
+     */
+    public fun estimate(encodedItem: ByteArray): Long {
+        var min = Long.MAX_VALUE
+        for (row in 0 until depth) {
+            val col = columnFor(encodedItem, row, width)
+            val v = cells[row][col]
+            if (v < min) min = v
+        }
+        return if (min == Long.MAX_VALUE) 0L else min
     }
 
     /**
@@ -87,16 +122,11 @@ public class CountMinSketch private constructor(
      * the item most — it is NOT the sum across replicas. The estimate is always ≥
      * the true count seen by any single merged replica, and within the Count-Min
      * error bound with high probability.
+     *
+     * For high-frequency hot paths where the same key is estimated many times,
+     * prefer [estimate(ByteArray)][estimate] with a cached encoding to avoid per-call allocation.
      */
-    public fun estimate(item: String): Long {
-        var min = Long.MAX_VALUE
-        for (row in 0 until depth) {
-            val col = columnFor(item, row, width)
-            val v = cells[row][col]
-            if (v < min) min = v
-        }
-        return if (min == Long.MAX_VALUE) 0L else min
-    }
+    public fun estimate(item: String): Long = estimate(item.encodeToByteArray())
 
     /** The join: element-wise max of the two count matrices. */
     override fun piece(other: CountMinSketch): CountMinSketch {
@@ -141,16 +171,20 @@ public class CountMinSketch private constructor(
         }
 
         /**
-         * Column index for [item] in [row], mapped to `[0, width)`.
+         * Column index for [encodedItem] in [row], mapped to `[0, width)`.
          *
          * Uses canonical MurmurHash3_x86_32 seeded by [row], giving each row an
          * independent hash function with proper avalanche. The unsigned hash value
          * is reduced to the column range with a modulo.
          */
-        internal fun columnFor(item: String, row: Int, width: Int): Int {
-            val h = Murmur3.hash32(item, seed = row).toLong() and 0xFFFF_FFFFL
+        internal fun columnFor(encodedItem: ByteArray, row: Int, width: Int): Int {
+            val h = Murmur3.hash32(encodedItem, seed = row).toLong() and 0xFFFF_FFFFL
             return (h % width).toInt()
         }
+
+        /** Column index for [item] in [row]; convenience overload that encodes to UTF-8. */
+        internal fun columnFor(item: String, row: Int, width: Int): Int =
+            columnFor(item.encodeToByteArray(), row, width)
 
         private fun zeroCells(width: Int, depth: Int): Array<LongArray> =
             Array(depth) { LongArray(width) }
