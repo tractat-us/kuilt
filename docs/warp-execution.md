@@ -36,6 +36,17 @@ symbolic dispatch.** Every peer runs the same build; the grid distributes
 a compiler plugin (KSP) could auto-register the ops it sees so it still *reads*
 like an ordinary lambda.
 
+**One honest gap the spike must measure: exclusive claim.** An `ORSet` *distributes*
+work idempotently, but it does not *assign* it — two peers can claim the same
+descriptor concurrently. Deciding a task is "mine, exclusively" is non-monotone, so
+it's either a consensus stitch per task (expensive) or — the coordination-free path —
+**optimistic execution with dedup**: peers may double-run a task, and the duplicate
+is dropped because results land in a `Results` `ORMap` keyed by task id (idempotent).
+This is where the CALM boundary bites *hardest* in the compute engine — work-stealing
+schedulers spend most of their complexity here — and it is exactly what the #680 spike
+exists to measure: how often duplicate execution actually happens, and whether the
+optimistic path is cheap enough to avoid per-task consensus.
+
 ## Shipping real code: WASM kernels (the fantasy)
 
 Named ops can only run code already in the deployed binary. If we ever wanted to
@@ -50,8 +61,13 @@ native code:
   you'd be running code other peers sent you); and the browser runs it natively.
   Under the hood the desktop/server runtimes (wasmtime/wasmer) JIT it to native via
   Cranelift/LLVM, so near-native speed comes for free. The one hard constraint:
-  **iOS forbids runtime JIT**, so on iPhone you *interpret* the wasm (wasm3) —
-  slower, but real and portable.
+  **iOS forbids runtime JIT**, so on iPhone you *interpret* the wasm — slower, but
+  real and portable. The interpreter choice has moved and matters: the classic tiny
+  one (wasm3) supports only the base spec — **not WasmGC or exception handling** — so
+  it *cannot* run a Kotlin/Wasm kernel today. The current best fit is **Wasmtime's
+  Pulley**, a portable interpreter backend (still experimental) built for exactly the
+  JIT-forbidden case, moving toward Cranelift feature parity; wasm3 is an option only
+  for base-spec (non-Kotlin) kernels.
 - **Not LLVM IR on the wire.** The tempting "ship LLVM bitcode for native speed"
   path is a trap: bitcode isn't portable (Google tried it — PNaCl — and retired it
   in favour of WebAssembly), it needs the JIT iOS bans, and it's unsandboxed. LLVM
@@ -74,6 +90,12 @@ front? No. You let it spread the way everything else here spreads: **eventually*
 A kernel is a **bobbin**, the wound thread the shuttle draws from; a peer can't run
 an op until the right bobbin is loaded, so bobbins gossip across the mesh lazily,
 on demand. The rack of loaded bobbins is the **creel**.
+
+Recognition, in the spirit of the rest of this dream: kuilt already maintains a
+structure shaped like the creel's "who has which bobbin" map — `:kuilt-session`'s
+`SeamRoom` keeps a convergent, **ephemeral per-peer view** (membership/capabilities)
+with automatic eviction on disconnect. The creel's availability tracking is the same
+shape; the session layer is its template, not a thing to build fresh.
 
 The structure is exactly the CRDT-cache shape — a **content-addressed store with a
 CRDT manifest over the keys**, *keys known, values lazy*:

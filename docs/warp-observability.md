@@ -13,6 +13,11 @@ the same gossip:
 
 - **Logs** — an append-only distributed log *is* an `Rga`: a convergent, ordered,
   append-only sequence. Every peer appends; the merges interleave into one order.
+  (Caveat for the high-volume case: `Rga`'s full merge can interleave *any* two
+  peers' inserts into one complex total order — heavier than a log needs. Where each
+  producer only appends to its own sub-sequence, a per-producer grow-only sequence
+  merged by vector clock is cheaper and gives more predictable, producer-stable
+  ordering. Reserve `Rga` for genuinely collaborative sequences.)
 - **Metrics** — counters are `GCounter`/`PNCounter`, gauges are `LWWRegister`,
   unique-cardinality is a HyperLogLog sketch (a planned zoo addition, #693). All
   mergeable, all gossiped.
@@ -30,6 +35,14 @@ hand-curated semantic spans. That superset is a gift for debugging (you see ever
 real dependency, not just the ones someone remembered to annotate) and can be
 narrowed with explicit annotations where you want precision.
 
+Be honest about the scale, though: the full causal cone is *wide* — every
+anti-entropy exchange, gossip round, and membership ping adds ancestry — so
+presenting it raw would swamp a trace view. Backend-compatible traces (Jaeger/Tempo,
+W3C `traceparent` parent/child links) still need explicit propagation; causal
+inference is a **supplementary** debugging lens over that, not a drop-in replacement.
+(The inferred-link OTEP changes the trace data model, and would meet real resistance
+in the OpenTelemetry tracing SIG for exactly that reason.)
+
 The horizontal payoff is stark: the `Causal` carrier is the *same* metadata that
 makes CRDTs converge in the first place. Convergence and distributed tracing turn
 out to be one mechanism read two ways — you don't build a tracer, you read the one
@@ -43,7 +56,11 @@ supplies a coordination-free, offline-first transport. Three seams:
 
 1. A CRDT-backed `SpanExporter`/`MetricExporter`/`LogRecordExporter` that writes
    into the `Rga`/counter/`Causal` structures instead of POSTing OTLP — and OTel
-   *cumulative* metric temporality maps cleanly onto monotone CRDT counters.
+   *cumulative* metric temporality maps cleanly onto monotone CRDT counters. (Cleanly
+   for **counters**; less so for **gauges** — last-value-wins is non-monotone, and an
+   `LWWRegister` leans on a timestamp comparison that isn't a pure join under clock
+   skew — and **histograms**, where bucket counts are monotone but exemplar
+   replacement isn't. Counters are the clean case; the rest need care.)
 2. Propagate W3C `traceparent` inside the [**task descriptor**](warp-execution.md),
    so a trace follows the work as the shuttle carries it across peers — yet within
    the mesh the span links can be *read off the causal DAG* rather than hand-propagated.

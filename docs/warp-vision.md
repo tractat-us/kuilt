@@ -94,9 +94,11 @@ A loom holds the **warp**: the parallel threads under tension. You load a
 ![One loom, three layers: the draft (recipe) is woven into coordination-free cloth by the warp, weft and shuttle, then the embroidery — consensus — is stitched on top by hand.](images/warp/loom.svg)
 
 *(How does a function actually reach other peers, when a phone, a server, and a
-browser can't share compiled code? You ship a **name**, not the code — and the
-deeper machinery, including the **bobbin/creel** code cache that ships real
-kernels lazily, lives in [`warp-execution.md`](warp-execution.md).)*
+browser can't share compiled code? You ship a **name**, not the code — which, in
+the near-term form, means **every peer runs the same build** (true code mobility
+across versions is the wasm-kernel fantasy, with real iOS limits). The deeper
+machinery, including the **bobbin/creel** code cache that ships real kernels lazily,
+lives in [`warp-execution.md`](warp-execution.md).)*
 
 ## The reduction to simplicity
 
@@ -173,6 +175,12 @@ Two properties make this lovely rather than burdensome:
 
 So the surface tells the truth: everything cheap looks local; the one expensive
 thing looks like exactly one expensive line.
+
+And not every stitch is a *full* consensus round, either. For the common case of a
+shared **random** choice — who goes first, breaking a tie — kuilt's dealing module
+already has a lighter commit-reveal agreement (no trusted dealer) that costs far
+less than electing a leader through Raft. The embroidery has more than one needle;
+spend the cheapest one the question allows.
 
 ## Horizons — the fantasy, last
 

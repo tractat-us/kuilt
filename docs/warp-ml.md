@@ -15,14 +15,21 @@ it's CALM telling you which workloads can run coordination-free.
 
 ## Where it fits
 
-- **Federated learning / analytics — the standout.** FedAvg is a count-normalized
-  sum of model updates: accumulate `(Σweights, Σcount)` as monotone counters and
-  divide at read — that's a *weave*, on the *same* counters that carry
-  [metrics](warp-observability.md). Federated averaging and metric aggregation are
-  one merge. Brokerless, data stays on-device, no central server. kuilt already reaches phones, browsers, and servers, so a peer-symmetric
-  *multiplatform* federated substrate is genuinely differentiated — most federated
-  frameworks are server-orchestrated, and most can't reach the browser or iOS at
-  all. Secure aggregation rides the same monotone accumulation.
+- **Federated learning / analytics — the standout.** The *core* of FedAvg is
+  monotone: accumulate `(Σweights, Σcount)` as a pair of counters — the *same*
+  counters that carry [metrics](warp-observability.md), so the accumulation is one
+  merge. Be precise about the boundary, though: the averaging itself
+  (`Σweights / Σcount`) is a **read-time projection**, not a lattice op — a threshold
+  read over the monotone accumulator, not part of the weave — and a standard FL
+  *round* still has a **synchronization barrier** (wait for a client cohort, then
+  aggregate), which is a coordination step, not eventual consistency. So warp suits
+  the **outer loop** (accumulate-and-average across rounds, asynchronous variants),
+  not a drop-in for the synchronized round. Brokerless, data stays on-device; kuilt
+  reaches phones, browsers, and servers, so a peer-symmetric *multiplatform*
+  substrate is genuinely differentiated — most FL frameworks are server-orchestrated
+  and can't reach the browser or iOS at all. (Honest caveat: **secure aggregation**
+  is *not* free here — it needs interactive cryptographic rounds, masking and
+  key-agreement, which are not monotone and don't ride the counters.)
 - **Distributed inference / batch scoring.** The search-and-rank hero example *is*
   this when `score` is a model forward pass: shuttle the inputs, weave the outputs.
   Models are big immutable blobs, so the [bobbin/creel](warp-execution.md) cache is
