@@ -76,7 +76,7 @@ public class MovableTree<V> private constructor(
 
     /** All direct children of [nodeId]. */
     public fun childrenOf(nodeId: String): Set<String> =
-        effectiveParents.entries.filter { it.value == nodeId }.map { it.key }.toSet()
+        effectiveParents.filterValues { it == nodeId }.keys.toSet()
 
     /**
      * True if [ancestor] is a proper ancestor of [descendant] (i.e. [ancestor]
@@ -110,7 +110,7 @@ public class MovableTree<V> private constructor(
     public fun addNode(replica: ReplicaId, ts: Long, parent: String, value: V): Pair<MovableTree<V>, String> {
         val nodeId = "$value:${replica.value}:$ts"
         val op = MoveOp(ts = ts, replica = replica, node = nodeId, newParent = parent, value = value)
-        return Pair(applyOp(op), nodeId)
+        return applyOp(op) to nodeId
     }
 
     /**
@@ -134,7 +134,7 @@ public class MovableTree<V> private constructor(
         val op = MoveOp<V>(ts = ts, replica = replica, node = node, newParent = newParent, value = null)
         val updated = applyOp(op)
         val delta = MovableTree<V>(listOf(op))
-        return Pair(updated, Patch(delta))
+        return updated to Patch(delta)
     }
 
     // ── Quilted / merge ───────────────────────────────────────────────────────
@@ -204,22 +204,26 @@ public data class MoveOp<V>(
  * Merge two sorted, deduplicated op-logs into one sorted, deduplicated list.
  * Deduplication is by `(ts, replica)` identity — two ops with the same timestamp
  * and replicaId are the same op.
+ *
+ * Both inputs are already sorted and deduplicated (invariant maintained by [insertSorted]),
+ * so a standard merge-step suffices: the only "duplicate" that can arise is when both lists
+ * contain the same op (equal `ts` + `replica`), handled by the `cmp == 0` branch which
+ * advances both pointers and emits the op once.
  */
 internal fun <V> mergeDistinctLogs(a: List<MoveOp<V>>, b: List<MoveOp<V>>): List<MoveOp<V>> {
-    val seen = mutableSetOf<Pair<Long, ReplicaId>>()
     val merged = mutableListOf<MoveOp<V>>()
     var i = 0; var j = 0
     while (i < a.size && j < b.size) {
         val opA = a[i]; val opB = b[j]
         val cmp = compareOps(opA, opB)
         when {
-            cmp < 0 -> { if (seen.add(opA.ts to opA.replica)) merged += opA; i++ }
-            cmp > 0 -> { if (seen.add(opB.ts to opB.replica)) merged += opB; j++ }
-            else    -> { if (seen.add(opA.ts to opA.replica)) merged += opA; i++; j++ }
+            cmp < 0 -> { merged += opA; i++ }
+            cmp > 0 -> { merged += opB; j++ }
+            else    -> { merged += opA; i++; j++ }  // same op in both — emit once
         }
     }
-    while (i < a.size) { val op = a[i++]; if (seen.add(op.ts to op.replica)) merged += op }
-    while (j < b.size) { val op = b[j++]; if (seen.add(op.ts to op.replica)) merged += op }
+    while (i < a.size) merged += a[i++]
+    while (j < b.size) merged += b[j++]
     return merged
 }
 
@@ -227,9 +231,8 @@ internal fun <V> mergeDistinctLogs(a: List<MoveOp<V>>, b: List<MoveOp<V>>): List
 internal fun <V> insertSorted(log: List<MoveOp<V>>, op: MoveOp<V>): List<MoveOp<V>> {
     if (log.isEmpty()) return listOf(op)
     // Check for duplicate (idempotent insert).
-    val idx = log.indexOfFirst { it.ts == op.ts && it.replica == op.replica }
-    if (idx >= 0) return log
-    val insertAt = log.indexOfFirst { compareOps(op, it) < 0 }.let { if (it < 0) log.size else it }
+    if (log.any { it.ts == op.ts && it.replica == op.replica }) return log
+    val insertAt = log.indexOfFirst { compareOps(op, it) < 0 }.takeIf { it >= 0 } ?: log.size
     return log.toMutableList().also { it.add(insertAt, op) }
 }
 
@@ -267,7 +270,9 @@ internal fun wouldCycle(node: String, newParent: String, parents: Map<String, St
 
 /**
  * The path from [nodeId] to the root, inclusive.
- * Returns an empty list if [nodeId] == [MovableTree.ROOT_ID] (root has no path to traverse).
+ * Returns `[ROOT_ID]` if [nodeId] is itself the root (a single-element path).
+ * Returns a path ending at [ROOT_ID] if the node is connected, or a partial path
+ * (not ending at [ROOT_ID]) if the node is not yet rooted (unknown parent).
  * Uses a visited-set to guard against infinite loops in a corrupt parent map.
  */
 internal fun ancestorPath(nodeId: String, parents: Map<String, String>): List<String> {
