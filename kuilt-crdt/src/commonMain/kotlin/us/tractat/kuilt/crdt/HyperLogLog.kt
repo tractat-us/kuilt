@@ -231,8 +231,15 @@ public class HyperLogLog private constructor(
 
             @Suppress("KotlinConstantConditions")
             when (len and 3) {
-                3 -> { k1 = k1 xor ((data[tail + 2].toInt() and 0xFF) shl 16); k1 = k1 xor ((data[tail + 1].toInt() and 0xFF) shl 8); k1 = k1 xor (data[tail].toInt() and 0xFF) }
-                2 -> { k1 = k1 xor ((data[tail + 1].toInt() and 0xFF) shl 8); k1 = k1 xor (data[tail].toInt() and 0xFF) }
+                3 -> {
+                    k1 = k1 xor ((data[tail + 2].toInt() and 0xFF) shl 16)
+                    k1 = k1 xor ((data[tail + 1].toInt() and 0xFF) shl 8)
+                    k1 = k1 xor (data[tail].toInt() and 0xFF)
+                }
+                2 -> {
+                    k1 = k1 xor ((data[tail + 1].toInt() and 0xFF) shl 8)
+                    k1 = k1 xor (data[tail].toInt() and 0xFF)
+                }
                 1 -> k1 = k1 xor (data[tail].toInt() and 0xFF)
             }
             if (len and 3 != 0) {

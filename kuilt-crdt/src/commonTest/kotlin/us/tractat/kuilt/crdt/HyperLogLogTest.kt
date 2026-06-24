@@ -109,6 +109,44 @@ class HyperLogLogTest {
         assertTrue(estimate in 1L..5L, "expected ~1 for one distinct item, got $estimate")
     }
 
+    // ── Error paths ──────────────────────────────────────────────────────────
+
+    @Test
+    fun pieceMismatchedPrecisionThrows() {
+        val a = HyperLogLog.empty(precision = 10)
+        val b = HyperLogLog.empty(precision = 14)
+        assertFailsWith<IllegalArgumentException> { a.piece(b) }
+    }
+
+    // ── m property ────────────────────────────────────────────────────────────
+
+    @Test
+    fun mPropertyReflectsPrecision() {
+        assertAll(
+            { assertEquals(1 shl 4, HyperLogLog.empty(precision = 4).m) },
+            { assertEquals(1 shl 14, HyperLogLog.empty(precision = 14).m) },
+            { assertEquals(1 shl 18, HyperLogLog.empty(precision = 18).m) },
+        )
+    }
+
+    // ── Hash stability (golden vectors) ──────────────────────────────────────
+
+    /**
+     * Pin the MurmurHash3-32 output against canonical smhasher reference values
+     * (seed = 0, little-endian, Austin Appleby public-domain reference).
+     * A change to the hash function that breaks these vectors breaks cross-platform
+     * serialisation stability, so this test must stay pinned.
+     */
+    @Test
+    fun murmur3GoldenVectors() {
+        assertAll(
+            { assertEquals(0x00000000, HyperLogLog.murmur3Hash32("")) },
+            { assertEquals(0x3c2569b2.toInt(), HyperLogLog.murmur3Hash32("a")) },
+            { assertEquals(0xb3dd93fa.toInt(), HyperLogLog.murmur3Hash32("abc")) },
+            { assertEquals(0x248bfa47, HyperLogLog.murmur3Hash32("hello")) },
+        )
+    }
+
     // ── Serialization ─────────────────────────────────────────────────────────
 
     @Test
