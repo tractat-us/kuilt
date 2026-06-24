@@ -4,7 +4,6 @@ import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.builtins.SetSerializer
-import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.descriptors.SerialDescriptor
 import kotlinx.serialization.descriptors.buildClassSerialDescriptor
 import kotlinx.serialization.encoding.CompositeDecoder
@@ -29,11 +28,17 @@ import kotlinx.serialization.encoding.encodeStructure
  * same logical state (same op set, different delivery order) produce identical bytes.
  * This mirrors the fix applied to [FugueSerializer] (issue #713).
  *
- * Wire format: `{ "ops": List<RgaOp<V>>, "lamport": Long }`
+ * Wire format: `{ "ops": List<RgaOp<V>> }`
  *
- * Note: the field "ops" is now encoded as a List (not a Set) so that the canonical sort
- * order is preserved in the wire encoding. Decoders reconstruct the Set by reading the
- * list — the semantic meaning is unchanged (an op-log is a set of unique ops).
+ * Note: the field "ops" is encoded as a List (not a Set) so that the canonical sort order
+ * is preserved in the wire encoding. Decoders reconstruct the Set by reading the list —
+ * the semantic meaning is unchanged (an op-log is a set of unique ops).
+ *
+ * The [Rga.lamport] high-water is **not** encoded on the wire. On decode it is derived
+ * from the op-set as `max(op.id.lamport)` over all ops (Insert/Remove ids are real Rga
+ * ids; Compact positions.keys are the ids of compacted Inserts). This makes the serialized
+ * form a pure function of the logical ([equals]) value, satisfying the content-addressing
+ * and Quilter delta-fingerprinting invariant (issue #779).
  */
 @OptIn(ExperimentalSerializationApi::class)
 internal class RgaSerializer<V>(vSerializer: KSerializer<V>) : KSerializer<Rga<V>> {
@@ -41,11 +46,9 @@ internal class RgaSerializer<V>(vSerializer: KSerializer<V>) : KSerializer<Rga<V
     private val opSerializer: KSerializer<RgaOp<V>> = RgaOpSerializer(vSerializer)
     private val opsSetSerializer: KSerializer<Set<RgaOp<V>>> = SetSerializer(opSerializer)
     private val opsListSerializer: KSerializer<List<RgaOp<V>>> = ListSerializer(opSerializer)
-    private val longSerializer: KSerializer<Long> = Long.serializer()
 
     override val descriptor: SerialDescriptor = buildClassSerialDescriptor("Rga") {
         element("ops", opsListSerializer.descriptor)
-        element("lamport", longSerializer.descriptor)
     }
 
     /**
@@ -55,27 +58,48 @@ internal class RgaSerializer<V>(vSerializer: KSerializer<V>) : KSerializer<Rga<V
      * - Multiple [RgaOp.Compact] ops sort by the full sorted [RgaOp.Compact.positions] key-list,
      *   compared lexicographically, to achieve a deterministic order even under a malformed
      *   remote that violates the disjoint-keys invariant (see [compareCompactOps]).
+     *
+     * [Rga.lamport] is omitted from the wire; it is derived on decode via [deriveLamport].
      */
     override fun serialize(encoder: Encoder, value: Rga<V>): Unit = encoder.encodeStructure(descriptor) {
         val sortedOps = value.ops.sortedWith(opComparator())
         encodeSerializableElement(descriptor, 0, opsListSerializer, sortedOps)
-        encodeLongElement(descriptor, 1, value.lamport)
     }
 
     override fun deserialize(decoder: Decoder): Rga<V> = decoder.decodeStructure(descriptor) {
         var ops: Set<RgaOp<V>>? = null
-        var lamport = 0L
 
         mainLoop@ while (true) {
             when (val index = decodeElementIndex(descriptor)) {
                 CompositeDecoder.DECODE_DONE -> break@mainLoop
                 0 -> ops = decodeSerializableElement(descriptor, 0, opsListSerializer).toSet()
-                1 -> lamport = decodeLongElement(descriptor, 1)
                 else -> error("Unexpected index $index in Rga deserializer")
             }
         }
 
-        Rga.fromOps(ops ?: emptySet(), lamport)
+        val decodedOps = ops ?: emptySet()
+        Rga.fromOps(decodedOps, deriveLamport(decodedOps))
+    }
+
+    companion object {
+        /**
+         * Derive the Lamport high-water from the op-set alone.
+         *
+         * - [RgaOp.Insert] and [RgaOp.Remove] carry real [RgaId]s whose [RgaId.lamport]
+         *   values bound the clock.
+         * - [RgaOp.Compact] carries no id of its own but its [RgaOp.Compact.positions] keys
+         *   are the real [RgaId]s of compacted Inserts — those must be included so the derived
+         *   clock covers compacted state.
+         * - Empty op-set → 0L (same as the initial value in [Rga.empty]).
+         */
+        internal fun <V> deriveLamport(ops: Set<RgaOp<V>>): Long =
+            ops.flatMap { op ->
+                when (op) {
+                    is RgaOp.Insert -> listOf(op.id.lamport)
+                    is RgaOp.Remove<*> -> listOf(op.id.lamport)
+                    is RgaOp.Compact -> op.positions.keys.map { it.lamport }
+                }
+            }.maxOrNull()?.coerceAtLeast(0L) ?: 0L
     }
 
     /**
