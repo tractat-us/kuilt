@@ -219,7 +219,7 @@ private class MeshSeam(
     private val _state = MutableStateFlow<SeamState>(SeamState.Woven)
     override val state: StateFlow<SeamState> = _state.asStateFlow()
 
-    private val spool = Spool(policy)
+    private val spool = Spool<Swatch>(policy)
     override val incoming: Flow<Swatch> = spool.incoming
 
     // Atomic single-shot teardown gate. `close()` and each `readLoop`'s `finally` race to flip it

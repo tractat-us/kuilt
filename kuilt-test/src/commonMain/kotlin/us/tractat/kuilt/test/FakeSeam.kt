@@ -52,7 +52,7 @@ public class FakeSeam(
     private val _state = MutableStateFlow(initialState)
     override val state: StateFlow<SeamState> = _state.asStateFlow()
 
-    private val spool = Spool(policy)
+    private val spool = Spool<Swatch>(policy)
     override val incoming: Flow<Swatch> = spool.incoming
 
     private val _broadcasts = mutableListOf<ByteArray>()

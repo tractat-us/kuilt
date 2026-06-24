@@ -92,10 +92,12 @@ One blessed type owns per-receiver inbound delivery; it is the *only* sanctioned
 frame delivery, so `Channel.UNLIMITED`-for-delivery disappears from the codebase. It is **public**
 in `:kuilt-core` — alongside the already-public `DeliveryPolicy`/`Overflow`/`FrameOverflow` — so
 every kuilt module *and* third-party fabric implementors (the headline extension point) share the
-one primitive rather than each re-deriving a bounded channel.
+one primitive rather than each re-deriving a bounded channel. It is **generic in the frame type**
+because kuilt delivers at two layers with the same unbounded-growth risk: the multi-peer Seam layer
+(`Spool<Swatch>`) and the point-to-point `Connection` transport SPI (`Spool<ByteArray>`).
 
 ```kotlin
-public class Spool(private val policy: DeliveryPolicy) {
+public class Spool<T>(private val policy: DeliveryPolicy) {
     // bounded Channel(policy.capacity, onBufferOverflow = policy.overflow.toBufferOverflow())
     suspend fun deliver(frame: Swatch)   // SUSPEND ⇒ suspends; DROP_* ⇒ returns; FAIL ⇒ throws
     val incoming: Flow<Swatch>           // single-collection, FIFO

@@ -1,14 +1,12 @@
 package us.tractat.kuilt.conformance
 
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
 import us.tractat.kuilt.core.CloseReason
+import us.tractat.kuilt.core.DeliveryPolicy
 import us.tractat.kuilt.core.FabricAvailability
 import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.Pattern
@@ -17,6 +15,7 @@ import us.tractat.kuilt.core.PeerNotConnected
 import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
+import us.tractat.kuilt.core.Spool
 import us.tractat.kuilt.core.Swatch
 import us.tractat.kuilt.core.Tag
 
@@ -41,8 +40,13 @@ import us.tractat.kuilt.core.Tag
  * Frame routing is in-memory. [broadcast] and [sendTo] deliver frames to all
  * other seams on the same loom regardless of [SeamState] — this lets tests
  * inspect whether frames sent while [SeamState.Weaving] ever arrive.
+ *
+ * Inbound delivery is bounded and backpressured via one [Spool] per receiver,
+ * with overflow behaviour chosen by [policy] (default [DeliveryPolicy.Reliable]).
  */
-public class DelayedWovenLoom : Loom {
+public class DelayedWovenLoom(
+    private val policy: DeliveryPolicy = DeliveryPolicy.Reliable,
+) : Loom {
     private val _peers = MutableStateFlow<Set<PeerId>>(emptySet())
     private val links = mutableMapOf<PeerId, DelayedWovenSeam>()
     private var counter = 0
@@ -51,13 +55,13 @@ public class DelayedWovenLoom : Loom {
 
     override suspend fun weave(rendezvous: Rendezvous): Seam {
         val id = freshId()
-        val seam = DelayedWovenSeam(id, this)
+        val seam = DelayedWovenSeam(id, this, policy)
         links[id] = seam
         _peers.update { it + id }
         return seam
     }
 
-    internal fun dispatch(sender: PeerId, payload: ByteArray, recipient: PeerId?) {
+    internal suspend fun dispatch(sender: PeerId, payload: ByteArray, recipient: PeerId?) {
         val targets = if (recipient == null) {
             links.keys.filter { it != sender }
         } else {
@@ -91,18 +95,23 @@ public class DelayedWovenLoom : Loom {
  *
  * Call [markWoven] to transition to [SeamState.Woven], simulating a radio
  * fabric completing its link-establishment phase.
+ *
+ * Inbound delivery is bounded via a [Spool] — the same primitive used by
+ * `InMemoryLoom` — so backpressure and overflow behaviour follow the loom's
+ * [DeliveryPolicy].
  */
 public class DelayedWovenSeam internal constructor(
     override val selfId: PeerId,
     private val loom: DelayedWovenLoom,
+    policy: DeliveryPolicy,
 ) : Seam {
     private val _state = MutableStateFlow<SeamState>(SeamState.Weaving)
     override val state: StateFlow<SeamState> = _state.asStateFlow()
 
     override val peers: StateFlow<Set<PeerId>> = loom.peers
 
-    private val incomingChannel = Channel<Swatch>(capacity = Channel.UNLIMITED)
-    override val incoming: Flow<Swatch> = incomingChannel.receiveAsFlow()
+    private val spool = Spool<Swatch>(policy)
+    override val incoming: Flow<Swatch> = spool.incoming
 
     private var sequenceCounter = 0L
     private var closed = false
@@ -128,15 +137,11 @@ public class DelayedWovenSeam internal constructor(
         closed = true
         _state.value = SeamState.Torn(reason)
         loom.remove(selfId)
-        incomingChannel.close()
+        spool.close()
     }
 
-    internal fun deliver(swatch: Swatch) {
-        if (!closed) {
-            incomingChannel.trySend(
-                swatch.copy(sequence = ++sequenceCounter),
-            )
-        }
+    internal suspend fun deliver(swatch: Swatch) {
+        if (!closed) spool.deliver(swatch.copy(sequence = ++sequenceCounter))
     }
 
     private fun checkNotClosed() {

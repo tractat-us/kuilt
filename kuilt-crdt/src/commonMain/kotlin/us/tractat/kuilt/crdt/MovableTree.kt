@@ -1,6 +1,7 @@
 package us.tractat.kuilt.crdt
 
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.Transient
 
 /**
  * A replicated tree that supports concurrent **move/reparent** operations without
@@ -37,13 +38,13 @@ import kotlinx.serialization.Serializable
  *
  * ## Move-log GC
  *
- * The move-log is **unbounded** in this implementation. Safe GC requires
- * *causal stability*: an op can be compacted away only once **every** peer has
- * received and applied it (i.e. the op's timestamp is below the minimum of all
- * replicas' delivered vectors). Implementing stability detection requires
- * coordination at the transport layer (e.g. the delivered-vector gossip of
- * `Quilter` / `RgaGcCoordinator`). Until that is wired up, callers should
- * expect log size to grow linearly with the total number of moves ever made.
+ * Move-log GC is performed by [compact], which removes causally-stable ops whose
+ * effect has been superseded by a later stable op on the same node. Causal
+ * stability is determined by the `Quilter` replicator, which gossips delivered
+ * version vectors and exposes them to `MovableTreeGcCoordinator`. [causalDots]
+ * exposes each op's `(replica, seq)` dot so the `Quilter` can compute the
+ * contiguous delivered VV. The compaction result ([MoveTreeCompact]) is
+ * broadcast to peers so they can trim their own logs.
  *
  * @param N the type of node identifier — must be a stable, globally unique string
  *   (e.g. a UUID). The special [ROOT_ID] is reserved for the root node.
@@ -55,12 +56,40 @@ import kotlinx.serialization.Serializable
 public class MovableTree<V> private constructor(
     /** Total-order log of every move op ever applied. Sorted by (ts, replicaId) ascending. */
     private val log: List<MoveOp<V>>,
+    /**
+     * Dense per-replica sequence counter: `replica → highest seq assigned to that replica`.
+     * Bumped at op-creation time (addNode / move); merged (max) on piece().
+     * Monotonically non-decreasing — never resets after compaction.
+     */
+    private val seqByReplica: Map<ReplicaId, Long>,
+    /**
+     * Dots of ops that have been garbage-collected by a [MoveTreeCompact].
+     * Re-emitted in [causalDots] to keep the Quilter's contiguous delivered frontier gap-free
+     * after GC removes raw ops from the log.
+     */
+    private val compactedDots: Set<Dot>,
+    /**
+     * Pre-computed effective parent map, or `null` if this instance was constructed
+     * without one (deserialization, [empty]). In that case [effectiveParents] computes
+     * it lazily on first access.
+     *
+     * `@Transient`: kotlinx.serialization skips fields not in the primary constructor's
+     * parameter list, or fields explicitly annotated `@Transient`. This field has no
+     * backing property in the serialized form — it is purely an in-memory cache.
+     *
+     * Invariant: when non-null, equals `replayLog(log)`. The only supplier is [piece],
+     * which computes the incremental result before constructing the new instance.
+     */
+    @Transient
+    private val cachedParents: Map<String, String>? = null,
 ) : Quilted<MovableTree<V>> {
 
-    // The effective parent map is derived by replaying the log. We cache it lazily
-    // via a computed property so the class stays a pure value type with no mutable
-    // fields that would complicate serialization.
-    private val effectiveParents: Map<String, String> by lazy { replayLog(log) }
+    /**
+     * The effective parent map. Computed from [cachedParents] when available (the common
+     * path — avoids a full replay on every [piece] call), or lazily replayed from [log]
+     * on first access (deserialization and [empty] paths).
+     */
+    private val effectiveParents: Map<String, String> by lazy { cachedParents ?: replayLog(log) }
 
     // ── Public read API ───────────────────────────────────────────────────────
 
@@ -93,7 +122,7 @@ public class MovableTree<V> private constructor(
     public fun hasPathToRoot(nodeId: String): Boolean =
         ancestorPath(nodeId, effectiveParents).lastOrNull() == ROOT_ID
 
-    /** Number of ops in the move-log (grows with every [move] or [addNode] call). */
+    /** Number of ops in the move-log (grows with every [move] or [addNode] call; shrinks on compaction). */
     public val moveLogSize: Int get() = log.size
 
     // ── Mutation API ─────────────────────────────────────────────────────────
@@ -112,9 +141,10 @@ public class MovableTree<V> private constructor(
      */
     public fun addNode(replica: ReplicaId, ts: Long, parent: String, value: V): AddNodeResult<V> {
         val nodeId = "$value:${replica.value}:$ts"
-        val op = MoveOp(ts = ts, replica = replica, node = nodeId, newParent = parent, value = value)
-        val delta = MovableTree<V>(listOf(op))
-        return AddNodeResult(tree = applyOp(op), nodeId = nodeId, patch = Patch(delta))
+        val seq = nextSeqFor(replica)
+        val op = MoveOp(ts = ts, replica = replica, node = nodeId, newParent = parent, value = value, seq = seq)
+        val delta = MovableTree<V>(listOf(op), mapOf(replica to seq), emptySet())
+        return AddNodeResult(tree = applyOp(op, seq), nodeId = nodeId, patch = Patch(delta))
     }
 
     /**
@@ -135,9 +165,10 @@ public class MovableTree<V> private constructor(
         node: String,
         newParent: String,
     ): Pair<MovableTree<V>, Patch<MovableTree<V>>> {
-        val op = MoveOp<V>(ts = ts, replica = replica, node = node, newParent = newParent, value = null)
-        val updated = applyOp(op)
-        val delta = MovableTree<V>(listOf(op))
+        val seq = nextSeqFor(replica)
+        val op = MoveOp<V>(ts = ts, replica = replica, node = node, newParent = newParent, value = null, seq = seq)
+        val updated = applyOp(op, seq)
+        val delta = MovableTree<V>(listOf(op), mapOf(replica to seq), emptySet())
         return updated to Patch(delta)
     }
 
@@ -153,29 +184,255 @@ public class MovableTree<V> private constructor(
      *   replica's log appears on which side.
      * - **Associative** — follows from the set-union nature of the log merge and the
      *   determinism of the replay.
+     *
+     * ## Incremental replay optimization (#728)
+     *
+     * Rather than replaying the full merged log from scratch on every merge, we
+     * identify the **earliest position** at which the merged log diverges from
+     * `this.log` (the first op that was inserted from `other`). Everything before
+     * that position has already been replayed into `this.effectiveParents`, so we
+     * reuse that prefix and replay only from the divergence point forward.
+     *
+     * Common case — `other` contains only ops with timestamps **later than** every
+     * op in `this.log` (monotone-advancing append): the divergence point equals
+     * `this.log.size`, so we apply only the new ops to `effectiveParents`. This
+     * reduces the per-merge cost from O(|merged| × depth) to O(|new| × depth).
+     *
+     * Worst case — an op arrives with a timestamp earlier than some ops in
+     * `this.log` (out-of-order delivery): we replay from the insertion point, which
+     * is still correct but more expensive (up to O(|merged| × depth)). Correctness
+     * is preserved in all cases because the replay visits the identical total-order
+     * log in the identical order.
      */
     override fun piece(other: MovableTree<V>): MovableTree<V> {
         val merged = mergeDistinctLogs(log, other.log)
-        return MovableTree(merged)
+        val mergedSeq = mergeSeqs(seqByReplica, other.seqByReplica)
+        val mergedCompacted = compactedDots + other.compactedDots
+        // Apply any compacted dots from the other side — remove ops that were GC'd there.
+        val prunedLog = if (mergedCompacted.isEmpty()) merged
+            else merged.filter { op -> op.dot !in mergedCompacted }
+        val mergedParents = incrementalReplay(prunedLog)
+        return MovableTree(prunedLog, mergedSeq, mergedCompacted, mergedParents)
+    }
+
+    // ── Causal GC ────────────────────────────────────────────────────────────
+
+    /**
+     * The causal [Dot]s this op-log has delivered: one dot per [MoveOp] in the log
+     * (its `(replica, seq)` pair) **plus** the dots of any previously compacted ops
+     * (so the Quilter's contiguous delivered frontier stays gap-free after GC).
+     */
+    override fun causalDots(): Set<Dot> {
+        val liveDots = log.mapTo(mutableSetOf()) { op -> op.dot }
+        return liveDots + compactedDots
+    }
+
+    /**
+     * Garbage-collect causally-stable ops whose effect has been superseded.
+     *
+     * A [MoveOp] is eligible for GC when ALL hold:
+     * 1. **Causally stable** — `op.seq ≤ stableCut[op.replica]`: every live peer delivered it.
+     * 2. **Superseded** — a later causally-stable op exists on the same node whose effect is what
+     *    the replay actually keeps; this op is not the winning placement for its node.
+     * 3. **Not a creation op that is still referenced** — creation ops (`value != null`) that
+     *    any live op still references as `node` or `newParent` must be retained.
+     * 4. **Frontier-complete** — `delivered.dominates(frontierMax)`: self has delivered every
+     *    op known to exist (guards against a concurrent move that would make an op non-superseded).
+     *
+     * Returns the compacted tree and a [MoveTreeCompact] to broadcast to peers, or `null` if
+     * no op is eligible.
+     *
+     * @param stableCut `S` — elementwise min over live peers' delivered VVs.
+     * @param frontierMax `F` — elementwise max of live and retained-evicted peer frontiers.
+     * @param delivered this replica's own contiguous delivered VV.
+     */
+    public fun compact(
+        stableCut: VersionVector,
+        frontierMax: VersionVector,
+        delivered: VersionVector,
+    ): Pair<MovableTree<V>, MoveTreeCompact>? {
+        if (!delivered.dominates(frontierMax)) return null // condition 4 — frontier-complete
+
+        val winningOps = winningOpPerNode()
+        val referencedNodes = referencedNodeIds()
+        val droppable = log.filter { op -> isDroppable(op, stableCut, winningOps, referencedNodes) }
+        if (droppable.isEmpty()) return null
+
+        val droppedDots = droppable.mapTo(mutableSetOf()) { op -> op.dot }
+        val newLog = log.filter { op -> op.dot !in droppedDots }
+        val newCompacted = compactedDots + droppedDots
+        val compactOp = MoveTreeCompact(droppedDots)
+        // Compaction removes only losing (superseded) ops — those never affected effectiveParents.
+        // The winning ops remain, so the parent map is unchanged. Pass it through directly.
+        return MovableTree(newLog, seqByReplica, newCompacted, effectiveParents) to compactOp
+    }
+
+    /**
+     * Apply a [MoveTreeCompact] received from a peer, trimming the local log to match.
+     * Idempotent — applying the same compact twice is safe.
+     */
+    public fun applyCompact(compact: MoveTreeCompact): MovableTree<V> {
+        val newLog = log.filter { op -> op.dot !in compact.droppedDots }
+        val newCompacted = compactedDots + compact.droppedDots
+        // Same reasoning as in compact(): dropped dots are losing ops that never affected effectiveParents.
+        return MovableTree(newLog, seqByReplica, newCompacted, effectiveParents)
     }
 
     override fun equals(other: Any?): Boolean =
-        other is MovableTree<*> && log == other.log
+        other is MovableTree<*> && log == other.log &&
+            seqByReplica == other.seqByReplica && compactedDots == other.compactedDots
 
-    override fun hashCode(): Int = log.hashCode()
+    override fun hashCode(): Int = 31 * (31 * log.hashCode() + seqByReplica.hashCode()) + compactedDots.hashCode()
 
     override fun toString(): String = "MovableTree(ops=${log.size}, nodes=${effectiveParents.size + 1})"
 
     // ── Internal helpers ──────────────────────────────────────────────────────
 
-    private fun applyOp(op: MoveOp<V>): MovableTree<V> = MovableTree(insertSorted(log, op))
+    private fun nextSeqFor(replica: ReplicaId): Long = (seqByReplica[replica] ?: 0L) + 1L
+
+    private fun applyOp(op: MoveOp<V>, seq: Long): MovableTree<V> {
+        val newSeq = seqByReplica + (op.replica to maxOf(seqByReplica[op.replica] ?: 0L, seq))
+        val newLog = insertSorted(log, op)
+        val newParents = incrementalReplay(newLog)
+        return MovableTree(newLog, newSeq, compactedDots, newParents)
+    }
+
+    /**
+     * Compute the incremental effective parent map for [newLog], reusing [effectiveParents]
+     * as the cached prefix result.
+     *
+     * Finds the first position [k] at which [newLog] diverges from [log] (i.e. the first
+     * position containing an op not already in [log] at that slot). Everything before [k]
+     * has already been replayed into [effectiveParents]; we restart from the parent map
+     * valid up to [k] and replay only [newLog[k..]].
+     *
+     * **Common case** (monotone append — all new ops have later timestamps):
+     * [k] == [log].size, so we reuse [effectiveParents] fully and replay only the new
+     * ops. Cost: O(|new ops| × depth) instead of O(|newLog| × depth).
+     *
+     * **Worst case** (out-of-order delivery): [k] < [log].size. We replay from [k],
+     * which requires recomputing the prefix map for [newLog[0..k-1]] from scratch
+     * first. Cost: O(|newLog| × depth) — no worse than the old full replay.
+     *
+     * **Correctness**: the replay visits [newLog] in the identical deterministic total
+     * order regardless of which path is taken. The incremental path is equivalent to
+     * full replay by induction: if [effectiveParents] == replayLog([log]), then
+     * reusing it as the prefix of [newLog[0..k-1]] (which equals [log[0..k-1]])
+     * and continuing with [newLog[k..]] produces replayLog([newLog]).
+     */
+    private fun incrementalReplay(newLog: List<MoveOp<V>>): Map<String, String> {
+        val firstNew = firstDivergenceIndex(newLog)
+        return if (firstNew == log.size) {
+            // Fast path: all new ops are appended; reuse the cached prefix.
+            replayLogFrom(newLog, startIndex = firstNew, initialParents = effectiveParents)
+        } else {
+            // Slow path: op(s) inserted in the middle; recompute prefix then continue.
+            val prefixParents = replayLogFrom(newLog, startIndex = 0, endIndex = firstNew, initialParents = emptyMap())
+            replayLogFrom(newLog, startIndex = firstNew, initialParents = prefixParents)
+        }
+    }
+
+    /**
+     * The first index [k] such that [newLog] differs from [log] at position [k]
+     * (either a different op at that slot, or [newLog] ended before [log] did),
+     * or [log].size if [newLog] is a strict extension of [log]:
+     * - same ops at every position [0..[log].size-1], and
+     * - [newLog] has additional ops at the end.
+     *
+     * Since both lists are sorted by the same total order and [mergeDistinctLogs]
+     * deduplicates by `(ts, replica)`, any op from [log] that is also in [newLog]
+     * occupies the same relative position. The first new op must appear at or after
+     * its natural sorted position.
+     *
+     * The [log].size return value is only valid when [newLog] is a **superset** of
+     * [log] (no ops removed, possibly some appended). If [newLog] is shorter (due to
+     * compaction filtering), divergence is detected at [newLog].size.
+     */
+    private fun firstDivergenceIndex(newLog: List<MoveOp<V>>): Int {
+        val limit = minOf(log.size, newLog.size)
+        for (i in 0 until limit) {
+            if (log[i] !== newLog[i] && log[i] != newLog[i]) return i
+        }
+        // If newLog is shorter than log, there are missing ops from log's tail — divergence at newLog.size.
+        // If newLog is longer or equal length, log's prefix is fully matched — divergence (new ops) at log.size.
+        return if (newLog.size < log.size) newLog.size else log.size
+    }
+
+    /**
+     * Compute the winning op (last stable, highest-priority applied op) for each node.
+     * The replay builds the effective parent map by applying ops in order; a later op
+     * on a node that is not skipped (for cycle prevention) supersedes earlier ones.
+     * The winning op for node `n` is the last op in replay order whose application
+     * actually updated `effectiveParents[n]`.
+     */
+    private fun winningOpPerNode(): Map<String, MoveOp<V>> {
+        val winners = mutableMapOf<String, MoveOp<V>>()
+        val parents = mutableMapOf<String, String>()
+        for (op in log) {
+            if (op.node == ROOT_ID) continue
+            if (wouldCycle(op.node, op.newParent, parents)) continue
+            parents[op.node] = op.newParent
+            winners[op.node] = op
+        }
+        return winners
+    }
+
+    /**
+     * The set of all node ids referenced by any op in the log — either as the moved node
+     * or as the target parent. Used to protect creation ops from being GC'd while any
+     * live op still references the node.
+     */
+    private fun referencedNodeIds(): Set<String> =
+        log.flatMapTo(mutableSetOf()) { op -> listOf(op.node, op.newParent) }
+
+    /**
+     * True if [op] is eligible for GC under the compaction safety conditions.
+     *
+     * Four conditions must ALL hold:
+     * 1. **Causally stable** — `op.seq ≤ stableCut[op.replica]`.
+     * 2. **Superseded** — a later op is the winning placement for this node.
+     * 3. **Not a creation op still referenced** — creation ops (`value != null`) whose node
+     *    is still referenced by any live op must be retained.
+     * 4. **Winner also causally stable** — the winning op that supersedes this one must itself
+     *    be causally stable. Without this gate, a slow peer could receive a [MoveTreeCompact]
+     *    while the winner is still unknown to it, apply it, and regress to a phantom parent
+     *    (transient divergence until the winner arrives). The winner must be universally
+     *    delivered before any op it supersedes can be dropped.
+     */
+    private fun isDroppable(
+        op: MoveOp<V>,
+        stableCut: VersionVector,
+        winningOps: Map<String, MoveOp<V>>,
+        referencedNodes: Set<String>,
+    ): Boolean {
+        if (!stableCut.contains(op.dot)) return false // (1) not causally stable
+        if (op.value != null && op.node in referencedNodes) return false // (3) creation op still referenced
+        val winner = winningOps[op.node] ?: return false
+        if (winner.dot == op.dot) return false // (2) this IS the winning op — not superseded
+        return stableCut.contains(winner.dot) // (4) winner must also be causally stable
+    }
+
+    // ── Test accessors ────────────────────────────────────────────────────────
+
+    /**
+     * Exposes the internal log for test-only inspection.
+     * Used by [MovableTreeIncrementalReplayTest] to compare the incremental parent
+     * map against a from-scratch [replayLog] of the same log.
+     */
+    internal fun logForTest(): List<MoveOp<V>> = log
+
+    /**
+     * Exposes the cached effective parent map for test-only inspection.
+     * The test asserts that this equals [replayLog] applied to [logForTest].
+     */
+    internal fun effectiveParentsForTest(): Map<String, String> = effectiveParents
 
     public companion object {
         /** The reserved id of the tree's root node. The root has no parent. */
         public const val ROOT_ID: String = "__root__"
 
         /** An empty tree containing only [ROOT_ID]. */
-        public fun <V> empty(): MovableTree<V> = MovableTree(emptyList())
+        public fun <V> empty(): MovableTree<V> = MovableTree(emptyList(), emptyMap(), emptySet())
     }
 }
 
@@ -218,14 +475,69 @@ public data class AddNodeResult<V>(
  * The `(ts, replica)` pair is the logical timestamp that determines the
  * operation's position in the total replay order. Two ops with the same pair are
  * treated as identical (idempotency); callers must ensure uniqueness per replica.
+ *
+ * [seq] is a dense per-replica delivery counter (1, 2, 3, …) used by the
+ * causal-stability GC machinery. It is assigned at op-creation time by the
+ * replica named in [replica] and is separate from [ts] (which is a Lamport clock,
+ * not dense). The [dot] property (`Dot(replica, seq)`) is the causal identifier
+ * consumed by `Quilter`.
+ *
+ * **Logical identity** is `(ts, replica)` — [seq] is a delivery-tracking field that
+ * does not participate in [equals] or [hashCode]. Two ops with the same `(ts, replica)`
+ * represent the same logical operation; the one with the higher [seq] is canonical
+ * (minted by the true author). `[insertSorted]` deduplicates by `(ts, replica)` and
+ * retains the op with the higher seq so the canonical author's seq survives merges.
+ *
+ * **Wire-format note:** adding [seq] is a breaking change. This is intentional
+ * and cheap pre-1.0 (see docs/op-log-crdt-compaction.md, #725).
  */
 @Serializable
-public data class MoveOp<V>(
+public class MoveOp<V>(
     public val ts: Long,
     public val replica: ReplicaId,
     public val node: String,
     public val newParent: String,
     public val value: V?,
+    /** Dense per-replica delivery sequence number. Used by [MovableTree.causalDots] for GC. */
+    public val seq: Long,
+) {
+    /** This op's causal [Dot] — `(replica, seq)`. The key into causal-stability VVs. */
+    public val dot: Dot get() = Dot(replica, seq)
+
+    /** Logical identity is (ts, replica) — seq is a delivery-tracking field. */
+    override fun equals(other: Any?): Boolean =
+        other is MoveOp<*> && ts == other.ts && replica == other.replica
+
+    override fun hashCode(): Int = 31 * ts.hashCode() + replica.hashCode()
+
+    override fun toString(): String =
+        "MoveOp(ts=$ts, replica=${replica.value}, node=$node, newParent=$newParent, seq=$seq)"
+
+    public fun copy(
+        ts: Long = this.ts,
+        replica: ReplicaId = this.replica,
+        node: String = this.node,
+        newParent: String = this.newParent,
+        value: V? = this.value,
+        seq: Long = this.seq,
+    ): MoveOp<V> = MoveOp(ts, replica, node, newParent, value, seq)
+}
+
+// ── Compact op ───────────────────────────────────────────────────────────────
+
+/**
+ * Records that the ops identified by [droppedDots] have been garbage-collected from the move-log.
+ *
+ * Broadcast to peers so they can apply the same trim via [MovableTree.applyCompact].
+ * Receiving the same [MoveTreeCompact] twice is idempotent.
+ *
+ * The [droppedDots] are re-emitted by [MovableTree.causalDots] in the compacted tree so that the
+ * Quilter's contiguous delivered frontier has no holes after GC removes raw ops from the log.
+ */
+@Serializable
+public data class MoveTreeCompact(
+    /** The `(replica, seq)` dots of ops that were dropped by this compaction. */
+    public val droppedDots: Set<Dot>,
 )
 
 // ── Pure replay logic (top-level functions for easy unit inspection) ──────────
@@ -233,12 +545,11 @@ public data class MoveOp<V>(
 /**
  * Merge two sorted, deduplicated op-logs into one sorted, deduplicated list.
  * Deduplication is by `(ts, replica)` identity — two ops with the same timestamp
- * and replicaId are the same op.
+ * and replicaId are the same logical op. When both lists contain the same op,
+ * the version with the higher [MoveOp.seq] is kept (canonical author seq wins).
  *
  * Both inputs are already sorted and deduplicated (invariant maintained by [insertSorted]),
- * so a standard merge-step suffices: the only "duplicate" that can arise is when both lists
- * contain the same op (equal `ts` + `replica`), handled by the `cmp == 0` branch which
- * advances both pointers and emits the op once.
+ * so a standard merge-step suffices.
  */
 internal fun <V> mergeDistinctLogs(a: List<MoveOp<V>>, b: List<MoveOp<V>>): List<MoveOp<V>> {
     val merged = mutableListOf<MoveOp<V>>()
@@ -249,7 +560,11 @@ internal fun <V> mergeDistinctLogs(a: List<MoveOp<V>>, b: List<MoveOp<V>>): List
         when {
             cmp < 0 -> { merged += opA; i++ }
             cmp > 0 -> { merged += opB; j++ }
-            else    -> { merged += opA; i++; j++ }  // same op in both — emit once
+            else    -> {
+                // Same (ts, replica) — canonical op has the higher seq.
+                merged += if (opA.seq >= opB.seq) opA else opB
+                i++; j++
+            }
         }
     }
     while (i < a.size) merged += a[i++]
@@ -257,11 +572,22 @@ internal fun <V> mergeDistinctLogs(a: List<MoveOp<V>>, b: List<MoveOp<V>>): List
     return merged
 }
 
-/** Insert [op] into the sorted [log] in-place (by value, producing a new list). */
+/**
+ * Insert [op] into the sorted [log] in-place (by value, producing a new list).
+ *
+ * Deduplication is by logical identity `(ts, replica)`. When a duplicate is detected,
+ * the op with the **higher [seq]** wins — that is the canonical version minted by the
+ * true author. This ensures that a locally-assigned temporary seq is replaced by the
+ * author's canonical seq when the authoritative op arrives via a patch.
+ */
 internal fun <V> insertSorted(log: List<MoveOp<V>>, op: MoveOp<V>): List<MoveOp<V>> {
     if (log.isEmpty()) return listOf(op)
-    // Check for duplicate (idempotent insert).
-    if (log.any { it.ts == op.ts && it.replica == op.replica }) return log
+    val existingIdx = log.indexOfFirst { it.ts == op.ts && it.replica == op.replica }
+    if (existingIdx >= 0) {
+        // Duplicate — keep the version with the higher seq (canonical author seq wins).
+        val existing = log[existingIdx]
+        return if (op.seq > existing.seq) log.toMutableList().also { it[existingIdx] = op } else log
+    }
     val insertAt = log.indexOfFirst { compareOps(op, it) < 0 }.takeIf { it >= 0 } ?: log.size
     return log.toMutableList().also { it.add(insertAt, op) }
 }
@@ -279,9 +605,28 @@ internal fun <V> insertSorted(log: List<MoveOp<V>>, op: MoveOp<V>): List<MoveOp<
  * node in the parent map; without a prior registration, a later move-only op
  * targeting that node would have nowhere to anchor.
  */
-internal fun <V> replayLog(log: List<MoveOp<V>>): Map<String, String> {
-    val parents = mutableMapOf<String, String>()
-    for (op in log) {
+internal fun <V> replayLog(log: List<MoveOp<V>>): Map<String, String> =
+    replayLogFrom(log, startIndex = 0, initialParents = emptyMap())
+
+/**
+ * Replay a slice of [log] starting at [startIndex] (inclusive) and ending at
+ * [endIndex] (exclusive, defaults to [log].size), seeding the parent map from
+ * [initialParents].
+ *
+ * Used by [MovableTree.incrementalReplay] to avoid full replay on every merge:
+ * the prefix result (already in [initialParents]) is reused directly, and only
+ * the new suffix is replayed. The same cycle-prevention logic applies — the
+ * ancestor check walks [initialParents], which already encodes the prefix state.
+ */
+internal fun <V> replayLogFrom(
+    log: List<MoveOp<V>>,
+    startIndex: Int,
+    initialParents: Map<String, String>,
+    endIndex: Int = log.size,
+): Map<String, String> {
+    val parents = initialParents.toMutableMap()
+    for (i in startIndex until endIndex) {
+        val op = log[i]
         if (op.node == MovableTree.ROOT_ID) continue
         if (wouldCycle(op.node, op.newParent, parents)) continue
         parents[op.node] = op.newParent
@@ -315,6 +660,18 @@ internal fun ancestorPath(nodeId: String, parents: Map<String, String>): List<St
     }
     if (current == MovableTree.ROOT_ID) path += MovableTree.ROOT_ID
     return path
+}
+
+/** Merge two seqByReplica maps, taking the max per replica. */
+internal fun mergeSeqs(a: Map<ReplicaId, Long>, b: Map<ReplicaId, Long>): Map<ReplicaId, Long> {
+    if (a.isEmpty()) return b
+    if (b.isEmpty()) return a
+    val result = a.toMutableMap()
+    for ((replica, seq) in b) {
+        val current = result[replica]
+        if (current == null || seq > current) result[replica] = seq
+    }
+    return result
 }
 
 /** Total order for ops: ascending `ts`, then ascending `replica.value`. */

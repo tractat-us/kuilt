@@ -117,7 +117,7 @@ private class InMemorySeam(
     private val factory: InMemoryLoom,
     policy: DeliveryPolicy,
 ) : Seam {
-    private val spool = Spool(policy)
+    private val spool = Spool<Swatch>(policy)
     private var closed = false
     private var sequenceCounter = 0L
 

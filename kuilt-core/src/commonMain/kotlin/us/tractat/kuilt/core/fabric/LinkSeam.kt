@@ -83,7 +83,7 @@ internal class LinkSeam(
     private val _state = MutableStateFlow<SeamState>(SeamState.Woven)
     override val state: StateFlow<SeamState> = _state.asStateFlow()
 
-    private val inbox = Spool(policy)
+    private val inbox = Spool<Swatch>(policy)
     override val incoming: Flow<Swatch> = inbox.incoming
 
     // Single-writer outbound queue: concurrent broadcast/sendTo enqueue here;
