@@ -453,6 +453,38 @@ class MovableTreeCompactionTest {
         )
     }
 
+    /**
+     * Regression for the unstable-winner soundness bug (#764 review).
+     *
+     * Scenario: addA(seq1), addB(seq2), addC(seq3), move(A→B, seq4), move(A→C, seq5).
+     * seq5 is A's winner (last applied). With stableCut = {alice→4} (seq5 NOT stable yet),
+     * compact() must NOT drop seq4 — dropping it while a slow peer hasn't seen seq5 yet
+     * would leave that peer with a phantom parent for A.
+     */
+    @Test
+    fun compactDoesNotDropSupersededOpWhenWinnerIsUnstable() {
+        val tree = MovableTree.empty<String>()
+        val (t1, idA) = tree.addNode(alice, ts = 1L, parent = MovableTree.ROOT_ID, value = "A")
+        val (t2, idB) = t1.addNode(alice, ts = 2L, parent = MovableTree.ROOT_ID, value = "B")
+        val (t3, idC) = t2.addNode(alice, ts = 3L, parent = MovableTree.ROOT_ID, value = "C")
+        val (t4, _) = t3.move(alice, ts = 4L, node = idA, newParent = idB) // superseded candidate
+        val (t5, _) = t4.move(alice, ts = 5L, node = idA, newParent = idC) // the winner (seq=5)
+
+        // stableCut covers only through seq=4; seq=5 (the winner) is NOT yet stable.
+        val partialCut = stableCut(alice to 4L)
+        val fullFrontier = frontier(alice to 5L)
+
+        // delivered dominates the full frontier — locally we have all 5 ops.
+        val deliveredAll = stableCut(alice to 5L)
+
+        // compact must return null — dropping the seq=4 move would be unsound
+        // because its winner (seq=5) is not yet causally stable on all peers.
+        assertNull(
+            t5.compact(stableCut = partialCut, frontierMax = fullFrontier, delivered = deliveredAll),
+            "compact must return null when the winner (seq=5) is not stable — dropping seq=4 would be unsound",
+        )
+    }
+
     @Test
     fun compactDoesNotDropCreationOpReferencedByLiveMove() {
         // Node A created at ts=1 (creation op). Then moved under B at ts=2 (live move).
@@ -545,15 +577,20 @@ class MovableTreeCompactionTest {
         // After merge: bob's ts=4 wins for B (higher ts). A→B, B stays under ROOT (cycle prevented).
         val merged = aliceTree.piece(bobPatch)
 
-        // Now compact: alice's ts=3 (move A under B) is still the winning op for A,
-        // but if there's a later move on any node that makes earlier ops redundant, GC them.
-        // For this scenario, we assert cycle prevention still holds post-compaction regardless.
-        val delivered = stableCut(alice to 3L, bob to 4L)
-        val compacted = merged.compact(
+        // Now compact: alice's ts=3 (move A under B) is the winning op for A; bob's ts=4 wins
+        // for B. In this specific scenario there are no superseded non-creation moves — the
+        // creation ops and winning moves are the only ops. To make compaction fire, add a
+        // superseded move: move A back to ROOT at ts=5 (supersedes alice's ts=3 move of A→B).
+        val (merged2, _) = merged.move(alice, ts = 5L, node = idA, newParent = MovableTree.ROOT_ID)
+        val delivered = stableCut(alice to 5L, bob to 4L)
+        val (compacted, _) = merged2.compact(
             stableCut = delivered,
             frontierMax = delivered,
             delivered = delivered,
-        )?.first ?: merged // compact may or may not yield something — test the result either way
+        ) ?: error("compact must fire — alice's ts=3 move(A→B) is superseded by ts=5 move(A→ROOT)")
+
+        // Compact must have actually shrunk the log.
+        assertTrue(compacted.moveLogSize < merged2.moveLogSize, "log must shrink — not a vacuous pass")
 
         assertAll(
             { assertFalse(compacted.isAncestor(idA, idA), "A must not be its own ancestor") },

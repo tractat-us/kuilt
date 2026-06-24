@@ -284,6 +284,17 @@ public class MovableTree<V> private constructor(
 
     /**
      * True if [op] is eligible for GC under the compaction safety conditions.
+     *
+     * Four conditions must ALL hold:
+     * 1. **Causally stable** — `op.seq ≤ stableCut[op.replica]`.
+     * 2. **Superseded** — a later op is the winning placement for this node.
+     * 3. **Not a creation op still referenced** — creation ops (`value != null`) whose node
+     *    is still referenced by any live op must be retained.
+     * 4. **Winner also causally stable** — the winning op that supersedes this one must itself
+     *    be causally stable. Without this gate, a slow peer could receive a [MoveTreeCompact]
+     *    while the winner is still unknown to it, apply it, and regress to a phantom parent
+     *    (transient divergence until the winner arrives). The winner must be universally
+     *    delivered before any op it supersedes can be dropped.
      */
     private fun isDroppable(
         op: MoveOp<V>,
@@ -294,7 +305,8 @@ public class MovableTree<V> private constructor(
         if (!stableCut.contains(op.dot)) return false // (1) not causally stable
         if (op.value != null && op.node in referencedNodes) return false // (3) creation op still referenced
         val winner = winningOps[op.node] ?: return false
-        return winner.dot != op.dot // (2) op is not the winning placement for this node
+        if (winner.dot == op.dot) return false // (2) this IS the winning op — not superseded
+        return stableCut.contains(winner.dot) // (4) winner must also be causally stable
     }
 
     public companion object {
