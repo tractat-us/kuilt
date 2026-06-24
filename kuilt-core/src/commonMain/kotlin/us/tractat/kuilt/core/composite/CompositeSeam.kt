@@ -9,16 +9,15 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.cancelAndJoin
-import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
-import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
 import us.tractat.kuilt.core.CloseReason
+import us.tractat.kuilt.core.DeliveryPolicy
 import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.PeerNotConnected
@@ -26,6 +25,7 @@ import us.tractat.kuilt.core.PlyId
 import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
+import us.tractat.kuilt.core.Spool
 import us.tractat.kuilt.core.Swatch
 import us.tractat.kuilt.core.runCatchingCancellable
 import kotlin.coroutines.CoroutineContext
@@ -65,6 +65,15 @@ import kotlin.coroutines.CoroutineContext
  * (`Seam.broadcast`/`sendTo`/`close`, `cancelAndJoin`) are NEVER invoked while the lock is
  * held: callers snapshot the target plies under the lock, release, then send/close outside it.
  *
+ * **Inbound backpressure.** Application payloads are delivered through a [Spool] whose
+ * capacity and overflow behaviour are governed by [policy] (default [DeliveryPolicy.Reliable]).
+ * The unbounded `Channel.UNLIMITED` inbox is gone; unbounded inbound queues are structurally
+ * unrepresentable per the fabric-backpressure epic. [Spool.deliver] is called OUTSIDE the lock
+ * — it may suspend under a SUSPEND-overflow policy, and a [reentrantLock] must never be held
+ * across a suspension point.
+ *
+ * @param policy Governs the inbound [Spool]'s capacity and overflow behaviour.
+ *   Defaults to [DeliveryPolicy.Reliable] (bounded, backpressured, lossless).
  * @param dispatcher The scope for the seam's internal coroutines (scheduling only — see the
  *   thread-safety note above). Production callers pass `Dispatchers.Default`; test callers
  *   pass a dispatcher derived from the test scheduler so the seam's pumps share the same
@@ -75,6 +84,7 @@ internal class CompositeSeam(
     private val rendezvous: Rendezvous,
     private val desired: StateFlow<List<Pair<PlyId, Loom>>>,
     private val dispatcher: CoroutineContext = Dispatchers.Default,
+    private val policy: DeliveryPolicy = DeliveryPolicy.Reliable,
 ) : Seam {
     private val scope = CoroutineScope(SupervisorJob() + dispatcher)
     private val gate = PlyInboundGate()
@@ -105,8 +115,8 @@ internal class CompositeSeam(
     private val _peers = MutableStateFlow(setOf(selfId))
     override val peers: StateFlow<Set<PeerId>> = _peers.asStateFlow()
 
-    private val incomingChannel = Channel<Swatch>(capacity = Channel.UNLIMITED)
-    override val incoming: Flow<Swatch> = incomingChannel.receiveAsFlow()
+    private val spool = Spool<Swatch>(policy)
+    override val incoming: Flow<Swatch> = spool.incoming
 
     // PlyId -> live ply, in send-preference (insertion) order. A LinkedHashMap so
     // broadcast/sendTo iterate most-preferred-first. Guarded by [lock].
@@ -211,7 +221,7 @@ internal class CompositeSeam(
             else -> SeamState.Weaving
         }
 
-    private fun onPlyFrame(plyId: PlyId, swatch: Swatch) {
+    private suspend fun onPlyFrame(plyId: PlyId, swatch: Swatch) {
         when (val frame = PlyFrame.decode(swatch.toByteArray())) {
             is PlyFrame.Announce -> {
                 // Announce keys idMap by (plyId, transport sender) → composite id.
@@ -222,10 +232,12 @@ internal class CompositeSeam(
             is PlyFrame.Data -> {
                 // Data uses the in-frame originId — the transport sender may be a gateway.
                 // The gate is single-collection by contract; the lock restores that invariant
-                // across the concurrent per-ply inbound pumps. trySend is channel-safe outside it.
+                // across the concurrent per-ply inbound pumps. Snapshot under the lock and
+                // deliver OUTSIDE it — spool.deliver may suspend (SUSPEND-overflow policy)
+                // and must never be called while holding a reentrantLock.
                 val payloads = lock.withLock { gate.accept(frame) }
                 payloads.forEach { payload ->
-                    incomingChannel.trySend(Swatch(payload = payload, sender = frame.originId))
+                    spool.deliver(Swatch(payload = payload, sender = frame.originId))
                 }
             }
         }
@@ -301,7 +313,7 @@ internal class CompositeSeam(
             snapshot
         }
         _state.value = SeamState.Torn(reason)
-        incomingChannel.close()
+        spool.close()
         toClose.forEach { it.seam.close(reason) }
     }
 
