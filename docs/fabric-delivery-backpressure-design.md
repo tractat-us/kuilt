@@ -86,13 +86,16 @@ Beyond fixing #701 this buys, for free:
 - `Strict` (`FAIL`) — a test asserts "this fabric must never overflow"; a flood becomes a loud
   error, not a silent heap climb.
 
-### The `Mailbox` primitive
+### The `Spool` primitive
 
 One blessed type owns per-receiver inbound delivery; it is the *only* sanctioned way to wire
-frame delivery, so `Channel.UNLIMITED`-for-delivery disappears from the codebase.
+frame delivery, so `Channel.UNLIMITED`-for-delivery disappears from the codebase. It is **public**
+in `:kuilt-core` — alongside the already-public `DeliveryPolicy`/`Overflow`/`FrameOverflow` — so
+every kuilt module *and* third-party fabric implementors (the headline extension point) share the
+one primitive rather than each re-deriving a bounded channel.
 
 ```kotlin
-internal class Mailbox(private val policy: DeliveryPolicy) {
+public class Spool(private val policy: DeliveryPolicy) {
     // bounded Channel(policy.capacity, onBufferOverflow = policy.overflow.toBufferOverflow())
     suspend fun deliver(frame: Swatch)   // SUSPEND ⇒ suspends; DROP_* ⇒ returns; FAIL ⇒ throws
     val incoming: Flow<Swatch>           // single-collection, FIFO
@@ -100,7 +103,7 @@ internal class Mailbox(private val policy: DeliveryPolicy) {
 }
 ```
 
-A `DeliveryPolicy.Reliable` Mailbox uses `Channel(capacity, SUSPEND)`; `deliver` therefore
+A `DeliveryPolicy.Reliable` Spool uses `Channel(capacity, SUSPEND)`; `deliver` therefore
 suspends the caller when full. **The send must be performed outside any lock** — each fabric
 assigns sequence numbers and snapshots its target set under its existing lock, releases it,
 then `deliver`s. This is the same "I/O outside the lock" rule `Quilter`/`SeamRoom` already follow.
@@ -132,7 +135,7 @@ escape hatch either way.
 
 ## Migration surface
 
-Grouped for phasing. Each adopts `Mailbox` + a sensible default policy.
+Grouped for phasing. Each adopts `Spool` + a sensible default policy.
 
 | Group | Sites | Default policy |
 |---|---|---|
@@ -147,8 +150,8 @@ Grouped for phasing. Each adopts `Mailbox` + a sensible default policy.
 Per the EPIC convention — one behaviour move per PR, each independently revertable.
 
 - **Phase 0 (planning sub-issue):** land this spec + the implementation plan + the `DeliveryPolicy`
-  / `Mailbox` primitive + the detekt guard. Closes the *planning* sub-issue (not the epic).
-- **Phase 1:** `InMemoryLoom` → `Mailbox` (`Reliable`). Acceptance: the 16 MB-heap experiment
+  / `Spool` primitive + the detekt guard. Closes the *planning* sub-issue (not the epic).
+- **Phase 1:** `InMemoryLoom` → `Spool` (`Reliable`). Acceptance: the 16 MB-heap experiment
   passes; decides generous-bound-vs-pump for `SUSPEND`.
 - **Phases 2…k:** one production fabric per PR; `CompositeSeam`'s phase also retires
   `limitedParallelism(1)`.

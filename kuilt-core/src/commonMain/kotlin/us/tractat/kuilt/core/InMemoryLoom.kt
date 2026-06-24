@@ -9,7 +9,6 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import us.tractat.kuilt.core.SeamState.Torn
 import us.tractat.kuilt.core.SeamState.Woven
-import us.tractat.kuilt.core.internal.Mailbox
 
 /**
  * In-memory implementation of [Loom] for use in tests and
@@ -17,7 +16,7 @@ import us.tractat.kuilt.core.internal.Mailbox
  * factory instance share a single in-memory mesh.
  *
  * Thread-safe: the shared mesh state is protected by a [Mutex]. Frame
- * delivery is bounded and backpressured via one [Mailbox] per link, with
+ * delivery is bounded and backpressured via one [Spool] per link, with
  * overflow behaviour chosen by [DeliveryPolicy].
  *
  * The suspending [deliver] call happens **outside** the factory mutex —
@@ -118,7 +117,7 @@ private class InMemorySeam(
     private val factory: InMemoryLoom,
     policy: DeliveryPolicy,
 ) : Seam {
-    private val mailbox = Mailbox(policy)
+    private val spool = Spool(policy)
     private var closed = false
     private var sequenceCounter = 0L
 
@@ -128,7 +127,7 @@ private class InMemorySeam(
     private val _state = MutableStateFlow<SeamState>(Woven)
     override val state: StateFlow<SeamState> = _state.asStateFlow()
 
-    override val incoming: Flow<Swatch> = mailbox.incoming
+    override val incoming: Flow<Swatch> = spool.incoming
 
     override suspend fun broadcast(payload: ByteArray) {
         checkNotClosed()
@@ -150,13 +149,13 @@ private class InMemorySeam(
         closed = true
         _state.value = Torn(reason)
         factory.remove(selfId)
-        mailbox.close()
+        spool.close()
     }
 
     internal fun nextSequence(): Long = ++sequenceCounter
 
     internal suspend fun deliver(frame: Swatch) {
-        if (!closed) mailbox.deliver(frame)
+        if (!closed) spool.deliver(frame)
     }
 
     private fun checkNotClosed() {
