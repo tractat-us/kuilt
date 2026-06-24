@@ -237,3 +237,41 @@ internal fun sampleRga() {
     check(mergedByA.toList() == mergedByB.toList())
 }
 
+// ── MovableTree ───────────────────────────────────────────────────────────────
+
+/**
+ * Concurrent moves and cycle prevention: two replicas move the same node to
+ * different parents; both converge to the same acyclic tree.
+ */
+@Suppress("unused")
+internal fun sampleMovableTree() {
+    val alice = ReplicaId("alice")
+    val bob = ReplicaId("bob")
+
+    // Shared initial state: root → A, root → B, root → C.
+    val base = MovableTree.empty<String>()
+    val (t1, idA) = base.addNode(alice, ts = 1L, parent = MovableTree.ROOT_ID, value = "A")
+    val (t2, idB) = t1.addNode(alice, ts = 2L, parent = MovableTree.ROOT_ID, value = "B")
+    val (t3, idC) = t2.addNode(alice, ts = 3L, parent = MovableTree.ROOT_ID, value = "C")
+
+    // Alice moves A under B (ts=4); Bob moves A under C (ts=5). Both diverge from t3.
+    val (aliceState, alicePatch) = t3.move(alice, ts = 4L, node = idA, newParent = idB)
+    val (bobState, bobPatch)     = t3.move(bob,   ts = 5L, node = idA, newParent = idC)
+
+    // Each replica absorbs the other's delta.
+    val mergedByAlice = aliceState.piece(bobPatch)
+    val mergedByBob   = bobState.piece(alicePatch)
+
+    // Convergence guaranteed: both arrive at the same tree.
+    check(mergedByAlice == mergedByBob)
+
+    // Bob's ts=5 wins — A ends up under C.
+    check(mergedByAlice.parentOf(idA) == idC)
+
+    // Cycle prevention: moving A under C while C is under A is silently skipped.
+    val (t4, _) = t3.addNode(alice, ts = 6L, parent = idA, value = "D")
+    val (_, cyclePatch) = t4.move(alice, ts = 7L, node = idA, newParent = idA)
+    val safe = t4.piece(cyclePatch)
+    check(!safe.isAncestor(ancestor = idA, descendant = idA))
+}
+
