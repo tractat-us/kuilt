@@ -9,19 +9,19 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.launch
 import us.tractat.kuilt.core.CloseReason
+import us.tractat.kuilt.core.DeliveryPolicy
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.PeerNotConnected
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
+import us.tractat.kuilt.core.Spool
 import us.tractat.kuilt.core.Swatch
 import us.tractat.kuilt.core.runCatchingCancellable
 import kotlin.coroutines.CoroutineContext
@@ -143,12 +143,16 @@ private class Link(val remoteId: PeerId, val conn: Connection, val linkNonce: St
  *   virtual clock as the test's `withTimeout`.
  * @param random Source of per-connection nonces. Production defaults to [Random.Default]; tests
  *   pass a seeded [Random] so the dedup tiebreak is deterministic.
+ * @param policy Delivery policy for the seam's inbound [Spool]. Defaults to [DeliveryPolicy.Reliable]
+ *   (bounded, backpressured). Pass [DeliveryPolicy.Lossy] for a lossy radio-style fabric or
+ *   [DeliveryPolicy.Strict] in tests that assert no overflow.
  */
 public suspend fun meshSeam(
     selfId: PeerId,
     connections: List<Connection>,
     dispatcher: CoroutineContext,
     random: Random = Random.Default,
+    policy: DeliveryPolicy = DeliveryPolicy.Reliable,
 ): Mesh {
     val links = coroutineScope {
         connections.map { conn -> async { handshakeLink(selfId, conn, dispatcher, random) } }.awaitAll()
@@ -167,7 +171,7 @@ public suspend fun meshSeam(
     }
     losers.forEach { runCatchingCancellable { it.conn.close() } }
 
-    return MeshSeam(selfId, winners, dispatcher, random)
+    return MeshSeam(selfId, winners, dispatcher, random, policy)
 }
 
 /**
@@ -197,6 +201,7 @@ private class MeshSeam(
     initialLinks: Map<PeerId, Link>,
     private val dispatcher: CoroutineContext,
     private val random: Random,
+    policy: DeliveryPolicy,
 ) : Mesh {
     private val scope = CoroutineScope(SupervisorJob() + dispatcher)
 
@@ -214,8 +219,8 @@ private class MeshSeam(
     private val _state = MutableStateFlow<SeamState>(SeamState.Woven)
     override val state: StateFlow<SeamState> = _state.asStateFlow()
 
-    private val inbox = Channel<Swatch>(Channel.UNLIMITED)
-    override val incoming: Flow<Swatch> = inbox.receiveAsFlow()
+    private val spool = Spool(policy)
+    override val incoming: Flow<Swatch> = spool.incoming
 
     // Atomic single-shot teardown gate. `close()` and each `readLoop`'s `finally` race to flip it
     // false→true; whoever wins runs the seam-wide teardown, the loser is a no-op — so the seam
@@ -288,7 +293,9 @@ private class MeshSeam(
         try {
             conn.incoming.collect { bytes ->
                 if (!closed.value) {
-                    inbox.trySend(Swatch(payload = bytes, sender = remoteId, sequence = seq.incrementAndGet()))
+                    // Sequence number is assigned atomically outside the lock. `deliver` SUSPENDS
+                    // for backpressure (SUSPEND policy) — never called while holding `lock`.
+                    spool.deliver(Swatch(payload = bytes, sender = remoteId, sequence = seq.incrementAndGet()))
                 }
             }
         } catch (e: CancellationException) {
@@ -319,7 +326,7 @@ private class MeshSeam(
             snapshot
         }
         _state.value = SeamState.Torn(reason)
-        inbox.close()
+        spool.close()
         scope.cancel()
         return conns
     }
