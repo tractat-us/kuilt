@@ -36,6 +36,7 @@
             <toc-element topic="crdt-gcounter.md"/>
             <toc-element topic="crdt-pncounter.md"/>
             <toc-element topic="crdt-bounded-counter.md"/>
+            <toc-element topic="crdt-resettablecounter.md"/>
         </toc-element>
         <toc-element toc-title="Sets">
             <toc-element topic="crdt-gset.md"/>
