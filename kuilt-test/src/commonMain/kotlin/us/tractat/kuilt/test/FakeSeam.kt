@@ -1,17 +1,17 @@
 package us.tractat.kuilt.test
 
-import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
 import us.tractat.kuilt.core.CloseReason
+import us.tractat.kuilt.core.DeliveryPolicy
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.PeerNotConnected
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
+import us.tractat.kuilt.core.Spool
 import us.tractat.kuilt.core.Swatch
 
 /**
@@ -35,11 +35,16 @@ import us.tractat.kuilt.core.Swatch
  *   no-op, but the payload is still recorded in [broadcasts].
  * - [sendTo] to a peer not in [peers]: throws [PeerNotConnected].
  * - Either send while [SeamState.Torn]: throws [IllegalStateException].
+ *
+ * The inbound buffer is bounded via [policy] (default [DeliveryPolicy.Reliable]).
+ * Unbounded delivery is structurally unrepresentable — pass a custom policy to
+ * change capacity or overflow behaviour.
  */
 public class FakeSeam(
     override val selfId: PeerId = PeerId("self"),
     initialPeers: Set<PeerId> = setOf(selfId),
     initialState: SeamState = SeamState.Woven,
+    policy: DeliveryPolicy = DeliveryPolicy.Reliable,
 ) : Seam {
     private val _peers = MutableStateFlow(initialPeers)
     override val peers: StateFlow<Set<PeerId>> = _peers.asStateFlow()
@@ -47,8 +52,8 @@ public class FakeSeam(
     private val _state = MutableStateFlow(initialState)
     override val state: StateFlow<SeamState> = _state.asStateFlow()
 
-    private val incomingChannel = Channel<Swatch>(capacity = Channel.UNLIMITED)
-    override val incoming: Flow<Swatch> = incomingChannel.receiveAsFlow()
+    private val spool = Spool(policy)
+    override val incoming: Flow<Swatch> = spool.incoming
 
     private val _broadcasts = mutableListOf<ByteArray>()
     private val _directed = mutableListOf<Pair<PeerId, ByteArray>>()
@@ -83,7 +88,7 @@ public class FakeSeam(
     override suspend fun close(reason: CloseReason) {
         if (_state.value is SeamState.Torn) return
         _state.value = SeamState.Torn(reason)
-        incomingChannel.close()
+        spool.close()
     }
 
     // ── Test-driver helpers ───────────────────────────────────────────────────
@@ -108,9 +113,9 @@ public class FakeSeam(
         _state.value = SeamState.Torn(reason)
     }
 
-    /** Push [swatch] directly into [incoming]. */
+    /** Push [swatch] directly into [incoming], applying the configured [DeliveryPolicy]. */
     public suspend fun deliver(swatch: Swatch) {
-        incomingChannel.send(swatch)
+        spool.deliver(swatch)
     }
 
     /**
