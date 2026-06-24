@@ -36,5 +36,6 @@ dependencies {
         api(project(":kuilt-mdns"))
         api(project(":kuilt-conformance"))
         api(project(":kuilt-test"))
+        api(project(":kuilt-otel"))
     }
 }
