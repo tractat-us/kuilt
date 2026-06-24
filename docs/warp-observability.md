@@ -14,7 +14,8 @@ the same gossip:
 - **Logs** — an append-only distributed log *is* an `Rga`: a convergent, ordered,
   append-only sequence. Every peer appends; the merges interleave into one order.
 - **Metrics** — counters are `GCounter`/`PNCounter`, gauges are `LWWRegister`,
-  unique-cardinality is HyperLogLog. All mergeable, all gossiped.
+  unique-cardinality is a HyperLogLog sketch (a planned zoo addition, #693). All
+  mergeable, all gossiped.
 - **Traces** — causal dependency structure is exactly what the zoo's `Causal`
   carrier already tracks.
 

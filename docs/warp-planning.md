@@ -27,9 +27,10 @@ function counts embroidery stitches.
 And the recognitions cascade:
 
 - **Statistics are CRDTs.** Cardinalities are mergeable HyperLogLog sketches —
-  i.e. CRDTs — gossiped on the same anti-entropy. The stats layer is the zoo again;
-  and the *same* gossiped sketches are also your
-  [metrics and telemetry](warp-observability.md) — paid for once, spent twice.
+  i.e. CRDTs. (HyperLogLog isn't in the zoo *yet* — see #693 — but its merge is
+  element-wise `max`, a clean lattice join, so it gossips like any other CRDT.) The
+  *same* sketches are also your [metrics and telemetry](warp-observability.md) —
+  paid for once, spent twice.
 - **Planning is itself ~coordination-free.** Each peer plans locally from the
   convergent draft + gossiped stats; no central optimizer. (Need one canonical
   plan? Electing it is just another embroidery stitch.)
@@ -64,8 +65,9 @@ The planning slice breaks into five sub-issues, in dependency order:
 
 4. **Stats gossip** (`E4`) — *what the cost model reads*. A planner needs numbers:
    shard sizes, cardinalities, selectivity. These are gathered as **mergeable CRDT
-   sketches** — HyperLogLog for distinct-counts, counters for sizes — gossiped on the
-   same anti-entropy as everything else. (This is the same machinery as
+   sketches** — HyperLogLog for distinct-counts (a planned zoo addition, #693),
+   counters for sizes — gossiped on the same anti-entropy as everything else. (This
+   is the same machinery as
    [observability metrics](warp-observability.md) — paid for once.)
 
 5. **Incremental / threshold-read execution** (`E5`) — *how the plan runs*. Because
