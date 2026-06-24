@@ -37,13 +37,21 @@ public interface Room {
      *
      * A peer is absent until the admit/identify handshake completes.
      * A peer is removed on clean [leave] or transport disconnect.
+     *
+     * **This is the authoritative, replay-safe source of current membership.** Being a
+     * [StateFlow], a new collector immediately receives the current set. Reach for [roster]
+     * (not [events]) to answer "who is in the room?" — it cannot miss a join or leave.
      */
     public val roster: StateFlow<Set<Member>>
 
     /**
      * Stream of [MembershipEvent]s describing roster and liveness changes.
      *
-     * Hot; backed by a shared flow. Late collectors miss historical events.
+     * Hot, backed by a shared flow with a **bounded replay cache**: a late collector still
+     * receives the most recent membership events (so a [MembershipEvent.Joined] emitted in the
+     * brief window before a `host { onRoom }` consumer subscribes is not lost — see #692), but
+     * only the recent tail, not the full history. Treat events as **idempotent notifications**;
+     * use [roster] as the authoritative current-membership source.
      */
     public val events: Flow<MembershipEvent>
 

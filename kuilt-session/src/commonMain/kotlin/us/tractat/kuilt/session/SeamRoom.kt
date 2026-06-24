@@ -5,6 +5,7 @@ import kotlinx.atomicfu.locks.withLock
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -157,6 +158,14 @@ public class SeamRoomFactory(
  *
  * [start] must be called by [SeamRoomFactory] after construction to launch these loops.
  */
+/**
+ * Size of the [Room.events] replay cache (#692). Large enough to retain the startup-window
+ * membership burst (the per-connection host room emits a single [MembershipEvent.Joined]; a
+ * mesh room may admit several peers near-simultaneously) so a late subscriber can't miss it,
+ * yet bounded so a long-lived room never accumulates unbounded history.
+ */
+private const val MEMBERSHIP_EVENT_REPLAY = 64
+
 internal class SeamRoom(
     private val seam: Seam,
     role: SessionRole,
@@ -215,7 +224,22 @@ internal class SeamRoom(
     /** Channel views keyed by sub-id. Created on demand via [channel]. */
     private val channelViews = mutableMapOf<Short, Seam>()
 
-    private val _events = MutableSharedFlow<MembershipEvent>(extraBufferCapacity = 64)
+    /**
+     * Membership events carry a **bounded replay cache** (#692). A `replay = 0` flow drops
+     * any [MembershipEvent] emitted while no one is collecting — and the room starts admitting
+     * (emitting [MembershipEvent.Joined]) *before* a `host { onRoom }` consumer can subscribe,
+     * so the join was lost into the void. The replay cache retains the most recent
+     * [MEMBERSHIP_EVENT_REPLAY] events for a late subscriber, closing that startup race.
+     *
+     * Replay is **best-effort, not a membership log**: a subscriber to a long-lived room only
+     * sees the recent tail, not the full history. [roster] remains the authoritative,
+     * replay-safe source of current membership; treat [events] as idempotent notifications.
+     */
+    private val _events = MutableSharedFlow<MembershipEvent>(
+        replay = MEMBERSHIP_EVENT_REPLAY,
+        extraBufferCapacity = 64,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST,
+    )
     override val events: Flow<MembershipEvent> = _events.asSharedFlow()
 
     private val _incoming = MutableSharedFlow<RoomFrame>(extraBufferCapacity = 64)
