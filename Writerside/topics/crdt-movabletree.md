@@ -1,26 +1,39 @@
 # Movable Tree
 
-A shared folder hierarchy — files, tasks, scene objects — where anyone can move anything and all devices end up with the same tree, with no cycles, no coordination.
+Imagine a shared folder where you and a colleague can both reorganise files at the same time — even when one of you is on a plane with no internet. You move a folder under a new parent; they move the same folder somewhere else. When you reconnect, you end up with the same folder structure. No "merge conflict" dialog. No one's change is silently lost, and the hierarchy is never broken into a cycle.
+
+That's what `MovableTree` is for: a replicated hierarchy where anyone can reparent any node at any time, offline or concurrent, and every device converges to the same valid tree.
 
 **Converges to:** the same acyclic tree on every replica, regardless of the order moves were received.
 
-## The key idea
+## Why concurrent moves are hard
 
-Every move is tagged with a logical timestamp `(ts, replicaId)`. Merging two replicas takes the **union** of their move-logs and replays it in timestamp order. Before applying each move, the algorithm checks whether it would introduce a cycle — if it would, the move is skipped. Because the replay is deterministic, every replica arrives at the same tree.
+A plain "last writer wins" rule fails almost immediately for trees. Take two nodes A and B. Alice moves A under B while Bob — working offline at the same time — moves B under A. If you apply both moves naively, you get a cycle: A is under B, and B is under A. The tree is broken.
 
-This is the algorithm from Kleppmann et al., "A highly-available move operation for replicated trees" (IEEE TPDS 2021).
+The same hazard appears with a single node moved by two people to different parents: whoever's move lands second may contradict the first in ways that leave one replica's tree inconsistent with another's.
 
-## Concurrent moves
+The challenge is finding a rule that:
+1. Makes both replicas agree on *one* final parent for every node.
+2. Never produces a cycle, no matter what concurrent moves happened.
+3. Requires no coordination — replicas can apply moves in any order and still converge.
 
-When two replicas concurrently move the same node to different parents, the higher-timestamped move wins. Ties break on `replicaId` (lexicographic). The losing move is recorded but skipped during replay, so the tree never has two parents for one node.
+## The mechanism: move-log union and deterministic replay
 
-## Cycle prevention
+`MovableTree` records every move as a `MoveOp` stamped with a logical timestamp `(ts, replicaId)`. Merging two replicas takes the **union** of their move-logs, then **replays** every op from that union in a strict total order — smallest timestamp first, `replicaId` lexicographically (ascending) as the tie-break.
 
-Moving node A under node B is safe only when B is **not** a descendant of A. When concurrent moves together would form a cycle (Alice moves A under B, Bob moves B under A), the lower-priority move is skipped and the higher-priority one stands. The result is always a valid tree.
+At each step of the replay, the algorithm asks: *would applying this op create a cycle?* Specifically, would the node being moved become an ancestor of its proposed new parent in the tree built from ops replayed so far? If yes, the op is skipped. If no, the parent map is updated.
 
-## Move-log GC
+Because every replica replays the same union in the same order and applies the same cycle check, every replica arrives at the same tree. The three semilattice laws hold:
 
-The move-log grows with every operation. Safe garbage collection requires *causal stability* — an op can be dropped only once every replica has received and applied it. This is not yet wired to the transport layer; the log is unbounded in the current implementation. For short-lived sessions or small trees this is not a concern.
+- **Idempotent** — absorbing the same delta twice changes nothing; the same `(ts, replicaId)` op is deduplicated before replay.
+- **Commutative** — it doesn't matter whether Alice absorbs Bob's patch or Bob absorbs Alice's first; the union is the union.
+- **Associative** — follows from set-union and deterministic replay.
+
+## Concurrent moves: the winning op
+
+When two replicas independently move the same node (or create a cycle together), the higher-timestamped op wins. Ties on timestamp break on `replicaId` — lexicographically ascending, so a larger `replicaId` supersedes a smaller one at the same instant.
+
+The losing op is not discarded — it stays in the log. On merge, it participates in the union but is skipped by the replay (it's the move that would have lost the conflict). The winning op stands alone, and the result is a single parent for that node across all replicas.
 
 ## Code example
 
@@ -50,6 +63,20 @@ check(mergedByAlice == mergedByBob)
 // Bob's ts=5 wins — A ends up under C.
 check(mergedByAlice.parentOf(idA) == idC)
 ```
+
+Here Bob's move has a higher timestamp (`ts=5` vs. `ts=4`), so A ends up under C on both replicas. Alice's move is recorded in the log and participates in the replay, but the cycle check skips it once Bob's higher-priority move has already placed A under C (applying Alice's move at that point would give A two parents — but since the replay is sequential, the first move to apply determines the parent, and only the *later* timestamp is allowed to override it).
+
+## Cycle prevention in detail
+
+The cycle check runs against the tree as it exists at that point in the replay — the "effective" state built from all ops with a lower timestamp that were not themselves skipped. This means: when two concurrent moves together would form a cycle (Alice moves A under B while Bob moves B under A), the lower-priority move gets to run first (smaller timestamp), and then the higher-priority move is checked against the tree that now includes the first move. One of the two will always be a cycle and be skipped; the other stands. The result is always a valid tree.
+
+Moving a node to itself is also a cycle and is silently skipped.
+
+## The honest constraint: unbounded log growth
+
+The move-log grows by one entry for every `move` or `addNode` call. Safe garbage collection — pruning old ops from the log — requires *causal stability*: an op can only be dropped once every peer has received and applied it (i.e. the op's timestamp falls below the minimum of all replicas' delivered vectors). Determining that requires coordination at the transport layer, such as the delivered-vector gossip that `RgaGcCoordinator` uses for [RGA](crdt-rga.md).
+
+That coordination is not yet wired up for `MovableTree`. For short-lived sessions, small trees, or infrequent reparenting, this is not a concern. For long-running trees with continuous moves, expect log size to grow linearly with the total number of moves ever made.
 
 ## When to use
 
