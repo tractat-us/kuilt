@@ -1,16 +1,15 @@
 package us.tractat.kuilt.core
 
-import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import us.tractat.kuilt.core.SeamState.Torn
 import us.tractat.kuilt.core.SeamState.Woven
+import us.tractat.kuilt.core.internal.Mailbox
 
 /**
  * In-memory implementation of [Loom] for use in tests and
@@ -18,14 +17,21 @@ import us.tractat.kuilt.core.SeamState.Woven
  * factory instance share a single in-memory mesh.
  *
  * Thread-safe: the shared mesh state is protected by a [Mutex]. Frame
- * delivery is channel-based (one [Channel] per link) so backpressure and
- * FIFO delivery are both preserved.
+ * delivery is bounded and backpressured via one [Mailbox] per link, with
+ * overflow behaviour chosen by [DeliveryPolicy].
+ *
+ * The suspending [deliver] call happens **outside** the factory mutex —
+ * sequence numbers are assigned under the lock, then delivery is performed
+ * after releasing it, so a `SUSPEND`-policy backpressure suspension never
+ * holds the mutex.
  *
  * Not a production transport — no discovery, no network, no serialization.
  * Intended to be the test bedrock for `:session-protocol` and every layer
  * above it.
  */
-public class InMemoryLoom : Loom {
+public class InMemoryLoom(
+    private val policy: DeliveryPolicy = DeliveryPolicy.Reliable,
+) : Loom {
     private val mutex = Mutex()
 
     // Shared peer set: every link in the mesh observes this same StateFlow.
@@ -50,7 +56,7 @@ public class InMemoryLoom : Loom {
 
     private fun newSeam(): InMemorySeam {
         val id = freshPeerId()
-        val link = InMemorySeam(id, this)
+        val link = InMemorySeam(id, this, policy)
         links[id] = link
         _peers.update { it + id }
         return link
@@ -63,23 +69,22 @@ public class InMemoryLoom : Loom {
         payload: ByteArray,
         recipient: PeerId?,
     ) {
-        mutex.withLock {
-            val targets =
-                if (recipient == null) {
-                    links.keys.filter { it != sender }
-                } else {
-                    listOf(recipient)
-                }
-            for (targetId in targets) {
-                val target = links[targetId] ?: continue
-                val frame =
-                    Swatch(
-                        payload = payload,
-                        sender = sender,
-                        sequence = target.nextSequence(),
-                    )
-                target.deliver(frame)
+        // Snapshot (target, sequenced-frame) pairs under the lock — sequence assignment stays
+        // atomic and ordered — then deliver outside the lock so a SUSPEND-policy backpressure
+        // suspension never holds the factory mutex.
+        val deliveries: List<Pair<InMemorySeam, Swatch>> = mutex.withLock {
+            val targetIds = if (recipient == null) {
+                links.keys.filter { it != sender }
+            } else {
+                listOf(recipient)
             }
+            targetIds.mapNotNull { targetId ->
+                val target = links[targetId] ?: return@mapNotNull null
+                target to Swatch(payload = payload, sender = sender, sequence = target.nextSequence())
+            }
+        }
+        for ((target, frame) in deliveries) {
+            target.deliver(frame)
         }
     }
 
@@ -111,8 +116,9 @@ public data class InMemoryTag(
 private class InMemorySeam(
     override val selfId: PeerId,
     private val factory: InMemoryLoom,
+    policy: DeliveryPolicy,
 ) : Seam {
-    private val incomingChannel = Channel<Swatch>(capacity = Channel.UNLIMITED)
+    private val mailbox = Mailbox(policy)
     private var closed = false
     private var sequenceCounter = 0L
 
@@ -122,7 +128,7 @@ private class InMemorySeam(
     private val _state = MutableStateFlow<SeamState>(Woven)
     override val state: StateFlow<SeamState> = _state.asStateFlow()
 
-    override val incoming: Flow<Swatch> = incomingChannel.receiveAsFlow()
+    override val incoming: Flow<Swatch> = mailbox.incoming
 
     override suspend fun broadcast(payload: ByteArray) {
         checkNotClosed()
@@ -144,15 +150,13 @@ private class InMemorySeam(
         closed = true
         _state.value = Torn(reason)
         factory.remove(selfId)
-        incomingChannel.close()
+        mailbox.close()
     }
 
     internal fun nextSequence(): Long = ++sequenceCounter
 
-    internal fun deliver(frame: Swatch) {
-        if (!closed) {
-            incomingChannel.trySend(frame)
-        }
+    internal suspend fun deliver(frame: Swatch) {
+        if (!closed) mailbox.deliver(frame)
     }
 
     private fun checkNotClosed() {
