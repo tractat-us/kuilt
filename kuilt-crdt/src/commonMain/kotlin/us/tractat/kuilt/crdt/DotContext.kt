@@ -18,11 +18,15 @@ import kotlinx.serialization.Serializable
  * Equality is canonical — compaction pushes the cloud as far into the vector as
  * possible and drops already-covered dots — so two contexts with the same causal
  * history are structurally equal, which the conformance laws rely on.
+ *
+ * Serialized by [DotContextSerializer], which emits both [vv] and [cloud] in a
+ * canonical sorted order so that two replicas at the same logical state produce
+ * identical bytes regardless of delivery order (issue #713).
  */
-@Serializable
+@Serializable(with = DotContextSerializer::class)
 public class DotContext private constructor(
-    private val vv: Map<ReplicaId, Long>,
-    private val cloud: Set<Dot>,
+    internal val vv: Map<ReplicaId, Long>,
+    internal val cloud: Set<Dot>,
 ) : Quilted<DotContext> {
 
     /** True if [dot] has been witnessed — covered by the vector or held in the cloud. */
@@ -72,6 +76,20 @@ public class DotContext private constructor(
         /** A history witnessing exactly [dots]. */
         public fun of(vararg dots: Dot): DotContext =
             dots.fold(EMPTY) { ctx, dot -> ctx.add(dot) }
+
+        /**
+         * Reconstruct a [DotContext] directly from its normalized parts, bypassing
+         * the public [add] path. Used by [DotContextSerializer] to round-trip the
+         * internal representation without re-adding each dot individually.
+         *
+         * **Precondition:** [vv] and [cloud] must already be in the canonical compact
+         * form produced by [compact] — i.e. no cloud dot is covered by the vector, and
+         * no cloud dot sits exactly at `vv[replica] + 1` (otherwise compaction would
+         * have consumed it). The serializer ensures this because it serializes
+         * already-compacted state.
+         */
+        internal fun fromParts(vv: Map<ReplicaId, Long>, cloud: Set<Dot>): DotContext =
+            DotContext(vv, cloud)
 
         /**
          * Normalize `(vv, cloud)`: drop cloud dots already covered by the vector,

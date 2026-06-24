@@ -8,8 +8,12 @@ import kotlinx.serialization.Serializable
  * [join] needs no value-level conflict resolution — surviving dots simply keep
  * their value. As `Causal<DotFun<V>>` this is a Multi-Value Register: concurrent
  * writes each keep their (dot, value), surfacing the conflict rather than hiding it.
+ *
+ * Serialized by [DotFunSerializer], which emits [values] entries sorted by [Dot]
+ * key so that two replicas at the same logical state produce identical bytes
+ * regardless of delivery order (issue #713).
  */
-@Serializable
+@Serializable(with = DotFunSerializer::class)
 public class DotFun<V>(public val values: Map<Dot, V> = emptyMap()) : DotStore<DotFun<V>> {
 
     override val dots: Set<Dot> get() = values.keys

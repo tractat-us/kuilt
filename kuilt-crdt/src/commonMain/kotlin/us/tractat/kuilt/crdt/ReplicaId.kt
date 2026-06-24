@@ -17,7 +17,12 @@ import kotlin.jvm.JvmInline
  * Choose a stable identifier (a UUID, device serial, or similar) at replica
  * creation and keep it for the peer's lifetime. Never derive a `ReplicaId`
  * from a counter that can wrap or restart.
+ *
+ * Implements [Comparable] so that serializers can emit entries in a canonical,
+ * delivery-order-independent order (lexicographic on [value]).
  */
 @Serializable
 @JvmInline
-public value class ReplicaId(public val value: String)
+public value class ReplicaId(public val value: String) : Comparable<ReplicaId> {
+    override fun compareTo(other: ReplicaId): Int = value.compareTo(other.value)
+}

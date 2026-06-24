@@ -6,8 +6,12 @@ import kotlinx.serialization.Serializable
  * The simplest [DotStore]: a bare set of dots carrying no payload. Presence is
  * "non-empty". As `Causal<DotSet>` it is an enable-wins flag / set of opaque
  * adds; nested inside a DotMap it becomes the per-element store of an OR-Set.
+ *
+ * Serialized by [DotSetSerializer], which emits [dots] sorted by [Dot] so that
+ * two replicas at the same logical state produce identical bytes regardless of
+ * delivery order (issue #713).
  */
-@Serializable
+@Serializable(with = DotSetSerializer::class)
 public class DotSet(override val dots: Set<Dot> = emptySet()) : DotStore<DotSet> {
 
     override val empty: DotSet get() = DotSet()
