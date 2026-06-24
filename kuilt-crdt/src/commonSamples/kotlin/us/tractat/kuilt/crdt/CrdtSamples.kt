@@ -218,6 +218,32 @@ internal fun sampleCausal() {
     check(!merged.store.isBottom)  // present — add wins
 }
 
+// ── ResettableCounter ─────────────────────────────────────────────────────────
+
+/**
+ * Two replicas increment; one resets. A concurrent increment (missed the reset)
+ * survives; an increment the resetter had observed is cleared.
+ */
+@Suppress("unused")
+internal fun sampleResettableCounter() {
+    val a = ReplicaId("A")
+    val b = ReplicaId("B")
+
+    // Shared start: A has incremented 10.
+    var shared = ResettableCounter.ZERO
+    shared = shared.piece(shared.increment(a, 10L))
+
+    // B resets based on what it observed (the 10 from A).
+    val afterReset = shared.piece(shared.reset())
+
+    // Concurrently, A increments 3 more — A hasn't seen B's reset yet.
+    val concurrentAdd = shared.piece(shared.increment(a, 3L))
+
+    // Merge: the pre-reset 10 is gone; the concurrent 3 survives.
+    val merged = afterReset.piece(concurrentAdd)
+    check(merged.value == 3L) // only the concurrent increment survived
+}
+
 // ── Rga ───────────────────────────────────────────────────────────────────────
 
 /** Concurrent inserts converge to a deterministic order. */
