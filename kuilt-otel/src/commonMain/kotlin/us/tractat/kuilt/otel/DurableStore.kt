@@ -18,9 +18,9 @@ package us.tractat.kuilt.otel
  *
  * | Platform | Suggested WAL | Status |
  * |---|---|---|
- * | JVM / Android | Java `FileOutputStream` + `channel.force(true)` | A1 — ships here |
- * | iOS / macOS | NSFileManager atomic-write | TODO: follow-up issue filed (#724) |
- * | wasmJs | IndexedDB `IDBObjectStore` | TODO: follow-up issue filed (#725) |
+ * | JVM / Android | `FileChannel.force(true)` + atomic rename | Ships in this module (#800) |
+ * | iOS / macOS | NSFileManager atomic-write | Follow-up issue filed (#802) |
+ * | wasmJs | IndexedDB `IDBObjectStore` | Follow-up issue filed (#801) |
  *
  * Tests inject [InMemoryDurableStore]; production code wires a platform WAL.
  */
