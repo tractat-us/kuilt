@@ -32,14 +32,16 @@ kotlin {
     }
 }
 
-// Modest test-fork heap for QuilterConcurrencyTest — a deliberate concurrency flood (thousands of
-// deltas in flight under a real multi-threaded dispatcher). It was pinned to 1 GB (#655) because
-// the in-memory fabric's UNLIMITED inbound channel let the transient backlog scale with consumer
-// lag and tip a contended CI fork into OOM. #701/#741 made delivery bounded (the fabric now buffers
-// through a bounded Spool), so peak memory no longer scales with lag. Controlled experiment:
-// QuilterConcurrencyTest passes at 128 MB under bounded delivery; 256 MB is ample CI headroom.
+// Generous test-fork heap (#655). QuilterConcurrencyTest is a deliberate concurrency flood —
+// thousands of deltas in flight under a real *multi-threaded* dispatcher. Delivery is now bounded
+// (#701/#741: the in-memory fabric buffers through a bounded Spool), which caps the inbound backlog,
+// but the flood's delta allocation + GC pressure under a contended CI runner still needs real
+// headroom: a 256 MB attempt (#776) OOM'd intermittently on contended runners (it passed locally
+// uncontended and on idle CI, but OOM'd at 256 MB during #783's build — and 256 MB is below the
+// ~512 MB default that #655 already found OOM-prone). Bounded delivery removes the *unbounded*
+// backlog; it does not remove the need for contention headroom. Keep 1 GB.
 tasks.withType<Test>().configureEach {
-    maxHeapSize = "256m"
+    maxHeapSize = "1g"
 }
 
 // kuilt-conformance ships kotlin-test-junit in commonMain; resolve the
