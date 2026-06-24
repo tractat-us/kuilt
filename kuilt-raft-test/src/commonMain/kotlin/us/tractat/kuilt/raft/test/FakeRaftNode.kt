@@ -1,6 +1,7 @@
 package us.tractat.kuilt.raft.test
 
 import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
@@ -11,6 +12,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.launch
+import us.tractat.kuilt.core.DeliveryPolicy
 import us.tractat.kuilt.raft.ClientId
 import us.tractat.kuilt.raft.Committed
 import us.tractat.kuilt.raft.DedupKey
@@ -40,8 +42,10 @@ import us.tractat.kuilt.raft.Snapshot
  * **Stream semantics — a deliberate divergence from the real [RaftNode].** The real
  * [RaftNode] documents [committed] and [trace] as *hot, no-replay* flows (late
  * collectors miss history). For test ergonomics this double backs them with
- * unbounded-buffering channels instead, so `pushCommitted(...)` followed by
- * `committed.first()` works without racing a collector. Two consequences a consumer
+ * bounded, backpressured channels ([DeliveryPolicy.DEFAULT_CAPACITY] / SUSPEND), so
+ * `pushCommitted(...)` followed by `committed.first()` works without racing a
+ * collector (provided fewer than [DeliveryPolicy.DEFAULT_CAPACITY] items accumulate
+ * before the first collect — always true in unit tests). Two consequences a consumer
  * should not encode as [RaftNode] guarantees:
  * - entries/events emitted before collection are **buffered and replayed** here,
  *   whereas the real [RaftNode] would drop them;
@@ -74,7 +78,10 @@ public class FakeRaftNode(
     private val _commitIndex = MutableStateFlow(initialCommitIndex)
     override val commitIndex: StateFlow<Long> = _commitIndex.asStateFlow()
 
-    private val committedChannel = Channel<Committed>(capacity = Channel.UNLIMITED)
+    private val committedChannel = Channel<Committed>(
+        capacity = DeliveryPolicy.DEFAULT_CAPACITY,
+        onBufferOverflow = BufferOverflow.SUSPEND,
+    )
     override val committed: Flow<Committed> = committedChannel.receiveAsFlow()
 
     // Backs committedFrom: an ordered history of committed entries for replay, plus a
@@ -84,7 +91,10 @@ public class FakeRaftNode(
 
     override fun committedFrom(fromIndex: Long): Flow<Committed> = flow {
         coroutineScope {
-            val buffer = Channel<LogEntry>(Channel.UNLIMITED)
+            val buffer = Channel<LogEntry>(
+                capacity = DeliveryPolicy.DEFAULT_CAPACITY,
+                onBufferOverflow = BufferOverflow.SUSPEND,
+            )
             val tail = launch(start = CoroutineStart.UNDISPATCHED) {
                 try {
                     committedTail.collect { buffer.send(it) }
@@ -113,7 +123,10 @@ public class FakeRaftNode(
     private val _compactionFloor = MutableStateFlow(0L)
     override val compactionFloor: StateFlow<Long> = _compactionFloor.asStateFlow()
 
-    private val traceChannel = Channel<RaftTraceEvent>(capacity = Channel.UNLIMITED)
+    private val traceChannel = Channel<RaftTraceEvent>(
+        capacity = DeliveryPolicy.DEFAULT_CAPACITY,
+        onBufferOverflow = BufferOverflow.SUSPEND,
+    )
     override val trace: Flow<RaftTraceEvent> = traceChannel.receiveAsFlow()
 
     private val _proposals = mutableListOf<ByteArray>()
