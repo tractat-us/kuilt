@@ -261,13 +261,43 @@ class StarHarnessTest {
 
         assertEquals(listOf("hello"), received)
     }
+
+    /**
+     * Leak-boundary invariant (design §"unicast invariant", Testing §3): under FullFanout the hub
+     * relays `broadcast` ONLY. A `sendTo` addressed to one spoke must reach that spoke and NEVER be
+     * observed by any other spoke — the transport guard that protects per-recipient hidden info
+     * with NO cryptographic backstop. A failure here is a hidden-information leak, not a flake.
+     */
+    @Test
+    fun hubSendToReachesOnlyTheAddressedSpokeNeverTheOthers() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        val star = backgroundScope.inMemoryStarOf(n = 3)
+        advanceTimeBy(300); runCurrent()
+
+        val addressee = mutableListOf<String>()
+        val other = mutableListOf<String>()
+        val ja = kotlinx.coroutines.launch { star.clients[0].incoming.collect { addressee += it.decodeToString() } }
+        val jb = kotlinx.coroutines.launch { star.clients[1].incoming.collect { other += it.decodeToString() } }
+        advanceTimeBy(50); runCurrent()
+
+        // Hub addresses ONLY client-0 (models server -> the one entitled seat).
+        star.hub.sendTo(PeerId("client-0"), "secret".encodeToByteArray())
+        advanceTimeBy(300); runCurrent()
+        ja.cancel(); jb.cancel()
+
+        assertEquals(listOf("secret"), addressee)   // the addressed spoke receives it
+        assertEquals(emptyList(), other)            // NEVER relayed to any other spoke
+    }
 }
 ```
+
+> Match the real `broadcast`/`sendTo`/`incoming` shapes the other tests in this module use
+> (`sendTo` arity — `PeerId` + `Swatch`/`ByteArray`; whether `incoming` elements expose
+> `decodeToString()`). The invariant under test is fixed; adapt only the surface syntax.
 
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `./gradlew :kuilt-test:jvmTest --tests "us.tractat.kuilt.test.fabric.StarHarnessTest"`
-Expected: FAIL — `inMemoryStarOf` unresolved.
+Expected: FAIL — `inMemoryStarOf` unresolved (both tests fail to compile).
 
 - [ ] **Step 3: Write minimal implementation** (model the connection wiring on `MeshHarness.inMemoryMeshOfSize`)
 
@@ -335,7 +365,12 @@ public suspend fun CoroutineScope.inMemoryStarOf(
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `./gradlew :kuilt-test:jvmTest --tests "us.tractat.kuilt.test.fabric.StarHarnessTest"`
-Expected: PASS — `client[0]`'s broadcast reaches the hub, which re-floods (FullFanout) to `client[1]`.
+Expected: PASS (both tests) — `client[0]`'s broadcast reaches the hub, which re-floods (FullFanout)
+to `client[1]`; and the hub's `sendTo(client-0)` reaches **only** `client[0]`, never `client[1]`
+(the unicast leak-boundary invariant). If the second test fails with `client[1]` observing the
+`sendTo` frame, FullFanout is wrongly relaying `sendTo` — that is the leak the test exists to catch;
+**stop and fix the relay path** (`sendTo` must pass through `base.sendTo` unwrapped, never the
+GossipFrame flood), do not weaken the assertion.
 
 - [ ] **Step 5: Commit**
 
@@ -535,6 +570,6 @@ EOF
 
 ## Self-Review
 
-- **Spec coverage:** Two-transport/no-classes → documented (no code; `kuilt-deal` owns secrecy). Prompt forward flow → Tasks 1–4. Reconnect→FullState → Task 5. Hub-centric/no-spoke↔spoke → enforced by *not* adding routing (default policies + FullFanout only). FullFanout dependency → Tasks 1–2. Regime-1 scope / regimes 2–3 deferred → spec only, no code. Escalations → spec only. **No gaps.**
+- **Spec coverage:** Two-transport/no-classes → documented. Prompt forward flow → Tasks 1–4. Reconnect→FullState → Task 5. **Unicast leak-boundary invariant (`sendTo` never relayed) → Task 3 second test** (`hubSendToReachesOnlyTheAddressedSpokeNeverTheOthers`) — first-class and tested because the immediate consumer defers `kuilt-deal`, so the transport guarantee is the *only* guard on per-recipient hidden info. Hub-centric/no-spoke↔spoke → enforced by *not* adding routing (default policies + FullFanout only). FullFanout dependency → Tasks 1–2. Regime-1 scope / regimes 2–3 deferred → spec only, no code. Escalations (incl. routed-`sendTo`-stays-unicast guard) → spec only. **No gaps.**
 - **Placeholder scan:** `mutateAppend`, `setupStarGame`, `dropClient`, `reconnectClient` are named, scoped, and each pinned to a concrete exemplar test to copy the idiom from — not "TODO". The only intentional deferrals to an exemplar are the RGA-through-Quilter mutation idiom and the mesh sever/re-admit idiom, because their exact arity lives in `kuilt-quilter`/`kuilt-core` tests the implementer must match rather than guess.
 - **Type consistency:** `ActiveViewPolicy` / `RandomKRegular` / `FullFanout` / `activeViewPolicy` param / `inMemoryStarOf` / `Star(hub, clients)` are used identically across Tasks 1–5.

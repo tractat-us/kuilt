@@ -12,8 +12,11 @@ client's updates to all the others over the reliable connections it already hold
 forward flow is prompt and in-order, so a sequence CRDT (RGA chat) applies updates as
 they arrive. The only thing that interrupts it is a client **losing its connection** —
 healed when it reconnects and the hub hands it the current state. **Clients never talk to
-each other; everything flows through the hub.** No traffic classes in the fabric, and
-hidden information is dealt **publicly** (encrypted) via `kuilt-deal`.
+each other; everything flows through the hub.** No traffic classes in the fabric: there is
+exactly one rule — a **`broadcast` floods to everyone, a `sendTo` reaches one peer and is
+never relayed** — so anything addressed to a single peer stays private to that peer. Hidden
+information can *additionally* be dealt **publicly** (encrypted) via `kuilt-deal`, but the
+fabric's unicast guarantee for `sendTo` stands on its own and does not depend on it.
 
 ## Background — what's needed
 
@@ -56,14 +59,27 @@ The fabric exposes two send verbs, and they **are** the model:
   public game state, presence, chat, and **`kuilt-deal` ciphertext** (public by construction).
 - **`sendTo(peer)`** — "exactly this peer." Point-to-point. Carries raft RPCs.
 
-Secrecy is a property of the *payload*, not the transport: `DealSession` (`kuilt-deal`)
-drives a cryptographically fair deal as an op-CRDT **broadcast over the seam**, with
-per-card visibility set by which players **strip** their encryption layer — a cryptographic
-visibility quorum. So a per-recipient secret never needs a private path; it is public
-ciphertext that floods like any other broadcast. We **reject** a fabric-level traffic-class
-system (typed channels / declared partitions / on-the-wire class tags): it would push peer-
-and policy-semantics into the layer whose whole purpose is to mask them. (Fireworks' A6
-per-seat `sendTo` disclosure is a transitional shape that public dealing can replace.)
+**The unicast invariant — a first-class, tested fabric guarantee.** `sendTo(peer)` is
+point-to-point and is **never** relayed or fanned out — not by the `FullFanout` hub, not by
+any active-view policy. Only `broadcast` floods. This makes the *send verb itself* the leak
+boundary: a per-recipient payload sent via `sendTo` reaches exactly its addressee and no one
+else, **independent of whether the payload is also cryptographically protected**. A consumer
+that has not adopted public dealing relies on this transport guarantee alone to keep
+per-recipient hidden information from leaking across peers; a consumer that has adopted public
+dealing gets defence in depth. The invariant is **tested, not merely asserted** (Testing §3),
+because a consumer may depend on it without the cryptographic backstop.
+
+Secrecy can *additionally* be made a property of the *payload*, not the transport:
+`DealSession` (`kuilt-deal`) drives a cryptographically fair deal as an op-CRDT **broadcast
+over the seam**, with per-card visibility set by which players **strip** their encryption
+layer — a cryptographic visibility quorum. So a per-recipient secret *can* travel as public
+ciphertext that floods like any other broadcast. But public dealing is an **optional**
+payload-level protection layered on top of the unicast invariant, **not a prerequisite** for
+it — and it is deferred indefinitely by the immediate consumer, so the baseline must keep
+per-recipient payloads safe on the transport guarantee alone. We **reject** a fabric-level
+traffic-class system (typed channels / declared partitions / on-the-wire class tags): it would
+push peer- and policy-semantics into the layer whose whole purpose is to mask them — the single
+"`broadcast` floods, `sendTo` never does" rule is the entire model.
 
 ### Prompt forward flow (the baseline)
 
@@ -116,6 +132,11 @@ reconnect-FullState) is the design.
    the origin-only `onResend` guard, `Quilter.kt:761`). **Trigger:** mid-stream loss on a
    *healthy* link becomes real (lossy transport, `DeliveryPolicy.Lossy`), **or**
    FullState-on-reconnect of a long chat RGA proves too expensive and a delta-range resend is wanted.
+   **Guard (non-negotiable):** any routed `sendTo` that lands here must remain **unicast** —
+   routed to the single addressed peer (`spoke→hub→spoke`), **never** fanned out. A routed
+   `sendTo` that floods would break the unicast invariant and leak per-recipient payloads across
+   peers (in the trusted-leader regime with no `kuilt-deal` backstop, that is a direct
+   hidden-information leak). The escalation makes `sendTo` *reachable*, never *broadcast*.
 2. **Full Plumtree** (lazy-push `IHAVE` digests + `GRAFT`). Proactive gap discovery +
    alternate-path repair. **Trigger:** a true partial-mesh interior at scale (M-server core /
    k-regular overlay) where dropped floods have *alternate* paths worth grafting and anti-entropy
@@ -131,13 +152,22 @@ RNG, never `advanceUntilIdle` (gossip timers re-arm).
    within a bounded window **and in order**. Proves prompt, ordered chat.
 2. **Reconnect heals.** B drops; A appends ops; B reconnects → receives `FullState` → converges.
    Proves the gap-healing baseline without cross-relay repair.
+3. **Leak boundary — `sendTo` is never relayed (gating).** Under `FullFanout`, the hub
+   `sendTo`s a frame to spoke A; assert A receives it and **B never observes it**. Locks the
+   unicast invariant that protects per-recipient payloads regardless of payload-level secrecy —
+   the consumer relies on this *without* the `kuilt-deal` cryptographic backstop.
 
 ## Decisions recorded
 
 - **Hub-centric baseline** (forward flow + reconnect-FullState); **no spoke→spoke**. Supersedes
   the earlier "faithful-mesh / routed `sendTo`" framing, now demoted to an **escalation**.
-- **No fabric traffic classes** — secrecy via `kuilt-deal` public dealing.
-- **Cross-relay prompt repair and full Plumtree are escalations** with explicit triggers.
+- **No fabric traffic classes.** The leak boundary is the **unicast invariant** — `sendTo` is
+  never relayed/fanned-out, only `broadcast` floods — a **tested**, first-class fabric guarantee
+  that holds **with or without** `kuilt-deal`. Public cryptographic dealing is an *optional*
+  payload-level protection (deferred indefinitely by the immediate consumer), not a prerequisite;
+  the baseline keeps per-recipient payloads safe on the transport guarantee alone.
+- **Cross-relay prompt repair and full Plumtree are escalations** with explicit triggers; any
+  routed `sendTo` escalation stays **unicast** (never fans out).
 - **Dependency:** hub on the `FullFanout` active-view policy (epic #794 phase 1) for rooms larger
   than the default active-view size.
 
