@@ -1,22 +1,34 @@
-package us.tractat.kuilt.core.internal
+package us.tractat.kuilt.core
 
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.ClosedSendChannelException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.receiveAsFlow
-import us.tractat.kuilt.core.DeliveryPolicy
-import us.tractat.kuilt.core.FrameOverflow
-import us.tractat.kuilt.core.Overflow
-import us.tractat.kuilt.core.Swatch
 
 /**
- * The one sanctioned per-receiver inbound buffer for in-process fabrics. Always bounded; its
- * overflow behaviour is the injected [DeliveryPolicy]. `SUSPEND`/`DROP_*` delegate to the
- * channel's native [BufferOverflow]; `FAIL` is enforced explicitly. Single-collection FIFO
- * (collect [incoming] once).
+ * The one sanctioned per-receiver inbound buffer for in-process fabrics.
+ *
+ * A `Spool` holds incoming [Swatch]es for a single receiver, the way a spool of thread feeds a
+ * loom — and, like the print-spool sense of the word, it is a bounded producer/consumer queue.
+ * Fabric implementations create one `Spool` per peer: each arriving frame is handed to [deliver],
+ * and the peer collects [incoming] exactly once (single-collection FIFO).
+ *
+ * It is **always bounded** — its capacity and overflow behaviour come from the injected
+ * [DeliveryPolicy] (default [DeliveryPolicy.Reliable], capacity [DeliveryPolicy.DEFAULT_CAPACITY]).
+ * There is no unbounded `Spool`: that footgun (an inbound queue growing without backpressure until
+ * it exhausts the heap) is structurally unrepresentable. Implement a custom [Seam]/fabric by routing
+ * delivery through a `Spool` rather than a raw [Channel].
+ *
+ * Overflow behaviour follows the policy:
+ *  - `SUSPEND` suspends the delivering caller until the receiver drains (backpressure).
+ *  - `DROP_OLDEST` / `DROP_LATEST` never suspend — the channel discards per the policy.
+ *  - `FAIL` throws [FrameOverflow] when the buffer is genuinely full.
+ *
+ * A receiver that closes concurrently (left the mesh) is treated as a drop, not an error — matching
+ * best-effort fabric delivery: the frame is simply discarded rather than surfaced to the broadcaster.
  */
-internal class Mailbox(private val policy: DeliveryPolicy) {
+public class Spool(private val policy: DeliveryPolicy) {
     private val channel: Channel<Swatch> =
         if (policy.overflow == Overflow.FAIL) {
             Channel(capacity = policy.capacity, onBufferOverflow = BufferOverflow.SUSPEND)
@@ -24,9 +36,11 @@ internal class Mailbox(private val policy: DeliveryPolicy) {
             Channel(capacity = policy.capacity, onBufferOverflow = policy.overflow.toBufferOverflow())
         }
 
-    val incoming: Flow<Swatch> = channel.receiveAsFlow()
+    /** The single-collection FIFO stream of delivered frames. Collect once per `Spool`. */
+    public val incoming: Flow<Swatch> = channel.receiveAsFlow()
 
-    suspend fun deliver(frame: Swatch) {
+    /** Deliver one frame to the receiver, applying the [DeliveryPolicy]'s overflow behaviour. */
+    public suspend fun deliver(frame: Swatch) {
         when (policy.overflow) {
             Overflow.FAIL -> {
                 val result = channel.trySend(frame)
@@ -47,7 +61,8 @@ internal class Mailbox(private val policy: DeliveryPolicy) {
         }
     }
 
-    fun close() {
+    /** Close the spool; [incoming] completes. */
+    public fun close() {
         channel.close()
     }
 }
