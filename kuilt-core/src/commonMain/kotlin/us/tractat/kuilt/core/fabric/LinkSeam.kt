@@ -4,20 +4,22 @@ import kotlinx.atomicfu.atomic
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.ClosedSendChannelException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import us.tractat.kuilt.core.CloseReason
+import us.tractat.kuilt.core.DeliveryPolicy
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.PeerNotConnected
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
+import us.tractat.kuilt.core.Spool
 import us.tractat.kuilt.core.Swatch
 import us.tractat.kuilt.core.runCatchingCancellable
 import kotlin.coroutines.CoroutineContext
@@ -38,23 +40,40 @@ import kotlin.coroutines.CoroutineContext
  * clean closed-seam [IllegalStateException] the pre-check produces — a closed seam never
  * leaks a raw channel exception.
  *
+ * **Inbox backpressure.** Inbound frames are delivered through a [Spool] whose capacity
+ * and overflow behaviour are governed by [policy] (default [DeliveryPolicy.Reliable],
+ * capacity [DeliveryPolicy.DEFAULT_CAPACITY], overflow [us.tractat.kuilt.core.Overflow.SUSPEND]).
+ * The old [Channel.UNLIMITED] inbox is gone: unbounded inbound queues are structurally
+ * unrepresentable per the fabric-backpressure epic.
+ *
+ * **Outbox.** The outbound queue is a bounded [Channel] (capacity [DeliveryPolicy.DEFAULT_CAPACITY],
+ * overflow [BufferOverflow.SUSPEND]). SUSPEND is the right strategy for an outbound queue:
+ * `broadcast`/`sendTo` callers are backpressured when the wire cannot keep up, preserving FIFO
+ * order without dropping frames. The outbox is distinct from the inbox policy because it is a
+ * wire-output buffer, not an inbound delivery buffer; a per-call override of outbound capacity
+ * is not useful at this primitive's level.
+ *
  * @param dispatcher The scope for the seam's read/write loops. Production callers pass
  *   `Dispatchers.Default.limitedParallelism(1)`; test callers pass a
  *   `TestCoroutineDispatcher` derived from the test scheduler so that the seam's
  *   read/write loops share the same virtual clock as the test's `withTimeout`.
+ * @param policy Governs the inbox [Spool]'s capacity and overflow behaviour.
+ *   Defaults to [DeliveryPolicy.Reliable] (bounded, backpressured, lossless).
  */
 public fun identified(
     conn: Connection,
     selfId: PeerId,
     remoteId: PeerId,
     dispatcher: CoroutineContext,
-): Seam = LinkSeam(conn, selfId, remoteId, dispatcher)
+    policy: DeliveryPolicy = DeliveryPolicy.Reliable,
+): Seam = LinkSeam(conn, selfId, remoteId, dispatcher, policy)
 
 internal class LinkSeam(
     private val conn: Connection,
     override val selfId: PeerId,
     private val remoteId: PeerId,
     dispatcher: CoroutineContext,
+    policy: DeliveryPolicy = DeliveryPolicy.Reliable,
 ) : Seam {
     private val scope = CoroutineScope(SupervisorJob() + dispatcher)
 
@@ -64,12 +83,16 @@ internal class LinkSeam(
     private val _state = MutableStateFlow<SeamState>(SeamState.Woven)
     override val state: StateFlow<SeamState> = _state.asStateFlow()
 
-    private val inbox = Channel<Swatch>(Channel.UNLIMITED)
-    override val incoming: Flow<Swatch> = inbox.receiveAsFlow()
+    private val inbox = Spool(policy)
+    override val incoming: Flow<Swatch> = inbox.incoming
 
     // Single-writer outbound queue: concurrent broadcast/sendTo enqueue here;
-    // one coroutine drains in FIFO order to conn.send.
-    private val outbox = Channel<ByteArray>(Channel.UNLIMITED)
+    // one coroutine drains in FIFO order to conn.send. Bounded with SUSPEND overflow so
+    // callers are backpressured rather than producing unbounded frame accumulation.
+    private val outbox = Channel<ByteArray>(
+        capacity = DeliveryPolicy.DEFAULT_CAPACITY,
+        onBufferOverflow = BufferOverflow.SUSPEND,
+    )
 
     // Atomic single-shot teardown gate. `close()` and `readLoop`'s `finally` race to flip it
     // false→true; whoever wins runs teardown, the loser is a no-op — so teardown happens exactly
@@ -117,7 +140,12 @@ internal class LinkSeam(
     private suspend fun readLoop() {
         try {
             conn.incoming.collect { bytes ->
-                if (!closed.value) inbox.trySend(Swatch(payload = bytes, sender = remoteId, sequence = ++seq))
+                if (!closed.value) {
+                    // deliver suspends under SUSPEND-overflow policy — this is intentional: the
+                    // readLoop pauses until the consumer drains, propagating backpressure from the
+                    // inbox spool back to the wire. No lock is held here, so suspension is safe.
+                    inbox.deliver(Swatch(payload = bytes, sender = remoteId, sequence = ++seq))
+                }
             }
         } catch (e: CancellationException) {
             throw e
