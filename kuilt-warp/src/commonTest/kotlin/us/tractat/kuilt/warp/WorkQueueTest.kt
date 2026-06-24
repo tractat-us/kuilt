@@ -22,25 +22,25 @@ class WorkQueueTest {
 
     @Test
     fun emptyQueueHasNoPendingTasks() {
-        assertTrue(WorkQueue.empty().pending.isEmpty())
+        assertTrue(WorkQueue.empty<String>().pending.isEmpty())
     }
 
     @Test
     fun addedTaskAppearsInPending() {
-        val q = WorkQueue.empty().add(alice, "task-1")
+        val q = WorkQueue.empty<String>().add(alice, "task-1")
         assertTrue(q.pending.contains("task-1"))
     }
 
     @Test
     fun removedTaskDisappearsFromPending() {
-        val q = WorkQueue.empty().add(alice, "task-1").remove("task-1")
+        val q = WorkQueue.empty<String>().add(alice, "task-1").remove("task-1")
         assertFalse(q.pending.contains("task-1"))
     }
 
     @Test
     fun concurrentAddsFromDifferentReplicasBothSurviveMerge() {
-        val qa = WorkQueue.empty().add(alice, "task-A")
-        val qb = WorkQueue.empty().add(bob, "task-B")
+        val qa = WorkQueue.empty<String>().add(alice, "task-A")
+        val qb = WorkQueue.empty<String>().add(bob, "task-B")
         val merged = qa.merge(qb)
         assertEquals(setOf("task-A", "task-B"), merged.pending)
     }
@@ -48,7 +48,7 @@ class WorkQueueTest {
     @Test
     fun addWinsOverConcurrentRemove() {
         // shared start: alice added "task-1"
-        val start = WorkQueue.empty().add(alice, "task-1")
+        val start = WorkQueue.empty<String>().add(alice, "task-1")
         // bob removes what he saw
         val bobView = start.remove("task-1")
         // alice concurrently re-adds "task-1" (a new dot)
@@ -59,7 +59,7 @@ class WorkQueueTest {
 
     @Test
     fun removeWithoutConcurrentAddDisappears() {
-        val start = WorkQueue.empty().add(alice, "task-1")
+        val start = WorkQueue.empty<String>().add(alice, "task-1")
         val removed = start.remove("task-1")
         // merging with the original (stale-present) view still drops the task
         val merged = removed.merge(start)
@@ -68,20 +68,20 @@ class WorkQueueTest {
 
     @Test
     fun mergeIsCommutative() {
-        val qa = WorkQueue.empty().add(alice, "task-A")
-        val qb = WorkQueue.empty().add(bob, "task-B")
+        val qa = WorkQueue.empty<String>().add(alice, "task-A")
+        val qb = WorkQueue.empty<String>().add(bob, "task-B")
         assertEquals(qa.merge(qb), qb.merge(qa))
     }
 
     @Test
     fun mergeIsIdempotent() {
-        val q = WorkQueue.empty().add(alice, "task-1").add(bob, "task-2")
+        val q = WorkQueue.empty<String>().add(alice, "task-1").add(bob, "task-2")
         assertEquals(q, q.merge(q))
     }
 
     @Test
     fun multipleTasksAddedByOneReplica() {
-        val q = WorkQueue.empty()
+        val q = WorkQueue.empty<String>()
             .add(alice, "task-1")
             .add(alice, "task-2")
             .add(alice, "task-3")
@@ -90,7 +90,7 @@ class WorkQueueTest {
 
     @Test
     fun removeOneOfManyTasksLeavesOthers() {
-        val q = WorkQueue.empty()
+        val q = WorkQueue.empty<String>()
             .add(alice, "task-1")
             .add(alice, "task-2")
             .remove("task-1")
@@ -100,9 +100,9 @@ class WorkQueueTest {
 
     @Test
     fun threeWayMergePreservesAllTasks() {
-        val qa = WorkQueue.empty().add(alice, "task-A")
-        val qb = WorkQueue.empty().add(bob, "task-B")
-        val qc = WorkQueue.empty().add(ReplicaId("carol"), "task-C")
+        val qa = WorkQueue.empty<String>().add(alice, "task-A")
+        val qb = WorkQueue.empty<String>().add(bob, "task-B")
+        val qc = WorkQueue.empty<String>().add(ReplicaId("carol"), "task-C")
         val merged = qa.merge(qb).merge(qc)
         assertEquals(setOf("task-A", "task-B", "task-C"), merged.pending)
     }
