@@ -1,0 +1,117 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1040 560" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif">
+  <style>
+    .title{fill:#e5e7eb;font-size:19px;font-weight:700}
+    .sub{fill:#7f848e;font-size:12px}
+    .cl{font-size:11px;font-weight:700;letter-spacing:.5px}
+    .chip{font-size:9.5px;font-weight:600;fill:#cdd3de}
+    .row{font-size:9px;fill:#7f848e;font-style:italic}
+    .e{stroke:#4a5260;stroke-width:1.4;fill:none;marker-end:url(#m)}
+    .gate{stroke:#e5c07b;stroke-width:2.4;fill:none;marker-end:url(#g)}
+    .gl{font-size:10px;font-weight:700;fill:#e5c07b}
+  </style>
+  <defs>
+    <marker id="m" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0 0 L6 3 L0 6 z" fill="#4a5260"/></marker>
+    <marker id="g" markerWidth="9" markerHeight="9" refX="6" refY="3.5" orient="auto"><path d="M0 0 L7 3.5 L0 7 z" fill="#e5c07b"/></marker>
+  </defs>
+  <rect fill="#161a22" width="1040" height="560"/>
+  <text class="title" x="34" y="32">Epic slices — the full provisional-issue DAG</text>
+  <text class="sub" x="34" y="51">~38 sub-issues, grouped by the spine payoff each backs. Green = buildable today · blue = compute/planning dream · amber = ML dream.</text>
+
+  <!-- REALITY cluster -->
+  <rect x="34" y="62" width="972" height="86" rx="11" fill="#101a13" stroke="#98c379" stroke-width="1.6"/>
+  <text class="cl" x="46" y="80" fill="#98c379">REALITY · the offline exporter — gated on nothing</text>
+  <g>
+    <rect x="46"  y="92" width="58" height="24" rx="6" fill="#1e2127" stroke="#98c37977"/><text class="chip" x="75"  y="108" text-anchor="middle">A1 store</text>
+    <rect x="140" y="92" width="46" height="24" rx="6" fill="#1e2127" stroke="#98c37977"/><text class="chip" x="163" y="108" text-anchor="middle">A2 span</text>
+    <rect x="196" y="92" width="58" height="24" rx="6" fill="#1e2127" stroke="#98c37977"/><text class="chip" x="225" y="108" text-anchor="middle">A3 metric</text>
+    <rect x="264" y="92" width="46" height="24" rx="6" fill="#1e2127" stroke="#98c37977"/><text class="chip" x="287" y="108" text-anchor="middle">A4 log</text>
+    <rect x="350" y="92" width="64" height="24" rx="6" fill="#1e2127" stroke="#98c37977"/><text class="chip" x="382" y="108" text-anchor="middle">A5 bridge</text>
+    <rect x="470" y="92" width="58" height="24" rx="6" fill="#1e2127" stroke="#5a6472"/><text class="chip" x="499" y="108" text-anchor="middle">A6 evict</text>
+    <rect x="540" y="92" width="74" height="24" rx="6" fill="#1e2127" stroke="#5a6472"/><text class="chip" x="577" y="108" text-anchor="middle">A7 OTel glue</text>
+    <rect x="628" y="92" width="96" height="24" rx="6" fill="#1e2127" stroke="#5a6472"/><text class="chip" x="676" y="108" text-anchor="middle">A8 causal-trace</text>
+    <text class="row" x="744" y="108">store → exporters → bridge</text>
+  </g>
+  <path class="e" d="M104 104 H140"/><path class="e" d="M310 104 C 330 104, 332 104, 350 104"/>
+  <path class="e" d="M254 116 C 300 130, 330 118, 350 110"/><path class="e" d="M186 116 C 250 134, 330 120, 350 110"/>
+
+  <!-- DREAM label -->
+  <text class="cl" x="34" y="172" fill="#7f848e">THE DREAM — every cluster below is gated on the #680 spike</text>
+
+  <!-- COMPUTE cluster -->
+  <rect x="34" y="182" width="690" height="356" rx="11" fill="#13171f" stroke="#61afef88" stroke-width="1.6"/>
+  <text class="cl" x="46" y="200" fill="#9ecbf0">COMPUTE ENGINE · 0 → B → C → D</text>
+  <!-- 0 row -->
+  <g>
+    <text class="row" x="46" y="224">slice 0</text>
+    <rect x="92"  y="214" width="46" height="22" rx="5" fill="#16202b" stroke="#61afef66"/><text class="chip" x="115" y="229" text-anchor="middle" font-size="8.5">queue</text>
+    <rect x="144" y="214" width="46" height="22" rx="5" fill="#16202b" stroke="#61afef66"/><text class="chip" x="167" y="229" text-anchor="middle" font-size="8.5">sched</text>
+    <rect x="196" y="214" width="50" height="22" rx="5" fill="#16202b" stroke="#61afef66"/><text class="chip" x="221" y="229" text-anchor="middle" font-size="8.5">results</text>
+    <rect x="276" y="214" width="54" height="22" rx="5" fill="#16202b" stroke="#61afef66"/><text class="chip" x="303" y="229" text-anchor="middle" font-size="8.5">shuttle</text>
+    <rect x="360" y="211" width="84" height="28" rx="6" fill="#16202b" stroke="#61afef" stroke-width="1.6"/><text class="chip" x="402" y="229" text-anchor="middle" fill="#9ecbf0" font-size="9">spike · #680</text>
+  </g>
+  <path class="e" d="M246 225 H276"/><path class="e" d="M330 225 H360"/>
+  <!-- B row -->
+  <g>
+    <text class="row" x="46" y="266">slice B</text>
+    <rect x="92"  y="256" width="44" height="22" rx="5" fill="#16202b" stroke="#61afef66"/><text class="chip" x="114" y="271" text-anchor="middle">B1 type</text>
+    <rect x="150" y="256" width="64" height="22" rx="5" fill="#16202b" stroke="#61afef66"/><text class="chip" x="182" y="271" text-anchor="middle">B2 commit</text>
+    <rect x="228" y="256" width="78" height="22" rx="5" fill="#16202b" stroke="#61afef66"/><text class="chip" x="267" y="271" text-anchor="middle">B3 combinators</text>
+  </g>
+  <path class="e" d="M136 267 H150"/>
+  <!-- C core row -->
+  <g>
+    <text class="row" x="46" y="306">slice C</text>
+    <rect x="92"  y="296" width="60" height="22" rx="5" fill="#16202b" stroke="#61afef66"/><text class="chip" x="122" y="311" text-anchor="middle">C1 registry</text>
+    <rect x="166" y="296" width="84" height="22" rx="5" fill="#16202b" stroke="#61afef66"/><text class="chip" x="208" y="311" text-anchor="middle">C2 descriptor</text>
+    <rect x="300" y="296" width="44" height="22" rx="5" fill="#16202b" stroke="#61afef66"/><text class="chip" x="322" y="311" text-anchor="middle">C4 creel</text>
+    <rect x="358" y="296" width="80" height="22" rx="5" fill="#16202b" stroke="#61afef66"/><text class="chip" x="398" y="311" text-anchor="middle">C5 bobbin-gossip</text>
+  </g>
+  <path class="e" d="M152 307 H166"/><path class="e" d="M250 307 H300"/><path class="e" d="M344 307 H358"/>
+  <!-- C runtimes row -->
+  <g>
+    <text class="row" x="46" y="344">wasm runtime ×target (off C2)</text>
+    <rect x="300" y="332" width="64" height="22" rx="5" fill="#16202b" stroke="#61afef66"/><text class="chip" x="332" y="347" text-anchor="middle">C3·browser</text>
+    <rect x="372" y="332" width="50" height="22" rx="5" fill="#16202b" stroke="#61afef66"/><text class="chip" x="397" y="347" text-anchor="middle">C3·jvm</text>
+    <rect x="430" y="332" width="58" height="22" rx="5" fill="#16202b" stroke="#61afef66"/><text class="chip" x="459" y="347" text-anchor="middle">C3·macos</text>
+    <rect x="496" y="332" width="92" height="22" rx="5" fill="#211c17" stroke="#e5c07b88"/><text class="chip" x="542" y="347" text-anchor="middle">C3·ios (interp)</text>
+  </g>
+  <path class="e" d="M208 318 C 240 332, 270 340, 300 343"/>
+  <!-- D row -->
+  <g>
+    <text class="row" x="46" y="392">slice D</text>
+    <rect x="92"  y="382" width="60" height="22" rx="5" fill="#16202b" stroke="#61afef66"/><text class="chip" x="122" y="397" text-anchor="middle">D1 compile</text>
+    <rect x="166" y="382" width="64" height="22" rx="5" fill="#16202b" stroke="#61afef66"/><text class="chip" x="198" y="397" text-anchor="middle">D2 variants</text>
+    <rect x="244" y="382" width="54" height="22" rx="5" fill="#16202b" stroke="#61afef66"/><text class="chip" x="271" y="397" text-anchor="middle">D3 tiered</text>
+    <rect x="320" y="382" width="68" height="22" rx="5" fill="#16202b" stroke="#5a6472"/><text class="chip" x="354" y="397" text-anchor="middle">D4·kwasm</text>
+    <rect x="396" y="382" width="60" height="22" rx="5" fill="#16202b" stroke="#5a6472"/><text class="chip" x="426" y="397" text-anchor="middle">D4·graal</text>
+  </g>
+  <path class="e" d="M152 393 H166"/><path class="e" d="M230 393 H244"/>
+  <path class="e" d="M208 318 C 150 360, 120 372, 120 382"/>
+  <text class="row" x="46" y="430">C (via C2) gates D ↑</text>
+
+  <!-- PLANNING cluster -->
+  <rect x="740" y="182" width="266" height="150" rx="11" fill="#13171f" stroke="#61afef88" stroke-width="1.6"/>
+  <text class="cl" x="752" y="200" fill="#9ecbf0">PLANNING · E</text>
+  <rect x="752" y="212" width="50" height="22" rx="5" fill="#16202b" stroke="#61afef66"/><text class="chip" x="777" y="227" text-anchor="middle">draft</text>
+  <rect x="812" y="212" width="60" height="22" rx="5" fill="#16202b" stroke="#61afef66"/><text class="chip" x="842" y="227" text-anchor="middle">E2 rewrite</text>
+  <rect x="888" y="212" width="58" height="22" rx="5" fill="#16202b" stroke="#61afef66"/><text class="chip" x="917" y="227" text-anchor="middle">E3 cost</text>
+  <rect x="752" y="248" width="80" height="22" rx="5" fill="#16202b" stroke="#61afef66"/><text class="chip" x="792" y="263" text-anchor="middle">E4 HLL stats</text>
+  <rect x="844" y="248" width="92" height="22" rx="5" fill="#16202b" stroke="#61afef66"/><text class="chip" x="890" y="263" text-anchor="middle">E5 incremental</text>
+  <path class="e" d="M802 223 H812"/><path class="e" d="M872 223 H888"/>
+  <text class="row" x="752" y="296">E1 also needs B1 (the type seam)</text>
+
+  <!-- ML cluster -->
+  <rect x="740" y="360" width="266" height="150" rx="11" fill="#1d1812" stroke="#e5c07b88" stroke-width="1.6"/>
+  <text class="cl" x="752" y="378" fill="#e5c07b">FEDERATED ML · F</text>
+  <rect x="752" y="390" width="92" height="22" rx="5" fill="#211c17" stroke="#e5c07b66"/><text class="chip" x="798" y="405" text-anchor="middle">F1 FedAvg-weave</text>
+  <rect x="752" y="424" width="86" height="22" rx="5" fill="#211c17" stroke="#e5c07b66"/><text class="chip" x="795" y="439" text-anchor="middle">F2 model-kernel</text>
+  <rect x="850" y="424" width="64" height="22" rx="5" fill="#211c17" stroke="#e5c07b66"/><text class="chip" x="882" y="439" text-anchor="middle">F4 demo</text>
+  <rect x="752" y="458" width="120" height="22" rx="5" fill="#211c17" stroke="#5a6472"/><text class="chip" x="812" y="473" text-anchor="middle">F3 secure-agg (opt)</text>
+  <path class="e" d="M838 435 H850"/><path class="e" d="M844 401 C 868 408, 876 416, 882 424"/>
+
+  <!-- inter-cluster GATES -->
+  <path class="gate" d="M444 225 C 580 210, 650 200, 740 207"/>
+  <text class="gl" x="572" y="198">spike gates E</text>
+  <path class="gate" d="M444 234 C 580 300, 650 400, 740 400"/>
+  <text class="gl" x="556" y="372">0e → F1 · C2 → F2</text>
+</svg>

@@ -1,0 +1,92 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 980 600" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif">
+  <style>
+    .title{fill:#e5e7eb;font-size:20px;font-weight:700}
+    .sub{fill:#7f848e;font-size:12.5px}
+    .role{font-size:13px;font-weight:700}
+    .use{font-size:10px;fill:#9aa0ab}
+    .prim{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:10px;fill:#98c379}
+    .ships{font-size:8.5px;fill:#6f9a5a}
+    .blabel{font-size:8.5px;font-weight:700;letter-spacing:.5px;fill:#7f848e}
+    .iss{font-size:9.5px;fill:#cdd3de}
+    .tier{font-size:10px;font-weight:700;fill:#7f848e;letter-spacing:.5px}
+    .axis{font-size:12px;font-weight:700;letter-spacing:.5px}
+    .conn{stroke:#3a4150;stroke-width:1.5}
+  </style>
+  <defs>
+    <marker id="ar" markerWidth="11" markerHeight="11" refX="7" refY="4" orient="auto"><path d="M0 0 L8 4 L0 8 z" fill="#56b6c2"/></marker>
+  </defs>
+  <rect fill="#161a22" width="980" height="600"/>
+  <text class="title" x="36" y="34">The shared spine — three tiers, two axes</text>
+  <text class="sub" x="36" y="55">Down each column: the role (use) · the primitive it wraps (recognition) · the issues that build it (the work). Across: one substrate, six payoffs.</text>
+
+  <!-- left tier labels (the vertical reading) -->
+  <text class="tier" x="14" y="120">USE</text>
+  <text class="tier" x="14" y="208">IS</text>
+  <text class="tier" x="14" y="330">BUILT BY</text>
+
+  <!-- columns -->
+  <!-- helper: each col x; engine blue (#61afef), externality amber (#e5c07b) -->
+  <g text-anchor="middle">
+    <!-- 1 Replication -->
+    <rect x="70" y="96" width="138" height="404" rx="11" fill="#16202b" stroke="#61afef55"/>
+    <text class="role" x="139" y="122" fill="#9ecbf0">Replication</text><text class="use" x="139" y="138">the core, today</text>
+    <rect x="82" y="158" width="114" height="64" rx="8" fill="#10130f" stroke="#98c37944"/><text class="prim" x="139" y="190">Quilter</text><text class="ships" x="139" y="208">ships ✓</text>
+    <rect x="82" y="300" width="114" height="186" rx="8" fill="#13161d" stroke="#61afef33"/>
+    <text class="blabel" x="139" y="320">BACKED BY</text><text class="iss" x="139" y="346">— substrate</text><text class="iss" x="139" y="364" fill="#7f848e">(no new work)</text>
+
+    <!-- 2 Compute -->
+    <rect x="214" y="96" width="138" height="404" rx="11" fill="#16202b" stroke="#61afef55"/>
+    <text class="role" x="283" y="122" fill="#9ecbf0">Compute</text><text class="use" x="283" y="138">work + results</text>
+    <rect x="226" y="158" width="114" height="64" rx="8" fill="#10130f" stroke="#98c37944"/><text class="prim" x="283" y="185">ORSet +</text><text class="prim" x="283" y="199">ORMap</text><text class="ships" x="283" y="215">ships ✓</text>
+    <rect x="226" y="300" width="114" height="186" rx="8" fill="#13161d" stroke="#61afef33"/>
+    <text class="blabel" x="283" y="320">BACKED BY · ≈21 issues</text>
+    <text class="iss" x="283" y="342">the spike</text><text class="iss" x="283" y="360">type seam</text><text class="iss" x="283" y="378">wasm + bobbins</text><text class="iss" x="283" y="396">compiler nodes</text>
+
+    <!-- 3 Planning -->
+    <rect x="358" y="96" width="138" height="404" rx="11" fill="#16202b" stroke="#61afef55"/>
+    <text class="role" x="427" y="122" fill="#9ecbf0">Planning</text><text class="use" x="427" y="138">query stats</text>
+    <rect x="370" y="158" width="114" height="64" rx="8" fill="#10130f" stroke="#98c37944"/><text class="prim" x="427" y="190">HyperLogLog</text><text class="ships" x="427" y="208">ships ✓</text>
+    <rect x="370" y="300" width="114" height="186" rx="8" fill="#13161d" stroke="#61afef33"/>
+    <text class="blabel" x="427" y="320">BACKED BY · 5 issues</text>
+    <text class="iss" x="427" y="342">draft as a value</text><text class="iss" x="427" y="360">rewrite rules</text><text class="iss" x="427" y="378">cost model</text><text class="iss" x="427" y="396">stats · incremental</text>
+
+    <!-- 4 Observability (amber) -->
+    <rect x="502" y="96" width="138" height="404" rx="11" fill="#211c17" stroke="#e5c07b55"/>
+    <text class="role" x="571" y="122" fill="#e5c07b">Observability</text><text class="use" x="571" y="138">logs/metrics/traces</text>
+    <rect x="514" y="158" width="114" height="64" rx="8" fill="#10130f" stroke="#98c37944"/><text class="prim" x="571" y="183">Rga · counters</text><text class="prim" x="571" y="197">· Causal</text><text class="ships" x="571" y="215">ships ✓</text>
+    <rect x="514" y="300" width="114" height="186" rx="8" fill="#1d1812" stroke="#e5c07b33"/>
+    <text class="blabel" x="571" y="320">BACKED BY · 3 issues</text>
+    <text class="iss" x="571" y="344">span exporter</text><text class="iss" x="571" y="362">log exporter</text><text class="iss" x="571" y="380">trace inference</text>
+
+    <!-- 5 Telemetry (amber) -->
+    <rect x="646" y="96" width="138" height="404" rx="11" fill="#211c17" stroke="#e5c07b55"/>
+    <text class="role" x="715" y="122" fill="#e5c07b">Telemetry</text><text class="use" x="715" y="138">offline-first</text>
+    <rect x="658" y="158" width="114" height="64" rx="8" fill="#10130f" stroke="#98c37944"/><text class="prim" x="715" y="183">durable buf +</text><text class="prim" x="715" y="197">idempotent</text><text class="ships" x="715" y="215">~ships ✓</text>
+    <rect x="658" y="300" width="114" height="186" rx="8" fill="#1d1812" stroke="#e5c07b33"/>
+    <text class="blabel" x="715" y="320">BACKED BY · 5 issues</text>
+    <text class="iss" x="715" y="342">durable store</text><text class="iss" x="715" y="360">metric exporter</text><text class="iss" x="715" y="378">OTLP bridge</text><text class="iss" x="715" y="396">eviction · glue</text>
+
+    <!-- 6 Federated ML (amber) -->
+    <rect x="790" y="96" width="138" height="404" rx="11" fill="#211c17" stroke="#e5c07b55"/>
+    <text class="role" x="859" y="122" fill="#e5c07b">Federated ML</text><text class="use" x="859" y="138">FedAvg</text>
+    <rect x="802" y="158" width="114" height="64" rx="8" fill="#10130f" stroke="#98c37944"/><text class="prim" x="859" y="190">Σ counters</text><text class="ships" x="859" y="208">ships ✓</text>
+    <rect x="802" y="300" width="114" height="186" rx="8" fill="#1d1812" stroke="#e5c07b33"/>
+    <text class="blabel" x="859" y="320">BACKED BY · 4 issues</text>
+    <text class="iss" x="859" y="342">FedAvg weave</text><text class="iss" x="859" y="360">model kernel</text><text class="iss" x="859" y="378">secure-agg (opt)</text><text class="iss" x="859" y="396">end-to-end demo</text>
+  </g>
+
+  <!-- connectors into the spine -->
+  <g class="conn">
+    <line x1="139" y1="500" x2="139" y2="520"/><line x1="283" y1="500" x2="283" y2="520"/>
+    <line x1="427" y1="500" x2="427" y2="520"/><line x1="571" y1="500" x2="571" y2="520"/>
+    <line x1="715" y1="500" x2="715" y2="520"/><line x1="859" y1="500" x2="859" y2="520"/>
+  </g>
+
+  <!-- THE SPINE -->
+  <rect x="70" y="520" width="858" height="48" rx="12" fill="#16201a" stroke="#98c379" stroke-width="2"/>
+  <text x="499" y="549" text-anchor="middle" font-size="13" font-weight="700" fill="#98c379">THE SHARED SUBSTRATE · CRDTs · gossip · anti-entropy — built once</text>
+
+  <!-- HORIZONTAL AXIS -->
+  <line x1="70" y1="586" x2="928" y2="586" stroke="#56b6c2" stroke-width="2" marker-end="url(#ar)"/>
+  <text class="axis" x="72" y="600" fill="#56b6c2" font-size="11">PAYOFF → breadth · engine (blue) → externalities (amber)</text>
+</svg>

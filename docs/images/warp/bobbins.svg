@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 560" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif">
+  <style>
+    .title{fill:#e5e7eb;font-size:20px;font-weight:700}
+    .h{font-size:14px;font-weight:700}
+    .t{font-size:12px;fill:#cdd3de}
+    .mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}
+    .cm{fill:#7f848e}.tl{fill:#56b6c2}.grn{fill:#98c379}.am{fill:#e5c07b}.blue{fill:#61afef}.red{fill:#f0b3b3}
+    .badge{font-size:11px;font-weight:700}
+    .lk{stroke:#3a4150;stroke-width:2;fill:none;marker-end:url(#a)}
+  </style>
+  <marker id="a" markerWidth="9" markerHeight="9" refX="6" refY="3" orient="auto"><path d="M0 0 L6 3 L0 6 z" fill="#3a4150"/></marker>
+  <rect fill="#161a22" width="800" height="560"/>
+  <text class="title" x="40" y="36">Lazy bobbins — gossiping the code, eventually</text>
+
+  <!-- descriptor -->
+  <rect x="40" y="54" width="720" height="44" rx="10" fill="#241f17" stroke="#e5c07b66"/>
+  <text class="mono" x="58" y="81"><tspan class="cm">descriptor:  { op: </tspan><tspan class="am">⊞#a1b2…</tspan><tspan class="cm">, arg, item }</tspan>     <tspan class="t">— the op-id IS the content-hash of the kernel</tspan></text>
+
+  <!-- THE CREEL : keys -->
+  <rect x="40" y="116" width="350" height="180" rx="12" fill="#16201a" stroke="#98c37966" stroke-width="1.5"/>
+  <text class="h grn" x="58" y="140">THE CREEL · keys converge</text>
+  <rect x="250" y="126" width="124" height="20" rx="10" fill="#98c37918" stroke="#98c37955"/>
+  <text class="badge grn" x="312" y="140" text-anchor="middle">CRDT · GSet</text>
+  <text class="t" x="58" y="162">Every peer agrees which bobbins exist —</text>
+  <text class="t" x="58" y="180">a grow-only set of hashes. Cheap to gossip.</text>
+  <g class="mono">
+    <rect x="58" y="196" width="300" height="26" rx="6" fill="#10130f" stroke="#2c313a"/><text class="am" x="70" y="214">⊞#a1b2…</text><text class="cm" x="150" y="214">score-kernel</text>
+    <rect x="58" y="228" width="300" height="26" rx="6" fill="#10130f" stroke="#2c313a"/><text class="am" x="70" y="246">⊞#c3d4…</text><text class="cm" x="150" y="246">tokenize-kernel</text>
+    <rect x="58" y="260" width="300" height="26" rx="6" fill="#10130f" stroke="#2c313a"/><text class="am" x="70" y="278">⊞#e5f6…</text><text class="cm" x="150" y="278">rank-kernel</text>
+  </g>
+
+  <!-- THE BOBBINS : values -->
+  <rect x="410" y="116" width="350" height="180" rx="12" fill="#16202b" stroke="#61afef66" stroke-width="1.5"/>
+  <text class="h blue" x="428" y="140">THE BOBBINS · values lazy</text>
+  <rect x="640" y="126" width="104" height="20" rx="10" fill="#61afef18" stroke="#61afef55"/>
+  <text class="badge blue" x="692" y="140" text-anchor="middle">cache</text>
+  <text class="t" x="428" y="162">Each peer holds a <tspan font-style="italic">subset</tspan> of the bytes.</text>
+  <text class="t" x="428" y="180">Immutable &amp; content-addressed — fetched on demand.</text>
+  <g class="mono" font-size="11">
+    <text class="t" x="428" y="206">peer A</text><text class="grn" x="486" y="206">⊞#a1b2 ✓</text><text class="grn" x="568" y="206">⊞#c3d4 ✓</text><text class="cm" x="650" y="206">⊞#e5f6 ·</text>
+    <text class="t" x="428" y="230">peer B</text><text class="cm" x="486" y="230">⊞#a1b2 ·</text><text class="grn" x="568" y="230">⊞#c3d4 ✓</text><text class="grn" x="650" y="230">⊞#e5f6 ✓</text>
+    <text class="t" x="428" y="254">peer C</text><text class="red" x="486" y="254">⊞#a1b2 ✗</text><text class="cm" x="568" y="254">⊞#c3d4 ·</text><text class="cm" x="650" y="254">⊞#e5f6 ·</text>
+  </g>
+  <text class="t" x="428" y="280" font-size="11">presence lattice per bobbin:  <tspan class="cm">Absent</tspan> ⊏ <tspan class="grn">Present(bytes)</tspan>  — monotone</text>
+
+  <!-- flow -->
+  <rect x="40" y="314" width="720" height="92" rx="12" fill="#1e2127" stroke="#2c313a" stroke-width="1.5"/>
+  <text class="h" x="58" y="338" fill="#fff">peer C is assigned op ⊞#a1b2 but lacks the bobbin →</text>
+  <text class="t" x="58" y="362">1. asks neighbours "who has ⊞#a1b2?"   2. pulls bytes from peer A   3. re-hashes to verify   4. caches in its creel   5. runs.</text>
+  <text class="t" x="58" y="384" fill="#98c379">Content-addressing makes every fetch idempotent &amp; conflict-free: key = hash(value), so any two copies are byte-identical. New peers warm lazily.</text>
+
+  <!-- caveat -->
+  <rect x="40" y="424" width="720" height="76" rx="12" fill="#1d1416" stroke="#e06c7566" stroke-width="1.5"/>
+  <text class="h red" x="58" y="448">The one honest caveat: safety converges, availability doesn't</text>
+  <text class="t" x="58" y="470">The <tspan class="grn">key-set</tspan> converging is a <tspan font-weight="700">safety</tspan> property the CRDT gives you. Whether the <tspan class="blue">bytes</tspan> are actually fetchable is <tspan font-weight="700">liveness</tspan> — it isn't.</text>
+  <text class="t" x="58" y="490">If the sole holder of a bobbin dies before anyone pulls it, that op stalls. Pin each bobbin on ≥ k peers (a replication factor), like any P2P store.</text>
+
+  <text class="t" x="40" y="534" fill="#7f848e">Precedent: <tspan fill="#cdd3de">Merkle-CRDT</tspan> — CRDT state addressed by Merkle hash, so peers advertise hashes and fetch the bytes lazily by hash. Exactly "keys known, values lazy."</text>
+</svg>

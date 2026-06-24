@@ -1,0 +1,60 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 520" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif">
+  <style>
+    .title{fill:#e5e7eb;font-size:20px;font-weight:700}
+    .h{font-size:15px;font-weight:700}
+    .t{font-size:12.5px;fill:#cdd3de}
+    .mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}
+    .cm{fill:#7f848e}
+    .chip{font-size:11px;font-weight:600}
+  </style>
+  <rect fill="#161a22" width="800" height="520"/>
+  <text class="title" x="40" y="38">Code mobility: WASM is the trick, LLVM is the trap</text>
+
+  <!-- Rung 1: named ops -->
+  <rect x="40" y="58" width="720" height="72" rx="12" fill="#16201a" stroke="#98c37966" stroke-width="1.5"/>
+  <circle cx="76" cy="94" r="17" fill="#98c37922" stroke="#98c379" stroke-width="1.5"/>
+  <text x="76" y="100" text-anchor="middle" font-size="18" fill="#98c379">✓</text>
+  <text class="h" x="108" y="86" fill="#98c379">① Named ops — the default</text>
+  <text class="t" x="108" y="108">Ship <tspan class="mono" fill="#e5c07b">(opId, args)</tspan>; the code is already everywhere. Works on every target.</text>
+  <text class="t" x="108" y="124" fill="#7f848e">Limit: can only run code already in the deployed binary.</text>
+
+  <!-- Rung 3: wasm kernels -->
+  <rect x="40" y="144" width="720" height="180" rx="12" fill="#241f17" stroke="#e5c07b" stroke-width="1.5"/>
+  <text x="76" y="180" text-anchor="middle" font-size="22" fill="#e5c07b">✦</text>
+  <text class="h" x="108" y="172" fill="#e5c07b">③ WASM kernels — the fantasy</text>
+  <text class="t" x="108" y="194">Ship a compiled <tspan class="mono" fill="#98c379">.wasm</tspan> blob <tspan font-style="italic">as</tspan> the method:
+    <tspan fill="#98c379" font-weight="600">same bytes everywhere · sandboxed · browser-native</tspan></text>
+
+  <!-- per-platform chips -->
+  <g class="chip">
+    <rect x="108" y="214" width="142" height="46" rx="8" fill="#16201a" stroke="#98c37955"/>
+    <text x="179" y="234" text-anchor="middle" fill="#9ecbf0">browser</text>
+    <text x="179" y="250" text-anchor="middle" fill="#98c379">native engine</text>
+
+    <rect x="262" y="214" width="142" height="46" rx="8" fill="#16201a" stroke="#98c37955"/>
+    <text x="333" y="234" text-anchor="middle" fill="#9ecbf0">JVM / Android</text>
+    <text x="333" y="250" text-anchor="middle" fill="#98c379">JIT (Chicory)</text>
+
+    <rect x="416" y="214" width="160" height="46" rx="8" fill="#16201a" stroke="#98c37955"/>
+    <text x="496" y="234" text-anchor="middle" fill="#9ecbf0">macOS / desktop</text>
+    <text x="496" y="250" text-anchor="middle" fill="#98c379">JIT · Cranelift</text>
+
+    <rect x="588" y="214" width="160" height="46" rx="8" fill="#2a1a1a" stroke="#e06c7588"/>
+    <text x="668" y="234" text-anchor="middle" fill="#f0b3b3">iOS</text>
+    <text x="668" y="250" text-anchor="middle" fill="#e5c07b">interpret — JIT banned</text>
+  </g>
+  <text class="t" x="108" y="290" fill="#7f848e">Desktop/server runtimes JIT wasm → native via Cranelift/LLVM, so near-native speed is free.</text>
+  <text class="t" x="108" y="308">The one hard wall: <tspan fill="#f0b3b3">iOS forbids runtime JIT</tspan>, so on iPhone you interpret (wasm3) — slower, but real.</text>
+
+  <!-- Rung reject: LLVM IR -->
+  <rect x="40" y="338" width="720" height="92" rx="12" fill="#1d1416" stroke="#e06c7566" stroke-width="1.5"/>
+  <circle cx="76" cy="374" r="17" fill="#e06c7522" stroke="#e06c75" stroke-width="1.5"/>
+  <text x="76" y="380" text-anchor="middle" font-size="18" fill="#e06c75">✕</text>
+  <text class="h" x="108" y="366" fill="#e06c75">LLVM IR on the wire — the trap</text>
+  <line x1="108" y1="361" x2="404" y2="361" stroke="#e06c75" stroke-width="1.5"/>
+  <text class="t" x="108" y="388" fill="#c9a0a4">Not portable — Google tried it (PNaCl) and <tspan font-weight="600">retired it for WebAssembly in 2017.</tspan></text>
+  <text class="t" x="108" y="406" fill="#c9a0a4">Needs the JIT iOS bans. Unsandboxed (running peers' native code = RCE by design). Tens of MB.</text>
+
+  <text class="t" x="40" y="462" fill="#98c379" font-weight="600">LLVM keeps its rightful job — inside the wasm runtime, making wasm fast — not as a distribution format.</text>
+  <text class="t" x="40" y="486" fill="#7f848e">Code mobility is a tier, not a switch: names by default · sandboxed wasm kernels when you must ship code · never raw native.</text>
+</svg>

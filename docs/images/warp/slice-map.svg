@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 840 400" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif">
+  <style>
+    .title{fill:#e5e7eb;font-size:19px;font-weight:700}
+    .sub{fill:#7f848e;font-size:12.5px}
+    .sl{font-size:13px;font-weight:700}
+    .d{font-size:10px;fill:#9aa0ab}
+    .zone{font-size:11px;font-weight:700;letter-spacing:.5px}
+    .edge{stroke:#5a6472;stroke-width:2;fill:none;marker-end:url(#m)}
+  </style>
+  <marker id="m" markerWidth="10" markerHeight="10" refX="7" refY="4" orient="auto"><path d="M0 0 L8 4 L0 8 z" fill="#5a6472"/></marker>
+  <rect fill="#161a22" width="840" height="400"/>
+  <text class="title" x="36" y="34">Epic slices — the dependency map</text>
+  <text class="sub" x="36" y="54">Green = buildable today · blue = the throwaway probe · amber = dream. Arrows mean "needs".</text>
+
+  <!-- REALITY band -->
+  <text class="zone" x="36" y="86" fill="#98c379">REALITY — needs no warp</text>
+  <rect x="36" y="94" width="360" height="56" rx="11" fill="#16201a" stroke="#98c379" stroke-width="1.5"/>
+  <text class="sl" x="54" y="120" fill="#98c379">A · Offline OTel exporter</text>
+  <text class="d" x="54" y="138">builds today on kuilt's anti-entropy · real users</text>
+  <text class="d" x="412" y="126" fill="#7f848e">detached from the graph ↓</text>
+
+  <!-- DREAM cluster -->
+  <text class="zone" x="36" y="184" fill="#e5c07b">THE DREAM — all gated on the spike</text>
+
+  <!-- nodes -->
+  <rect x="36"  y="196" width="214" height="56" rx="11" fill="#16202b" stroke="#61afef88" stroke-width="1.5"/>
+  <text class="sl" x="50" y="222" fill="#9ecbf0">0 · The spike (#680)</text>
+  <text class="d" x="50" y="240">minimal Warp · measure where CALM bites</text>
+
+  <rect x="318" y="166" width="196" height="50" rx="10" fill="#211c17" stroke="#e5c07b66"/>
+  <text class="sl" x="330" y="188" fill="#e5c07b">B · Type seam</text><text class="d" x="330" y="204">CoordinationFree/Coordinated</text>
+
+  <rect x="318" y="228" width="196" height="50" rx="10" fill="#211c17" stroke="#e5c07b66"/>
+  <text class="sl" x="330" y="250" fill="#e5c07b">C · Code mobility</text><text class="d" x="330" y="266">wasm kernels + bobbins</text>
+
+  <rect x="318" y="290" width="196" height="50" rx="10" fill="#211c17" stroke="#e5c07b66"/>
+  <text class="sl" x="330" y="312" fill="#e5c07b">E · Query planning</text><text class="d" x="330" y="328">Draft → Draft</text>
+
+  <rect x="588" y="197" width="196" height="50" rx="10" fill="#211c17" stroke="#e5c07b66"/>
+  <text class="sl" x="600" y="219" fill="#e5c07b">D · Compiler nodes</text><text class="d" x="600" y="235">tiered compilation</text>
+
+  <rect x="588" y="290" width="196" height="50" rx="10" fill="#211c17" stroke="#e5c07b66"/>
+  <text class="sl" x="600" y="312" fill="#e5c07b">F · Federated ML</text><text class="d" x="600" y="328">FedAvg demo</text>
+
+  <!-- edges -->
+  <path class="edge" d="M250 214 C 286 200, 296 195, 318 191"/>
+  <path class="edge" d="M250 226 H318"/>
+  <path class="edge" d="M250 240 C 286 252, 296 300, 318 312"/>
+  <path class="edge" d="M514 248 C 552 240, 562 226, 588 222"/>
+  <path class="edge" d="M514 262 C 552 280, 562 305, 588 312"/>
+
+  <text class="d" x="36" y="380" fill="#7f848e">F also uses the warp core — transitively, via C → 0. The lone real entry point is A.</text>
+</svg>
