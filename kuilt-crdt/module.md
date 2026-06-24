@@ -41,6 +41,43 @@ and converges any `Quilted` state across peers automatically.
 `MuxSeam` (`:kuilt-core`) multiplexes several CRDTs over one underlying `Seam`,
 routing frames by channel tag.
 
+## Minimal sparse fragment idiom
+
+Array-backed CRDTs should ship deltas as the **smallest possible fragment** of
+their backing array, not the full array. The mutator (`add`, `increment`, …)
+produces a `Patch` whose embedded state is nearly empty — only the cells that
+changed are non-zero. The join (`piece`) then applies that fragment via
+element-wise max (or OR, or whichever lattice operation applies), so a
+re-delivered or duplicate patch is safe and idempotent.
+
+All three probabilistic sketch types in the zoo implement this idiom, each in the
+encoding that fits its structure:
+
+| Type | Backing store | Delta encoding | Wire size per add |
+|------|--------------|---------------|-------------------|
+| `CountMinSketch` | `Long` matrix (`depth × width`) | `List<CellDelta(row, col, value)>` — one triple per hash row | O(depth) cells |
+| `HyperLogLog` | 6-bit-packed `ByteArray` | Same-length `ByteArray` with at most one non-zero 6-bit register slot | O(1) registers |
+| `BloomFilter` | `LongArray` of bit-words | Same-length `LongArray` with only touched words non-zero; `BloomFilterSerializer` encodes as `(wordIndex, wordValue)` pairs | O(hashCount) words |
+
+The three encodings are intentionally type-specific:
+- **CountMinSketch** needs `(row, col)` addressing — a 2D matrix cell requires
+  both dimensions.
+- **HyperLogLog** packs six bits per register; the "sparse" delta is structurally
+  a same-sized `ByteArray` with one slot set — zeros are structurally meaningful
+  and the packed accessor is non-trivial.
+- **BloomFilter** uses bit-word addressing (`wordIndex`); the sparse encoding lives
+  in the serializer layer (`BloomFilterSerializer`), not in the type.
+
+A `SparseArrayDelta<Cell>` shared helper would need to unify three incompatible
+carriers (`LongArray`, `ByteArray`, `List<CellDelta>`) or force them all into a
+single index+value pair encoding with incompatible value semantics. That helper
+would be more complex and less readable than the three clean type-specific forms,
+so no shared abstraction is introduced.
+
+**Guidance for future array-backed CRDTs:** produce a minimal-fragment delta by
+default; keep the encoding local to the type. Use `piece`'s element-wise operation
+to absorb any fragment safely.
+
 ## The `Causal` layer
 
 `ORSet`, `MVRegister`, `ORMap`, and `ResettableCounter` are all thin wrappers over `Causal<DotStore>`.
