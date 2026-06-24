@@ -28,6 +28,7 @@ delivery order or duplication.
 | `JsonCrdt` | Recursive JSON: ORMap objects, Rga arrays, MVRegister leaves | Via key remove |
 | `EphemeralMap` | Per-replica slot, higher clock wins; caller-driven TTL eviction | Via graceful leave |
 | `MovableTree` | Op-log union; Lamport-ordered replay with cycle prevention | Via reparent |
+| `BloomFilter` | Bitwise-OR of bit array; probabilistic membership, bounded FP rate | No (union-only) |
 
 ## Replication
 

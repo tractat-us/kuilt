@@ -42,6 +42,7 @@
             <toc-element topic="crdt-gset.md"/>
             <toc-element topic="crdt-orset.md"/>
             <toc-element topic="crdt-twophaseset.md"/>
+            <toc-element topic="crdt-bloomfilter.md"/>
         </toc-element>
         <toc-element toc-title="Registers">
             <toc-element topic="crdt-lwwregister.md"/>
