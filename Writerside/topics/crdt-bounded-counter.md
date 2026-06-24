@@ -18,37 +18,26 @@ quota(r) = initial(r) + received(r) - spent(r)
 
 Transfers move quota between replicas via a 2D matrix (one row per donor, one column per recipient), so two concurrent donors can both transfer to the same recipient without colliding.
 
-## Code examples
+## Code example
 
-**Initialise — per-replica quotas:**
-
+<!-- verbatim from kuilt-crdt/src/commonSamples/kotlin/us/tractat/kuilt/crdt/CrdtSamples.kt#sampleBoundedCounter -->
 ```kotlin
+val a = ReplicaId("A")
+val b = ReplicaId("B")
+
+var counter = BoundedCounter.init(mapOf(a to 5L, b to 3L))
+
+// A spends 2 from its own quota.
+val spendPatch = counter.trySpend(a, 2L) ?: error("quota sufficient")
+counter = counter.piece(spendPatch)
+check(counter.quota(a) == 3L)
+
+// B transfers 1 unit to A.
+val transferPatch = counter.transfer(from = b, to = a, amount = 1L) ?: error("quota sufficient")
+counter = counter.piece(transferPatch)
+check(counter.quota(a) == 4L)
+check(counter.quota(b) == 2L)
 ```
-{ src="../../kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/BoundedCounterTest.kt" include-symbol="initSetsPerReplicaQuotas" }
-
-**Spend within quota:**
-
-```kotlin
-```
-{ src="../../kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/BoundedCounterTest.kt" include-symbol="trySpendWithinQuotaProducesADeltaThatDebitsTheReplica" }
-
-**Spend over quota is denied:**
-
-```kotlin
-```
-{ src="../../kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/BoundedCounterTest.kt" include-symbol="trySpendOverQuotaIsDenied" }
-
-**Transfer quota between replicas:**
-
-```kotlin
-```
-{ src="../../kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/BoundedCounterTest.kt" include-symbol="transferMovesQuotaFromSenderToReceiver" }
-
-**Two concurrent donors both succeed (the 2D matrix preserves both):**
-
-```kotlin
-```
-{ src="../../kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/BoundedCounterTest.kt" include-symbol="concurrentMultiDonorTransfersConverge" }
 
 ## Active rebalancing
 

@@ -8,25 +8,21 @@ A map where each key is an `LWWRegister`. Concurrent writes to the same key are 
 
 `LWWMap` is a map from key to `LWWRegister<V>`. `piece` merges each key's register independently using the LWW rule. Keys with no conflict simply union.
 
-## Code examples
+## Code example
 
-**Set and read:**
-
+<!-- verbatim from kuilt-crdt/src/commonSamples/kotlin/us/tractat/kuilt/crdt/CrdtSamples.kt#sampleLWWMap -->
 ```kotlin
+val a = ReplicaId("A")
+val b = ReplicaId("B")
+
+val left = LWWMap.empty<String, Int>()
+    .set(a, timestamp = 1L, key = "score", value = 10)
+val right = LWWMap.empty<String, Int>()
+    .set(b, timestamp = 2L, key = "score", value = 20)
+
+val merged = left.piece(right)
+check(merged["score"] == 20)  // ts=2 wins for this key
 ```
-{ src="../../kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/LWWMapTest.kt" include-symbol="setReturnsTheValue" }
-
-**Per-key LWW: later timestamp wins:**
-
-```kotlin
-```
-{ src="../../kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/LWWMapTest.kt" include-symbol="perKeyLwwSemantics_laterWins" }
-
-**Different keys compose independently:**
-
-```kotlin
-```
-{ src="../../kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/LWWMapTest.kt" include-symbol="differentKeysComposeIndependently" }
 
 ## When to use
 

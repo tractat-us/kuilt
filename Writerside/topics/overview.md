@@ -6,11 +6,11 @@ It is a Kotlin Multiplatform library (JVM, Android, iOS, macOS, wasmJs).
 
 ## Three building blocks — pick what you need
 
-- **Connections** — one API for devices to find each other and exchange messages.
+- **Network Fabric** — one API for devices to find each other and exchange messages.
   kuilt calls this the network fabric (`Loom`/`Seam`).
   Swap WebSocket for LAN discovery or Bluetooth without touching your app logic.
 
-- **Replication** — shared data stays in sync, even when devices edit offline or at the same time.
+- **Replicated Data** — shared data stays in sync, even when devices edit offline or at the same time.
   Under the hood this uses CRDT data types such as `LWWMap`, `ORSet`, `Rga`, and `JsonCrdt` from `kuilt-crdt`.
   Add `Quilter` to propagate changes live over a `Seam`. For large sessions, a `GossipSeam` keeps the cost flat as peers grow.
 
@@ -20,7 +20,7 @@ It is a Kotlin Multiplatform library (JVM, Android, iOS, macOS, wasmJs).
 ## Pick by the guarantee you need
 
 - **Connect and send bytes** → add a fabric only.
-- **Shared state that survives offline edits and concurrent updates** → add Replication.
+- **Shared state that survives offline edits and concurrent updates** → add Replicated Data.
 - **Strict turn order or globally-agreed decisions** → add Consensus on top.
 
 Start with the weakest guarantee that keeps your product correct. Add stronger guarantees only where needed.

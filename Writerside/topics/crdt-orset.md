@@ -13,25 +13,22 @@ Every `add(replica, element)` tags the element with a unique dot `(replica, coun
 
 This is why add wins over a *concurrent* remove: a concurrent remove only witnessed dots it already had. A new dot minted by the concurrent add was never seen by the remover, so it survives.
 
-## Code examples
+## Code example
 
-**Add then contains:**
-
+<!-- verbatim from kuilt-crdt/src/commonSamples/kotlin/us/tractat/kuilt/crdt/CrdtSamples.kt#sampleORSet -->
 ```kotlin
+val a = ReplicaId("A")
+val b = ReplicaId("B")
+
+// Shared start: "alice" is present on both replicas.
+val start = ORSet.empty<String>().add(a, "alice")
+
+val alice = start.remove("alice")       // Alice concurrently removes
+val bob = start.add(b, "alice")         // Bob concurrently re-adds
+
+val merged = alice.piece(bob)
+check(merged.contains("alice"))         // add-wins
 ```
-{ src="../../kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/ORSetTest.kt" include-symbol="addThenContains" }
-
-**Add wins over concurrent remove:**
-
-```kotlin
-```
-{ src="../../kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/ORSetTest.kt" include-symbol="addWinsOverConcurrentRemove" }
-
-**Remove wins when it observed the add:**
-
-```kotlin
-```
-{ src="../../kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/ORSetTest.kt" include-symbol="removeWinsWhenNothingConcurrentlyAdded" }
 
 ## When to use
 

@@ -43,7 +43,7 @@ routing frames by channel tag.
 
 ## The `Causal` layer
 
-`ORSet`, `MVRegister`, and `ORMap` are all thin wrappers over `Causal<DotStore>`.
+`ORSet`, `MVRegister`, `ORMap`, and `ResettableCounter` are all thin wrappers over `Causal<DotStore>`.
 A `DotContext` accumulates witnessed `(ReplicaId, seq)` dots; a remove drops the
 dots currently on the element from the store while retaining them in the context,
 so a concurrent add on a replica that minted a *different* dot survives the merge.

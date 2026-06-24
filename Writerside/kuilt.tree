@@ -15,7 +15,7 @@
         <toc-element topic="quick-start.md"/>
     </toc-element>
 
-    <toc-element toc-title="Connections">
+    <toc-element toc-title="Network Fabric">
         <toc-element topic="contract.md"/>
         <toc-element topic="fabrics.md"/>
         <toc-element topic="fabric-kit.md"/>
@@ -30,7 +30,7 @@
         <toc-element topic="cluster-server-client.md"/>
     </toc-element>
 
-    <toc-element toc-title="Replication">
+    <toc-element toc-title="Replicated Data">
         <toc-element topic="crdt-overview.md"/>
         <toc-element toc-title="Counters">
             <toc-element topic="crdt-gcounter.md"/>
@@ -42,7 +42,6 @@
             <toc-element topic="crdt-gset.md"/>
             <toc-element topic="crdt-orset.md"/>
             <toc-element topic="crdt-twophaseset.md"/>
-            <toc-element topic="crdt-bloomfilter.md"/>
         </toc-element>
         <toc-element toc-title="Registers">
             <toc-element topic="crdt-lwwregister.md"/>
@@ -55,7 +54,6 @@
         <toc-element toc-title="Sequences">
             <toc-element topic="crdt-rga.md"/>
             <toc-element topic="crdt-fugue.md"/>
-            <toc-element topic="crdt-causal.md"/>
         </toc-element>
         <toc-element toc-title="Trees">
             <toc-element topic="crdt-movabletree.md"/>
@@ -67,13 +65,17 @@
             <toc-element topic="crdt-ephemeralmap.md"/>
         </toc-element>
         <toc-element toc-title="Sketches">
+            <toc-element topic="crdt-bloomfilter.md"/>
             <toc-element topic="crdt-hyperloglog.md"/>
             <toc-element topic="crdt-countminsketch.md"/>
         </toc-element>
         <toc-element toc-title="Live Replication">
             <toc-element topic="crdt-quilter.md"/>
         </toc-element>
-        <toc-element topic="crdt-custom.md"/>
+        <toc-element toc-title="Building Your Own">
+            <toc-element topic="crdt-causal.md"/>
+            <toc-element topic="crdt-custom.md"/>
+        </toc-element>
     </toc-element>
 
     <toc-element toc-title="Internals">

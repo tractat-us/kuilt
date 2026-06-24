@@ -8,17 +8,15 @@ A set that only grows. Elements can be added but never removed. Merging two `GSe
 
 `piece(a, b)` is `a.elements ∪ b.elements`. Set union is idempotent (re-adding something doesn't change the result), commutative, and associative — the three laws that guarantee convergence.
 
-## Code examples
+## Code example
 
-**Add and merge:**
-
+<!-- verbatim from kuilt-crdt/src/commonSamples/kotlin/us/tractat/kuilt/crdt/CrdtSamples.kt#sampleGSet -->
 ```kotlin
+var set = GSet.empty<String>()
+set = set.piece(set.add("alice"))
+set = set.piece(set.add("bob"))
+check(set.elements == setOf("alice", "bob"))
 ```
-{ src="../../kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/GSetTest.kt" include-symbol="addProducesADeltaThatAddsAnElement" }
-
-```kotlin
-```
-{ src="../../kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/GSetTest.kt" include-symbol="mergeIsUnion" }
 
 ## When to use
 

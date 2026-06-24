@@ -8,25 +8,22 @@ A map where keys can be added and removed, and values can be any CRDT. When two 
 
 Key presence is an ORSet of presence dots. Value merging is the value type's own `piece`. When a key is removed by one replica and re-added with a new value by another concurrently, the ORSet semantics apply: the new add's dot survives, so the key is present, and the value is the merge of both sides.
 
-## Code examples
+## Code example
 
-**Put and query:**
-
+<!-- verbatim from kuilt-crdt/src/commonSamples/kotlin/us/tractat/kuilt/crdt/CrdtSamples.kt#sampleORMap -->
 ```kotlin
+val a = ReplicaId("A")
+val b = ReplicaId("B")
+
+val start = ORMap.empty<String, GSet<String>>()
+    .put(a, "team", GSet.of("alice"))
+
+val alice = start.remove("team")                          // Alice removes the key
+val bob = start.put(b, "team", GSet.of("bob"))            // Bob concurrently adds
+
+val merged = alice.piece(bob)
+check("team" in merged.keys)                               // add-wins on the key
 ```
-{ src="../../kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/ORMapTest.kt" include-symbol="putThenContains" }
-
-**Values merge via their own `piece`:**
-
-```kotlin
-```
-{ src="../../kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/ORMapTest.kt" include-symbol="valuesMergeViaTheirOwnPiece" }
-
-**Add wins over concurrent remove:**
-
-```kotlin
-```
-{ src="../../kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/ORMapTest.kt" include-symbol="addWinsOverConcurrentRemove" }
 
 ## When to use
 

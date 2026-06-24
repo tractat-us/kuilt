@@ -10,25 +10,19 @@ Each write records `(timestamp, replicaId, value)`. `piece` takes the write with
 
 This is deterministic and commutative — two replicas starting from the same state will converge to the same write regardless of merge order.
 
-## Code examples
+## Code example
 
-**Set and read:**
-
+<!-- verbatim from kuilt-crdt/src/commonSamples/kotlin/us/tractat/kuilt/crdt/CrdtSamples.kt#sampleLWWRegister -->
 ```kotlin
+val a = ReplicaId("A")
+val b = ReplicaId("B")
+
+val left = LWWRegister.empty<String>().set(a, timestamp = 1L, value = "v1")
+val right = LWWRegister.empty<String>().set(b, timestamp = 2L, value = "v2")
+
+check(left.piece(right).value == "v2")  // ts=2 wins
+check(right.piece(left).value == "v2")  // commutative
 ```
-{ src="../../kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/LWWRegisterTest.kt" include-symbol="setThenRead" }
-
-**Later timestamp wins (commutative):**
-
-```kotlin
-```
-{ src="../../kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/LWWRegisterTest.kt" include-symbol="laterTimestampWins" }
-
-**Tie-break on replica id:**
-
-```kotlin
-```
-{ src="../../kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/LWWRegisterTest.kt" include-symbol="tieBreaksOnReplicaIdLexicographically" }
 
 ## When to use
 
