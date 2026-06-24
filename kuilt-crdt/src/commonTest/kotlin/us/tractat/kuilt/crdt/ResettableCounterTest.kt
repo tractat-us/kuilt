@@ -2,6 +2,7 @@ package us.tractat.kuilt.crdt
 
 import kotlinx.serialization.json.Json
 import kotlin.test.Test
+import us.tractat.kuilt.test.assertAll
 import kotlin.test.assertFailsWith
 import kotlin.test.assertEquals
 
@@ -137,6 +138,25 @@ class ResettableCounterTest {
         val delta = counter.increment(b, 5L)
         // The delta's store must contain exactly one dot — the freshly minted one.
         assertEquals(1, dotCount(delta.delta))
+    }
+
+    /**
+     * `reset` must return a minimal delta: empty store, context equal to the
+     * current state's context.  The `Causal` invariant guarantees every live dot
+     * is already in `causal.context`, so folding the dots in one-by-one is
+     * provably a no-op.  The delta carries exactly the existing context and
+     * nothing else.
+     */
+    @Test
+    fun resetDeltaIsMinimal() {
+        var counter = ResettableCounter.ZERO
+        repeat(10) { counter = counter.piece(counter.increment(a, 1L)) }
+
+        val delta = counter.reset()
+        assertAll(
+            { assertEquals(0, dotCount(delta.delta), "reset delta store must be empty") },
+            { assertEquals(counter.causal.context, delta.delta.causal.context, "reset delta context must equal state context") },
+        )
     }
 
     private fun dotCount(rc: ResettableCounter): Int = rc.causal.store.values.size
