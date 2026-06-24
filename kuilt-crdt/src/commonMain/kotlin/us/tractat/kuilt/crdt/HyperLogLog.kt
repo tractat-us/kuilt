@@ -1,6 +1,7 @@
 package us.tractat.kuilt.crdt
 
 import kotlinx.serialization.Serializable
+import us.tractat.kuilt.crdt.internal.Murmur3
 
 /**
  * A HyperLogLog cardinality estimator: a sketch that answers "how many distinct
@@ -49,13 +50,13 @@ public class HyperLogLog private constructor(
     /**
      * Add [value] to the sketch. Returns a new sketch; the receiver is unchanged.
      *
-     * The value is hashed with MurmurHash3 (32-bit). The top [precision] bits
+     * The value is hashed with [us.tractat.kuilt.crdt.internal.Murmur3] (32-bit). The top [precision] bits
      * select the register index; the remaining bits determine the position of the
      * leftmost `1` bit (plus one), which is the value stored if larger than the
      * current register entry.
      */
     public fun add(value: String): HyperLogLog {
-        val hash = murmur3Hash32(value)
+        val hash = Murmur3.hash32(value)
         val (index, leadingZeros) = indexAndRho(hash)
         if (leadingZeros <= registers[index]) return this
         val next = registers.copyOf()
@@ -185,87 +186,5 @@ public class HyperLogLog private constructor(
          */
         private fun ln(x: Double): Double = kotlin.math.ln(x)
 
-        // ── MurmurHash3 (32-bit, seed 0) ─────────────────────────────────────
-
-        /**
-         * MurmurHash3 32-bit for a UTF-8 string. Produces a stable, platform-
-         * independent hash for any input. Seed is fixed at 0 so the hash is
-         * deterministic across all runs and targets.
-         *
-         * Implementation follows the canonical public-domain reference by
-         * Austin Appleby (https://github.com/aappleby/smhasher).
-         */
-        internal fun murmur3Hash32(key: String, seed: Int = 0): Int {
-            val data = key.encodeToByteArray()
-            return murmur3Hash32Bytes(data, seed)
-        }
-
-        internal fun murmur3Hash32Bytes(data: ByteArray, seed: Int = 0): Int {
-            val len = data.size
-            val nblocks = len / 4
-            var h1 = seed
-
-            val c1 = 0xcc9e2d51.toInt()
-            val c2 = 0x1b873593
-
-            // Body — process 4-byte blocks
-            for (i in 0 until nblocks) {
-                val base = i * 4
-                var k1 = (data[base].toInt() and 0xFF) or
-                    ((data[base + 1].toInt() and 0xFF) shl 8) or
-                    ((data[base + 2].toInt() and 0xFF) shl 16) or
-                    ((data[base + 3].toInt() and 0xFF) shl 24)
-
-                k1 = k1 * c1
-                k1 = rotl32(k1, 15)
-                k1 = k1 * c2
-
-                h1 = h1 xor k1
-                h1 = rotl32(h1, 13)
-                h1 = h1 * 5 + 0xe6546b64.toInt()
-            }
-
-            // Tail — remaining bytes
-            val tail = nblocks * 4
-            var k1 = 0
-
-            @Suppress("KotlinConstantConditions")
-            when (len and 3) {
-                3 -> {
-                    k1 = k1 xor ((data[tail + 2].toInt() and 0xFF) shl 16)
-                    k1 = k1 xor ((data[tail + 1].toInt() and 0xFF) shl 8)
-                    k1 = k1 xor (data[tail].toInt() and 0xFF)
-                }
-                2 -> {
-                    k1 = k1 xor ((data[tail + 1].toInt() and 0xFF) shl 8)
-                    k1 = k1 xor (data[tail].toInt() and 0xFF)
-                }
-                1 -> k1 = k1 xor (data[tail].toInt() and 0xFF)
-            }
-            if (len and 3 != 0) {
-                k1 = k1 * c1
-                k1 = rotl32(k1, 15)
-                k1 = k1 * c2
-                h1 = h1 xor k1
-            }
-
-            // Finalization mix
-            h1 = h1 xor len
-            h1 = fmix32(h1)
-
-            return h1
-        }
-
-        private fun rotl32(x: Int, r: Int): Int = (x shl r) or (x ushr (32 - r))
-
-        private fun fmix32(h: Int): Int {
-            var h1 = h
-            h1 = h1 xor (h1 ushr 16)
-            h1 = h1 * 0x85ebca6b.toInt()
-            h1 = h1 xor (h1 ushr 13)
-            h1 = h1 * 0xc2b2ae35.toInt()
-            h1 = h1 xor (h1 ushr 16)
-            return h1
-        }
     }
 }

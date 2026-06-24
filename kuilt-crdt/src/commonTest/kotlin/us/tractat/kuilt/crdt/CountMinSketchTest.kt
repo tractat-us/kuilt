@@ -147,19 +147,19 @@ class CountMinSketchTest {
      * invalidated — every stored estimate silently maps to the wrong cells after
      * an upgrade. Any change to the hash algorithm requires a migration strategy.
      *
-     * Algorithm: multiply-shift, seed = (row+1)×2654435761L, LCG body (multiplier
-     * 6364136223846793005L), finalisation mix. Input encoding: UTF-8 bytes.
+     * Algorithm: MurmurHash3_x86_32(item, seed = rowIndex) mod width.
+     * Vectors independently verified against the canonical smhasher reference.
      */
     @Test
     fun hashStabilityGoldenVector() {
         assertAll(
-            { assertEquals(8, CountMinSketch.columnFor("hello".encodeToByteArray(), row = 0, width = 16)) },
-            { assertEquals(4, CountMinSketch.columnFor("hello".encodeToByteArray(), row = 1, width = 16)) },
-            { assertEquals(7, CountMinSketch.columnFor("hello".encodeToByteArray(), row = 2, width = 16)) },
-            { assertEquals(6, CountMinSketch.columnFor("hello".encodeToByteArray(), row = 3, width = 16)) },
-            { assertEquals(2, CountMinSketch.columnFor("world".encodeToByteArray(), row = 0, width = 8)) },
-            { assertEquals(4, CountMinSketch.columnFor("world".encodeToByteArray(), row = 1, width = 8)) },
-            { assertEquals(1, CountMinSketch.columnFor("world".encodeToByteArray(), row = 2, width = 8)) },
+            { assertEquals(7, CountMinSketch.columnFor("hello", row = 0, width = 16)) },
+            { assertEquals(13, CountMinSketch.columnFor("hello", row = 1, width = 16)) },
+            { assertEquals(13, CountMinSketch.columnFor("hello", row = 2, width = 16)) },
+            { assertEquals(5, CountMinSketch.columnFor("hello", row = 3, width = 16)) },
+            { assertEquals(3, CountMinSketch.columnFor("world", row = 0, width = 8)) },
+            { assertEquals(7, CountMinSketch.columnFor("world", row = 1, width = 8)) },
+            { assertEquals(7, CountMinSketch.columnFor("world", row = 2, width = 8)) },
         )
     }
 
