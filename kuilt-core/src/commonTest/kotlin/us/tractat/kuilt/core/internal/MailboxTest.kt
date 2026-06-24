@@ -55,4 +55,21 @@ class MailboxTest {
         box.deliver(frame(1))
         assertFailsWith<FrameOverflow> { box.deliver(frame(2)) }
     }
+
+    @Test
+    fun reliableDeliverToAClosedMailboxIsADropNotAnError() = runTest {
+        // A receiver that closed concurrently (left the mesh) must not surface an error to the
+        // broadcasting sender — it is a drop, matching a peer that went away.
+        val box = Mailbox(DeliveryPolicy.Reliable)
+        box.close()
+        box.deliver(frame(1)) // must not throw ClosedSendChannelException
+    }
+
+    @Test
+    fun failDeliverToAClosedMailboxIsADropNotOverflow() = runTest {
+        // A closed channel is "receiver gone", not "buffer full" — FAIL must not conflate them.
+        val box = Mailbox(DeliveryPolicy(capacity = 1, overflow = Overflow.FAIL))
+        box.close()
+        box.deliver(frame(1)) // must not throw FrameOverflow
+    }
 }

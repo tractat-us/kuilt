@@ -2,6 +2,7 @@ package us.tractat.kuilt.core.internal
 
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.channels.ClosedSendChannelException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.receiveAsFlow
 import us.tractat.kuilt.core.DeliveryPolicy
@@ -27,12 +28,22 @@ internal class Mailbox(private val policy: DeliveryPolicy) {
 
     suspend fun deliver(frame: Swatch) {
         when (policy.overflow) {
-            Overflow.FAIL ->
-                if (!channel.trySend(frame).isSuccess) {
+            Overflow.FAIL -> {
+                val result = channel.trySend(frame)
+                // A closed channel means the receiver went away (left the mesh) — a drop, like
+                // any departed peer. Only a genuinely full buffer is the FAIL signal.
+                if (result.isFailure && !result.isClosed) {
                     throw FrameOverflow("delivery buffer full (capacity=${policy.capacity})")
                 }
-            // SUSPEND suspends; DROP_* never suspend (the channel handles overflow).
-            else -> channel.send(frame)
+            }
+            // SUSPEND suspends; DROP_* never suspend (the channel handles overflow). A receiver
+            // that closes concurrently races the send — it is gone, so the frame is dropped (as
+            // the pre-bounded `trySend` did) rather than surfaced to the broadcasting caller.
+            else -> try {
+                channel.send(frame)
+            } catch (e: ClosedSendChannelException) {
+                // receiver closed concurrently — drop
+            }
         }
     }
 
@@ -45,5 +56,5 @@ private fun Overflow.toBufferOverflow(): BufferOverflow = when (this) {
     Overflow.SUSPEND -> BufferOverflow.SUSPEND
     Overflow.DROP_OLDEST -> BufferOverflow.DROP_OLDEST
     Overflow.DROP_LATEST -> BufferOverflow.DROP_LATEST
-    Overflow.FAIL -> BufferOverflow.SUSPEND // unreachable; FAIL handled in deliver()
+    Overflow.FAIL -> error("FAIL is enforced in deliver(); toBufferOverflow() must not be called for it")
 }

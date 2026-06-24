@@ -12,7 +12,8 @@ class DeliveryPolicyTest {
     }
 
     @Test
-    fun defaultCapacityIsBoundedAndPositive() {
-        assertEquals(true, DeliveryPolicy.Reliable.capacity in 1..1_000_000)
+    fun defaultCapacityIsTheDocumentedBoundedSize() {
+        assertEquals(256, DeliveryPolicy.DEFAULT_CAPACITY, "the bounded default — never UNLIMITED")
+        assertEquals(256, DeliveryPolicy.Reliable.capacity)
     }
 }
