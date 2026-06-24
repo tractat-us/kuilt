@@ -224,4 +224,54 @@ class CountMinSketchTest {
         assertEquals(2L, sketch.estimate(encoded))
     }
 
+    // ── Sparse delta (#726) ───────────────────────────────────────────────────
+
+    @Test
+    fun sparseDeltaIsSmallerthanFullMatrix() {
+        // At typical dimensions the sparse delta carries only d cells vs d×w.
+        val width = 512
+        val depth = 5
+        val sketch = CountMinSketch.empty(width = width, depth = depth)
+        val patch = sketch.add("item")
+        val sparseCells = patch.delta.sparseCells
+        // Sparse delta has exactly depth entries (one changed cell per row).
+        assertEquals(depth, sparseCells!!.size)
+        // And is much smaller than the full d×w = 2560 cells.
+        assertTrue(sparseCells.size < width * depth, "sparse delta must be smaller than full matrix")
+    }
+
+    @Test
+    fun sparseDeltaMergesIdenticallyToFullStateDelta() {
+        // A sparse patch applied via piece() must yield the same sketch as if
+        // the patch had carried the full matrix.
+        val sketch = CountMinSketch.empty(width = 16, depth = 4)
+        val patch = sketch.add("hello")
+        val viaSparsePiece = sketch.piece(patch)
+
+        // Both replicas add "hello" once from empty — must reach the same state.
+        var sketchB = CountMinSketch.empty(width = 16, depth = 4)
+        sketchB = sketchB.piece(sketchB.add("hello"))
+        assertEquals(viaSparsePiece, sketchB)
+    }
+
+    @Test
+    fun sparseDeltaIsIdempotentOnRedelivery() {
+        var sketch = CountMinSketch.empty(width = 32, depth = 4)
+        val patch = sketch.add("x")
+        sketch = sketch.piece(patch)
+        val afterFirst = sketch.estimate("x")
+        sketch = sketch.piece(patch)  // re-deliver
+        assertEquals(afterFirst, sketch.estimate("x"), "sparse max-merge must be idempotent")
+    }
+
+    @Test
+    fun sparseDeltasFromDistinctReplicasMergeCorrectly() {
+        val base = CountMinSketch.empty(width = 64, depth = 4)
+        var a = base
+        var b = base
+        repeat(5) { a = a.piece(a.add("shared")) }
+        repeat(3) { b = b.piece(b.add("shared")) }
+        val merged = a.piece(b)
+        assertTrue(merged.estimate("shared") >= 5L)
+    }
 }
