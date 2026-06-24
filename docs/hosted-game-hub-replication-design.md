@@ -23,6 +23,29 @@ hidden information is dealt **publicly** (encrypted) via `kuilt-deal`.
   one connection (to the server). The design intent — and what the data flow actually is —
   is to make the **hub→client** flow prompt so clients never need to talk to each other.
 
+## Deployment topology (scope — regime 1 only)
+
+This design targets the case where **every participant holds a direct, reliable link to one
+server** (each device opens a WebSocket to the hub). Device heterogeneity is then invisible —
+an iPhone, a browser, and a desktop all speak WebSocket to the server identically, and the
+topology is a flat reliable star. This is fireworks' deployment today (single Fly.io server).
+
+**Known and explicitly out of scope** — heterogeneous / peer-to-peer topologies, where the
+substrate forms a **tree or partial mesh** instead of a flat star:
+
+- a participant reachable only *through another participant* (e.g. a `kuilt-webrtc` browser
+  peer behind a peer-relay, or a `kuilt-nearby` iPhone reachable only via another iPhone) →
+  **multi-hop**, spoke↔spoke relaying required;
+- no universally-reachable node (pure P2P) → **partial mesh over lossy links**.
+
+These are real, first-class kuilt targets (the `kuilt-nearby` / `kuilt-webrtc` modules exist),
+**not** corner cases — but they are served by the **existing gossip overlay** (`GossipSeam` with
+the **random-k-out** active-view policy + anti-entropy) and the Escalations below, *not* by this
+baseline. The unifier is the epic [#794](https://github.com/tractat-us/kuilt/issues/794)
+**active-view policy**: `FullFanout` = this server star; random-k-out = the P2P mesh (already
+built); a future `TwoTier`/tree policy = the multi-hop case. We are aware of these regimes and
+are deliberately deferring them.
+
 ## Design
 
 ### Two transport concerns, no classes

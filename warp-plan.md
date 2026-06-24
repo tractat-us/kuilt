@@ -22,15 +22,28 @@ assignment + an `ORMap` dedup backstop + liveness-driven failover**. The cost re
 per-task to per-membership-change (CALM), which is the whole win when tasks ≫ membership churn.
 Slice A (offline OTel exporter) already shipped — the detached "reality" component.
 
-## Phase 0 — answer (a): measure the exact viable regime  ⏳ RUNNING
+## Phase 0 — answer (a): measured  ✅ GO (#796, v4)
 
-v4 of the spike (#796) adds **membership-propagation lag** (the v3 gap: membership converged
-instantly, so the failure mode never appeared). It sweeps **churn × convergence-lag** and reports
-the **crossover contour** — the threshold below which consistent hashing stays ~0-dup. 
+v4 fixed the v3 zero-window bug (assignment now runs *before* gossip, so peers genuinely disagree on
+the ring during the convergence window) + streaming workload. The measured crossover:
 
-**Go/no-go gate:** if the viable regime (low churn × fast gossip) covers a real target workload
-(it does for sessions/server fleets; the open question is high-churn mobile/browser), **promote to
-Phase 1.** If even stable membership is fragile, stop and keep warp a documented dream.
+| Ring source | Dup rate | Coordination | Viable to |
+|---|---|---|---|
+| **D-Strong** (raft-backed ring) | **~0** | **0.5–2 msgs/task amortized** | **~15–20% churn** |
+| D-Gossip (eventual ring) | 0%→4.6%→9.1%→10–29% (0/5/10/20% churn) | ~0/task | only **<5% churn** |
+| (ref) Consensus per-task | 0 | 6–10 msgs/task | any |
+| (ref) Optimistic | 16–69% | 0 | never clean |
+
+**The verdict — GO, with a sharpened design:** the winner is **consistent hashing over a
+consensus-backed (raft) ring** — it amortizes consensus to **0.5–2 msgs/task** (because membership
+changes are rarer than tasks) for **near-zero duplicates**, ~3–5× cheaper than per-task consensus,
+holding to ~15–20% churn. The cheap gossip-ring is a lower-cost option only for very stable
+membership (<5% churn). High-churn mobile/browser fleets (peers in/out every few rounds) fall
+outside even D-Strong — those want a per-task strategy or accept the waste.
+
+**Design consequence for Phase 1:** the ring source stays pluggable, but **default to raft-membership
+(D-Strong)** — that's the measured sweet spot. (Remaining caveat: "% churn per round" needs a
+round→wall-time mapping to translate to real join/leave rates; note it, don't block on it.)
 
 ## Phase 1 — graduate slice 0 to a real foundation  (the first scheduled warp work)
 
