@@ -31,7 +31,7 @@ import kotlinx.serialization.Serializable
  */
 @Serializable
 public class ResettableCounter private constructor(
-    private val causal: Causal<DotFun<Long>>,
+    internal val causal: Causal<DotFun<Long>>,
 ) : Quilted<ResettableCounter> {
 
     /** The counter's current value: sum of all live increment amounts. */
@@ -47,9 +47,7 @@ public class ResettableCounter private constructor(
     public fun increment(replica: ReplicaId, by: Long = 1L): Patch<ResettableCounter> {
         require(by >= 1L) { "ResettableCounter increment must be positive, was $by" }
         val dot = causal.context.nextDot(replica)
-        val newValues = causal.store.values + (dot to by)
-        val newContext = causal.context.add(dot)
-        return Patch(ResettableCounter(Causal(DotFun(newValues), newContext)))
+        return Patch(ResettableCounter(Causal(DotFun(mapOf(dot to by)), DotContext.of(dot))))
     }
 
     /**
