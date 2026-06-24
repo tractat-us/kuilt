@@ -2,6 +2,8 @@ import org.gradle.accessors.dm.LibrariesForLibs
 import org.jetbrains.kotlin.gradle.ExperimentalKotlinGradlePluginApi
 import org.jetbrains.kotlin.gradle.ExperimentalWasmDsl
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+import org.jetbrains.kotlin.gradle.targets.js.testing.KotlinJsTest
+import org.jetbrains.kotlin.gradle.targets.js.testing.karma.KotlinKarma
 
 plugins {
     id("kuilt.publish")
@@ -152,6 +154,33 @@ afterEvaluate {
     listOf("detektBaselineMetadataCommonMain", "detektBaselineJvmMain").forEach { name ->
         tasks.findByName(name)?.let { detektBaselineLifecycle.dependsOn(it) }
     }
+}
+
+// Generate the shared wasmJs Mocha/Karma timeout configuration into the build
+// directory so that every module gets an adequate per-test and socket budget by
+// default. The Gradle `useMocha { timeout }` DSL does NOT reach the wasmJs
+// *browser* task (it configures the node task instead) — hence the karma.config.d
+// approach. Rather than a per-module source file (which caused three identical
+// copies to accumulate), the convention plugin materialises one canonical copy in
+// each module's build directory and redirects KotlinKarma.configDirectory there.
+//
+// Why afterEvaluate: KGP calls `test.useKarma { … }` (which sets testFramework)
+// inside its own `project.whenEvaluated` block, registered when `browser()` is
+// called above. Gradle processes afterEvaluate/whenEvaluated in FIFO order, so KGP's
+// callback fires before this one — testFramework is already a KotlinKarma instance
+// by the time we reach this block.
+val generateKarmaTimeouts = tasks.register<GenerateKarmaTimeouts>("generateKarmaTimeouts") {
+    group = "build setup"
+    description = "Writes the shared wasmJs Mocha/Karma timeout config into build/karma-config.d/."
+    outputFile.set(layout.buildDirectory.file("karma-config.d/timeouts.js"))
+}
+
+afterEvaluate {
+    val wasmBrowserTest = tasks.findByName("wasmJsBrowserTest") as? KotlinJsTest ?: return@afterEvaluate
+    val karma = wasmBrowserTest.testFramework as? KotlinKarma ?: return@afterEvaluate
+    val configDir = layout.buildDirectory.dir("karma-config.d").get().asFile
+    karma.useConfigDirectory(configDir)
+    wasmBrowserTest.dependsOn(generateKarmaTimeouts)
 }
 
 // Serialize wasmJsBrowserTest across the whole build. `registerIfAbsent` makes
