@@ -68,7 +68,7 @@ internal class NearbySeam(
     private val _state = MutableStateFlow<SeamState>(SeamState.Weaving)
     override val state: StateFlow<SeamState> = _state.asStateFlow()
 
-    private val spool = Spool(policy)
+    private val spool = Spool<Swatch>(policy)
     override val incoming: Flow<Swatch> = spool.incoming
 
     // Guards only the `closed` flag. All `endpointPeers` access uses `endpointPeersMutex`.
