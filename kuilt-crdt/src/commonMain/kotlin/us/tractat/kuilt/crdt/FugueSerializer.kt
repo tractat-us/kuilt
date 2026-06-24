@@ -3,6 +3,7 @@ package us.tractat.kuilt.crdt
 import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.SerializationException
+import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.builtins.SetSerializer
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.descriptors.SerialDescriptor
@@ -27,6 +28,7 @@ internal class FugueSerializer<V>(vSerializer: KSerializer<V>) : KSerializer<Fug
 
     private val opSerializer: KSerializer<FugueOp<V>> = FugueOpSerializer(vSerializer)
     private val opsSerializer: KSerializer<Set<FugueOp<V>>> = SetSerializer(opSerializer)
+    private val opsListSerializer: KSerializer<List<FugueOp<V>>> = ListSerializer(opSerializer)
     private val longSerializer: KSerializer<Long> = Long.serializer()
 
     override val descriptor: SerialDescriptor = buildClassSerialDescriptor("Fugue") {
@@ -34,9 +36,23 @@ internal class FugueSerializer<V>(vSerializer: KSerializer<V>) : KSerializer<Fug
         element("lamport", longSerializer.descriptor)
     }
 
+    /**
+     * Serialize ops in canonical [FugueId] ascending order so that two replicas
+     * holding the same logical state (same op set, different delivery order) produce
+     * identical bytes. [FugueId] is [Comparable] — ascending lamport, then replicaId.
+     *
+     * Both [FugueOp.Insert] and [FugueOp.Remove] carry an `id` field; for removes
+     * the id is the tombstoned element, which also serves as a stable sort key.
+     */
     override fun serialize(encoder: Encoder, value: Fugue<V>): Unit = encoder.encodeStructure(descriptor) {
-        encodeSerializableElement(descriptor, 0, opsSerializer, value.ops)
+        val sortedOps = value.ops.sortedWith(compareBy { opId(it) })
+        encodeSerializableElement(descriptor, 0, opsListSerializer, sortedOps)
         encodeLongElement(descriptor, 1, value.lamport)
+    }
+
+    private fun opId(op: FugueOp<V>): FugueId = when (op) {
+        is FugueOp.Insert -> op.id
+        is FugueOp.Remove -> op.id
     }
 
     override fun deserialize(decoder: Decoder): Fugue<V> = decoder.decodeStructure(descriptor) {
