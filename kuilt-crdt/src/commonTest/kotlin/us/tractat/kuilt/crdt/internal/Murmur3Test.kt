@@ -155,6 +155,122 @@ class Murmur3Test {
         )
     }
 
+    // ── One-block body + each tail length: pins loop-then-tail interaction ──────
+    //
+    // The 0-block tests above (tailLength1/2/3) exercise the tail in isolation.
+    // These exercise the body loop AND the tail together, catching bugs that only
+    // surface when the two mix (e.g. off-by-one in the block-end offset calculation).
+
+    @Test
+    fun oneBlockPlusOneByteTail() {
+        // "abcde" (5 bytes: 1 block "abcd" + 1-byte tail "e") → 0xE89B9AF6 = -392455434 (signed)
+        assertEquals(-392455434, Murmur3.hash32("abcde"))
+    }
+
+    @Test
+    fun oneBlockPlusTwoByteTail() {
+        // "abcdef" (6 bytes: 1 block + 2-byte tail) → 0x6181C085 = 1635893381
+        assertEquals(1635893381, Murmur3.hash32("abcdef"))
+    }
+
+    @Test
+    fun oneBlockPlusThreeByteTail() {
+        // "abcdefg" (7 bytes: 1 block + 3-byte tail) → 0x883C9B06 = -2009294074 (signed)
+        assertEquals(-2009294074, Murmur3.hash32("abcdefg"))
+    }
+
+    // ── High-bit (≥ 0x80) bytes: pins the `and 0xFF` masks in readLittleEndianInt
+    //    and readTail. Kotlin Byte is signed; without the mask, 0xFF is sign-extended
+    //    to 0xFFFFFFFF, corrupting the mix. Each test places 0xFF in a different
+    //    byte position so every shift/OR path is exercised. ────────────────────────
+
+    @Test
+    fun highBitInBlockBytePosition0() {
+        // 0xFF in little-endian position 0 of the block → 0xEC306C59 = -332370855 (signed)
+        assertEquals(-332370855, Murmur3.hash32(byteArrayOf(0xFF.toByte(), 0, 0, 0)))
+    }
+
+    @Test
+    fun highBitInBlockBytePosition1() {
+        // 0xFF in little-endian position 1 → 0x00305D31 = 3169585
+        assertEquals(3169585, Murmur3.hash32(byteArrayOf(0, 0xFF.toByte(), 0, 0)))
+    }
+
+    @Test
+    fun highBitInBlockBytePosition2() {
+        // 0xFF in little-endian position 2 → 0x36226E67 = 908226151
+        assertEquals(908226151, Murmur3.hash32(byteArrayOf(0, 0, 0xFF.toByte(), 0)))
+    }
+
+    @Test
+    fun highBitInBlockBytePosition3() {
+        // 0xFF in little-endian position 3 → 0x82D34F5D = -2100080803 (signed)
+        assertEquals(-2100080803, Murmur3.hash32(byteArrayOf(0, 0, 0, 0xFF.toByte())))
+    }
+
+    @Test
+    fun allHighBitBlock() {
+        // All four bytes 0xFF in one block — maximum unsigned value per lane.
+        // → 0x76293B50 = 1982413648
+        assertEquals(1982413648, Murmur3.hash32(byteArrayOf(0xFF.toByte(), 0xFF.toByte(), 0xFF.toByte(), 0xFF.toByte())))
+    }
+
+    @Test
+    fun highBitInTailLength1() {
+        // Block "abcd" + 1-byte tail 0xFF — pins `and 0xFF` in readTail at remaining=1.
+        // → 0x3825DAFC = 942004988
+        assertEquals(942004988, Murmur3.hash32(byteArrayOf(0x61, 0x62, 0x63, 0x64, 0xFF.toByte())))
+    }
+
+    @Test
+    fun highBitInTailLength2() {
+        // Block "abcd" + 2-byte tail [0xFF, 0xFF] — pins `and 0xFF` at remaining=2.
+        // → 0xE3327A6A = -483231126 (signed)
+        assertEquals(-483231126, Murmur3.hash32(byteArrayOf(0x61, 0x62, 0x63, 0x64, 0xFF.toByte(), 0xFF.toByte())))
+    }
+
+    @Test
+    fun highBitInTailLength3() {
+        // Block "abcd" + 3-byte tail [0xFF, 0xFF, 0xFF] — pins `and 0xFF` at remaining=3.
+        // → 0xEFB1C5DC = -273562148 (signed)
+        assertEquals(-273562148, Murmur3.hash32(byteArrayOf(0x61, 0x62, 0x63, 0x64, 0xFF.toByte(), 0xFF.toByte(), 0xFF.toByte())))
+    }
+
+    // ── k1 == 0 guard: pins the `if (k1 != 0)` branch being false for a non-empty
+    //    tail. When the tail bytes all XOR to zero the tail-mix is correctly skipped
+    //    (it would be a no-op anyway, but the guard must not corrupt the output). ──
+
+    @Test
+    fun zeroTailByteSkipsMix() {
+        // Block "abcd" + 1-byte tail 0x00.
+        // readTail returns 0; the `if (k1 != 0)` branch is NOT taken.
+        // Result must differ from hash("abcd") only by the `xor len` in finalization
+        // (len=5 vs 4), not by any tail mixing. → 0xD8C0D9EA = -658449942 (signed)
+        assertEquals(-658449942, Murmur3.hash32(byteArrayOf(0x61, 0x62, 0x63, 0x64, 0)))
+    }
+
+    // ── Long input (≥ 64 bytes): exercises many body-loop iterations ─────────────
+
+    @Test
+    fun longInput() {
+        // 64 bytes of 'a' (0x61) — 16 body blocks, no tail.
+        // → 0xEE9D2997 = -291690089 (signed)
+        assertEquals(-291690089, Murmur3.hash32(ByteArray(64) { 0x61.toByte() }))
+    }
+
+    // ── Additional non-zero seeds: confirms seed actually propagates through ─────
+    //    the entire computation (fmix, block mixing), not just the initial state. ─
+
+    @Test
+    fun thirdDistinctNonZeroSeed() {
+        assertAll(
+            // hash("hello", 1) → 0xBB4ABCAD = -1152729939 (signed)
+            { assertEquals(-1152729939, Murmur3.hash32("hello", seed = 1)) },
+            // hash("hello", 1588444911) → 0x5D3CB105 = 1564258565
+            { assertEquals(1564258565, Murmur3.hash32("hello", seed = 1588444911)) },
+        )
+    }
+
     // ── Determinism ──────────────────────────────────────────────────────────
 
     @Test

@@ -132,19 +132,19 @@ class HyperLogLogTest {
     // ── Hash stability (golden vectors) ──────────────────────────────────────
 
     /**
-     * Pin the MurmurHash3-32 output against canonical smhasher reference values
-     * (seed = 0, little-endian, Austin Appleby public-domain reference).
-     * A change to the hash function that breaks these vectors breaks cross-platform
-     * serialisation stability, so this test must stay pinned.
+     * Adding the same value twice is idempotent — the HyperLogLog register state
+     * must not change, so the returned instance is identical to the result of one
+     * add (join-semilattice idempotence).
+     *
+     * The Murmur3 golden vectors that previously lived here have moved to
+     * [us.tractat.kuilt.crdt.internal.Murmur3Test] — the consolidated hash is now
+     * tested at its own level.
      */
     @Test
-    fun murmur3GoldenVectors() {
-        assertAll(
-            { assertEquals(0x00000000, HyperLogLog.murmur3Hash32("")) },
-            { assertEquals(0x3c2569b2.toInt(), HyperLogLog.murmur3Hash32("a")) },
-            { assertEquals(0xb3dd93fa.toInt(), HyperLogLog.murmur3Hash32("abc")) },
-            { assertEquals(0x248bfa47, HyperLogLog.murmur3Hash32("hello")) },
-        )
+    fun addingDuplicateIsIdempotent() {
+        val once = HyperLogLog.empty().add("hello")
+        val twice = once.add("hello")
+        assertEquals(once, twice)
     }
 
     // ── Serialization ─────────────────────────────────────────────────────────

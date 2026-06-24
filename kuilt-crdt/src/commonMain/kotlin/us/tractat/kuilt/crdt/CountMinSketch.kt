@@ -63,6 +63,11 @@ public class CountMinSketch private constructor(
     private val cells: Array<LongArray>,
 ) : Quilted<CountMinSketch> {
 
+    init {
+        require(width >= 1) { "width must be ≥ 1, was $width" }
+        require(depth >= 1) { "depth must be ≥ 1, was $depth" }
+    }
+
     /**
      * Add one occurrence of [item] to this sketch. Returns a [Patch] carrying
      * the incremented delta; the receiver is unchanged.
