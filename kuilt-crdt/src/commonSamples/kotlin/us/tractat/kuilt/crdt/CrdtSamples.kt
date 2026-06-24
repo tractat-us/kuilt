@@ -270,6 +270,41 @@ internal fun sampleBloomFilter() {
     check(!replicaA.mightContain("carol") || true)  // might be a false positive — that's expected
 }
 
+// ── Fugue ─────────────────────────────────────────────────────────────────────
+
+/**
+ * Concurrent runs inserted at the same position stay contiguous after merge.
+ * This is the property that distinguishes Fugue from RGA.
+ */
+@Suppress("unused")
+internal fun sampleFugue() {
+    val a = ReplicaId("A")
+    val b = ReplicaId("B")
+
+    // Replica A builds a run: "a1", "a2", "a3" (each prepended before the prior front).
+    val (fA1, opA1) = Fugue.empty<String>().insertAt(a, 0, "a1")
+    val (fA2, opA2) = fA1.insertAt(a, 0, "a2")
+    val (fA3, opA3) = fA2.insertAt(a, 0, "a3")
+
+    // Replica B independently builds "b1", "b2" at the same position.
+    val (fB1, opB1) = Fugue.empty<String>().insertAt(b, 0, "b1")
+    val (fB2, opB2) = fB1.insertAt(b, 0, "b2")
+
+    // Merge all ops into both replicas.
+    val mergedByA = fA3.apply(opB1).apply(opB2)
+    val mergedByB = fB2.apply(opA1).apply(opA2).apply(opA3)
+
+    // Both converge to the same order.
+    check(mergedByA.toList() == mergedByB.toList()) { "Convergence: both must agree" }
+
+    val merged = mergedByA.toList()
+    // The A-run and B-run each form a contiguous block — no interleaving.
+    val aIndices = merged.mapIndexedNotNull { i, v -> if (v.startsWith("a")) i else null }
+    val bIndices = merged.mapIndexedNotNull { i, v -> if (v.startsWith("b")) i else null }
+    check(aIndices == (aIndices.first()..aIndices.last()).toList()) { "A run is contiguous: $merged" }
+    check(bIndices == (bIndices.first()..bIndices.last()).toList()) { "B run is contiguous: $merged" }
+}
+
 // ── Rga ───────────────────────────────────────────────────────────────────────
 
 /** Concurrent inserts converge to a deterministic order. */

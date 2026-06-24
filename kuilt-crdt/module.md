@@ -25,6 +25,7 @@ delivery order or duplication.
 | `BoundedCounter` | Escrow-quota counter; spend within quota | Via transfer |
 | `ResettableCounter` | Causal: concurrent increment survives reset | Via observed-reset |
 | `Rga` | Op-log union; Lamport-ordered insert wins | Via tombstone |
+| `Fugue` | Op-log union; tree-based maximal non-interleaving ordering | Via tombstone |
 | `JsonCrdt` | Recursive JSON: ORMap objects, Rga arrays, MVRegister leaves | Via key remove |
 | `EphemeralMap` | Per-replica slot, higher clock wins; caller-driven TTL eviction | Via graceful leave |
 | `MovableTree` | Op-log union; Lamport-ordered replay with cycle prevention | Via reparent |
