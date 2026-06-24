@@ -1,5 +1,6 @@
 package us.tractat.kuilt.session.test
 
+import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -8,9 +9,11 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
 import us.tractat.kuilt.core.CloseReason
+import us.tractat.kuilt.core.DeliveryPolicy
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
+import us.tractat.kuilt.core.Spool
 import us.tractat.kuilt.core.Swatch
 import us.tractat.kuilt.session.LeaveReason
 import us.tractat.kuilt.session.Liveness
@@ -48,9 +51,10 @@ import kotlin.time.Instant
  * **Stream semantics — a deliberate divergence from the real [Room].** The real
  * [Room] documents [events] and [incoming] as *hot, no-replay* streams (late
  * collectors miss history). For test ergonomics this double backs them with
- * unbounded buffering channels instead, so `deliver(...)` followed by
- * `incoming.first()` works without racing a collector. Two consequences a
- * consumer should not encode as [Room] guarantees:
+ * bounded, backpressured channels instead, so `deliver(...)` followed by
+ * `incoming.first()` works without racing a collector (capacity [DeliveryPolicy.DEFAULT_CAPACITY]).
+ * [FakeChannelSeam.incoming] is backed by a [Spool] using [channelPolicy].
+ * Two consequences a consumer should not encode as [Room] guarantees:
  * - frames/events emitted before collection are **buffered and replayed** here,
  *   whereas the real [Room] would drop them;
  * - [leave] **completes** [events]/[incoming] (channel close), whereas the real
@@ -61,6 +65,7 @@ public class FakeRoom(
     initialRole: SessionRole = SessionRole.Host,
     initialRoster: Set<Member> = emptySet(),
     initialResumeToken: ResumeToken? = null,
+    public val channelPolicy: DeliveryPolicy = DeliveryPolicy.Reliable,
 ) : Room {
     private val _role = MutableStateFlow(initialRole)
     override val role: StateFlow<SessionRole> = _role.asStateFlow()
@@ -77,10 +82,16 @@ public class FakeRoom(
     /** Seam state forwarded to channel views. Use [tearSeam] to simulate transport closure. */
     private val _seamState = MutableStateFlow<SeamState>(SeamState.Woven)
 
-    private val eventsChannel = Channel<MembershipEvent>(capacity = Channel.UNLIMITED)
+    private val eventsChannel = Channel<MembershipEvent>(
+        capacity = DeliveryPolicy.DEFAULT_CAPACITY,
+        onBufferOverflow = BufferOverflow.SUSPEND,
+    )
     override val events: Flow<MembershipEvent> = eventsChannel.receiveAsFlow()
 
-    private val incomingChannel = Channel<RoomFrame>(capacity = Channel.UNLIMITED)
+    private val incomingChannel = Channel<RoomFrame>(
+        capacity = DeliveryPolicy.DEFAULT_CAPACITY,
+        onBufferOverflow = BufferOverflow.SUSPEND,
+    )
     override val incoming: Flow<RoomFrame> = incomingChannel.receiveAsFlow()
 
     private var _resumeToken: ResumeToken? = initialResumeToken
@@ -233,8 +244,8 @@ public class FakeRoom(
 
     /**
      * Returns a [Seam] view scoped to channel [id], backed by [_rosterPeers] for
-     * admit-gated peer visibility and a dedicated [Channel<Swatch>] for test-driver
-     * frame delivery via [FakeChannelSeam.deliver].
+     * admit-gated peer visibility and a bounded [Spool] for test-driver frame
+     * delivery via [FakeChannelSeam.deliver].
      *
      * Idempotent: the same [Seam] instance is returned for each distinct [id].
      */
@@ -271,7 +282,8 @@ public class FakeRoom(
      * A [Seam] view returned by [FakeRoom.channel].
      *
      * - `peers` reflects the admitted roster (+ self) via [_rosterPeers].
-     * - `incoming` is driven by test-driver [deliver] calls.
+     * - `incoming` is driven by test-driver [deliver] calls, buffered via a
+     *   bounded [Spool] (policy from [FakeRoom.channelPolicy]).
      * - `broadcast`/`sendTo` delegate to [FakeRoom.broadcast]/[sendTo] with raw
      *   payloads (no channel framing added — the Fake is not a protocol layer).
      * - `state` forwards [_seamState].
@@ -282,8 +294,8 @@ public class FakeRoom(
         override val peers: StateFlow<Set<PeerId>> get() = _rosterPeers.asStateFlow()
         override val state: StateFlow<SeamState> get() = _seamState.asStateFlow()
 
-        private val incomingChannel = Channel<Swatch>(capacity = Channel.UNLIMITED)
-        override val incoming: Flow<Swatch> = incomingChannel.receiveAsFlow()
+        private val spool = Spool(channelPolicy)
+        override val incoming: Flow<Swatch> = spool.incoming
 
         override suspend fun broadcast(payload: ByteArray): Unit = this@FakeRoom.broadcast(payload)
         override suspend fun sendTo(peer: PeerId, payload: ByteArray): Unit = this@FakeRoom.sendTo(peer, payload)
@@ -293,7 +305,7 @@ public class FakeRoom(
 
         /** Push [payload] from [sender] into this channel's [incoming]. */
         public suspend fun deliver(sender: PeerId, payload: ByteArray) {
-            incomingChannel.send(Swatch(payload = payload, sender = sender, sequence = 0L))
+            spool.deliver(Swatch(payload = payload, sender = sender, sequence = 0L))
         }
     }
 }
