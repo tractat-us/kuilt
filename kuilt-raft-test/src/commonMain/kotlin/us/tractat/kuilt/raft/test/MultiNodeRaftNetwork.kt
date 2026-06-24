@@ -1,5 +1,6 @@
 package us.tractat.kuilt.raft.test
 
+import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -7,6 +8,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
+import us.tractat.kuilt.core.DeliveryPolicy
 import us.tractat.kuilt.raft.NodeId
 import us.tractat.kuilt.raft.RaftEnvelope
 import us.tractat.kuilt.raft.RaftTransport
@@ -44,7 +46,10 @@ public class MultiNodeRaftNetwork(
      * to it. Call once per node before constructing [us.tractat.kuilt.raft.RaftNode].
      */
     public fun transport(id: NodeId): RaftTransport {
-        val ch = Channel<RaftEnvelope>(Channel.UNLIMITED)
+        val ch = Channel<RaftEnvelope>(
+            capacity = DeliveryPolicy.DEFAULT_CAPACITY,
+            onBufferOverflow = BufferOverflow.SUSPEND,
+        )
         channels[id] = ch
         _peers.update { it + id }
         val limit = maxPayloadBytes
