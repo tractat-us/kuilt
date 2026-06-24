@@ -81,6 +81,7 @@ public class GossipView(
     private val config: HeartbeatConfig = HeartbeatConfig(),
     private val spareCount: Int = DEFAULT_SPARE_COUNT,
     private val jitter: ClosedRange<Duration> = DEFAULT_JITTER,
+    private val activeViewPolicy: ActiveViewPolicy = ActiveViewPolicy.RandomKRegular,
 ) {
     private val _active = MutableStateFlow<Set<PeerId>>(emptySet())
 
@@ -153,7 +154,7 @@ public class GossipView(
     ) {
         failed = failed intersect currentRoster
 
-        val k = recommendedActiveViewSize(currentRoster.size)
+        val k = activeViewPolicy.activeViewSize(currentRoster.size)
         val candidates = currentRoster - selfId - failed
 
         val keep = _active.value.filter { it in candidates }

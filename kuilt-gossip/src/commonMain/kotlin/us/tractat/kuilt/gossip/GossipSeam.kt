@@ -77,6 +77,7 @@ public class GossipSeam(
     spareCount: Int = GossipView.DEFAULT_SPARE_COUNT,
     jitter: ClosedRange<Duration> = GossipView.DEFAULT_JITTER,
     private val initialTtl: Int = DEFAULT_TTL,
+    activeViewPolicy: ActiveViewPolicy = ActiveViewPolicy.RandomKRegular,
     policy: DeliveryPolicy = DeliveryPolicy.Reliable,
 ) : Seam {
     // Broadcast bus for raw inbound frames; per-neighbour detectors subscribe here
@@ -114,6 +115,7 @@ public class GossipSeam(
             config = config,
             spareCount = spareCount,
             jitter = jitter,
+            activeViewPolicy = activeViewPolicy,
         )
 
     /** The active-neighbour view — deltas/GC target set. Strict subset of [peers]. */
