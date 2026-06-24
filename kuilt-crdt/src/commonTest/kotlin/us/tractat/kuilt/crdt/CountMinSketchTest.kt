@@ -1,8 +1,9 @@
 package us.tractat.kuilt.crdt
 
 import kotlinx.serialization.json.Json
+import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
-import kotlin.test.assertAll
+import kotlin.test.assertFailsWith
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
@@ -140,22 +141,12 @@ class CountMinSketchTest {
     // ── Width/depth configuration ─────────────────────────────────────────────
 
     @Test
-    fun requiresPositiveWidthAndDepth() {
-        assertAll(
-            {
-                try {
-                    CountMinSketch.empty(width = 0, depth = 4)
-                    throw AssertionError("expected IllegalArgumentException")
-                } catch (_: IllegalArgumentException) {
-                }
-            },
-            {
-                try {
-                    CountMinSketch.empty(width = 16, depth = 0)
-                    throw AssertionError("expected IllegalArgumentException")
-                } catch (_: IllegalArgumentException) {
-                }
-            },
-        )
+    fun requiresWidthAtLeastOne() {
+        assertFailsWith<IllegalArgumentException> { CountMinSketch.empty(width = 0, depth = 4) }
+    }
+
+    @Test
+    fun requiresDepthAtLeastOne() {
+        assertFailsWith<IllegalArgumentException> { CountMinSketch.empty(width = 16, depth = 0) }
     }
 }

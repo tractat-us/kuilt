@@ -67,6 +67,7 @@
         </toc-element>
         <toc-element toc-title="Sketches">
             <toc-element topic="crdt-hyperloglog.md"/>
+            <toc-element topic="crdt-countminsketch.md"/>
         </toc-element>
         <toc-element toc-title="Live Replication">
             <toc-element topic="crdt-quilter.md"/>
