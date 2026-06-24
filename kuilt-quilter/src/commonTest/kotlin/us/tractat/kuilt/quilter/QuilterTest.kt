@@ -145,6 +145,53 @@ class QuilterTest {
     }
 
     /**
+     * A [QuiltMessage.FullState] whose state is dominated by the receiver's current state
+     * must not trigger any state change — the idempotence guard introduced for #737.
+     *
+     * Setup: A and B converge; then A applies an extra increment alone. B now has a
+     * dominated state. After anti-entropy fires (B → A), A's state must remain at the
+     * converged value and must NOT be replaced with the lower-count dominated state.
+     *
+     * Also verifies the converse: B must still correctly receive and apply A's FullState
+     * (new information is never dropped). The guard only skips the dominated direction.
+     */
+    @Test
+    fun dominatedFullStateIsIdempotentAndNewInfoIsPreserved() = runTest(UnconfinedTestDispatcher()) {
+        val loom = InMemoryLoom()
+        val seamA = loom.host(Pattern("test"))
+        val seamB = loom.join(InMemoryTag("b"))
+
+        val repA = gcounterReplicator(seamA, backgroundScope)
+        val repB = gcounterReplicator(seamB, backgroundScope)
+
+        // Both accumulate and fully converge.
+        repA.apply(repA.state.value.inc(repA.replica, 5L))
+        repB.apply(repB.state.value.inc(repB.replica, 3L))
+        testScheduler.advanceUntilIdle()
+        assertEquals(8L, repA.state.value.value)
+        assertEquals(8L, repB.state.value.value)
+
+        // B applies an extra increment that A has NOT seen yet.
+        repB.apply(repB.state.value.inc(repB.replica, 7L))
+
+        // Advance ONE anti-entropy tick. B sends A its full state (now 15).
+        // This is NOT dominated — A must learn B's new count and converge to 15.
+        testScheduler.advanceTimeBy(QuilterConfig().antiEntropyInterval.inWholeMilliseconds)
+        testScheduler.advanceUntilIdle()
+
+        assertEquals(15L, repA.state.value.value, "A must absorb B's new state via FullState")
+        assertEquals(15L, repB.state.value.value)
+
+        // Now both are fully converged. The NEXT anti-entropy tick sends equal state.
+        // The guard must fire (merged == current) and A's value must stay at 15.
+        testScheduler.advanceTimeBy(QuilterConfig().antiEntropyInterval.inWholeMilliseconds)
+        testScheduler.advanceUntilIdle()
+
+        assertEquals(15L, repA.state.value.value, "A's state must remain 15 after dominated FullState delivery")
+        assertEquals(15L, repB.state.value.value, "B's state must remain 15 after dominated FullState delivery")
+    }
+
+    /**
      * After B has acked all of A's deltas, A's pending delta buffer must be empty.
      */
     @Test
