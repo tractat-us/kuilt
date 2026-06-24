@@ -27,7 +27,7 @@ bobbins* below) once you ship real code, and it can carry a W3C `traceparent` so
 trace [follows the work](warp-observability.md) across peers. Design the envelope
 once; it pays off three ways.
 
-![How a method crosses the fabric, in five steps: shuttle splits the work into descriptors; a CRDT work-queue replicates them; the equalizer places them; each peer runs its own registered copy; results merge back. On the wire: names and data, never the function.](images/warp/on-the-wire.svg)
+![How a method crosses the fabric, in five steps: shuttle splits the work into descriptors; a CRDT work-queue replicates them; consistent hashing assigns each task to its owner peer; each peer runs its own registered copy; results merge back. On the wire: names and data, never the function.](images/warp/on-the-wire.svg)
 
 That implies one honest constraint, stated up front: **a homogeneous binary with
 symbolic dispatch.** Every peer runs the same build; the grid distributes
