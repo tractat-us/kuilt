@@ -1,5 +1,8 @@
 package us.tractat.kuilt.crdt
 
+import kotlinx.serialization.ExperimentalSerializationApi
+import kotlinx.serialization.cbor.Cbor
+import kotlinx.serialization.encodeToByteArray
 import kotlinx.serialization.json.Json
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -170,5 +173,87 @@ class BloomFilterTest {
         val withData = filter.piece(filter.add("test"))
         assertTrue(withData.mightContain("test"))
         assertFalse(filter.mightContain("test"))
+    }
+
+    // ── Sparse delta ──────────────────────────────────────────────────────────
+
+    @Test
+    fun addDeltaIsSparse() {
+        // A single add touches at most k distinct words (one word per hash position);
+        // the delta must carry only those non-zero words, not the full O(m) array.
+        val filter = BloomFilter.create(expectedElements = 10_000, falsePositiveRate = 0.01)
+        val delta = filter.add("hello").delta
+        // k = hashCount for this config; non-zero words must be at most k.
+        assertTrue(
+            delta.nonZeroWordCount() <= filter.hashCount,
+            "Expected sparse delta: nonZeroWordCount=${delta.nonZeroWordCount()} should be ≤ hashCount=${filter.hashCount}"
+        )
+        // Crucially it must be *strictly* less than the full array length.
+        assertTrue(
+            delta.nonZeroWordCount() < filter.wordCount,
+            "Delta should be sparse: nonZeroWordCount=${delta.nonZeroWordCount()} vs wordCount=${filter.wordCount}"
+        )
+    }
+
+    @Test
+    fun sparseDeltaMergesIdenticallyToFullArrayDelta() {
+        // A sparse delta and a full-array delta encoding the same k bits must produce
+        // the same merged state, because OR-merging 0L words is a no-op.
+        // We verify this by cross-checking two independent merge paths:
+        //   A) add() sparse delta absorbed into an empty filter.
+        //   B) the same k bits set in a full-width BloomFilter via fromRaw.
+        val n = 1000
+        val p = 0.01
+        val template = BloomFilter.create(n, p)
+
+        val element = "cross-check"
+        // Path A: sparse delta from add().
+        val sparseResult = template.piece(template.add(element))
+
+        // Path B: use addToFullArray() which returns a BloomFilter with a full-width
+        // backing array (the old add() behaviour) and absorb it the same way.
+        val fullDelta = template.addToFullArray(element)
+        val fullResult = template.piece(fullDelta)
+
+        assertEquals(sparseResult, fullResult, "Sparse and full-array deltas must produce identical merged state")
+        assertTrue(sparseResult.mightContain(element))
+    }
+
+    @OptIn(ExperimentalSerializationApi::class)
+    @Test
+    fun addDeltaWireSizeFarSmallerThanFullState() {
+        // The add() delta must encode much more compactly than a dense full state.
+        // For n=10_000, p=1%: 1498 words total, k=7 hash positions.
+        // Sparse delta: ~7 (index+word) pairs ≈ tens of bytes.
+        // Dense full state: 1498 longs ≈ 1.5 KB+ in CBOR.
+        val emptyFilter = BloomFilter.create(10_000, 0.01)
+
+        // Build a non-trivial full state with many non-zero words.
+        var fullState = emptyFilter
+        repeat(500) { i -> fullState = fullState.piece(fullState.add("item-$i")) }
+
+        val addDelta = emptyFilter.add("new-element").delta
+        val addDeltaBytes = Cbor.encodeToByteArray(BloomFilter.serializer(), addDelta)
+        val fullStateBytes = Cbor.encodeToByteArray(BloomFilter.serializer(), fullState)
+
+        println("add() delta CBOR: ${addDeltaBytes.size} bytes (nonZeroWords=${addDelta.nonZeroWordCount()}/${addDelta.wordCount})")
+        println("Full state CBOR: ${fullStateBytes.size} bytes (nonZeroWords=${fullState.nonZeroWordCount()}/${fullState.wordCount})")
+
+        // The add() delta must be at least 10× smaller than the full state.
+        assertTrue(
+            addDeltaBytes.size * 10 < fullStateBytes.size,
+            "add() delta (${addDeltaBytes.size}B) should be at least 10× smaller than full state (${fullStateBytes.size}B)"
+        )
+    }
+
+    @Test
+    fun sparseDeltaIsIdempotentUnderRedelivery() {
+        // Re-delivering a sparse delta must not corrupt the state.
+        val filter = BloomFilter.create(expectedElements = 100)
+        val delta = filter.add("idempotent")
+        val once = filter.piece(delta)
+        val twice = once.piece(delta)
+        assertEquals(once, twice)
+        assertTrue(twice.mightContain("idempotent"))
     }
 }
