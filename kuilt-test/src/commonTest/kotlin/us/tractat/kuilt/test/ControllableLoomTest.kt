@@ -206,7 +206,7 @@ class ControllableLoomTest {
     }
 
     @Test
-    fun `deliverNext returns false when queue is empty`() {
+    fun `deliverNext returns false when queue is empty`() = runTest {
         val loom = ControllableLoom()
         val id = PeerId("ghost")
         assertFalse(loom.deliverNext(id))
