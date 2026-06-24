@@ -44,15 +44,17 @@ things, and kuilt already ships all four. The vision is not "build a grid." It i
 | to know who's in the room, and who left | `:kuilt-liveness` (membership + failure detection) |
 | to spread work and answers around | gossip dissemination (#652) |
 | shared state that always agrees in the end | the CRDT zoo + `Quilter` |
-| to balance load without a boss | the `BoundedCounter` equalizer (#643/#644/#667) |
+| to assign each task to one owner, without a boss | consistent hashing over the roster (measured in [spike results](warp-spike-results.md)) |
+| to smooth the load when the ring shifts | the `BoundedCounter` equalizer (#643/#644/#667) |
 | to agree *exactly* when agreement is unavoidable | `:kuilt-raft` |
 
-The fourth row is the quiet punchline. The `BoundedCounter` equalizer we built to
-keep quotas balanced is, mathematically, a **decentralized work-stealing
-scheduler** — diffusive load balancing and power-of-two-choices, the exact
-algorithms a grid uses to place tasks. We built a scheduler in disguise: rename
-`BoundedCounter` to **`TaskScheduler`**, aim it at queue-depth instead of quota,
-and *nothing else changes*.
+The fourth and fifth rows are the quiet punchline. The spike ([measured results](warp-spike-results.md))
+showed that **consistent hashing over the roster is the scheduler** — every peer computes the same
+hash ring from the membership view and executes only the tasks that map to its arc, with ~0 duplicates
+and ~0 per-task coordination messages in stable membership. The `BoundedCounter` equalizer layers on
+top as a **load-smoother**: it rebalances quota when the ring shifts after a join or leave, but it is
+not the assigner. We built both in disguise: rename the ring computation to **`TaskScheduler`** and
+the equalizer to **`LoadSmoother`**, aim them at queue-depth instead of quota, and *nothing else changes*.
 
 So `:kuilt-warp` is a *thin reframing*, not a new engine. Every compute type is a
 trivial wrapper around a primitive kuilt already ships:
@@ -60,18 +62,19 @@ trivial wrapper around a primitive kuilt already ships:
 ```kotlin
 class Warp(seam: Seam)                          // the grid — parallel lanes across the peers
 class TaskQueue<T>(q: ORSet<Task<T>>)           // the work-queue   — a thin wrapper over an ORSet
-class TaskScheduler(eq: BoundedCounter)         // places the work  — the equalizer, aimed at depth
+class TaskScheduler(roster: Roster)             // assigns the work — consistent hashing over the roster
+class LoadSmoother(eq: BoundedCounter)          // smooths the load — the equalizer, rebalances on churn
 class Results<R>(r: ORMap<Id, R>)               // the result store — a thin wrapper over an ORMap
 // movement: Quilter anti-entropy already carries both the queue and the results.
 ```
 
 That is the whole trick, and the doc keeps doing it on purpose: **name the grid
-role, then reveal the CRDT under it.** A `TaskScheduler` is the equalizer; a
-`TaskQueue` is an `ORSet`; `Results` is an `ORMap`. The compute layer is
-*vocabulary*, not machinery — which is exactly why the only thing to build is the
-thin wrappers.
+role, then reveal the primitive under it.** A `TaskScheduler` is consistent hashing
+over the roster; a `LoadSmoother` is the equalizer; a `TaskQueue` is an `ORSet`;
+`Results` is an `ORMap`. The compute layer is *vocabulary*, not machinery — which is
+exactly why the only thing to build is the thin wrappers.
 
-![The recognition map: each grid role (TaskQueue, TaskScheduler, Results, the bobbin creel, transport, commit) is a thin wrapper over a kuilt primitive that already ships (ORSet, the BoundedCounter equalizer, ORMap, GSet+EphemeralMap, Quilter, :kuilt-raft). New code is just the wrappers.](images/warp/recognition-map.svg)
+![The recognition map: each grid role (TaskQueue, TaskScheduler, LoadSmoother, Results, the bobbin creel, transport, commit) is a thin wrapper over a kuilt primitive that already ships (ORSet, consistent hashing over the roster, the BoundedCounter equalizer, ORMap, GSet+EphemeralMap, Quilter, :kuilt-raft). New code is just the wrappers.](images/warp/recognition-map.svg)
 
 The textile metaphor finishes itself — and it stretches across the whole design.
 A loom holds the **warp**: the parallel threads under tension. You load a
