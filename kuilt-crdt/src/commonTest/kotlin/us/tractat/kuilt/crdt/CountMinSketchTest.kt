@@ -68,7 +68,7 @@ class CountMinSketchTest {
         val width = 512
         val depth = 5
         val totalItems = 10_000
-        val epsilon = Math.E / width  // ≈ 0.0053
+        val epsilon = kotlin.math.E / width  // ≈ 0.0053
 
         var sketch = CountMinSketch.empty(width = width, depth = depth)
         val trueCounts = mutableMapOf<String, Long>()
