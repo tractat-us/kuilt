@@ -54,6 +54,7 @@
         </toc-element>
         <toc-element toc-title="Sequences">
             <toc-element topic="crdt-rga.md"/>
+            <toc-element topic="crdt-fugue.md"/>
             <toc-element topic="crdt-causal.md"/>
         </toc-element>
         <toc-element toc-title="Trees">
