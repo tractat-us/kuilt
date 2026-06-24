@@ -6,6 +6,7 @@ import kotlinx.serialization.builtins.MapSerializer
 import kotlinx.serialization.descriptors.SerialDescriptor
 import kotlinx.serialization.encoding.Decoder
 import kotlinx.serialization.encoding.Encoder
+import us.tractat.kuilt.crdt.internal.serialKeyComparator
 
 /**
  * Custom [KSerializer] for [DotMap]`<K, S>` that emits [DotMap.entries] in a canonical
@@ -15,13 +16,13 @@ import kotlinx.serialization.encoding.Encoder
  * Wire format: `Map<K, S>` — same structural layout as the auto-generated serializer,
  * but with entries emitted in a canonical sorted order.
  *
- * **Sort order:** entries are sorted by the [String] representation of the serialized key
- * ([K.toString]). This is deterministic — two values that are equal per [equals] have the
- * same [toString] for every well-behaved `K` (data classes, value classes, sealed classes,
- * primitives). The alternative (serialising keys to JSON and sorting the JSON strings) is
- * more rigorous but also more expensive; the `toString`-based sort is sufficient because
- * all [DotMap] key types used in this module ([String], [Int], sealed types) satisfy the
- * invariant.
+ * **Sort order:** entries are sorted by the structural encoding of their key: each [K]
+ * is serialized to a sequence of primitive leaf values via its [KSerializer], and those
+ * sequences are compared lexicographically.  This produces a deterministic order for any
+ * serializable key type — including data classes, inline value classes, and compound keys
+ * — and is robust where a [toString]-based sort is not: [Double] (`-0.0`/`NaN`), [ByteArray]
+ * (identity hash), and any type whose [toString] is not injective or platform-stable would
+ * silently produce a non-canonical sort.  See [serialKeyComparator] (issue #752).
  *
  * The auto-generated serializer is delivery-order-dependent because [DotMap.join] builds
  * a [LinkedHashMap] whose iteration order depends on which side is `self` vs `other` in
@@ -34,12 +35,13 @@ public class DotMapSerializer<K, S : DotStore<S>>(
 ) : KSerializer<DotMap<K, S>> {
 
     private val mapSerializer = MapSerializer(kSerializer, sSerializer)
+    private val keyComparator: Comparator<K> = serialKeyComparator(kSerializer)
 
     override val descriptor: SerialDescriptor = mapSerializer.descriptor
 
     override fun serialize(encoder: Encoder, value: DotMap<K, S>) {
         val sorted = value.entries.entries
-            .sortedBy { (key, _) -> key.toString() }
+            .sortedWith(compareBy(keyComparator) { (key, _) -> key })
             .associate { (key, v) -> key to v }
         mapSerializer.serialize(encoder, sorted)
     }

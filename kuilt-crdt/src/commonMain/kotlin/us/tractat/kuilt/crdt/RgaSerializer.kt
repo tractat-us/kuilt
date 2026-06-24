@@ -52,8 +52,9 @@ internal class RgaSerializer<V>(vSerializer: KSerializer<V>) : KSerializer<Rga<V
      * Sort ops in a canonical, delivery-order-independent order before encoding:
      * - [RgaOp.Insert] and [RgaOp.Remove] sort by their [RgaId] ascending.
      * - [RgaOp.Compact] ops sort last (they carry no id of their own).
-     * - Multiple [RgaOp.Compact] ops sort by the string representation of their
-     *   [RgaOp.Compact.positions] keys to achieve a deterministic order among them.
+     * - Multiple [RgaOp.Compact] ops sort by the full sorted [RgaOp.Compact.positions] key-list,
+     *   compared lexicographically, to achieve a deterministic order even under a malformed
+     *   remote that violates the disjoint-keys invariant (see [compareCompactOps]).
      */
     override fun serialize(encoder: Encoder, value: Rga<V>): Unit = encoder.encodeStructure(descriptor) {
         val sortedOps = value.ops.sortedWith(opComparator())
@@ -80,7 +81,17 @@ internal class RgaSerializer<V>(vSerializer: KSerializer<V>) : KSerializer<Rga<V
     /**
      * A [Comparator] that orders [RgaOp]s canonically:
      * Insert and Remove ops sort by their [RgaId]; Compact ops sort last, then by
-     * their smallest contained [RgaId] key (guaranteed unique per op).
+     * the full sorted key-list of their [RgaOp.Compact.positions] maps.
+     *
+     * **Compact tiebreak rationale:** surviving [RgaOp.Compact] ops on a well-formed
+     * replica have disjoint [RgaOp.Compact.positions] key-sets (each [RgaId] is
+     * compacted into at most one [Compact] op).  Under that invariant,
+     * `positions.keys.minOrNull()` is sufficient — no two Compact ops share the same
+     * minimum key, so there are no ties.  To guard against a malformed remote that
+     * violates the invariant (where `minOrNull()` could tie and fall back to
+     * set-iteration order — the exact nondeterminism #713 fixed), the comparator
+     * walks the full sorted key-list until it finds a difference.  This is O(N) in
+     * the number of compacted ids, but compact ops are rare and small in practice.
      */
     private fun opComparator(): Comparator<RgaOp<*>> = Comparator { a, b ->
         val typeA = opTypeOrdinal(a)
@@ -89,12 +100,19 @@ internal class RgaSerializer<V>(vSerializer: KSerializer<V>) : KSerializer<Rga<V
         when (a) {
             is RgaOp.Insert -> a.id.compareTo((b as RgaOp.Insert).id)
             is RgaOp.Remove<*> -> a.id.compareTo((b as RgaOp.Remove<*>).id)
-            is RgaOp.Compact -> {
-                val minA = a.positions.keys.minOrNull() ?: RgaId.HEAD
-                val minB = (b as RgaOp.Compact).positions.keys.minOrNull() ?: RgaId.HEAD
-                minA.compareTo(minB)
-            }
+            is RgaOp.Compact -> compareCompactOps(a, b as RgaOp.Compact)
         }
+    }
+
+    private fun compareCompactOps(a: RgaOp.Compact, b: RgaOp.Compact): Int {
+        val keysA = a.positions.keys.sorted()
+        val keysB = b.positions.keys.sorted()
+        val minLen = minOf(keysA.size, keysB.size)
+        for (i in 0 until minLen) {
+            val cmp = keysA[i].compareTo(keysB[i])
+            if (cmp != 0) return cmp
+        }
+        return keysA.size - keysB.size
     }
 
     /** Ordinal used for inter-type ordering: Insert=0, Remove=1, Compact=2. */
