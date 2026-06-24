@@ -4,21 +4,21 @@ import io.github.oshai.kotlinlogging.KotlinLogging
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import us.tractat.kuilt.core.CloseReason
+import us.tractat.kuilt.core.DeliveryPolicy
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.PeerNotConnected
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
+import us.tractat.kuilt.core.Spool
 import us.tractat.kuilt.core.Swatch
 
 private val log = KotlinLogging.logger {}
@@ -47,6 +47,8 @@ private val log = KotlinLogging.logger {}
  * @param scope               Coroutine scope for the receive loop; cancelled on [close].
  * @param maxChunkPayload     Per-chunk payload cap forwarded to [ChunkCodec].
  * @param msgIdCounter        Shared monotonic counter for message IDs (use one per seam).
+ * @param policy              Delivery policy for the inbound [Spool]. Defaults to
+ *                            [DeliveryPolicy.Reliable] (bounded, backpressured).
  */
 internal class NearbySeam(
     override val selfId: PeerId,
@@ -57,6 +59,7 @@ internal class NearbySeam(
     private val scope: CoroutineScope,
     private val maxChunkPayload: Int = ChunkCodec.MAX_CHUNK_PAYLOAD,
     private val msgIdCounter: MsgIdCounter,
+    private val policy: DeliveryPolicy = DeliveryPolicy.Reliable,
 ) : Seam {
 
     override val peers: StateFlow<Set<PeerId>> = sharedPeers.asStateFlow()
@@ -65,8 +68,8 @@ internal class NearbySeam(
     private val _state = MutableStateFlow<SeamState>(SeamState.Weaving)
     override val state: StateFlow<SeamState> = _state.asStateFlow()
 
-    private val incomingChannel = Channel<Swatch>(capacity = Channel.UNLIMITED)
-    override val incoming: Flow<Swatch> = incomingChannel.receiveAsFlow()
+    private val spool = Spool<Swatch>(policy)
+    override val incoming: Flow<Swatch> = spool.incoming
 
     // Guards only the `closed` flag. All `endpointPeers` access uses `endpointPeersMutex`.
     private val closedMutex = Mutex()
@@ -95,21 +98,28 @@ internal class NearbySeam(
 
     private suspend fun receiveLoop() {
         api.payloadReceived.collect { event ->
-            endpointPeersMutex.withLock {
+            // Snapshot (swatch) under the lock, then deliver OUTSIDE it so that a
+            // SUSPEND-policy backpressure stall never holds endpointPeersMutex.
+            val frame = endpointPeersMutex.withLock {
                 if (closed) return@collect
                 // Ignore payloads from unknown endpoints (e.g. not yet connected).
                 val remotePeerId = endpointPeers[event.endpointId] ?: return@collect
-                processPayload(event.endpointId, event.bytes, remotePeerId)
-            }
+                assembleFrame(event.endpointId, event.bytes, remotePeerId)
+            } ?: return@collect
+            spool.deliver(frame)
         }
     }
 
-    private fun processPayload(endpointId: String, bytes: ByteArray, remotePeerId: PeerId) {
-        val chunk = ChunkCodec.decodeChunk(bytes) ?: return
+    /**
+     * Reassemble a chunk and build the [Swatch] — called under [endpointPeersMutex].
+     * Returns `null` if the chunk is incomplete or malformed.
+     */
+    private fun assembleFrame(endpointId: String, bytes: ByteArray, remotePeerId: PeerId): Swatch? {
+        val chunk = ChunkCodec.decodeChunk(bytes) ?: return null
         val reassembler = reassemblers.getOrPut(endpointId) { ChunkCodec.Reassembler() }
-        val payload = reassembler.feed(chunk) ?: return
+        val payload = reassembler.feed(chunk) ?: return null
         val seq = nextSequence(endpointId)
-        incomingChannel.trySend(Swatch(payload = payload, sender = remotePeerId, sequence = seq))
+        return Swatch(payload = payload, sender = remotePeerId, sequence = seq)
     }
 
     private fun nextSequence(endpointId: String): Long {
@@ -178,7 +188,7 @@ internal class NearbySeam(
         // AND the background accept coroutine launched by NearbyLoom.open() into
         // the same scope, preventing coroutine leaks between tests.
         scope.coroutineContext[Job]?.cancel()
-        incomingChannel.close()
+        spool.close()
         val endpoints = endpointPeersMutex.withLock { endpointPeers.keys.toList() }
         for (endpointId in endpoints) {
             api.disconnect(endpointId)
