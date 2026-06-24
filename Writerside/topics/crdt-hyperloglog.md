@@ -45,9 +45,10 @@ with the same sketch → nothing changes.
 var hll = HyperLogLog.empty(precision = 14)
 
 // Add a stream of items — duplicates do not inflate the count.
-hll = hll.add("alice")
-hll = hll.add("bob")
-hll = hll.add("alice") // duplicate — no effect
+// add() returns a sparse Patch; apply it with piece().
+hll = hll.piece(hll.add("alice"))
+hll = hll.piece(hll.add("bob"))
+hll = hll.piece(hll.add("alice")) // duplicate — no-op delta, nothing changes
 
 // The estimate is approximate but close to 2 for small cardinalities.
 check(hll.estimate() in 1L..3L)
@@ -63,8 +64,8 @@ val b = ReplicaId("B")
 // Replica A sees users 0–999; replica B sees users 500–1499 (500 in common).
 var hllA = HyperLogLog.empty(precision = 14)
 var hllB = HyperLogLog.empty(precision = 14)
-repeat(1_000) { i -> hllA = hllA.add("user-$i") }
-repeat(1_000) { i -> hllB = hllB.add("user-${i + 500}") }
+repeat(1_000) { i -> hllA = hllA.piece(hllA.add("user-$i")) }
+repeat(1_000) { i -> hllB = hllB.piece(hllB.add("user-${i + 500}")) }
 
 // Merge: element-wise max of registers.
 val merged = hllA.piece(hllB)
