@@ -3,17 +3,17 @@ package us.tractat.kuilt.gossip
 import kotlinx.atomicfu.locks.reentrantLock
 import kotlinx.atomicfu.locks.withLock
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
-import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.launch
 import us.tractat.kuilt.core.CloseReason
+import us.tractat.kuilt.core.DeliveryPolicy
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
+import us.tractat.kuilt.core.Spool
 import us.tractat.kuilt.core.Swatch
 import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.liveness.HeartbeatConfig
@@ -77,17 +77,19 @@ public class GossipSeam(
     spareCount: Int = GossipView.DEFAULT_SPARE_COUNT,
     jitter: ClosedRange<Duration> = GossipView.DEFAULT_JITTER,
     private val initialTtl: Int = DEFAULT_TTL,
+    policy: DeliveryPolicy = DeliveryPolicy.Reliable,
 ) : Seam {
     // Broadcast bus for raw inbound frames; per-neighbour detectors subscribe here
     // so they never contend for the single-consumer base.incoming channel.
     private val rawIncoming = MutableSharedFlow<Swatch>(extraBufferCapacity = RAW_BUFFER)
 
-    // Application frames delivered to the single [incoming] collector. A buffered
-    // channel (not a SharedFlow): it never drops a frame for a collector that
-    // subscribes after a send, and — closed when the inbound loop ends (base seam
-    // Torn) — its receiveAsFlow **completes**, honouring the Seam termination
-    // contract that consumers like Quilter rely on to self-clean.
-    private val _incoming = Channel<Swatch>(Channel.UNLIMITED)
+    // Application frames delivered to the single [incoming] collector. A bounded [Spool]
+    // (not a SharedFlow): it never drops a frame for a collector that subscribes after a
+    // send, and — closed when the inbound loop ends (base seam Torn) — its [Spool.incoming]
+    // **completes**, honouring the Seam termination contract that consumers like Quilter
+    // rely on to self-clean. Delivery is bounded/backpressured (no UNLIMITED inbound queue);
+    // `deliver` runs on the single base.incoming collector, so it holds no lock.
+    private val spool = Spool<Swatch>(policy)
 
     // Per-origin broadcast sequence counter. Guarded by a lock (not dispatcher
     // confinement) so concurrent broadcast() callers get distinct sequence numbers
@@ -128,7 +130,7 @@ public class GossipSeam(
     override val state: StateFlow<SeamState> get() = base.state
 
     /** Application frames only — heartbeat ping/pong frames are filtered out. */
-    override val incoming: Flow<Swatch> = _incoming.receiveAsFlow()
+    override val incoming: Flow<Swatch> = spool.incoming
 
     /**
      * Starts the inbound loop (sole collector of `base.incoming`) and the
@@ -143,7 +145,7 @@ public class GossipSeam(
             try {
                 base.incoming.collect { swatch -> dispatchInbound(swatch) }
             } finally {
-                _incoming.close()
+                spool.close()
             }
         }
     }
@@ -161,7 +163,7 @@ public class GossipSeam(
         val frame = GossipFrame.tryDecode(swatch)
         if (frame == null) {
             // A raw point-to-point sendTo frame (or any non-gossip frame): deliver as-is.
-            _incoming.trySend(swatch)
+            spool.deliver(swatch)
             return
         }
         // Our own broadcast looped back along the overlay — we already have it.
@@ -169,7 +171,7 @@ public class GossipSeam(
         // Already delivered + relayed this broadcast; dedup terminates the flood.
         if (!dedup.markSeenIfNew(frame.origin, frame.seq)) return
 
-        _incoming.trySend(Swatch(payload = frame.payload, sender = frame.origin, sequence = frame.seq))
+        spool.deliver(Swatch(payload = frame.payload, sender = frame.origin, sequence = frame.seq))
         // Re-flood to our own active neighbours minus the peer it arrived from,
         // until the hop budget runs out.
         if (frame.ttl > 1) flood(frame.decremented(), except = swatch.sender)
