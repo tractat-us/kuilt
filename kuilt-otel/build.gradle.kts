@@ -25,6 +25,25 @@ kotlin {
             implementation(project(":kuilt-test"))
             implementation(libs.kotlinx.coroutines.test)
         }
+
+        // jvmAndAndroidMain: FileChannelDurableStore uses java.io / java.nio.channels,
+        // which are available on both JVM and Android but not on iOS/macOS/wasmJs.
+        // Adding this intermediate disables KMP's hierarchy auto-wiring, so iOS and
+        // macOS intermediates are declared explicitly below (mirroring kuilt-tcp).
+        val jvmAndAndroidMain by creating {
+            dependsOn(commonMain.get())
+        }
+        jvmMain.get().dependsOn(jvmAndAndroidMain)
+        androidMain.get().dependsOn(jvmAndAndroidMain)
+
+        // iOS and macOS intermediates: empty stubs — the JVM WAL is not available on
+        // Apple platforms. Platform implementations ship in follow-up issues (#802).
+        val iosMain by creating { dependsOn(commonMain.get()) }
+        val iosArm64Main by getting { dependsOn(iosMain) }
+        val iosSimulatorArm64Main by getting { dependsOn(iosMain) }
+        val macosMain by creating { dependsOn(commonMain.get()) }
+        val macosArm64Main by getting { dependsOn(macosMain) }
+
         jvmTest.dependencies {
             runtimeOnly(libs.logback)
         }
