@@ -26,6 +26,7 @@ delivery order or duplication.
 | `Rga` | Op-log union; Lamport-ordered insert wins | Via tombstone |
 | `JsonCrdt` | Recursive JSON: ORMap objects, Rga arrays, MVRegister leaves | Via key remove |
 | `EphemeralMap` | Per-replica slot, higher clock wins; caller-driven TTL eviction | Via graceful leave |
+| `MovableTree` | Op-log union; Lamport-ordered replay with cycle prevention | Via reparent |
 
 ## Replication
 
