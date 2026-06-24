@@ -736,7 +736,14 @@ public class Quilter<S : Quilted<S>>(
     }
 
     private fun onFullState(msg: QuiltMessage.FullState<S>) {
-        _state.update { it.piece(msg.state) }
+        val current = _state.value
+        val merged = current.piece(msg.state)
+        // Idempotence guard: skip state update and the downstream recomputeDeliveredLocal()
+        // when the incoming state is dominated (its join equals current). This avoids an
+        // unnecessary O(M log M) tree rebuild on every anti-entropy full-state tick for
+        // replicas already up to date — the common case during steady-state replication.
+        if (merged == current) return
+        _state.value = merged
         recomputeDeliveredLocal()
     }
 

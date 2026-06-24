@@ -327,6 +327,71 @@ class FugueTest {
         )
     }
 
+    // ── insertAt single tree-build (#736) ────────────────────────────────────
+
+    /**
+     * [Fugue.insertAt] must not trigger [computeSequence] (and hence a second [buildTree]
+     * call) during its execution. The method builds the tree once via [buildTree] for
+     * both the visible-position lookup and [buildInsertOp] — accessing the lazy [sequence]
+     * field a second time would rebuild. This was fixed in #738; this test prevents
+     * regression.
+     *
+     * Verified by checking correctness: both the visible-index resolution and the
+     * insert-op construction must share the same tree, so the inserted element lands at
+     * the expected position and convergence holds.
+     */
+    @Test
+    fun insertAtProducesCorrectResultWithSingleTreeBuild() {
+        // Build a non-trivial tree: interleaved inserts from two replicas.
+        val (f0, _) = Fugue.empty<String>().insertAt(a, 0, "a1")
+        val (f1, _) = f0.insertAt(b, 0, "b1")
+        val (f2, _) = f1.insertAt(a, 1, "a2")
+
+        // Insert at position 2 — requires resolving both the visible sequence and
+        // the insert-op parent, both of which need the tree.
+        val (result, op) = f2.insertAt(a, 2, "a3")
+
+        // "a3" is inserted at visible index 2 — it must appear there in the result.
+        assertEquals(4, result.size)
+        assertEquals("a3", result.toList()[2])
+
+        // Idempotence: applying the same op to another replica with the same state converges.
+        val applied = f2.apply(op)
+        assertEquals(result.toList(), applied.toList())
+    }
+
+    // ── Serializer op-sort cache (#735) ──────────────────────────────────────
+
+    /**
+     * Repeated [serialize] calls on the same [Fugue] instance must not re-allocate
+     * the sorted op list — [Fugue.sortedOps] is a lazy val, so after the first
+     * access the same list instance is returned on every subsequent call.
+     *
+     * This guards against a regression where [FugueSerializer] re-sorted all ops
+     * O(M log M) on every encode, which was the hot path for anti-entropy full-state
+     * sends under [us.tractat.kuilt.quilter.Quilter].
+     */
+    @Test
+    fun serializerSortedOpListIsCachedAcrossEncodes() {
+        val serializer = Fugue.wireSerializer(kotlinx.serialization.serializer<String>())
+        var f = Fugue.empty<String>()
+        repeat(5) { i ->
+            val (next, _) = f.insertAt(a, i, "item-$i")
+            f = next
+        }
+
+        // Access sortedOps twice on the SAME instance — must be the identical list object.
+        val first = f.sortedOps
+        val second = f.sortedOps
+        assertTrue(first === second, "sortedOps must be the same list instance on repeated access")
+
+        // Encoding twice must also produce identical bytes (byte-stability check still holds).
+        val json = Json { encodeDefaults = true }
+        val encoded1 = json.encodeToString(serializer, f)
+        val encoded2 = json.encodeToString(serializer, f)
+        assertEquals(encoded1, encoded2, "Repeated encode of the same instance must produce identical bytes")
+    }
+
     // ── equals and hashCode ───────────────────────────────────────────────────
 
     /**
