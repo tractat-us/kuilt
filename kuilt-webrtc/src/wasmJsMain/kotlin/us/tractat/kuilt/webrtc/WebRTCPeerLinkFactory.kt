@@ -7,14 +7,14 @@ import us.tractat.kuilt.webrtc.internal.RtcPeerConnectionFacade
 import us.tractat.kuilt.webrtc.internal.RtcPeerConnectionFacadeFactory
 import us.tractat.kuilt.webrtc.internal.WebRTCPeerLink
 import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.launch
+import us.tractat.kuilt.core.DeliveryPolicy
 import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.Seam
+import us.tractat.kuilt.core.Spool
 import kotlin.random.Random
 
 /**
@@ -82,15 +82,16 @@ public class WebRTCPeerLinkFactory
         private suspend fun buildLink(
             selfId: PeerId,
             facade: RtcPeerConnectionFacade,
+            policy: DeliveryPolicy = DeliveryPolicy.Reliable,
         ): WebRTCPeerLink {
             val guessedRemoteId = PeerId(randomToken("peer"))
             facade.sendBytes(selfId.value.encodeToByteArray())
 
             val senderIdDeferred = CompletableDeferred<PeerId>()
-            val userChannel = Channel<ByteArray>(Channel.UNLIMITED)
+            val userSpool = Spool<ByteArray>(policy)
             // Construct the link first so its scope exists, then launch the demux on
             // that scope — no orphan CoroutineScope; the demux dies when the link closes.
-            val link = WebRTCPeerLink(selfId, guessedRemoteId, facade, userChannel.receiveAsFlow(), senderIdDeferred)
+            val link = WebRTCPeerLink(selfId, guessedRemoteId, facade, userSpool.incoming, senderIdDeferred)
             link.scope.launch {
                 var idReceived = false
                 facade.incomingBytes.collect { bytes ->
@@ -98,10 +99,10 @@ public class WebRTCPeerLinkFactory
                         idReceived = true
                         senderIdDeferred.complete(PeerId(bytes.decodeToString()))
                     } else {
-                        userChannel.send(bytes)
+                        userSpool.deliver(bytes)
                     }
                 }
-                userChannel.close()
+                userSpool.close()
             }
             // Return immediately — senderIdDeferred resolves in the background when the
             // remote's ID frame arrives. Seam.incoming awaits it lazily per frame.
