@@ -71,6 +71,58 @@ internal suspend fun sampleWarpTelemetry() {
 }
 
 /** @suppress — sample only */
+internal suspend fun sampleWarpOtlpBridge() {
+    val telemetry = WarpTelemetry(
+        replica = us.tractat.kuilt.crdt.ReplicaId("device-uuid-abc123"),
+        store = InMemoryDurableStore(),
+    )
+    telemetry.recover()
+
+    // Export spans while possibly offline — export() succeeds on durable local write.
+    val span = SpanRecord(
+        traceId = kotlinx.io.bytestring.ByteString(ByteArray(16) { it.toByte() }),
+        spanId = kotlinx.io.bytestring.ByteString(ByteArray(8) { it.toByte() }),
+        parentSpanId = null,
+        name = "checkout",
+        kind = SpanKind.CLIENT,
+        startEpochNanos = 1_000_000_000L,
+        endEpochNanos = 2_000_000_000L,
+    )
+    telemetry.spans.export(span)
+
+    // When connectivity returns, drain to the backend.
+    // WarpOtlpBridge reconciles by digest: only spans the edge doesn't have are sent.
+    // A resend on reconnect cannot double-count.
+    val bridge = WarpOtlpBridge(exporter = telemetry.spans)
+
+    // Wire your OtlpEdge implementation and call drain whenever connectivity returns.
+    // DrainResult.Success(spansSent = N) — N spans sent; 0 means edge was already up to date.
+    // DrainResult.Failure(cause)         — edge unreachable; retry on next reconnect.
+    //
+    // val edge: OtlpEdge = MyKtorOtlpEdge(endpoint = "https://otel-collector.example.com")
+    // val result: DrainResult = bridge.drain(edge)
+    println("bridge ready: $bridge")
+}
+
+/** @suppress — sample only */
+internal suspend fun sampleOtlpEdge() {
+    // OtlpEdge is the interface you implement to point the bridge at your backend.
+    // The bridge calls digest() to learn what the edge already has, then send() for the delta.
+    //
+    // Example skeleton — replace with real Ktor HTTP or gRPC:
+    //
+    // class KtorOtlpEdge(private val endpoint: String) : OtlpEdge {
+    //     override suspend fun digest(): SpanDigest {
+    //         val ids = httpClient.get("$endpoint/v1/traces/digest").body<Set<ByteString>>()
+    //         return SpanDigest(ids)
+    //     }
+    //     override suspend fun send(spans: Set<SpanRecord>) {
+    //         httpClient.post("$endpoint/v1/traces") { setBody(spans.toOtlpProto()) }
+    //     }
+    // }
+}
+
+/** @suppress — sample only */
 internal suspend fun sampleWarpSpanExporter() {
     val replica = ReplicaId("device-uuid-abc123")
     val store = InMemoryDurableStore()
