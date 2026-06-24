@@ -16,8 +16,17 @@ import us.tractat.kuilt.crdt.internal.Murmur3
  *
  * **Precision.** The [precision] parameter `p` controls the number of registers
  * `m = 2^p` (valid range: 4–18 inclusive). Higher precision reduces the relative
- * standard error (`1.04 / sqrt(m)`) at the cost of memory (`m` bytes). The
- * default (`p = 14`) gives `m = 16384` registers and ~0.81% relative error.
+ * standard error (`1.04 / sqrt(m)`) at the cost of memory (`ceil(m * 6 / 8)` bytes).
+ * The default (`p = 14`) gives `m = 16384` registers and ~0.81% relative error.
+ *
+ * **Storage.** Registers are packed at **6 bits per register** (values 0–63), reducing
+ * state size by 25% compared to the previous 1-byte-per-register form. The backing
+ * `ByteArray` has size `ceil(m * 6 / 8)`. Register `i` spans bits `[i*6, i*6+5]`
+ * across at most two consecutive bytes. See [getRegister] and [setRegisterInto].
+ *
+ * **Wire format.** The packed register array is serialized directly. This is a
+ * **wire-breaking change** vs the previous 1-byte-per-register format (pre-1.0,
+ * intentional). Old-format data is not compatible.
  *
  * **Accuracy.** The estimate uses standard HyperLogLog bias-correction combined
  * with a small-range linear-counting correction (HLL++-style). For very low
@@ -47,12 +56,18 @@ import us.tractat.kuilt.crdt.internal.Murmur3
 @Serializable
 public class HyperLogLog private constructor(
     private val precision: Int,
-    /** One byte per register: the maximum leading-zero count + 1 seen so far. */
+    /**
+     * 6-bit-per-register packed backing store. Size = ceil(m * 6 / 8).
+     * Register `i` occupies bits [i*6, i*6+5] across at most two consecutive bytes.
+     */
     private val registers: ByteArray,
 ) : Quilted<HyperLogLog> {
 
     /** Number of registers (`m = 2^precision`). */
-    public val m: Int get() = registers.size
+    public val m: Int get() = 1 shl precision
+
+    /** Size of the packed backing store in bytes: `ceil(m * 6 / 8)`. */
+    public val packedByteSize: Int get() = registers.size
 
     /**
      * Add [value] to the sketch. Returns a [Patch] whose delta is a sparse
@@ -71,9 +86,9 @@ public class HyperLogLog private constructor(
     public fun add(value: String): Patch<HyperLogLog> {
         val hash = Murmur3.hash32(value)
         val (index, leadingZeros) = indexAndRho(hash)
-        if (leadingZeros <= registers[index]) return emptyPatch()
-        val sparse = ByteArray(m)
-        sparse[index] = leadingZeros
+        if (leadingZeros <= getRegister(index)) return emptyPatch()
+        val sparse = ByteArray(packedSize(m))
+        setRegisterInto(sparse, index, leadingZeros)
         return Patch(HyperLogLog(precision, sparse))
     }
 
@@ -96,7 +111,10 @@ public class HyperLogLog private constructor(
         require(precision == other.precision) {
             "Cannot merge HyperLogLog instances with different precision ($precision vs ${other.precision})"
         }
-        val merged = ByteArray(m) { i -> maxOf(registers[i], other.registers[i]) }
+        val merged = ByteArray(packedSize(m))
+        for (i in 0 until m) {
+            setRegisterInto(merged, i, maxOf(getRegister(i), other.getRegister(i)))
+        }
         return HyperLogLog(precision, merged)
     }
 
@@ -112,19 +130,49 @@ public class HyperLogLog private constructor(
     // ── Internal test support ────────────────────────────────────────────────
 
     /** Number of non-zero registers. Exposed for testing sparse delta invariants. */
-    internal fun nonZeroRegisterCount(): Int = registers.count { it != 0.toByte() }
+    internal fun nonZeroRegisterCount(): Int = (0 until m).count { i -> getRegister(i) != 0.toByte() }
+
+    // ── Private: register accessors ──────────────────────────────────────────
+
+    /**
+     * Reads the 6-bit register value at logical index [index] from [registers].
+     * Register `i` occupies bits `[i*6 .. i*6+5]` of the packed byte array,
+     * spanning at most two consecutive bytes.
+     */
+    private fun getRegister(index: Int): Byte {
+        val bitPos = index * 6
+        val byteIndex = bitPos ushr 3          // bitPos / 8
+        val bitOffset = bitPos and 7           // bitPos % 8
+        return if (bitOffset <= 2) {
+            // All 6 bits fit in one byte (offsets 0, 1, 2).
+            ((registers[byteIndex].toInt() and 0xFF) ushr (2 - bitOffset) and 0x3F).toByte()
+        } else {
+            // 6 bits span two consecutive bytes (offsets 3..7).
+            val bitsInFirst = 8 - bitOffset    // bits contributed by registers[byteIndex]
+            val hi = (registers[byteIndex].toInt() and 0xFF) and ((1 shl bitsInFirst) - 1)
+            val bitsInSecond = 6 - bitsInFirst
+            val lo = (registers[byteIndex + 1].toInt() and 0xFF) ushr (8 - bitsInSecond)
+            ((hi shl bitsInSecond) or lo).toByte()
+        }
+    }
 
     // ── Private helpers ──────────────────────────────────────────────────────
 
-    private fun emptyPatch(): Patch<HyperLogLog> = Patch(HyperLogLog(precision, ByteArray(m)))
+    private fun emptyPatch(): Patch<HyperLogLog> = Patch(HyperLogLog(precision, ByteArray(packedSize(m))))
 
     private fun rawEstimate(): Double {
-        val harmonicSum = registers.fold(0.0) { acc, reg -> acc + TWO_POW_NEG[reg.toInt() and 0xFF] }
+        var harmonicSum = 0.0
+        for (i in 0 until m) {
+            harmonicSum += TWO_POW_NEG[getRegister(i).toInt() and 0xFF]
+        }
         return alphaMM(m) / harmonicSum
     }
 
     private fun linearCountingOrRaw(rawEstimate: Double): Long {
-        val emptyRegisters = registers.count { it == 0.toByte() }
+        var emptyRegisters = 0
+        for (i in 0 until m) {
+            if (getRegister(i) == 0.toByte()) emptyRegisters++
+        }
         return when {
             emptyRegisters == m -> 0L // completely empty sketch
             emptyRegisters > 0 -> (m * ln(m.toDouble() / emptyRegisters)).toLong().coerceAtLeast(1L)
@@ -156,7 +204,41 @@ public class HyperLogLog private constructor(
             require(precision in MIN_PRECISION..MAX_PRECISION) {
                 "HyperLogLog precision must be in [$MIN_PRECISION, $MAX_PRECISION], was $precision"
             }
-            return HyperLogLog(precision, ByteArray(1 shl precision))
+            return HyperLogLog(precision, ByteArray(packedSize(1 shl precision)))
+        }
+
+        /** Packed backing store size in bytes for [m] registers at 6 bits/register. */
+        internal fun packedSize(m: Int): Int = (m * 6 + 7) / 8
+
+        /**
+         * Writes a 6-bit [value] (0–63) into register [index] of [backing].
+         * Pure function on the array (no allocation). Companion placement allows
+         * reuse from [add] without a receiver.
+         */
+        internal fun setRegisterInto(backing: ByteArray, index: Int, value: Byte) {
+            val v = value.toInt() and 0x3F   // clamp to 6 bits
+            val bitPos = index * 6
+            val byteIndex = bitPos ushr 3
+            val bitOffset = bitPos and 7
+            if (bitOffset <= 2) {
+                // All 6 bits fit in one byte.
+                val shift = 2 - bitOffset
+                val mask = 0x3F shl shift
+                backing[byteIndex] = ((backing[byteIndex].toInt() and 0xFF and mask.inv()) or (v shl shift)).toByte()
+            } else {
+                // 6 bits span two consecutive bytes.
+                val bitsInFirst = 8 - bitOffset
+                val bitsInSecond = 6 - bitsInFirst
+                // High bitsInFirst bits of v go into the low bitsInFirst bits of backing[byteIndex].
+                val maskFirst = (1 shl bitsInFirst) - 1
+                val hiPart = (v ushr bitsInSecond) and maskFirst
+                backing[byteIndex] = ((backing[byteIndex].toInt() and 0xFF and maskFirst.inv()) or hiPart).toByte()
+                // Low bitsInSecond bits of v go into the top bitsInSecond bits of backing[byteIndex+1].
+                val shift2 = 8 - bitsInSecond
+                val maskSecond = ((1 shl bitsInSecond) - 1) shl shift2
+                val loPart = (v and ((1 shl bitsInSecond) - 1)) shl shift2
+                backing[byteIndex + 1] = ((backing[byteIndex + 1].toInt() and 0xFF and maskSecond.inv()) or loPart).toByte()
+            }
         }
 
         // ── HLL constants ────────────────────────────────────────────────────
