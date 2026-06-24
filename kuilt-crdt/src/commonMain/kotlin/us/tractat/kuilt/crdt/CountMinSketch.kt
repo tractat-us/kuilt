@@ -1,6 +1,7 @@
 package us.tractat.kuilt.crdt
 
 import kotlinx.serialization.Serializable
+import us.tractat.kuilt.crdt.internal.Murmur3
 
 /**
  * A Count-Min sketch: approximate per-item frequency over a stream, in fixed
@@ -39,10 +40,10 @@ import kotlinx.serialization.Serializable
  *
  * ## Hash family
  *
- * One hash function per row, implemented as a seeded multiply-shift hash over
- * the item's UTF-8 bytes. Seed for row `i` is `(i + 1) * 2654435761L` (a
- * Fibonacci-derived multiplier). The hash is entirely self-contained — no
- * external dependencies.
+ * One hash function per row, derived from canonical MurmurHash3_x86_32 (Austin
+ * Appleby, public domain). Seed for row `i` is `i` (row index), giving each row
+ * an independent hash function with proper avalanche. The hash is byte-identical
+ * on all Kotlin Multiplatform targets.
  *
  * ## Use
  *
@@ -62,25 +63,14 @@ public class CountMinSketch private constructor(
     private val cells: Array<LongArray>,
 ) : Quilted<CountMinSketch> {
 
-    init {
-        require(width >= 1) { "width must be ≥ 1, was $width" }
-        require(depth >= 1) { "depth must be ≥ 1, was $depth" }
-    }
-
     /**
      * Add one occurrence of [item] to this sketch. Returns a [Patch] carrying
-     * the delta; the receiver is unchanged.
-     *
-     * The delta cell for each row carries the receiver's current cell value + 1
-     * (an absolute value, not a relative increment). This is correct for
-     * max-merge: when any replica absorbs the patch via [piece], [maxOf] picks
-     * up the new value only if it exceeds what the replica already knows.
+     * the incremented delta; the receiver is unchanged.
      */
     public fun add(item: String): Patch<CountMinSketch> {
         val delta = zeroCells(width, depth)
-        val hashBytes = item.encodeToByteArray()
         for (row in 0 until depth) {
-            val col = columnFor(hashBytes, row, width)
+            val col = columnFor(item, row, width)
             delta[row][col] = cells[row][col] + 1L
         }
         return Patch(CountMinSketch(width, depth, delta))
@@ -94,13 +84,13 @@ public class CountMinSketch private constructor(
      * error bound with high probability.
      */
     public fun estimate(item: String): Long {
-        val hashBytes = item.encodeToByteArray()
-        var min = cells[0][columnFor(hashBytes, 0, width)]
-        for (row in 1 until depth) {
-            val v = cells[row][columnFor(hashBytes, row, width)]
+        var min = Long.MAX_VALUE
+        for (row in 0 until depth) {
+            val col = columnFor(item, row, width)
+            val v = cells[row][col]
             if (v < min) min = v
         }
-        return min
+        return if (min == Long.MAX_VALUE) 0L else min
     }
 
     /** The join: element-wise max of the two count matrices. */
@@ -139,32 +129,22 @@ public class CountMinSketch private constructor(
          * Larger [width] → lower error rate (`ε = e/width`).
          * Larger [depth] → lower failure probability (`δ = e^-depth`).
          */
-        public fun empty(width: Int, depth: Int): CountMinSketch =
-            CountMinSketch(width, depth, zeroCells(width, depth))
+        public fun empty(width: Int, depth: Int): CountMinSketch {
+            require(width >= 1) { "width must be ≥ 1, was $width" }
+            require(depth >= 1) { "depth must be ≥ 1, was $depth" }
+            return CountMinSketch(width, depth, zeroCells(width, depth))
+        }
 
         /**
-         * Row-seed for row [row]: a Fibonacci-derived multiplier so each row
-         * gets an independent hash function.
-         */
-        private fun seedFor(row: Int): Long = (row + 1).toLong() * 2654435761L
-
-        /**
-         * Multiply-shift hash of [bytes] for [row], mapped to `[0, width)`.
+         * Column index for [item] in [row], mapped to `[0, width)`.
          *
-         * This is a simple, dependency-free hash adequate for frequency
-         * sketching. It is NOT cryptographically secure.
+         * Uses canonical MurmurHash3_x86_32 seeded by [row], giving each row an
+         * independent hash function with proper avalanche. The unsigned hash value
+         * is reduced to the column range with a modulo.
          */
-        internal fun columnFor(bytes: ByteArray, row: Int, width: Int): Int {
-            var h = seedFor(row)
-            for (b in bytes) {
-                h = h * 6364136223846793005L + b.toLong()
-            }
-            // Mix the high and low bits, then map to [0, width).
-            h = h xor (h ushr 33)
-            h *= -49064778989728563L
-            h = h xor (h ushr 33)
-            val positive = h and Long.MAX_VALUE
-            return (positive % width).toInt()
+        internal fun columnFor(item: String, row: Int, width: Int): Int {
+            val h = Murmur3.hash32(item, seed = row).toLong() and 0xFFFF_FFFFL
+            return (h % width).toInt()
         }
 
         private fun zeroCells(width: Int, depth: Int): Array<LongArray> =

@@ -4,6 +4,7 @@ import kotlinx.serialization.Serializable
 import kotlin.math.ceil
 import kotlin.math.ln
 import kotlin.math.roundToInt
+import us.tractat.kuilt.crdt.internal.Murmur3
 
 /**
  * A probabilistic, mergeable Bloom filter: an approximate set whose merge is
@@ -19,11 +20,11 @@ import kotlin.math.roundToInt
  * need probabilistic removes, model the filter together with a [GSet] of
  * tombstones.
  *
- * **Hash function.** Double-hashing from a single 64-bit Murmur3-inspired hash —
- * `h_i(x) = (h1 + i * h2) mod m` for i ∈ [0, k). This is a well-known,
- * dependency-free approximation of independent hash functions; see Kirsch &
- * Mitzenmacher (2008) "Less Hashing, Same Performance". The hash is entirely
- * deterministic and portable across platforms.
+ * **Hash function.** Kirsch–Mitzenmacher double-hashing using canonical
+ * MurmurHash3_x86_32 (Austin Appleby, public domain): `h_i(x) = (h1 + i * h2) mod m`
+ * where `h1 = Murmur3(x, seed=0)` and `h2 = Murmur3(x, seed=h1)`, for i ∈ [0, k).
+ * See Kirsch & Mitzenmacher (2008) "Less Hashing, Same Performance". The hash is
+ * byte-identical on all Kotlin Multiplatform targets.
  *
  * **Merge compatibility.** Two [BloomFilter] instances can only be [piece]d if
  * they were created with the same [bitCount] and [hashCount]. Use [create] with
@@ -47,7 +48,10 @@ public class BloomFilter private constructor(
      */
     public fun mightContain(element: String): Boolean {
         val (h1, h2) = hashPair(element)
-        return bitPositions(h1, h2).all { isBitSet(it) }
+        return (0 until hashCount).all { i ->
+            val bit = positiveMod(h1 + i.toLong() * h2, bitCount.toLong()).toInt()
+            isBitSet(bit)
+        }
     }
 
     /**
@@ -57,8 +61,9 @@ public class BloomFilter private constructor(
     public fun add(element: String): Patch<BloomFilter> {
         val delta = LongArray(bits.size)
         val (h1, h2) = hashPair(element)
-        for (bit in bitPositions(h1, h2)) {
-            delta[longIndex(bit)] = delta[longIndex(bit)] or bitMask(bit)
+        for (i in 0 until hashCount) {
+            val bit = positiveMod(h1 + i.toLong() * h2, bitCount.toLong()).toInt()
+            delta[bit ushr 6] = delta[bit ushr 6] or (1L shl (bit and 63))
         }
         return Patch(BloomFilter(bitCount, hashCount, delta))
     }
@@ -90,23 +95,8 @@ public class BloomFilter private constructor(
 
     // ── Private helpers ──────────────────────────────────────────────────────
 
-    /** Maps a bit index to its slot in [bits] (divide by 64). */
-    private fun longIndex(bit: Int): Int = bit ushr 6
-
-    /** Bitmask for [bit] within its long slot. */
-    private fun bitMask(bit: Int): Long = 1L shl (bit and 63)
-
     private fun isBitSet(bit: Int): Boolean =
-        bits[longIndex(bit)] and bitMask(bit) != 0L
-
-    /**
-     * Produces the [hashCount] bit positions for a double-hashing probe
-     * sequence from pre-computed components [h1] (base) and [h2] (step).
-     */
-    private fun bitPositions(h1: Long, h2: Long): Iterable<Int> =
-        (0 until hashCount).map { i ->
-            positiveMod(h1 + i.toLong() * h2, bitCount.toLong()).toInt()
-        }
+        bits[bit ushr 6] and (1L shl (bit and 63)) != 0L
 
     public companion object {
 
@@ -158,42 +148,15 @@ public class BloomFilter private constructor(
         // ── Hash ─────────────────────────────────────────────────────────────
 
         /**
-         * Returns a pair (h1, h2) used for double-hashing. The underlying hash
-         * is a Murmur3-inspired 64-bit mix — portable, deterministic, and
-         * dependency-free. h1 is the base position; h2 is the step size (made
-         * odd to guarantee full-period coverage).
+         * Returns a pair (h1, h2) for Kirsch–Mitzenmacher double-hashing.
+         * `h1 = Murmur3(element, seed=0)` — the base position.
+         * `h2 = Murmur3(element, seed=h1)` — the step size, made odd to ensure
+         * full-period coverage over the bit array.
          */
         private fun hashPair(element: String): Pair<Long, Long> {
-            val raw = murmur3Mix(element)
-            val h1 = raw ushr 32
-            val h2 = (raw and 0xFFFF_FFFFL) or 1L   // ensure odd step
+            val h1 = Murmur3.hash32(element, seed = 0).toLong() and 0xFFFF_FFFFL
+            val h2 = (Murmur3.hash32(element, seed = h1.toInt()).toLong() and 0xFFFF_FFFFL) or 1L
             return Pair(h1, h2)
-        }
-
-        /**
-         * A Murmur3-inspired 64-bit hash of [s]. Operates on UTF-16 code units to
-         * avoid a platform-specific UTF-8 encoding step while remaining fully
-         * deterministic across Kotlin targets.
-         */
-        private fun murmur3Mix(s: String): Long {
-            // Hex literals that exceed Long.MAX_VALUE must be written as signed twos-complement.
-            val c1 = -0x00ae5024128aa333L   // 0xff51afd7ed558ccd
-            val c2 = -0x3b314601e57a13adL   // 0xc4ceb9fe1a85ec53
-            var h = 0x9368d313L xor s.length.toLong()
-            for (ch in s) {
-                h = h xor ch.code.toLong()
-                h = h * c1
-                h = h xor (h ushr 33)
-                h = h * c2
-                h = h xor (h ushr 33)
-            }
-            // Finalisation mix
-            h = h xor (h ushr 33)
-            h = h * c1
-            h = h xor (h ushr 33)
-            h = h * c2
-            h = h xor (h ushr 33)
-            return h
         }
 
         /** Positive modulo — Kotlin's `%` can return negative values for negative dividends. */
