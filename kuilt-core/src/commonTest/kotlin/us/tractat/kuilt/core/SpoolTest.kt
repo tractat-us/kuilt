@@ -18,7 +18,7 @@ class SpoolTest {
 
     @Test
     fun reliableDeliversInOrder() = runTest {
-        val spool = Spool(DeliveryPolicy.Reliable)
+        val spool = Spool<Swatch>(DeliveryPolicy.Reliable)
         spool.deliver(frame(1)); spool.deliver(frame(2)); spool.deliver(frame(3))
         val got = spool.incoming.take(3).toList().map { it.sequence }
         assertEquals(listOf(1L, 2L, 3L), got)
@@ -26,7 +26,7 @@ class SpoolTest {
 
     @Test
     fun suspendBlocksWhenFull() = runTest {
-        val spool = Spool(DeliveryPolicy(capacity = 1, overflow = Overflow.SUSPEND))
+        val spool = Spool<Swatch>(DeliveryPolicy(capacity = 1, overflow = Overflow.SUSPEND))
         spool.deliver(frame(1))                       // fills the buffer
         var second = false
         val job = backgroundScope.launch { spool.deliver(frame(2)); second = true }
@@ -40,14 +40,14 @@ class SpoolTest {
 
     @Test
     fun dropOldestBoundsAndKeepsNewest() = runTest {
-        val spool = Spool(DeliveryPolicy(capacity = 1, overflow = Overflow.DROP_OLDEST))
+        val spool = Spool<Swatch>(DeliveryPolicy(capacity = 1, overflow = Overflow.DROP_OLDEST))
         spool.deliver(frame(1)); spool.deliver(frame(2)) // 1 dropped, never suspends
         assertEquals(2L, spool.incoming.first().sequence)
     }
 
     @Test
     fun failThrowsOnOverflow() = runTest {
-        val spool = Spool(DeliveryPolicy(capacity = 1, overflow = Overflow.FAIL))
+        val spool = Spool<Swatch>(DeliveryPolicy(capacity = 1, overflow = Overflow.FAIL))
         spool.deliver(frame(1))
         assertFailsWith<FrameOverflow> { spool.deliver(frame(2)) }
     }
@@ -56,7 +56,7 @@ class SpoolTest {
     fun reliableDeliverToAClosedSpoolIsADropNotAnError() = runTest {
         // A receiver that closed concurrently (left the mesh) must not surface an error to the
         // broadcasting sender — it is a drop, matching a peer that went away.
-        val spool = Spool(DeliveryPolicy.Reliable)
+        val spool = Spool<Swatch>(DeliveryPolicy.Reliable)
         spool.close()
         spool.deliver(frame(1)) // must not throw ClosedSendChannelException
     }
@@ -64,7 +64,7 @@ class SpoolTest {
     @Test
     fun failDeliverToAClosedSpoolIsADropNotOverflow() = runTest {
         // A closed channel is "receiver gone", not "buffer full" — FAIL must not conflate them.
-        val spool = Spool(DeliveryPolicy(capacity = 1, overflow = Overflow.FAIL))
+        val spool = Spool<Swatch>(DeliveryPolicy(capacity = 1, overflow = Overflow.FAIL))
         spool.close()
         spool.deliver(frame(1)) // must not throw FrameOverflow
     }
