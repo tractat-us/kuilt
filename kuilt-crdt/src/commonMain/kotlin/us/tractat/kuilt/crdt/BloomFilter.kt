@@ -47,10 +47,7 @@ public class BloomFilter private constructor(
      */
     public fun mightContain(element: String): Boolean {
         val (h1, h2) = hashPair(element)
-        return (0 until hashCount).all { i ->
-            val bit = positiveMod(h1 + i.toLong() * h2, bitCount.toLong()).toInt()
-            isBitSet(bit)
-        }
+        return bitPositions(h1, h2).all { isBitSet(it) }
     }
 
     /**
@@ -60,9 +57,8 @@ public class BloomFilter private constructor(
     public fun add(element: String): Patch<BloomFilter> {
         val delta = LongArray(bits.size)
         val (h1, h2) = hashPair(element)
-        for (i in 0 until hashCount) {
-            val bit = positiveMod(h1 + i.toLong() * h2, bitCount.toLong()).toInt()
-            delta[bit ushr 6] = delta[bit ushr 6] or (1L shl (bit and 63))
+        for (bit in bitPositions(h1, h2)) {
+            delta[longIndex(bit)] = delta[longIndex(bit)] or bitMask(bit)
         }
         return Patch(BloomFilter(bitCount, hashCount, delta))
     }
@@ -94,8 +90,23 @@ public class BloomFilter private constructor(
 
     // ── Private helpers ──────────────────────────────────────────────────────
 
+    /** Maps a bit index to its slot in [bits] (divide by 64). */
+    private fun longIndex(bit: Int): Int = bit ushr 6
+
+    /** Bitmask for [bit] within its long slot. */
+    private fun bitMask(bit: Int): Long = 1L shl (bit and 63)
+
     private fun isBitSet(bit: Int): Boolean =
-        bits[bit ushr 6] and (1L shl (bit and 63)) != 0L
+        bits[longIndex(bit)] and bitMask(bit) != 0L
+
+    /**
+     * Produces the [hashCount] bit positions for a double-hashing probe
+     * sequence from pre-computed components [h1] (base) and [h2] (step).
+     */
+    private fun bitPositions(h1: Long, h2: Long): Iterable<Int> =
+        (0 until hashCount).map { i ->
+            positiveMod(h1 + i.toLong() * h2, bitCount.toLong()).toInt()
+        }
 
     public companion object {
 
