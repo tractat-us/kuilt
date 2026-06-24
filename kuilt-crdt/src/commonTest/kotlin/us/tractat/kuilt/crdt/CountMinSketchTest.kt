@@ -138,6 +138,31 @@ class CountMinSketchTest {
         )
     }
 
+    // ── Hash stability (golden vectors) ──────────────────────────────────────
+
+    /**
+     * Pins the column assignments produced by [CountMinSketch.columnFor].
+     *
+     * **Wire-breaking warning:** if these values change, persisted matrices are
+     * invalidated — every stored estimate silently maps to the wrong cells after
+     * an upgrade. Any change to the hash algorithm requires a migration strategy.
+     *
+     * Algorithm: multiply-shift, seed = (row+1)×2654435761L, LCG body (multiplier
+     * 6364136223846793005L), finalisation mix. Input encoding: UTF-8 bytes.
+     */
+    @Test
+    fun hashStabilityGoldenVector() {
+        assertAll(
+            { assertEquals(8, CountMinSketch.columnFor("hello".encodeToByteArray(), row = 0, width = 16)) },
+            { assertEquals(4, CountMinSketch.columnFor("hello".encodeToByteArray(), row = 1, width = 16)) },
+            { assertEquals(7, CountMinSketch.columnFor("hello".encodeToByteArray(), row = 2, width = 16)) },
+            { assertEquals(6, CountMinSketch.columnFor("hello".encodeToByteArray(), row = 3, width = 16)) },
+            { assertEquals(2, CountMinSketch.columnFor("world".encodeToByteArray(), row = 0, width = 8)) },
+            { assertEquals(4, CountMinSketch.columnFor("world".encodeToByteArray(), row = 1, width = 8)) },
+            { assertEquals(1, CountMinSketch.columnFor("world".encodeToByteArray(), row = 2, width = 8)) },
+        )
+    }
+
     // ── Width/depth configuration ─────────────────────────────────────────────
 
     @Test
@@ -148,5 +173,15 @@ class CountMinSketchTest {
     @Test
     fun requiresDepthAtLeastOne() {
         assertFailsWith<IllegalArgumentException> { CountMinSketch.empty(width = 16, depth = 0) }
+    }
+
+    @Test
+    fun requiresValidDimensionsOnDeserialization() {
+        // kotlinx-serialization bypasses the private constructor, so the init block
+        // must fire to reject invalid dimensions that arrive through the wire.
+        val badJson = """{"width":0,"depth":4,"cells":[]}"""
+        assertFailsWith<IllegalArgumentException> {
+            Json.decodeFromString(CountMinSketch.serializer(), badJson)
+        }
     }
 }

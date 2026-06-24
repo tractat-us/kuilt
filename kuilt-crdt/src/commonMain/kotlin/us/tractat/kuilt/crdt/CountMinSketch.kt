@@ -62,9 +62,19 @@ public class CountMinSketch private constructor(
     private val cells: Array<LongArray>,
 ) : Quilted<CountMinSketch> {
 
+    init {
+        require(width >= 1) { "width must be ≥ 1, was $width" }
+        require(depth >= 1) { "depth must be ≥ 1, was $depth" }
+    }
+
     /**
      * Add one occurrence of [item] to this sketch. Returns a [Patch] carrying
-     * the incremented delta; the receiver is unchanged.
+     * the delta; the receiver is unchanged.
+     *
+     * The delta cell for each row carries the receiver's current cell value + 1
+     * (an absolute value, not a relative increment). This is correct for
+     * max-merge: when any replica absorbs the patch via [piece], [maxOf] picks
+     * up the new value only if it exceeds what the replica already knows.
      */
     public fun add(item: String): Patch<CountMinSketch> {
         val delta = zeroCells(width, depth)
@@ -85,13 +95,12 @@ public class CountMinSketch private constructor(
      */
     public fun estimate(item: String): Long {
         val hashBytes = item.encodeToByteArray()
-        var min = Long.MAX_VALUE
-        for (row in 0 until depth) {
-            val col = columnFor(hashBytes, row, width)
-            val v = cells[row][col]
+        var min = cells[0][columnFor(hashBytes, 0, width)]
+        for (row in 1 until depth) {
+            val v = cells[row][columnFor(hashBytes, row, width)]
             if (v < min) min = v
         }
-        return if (min == Long.MAX_VALUE) 0L else min
+        return min
     }
 
     /** The join: element-wise max of the two count matrices. */
@@ -130,11 +139,8 @@ public class CountMinSketch private constructor(
          * Larger [width] → lower error rate (`ε = e/width`).
          * Larger [depth] → lower failure probability (`δ = e^-depth`).
          */
-        public fun empty(width: Int, depth: Int): CountMinSketch {
-            require(width >= 1) { "width must be ≥ 1, was $width" }
-            require(depth >= 1) { "depth must be ≥ 1, was $depth" }
-            return CountMinSketch(width, depth, zeroCells(width, depth))
-        }
+        public fun empty(width: Int, depth: Int): CountMinSketch =
+            CountMinSketch(width, depth, zeroCells(width, depth))
 
         /**
          * Row-seed for row [row]: a Fibonacci-derived multiplier so each row
