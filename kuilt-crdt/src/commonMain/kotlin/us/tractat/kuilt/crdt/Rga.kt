@@ -515,10 +515,19 @@ public class Rga<V> private constructor(
         return Rga(mergedOps, mergedLamport, newCache)
     }
 
+    /**
+     * Two [Rga] instances are equal when their op-sets are equal — i.e. they
+     * represent the same CRDT state. The [lamport] high-water mark is a clock
+     * convenience, not part of the value: two converged replicas may differ in
+     * [lamport] if one advanced its clock by merging with a peer that had a higher
+     * clock, so including it in equality would break `a.piece(a) == a` in that case.
+     *
+     * This matches [Fugue.equals], which is also ops-only.
+     */
     override fun equals(other: Any?): Boolean =
-        other is Rga<*> && ops == other.ops && lamport == other.lamport
+        other is Rga<*> && ops == other.ops
 
-    override fun hashCode(): Int = 31 * ops.hashCode() + lamport.hashCode()
+    override fun hashCode(): Int = ops.hashCode()
 
     override fun toString(): String = "Rga(${toList()})"
 

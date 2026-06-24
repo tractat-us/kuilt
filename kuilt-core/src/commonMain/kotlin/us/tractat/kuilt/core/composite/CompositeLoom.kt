@@ -3,6 +3,7 @@ package us.tractat.kuilt.core.composite
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import us.tractat.kuilt.core.DeliveryPolicy
 import us.tractat.kuilt.core.FabricAvailability
 import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.PlyId
@@ -26,24 +27,29 @@ import kotlin.coroutines.CoroutineContext
  *   coroutines (scheduling only — the woven seam's thread-safety is via a lock + atomics,
  *   so it is correct under a multi-threaded dispatcher). Production default
  *   ([Dispatchers.Default]); tests inject a dispatcher derived from the test scheduler.
+ * @param policy Governs the inbound [us.tractat.kuilt.core.Spool]'s capacity and overflow
+ *   behaviour for each woven [CompositeSeam]. Defaults to [DeliveryPolicy.Reliable]
+ *   (bounded, backpressured, lossless).
  */
 public class CompositeLoom(
     private val plies: StateFlow<List<Pair<PlyId, Loom>>>,
     private val dispatcher: CoroutineContext = Dispatchers.Default,
+    private val policy: DeliveryPolicy = DeliveryPolicy.Reliable,
 ) : Loom {
 
     /** Static convenience: a fixed ply set that never changes after `weave()`. */
     public constructor(
         plies: List<Pair<PlyId, Loom>>,
         dispatcher: CoroutineContext = Dispatchers.Default,
-    ) : this(MutableStateFlow(plies), dispatcher)
+        policy: DeliveryPolicy = DeliveryPolicy.Reliable,
+    ) : this(MutableStateFlow(plies), dispatcher, policy)
 
     override suspend fun weave(rendezvous: Rendezvous): Seam {
         val current = plies.value
         require(current.isNotEmpty()) { "CompositeLoom desired set must be non-empty at weave()" }
         require(current.map { it.first }.toSet().size == current.size) { "duplicate PlyId" }
         val initial = current.map { (id, loom) -> id to loom.weave(rendezvous) }
-        return CompositeSeam(initial, rendezvous, plies, dispatcher)
+        return CompositeSeam(initial, rendezvous, plies, dispatcher, policy)
     }
 
     override fun availability(): FabricAvailability =

@@ -4,6 +4,8 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.consumeAsFlow
+import us.tractat.kuilt.core.DeliveryPolicy
+import us.tractat.kuilt.core.Spool
 import us.tractat.kuilt.webrtc.internal.RtcPeerConnectionFacade
 import us.tractat.kuilt.webrtc.internal.RtcPeerConnectionFacadeFactory
 import us.tractat.kuilt.webrtc.internal.SdpType
@@ -16,10 +18,17 @@ import us.tractat.kuilt.webrtc.internal.SdpType
  *
  * Wire up via [PairedFacadeFactory] which returns two factories whose
  * created facades are connected to each other.
+ *
+ * Data delivery (ByteArray) uses bounded [Spool]s, mirroring the production
+ * [BrowserRtcFacadeFactory] channels. Signaling ([SignalingMessage.IceCandidate])
+ * remains on unbounded channels — control-plane, out of scope for backpressure.
+ *
+ * @param policy Governs the [Spool] capacity and overflow behaviour for data frames.
+ *   Defaults to [DeliveryPolicy.Reliable].
  */
 internal class PairedFacadeFactory private constructor(
     private val side: Side,
-    private val partner: Pair<Channel<ByteArray>, Channel<ByteArray>>,
+    private val spools: Pair<Spool<ByteArray>, Spool<ByteArray>>,
     private val dataChannelOpen: Pair<CompletableDeferred<Unit>, CompletableDeferred<Unit>>,
     private val remoteClose: Pair<CompletableDeferred<Unit>, CompletableDeferred<Unit>>,
 ) : RtcPeerConnectionFacadeFactory {
@@ -29,10 +38,12 @@ internal class PairedFacadeFactory private constructor(
         iceConfig: IceConfig,
         hostInitiated: Boolean,
     ): RtcPeerConnectionFacade {
-        val (outboundChan, inboundChan) =
+        // Left facade sends into rightInbound; reads from leftInbound.
+        // Right facade sends into leftInbound; reads from rightInbound.
+        val (outboundSpool, inboundSpool) =
             when (side) {
-                Side.Left -> partner.first to partner.second
-                Side.Right -> partner.second to partner.first
+                Side.Left -> spools.second to spools.first
+                Side.Right -> spools.first to spools.second
             }
         val (localOpen, remoteOpen) =
             when (side) {
@@ -44,14 +55,15 @@ internal class PairedFacadeFactory private constructor(
                 Side.Left -> remoteClose.first to remoteClose.second
                 Side.Right -> remoteClose.second to remoteClose.first
             }
-        return FakeFacade(outboundChan, inboundChan, localOpen, remoteOpen, localClose, remoteClosePeer)
+        return FakeFacade(outboundSpool, inboundSpool, localOpen, remoteOpen, localClose, remoteClosePeer)
     }
 
     companion object {
         /** Returns (leftFactory, rightFactory). One facade created from each pairs with the other. */
-        fun pair(): Pair<PairedFacadeFactory, PairedFacadeFactory> {
-            val leftToRight = Channel<ByteArray>(Channel.UNLIMITED)
-            val rightToLeft = Channel<ByteArray>(Channel.UNLIMITED)
+        fun pair(policy: DeliveryPolicy = DeliveryPolicy.Reliable): Pair<PairedFacadeFactory, PairedFacadeFactory> {
+            // leftInbound: right writes, left reads. rightInbound: left writes, right reads.
+            val leftInbound = Spool<ByteArray>(policy)
+            val rightInbound = Spool<ByteArray>(policy)
             val leftOpen = CompletableDeferred<Unit>()
             val rightOpen = CompletableDeferred<Unit>()
             val leftClose = CompletableDeferred<Unit>()
@@ -59,14 +71,14 @@ internal class PairedFacadeFactory private constructor(
             val left =
                 PairedFacadeFactory(
                     Side.Left,
-                    leftToRight to rightToLeft,
+                    leftInbound to rightInbound,
                     leftOpen to rightOpen,
                     leftClose to rightClose,
                 )
             val right =
                 PairedFacadeFactory(
                     Side.Right,
-                    leftToRight to rightToLeft,
+                    leftInbound to rightInbound,
                     leftOpen to rightOpen,
                     leftClose to rightClose,
                 )
@@ -76,8 +88,8 @@ internal class PairedFacadeFactory private constructor(
 }
 
 private class FakeFacade(
-    private val outbound: Channel<ByteArray>,
-    private val inbound: Channel<ByteArray>,
+    private val outbound: Spool<ByteArray>,
+    private val inbound: Spool<ByteArray>,
     private val localOpen: CompletableDeferred<Unit>,
     private val remoteOpen: CompletableDeferred<Unit>,
     private val localClose: CompletableDeferred<Unit>,
@@ -87,7 +99,7 @@ private class FakeFacade(
     private val failure = CompletableDeferred<Throwable>()
 
     override val localIceCandidates: Flow<SignalingMessage.IceCandidate> = iceCandidates.consumeAsFlow()
-    override val incomingBytes: Flow<ByteArray> = inbound.consumeAsFlow()
+    override val incomingBytes: Flow<ByteArray> = inbound.incoming
 
     override suspend fun awaitDataChannelOpen() {
         // Both sides must call createOffer/createAnswer + setLocalDescription
@@ -127,13 +139,13 @@ private class FakeFacade(
     }
 
     override suspend fun sendBytes(bytes: ByteArray) {
-        outbound.send(bytes)
+        outbound.deliver(bytes)
     }
 
     override suspend fun close() {
         if (!localClose.isCompleted) {
             localClose.complete(Unit)
-            // Signal the partner that we closed.
+            // Signal the partner that we closed, and complete the partner's incoming flow.
             remoteClose.complete(Unit)
         }
         outbound.close()

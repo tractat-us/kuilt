@@ -2,14 +2,22 @@ package us.tractat.kuilt.webrtc.internal
 
 import io.github.oshai.kotlinlogging.KotlinLogging
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.await
+import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.consumeAsFlow
+import kotlinx.coroutines.launch
+import us.tractat.kuilt.core.DeliveryPolicy
+import us.tractat.kuilt.core.Spool
 import us.tractat.kuilt.webrtc.IceConfig
 import us.tractat.kuilt.webrtc.IceServer
 import us.tractat.kuilt.webrtc.IceTransportPolicy
 import us.tractat.kuilt.webrtc.SignalingMessage
+import kotlin.coroutines.CoroutineContext
 
 private val log = KotlinLogging.logger {}
 
@@ -24,8 +32,17 @@ private val log = KotlinLogging.logger {}
  * Kotlin/Wasm because the JS closure extracts primitives / [kotlin.js.JsAny]
  * values before calling the Kotlin handler — avoiding the unreliable
  * external-interface wrapper path that direct assignment uses.
+ *
+ * @param policy Governs the inbound [Spool]'s capacity and overflow behaviour.
+ *   Defaults to [DeliveryPolicy.Reliable] (bounded, backpressured, lossless).
+ * @param dispatcher The context for the delivery drain coroutine (scheduling only).
+ *   Production callers use the default [Dispatchers.Default]; tests pass a context
+ *   derived from the test scheduler so virtual-time control works.
  */
-internal class BrowserRtcFacadeFactory : RtcPeerConnectionFacadeFactory {
+internal class BrowserRtcFacadeFactory(
+    private val policy: DeliveryPolicy = DeliveryPolicy.Reliable,
+    private val dispatcher: CoroutineContext = Dispatchers.Default,
+) : RtcPeerConnectionFacadeFactory {
     override fun create(
         iceConfig: IceConfig,
         hostInitiated: Boolean,
@@ -37,7 +54,7 @@ internal class BrowserRtcFacadeFactory : RtcPeerConnectionFacadeFactory {
             } else {
                 null
             }
-        return BrowserRtcFacade(pc, dataChannel)
+        return BrowserRtcFacade(pc, dataChannel, policy, dispatcher)
     }
 
     private fun buildConfiguration(iceConfig: IceConfig): RTCConfiguration {
@@ -68,9 +85,19 @@ internal class BrowserRtcFacadeFactory : RtcPeerConnectionFacadeFactory {
 private class BrowserRtcFacade(
     private val pc: RTCPeerConnection,
     initialDataChannel: RTCDataChannel?,
+    policy: DeliveryPolicy,
+    dispatcher: CoroutineContext,
 ) : RtcPeerConnectionFacade {
+    private val scope = CoroutineScope(SupervisorJob() + dispatcher)
     private val iceCandidatesChan = Channel<SignalingMessage.IceCandidate>(Channel.UNLIMITED)
-    private val incomingChan = Channel<ByteArray>(Channel.UNLIMITED)
+
+    // Bounded staging channel: the RTCDataChannel onmessage JS callback deposits frames here
+    // non-suspendingly via trySend. The single drain coroutine forwards them to the spool in
+    // FIFO order — matching the bridge pattern from BridgePeerLink / MCSessionLink.
+    private val bridge: Channel<ByteArray> =
+        Channel(capacity = policy.capacity, onBufferOverflow = BufferOverflow.DROP_OLDEST)
+    private val spool = Spool<ByteArray>(policy)
+
     private val dataChannelOpen = CompletableDeferred<Unit>()
     private val dataChannelClosed = CompletableDeferred<Unit>()
     private val connectionFailed = CompletableDeferred<Throwable>()
@@ -79,9 +106,17 @@ private class BrowserRtcFacade(
 
     override val localIceCandidates: Flow<SignalingMessage.IceCandidate> =
         iceCandidatesChan.consumeAsFlow()
-    override val incomingBytes: Flow<ByteArray> = incomingChan.consumeAsFlow()
+    override val incomingBytes: Flow<ByteArray> = spool.incoming
 
     init {
+        // Single drain coroutine: forwards frames from the JS-callback bridge to the spool in
+        // FIFO order. A single coroutine (not one per frame) preserves delivery ordering.
+        scope.launch {
+            for (frame in bridge) {
+                spool.deliver(frame)
+            }
+        }
+
         pcSetOnIceCandidate(pc) { cand ->
             log.debug { "rtc localIceCandidate sdpMid=${sdpMidString(cand)}" }
             iceCandidatesChan.trySend(
@@ -112,16 +147,18 @@ private class BrowserRtcFacade(
             if (!dataChannelOpen.isCompleted) dataChannelOpen.complete(Unit)
         }
         dcSetOnClose(ch) {
-            log.debug { "rtc dc.onclose — closing incomingChan" }
+            log.debug { "rtc dc.onclose — closing bridge and spool" }
             if (!dataChannelClosed.isCompleted) dataChannelClosed.complete(Unit)
-            incomingChan.close()
+            bridge.close()
+            spool.close()
         }
         dcSetOnError(ch) { message ->
             log.warn { "rtc dc.onerror message=$message readyState=${ch.readyState}" }
         }
         dcSetOnMessage(ch) { data ->
-            val bytes = data.toByteArray()
-            incomingChan.trySend(bytes)
+            // Non-suspending deposit into the bridge channel. The drain coroutine
+            // forwards to spool.deliver in FIFO order.
+            bridge.trySend(data.toByteArray())
         }
     }
 
@@ -173,7 +210,8 @@ private class BrowserRtcFacade(
     override suspend fun close() {
         dataChannel?.close()
         pc.close()
-        incomingChan.close()
+        bridge.close()
+        spool.close()
         iceCandidatesChan.close()
     }
 }
