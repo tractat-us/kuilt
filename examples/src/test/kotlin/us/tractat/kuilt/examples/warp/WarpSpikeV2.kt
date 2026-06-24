@@ -404,9 +404,15 @@ private fun claimWithIntent(
  * Zero duplicates. Every assignment costs a quorum round-trip. For N peers, a quorum
  * requires ceil((N+1)/2) peers to agree. We model this as:
  *   - coordination cost = 2 × quorum-size messages per task (propose + accept)
- * The oracle assigns each unassigned task to exactly one peer per round (simulating
- * the Raft-append → commit flow for a batch of claims). The measurement surfaces the
- * messages-per-task cost of zero duplicates.
+ *
+ * The full `2 × quorumSize` messages are attributed to the winning peer so that
+ * `sum(coordinationMessagesSent) / tasksCompleted` yields the correct per-task cost.
+ * We do NOT divide by peer count — that was an accounting bug that produced a
+ * spuriously low ~1.0 msgs/task figure.
+ *
+ * Cost-model caveat: this models the minimum quorum exchange. Real Raft adds leader
+ * heartbeats, retry rounds on contention, and leader-concentration of work; treat
+ * the number as a lower-bound on consensus coordination cost.
  */
 private fun claimConsensus(
     peers: List<PeerStateV2>,
@@ -423,30 +429,32 @@ private fun claimConsensus(
         pickCandidateForConsensus(peer, consensusAssigned) to peer.id
     }.filter { it.first != null }.map { it.first!! to it.second }
 
-    // Group requests by task; assign one peer per task (the one with lowest replica-id for determinism).
+    // Group requests by task; assign one peer per task (lowest replica-id = deterministic winner).
     val taskToWinner = taskRequests
         .groupBy { it.first }
         .mapValues { (_, requesters) -> requesters.minByOrNull { it.second.value }!!.second }
 
-    // Record assignments and track coordination cost.
-    var totalMessages = 0
+    // Record assignments. Attribute the full 2×quorum cost to the winner so the
+    // per-task average is correct — real Raft concentrates messages on the leader anyway.
+    val winnerToNewMessages = mutableMapOf<ReplicaId, Int>()
     for ((task, winner) in taskToWinner) {
         if (task !in consensusAssigned) {
             consensusAssigned[task] = winner
             claims.add(task to winner)
-            totalMessages += messagesPerAssignment
+            winnerToNewMessages[winner] = (winnerToNewMessages[winner] ?: 0) + messagesPerAssignment
         }
     }
 
-    // Distribute coordination cost across winning peers (approximate — real Raft concentrates on leader).
-    val msgsPerPeer = if (taskToWinner.isNotEmpty()) totalMessages / peers.size else 0
     val updated = peers.map { peer ->
         val assignedTask = consensusAssigned.entries.firstOrNull { it.value == peer.id && it.key !in peer.executions }
+        val extraMsgs = winnerToNewMessages[peer.id] ?: 0
         if (assignedTask != null) {
             peer.copy(
                 executions = peer.executions + assignedTask.key,
-                coordinationMessagesSent = peer.coordinationMessagesSent + msgsPerPeer,
+                coordinationMessagesSent = peer.coordinationMessagesSent + extraMsgs,
             )
+        } else if (extraMsgs > 0) {
+            peer.copy(coordinationMessagesSent = peer.coordinationMessagesSent + extraMsgs)
         } else {
             peer
         }

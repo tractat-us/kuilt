@@ -144,9 +144,10 @@ this file is the starting data point, not the design.
 
 ## v2 — Head-to-head comparison (strategy tradeoff measurement)
 
-> **Status: SPECULATIVE / EXPERIMENTAL.** Extends the v1 spike with three fixes: realistic
-> gossip propagation (partial-view fanout, multi-hop), a consensus baseline, and a hard
-> convergence assertion (proved, not assumed). See `WarpSpikeV2.kt` / `WarpSpikeV2Test.kt`.
+> **Status: SPECULATIVE / EXPERIMENTAL.** Extends the v1 spike with four fixes: realistic
+> gossip propagation (partial-view fanout, multi-hop), a consensus baseline with corrected
+> cost accounting, hard convergence assertions (proved, not assumed), and scheduler dropped
+> from measurement. See `WarpSpikeV2.kt` / `WarpSpikeV2Test.kt`.
 
 ### What v2 measures
 
@@ -157,42 +158,71 @@ propagation where convergence genuinely lags.
 | Strategy | Approach | Pre-claim coord? |
 |----------|----------|-----------------|
 | Optimistic-dedup (OPT) | Claim locally; dedup via `Results` `ORMap` | None (0 msgs/task) |
-| Intent-register (IR) | Write to `LWWMap<TaskId,PeerId>`, gossip once, execute if winner | 1 gossip propagation |
+| Intent-register (IR) | Write to `LWWMap<TaskId,PeerId>`, gossip once, execute if winner | fanout × intent msgs |
 | Consensus-model (CONS) | Quorum round-trip per task (modelled oracle, 0 dups) | `2 × ceil((N+1)/2)` msgs/task |
 
 ### Headline numbers (40 tasks, 30 rounds, fanout=3, 2-hop, seed=680)
 
 | peers | OPT dup% | IR dup% | CONS dup% | OPT msgs/task | IR msgs/task | CONS msgs/task |
 |------:|---------:|--------:|----------:|--------------:|-------------:|---------------:|
-| 2     | 4.8%     | 2.8%    | 0.0%      | 0.0           | 1.7          | 2.0            |
-| 4     | 16.7%    | 0.0%    | 0.0%      | 0.0           | 7.2          | 1.0            |
-| 8     | 53.5%    | 24.5%   | 0.0%      | 0.0           | 14.6         | 1.0            |
-| 16    | 67.5%    | 37.5%   | 0.0%      | 0.0           | 25.0         | 1.0            |
+| 2     | 4.8%     | 2.8%    | 0.0%      | 0.0           | 1.7          | 4.0            |
+| 4     | 16.7%    | 0.0%    | 0.0%      | 0.0           | 7.2          | 6.0            |
+| 8     | 53.5%    | 24.5%   | 0.0%      | 0.0           | 14.6         | 10.0           |
+| 16    | 67.5%    | 37.5%   | 0.0%      | 0.0           | 25.0         | 18.0           |
 
-### The tradeoff statement (4 peers, fanout=3)
+### The tradeoff — no free lunch
 
-- **Optimistic-dedup:** 16.7% duplicates, zero coordination overhead.
-- **Intent-register:** 0.0% duplicates (16.7% fewer), but costs +7.2 gossip messages per task.
-- **Consensus-model:** 0.0% duplicates, but costs a quorum round-trip per task (~3 messages).
+**Consensus and intent-register are in the same coordination-cost ballpark at small N.** At
+4 peers, IR costs 7.2 msgs/task vs consensus's 6.0 — about the same order of magnitude.
+Intent-register reaches parity with consensus on duplicate rate (both 0%), but does not
+beat consensus on coordination cost at this scale. The options are:
 
-**Intent-register eliminates duplicates at 4 peers, but its gossip fanout cost (7.2 msgs/task)
-exceeds even the modelled consensus cost (1–2 msgs/task at small clusters).** The crossover
-depends on cluster size and fanout: at N=2, IR is cheaper than consensus (1.7 vs 2.0 msgs/task);
-at N≥4, IR's fanout overhead dominates. This means intent-register is the sweet spot only at
-very small peer counts (2–3) with moderate fanout; at N≥4, full consensus wins on both dimensions
-(0% dups, lower messages) against a naive fanout-to-all-neighbours intent strategy.
+- **Optimistic-dedup:** zero coordination, 17–54% wasted compute. The right choice when
+  tasks are fast and idempotent — the waste is tolerable and the simplicity is free.
+- **Intent-register:** similar coordination cost to consensus, fewer duplicates than optimistic
+  but not zero at scale (24.5% at 8 peers). Useful only if the gossip-amortization benefit
+  (see caveats) closes the gap significantly.
+- **Consensus:** zero duplicates, minimum-viable quorum messages. The right choice when
+  duplicate execution is genuinely expensive and tasks are not idempotent.
+
+**The CALM boundary holds.** Exclusive task assignment is non-monotone — you cannot determine
+from grows-only CRDT state alone who has exclusive claim. The coordination cost of zero
+duplicates is real and unavoidable. There is no strictly-better option: reducing duplicates
+always costs more coordination.
+
+### Cost-model caveats
+
+The two costs are not apples-to-apples and should be read as order-of-magnitude brackets:
+
+**Consensus (undercounts real cost):**
+- Models only the minimum quorum exchange: 1 propose + `quorumSize` accepts per task.
+- Real Raft adds leader heartbeats, retry rounds on contention, log replication to all
+  followers (not just a quorum), and snapshots. True consensus cost is higher.
+- Batched proposals collapse many tasks into one round-trip, which would lower the
+  per-task number substantially at high throughput.
+
+**Intent-register (overcounts real cost):**
+- Models every intent announcement as `fanout` additional messages per task, in addition
+  to the results gossip traffic.
+- In a real Quilter-backed system, intent writes would piggyback on the same delta-gossip
+  messages already being sent for results — the marginal cost per task is lower.
+- A more selective strategy (announce intent only to the peer most likely to be the
+  concurrent claimant) could cut IR's overhead substantially.
+
+Treat the cost column as indicating **which order of magnitude** the strategy lives in,
+not as a precise message count.
 
 ### Gossip quality effect (4 peers, 40 tasks, seed=680)
 
-| gossip config    | OPT dup% | IR dup% | OPT msgs/task | IR msgs/task |
-|------------------|----------:|--------:|--------------:|-------------:|
-| fanout=2, hops=1 | 42.0%     | 20.0%   | 0.0           | 5.6          |
-| fanout=3, hops=1 | 9.1%      | 2.4%    | 0.0           | 7.8          |
-| fanout=3, hops=2 | 16.7%     | 2.4%    | 0.0           | 7.5          |
-| fanout=5, hops=3 | 9.1%      | 0.0%    | 0.0           | 9.5          |
+| gossip config    | OPT dup% | IR dup% | CONS dup% | OPT msgs/task | IR msgs/task | CONS msgs/task |
+|------------------|---------:|--------:|----------:|--------------:|-------------:|---------------:|
+| fanout=2, hops=1 | 42.0%    | 20.0%   | 0.0%      | 0.0           | 5.6          | 6.0            |
+| fanout=3, hops=1 | 9.1%     | 2.4%    | 0.0%      | 0.0           | 7.8          | 6.0            |
+| fanout=3, hops=2 | 16.7%    | 2.4%    | 0.0%      | 0.0           | 7.5          | 6.0            |
+| fanout=5, hops=3 | 9.1%     | 0.0%    | 0.0%      | 0.0           | 9.5          | 6.0            |
 
-Better gossip (higher fanout, more hops) cuts duplicate rates but increases IR's overhead
-proportionally — the tradeoff is intrinsic to the gossip mechanism, not tuneable away.
+Better gossip cuts duplicate rates but increases IR's overhead proportionally. The tradeoff
+between duplicate rate and intent-gossip cost is intrinsic to the fanout mechanism.
 
 ### Correctness — convergence proved, not assumed (fixes v1's main gap)
 
@@ -203,30 +233,20 @@ Every v2 simulation run ends with a hard assertion before returning results:
 This demonstrates that `ORMap` deduplication is correct under the realistic gossip model:
 the CRDT merge subsumes duplicate writes deterministically, regardless of claim order.
 
-### What the consensus model measures (and its limits)
-
-The consensus model is a **cost oracle**, not a real Raft cluster. It:
-- Assigns each task to exactly one peer with zero duplicates (by oracle).
-- Counts `2 × quorum-size` coordination messages per assignment.
-- Distributes that cost per-peer as `totalMessages / peerCount`.
-
-This understates real Raft cost (leader does more work; log replication adds rounds) and
-overstates consensus throughput (real Raft batches proposals). The number is a directional
-reference point, not a precise Raft benchmark.
-
 ### Key findings vs v1
 
 | Gap | v1 finding | v2 finding |
 |-----|-----------|-----------|
 | Model fidelity | Full-state every round (best-case floor) | Partial-view fanout gossip (realistic lag) |
-| Duplicate rate at 8 peers | 28.6% | 53.5% (floor was understated — v1's concern confirmed) |
-| Baseline | None | Consensus model: 0% dups at modest message cost |
-| Intent-register | Predicted to help | Confirmed: cuts dups substantially, but gossip overhead is real |
+| Duplicate rate at 8 peers | 28.6% | 53.5% — floor was understated, v1's concern confirmed |
+| Baseline | None | Consensus: 0% dups, 6 msgs/task at N=4 |
+| Intent-register | Predicted to help | Confirmed: cuts dups, but same cost ballpark as consensus |
 | Correctness | Assumed | Proved: hard convergence assertion in every run |
+| Cost accounting | Consensus showed ~1 msg/task (accounting bug) | Fixed: 6 msgs/task at N=4 (2 × quorum) |
 
 ### Honest limits
 
 - The consensus model is a simplified oracle, not a Raft measurement.
-- "Coordination messages" for intent-register counts per-fanout-neighbour intent gossips;
-  a more selective intent strategy (announce only to likely-winner peers) could reduce this.
+- "Coordination messages" counts are model-level approximations — see Cost-model caveats above.
 - Results are seeded and deterministic but reflect one specific gossip topology per seed.
+- The `BoundedCounter` scheduler is omitted from v2 (quota was always saturated at v1's init).
