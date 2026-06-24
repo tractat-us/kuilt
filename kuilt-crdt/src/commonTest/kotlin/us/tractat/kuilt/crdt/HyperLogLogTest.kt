@@ -37,7 +37,8 @@ class HyperLogLogTest {
     @Test
     fun singleElementEstimatesOne() {
         val hll = HyperLogLog.empty()
-        val next = hll.add("hello")
+        val patch = hll.add("hello")
+        val next = hll.piece(patch)
         // small-cardinality correction: exact for n=1
         assertTrue(next.estimate() in 1L..2L, "expected ≈1, got ${next.estimate()}")
     }
@@ -81,7 +82,7 @@ class HyperLogLogTest {
     fun estimateIsWithinErrorBandFor10kDistinctItems() {
         val n = 10_000
         var hll = HyperLogLog.empty(precision = 14)
-        repeat(n) { i -> hll = hll.add("item-$i") }
+        repeat(n) { i -> hll = hll.piece(hll.add("item-$i")) }
         val estimate = hll.estimate()
         val tolerance = (n * 0.10).toLong()
         assertTrue(
@@ -103,7 +104,7 @@ class HyperLogLogTest {
     @Test
     fun duplicateAddsDontInflateEstimate() {
         var hll = HyperLogLog.empty(precision = 14)
-        repeat(1_000) { hll = hll.add("same-key") }
+        repeat(1_000) { hll = hll.piece(hll.add("same-key")) }
         val estimate = hll.estimate()
         // Should converge to ~1 (small cardinality correction)
         assertTrue(estimate in 1L..5L, "expected ~1 for one distinct item, got $estimate")
@@ -142,8 +143,9 @@ class HyperLogLogTest {
      */
     @Test
     fun addingDuplicateIsIdempotent() {
-        val once = HyperLogLog.empty().add("hello")
-        val twice = once.add("hello")
+        val base = HyperLogLog.empty()
+        val once = base.piece(base.add("hello"))
+        val twice = once.piece(once.add("hello"))
         assertEquals(once, twice)
     }
 
@@ -171,10 +173,81 @@ class HyperLogLogTest {
         )
     }
 
+    // ── Sparse delta ──────────────────────────────────────────────────────────
+
+    /**
+     * A single add() changes at most one register. The delta's register array
+     * must have at most one non-zero entry.
+     */
+    @Test
+    fun addProducesSparseDeltaWithAtMostOneNonZeroRegister() {
+        val hll = HyperLogLog.empty(precision = 10)
+        val patch = hll.add("test-value")
+        val nonZeroCount = patch.delta.nonZeroRegisterCount()
+        assertTrue(nonZeroCount <= 1, "expected at most 1 non-zero register, got $nonZeroCount")
+    }
+
+    /**
+     * A no-op add (re-adding a value whose ρ doesn't exceed the stored max)
+     * produces an empty delta — all registers zero.
+     */
+    @Test
+    fun noOpAddProducesEmptyDelta() {
+        val hll = HyperLogLog.empty(precision = 10)
+        // Add once so the register is set; a second add of the same value is a no-op.
+        val filled = hll.piece(hll.add("repeat"))
+        val noOpPatch = filled.add("repeat")
+        assertEquals(0, noOpPatch.delta.nonZeroRegisterCount(), "no-op add must produce empty delta")
+    }
+
+    /**
+     * Merging a sparse delta into a state produces the same result as adding the
+     * element to each replica independently and then merging their full states.
+     */
+    @Test
+    fun sparseDeltaMergesIdenticallyToFullStateMerge() {
+        val base = addMany(HyperLogLog.empty(precision = 10), prefix = "base", n = 20)
+        val element = "new-element"
+
+        // Path 1: apply via sparse delta
+        val viaSparseDelta = base.piece(base.add(element))
+
+        // Path 2: add to a fresh copy and merge full states
+        val freshCopy = addMany(HyperLogLog.empty(precision = 10), prefix = "base", n = 20)
+        val viaFullStateMerge = base.piece(freshCopy.piece(freshCopy.add(element)))
+
+        assertEquals(viaFullStateMerge, viaSparseDelta)
+    }
+
+    /**
+     * The patch returned by add() correctly applies via the lattice join.
+     */
+    @Test
+    fun addPatchAppliesCorrectlyViaLatticeJoin() {
+        val hll = HyperLogLog.empty(precision = 10)
+        val patch = hll.add("hello")
+        val result = hll.piece(patch)
+        // result must be above or equal to hll (monotone growth)
+        assertEquals(result, result.piece(hll), "result must dominate the original (piece is join)")
+    }
+
+    /**
+     * Re-delivering the same sparse delta is idempotent (element-wise max is safe
+     * to apply multiple times).
+     */
+    @Test
+    fun sparseDeltaIsIdempotentOnRedelivery() {
+        val hll = HyperLogLog.empty(precision = 10)
+        val patch = hll.add("idempotent")
+        val once = hll.piece(patch)
+        val twice = once.piece(patch)
+        assertEquals(once, twice, "re-applying the same delta must be a no-op")
+    }
+
     // ── Helpers ───────────────────────────────────────────────────────────────
 
     private fun addMany(hll: HyperLogLog, n: Int) = addMany(hll, prefix = "item", n = n)
 
     private fun addMany(hll: HyperLogLog, prefix: String, n: Int): HyperLogLog =
-        (0 until n).fold(hll) { acc, i -> acc.add("$prefix-$i") }
+        (0 until n).fold(hll) { acc, i -> acc.piece(acc.add("$prefix-$i")) }
 }

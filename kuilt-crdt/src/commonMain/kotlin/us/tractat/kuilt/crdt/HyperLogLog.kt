@@ -29,8 +29,15 @@ import us.tractat.kuilt.crdt.internal.Murmur3
  * on all targets. The hash is stable across runs and platforms for any given
  * input string.
  *
- * **Immutable.** [add] does not mutate the receiver; it returns a new instance.
+ * **Immutable.** [add] does not mutate the receiver; it returns a [Patch]. The
+ * delta inside the patch is a sparse fragment: only the changed register is
+ * non-zero (all others are zero). For a no-op add (the new ρ does not exceed
+ * the stored max) the delta is all-zero — an empty fragment that Quilter can
+ * skip without broadcasting.
+ *
  * [piece] is the join: a new instance whose registers are element-wise max.
+ * A sparse delta is a valid lattice fragment — element-wise max makes the join
+ * correct and idempotent regardless of how many registers are non-zero.
  *
  * @param precision `p` in [4, 18]. Registers = `2^p`. Default 14 (~0.81% error).
  *
@@ -48,20 +55,26 @@ public class HyperLogLog private constructor(
     public val m: Int get() = registers.size
 
     /**
-     * Add [value] to the sketch. Returns a new sketch; the receiver is unchanged.
+     * Add [value] to the sketch. Returns a [Patch] whose delta is a sparse
+     * fragment — at most one register is non-zero (the one that changed). If
+     * the new ρ value does not exceed the currently stored max the delta is
+     * all-zero (a no-op fragment; Quilter skips broadcasting it).
+     *
+     * The receiver is unchanged. Apply the patch with [piece]:
+     * `val next = hll.piece(hll.add(value))`.
      *
      * The value is hashed with [us.tractat.kuilt.crdt.internal.Murmur3] (32-bit). The top [precision] bits
      * select the register index; the remaining bits determine the position of the
      * leftmost `1` bit (plus one), which is the value stored if larger than the
      * current register entry.
      */
-    public fun add(value: String): HyperLogLog {
+    public fun add(value: String): Patch<HyperLogLog> {
         val hash = Murmur3.hash32(value)
         val (index, leadingZeros) = indexAndRho(hash)
-        if (leadingZeros <= registers[index]) return this
-        val next = registers.copyOf()
-        next[index] = leadingZeros
-        return HyperLogLog(precision, next)
+        if (leadingZeros <= registers[index]) return emptyPatch()
+        val sparse = ByteArray(m)
+        sparse[index] = leadingZeros
+        return Patch(HyperLogLog(precision, sparse))
     }
 
     /**
@@ -96,7 +109,14 @@ public class HyperLogLog private constructor(
 
     override fun toString(): String = "HyperLogLog(p=$precision, estimate=${estimate()})"
 
+    // ── Internal test support ────────────────────────────────────────────────
+
+    /** Number of non-zero registers. Exposed for testing sparse delta invariants. */
+    internal fun nonZeroRegisterCount(): Int = registers.count { it != 0.toByte() }
+
     // ── Private helpers ──────────────────────────────────────────────────────
+
+    private fun emptyPatch(): Patch<HyperLogLog> = Patch(HyperLogLog(precision, ByteArray(m)))
 
     private fun rawEstimate(): Double {
         val harmonicSum = registers.fold(0.0) { acc, reg -> acc + TWO_POW_NEG[reg.toInt() and 0xFF] }
