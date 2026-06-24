@@ -1,6 +1,9 @@
 package us.tractat.kuilt.crdt
 
+import kotlinx.serialization.ExperimentalSerializationApi
+import kotlinx.serialization.cbor.Cbor
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.serializer
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -274,6 +277,54 @@ class FugueTest {
         val encoded = json.encodeToString(serializer, f)
         val decoded = json.decodeFromString(serializer, encoded)
         assertEquals(emptyList(), decoded.toList())
+    }
+
+    /**
+     * Two replicas that reach the same logical state via different op-delivery
+     * orders must produce identical serialized bytes (JSON and CBOR).
+     *
+     * Equal logical state → equal wire bytes is required for content-addressing,
+     * digest equality, and Quilter delta-fingerprint dedup. The serializer must
+     * emit ops in a canonical, replica-independent order — not insertion/delivery
+     * order (which varies per replica).
+     */
+    @OptIn(ExperimentalSerializationApi::class)
+    @Test
+    fun serializerIsByteStableAcrossDeliveryOrders() {
+        val serializer = Fugue.wireSerializer(serializer<String>())
+        val json = Json { encodeDefaults = true }
+        val cbor = Cbor
+
+        // Build three concurrent ops from different replicas so delivery order matters.
+        val (fA, opA) = Fugue.empty<String>().insertAt(a, 0, "alpha")
+        val (fB, opB) = Fugue.empty<String>().insertAt(b, 0, "beta")
+        val (fC, opC) = Fugue.empty<String>().insertAt(c, 0, "gamma")
+
+        // Replica 1: receives ops in order A→B→C
+        val replica1 = fA.apply(opB).apply(opC)
+        // Replica 2: receives ops in order C→A→B
+        val replica2 = fC.apply(opA).apply(opB)
+
+        // Logical equality — same visible elements regardless of delivery order.
+        assertEquals(replica1.toList(), replica2.toList(), "Replicas must converge logically")
+
+        val jsonBytes1 = json.encodeToString(serializer, replica1)
+        val jsonBytes2 = json.encodeToString(serializer, replica2)
+
+        assertEquals(
+            jsonBytes1,
+            jsonBytes2,
+            "JSON bytes must be identical for equal logical states regardless of delivery order",
+        )
+
+        val cborBytes1 = cbor.encodeToByteArray(serializer, replica1)
+        val cborBytes2 = cbor.encodeToByteArray(serializer, replica2)
+
+        assertEquals(
+            cborBytes1.toList(),
+            cborBytes2.toList(),
+            "CBOR bytes must be identical for equal logical states regardless of delivery order",
+        )
     }
 
     // ── apply and piece consistency ──────────────────────────────────────────
