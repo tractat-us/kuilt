@@ -1,10 +1,10 @@
 package us.tractat.kuilt.crdt
 
 import kotlinx.serialization.json.Json
+import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
-import kotlin.test.assertAll
 import kotlin.test.assertFailsWith
 
 class HyperLogLogTest {
