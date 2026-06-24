@@ -55,3 +55,42 @@ subprojects {
         systemProperty("kotlinx.coroutines.debug", "")
     }
 }
+
+// Guard: forbid unbounded Swatch delivery channels (fabric-backpressure epic, #701/#741).
+// Every in-process fabric must deliver inbound frames through the bounded `Spool` primitive;
+// a raw `Channel<Swatch>(... UNLIMITED ...)` reintroduces the unbounded inbound backlog that
+// caused the #655 OOM. The single sanctioned exception is `FaultySeam` (deterministic loss
+// injection — a test fixture, not a capacity policy). Type-scoped to `Channel<Swatch>` so it
+// catches delivery buffers without flagging legitimate non-delivery channels. Line-based
+// (matches the idiomatic single-line declaration).
+val forbidUnboundedSwatchDelivery by tasks.registering {
+    group = "verification"
+    description = "Fails if any source declares an unbounded Channel<Swatch> — use a bounded Spool<Swatch>."
+    val srcDirs = subprojects.mapNotNull { it.projectDir.resolve("src").takeIf(java.io.File::exists) }
+    srcDirs.forEach { inputs.dir(it) }
+    val rootPath = rootDir
+    val allowlist = setOf("FaultySeam.kt")
+    doLast {
+        val ctor = Regex("""Channel<Swatch>\s*\(""")
+        val offenders = srcDirs.asSequence().flatMap { dir ->
+            dir.walkTopDown().filter { it.isFile && it.extension == "kt" && it.name !in allowlist }
+        }.flatMap { file ->
+            file.readLines().asSequence().withIndex()
+                .filter { (_, line) -> ctor.containsMatchIn(line) && "UNLIMITED" in line }
+                .map { (i, line) -> "${file.relativeTo(rootPath)}:${i + 1}  ${line.trim()}" }
+        }.toList()
+        if (offenders.isNotEmpty()) {
+            error(
+                "Unbounded Swatch delivery channel(s) found — deliver through a bounded Spool<Swatch> " +
+                    "instead (FaultySeam is the only allowed exception):\n  " + offenders.joinToString("\n  "),
+            )
+        }
+    }
+}
+
+// Run the guard as part of `check` (hence `build`, hence CI) in every module.
+allprojects {
+    tasks.matching { it.name == "check" }.configureEach {
+        dependsOn(rootProject.tasks.named("forbidUnboundedSwatchDelivery"))
+    }
+}
