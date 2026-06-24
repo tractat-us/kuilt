@@ -26,6 +26,7 @@ import us.tractat.kuilt.crdt.ReplicaId
  * )
  * telemetry.recover()               // load persisted state from the store
  * telemetry.spans.export(span)      // export() returns on durable write
+ * telemetry.logs.export(logRecord)  // same guarantee for log records
  * ```
  *
  * A [WarpOtlpBridge] drains the converged CRDTs to a real OTLP endpoint whenever
@@ -33,9 +34,9 @@ import us.tractat.kuilt.crdt.ReplicaId
  *
  * ## Honest limits
  *
- * - **Metrics (A3) and Logs (A4) exporters** are deferred to follow-up PRs.
- *   See issues filed against #723. Their slots are reserved here so the API shape
- *   is stable, but they are `TODO`-stubbed.
+ * - **Metrics (A3) exporter** is deferred to a follow-up PR.
+ *   See issues filed against #723. Its slot is reserved here so the API shape
+ *   is stable, but it is `TODO`-stubbed.
  * - **[WarpOtlpBridge] (A5)** is deferred; a follow-up PR wires the edge drain.
  * - **Platform WALs** for iOS/macOS (#724) and wasmJs/IndexedDB (#725) are
  *   deferred; pass [InMemoryDurableStore] until those land.
@@ -44,7 +45,8 @@ import us.tractat.kuilt.crdt.ReplicaId
  * @param store Durable persistence backend. [InMemoryDurableStore] in tests;
  *   a platform-specific WAL in production.
  * @param maxSpans Maximum number of spans buffered in memory.
- * @param bufferPolicy Eviction strategy when [maxSpans] is exceeded.
+ * @param maxLogRecords Maximum number of log records buffered in memory.
+ * @param bufferPolicy Eviction strategy when [maxSpans] or [maxLogRecords] is exceeded.
  *
  * @sample us.tractat.kuilt.otel.sampleWarpTelemetry
  */
@@ -52,6 +54,7 @@ public class WarpTelemetry(
     replica: ReplicaId,
     store: DurableStore,
     maxSpans: Int = DEFAULT_MAX_SPANS,
+    maxLogRecords: Int = DEFAULT_MAX_LOG_RECORDS,
     bufferPolicy: BufferPolicy = BufferPolicy.DROP_OLDEST,
 ) {
     /** The span exporter (A2). Export spans here; they are CRDT-merged on reconnect. */
@@ -66,17 +69,23 @@ public class WarpTelemetry(
     // Wire cumulative GCounter/PNCounter + HyperLogLog for unique-cardinality metrics.
     // See https://github.com/tractat-us/kuilt/issues/723 (sub-issue TBD).
 
-    // A4: LogRecordExporter — deferred to follow-up PR.
-    // Wire Rga<LogRecord> for ordered, append-only log replication.
-    // See https://github.com/tractat-us/kuilt/issues/723 (sub-issue TBD).
+    /** The log-record exporter (A4). Export log records here; they are CRDT-merged on reconnect. */
+    public val logs: WarpLogRecordExporter = WarpLogRecordExporter(
+        replica = replica,
+        store = store,
+        maxRecords = maxLogRecords,
+        bufferPolicy = bufferPolicy,
+    )
 
     /**
      * Load persisted CRDT state from the [DurableStore].
      *
-     * Call once at startup, before any calls to [spans.export][WarpSpanExporter.export].
+     * Call once at startup, before any calls to [spans.export][WarpSpanExporter.export]
+     * or [logs.export][WarpLogRecordExporter.export].
      * Idempotent: a second call simply re-reads and re-decodes the same bytes.
      */
     public suspend fun recover() {
         spans.recover()
+        logs.recover()
     }
 }
