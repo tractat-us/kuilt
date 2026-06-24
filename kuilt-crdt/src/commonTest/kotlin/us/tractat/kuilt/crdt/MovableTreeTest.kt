@@ -332,6 +332,161 @@ class MovableTreeTest {
 }
 
 /**
+ * Tests for [MovableTree] incremental-replay optimization (#728).
+ *
+ * The contract: piece() must produce byte-identical results to a from-scratch
+ * replayLog across all interleavings of concurrent ops (convergence) while doing
+ * less work in the common case.
+ *
+ * These tests fuzz random concurrent-move interleavings and assert that:
+ * - The effective parent map from an incremental merge equals the parent map from
+ *   a full from-scratch replay of the same merged log.
+ * - Cycle prevention is preserved (no node is its own ancestor).
+ * - Compaction compatibility: compact() + applyCompact() after incremental merges
+ *   must still converge.
+ */
+class MovableTreeIncrementalReplayTest {
+
+    private val alice = ReplicaId("alice")
+    private val bob = ReplicaId("bob")
+    private val carol = ReplicaId("carol")
+
+    /**
+     * After every piece() call, the effective parent map must equal what a
+     * from-scratch replayLog of the merged log would produce. We verify this
+     * by exposing the internal parent map via [MovableTree.effectiveParentsForTest]
+     * and comparing it to [replayLog] applied to the same log.
+     *
+     * Fuzz: 50 random interleavings of 20 ops across 3 replicas.
+     */
+    @Test
+    fun incrementalPieceMapsMatchFromScratchReplay() {
+        val random = kotlin.random.Random(42L)
+        repeat(50) { seed ->
+            val rng = kotlin.random.Random(seed.toLong())
+            var alice0 = MovableTree.empty<String>()
+            var bob0 = MovableTree.empty<String>()
+            var carol0 = MovableTree.empty<String>()
+
+            // Build a shared base: 5 nodes known to all replicas.
+            val nodes = mutableListOf<String>()
+            for (i in 1..5) {
+                val parent = if (nodes.isEmpty()) MovableTree.ROOT_ID else nodes[rng.nextInt(nodes.size)]
+                val (nextAlice, nodeId) = alice0.addNode(alice, ts = i.toLong(), parent = parent, value = "node$i")
+                alice0 = nextAlice
+                nodes += nodeId
+            }
+            // Share the base with all replicas.
+            bob0 = alice0
+            carol0 = alice0
+
+            var ts = 6L
+            // Perform 15 random independent moves across the 3 replicas.
+            repeat(15) {
+                val node = nodes[rng.nextInt(nodes.size)]
+                val parent = if (rng.nextBoolean()) MovableTree.ROOT_ID else nodes[rng.nextInt(nodes.size)]
+                val replica = when (rng.nextInt(3)) {
+                    0 -> { val (next, _) = alice0.move(alice, ts = ts, node = node, newParent = parent); alice0 = next; alice }
+                    1 -> { val (next, _) = bob0.move(bob, ts = ts, node = node, newParent = parent); bob0 = next; bob }
+                    else -> { val (next, _) = carol0.move(carol, ts = ts, node = node, newParent = parent); carol0 = next; carol }
+                }
+                ts++
+                // suppress unused warning
+                replica.hashCode()
+            }
+
+            // Merge all three in all orderings.
+            val ab = alice0.piece(bob0)
+            val abc = ab.piece(carol0)
+            val bac = bob0.piece(alice0).piece(carol0)
+            val cab = carol0.piece(alice0).piece(bob0)
+
+            // All orderings must produce the same tree (convergence).
+            assertEquals(abc, bac, "ordering abc vs bac failed at seed=$seed")
+            assertEquals(abc, cab, "ordering abc vs cab failed at seed=$seed")
+
+            // Each merged tree's effective parent map must equal a from-scratch replay
+            // of its log — this is the key contract for the incremental optimization.
+            for ((label, merged) in listOf("abc" to abc, "bac" to bac, "cab" to cab)) {
+                val fromScratch: Map<String, String> = replayLog(merged.logForTest())
+                val incremental: Map<String, String> = merged.effectiveParentsForTest()
+                assertTrue(
+                    fromScratch == incremental,
+                    "effectiveParents mismatch (seed=$seed, ordering=$label): incremental != from-scratch",
+                )
+
+                // No node is its own ancestor (cycle prevention).
+                for (node in nodes) {
+                    assertFalse(
+                        merged.isAncestor(ancestor = node, descendant = node),
+                        "cycle detected at node=$node (seed=$seed, ordering=$label)",
+                    )
+                }
+            }
+        }
+    }
+
+    /** Compaction + incremental replay: compact on one replica, then merge with another. */
+    @Test
+    fun incrementalReplayAfterCompactionIsConsistent() {
+        val base = MovableTree.empty<String>()
+        val (t1, idA) = base.addNode(alice, ts = 1L, parent = MovableTree.ROOT_ID, value = "A")
+        val (t2, idB) = t1.addNode(alice, ts = 2L, parent = MovableTree.ROOT_ID, value = "B")
+        val (t3, _) = t2.move(alice, ts = 3L, node = idA, newParent = idB)
+        val (t4, _) = t3.move(alice, ts = 4L, node = idA, newParent = MovableTree.ROOT_ID)
+
+        val delivered = VersionVector.of(mapOf(alice to 4L))
+        val (aliceCompacted, compactOp) = t4.compact(
+            stableCut = delivered,
+            frontierMax = delivered,
+            delivered = delivered,
+        ) ?: error("compact must succeed")
+
+        // Bob applies the compact op and then merges with alice's compacted tree.
+        val bobAfterCompact = t4.applyCompact(compactOp)
+        val merged = aliceCompacted.piece(bobAfterCompact)
+
+        val fromScratch: Map<String, String> = replayLog(merged.logForTest())
+        val incremental: Map<String, String> = merged.effectiveParentsForTest()
+        assertTrue(fromScratch == incremental, "effectiveParents mismatch after compaction: incremental != from-scratch")
+        assertEquals(MovableTree.ROOT_ID, merged.parentOf(idA))
+        assertEquals(MovableTree.ROOT_ID, merged.parentOf(idB))
+    }
+
+    /**
+     * The common case: a small delta (1-2 new ops, all later than any existing op)
+     * is merged into a large base. The incremental path must produce the same
+     * result as from-scratch replay.
+     */
+    @Test
+    fun appendOnlyDeltaMergeMatchesFromScratch() {
+        var base = MovableTree.empty<String>()
+        val nodes = mutableListOf<String>()
+        // Build a tree with 30 ops (simulates a log that has grown over time).
+        for (i in 1..30) {
+            val parent = if (nodes.isEmpty()) MovableTree.ROOT_ID else nodes[(i - 1) % nodes.size]
+            val (next, nodeId) = base.addNode(alice, ts = i.toLong(), parent = parent, value = "n$i")
+            base = next
+            nodes += nodeId
+        }
+
+        // Bob only has the first 10 ops.
+        var smallDelta = MovableTree.empty<String>()
+        for (i in 31..33) {
+            val parent = nodes[i % nodes.size]
+            val (next, nodeId) = smallDelta.addNode(bob, ts = i.toLong(), parent = parent, value = "b$i")
+            smallDelta = next
+            nodes += nodeId
+        }
+
+        val merged = base.piece(smallDelta)
+        val fromScratch: Map<String, String> = replayLog(merged.logForTest())
+        val incremental: Map<String, String> = merged.effectiveParentsForTest()
+        assertTrue(fromScratch == incremental, "incremental merge of append-only delta must match from-scratch replay")
+    }
+}
+
+/**
  * Tests for [MovableTree] causal GC / compaction (#725).
  *
  * TDD: these tests were written BEFORE the implementation. They verify:
