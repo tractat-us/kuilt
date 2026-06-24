@@ -1,11 +1,11 @@
 package us.tractat.kuilt.otel
 
 /**
- * A durable, single-key store that persists serialized CRDT state across process restarts.
+ * A durable, typed-key store that persists serialized CRDT state across process restarts.
  *
- * The store is **key-addressed**: each CRDT in [WarpTelemetry] lives under its own [key]
- * (`"spans"`, `"metrics"`, `"logs"`). Reads and writes are opaque byte arrays — the store
- * knows nothing about CRDT internals; serialization lives in the callers.
+ * The store is **key-addressed**: each CRDT in [WarpTelemetry] lives under its own [StoreKey].
+ * Reads and writes are opaque byte arrays — the store knows nothing about CRDT internals;
+ * serialization lives in the callers.
  *
  * ## Durability contract
  *
@@ -30,7 +30,7 @@ public interface DurableStore {
      *
      * Called on startup to recover CRDT state from the previous session.
      */
-    public suspend fun read(key: String): ByteArray?
+    public suspend fun read(key: StoreKey): ByteArray?
 
     /**
      * Durably write [bytes] under [key], overwriting any previous value.
@@ -38,12 +38,12 @@ public interface DurableStore {
      * Returns after the write is fsync'd (or equivalent). Never returns before
      * the bytes are committed — the caller relies on this for crash-safe export.
      */
-    public suspend fun write(key: String, bytes: ByteArray)
+    public suspend fun write(key: StoreKey, bytes: ByteArray)
 
     /**
      * Remove the entry for [key]. No-op if the key is absent.
      *
      * Intended for tests and cleanup; production code rarely needs this.
      */
-    public suspend fun delete(key: String)
+    public suspend fun delete(key: StoreKey)
 }

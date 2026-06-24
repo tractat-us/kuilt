@@ -15,13 +15,13 @@ import kotlinx.atomicfu.locks.withLock
 public class InMemoryDurableStore : DurableStore {
 
     private val lock = reentrantLock()
-    private val store: MutableMap<String, ByteArray> = mutableMapOf()
+    private val store: MutableMap<StoreKey, ByteArray> = mutableMapOf()
 
-    override suspend fun read(key: String): ByteArray? = lock.withLock { store[key]?.copyOf() }
+    override suspend fun read(key: StoreKey): ByteArray? = lock.withLock { store[key]?.copyOf() }
 
-    override suspend fun write(key: String, bytes: ByteArray): Unit = lock.withLock {
+    override suspend fun write(key: StoreKey, bytes: ByteArray): Unit = lock.withLock {
         store[key] = bytes.copyOf()
     }
 
-    override suspend fun delete(key: String): Unit = lock.withLock { store.remove(key) }
+    override suspend fun delete(key: StoreKey): Unit = lock.withLock { store.remove(key) }
 }

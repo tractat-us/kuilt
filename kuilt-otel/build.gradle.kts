@@ -16,6 +16,10 @@ kotlin {
             implementation(libs.kotlinx.serialization.cbor)
             implementation(libs.kotlinx.atomicfu)
             implementation(libs.kotlin.logging)
+            // ByteString — value-based equals/hashCode for trace/span IDs stored in ORSet.
+            // kotlinx-io-bytestring is a transitive of kotlinx-io-core but we declare it
+            // explicitly because we use it directly in the public API.
+            api(libs.kotlinx.io.bytestring)
         }
         commonTest.dependencies {
             implementation(project(":kuilt-test"))

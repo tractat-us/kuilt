@@ -1,16 +1,23 @@
 package us.tractat.kuilt.otel
 
+import kotlinx.io.bytestring.ByteString
 import kotlinx.serialization.Serializable
 
 /**
- * A completed span record, shaped to round-trip through OTLP JSON.
+ * A completed span record, shaped to round-trip through OTLP.
  *
  * This is kuilt's KMP-native representation of an OpenTelemetry span. It is
  * intentionally minimal: the fields map 1-to-1 to OTLP's `Span` proto message
  * so a [WarpOtlpBridge] can serialize them directly with no further transformation.
  *
- * `traceId` and `spanId` are hex-encoded 32 / 16 character strings (128-bit /
- * 64-bit) matching the W3C `traceparent` encoding and OTLP JSON conventions.
+ * `traceId` and `spanId` carry raw bytes matching the OTLP protobuf wire format:
+ * - `traceId` — 16 bytes (128-bit), matches OTLP proto3 `bytes trace_id`.
+ * - `spanId` — 8 bytes (64-bit), matches OTLP proto3 `bytes span_id`.
+ * - `parentSpanId` — 8 bytes for child spans; `null` for root spans.
+ *
+ * [ByteString] is used rather than [ByteArray] because the [ORSet] inside
+ * [WarpSpanExporter] keys by element equality — [ByteString] provides content-based
+ * `equals`/`hashCode`, so re-exporting the same span is always a no-op set union.
  *
  * [SpanRecord] is the element type stored in the [ORSet][us.tractat.kuilt.crdt.ORSet]
  * inside [WarpSpanExporter]: keyed by [spanId], so re-exporting the same span
@@ -28,12 +35,15 @@ import kotlinx.serialization.Serializable
  */
 @Serializable
 public data class SpanRecord(
-    /** Hex-encoded 128-bit trace id (32 hex chars). */
-    public val traceId: String,
-    /** Hex-encoded 64-bit span id (16 hex chars). */
-    public val spanId: String,
-    /** Optional parent span id (null for root spans). */
-    public val parentSpanId: String?,
+    /** 128-bit trace id as raw bytes (16 bytes). Matches OTLP proto3 `bytes trace_id`. */
+    @Serializable(with = ByteStringSerializer::class)
+    public val traceId: ByteString,
+    /** 64-bit span id as raw bytes (8 bytes). Matches OTLP proto3 `bytes span_id`. */
+    @Serializable(with = ByteStringSerializer::class)
+    public val spanId: ByteString,
+    /** Parent span id (8 bytes), or `null` for root spans. */
+    @Serializable(with = ByteStringSerializer::class)
+    public val parentSpanId: ByteString?,
     /** Human-readable operation name. */
     public val name: String,
     /** Span kind: SERVER, CLIENT, PRODUCER, CONSUMER, INTERNAL. */
@@ -46,7 +56,19 @@ public data class SpanRecord(
     public val attributes: Map<String, String> = emptyMap(),
     /** Span status. */
     public val status: SpanStatus = SpanStatus.Unset,
-)
+) {
+    init {
+        require(traceId.size == 16) {
+            "traceId must be 16 bytes (128-bit); got ${traceId.size}"
+        }
+        require(spanId.size == 8) {
+            "spanId must be 8 bytes (64-bit); got ${spanId.size}"
+        }
+        require(parentSpanId == null || parentSpanId.size == 8) {
+            "parentSpanId must be 8 bytes (64-bit) or null; got ${parentSpanId?.size}"
+        }
+    }
+}
 
 /** OTLP span kind values. */
 @Serializable

@@ -10,7 +10,7 @@ import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.crdt.ORSet
 import us.tractat.kuilt.crdt.ReplicaId
 
-private val logger = KotlinLogging.logger("us.tractat.kuilt.otel.WarpSpanExporter")
+private val logger = KotlinLogging.logger {}
 
 /**
  * A CRDT-backed span exporter.
@@ -53,11 +53,22 @@ public class WarpSpanExporter(
     private val maxSpans: Int = DEFAULT_MAX_SPANS,
     private val bufferPolicy: BufferPolicy = BufferPolicy.DROP_OLDEST,
 ) {
+    // The lock guards 'spans'. No suspend calls are made inside the locked section —
+    // Cbor encode/decode and the CRDT mutations are pure (non-suspending). The store
+    // write is performed outside the lock on the encoded snapshot.
+    //
+    // An explicit reentrant lock is the repo policy for scope-owning types: correctness
+    // must hold under a real multi-threaded dispatcher, not just the test dispatcher.
+    // limitedParallelism(1) confinement is BANNED — see CLAUDE.md thread-safety section.
     private val lock = reentrantLock()
     private var spans: ORSet<SpanRecord> = ORSet.empty()
 
     private companion object {
-        private const val STORE_KEY = "otel.spans"
+        private val STORE_KEY = StoreKey("otel.spans")
+        // alwaysUseByteString ensures traceId/spanId bytes are encoded as CBOR
+        // major type 2 (byte string) rather than an array of integers, halving the
+        // wire size vs. the default array encoding.
+        private val cbor = Cbor { alwaysUseByteString = true }
         private val spanSerializer = ORSet.serializer(SpanRecord.serializer())
     }
 
@@ -70,7 +81,7 @@ public class WarpSpanExporter(
     public suspend fun recover() {
         val bytes = store.read(STORE_KEY) ?: return
         val recovered = runCatchingCancellable<ORSet<SpanRecord>> {
-            Cbor.decodeFromByteArray(spanSerializer, bytes)
+            cbor.decodeFromByteArray(spanSerializer, bytes)
         }.getOrNull() ?: run {
             logger.warn { "otel.spans: corrupt store entry, starting fresh" }
             return
@@ -92,7 +103,7 @@ public class WarpSpanExporter(
         val encoded = lock.withLock {
             maybeEvict()
             spans = spans.add(replica, span)
-            Cbor.encodeToByteArray(spanSerializer, spans)
+            cbor.encodeToByteArray(spanSerializer, spans)
         }
         return runCatchingCancellable { store.write(STORE_KEY, encoded) }
             .fold(
@@ -121,7 +132,7 @@ public class WarpSpanExporter(
     public suspend fun merge(remote: ORSet<SpanRecord>): ExportResult {
         val encoded = lock.withLock {
             spans = spans.piece(remote)
-            Cbor.encodeToByteArray(spanSerializer, spans)
+            cbor.encodeToByteArray(spanSerializer, spans)
         }
         return runCatchingCancellable { store.write(STORE_KEY, encoded) }
             .fold(

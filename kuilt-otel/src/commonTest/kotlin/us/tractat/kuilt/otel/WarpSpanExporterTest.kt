@@ -1,9 +1,11 @@
 package us.tractat.kuilt.otel
 
 import kotlinx.coroutines.test.runTest
+import kotlinx.io.bytestring.ByteString
 import us.tractat.kuilt.crdt.ReplicaId
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
@@ -14,14 +16,20 @@ class WarpSpanExporterTest {
 
     // ---- helpers ----
 
+    /** 16 raw bytes for a trace id (OTLP: 128-bit). */
+    private fun traceId(id: Byte): ByteString = ByteString(ByteArray(16) { id })
+
+    /** 8 raw bytes for a span id (OTLP: 64-bit). */
+    private fun spanId(id: Byte): ByteString = ByteString(ByteArray(8) { id })
+
     private fun span(
-        id: String,
+        id: Byte,
         name: String = "op",
         startNanos: Long = 1_000L,
         endNanos: Long = 2_000L,
     ) = SpanRecord(
-        traceId = "trace-$id",
-        spanId = id,
+        traceId = traceId(id),
+        spanId = spanId(id),
         parentSpanId = null,
         name = name,
         kind = SpanKind.INTERNAL,
@@ -46,32 +54,110 @@ class WarpSpanExporterTest {
     @Test
     fun inMemoryStoreRoundTrips() = runTest {
         val store = InMemoryDurableStore()
-        store.write("key", byteArrayOf(1, 2, 3))
-        val got = store.read("key")!!
+        val key = StoreKey("key")
+        store.write(key, byteArrayOf(1, 2, 3))
+        val got = store.read(key)!!
         assertEquals(3, got.size)
         assertEquals(1, got[0])
     }
 
     @Test
     fun inMemoryStoreReturnsNullForAbsentKey() = runTest {
-        assertEquals(null, InMemoryDurableStore().read("missing"))
+        assertEquals(null, InMemoryDurableStore().read(StoreKey("missing")))
     }
 
     @Test
     fun inMemoryStoreDeleteRemovesKey() = runTest {
         val store = InMemoryDurableStore()
-        store.write("k", byteArrayOf(42))
-        store.delete("k")
-        assertEquals(null, store.read("k"))
+        val key = StoreKey("k")
+        store.write(key, byteArrayOf(42))
+        store.delete(key)
+        assertEquals(null, store.read(key))
     }
 
     @Test
     fun inMemoryStoreWriteIsDefensivelyCopied() = runTest {
         val store = InMemoryDurableStore()
+        val key = StoreKey("k")
         val bytes = byteArrayOf(1, 2, 3)
-        store.write("k", bytes)
+        store.write(key, bytes)
         bytes[0] = 99
-        assertEquals(1, store.read("k")!![0])
+        assertEquals(1, store.read(key)!![0])
+    }
+
+    // ---- SpanRecord validation ----
+
+    @Test
+    fun spanRecordRejectsShortTraceId() {
+        assertFailsWith<IllegalArgumentException> {
+            SpanRecord(
+                traceId = ByteString(ByteArray(15)), // too short
+                spanId = spanId(1),
+                parentSpanId = null,
+                name = "op",
+                kind = SpanKind.INTERNAL,
+                startEpochNanos = 1L,
+                endEpochNanos = 2L,
+            )
+        }
+    }
+
+    @Test
+    fun spanRecordRejectsShortSpanId() {
+        assertFailsWith<IllegalArgumentException> {
+            SpanRecord(
+                traceId = traceId(1),
+                spanId = ByteString(ByteArray(7)), // too short
+                parentSpanId = null,
+                name = "op",
+                kind = SpanKind.INTERNAL,
+                startEpochNanos = 1L,
+                endEpochNanos = 2L,
+            )
+        }
+    }
+
+    @Test
+    fun spanRecordRejectsWrongParentSpanIdLength() {
+        assertFailsWith<IllegalArgumentException> {
+            SpanRecord(
+                traceId = traceId(1),
+                spanId = spanId(1),
+                parentSpanId = ByteString(ByteArray(4)), // must be 8 or null
+                name = "op",
+                kind = SpanKind.INTERNAL,
+                startEpochNanos = 1L,
+                endEpochNanos = 2L,
+            )
+        }
+    }
+
+    @Test
+    fun spanRecordAcceptsNullParentSpanId() {
+        // Root span — no exception expected
+        SpanRecord(
+            traceId = traceId(1),
+            spanId = spanId(1),
+            parentSpanId = null,
+            name = "root",
+            kind = SpanKind.INTERNAL,
+            startEpochNanos = 1L,
+            endEpochNanos = 2L,
+        )
+    }
+
+    @Test
+    fun spanRecordAcceptsValidParentSpanId() {
+        // Child span with 8-byte parent — no exception expected
+        SpanRecord(
+            traceId = traceId(1),
+            spanId = spanId(2),
+            parentSpanId = spanId(1),
+            name = "child",
+            kind = SpanKind.CLIENT,
+            startEpochNanos = 1L,
+            endEpochNanos = 2L,
+        )
     }
 
     // ---- A2: WarpSpanExporter idempotency ----
@@ -79,14 +165,14 @@ class WarpSpanExporterTest {
     @Test
     fun exportReturnsSuccessOnDurableWrite() = runTest {
         val exporter = exporterFor()
-        val result = exporter.export(span("s1"))
+        val result = exporter.export(span(1))
         assertEquals(ExportResult.Success, result)
     }
 
     @Test
     fun exportingSameSpanTwiceIsIdempotent() = runTest {
         val exporter = exporterFor()
-        val s = span("s1")
+        val s = span(1)
         exporter.export(s)
         exporter.export(s)
         // ORSet deduplicates by element: same span → size remains 1
@@ -96,7 +182,7 @@ class WarpSpanExporterTest {
     @Test
     fun exportedSpanAppearsInSnapshot() = runTest {
         val exporter = exporterFor()
-        val s = span("s1")
+        val s = span(1)
         exporter.export(s)
         assertTrue(s in exporter.snapshot().elements)
     }
@@ -107,7 +193,7 @@ class WarpSpanExporterTest {
     fun retryCannotDoubleCount() = runTest {
         // Simulate a retry loop: the same span is sent N times.
         val exporter = exporterFor()
-        val s = span("retry-me")
+        val s = span(1)
         repeat(5) { exporter.export(s) }
         assertEquals(1, exporter.snapshot().elements.size)
     }
@@ -122,8 +208,8 @@ class WarpSpanExporterTest {
         val exporterA = exporterFor(replica = replicaA, store = storeA)
         val exporterB = exporterFor(replica = replicaB, store = storeB)
 
-        val spanA = span("a1", name = "A-op")
-        val spanB = span("b1", name = "B-op")
+        val spanA = span(1, name = "A-op")
+        val spanB = span(2, name = "B-op")
 
         // Both export while offline — independently.
         exporterA.export(spanA)
@@ -145,7 +231,7 @@ class WarpSpanExporterTest {
         // Merging the same remote snapshot twice changes nothing.
         val exporterA = exporterFor(replica = replicaA)
         val exporterB = exporterFor(replica = replicaB)
-        exporterB.export(span("b1"))
+        exporterB.export(span(1))
         val remote = exporterB.snapshot()
 
         exporterA.merge(remote)
@@ -163,7 +249,7 @@ class WarpSpanExporterTest {
         val store = InMemoryDurableStore()
         val exporterA = exporterFor(replica = replicaA, store = store)
         val exporterB = exporterFor(replica = replicaB)
-        val s = span("b1")
+        val s = span(1)
         exporterB.export(s)
 
         exporterA.merge(exporterB.snapshot())
@@ -180,7 +266,7 @@ class WarpSpanExporterTest {
     fun recoveredStateMatchesPersistedState() = runTest {
         val store = InMemoryDurableStore()
         val exporter1 = exporterFor(store = store)
-        val s = span("s1")
+        val s = span(1)
         exporter1.export(s)
 
         // New exporter, same store — simulates a process restart.
@@ -202,41 +288,48 @@ class WarpSpanExporterTest {
     fun bufferCapEvictsOldestSpanWithDropOldestPolicy() = runTest {
         val exporter = exporterFor(maxSpans = 3, bufferPolicy = BufferPolicy.DROP_OLDEST)
 
-        exporter.export(span("s1", startNanos = 100))
-        exporter.export(span("s2", startNanos = 200))
-        exporter.export(span("s3", startNanos = 300))
+        val s1 = span(1, startNanos = 100)
+        val s2 = span(2, startNanos = 200)
+        val s3 = span(3, startNanos = 300)
+        val s4 = span(4, startNanos = 400)
+        exporter.export(s1)
+        exporter.export(s2)
+        exporter.export(s3)
         // Buffer is at capacity; exporting s4 must evict the oldest (s1).
-        exporter.export(span("s4", startNanos = 400))
+        exporter.export(s4)
 
         val elements = exporter.snapshot().elements
         assertEquals(3, elements.size)
-        assertTrue(elements.none { it.spanId == "s1" }, "oldest span should be evicted")
-        assertTrue(elements.any { it.spanId == "s4" }, "newest span should be present")
+        assertTrue(s1 !in elements, "oldest span should be evicted")
+        assertTrue(s4 in elements, "newest span should be present")
     }
 
     @Test
     fun bufferCapEvictsNewestSpanWithDropNewestPolicy() = runTest {
         val exporter = exporterFor(maxSpans = 3, bufferPolicy = BufferPolicy.DROP_NEWEST)
 
-        exporter.export(span("s1", startNanos = 100))
-        exporter.export(span("s2", startNanos = 200))
-        exporter.export(span("s3", startNanos = 300))
-        // Buffer is at capacity; exporting s4 must evict the newest (s3, then s4 is inserted).
-        // With DROP_NEWEST the newest buffered span is evicted to make room for the incoming one.
-        exporter.export(span("s4", startNanos = 400))
+        val s1 = span(1, startNanos = 100)
+        val s2 = span(2, startNanos = 200)
+        val s3 = span(3, startNanos = 300)
+        val s4 = span(4, startNanos = 400)
+        exporter.export(s1)
+        exporter.export(s2)
+        exporter.export(s3)
+        // Buffer is at capacity; exporting s4 must evict the newest (s3), then s4 is inserted.
+        exporter.export(s4)
 
         // After eviction of s3 and insertion of s4, set is {s1, s2, s4}.
         val elements = exporter.snapshot().elements
         assertEquals(3, elements.size)
-        assertTrue(elements.none { it.spanId == "s3" }, "newest-before-insert should be evicted")
+        assertTrue(s3 !in elements, "newest-before-insert should be evicted")
     }
 
     @Test
     fun evictedSpanLeavesRoomForNewSpan() = runTest {
         val exporter = exporterFor(maxSpans = 2, bufferPolicy = BufferPolicy.DROP_OLDEST)
-        exporter.export(span("s1", startNanos = 100))
-        exporter.export(span("s2", startNanos = 200))
-        val result = exporter.export(span("s3", startNanos = 300))
+        exporter.export(span(1, startNanos = 100))
+        exporter.export(span(2, startNanos = 200))
+        val result = exporter.export(span(3, startNanos = 300))
         assertEquals(ExportResult.Success, result)
         assertEquals(2, exporter.snapshot().elements.size)
     }
@@ -246,14 +339,14 @@ class WarpSpanExporterTest {
     @Test
     fun exportReturnsFailureWhenStoreFails() = runTest {
         val exporter = exporterFor(store = AlwaysFailStore)
-        val result = exporter.export(span("s1"))
+        val result = exporter.export(span(1))
         assertIs<ExportResult.Failure>(result)
     }
 
     private object AlwaysFailStore : DurableStore {
-        override suspend fun read(key: String): ByteArray? = null
-        override suspend fun write(key: String, bytes: ByteArray) =
+        override suspend fun read(key: StoreKey): ByteArray? = null
+        override suspend fun write(key: StoreKey, bytes: ByteArray) =
             throw RuntimeException("simulated store failure")
-        override suspend fun delete(key: String) = Unit
+        override suspend fun delete(key: StoreKey) = Unit
     }
 }

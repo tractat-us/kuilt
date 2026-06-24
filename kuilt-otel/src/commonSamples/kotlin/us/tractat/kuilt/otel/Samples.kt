@@ -1,5 +1,6 @@
 package us.tractat.kuilt.otel
 
+import kotlinx.io.bytestring.ByteString
 import us.tractat.kuilt.crdt.ReplicaId
 
 /** @suppress — sample only */
@@ -12,11 +13,10 @@ internal suspend fun sampleWarpTelemetry() {
     // Load any spans buffered during a previous session.
     telemetry.recover()
 
-    // export() returns the moment the span is durably written locally —
-    // not when it reaches a backend. Delivery is the fabric's job.
+    // Span ids are raw bytes (OTLP wire format): 16 bytes for trace id, 8 for span id.
     val span = SpanRecord(
-        traceId = "0af7651916cd43dd8448eb211c80319c",
-        spanId = "b7ad6b7169203331",
+        traceId = ByteString(ByteArray(16) { it.toByte() }),
+        spanId = ByteString(ByteArray(8) { it.toByte() }),
         parentSpanId = null,
         name = "purchase",
         kind = SpanKind.SERVER,
@@ -26,6 +26,8 @@ internal suspend fun sampleWarpTelemetry() {
         status = SpanStatus.Ok,
     )
 
+    // export() returns the moment the span is durably written locally —
+    // not when it reaches a backend. Delivery is the fabric's job.
     val result = telemetry.spans.export(span)
     check(result == ExportResult.Success) { "export failed: $result" }
 }
@@ -39,9 +41,10 @@ internal suspend fun sampleWarpSpanExporter() {
     // Recover persisted state from a previous session.
     exporter.recover()
 
+    // Span ids are raw bytes (OTLP wire format): 16 bytes for trace id, 8 for span id.
     val span = SpanRecord(
-        traceId = "0af7651916cd43dd8448eb211c80319c",
-        spanId = "b7ad6b7169203331",
+        traceId = ByteString(ByteArray(16) { it.toByte() }),
+        spanId = ByteString(ByteArray(8) { it.toByte() }),
         parentSpanId = null,
         name = "checkout",
         kind = SpanKind.CLIENT,
