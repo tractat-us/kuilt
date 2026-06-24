@@ -2,8 +2,8 @@ package us.tractat.kuilt.crdt
 
 import kotlinx.serialization.json.Json
 import kotlin.test.Test
+import kotlin.test.assertFailsWith
 import kotlin.test.assertEquals
-import kotlin.test.assertTrue
 
 private val json = Json { allowStructuredMapKeys = true } // DotFun's keys are Dots
 
@@ -29,13 +29,7 @@ class ResettableCounterTest {
 
     @Test
     fun incrementsMustBePositive() {
-        val counter = ResettableCounter.ZERO
-        try {
-            counter.increment(a, 0L)
-            error("Expected IllegalArgumentException")
-        } catch (e: IllegalArgumentException) {
-            assertTrue(e.message?.contains("positive") == true)
-        }
+        assertFailsWith<IllegalArgumentException> { ResettableCounter.ZERO.increment(a, 0L) }
     }
 
     @Test
@@ -127,6 +121,25 @@ class ResettableCounterTest {
         assertEquals(0L, reset1.value)
         assertEquals(0L, reset2.value)
     }
+
+    // ── Delta minimality ─────────────────────────────────────────────────────
+
+    /**
+     * `increment` must return a minimal delta: one dot in the store, not the full prior state.
+     * Anti-entropy carries the full state when a peer is behind; the per-op delta is
+     * only the new information — O(1), not O(live-dots).
+     */
+    @Test
+    fun incrementDeltaIsMinimal() {
+        var counter = ResettableCounter.ZERO
+        repeat(10) { counter = counter.piece(counter.increment(a, 1L)) }
+
+        val delta = counter.increment(b, 5L)
+        // The delta's store must contain exactly one dot — the freshly minted one.
+        assertEquals(1, dotCount(delta.delta))
+    }
+
+    private fun dotCount(rc: ResettableCounter): Int = rc.causal.store.values.size
 
     // ── Serialization ─────────────────────────────────────────────────────────
 
