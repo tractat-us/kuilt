@@ -63,6 +63,29 @@ class MovableTreeTest {
         assertNull(applied.parentOf(MovableTree.ROOT_ID))
     }
 
+    @Test
+    fun parentOfRootIsNull() {
+        // Root has no parent — parentOf(ROOT_ID) always returns null regardless of ops.
+        val tree = MovableTree.empty<String>()
+        assertNull(tree.parentOf(MovableTree.ROOT_ID))
+    }
+
+    @Test
+    fun childrenOfWithNoChildren() {
+        val tree = MovableTree.empty<String>()
+        val (t1, idA) = tree.addNode(alice, ts = 1L, parent = MovableTree.ROOT_ID, value = "A")
+        // A has no children yet.
+        assertEquals(emptySet(), t1.childrenOf(idA))
+    }
+
+    @Test
+    fun isAncestorReturnsFalseForSelf() {
+        // isAncestor documents "proper ancestor … excluding descendant itself".
+        val tree = MovableTree.empty<String>()
+        val (t1, idA) = tree.addNode(alice, ts = 1L, parent = MovableTree.ROOT_ID, value = "A")
+        assertFalse(t1.isAncestor(ancestor = idA, descendant = idA))
+    }
+
     // ── Serialization round-trip ──────────────────────────────────────────────
 
     @Test
