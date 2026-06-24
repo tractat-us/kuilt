@@ -1,6 +1,7 @@
 package us.tractat.kuilt.crdt
 
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.Transient
 
 /**
  * A replicated tree that supports concurrent **move/reparent** operations without
@@ -67,12 +68,28 @@ public class MovableTree<V> private constructor(
      * after GC removes raw ops from the log.
      */
     private val compactedDots: Set<Dot>,
+    /**
+     * Pre-computed effective parent map, or `null` if this instance was constructed
+     * without one (deserialization, [empty]). In that case [effectiveParents] computes
+     * it lazily on first access.
+     *
+     * `@Transient`: kotlinx.serialization skips fields not in the primary constructor's
+     * parameter list, or fields explicitly annotated `@Transient`. This field has no
+     * backing property in the serialized form — it is purely an in-memory cache.
+     *
+     * Invariant: when non-null, equals `replayLog(log)`. The only supplier is [piece],
+     * which computes the incremental result before constructing the new instance.
+     */
+    @Transient
+    private val cachedParents: Map<String, String>? = null,
 ) : Quilted<MovableTree<V>> {
 
-    // The effective parent map is derived by replaying the log. We cache it lazily
-    // via a computed property so the class stays a pure value type with no mutable
-    // fields that would complicate serialization.
-    private val effectiveParents: Map<String, String> by lazy { replayLog(log) }
+    /**
+     * The effective parent map. Computed from [cachedParents] when available (the common
+     * path — avoids a full replay on every [piece] call), or lazily replayed from [log]
+     * on first access (deserialization and [empty] paths).
+     */
+    private val effectiveParents: Map<String, String> by lazy { cachedParents ?: replayLog(log) }
 
     // ── Public read API ───────────────────────────────────────────────────────
 
@@ -167,6 +184,25 @@ public class MovableTree<V> private constructor(
      *   replica's log appears on which side.
      * - **Associative** — follows from the set-union nature of the log merge and the
      *   determinism of the replay.
+     *
+     * ## Incremental replay optimization (#728)
+     *
+     * Rather than replaying the full merged log from scratch on every merge, we
+     * identify the **earliest position** at which the merged log diverges from
+     * `this.log` (the first op that was inserted from `other`). Everything before
+     * that position has already been replayed into `this.effectiveParents`, so we
+     * reuse that prefix and replay only from the divergence point forward.
+     *
+     * Common case — `other` contains only ops with timestamps **later than** every
+     * op in `this.log` (monotone-advancing append): the divergence point equals
+     * `this.log.size`, so we apply only the new ops to `effectiveParents`. This
+     * reduces the per-merge cost from O(|merged| × depth) to O(|new| × depth).
+     *
+     * Worst case — an op arrives with a timestamp earlier than some ops in
+     * `this.log` (out-of-order delivery): we replay from the insertion point, which
+     * is still correct but more expensive (up to O(|merged| × depth)). Correctness
+     * is preserved in all cases because the replay visits the identical total-order
+     * log in the identical order.
      */
     override fun piece(other: MovableTree<V>): MovableTree<V> {
         val merged = mergeDistinctLogs(log, other.log)
@@ -175,7 +211,8 @@ public class MovableTree<V> private constructor(
         // Apply any compacted dots from the other side — remove ops that were GC'd there.
         val prunedLog = if (mergedCompacted.isEmpty()) merged
             else merged.filter { op -> op.dot !in mergedCompacted }
-        return MovableTree(prunedLog, mergedSeq, mergedCompacted)
+        val mergedParents = incrementalReplay(prunedLog)
+        return MovableTree(prunedLog, mergedSeq, mergedCompacted, mergedParents)
     }
 
     // ── Causal GC ────────────────────────────────────────────────────────────
@@ -225,7 +262,9 @@ public class MovableTree<V> private constructor(
         val newLog = log.filter { op -> op.dot !in droppedDots }
         val newCompacted = compactedDots + droppedDots
         val compactOp = MoveTreeCompact(droppedDots)
-        return MovableTree(newLog, seqByReplica, newCompacted) to compactOp
+        // Compaction removes only losing (superseded) ops — those never affected effectiveParents.
+        // The winning ops remain, so the parent map is unchanged. Pass it through directly.
+        return MovableTree(newLog, seqByReplica, newCompacted, effectiveParents) to compactOp
     }
 
     /**
@@ -235,7 +274,8 @@ public class MovableTree<V> private constructor(
     public fun applyCompact(compact: MoveTreeCompact): MovableTree<V> {
         val newLog = log.filter { op -> op.dot !in compact.droppedDots }
         val newCompacted = compactedDots + compact.droppedDots
-        return MovableTree(newLog, seqByReplica, newCompacted)
+        // Same reasoning as in compact(): dropped dots are losing ops that never affected effectiveParents.
+        return MovableTree(newLog, seqByReplica, newCompacted, effectiveParents)
     }
 
     override fun equals(other: Any?): Boolean =
@@ -252,7 +292,70 @@ public class MovableTree<V> private constructor(
 
     private fun applyOp(op: MoveOp<V>, seq: Long): MovableTree<V> {
         val newSeq = seqByReplica + (op.replica to maxOf(seqByReplica[op.replica] ?: 0L, seq))
-        return MovableTree(insertSorted(log, op), newSeq, compactedDots)
+        val newLog = insertSorted(log, op)
+        val newParents = incrementalReplay(newLog)
+        return MovableTree(newLog, newSeq, compactedDots, newParents)
+    }
+
+    /**
+     * Compute the incremental effective parent map for [newLog], reusing [effectiveParents]
+     * as the cached prefix result.
+     *
+     * Finds the first position [k] at which [newLog] diverges from [log] (i.e. the first
+     * position containing an op not already in [log] at that slot). Everything before [k]
+     * has already been replayed into [effectiveParents]; we restart from the parent map
+     * valid up to [k] and replay only [newLog[k..]].
+     *
+     * **Common case** (monotone append — all new ops have later timestamps):
+     * [k] == [log].size, so we reuse [effectiveParents] fully and replay only the new
+     * ops. Cost: O(|new ops| × depth) instead of O(|newLog| × depth).
+     *
+     * **Worst case** (out-of-order delivery): [k] < [log].size. We replay from [k],
+     * which requires recomputing the prefix map for [newLog[0..k-1]] from scratch
+     * first. Cost: O(|newLog| × depth) — no worse than the old full replay.
+     *
+     * **Correctness**: the replay visits [newLog] in the identical deterministic total
+     * order regardless of which path is taken. The incremental path is equivalent to
+     * full replay by induction: if [effectiveParents] == replayLog([log]), then
+     * reusing it as the prefix of [newLog[0..k-1]] (which equals [log[0..k-1]])
+     * and continuing with [newLog[k..]] produces replayLog([newLog]).
+     */
+    private fun incrementalReplay(newLog: List<MoveOp<V>>): Map<String, String> {
+        val firstNew = firstDivergenceIndex(newLog)
+        return if (firstNew == log.size) {
+            // Fast path: all new ops are appended; reuse the cached prefix.
+            replayLogFrom(newLog, startIndex = firstNew, initialParents = effectiveParents)
+        } else {
+            // Slow path: op(s) inserted in the middle; recompute prefix then continue.
+            val prefixParents = replayLogFrom(newLog, startIndex = 0, endIndex = firstNew, initialParents = emptyMap())
+            replayLogFrom(newLog, startIndex = firstNew, initialParents = prefixParents)
+        }
+    }
+
+    /**
+     * The first index [k] such that [newLog] differs from [log] at position [k]
+     * (either a different op at that slot, or [newLog] ended before [log] did),
+     * or [log].size if [newLog] is a strict extension of [log]:
+     * - same ops at every position [0..[log].size-1], and
+     * - [newLog] has additional ops at the end.
+     *
+     * Since both lists are sorted by the same total order and [mergeDistinctLogs]
+     * deduplicates by `(ts, replica)`, any op from [log] that is also in [newLog]
+     * occupies the same relative position. The first new op must appear at or after
+     * its natural sorted position.
+     *
+     * The [log].size return value is only valid when [newLog] is a **superset** of
+     * [log] (no ops removed, possibly some appended). If [newLog] is shorter (due to
+     * compaction filtering), divergence is detected at [newLog].size.
+     */
+    private fun firstDivergenceIndex(newLog: List<MoveOp<V>>): Int {
+        val limit = minOf(log.size, newLog.size)
+        for (i in 0 until limit) {
+            if (log[i] !== newLog[i] && log[i] != newLog[i]) return i
+        }
+        // If newLog is shorter than log, there are missing ops from log's tail — divergence at newLog.size.
+        // If newLog is longer or equal length, log's prefix is fully matched — divergence (new ops) at log.size.
+        return if (newLog.size < log.size) newLog.size else log.size
     }
 
     /**
@@ -308,6 +411,21 @@ public class MovableTree<V> private constructor(
         if (winner.dot == op.dot) return false // (2) this IS the winning op — not superseded
         return stableCut.contains(winner.dot) // (4) winner must also be causally stable
     }
+
+    // ── Test accessors ────────────────────────────────────────────────────────
+
+    /**
+     * Exposes the internal log for test-only inspection.
+     * Used by [MovableTreeIncrementalReplayTest] to compare the incremental parent
+     * map against a from-scratch [replayLog] of the same log.
+     */
+    internal fun logForTest(): List<MoveOp<V>> = log
+
+    /**
+     * Exposes the cached effective parent map for test-only inspection.
+     * The test asserts that this equals [replayLog] applied to [logForTest].
+     */
+    internal fun effectiveParentsForTest(): Map<String, String> = effectiveParents
 
     public companion object {
         /** The reserved id of the tree's root node. The root has no parent. */
@@ -487,9 +605,28 @@ internal fun <V> insertSorted(log: List<MoveOp<V>>, op: MoveOp<V>): List<MoveOp<
  * node in the parent map; without a prior registration, a later move-only op
  * targeting that node would have nowhere to anchor.
  */
-internal fun <V> replayLog(log: List<MoveOp<V>>): Map<String, String> {
-    val parents = mutableMapOf<String, String>()
-    for (op in log) {
+internal fun <V> replayLog(log: List<MoveOp<V>>): Map<String, String> =
+    replayLogFrom(log, startIndex = 0, initialParents = emptyMap())
+
+/**
+ * Replay a slice of [log] starting at [startIndex] (inclusive) and ending at
+ * [endIndex] (exclusive, defaults to [log].size), seeding the parent map from
+ * [initialParents].
+ *
+ * Used by [MovableTree.incrementalReplay] to avoid full replay on every merge:
+ * the prefix result (already in [initialParents]) is reused directly, and only
+ * the new suffix is replayed. The same cycle-prevention logic applies — the
+ * ancestor check walks [initialParents], which already encodes the prefix state.
+ */
+internal fun <V> replayLogFrom(
+    log: List<MoveOp<V>>,
+    startIndex: Int,
+    initialParents: Map<String, String>,
+    endIndex: Int = log.size,
+): Map<String, String> {
+    val parents = initialParents.toMutableMap()
+    for (i in startIndex until endIndex) {
+        val op = log[i]
         if (op.node == MovableTree.ROOT_ID) continue
         if (wouldCycle(op.node, op.newParent, parents)) continue
         parents[op.node] = op.newParent
