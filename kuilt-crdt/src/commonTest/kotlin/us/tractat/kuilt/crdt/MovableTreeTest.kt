@@ -10,6 +10,12 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
+private fun stableCut(vararg pairs: Pair<ReplicaId, Long>): VersionVector =
+    VersionVector.of(mapOf(*pairs))
+
+private fun frontier(vararg pairs: Pair<ReplicaId, Long>): VersionVector =
+    VersionVector.of(mapOf(*pairs))
+
 /**
  * Tests for [MovableTree] — the Kleppmann move-op replicated tree.
  *
@@ -322,5 +328,284 @@ class MovableTreeTest {
             .piece(movePatch)
 
         assertEquals(t3, peer)
+    }
+}
+
+/**
+ * Tests for [MovableTree] causal GC / compaction (#725).
+ *
+ * TDD: these tests were written BEFORE the implementation. They verify:
+ * 1. [MovableTree.causalDots] is non-empty (Quilter can drive GC).
+ * 2. [MovableTree.compact] shrinks the move-log after ops become causally stable.
+ * 3. Convergence is preserved across compaction.
+ * 4. Cycle prevention still holds post-compaction.
+ * 5. A creation op referenced by a live move is NOT dropped.
+ */
+class MovableTreeCompactionTest {
+
+    private val alice = ReplicaId("alice")
+    private val bob = ReplicaId("bob")
+
+    // ── causalDots ────────────────────────────────────────────────────────────
+
+    @Test
+    fun causalDotsIsEmptyForEmptyTree() {
+        assertEquals(emptySet(), MovableTree.empty<String>().causalDots())
+    }
+
+    @Test
+    fun causalDotsExposesOneDotsPerOp() {
+        val tree = MovableTree.empty<String>()
+        val (t1, _) = tree.addNode(alice, ts = 1L, parent = MovableTree.ROOT_ID, value = "A")
+        val (t2, _) = t1.addNode(alice, ts = 2L, parent = MovableTree.ROOT_ID, value = "B")
+        // Two ops by alice → two dots.
+        val dots = t2.causalDots()
+        assertEquals(2, dots.size)
+        assertTrue(dots.all { it.replica == alice })
+        // Seqs must be distinct (dense, no collision).
+        assertEquals(2, dots.map { it.seq }.toSet().size)
+    }
+
+    @Test
+    fun causalDotsSpansBothReplicas() {
+        val tree = MovableTree.empty<String>()
+        val (t1, idA) = tree.addNode(alice, ts = 1L, parent = MovableTree.ROOT_ID, value = "A")
+        val (t2, _) = t1.addNode(bob, ts = 2L, parent = idA, value = "B")
+        val dots = t2.causalDots()
+        assertEquals(2, dots.size)
+        assertTrue(dots.any { it.replica == alice })
+        assertTrue(dots.any { it.replica == bob })
+    }
+
+    @Test
+    fun causalDotsIncludesCompactedDots() {
+        // After compaction, causalDots must still include the compacted ops' dots
+        // so the Quilter's contiguous delivered frontier has no holes.
+        // Scenario: addA, addB, move(A→B), move(A→ROOT). The third op [move A→B, seq=3]
+        // is superseded by the fourth op [move A→ROOT, seq=4] and is droppable once stable.
+        val tree = MovableTree.empty<String>()
+        val (t1, idA) = tree.addNode(alice, ts = 1L, parent = MovableTree.ROOT_ID, value = "A")
+        val (t2, idB) = t1.addNode(alice, ts = 2L, parent = MovableTree.ROOT_ID, value = "B")
+        val (t3, _) = t2.move(alice, ts = 3L, node = idA, newParent = idB)
+        val (t4, _) = t3.move(alice, ts = 4L, node = idA, newParent = MovableTree.ROOT_ID)
+
+        val dotsBeforeGc = t4.causalDots()
+        // Four ops, all alice.
+        assertEquals(4, dotsBeforeGc.size)
+
+        val delivered = stableCut(alice to 4L)
+        val (compacted, _) = t4.compact(
+            stableCut = delivered,
+            frontierMax = delivered,
+            delivered = delivered,
+        ) ?: error("compact() must return non-null — move(A→B) at seq=3 is superseded by move(A→ROOT) at seq=4")
+
+        // After compaction the log shrinks, but causalDots must still cover all 4 delivered dots.
+        assertTrue(compacted.moveLogSize < t4.moveLogSize, "log must shrink")
+        assertEquals(4, compacted.causalDots().size, "all 4 dots must still be visible post-GC")
+    }
+
+    // ── compact — log shrinks ─────────────────────────────────────────────────
+
+    @Test
+    fun compactReturnsNullWhenFrontierNotComplete() {
+        val tree = MovableTree.empty<String>()
+        val (t1, idA) = tree.addNode(alice, ts = 1L, parent = MovableTree.ROOT_ID, value = "A")
+        val (t2, idB) = t1.addNode(alice, ts = 2L, parent = MovableTree.ROOT_ID, value = "B")
+        val (t3, _) = t2.move(alice, ts = 3L, node = idA, newParent = idB)
+
+        val stableCutAll = stableCut(alice to 3L)
+        // Frontier claims bob has op 1, but delivered doesn't include it → not frontier-complete.
+        val frontierWithBob = frontier(alice to 3L, bob to 1L)
+        val delivered = stableCut(alice to 3L) // only alice delivered — bob frontier not met
+
+        assertNull(t3.compact(stableCut = stableCutAll, frontierMax = frontierWithBob, delivered = delivered))
+    }
+
+    @Test
+    fun compactDropsSupersededNonCreationOp() {
+        // Setup: Alice adds A (creation op ts=1), then moves A under ROOT (ts=2 move),
+        // then moves A under itself-sibling B (ts=3 — the "winning" move).
+        // After stability, the ts=2 move is superseded by ts=3 and should be droppable.
+        val tree = MovableTree.empty<String>()
+        val (t1, idA) = tree.addNode(alice, ts = 1L, parent = MovableTree.ROOT_ID, value = "A")
+        val (t2, idB) = t1.addNode(alice, ts = 2L, parent = MovableTree.ROOT_ID, value = "B")
+        // Move A under B at ts=3 — this is the winning op.
+        val (t3, _) = t2.move(alice, ts = 3L, node = idA, newParent = idB)
+        // Now move A again at ts=4 — supersedes ts=3, so ts=3 move becomes redundant.
+        val (t4, _) = t3.move(alice, ts = 4L, node = idA, newParent = MovableTree.ROOT_ID)
+
+        val logSizeBefore = t4.moveLogSize
+        val delivered = stableCut(alice to 4L)
+
+        val (compacted, compactOp) = t4.compact(
+            stableCut = delivered,
+            frontierMax = delivered,
+            delivered = delivered,
+        ) ?: error("compact() must return non-null — ops are stable and ts=3 move is superseded")
+
+        assertAll(
+            { assertTrue(compacted.moveLogSize < logSizeBefore, "log must shrink after compaction") },
+            { assertTrue(compactOp.droppedDots.isNotEmpty(), "compact op must carry dropped dots") },
+            // Tree shape must be preserved.
+            { assertEquals(MovableTree.ROOT_ID, compacted.parentOf(idA)) },
+            { assertEquals(MovableTree.ROOT_ID, compacted.parentOf(idB)) },
+        )
+    }
+
+    @Test
+    fun compactDoesNotDropCreationOpReferencedByLiveMove() {
+        // Node A created at ts=1 (creation op). Then moved under B at ts=2 (live move).
+        // The ts=1 creation op registers A's value — it must NOT be dropped even though
+        // it is causally stable, because the ts=2 move still references node A.
+        val tree = MovableTree.empty<String>()
+        val (t1, idA) = tree.addNode(alice, ts = 1L, parent = MovableTree.ROOT_ID, value = "A")
+        val (t2, idB) = t1.addNode(alice, ts = 2L, parent = MovableTree.ROOT_ID, value = "B")
+        val (t3, _) = t2.move(alice, ts = 3L, node = idA, newParent = idB)
+
+        // All three ops are stable. But ts=1 is A's creation op — referenced by idA which is
+        // still a live node in the tree.
+        val delivered = stableCut(alice to 3L)
+
+        // ts=3 is the winning (latest) move for node A, so ts=1 creation is the one that
+        // "registered" the node. Since there's no later op on idA that supersedes ts=3,
+        // nothing for idA is droppable. compact() must return null or not drop creation ops.
+        val result = t3.compact(stableCut = delivered, frontierMax = delivered, delivered = delivered)
+
+        // If compact returns non-null, the creation op for idA must still be present.
+        if (result != null) {
+            val (compacted, _) = result
+            assertTrue(compacted.contains(idA), "node A must still exist after compaction")
+            assertNotNull(compacted.parentOf(idA), "node A must still have a parent after compaction")
+        }
+        // Whether null or non-null, node A's identity must survive.
+    }
+
+    @Test
+    fun compactDoesNotDropCreationOpOfParentNode() {
+        // Node B is a creation op (ts=2). Node A is moved under B (ts=3, the winning move).
+        // B's creation op must not be dropped while A's live parent is B.
+        val tree = MovableTree.empty<String>()
+        val (t1, idA) = tree.addNode(alice, ts = 1L, parent = MovableTree.ROOT_ID, value = "A")
+        val (t2, idB) = t1.addNode(alice, ts = 2L, parent = MovableTree.ROOT_ID, value = "B")
+        val (t3, _) = t2.move(alice, ts = 3L, node = idA, newParent = idB)
+
+        val delivered = stableCut(alice to 3L)
+        val result = t3.compact(stableCut = delivered, frontierMax = delivered, delivered = delivered)
+
+        if (result != null) {
+            val (compacted, _) = result
+            assertTrue(compacted.contains(idB), "node B must still exist — it is a live parent of A")
+        }
+    }
+
+    // ── compact — convergence preserved ──────────────────────────────────────
+
+    @Test
+    fun twoReplicasStillConvergeAfterOneCompacts() {
+        // Alice and Bob start with the same 4-op tree.
+        // Alice compacts; Bob does not.
+        // They then merge — both must arrive at the same effective parent map.
+        val base = MovableTree.empty<String>()
+        val (t1, idA) = base.addNode(alice, ts = 1L, parent = MovableTree.ROOT_ID, value = "A")
+        val (t2, idB) = t1.addNode(alice, ts = 2L, parent = MovableTree.ROOT_ID, value = "B")
+        // Move A under B (ts=3) then move A back to ROOT (ts=4) — supersedes ts=3.
+        val (t3, _) = t2.move(alice, ts = 3L, node = idA, newParent = idB)
+        val (t4, _) = t3.move(alice, ts = 4L, node = idA, newParent = MovableTree.ROOT_ID)
+
+        val delivered = stableCut(alice to 4L)
+        val (aliceCompacted, compactOp) = t4.compact(
+            stableCut = delivered,
+            frontierMax = delivered,
+            delivered = delivered,
+        ) ?: error("compact must succeed — all ops stable, ts=3 move superseded")
+
+        // Bob absorbs the Compact op.
+        val bobAfterCompact = t4.piece(Patch(MovableTree.empty<String>().applyCompact(compactOp)))
+
+        // Both replicas must have identical parent maps.
+        assertAll(
+            { assertEquals(aliceCompacted.parentOf(idA), bobAfterCompact.parentOf(idA)) },
+            { assertEquals(aliceCompacted.parentOf(idB), bobAfterCompact.parentOf(idB)) },
+        )
+    }
+
+    @Test
+    fun cyclePreventionHoldsAfterCompaction() {
+        // Two concurrent moves that would cycle. Compact the superseded move.
+        // The resulting tree must still be acyclic and have path to root.
+        val base = MovableTree.empty<String>()
+        val (t1, idA) = base.addNode(alice, ts = 1L, parent = MovableTree.ROOT_ID, value = "A")
+        val (t2, idB) = t1.addNode(alice, ts = 2L, parent = MovableTree.ROOT_ID, value = "B")
+
+        // Alice moves A→B, Bob moves B→A concurrently (would cycle).
+        val (aliceTree, _) = t2.move(alice, ts = 3L, node = idA, newParent = idB)
+        val (bobTree, bobPatch) = t2.move(bob, ts = 4L, node = idB, newParent = idA)
+
+        // After merge: bob's ts=4 wins for B (higher ts). A→B, B stays under ROOT (cycle prevented).
+        val merged = aliceTree.piece(bobPatch)
+
+        // Now compact: alice's ts=3 (move A under B) is still the winning op for A,
+        // but if there's a later move on any node that makes earlier ops redundant, GC them.
+        // For this scenario, we assert cycle prevention still holds post-compaction regardless.
+        val delivered = stableCut(alice to 3L, bob to 4L)
+        val compacted = merged.compact(
+            stableCut = delivered,
+            frontierMax = delivered,
+            delivered = delivered,
+        )?.first ?: merged // compact may or may not yield something — test the result either way
+
+        assertAll(
+            { assertFalse(compacted.isAncestor(idA, idA), "A must not be its own ancestor") },
+            { assertFalse(compacted.isAncestor(idB, idB), "B must not be its own ancestor") },
+            { assertTrue(compacted.hasPathToRoot(idA), "A must have path to root") },
+            { assertTrue(compacted.hasPathToRoot(idB), "B must have path to root") },
+        )
+    }
+
+    // ── compact op broadcast — peers apply it ─────────────────────────────────
+
+    @Test
+    fun applyCompactShrinksPeerLog() {
+        val base = MovableTree.empty<String>()
+        val (t1, idA) = base.addNode(alice, ts = 1L, parent = MovableTree.ROOT_ID, value = "A")
+        val (t2, idB) = t1.addNode(alice, ts = 2L, parent = MovableTree.ROOT_ID, value = "B")
+        val (t3, _) = t2.move(alice, ts = 3L, node = idA, newParent = idB)
+        val (t4, _) = t3.move(alice, ts = 4L, node = idA, newParent = MovableTree.ROOT_ID)
+
+        val delivered = stableCut(alice to 4L)
+        val (_, compactOp) = t4.compact(
+            stableCut = delivered,
+            frontierMax = delivered,
+            delivered = delivered,
+        ) ?: error("compact must succeed")
+
+        // Peer (bob's replica) has the same full log — apply the compact op.
+        val peerAfter = t4.applyCompact(compactOp)
+
+        assertTrue(peerAfter.moveLogSize < t4.moveLogSize, "peer log must shrink after applying compact op")
+    }
+
+    // ── serialization round-trip including Compact op ─────────────────────────
+
+    @Test
+    fun compactedTreeRoundTripsThroughJson() {
+        val base = MovableTree.empty<String>()
+        val (t1, idA) = base.addNode(alice, ts = 1L, parent = MovableTree.ROOT_ID, value = "A")
+        val (t2, idB) = t1.addNode(alice, ts = 2L, parent = MovableTree.ROOT_ID, value = "B")
+        val (t3, _) = t2.move(alice, ts = 3L, node = idA, newParent = idB)
+        val (t4, _) = t3.move(alice, ts = 4L, node = idA, newParent = MovableTree.ROOT_ID)
+
+        val delivered = stableCut(alice to 4L)
+        val (compacted, _) = t4.compact(
+            stableCut = delivered,
+            frontierMax = delivered,
+            delivered = delivered,
+        ) ?: error("compact must succeed")
+
+        val ser = MovableTree.serializer(String.serializer())
+        val encoded = Json.encodeToString(ser, compacted)
+        val decoded = Json.decodeFromString(ser, encoded)
+        assertEquals(compacted, decoded)
     }
 }
