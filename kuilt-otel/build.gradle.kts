@@ -25,6 +25,30 @@ kotlin {
             implementation(project(":kuilt-test"))
             implementation(libs.kotlinx.coroutines.test)
         }
+
+        // jvmAndAndroidMain: FileChannelDurableStore uses java.io / java.nio.channels,
+        // which are available on both JVM and Android but not on iOS/macOS/wasmJs.
+        // Adding this intermediate disables KMP's hierarchy auto-wiring, so all other
+        // intermediates are declared explicitly below (mirroring kuilt-tcp / kuilt-multipeer).
+        val jvmAndAndroidMain by creating { dependsOn(commonMain.get()) }
+        jvmMain.get().dependsOn(jvmAndAndroidMain)
+        androidMain.get().dependsOn(jvmAndAndroidMain)
+
+        // appleMain: NSFileManagerDurableStore uses platform.Foundation, which is available
+        // on all Apple targets without an explicit dependency (built into the K/N distribution).
+        val appleMain by creating { dependsOn(commonMain.get()) }
+        val iosMain by creating { dependsOn(appleMain) }
+        val iosArm64Main by getting { dependsOn(iosMain) }
+        val iosSimulatorArm64Main by getting { dependsOn(iosMain) }
+        val macosMain by creating { dependsOn(appleMain) }
+        val macosArm64Main by getting { dependsOn(macosMain) }
+
+        // appleTest: tests for NSFileManagerDurableStore that use NSTemporaryDirectory().
+        val appleTest by creating { dependsOn(commonTest.get()) }
+        val iosArm64Test by getting { dependsOn(appleTest) }
+        val iosSimulatorArm64Test by getting { dependsOn(appleTest) }
+        val macosArm64Test by getting { dependsOn(appleTest) }
+
         jvmTest.dependencies {
             runtimeOnly(libs.logback)
         }
