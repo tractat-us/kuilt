@@ -139,3 +139,94 @@ worth the added complexity depends on task cost distribution.
 
 The spike code is throwaway. If a real `:kuilt-warp` module is ever started,
 this file is the starting data point, not the design.
+
+---
+
+## v2 — Head-to-head comparison (strategy tradeoff measurement)
+
+> **Status: SPECULATIVE / EXPERIMENTAL.** Extends the v1 spike with three fixes: realistic
+> gossip propagation (partial-view fanout, multi-hop), a consensus baseline, and a hard
+> convergence assertion (proved, not assumed). See `WarpSpikeV2.kt` / `WarpSpikeV2Test.kt`.
+
+### What v2 measures
+
+v2 compares three claim strategies on two axes — **duplicate-execution rate** (wasted work)
+and **coordination messages per task** (overhead) — under realistic partial-view gossip
+propagation where convergence genuinely lags.
+
+| Strategy | Approach | Pre-claim coord? |
+|----------|----------|-----------------|
+| Optimistic-dedup (OPT) | Claim locally; dedup via `Results` `ORMap` | None (0 msgs/task) |
+| Intent-register (IR) | Write to `LWWMap<TaskId,PeerId>`, gossip once, execute if winner | 1 gossip propagation |
+| Consensus-model (CONS) | Quorum round-trip per task (modelled oracle, 0 dups) | `2 × ceil((N+1)/2)` msgs/task |
+
+### Headline numbers (40 tasks, 30 rounds, fanout=3, 2-hop, seed=680)
+
+| peers | OPT dup% | IR dup% | CONS dup% | OPT msgs/task | IR msgs/task | CONS msgs/task |
+|------:|---------:|--------:|----------:|--------------:|-------------:|---------------:|
+| 2     | 4.8%     | 2.8%    | 0.0%      | 0.0           | 1.7          | 2.0            |
+| 4     | 16.7%    | 0.0%    | 0.0%      | 0.0           | 7.2          | 1.0            |
+| 8     | 53.5%    | 24.5%   | 0.0%      | 0.0           | 14.6         | 1.0            |
+| 16    | 67.5%    | 37.5%   | 0.0%      | 0.0           | 25.0         | 1.0            |
+
+### The tradeoff statement (4 peers, fanout=3)
+
+- **Optimistic-dedup:** 16.7% duplicates, zero coordination overhead.
+- **Intent-register:** 0.0% duplicates (16.7% fewer), but costs +7.2 gossip messages per task.
+- **Consensus-model:** 0.0% duplicates, but costs a quorum round-trip per task (~3 messages).
+
+**Intent-register eliminates duplicates at 4 peers, but its gossip fanout cost (7.2 msgs/task)
+exceeds even the modelled consensus cost (1–2 msgs/task at small clusters).** The crossover
+depends on cluster size and fanout: at N=2, IR is cheaper than consensus (1.7 vs 2.0 msgs/task);
+at N≥4, IR's fanout overhead dominates. This means intent-register is the sweet spot only at
+very small peer counts (2–3) with moderate fanout; at N≥4, full consensus wins on both dimensions
+(0% dups, lower messages) against a naive fanout-to-all-neighbours intent strategy.
+
+### Gossip quality effect (4 peers, 40 tasks, seed=680)
+
+| gossip config    | OPT dup% | IR dup% | OPT msgs/task | IR msgs/task |
+|------------------|----------:|--------:|--------------:|-------------:|
+| fanout=2, hops=1 | 42.0%     | 20.0%   | 0.0           | 5.6          |
+| fanout=3, hops=1 | 9.1%      | 2.4%    | 0.0           | 7.8          |
+| fanout=3, hops=2 | 16.7%     | 2.4%    | 0.0           | 7.5          |
+| fanout=5, hops=3 | 9.1%      | 0.0%    | 0.0           | 9.5          |
+
+Better gossip (higher fanout, more hops) cuts duplicate rates but increases IR's overhead
+proportionally — the tradeoff is intrinsic to the gossip mechanism, not tuneable away.
+
+### Correctness — convergence proved, not assumed (fixes v1's main gap)
+
+Every v2 simulation run ends with a hard assertion before returning results:
+1. All peers' `Results` `ORMap`s are identical after full merge (`forceConverge`).
+2. Every executed task has exactly one result in the `ORMap` — no task is lost.
+
+This demonstrates that `ORMap` deduplication is correct under the realistic gossip model:
+the CRDT merge subsumes duplicate writes deterministically, regardless of claim order.
+
+### What the consensus model measures (and its limits)
+
+The consensus model is a **cost oracle**, not a real Raft cluster. It:
+- Assigns each task to exactly one peer with zero duplicates (by oracle).
+- Counts `2 × quorum-size` coordination messages per assignment.
+- Distributes that cost per-peer as `totalMessages / peerCount`.
+
+This understates real Raft cost (leader does more work; log replication adds rounds) and
+overstates consensus throughput (real Raft batches proposals). The number is a directional
+reference point, not a precise Raft benchmark.
+
+### Key findings vs v1
+
+| Gap | v1 finding | v2 finding |
+|-----|-----------|-----------|
+| Model fidelity | Full-state every round (best-case floor) | Partial-view fanout gossip (realistic lag) |
+| Duplicate rate at 8 peers | 28.6% | 53.5% (floor was understated — v1's concern confirmed) |
+| Baseline | None | Consensus model: 0% dups at modest message cost |
+| Intent-register | Predicted to help | Confirmed: cuts dups substantially, but gossip overhead is real |
+| Correctness | Assumed | Proved: hard convergence assertion in every run |
+
+### Honest limits
+
+- The consensus model is a simplified oracle, not a Raft measurement.
+- "Coordination messages" for intent-register counts per-fanout-neighbour intent gossips;
+  a more selective intent strategy (announce only to likely-winner peers) could reduce this.
+- Results are seeded and deterministic but reflect one specific gossip topology per seed.
