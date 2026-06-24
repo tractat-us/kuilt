@@ -6,28 +6,44 @@ import kotlinx.serialization.Serializable
 /**
  * A unique, totally-ordered identity for a single Fugue element.
  *
- * Carries a [lamport] timestamp (for total ordering) and a [replicaId]
- * (for deterministic tiebreaking). Two real ids from the same author
- * share neither a lamport value nor a replica id, so the order is total.
+ * Carries two orthogonal counters:
+ * - [lamport] — the total-order tiebreak used by the Fugue tree. Monotonic per
+ *   author but **not dense** (the clock jumps to `max(seen) + 1`).
+ * - [seq] — a **dense, contiguous per-author delivery counter** (1, 2, 3, …). This
+ *   is the key into the causal-stability version vectors used by [Fugue.compact]
+ *   (same pattern as [RgaId.seq] for [Rga]). [seq] never participates in ordering.
+ *
+ * Total order ([compareTo]): higher [lamport] wins; [replicaId] breaks ties
+ * deterministically. [seq] is deliberately excluded — it tracks delivery, not order.
  *
  * The special sentinel [HEAD] is the virtual root of the Fugue tree;
- * it sorts before every real id.
+ * it sorts before every real id. Its [seq] is `0` (never an author dot).
+ *
+ * **Wire-format note:** Adding [seq] is a breaking change relative to the pre-#714
+ * format. This is intentional and cheap pre-1.0 per the design note
+ * (`docs/op-log-crdt-compaction.md`).
  */
 @Serializable
 public data class FugueId(
     public val lamport: Long,
     public val replicaId: ReplicaId,
+    /** Dense per-author delivery counter. Used by causal-stability GC; excluded from ordering. */
+    public val seq: Long,
 ) : Comparable<FugueId> {
     override fun compareTo(other: FugueId): Int {
         val byLamport = lamport.compareTo(other.lamport)
         return if (byLamport != 0) byLamport else replicaId.value.compareTo(other.replicaId.value)
     }
 
+    /** This id's causal [Dot] — `(replicaId, seq)`. The key into causal-stability VVs. */
+    public val dot: Dot get() = Dot(replicaId, seq)
+
     public companion object {
         /**
          * Virtual root of the Fugue tree. Sorts before every real [FugueId].
+         * Its [seq] is `0` — it is never an author dot.
          */
-        public val HEAD: FugueId = FugueId(lamport = Long.MIN_VALUE, replicaId = ReplicaId(""))
+        public val HEAD: FugueId = FugueId(lamport = Long.MIN_VALUE, replicaId = ReplicaId(""), seq = 0L)
     }
 }
 
@@ -84,6 +100,30 @@ public sealed interface FugueOp<out V> {
     public data class Remove<V>(
         override val id: FugueId,
     ) : FugueOp<V>
+
+    /**
+     * Records that the [positions] entries have been garbage-collected from the op-log.
+     *
+     * The map carries each compacted id's tree-parent at GC time (`id → Insert.parent`).
+     * [buildTree] uses this to re-root surviving children of a dropped node to the
+     * nearest surviving ancestor, preserving the traversal order.
+     *
+     * The ids purged are [positions].keys. Merging two [Compact] ops via [Fugue.piece]
+     * unions their [positions] maps — sound because a given id's [Insert.parent] is
+     * fixed at insert time, so two replicas always agree on the value.
+     *
+     * Applying a [Compact] removes every [Insert] and [Remove] op whose id is in
+     * [positions].keys. Receiving the same [Compact] twice is idempotent.
+     *
+     * [id] is the sentinel [FugueId.HEAD] — a [Compact] carries no element id of its own
+     * but must satisfy the [FugueOp] contract.
+     */
+    @Serializable
+    public data class Compact(
+        public val positions: Map<FugueId, FugueId>,
+    ) : FugueOp<Nothing> {
+        override val id: FugueId get() = FugueId.HEAD
+    }
 }
 
 /**
@@ -129,6 +169,12 @@ private class FugueNode(
  * absorbed the same set of ops produce the same [toList] regardless of delivery
  * order.
  *
+ * **Causal-stability GC.** [causalDots] exposes the delivered [Dot]s so the
+ * [us.tractat.kuilt.quilter.Quilter] causal-stability machinery can drive
+ * compaction. [compact] garbage-collects causally-stable tombstones whose id
+ * is no longer a live tree parent. This bounds op-log growth under long-running
+ * replication. See `docs/op-log-crdt-compaction.md` for the safety argument.
+ *
  * **Serialization.** Use [wireSerializer] rather than the compiler-generated
  * serializer to correctly thread the element-type serializer through the op-log.
  *
@@ -154,22 +200,27 @@ public class Fugue<V> private constructor(
         cache?.tombstones ?: computeTombstones()
     }
 
+    private val compactedIds: Set<FugueId> by lazy {
+        cache?.compactedIds ?: computeCompactedIds()
+    }
+
+    private val compactPositions: Map<FugueId, FugueId> by lazy {
+        cache?.compactPositions ?: computeCompactPositions()
+    }
+
+    /**
+     * Ceiling of the [FugueId.seq] seen per [ReplicaId], maintained incrementally.
+     * Used by [nextSeqFor] to avoid rescanning the op-log.
+     */
+    private val maxSeqByReplica: Map<ReplicaId, Long> by lazy {
+        cache?.maxSeqByReplica ?: computeMaxSeqByReplica()
+    }
+
     /**
      * The materialized sequence of all [FugueId]s in Fugue tree-traversal order,
      * including tombstoned elements.
      */
     private val sequence: List<FugueId> by lazy { computeSequence() }
-
-    /**
-     * Ops sorted in canonical [FugueId] ascending order, computed once per instance.
-     *
-     * [FugueSerializer] uses this to produce byte-stable wire output without re-sorting
-     * the op set on every encode call (which would be O(M log M) per anti-entropy send).
-     * The op set is immutable per [Fugue] instance, so the sorted order never changes.
-     */
-    internal val sortedOps: List<FugueOp<V>> by lazy {
-        ops.sortedWith(compareBy { it.id })
-    }
 
     // ── Public API ────────────────────────────────────────────────────────────
 
@@ -200,10 +251,13 @@ public class Fugue<V> private constructor(
             "insertAt($index) out of range; visible size is ${visible.size}"
         }
         val newLamport = lamport + 1L
-        val id = FugueId(lamport = newLamport, replicaId = replica)
+        val seq = nextSeqFor(replica)
+        val id = FugueId(lamport = newLamport, replicaId = replica, seq = seq)
         val op = buildInsertOp(id, value, visible, index, tree)
         return applyInsert(op, newLamport) to op
     }
+
+    private fun nextSeqFor(replica: ReplicaId): Long = (maxSeqByReplica[replica] ?: 0L) + 1L
 
     /**
      * Remove the visible element at [index].
@@ -219,8 +273,55 @@ public class Fugue<V> private constructor(
         val newCache = FugueCache(
             insertsById = insertsById,
             tombstones = tombstones + id,
+            compactedIds = compactedIds,
+            compactPositions = compactPositions,
+            maxSeqByReplica = maxSeqByReplica,
         )
         return Fugue(ops + op, lamport, newCache) to op
+    }
+
+    /**
+     * Garbage-collect tombstoned elements that are **causally stable** under the
+     * eviction-safe causal-stability barrier (same design as [Rga.compact],
+     * `docs/op-log-crdt-compaction.md`).
+     *
+     * A tombstoned element with dot `(r, sᵢ)` is purged iff **all** hold:
+     * 1. **Tombstoned** — implied (only [tombstones] are candidates).
+     * 2. **Causally stable** — `sᵢ ≤ stableCut[r]`: every live peer has delivered it.
+     * 3. **Frontier-complete** — `∀x: delivered[x] ≥ frontierMax[x]`: this replica has
+     *    delivered every op below every known frontier, so any concurrent
+     *    `Insert(J, parent=id)` that exists anywhere has been delivered locally.
+     * 4. **No surviving tree child** — no live [FugueOp.Insert] has `parent == id`.
+     *    Dropping a node while a child still refers to it as its tree parent would
+     *    detach that child's subtree from the traversal. The compacted positions map
+     *    handles re-rooting surviving children after GC on the next compaction pass.
+     *
+     * Returns the compacted [Fugue] and a [FugueOp.Compact] delta to broadcast to
+     * peers, or `null` if no element qualifies (or condition 3 is not yet met).
+     *
+     * Peers that receive the [FugueOp.Compact] apply it via [apply] or absorb it
+     * through [piece] — both paths strip the referenced ops from the log.
+     *
+     * @param stableCut `S` — elementwise **min** over all live peers' delivered VVs.
+     * @param frontierMax `F` — elementwise **max** of the live frontier and any
+     *   retained (evicted-peer) frontier; the set of dots known to *exist*.
+     * @param delivered this replica's own contiguous delivered VV.
+     */
+    public fun compact(
+        stableCut: VersionVector,
+        frontierMax: VersionVector,
+        delivered: VersionVector,
+    ): Pair<Fugue<V>, FugueOp.Compact>? {
+        if (!delivered.dominates(frontierMax)) return null  // condition 3 — frontier-complete
+        val liveParents = insertsById.values.mapTo(mutableSetOf()) { it.parent }
+        val gcIds = tombstones
+            .filter { id -> stableCut.contains(id.dot) && id !in liveParents }  // (2) + (4)
+            .toSet()
+        if (gcIds.isEmpty()) return null
+        val positions = gcIds.associateWith { id -> insertsById.getValue(id).parent }
+        val compactOp = FugueOp.Compact(positions)
+        val newOps = purgeAndRecord(ops, gcIds, compactOp)
+        return withCompactCaches(newOps, gcIds, compactOp) to compactOp
     }
 
     /**
@@ -231,7 +332,30 @@ public class Fugue<V> private constructor(
     public fun apply(op: FugueOp<V>): Fugue<V> = when (op) {
         is FugueOp.Insert -> applyInsert(op, maxOf(lamport, op.id.lamport))
         is FugueOp.Remove -> applyRemove(op)
+        is FugueOp.Compact -> applyCompact(op)
     }
+
+    /**
+     * The causal [Dot]s this op-log has delivered — one per [FugueOp.Insert] plus
+     * one per id in every [FugueOp.Compact].
+     *
+     * [FugueOp.Remove] mints no dot (it reuses the target insert's id). Including it
+     * would over-claim when a Remove arrives before its Insert, prematurely advancing
+     * the stable cut (the #275-class hazard, per-Rga reasoning).
+     *
+     * [FugueOp.Compact] ids re-emit the compacted inserts' dots so the contiguous
+     * frontier does not develop holes after GC.
+     */
+    override fun causalDots(): Set<Dot> =
+        ops.asSequence()
+            .flatMap { op ->
+                when (op) {
+                    is FugueOp.Insert -> sequenceOf(op.id.dot)
+                    is FugueOp.Compact -> op.positions.keys.asSequence().map { it.dot }
+                    is FugueOp.Remove -> emptySequence()
+                }
+            }
+            .toSet()
 
     /**
      * Merge two replicas' op-logs. The result is idempotent set-union — both
@@ -241,15 +365,29 @@ public class Fugue<V> private constructor(
      * - **Idempotent**: `a.piece(a)` converges to `a`
      * - **Commutative**: `a.piece(b)` == `b.piece(a)`
      * - **Associative**: `a.piece(b).piece(c)` == `a.piece(b.piece(c))`
+     *
+     * Any [FugueOp.Compact] ops in the union are applied eagerly so that Insert/Remove
+     * ops already GC'd on one peer do not re-inflate the op-log on merge.
      */
     override fun piece(other: Fugue<V>): Fugue<V> {
-        val mergedOps = ops + other.ops
+        val mergedCompactedIds = compactedIds + other.compactedIds
+        val mergedCompactPositions = compactPositions + other.compactPositions
+        val rawInsertsById = insertsById + other.insertsById
+        val mergedInsertsById = if (mergedCompactedIds.isEmpty()) rawInsertsById
+            else rawInsertsById.filterKeys { it !in mergedCompactedIds }
+        val rawTombstones = tombstones + other.tombstones
+        val mergedTombstones = if (mergedCompactedIds.isEmpty()) rawTombstones
+            else rawTombstones.filterTo(mutableSetOf()) { it !in mergedCompactedIds }
+        val mergedMaxSeq = mergeMaxSeq(maxSeqByReplica, other.maxSeqByReplica)
         val mergedLamport = maxOf(lamport, other.lamport)
-        val mergedInserts = insertsById + other.insertsById
-        val mergedTombstones = tombstones + other.tombstones
+        val rawUnion = ops + other.ops
+        val mergedOps = if (mergedCompactedIds.isEmpty()) rawUnion else purge(rawUnion, mergedCompactedIds)
         val newCache = FugueCache(
-            insertsById = mergedInserts,
+            insertsById = mergedInsertsById,
             tombstones = mergedTombstones,
+            compactedIds = mergedCompactedIds,
+            compactPositions = mergedCompactPositions,
+            maxSeqByReplica = mergedMaxSeq,
         )
         return Fugue(mergedOps, mergedLamport, newCache)
     }
@@ -308,28 +446,93 @@ public class Fugue<V> private constructor(
     }
 
     private fun applyInsert(op: FugueOp.Insert<V>, newLamport: Long): Fugue<V> {
-        if (op.id in insertsById) return this
+        if (op.id in insertsById || op.id in compactedIds) return this
+        val newSeq = maxSeqByReplica[op.id.replicaId].let { cur ->
+            if (cur == null || op.id.seq > cur) maxSeqByReplica + (op.id.replicaId to op.id.seq)
+            else maxSeqByReplica
+        }
         val newCache = FugueCache(
             insertsById = insertsById + (op.id to op),
             tombstones = tombstones,
+            compactedIds = compactedIds,
+            compactPositions = compactPositions,
+            maxSeqByReplica = newSeq,
         )
         return Fugue(ops + op, newLamport, newCache)
     }
 
     private fun applyRemove(op: FugueOp.Remove<V>): Fugue<V> {
-        if (op.id in tombstones) return this
+        if (op.id in tombstones || op.id in compactedIds) return this
         val newCache = FugueCache(
             insertsById = insertsById,
             tombstones = tombstones + op.id,
+            compactedIds = compactedIds,
+            compactPositions = compactPositions,
+            maxSeqByReplica = maxSeqByReplica,
         )
         return Fugue(ops + op, lamport, newCache)
+    }
+
+    private fun applyCompact(op: FugueOp.Compact): Fugue<V> {
+        val newOps = purgeAndRecord(ops, op.positions.keys, op)
+        return withCompactCaches(newOps, op.positions.keys, op)
+    }
+
+    private fun withCompactCaches(
+        newOps: Set<FugueOp<V>>,
+        gcIds: Set<FugueId>,
+        compactOp: FugueOp.Compact,
+    ): Fugue<V> {
+        val newCache = FugueCache(
+            insertsById = insertsById - gcIds,
+            tombstones = tombstones - gcIds,
+            compactedIds = compactedIds + gcIds,
+            compactPositions = compactPositions + compactOp.positions,
+            maxSeqByReplica = maxSeqByReplica,
+        )
+        return Fugue(newOps, lamport, newCache)
     }
 
     private fun computeInsertsById(): Map<FugueId, FugueOp.Insert<V>> =
         ops.filterIsInstance<FugueOp.Insert<V>>().associateBy { it.id }
 
     private fun computeTombstones(): Set<FugueId> =
-        ops.filterIsInstance<FugueOp.Remove<V>>().mapTo(mutableSetOf()) { it.id }
+        ops.filterIsInstance<FugueOp.Remove<V>>()
+            .mapTo(mutableSetOf()) { it.id }
+            .apply { removeAll(compactedIds) }
+
+    private fun computeCompactedIds(): Set<FugueId> =
+        ops.filterIsInstance<FugueOp.Compact>()
+            .flatMapTo(mutableSetOf()) { it.positions.keys }
+
+    private fun computeCompactPositions(): Map<FugueId, FugueId> =
+        ops.filterIsInstance<FugueOp.Compact>()
+            .flatMap { it.positions.entries }
+            .associate { (k, v) -> k to v }
+
+    /**
+     * Compute the maxSeqByReplica map from the op-log (fallback when no cache is provided).
+     *
+     * Folds in **compacted ids** from [FugueOp.Compact.positions] keys as well as live
+     * [FugueOp.Insert]s. A self-compaction purges the Insert from the log, so scanning
+     * only surviving inserts would regress the per-author high-water and let [nextSeqFor]
+     * reuse a seq (same as [Rga] #639 fix).
+     */
+    private fun computeMaxSeqByReplica(): Map<ReplicaId, Long> {
+        val result = mutableMapOf<ReplicaId, Long>()
+        fun consider(id: FugueId) {
+            val current = result[id.replicaId]
+            if (current == null || id.seq > current) result[id.replicaId] = id.seq
+        }
+        for (op in ops) {
+            when (op) {
+                is FugueOp.Insert -> consider(op.id)
+                is FugueOp.Compact -> op.positions.keys.forEach(::consider)
+                is FugueOp.Remove -> {}
+            }
+        }
+        return result
+    }
 
     /**
      * Build the in-memory Fugue tree from the current op-log.
@@ -339,25 +542,46 @@ public class Fugue<V> private constructor(
      *
      * After construction, each node's [FugueNode.leftChildren] and
      * [FugueNode.rightChildren] are sorted according to the Fugue ordering:
-     * - Left children: ascending [FugueId] (sender-id order).
+     * - Left children: ascending [FugueId].
      * - Right children: reverse rightOrigin sequence order, breaking ties by
      *   sender-id descending.
+     *
+     * **Positional re-root (#714).** An [FugueOp.Insert] whose [FugueOp.Insert.parent]
+     * has been compacted away does not drop from the tree. Instead, `nearestAncestor`
+     * chain-walks [compactPositions] until it reaches a present (non-compacted) id or
+     * [FugueId.HEAD]. This preserves the traversal order of surviving nodes: a child of
+     * a GC'd node stays below the GC'd node's own surviving ancestor rather than
+     * floating to HEAD arbitrarily.
      */
     private fun buildTree(): Map<FugueId, FugueNode> {
-        // Create all nodes first (no children yet).
-        val nodes = mutableMapOf<FugueId, FugueNode>()
+        val present = insertsById.keys
+        val positions = compactPositions
 
-        // Build a virtual HEAD node as the root sentinel.
+        fun nearestAncestor(start: FugueId): FugueId {
+            var cur = start
+            while (cur != FugueId.HEAD && cur !in present) cur = positions[cur] ?: FugueId.HEAD
+            return cur
+        }
+
+        val nodes = mutableMapOf<FugueId, FugueNode>()
         val headNode = FugueNode(id = FugueId.HEAD, parent = null, side = FugueSide.Right, rightOrigin = null)
         nodes[FugueId.HEAD] = headNode
 
-        // Create nodes in ascending ID order — parents always have lower lamport than children,
+        // Sort ascending by id — parents always have lower lamport than children,
         // so ascending order guarantees topological order (parent before child).
         val sortedInserts = insertsById.values.sortedWith(compareBy({ it.id.lamport }, { it.id.replicaId.value }))
         for (insert in sortedInserts) {
-            val parentNode = nodes[insert.parent]
-                ?: error("Fugue tree: parent ${insert.parent} not found for ${insert.id}. Ops may be out of order.")
-            val rightOriginNode = insert.rightOrigin?.let { nodes[it] }
+            val effectiveParentId = if (insert.parent == FugueId.HEAD || insert.parent in present) {
+                insert.parent
+            } else {
+                nearestAncestor(insert.parent)
+            }
+            val parentNode = nodes[effectiveParentId]
+                ?: error("Fugue tree: parent $effectiveParentId not found for ${insert.id}.")
+            val rightOriginNode = insert.rightOrigin?.let { ro ->
+                val effectiveRo = if (ro == FugueId.HEAD || ro in present) ro else nearestAncestor(ro)
+                nodes[effectiveRo]
+            }
             val node = FugueNode(id = insert.id, parent = parentNode, side = insert.side, rightOrigin = rightOriginNode)
             nodes[insert.id] = node
             when (insert.side) {
@@ -366,7 +590,6 @@ public class Fugue<V> private constructor(
             }
         }
 
-        // Sort children after all nodes are added.
         sortChildren(nodes)
         return nodes
     }
@@ -575,6 +798,40 @@ public class Fugue<V> private constructor(
          */
         public fun <V> wireSerializer(vSerializer: KSerializer<V>): KSerializer<Fugue<V>> =
             FugueSerializer(vSerializer)
+
+        /**
+         * Strip Insert and Remove ops for all [gcIds] from [ops], merging the
+         * [compactOp] in. The Compact op itself is retained.
+         */
+        internal fun <V> purgeAndRecord(
+            ops: Set<FugueOp<V>>,
+            gcIds: Set<FugueId>,
+            compactOp: FugueOp.Compact,
+        ): Set<FugueOp<V>> = purge(ops, gcIds) + compactOp
+
+        /**
+         * Remove all [FugueOp.Insert] and [FugueOp.Remove] ops whose id is in [gcIds].
+         * [FugueOp.Compact] ops are left intact.
+         */
+        internal fun <V> purge(ops: Set<FugueOp<V>>, gcIds: Set<FugueId>): Set<FugueOp<V>> =
+            ops.filterTo(mutableSetOf()) { op ->
+                when (op) {
+                    is FugueOp.Insert -> op.id !in gcIds
+                    is FugueOp.Remove -> op.id !in gcIds
+                    is FugueOp.Compact -> true
+                }
+            }
+
+        private fun mergeMaxSeq(a: Map<ReplicaId, Long>, b: Map<ReplicaId, Long>): Map<ReplicaId, Long> {
+            if (a.isEmpty()) return b
+            if (b.isEmpty()) return a
+            val result = a.toMutableMap()
+            for ((replica, seq) in b) {
+                val current = result[replica]
+                if (current == null || seq > current) result[replica] = seq
+            }
+            return result
+        }
     }
 }
 
@@ -585,11 +842,17 @@ public class Fugue<V> private constructor(
 internal data class FugueCache<V>(
     val insertsById: Map<FugueId, FugueOp.Insert<V>>,
     val tombstones: Set<FugueId>,
+    val compactedIds: Set<FugueId>,
+    val compactPositions: Map<FugueId, FugueId>,
+    val maxSeqByReplica: Map<ReplicaId, Long>,
 ) {
     companion object {
         fun <V> empty(): FugueCache<V> = FugueCache(
             insertsById = emptyMap(),
             tombstones = emptySet(),
+            compactedIds = emptySet(),
+            compactPositions = emptyMap(),
+            maxSeqByReplica = emptyMap(),
         )
     }
 }

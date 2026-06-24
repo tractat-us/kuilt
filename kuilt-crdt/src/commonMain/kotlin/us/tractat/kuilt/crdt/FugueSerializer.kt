@@ -4,6 +4,7 @@ import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.builtins.MapSerializer
 import kotlinx.serialization.builtins.SetSerializer
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.descriptors.SerialDescriptor
@@ -41,12 +42,13 @@ internal class FugueSerializer<V>(vSerializer: KSerializer<V>) : KSerializer<Fug
      * holding the same logical state (same op set, different delivery order) produce
      * identical bytes. [FugueId] is [Comparable] — ascending lamport, then replicaId.
      *
-     * The sorted order is cached on the [Fugue] instance via [Fugue.sortedOps] — the
-     * op set is immutable per instance so the sort is paid at most once, not once per
-     * anti-entropy send or gossip broadcast.
+     * [FugueOp.id] is available on the sealed interface, so the sort key is uniform
+     * regardless of op variant. [FugueOp.Compact] uses [FugueId.HEAD] as its sentinel
+     * id and thus sorts before all real Insert/Remove ops — stable and deterministic.
      */
     override fun serialize(encoder: Encoder, value: Fugue<V>): Unit = encoder.encodeStructure(descriptor) {
-        encodeSerializableElement(descriptor, 0, opsListSerializer, value.sortedOps)
+        val sortedOps = value.ops.sortedWith(compareBy { it.id })
+        encodeSerializableElement(descriptor, 0, opsListSerializer, sortedOps)
         encodeLongElement(descriptor, 1, value.lamport)
     }
 
@@ -74,6 +76,7 @@ internal class FugueSerializer<V>(vSerializer: KSerializer<V>) : KSerializer<Fug
  * Wire format (a map with mandatory type discriminator `t`):
  * - Insert: `{ "t": 0, "id": FugueId, "v": V, "p": FugueId, "s": FugueSide, "ro": FugueId? }`
  * - Remove: `{ "t": 1, "id": FugueId }`
+ * - Compact: `{ "t": 2, "pos": Map<FugueId, FugueId> }`
  */
 @OptIn(ExperimentalSerializationApi::class)
 internal class FugueOpSerializer<V>(
@@ -82,14 +85,17 @@ internal class FugueOpSerializer<V>(
 
     private val idSerializer: KSerializer<FugueId> = FugueId.serializer()
     private val sideSerializer: KSerializer<FugueSide> = FugueSide.serializer()
+    private val positionsSerializer: KSerializer<Map<FugueId, FugueId>> =
+        MapSerializer(idSerializer, idSerializer)
 
     override val descriptor: SerialDescriptor = buildClassSerialDescriptor("us.tractat.kuilt.crdt.FugueOp") {
-        element<Int>("t")                                                           // 0 = Insert, 1 = Remove
-        element("id", idSerializer.descriptor, isOptional = true)                   // Insert + Remove
-        element("v", vSerializer.descriptor, isOptional = true)                     // Insert only
-        element("p", idSerializer.descriptor, isOptional = true)                    // Insert: parent
-        element("s", sideSerializer.descriptor, isOptional = true)                  // Insert: side
-        element("ro", idSerializer.descriptor, isOptional = true)                   // Insert: rightOrigin (R-side only)
+        element<Int>("t")                                                            // 0=Insert, 1=Remove, 2=Compact
+        element("id", idSerializer.descriptor, isOptional = true)                    // Insert + Remove
+        element("v", vSerializer.descriptor, isOptional = true)                      // Insert only
+        element("p", idSerializer.descriptor, isOptional = true)                     // Insert: parent
+        element("s", sideSerializer.descriptor, isOptional = true)                   // Insert: side
+        element("ro", idSerializer.descriptor, isOptional = true)                    // Insert: rightOrigin (R-side only)
+        element("pos", positionsSerializer.descriptor, isOptional = true)            // Compact only
     }
 
     override fun serialize(encoder: Encoder, value: FugueOp<V>): Unit = encoder.encodeStructure(descriptor) {
@@ -108,6 +114,10 @@ internal class FugueOpSerializer<V>(
                 encodeIntElement(descriptor, 0, TYPE_REMOVE)
                 encodeSerializableElement(descriptor, 1, idSerializer, value.id)
             }
+            is FugueOp.Compact -> {
+                encodeIntElement(descriptor, 0, TYPE_COMPACT)
+                encodeSerializableElement(descriptor, 6, positionsSerializer, value.positions)
+            }
         }
     }
 
@@ -120,6 +130,7 @@ internal class FugueOpSerializer<V>(
         var parent: FugueId? = null
         var side: FugueSide? = null
         var rightOrigin: FugueId? = null
+        var positions: Map<FugueId, FugueId>? = null
 
         mainLoop@ while (true) {
             when (val index = decodeElementIndex(descriptor)) {
@@ -130,6 +141,7 @@ internal class FugueOpSerializer<V>(
                 3 -> parent = decodeSerializableElement(descriptor, 3, idSerializer)
                 4 -> side = decodeSerializableElement(descriptor, 4, sideSerializer)
                 5 -> rightOrigin = decodeSerializableElement(descriptor, 5, idSerializer)
+                6 -> positions = decodeSerializableElement(descriptor, 6, positionsSerializer)
                 else -> throw SerializationException("Unexpected index: $index")
             }
         }
@@ -143,6 +155,7 @@ internal class FugueOpSerializer<V>(
                 rightOrigin = rightOrigin,  // nullable, may be absent
             )
             TYPE_REMOVE -> FugueOp.Remove(id = id ?: missingField("Remove", "id"))
+            TYPE_COMPACT -> FugueOp.Compact(positions = positions ?: missingField("Compact", "pos"))
             else -> throw SerializationException("Unknown FugueOp type discriminator: $type")
         }
     }
@@ -153,5 +166,6 @@ internal class FugueOpSerializer<V>(
     private companion object {
         const val TYPE_INSERT = 0
         const val TYPE_REMOVE = 1
+        const val TYPE_COMPACT = 2
     }
 }
