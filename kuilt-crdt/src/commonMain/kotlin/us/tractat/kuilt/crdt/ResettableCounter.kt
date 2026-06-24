@@ -27,6 +27,14 @@ import kotlinx.serialization.Serializable
  * requires `Json { allowStructuredMapKeys = true }`; CBOR and Protobuf encode
  * it cleanly without any flag.
  *
+ * **`Causal` invariant:** every dot in `causal.store` is already witnessed by
+ * `causal.context`.  This is established by [increment] (which calls
+ * `causal.context.add(dot)` when minting a new dot) and preserved by [piece]
+ * (`Causal.piece` unions both contexts, so new store dots from either replica
+ * are always witnessed).  [reset] exploits this invariant: it needs the
+ * current context unchanged and an empty store, so no fold over live dots is
+ * required — the context is already complete.
+ *
  * @sample us.tractat.kuilt.crdt.sampleResettableCounter
  */
 @Serializable
@@ -51,19 +59,20 @@ public class ResettableCounter private constructor(
     }
 
     /**
-     * Reset the counter to zero: retire every currently-live dot into the
-     * causal context and clear the store. Returns the delta to absorb with
-     * [piece]; the receiver is unchanged.
+     * Reset the counter to zero: clear the store and carry the current causal
+     * context forward. Returns the delta to absorb with [piece]; the receiver
+     * is unchanged.
      *
      * Any increment concurrent with this reset — minted on a replica that had
      * not yet seen the reset — will survive the merge, because its dot is not
      * in this reset's context.
+     *
+     * **O(1).** The `Causal` invariant guarantees every live dot is already in
+     * `causal.context` (see class KDoc), so no fold over live dots is needed —
+     * the context is already complete.
      */
-    public fun reset(): Patch<ResettableCounter> {
-        val allDots = causal.store.values.keys
-        val newContext = allDots.fold(causal.context) { ctx, dot -> ctx.add(dot) }
-        return Patch(ResettableCounter(Causal(DotFun(), newContext)))
-    }
+    public fun reset(): Patch<ResettableCounter> =
+        Patch(ResettableCounter(Causal(DotFun(), causal.context)))
 
     /** The causal merge of two replicas. */
     override fun piece(other: ResettableCounter): ResettableCounter =
