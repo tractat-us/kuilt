@@ -46,26 +46,6 @@ val merged = afterReset.piece(concurrentAdd)
 check(merged.value == 3L) // only the concurrent increment survived
 ```
 
-## Code examples
-
-**Increment on behalf of a replica:**
-
-```kotlin
-```
-{ src="../../kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/ResettableCounterTest.kt" include-symbol="incrementIncreasesValue" }
-
-**Reset to zero (observed-reset: concurrent increments survive):**
-
-```kotlin
-```
-{ src="../../kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/ResettableCounterTest.kt" include-symbol="resetClearsToZero" }
-
-**Multiple replicas converge:**
-
-```kotlin
-```
-{ src="../../kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/ResettableCounterTest.kt" include-symbol="multipleReplicaIncrementsSum" }
-
 ## Internals
 
 `ResettableCounter` is a thin wrapper around `Causal<DotFun<Long>>` — the same causal plumbing that powers `ORSet` and `MVRegister`. Internally:
@@ -90,7 +70,7 @@ One practical constraint: increments must be positive (`by >= 1`). `ResettableCo
 |-----------|-----|
 | Score, tally, or count that anyone can clear to start fresh | `ResettableCounter` |
 | Counter that also needs to go down | [PNCounter](crdt-pncounter.md) |
-| Counter that must never go below zero | [BoundedCounter](crdt-boundedcounter.md) |
+| Counter that must never go below zero | [BoundedCounter](crdt-bounded-counter.md) |
 | Counter that only ever grows | [GCounter](crdt-gcounter.md) |
 
 ## Serialization note

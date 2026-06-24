@@ -20,26 +20,18 @@ Writing `leave(replica, clock)` records a null value at a higher clock — a tom
 
 **Write a presence value:**
 
-```kotlin
-```
 { src="../../kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/EphemeralMapTest.kt" include-symbol="putAddsEntry" }
 
 **Later clock wins within a replica's slot:**
 
-```kotlin
-```
 { src="../../kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/EphemeralMapTest.kt" include-symbol="laterClockWins_sameReplica" }
 
 **Rejoin beats a stale departure:**
 
-```kotlin
-```
 { src="../../kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/EphemeralMapTest.kt" include-symbol="presenceWithHigherClockWinsOverStaleDeparture" }
 
 **A stale entry is evicted from the live view:**
 
-```kotlin
-```
 { src="../../kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/EphemeralMapTest.kt" include-symbol="expiredEntryIsEvicted" }
 
 ## When to use

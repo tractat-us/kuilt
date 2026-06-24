@@ -22,26 +22,18 @@ A key added concurrently with a remove survives — the add wins. When two repli
 
 **Set and read a scalar:**
 
-```kotlin
-```
 { src="../../kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/JsonCrdtTest.kt" include-symbol="setThenGet" }
 
 **Concurrent edits to a nested object both survive:**
 
-```kotlin
-```
 { src="../../kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/JsonCrdtTest.kt" include-symbol="nestedObjectMerge" }
 
 **A concurrent add wins over a remove:**
 
-```kotlin
-```
 { src="../../kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/JsonCrdtTest.kt" include-symbol="addWinsOverConcurrentRemove" }
 
 **Concurrent scalar writes surface as a multi-value:**
 
-```kotlin
-```
 { src="../../kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/JsonCrdtTest.kt" include-symbol="concurrentScalarWritesProduceMultiValue" }
 
 ## When to use

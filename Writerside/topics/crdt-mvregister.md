@@ -8,25 +8,24 @@ Holds one value, but surfaces conflicts instead of silently picking a winner. Wh
 
 `MVRegister` uses a `DotFun` (a map from causal dots to values). Each `set(replica, value)` mints a new dot, superseding all dots the replica has already seen. On merge, a dot that was witnessed-and-superseded by one side is removed; a dot unknown to the other side is kept. The result is the set of values at the causal frontier.
 
-## Code examples
+## Code example
 
-**Set and read:**
-
+<!-- verbatim from kuilt-crdt/src/commonSamples/kotlin/us/tractat/kuilt/crdt/CrdtSamples.kt#sampleMVRegister -->
 ```kotlin
+val a = ReplicaId("A")
+val b = ReplicaId("B")
+
+// Two replicas set independently — neither has seen the other.
+val fromA = MVRegister.empty<String>().set(a, "vA")
+val fromB = MVRegister.empty<String>().set(b, "vB")
+
+val merged = fromA.piece(fromB)
+check(merged.values == setOf("vA", "vB"))  // concurrent writes retained
+
+// A later write on one replica that observes the merged state resolves it.
+val resolved = merged.set(a, "resolved")
+check(resolved.values == setOf("resolved"))
 ```
-{ src="../../kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/MVRegisterTest.kt" include-symbol="setThenRead" }
-
-**Concurrent writes keep both values:**
-
-```kotlin
-```
-{ src="../../kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/MVRegisterTest.kt" include-symbol="concurrentWritesKeepBothValues" }
-
-**A later write resolves the conflict:**
-
-```kotlin
-```
-{ src="../../kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/MVRegisterTest.kt" include-symbol="aLaterWriteResolvesTheConflict" }
 
 ## When to use
 

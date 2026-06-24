@@ -19,8 +19,12 @@ Every element gets a globally unique id = `(lamportTimestamp, replicaId)`. Inser
 For long-running sequences (e.g. a chat log), the `RgaGcCoordinator` + `WindowPolicy.byCount(n)` combination drops the leading visible prefix beyond `n` elements via a `Compact` operation. The op-log is bounded to the window size:
 
 ```kotlin
+// see RgaWindowByCountIntegrationTest.byCountDropsLeadingPrefixAndWindowRenders
+val coordinator = RgaGcCoordinator(seam, WindowPolicy.byCount(100))
+coordinator.start()
+// WindowPolicy trims the leading visible prefix beyond 100 elements;
+// a late joiner receives the windowed FullState and never materialises the dropped prefix.
 ```
-{ src="../../kuilt-quilter/src/commonTest/kotlin/us/tractat/kuilt/quilter/RgaWindowByCountIntegrationTest.kt" include-symbol="byCountDropsLeadingPrefixAndWindowRenders" }
 
 A late joiner receives the windowed state via `FullState` and never materialises the dropped prefix — the op-log stays bounded.
 
@@ -30,6 +34,24 @@ Tombstones accumulate over time. `RgaGcCoordinator` implements a distributed gar
 
 See `docs/adr-003-rga-tombstone-gc-history-windowing.md` in the repository for the full design.
 
+## Code example
+
+<!-- verbatim from kuilt-crdt/src/commonSamples/kotlin/us/tractat/kuilt/crdt/CrdtSamples.kt#sampleRga -->
+```kotlin
+val a = ReplicaId("A")
+val b = ReplicaId("B")
+
+val (rgaA, opA) = Rga.empty<String>().insertAt(a, 0, "Hello")
+val (rgaB, opB) = Rga.empty<String>().insertAt(b, 0, "World")
+
+// Both replicas absorb both ops.
+val mergedByA = rgaA.apply(opB)
+val mergedByB = rgaB.apply(opA)
+
+// Convergence: both produce the same list regardless of delivery order.
+check(mergedByA.toList() == mergedByB.toList())
+```
+
 ## When to use
 
-Use `Rga` (RGA) for ordered sequences where concurrent insertions and deletions are possible — chat messages, command history, collaborative text. For unordered collections, prefer [ORSet](crdt-orset.md) or [GSet](crdt-gset.md).
+Use `Rga` (RGA) for ordered sequences where concurrent insertions and deletions are possible — chat messages, command history, collaborative text. For unordered collections, prefer [ORSet](crdt-orset.md) or [GSet](crdt-gset.md). For collaborative text where concurrent runs must not interleave, see [Fugue](crdt-fugue.md).

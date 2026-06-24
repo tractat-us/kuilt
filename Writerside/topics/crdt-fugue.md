@@ -55,8 +55,8 @@ sequence CRDT with such a proof.
 Alice types `"a1"`, `"a2"`, `"a3"` at position 0, offline. Bob independently types
 `"b1"`, `"b2"` at the same position. When they sync:
 
-```kotlin
 <!-- verbatim from kuilt-crdt/src/commonSamples/kotlin/us/tractat/kuilt/crdt/CrdtSamples.kt#sampleFugue -->
+```kotlin
 val a = ReplicaId("A")
 val b = ReplicaId("B")
 

@@ -4,30 +4,22 @@
 
 ## Basic setup
 
-```kotlin
-```
 { src="../../kuilt-quilter/src/commonSamples/kotlin/us/tractat/kuilt/quilter/QuilterSamples.kt" include-symbol="sampleQuilterSetup" }
 
 ## Two-peer GCounter convergence
 
-```kotlin
-```
 { src="../../kuilt-quilter/src/commonTest/kotlin/us/tractat/kuilt/quilter/QuilterTest.kt" include-symbol="twoPeerGCounterConverges" }
 
 ## Late-joiner full-state sync
 
 When a peer joins after others have accumulated state, `Quilter` sends a `FullState` message rather than replaying the delta history. The late joiner converges in one round-trip:
 
-```kotlin
-```
 { src="../../kuilt-quilter/src/commonTest/kotlin/us/tractat/kuilt/quilter/QuilterTest.kt" include-symbol="lateJoinerReceivesFullState" }
 
 ## Multiplexing multiple replicators over one Seam
 
 `Seam.incoming` is single-collection per the kuilt contract. If two replicators tried to collect the same `Seam` independently, one would starve. `MuxSeam` (`kuilt-core`) solves this: it wraps the underlying seam, owns the single collection via `shareIn`, and prefixes frames with a 1-byte channel tag:
 
-```kotlin
-```
 { src="../../kuilt-core/src/commonSamples/kotlin/us/tractat/kuilt/core/LoomSamples.kt" include-symbol="sampleMuxSeamChannels" }
 
 Each consumer gets a typed `Seam` view that strips the tag on reads and prepends it on writes. This is how `BoundedCounterTransferCoordinator` and `Quilter` share one transport (see [BoundedCounter](crdt-bounded-counter.md)). It is also how `kuilt-session`'s `Room.channel(id)` provides scoped sub-channels.
@@ -36,8 +28,6 @@ Each consumer gets a typed `Seam` view that strips the tag on reads and prepends
 
 `Quilter` + `LWWMap` is the standard pattern for live-converging session metadata (display names, preferences):
 
-```kotlin
-```
 { src="../../kuilt-quilter/src/commonSamples/kotlin/us/tractat/kuilt/quilter/QuilterSamples.kt" include-symbol="sampleQuilterSessionMetadata" }
 
 ## Scaling to many peers

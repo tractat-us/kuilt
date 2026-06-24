@@ -9,7 +9,7 @@ The technical name for these structures is **CRDTs** (Conflict-free Replicated D
 
 Use replication when you want convergence without a central coordinator. If your feature needs strict, globally ordered decisions instead (like turn order in a game), use [Consensus](raft.md) for that part.
 
-`kuilt-crdt` provides fourteen types, grouped by what they model.
+`kuilt-crdt` provides nineteen types, grouped by what they model.
 
 **`kuilt-crdt` depends on nothing else in kuilt** — not even `kuilt-core`. Add it to any project on its own and replicate over whatever transport you already have. Live replication over a `Seam` (via [`Quilter`](crdt-quilter.md)) is opt-in, not required.
 
@@ -19,6 +19,7 @@ Use replication when you want convergence without a central coordinator. If your
 |---|---|
 | Event tally, vote count, metric | [`GCounter`](crdt-gcounter.md) — grow-only; each replica owns its slot |
 | Like/dislike, upvote/downvote | [`PNCounter`](crdt-pncounter.md) — increment and decrement; value may be negative |
+| Score or tally that anyone can reset to zero | [`ResettableCounter`](crdt-resettablecounter.md) — concurrent increments survive a reset |
 | Collaborative tag cloud, ever-growing log | [`GSet`](crdt-gset.md) — add-only; simple and fast |
 | Collaborative labels where items can be archived | [`TwoPhaseSet`](crdt-twophaseset.md) — add once, remove once; removal is permanent |
 | Collaborative labels where items can be re-added | [`ORSet`](crdt-orset.md) — add-wins on concurrent conflict |
@@ -27,22 +28,29 @@ Use replication when you want convergence without a central coordinator. If your
 | Online presence / roster (key → last-write value) | [`LWWMap`](crdt-lwwmap.md) — per-key LWWRegister |
 | Presence / roster (key → nested CRDT value) | [`ORMap`](crdt-ormap.md) — add-wins key set; values merge via their own CRDT |
 | Seat or inventory reservation (can't oversell) | [`BoundedCounter`](crdt-bounded-counter.md) — quota-per-replica; total spend can never exceed budget |
-| Collaborative text / ordered list | [`Rga`](crdt-rga.md) — stable insertion ids; converges to same order everywhere |
+| Collaborative text / ordered list (non-interleaving) | [`Fugue`](crdt-fugue.md) — concurrent runs stay contiguous; maximal non-interleaving proven |
+| Collaborative text / ordered list | [`Rga`](crdt-rga.md) — stable insertion ids; converges to same order everywhere; GC support |
+| Hierarchical data (file trees, scene graphs) | [`MovableTree`](crdt-movabletree.md) — reparent nodes concurrently; cycle prevention guaranteed |
 | JSON document sync | [`JsonCrdt`](crdt-jsoncrdt.md) — ORMap objects + RGA arrays + MVRegister leaves, recursive |
 | Ephemeral presence (cursors, typing indicators) | [`EphemeralMap`](crdt-ephemeralmap.md) — per-replica slot; TTL eviction |
+| "Have I seen this?" deduplication, compact | [`BloomFilter`](crdt-bloomfilter.md) — probabilistic membership; no false negatives; bitwise-OR merge |
+| How many distinct items (e.g. unique visitors)? | [`HyperLogLog`](crdt-hyperloglog.md) — ~1% error estimate; 16 KB for any cardinality |
+| How often does X appear (trending topics, heavy hitters)? | [`CountMinSketch`](crdt-countminsketch.md) — frequency sketch; never underestimates; fixed memory |
 | Causal stability / building your own CRDT | [`Causal` primitives](crdt-causal.md) — `DotContext`, `DotSet`, `DotFun`, `DotMap` |
 
 ## Structure at a glance
 
 | Group | Types | Convergence property |
 |-------|-------|----------------------|
-| Counters | `GCounter`, `PNCounter`, `BoundedCounter` | Per-replica monotone internals; deterministic integer result after merge |
+| Counters | `GCounter`, `PNCounter`, `BoundedCounter`, `ResettableCounter` | Per-replica monotone internals; deterministic integer result after merge |
 | Sets | `GSet`, `ORSet`, `TwoPhaseSet` | Set union / observe-remove semantics |
 | Registers | `LWWRegister`, `MVRegister` | Last-write-wins or multi-value concurrent conflict |
 | Maps | `LWWMap`, `ORMap` | Key-level LWW or ORSet-keyed map |
-| Sequences | `Rga` (RGA, Replicated Growable Array) | Ordered list with stable unique ids |
+| Sequences | `Fugue`, `Rga` | Ordered list with stable unique ids; Fugue adds maximal non-interleaving |
+| Trees | `MovableTree` | Op-log union; Lamport-ordered replay with cycle prevention |
 | Composite | `JsonCrdt` | Recursive JSON document — ORMap objects, RGA arrays, MVRegister leaves |
 | Ephemeral | `EphemeralMap` | Per-replica presence slot, clock-ordered, with caller-driven TTL eviction |
+| Sketches | `BloomFilter`, `HyperLogLog`, `CountMinSketch` | Probabilistic structures; bitwise-OR or element-wise max merge |
 | Causal primitives | `Causal`, `DotContext`, `DotSet` | Causal-context-based remove/add reasoning |
 
 ## Using the types without kuilt

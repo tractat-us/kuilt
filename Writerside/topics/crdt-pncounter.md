@@ -8,11 +8,7 @@ A counter that can go up or down. Two `GCounter`s under the hood — one for inc
 
 `PNCounter` + `Quilter` is the natural fit for a vote tally: each peer owns its own slot, increments record upvotes, decrements record downvotes. Deltas propagate automatically; both replicas converge to the same net count.
 
-```kotlin
-```
-{ src="../../kuilt-quilter/src/commonSamples/kotlin/us/tractat/kuilt/quilter/QuilterSamples.kt" include-symbol="sampleVoteTally" }
-
-See the full test at [`VoteTallyTest.kt`](https://github.com/tractat-us/kuilt/blob/main/examples/src/test/kotlin/us/tractat/kuilt/examples/VoteTallyTest.kt).
+See `QuilterSamples.sampleVoteTally` and the full integration test at [`VoteTallyTest.kt`](https://github.com/tractat-us/kuilt/blob/main/examples/src/test/kotlin/us/tractat/kuilt/examples/VoteTallyTest.kt).
 
 ## Merge rule
 
@@ -24,31 +20,19 @@ value = inc.value - dec.value
 
 There is no floor at zero. A replica can decrement without having incremented — `value` can go negative.
 
-## Code examples
+## Code example
 
-**Increment:**
-
+<!-- verbatim from kuilt-crdt/src/commonSamples/kotlin/us/tractat/kuilt/crdt/CrdtSamples.kt#samplePNCounter -->
 ```kotlin
+val a = ReplicaId("A")
+val b = ReplicaId("B")
+
+var counter = PNCounter.ZERO
+counter = counter.piece(counter.increment(a, 10))
+counter = counter.piece(counter.decrement(b, 3))
+
+check(counter.value == 7L)
 ```
-{ src="../../kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/PNCounterTest.kt" include-symbol="incrementRaisesValue" }
-
-**Decrement:**
-
-```kotlin
-```
-{ src="../../kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/PNCounterTest.kt" include-symbol="decrementLowersValue" }
-
-**Concurrent increments from different replicas merge:**
-
-```kotlin
-```
-{ src="../../kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/PNCounterTest.kt" include-symbol="concurrentIncAndDecFromDifferentReplicasMerge" }
-
-**Value can go negative:**
-
-```kotlin
-```
-{ src="../../kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/PNCounterTest.kt" include-symbol="valueCanGoNegative" }
 
 ## When to use
 

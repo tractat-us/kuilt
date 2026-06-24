@@ -16,29 +16,35 @@ This is why merging doesn't double-count: the same increment, seen from two repl
 
 ## Code examples
 
-**Zero counter and summing across replicas:**
-
+<!-- verbatim from kuilt-crdt/src/commonSamples/kotlin/us/tractat/kuilt/crdt/CrdtSamples.kt#sampleGCounter -->
 ```kotlin
+val a = ReplicaId("A")
+val b = ReplicaId("B")
+
+var replicaA = GCounter.ZERO
+var replicaB = GCounter.ZERO
+
+// Each replica increments its own slot.
+replicaA = replicaA.piece(replicaA.inc(a, 3))
+replicaB = replicaB.piece(replicaB.inc(b, 5))
+
+// After merging both deltas, every replica converges to the same value.
+val merged = replicaA.piece(replicaB)
+check(merged.value == 8L) // 3 + 5
 ```
-{ src="../../kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/GCounterTest.kt" include-symbol="zeroHasValueZero" }
 
-**Inc produces a delta:**
+**Piece is element-wise max — the same increment is never double-counted:**
 
+<!-- verbatim from kuilt-crdt/src/commonSamples/kotlin/us/tractat/kuilt/crdt/CrdtSamples.kt#sampleGCounterPiece -->
 ```kotlin
+val a = ReplicaId("A")
+val b = ReplicaId("B")
+
+val left = GCounter.of(a to 2L, b to 1L)
+val right = GCounter.of(a to 1L, b to 3L)
+// merge takes max per slot: a→2, b→3
+check(left.piece(right) == GCounter.of(a to 2L, b to 3L))
 ```
-{ src="../../kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/GCounterTest.kt" include-symbol="incProducesADeltaThatRaisesTheCount" }
-
-**Merge is element-wise max, not sum:**
-
-```kotlin
-```
-{ src="../../kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/GCounterTest.kt" include-symbol="pieceTakesElementwiseMaxNotSum" }
-
-**JSON round-trip:**
-
-```kotlin
-```
-{ src="../../kuilt-crdt/src/commonTest/kotlin/us/tractat/kuilt/crdt/GCounterTest.kt" include-symbol="roundTripsThroughJson" }
 
 ## When to use
 
