@@ -47,8 +47,7 @@ internal class FugueSerializer<V>(vSerializer: KSerializer<V>) : KSerializer<Fug
      * id and thus sorts before all real Insert/Remove ops — stable and deterministic.
      */
     override fun serialize(encoder: Encoder, value: Fugue<V>): Unit = encoder.encodeStructure(descriptor) {
-        val sortedOps = value.ops.sortedWith(compareBy { it.id })
-        encodeSerializableElement(descriptor, 0, opsListSerializer, sortedOps)
+        encodeSerializableElement(descriptor, 0, opsListSerializer, value.sortedOps)
         encodeLongElement(descriptor, 1, value.lamport)
     }
 

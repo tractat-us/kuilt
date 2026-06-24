@@ -222,6 +222,9 @@ public class Fugue<V> private constructor(
      */
     private val sequence: List<FugueId> by lazy { computeSequence() }
 
+    /** Canonical sorted op list, cached across encodes. Used by [FugueSerializer]. */
+    internal val sortedOps: List<FugueOp<V>> by lazy { ops.sortedWith(compareBy { it.id }) }
+
     // ── Public API ────────────────────────────────────────────────────────────
 
     /** The current visible (non-tombstoned) elements, in sequence order. */
@@ -291,10 +294,12 @@ public class Fugue<V> private constructor(
      * 3. **Frontier-complete** — `∀x: delivered[x] ≥ frontierMax[x]`: this replica has
      *    delivered every op below every known frontier, so any concurrent
      *    `Insert(J, parent=id)` that exists anywhere has been delivered locally.
-     * 4. **No surviving tree child** — no live [FugueOp.Insert] has `parent == id`.
-     *    Dropping a node while a child still refers to it as its tree parent would
-     *    detach that child's subtree from the traversal. The compacted positions map
-     *    handles re-rooting surviving children after GC on the next compaction pass.
+     * 4. **No surviving tree anchor** — no live [FugueOp.Insert] has `parent == id`
+     *    OR `rightOrigin == id`. Dropping a node while a child still refers to it as
+     *    its tree parent would detach that child's subtree; dropping a node that is
+     *    still a `rightOrigin` of a surviving insert would change the right-sibling
+     *    ordering and break non-interleaving. The compacted positions map handles
+     *    re-rooting surviving children after GC on the next compaction pass.
      *
      * Returns the compacted [Fugue] and a [FugueOp.Compact] delta to broadcast to
      * peers, or `null` if no element qualifies (or condition 3 is not yet met).
@@ -313,9 +318,14 @@ public class Fugue<V> private constructor(
         delivered: VersionVector,
     ): Pair<Fugue<V>, FugueOp.Compact>? {
         if (!delivered.dominates(frontierMax)) return null  // condition 3 — frontier-complete
-        val liveParents = insertsById.values.mapTo(mutableSetOf()) { it.parent }
+        // Condition 4: id must not be a live anchor — guard both parent AND rightOrigin.
+        // A compacted id that is still a rightOrigin of a surviving insert would break
+        // buildTree's nearestAncestor chain, causing wrong sibling ordering.
+        val liveAnchors = insertsById.values.flatMapTo(mutableSetOf()) {
+            listOfNotNull(it.parent, it.rightOrigin)
+        }
         val gcIds = tombstones
-            .filter { id -> stableCut.contains(id.dot) && id !in liveParents }  // (2) + (4)
+            .filter { id -> stableCut.contains(id.dot) && id !in liveAnchors }  // (2) + (4)
             .toSet()
         if (gcIds.isEmpty()) return null
         val positions = gcIds.associateWith { id -> insertsById.getValue(id).parent }

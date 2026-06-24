@@ -4,6 +4,7 @@ import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.cbor.Cbor
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.serializer
+import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
@@ -19,7 +20,7 @@ import kotlin.test.assertTrue
  *  1. Tombstoned.
  *  2. Causally stable — `id.seq ≤ stableCut[id.replicaId]`.
  *  3. Frontier-complete — this replica has delivered every known dot.
- *  4. No surviving tree child — no live Insert has `parent == id`.
+ *  4. No surviving tree anchor — no live Insert has `parent == id` OR `rightOrigin == id`.
  */
 class FugueCompactTest {
 
@@ -189,8 +190,7 @@ class FugueCompactTest {
 
         assertEquals(listOf("a", "c"), f4.toList(), "setup: b removed")
 
-        val seqB = opB.id.seq   // the FugueId.seq of the removed element
-        // The id of the removed element is opB.id; we need to cover that seq
+        // Cover all inserts' seqs in the stable cut (opB.id is a Remove, not in Insert list).
         val maxSeq = f4.ops.filterIsInstance<FugueOp.Insert<String>>().maxOf { it.id.seq }
         val stableCut = VersionVector.of(mapOf(a to maxSeq))
         val delivered = stableCut
@@ -369,5 +369,194 @@ class FugueCompactTest {
         // Two independent compacted replicas merged via piece
         val merged = compA.piece(compB)
         assertTrue(merged.ops.filterIsInstance<FugueOp.Compact>().isNotEmpty(), "merged state must contain at least one Compact op")
+    }
+
+    // ── compact — safety condition 4 (rightOrigin anchor) ────────────────────
+
+    /**
+     * A tombstoned Insert whose id is still a live **rightOrigin** MUST NOT be GC'd.
+     *
+     * The rightOrigin anchors right-sibling ordering in [Fugue.buildTree]. Compacting it
+     * would cause [Fugue.buildTree] to substitute it with its nearest ancestor, changing
+     * the observed sibling order and breaking non-interleaving.
+     *
+     * The Insert is constructed directly via [FugueOp.Insert] to explicitly control the
+     * [FugueOp.Insert.rightOrigin] field, which the high-level [Fugue.insertAt] API does
+     * not always produce with a non-null rightOrigin.
+     */
+    @Test
+    fun compactDoesNotDropNodeThatIsStillARightOriginAnchor() {
+        // Manually construct three ops:
+        //   opA: Insert("a") as right-child of HEAD
+        //   opB: Insert("b") as right-child of a — this is what will become the rightOrigin
+        //   opX: Insert("x") as right-child of a, rightOrigin = b.id (concurrent with b)
+        val aId = FugueId(lamport = 1L, replicaId = a, seq = 1L)
+        val bId = FugueId(lamport = 2L, replicaId = a, seq = 2L)
+        val xId = FugueId(lamport = 2L, replicaId = b, seq = 1L)
+
+        val opA = FugueOp.Insert(id = aId, value = "a", parent = FugueId.HEAD, side = FugueSide.Right, rightOrigin = null)
+        val opB = FugueOp.Insert(id = bId, value = "b", parent = aId, side = FugueSide.Right, rightOrigin = null)
+        val opX = FugueOp.Insert(id = xId, value = "x", parent = aId, side = FugueSide.Right, rightOrigin = bId)
+
+        // Apply all three inserts, then tombstone b (leaving x alive with rightOrigin = b).
+        var f = Fugue.empty<String>().apply(opA).apply(opB).apply(opX)
+        f = f.apply(FugueOp.Remove(bId))
+
+        // b is tombstoned, causally stable, but x still references it as rightOrigin.
+        // stableCut must cover all inserted ops so condition 2 is met for b.
+        val stableCut = VersionVector.of(mapOf(a to maxOf(aId.seq, bId.seq), b to xId.seq))
+        val delivered = stableCut
+
+        assertNull(
+            f.compact(stableCut = stableCut, frontierMax = stableCut, delivered = delivered),
+            "must not GC a tombstoned node whose id is still a live rightOrigin anchor (condition 4)",
+        )
+    }
+
+    // ── randomized fuzz — compaction preserves toList() ──────────────────────
+
+    /**
+     * For a range of random seeds: build a multi-replica Fugue state with random inserts
+     * and removes, compact all eligible tombstones, and verify that [Fugue.toList] is
+     * unchanged.
+     *
+     * This covers the full condition-4 predicate (parent AND rightOrigin) across many
+     * structural shapes that are hard to enumerate by hand.
+     */
+    @Test
+    fun randomizedCompactionPreservesToList() {
+        repeat(300) { seed ->
+            val rng = Random(seed)
+            val values = listOf("p", "q", "r", "s", "t")
+
+            // Build a random op sequence on three independent replicas.
+            var fA = Fugue.empty<String>()
+            var fB = Fugue.empty<String>()
+            var fC = Fugue.empty<String>()
+
+            repeat(6) {
+                val value = values[rng.nextInt(values.size)]
+                when (rng.nextInt(3)) {
+                    0 -> {
+                        val idx = if (fA.size == 0) 0 else rng.nextInt(fA.size + 1)
+                        val (next, _) = fA.insertAt(a, idx, value)
+                        fA = next
+                    }
+                    1 -> {
+                        val idx = if (fB.size == 0) 0 else rng.nextInt(fB.size + 1)
+                        val (next, _) = fB.insertAt(b, idx, value)
+                        fB = next
+                    }
+                    else -> {
+                        val idx = if (fC.size == 0) 0 else rng.nextInt(fC.size + 1)
+                        val (next, _) = fC.insertAt(c, idx, value)
+                        fC = next
+                    }
+                }
+            }
+
+            // Merge all replicas.
+            var merged = fA.piece(fB).piece(fC)
+
+            // Remove some elements.
+            repeat(3) {
+                if (merged.size > 0) {
+                    val idx = rng.nextInt(merged.size)
+                    val (next, _) = merged.removeAt(idx) ?: return@repeat
+                    merged = next
+                }
+            }
+
+            val expectedList = merged.toList()
+            val allSeqs = merged.ops
+                .filterIsInstance<FugueOp.Insert<String>>()
+                .groupBy { it.id.replicaId }
+                .mapValues { (_, ops) -> ops.maxOf { it.id.seq } }
+            val stableCut = VersionVector.of(allSeqs)
+            val delivered = stableCut
+
+            val result = merged.compact(
+                stableCut = stableCut,
+                frontierMax = stableCut,
+                delivered = delivered,
+            )
+            if (result != null) {
+                val (compacted, compactOp) = result
+                assertEquals(
+                    expectedList, compacted.toList(),
+                    "seed=$seed: compact() must not change toList()",
+                )
+                // Also verify apply(compactOp) on the original gives the same result.
+                val applied = merged.apply(compactOp)
+                assertEquals(
+                    expectedList, applied.toList(),
+                    "seed=$seed: apply(compactOp) must not change toList()",
+                )
+            }
+        }
+    }
+
+    /**
+     * Pinned regression: seed 244 triggered the rightOrigin-anchor bug before the fix.
+     * The fuzz harness must always pass this seed after the fix.
+     */
+    @Test
+    fun seed244RegressionRightOriginAnchor() {
+        val rng = Random(244)
+        val values = listOf("p", "q", "r", "s", "t")
+
+        var fA = Fugue.empty<String>()
+        var fB = Fugue.empty<String>()
+        var fC = Fugue.empty<String>()
+
+        repeat(6) {
+            val value = values[rng.nextInt(values.size)]
+            when (rng.nextInt(3)) {
+                0 -> {
+                    val idx = if (fA.size == 0) 0 else rng.nextInt(fA.size + 1)
+                    val (next, _) = fA.insertAt(a, idx, value)
+                    fA = next
+                }
+                1 -> {
+                    val idx = if (fB.size == 0) 0 else rng.nextInt(fB.size + 1)
+                    val (next, _) = fB.insertAt(b, idx, value)
+                    fB = next
+                }
+                else -> {
+                    val idx = if (fC.size == 0) 0 else rng.nextInt(fC.size + 1)
+                    val (next, _) = fC.insertAt(c, idx, value)
+                    fC = next
+                }
+            }
+        }
+
+        var merged = fA.piece(fB).piece(fC)
+
+        repeat(3) {
+            if (merged.size > 0) {
+                val idx = rng.nextInt(merged.size)
+                val (next, _) = merged.removeAt(idx) ?: return@repeat
+                merged = next
+            }
+        }
+
+        val expectedList = merged.toList()
+        val allSeqs = merged.ops
+            .filterIsInstance<FugueOp.Insert<String>>()
+            .groupBy { it.id.replicaId }
+            .mapValues { (_, ops) -> ops.maxOf { it.id.seq } }
+        val stableCut = VersionVector.of(allSeqs)
+        val delivered = stableCut
+
+        val result = merged.compact(
+            stableCut = stableCut,
+            frontierMax = stableCut,
+            delivered = delivered,
+        )
+        if (result != null) {
+            val (compacted, compactOp) = result
+            assertEquals(expectedList, compacted.toList(), "seed=244 regression: toList() unchanged after compact")
+            assertEquals(expectedList, merged.apply(compactOp).toList(), "seed=244 regression: toList() unchanged after apply(compact)")
+        }
     }
 }

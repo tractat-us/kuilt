@@ -81,9 +81,9 @@ A `FugueOp.Insert(id, ...)` paired with a `FugueOp.Remove(id)` is a candidate on
 1. **Tombstoned** — `Remove(id)` is in the log.
 2. **Causally stable** — `id.seq ≤ S[id.replicaId]`.
 3. **Frontier-complete** — `delivered[x] ≥ F[x]` for all authors `x`. (Same as `Rga`: rules out a concurrent `Insert` anywhere in the system that references this node as its tree parent.)
-4. **No surviving tree child** — no live `Insert` has `parent == id`. Dropping a node while a child still refers to it as its tree parent would make the tree unreachable from HEAD for that subtree.
+4. **No surviving tree anchor** — no live `Insert` has `parent == id` OR `rightOrigin == id`. Dropping a node while another node still references it as its tree parent would orphan that subtree; dropping a node that is still a `rightOrigin` would change the sibling-ordering comparator result for the right children of that parent, breaking non-interleaving.
 
-The `parent` field plays the same structural role in Fugue that `after` plays in Rga: it is the positional anchor. When a node is GC'd, any surviving child whose parent is the compacted node needs to be re-rooted to the nearest surviving ancestor. `Rga` handles this with a `compactPositions` map; `Fugue.compact()` would need the same: a `Compact` op carrying `positions: Map<FugueId, FugueId>` (each compacted id mapped to its parent at GC time) so that `computeSequence` can chain-walk to the nearest surviving ancestor.
+The `parent` field plays the same structural role in Fugue that `after` plays in Rga: it is the positional anchor. `rightOrigin` is a secondary anchor — it determines the ordering of concurrent right-children inserted at the same parent. Both must be guarded: `liveAnchors = { op.parent | op ∈ liveInserts } ∪ { op.rightOrigin | op ∈ liveInserts, op.rightOrigin ≠ null }`. When a node is GC'd, any surviving child whose parent is the compacted node needs to be re-rooted to the nearest surviving ancestor. `Rga` handles this with a `compactPositions` map; `Fugue.compact()` uses the same: a `Compact` op carrying `positions: Map<FugueId, FugueId>` (each compacted id mapped to its parent at GC time) so that `buildTree` can chain-walk to the nearest surviving ancestor.
 
 ### `causalDots()` shape
 
