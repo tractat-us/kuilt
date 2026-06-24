@@ -5,6 +5,7 @@ import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.cbor.Cbor
 import kotlinx.serialization.json.Json
 
+import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
@@ -257,5 +258,86 @@ class CanonicalSerializationTest {
         val cborBytes1 = cbor.encodeToByteArray(ser, rga1)
         val cborBytes2 = cbor.encodeToByteArray(ser, rga2)
         assertEquals(cborBytes1.toList(), cborBytes2.toList(), "Rga CBOR must be delivery-order-independent")
+    }
+
+    // ── Fugue lamport-invariance (#779) ───────────────────────────────────────
+
+    /**
+     * Two Fugue replicas with identical op-sets but different [Fugue.lamport] high-water
+     * marks must serialize to **identical bytes**.
+     *
+     * The divergence is natural: [Fugue.piece] (and [Rga.piece]) advances the lamport
+     * to `max(left, right)`. A replica that merged with a peer holding a higher lamport
+     * carries that higher clock even when the op-sets are otherwise identical. Before
+     * this fix [FugueSerializer] encoded the raw [Fugue.lamport] field, so two
+     * logically-equal replicas produced different bytes — breaking content-addressing
+     * and Quilter delta fingerprinting (issue #779).
+     *
+     * We use [Fugue.fromOps] (internal) to construct the divergent-lamport scenario
+     * directly, which is the cleanest way to set up two Fugue instances with the same
+     * op-set but different clock high-waters without relying on a specific sequence of
+     * [piece]/[apply] calls.
+     */
+    @Test
+    fun fugueSerializationIsLamportInvariant() {
+        val (fugueA, opA) = Fugue.empty<String>().insertAt(a, 0, "x")
+        val ops = fugueA.ops
+
+        // Two replicas: identical op-set, different lamport high-water marks.
+        val normalLamport = Fugue.fromOps(ops, opA.id.lamport)          // lamport == 1
+        val advancedLamport = Fugue.fromOps(ops, opA.id.lamport + 99L)  // lamport == 100
+
+        val ser = Fugue.wireSerializer(String.serializer())
+
+        assertAll(
+            { assertEquals(normalLamport, advancedLamport, "Fugue.equals must be lamport-invariant") },
+            {
+                val json1 = json.encodeToString(ser, normalLamport)
+                val json2 = json.encodeToString(ser, advancedLamport)
+                assertEquals(json1, json2, "Fugue JSON must be lamport-invariant")
+            },
+            {
+                val cbor1 = cbor.encodeToByteArray(ser, normalLamport)
+                val cbor2 = cbor.encodeToByteArray(ser, advancedLamport)
+                assertEquals(cbor1.toList(), cbor2.toList(), "Fugue CBOR must be lamport-invariant")
+            },
+        )
+    }
+
+    /**
+     * Two Rga replicas with identical op-sets but different [Rga.lamport] high-water
+     * marks must be considered equal **and** serialize to identical bytes.
+     *
+     * Before this fix [Rga.equals] included [Rga.lamport], so two converged replicas
+     * (same op-set, different clock) were not equal. [RgaSerializer] also encoded the
+     * raw [Rga.lamport] field, so bytes differed. Both are fixed together: [Rga.equals]
+     * and [RgaSerializer] become lamport-invariant, consistent with [Fugue]'s rule.
+     *
+     * Issue #779.
+     */
+    @Test
+    fun rgaSerializationIsLamportInvariant() {
+        val (rgaA, opA) = Rga.empty<String>().insertAfter(a, RgaId.HEAD, "x")
+        val ops = rgaA.ops
+
+        // Two replicas: identical op-set, different lamport high-water marks.
+        val normalLamport = Rga.fromOps(ops, opA.id.lamport)          // lamport == 1
+        val advancedLamport = Rga.fromOps(ops, opA.id.lamport + 99L)  // lamport == 100
+
+        val ser = Rga.wireSerializer(String.serializer())
+
+        assertAll(
+            { assertEquals(normalLamport, advancedLamport, "Rga.equals must be lamport-invariant") },
+            {
+                val json1 = json.encodeToString(ser, normalLamport)
+                val json2 = json.encodeToString(ser, advancedLamport)
+                assertEquals(json1, json2, "Rga JSON must be lamport-invariant")
+            },
+            {
+                val cbor1 = cbor.encodeToByteArray(ser, normalLamport)
+                val cbor2 = cbor.encodeToByteArray(ser, advancedLamport)
+                assertEquals(cbor1.toList(), cbor2.toList(), "Rga CBOR must be lamport-invariant")
+            },
+        )
     }
 }

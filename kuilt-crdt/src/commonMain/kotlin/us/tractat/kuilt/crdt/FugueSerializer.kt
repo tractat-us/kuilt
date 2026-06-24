@@ -20,7 +20,15 @@ import kotlinx.serialization.encoding.encodeStructure
  * Custom [KSerializer] for [Fugue]`<V>` that threads [vSerializer] correctly
  * through the op-log.
  *
- * Wire format: `{ "ops": Set<FugueOp<V>>, "lamport": Long }`
+ * Wire format: `{ "ops": List<FugueOp<V>> }`
+ *
+ * The [Fugue.lamport] high-water is **not** encoded on the wire. On decode it is
+ * derived from the op-set as `max(op.id.lamport)` over all ops (Insert/Remove ids
+ * are real Fugue ids; Compact positions.keys are the ids of compacted Inserts).
+ * This makes the serialized form a pure function of the logical ([equals]) value:
+ * two replicas with the same op-set but different clock high-waters produce identical
+ * bytes, satisfying the content-addressing and Quilter delta-fingerprinting invariant
+ * (issue #779 / #713).
  *
  * Use [Fugue.wireSerializer] to obtain an instance.
  */
@@ -30,11 +38,9 @@ internal class FugueSerializer<V>(vSerializer: KSerializer<V>) : KSerializer<Fug
     private val opSerializer: KSerializer<FugueOp<V>> = FugueOpSerializer(vSerializer)
     private val opsSerializer: KSerializer<Set<FugueOp<V>>> = SetSerializer(opSerializer)
     private val opsListSerializer: KSerializer<List<FugueOp<V>>> = ListSerializer(opSerializer)
-    private val longSerializer: KSerializer<Long> = Long.serializer()
 
     override val descriptor: SerialDescriptor = buildClassSerialDescriptor("Fugue") {
         element("ops", opsSerializer.descriptor)
-        element("lamport", longSerializer.descriptor)
     }
 
     /**
@@ -45,26 +51,48 @@ internal class FugueSerializer<V>(vSerializer: KSerializer<V>) : KSerializer<Fug
      * [FugueOp.id] is available on the sealed interface, so the sort key is uniform
      * regardless of op variant. [FugueOp.Compact] uses [FugueId.HEAD] as its sentinel
      * id and thus sorts before all real Insert/Remove ops — stable and deterministic.
+     *
+     * [Fugue.lamport] is omitted from the wire; it is derived on decode via
+     * [deriveLamport].
      */
     override fun serialize(encoder: Encoder, value: Fugue<V>): Unit = encoder.encodeStructure(descriptor) {
         encodeSerializableElement(descriptor, 0, opsListSerializer, value.sortedOps)
-        encodeLongElement(descriptor, 1, value.lamport)
     }
 
     override fun deserialize(decoder: Decoder): Fugue<V> = decoder.decodeStructure(descriptor) {
         var ops: Set<FugueOp<V>>? = null
-        var lamport = 0L
 
         mainLoop@ while (true) {
             when (val index = decodeElementIndex(descriptor)) {
                 CompositeDecoder.DECODE_DONE -> break@mainLoop
                 0 -> ops = decodeSerializableElement(descriptor, 0, opsSerializer)
-                1 -> lamport = decodeLongElement(descriptor, 1)
                 else -> error("Unexpected index $index in Fugue deserializer")
             }
         }
 
-        Fugue.fromOps(ops ?: emptySet(), lamport)
+        val decodedOps = ops ?: emptySet()
+        Fugue.fromOps(decodedOps, deriveLamport(decodedOps))
+    }
+
+    companion object {
+        /**
+         * Derive the Lamport high-water from the op-set alone.
+         *
+         * - [FugueOp.Insert] and [FugueOp.Remove] carry real [FugueId]s whose [FugueId.lamport]
+         *   values bound the clock.
+         * - [FugueOp.Compact] uses [FugueId.HEAD] as its own [FugueOp.id] (lamport = [Long.MIN_VALUE])
+         *   but its [FugueOp.Compact.positions] keys are the real [FugueId]s of compacted Inserts —
+         *   those must be included so the derived clock covers compacted state.
+         * - Empty op-set → 0L (same as the initial value in [Fugue.empty]).
+         */
+        internal fun <V> deriveLamport(ops: Set<FugueOp<V>>): Long =
+            ops.flatMap { op ->
+                when (op) {
+                    is FugueOp.Insert -> listOf(op.id.lamport)
+                    is FugueOp.Remove -> listOf(op.id.lamport)
+                    is FugueOp.Compact -> op.positions.keys.map { it.lamport }
+                }
+            }.maxOrNull()?.coerceAtLeast(0L) ?: 0L
     }
 }
 
