@@ -1,15 +1,14 @@
 package us.tractat.kuilt.test
 
-import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import us.tractat.kuilt.core.CloseReason
+import us.tractat.kuilt.core.DeliveryPolicy
 import us.tractat.kuilt.core.FabricAvailability
 import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.PeerId
@@ -17,6 +16,7 @@ import us.tractat.kuilt.core.PeerNotConnected
 import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
+import us.tractat.kuilt.core.Spool
 import us.tractat.kuilt.core.Swatch
 
 /**
@@ -33,9 +33,6 @@ import us.tractat.kuilt.core.Swatch
  *
  * ## Control surface
  *
- * All control methods are non-suspending and safe to call from a `runTest` body
- * (queues are flushed synchronously without a dispatcher).
- *
  * - [holdDelivery] — buffer all subsequent frames destined for [to].
  * - [releaseDelivery] — flush the hold queue for [to] in FIFO order and resume
  *   immediate delivery.
@@ -49,7 +46,9 @@ import us.tractat.kuilt.core.Swatch
  * (or auto-generated as `peer-N` when blank). [Rendezvous.Existing] uses the tag's
  * `displayName` the same way.
  */
-public class ControllableLoom : Loom {
+public class ControllableLoom(
+    public val policy: DeliveryPolicy = DeliveryPolicy.Reliable,
+) : Loom {
 
     private val mutex = Mutex()
     private val _peers = MutableStateFlow<Set<PeerId>>(emptySet())
@@ -68,8 +67,9 @@ public class ControllableLoom : Loom {
     override fun availability(): FabricAvailability = FabricAvailability.Available
 
     // ── Control surface ───────────────────────────────────────────────────────
-    // These methods assume single-threaded test usage and are deliberately NOT mutex-guarded;
-    // concurrent dispatch/remove calls are guarded separately via [mutex].
+    // holdDelivery and bufferedCount are synchronous — they only touch the hold
+    // bookkeeping structures, never the Spool.  releaseDelivery and deliverNext
+    // are suspend because flushing the hold queue calls the suspending Spool.deliver.
 
     /** Start buffering frames destined for [to] rather than delivering them immediately. */
     public fun holdDelivery(to: PeerId) {
@@ -80,7 +80,7 @@ public class ControllableLoom : Loom {
     /**
      * Flush all buffered frames for [to] in FIFO order and resume immediate delivery.
      */
-    public fun releaseDelivery(to: PeerId) {
+    public suspend fun releaseDelivery(to: PeerId) {
         held.remove(to)
         drainQueue(to)
     }
@@ -90,11 +90,12 @@ public class ControllableLoom : Loom {
      *
      * @return `true` if a frame was delivered, `false` if the queue was empty.
      */
-    public fun deliverNext(to: PeerId): Boolean {
+    public suspend fun deliverNext(to: PeerId): Boolean {
         val queue = holdQueues[to] ?: return false
         if (queue.isEmpty()) return false
         val (sender, payload) = queue.removeFirst()
-        forwardFrame(to, sender, payload)
+        val delivery = snapshotDelivery(to, sender, payload) ?: return true
+        delivery.first.deliver(delivery.second)
         return true
     }
 
@@ -104,15 +105,21 @@ public class ControllableLoom : Loom {
     // ── Internal mesh ─────────────────────────────────────────────────────────
 
     internal suspend fun dispatch(sender: PeerId, payload: ByteArray, recipient: PeerId?) {
-        mutex.withLock {
+        // Snapshot sequence-assigned frames under the lock, then deliver outside so a
+        // SUSPEND-policy backpressure suspension never holds the factory mutex.
+        val deliveries: List<Pair<ControllableSeam, Swatch>> = mutex.withLock {
             val targets = recipientsFor(sender, recipient)
-            for (target in targets) {
+            targets.mapNotNull { target ->
                 if (target in held) {
                     holdQueues.getOrPut(target) { ArrayDeque() }.addLast(sender to payload)
+                    null
                 } else {
-                    forwardFrame(target, sender, payload)
+                    snapshotDeliveryLocked(target, sender, payload)
                 }
             }
+        }
+        for ((seam, frame) in deliveries) {
+            seam.deliver(frame)
         }
     }
 
@@ -128,7 +135,7 @@ public class ControllableLoom : Loom {
     // ── Private helpers ───────────────────────────────────────────────────────
 
     private fun newSeam(id: PeerId): ControllableSeam {
-        val seam = ControllableSeam(id, this)
+        val seam = ControllableSeam(id, this, policy)
         seams[id] = seam
         _peers.update { it + id }
         return seam
@@ -145,18 +152,43 @@ public class ControllableLoom : Loom {
     private fun recipientsFor(sender: PeerId, recipient: PeerId?): List<PeerId> =
         if (recipient == null) seams.keys.filter { it != sender } else listOf(recipient)
 
-    private fun drainQueue(to: PeerId) {
-        val queue = holdQueues[to] ?: return
-        while (queue.isNotEmpty()) {
-            val (sender, payload) = queue.removeFirst()
-            forwardFrame(to, sender, payload)
-        }
+    /** Assigns a sequence number and builds the [Swatch]; must be called under [mutex]. */
+    private fun snapshotDeliveryLocked(
+        target: PeerId,
+        sender: PeerId,
+        payload: ByteArray,
+    ): Pair<ControllableSeam, Swatch>? {
+        val seam = seams[target] ?: return null
+        val frame = Swatch(payload = payload, sender = sender, sequence = seam.nextSequence())
+        return seam to frame
     }
 
-    private fun forwardFrame(to: PeerId, sender: PeerId, payload: ByteArray) {
-        val seam = seams[to] ?: return
+    /**
+     * Builds a delivery pair for a single (target, sender, payload) triple without
+     * holding the [mutex] — used by the control surface which runs outside [dispatch].
+     */
+    private fun snapshotDelivery(
+        target: PeerId,
+        sender: PeerId,
+        payload: ByteArray,
+    ): Pair<ControllableSeam, Swatch>? {
+        val seam = seams[target] ?: return null
         val frame = Swatch(payload = payload, sender = sender, sequence = seam.nextSequence())
-        seam.deliver(frame)
+        return seam to frame
+    }
+
+    private suspend fun drainQueue(to: PeerId) {
+        val queue = holdQueues[to] ?: return
+        val deliveries = buildList {
+            while (queue.isNotEmpty()) {
+                val (sender, payload) = queue.removeFirst()
+                val delivery = snapshotDelivery(to, sender, payload)
+                if (delivery != null) add(delivery)
+            }
+        }
+        for ((seam, frame) in deliveries) {
+            seam.deliver(frame)
+        }
     }
 }
 
@@ -167,9 +199,10 @@ public class ControllableLoom : Loom {
 public class ControllableSeam internal constructor(
     override val selfId: PeerId,
     private val loom: ControllableLoom,
+    policy: DeliveryPolicy,
 ) : Seam {
 
-    private val incomingChannel = Channel<Swatch>(capacity = Channel.UNLIMITED)
+    private val spool = Spool(policy)
     private var closed = false
     private var sequenceCounter = 0L
 
@@ -178,7 +211,7 @@ public class ControllableSeam internal constructor(
     private val _state = MutableStateFlow<SeamState>(SeamState.Woven)
     override val state: StateFlow<SeamState> = _state.asStateFlow()
 
-    override val incoming: Flow<Swatch> = incomingChannel.receiveAsFlow()
+    override val incoming: Flow<Swatch> = spool.incoming
 
     override suspend fun broadcast(payload: ByteArray) {
         checkNotClosed()
@@ -197,13 +230,13 @@ public class ControllableSeam internal constructor(
         closed = true
         _state.value = SeamState.Torn(reason)
         loom.remove(selfId)
-        incomingChannel.close()
+        spool.close()
     }
 
     internal fun nextSequence(): Long = ++sequenceCounter
 
-    internal fun deliver(frame: Swatch) {
-        if (!closed) incomingChannel.trySend(frame)
+    internal suspend fun deliver(frame: Swatch) {
+        if (!closed) spool.deliver(frame)
     }
 
     private fun checkNotClosed() {
