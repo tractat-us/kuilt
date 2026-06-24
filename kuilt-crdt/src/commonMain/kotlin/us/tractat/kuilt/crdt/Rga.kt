@@ -530,14 +530,29 @@ public class Rga<V> private constructor(
     private fun computeInsertsById(): Map<RgaId, RgaOp.Insert<V>> =
         ops.filterIsInstance<RgaOp.Insert<V>>().associateBy { it.id }
 
-    /** Compute the maxSeqByReplica map from the op-log (fallback when no cache is provided). */
+    /**
+     * Compute the maxSeqByReplica map from the op-log (fallback when no cache is provided).
+     *
+     * Folds in **compacted ids** as well as live [RgaOp.Insert]s. A self-compaction purges a
+     * replica's own [RgaOp.Insert] from the log, so scanning only surviving inserts would
+     * regress the per-author high-water and let [nextSeqFor] reuse a seq it already minted
+     * (#639). The purged ids survive in the retained [RgaOp.Compact.positions] keys — each
+     * carries its full [RgaId] (hence its seq) — so the true high-water is recoverable from
+     * exactly the data that is already persisted. (Like the rest of the CRDT zoo, which mints
+     * from the monotonic version vector that compaction only raises, the seq counter must
+     * never go backwards.)
+     */
     private fun computeMaxSeqByReplica(): Map<ReplicaId, Long> {
         val result = mutableMapOf<ReplicaId, Long>()
+        fun consider(id: RgaId) {
+            val current = result[id.replicaId]
+            if (current == null || id.seq > current) result[id.replicaId] = id.seq
+        }
         for (op in ops) {
-            if (op is RgaOp.Insert) {
-                val id = op.id
-                val current = result[id.replicaId]
-                if (current == null || id.seq > current) result[id.replicaId] = id.seq
+            when (op) {
+                is RgaOp.Insert -> consider(op.id)
+                is RgaOp.Compact -> op.positions.keys.forEach(::consider)
+                is RgaOp.Remove<*> -> {} // a Remove mints no seq; its insert (or its compacted id) is counted
             }
         }
         return result
