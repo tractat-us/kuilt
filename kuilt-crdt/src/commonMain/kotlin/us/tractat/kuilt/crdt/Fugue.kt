@@ -45,9 +45,14 @@ public enum class FugueSide { Left, Right }
 
 /**
  * An operation on a [Fugue] sequence.
+ *
+ * Every operation carries an [id] — the [FugueId] of the element it creates or
+ * tombstones. This is the stable sort key used for canonical serialization.
  */
 @Serializable
 public sealed interface FugueOp<out V> {
+    /** The [FugueId] of the element this operation creates or tombstones. */
+    public val id: FugueId
 
     /**
      * Insert [value] with identity [id].
@@ -64,7 +69,7 @@ public sealed interface FugueOp<out V> {
      */
     @Serializable
     public data class Insert<V>(
-        public val id: FugueId,
+        override val id: FugueId,
         public val value: V,
         public val parent: FugueId,
         public val side: FugueSide,
@@ -77,7 +82,7 @@ public sealed interface FugueOp<out V> {
      */
     @Serializable
     public data class Remove<V>(
-        public val id: FugueId,
+        override val id: FugueId,
     ) : FugueOp<V>
 }
 
@@ -178,13 +183,14 @@ public class Fugue<V> private constructor(
         index: Int,
         value: V,
     ): Pair<Fugue<V>, FugueOp.Insert<V>> {
-        val visible = visibleSequence()
+        val tree = buildTree()
+        val visible = visibleSequenceFrom(tree)
         require(index in 0..visible.size) {
             "insertAt($index) out of range; visible size is ${visible.size}"
         }
         val newLamport = lamport + 1L
         val id = FugueId(lamport = newLamport, replicaId = replica)
-        val op = buildInsertOp(id, value, visible, index)
+        val op = buildInsertOp(id, value, visible, index, tree)
         return applyInsert(op, newLamport) to op
     }
 
@@ -237,16 +243,29 @@ public class Fugue<V> private constructor(
         return Fugue(mergedOps, mergedLamport, newCache)
     }
 
+    /**
+     * Two [Fugue] instances are equal when their op-sets are equal — i.e. they
+     * represent the same CRDT state. The [lamport] high-water mark is a clock
+     * convenience, not part of the value: two converged replicas may differ in
+     * [lamport] if one advanced its clock by observing a duplicate op, so including
+     * it in equality would make `a.piece(a) != a` in that case.
+     */
     override fun equals(other: Any?): Boolean =
-        other is Fugue<*> && ops == other.ops && lamport == other.lamport
+        other is Fugue<*> && ops == other.ops
 
-    override fun hashCode(): Int = 31 * ops.hashCode() + lamport.hashCode()
+    override fun hashCode(): Int = ops.hashCode()
 
     override fun toString(): String = "Fugue(${toList()})"
 
     // ── Private helpers ───────────────────────────────────────────────────────
 
     private fun visibleSequence(): List<FugueId> = sequence.filter { it !in tombstones }
+
+    private fun visibleSequenceFrom(tree: Map<FugueId, FugueNode>): List<FugueId> {
+        val all = mutableListOf<FugueId>()
+        tree[FugueId.HEAD]?.let { traverseSubtree(it, all, emitSelf = false) }
+        return all.filter { it !in tombstones }
+    }
 
     /**
      * Build the [FugueOp.Insert] for a new element at [index] in the visible sequence.
@@ -264,10 +283,10 @@ public class Fugue<V> private constructor(
         value: V,
         visible: List<FugueId>,
         index: Int,
+        tree: Map<FugueId, FugueNode>,
     ): FugueOp.Insert<V> {
         val leftOriginId = if (index == 0) FugueId.HEAD else visible[index - 1]
-        val tree = buildTree()
-        val leftOriginNode = tree[leftOriginId] ?: buildHeadNode(tree)
+        val leftOriginNode = tree.getValue(leftOriginId)
         return if (leftOriginNode.rightChildren.isEmpty()) {
             val rightOriginId = nextNonDescendantId(leftOriginNode)
             FugueOp.Insert(id = id, value = value, parent = leftOriginId, side = FugueSide.Right, rightOrigin = rightOriginId)
@@ -461,9 +480,6 @@ public class Fugue<V> private constructor(
         }
         return depth
     }
-
-    private fun buildHeadNode(tree: Map<FugueId, FugueNode>): FugueNode =
-        tree[FugueId.HEAD] ?: error("HEAD node not found in tree")
 
     /**
      * Returns the leftmost descendant of [node] by repeatedly following the first
