@@ -30,6 +30,7 @@ delivery order or duplication.
 | `MovableTree` | Op-log union; Lamport-ordered replay with cycle prevention | Via reparent |
 | `BloomFilter` | Bitwise-OR of bit array; probabilistic membership, bounded FP rate | No (union-only) |
 | `HyperLogLog` | Element-wise max of registers; ~0.8% error at p=14 | N/A (sketch, not a set) |
+| `CountMinSketch` | Approximate frequency sketch; element-wise max merge (idempotent CMS) | No |
 
 ## Replication
 

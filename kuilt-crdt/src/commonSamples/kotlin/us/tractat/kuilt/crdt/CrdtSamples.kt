@@ -370,3 +370,38 @@ internal fun sampleHyperLogLogMerge() {
     check(merged.piece(hllB) == merged)
 }
 
+// ── CountMinSketch ────────────────────────────────────────────────────────────
+
+/** Track approximate word frequencies; the estimate never underestimates. */
+@Suppress("unused")
+internal fun sampleCountMinSketch() {
+    // width=512, depth=5 → ε ≈ 0.005, δ ≈ 0.007 error bound.
+    var sketch = CountMinSketch.empty(width = 512, depth = 5)
+
+    // add() returns a delta; absorb it with piece().
+    repeat(10) { sketch = sketch.piece(sketch.add("hello")) }
+    repeat(3) { sketch = sketch.piece(sketch.add("world")) }
+
+    check(sketch.estimate("hello") >= 10L)  // never underestimates
+    check(sketch.estimate("world") >= 3L)
+    check(sketch.estimate("unseen") == 0L)  // empty sketch returns 0
+}
+
+/** Max-merge is idempotent: re-delivering the same patch does not inflate the count. */
+@Suppress("unused")
+internal fun sampleCountMinSketchMerge() {
+    var a = CountMinSketch.empty(width = 64, depth = 4)
+    var b = CountMinSketch.empty(width = 64, depth = 4)
+
+    // Two replicas observe different occurrences of the same item.
+    repeat(7) { a = a.piece(a.add("event")) }
+    repeat(4) { b = b.piece(b.add("event")) }
+
+    // After merging, the merged estimate is >= the max of the two.
+    val merged = a.piece(b)
+    check(merged.estimate("event") >= 7L)
+
+    // Merging again is idempotent — same result.
+    check(merged.piece(a) == merged.piece(a).piece(a))
+}
+
