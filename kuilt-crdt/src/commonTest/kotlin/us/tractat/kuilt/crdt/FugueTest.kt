@@ -327,6 +327,38 @@ class FugueTest {
         )
     }
 
+    // ── Serializer op-sort cache (#735) ──────────────────────────────────────
+
+    /**
+     * Repeated [serialize] calls on the same [Fugue] instance must not re-allocate
+     * the sorted op list — [Fugue.sortedOps] is a lazy val, so after the first
+     * access the same list instance is returned on every subsequent call.
+     *
+     * This guards against a regression where [FugueSerializer] re-sorted all ops
+     * O(M log M) on every encode, which was the hot path for anti-entropy full-state
+     * sends under [us.tractat.kuilt.quilter.Quilter].
+     */
+    @Test
+    fun serializerSortedOpListIsCachedAcrossEncodes() {
+        val serializer = Fugue.wireSerializer(kotlinx.serialization.serializer<String>())
+        var f = Fugue.empty<String>()
+        repeat(5) { i ->
+            val (next, _) = f.insertAt(a, i, "item-$i")
+            f = next
+        }
+
+        // Access sortedOps twice on the SAME instance — must be the identical list object.
+        val first = f.sortedOps
+        val second = f.sortedOps
+        assertTrue(first === second, "sortedOps must be the same list instance on repeated access")
+
+        // Encoding twice must also produce identical bytes (byte-stability check still holds).
+        val json = Json { encodeDefaults = true }
+        val encoded1 = json.encodeToString(serializer, f)
+        val encoded2 = json.encodeToString(serializer, f)
+        assertEquals(encoded1, encoded2, "Repeated encode of the same instance must produce identical bytes")
+    }
+
     // ── equals and hashCode ───────────────────────────────────────────────────
 
     /**

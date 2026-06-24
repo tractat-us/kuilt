@@ -160,6 +160,17 @@ public class Fugue<V> private constructor(
      */
     private val sequence: List<FugueId> by lazy { computeSequence() }
 
+    /**
+     * Ops sorted in canonical [FugueId] ascending order, computed once per instance.
+     *
+     * [FugueSerializer] uses this to produce byte-stable wire output without re-sorting
+     * the op set on every encode call (which would be O(M log M) per anti-entropy send).
+     * The op set is immutable per [Fugue] instance, so the sorted order never changes.
+     */
+    internal val sortedOps: List<FugueOp<V>> by lazy {
+        ops.sortedWith(compareBy { it.id })
+    }
+
     // ── Public API ────────────────────────────────────────────────────────────
 
     /** The current visible (non-tombstoned) elements, in sequence order. */

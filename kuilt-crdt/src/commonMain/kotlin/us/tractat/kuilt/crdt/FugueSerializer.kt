@@ -41,12 +41,12 @@ internal class FugueSerializer<V>(vSerializer: KSerializer<V>) : KSerializer<Fug
      * holding the same logical state (same op set, different delivery order) produce
      * identical bytes. [FugueId] is [Comparable] — ascending lamport, then replicaId.
      *
-     * [FugueOp.id] is available on the sealed interface, so the sort key is uniform
-     * regardless of op variant.
+     * The sorted order is cached on the [Fugue] instance via [Fugue.sortedOps] — the
+     * op set is immutable per instance so the sort is paid at most once, not once per
+     * anti-entropy send or gossip broadcast.
      */
     override fun serialize(encoder: Encoder, value: Fugue<V>): Unit = encoder.encodeStructure(descriptor) {
-        val sortedOps = value.ops.sortedWith(compareBy { it.id })
-        encodeSerializableElement(descriptor, 0, opsListSerializer, sortedOps)
+        encodeSerializableElement(descriptor, 0, opsListSerializer, value.sortedOps)
         encodeLongElement(descriptor, 1, value.lamport)
     }
 
