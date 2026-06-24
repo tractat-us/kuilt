@@ -29,6 +29,7 @@ delivery order or duplication.
 | `EphemeralMap` | Per-replica slot, higher clock wins; caller-driven TTL eviction | Via graceful leave |
 | `MovableTree` | Op-log union; Lamport-ordered replay with cycle prevention | Via reparent |
 | `BloomFilter` | Bitwise-OR of bit array; probabilistic membership, bounded FP rate | No (union-only) |
+| `HyperLogLog` | Element-wise max of registers; ~0.8% error at p=14 | N/A (sketch, not a set) |
 
 ## Replication
 

@@ -327,3 +327,46 @@ internal fun sampleMovableTree() {
     check(!safe.isAncestor(ancestor = idA, descendant = idA))
 }
 
+// ── HyperLogLog ───────────────────────────────────────────────────────────────
+
+/** Count distinct items with a fixed memory footprint (≈16 KB at p=14). */
+@Suppress("unused")
+internal fun sampleHyperLogLog() {
+    var hll = HyperLogLog.empty(precision = 14)
+
+    // Add a stream of items — duplicates do not inflate the count.
+    hll = hll.add("alice")
+    hll = hll.add("bob")
+    hll = hll.add("alice") // duplicate — no effect
+
+    // The estimate is approximate but close to 2 for small cardinalities.
+    check(hll.estimate() in 1L..3L)
+}
+
+/**
+ * Two replicas track distinct visitors independently; merging gives the union's
+ * cardinality without sharing the actual item list.
+ */
+@Suppress("unused")
+internal fun sampleHyperLogLogMerge() {
+    val a = ReplicaId("A")
+    val b = ReplicaId("B")
+
+    // Replica A sees users 0–999; replica B sees users 500–1499 (500 in common).
+    var hllA = HyperLogLog.empty(precision = 14)
+    var hllB = HyperLogLog.empty(precision = 14)
+    repeat(1_000) { i -> hllA = hllA.add("user-$i") }
+    repeat(1_000) { i -> hllB = hllB.add("user-${i + 500}") }
+
+    // Merge: element-wise max of registers.
+    val merged = hllA.piece(hllB)
+
+    // The merged estimate is close to 1500 (the true distinct count).
+    val estimate = merged.estimate()
+    check(estimate in 1_200L..1_800L) { "expected ≈1500, got $estimate" }
+
+    // Idempotent: merging again with either replica changes nothing.
+    check(merged.piece(hllA) == merged)
+    check(merged.piece(hllB) == merged)
+}
+
