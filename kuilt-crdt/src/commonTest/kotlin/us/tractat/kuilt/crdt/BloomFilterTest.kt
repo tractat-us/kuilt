@@ -3,6 +3,7 @@ package us.tractat.kuilt.crdt
 import kotlinx.serialization.json.Json
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
@@ -160,14 +161,7 @@ class BloomFilterTest {
         val small = BloomFilter.create(expectedElements = 100)
         val large = BloomFilter.create(expectedElements = 1000)
 
-        // Merging incompatible filters must throw, not silently produce garbage.
-        var threw = false
-        try {
-            small.piece(large)
-        } catch (_: IllegalArgumentException) {
-            threw = true
-        }
-        assertTrue(threw, "Expected IllegalArgumentException for incompatible filters")
+        assertFailsWith<IllegalArgumentException> { small.piece(large) }
     }
 
     @Test
