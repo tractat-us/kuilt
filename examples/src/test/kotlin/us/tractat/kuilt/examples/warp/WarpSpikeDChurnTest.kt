@@ -129,6 +129,120 @@ class WarpSpikeDChurnTest {
         }
     }
 
+    /**
+     * v4 headline: 2D sweep of churn rate × gossip-convergence lag (propagationHops).
+     *
+     * This is the measurement that v3 couldn't produce because membership propagated
+     * instantly. Now that membership travels the same gossip path as task/result deltas,
+     * the convergence window is real: higher hops → faster convergence → smaller dup window.
+     * Lower hops (slower gossip) → wider disagreement → higher D-G dup rate under churn.
+     *
+     * The crossover contour is the (churn × lag) threshold below which D-G stays near-zero
+     * and above which it degrades toward OPT/IR.
+     */
+    @Test
+    fun `D v4 — 2D sweep churn rate x gossip lag at 4 peers`() {
+        val churnVariants = listOf(
+            0 to ChurnConfig(0, 0, 0, 64),
+            1 to ChurnConfig(1, 1, 0, 64),
+            5 to ChurnConfig(3, 2, 1, 64),
+            10 to ChurnConfig(5, 3, 2, 64),
+            20 to ChurnConfig(10, 5, 5, 64),
+        )
+        val hopVariants = listOf(1, 2, 3, 5)
+
+        println("\n=== WARP SPIKE D v4 — 2D churn × gossip-lag sweep (4 peers, 100 rounds, 2 tasks/round) ===")
+        println("SPECULATIVE/EXPERIMENTAL | seed=${seed}L, fanout=3")
+        println("Rows = churn rate, Cols = propagationHops (gossip convergence speed)")
+        println()
+        print("%-6s |".format("churn"))
+        for (hops in hopVariants) {
+            print(" %-16s".format("hops=$hops D-G%"))
+        }
+        println(" | OPT%   CONS%")
+        println("-".repeat(20 + hopVariants.size * 17 + 18))
+
+        val allResults = mutableListOf<DWithBaselineResult>()
+        for ((churnPct, churnCfg) in churnVariants) {
+            print("%-6s |".format("$churnPct%"))
+            for (hops in hopVariants) {
+                val gossip = GossipConfig(fanout = 3, propagationHops = hops)
+                val r = runStrategyDWithBaseline(
+                    taskCount = 10,
+                    peerCount = 4,
+                    rounds = 100,
+                    churnConfig = churnCfg,
+                    gossipConfig = gossip,
+                    rng = Random(seed + churnPct + hops),
+                    tasksPerRound = 2,
+                )
+                allResults.add(r)
+                print(" %-16s".format(pct(r.d.gossip.duplicateRate)))
+            }
+            // Print OPT and CONS from the 2-hop baseline for reference.
+            val baseline = allResults.last()
+            println(" | %-6s %-6s".format(pct(baseline.v2.optimistic.duplicateRate), pct(baseline.v2.consensus.duplicateRate)))
+        }
+        println()
+        println("D-G = gossip-roster ring (membership disagrees during convergence window)")
+        println("OPT/CONS baselines use hops=2 for reference (they don't use the ring)")
+        println()
+        printCrossoverContour(allResults, hopVariants)
+
+        // Hard assertions: D-STRONG at zero churn always zero dups.
+        allResults.filter { it.d.churnConfig.joinRatePercent == 0 }.forEach { r ->
+            assertTrue(r.d.strong.duplicateRate == 0.0, "D-STRONG zero-churn must be 0 dups")
+        }
+        allResults.forEach { r ->
+            assertTrue(r.d.gossip.duplicateRate in 0.0..1.0)
+            assertTrue(r.d.strong.duplicateRate in 0.0..1.0)
+        }
+    }
+
+    @Test
+    fun `D v4 — 2D sweep churn rate x gossip lag at 8 peers`() {
+        val churnVariants = listOf(
+            0 to ChurnConfig(0, 0, 0, 64),
+            5 to ChurnConfig(3, 2, 1, 64),
+            10 to ChurnConfig(5, 3, 2, 64),
+            20 to ChurnConfig(10, 5, 5, 64),
+        )
+        val hopVariants = listOf(1, 2, 3, 5)
+
+        println("\n=== WARP SPIKE D v4 — 2D churn × gossip-lag sweep (8 peers, 100 rounds, 2 tasks/round) ===")
+        println("SPECULATIVE/EXPERIMENTAL | seed=${seed}L, fanout=3")
+        println()
+        print("%-6s |".format("churn"))
+        for (hops in hopVariants) {
+            print(" %-16s".format("hops=$hops D-G%"))
+        }
+        println(" | OPT%   CONS%")
+        println("-".repeat(20 + hopVariants.size * 17 + 18))
+
+        for ((churnPct, churnCfg) in churnVariants) {
+            print("%-6s |".format("$churnPct%"))
+            var baseline: DWithBaselineResult? = null
+            for (hops in hopVariants) {
+                val gossip = GossipConfig(fanout = 3, propagationHops = hops)
+                val r = runStrategyDWithBaseline(
+                    taskCount = 10,
+                    peerCount = 8,
+                    rounds = 100,
+                    churnConfig = churnCfg,
+                    gossipConfig = gossip,
+                    rng = Random(seed + churnPct + hops + 8),
+                    tasksPerRound = 2,
+                )
+                baseline = r
+                print(" %-16s".format(pct(r.d.gossip.duplicateRate)))
+                assertTrue(r.d.gossip.duplicateRate in 0.0..1.0)
+            }
+            val bl = baseline!!
+            println(" | %-6s %-6s".format(pct(bl.v2.optimistic.duplicateRate), pct(bl.v2.consensus.duplicateRate)))
+        }
+        println()
+    }
+
     @Test
     fun `D comprehensive churn sweep — full table for docs`() {
         val gossip = GossipConfig(fanout = 3, propagationHops = 2)
@@ -144,7 +258,7 @@ class WarpSpikeDChurnTest {
         )
 
         println("\n=== WARP SPIKE D — COMPREHENSIVE CHURN SWEEP ===")
-        println("SPECULATIVE/EXPERIMENTAL | 40 tasks, 30 rounds, seed=${seed}L, fanout=3, 2-hop")
+        println("SPECULATIVE/EXPERIMENTAL | 100 rounds, 2 tasks/round, seed=${seed}L, fanout=3, 2-hop")
         println()
         println(
             "%-6s %-4s | %-9s %-9s %-9s %-9s %-9s | %-10s %-10s %-10s".format(
@@ -159,12 +273,13 @@ class WarpSpikeDChurnTest {
         for (peerCount in listOf(4, 8)) {
             for (variant in churnVariants) {
                 val result = runStrategyDWithBaseline(
-                    taskCount = 40,
+                    taskCount = 10,
                     peerCount = peerCount,
-                    rounds = 30,
+                    rounds = 100,
                     churnConfig = variant.config,
                     gossipConfig = gossip,
                     rng = Random(seed + peerCount),
+                    tasksPerRound = 2,
                 )
                 allRows.add(result)
                 println(
@@ -219,12 +334,13 @@ class WarpSpikeDChurnTest {
             ChurnConfig(10, 5, 5, 64),
         ).map { churn ->
             runStrategyD(
-                taskCount = 40,
+                taskCount = 10,
                 peerCount = peerCount,
-                rounds = 30,
+                rounds = 100,
                 churnConfig = churn,
                 gossipConfig = gossip,
                 rng = Random(seed + peerCount),
+                tasksPerRound = 2,
             )
         }
     }
@@ -270,6 +386,32 @@ class WarpSpikeDChurnTest {
                 "D-STRONG zero-churn must be 0 dups at ${zeroChurn.peerCount} peers",
             )
         }
+    }
+
+    private fun printCrossoverContour(rows: List<DWithBaselineResult>, hopVariants: List<Int>) {
+        println("=== CROSSOVER CONTOUR ===")
+        // Find the first (churn, hops) cell where D-G dup-rate exceeds a meaningful threshold (5%).
+        val threshold = 0.05
+        val crossover = rows.firstOrNull { it.d.gossip.duplicateRate > threshold }
+        if (crossover != null) {
+            val c = crossover.d.churnConfig
+            val h = crossover.d.gossipConfig.propagationHops
+            println(
+                "D-G first exceeds ${pct(threshold)} at churn ~${c.joinRatePercent}/${c.leaveRatePercent}/${c.partitionRatePercent}%" +
+                    ", hops=$h",
+            )
+            println(
+                "Below this (churn×lag) point: D-GOSSIP is the dominant strategy — 0-cost per task, near-0 dups.",
+            )
+            println(
+                "Above it: consistent-hashing degrades toward OPT (${pct(crossover.v2.optimistic.duplicateRate)} dups)." +
+                    " Use CONS if dups are expensive.",
+            )
+        } else {
+            println("D-G stays below ${pct(threshold)} dup-rate across all measured (churn × lag) points.")
+            println("Consistent hashing is the dominant strategy across the full sweep — membership is stable enough.")
+        }
+        println()
     }
 
     private fun printCrossoverVerdict(rows: List<DWithBaselineResult>) {
