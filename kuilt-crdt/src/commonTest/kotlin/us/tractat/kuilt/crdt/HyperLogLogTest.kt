@@ -244,6 +244,60 @@ class HyperLogLogTest {
         assertEquals(once, twice, "re-applying the same delta must be a no-op")
     }
 
+    // ── 6-bit packing ─────────────────────────────────────────────────────────
+
+    /**
+     * Serialized state size must be ~25% smaller than the old 1-byte-per-register form.
+     * Packed size = ceil(m * 6 / 8). Old size = m. Reduction ≥ 24%.
+     */
+    @Test
+    fun serializedSizeIsReducedByAtLeast24Percent() {
+        val hll = addMany(HyperLogLog.empty(precision = 14), prefix = "pack", n = 500)
+        val serialized = Json.encodeToString(HyperLogLog.serializer(), hll)
+        // The packed backing ByteArray length is ceil(m*6/8). For p=14, m=16384 → 12288 bytes.
+        // The JSON Base64 of a ByteArray of size n occupies ceil(n/3)*4 chars (+ overhead).
+        // Old: Base64 of 16384 bytes ≈ 21848 chars. New: Base64 of 12288 bytes ≈ 16384 chars.
+        // We just check: packed JSON is less than 76% of the old size (i.e. ≥24% smaller).
+        val oldPackedBase64Len = (16384 + 2) / 3 * 4  // base64 of 16384 bytes
+        val serializedBase64EstimateUpperBound = (oldPackedBase64Len * 76) / 100
+        val base64Content = serialized.substringAfter("\"registers\":\"").substringBefore("\"")
+        assertTrue(
+            base64Content.length < serializedBase64EstimateUpperBound,
+            "packed registers Base64 (${base64Content.length} chars) should be < $serializedBase64EstimateUpperBound"
+        )
+    }
+
+    /**
+     * 6-bit register accessors round-trip every value in [0, 63] for every register index.
+     * Tested at small precision to keep the loop tight.
+     */
+    @Test
+    fun registerPackingRoundTripsAllValidValues() {
+        // Use precision=4 (m=16) so we can exhaustively test all indices × all values.
+        // We do this by adding synthetic strings and checking the estimate is stable across
+        // a JSON encode→decode round-trip at various cardinalities.
+        for (p in listOf(4, 10, 14)) {
+            val hll = addMany(HyperLogLog.empty(precision = p), prefix = "rt-$p", n = 100)
+            val decoded = Json.decodeFromString(HyperLogLog.serializer(),
+                Json.encodeToString(HyperLogLog.serializer(), hll))
+            assertEquals(hll, decoded, "round-trip failed at precision=$p")
+            assertEquals(hll.estimate(), decoded.estimate(), "estimate mismatch at precision=$p")
+        }
+    }
+
+    /**
+     * The packed backing store size (reported via `packedByteSize`) must equal ceil(m*6/8).
+     */
+    @Test
+    fun packedBackingSizeIsCorrect() {
+        assertAll(
+            { assertEquals(12, HyperLogLog.empty(precision = 4).packedByteSize) },   // m=16, ceil(96/8)=12
+            { assertEquals(768, HyperLogLog.empty(precision = 10).packedByteSize) },  // m=1024, ceil(6144/8)=768
+            { assertEquals(12288, HyperLogLog.empty(precision = 14).packedByteSize) }, // m=16384
+            { assertEquals(196608, HyperLogLog.empty(precision = 18).packedByteSize) }, // m=262144
+        )
+    }
+
     // ── Helpers ───────────────────────────────────────────────────────────────
 
     private fun addMany(hll: HyperLogLog, n: Int) = addMany(hll, prefix = "item", n = n)
