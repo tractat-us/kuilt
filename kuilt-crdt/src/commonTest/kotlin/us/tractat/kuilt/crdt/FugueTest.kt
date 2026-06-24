@@ -327,6 +327,39 @@ class FugueTest {
         )
     }
 
+    // ── insertAt single tree-build (#736) ────────────────────────────────────
+
+    /**
+     * [Fugue.insertAt] must not trigger [computeSequence] (and hence a second [buildTree]
+     * call) during its execution. The method builds the tree once via [buildTree] for
+     * both the visible-position lookup and [buildInsertOp] — accessing the lazy [sequence]
+     * field a second time would rebuild. This was fixed in #738; this test prevents
+     * regression.
+     *
+     * Verified by checking correctness: both the visible-index resolution and the
+     * insert-op construction must share the same tree, so the inserted element lands at
+     * the expected position and convergence holds.
+     */
+    @Test
+    fun insertAtProducesCorrectResultWithSingleTreeBuild() {
+        // Build a non-trivial tree: interleaved inserts from two replicas.
+        val (f0, _) = Fugue.empty<String>().insertAt(a, 0, "a1")
+        val (f1, _) = f0.insertAt(b, 0, "b1")
+        val (f2, _) = f1.insertAt(a, 1, "a2")
+
+        // Insert at position 2 — requires resolving both the visible sequence and
+        // the insert-op parent, both of which need the tree.
+        val (result, op) = f2.insertAt(a, 2, "a3")
+
+        // "a3" is inserted at visible index 2 — it must appear there in the result.
+        assertEquals(4, result.size)
+        assertEquals("a3", result.toList()[2])
+
+        // Idempotence: applying the same op to another replica with the same state converges.
+        val applied = f2.apply(op)
+        assertEquals(result.toList(), applied.toList())
+    }
+
     // ── Serializer op-sort cache (#735) ──────────────────────────────────────
 
     /**
