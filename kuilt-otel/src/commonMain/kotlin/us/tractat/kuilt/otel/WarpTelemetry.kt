@@ -36,9 +36,6 @@ import us.tractat.kuilt.crdt.ReplicaId
  *
  * ## Honest limits
  *
- * - **Metrics (A3) exporter** is deferred to a follow-up PR.
- *   See issues filed against #723. Its slot is reserved here so the API shape
- *   is stable, but it is `TODO`-stubbed.
  * - **Platform WALs** for iOS/macOS (#724) and wasmJs/IndexedDB (#725) are
  *   deferred; pass [InMemoryDurableStore] until those land.
  *
@@ -47,7 +44,9 @@ import us.tractat.kuilt.crdt.ReplicaId
  *   a platform-specific WAL in production.
  * @param maxSpans Maximum number of spans buffered in memory.
  * @param maxLogRecords Maximum number of log records buffered in memory.
+ * @param maxMetrics Maximum number of distinct metric series buffered in memory.
  * @param bufferPolicy Eviction strategy when [maxSpans] or [maxLogRecords] is exceeded.
+ * @param metricBufferPolicy Eviction strategy when [maxMetrics] is exceeded.
  *
  * @sample us.tractat.kuilt.otel.sampleWarpTelemetry
  */
@@ -57,6 +56,8 @@ public class WarpTelemetry(
     maxSpans: Int = DEFAULT_MAX_SPANS,
     maxLogRecords: Int = DEFAULT_MAX_LOG_RECORDS,
     bufferPolicy: BufferPolicy = BufferPolicy.DROP_OLDEST,
+    maxMetrics: Int = DEFAULT_MAX_METRICS,
+    metricBufferPolicy: MetricBufferPolicy = MetricBufferPolicy.DROP_OLDEST,
 ) {
     /** The span exporter (A2). Export spans here; they are CRDT-merged on reconnect. */
     public val spans: WarpSpanExporter = WarpSpanExporter(
@@ -66,9 +67,16 @@ public class WarpTelemetry(
         bufferPolicy = bufferPolicy,
     )
 
-    // A3: MetricExporter — deferred to follow-up PR.
-    // Wire cumulative GCounter/PNCounter + HyperLogLog for unique-cardinality metrics.
-    // See https://github.com/tractat-us/kuilt/issues/723 (sub-issue TBD).
+    /**
+     * The metric exporter (A3). Export cumulative sums, gauges, and cardinality estimates
+     * here; they are CRDT-merged on reconnect with no double-counting.
+     */
+    public val metrics: WarpMetricExporter = WarpMetricExporter(
+        replica = replica,
+        store = store,
+        maxMetrics = maxMetrics,
+        bufferPolicy = metricBufferPolicy,
+    )
 
     /** The log-record exporter (A4). Export log records here; they are CRDT-merged on reconnect. */
     public val logs: WarpLogRecordExporter = WarpLogRecordExporter(
@@ -79,14 +87,16 @@ public class WarpTelemetry(
     )
 
     /**
-     * Load persisted CRDT state from the [DurableStore].
+     * Load persisted CRDT state from the [DurableStore] for all exporters.
      *
      * Call once at startup, before any calls to [spans.export][WarpSpanExporter.export],
+     * [metrics.incrementSum][WarpMetricExporter.incrementSum],
      * [logs.export][WarpLogRecordExporter.export], or [WarpOtlpBridge.drain].
      * Idempotent: a second call simply re-reads and re-decodes the same bytes.
      */
     public suspend fun recover() {
         spans.recover()
+        metrics.recover()
         logs.recover()
     }
 }

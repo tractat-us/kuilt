@@ -123,6 +123,31 @@ internal suspend fun sampleOtlpEdge() {
 }
 
 /** @suppress — sample only */
+internal suspend fun sampleWarpMetricExporter() {
+    val replica = us.tractat.kuilt.crdt.ReplicaId("device-uuid-abc123")
+    val exporter = WarpMetricExporter(replica = replica, store = InMemoryDurableStore())
+
+    // Recover persisted metrics from a previous session.
+    exporter.recover()
+
+    // Sum: count server requests — idempotent merge means no double-count under retry.
+    val requests = MetricKey("server.requests", MetricKind.SUM, mapOf("handler" to "/api/v1"))
+    exporter.incrementSum(requests, by = 1L)
+    check(exporter.sumValue(requests) == 1L)
+
+    // Gauge: snapshot the current CPU load — last writer (by timestamp) wins across replicas.
+    val cpu = MetricKey("cpu.usage", MetricKind.GAUGE)
+    exporter.setGauge(cpu, value = 0.72, timestamp = 1_000_000L)
+    check(exporter.gaugeValue(cpu) == 0.72)
+
+    // Cardinality: count distinct users — same user added twice is still 1.
+    val users = MetricKey("unique.users", MetricKind.CARDINALITY)
+    exporter.addCardinality(users, "user-abc")
+    exporter.addCardinality(users, "user-abc") // idempotent — no double-count
+    check(exporter.cardinalityEstimate(users) > 0L)
+}
+
+/** @suppress — sample only */
 internal suspend fun sampleWarpSpanExporter() {
     val replica = ReplicaId("device-uuid-abc123")
     val store = InMemoryDurableStore()
