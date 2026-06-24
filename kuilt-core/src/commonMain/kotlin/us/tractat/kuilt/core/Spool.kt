@@ -7,18 +7,23 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.receiveAsFlow
 
 /**
- * The one sanctioned per-receiver inbound buffer for in-process fabrics.
+ * The one sanctioned per-receiver inbound buffer for in-process delivery.
  *
- * A `Spool` holds incoming [Swatch]es for a single receiver, the way a spool of thread feeds a
+ * A `Spool` holds incoming frames for a single receiver, the way a spool of thread feeds a
  * loom — and, like the print-spool sense of the word, it is a bounded producer/consumer queue.
- * Fabric implementations create one `Spool` per peer: each arriving frame is handed to [deliver],
- * and the peer collects [incoming] exactly once (single-collection FIFO).
+ * Each arriving frame is handed to [deliver], and the receiver collects [incoming] exactly once
+ * (single-collection FIFO).
+ *
+ * It is generic in the frame type [T] because kuilt delivers at two layers, both with the same
+ * unbounded-growth risk: the multi-peer **Seam** layer (`Spool<Swatch>`) and the point-to-point
+ * **[us.tractat.kuilt.core.fabric.Connection]** transport SPI (`Spool<ByteArray>`). Both — and any
+ * third-party fabric implementor — route delivery through one `Spool` rather than re-deriving a
+ * bounded channel.
  *
  * It is **always bounded** — its capacity and overflow behaviour come from the injected
  * [DeliveryPolicy] (default [DeliveryPolicy.Reliable], capacity [DeliveryPolicy.DEFAULT_CAPACITY]).
  * There is no unbounded `Spool`: that footgun (an inbound queue growing without backpressure until
- * it exhausts the heap) is structurally unrepresentable. Implement a custom [Seam]/fabric by routing
- * delivery through a `Spool` rather than a raw [Channel].
+ * it exhausts the heap) is structurally unrepresentable.
  *
  * Overflow behaviour follows the policy:
  *  - `SUSPEND` suspends the delivering caller until the receiver drains (backpressure).
@@ -28,8 +33,8 @@ import kotlinx.coroutines.flow.receiveAsFlow
  * A receiver that closes concurrently (left the mesh) is treated as a drop, not an error — matching
  * best-effort fabric delivery: the frame is simply discarded rather than surfaced to the broadcaster.
  */
-public class Spool(private val policy: DeliveryPolicy) {
-    private val channel: Channel<Swatch> =
+public class Spool<T>(private val policy: DeliveryPolicy) {
+    private val channel: Channel<T> =
         if (policy.overflow == Overflow.FAIL) {
             Channel(capacity = policy.capacity, onBufferOverflow = BufferOverflow.SUSPEND)
         } else {
@@ -37,10 +42,10 @@ public class Spool(private val policy: DeliveryPolicy) {
         }
 
     /** The single-collection FIFO stream of delivered frames. Collect once per `Spool`. */
-    public val incoming: Flow<Swatch> = channel.receiveAsFlow()
+    public val incoming: Flow<T> = channel.receiveAsFlow()
 
     /** Deliver one frame to the receiver, applying the [DeliveryPolicy]'s overflow behaviour. */
-    public suspend fun deliver(frame: Swatch) {
+    public suspend fun deliver(frame: T) {
         when (policy.overflow) {
             Overflow.FAIL -> {
                 val result = channel.trySend(frame)

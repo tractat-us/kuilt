@@ -294,7 +294,7 @@ public class FakeRoom(
         override val peers: StateFlow<Set<PeerId>> get() = _rosterPeers.asStateFlow()
         override val state: StateFlow<SeamState> get() = _seamState.asStateFlow()
 
-        private val spool = Spool(channelPolicy)
+        private val spool = Spool<Swatch>(channelPolicy)
         override val incoming: Flow<Swatch> = spool.incoming
 
         override suspend fun broadcast(payload: ByteArray): Unit = this@FakeRoom.broadcast(payload)
