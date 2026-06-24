@@ -2,6 +2,7 @@ package us.tractat.kuilt.crdt
 
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
+import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -257,5 +258,69 @@ class MovableTreeTest {
         val (t2, idB) = t1.addNode(alice, ts = 2L, parent = MovableTree.ROOT_ID, value = "B")
         val (t3, _)   = t2.move(alice, ts = 3L, node = idA, newParent = idB)
         assertEquals(3, t3.moveLogSize)
+    }
+
+    // ── addNode Patch convergence ─────────────────────────────────────────────
+
+    /**
+     * The patch returned by [MovableTree.addNode] must produce the same tree when
+     * applied via [MovableTree.piece] as receiving the full-state update directly.
+     *
+     * This is the Quilter integration path: a replica applies addNode locally and
+     * ships the patch to peers; peers absorb via piece(patch) and must converge.
+     */
+    @Test
+    fun addNodePatchConvergesWithFullStatePath() {
+        val base = MovableTree.empty<String>()
+        val (t1, idA, patch) = base.addNode(alice, ts = 1L, parent = MovableTree.ROOT_ID, value = "A")
+
+        // Peer absorbs via the patch delta (Quilter path).
+        val peerAfterPatch = base.piece(patch)
+
+        assertAll(
+            { assertEquals(t1, peerAfterPatch) },
+            { assertTrue(peerAfterPatch.contains(idA)) },
+            { assertEquals(MovableTree.ROOT_ID, peerAfterPatch.parentOf(idA)) },
+        )
+    }
+
+    /**
+     * Multiple addNode patches compose correctly: applying them individually or in
+     * batch produces the same result as the full-state path.
+     */
+    @Test
+    fun multipleAddNodePatchesComposeProperly() {
+        val base = MovableTree.empty<String>()
+        val (t1, idA, patchA) = base.addNode(alice, ts = 1L, parent = MovableTree.ROOT_ID, value = "A")
+        val (t2, idB, patchB) = t1.addNode(alice, ts = 2L, parent = idA, value = "B")
+
+        // Peer starts from base and absorbs patches in order.
+        val peerAfterBoth = base.piece(patchA).piece(patchB)
+
+        assertAll(
+            { assertEquals(t2, peerAfterBoth) },
+            { assertTrue(peerAfterBoth.contains(idA)) },
+            { assertTrue(peerAfterBoth.contains(idB)) },
+            { assertEquals(idA, peerAfterBoth.parentOf(idB)) },
+        )
+    }
+
+    /**
+     * addNode patch and move patch compose together: a peer can apply an addNode
+     * delta followed by a move delta and arrive at the same state as the originator.
+     */
+    @Test
+    fun addNodePatchComposesWithMovePatch() {
+        val base = MovableTree.empty<String>()
+        val (t1, idA, addPatch) = base.addNode(alice, ts = 1L, parent = MovableTree.ROOT_ID, value = "A")
+        val (t2, idB, _) = t1.addNode(alice, ts = 2L, parent = MovableTree.ROOT_ID, value = "B")
+        val (t3, movePatch) = t2.move(alice, ts = 3L, node = idA, newParent = idB)
+
+        // Peer receives the addNode delta for A, then the move delta.
+        val peer = base.addNode(alice, ts = 2L, parent = MovableTree.ROOT_ID, value = "B").tree
+            .piece(addPatch)
+            .piece(movePatch)
+
+        assertEquals(t3, peer)
     }
 }

@@ -105,12 +105,16 @@ public class MovableTree<V> private constructor(
      * increasing per replica and unique per `(replica, ts)` pair. A practical
      * choice is a Lamport clock incremented on every local operation.
      *
-     * @return the updated tree and the newly minted node id (`"<value>:<replica>:<ts>"`).
+     * @return an [AddNodeResult] carrying the updated tree, the newly minted node id
+     *   (`"<value>:<replica>:<ts>"`), and a [Patch] suitable for delta-propagation to
+     *   peers via [Quilted.piece]. Mirrors [move]'s `Patch`-returning shape so
+     *   `addNode` composes with `Quilter.apply()` without further bookkeeping.
      */
-    public fun addNode(replica: ReplicaId, ts: Long, parent: String, value: V): Pair<MovableTree<V>, String> {
+    public fun addNode(replica: ReplicaId, ts: Long, parent: String, value: V): AddNodeResult<V> {
         val nodeId = "$value:${replica.value}:$ts"
         val op = MoveOp(ts = ts, replica = replica, node = nodeId, newParent = parent, value = value)
-        return applyOp(op) to nodeId
+        val delta = MovableTree<V>(listOf(op))
+        return AddNodeResult(tree = applyOp(op), nodeId = nodeId, patch = Patch(delta))
     }
 
     /**
@@ -174,6 +178,32 @@ public class MovableTree<V> private constructor(
         public fun <V> empty(): MovableTree<V> = MovableTree(emptyList())
     }
 }
+
+// ── AddNode result ────────────────────────────────────────────────────────────
+
+/**
+ * The result of [MovableTree.addNode]: the updated tree, the newly minted node id,
+ * and the [Patch] that encodes the insertion delta for delta-propagation to peers.
+ *
+ * Supports three-element destructuring:
+ * ```kotlin
+ * val (tree, nodeId, patch) = base.addNode(alice, ts = 1L, parent = ROOT_ID, value = "A")
+ * // ship `patch` to peers; they absorb with `peer.piece(patch)`
+ * ```
+ *
+ * Two-element destructuring also compiles when the patch is not needed locally:
+ * ```kotlin
+ * val (tree, nodeId) = base.addNode(...)
+ * ```
+ */
+public data class AddNodeResult<V>(
+    /** The tree after the new node has been applied. */
+    public val tree: MovableTree<V>,
+    /** The id minted for the new node (`"<value>:<replica>:<ts>"`). */
+    public val nodeId: String,
+    /** Delta patch carrying just the insertion op — absorb on peers with [MovableTree.piece]. */
+    public val patch: Patch<MovableTree<V>>,
+)
 
 // ── Op record ────────────────────────────────────────────────────────────────
 
