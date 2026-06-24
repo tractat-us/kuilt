@@ -5,6 +5,8 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
+private val json = Json { allowStructuredMapKeys = true } // DotFun's keys are Dots
+
 class ResettableCounterTest {
 
     private val a = ReplicaId("A")
@@ -133,8 +135,8 @@ class ResettableCounterTest {
         var counter = ResettableCounter.ZERO
         counter = counter.piece(counter.increment(a, 7L))
         counter = counter.piece(counter.increment(b, 3L))
-        val json = Json.encodeToString(ResettableCounter.serializer(), counter)
-        val decoded = Json.decodeFromString(ResettableCounter.serializer(), json)
+        val encoded = json.encodeToString(ResettableCounter.serializer(), counter)
+        val decoded = json.decodeFromString(ResettableCounter.serializer(), encoded)
         assertEquals(counter, decoded)
     }
 }
