@@ -30,14 +30,15 @@ import us.tractat.kuilt.crdt.ReplicaId
  * ```
  *
  * A [WarpOtlpBridge] drains the converged CRDTs to a real OTLP endpoint whenever
- * the network is available.
+ * the network is available. Wire it with an [OtlpEdge] implementation and call
+ * [WarpOtlpBridge.drain] on each reconnect — it reconciles by digest and sends
+ * only the spans the edge does not yet have.
  *
  * ## Honest limits
  *
  * - **Metrics (A3) exporter** is deferred to a follow-up PR.
  *   See issues filed against #723. Its slot is reserved here so the API shape
  *   is stable, but it is `TODO`-stubbed.
- * - **[WarpOtlpBridge] (A5)** is deferred; a follow-up PR wires the edge drain.
  * - **Platform WALs** for iOS/macOS (#724) and wasmJs/IndexedDB (#725) are
  *   deferred; pass [InMemoryDurableStore] until those land.
  *
@@ -80,8 +81,8 @@ public class WarpTelemetry(
     /**
      * Load persisted CRDT state from the [DurableStore].
      *
-     * Call once at startup, before any calls to [spans.export][WarpSpanExporter.export]
-     * or [logs.export][WarpLogRecordExporter.export].
+     * Call once at startup, before any calls to [spans.export][WarpSpanExporter.export],
+     * [logs.export][WarpLogRecordExporter.export], or [WarpOtlpBridge.drain].
      * Idempotent: a second call simply re-reads and re-decodes the same bytes.
      */
     public suspend fun recover() {

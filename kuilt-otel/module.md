@@ -27,7 +27,7 @@ delta-temporality retry bug is structurally impossible.
 @sample us.tractat.kuilt.otel.sampleWarpTelemetry
 ```
 
-## What's here (slices A1–A4 + WAL-JVM)
+## What's here (slices A1–A4 + WAL-JVM + A5)
 
 | Type | What it does |
 |---|---|
@@ -37,6 +37,10 @@ delta-temporality retry bug is structurally impossible.
 | [WarpSpanExporter] | CRDT-backed span buffer (ORSet). Idempotent export + merge. |
 | [WarpLogRecordExporter] | CRDT-backed log buffer (Rga). Ordered, idempotent export + merge. |
 | [WarpTelemetry] | Facade that composes all exporters under one surface. |
+| [WarpOtlpBridge] | Drains converged CRDTs to an OTLP edge, reconciling by digest. |
+| [OtlpEdge] | Interface your backend implements to receive spans. |
+| [SpanDigest] | Compact set of span ids the edge already holds; drives delta computation. |
+| [DrainResult] | Typed result of [WarpOtlpBridge.drain]: spans sent or failure. |
 | [SpanRecord] | OTLP-shaped span data model. |
 | [LogRecord] | OTLP-shaped log-record data model with optional trace correlation. |
 | [ExportResult] | Typed result of `export()` / `merge()`. |
@@ -45,7 +49,6 @@ delta-temporality retry bug is structurally impossible.
 ## Deferred (follow-up PRs)
 
 - **A3 MetricExporter** — cumulative `GCounter`/`PNCounter` + `HyperLogLog` for cardinality.
-- **A5 WarpOtlpBridge** — drains converged CRDTs to a real OTLP endpoint.
 - **Platform WALs** — NSFileManager (iOS/macOS, #802), IndexedDB (wasmJs, #801).
 
 ## Honest limits
