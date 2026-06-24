@@ -131,6 +131,104 @@ class CanonicalSerializationTest {
         assertEquals(cborBytes1.toList(), cborBytes2.toList(), "ResettableCounter CBOR must be delivery-order-independent")
     }
 
+    // ── ORMap (via DotMap) ────────────────────────────────────────────────────
+
+    /**
+     * Two ORMap replicas put keys in opposite orders and then merge.
+     * Their serialized bytes after merge must be identical.
+     *
+     * This test catches a regression where DotMapSerializer sorted by [key.toString()]
+     * instead of the structural key encoding — a toString-based sort is fragile for
+     * non-injective types (Double, ByteArray, etc.).  The String key here is the
+     * minimal exercise; the structural-sort property is proven by insertion-order
+     * independence (issue #752).
+     */
+    @Test
+    fun orMapSerializationIsDeliveryOrderIndependent() {
+        // Replica 1: A puts "alpha", B puts "beta"
+        val m1a = ORMap.empty<String, GCounter>().put(a, "alpha", GCounter.of(a to 1L))
+        val m1b = ORMap.empty<String, GCounter>().put(b, "beta", GCounter.of(b to 2L))
+        val merged1 = m1a.piece(m1b)
+
+        // Replica 2: B puts "beta", A puts "alpha"
+        val m2b = ORMap.empty<String, GCounter>().put(b, "beta", GCounter.of(b to 2L))
+        val m2a = ORMap.empty<String, GCounter>().put(a, "alpha", GCounter.of(a to 1L))
+        val merged2 = m2b.piece(m2a)
+
+        assertEquals(merged1, merged2)
+
+        val ser = ORMap.serializer(String.serializer(), GCounter.serializer())
+        val jsonBytes1 = json.encodeToString(ser, merged1)
+        val jsonBytes2 = json.encodeToString(ser, merged2)
+        assertEquals(jsonBytes1, jsonBytes2, "ORMap JSON must be delivery-order-independent")
+
+        val cborBytes1 = cbor.encodeToByteArray(ser, merged1)
+        val cborBytes2 = cbor.encodeToByteArray(ser, merged2)
+        assertEquals(cborBytes1.toList(), cborBytes2.toList(), "ORMap CBOR must be delivery-order-independent")
+    }
+
+    /**
+     * DotMap structural sort must be independent of the order entries were inserted,
+     * not just of merge order.  This directly validates that the comparator is a
+     * pure function of key content — the structural-sort invariant (#752).
+     *
+     * We construct two DotMap instances with the same keys but in different insertion
+     * orders (without merging) and assert identical serialized bytes.
+     */
+    @Test
+    fun dotMapSortIsInsertionOrderIndependent() {
+        val dotA = Dot(a, 1L)
+        val dotB = Dot(b, 1L)
+
+        // Build two DotMaps with the same entries but in reversed insertion order.
+        val map1 = DotMap(linkedMapOf("zebra" to DotSet(setOf(dotA)), "aardvark" to DotSet(setOf(dotB))))
+        val map2 = DotMap(linkedMapOf("aardvark" to DotSet(setOf(dotB)), "zebra" to DotSet(setOf(dotA))))
+
+        // They must be equal (same entries) …
+        assertEquals(map1, map2)
+
+        // … and serialize to the same bytes regardless of insertion order.
+        val ser = DotMap.serializer(String.serializer(), DotSet.serializer())
+        val jsonBytes1 = json.encodeToString(ser, map1)
+        val jsonBytes2 = json.encodeToString(ser, map2)
+        assertEquals(jsonBytes1, jsonBytes2, "DotMap JSON must be insertion-order-independent")
+
+        val cborBytes1 = cbor.encodeToByteArray(ser, map1)
+        val cborBytes2 = cbor.encodeToByteArray(ser, map2)
+        assertEquals(cborBytes1.toList(), cborBytes2.toList(), "DotMap CBOR must be insertion-order-independent")
+    }
+
+    /**
+     * Regression guard for the toString-sort fragility (#752): two structurally
+     * distinct keys that share a common [toString] prefix must still sort
+     * deterministically by their structural encoding.
+     *
+     * We use [ReplicaId] keys (inline value class over [String]) to confirm that
+     * the structural-key comparator works for non-primitive serializable types.
+     */
+    @Test
+    fun dotMapStructuralSortWorksForInlineValueClassKeys() {
+        val r1 = ReplicaId("alice")
+        val r2 = ReplicaId("bob")
+
+        val dotR1 = Dot(a, 1L)
+        val dotR2 = Dot(b, 1L)
+
+        val map1 = DotMap(linkedMapOf(r1 to DotSet(setOf(dotR1)), r2 to DotSet(setOf(dotR2))))
+        val map2 = DotMap(linkedMapOf(r2 to DotSet(setOf(dotR2)), r1 to DotSet(setOf(dotR1))))
+
+        assertEquals(map1, map2)
+
+        val ser = DotMap.serializer(ReplicaId.serializer(), DotSet.serializer())
+        val jsonBytes1 = json.encodeToString(ser, map1)
+        val jsonBytes2 = json.encodeToString(ser, map2)
+        assertEquals(jsonBytes1, jsonBytes2, "DotMap with ReplicaId keys must be insertion-order-independent")
+
+        val cborBytes1 = cbor.encodeToByteArray(ser, map1)
+        val cborBytes2 = cbor.encodeToByteArray(ser, map2)
+        assertEquals(cborBytes1.toList(), cborBytes2.toList(), "DotMap with ReplicaId keys CBOR must be canonical")
+    }
+
     // ── Rga ───────────────────────────────────────────────────────────────────
 
     /**

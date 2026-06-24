@@ -8,9 +8,10 @@ import kotlinx.serialization.Serializable
  * nested store becomes bottom (empty) is dropped. `Causal<DotMap<E, DotSet>>` is
  * an OR-Set; a richer nested store gives an OR-Map.
  *
- * Serialized by [DotMapSerializer], which emits [entries] sorted by key's [toString]
- * so that two replicas at the same logical state produce identical bytes regardless
- * of delivery order (issue #713).
+ * Serialized by [DotMapSerializer], which emits [entries] sorted by the structural
+ * encoding of their key (serialized primitive leaves, compared lexicographically) so that
+ * two replicas at the same logical state produce identical bytes regardless of delivery
+ * order (issue #713, hardened in #752).
  */
 @Serializable(with = DotMapSerializer::class)
 public class DotMap<K, S : DotStore<S>>(
