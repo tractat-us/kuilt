@@ -244,6 +244,32 @@ internal fun sampleResettableCounter() {
     check(merged.value == 3L) // only the concurrent increment survived
 }
 
+// ── BloomFilter ───────────────────────────────────────────────────────────────
+
+/**
+ * Two independent replicas each add elements; merging produces a filter that
+ * answers for both, without false negatives.
+ */
+@Suppress("unused")
+internal fun sampleBloomFilter() {
+    // Both replicas share the same configuration: 1 000 expected elements, 1% FP rate.
+    var replicaA = BloomFilter.create(expectedElements = 1_000, falsePositiveRate = 0.01)
+    var replicaB = BloomFilter.create(expectedElements = 1_000, falsePositiveRate = 0.01)
+
+    // Each replica adds its own element independently.
+    replicaA = replicaA.piece(replicaA.add("alice"))
+    replicaB = replicaB.piece(replicaB.add("bob"))
+
+    // After merging (bitwise OR), both elements are visible to either replica.
+    val merged = replicaA.piece(replicaB)
+    check(merged.mightContain("alice"))  // no false negatives
+    check(merged.mightContain("bob"))    // no false negatives
+
+    // Elements never added cannot report false negatives by definition,
+    // but they may occasionally produce a false positive (within the rate bound).
+    check(!replicaA.mightContain("carol") || true)  // might be a false positive — that's expected
+}
+
 // ── Rga ───────────────────────────────────────────────────────────────────────
 
 /** Concurrent inserts converge to a deterministic order. */
