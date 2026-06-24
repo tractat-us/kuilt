@@ -198,10 +198,10 @@ class WarpSpikeDChurnTest {
                 "D-STRONG zero-churn must have 0 dups at ${r.d.peerCount} peers",
             )
         }
-        // D-GOSSIP dup-rate must be non-negative (can exceed 1.0 under churn — see assertDConvergenceInvariants).
+        // Duplicate-rate is live-peer-only, so always in [0, 1].
         allRows.forEach { r ->
-            assertTrue(r.d.gossip.duplicateRate >= 0.0)
-            assertTrue(r.d.strong.duplicateRate >= 0.0)
+            assertTrue(r.d.gossip.duplicateRate in 0.0..1.0)
+            assertTrue(r.d.strong.duplicateRate in 0.0..1.0)
         }
     }
 
@@ -253,12 +253,10 @@ class WarpSpikeDChurnTest {
 
     private fun assertDConvergenceInvariants(results: List<StrategyDResult>) {
         // Convergence is asserted inside the simulation — if we got here, it passed.
-        // Note: duplicate-rate can exceed 1.0 under heavy churn (departed peers' executions
-        // are recorded in claimsPerTask but not in live peers' execution counts — the metric
-        // still conveys cost; it's a spike measurement, not a probability).
+        // Duplicate-rate is computed over live-peer executions only, so it is always in [0, 1].
         results.forEach { r ->
-            assertTrue(r.gossip.duplicateRate >= 0.0)
-            assertTrue(r.strong.duplicateRate >= 0.0)
+            assertTrue(r.gossip.duplicateRate in 0.0..1.0, "D-GOSSIP dup-rate out of range: ${r.gossip.duplicateRate}")
+            assertTrue(r.strong.duplicateRate in 0.0..1.0, "D-STRONG dup-rate out of range: ${r.strong.duplicateRate}")
             // Tasks-lost should be non-negative and <= total tasks.
             assertTrue(r.gossip.tasksLost in 0..r.gossip.totalTasks)
         }

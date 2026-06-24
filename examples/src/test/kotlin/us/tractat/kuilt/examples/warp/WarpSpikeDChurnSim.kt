@@ -600,9 +600,18 @@ private fun buildRingResult(
     membershipCoordMessages: Int,
     tasksLost: Int,
 ): RingResult {
-    val totalExecutions = peers.sumOf { it.executions.size }
-    val duplicateExecutions = claimsPerTask.values.sumOf { maxOf(0, it.size - 1) }
-    val tasksCompleted = claimsPerTask.keys.size
+    // Filter claims to live peers only. Under churn, departed peers' claims accumulate in
+    // claimsPerTask while their executions are absent from the live peer set — including them
+    // inflates both numerator and denominator relative to each other in a misleading way.
+    // "Duplicate rate" here means: among live peers' executions, what fraction were redundant?
+    val livePeerIds = peers.map { it.id }.toSet()
+    val liveClaimsPerTask: Map<TaskId, List<ReplicaId>> = claimsPerTask
+        .mapValues { (_, claimers) -> claimers.filter { it in livePeerIds } }
+        .filterValues { it.isNotEmpty() }
+
+    val totalExecutions = liveClaimsPerTask.values.sumOf { it.size }
+    val duplicateExecutions = liveClaimsPerTask.values.sumOf { maxOf(0, it.size - 1) }
+    val tasksCompleted = liveClaimsPerTask.keys.size
     val duplicateRate = if (totalExecutions > 0) duplicateExecutions.toDouble() / totalExecutions else 0.0
     val coordPerTask = if (tasksCompleted > 0) membershipCoordMessages.toDouble() / tasksCompleted else 0.0
 

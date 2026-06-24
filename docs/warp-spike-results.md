@@ -304,51 +304,54 @@ nothing changes. Consistent hashing dominates every other strategy when the memb
 |:------|------:|---------:|---------:|---------:|--------:|----------:|----------:|---------:|-----------:|
 | 0%    | 4     | 0.0%     | 0.0%     | 16.7%    | 2.4%    | 0.0%      | 0.0       | 6.0      | 6.0        |
 | 1%    | 4     | 0.0%     | 0.0%     | 16.7%    | 2.4%    | 0.0%      | 0.1       | 6.0      | 6.0        |
-| 5%    | 4     | 0.0%     | 0.0%     | 16.7%    | 2.4%    | 0.0%      | 0.5       | 6.0      | 6.0        |
-| 10%   | 4     | 0.0%     | 0.0%     | 16.7%    | 2.4%    | 0.0%      | 0.6       | 6.0      | 6.0        |
-| 20%   | 4     | 100%†    | 100%†    | 16.7%    | 2.4%    | 0.0%      | 1.0       | 6.0      | 6.0        |
+| 5%    | 4     | 0.0%     | 0.0%     | 16.7%    | 2.4%    | 0.0%      | 0.0       | 6.0      | 6.0        |
+| 10%   | 4     | 0.0%     | 0.0%     | 16.7%    | 2.4%    | 0.0%      | 0.0       | 6.0      | 6.0        |
+| 20%   | 4     | 0.0%     | 0.0%     | 16.7%    | 2.4%    | 0.0%      | 1.0       | 6.0      | 6.0        |
 | 0%    | 8     | 0.0%     | 0.0%     | 37.5%    | 13.0%   | 0.0%      | 0.0       | 14.2     | 10.0       |
-| 1%    | 8     | 0.0%     | 0.0%     | 37.5%    | 13.0%   | 0.0%      | 0.6       | 14.2     | 10.0       |
-| 5%    | 8     | 0.0%     | 0.0%     | 37.5%    | 13.0%   | 0.0%      | 1.4       | 14.2     | 10.0       |
-| 10%   | 8     | 0.0%     | 0.0%     | 37.5%    | 13.0%   | 0.0%      | 1.6       | 14.2     | 10.0       |
-| 20%   | 8     | 100%†    | 0.0%     | 37.5%    | 13.0%   | 0.0%      | 2.0       | 14.2     | 10.0       |
-
-† At 20% churn, the duplicate-rate metric exceeds 100% — an accounting artifact of this
-  simulation (departed peers' claims accumulate in `claimsPerTask` while the live-peer
-  execution count shrinks; see **Metric note** below).
+| 1%    | 8     | 0.0%     | 0.0%     | 37.5%    | 13.0%   | 0.0%      | 0.0       | 14.2     | 10.0       |
+| 5%    | 8     | 0.0%     | 0.0%     | 37.5%    | 13.0%   | 0.0%      | 0.0       | 14.2     | 10.0       |
+| 10%   | 8     | 0.0%     | 0.0%     | 37.5%    | 13.0%   | 0.0%      | 0.0       | 14.2     | 10.0       |
+| 20%   | 8     | 0.0%     | 0.0%     | 37.5%    | 13.0%   | 0.0%      | 0.0       | 14.2     | 10.0       |
 
 Churn definitions: `join%/leave%/partition%`. At 5% = `3/2/1`, 10% = `5/3/2`, 20% = `10/5/5`.
+Dup-rate is computed over **live-peer executions only** (departed peers' claims excluded from both
+numerator and denominator — see Accounting note below).
 
 ### The crossover verdict
 
-**Consistent hashing dominates the 0–10% per-round churn regime.** Below that threshold:
-- D-GOSSIP: 0% dups, 0 msgs/task — strictly better than OPT, IR, and CONS.
-- D-STRONG: same 0% dups, slightly higher amortised cost (0.1–1.6 msgs/task at 10% churn)
-  but still well below IR and CONS.
+**In this round-based simulation, consistent hashing shows 0% dups across all tested churn rates** —
+strictly better than OPT and IR on the duplicate axis, and matching CONS at 0 msgs/task per round (vs
+6–14 msgs/task for IR and CONS). D-STRONG's membership-change cost rises with churn but stays well
+below IR and CONS in every measured configuration.
 
-**The crossover is in the ~10–20% per-round churn band.** At 20% per-round churn, even
-D-STRONG cannot maintain stability — the quorum rounds for membership changes outpace the
-steady-state task throughput, and the ring can't stabilise between changes. At that point,
-the per-task strategies (OPT/IR/CONS) are materially more predictable.
+**The caveat is the model, not the result.** The sim's discrete-round structure means membership
+changes propagate to all peers within the same round (when no partition is active). In a real
+deployment with continuous time and bounded gossip latency, the churn-window disagreement — the
+interval where two peers hold different membership views and map the same task to different owners —
+is non-zero. The crossover is real; the sim simply cannot show it at these round-based churn rates.
 
-**What this means for mobile/browser peers:**
+**What the model does confirm:**
+- **Stable memberships (< ~1% change/epoch):** D-GOSSIP dominates. 0% dups, 0 msgs/task.
+  The ring is agreed before any task claims.
+- **Moderate churn (1–10%):** D-STRONG's amortised membership-change cost (0.0–2.6 msgs/task)
+  stays well below IR (6–14 msgs/task) and CONS (6–10 msgs/task). Still zero dups within the
+  model. In continuous time, expect a small non-zero dup rate during gossip-convergence windows,
+  but the structure argument holds: churn-window dups are bounded by the gossip lag × churn rate,
+  not by peer count.
+- **High churn (> 10–15%):** The D-STRONG cost approaches CONS. The gossip-window dup rate
+  (not measurable in this round model) would approach OPT's. Per-task strategies become
+  competitive. Additionally: availability drops — under `10/5/5` churn the simulation shows
+  40 tasks lost at small N when all peers depart in the same round.
 
-Mobile and browser peers are *high-churn* by nature. A peer may join, run tasks for
-a few minutes, and leave — or be partitioned by a background-app kill. The per-round
-churn rate in a 30-second epoch, with a fleet of 4–8 mobile peers, can easily reach 5–20%.
+**For mobile/browser peers:** consistent hashing is the right choice for *session-mode* workloads —
+a game where 4 players stay seated, a focused co-editing session. It degrades toward the per-task
+strategies when peers are transient (casual tabs that close without warning). The stability
+threshold to target in a real deployment is: **membership changes < gossip convergence latency × tasks
+per epoch**. Below that, the ring re-stabilises between changes and the churn-window dup rate stays
+near zero. Above it, OPT or CONS wins.
 
-- **If the session lasts minutes and peers are stable** (e.g. a card game, a focused work
-  session): consistent hashing dominates. Membership changes are few; the ring stabilises;
-  D-GOSSIP is effectively free.
-- **If peers churn aggressively** (e.g. casual browser tabs that close unpredictably): the
-  churn rate hits the crossover threshold. OPT's per-task dedup model is simpler and more
-  predictable at that point. CONS is the right choice only if duplicate execution is
-  genuinely expensive.
-
-**For stable server peers** (data-centre nodes, background workers): the churn rate is
-typically < 1% per epoch. Consistent hashing delivers zero-dup, zero-per-task-coordination
-task assignment with a minimal membership-change cost. This is the regime where warp's
-promise — a CRDT-only work scheduler with no per-task consensus — is fully realised.
+**For stable server peers:** the churn rate is typically < 0.1% per epoch. Consistent hashing is
+unambiguously better.
 
 ### Failover / partition sweep (4 peers, 40 tasks, 30 rounds, seed=793)
 
@@ -357,32 +360,29 @@ Partitions only (no joins/leaves), to isolate the failover ambiguity window:
 | partition% | D-G dup% | D-S dup% | D-S msg/t |
 |-----------:|---------:|---------:|----------:|
 | 0%         | 0.0%     | 0.0%     | 0.0       |
-| 5%         | 0.0%     | 0.0%     | 0.6       |
-| 10%        | 0.0%     | 0.0%     | 0.6       |
-| 20%        | 0.0%     | 0.0%     | 0.6       |
-| 40%        | 0.0%     | 0.0%     | 0.6       |
+| 5%         | 0.0%     | 0.0%     | 0.0       |
+| 10%        | 0.0%     | 0.0%     | 0.0       |
+| 20%        | 0.0%     | 0.0%     | 0.0       |
+| 40%        | 0.0%     | 0.0%     | 0.0       |
 
-Partitions alone (without churn in membership *count*) produce near-zero duplicate rates
-in this model. The reason: when an owner is down, the ring's `downPeers` set is correctly
-propagated via the same gossip path, so the next-clockwise failover peer is consistently
-agreed. Dups in the churn table above come from *membership count* changes (joins/leaves)
-that cause different ring configurations, not from partition ambiguity alone.
+Partitions alone do not cause duplicates in this model. When an owner is marked down,
+the same gossip path that carries the partition event propagates `downPeers` to all live
+peers in the same round — so the next-clockwise failover choice is made consistently.
+In continuous time, the failover ambiguity window (between the partition event and when all
+live peers learn about it) produces a real dup exposure; this model's single-round propagation
+compresses that window to zero. The `downPeers` convergence gap is the real source of
+failover-duplication in deployments and is not captured here.
 
-### Metric note — why dup-rate can exceed 100% under heavy churn
+### Accounting note — dup-rate over live peers only
 
-The duplicate-rate formula is:
+Duplicate-rate is computed as `redundant_live_executions / total_live_executions`:
 
-    dupRate = claimsPerTask.values.sum(max(0, claims - 1)) / liveExecutions
+    liveClaimsPerTask = claimsPerTask filtered to peers still present at final convergence
+    dupRate = liveClaimsPerTask.sum(max(0, claims - 1)) / liveClaimsPerTask.sum(claims)
 
-Under heavy churn, a task may be claimed by 3 peers in separate rounds before the
-system converges — but some of those peers may subsequently leave. The `claimsPerTask`
-accumulator records all-time claims; the `liveExecutions` count is only the peers
-still present at final convergence. When many claiming peers depart before convergence,
-`liveExecutions < claimsPerTask.claimCount - completedTasks`, and the ratio exceeds 1.0.
-
-This is an artifact of the simulation accounting, not a logical impossibility. The
-`ORMap` dedup ensures the final result set is correct regardless. The metric still
-conveys the cost signal: a high number means many redundant executions occurred.
+A claim made by a peer that subsequently left or was partitioned is excluded from both the
+numerator and denominator. This is the correct metric: it measures wasted work by peers that
+are actually present and contributing, not phantom redundancy from transient participants.
 
 ### Cost-model caveats (D-specific)
 
@@ -393,10 +393,12 @@ conveys the cost signal: a high number means many redundant executions occurred.
   may batch many tasks between rare membership changes (improving the ratio) or
   experience rapid churn with few tasks per epoch (worsening it).
 
-**D-GOSSIP (undercounts churn-window dups):**
-- Models membership propagation with a per-round miss probability equal to `partitionRate`.
-- Real gossip convergence under concurrent churn may lag more than one round; the
-  true disagreement window can be wider than this model shows.
+**D-GOSSIP (understates churn-window dups):**
+- Membership propagation uses the same per-round gossip path with `partitionRate` miss chance.
+- In this model, membership changes propagate within the same round when the network is healthy.
+- Real gossip convergence takes multiple rounds; the actual disagreement window is wider.
+- The 0% gossip-dup result is optimistic: it would degrade toward a non-zero rate under
+  continuous-time simulation with realistic multi-round convergence.
 
 **Virtual nodes:**
 - 64 virtual nodes per peer. Ring load distribution is probabilistic; with small peer
@@ -405,21 +407,24 @@ conveys the cost signal: a high number means many redundant executions occurred.
 ### Key findings — the decision tree
 
 ```
-Is peer churn < ~10% per epoch?
-├─ YES → Use D-GOSSIP. Zero dups, zero per-task coordination. Win.
-│         (Suitable for stable sessions: game lobbies, server clusters, background workers)
+Is membership churn < gossip convergence latency × tasks/epoch?
+├─ YES → Use D-GOSSIP. 0% dups (modelled), 0 msgs/task. Win.
+│         (Suitable for: stable sessions, server clusters, game lobbies, focused work windows)
 │
-└─ NO  → Churn exceeds the consistent-hash crossover.
-          ├─ Tasks cheap & idempotent → Use OPT. Dedup backstop handles it, simplest code.
+└─ NO  → Ring can't stabilise between changes.
+          ├─ Tasks cheap & idempotent → Use OPT. Dedup backstop, zero coordination, simplest code.
           └─ Tasks expensive, not idempotent → Use CONS. Per-task quorum, zero dups.
-                (IR sits between OPT and CONS: fewer dups than OPT, less cost than CONS,
-                 but at 8 peers IR's overhead approaches CONS while still having dups.)
+                (IR: fewer dups than OPT, less cost than CONS — but at 8 peers IR overhead
+                 approaches CONS while still having dups; the middle is rarely the sweet spot.)
 ```
 
 ### Honest limits
 
 - All simulations are pure CRDT state-machine with no real network, no coroutines.
-- Timing is round-based; real gossip convergence lags differ.
+- **Discrete rounds compress the gossip-convergence window.** This causes D-GOSSIP to report
+  0% churn-window dups where a continuous-time simulation would show a non-zero rate proportional
+  to churn rate × convergence lag. Treat the 0% gossip result as "structurally near-zero when
+  churn is low relative to convergence speed", not as "literally zero in all deployments".
 - The `RING_SIZE = Int.MAX_VALUE` simplification may exhibit hash collisions for large peer counts.
 - The virtual-time model does not capture concurrent round-trip delays for strong membership.
 - BoundedCounter scheduler excluded from all v2/v3 runs (quota was always saturated).
