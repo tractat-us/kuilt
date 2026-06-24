@@ -2,13 +2,16 @@ package us.tractat.kuilt.multipeer.internal
 
 import io.github.oshai.kotlinlogging.KotlinLogging
 import kotlinx.cinterop.ExperimentalForeignApi
-import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
 import platform.Foundation.NSData
 import platform.Foundation.NSError
 import platform.Foundation.NSInputStream
@@ -21,10 +24,12 @@ import platform.MultipeerConnectivity.MCSessionSendDataMode
 import platform.MultipeerConnectivity.MCSessionState
 import platform.darwin.NSObject
 import us.tractat.kuilt.core.CloseReason
+import us.tractat.kuilt.core.DeliveryPolicy
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.PeerNotConnected
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
+import us.tractat.kuilt.core.Spool
 import us.tractat.kuilt.core.Swatch
 
 private val log = KotlinLogging.logger {}
@@ -39,8 +44,8 @@ private val log = KotlinLogging.logger {}
  *
  * MC delegate callbacks fire on the framework's private queue. Every state
  * mutation in this class therefore happens on a coroutine-friendly primitive
- * (`MutableStateFlow.update` / `MutableSharedFlow.tryEmit`) which is safe from
- * any thread.
+ * (`MutableStateFlow.update`) or a [Spool] whose bounded [deliver] is called
+ * via a supervised [scope] launch — safe from any thread.
  *
  * Two-way mapping from `MCPeerID` ↔ [PeerId]: we use the peer's
  * `displayName` as the wire identity. Apple does not expose a stable identity
@@ -52,6 +57,7 @@ private val log = KotlinLogging.logger {}
 internal class MCSessionLink(
     private val localPeerId: MCPeerID,
     internal val session: MCSession,
+    private val policy: DeliveryPolicy = DeliveryPolicy.Reliable,
 ) : Seam {
     override val selfId: PeerId = PeerId(localPeerId.displayName)
 
@@ -62,8 +68,14 @@ internal class MCSessionLink(
     private val _state: MutableStateFlow<SeamState> = MutableStateFlow(SeamState.Weaving)
     override val state: StateFlow<SeamState> = _state.asStateFlow()
 
-    private val incomingChannel: Channel<Swatch> = Channel(Channel.UNLIMITED)
-    override val incoming: Flow<Swatch> = incomingChannel.receiveAsFlow()
+    // Supervised scope for bridging the non-coroutine MC delegate callbacks into
+    // the suspending spool.deliver. Uses Dispatchers.Default so deliver runs off
+    // the framework's callback queue. SupervisorJob so a single failed delivery
+    // (e.g. FrameOverflow on a Strict policy) does not tear down the entire scope.
+    private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
+    private val spool: Spool<Swatch> = Spool(policy)
+    override val incoming: Flow<Swatch> = spool.incoming
 
     val delegate: MCSessionDelegateProtocol = SessionDelegate()
 
@@ -111,7 +123,8 @@ internal class MCSessionLink(
         // disconnect — suppressing the spurious mc.session.error warn.
         closing = true
         _state.value = SeamState.Torn(reason)
-        incomingChannel.close()
+        spool.close()
+        scope.cancel()
         session.disconnect()
     }
 
@@ -162,7 +175,11 @@ internal class MCSessionLink(
                     payload = didReceiveData.toByteArray(),
                     sender = PeerId(fromPeer.displayName),
                 )
-            incomingChannel.trySend(frame)
+            // deliver is suspending — bridge via the supervised scope so the MC
+            // callback thread is never blocked. The scope is cancelled in close(),
+            // after which the spool is also closed so a concurrent deliver silently
+            // drops (ClosedSendChannelException is swallowed by Spool.deliver).
+            scope.launch { spool.deliver(frame) }
         }
 
         // MultipeerConnectivity defines five other delegate callbacks
