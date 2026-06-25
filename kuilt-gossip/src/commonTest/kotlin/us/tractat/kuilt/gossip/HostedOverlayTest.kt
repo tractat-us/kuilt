@@ -3,6 +3,7 @@ package us.tractat.kuilt.gossip
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.fabric.meshSeam
@@ -39,5 +40,41 @@ class HostedOverlayTest {
         hub.peers.first { PeerId("client-0") in it }
         client.peers.first { PeerId("hub") in it }
         assertTrue(PeerId("client-0") in hub.peers.value)
+    }
+
+    /**
+     * A torn spoke (client-end closed before the Hello preamble completes) must NOT kill the
+     * accept-pump. The next healthy spoke offered after the failed one must still join the hub.
+     *
+     * Without the `runCatchingCancellable` guard a thrown exception from `addLink` propagates
+     * out of the pump coroutine, cancelling it permanently — the good spoke never reaches
+     * `hubMesh.addLink` and the hub's peer set never includes `client-good`.
+     */
+    @Test
+    fun tornSpokeBeforeHandshakeDoesNotKillAcceptPump() = runTest(StandardTestDispatcher()) {
+        val dispatcher = coroutineContext[ContinuationInterceptor]!!
+        val clock: () -> Instant = { Instant.fromEpochMilliseconds(0) }
+        val source = InMemoryConnectionSource()
+
+        val hub = backgroundScope.hostedOverlay(PeerId("hub"), source, dispatcher, Random(0L), clock)
+
+        // Offer a bad spoke: close the client-end immediately so the hub-side addLink sees a
+        // closed incoming flow during the MeshHello preamble read → throws → pump must survive.
+        val (badHubEnd, badClientEnd) = connectionPair()
+        badClientEnd.close()            // tears the spoke before it can send a Hello
+        source.offer(badHubEnd)         // pump dequeues it, addLink throws, pump must continue
+        runCurrent()                    // let the pump attempt (and fail) the bad admit
+
+        // Now offer a healthy spoke — the pump must still be alive to accept it.
+        val (goodHubEnd, goodClientEnd) = connectionPair()
+        val goodClientBuild = backgroundScope.async {
+            GossipSeam(meshSeam(PeerId("client-good"), listOf(goodClientEnd), dispatcher), Random(2L), clock)
+                .also { it.start(backgroundScope) }
+        }
+        source.offer(goodHubEnd)
+        goodClientBuild.await()
+
+        hub.peers.first { PeerId("client-good") in it }
+        assertTrue(PeerId("client-good") in hub.peers.value)
     }
 }
