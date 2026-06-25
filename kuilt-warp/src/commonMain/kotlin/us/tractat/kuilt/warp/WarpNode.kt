@@ -204,6 +204,22 @@ public class WarpNode(
     /** Wall-clock instant of the last effective-ring change. Guarded by [lock]. */
     private var lastRingChangeAt: Instant = Instant.fromEpochMilliseconds(0L)
 
+    /**
+     * Wall-clock instant this peer first announced a claim for a task. Guarded by [lock].
+     *
+     * The lease backstop ([scheduleLeaseRecheck]) measures [ClaimStrategy.RingWithIntent.claimLease]
+     * from this instant. Cleared in [removeFromQueue] when the task leaves the queue.
+     */
+    private val intentFirstSeenAt = mutableMapOf<TaskId, Instant>()
+
+    /**
+     * Task IDs for which a lease re-check coroutine is currently scheduled. Guarded by [lock].
+     *
+     * Ensures at most one lease timer exists per task: a peer may stand down repeatedly (each
+     * re-announce on a queue/ring emission), but only the first stand-down arms the lease.
+     */
+    private val leaseScheduled = mutableSetOf<TaskId>()
+
     /** Task IDs we have already started executing; prevents double-execution on this node. */
     private val claimed = mutableSetOf<TaskId>()
 
@@ -463,17 +479,17 @@ public class WarpNode(
         if (alreadyInFlight) return
 
         // Announce (free): union selfId into the claimant set. ORMap.put is additive.
-        lock.withLock {
-            intentQuilter.apply(Patch(intentQuilter.state.value.put(replica, taskId, GSet.of(selfId))))
-        }
-
+        // Record the first-seen instant once — the lease backstop measures claimLease from here.
         val mustSettle = lock.withLock {
+            intentQuilter.apply(Patch(intentQuilter.state.value.put(replica, taskId, GSet.of(selfId))))
+            intentFirstSeenAt.getOrPut(taskId) { clock() }
             val sinceChange = clock() - lastRingChangeAt
             val competing = (intentQuilter.state.value[taskId]?.elements ?: emptySet()).any { it != selfId }
             sinceChange < strategy.settleWindow || competing
         }
 
         scope.launch {
+            var stoodDown = false
             try {
                 if (mustSettle) delay(strategy.settleWindow) // suspend OUTSIDE the lock
                 val execute = lock.withLock {
@@ -482,12 +498,53 @@ public class WarpNode(
                         claimed.add(taskId)
                         true
                     } else {
-                        false // stand down — stay eligible to re-home later
+                        stoodDown = true // lost the tiebreak — arm the lease backstop below
+                        false
                     }
                 }
                 if (execute) doExecute(taskId)
             } finally {
+                // Release inFlight so a ring change can re-announce immediately (the fast
+                // liveness-drop failover path). The lease is a SEPARATE timer that backstops
+                // the alive-but-stuck winner where no ring change ever re-fires the announce.
                 lock.withLock { inFlight.remove(taskId) }
+                if (stoodDown) scheduleLeaseRecheck(taskId, strategy)
+            }
+        }
+    }
+
+    /**
+     * Backstop for an alive-but-stuck winner. A peer that lost the tiebreak waits out
+     * [ClaimStrategy.RingWithIntent.claimLease] and, if the task is still pending and unclaimed
+     * by then (the winner died or stalled without any ring change to re-fire the announce),
+     * proceeds as the next live claimant. Worst case: one duplicate after the lease — never a
+     * stranded task.
+     *
+     * At most one lease timer per task ([leaseScheduled] guard) — repeated stand-downs do not
+     * stack extra timers.
+     */
+    private fun scheduleLeaseRecheck(taskId: TaskId, strategy: ClaimStrategy.RingWithIntent) {
+        val alreadyScheduled = lock.withLock { !leaseScheduled.add(taskId) }
+        if (alreadyScheduled) return
+        scope.launch {
+            try {
+                delay(strategy.claimLease) // suspend OUTSIDE the lock
+                val execute = lock.withLock {
+                    val firstSeen = intentFirstSeenAt[taskId] ?: return@withLock false
+                    val leaseExpired = clock() - firstSeen >= strategy.claimLease
+                    val stillPending = taskId in queueQuilter.state.value.elements
+                    if (taskId !in claimed && stillPending && leaseExpired &&
+                        winnerAfterLease(taskId, strategy) == selfId
+                    ) {
+                        claimed.add(taskId)
+                        true
+                    } else {
+                        false
+                    }
+                }
+                if (execute) doExecute(taskId)
+            } finally {
+                lock.withLock { leaseScheduled.remove(taskId) }
             }
         }
     }
@@ -502,6 +559,27 @@ public class WarpNode(
         val claimants = intentQuilter.state.value[taskId]?.elements ?: emptySet()
         val effectiveRoster = rosterPeers - partitionedPeers
         return claimants.intersect(effectiveRoster).minByOrNull { it.value }
+    }
+
+    /**
+     * Like [winner], but once the lease has elapsed without a result it EXCLUDES the current
+     * lowest-`PeerId` claimant — the timed-out winner. This is what lets an alive-but-stuck
+     * winner (still in [rosterPeers], so [winner] keeps selecting it) be superseded by the next
+     * live claimant. Before the lease elapses it is identical to [winner].
+     *
+     * Caller holds [lock]. Returns `null` if no eligible claimant remains.
+     */
+    private fun winnerAfterLease(taskId: TaskId, strategy: ClaimStrategy.RingWithIntent): PeerId? {
+        val firstSeen = intentFirstSeenAt[taskId] ?: return winner(taskId)
+        val leaseElapsed = clock() - firstSeen >= strategy.claimLease
+        val claimants = intentQuilter.state.value[taskId]?.elements ?: emptySet()
+        val live = claimants.intersect(rosterPeers - partitionedPeers)
+        val eligible = if (leaseElapsed) {
+            live.minByOrNull { it.value }?.let { live - it } ?: live
+        } else {
+            live
+        }
+        return eligible.minByOrNull { it.value }
     }
 
     private fun executeAsync(taskId: TaskId) {
@@ -551,6 +629,8 @@ public class WarpNode(
         lock.withLock {
             queueQuilter.apply(Patch(queueQuilter.state.value.remove(taskId)))
             intentQuilter.apply(Patch(intentQuilter.state.value.remove(taskId)))
+            intentFirstSeenAt.remove(taskId)
+            leaseScheduled.remove(taskId)
         }
     }
 

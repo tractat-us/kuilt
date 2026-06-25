@@ -68,6 +68,21 @@ strict exactly-once — is a later slice (B in the slice taxonomy).
 The type boundary makes the trade-off explicit at the call site: callers opt into coordination
 for the tasks that need it; everything else stays on the fast path.
 
+### The intent-register layer (reducing window duplicates)
+
+The ring eliminates steady-state duplicates, but during a membership change two peers can
+briefly disagree about who owns a task and both run it. The `Results` board still converges
+to one answer — the wasted run is just thrown away. `ClaimStrategy.RingWithIntent` (the
+default) trims that waste: before running an owned task a peer *announces* its claim into a
+small shared register (a grow-only set of claimants per task), and during the brief
+disagreement window it waits a moment and runs the task only if it is the agreed claimant.
+The announcement is free — it rides the replication traffic already flowing — and the wait is
+paid only inside that window, so the common path keeps its zero-latency, zero-coordination
+behaviour. A claim that is won but never finishes (the winner died or stalled) lapses after a
+lease, so the net can only ever cost one duplicate, never a lost task. Choose
+`ClaimStrategy.Ring` to opt out. See `docs/warp-spike-results.md` for the duplicate-rate
+measurements that motivated this.
+
 ## Duplicate rate — the go/no-go number
 
 The [spike](warp-spike-results.md) measured the ORSet-queue + ORMap-dedup architecture
