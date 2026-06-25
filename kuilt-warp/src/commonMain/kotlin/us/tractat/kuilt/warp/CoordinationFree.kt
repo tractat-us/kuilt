@@ -1,5 +1,6 @@
 package us.tractat.kuilt.warp
 
+import us.tractat.kuilt.crdt.LatticeProduct
 import us.tractat.kuilt.crdt.Quilted
 
 /**
@@ -74,6 +75,39 @@ public fun <A : Quilted<A>> liftCoordinationFree(value: A): CoordinationFree<A> 
  * left across the list. The list must not be empty.
  *
  * @throws NoSuchElementException if [contributions] is empty.
+ * @see joinAllOrNull
  */
 public fun <A : Quilted<A>> joinAll(contributions: List<CoordinationFree<A>>): CoordinationFree<A> =
     contributions.reduce { acc, next -> acc.embroider(next) }
+
+/**
+ * Compute the join (least upper bound) of all values in [contributions], or null if
+ * the list is empty.
+ *
+ * This is the empty-safe variant of [joinAll]: identical behaviour for non-empty
+ * input, but returns null instead of throwing when [contributions] is empty. Useful
+ * when the contribution set is built dynamically and may legitimately be empty.
+ *
+ * @sample us.tractat.kuilt.warp.sampleJoinAllOrNull
+ */
+public fun <A : Quilted<A>> joinAllOrNull(contributions: List<CoordinationFree<A>>): CoordinationFree<A>? =
+    contributions.reduceOrNull { acc, next -> acc.embroider(next) }
+
+/**
+ * Pair this value with [other] into a [LatticeProduct], combining both states into a
+ * single coordination-free snapshot.
+ *
+ * The product is monotone by construction: componentwise join of two semilattices is
+ * itself a semilattice. The combined value can be embedded, transported, and merged
+ * exactly like any other [CoordinationFree] value, with both states kept in sync.
+ *
+ * @param B the second lattice type.
+ * @param other the second coordination-free value.
+ * @return a coordination-free [LatticeProduct] of this and [other].
+ *
+ * @sample us.tractat.kuilt.warp.sampleZip
+ */
+public fun <A : Quilted<A>, B : Quilted<B>> CoordinationFree<A>.zip(
+    other: CoordinationFree<B>,
+): CoordinationFree<LatticeProduct<A, B>> =
+    CoordinationFree(LatticeProduct.of(state, other.state))

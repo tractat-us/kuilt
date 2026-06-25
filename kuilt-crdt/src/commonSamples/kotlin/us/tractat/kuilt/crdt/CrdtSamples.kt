@@ -441,3 +441,27 @@ internal fun sampleCountMinSketchMerge() {
     check(merged.piece(a) == merged.piece(a).piece(a))
 }
 
+// ── LatticeProduct ───────────────────────────────────────────────────────────
+
+/**
+ * A GCounter and a GSet tracked together as one atomic coordination-free snapshot.
+ * Both components join independently; the lattice laws hold on the pair.
+ */
+@Suppress("unused")
+internal fun sampleLatticeProduct() {
+    val r1 = ReplicaId("r1")
+    val r2 = ReplicaId("r2")
+
+    // Two replicas each carry a (counter, tags) pair.
+    val replicaA = LatticeProduct.of(GCounter.of(r1 to 3L), GSet.of("alpha"))
+    val replicaB = LatticeProduct.of(GCounter.of(r2 to 7L), GSet.of("beta"))
+
+    // Componentwise join: counter sums, set unions.
+    val merged = replicaA.piece(replicaB)
+    check(merged.first.value == 10L)                      // 3 + 7
+    check(merged.second.elements == setOf("alpha", "beta"))
+
+    // Idempotent: merging again changes nothing.
+    check(merged.piece(replicaA) == merged)
+}
+
