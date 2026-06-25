@@ -545,7 +545,13 @@ public class WarpNode(
                         false // stand down — stay eligible to re-home later
                     }
                 }
-                if (execute) doExecute(taskId, kind)
+                if (execute) {
+                    runCatchingCancellable { doExecute(taskId, kind) }
+                        .onFailure { e ->
+                            logger.warn(e) { "WarpNode($selfId): executor failed for $taskId — unclaiming" }
+                            lock.withLock { claimed.remove(taskId) }
+                        }
+                }
             } finally {
                 lock.withLock { inFlight.remove(taskId) }
             }
