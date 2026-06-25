@@ -63,6 +63,29 @@ public class HyperLogLog private constructor(
     private val registers: ByteArray,
 ) : Quilted<HyperLogLog> {
 
+    /**
+     * Sparse-delta hint for [piece]. Not serialised (class-body property, not a
+     * primary-constructor parameter).
+     *
+     * - [EMPTY]: all registers are zero — [piece] returns `this` immediately.
+     * - [UNKNOWN]: general case — [piece] falls back to the full O(m) merge.
+     * - `>= 0`: exactly one non-zero register at this index — [piece] updates
+     *   only that register (O(1) register work + O(m) byte copy).
+     *
+     * Set only by the internal secondary constructor, which is called from [add]
+     * and [emptyPatch]. All other construction paths use [UNKNOWN].
+     */
+    private var sparseIndex: Int = UNKNOWN
+
+    /**
+     * Internal secondary constructor that carries a [sparseIndex] hint.
+     * Used by [add] and [emptyPatch] to annotate patch objects so [piece] can
+     * avoid the full O(m) register loop for common single-register updates.
+     */
+    private constructor(precision: Int, registers: ByteArray, sparseIndex: Int) : this(precision, registers) {
+        this.sparseIndex = sparseIndex
+    }
+
     /** Number of registers (`m = 2^precision`). */
     public val m: Int get() = 1 shl precision
 
@@ -89,7 +112,7 @@ public class HyperLogLog private constructor(
         if (leadingZeros <= getRegister(index)) return emptyPatch()
         val sparse = ByteArray(packedSize(m))
         setRegisterInto(sparse, index, leadingZeros)
-        return Patch(HyperLogLog(precision, sparse))
+        return Patch(HyperLogLog(precision, sparse, sparseIndex = index))
     }
 
     /**
@@ -106,10 +129,38 @@ public class HyperLogLog private constructor(
         }
     }
 
-    /** The join: element-wise maximum of the two register arrays. */
+    /**
+     * The join: element-wise maximum of the two register arrays.
+     *
+     * **Fast paths** (triggered by [sparseIndex] set in [add]/[emptyPatch]):
+     * - Empty delta ([EMPTY]): `other` has no non-zero registers — returns `this` unchanged.
+     * - Single-register delta (≥ 0): updates only the one register that [add] changed,
+     *   avoiding the O(m) bit-manipulation loop over all 16 384 registers. A byte-level
+     *   `copyOf` + one `setRegisterInto` replaces the full O(m) scan.
+     * - General case ([UNKNOWN]): falls back to the full O(m) element-wise merge.
+     *
+     * The fast paths matter because the common add/piece idiom
+     * (`hll = hll.piece(hll.add(x))`) would otherwise perform O(m) 6-bit
+     * bit-manipulation operations on *every* call, blocking the browser's single
+     * JS thread on wasmJs (the root cause of the Karma "browser disconnected"
+     * failures compensated by #768).
+     */
     override fun piece(other: HyperLogLog): HyperLogLog {
         require(precision == other.precision) {
             "Cannot merge HyperLogLog instances with different precision ($precision vs ${other.precision})"
+        }
+        when (val si = other.sparseIndex) {
+            EMPTY -> return this
+            UNKNOWN -> { /* fall through to full O(m) merge */ }
+            else -> {
+                // Single-register update: only register `si` differs from zero in `other`.
+                val newVal = other.getRegister(si)
+                val curVal = getRegister(si)
+                if (newVal <= curVal) return this
+                val merged = registers.copyOf()
+                setRegisterInto(merged, si, newVal)
+                return HyperLogLog(precision, merged)
+            }
         }
         val merged = ByteArray(packedSize(m))
         for (i in 0 until m) {
@@ -158,7 +209,7 @@ public class HyperLogLog private constructor(
 
     // ── Private helpers ──────────────────────────────────────────────────────
 
-    private fun emptyPatch(): Patch<HyperLogLog> = Patch(HyperLogLog(precision, ByteArray(packedSize(m))))
+    private fun emptyPatch(): Patch<HyperLogLog> = Patch(HyperLogLog(precision, ByteArray(packedSize(m)), sparseIndex = EMPTY))
 
     private fun rawEstimate(): Double {
         var harmonicSum = 0.0
@@ -193,6 +244,12 @@ public class HyperLogLog private constructor(
     }
 
     public companion object {
+        /** [sparseIndex] sentinel: all registers are zero (empty/no-op delta). */
+        private const val EMPTY = -2
+
+        /** [sparseIndex] sentinel: register distribution unknown; use full O(m) merge. */
+        private const val UNKNOWN = -1
+
         private const val MIN_PRECISION = 4
         private const val MAX_PRECISION = 18
 
