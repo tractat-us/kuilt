@@ -5,6 +5,7 @@
 
 package us.tractat.kuilt.warp
 
+import kotlinx.atomicfu.atomic
 import kotlinx.atomicfu.locks.reentrantLock
 import kotlinx.atomicfu.locks.withLock
 import kotlinx.coroutines.test.TestCoroutineScheduler
@@ -74,6 +75,54 @@ class WarpIntentRegisterTest {
             { assertEquals(tasks.toSet(), b.results.taskIds, "results converge on B") },
         )
         a.close(); b.close()
+    }
+
+    /**
+     * RingWithIntent executor failure must (a) not crash the node scope and (b) unclaim
+     * the task so a subsequent enqueue/re-home can execute it successfully.
+     *
+     * Regression for the parity gap between the Ring path (executeAsync wraps doExecute
+     * in runCatchingCancellable + unclaims on failure) and the RingWithIntent path
+     * (announceAndResolve called doExecute bare — no recovery, task stranded in claimed).
+     */
+    @Test
+    fun ringWithIntent_executorFailure_unclainsAndNodeRemainsAlive() = runTest(
+        UnconfinedTestDispatcher(),
+        timeout = 5.seconds,
+    ) {
+        val loom = InMemoryLoom()
+        val seam = loom.host(Pattern("intent-failure"))
+        val clock = schedulerClock(testScheduler)
+        val attemptCount = atomic(0)
+        val node = WarpNode(
+            selfId = seam.selfId,
+            seam = seam,
+            rosterFlow = seam.rosterSnapshot(),
+            scope = backgroundScope,
+            quilterConfig = TEST_QUILTER_CONFIG,
+            clock = clock,
+            strategy = ClaimStrategy.RingWithIntent(),
+            executor = { taskId ->
+                val attempt = attemptCount.incrementAndGet()
+                if (attempt == 1) throw RuntimeException("simulated executor failure for $taskId")
+                "recovered-${taskId.value}"
+            },
+        )
+        // First enqueue — executor throws; task must be unclaimed so it can be retried.
+        val t = TaskId("fail-task")
+        node.enqueue(t)
+        drain()
+
+        // The node must still be alive: enqueue a second task that succeeds.
+        val t2 = TaskId("healthy-task")
+        node.enqueue(t2)
+        drain()
+
+        assertAll(
+            { assertEquals(true, attemptCount.value >= 2, "executor was called at least twice (fail then retry)") },
+            { assertEquals(setOf(t, t2), node.results.taskIds, "both tasks completed after failure+retry") },
+        )
+        node.close()
     }
 
     /** A completed task's intent entry is tombstoned (register tracks only pending work). */
