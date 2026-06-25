@@ -10,12 +10,13 @@ package us.tractat.kuilt.warp
  *   [Results] ORMap backstop absorbs any duplicate executions that arise during failover.
  *   This is the default path when [WarpNode.enqueue] is called without a kind argument.
  *
- * - [Coordinated] — the escalation path, routed to [WarpNode]'s `coordinatedExecutor`.
- *   Intended for tasks that are non-idempotent or require a globally-agreed ordering.
- *   In this slice the routing seam is established; the Raft-backed consensus wiring
- *   lands in B-2 (#859). A caller opts in by calling
- *   `enqueue(taskId, CoordinationKind.Coordinated)` and supplying a `coordinatedExecutor`
- *   to [WarpNode].
+ * - [Coordinated] — the Raft-backed escalation path. The ring owner proposes the task
+ *   to the `raftNode` supplied at [WarpNode] construction time, suspends until a quorum
+ *   commits it, then calls `coordinatedExecutor` exactly once. Requires a non-null
+ *   `raftNode`; [WarpNode.enqueue] throws [IllegalStateException] immediately if none
+ *   was provided. A caller opts in by calling
+ *   `enqueue(taskId, CoordinationKind.Coordinated)` and supplying a `raftNode` and
+ *   `coordinatedExecutor` to [WarpNode].
  *
  * @see WarpNode.enqueue
  */
@@ -25,9 +26,10 @@ public sealed class CoordinationKind {
     public data object Free : CoordinationKind()
 
     /**
-     * Escalation path — for tasks that require a globally-agreed ordering or exactly-once
-     * semantics. Routes to [WarpNode]'s `coordinatedExecutor`. Consensus wiring (Raft) is
-     * the B-2 concern; this kind establishes the routing seam.
+     * Raft-backed escalation path — for tasks that require a globally-agreed ordering or
+     * exactly-once semantics. The ring owner proposes the task to the [WarpNode]'s `raftNode`
+     * and calls `coordinatedExecutor` only after a quorum commits the log entry. Requires
+     * `raftNode` to be non-null in the [WarpNode] constructor.
      */
     public data object Coordinated : CoordinationKind()
 }
