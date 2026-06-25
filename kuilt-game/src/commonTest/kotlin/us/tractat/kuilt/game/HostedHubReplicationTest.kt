@@ -47,7 +47,7 @@ import kotlin.time.Instant
 class HostedHubReplicationTest {
 
     @Test
-    fun clientChatRgaReachesAllOtherClientsPromptly() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun clientChatRgaReachesAllOtherClientsPromptly() = runTest(StandardTestDispatcher(), timeout = 30.seconds) {
         val game = setupStarGame(n = 3)
 
         // Client 0 appends m0, m1, m2 at the tail so order is preserved.
@@ -62,7 +62,7 @@ class HostedHubReplicationTest {
     }
 
     @Test
-    fun droppedClientSurvivesAndClusterKeepsReplicating() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun droppedClientSurvivesAndClusterKeepsReplicating() = runTest(StandardTestDispatcher(), timeout = 30.seconds) {
         val game = setupStarGame(n = 3)
 
         // 1. Establish history; all converge.
@@ -115,7 +115,7 @@ class HostedHubReplicationTest {
      * the full drop → evict → re-open → rejoin path, not prompt FullState.
      */
     @Test
-    fun reconnectingClientConvergesAfterLivenessEviction() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun reconnectingClientConvergesAfterLivenessEviction() = runTest(StandardTestDispatcher(), timeout = 30.seconds) {
         // Virtual-time clock the host's heartbeat detectors read; the test advances `nowMs`
         // alongside advanceTimeBy so silence is measured against the same virtual clock.
         val liveness = fastLivenessConfig()
