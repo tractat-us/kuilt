@@ -6,8 +6,6 @@ import io.ktor.server.application.pluginOrNull
 import io.ktor.server.routing.routing
 import io.ktor.server.websocket.WebSockets
 import io.ktor.server.websocket.webSocket
-import kotlinx.coroutines.CoroutineDispatcher
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
 import us.tractat.kuilt.core.fabric.Connection
 import us.tractat.kuilt.core.fabric.ConnectionSource
@@ -24,7 +22,6 @@ import us.tractat.kuilt.core.fabric.ConnectionSource
 public class KtorConnectionSource(
     application: Application,
     path: String,
-    dispatcher: CoroutineDispatcher = Dispatchers.IO,
 ) : ConnectionSource {
     private val connections = Channel<Connection>(capacity = Channel.UNLIMITED)
 
