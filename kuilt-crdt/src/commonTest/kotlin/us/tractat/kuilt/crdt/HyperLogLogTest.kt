@@ -4,8 +4,11 @@ import kotlinx.serialization.json.Json
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertTrue
+import kotlin.test.assertFalse
 import kotlin.test.assertFailsWith
+import kotlin.test.assertNotSame
+import kotlin.test.assertSame
+import kotlin.test.assertTrue
 
 class HyperLogLogTest {
 
@@ -41,6 +44,54 @@ class HyperLogLogTest {
         val next = hll.piece(patch)
         // small-cardinality correction: exact for n=1
         assertTrue(next.estimate() in 1L..2L, "expected ≈1, got ${next.estimate()}")
+    }
+
+    // ── piece() fast-path behaviour ───────────────────────────────────────────
+
+    /**
+     * piece(emptyDelta) must return the same instance — not a defensive copy.
+     *
+     * This directly proves the O(1) empty-delta fast path in piece(): if the
+     * implementation falls back to the full O(m) loop it always allocates a new
+     * ByteArray and returns a new HLL (even though the result is structurally equal),
+     * so assertSame fails. With the fast path, piece() short-circuits and returns
+     * `this`.
+     *
+     * This is the TDD companion for the piece() optimisation added to fix the
+     * wasmJs "Karma browser disconnected" root cause: the full O(m) bit-manipulation
+     * loop blocked the browser's single JS thread on every add/piece iteration,
+     * even when the delta was all-zero (see #788).
+     */
+    @Test
+    fun pieceWithEmptyDeltaReturnsSameInstance() {
+        val base = HyperLogLog.empty(precision = 4)
+        // First add: sets one register.
+        val state = base.piece(base.add("x").delta)
+        // Second add of same value: rho is identical, register already at that value → empty delta.
+        val emptyDelta = state.add("x")
+        assertEquals(0, emptyDelta.delta.nonZeroRegisterCount(), "re-add should produce empty delta")
+        assertSame(state, state.piece(emptyDelta.delta), "piece with empty delta must return the same instance")
+    }
+
+    /**
+     * piece(singleRegisterDelta) must return a new instance with only the updated
+     * register changed — the single-register fast path.
+     *
+     * Companion to pieceWithEmptyDeltaReturnsSameInstance: proves the non-empty
+     * arm of the fast path creates a new HLL (correct) while still only touching
+     * the one changed register.
+     */
+    @Test
+    fun pieceWithSingleRegisterDeltaUpdatesOnlyThatRegister() {
+        val state = HyperLogLog.empty(precision = 4)
+        val patch = state.add("x")
+        assertEquals(1, patch.delta.nonZeroRegisterCount(), "add() patch should have exactly 1 non-zero register")
+        val merged = state.piece(patch.delta)
+        assertNotSame(state, merged, "piece with non-empty delta must return a new instance")
+        assertAll(
+            { assertEquals(1, merged.nonZeroRegisterCount()) },
+            { assertEquals(merged, state.piece(state.add("x").delta)) }, // deterministic
+        )
     }
 
     // ── CRDT laws ─────────────────────────────────────────────────────────────
