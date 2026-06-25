@@ -32,7 +32,6 @@ import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
-import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
 
@@ -94,7 +93,8 @@ class HostedHubReplicationTest {
 
     /**
      * RECONNECT: a dropped voter's seat is freed by host liveness-eviction, so a fresh-identity
-     * reconnect is admitted and converges to the full chat history.
+     * reconnect is admitted and converges to the full chat history **promptly via FullState**, not
+     * via the slow anti-entropy backstop.
      *
      * The hub hosts with a [fastLivenessConfig] and a virtual-time clock, so the leader runs a
      * [us.tractat.kuilt.liveness.HeartbeatPartitionDetector] per voter. When `client-1` drops it
@@ -102,32 +102,23 @@ class HostedHubReplicationTest {
      * `PeerLost`, evicts the dead voter (roster 4 → 3) and **re-opens admission**. A reconnecting
      * peer with a fresh identity (`client-1-recon`) is then admitted and obtains a [GameSession].
      *
-     * **Healing path — anti-entropy, not prompt FullState (a known limitation).** The design's
-     * intended gap-healer is Quilter's first-contact FullState (`sendFullStateTo`). It does NOT
-     * deliver here: the hub fires that FullState during `gameJoin`, before the reconnecting chat
-     * Quilter's collector has subscribed, and `MuxSeam` is `replay = 0` so the frame is dropped;
-     * the deterministic retry is then cancelled because the reconnecting peer's own (empty) FullState
-     * reaching the hub triggers `cancelFullStateRetry(sender)` (`Quilter.dispatch`). So the heal
-     * actually lands on the hub's **anti-entropy backstop** (`reconcileWithRandomPeer`). At the 1-min
-     * production interval that would blow the 5 s bound, so this test tightens `antiEntropyInterval`
-     * to 25 ms to let the backstop fire inside the budget. Making this prompt is the deferred
-     * escalation (design §Escalations #1 / follow-up); this test verifies *eventual* convergence and
-     * the full drop → evict → re-open → rejoin path, not prompt FullState.
+     * **Healing path — prompt FullState push-back (fix #828).** The reconnecting Quilter sends its
+     * own (empty) FullState to the hub as soon as `onPeersChanged` fires — after its collector has
+     * subscribed. The hub's `onFullState` detects that the incoming state is strictly dominated by
+     * its own state and immediately calls `sendFullStateTo(sender)` to push the full history back.
+     * The heal is prompt and does not depend on the anti-entropy backstop timing.
+     *
+     * The test uses production `antiEntropyInterval` (1 minute) deliberately: only a prompt
+     * FullState push-back can converge within the ~600 ms of virtual time advanced below.
      */
     @Test
-    fun reconnectingClientConvergesAfterLivenessEviction() = runTest(StandardTestDispatcher(), timeout = 30.seconds) {
+    fun reconnectingClientConvergesViaPromptFullState() = runTest(StandardTestDispatcher(), timeout = 30.seconds) {
         // Virtual-time clock the host's heartbeat detectors read; the test advances `nowMs`
         // alongside advanceTimeBy so silence is measured against the same virtual clock.
         val liveness = fastLivenessConfig()
         var nowMs = 0L
-        // The hub pushes the reconnecting peer its first-contact FullState during gameJoin — before
-        // the reconnecting chat Quilter is collecting — so that initial frame is dropped (MuxSeam is
-        // replay = 0). The hub's anti-entropy backstop re-pushes the full state on its next round, so
-        // the heal converges. With production defaults (anti-entropy = 1 min) that would exceed the
-        // 5 s virtual-time bound; tightening the interval lets the backstop fire inside the budget.
         val chatConfig = QuilterConfig(
             expectVirtualTime = true,
-            antiEntropyInterval = 25.milliseconds,
         )
         val game = setupStarGame(
             n = 3,
@@ -158,9 +149,11 @@ class HostedHubReplicationTest {
         advanceTimeBy(windowMs)
         runCurrent()
 
-        // RECONNECT: client 1 rejoins via a fresh link + gameJoin, then heals to full history once the
-        // hub's anti-entropy backstop re-pushes the FullState. Advance in small bounded steps so the
-        // backstop rounds fire (never advanceUntilIdle — the heartbeat/election timers re-arm forever).
+        // RECONNECT: client 1 rejoins via a fresh link + gameJoin. The reconnecting Quilter's
+        // `onPeersChanged` fires after its collector subscribes, sending its empty FullState to the
+        // hub; the hub sees a strictly-dominated incoming state and pushes its full history back
+        // immediately. Advance a small bounded window — prompt heal, not anti-entropy cadence.
+        // (Never advanceUntilIdle — the heartbeat/election timers re-arm forever.)
         val rejoined = game.reconnectClient(1)
         repeat(30) {
             advanceTimeBy(20)
@@ -170,7 +163,7 @@ class HostedHubReplicationTest {
         assertEquals(
             listOf("before", "during"),
             rejoined.state.value.toList(),
-            "reconnecting client converged to full history after eviction + rejoin (anti-entropy heal)",
+            "reconnecting client converged to full history promptly via FullState push-back (fix #828)",
         )
     }
 
