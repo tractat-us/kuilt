@@ -53,4 +53,16 @@ class SeamRaftTransportTest {
             { assertTrue(NodeId(seamA.selfId.value) in tB.peers.value) },
         )
     }
+
+    @Test
+    fun sendToAbsentPeerSilentlyDropsPerContract() = raftRunTest {
+        val loom = InMemoryLoom()
+        val seam = loom.host(Pattern("test"))
+        val transport = SeamRaftTransport(seam)
+        // No peer named "ghost" is connected, so the underlying Seam.sendTo throws
+        // PeerNotConnected. The transport contract says sendTo "may silently drop if peer
+        // is unreachable" — a Raft voter dropping off the fabric must NOT crash the engine.
+        transport.sendTo(NodeId("ghost"), byteArrayOf(1, 2, 3))
+        // Reaching here without an exception is the assertion.
+    }
 }
