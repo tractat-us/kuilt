@@ -2,6 +2,13 @@
 
 _2026-06-25. Module: `:kuilt-warp`. Status: approved design, pre-implementation._
 
+> **UPDATE (2026-06-25):** the **lease backstop (§5, second bullet) was dropped from scope.**
+> Review found it only covered the *contended* stuck-winner case; a sole owner with a hung
+> executor on a converged ring still stranded its task. Shipped = the disagreement-window
+> duplicate reduction (`ClaimStrategy.Ring` / `RingWithIntent` + the intent register).
+> Dead-owner recovery is handled by liveness-driven failover; sole-owner-hung-executor recovery
+> (a visibility-timeout pattern) is out of scope. `claimLease`/`DEFAULT_CLAIM_LEASE` removed.
+
 ## Problem
 
 `WarpNode`'s claim path is consistent-hash assignment (Strategy D): each peer executes
@@ -32,7 +39,10 @@ with a smart adaptive default.
 **The intent-register must never lose a task.** Trading a duplicate (cheap, already
 backstopped) for a stuck task (work silently never happens) is a strict regression. Every
 failure mode degrades to *at worst one duplicate execution*, never to a task that no peer
-runs. This is the load-bearing constraint behind the liveness backstop (§5).
+runs. This is the load-bearing constraint behind the liveness backstop (§5). **Scope
+(post-update):** this holds for failures the *coordination* layer causes — ring disagreement
+and partitioned owners (handled by liveness-driven failover). A sole owner whose executor
+hangs is out of scope.
 
 ## 1. The strategy seam
 

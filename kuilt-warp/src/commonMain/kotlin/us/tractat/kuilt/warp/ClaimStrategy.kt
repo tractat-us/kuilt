@@ -2,7 +2,6 @@ package us.tractat.kuilt.warp
 
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
-import kotlin.time.Duration.Companion.seconds
 
 /**
  * Selects how [WarpNode] claims the tasks it owns on the consistent-hash ring.
@@ -21,24 +20,24 @@ public sealed interface ClaimStrategy {
      * Consistent-hash assignment plus an intent-register. A believed-owner announces its
      * claim (free — it piggybacks on existing delta gossip) and, when its ring changed
      * within [settleWindow] or it already sees a competing claim, waits [settleWindow] and
-     * executes only if it is the lowest-`PeerId` live claimant. A won-but-unexecuted claim
-     * lapses after [claimLease], so the net never loses a task — worst case is one duplicate.
+     * executes only if it is the lowest-`PeerId` live claimant. This shrinks the duplicate
+     * executions that arise while peers' ring views transiently disagree during membership
+     * churn; the `Results` board remains the final dedup backstop.
      *
-     * @property settleWindow bounded wait for competing claims to arrive. Should be well
-     *   below the heartbeat timeout. Tuning only.
-     * @property claimLease how long a won claim is honoured before the next live claimant may
-     *   proceed. Should comfortably exceed a normal task's duration. Tuning only.
+     * Recovery from a *failed* owner is handled by liveness-driven failover — a partitioned
+     * owner is dropped from the ring and its tasks re-home to the successor. A *sole* owner
+     * whose executor hangs indefinitely on a converged ring is out of scope here: that is a
+     * per-task execution concern, not a coordination one.
+     *
+     * @property settleWindow bounded wait for competing claims to arrive during the
+     *   disagreement window. Should be well below the heartbeat timeout. Tuning only.
      */
     public data class RingWithIntent(
         public val settleWindow: Duration = DEFAULT_SETTLE_WINDOW,
-        public val claimLease: Duration = DEFAULT_CLAIM_LEASE,
     ) : ClaimStrategy
 
     public companion object {
         /** Default settle window — short relative to the default heartbeat timeout (15 s). */
         public val DEFAULT_SETTLE_WINDOW: Duration = 500.milliseconds
-
-        /** Default claim lease — long enough that a normal task completes well within it. */
-        public val DEFAULT_CLAIM_LEASE: Duration = 30.seconds
     }
 }
