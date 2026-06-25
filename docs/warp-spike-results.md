@@ -449,4 +449,20 @@ Is membership churn < ~5% per epoch?
   remain. This is real availability degradation, not a model artifact.
 - The `RING_SIZE = Int.MAX_VALUE` simplification may exhibit hash collisions for large peer counts.
 - The virtual-time model does not capture concurrent round-trip delays for strong membership.
+
+---
+
+## Coordinated path: dup-rate = 0 under roster churn (B-4, #861)
+
+The coordination-free dup-rate figures above are for the **optimistic ring path** ([CoordinationKind.Free]). The **coordinated path** ([CoordinationKind.Coordinated]) routes through a Raft cluster and is structurally exactly-once:
+
+| Scenario | Execution count | Dup-rate |
+|----------|----------------|---------|
+| Stable ring (no churn) | 1 | **0%** |
+| Raft-leader failover (B-2 test) | 1 | **0%** |
+| Warp-roster churn: 2 ring owners propose same task | 1 | **0%** |
+
+**Mechanism (B-4 structural fix):** execution is driven from the Raft committed log, not inline after `propose()` returns. Only the current Raft leader's `WarpNode` fires `coordinatedExecutor` per committed entry; a local `coordinatedApplied` set blocks the second committed entry for the same task if two proposals both committed under churn. The two-proposal scenario is confirmed by the churn-sim test (`WarpNodeCoordinatedChurnSimTest`) which measured dup-rate=0.5 before the fix (2 executions / 1 task) and 0% after.
+
+**Measured in:** `kuilt-warp/src/commonTest/…/WarpNodeCoordinatedChurnSimTest.kt` (B-4 / #861).
 - BoundedCounter scheduler excluded from all v2/v3/v4 runs (quota was always saturated).
