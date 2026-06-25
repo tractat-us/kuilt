@@ -109,6 +109,9 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.warp.WarpNode")
  * @param heartbeatConfig Timing for per-peer heartbeat ping/pong. A tuning parameter —
  *   defaults to [HeartbeatConfig] production defaults (5 s interval, 15 s timeout,
  *   60 s reconnect window). Tests typically inject a short-cadence config.
+ * @param strategy How owned tasks are claimed. [ClaimStrategy.Ring] is pure consistent-hash
+ *   assignment; [ClaimStrategy.RingWithIntent] adds the intent-register safety net. Defaults
+ *   to [ClaimStrategy.Ring] in this slice.
  * @param executor Suspending function that performs the work for a given task and returns
  *   a string result. The body is called at most once per task per peer (re-entry after
  *   failover is possible; the [Results] backstop deduplicates).
@@ -121,6 +124,7 @@ public class WarpNode(
     quilterConfig: QuilterConfig = QuilterConfig(),
     private val clock: () -> Instant,
     private val heartbeatConfig: HeartbeatConfig = HeartbeatConfig(),
+    private val strategy: ClaimStrategy = ClaimStrategy.Ring,
     private val executor: suspend (TaskId) -> String,
 ) {
     private val replica = ReplicaId(selfId.value)
