@@ -9,14 +9,28 @@ import us.tractat.kuilt.core.fabric.Connection
 import io.ktor.websocket.Frame as KtorFrame
 
 /**
- * Adapts a Ktor [DefaultWebSocketSession] into a message [Connection] so a 2-peer
- * WebSocket fabric is built on the shared [us.tractat.kuilt.core.fabric.identified]
- * seam rather than a hand-rolled receive loop.
+ * Adapts any Ktor [DefaultWebSocketSession] into a kuilt [Connection] — byte-transparent
+ * binary framing, single-collection [incoming], idempotent [close].
  *
  * Works for both the client path
  * ([io.ktor.client.plugins.websocket.DefaultClientWebSocketSession]) and the server
  * path ([io.ktor.server.websocket.DefaultWebSocketServerSession]) — both extend
  * [DefaultWebSocketSession].
+ *
+ * **Primary use — in-process client spoke for [testApplication] tests.** Open a
+ * client WebSocket session and wrap it into a kuilt [Connection] to build a spoke
+ * that handshakes against a [KtorConnectionSource]-mounted hub route:
+ *
+ * ```kotlin
+ * testApplication {
+ *     val source = KtorConnectionSource(application, "/hub")
+ *     val client = createClient { install(WebSockets) }
+ *     client.webSocket("/hub") {
+ *         val clientSeam = meshSeam(PeerId("client"), listOf(WebSocketConnection(this)), dispatcher)
+ *         // clientSeam.peers now contains the hub's PeerId
+ *     }
+ * }
+ * ```
  *
  * **Wire format:** byte-transparent. Each binary WebSocket frame's payload is the
  * whole message, delivered verbatim; no framing prefix, no in-band handshake. A
@@ -30,7 +44,7 @@ import io.ktor.websocket.Frame as KtorFrame
  * **close:** closes the underlying session. Idempotent — Ktor's
  * [io.ktor.websocket.close] is a no-op once the session is already closing.
  */
-internal class WebSocketConnection(
+public class WebSocketConnection(
     private val session: DefaultWebSocketSession,
 ) : Connection {
     override suspend fun send(frame: ByteArray) {
