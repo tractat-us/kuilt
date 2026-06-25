@@ -18,6 +18,8 @@ package us.tractat.kuilt.warp
 import kotlinx.atomicfu.locks.reentrantLock
 import kotlinx.atomicfu.locks.withLock
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
@@ -30,6 +32,7 @@ import kotlin.test.Test
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
+import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 
@@ -317,4 +320,61 @@ class WarpNodeTest {
         nodeA.close()
         nodeB.close()
     }
+
+    /**
+     * [WarpNode.rawIncoming] receives every inbound frame from peers, AND
+     * the CRDT channels (queue/results) still converge — proving the fan-out
+     * does not break the existing mux ownership.
+     *
+     * Proof: nodeB collects a swatch from [WarpNode.rawIncoming]; simultaneously
+     * nodeA enqueues tasks and waits for results to converge on nodeB. Both must
+     * succeed — neither the rawIncoming subscriber nor the Quilter channels are
+     * starved by the other.
+     */
+    @Test
+    fun rawIncomingFanOutDeliversFramesToBothSubscriberAndCrdtChannels() =
+        runTest(UnconfinedTestDispatcher(), timeout = 5.seconds) {
+            val loom = InMemoryLoom()
+            val seamA = loom.host(Pattern("raw-fanout-test"))
+            val seamB = loom.join(InMemoryTag("b"))
+
+            val nodeA = WarpNode(
+                selfId = seamA.selfId,
+                seam = seamA,
+                rosterFlow = seamA.rosterSnapshot(),
+                scope = backgroundScope,
+                quilterConfig = TEST_QUILTER_CONFIG,
+                executor = { taskId -> "result-${taskId.value}" },
+            )
+            val nodeB = WarpNode(
+                selfId = seamB.selfId,
+                seam = seamB,
+                rosterFlow = seamB.rosterSnapshot(),
+                scope = backgroundScope,
+                quilterConfig = TEST_QUILTER_CONFIG,
+                executor = { taskId -> "result-${taskId.value}" },
+            )
+
+            // Collect the first swatch that arrives on B's rawIncoming.
+            val rawSwatchDeferred = backgroundScope.launch {
+                nodeB.rawIncoming.first()
+            }
+
+            // Enqueue tasks — these produce CRDT frames that flow from A → B.
+            val tasks = (1..4).map { TaskId("fanout-task-$it") }
+            tasks.forEach { nodeA.enqueue(it) }
+            advanceUntilIdle()
+
+            // rawIncoming must have fired (the job completed).
+            assertTrue(rawSwatchDeferred.isCompleted, "rawIncoming must deliver at least one swatch to subscribers")
+
+            // CRDT channels must still converge — results present on both nodes.
+            assertAll(
+                { assertEquals(tasks.toSet(), nodeA.results.taskIds, "nodeA results must converge") },
+                { assertEquals(tasks.toSet(), nodeB.results.taskIds, "nodeB results must converge") },
+            )
+
+            nodeA.close()
+            nodeB.close()
+        }
 }
