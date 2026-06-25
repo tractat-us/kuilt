@@ -86,5 +86,9 @@ public class Results<TaskId, Result> private constructor(
         /** An empty results board with no recorded results. */
         public fun <TaskId, Result> empty(): Results<TaskId, Result> =
             Results(ORMap.empty())
+
+        /** Wrap a raw [ORMap] as a [Results] — internal use by [WarpNode]. */
+        internal fun <TaskId, Result> from(map: ORMap<TaskId, LWWRegister<Result>>): Results<TaskId, Result> =
+            Results(map)
     }
 }
