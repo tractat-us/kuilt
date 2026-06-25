@@ -77,6 +77,16 @@ than "a job got the wrong answer." The
 checked this boundary directly: roughly zero duplicates while membership is steady,
 and never a wrong result.
 
+By default warp also *trims* those churn-window double-runs before they happen. In the brief
+moment right after a device joins or leaves, two devices can briefly disagree about who owns a
+job and both start it. So before running a job a device first quietly *calls dibs* — a small
+note that rides along with traffic already flowing — and, during that unsettled moment, waits a
+beat and runs the job only if it's the agreed owner. Two devices that would have raced now have
+one step aside. It costs nothing in the steady state — there's no note to wait on and no pause —
+and the answers board is still the final safety net for anything that slips through. (Prefer the
+simplest behaviour? Selecting `ClaimStrategy.Ring` turns the dibs step off and leans on the
+answers board alone.)
+
 ## The dream
 
 The scheduler above is the real, measured first step. The design docs below explore
