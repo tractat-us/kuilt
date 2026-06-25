@@ -1,12 +1,19 @@
 /**
  * Integration tests for [WarpNode].
  *
- * Runs under [UnconfinedTestDispatcher] (the same pattern as the Quilter tests) with
- * [advanceUntilIdle] after mutations so the event-driven execution loops drain fully.
+ * Runs under [UnconfinedTestDispatcher] with virtual time driven via bounded [advanceTimeBy]
+ * steps rather than [advanceUntilIdle]. [advanceUntilIdle] is unsafe here because the Quilter's
+ * anti-entropy loop (`while(true) { delay(interval); … }`) re-arms unconditionally — under
+ * [UnconfinedTestDispatcher] each re-arm lands at the current virtual instant, so
+ * [advanceUntilIdle] would spin it indefinitely. See [drain] for the bounded alternative.
  *
- * WarpNode has no re-arming timers of its own — it is event-driven via rosterFlow and
- * Quilter state flows. The Quilter underneath has an anti-entropy loop, but under
- * UnconfinedTestDispatcher delays execute eagerly so advanceUntilIdle is safe.
+ * **Clock injection:** each test derives its clock from `testScheduler.currentTime` so
+ * that [WarpNode.lastRingChangeAt] and the settle-window check (`sinceChange < settleWindow`)
+ * use the same virtual timeline as coroutine `delay(...)` calls. This ensures that a
+ * ring-change stamp and a subsequent settle-window check happen at the same virtual
+ * instant — `sinceChange == 0` — so the time-based clause of `mustSettle` does not
+ * trigger a spurious settle delay in steady-state tests, while still being accurate in
+ * production where the real clock ticks between events.
  */
 @file:OptIn(
     kotlinx.coroutines.ExperimentalCoroutinesApi::class,
@@ -20,8 +27,11 @@ import kotlinx.atomicfu.locks.withLock
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.TestCoroutineScheduler
+import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
-import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
@@ -37,8 +47,33 @@ import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
 
-/** Fixed clock for tests that don't exercise liveness timing. */
-private val FIXED_CLOCK: () -> Instant = { Instant.fromEpochMilliseconds(0L) }
+/** Returns a clock that reads virtual time from [scheduler], keeping it in sync with `delay()` calls. */
+private fun schedulerClock(scheduler: TestCoroutineScheduler): () -> Instant =
+    { Instant.fromEpochMilliseconds(scheduler.currentTime) }
+
+/**
+ * Advances virtual time in bounded steps to flush both Quilter anti-entropy convergence
+ * and the RingWithIntent settle window, without relying on [advanceUntilIdle].
+ *
+ * [advanceUntilIdle] is unsafe on systems whose timers re-arm unconditionally — the
+ * Quilter's anti-entropy loop is `while(true) { delay(antiEntropyInterval); … }`, which
+ * re-arms on every iteration regardless of convergence state. Under [UnconfinedTestDispatcher]
+ * this loop re-arms at the current virtual instant, and [advanceUntilIdle] would spin it
+ * indefinitely (it drains tasks scheduled at the current virtual time, and each re-arm lands
+ * at the current virtual time). The correct approach is bounded explicit time steps:
+ *
+ * 1. Step through enough anti-entropy intervals to allow Quilter state to converge.
+ *    [TEST_QUILTER_CONFIG.antiEntropyInterval] = 100 ms; 5 steps = 500 ms of virtual time.
+ * 2. Step through the settle window ([ClaimStrategy.DEFAULT_SETTLE_WINDOW] = 500 ms) so
+ *    one-shot [delay] calls inside [WarpNode.announceAndResolve] complete.
+ *
+ * Total virtual time advanced: 500 ms (convergence) + 500 ms (settle) = 1 s.
+ */
+private fun TestScope.drain() {
+    repeat(5) { advanceTimeBy(TEST_QUILTER_CONFIG.antiEntropyInterval); runCurrent() }
+    advanceTimeBy(ClaimStrategy.DEFAULT_SETTLE_WINDOW)
+    runCurrent()
+}
 
 /** Short-cadence [QuilterConfig] for tests that need fast anti-entropy. */
 private val TEST_QUILTER_CONFIG = QuilterConfig(
@@ -79,7 +114,7 @@ class WarpNodeTest {
             rosterFlow = rosterFlow,
             scope = backgroundScope,
             quilterConfig = TEST_QUILTER_CONFIG,
-            clock = FIXED_CLOCK,
+            clock = schedulerClock(testScheduler),
             executor ={ taskId ->
                 lock.withLock { executedByA.add(taskId) }
                 "result-${taskId.value}"
@@ -91,7 +126,7 @@ class WarpNodeTest {
             rosterFlow = rosterFlow,
             scope = backgroundScope,
             quilterConfig = TEST_QUILTER_CONFIG,
-            clock = FIXED_CLOCK,
+            clock = schedulerClock(testScheduler),
             executor ={ taskId ->
                 lock.withLock { executedByB.add(taskId) }
                 "result-${taskId.value}"
@@ -101,7 +136,7 @@ class WarpNodeTest {
         // With only peer A in the roster, A owns every task.
         val singleOwnerTasks = (1..4).map { TaskId("solo-task-$it") }
         singleOwnerTasks.forEach { nodeA.enqueue(it) }
-        advanceUntilIdle()
+        drain()
 
         val soloExecutedByA = lock.withLock { executedByA.toList() }
         assertEquals(
@@ -121,12 +156,12 @@ class WarpNodeTest {
             executedByB.clear()
         }
         rosterFlow.value = setOf(seamA.selfId, seamB.selfId)
-        advanceUntilIdle()
+        drain()
 
         // Enqueue more tasks — now both peers are on the ring.
         val twoOwnerTasks = (1..6).map { TaskId("two-peer-task-$it") }
         twoOwnerTasks.forEach { nodeA.enqueue(it) }
-        advanceUntilIdle()
+        drain()
 
         val allExecuted = lock.withLock { executedByA + executedByB }
         assertEquals(
@@ -160,7 +195,7 @@ class WarpNodeTest {
             rosterFlow = seamA.rosterSnapshot(),
             scope = backgroundScope,
             quilterConfig = TEST_QUILTER_CONFIG,
-            clock = FIXED_CLOCK,
+            clock = schedulerClock(testScheduler),
             executor ={ taskId ->
                 lock.withLock { executedBy[taskId] = seamA.selfId.value }
                 "result-${taskId.value}"
@@ -172,7 +207,7 @@ class WarpNodeTest {
             rosterFlow = seamB.rosterSnapshot(),
             scope = backgroundScope,
             quilterConfig = TEST_QUILTER_CONFIG,
-            clock = FIXED_CLOCK,
+            clock = schedulerClock(testScheduler),
             executor ={ taskId ->
                 lock.withLock { executedBy[taskId] = seamB.selfId.value }
                 "result-${taskId.value}"
@@ -182,7 +217,7 @@ class WarpNodeTest {
         val tasks = (1..10).map { TaskId("task-$it") }
         tasks.forEach { nodeA.enqueue(it) }
 
-        advanceUntilIdle()
+        drain()
 
         assertAll(
             { assertEquals(10, executedBy.size, "all 10 tasks must be executed") },
@@ -212,24 +247,24 @@ class WarpNodeTest {
             "done-$label-${taskId.value}"
         }
 
-        val nodeA = WarpNode(seamA.selfId, seamA, seamA.rosterSnapshot(), backgroundScope, TEST_QUILTER_CONFIG, FIXED_CLOCK, executor = executor("A"))
-        val nodeB = WarpNode(seamB.selfId, seamB, seamB.rosterSnapshot(), backgroundScope, TEST_QUILTER_CONFIG, FIXED_CLOCK, executor = executor("B"))
-        val nodeC = WarpNode(seamC.selfId, seamC, seamC.rosterSnapshot(), backgroundScope, TEST_QUILTER_CONFIG, FIXED_CLOCK, executor = executor("C"))
+        val nodeA = WarpNode(seamA.selfId, seamA, seamA.rosterSnapshot(), backgroundScope, TEST_QUILTER_CONFIG, schedulerClock(testScheduler), executor = executor("A"))
+        val nodeB = WarpNode(seamB.selfId, seamB, seamB.rosterSnapshot(), backgroundScope, TEST_QUILTER_CONFIG, schedulerClock(testScheduler), executor = executor("B"))
+        val nodeC = WarpNode(seamC.selfId, seamC, seamC.rosterSnapshot(), backgroundScope, TEST_QUILTER_CONFIG, schedulerClock(testScheduler), executor = executor("C"))
 
         // Let the three-peer mesh stabilise
-        advanceUntilIdle()
+        drain()
 
         // Partition B: close its seam — it disappears from seam.peers
         seamB.close()
 
         // Allow A and C to observe the partition, rebuild the ring, and claim B's tasks
-        advanceUntilIdle()
+        drain()
 
         // Enqueue tasks with only A and C live
         val tasks = (1..6).map { TaskId("failover-task-$it") }
         tasks.forEach { nodeA.enqueue(it) }
 
-        advanceUntilIdle()
+        drain()
 
         assertAll(
             { assertEquals(6, executed.size, "all tasks executed despite partition") },
@@ -256,7 +291,7 @@ class WarpNodeTest {
             rosterFlow = seamA.rosterSnapshot(),
             scope = backgroundScope,
             quilterConfig = TEST_QUILTER_CONFIG,
-            clock = FIXED_CLOCK,
+            clock = schedulerClock(testScheduler),
             executor ={ taskId -> "result-${taskId.value}" },
         )
         val nodeB = WarpNode(
@@ -265,14 +300,14 @@ class WarpNodeTest {
             rosterFlow = seamB.rosterSnapshot(),
             scope = backgroundScope,
             quilterConfig = TEST_QUILTER_CONFIG,
-            clock = FIXED_CLOCK,
+            clock = schedulerClock(testScheduler),
             executor ={ taskId -> "result-${taskId.value}" },
         )
 
         val tasks = (1..8).map { TaskId("conv-task-$it") }
         tasks.forEach { nodeA.enqueue(it) }
 
-        advanceUntilIdle()
+        drain()
 
         val expectedIds = tasks.toSet()
         assertAll(
@@ -304,7 +339,7 @@ class WarpNodeTest {
             rosterFlow = seamA.rosterSnapshot(),
             scope = backgroundScope,
             quilterConfig = TEST_QUILTER_CONFIG,
-            clock = FIXED_CLOCK,
+            clock = schedulerClock(testScheduler),
             executor ={ taskId -> "result-${taskId.value}" },
         )
         val nodeB = WarpNode(
@@ -313,14 +348,14 @@ class WarpNodeTest {
             rosterFlow = seamB.rosterSnapshot(),
             scope = backgroundScope,
             quilterConfig = TEST_QUILTER_CONFIG,
-            clock = FIXED_CLOCK,
+            clock = schedulerClock(testScheduler),
             executor ={ taskId -> "result-${taskId.value}" },
         )
 
         val taskId = TaskId("dedup-task")
         nodeA.enqueue(taskId)
 
-        advanceUntilIdle()
+        drain()
 
         assertAll(
             { assertEquals(1, nodeA.results.taskIds.size, "nodeA results board has exactly 1 entry") },
@@ -356,7 +391,7 @@ class WarpNodeTest {
                 rosterFlow = seamA.rosterSnapshot(),
                 scope = backgroundScope,
                 quilterConfig = TEST_QUILTER_CONFIG,
-                clock = FIXED_CLOCK,
+                clock = schedulerClock(testScheduler),
                 executor = { taskId -> "result-${taskId.value}" },
             )
             val nodeB = WarpNode(
@@ -365,7 +400,7 @@ class WarpNodeTest {
                 rosterFlow = seamB.rosterSnapshot(),
                 scope = backgroundScope,
                 quilterConfig = TEST_QUILTER_CONFIG,
-                clock = FIXED_CLOCK,
+                clock = schedulerClock(testScheduler),
                 executor = { taskId -> "result-${taskId.value}" },
             )
 
@@ -377,7 +412,7 @@ class WarpNodeTest {
             // Enqueue tasks — these produce CRDT frames that flow from A → B.
             val tasks = (1..4).map { TaskId("fanout-task-$it") }
             tasks.forEach { nodeA.enqueue(it) }
-            advanceUntilIdle()
+            drain()
 
             // rawIncoming must have fired (the job completed).
             assertTrue(rawSwatchDeferred.isCompleted, "rawIncoming must deliver at least one swatch to subscribers")

@@ -162,7 +162,10 @@ class WarpNodePartitionFailoverTest {
             tasks.forEach { nodeA.enqueue(it) }
 
             // Advance to let CRDT replication and task execution complete.
-            repeat(10) { this.advanceTimeByAndClock(50.milliseconds, clock) }
+            // With RingWithIntent, tasks enqueued shortly after a ring change settle for
+            // settleWindow (500 ms) before executing. Allow 700 ms total (14 × 50 ms) so
+            // the settle delay plus CRDT replication both complete within the test window.
+            repeat(14) { this.advanceTimeByAndClock(50.milliseconds, clock) }
 
             val taskIds = executedLock.withLock { executedBy.keys.toSet() }
             val resultsA = nodeA.results
