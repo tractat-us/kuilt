@@ -2,16 +2,12 @@
 
 package us.tractat.kuilt.otel
 
-import io.github.oshai.kotlinlogging.KotlinLogging
 import kotlinx.atomicfu.locks.reentrantLock
 import kotlinx.atomicfu.locks.withLock
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.cbor.Cbor
-import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.crdt.Dot
 import us.tractat.kuilt.crdt.ReplicaId
-
-private val logger = KotlinLogging.logger {}
 
 /**
  * Mints causal [Dot]s for spans and tracks the current happens-before frontier.
@@ -79,17 +75,20 @@ public class WarpCausalClock(private val replica: ReplicaId) {
     public fun frontier(): Set<Dot> = lock.withLock { frontier }
 
     /**
-     * Reload `(seq, frontier)` from [store]. Call once at startup before any [tick];
-     * a missing or corrupt entry leaves the clock fresh (seq 0, empty frontier).
+     * Reload `(seq, frontier)` from [store]. Call once at startup before any [tick].
+     *
+     * Two distinct outcomes:
+     * - Key absent (`store.read` returns `null`) → legitimate first run; clock stays
+     *   at seq=0 / empty frontier.
+     * - Key present but bytes won't decode → **throws**. Silently resetting seq to 0
+     *   would re-mint dots already used by earlier spans and corrupt causality. A
+     *   corrupt-but-present entry means the store or the write path is broken; the
+     *   caller must surface that, not swallow it.
      */
     public suspend fun recover(store: DurableStore) {
         val bytes = store.read(STORE_KEY) ?: return
-        val state = runCatchingCancellable {
-            cbor.decodeFromByteArray(stateSerializer, bytes)
-        }.getOrNull() ?: run {
-            logger.warn { "otel.causal.clock: corrupt store entry, starting fresh" }
-            return
-        }
+        // Let SerializationException (or any other decode failure) propagate — fail loud.
+        val state = cbor.decodeFromByteArray(stateSerializer, bytes)
         lock.withLock {
             seq = state.seq
             frontier = state.frontier

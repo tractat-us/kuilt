@@ -27,7 +27,7 @@ public data class SpanLink(
 )
 
 private val linkOrder: Comparator<SpanLink> =
-    compareBy({ it.fromSpanId }, { it.linkedSpanId })
+    compareBy({ it.fromSpanId }, { it.linkedSpanId }, { it.linkedTraceId })
 
 /**
  * Derive [SpanLink]s from the happens-before relation recorded in each span's
@@ -42,7 +42,8 @@ private val linkOrder: Comparator<SpanLink> =
  *
  * A predecessor dot that doesn't resolve (late or partial sync) is skipped and
  * logged at debug — never thrown. The result is sorted by `(fromSpanId,
- * linkedSpanId)` for deterministic, input-order-independent output.
+ * linkedSpanId, linkedTraceId)` — a strict total order — for deterministic,
+ * input-order-independent output.
  *
  * @sample us.tractat.kuilt.otel.sampleInferCausalLinks
  */
