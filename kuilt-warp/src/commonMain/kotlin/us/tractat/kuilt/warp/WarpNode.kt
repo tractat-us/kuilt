@@ -118,9 +118,22 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.warp.WarpNode")
  *   result. Called at most once per task per peer on the free path (re-entry after failover
  *   is possible; the [Results] backstop deduplicates).
  * @param coordinatedExecutor Suspending function for [CoordinationKind.Coordinated] tasks.
- *   Routes to the escalation path; supply a Raft-backed implementation in production
- *   (B-2, #859). Defaults to an explicit error so misuse surfaces immediately rather than
- *   silently routing coordinated tasks down the free path.
+ *   Called after the Raft log commits the task's proposal — the exactly-once guarantee
+ *   comes from Raft, not from this function. Defaults to an explicit error so a caller
+ *   who provides a [raftNode] but forgets to supply an executor surfaces the omission
+ *   immediately rather than silently doing nothing.
+ * @param raftNode [RaftNode] backing the [CoordinationKind.Coordinated] execution path.
+ *   When supplied, each coordinated task's ring owner proposes the task to this Raft
+ *   cluster for total-order delivery before invoking [coordinatedExecutor] — giving
+ *   exactly-once semantics even under leadership failover. The [Results] ORMap backstop
+ *   absorbs any duplicate executions that arise in transient edge cases.
+ *
+ *   **Required for coordinated tasks.** If `null`, calling [enqueue] with
+ *   [CoordinationKind.Coordinated] throws [IllegalStateException] immediately — fail-loud,
+ *   never a silent downgrade to the ring path. Pass a [us.tractat.kuilt.raft.test.FakeRaftNode]
+ *   from `:kuilt-raft-test` configured as [us.tractat.kuilt.raft.RaftRole.Leader] for unit
+ *   tests, or use [MultiNodeRaftSim][us.tractat.kuilt.raft.test.MultiNodeRaftSim] with real
+ *   nodes for consensus-correct cluster tests.
  */
 public class WarpNode(
     public val selfId: PeerId,
@@ -133,8 +146,9 @@ public class WarpNode(
     private val strategy: ClaimStrategy = ClaimStrategy.RingWithIntent(),
     private val executor: suspend (TaskId) -> String,
     private val coordinatedExecutor: suspend (TaskId) -> String = { taskId ->
-        error("No coordinatedExecutor provided for task $taskId — supply one to WarpNode (B-2, #859)")
+        error("No coordinatedExecutor provided for task $taskId — supply one to WarpNode")
     },
+    private val raftNode: RaftNode? = null,
 ) {
     private val replica = ReplicaId(selfId.value)
 
@@ -334,10 +348,13 @@ public class WarpNode(
      *
      * - [CoordinationKind.Free]: routes to the optimistic ring path, calling [executor].
      *   Equivalent to `enqueue(taskId)` — no behavioral change.
-     * - [CoordinationKind.Coordinated]: routes to the escalation path, calling
-     *   `coordinatedExecutor`. The task is replicated in a separate queue so the
-     *   coordination-free path is completely unaffected. Consensus wiring (B-2, #859)
-     *   slots into `coordinatedExecutor` without any change to this routing.
+     * - [CoordinationKind.Coordinated]: routes to the Raft-backed escalation path. The ring
+     *   owner proposes the task to [raftNode] for total-order delivery, then calls
+     *   [coordinatedExecutor] exactly once per committed log entry. The task is replicated
+     *   in a separate queue so the coordination-free path is completely unaffected.
+     *
+     *   Requires [raftNode] to be non-null — throws [IllegalStateException] immediately
+     *   if none was supplied to the constructor.
      *
      * Idempotent at the ORSet level: a concurrent add of the same ID on another peer
      * survives merge (add-wins).
@@ -345,8 +362,13 @@ public class WarpNode(
     public fun enqueue(taskId: TaskId, kind: CoordinationKind) {
         when (kind) {
             CoordinationKind.Free -> enqueue(taskId)
-            CoordinationKind.Coordinated ->
+            CoordinationKind.Coordinated -> {
+                checkNotNull(raftNode) {
+                    "WarpNode($selfId): raftNode is required to enqueue coordinated tasks — " +
+                        "no RaftNode was supplied at construction time"
+                }
                 coordQueueQuilter.apply(Patch(coordQueueQuilter.state.value.add(replica, taskId)))
+            }
         }
     }
 
@@ -578,17 +600,34 @@ public class WarpNode(
      * Invoke the correct executor for [taskId] based on [kind], record the result, and
      * remove the task from its queue.
      *
-     * [CoordinationKind.Free] calls [executor] (the fast ring path).
-     * [CoordinationKind.Coordinated] calls [coordinatedExecutor] (the escalation path;
-     * Raft consensus wiring lands in B-2, #859).
+     * [CoordinationKind.Free] calls [executor] directly (the fast ring path).
+     * [CoordinationKind.Coordinated] proposes to [raftNode] first — the call suspends
+     * until a quorum commits the entry — then calls [coordinatedExecutor]. Raft's total
+     * order guarantees that exactly one proposal per task commits across the cluster;
+     * the [Results] backstop absorbs any transient duplicates.
      */
     private suspend fun doExecute(taskId: TaskId, kind: CoordinationKind) {
         val result = when (kind) {
             CoordinationKind.Free -> executor(taskId)
-            CoordinationKind.Coordinated -> coordinatedExecutor(taskId)
+            CoordinationKind.Coordinated -> executeViaRaft(taskId)
         }
         recordResult(taskId, result)
         removeFromQueue(taskId, kind)
+    }
+
+    /**
+     * Proposes the task to the Raft cluster and — once the entry is committed to the log
+     * — invokes [coordinatedExecutor].
+     *
+     * The [RaftNode.propose] call suspends until a quorum has committed the log entry,
+     * guaranteeing that the task is durably recorded before any coordinator acts on it.
+     * Raft's total-order log guarantees exactly-once commitment; the [Results] LWW ORMap
+     * backstop absorbs any transient duplicates that arise in edge cases (e.g. a crash
+     * between the commit and the result write).
+     */
+    private suspend fun executeViaRaft(taskId: TaskId): String {
+        checkNotNull(raftNode).propose(taskId.value.encodeToByteArray())
+        return coordinatedExecutor(taskId)
     }
 
     private fun recordResult(taskId: TaskId, result: String) {

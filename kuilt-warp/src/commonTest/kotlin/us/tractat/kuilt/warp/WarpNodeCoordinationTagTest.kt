@@ -28,6 +28,8 @@ import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.quilter.QuilterConfig
+import us.tractat.kuilt.raft.RaftRole
+import us.tractat.kuilt.raft.test.FakeRaftNode
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -132,6 +134,7 @@ class WarpNodeCoordinationTagTest {
                 lock.withLock { coordExecuted.add(taskId) }
                 "coord-${taskId.value}"
             },
+            raftNode = FakeRaftNode(initialRole = RaftRole.Leader),
         )
 
         val nodeA = makeNode(seamA)
@@ -181,6 +184,7 @@ class WarpNodeCoordinationTagTest {
                 lock.withLock { coordExecuted.add(taskId) }
                 "coord-${taskId.value}"
             },
+            raftNode = FakeRaftNode(initialRole = RaftRole.Leader),
         )
 
         val nodeA = makeNode(seamA)

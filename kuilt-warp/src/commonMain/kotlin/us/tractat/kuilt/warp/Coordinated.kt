@@ -12,10 +12,12 @@ package us.tractat.kuilt.warp
  * compile-time gate: a caller who picks [Coordinated] is automatically routed
  * toward the consensus path in `WarpNode` (#813).
  *
- * Apply a coordinated task with [commit], which executes your escalation logic
- * and produces a result. In production, [commit] will delegate to the Raft-backed
- * proposal path; in this slice it is a pure function accepting a transform so the
- * seam can be tested without a Raft cluster.
+ * Apply a coordinated task with [commit], which applies your transform to the wrapped
+ * [value]. In [WarpNode], coordinated tasks are backed by a Raft cluster (supplied as
+ * the `raftNode` constructor parameter) that guarantees the `coordinatedExecutor` is
+ * invoked exactly once per committed log entry — giving exactly-once semantics even
+ * under leadership failover. The [Results] ORMap backstop absorbs any transient
+ * duplicates that arise in edge cases.
  *
  * @param A the value type — no monotone constraint required.
  * @property value the value to be processed under coordination.
@@ -24,16 +26,16 @@ package us.tractat.kuilt.warp
 public class Coordinated<A>(public val value: A) {
 
     /**
-     * Apply [transform] to [value] under the coordination contract and return the
-     * result.
+     * Apply [transform] to [value] and return the result.
      *
      * The name "commit" matches the warp vocabulary: coordination-free contributions
-     * are *embroidered* (merged); coordinated ones are *committed* (finalized via
-     * consensus). In a full WarpNode the transform body would propose to the Raft
-     * log; here it is a pure function so the seam is testable standalone.
+     * are *embroidered* (merged); coordinated ones are *committed* (finalised via
+     * consensus). The exactly-once guarantee is enforced by [WarpNode]'s Raft-backed
+     * proposal path — not by this method, which applies [transform] locally and is
+     * useful for constructing the value before handing it to [WarpNode.enqueue].
      *
      * @param R the result type.
-     * @param transform the action to run on [value] under the coordination guarantee.
+     * @param transform the action to run on [value].
      */
     public fun <R> commit(transform: (A) -> R): R = transform(value)
 
