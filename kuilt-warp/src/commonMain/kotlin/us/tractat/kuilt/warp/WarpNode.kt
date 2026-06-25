@@ -6,15 +6,23 @@ import io.github.oshai.kotlinlogging.KotlinLogging
 import kotlinx.atomicfu.locks.reentrantLock
 import kotlinx.atomicfu.locks.withLock
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
 import kotlinx.serialization.serializer
+import us.tractat.kuilt.core.CloseReason
 import us.tractat.kuilt.core.MuxSeam
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Seam
+import us.tractat.kuilt.core.SeamState
+import us.tractat.kuilt.core.Swatch
 import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.crdt.LWWRegister
 import us.tractat.kuilt.crdt.ORMap
@@ -54,6 +62,13 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.warp.WarpNode")
  * that is still present). The [Results] backstop ensures correctness even if the former
  * owner had partially finished and recorded a result before disappearing.
  *
+ * **Incoming fan-out.** [WarpNode] is the **sole collector** of [seam.incoming] (satisfying
+ * the kuilt single-collection contract, ADR-034). Every received [Swatch] is fanned to
+ * [rawIncoming] before the mux channels consume it. The internal [MuxSeam] subscribes to
+ * [rawIncoming] rather than [seam.incoming] directly. Per-peer liveness detectors (wired
+ * in a future PR) subscribe to [rawIncoming] filtered by sender — no second collection
+ * of [seam.incoming] is ever needed.
+ *
  * **Thread-safety.** Shared mutable state (`ring`, `claimed`) is guarded by an explicit
  * [kotlinx.atomicfu.locks.ReentrantLock] so this type is safe under a multi-threaded
  * dispatcher. No `limitedParallelism(1)` confinement is used — see CLAUDE.md.
@@ -64,7 +79,7 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.warp.WarpNode")
  *
  * @param selfId This peer's identifier on the [seam].
  * @param seam The multi-peer session. [WarpNode] takes sole ownership of [Seam.incoming]
- *   via an internal [MuxSeam].
+ *   by collecting it once and fanning every frame to [rawIncoming].
  * @param rosterFlow A [Flow] of the current live peer set, used to rebuild the hash ring
  *   on membership change. Use [Seam.rosterSnapshot] for eventual consistency or
  *   [RaftNode.rosterSnapshot] for strong consistency backed by Raft membership.
@@ -86,9 +101,28 @@ public class WarpNode(
 ) {
     private val replica = ReplicaId(selfId.value)
 
-    // MuxSeam splits the single seam.incoming across our two Quilters.
-    // Channel tags are module-private constants; heartbeat channel reserved for future use.
-    private val mux = MuxSeam(seam, scope)
+    /**
+     * Broadcast bus for every raw inbound [Swatch] received on [seam].
+     *
+     * [WarpNode] is the **single collector** of [seam.incoming] (ADR-034). The init
+     * block launches one coroutine that collects [seam.incoming] and emits each [Swatch]
+     * here. All downstream consumers — the internal [MuxSeam] channels and, in a future
+     * PR, per-peer [us.tractat.kuilt.liveness.HeartbeatPartitionDetector]s — subscribe to
+     * this flow rather than to [seam.incoming] directly.
+     *
+     * Capacity 256 absorbs burst traffic before subscribers are scheduled. Frames emitted
+     * before a subscriber starts are not replayed — for heartbeat liveness this is
+     * acceptable; the next heartbeat cycle catches up.
+     */
+    internal val rawIncoming = MutableSharedFlow<Swatch>(
+        extraBufferCapacity = 256,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST,
+    )
+
+    // MuxSeam consumes a proxy seam whose incoming is rawIncoming, not seam.incoming
+    // directly. This keeps seam.incoming single-collection: only the init fan-out loop
+    // below ever collects it.
+    private val mux = MuxSeam(RawIncomingProxy(seam, rawIncoming.asSharedFlow()), scope)
     private val queueSeam = mux.channel(CHANNEL_QUEUE)
     private val resultsSeam = mux.channel(CHANNEL_RESULTS)
 
@@ -129,10 +163,19 @@ public class WarpNode(
     private var timestampCounter = 0L
 
     // ---------------------------------------------------------------------------
-    // Lifecycle — react to roster and queue changes
+    // Lifecycle — fan-out loop, roster, and queue changes
     // ---------------------------------------------------------------------------
 
     init {
+        // Single collector of seam.incoming — fans every frame to rawIncoming.
+        // All downstream consumers (MuxSeam channels, future per-peer detectors)
+        // subscribe to rawIncoming; nobody else collects seam.incoming.
+        scope.launch {
+            seam.incoming.collect { swatch ->
+                rawIncoming.emit(swatch)
+            }
+        }
+
         // Rebuild the ring whenever the roster changes, then re-evaluate ownership.
         rosterFlow
             .onEach { peers -> onPeersChanged(peers) }
@@ -250,7 +293,33 @@ public class WarpNode(
     private companion object {
         const val CHANNEL_QUEUE: Byte = 0x01
         const val CHANNEL_RESULTS: Byte = 0x02
+
+        /** Reserved mux-channel tag for per-peer heartbeat ping/pong frames (wired in PR 2). */
+        @Suppress("unused")
+        const val CHANNEL_HEARTBEAT: Byte = 0x03
     }
+}
+
+/**
+ * A thin [Seam] adapter that replaces [incoming] with a caller-supplied [SharedFlow].
+ *
+ * Used by [WarpNode] to satisfy the single-collection contract (ADR-034): [WarpNode]
+ * collects [delegate.incoming] exactly once and fans every [Swatch] to [rawIncoming];
+ * [MuxSeam] then subscribes to [rawIncoming] via this proxy, never touching
+ * [delegate.incoming] a second time.
+ *
+ * All other [Seam] members delegate to [delegate] unchanged.
+ */
+private class RawIncomingProxy(
+    private val delegate: Seam,
+    override val incoming: Flow<Swatch>,
+) : Seam {
+    override val selfId: PeerId get() = delegate.selfId
+    override val peers: StateFlow<Set<PeerId>> get() = delegate.peers
+    override val state: StateFlow<SeamState> get() = delegate.state
+    override suspend fun broadcast(payload: ByteArray) = delegate.broadcast(payload)
+    override suspend fun sendTo(peer: PeerId, payload: ByteArray) = delegate.sendTo(peer, payload)
+    override suspend fun close(reason: CloseReason) = delegate.close(reason)
 }
 
 // ---------------------------------------------------------------------------
