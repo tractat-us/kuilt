@@ -155,7 +155,8 @@ class WarpNodeWebSocketTest {
                     rosterFlow = relaySeam.rosterSnapshot(),
                     scope = nodeScope,
                     quilterConfig = WS_QUILTER_CONFIG,
-                    executor = { taskId -> execLog.record(RELAY_ID, taskId); "result-$taskId" },
+                    clock = { kotlin.time.Clock.System.now() },
+                    executor ={ taskId -> execLog.record(RELAY_ID, taskId); "result-$taskId" },
                 )
                 val nodeA = WarpNode(
                     selfId = CLIENT_A_ID,
@@ -163,7 +164,8 @@ class WarpNodeWebSocketTest {
                     rosterFlow = clientSeamA.rosterSnapshot(),
                     scope = nodeScope,
                     quilterConfig = WS_QUILTER_CONFIG,
-                    executor = { taskId -> execLog.record(CLIENT_A_ID, taskId); "result-$taskId" },
+                    clock = { kotlin.time.Clock.System.now() },
+                    executor ={ taskId -> execLog.record(CLIENT_A_ID, taskId); "result-$taskId" },
                 )
                 val nodeB = WarpNode(
                     selfId = CLIENT_B_ID,
@@ -171,7 +173,8 @@ class WarpNodeWebSocketTest {
                     rosterFlow = clientSeamB.rosterSnapshot(),
                     scope = nodeScope,
                     quilterConfig = WS_QUILTER_CONFIG,
-                    executor = { taskId -> execLog.record(CLIENT_B_ID, taskId); "result-$taskId" },
+                    clock = { kotlin.time.Clock.System.now() },
+                    executor ={ taskId -> execLog.record(CLIENT_B_ID, taskId); "result-$taskId" },
                 )
 
                 // Enqueue all tasks on the relay.
@@ -254,7 +257,8 @@ class WarpNodeWebSocketTest {
                     rosterFlow = serverSeamA.rosterSnapshot(),
                     scope = nodeScope,
                     quilterConfig = WS_QUILTER_CONFIG,
-                    executor = { taskId -> execLog.record(RELAY_ID, taskId); "result-$taskId" },
+                    clock = { kotlin.time.Clock.System.now() },
+                    executor ={ taskId -> execLog.record(RELAY_ID, taskId); "result-$taskId" },
                 )
                 val nodeA = WarpNode(
                     selfId = CLIENT_A_ID,
@@ -262,7 +266,8 @@ class WarpNodeWebSocketTest {
                     rosterFlow = clientSeamA.rosterSnapshot(),
                     scope = nodeScope,
                     quilterConfig = WS_QUILTER_CONFIG,
-                    executor = { taskId -> execLog.record(CLIENT_A_ID, taskId); "result-$taskId" },
+                    clock = { kotlin.time.Clock.System.now() },
+                    executor ={ taskId -> execLog.record(CLIENT_A_ID, taskId); "result-$taskId" },
                 )
 
                 // Enqueue tasks.
@@ -369,7 +374,8 @@ class WarpNodeWebSocketTest {
                     rosterFlow = agreedRoster,
                     scope = nodeScope,
                     quilterConfig = WS_QUILTER_CONFIG,
-                    executor = { taskId -> execLog.record(RELAY_ID, taskId); "result-$taskId" },
+                    clock = { kotlin.time.Clock.System.now() },
+                    executor ={ taskId -> execLog.record(RELAY_ID, taskId); "result-$taskId" },
                 )
                 val nodeA = WarpNode(
                     selfId = CLIENT_A_ID,
@@ -377,7 +383,8 @@ class WarpNodeWebSocketTest {
                     rosterFlow = agreedRoster,
                     scope = nodeScope,
                     quilterConfig = WS_QUILTER_CONFIG,
-                    executor = { taskId -> execLog.record(CLIENT_A_ID, taskId); "result-$taskId" },
+                    clock = { kotlin.time.Clock.System.now() },
+                    executor ={ taskId -> execLog.record(CLIENT_A_ID, taskId); "result-$taskId" },
                 )
                 val nodeB = WarpNode(
                     selfId = CLIENT_B_ID,
@@ -385,7 +392,8 @@ class WarpNodeWebSocketTest {
                     rosterFlow = agreedRoster,
                     scope = nodeScope,
                     quilterConfig = WS_QUILTER_CONFIG,
-                    executor = { taskId -> execLog.record(CLIENT_B_ID, taskId); "result-$taskId" },
+                    clock = { kotlin.time.Clock.System.now() },
+                    executor ={ taskId -> execLog.record(CLIENT_B_ID, taskId); "result-$taskId" },
                 )
 
                 val tasks = (1..TASK_COUNT).map { TaskId("strong-task-$it") }
