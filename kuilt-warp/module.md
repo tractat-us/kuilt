@@ -39,6 +39,41 @@ The scheduler collapses to three things built from those primitives:
 A `WarpNode` ties them together: watch the queue, claim tasks that hash to you, write results.
 That is the entire scheduler — the machinery already existed, warp names the combination.
 
+## Two paths for every task
+
+Not every task is idempotent. A resize is fine to run twice; a payment is not. Warp makes
+the distinction explicit at the type level before any task ever runs.
+
+**Coordination-free** tasks live in a join-semilattice — their results merge correctly even if
+two peers do the same work concurrently. Wrap the value in `CoordinationFree` and hand it to
+the ring. `embroider` merges two contributions; `zip` pairs two `CoordinationFree` snapshots
+into one; `joinAll` folds a list of contributions down to a single result. The ring owner
+executes directly; duplicate executions are silently absorbed by the `Results` ORMap.
+
+```kotlin
+val score: CoordinationFree<PNCounter> = CoordinationFree(PNCounter.ZERO)
+val combined = peerA.embroider(peerB)            // componentwise join, always correct
+val snapshot = score.zip(CoordinationFree(GCounter.of(replica to 3L))) // pair two states
+```
+
+**Coordinated** tasks require a consensus round-trip — they are non-idempotent, have strict
+ordering requirements, or must run exactly once globally. Wrap the value in `Coordinated`, call
+`enqueue(taskId, CoordinationKind.Coordinated)`, and supply a `raftNode` and
+`coordinatedExecutor` to `WarpNode`. The ring owner proposes the task to the Raft cluster; only
+the current Raft leader's `WarpNode` fires `coordinatedExecutor` when the entry commits. The
+`Results` ORMap backstop absorbs any duplicate results from the brief dual-leader window.
+
+```kotlin
+// Opt into the Raft-backed path for a non-idempotent task:
+warpNode.enqueue(taskId, CoordinationKind.Coordinated)
+// coordinatedExecutor runs exactly once on the Raft leader's WarpNode.
+```
+
+The type boundary enforces the choice at compile time: `CoordinationFree` values can flow
+through `embroider`/`zip`/`joinAll`; `Coordinated` values cannot. A caller who picks
+`Coordinated` is automatically routed to the consensus path — there is no way to
+accidentally put a non-idempotent task on the ring path.
+
 ## The honest seam
 
 Consistent hashing stays coordination-free as long as the peer roster is stable. When a peer
@@ -49,8 +84,8 @@ cheaper than per-task consensus. At very high churn the cost rises toward per-ta
 `ORMap` dedup backstop caps the damage to duplicate execution rather than incorrect results.
 
 The spike results (see `docs/warp-spike-results.md`) measured this boundary directly:
-~0 duplicates per task at stable membership, scaling with peer count and partition rate but
-never producing wrong results.
+~0 duplicates per task at stable membership on the coordination-free path; the coordinated
+path achieves dup-rate=0 under roster churn (measured in B-4/#861).
 
 ## The further out
 

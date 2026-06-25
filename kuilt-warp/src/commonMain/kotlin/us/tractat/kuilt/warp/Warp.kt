@@ -7,7 +7,7 @@ package us.tractat.kuilt.warp
  * doing the same job twice. See `module.md` for the full design walk and
  * `docs/warp-foundation.md` for the architectural detail.
  *
- * This object is a placeholder. The implementation types (`TaskRing`, `WorkQueue`,
- * `WarpNode`) land in sub-issues #811–#814.
+ * The implementation types are `TaskRing`, `WorkQueue`, and `WarpNode`. See those types
+ * for per-component detail and `module.md` for the design walk across both execution paths.
  */
 public object Warp
