@@ -94,6 +94,9 @@ internal class RaftEngine(
     private val _commitIndex = MutableStateFlow(0L)
     override val commitIndex: StateFlow<Long> = _commitIndex.asStateFlow()
 
+    private val _membership = MutableStateFlow(bootstrapConfig)
+    override val membership: StateFlow<ClusterConfig> = _membership.asStateFlow()
+
     /**
      * Emits every committed [Committed] in index order. The overflow policy is [BufferOverflow.SUSPEND]
      * so the actor backpressures rather than silently dropping entries. Callers that fall behind will
@@ -150,20 +153,21 @@ internal class RaftEngine(
     override val trace: Flow<RaftTraceEvent> = _trace
 
     // ── Effective membership (actor-only mutable state) ──────────────────────
+    // Named `membershipState` to avoid shadowing the `membership: StateFlow<ClusterConfig>` override.
 
     /**
      * The effective membership: pure function of (log + snapshotConfig + bootstrapConfig).
      * Recomputed by [recomputeMembership] on every append, truncate, and snapshot install —
      * never mutated ad hoc. Starts as Simple(bootstrapConfig) until the first log load.
      */
-    private var membership: MembershipState = MembershipState.Simple(bootstrapConfig)
+    private var membershipState: MembershipState = MembershipState.Simple(bootstrapConfig)
 
     /**
      * The effective config as of the baseline of the most recently installed or compacted snapshot
      * ([SnapshotMeta.config]), or null when no snapshot is in force or its covered prefix held no config
      * change. Seeded on restart-load, on snapshot install, and on local compaction; consumed by
      * [recomputeMembership] as the "else snapshot's config" branch when the live log no longer carries a
-     * config entry (the entry that set the membership was compacted away).
+     * config entry (the entry that set the membershipState was compacted away).
      */
     private var snapshotConfig: ConfigPayload? = null
 
@@ -174,14 +178,14 @@ internal class RaftEngine(
      * Joint: union of both voter sets minus self.
      */
     private val otherVoters: Set<NodeId>
-        get() = membership.electionTargets(transport.selfId)
+        get() = membershipState.electionTargets(transport.selfId)
 
     /**
      * All members (voters + learners) other than self — the AppendEntries recipients.
      * Joint: union of all members from both configs minus self.
      */
     private val otherMembers: Set<NodeId>
-        get() = membership.replicationTargets(transport.selfId)
+        get() = membershipState.replicationTargets(transport.selfId)
 
     // ── Actor-only mutable state ──────────────────────────────────────────────
     private var currentTerm = 0L
@@ -207,7 +211,7 @@ internal class RaftEngine(
     private val pending = mutableListOf<Pair<Long, CompletableDeferred<LogEntry>>>()
 
     /**
-     * At most one membership change in flight at a time (one-change-at-a-time rule).
+     * At most one membershipState change in flight at a time (one-change-at-a-time rule).
      * Completed when C_new commits; failed on any leadership relinquish or close.
      * Not on [pending] — config entries are internal, withheld from [RaftNode.committed].
      */
@@ -318,7 +322,7 @@ internal class RaftEngine(
             storage.loadSnapshot()?.let { stored ->
                 snapshotIndex = stored.meta.lastIncludedIndex
                 snapshotTerm = stored.meta.lastIncludedTerm
-                // Seed the membership baseline from the snapshot so a node that crashed after compacting
+                // Seed the membershipState baseline from the snapshot so a node that crashed after compacting
                 // past a config change recovers under that change (the config entry is gone from the log).
                 snapshotConfig = stored.meta.config
                 _compactionFloor.value = snapshotIndex
@@ -327,11 +331,11 @@ internal class RaftEngine(
                     _commitIndex.value = snapshotIndex
                 }
             }
-            // Recompute effective membership from the recovered log + snapshot (restart recovery).
+            // Recompute effective membershipState from the recovered log + snapshot (restart recovery).
             // This is load-bearing: a node that crashed mid-transition comes back under exactly
             // the config its durable log justifies — no special restart path needed.
             recomputeMembership()
-            // Set initial role (consults membership.isLearner, so must run after recomputeMembership)
+            // Set initial role (consults membershipState.isLearner, so must run after recomputeMembership)
             _role.value = followerRole
             // Start actor and message subscription
             startActor()
@@ -451,15 +455,15 @@ internal class RaftEngine(
     // ── Role helper ───────────────────────────────────────────────────────────
 
     /**
-     * The non-leader role for this node: [RaftRole.Learner] if the effective membership
+     * The non-leader role for this node: [RaftRole.Learner] if the effective membershipState
      * classifies self as a learner, [RaftRole.Follower] otherwise. Learners replicate the log
      * but never vote, so they must never be promoted to Follower.
      *
-     * Consults [membership] (not the static bootstrapConfig) so a node whose role changed
+     * Consults [membershipState] (not the static bootstrapConfig) so a node whose role changed
      * via a config log entry correctly reflects its new classification.
      */
     private val followerRole: RaftRole
-        get() = if (membership.isLearner(transport.selfId)) RaftRole.Learner else RaftRole.Follower
+        get() = if (membershipState.isLearner(transport.selfId)) RaftRole.Learner else RaftRole.Follower
 
     // ── Log helpers ───────────────────────────────────────────────────────────
 
@@ -540,7 +544,7 @@ internal class RaftEngine(
         preVotesGranted += transport.selfId
         resetElectionTimeout()
         // Single-voter (or all other voters already granted): self pre-vote satisfies quorum — skip probe.
-        if (membership.voterQuorumReached(preVotesGranted - transport.selfId, transport.selfId)) { startRealElection(); return }
+        if (membershipState.voterQuorumReached(preVotesGranted - transport.selfId, transport.selfId)) { startRealElection(); return }
         emitTrace(RaftTraceEvent.PreVoteStarted(nextClock(), transport.selfId, proposed))
         val pv = RaftMessage.PreVote(proposed, transport.selfId, lastLogIndex, lastLogTerm, preVoteRound)
         otherVoters.forEach { send(it, pv) }
@@ -566,7 +570,7 @@ internal class RaftEngine(
         emitMetric(RaftMetric.ElectionStarted(currentTerm))
         logger.debug { "[raft:${transport.selfId}] election started for term $currentTerm" }
         // Single-voter cluster: self-vote already satisfies quorum — become leader immediately.
-        if (membership.voterQuorumReached(votesGranted - transport.selfId, transport.selfId)) { becomeLeader(); return }
+        if (membershipState.voterQuorumReached(votesGranted - transport.selfId, transport.selfId)) { becomeLeader(); return }
         emitTrace(RaftTraceEvent.Timeout(nextClock(), transport.selfId, currentTerm))
         val rv = RaftMessage.RequestVote(currentTerm, transport.selfId, lastLogIndex, lastLogTerm)
         otherVoters.forEach { peer ->
@@ -612,7 +616,7 @@ internal class RaftEngine(
         if (_role.value !is RaftRole.Candidate || m.term != currentTerm) return
         if (m.voteGranted) {
             votesGranted += from
-            if (membership.voterQuorumReached(votesGranted - transport.selfId, transport.selfId)) becomeLeader()
+            if (membershipState.voterQuorumReached(votesGranted - transport.selfId, transport.selfId)) becomeLeader()
         }
     }
 
@@ -642,7 +646,7 @@ internal class RaftEngine(
         if (preVoteTerm == null || m.proposedTerm != preVoteTerm || m.round != preVoteRound) return
         if (m.voteGranted) {
             preVotesGranted += from
-            if (membership.voterQuorumReached(preVotesGranted - transport.selfId, transport.selfId)) startRealElection()
+            if (membershipState.voterQuorumReached(preVotesGranted - transport.selfId, transport.selfId)) startRealElection()
         }
     }
 
@@ -772,9 +776,9 @@ internal class RaftEngine(
         if (_role.value !is RaftRole.Leader) return
         val contacted = recentVoterContacts.toSet()
         recentVoterContacts.clear()
-        // membership.quorumOfContacts credits self per voter set (only when self ∈ that set).
-        if (!membership.quorumOfContacts(contacted, transport.selfId)) {
-            debug { "onQuorumCheck: lost quorum — contacted=$contacted membership=$membership" }
+        // membershipState.quorumOfContacts credits self per voter set (only when self ∈ that set).
+        if (!membershipState.quorumOfContacts(contacted, transport.selfId)) {
+            debug { "onQuorumCheck: lost quorum — contacted=$contacted membershipState=$membershipState" }
             stepDownToFollower(StepDownReason.LostQuorum)
         }
     }
@@ -806,7 +810,7 @@ internal class RaftEngine(
             return
         }
         val ri = currentCommitIndex
-        if (membership.quorumOfContacts(emptySet(), transport.selfId)) {
+        if (membershipState.quorumOfContacts(emptySet(), transport.selfId)) {
             // Self alone constitutes a quorum of every active voter set (Simple single-voter, or
             // Joint where self is a majority of BOTH old and new). Freshness is trivially satisfied.
             // NOTE: gating on effectiveConfig.quorumSize == 1 is wrong during a shrinking Joint:
@@ -984,15 +988,15 @@ internal class RaftEngine(
             _commitIndex.value = m.lastIncludedIndex
         }
         _compactionFloor.value = snapshotIndex
-        // Adopt the snapshot's effective config as the recompute baseline, then recompute membership:
-        // the config entries that produced this membership were compacted away on the leader, so the
+        // Adopt the snapshot's effective config as the recompute baseline, then recompute membershipState:
+        // the config entries that produced this membershipState were compacted away on the leader, so the
         // snapshot is the only place the installer can learn them. A non-null joint payload resumes the
         // joint phase. Falls through to log-based or bootstrapConfig when the snapshot carries no config.
         snapshotConfig = m.config
         recomputeMembership()
         _committed.emit(Committed.Install(Snapshot(m.lastIncludedIndex, bytes)))
         incomingSnapshot = null
-        debug { "finalizeInstalledSnapshot($from): INSTALLED through=${m.lastIncludedIndex} term=${m.lastIncludedTerm} commit=$currentCommitIndex logTail=${log.firstOrNull()?.index}..${log.lastOrNull()?.index} membership=$membership" }
+        debug { "finalizeInstalledSnapshot($from): INSTALLED through=${m.lastIncludedIndex} term=${m.lastIncludedTerm} commit=$currentCommitIndex logTail=${log.firstOrNull()?.index}..${log.lastOrNull()?.index} membershipState=$membershipState" }
         emitTrace(RaftTraceEvent.InstallSnapshotAccepted(nextClock(), from, transport.selfId, m.lastIncludedIndex))
         send(from, RaftMessage.InstallSnapshotResponse(currentTerm, bytes.size.toLong(), echoedRound = m.round))
     }
@@ -1058,7 +1062,7 @@ internal class RaftEngine(
             if (conflict != null) {
                 storage.truncateFrom(conflict.index)
                 log.removeAll { it.index >= conflict.index }
-                // Adopt-on-append: recompute membership after rollback so a truncated config entry
+                // Adopt-on-append: recompute membershipState after rollback so a truncated config entry
                 // is immediately uneffected (§6 rollback safety).
                 recomputeMembership()
             }
@@ -1066,7 +1070,7 @@ internal class RaftEngine(
             if (toAdd.isNotEmpty()) {
                 log.addAll(toAdd)
                 storage.appendEntries(toAdd)
-                // Adopt-on-append: recompute membership after adding entries — a config entry
+                // Adopt-on-append: recompute membershipState after adding entries — a config entry
                 // in toAdd takes effect immediately on the follower.
                 recomputeMembership()
             }
@@ -1151,7 +1155,7 @@ internal class RaftEngine(
             // Only voters whose ACK arrived strictly after the read was queued count as fresh.
             val freshContacts = lastAckRound.filterValues { ackRound -> ackRound > read.sinceRound }.keys
             // BLOCKER 2: require fresh quorum of BOTH old and new voter sets for Joint config.
-            membership.quorumOfContacts(freshContacts, transport.selfId) && now > read.sinceRound
+            membershipState.quorumOfContacts(freshContacts, transport.selfId) && now > read.sinceRound
         }
         if (ready.isEmpty()) return
         pendingReads.removeAll(ready)
@@ -1162,10 +1166,10 @@ internal class RaftEngine(
     }
 
     private suspend fun tryAdvanceLeaderCommit() {
-        // membership.committedIndex accounts for Simple vs Joint quorum, self-credit per voter set,
+        // membershipState.committedIndex accounts for Simple vs Joint quorum, self-credit per voter set,
         // and the §5.4.2 term-guard (only entries from currentTerm can be used to advance commit
         // via replica-count — older entries only commit by implication via Log Matching).
-        val majorityIdx = membership.committedIndex(matchIndex, lastLogIndex, transport.selfId) ?: return
+        val majorityIdx = membershipState.committedIndex(matchIndex, lastLogIndex, transport.selfId) ?: return
         val entry = entryAt(majorityIdx)
         if (entry != null && entry.term == currentTerm && majorityIdx > currentCommitIndex) {
             advanceCommit(majorityIdx)
@@ -1281,9 +1285,9 @@ internal class RaftEngine(
         val s = snapshots.value ?: return
         if (s.throughIndex <= snapshotIndex || s.throughIndex > currentCommitIndex) return
         val term = termAt(s.throughIndex) ?: return   // must be a live, committed entry
-        // The membership the snapshot must carry is the config as of `throughIndex` — the highest-index
+        // The membershipState the snapshot must carry is the config as of `throughIndex` — the highest-index
         // config entry at or below the cut, else the config the prior snapshot already recorded. It must
-        // NOT be the live `membership`, which may reflect a later config entry between the cut and the
+        // NOT be the live `membershipState`, which may reflect a later config entry between the cut and the
         // log tail (that would stamp the snapshot with a future config and corrupt an installer's view).
         val configAsOfCut = log.lastOrNull { it.config != null && it.index <= s.throughIndex }?.config
             ?: snapshotConfig
@@ -1293,7 +1297,7 @@ internal class RaftEngine(
         snapshotIndex = s.throughIndex
         snapshotTerm = term
         // Retain the compacted config as the snapshot baseline so a subsequent recompute (or restart)
-        // still resolves membership correctly once the config entry is gone from the live log.
+        // still resolves membershipState correctly once the config entry is gone from the live log.
         snapshotConfig = configAsOfCut
         _compactionFloor.value = snapshotIndex
         emitTrace(RaftTraceEvent.Compacted(nextClock(), transport.selfId, snapshotIndex, snapshotTerm))
@@ -1393,7 +1397,7 @@ internal class RaftEngine(
     // ── Membership ────────────────────────────────────────────────────────────
 
     /**
-     * Recompute [membership] from the current log + [snapshotConfig] + [bootstrapConfig].
+     * Recompute [membershipState] from the current log + [snapshotConfig] + [bootstrapConfig].
      *
      * Resolution order: highest-index config entry in the live log, else snapshot config, else
      * Simple(bootstrapConfig). This is a deterministic function of (log, snapshot, bootstrap),
@@ -1408,7 +1412,7 @@ internal class RaftEngine(
      * on truncate as well.
      */
     private suspend fun recomputeMembership() {
-        val prior = membership
+        val prior = membershipState
         val configEntry = log.lastOrNull { it.config != null }
         val logConfig = configEntry?.config
         val resolved = logConfig ?: snapshotConfig
@@ -1423,9 +1427,10 @@ internal class RaftEngine(
             else                   -> "bootstrap"
         }
         val changed = newMembership != prior
-        membership = newMembership
+        membershipState = newMembership
         reevaluateSelfRole()
         if (changed) {
+            _membership.value = newMembership.effectiveConfig
             debug { "recomputeMembership: $prior → $newMembership (source=$branch)" }
             // `old` is the prior effective config — on the first ever change that is the
             // bootstrap config, which is more informative than null.
@@ -1439,7 +1444,7 @@ internal class RaftEngine(
     }
 
     /**
-     * After recomputing [membership], re-evaluate this node's resting role.
+     * After recomputing [membershipState], re-evaluate this node's resting role.
      *
      * A previously-learner node whose new config makes it a voter should leave [RaftRole.Learner]
      * and become election-eligible. A voter node whose new config makes it a learner should enter
@@ -1482,13 +1487,13 @@ internal class RaftEngine(
         // recomputeMembership() emits the ConfigChange trace event (unified leader+follower path),
         // so we do not emit it here — doing so would double-emit on the leader.
         recomputeMembership()
-        debug { "appendConfigEntry: index=$index payload=$payload membership=$membership" }
-        membership.replicationTargets(transport.selfId).forEach { sendAppendEntries(it) }
+        debug { "appendConfigEntry: index=$index payload=$payload membershipState=$membershipState" }
+        membershipState.replicationTargets(transport.selfId).forEach { sendAppendEntries(it) }
         tryAdvanceLeaderCommit()
     }
 
     /**
-     * Leader: validate and initiate a membership change request from [changeMembership].
+     * Leader: validate and initiate a membershipState change request from [changeMembership].
      *
      * A learner-set-only change (voter set unchanged) appends a single `Simple(target)` entry — no
      * quorum shift, so no joint phase. A voter-set change appends a `Joint(old, new)` entry and
@@ -1515,7 +1520,7 @@ internal class RaftEngine(
         // A change may only start from a settled Simple config. An in-flight — or orphaned, after a
         // leader crash mid-transition — Joint config means a §6 transition is still converging; reject
         // until C_new commits. This also makes the `current.config` read below total.
-        val current = membership
+        val current = membershipState
         if (current !is MembershipState.Simple) {
             debug { "onChangeMembership: rejected — joint transition in progress ($current)" }
             deferred.completeExceptionally(MembershipChangeInProgressException())
@@ -1544,26 +1549,26 @@ internal class RaftEngine(
      *
      * Simple committed: the transition is complete — wake the [changeMembership] caller. §6.4.1: if
      * this leader is not a voter in C_new (removed-leader / leader-replace), step down once C_new is
-     * durable, so the new cluster elects a leader from its own membership.
+     * durable, so the new cluster elects a leader from its own membershipState.
      */
     private suspend fun onConfigCommitted(entry: LogEntry) {
         val payload = entry.config ?: return
         debug { "onConfigCommitted: entry.index=${entry.index} payload=$payload" }
         if (payload.old != null) {
             // Joint committed → append C_new (Simple) to complete the transition — but ONLY if no
-            // later config entry has already superseded the Joint. `membership` always reflects the
-            // last config entry in the log, so `membership is Joint` is exactly the condition "no
+            // later config entry has already superseded the Joint. `membershipState` always reflects the
+            // last config entry in the log, so `membershipState is Joint` is exactly the condition "no
             // Simple(C_new) follows the Joint yet." A new leader that inherits a Joint whose trailing
             // Simple(C_new) is already in its log (the original leader appended it before crashing /
             // stepping down) must NOT append a second C_new: that duplicate carries the new leader's
             // term, diverges from the existing C_new, and wedges replication in an infinite
             // AppendEntries backup loop. Skipping is safe — C_new already exists; the Simple branch
             // will complete the deferred and run the step-down when that existing C_new commits.
-            if (membership is MembershipState.Joint) {
+            if (membershipState is MembershipState.Joint) {
                 debug { "onConfigCommitted: Joint committed — appending Simple(C_new=${payload.new})" }
                 appendConfigEntry(ConfigPayload(old = null, new = payload.new))
             } else {
-                debug { "onConfigCommitted: Joint committed but C_new already in log (membership=$membership) — skip duplicate append" }
+                debug { "onConfigCommitted: Joint committed but C_new already in log (membershipState=$membershipState) — skip duplicate append" }
             }
         } else {
             // Simple committed → transition complete; wake the changeMembership caller.
@@ -1607,7 +1612,7 @@ internal class RaftEngine(
             response.completeExceptionally(IllegalArgumentException("transferLeadership: target must not be this node (${transport.selfId.value})"))
             return
         }
-        val currentVoters = membership.effectiveConfig.voters
+        val currentVoters = membershipState.effectiveConfig.voters
         if (target !in currentVoters) {
             response.completeExceptionally(IllegalArgumentException("transferLeadership: target ${target.value} is not a voter in the current config ($currentVoters)"))
             return

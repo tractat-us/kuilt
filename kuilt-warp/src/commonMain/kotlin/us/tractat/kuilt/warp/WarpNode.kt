@@ -6,11 +6,12 @@ import io.github.oshai.kotlinlogging.KotlinLogging
 import kotlinx.atomicfu.locks.reentrantLock
 import kotlinx.atomicfu.locks.withLock
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.launchIn
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
 import kotlinx.serialization.serializer
-import kotlin.time.Duration.Companion.seconds
 import us.tractat.kuilt.core.MuxSeam
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Seam
@@ -23,6 +24,7 @@ import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.quilter.QuiltMessage
 import us.tractat.kuilt.quilter.QuilterConfig
 import us.tractat.kuilt.quilter.Quilter
+import us.tractat.kuilt.raft.RaftNode
 
 private val logger = KotlinLogging.logger("us.tractat.kuilt.warp.WarpNode")
 
@@ -35,7 +37,18 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.warp.WarpNode")
  * failover: the last-writer-wins register picks one result per task, so the board always
  * converges to exactly one entry per task regardless of how many peers raced to execute it.
  *
- * **Liveness-driven failover.** [WarpNode] watches [Seam.peers]. When a peer disappears,
+ * **Roster source.** [WarpNode] drives the consistent-hash ring from [rosterFlow] — a
+ * [Flow] of the live peer set. Two pluggable sources are provided:
+ *
+ * - [Seam.rosterSnapshot] — derives the roster from [Seam.peers]; cheap and eventually
+ *   consistent. Preserves the pre-#826 behavior.
+ * - [RaftNode.rosterSnapshot] — derives the roster from Raft's agreed [ClusterConfig];
+ *   strongly consistent, minimising duplicate executions under stable membership.
+ *
+ * The roster source is **required** — absence would silently choose a consistency model
+ * without the caller knowing. Pass the appropriate adapter for your use case.
+ *
+ * **Liveness-driven failover.** [WarpNode] watches [rosterFlow]. When a peer disappears,
  * every surviving peer rebuilds the ring and re-evaluates pending tasks. Tasks whose
  * former owner is now absent are claimed by their new ring owner (the next peer clockwise
  * that is still present). The [Results] backstop ensures correctness even if the former
@@ -45,13 +58,20 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.warp.WarpNode")
  * [kotlinx.atomicfu.locks.ReentrantLock] so this type is safe under a multi-threaded
  * dispatcher. No `limitedParallelism(1)` confinement is used — see CLAUDE.md.
  *
- * **Injection contract.** [scope] is a required parameter — no real-dispatcher default.
- * Pass [kotlinx.coroutines.test.TestScope.backgroundScope] in tests.
+ * **Injection contract.** [scope] and [rosterFlow] are required parameters — no real-dispatcher
+ * default, no silent roster binding. Pass [kotlinx.coroutines.test.TestScope.backgroundScope]
+ * in tests, and a [MutableStateFlow] of peer sets when you need fine-grained control.
  *
  * @param selfId This peer's identifier on the [seam].
  * @param seam The multi-peer session. [WarpNode] takes sole ownership of [Seam.incoming]
  *   via an internal [MuxSeam].
+ * @param rosterFlow A [Flow] of the current live peer set, used to rebuild the hash ring
+ *   on membership change. Use [Seam.rosterSnapshot] for eventual consistency or
+ *   [RaftNode.rosterSnapshot] for strong consistency backed by Raft membership.
  * @param scope Coroutine scope for background collection jobs. Required — no default.
+ * @param quilterConfig [QuilterConfig] for both internal [Quilter]s. Defaults to the
+ *   [QuilterConfig] production defaults. Pass a short-cadence config in tests that need
+ *   fast anti-entropy.
  * @param executor Suspending function that performs the work for a given task and returns
  *   a string result. The body is called at most once per task per peer (re-entry after
  *   failover is possible; the [Results] backstop deduplicates).
@@ -59,7 +79,9 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.warp.WarpNode")
 public class WarpNode(
     public val selfId: PeerId,
     seam: Seam,
+    rosterFlow: Flow<Set<PeerId>>,
     private val scope: CoroutineScope,
+    quilterConfig: QuilterConfig = QuilterConfig(),
     private val executor: suspend (TaskId) -> String,
 ) {
     private val replica = ReplicaId(selfId.value)
@@ -77,7 +99,7 @@ public class WarpNode(
         initial = ORSet.empty(),
         messageSerializer = QuiltMessage.serializer(ORSet.serializer(serializer<TaskId>())),
         scope = scope,
-        config = QUILTER_CONFIG,
+        config = quilterConfig,
         random = kotlin.random.Random(selfId.value.hashCode().toLong()),
     )
 
@@ -90,14 +112,14 @@ public class WarpNode(
             ORMap.serializer(serializer<TaskId>(), LWWRegister.serializer(serializer<String>()))
         ),
         scope = scope,
-        config = QUILTER_CONFIG,
+        config = quilterConfig,
         random = kotlin.random.Random(selfId.value.hashCode().toLong() xor 0x5555L),
     )
 
     // --- Shared mutable state (guarded by lock) ---
     private val lock = reentrantLock()
 
-    /** Current consistent-hash ring, rebuilt whenever [seam.peers] changes. */
+    /** Current consistent-hash ring, rebuilt whenever [rosterFlow] emits. */
     private var ring: TaskRing = TaskRing(setOf(selfId))
 
     /** Task IDs we have already started executing; prevents double-execution on this node. */
@@ -111,8 +133,8 @@ public class WarpNode(
     // ---------------------------------------------------------------------------
 
     init {
-        // Rebuild the ring whenever the peer set changes, then re-evaluate ownership.
-        seam.peers
+        // Rebuild the ring whenever the roster changes, then re-evaluate ownership.
+        rosterFlow
             .onEach { peers -> onPeersChanged(peers) }
             .launchIn(scope)
 
@@ -228,19 +250,36 @@ public class WarpNode(
     private companion object {
         const val CHANNEL_QUEUE: Byte = 0x01
         const val CHANNEL_RESULTS: Byte = 0x02
-
-        /**
-         * Quilter config for real-IO contexts (production or real-socket tests).
-         * Anti-entropy and full-state retry are kept short so a missed delta is
-         * healed within seconds rather than waiting the production-default 1 min / 30 s.
-         *
-         * `expectVirtualTime = true` suppresses the TestDispatcher warning — callers
-         * choose their own dispatcher.
-         */
-        val QUILTER_CONFIG = QuilterConfig(
-            antiEntropyInterval = 2.seconds,
-            fullStateRetryInterval = 3.seconds,
-            expectVirtualTime = true,
-        )
     }
 }
+
+// ---------------------------------------------------------------------------
+// Roster source adapters
+// ---------------------------------------------------------------------------
+
+/**
+ * Returns a [Flow] of the current peer set derived from [Seam.peers], suitable for
+ * passing to [WarpNode] as its [rosterFlow].
+ *
+ * This is the **eventual** roster source: the ring tracks who is currently connected
+ * to the seam. Under hub-spoke / churn the seam's peer view differs between nodes,
+ * introducing some ring disagreement and duplicate executions (backstopped by the
+ * Results ORMap). Use [RaftNode.rosterSnapshot] for a strongly-consistent alternative.
+ */
+public fun Seam.rosterSnapshot(): Flow<Set<PeerId>> = peers
+
+/**
+ * Returns a [Flow] of voter [PeerId]s derived from this [RaftNode]'s current
+ * [us.tractat.kuilt.raft.ClusterConfig], suitable for passing to [WarpNode] as its [rosterFlow].
+ *
+ * This is the **strong** roster source: the ring tracks the agreed Raft voter set.
+ * Under stable membership the ring is identical on every peer, eliminating duplicate
+ * executions from ring disagreement. Use [Seam.rosterSnapshot] for a cheaper,
+ * eventually-consistent alternative when you don't already have a Raft cluster.
+ *
+ * The emitted [PeerId] values are derived from [us.tractat.kuilt.raft.NodeId.value] by
+ * wrapping each in a [PeerId] — callers must ensure the [WarpNode.selfId] passed to
+ * [WarpNode] matches the corresponding voter's [us.tractat.kuilt.raft.NodeId.value].
+ */
+public fun RaftNode.rosterSnapshot(): Flow<Set<PeerId>> =
+    membership.map { config -> config.voters.mapTo(mutableSetOf()) { PeerId(it.value) } }

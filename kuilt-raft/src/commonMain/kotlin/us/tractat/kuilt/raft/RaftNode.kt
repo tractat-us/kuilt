@@ -121,6 +121,21 @@ public interface RaftNode {
     public val leader: StateFlow<NodeId?>
 
     /**
+     * The effective cluster membership as of the latest committed config entry.
+     *
+     * Reflects the [ClusterConfig] the node is currently operating under.
+     * During a joint-consensus transition (§6) this is the target C_new; once
+     * C_new is committed the transition is complete and this reflects C_new.
+     *
+     * Collect this flow to track membership changes — for example, to feed a
+     * [us.tractat.kuilt.warp.WarpNode] with a strongly-consistent roster via
+     * `raftNode.rosterSnapshot()`.
+     *
+     * The initial value is the bootstrap [ClusterConfig] passed to [CoroutineScope.raftNode].
+     */
+    public val membership: StateFlow<ClusterConfig>
+
+    /**
      * The index of the highest log entry known to be committed by a quorum.
      *
      * Advances monotonically. An entry at index `i` is safe to apply to a
