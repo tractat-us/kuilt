@@ -8,6 +8,7 @@ import kotlinx.atomicfu.locks.withLock
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -26,6 +27,7 @@ import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.Swatch
 import us.tractat.kuilt.core.runCatchingCancellable
+import us.tractat.kuilt.crdt.GSet
 import us.tractat.kuilt.crdt.LWWRegister
 import us.tractat.kuilt.crdt.ORMap
 import us.tractat.kuilt.crdt.ORSet
@@ -111,7 +113,7 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.warp.WarpNode")
  *   60 s reconnect window). Tests typically inject a short-cadence config.
  * @param strategy How owned tasks are claimed. [ClaimStrategy.Ring] is pure consistent-hash
  *   assignment; [ClaimStrategy.RingWithIntent] adds the intent-register safety net. Defaults
- *   to [ClaimStrategy.Ring] in this slice.
+ *   to [ClaimStrategy.RingWithIntent].
  * @param executor Suspending function that performs the work for a given task and returns
  *   a string result. The body is called at most once per task per peer (re-entry after
  *   failover is possible; the [Results] backstop deduplicates).
@@ -124,7 +126,7 @@ public class WarpNode(
     quilterConfig: QuilterConfig = QuilterConfig(),
     private val clock: () -> Instant,
     private val heartbeatConfig: HeartbeatConfig = HeartbeatConfig(),
-    private val strategy: ClaimStrategy = ClaimStrategy.Ring,
+    private val strategy: ClaimStrategy = ClaimStrategy.RingWithIntent(),
     private val executor: suspend (TaskId) -> String,
 ) {
     private val replica = ReplicaId(selfId.value)
@@ -178,11 +180,29 @@ public class WarpNode(
         random = kotlin.random.Random(selfId.value.hashCode().toLong() xor 0x5555L),
     )
 
+    private val intentSeam = mux.channel(CHANNEL_INTENT)
+
+    /** Quilter replicating per-task claimant sets — the intent register. */
+    private val intentQuilter: Quilter<ORMap<TaskId, GSet<PeerId>>> = Quilter(
+        replica = replica,
+        seam = intentSeam,
+        initial = ORMap.empty(),
+        messageSerializer = QuiltMessage.serializer(
+            ORMap.serializer(serializer<TaskId>(), GSet.serializer(serializer<PeerId>()))
+        ),
+        scope = scope,
+        config = quilterConfig,
+        random = kotlin.random.Random(selfId.value.hashCode().toLong() xor 0xAAAAL),
+    )
+
     // --- Shared mutable state (guarded by lock) ---
     private val lock = reentrantLock()
 
     /** Current consistent-hash ring, rebuilt whenever the effective roster changes. */
     private var ring: TaskRing = TaskRing(setOf(selfId))
+
+    /** Wall-clock instant of the last effective-ring change. Guarded by [lock]. */
+    private var lastRingChangeAt: Instant = Instant.fromEpochMilliseconds(0L)
 
     /** Task IDs we have already started executing; prevents double-execution on this node. */
     private val claimed = mutableSetOf<TaskId>()
@@ -287,6 +307,7 @@ public class WarpNode(
         jobs.forEach { it.cancel() }
         queueQuilter.close()
         resultsQuilter.close()
+        intentQuilter.close()
     }
 
     // ---------------------------------------------------------------------------
@@ -380,17 +401,79 @@ public class WarpNode(
     private fun rebuildRingAndClaim() {
         val effectiveRoster = lock.withLock { rosterPeers - partitionedPeers }
         val newRing = RosterSnapshot(effectiveRoster).toTaskRing()
-        lock.withLock { ring = newRing }
+        lock.withLock {
+            ring = newRing
+            lastRingChangeAt = clock()
+        }
         claimOwned(queueQuilter.state.value)
     }
 
     private fun claimOwned(pendingSet: ORSet<TaskId>) {
+        when (val s = strategy) {
+            is ClaimStrategy.Ring -> claimOwnedRing(pendingSet)
+            is ClaimStrategy.RingWithIntent -> claimOwnedWithIntent(pendingSet, s)
+        }
+    }
+
+    /** Today's behavior: execute every owned, unclaimed task immediately. */
+    private fun claimOwnedRing(pendingSet: ORSet<TaskId>) {
         val toExecute = lock.withLock {
             pendingSet.elements
                 .filter { taskId -> taskId !in claimed && ring.owner(taskId) == selfId }
                 .also { tasks -> claimed.addAll(tasks) }
         }
         toExecute.forEach { taskId -> executeAsync(taskId) }
+    }
+
+    private fun claimOwnedWithIntent(pendingSet: ORSet<TaskId>, strategy: ClaimStrategy.RingWithIntent) {
+        // Owned, not-yet-claimed tasks under this peer's current ring view.
+        val owned = lock.withLock {
+            pendingSet.elements.filter { taskId -> taskId !in claimed && ring.owner(taskId) == selfId }
+        }
+        owned.forEach { taskId -> announceAndResolve(taskId, strategy) }
+    }
+
+    /**
+     * Announce this peer's claim to [taskId], then resolve the winner. Executes immediately
+     * when no competitors are seen in the current local intent state; waits
+     * [ClaimStrategy.RingWithIntent.settleWindow] when a competing claim is already present
+     * so the converged claimant set can determine the winner deterministically.
+     */
+    private fun announceAndResolve(taskId: TaskId, strategy: ClaimStrategy.RingWithIntent) {
+        // Announce (free): union selfId into the claimant set. ORMap.put is additive.
+        lock.withLock {
+            intentQuilter.apply(Patch(intentQuilter.state.value.put(replica, taskId, GSet.of(selfId))))
+        }
+
+        val mustSettle = lock.withLock {
+            (intentQuilter.state.value[taskId]?.elements ?: emptySet()).any { it != selfId }
+        }
+
+        scope.launch {
+            if (mustSettle) delay(strategy.settleWindow) // suspend OUTSIDE the lock
+            val execute = lock.withLock {
+                if (taskId in claimed) return@withLock false
+                if (winner(taskId) == selfId) {
+                    claimed.add(taskId)
+                    true
+                } else {
+                    false // stand down — stay eligible to re-home later
+                }
+            }
+            if (execute) doExecute(taskId)
+        }
+    }
+
+    /**
+     * The winner of [taskId]: the lowest-`PeerId` claimant that is still in the effective
+     * roster. Every peer computes the same value from the converged claimant set, so losers
+     * deterministically stand down. Returns `null` if no live claimant remains.
+     */
+    private fun winner(taskId: TaskId): PeerId? {
+        // Caller holds [lock].
+        val claimants = intentQuilter.state.value[taskId]?.elements ?: emptySet()
+        val effectiveRoster = rosterPeers - partitionedPeers
+        return claimants.intersect(effectiveRoster).minByOrNull { it.value }
     }
 
     private fun executeAsync(taskId: TaskId) {
@@ -439,6 +522,7 @@ public class WarpNode(
         // the apply so the delta is always a subset of the current state.
         lock.withLock {
             queueQuilter.apply(Patch(queueQuilter.state.value.remove(taskId)))
+            intentQuilter.apply(Patch(intentQuilter.state.value.remove(taskId)))
         }
     }
 
@@ -449,6 +533,8 @@ public class WarpNode(
         /** Mux-channel tag reserved for per-peer heartbeat ping/pong frames. */
         @Suppress("unused")
         const val CHANNEL_HEARTBEAT: Byte = 0x03
+
+        const val CHANNEL_INTENT: Byte = 0x04
     }
 }
 
