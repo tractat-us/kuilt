@@ -6,6 +6,9 @@
 > nothing on its own** — it decomposes *what the work would be* if the dream were
 > pursued, and is honest that only one slice is real near-term. Speculative
 > (#665, spike #680).
+>
+> **Now operationalized:** [warp roadmap](warp-roadmap.md) turns this
+> decomposition into ordered, dispatch-ready Phase-2 epics (B → E ∥ C → D → F).
 
 ## The slices
 
