@@ -150,18 +150,21 @@ class WarpNodeWebSocketTest {
                 val nodeRelay = WarpNode(
                     selfId = RELAY_ID,
                     seam = relaySeam,
+                    rosterFlow = relaySeam.rosterSnapshot(),
                     scope = nodeScope,
                     executor = { taskId -> execLog.record(RELAY_ID, taskId); "result-$taskId" },
                 )
                 val nodeA = WarpNode(
                     selfId = CLIENT_A_ID,
                     seam = clientSeamA,
+                    rosterFlow = clientSeamA.rosterSnapshot(),
                     scope = nodeScope,
                     executor = { taskId -> execLog.record(CLIENT_A_ID, taskId); "result-$taskId" },
                 )
                 val nodeB = WarpNode(
                     selfId = CLIENT_B_ID,
                     seam = clientSeamB,
+                    rosterFlow = clientSeamB.rosterSnapshot(),
                     scope = nodeScope,
                     executor = { taskId -> execLog.record(CLIENT_B_ID, taskId); "result-$taskId" },
                 )
@@ -243,12 +246,14 @@ class WarpNodeWebSocketTest {
                 val nodeRelay = WarpNode(
                     selfId = RELAY_ID,
                     seam = serverSeamA,
+                    rosterFlow = serverSeamA.rosterSnapshot(),
                     scope = nodeScope,
                     executor = { taskId -> execLog.record(RELAY_ID, taskId); "result-$taskId" },
                 )
                 val nodeA = WarpNode(
                     selfId = CLIENT_A_ID,
                     seam = clientSeamA,
+                    rosterFlow = clientSeamA.rosterSnapshot(),
                     scope = nodeScope,
                     executor = { taskId -> execLog.record(CLIENT_A_ID, taskId); "result-$taskId" },
                 )
