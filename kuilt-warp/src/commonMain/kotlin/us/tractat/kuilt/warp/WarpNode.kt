@@ -10,6 +10,7 @@ import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
 import kotlinx.serialization.serializer
+import kotlin.time.Duration.Companion.seconds
 import us.tractat.kuilt.core.MuxSeam
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Seam
@@ -192,27 +193,54 @@ public class WarpNode(
     }
 
     private fun recordResult(taskId: TaskId, result: String) {
-        val ts = lock.withLock { ++timestampCounter }
-        resultsQuilter.apply(
-            Patch(
-                resultsQuilter.state.value.put(
-                    replica = replica,
-                    key = taskId,
-                    value = LWWRegister.empty<String>().set(replica, ts, result),
+        // Hold the WarpNode lock across the read-compute-apply so every concurrent
+        // executor coroutine mints a *unique* dot from the latest state. Without this,
+        // two concurrent `put` calls on the same base state each call `nextDot(replica)`,
+        // producing duplicate dots. When those patches are joined, the causal CRDT
+        // tombstoning logic silently drops one entry (the entry whose dot the other's
+        // context already witnesses). Bug: concurrent `recordResult` calls were losing
+        // results non-deterministically.
+        lock.withLock {
+            val ts = ++timestampCounter
+            resultsQuilter.apply(
+                Patch(
+                    resultsQuilter.state.value.put(
+                        replica = replica,
+                        key = taskId,
+                        value = LWWRegister.empty<String>().set(replica, ts, result),
+                    )
                 )
             )
-        )
+        }
     }
 
     private fun removeFromQueue(taskId: TaskId) {
-        queueQuilter.apply(Patch(queueQuilter.state.value.remove(taskId)))
+        // Hold the WarpNode lock so concurrent `remove` calls always operate on the
+        // latest state. Without this, two concurrent removes on the same base state
+        // would each produce a `remove` delta, both of which are correct (idempotent),
+        // but the key invariant below is that the state read happens atomically with
+        // the apply so the delta is always a subset of the current state.
+        lock.withLock {
+            queueQuilter.apply(Patch(queueQuilter.state.value.remove(taskId)))
+        }
     }
 
     private companion object {
         const val CHANNEL_QUEUE: Byte = 0x01
         const val CHANNEL_RESULTS: Byte = 0x02
 
-        /** Suppress the TestDispatcher guard warning — callers choose the dispatcher. */
-        val QUILTER_CONFIG = QuilterConfig(expectVirtualTime = true)
+        /**
+         * Quilter config for real-IO contexts (production or real-socket tests).
+         * Anti-entropy and full-state retry are kept short so a missed delta is
+         * healed within seconds rather than waiting the production-default 1 min / 30 s.
+         *
+         * `expectVirtualTime = true` suppresses the TestDispatcher warning — callers
+         * choose their own dispatcher.
+         */
+        val QUILTER_CONFIG = QuilterConfig(
+            antiEntropyInterval = 2.seconds,
+            fullStateRetryInterval = 3.seconds,
+            expectVirtualTime = true,
+        )
     }
 }

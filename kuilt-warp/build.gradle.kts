@@ -25,6 +25,13 @@ kotlin {
             implementation(libs.kotlinx.coroutines.test)
         }
         jvmTest.dependencies {
+            implementation(project(":kuilt-websocket"))
+            implementation(libs.kotlin.testJunit)
+            implementation(libs.kotlinx.coroutines.test)
+            implementation(libs.ktor.client.okhttp)
+            implementation(libs.ktor.client.websockets)
+            implementation(libs.ktor.serverNetty)
+            implementation(libs.ktor.serverWebsockets)
             runtimeOnly(libs.logback)
         }
         androidUnitTest.dependencies {
