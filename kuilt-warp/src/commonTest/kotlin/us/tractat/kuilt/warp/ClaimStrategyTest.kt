@@ -9,7 +9,7 @@ import kotlin.time.Duration.Companion.seconds
 class ClaimStrategyTest {
     @Test
     fun defaultsAreSaneAndRingIsAnObject() = assertAll(
-        { assertTrue(ClaimStrategy.Ring === ClaimStrategy.Ring, "Ring is a singleton object") },
+        { assertTrue(ClaimStrategy.Ring != ClaimStrategy.RingWithIntent(), "Ring and RingWithIntent are distinct strategies") },
         {
             val s = ClaimStrategy.RingWithIntent()
             assertTrue(s.settleWindow > 0.seconds, "settleWindow defaults positive")
