@@ -6,12 +6,14 @@ import io.github.oshai.kotlinlogging.KotlinLogging
 import kotlinx.atomicfu.locks.reentrantLock
 import kotlinx.atomicfu.locks.withLock
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onEach
@@ -29,10 +31,14 @@ import us.tractat.kuilt.crdt.ORMap
 import us.tractat.kuilt.crdt.ORSet
 import us.tractat.kuilt.crdt.Patch
 import us.tractat.kuilt.crdt.ReplicaId
+import us.tractat.kuilt.liveness.HeartbeatConfig
+import us.tractat.kuilt.liveness.HeartbeatPartitionDetector
+import us.tractat.kuilt.liveness.PartitionEvent
 import us.tractat.kuilt.quilter.QuiltMessage
 import us.tractat.kuilt.quilter.QuilterConfig
 import us.tractat.kuilt.quilter.Quilter
 import us.tractat.kuilt.raft.RaftNode
+import kotlin.time.Instant
 
 private val logger = KotlinLogging.logger("us.tractat.kuilt.warp.WarpNode")
 
@@ -56,26 +62,35 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.warp.WarpNode")
  * The roster source is **required** — absence would silently choose a consistency model
  * without the caller knowing. Pass the appropriate adapter for your use case.
  *
- * **Liveness-driven failover.** [WarpNode] watches [rosterFlow]. When a peer disappears,
- * every surviving peer rebuilds the ring and re-evaluates pending tasks. Tasks whose
- * former owner is now absent are claimed by their new ring owner (the next peer clockwise
- * that is still present). The [Results] backstop ensures correctness even if the former
- * owner had partially finished and recorded a result before disappearing.
+ * **Liveness-driven failover.** [WarpNode] maintains two failure-detection signals:
+ *
+ * 1. *Roster departure* — when a peer disappears from [rosterFlow], the ring is rebuilt
+ *    immediately and pending tasks re-home to their new owner.
+ * 2. *Heartbeat partition* — a [HeartbeatPartitionDetector] runs per admitted peer
+ *    (peers in [rosterFlow] that are not [selfId]). When a peer becomes unresponsive
+ *    (heartbeat timeout) or lost (reconnect window expired), it is added to
+ *    [partitionedPeers] and excluded from the effective ring. On recovery it is removed.
+ *    The effective ring is `rosterPeers - partitionedPeers`; tasks whose former owner
+ *    is partitioned re-home to the next peer clockwise on the effective ring.
+ *
+ * The [Results] backstop ensures correctness under both signals: duplicate executions
+ * during a failover window are absorbed, and the board converges to one entry per task.
  *
  * **Incoming fan-out.** [WarpNode] is the **sole collector** of [seam.incoming] (satisfying
  * the kuilt single-collection contract, ADR-034). Every received [Swatch] is fanned to
  * [rawIncoming] before the mux channels consume it. The internal [MuxSeam] subscribes to
- * [rawIncoming] rather than [seam.incoming] directly. Per-peer liveness detectors (wired
- * in a future PR) subscribe to [rawIncoming] filtered by sender — no second collection
+ * [rawIncoming] rather than [seam.incoming] directly. Per-peer [HeartbeatPartitionDetector]s
+ * subscribe to [rawIncoming] filtered by sender via [PerPeerSeam] — no second collection
  * of [seam.incoming] is ever needed.
  *
- * **Thread-safety.** Shared mutable state (`ring`, `claimed`) is guarded by an explicit
+ * **Thread-safety.** Shared mutable state (`ring`, `claimed`, `partitionedPeers`,
+ * `detectorJobs`, `rosterPeers`) is guarded by an explicit
  * [kotlinx.atomicfu.locks.ReentrantLock] so this type is safe under a multi-threaded
  * dispatcher. No `limitedParallelism(1)` confinement is used — see CLAUDE.md.
  *
- * **Injection contract.** [scope] and [rosterFlow] are required parameters — no real-dispatcher
- * default, no silent roster binding. Pass [kotlinx.coroutines.test.TestScope.backgroundScope]
- * in tests, and a [MutableStateFlow] of peer sets when you need fine-grained control.
+ * **Injection contract.** [scope], [rosterFlow], and [clock] are required parameters.
+ * Pass [kotlinx.coroutines.test.TestScope.backgroundScope] in tests, and a fixed
+ * [Instant]-returning lambda for the clock.
  *
  * @param selfId This peer's identifier on the [seam].
  * @param seam The multi-peer session. [WarpNode] takes sole ownership of [Seam.incoming]
@@ -87,16 +102,25 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.warp.WarpNode")
  * @param quilterConfig [QuilterConfig] for both internal [Quilter]s. Defaults to the
  *   [QuilterConfig] production defaults. Pass a short-cadence config in tests that need
  *   fast anti-entropy.
+ * @param clock Provides the current [Instant] for per-peer [HeartbeatPartitionDetector]s.
+ *   Required — never [kotlin.time.Clock.System] by default. Production callers use
+ *   `{ Clock.System.now() }`; tests inject a fixed or virtual clock so liveness timeouts
+ *   are deterministic.
+ * @param heartbeatConfig Timing for per-peer heartbeat ping/pong. A tuning parameter —
+ *   defaults to [HeartbeatConfig] production defaults (5 s interval, 15 s timeout,
+ *   60 s reconnect window). Tests typically inject a short-cadence config.
  * @param executor Suspending function that performs the work for a given task and returns
  *   a string result. The body is called at most once per task per peer (re-entry after
  *   failover is possible; the [Results] backstop deduplicates).
  */
 public class WarpNode(
     public val selfId: PeerId,
-    seam: Seam,
+    private val seam: Seam,
     rosterFlow: Flow<Set<PeerId>>,
     private val scope: CoroutineScope,
     quilterConfig: QuilterConfig = QuilterConfig(),
+    private val clock: () -> Instant,
+    private val heartbeatConfig: HeartbeatConfig = HeartbeatConfig(),
     private val executor: suspend (TaskId) -> String,
 ) {
     private val replica = ReplicaId(selfId.value)
@@ -106,9 +130,9 @@ public class WarpNode(
      *
      * [WarpNode] is the **single collector** of [seam.incoming] (ADR-034). The init
      * block launches one coroutine that collects [seam.incoming] and emits each [Swatch]
-     * here. All downstream consumers — the internal [MuxSeam] channels and, in a future
-     * PR, per-peer [us.tractat.kuilt.liveness.HeartbeatPartitionDetector]s — subscribe to
-     * this flow rather than to [seam.incoming] directly.
+     * here. All downstream consumers — the internal [MuxSeam] channels and per-peer
+     * [HeartbeatPartitionDetector]s — subscribe to this flow rather than to
+     * [seam.incoming] directly.
      *
      * Capacity 256 absorbs burst traffic before subscribers are scheduled. Frames emitted
      * before a subscriber starts are not replayed — for heartbeat liveness this is
@@ -153,11 +177,36 @@ public class WarpNode(
     // --- Shared mutable state (guarded by lock) ---
     private val lock = reentrantLock()
 
-    /** Current consistent-hash ring, rebuilt whenever [rosterFlow] emits. */
+    /** Current consistent-hash ring, rebuilt whenever the effective roster changes. */
     private var ring: TaskRing = TaskRing(setOf(selfId))
 
     /** Task IDs we have already started executing; prevents double-execution on this node. */
     private val claimed = mutableSetOf<TaskId>()
+
+    /** Peers currently known from [rosterFlow]. Guarded by [lock]. */
+    private var rosterPeers: Set<PeerId> = emptySet()
+
+    /**
+     * Peers detected as unresponsive or lost by their [HeartbeatPartitionDetector].
+     *
+     * The effective ring = `rosterPeers - partitionedPeers`. When a peer is added here
+     * (on [PartitionEvent.PeerUnresponsive] or [PartitionEvent.PeerLost]), the ring is
+     * rebuilt and [claimOwned] re-evaluates ownership so the partitioned peer's tasks
+     * re-home to the successor. Removed on [PartitionEvent.PeerRecovered].
+     *
+     * Guarded by [lock].
+     */
+    private val partitionedPeers = mutableSetOf<PeerId>()
+
+    /**
+     * Per-peer detector collection jobs, keyed by [PeerId].
+     *
+     * Started when a peer appears in [rosterFlow] (and is not [selfId]).
+     * Cancelled when the peer departs from [rosterFlow] or the node closes.
+     *
+     * Guarded by [lock].
+     */
+    private val detectorJobs = mutableMapOf<PeerId, Job>()
 
     // Monotonic timestamp counter for LWWRegister tags.
     private var timestampCounter = 0L
@@ -168,7 +217,7 @@ public class WarpNode(
 
     init {
         // Single collector of seam.incoming — fans every frame to rawIncoming.
-        // All downstream consumers (MuxSeam channels, future per-peer detectors)
+        // All downstream consumers (MuxSeam channels, per-peer detectors)
         // subscribe to rawIncoming; nobody else collects seam.incoming.
         scope.launch {
             seam.incoming.collect { swatch ->
@@ -213,9 +262,15 @@ public class WarpNode(
         get() = Results.from(resultsQuilter.state.value)
 
     /**
-     * Close this node's Quilter connections. Idempotent.
+     * Close this node's Quilter connections and stop all detectors. Idempotent.
      */
     public fun close() {
+        val jobs = lock.withLock {
+            val snapshot = detectorJobs.values.toList()
+            detectorJobs.clear()
+            snapshot
+        }
+        jobs.forEach { it.cancel() }
         queueQuilter.close()
         resultsQuilter.close()
     }
@@ -224,11 +279,87 @@ public class WarpNode(
     // Internal — ring management and task claiming
     // ---------------------------------------------------------------------------
 
-    private fun onPeersChanged(peers: Set<PeerId>) {
-        val newRing = RosterSnapshot(peers).toTaskRing()
+    private fun onPeersChanged(newRoster: Set<PeerId>) {
+        val (added, removed) = lock.withLock {
+            val prev = rosterPeers
+            rosterPeers = newRoster
+            val added = newRoster - prev - selfId
+            val removed = prev - newRoster
+            added to removed
+        }
+
+        // Stop detectors for departed peers (outside the lock — detector.stop() is suspend-free here
+        // since we're just cancelling jobs).
+        removed.forEach { peerId ->
+            val job = lock.withLock {
+                partitionedPeers.remove(peerId)
+                detectorJobs.remove(peerId)
+            }
+            job?.cancel()
+        }
+
+        // Start detectors for newly-appeared peers.
+        added.forEach { peerId -> startDetector(peerId) }
+
+        rebuildRingAndClaim()
+    }
+
+    /**
+     * Starts a [HeartbeatPartitionDetector] for [peerId].
+     *
+     * The detector receives a [PerPeerSeam] — a thin adapter that filters [rawIncoming]
+     * to frames from [peerId] only and delegates sends to the underlying [seam]. This
+     * lets the detector subscribe to per-peer ping/pong traffic without competing for
+     * the single-consumer [seam.incoming] channel (which the init fan-out loop holds).
+     *
+     * A separate coroutine in [scope] collects the detector's events and maps them to
+     * ring rebuilds via [handlePartitionEvent].
+     */
+    private fun startDetector(peerId: PeerId) {
+        val perPeerSeam = PerPeerSeam(seam, peerId, rawIncoming)
+        val detector = HeartbeatPartitionDetector(
+            link = perPeerSeam,
+            peerId = peerId,
+            config = heartbeatConfig,
+            clock = clock,
+        )
+        detector.start(scope)
+
+        val job = scope.launch {
+            detector.events.collect { event -> handlePartitionEvent(event) }
+        }
+        lock.withLock { detectorJobs[peerId] = job }
+    }
+
+    private fun handlePartitionEvent(event: PartitionEvent) {
+        when (event) {
+            is PartitionEvent.PeerUnresponsive -> markPartitioned(event.peerId)
+            is PartitionEvent.PeerLost -> markPartitioned(event.peerId)
+            is PartitionEvent.PeerRecovered -> markRecovered(event.peerId)
+        }
+    }
+
+    private fun markPartitioned(peerId: PeerId) {
+        lock.withLock { partitionedPeers.add(peerId) }
+        logger.info { "WarpNode($selfId): peer $peerId partitioned — excluding from ring" }
+        rebuildRingAndClaim()
+    }
+
+    private fun markRecovered(peerId: PeerId) {
+        lock.withLock { partitionedPeers.remove(peerId) }
+        logger.info { "WarpNode($selfId): peer $peerId recovered — restoring to ring" }
+        rebuildRingAndClaim()
+    }
+
+    /**
+     * Recomputes the effective ring from `rosterPeers - partitionedPeers` and re-evaluates
+     * task ownership. Tasks whose former owner is now absent or partitioned re-home to
+     * their new ring successor.
+     */
+    private fun rebuildRingAndClaim() {
+        val effectiveRoster = lock.withLock { rosterPeers - partitionedPeers }
+        val newRing = RosterSnapshot(effectiveRoster).toTaskRing()
         lock.withLock { ring = newRing }
-        // Re-evaluate the current pending set in case newly-owned tasks appeared
-        // (e.g. former owner departed and its tasks re-home to us).
         claimOwned(queueQuilter.state.value)
     }
 
@@ -294,7 +425,7 @@ public class WarpNode(
         const val CHANNEL_QUEUE: Byte = 0x01
         const val CHANNEL_RESULTS: Byte = 0x02
 
-        /** Reserved mux-channel tag for per-peer heartbeat ping/pong frames (wired in PR 2). */
+        /** Mux-channel tag reserved for per-peer heartbeat ping/pong frames. */
         @Suppress("unused")
         const val CHANNEL_HEARTBEAT: Byte = 0x03
     }
@@ -320,6 +451,40 @@ private class RawIncomingProxy(
     override suspend fun broadcast(payload: ByteArray) = delegate.broadcast(payload)
     override suspend fun sendTo(peer: PeerId, payload: ByteArray) = delegate.sendTo(peer, payload)
     override suspend fun close(reason: CloseReason) = delegate.close(reason)
+}
+
+/**
+ * A thin [Seam] view that presents only frames from [targetPeerId] via [rawIncoming].
+ *
+ * [HeartbeatPartitionDetector] subscribes to [incoming] to process pings/pongs for a
+ * specific peer. Since [Seam.incoming] is a channel-backed flow (single-consumer), we
+ * cannot let every detector collect it directly. Instead, [WarpNode]'s init block fans
+ * each inbound swatch to [rawIncoming] (a [MutableSharedFlow]) and each [PerPeerSeam]
+ * filters to its assigned [targetPeerId].
+ *
+ * [broadcast] and [sendTo] delegate to [delegate] unchanged — heartbeat pings/pongs are
+ * sent as raw frames on the underlying seam, bypassing [MuxSeam] channel wrapping. This
+ * matches how [us.tractat.kuilt.session.SeamRoom] wires its per-peer detectors.
+ *
+ * [close] is a no-op — the [PerPeerSeam] does not own the link lifecycle.
+ */
+private class PerPeerSeam(
+    private val delegate: Seam,
+    private val targetPeerId: PeerId,
+    private val rawIncoming: MutableSharedFlow<Swatch>,
+) : Seam {
+    override val selfId: PeerId get() = delegate.selfId
+    override val peers: StateFlow<Set<PeerId>> get() = delegate.peers
+    override val state: StateFlow<SeamState> get() = delegate.state
+
+    override val incoming: Flow<Swatch>
+        get() = rawIncoming.filter { it.sender == targetPeerId }
+
+    override suspend fun broadcast(payload: ByteArray): Unit = delegate.broadcast(payload)
+    override suspend fun sendTo(peer: PeerId, payload: ByteArray): Unit = delegate.sendTo(peer, payload)
+
+    /** No-op — lifecycle is owned by [WarpNode], not this view. */
+    override suspend fun close(reason: CloseReason) = Unit
 }
 
 // ---------------------------------------------------------------------------

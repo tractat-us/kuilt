@@ -35,6 +35,10 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
+import kotlin.time.Instant
+
+/** Fixed clock for tests that don't exercise liveness timing. */
+private val FIXED_CLOCK: () -> Instant = { Instant.fromEpochMilliseconds(0L) }
 
 /** Short-cadence [QuilterConfig] for tests that need fast anti-entropy. */
 private val TEST_QUILTER_CONFIG = QuilterConfig(
@@ -75,7 +79,8 @@ class WarpNodeTest {
             rosterFlow = rosterFlow,
             scope = backgroundScope,
             quilterConfig = TEST_QUILTER_CONFIG,
-            executor = { taskId ->
+            clock = FIXED_CLOCK,
+            executor ={ taskId ->
                 lock.withLock { executedByA.add(taskId) }
                 "result-${taskId.value}"
             },
@@ -86,7 +91,8 @@ class WarpNodeTest {
             rosterFlow = rosterFlow,
             scope = backgroundScope,
             quilterConfig = TEST_QUILTER_CONFIG,
-            executor = { taskId ->
+            clock = FIXED_CLOCK,
+            executor ={ taskId ->
                 lock.withLock { executedByB.add(taskId) }
                 "result-${taskId.value}"
             },
@@ -154,7 +160,8 @@ class WarpNodeTest {
             rosterFlow = seamA.rosterSnapshot(),
             scope = backgroundScope,
             quilterConfig = TEST_QUILTER_CONFIG,
-            executor = { taskId ->
+            clock = FIXED_CLOCK,
+            executor ={ taskId ->
                 lock.withLock { executedBy[taskId] = seamA.selfId.value }
                 "result-${taskId.value}"
             },
@@ -165,7 +172,8 @@ class WarpNodeTest {
             rosterFlow = seamB.rosterSnapshot(),
             scope = backgroundScope,
             quilterConfig = TEST_QUILTER_CONFIG,
-            executor = { taskId ->
+            clock = FIXED_CLOCK,
+            executor ={ taskId ->
                 lock.withLock { executedBy[taskId] = seamB.selfId.value }
                 "result-${taskId.value}"
             },
@@ -204,9 +212,9 @@ class WarpNodeTest {
             "done-$label-${taskId.value}"
         }
 
-        val nodeA = WarpNode(seamA.selfId, seamA, seamA.rosterSnapshot(), backgroundScope, TEST_QUILTER_CONFIG, executor("A"))
-        val nodeB = WarpNode(seamB.selfId, seamB, seamB.rosterSnapshot(), backgroundScope, TEST_QUILTER_CONFIG, executor("B"))
-        val nodeC = WarpNode(seamC.selfId, seamC, seamC.rosterSnapshot(), backgroundScope, TEST_QUILTER_CONFIG, executor("C"))
+        val nodeA = WarpNode(seamA.selfId, seamA, seamA.rosterSnapshot(), backgroundScope, TEST_QUILTER_CONFIG, FIXED_CLOCK, executor = executor("A"))
+        val nodeB = WarpNode(seamB.selfId, seamB, seamB.rosterSnapshot(), backgroundScope, TEST_QUILTER_CONFIG, FIXED_CLOCK, executor = executor("B"))
+        val nodeC = WarpNode(seamC.selfId, seamC, seamC.rosterSnapshot(), backgroundScope, TEST_QUILTER_CONFIG, FIXED_CLOCK, executor = executor("C"))
 
         // Let the three-peer mesh stabilise
         advanceUntilIdle()
@@ -248,7 +256,8 @@ class WarpNodeTest {
             rosterFlow = seamA.rosterSnapshot(),
             scope = backgroundScope,
             quilterConfig = TEST_QUILTER_CONFIG,
-            executor = { taskId -> "result-${taskId.value}" },
+            clock = FIXED_CLOCK,
+            executor ={ taskId -> "result-${taskId.value}" },
         )
         val nodeB = WarpNode(
             selfId = seamB.selfId,
@@ -256,7 +265,8 @@ class WarpNodeTest {
             rosterFlow = seamB.rosterSnapshot(),
             scope = backgroundScope,
             quilterConfig = TEST_QUILTER_CONFIG,
-            executor = { taskId -> "result-${taskId.value}" },
+            clock = FIXED_CLOCK,
+            executor ={ taskId -> "result-${taskId.value}" },
         )
 
         val tasks = (1..8).map { TaskId("conv-task-$it") }
@@ -294,7 +304,8 @@ class WarpNodeTest {
             rosterFlow = seamA.rosterSnapshot(),
             scope = backgroundScope,
             quilterConfig = TEST_QUILTER_CONFIG,
-            executor = { taskId -> "result-${taskId.value}" },
+            clock = FIXED_CLOCK,
+            executor ={ taskId -> "result-${taskId.value}" },
         )
         val nodeB = WarpNode(
             selfId = seamB.selfId,
@@ -302,7 +313,8 @@ class WarpNodeTest {
             rosterFlow = seamB.rosterSnapshot(),
             scope = backgroundScope,
             quilterConfig = TEST_QUILTER_CONFIG,
-            executor = { taskId -> "result-${taskId.value}" },
+            clock = FIXED_CLOCK,
+            executor ={ taskId -> "result-${taskId.value}" },
         )
 
         val taskId = TaskId("dedup-task")
@@ -344,6 +356,7 @@ class WarpNodeTest {
                 rosterFlow = seamA.rosterSnapshot(),
                 scope = backgroundScope,
                 quilterConfig = TEST_QUILTER_CONFIG,
+                clock = FIXED_CLOCK,
                 executor = { taskId -> "result-${taskId.value}" },
             )
             val nodeB = WarpNode(
@@ -352,6 +365,7 @@ class WarpNodeTest {
                 rosterFlow = seamB.rosterSnapshot(),
                 scope = backgroundScope,
                 quilterConfig = TEST_QUILTER_CONFIG,
+                clock = FIXED_CLOCK,
                 executor = { taskId -> "result-${taskId.value}" },
             )
 
