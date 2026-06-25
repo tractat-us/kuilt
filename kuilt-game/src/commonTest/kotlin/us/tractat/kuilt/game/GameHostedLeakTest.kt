@@ -16,12 +16,18 @@ import us.tractat.kuilt.test.fabric.connectionPair
 import kotlin.coroutines.ContinuationInterceptor
 import kotlin.random.Random
 import kotlin.test.Test
+import us.tractat.kuilt.test.assertAll
+import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.time.Instant
 
 class GameHostedLeakTest {
 
-    /** A per-seat `sendTo(client-0, …)` is never relayed by FullFanout to client-1. */
+    /**
+     * A per-seat `sendTo(client-0, …)` is delivered to the addressed seat and never relayed by
+     * FullFanout to any other seat. Both halves are asserted: the addressed seat receives exactly
+     * the bytes sent, and the bystander seat receives nothing.
+     */
     @Test
     fun perSeatSendToIsNeverRelayed() = runTest(StandardTestDispatcher()) {
         val dispatcher = coroutineContext[ContinuationInterceptor]!!
@@ -42,16 +48,25 @@ class GameHostedLeakTest {
         }
         hub.peers.first { clients.all { (id, _) -> id in it } }   // converged
 
-        // Collect what client-1 receives.
-        val seen = mutableListOf<ByteArray>()
-        val collector = backgroundScope.async {
-            clients[1].second.incoming.collect { seen += it.toByteArray() }
+        // Collect what BOTH clients receive.
+        val seenByZero = mutableListOf<ByteArray>()
+        val seenByOne = mutableListOf<ByteArray>()
+        val c0 = backgroundScope.async {
+            clients[0].second.incoming.collect { seenByZero += it.toByteArray() }
+        }
+        val c1 = backgroundScope.async {
+            clients[1].second.incoming.collect { seenByOne += it.toByteArray() }
         }
 
         hub.sendTo(PeerId("client-0"), byteArrayOf(42))               // disclosure for seat 0 only
         runCurrent()
 
-        assertEquals(0, seen.size, "client-1 must never observe a frame addressed to client-0")
-        collector.cancel()
+        assertAll(
+            { assertEquals(1, seenByZero.size, "client-0 (the addressed seat) must receive the disclosure") },
+            { assertContentEquals(byteArrayOf(42), seenByZero.single(), "client-0 receives the exact bytes") },
+            { assertEquals(0, seenByOne.size, "client-1 must never observe a frame addressed to client-0") },
+        )
+        c0.cancel()
+        c1.cancel()
     }
 }
