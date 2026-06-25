@@ -170,9 +170,10 @@ class HostedHubReplicationTest {
     // ── bootstrap ────────────────────────────────────────────────────────────
 
     /**
-     * One holder for a started star + hosted game: the [hub] GossipSeam, its [hubMesh] (so reconnect
-     * tests can admit a fresh link), the chat [Quilter]s on the host and each client, and the
-     * dispatcher (so reconnect can build a fresh `meshSeam` on the same virtual clock).
+     * One holder for a started star + hosted game: the [hub] Seam, its [source] (so reconnect
+     * tests can admit a fresh link via `source.offer(hubEnd)`), the chat [Quilter]s on the host
+     * and each client, and the dispatcher (so reconnect can build a fresh `meshSeam` on the same
+     * virtual clock).
      */
     private inner class HostedStarGame(
         val test: TestScope,
@@ -185,15 +186,15 @@ class HostedHubReplicationTest {
         val chatConfig: QuilterConfig,
     ) {
         val hub get() = star.hub
-        val hubMesh get() = star.hubMesh
+        val source get() = star.source
 
         /**
          * Drop client [i] off the fabric exactly as a departing process would: tear down its whole
          * session via [GameSession.close] — the node's election/heartbeat loops stop *before* the
          * seam closes, so the dropped client never fires raft sends onto a closed seam. Closing the
          * client's GossipSeam closes its base mesh and the underlying connection; the hub's read loop
-         * for that link then completes and `removePeer`s `client-i` from [hubMesh]'s roster. Asserts
-         * the drop took effect so the test is deterministic.
+         * for that link then completes and removes `client-i` from the hub's roster. Asserts the drop
+         * took effect so the test is deterministic.
          */
         suspend fun dropClient(i: Int) {
             clientSessions[i].close(CloseReason.Normal)
@@ -206,18 +207,19 @@ class HostedHubReplicationTest {
         }
 
         /**
-         * Reconnect the dropped client [i] with a **fresh identity** (`client-$i-recon`): admit a new
-         * link to the hub mesh, wrap the new client end in a fresh default-policy [GossipSeam], join
-         * the game via [gameJoin], and stand up a fresh chat [Quilter]. The invariant under test is
-         * FullState-on-first-contact healing — not raft membership-identity continuity — so the new
-         * peer is deliberately a stranger to the cluster. Returns the reconnecting chat Quilter.
+         * Reconnect the dropped client [i] with a **fresh identity** (`client-$i-recon`): offer a new
+         * link to the hub's accept source, wrap the new client end in a fresh default-policy
+         * [GossipSeam], join the game via [gameJoin], and stand up a fresh chat [Quilter]. The
+         * invariant under test is FullState-on-first-contact healing — not raft membership-identity
+         * continuity — so the new peer is deliberately a stranger to the cluster. Returns the
+         * reconnecting chat Quilter.
          */
         suspend fun reconnectClient(i: Int): Quilter<Rga<String>> {
             val reconId = PeerId("client-$i-recon")
             val (hubEnd, clientEnd) = connectionPair()
             // Admit the link on both ends concurrently — the mesh preambles must cross in parallel.
             val clientMesh = coroutineScope {
-                async { star.hubMesh.addLink(hubEnd) }
+                async { star.source.offer(hubEnd) }
                 async { meshSeam(reconId, listOf(clientEnd), dispatcher, Random(900L + i)) }.await()
             }
             val reconGossip = GossipSeam(
