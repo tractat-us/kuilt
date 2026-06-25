@@ -74,13 +74,19 @@ A **third Quilter** over a new mux channel `CHANNEL_INTENT = 0x04`, replicating
 ### Winner rule (every peer computes identically)
 
 ```
-winner(task) = min( claimants(task) ∩ effectiveRingOwners(task) )   by PeerId
+winner(task) = min( claimants(task) ∩ effectiveRoster )   by PeerId
+effectiveRoster = rosterPeers − partitionedPeers
 ```
 
-where `effectiveRingOwners(task)` is the set of peers the *current effective ring*
-(`rosterPeers − partitionedPeers`) would assign `task` to. In the steady single-owner case
-this is just that owner. Losers **stand down** — they do not add the task to the local
-`claimed` set, so they remain eligible to re-home the task later if ownership shifts.
+Only a peer that believes it owns `task` on its *own* ring view ever announces (joins
+`claimants`), so `claimants` is usually a single peer and occasionally two during the
+disagreement window. The tiebreak keys off the **converged** claimant set intersected with
+the **effective roster** — deliberately *not* each peer's per-task ring view, which is the
+very thing that disagrees in the window. Intersecting with `effectiveRoster` (which converges
+as roster + partition events gossip) drops dead/departed claimants so the winner is live; the
+lease (§5) covers any residual roster disagreement. Losers **stand down** — they do not add
+the task to the local `claimed` set, so they remain eligible to re-home it later if ownership
+shifts.
 
 ## 3. Claim lifecycle (adaptive path)
 
@@ -109,11 +115,12 @@ makes the default *smart* rather than merely *a default*.
 
 ## 5. Liveness backstop (never lose a task) — two layers
 
-- **Liveness-drop (fast path, no new code):** the winner rule intersects with
-  `effectiveRingOwners`, which already excludes `partitionedPeers`. So when the existing
-  `HeartbeatPartitionDetector` marks a won-but-dead winner lost, `rebuildRingAndClaim`
-  re-resolves the winner to the next owner automatically — this falls out of §2's rule, no
-  separate path.
+- **Liveness-drop (fast path, no new code):** the winner rule intersects `claimants` with
+  `effectiveRoster` (`rosterPeers − partitionedPeers`). So when the existing
+  `HeartbeatPartitionDetector` marks a won-but-dead winner lost, it leaves `effectiveRoster`,
+  the surviving peers re-resolve the winner to the next-lowest live claimant, and the
+  re-evaluation fires from `rebuildRingAndClaim` — this falls out of §2's rule, no separate
+  path.
 - **Lease (catch-all for slow-but-alive winner):** a won claim is valid for `claimLease`.
   If `task` is still pending `claimLease` after a peer lost the tiebreak, that peer
   re-evaluates and proceeds if it is now the lowest *live* claimant past its lease window.
