@@ -39,7 +39,9 @@ import us.tractat.kuilt.liveness.PartitionEvent
 import us.tractat.kuilt.quilter.QuiltMessage
 import us.tractat.kuilt.quilter.QuilterConfig
 import us.tractat.kuilt.quilter.Quilter
+import us.tractat.kuilt.raft.Committed
 import us.tractat.kuilt.raft.RaftNode
+import us.tractat.kuilt.raft.RaftRole
 import kotlin.time.Instant
 
 private val logger = KotlinLogging.logger("us.tractat.kuilt.warp.WarpNode")
@@ -49,9 +51,23 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.warp.WarpNode")
  *
  * Each peer in the session claims and executes the tasks it owns on the consistent-hash
  * ring — `ring.owner(task) == selfId`. Results land in a shared, replicated [Results]
- * board. The [Results] ORMap backstop absorbs any duplicate executions that arise during
- * failover: the last-writer-wins register picks one result per task, so the board always
- * converges to exactly one entry per task regardless of how many peers raced to execute it.
+ * board.
+ *
+ * **Exactly-once execution for coordinated tasks.** The [CoordinationKind.Coordinated]
+ * path is structurally exactly-once under both Raft-leader failover and warp-roster churn:
+ * - Each ring owner *proposes* the task to [raftNode] with a stable `requestId` (derived
+ *   from [TaskId]) — preventing the same node from double-proposing after a retry.
+ * - Execution is *driven from the committed log*, not from the `propose()` return. The
+ *   background [onCoordinatedCommit] listener fires on every committed entry; **only the
+ *   current Raft leader** invokes [coordinatedExecutor], so at most one peer executes any
+ *   committed entry at any given Raft instant.
+ * - A local [coordinatedApplied] set deduplicates if two proposals for the same task both
+ *   committed (possible under warp-roster churn when two ring owners each proposed before
+ *   the first entry's removal propagated). The leader skips the second entry.
+ *
+ * The [Results] LWW ORMap backstop remains as an additional safety net for truly
+ * concurrent edge cases (e.g. a crash between execution and result write), but it is no
+ * longer the primary dedup mechanism for the coordinated path.
  *
  * **Roster source.** [WarpNode] drives the consistent-hash ring from [rosterFlow] — a
  * [Flow] of the live peer set. Two pluggable sources are provided:
@@ -118,15 +134,18 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.warp.WarpNode")
  *   result. Called at most once per task per peer on the free path (re-entry after failover
  *   is possible; the [Results] backstop deduplicates).
  * @param coordinatedExecutor Suspending function for [CoordinationKind.Coordinated] tasks.
- *   Called after the Raft log commits the task's proposal — the exactly-once guarantee
- *   comes from Raft, not from this function. Defaults to an explicit error so a caller
- *   who provides a [raftNode] but forgets to supply an executor surfaces the omission
- *   immediately rather than silently doing nothing.
+ *   Invoked **from the committed-log listener** ([onCoordinatedCommit]) on the current Raft
+ *   leader, not inline after `propose()`. This gives structural exactly-once execution under
+ *   both Raft-leader failover and warp-roster churn: at most one leader fires this function
+ *   per committed log entry, and [coordinatedApplied] prevents re-invocation if two proposals
+ *   for the same task both committed (the expected churn scenario). Defaults to an explicit
+ *   error so a caller who provides a [raftNode] but forgets to supply an executor surfaces
+ *   the omission immediately rather than silently doing nothing.
  * @param raftNode [RaftNode] backing the [CoordinationKind.Coordinated] execution path.
- *   When supplied, each coordinated task's ring owner proposes the task to this Raft
- *   cluster for total-order delivery before invoking [coordinatedExecutor] — giving
- *   exactly-once semantics even under leadership failover. The [Results] ORMap backstop
- *   absorbs any duplicate executions that arise in transient edge cases.
+ *   When supplied, the ring owner proposes the task to this Raft cluster for total-order
+ *   delivery. Execution then fires from [raftNode.committed] on the Raft leader's [WarpNode],
+ *   giving structural exactly-once semantics under leadership failover and warp-roster churn.
+ *   The [Results] LWW ORMap is an additional backstop for edge cases.
  *
  *   **Required for coordinated tasks.** If `null`, calling [enqueue] with
  *   [CoordinationKind.Coordinated] throws [IllegalStateException] immediately — fail-loud,
@@ -258,6 +277,19 @@ public class WarpNode(
      */
     private val inFlight = mutableSetOf<TaskId>()
 
+    /**
+     * Task IDs for which [coordinatedExecutor] has been invoked via [onCoordinatedCommit].
+     *
+     * Guarded by [lock]. Prevents double-execution when the same task's command commits
+     * more than once — possible under warp-roster churn when two ring owners each proposed
+     * the same task and both entries appeared in the Raft log.
+     *
+     * Only the current Raft leader calls [coordinatedExecutor] (checked in
+     * [onCoordinatedCommit]), so this set is the local safety net for the same leader
+     * seeing two committed entries for the same [TaskId].
+     */
+    private val coordinatedApplied = mutableSetOf<TaskId>()
+
     /** Peers currently known from [rosterFlow]. Guarded by [lock]. */
     private var rosterPeers: Set<PeerId> = emptySet()
 
@@ -324,6 +356,13 @@ public class WarpNode(
         coordQueueQuilter.state
             .onEach { pendingSet -> claimOwned(pendingSet, CoordinationKind.Coordinated) }
             .launchIn(scope)
+
+        // Drive coordinated execution from the committed Raft log — exactly-once under churn.
+        // Only the Raft leader executes; [coordinatedApplied] prevents double-execution on
+        // the same node if two proposals for the same task both committed.
+        raftNode?.committed
+            ?.onEach { committed -> onCoordinatedCommit(committed) }
+            ?.launchIn(scope)
     }
 
     // ---------------------------------------------------------------------------
@@ -606,34 +645,82 @@ public class WarpNode(
      * Invoke the correct executor for [taskId] based on [kind], record the result, and
      * remove the task from its queue.
      *
-     * [CoordinationKind.Free] calls [executor] directly (the fast ring path).
-     * [CoordinationKind.Coordinated] proposes to [raftNode] first — the call suspends
-     * until a quorum commits the entry — then calls [coordinatedExecutor]. Raft's total
-     * order guarantees that exactly one proposal per task commits across the cluster;
-     * the [Results] backstop absorbs any transient duplicates.
+     * [CoordinationKind.Free] calls [executor] directly (the fast ring path), then
+     * records the result and removes the task from the queue.
+     *
+     * [CoordinationKind.Coordinated] only *proposes* to [raftNode] — it does **not**
+     * invoke [coordinatedExecutor] here. Execution happens asynchronously in
+     * [onCoordinatedCommit] when the committed log entry is observed by the Raft leader.
+     * This is the structural mechanism that achieves exactly-once execution under
+     * warp-roster churn: at most one leader exists at any Raft instant, so at most one
+     * [WarpNode] fires [coordinatedExecutor] per committed entry.
      */
     private suspend fun doExecute(taskId: TaskId, kind: CoordinationKind) {
-        val result = when (kind) {
-            CoordinationKind.Free -> executor(taskId)
+        when (kind) {
+            CoordinationKind.Free -> {
+                val result = executor(taskId)
+                recordResult(taskId, result)
+                removeFromQueue(taskId, kind)
+            }
             CoordinationKind.Coordinated -> executeViaRaft(taskId)
+            // Execution, result recording, and queue removal for Coordinated tasks
+            // are handled by onCoordinatedCommit on the Raft leader.
         }
-        recordResult(taskId, result)
-        removeFromQueue(taskId, kind)
     }
 
     /**
-     * Proposes the task to the Raft cluster and — once the entry is committed to the log
-     * — invokes [coordinatedExecutor].
+     * Proposes the task to the Raft cluster with a stable [requestId] derived from [taskId].
      *
-     * The [RaftNode.propose] call suspends until a quorum has committed the log entry,
-     * guaranteeing that the task is durably recorded before any coordinator acts on it.
-     * Raft's total-order log guarantees exactly-once commitment; the [Results] LWW ORMap
-     * backstop absorbs any transient duplicates that arise in edge cases (e.g. a crash
-     * between the commit and the result write).
+     * The call suspends until a quorum has committed the log entry, guaranteeing durability.
+     * [coordinatedExecutor] is **not** invoked here — execution is driven from the committed
+     * log in [onCoordinatedCommit] on the current Raft leader. This separation prevents the
+     * double-execution that occurred when two ring owners both called `coordinatedExecutor`
+     * inline after their respective `propose()` calls returned under warp-roster churn.
+     *
+     * The stable [requestId] (hash of [TaskId.value]) ensures that if this node retries the
+     * same proposal after a leadership failover, the Raft dedup table recognises the serial
+     * and avoids appending a duplicate entry under this node's own client identity.
      */
-    private suspend fun executeViaRaft(taskId: TaskId): String {
-        checkNotNull(raftNode).propose(taskId.value.encodeToByteArray())
-        return coordinatedExecutor(taskId)
+    private suspend fun executeViaRaft(taskId: TaskId) {
+        val requestId = taskId.value.hashCode().toLong()
+        checkNotNull(raftNode).propose(taskId.value.encodeToByteArray(), requestId)
+        // Execution driven from raftNode.committed in onCoordinatedCommit.
+    }
+
+    /**
+     * Called for each [Committed] event emitted by [raftNode]. Executes a coordinated task
+     * exactly once across the cluster per committed entry.
+     *
+     * **Exactly-once guarantee:**
+     * - Only the current Raft leader executes. At most one [WarpNode] holds the leader role
+     *   at any given Raft instant, so at most one peer enters the execution branch.
+     * - [coordinatedApplied] prevents re-execution if two proposals for the same [TaskId]
+     *   both committed (possible under warp-roster churn when the original ring owner and
+     *   its successor each proposed the task before the first removal propagated).
+     * - [Committed.Install] (snapshot installs) are ignored — coordinated tasks are not part
+     *   of the persistent Raft state machine.
+     */
+    private fun onCoordinatedCommit(committed: Committed) {
+        val entry = (committed as? Committed.Entry)?.entry ?: return
+        if (raftNode?.role?.value !is RaftRole.Leader) return
+
+        val taskId = runCatching { TaskId(entry.command.decodeToString()) }.getOrNull() ?: return
+
+        val shouldExecute = lock.withLock {
+            taskId in coordQueueQuilter.state.value.elements && coordinatedApplied.add(taskId)
+        }
+        if (!shouldExecute) return
+
+        scope.launch {
+            runCatchingCancellable {
+                val result = coordinatedExecutor(taskId)
+                recordResult(taskId, result)
+                removeFromQueue(taskId, CoordinationKind.Coordinated)
+            }.onFailure { e ->
+                logger.warn(e) { "WarpNode($selfId): coordinatedExecutor failed for $taskId — resetting" }
+                lock.withLock { coordinatedApplied.remove(taskId) }
+            }
+        }
     }
 
     private fun recordResult(taskId: TaskId, result: String) {

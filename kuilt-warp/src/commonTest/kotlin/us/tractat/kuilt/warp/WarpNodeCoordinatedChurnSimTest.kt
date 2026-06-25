@@ -105,7 +105,7 @@ class WarpNodeCoordinatedChurnSimTest {
                 strategy = ClaimStrategy.Ring,
                 executor = { "free" },
                 coordinatedExecutor = { taskId ->
-                    executionLock.withLock { executionCounts.merge(taskId, 1, Int::plus) }
+                    executionLock.withLock { executionCounts[taskId] = (executionCounts[taskId] ?: 0) + 1 }
                     "coordinated"
                 },
                 raftNode = sim.nodes[nodeId]!!,
