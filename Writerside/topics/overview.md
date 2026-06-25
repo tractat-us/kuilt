@@ -53,6 +53,11 @@ Every peer in a session uses the same `Seam` interface — there is no client/se
 | `kuilt-nearby` | Google Nearby Connections fabric (Android) |
 | `kuilt-webrtc` | WebRTC data-channel fabric (wasmJs) |
 | `kuilt-conformance` | `SeamConformanceSuite` + `RoomConformanceSuite` — prove any fabric or room implementation correct |
+| `kuilt-otel` | Offline-first telemetry: record logs, metrics, and traces on any device; they sync up when the network returns, with no duplicates |
+
+**Beyond the core:** the [Observability](observability.md) page covers `kuilt-otel`
+in depth, and the [Warp](warp.md) page covers an experimental way to spread work
+across a roomful of devices.
 
 ## What kuilt is not
 

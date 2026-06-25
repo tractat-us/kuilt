@@ -135,6 +135,18 @@ Replace `0.6.0` with the [latest release](https://central.sonatype.com/artifact/
 | `kuilt-conformance` | `SeamConformanceSuite` — verifies any fabric impl with one subclass. |
 | `kuilt-test` | Shared fakes and test utilities built on `kuilt-core`. |
 
+**Extras**
+
+| Module | Targets | What it gives you |
+|--------|---------|-------------------|
+| `kuilt-otel` | all | Offline-first OpenTelemetry exporter: record traces, metrics, and logs on any device and have them reconcile when connectivity returns — with no duplicates and no data loss (`WarpTelemetry`, `WarpOtlpBridge`). See the [Observability guide](https://tractat-us.github.io/kuilt/guide/observability.html). |
+
+**Experimental** — pre-1.0, outside the stability surface; API may change, not for production.
+
+| Module | Targets | What it gives you |
+|--------|---------|-------------------|
+| `kuilt-warp` | all | Coordination-free distributed task scheduler over a connected mesh: spread work across whoever is connected, no central boss, no peer doing the same job twice (`WarpNode`). See the [Warp guide](https://tractat-us.github.io/kuilt/guide/warp.html). |
+
 Every module depends only on `kuilt-core` (plus any fabric it wraps).
 
 ## The vocabulary
@@ -176,6 +188,10 @@ The full documentation suite is published to GitHub Pages on every push to `main
   with every code example drawn from real, compiled test code.
 - **[API reference](https://tractat-us.github.io/kuilt/api/)** — Dokka multi-module
   reference for every public symbol, with runnable `@sample` snippets.
+- **[Extras → Observability](https://tractat-us.github.io/kuilt/guide/observability.html)**
+  — the offline-first OpenTelemetry exporter (`kuilt-otel`).
+- **[Experimental → Warp](https://tractat-us.github.io/kuilt/guide/warp.html)**
+  — the coordination-free distributed scheduler (`kuilt-warp`) and the research behind it.
 
 The in-repo sources are **[docs/usage.md](docs/usage.md)** (open/join a WebSocket
 session, discover peers over mDNS, write + conformance-test your own fabric) and
