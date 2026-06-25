@@ -306,6 +306,142 @@ class WarpNodeWebSocketTest {
         }
     }
 
+    /**
+     * Phase-1 go/no-go: strong (agreed) ring over real WebSocket sockets.
+     *
+     * ## What this measures
+     *
+     * The hub-spoke test above feeds each [WarpNode] its OWN seam's roster — the relay sees
+     * `{relay, clientA, clientB}` but each client sees only `{self, relay}`. Those are
+     * three distinct rings, and ownership disagreement between them drives the measured
+     * ~22% dup-rate.
+     *
+     * This test isolates the variable: **roster agreement, not socket topology**. All three
+     * nodes consume the same `MutableStateFlow(setOf(relay, clientA, clientB))` — the agreed
+     * 3-peer view — so every node builds an identical consistent-hash ring. When rings agree,
+     * each task is owned by exactly one node and duplicate executions should approach zero.
+     *
+     * ## Why a shared `MutableStateFlow` is the right proxy for `RaftNode.rosterSnapshot()`
+     *
+     * [WarpNode] consumes only a `Flow<Set<PeerId>>`. A pre-seeded, stable
+     * [MutableStateFlow] is byte-for-byte identical input to what [RaftNode.rosterSnapshot]
+     * emits once Raft membership converges to the full set. The dup-rate physics depend only
+     * on roster agreement, not on what produces it. The [RaftNode.rosterSnapshot] adapter is
+     * already unit-tested in [WarpNodeTest]. Standing up real Raft consensus over WebSocket
+     * seams would exercise Raft (already TCK-covered), not warp's dup behaviour. The shared
+     * flow isolates the relevant variable cleanly.
+     *
+     * ## Assertion
+     *
+     * Dup-rate MUST be ≤ 5%. The 5% margin (not 0%) absorbs any genuine failover-window
+     * race: if a message arrives slightly before the first ring-rebuild tick, one task might
+     * transiently race. A tight bound proves the hypothesis; 0% is the expected steady-state.
+     *
+     * ## Go/no-go significance
+     *
+     * This is the Phase-1 measurement for epic [#809](https://github.com/tractat-us/kuilt/issues/809),
+     * lineage [#823](https://github.com/tractat-us/kuilt/issues/823). Passing this test
+     * confirms: **a strong (agreed) roster drives dup-rate to ~0 over real WebSocket sockets**.
+     * It does NOT graduate Phase 1 — that is a human go/no-go decision.
+     */
+    @Test
+    fun threeNodeFleet_strongRing_dupRateNearZero() {
+        runBlocking {
+            withTimeout(CONVERGENCE_TIMEOUT_MS) {
+                val (serverSeamA, clientSeamA) = connectClientPair(CLIENT_A_ID)
+                val (serverSeamB, clientSeamB) = connectClientPair(CLIENT_B_ID)
+
+                val relaySeam = BroadcastRelaySeam(
+                    selfId = RELAY_ID,
+                    arms = listOf(serverSeamA, serverSeamB),
+                    scope = nodeScope,
+                )
+
+                // The agreed roster: all three peers, known up-front (connections are established).
+                // Every node consumes the same flow → identical rings → each task owned by exactly one node.
+                val agreedRoster = MutableStateFlow(setOf(RELAY_ID, CLIENT_A_ID, CLIENT_B_ID))
+
+                val execLog = ExecutionLog()
+
+                val nodeRelay = WarpNode(
+                    selfId = RELAY_ID,
+                    seam = relaySeam,
+                    rosterFlow = agreedRoster,
+                    scope = nodeScope,
+                    quilterConfig = WS_QUILTER_CONFIG,
+                    executor = { taskId -> execLog.record(RELAY_ID, taskId); "result-$taskId" },
+                )
+                val nodeA = WarpNode(
+                    selfId = CLIENT_A_ID,
+                    seam = clientSeamA,
+                    rosterFlow = agreedRoster,
+                    scope = nodeScope,
+                    quilterConfig = WS_QUILTER_CONFIG,
+                    executor = { taskId -> execLog.record(CLIENT_A_ID, taskId); "result-$taskId" },
+                )
+                val nodeB = WarpNode(
+                    selfId = CLIENT_B_ID,
+                    seam = clientSeamB,
+                    rosterFlow = agreedRoster,
+                    scope = nodeScope,
+                    quilterConfig = WS_QUILTER_CONFIG,
+                    executor = { taskId -> execLog.record(CLIENT_B_ID, taskId); "result-$taskId" },
+                )
+
+                val tasks = (1..TASK_COUNT).map { TaskId("strong-task-$it") }
+                tasks.forEach { nodeRelay.enqueue(it) }
+
+                awaitAllResults(tasks, nodeRelay, nodeA, nodeB)
+
+                val dupRate = execLog.dupRate()
+                val dupPct = "%.1f".format(dupRate * 100)
+                println(
+                    "WarpNodeWebSocketTest (STRONG RING — go/no-go datum): dup-rate=$dupPct%  " +
+                        "(${execLog.dupCount()} dups / ${execLog.totalExecutions()} executions, " +
+                        "$TASK_COUNT tasks, agreed 3-peer roster)",
+                )
+                println(
+                    "Strong-ring datum vs eventual-roster: ~22% (hub-spoke disagreement)  |  " +
+                        "strong-ring budget: ≤${(MAX_STRONG_RING_DUP_RATE * 100).toInt()}%",
+                )
+
+                val allTaskIds = tasks.toSet()
+                assertAll(
+                    {
+                        assertTrue(
+                            dupRate <= MAX_STRONG_RING_DUP_RATE,
+                            "strong-ring dup-rate $dupPct% exceeds tight budget " +
+                                "${(MAX_STRONG_RING_DUP_RATE * 100).toInt()}% — ring disagreement is bleeding through",
+                        )
+                    },
+                    {
+                        assertTrue(
+                            nodeRelay.results.taskIds == allTaskIds,
+                            "relay missing results: ${allTaskIds - nodeRelay.results.taskIds}",
+                        )
+                    },
+                    {
+                        assertTrue(
+                            nodeA.results.taskIds == allTaskIds,
+                            "nodeA missing results: ${allTaskIds - nodeA.results.taskIds}",
+                        )
+                    },
+                    {
+                        assertTrue(
+                            nodeB.results.taskIds == allTaskIds,
+                            "nodeB missing results: ${allTaskIds - nodeB.results.taskIds}",
+                        )
+                    },
+                )
+
+                nodeRelay.close()
+                nodeA.close()
+                nodeB.close()
+                relaySeam.close()
+            }
+        }
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────────────────
 
     /**
@@ -344,7 +480,8 @@ class WarpNodeWebSocketTest {
 
         const val TASK_COUNT = 60
         const val FAILOVER_TASK_COUNT = 20
-        const val MAX_DUP_RATE = 0.35        // ≤ 35%: spike OPT@3-peers ≈ 9-17%; hub-spoke adds ring-disagreement
+        const val MAX_DUP_RATE = 0.35              // ≤ 35%: spike OPT@3-peers ≈ 9-17%; hub-spoke adds ring-disagreement
+        const val MAX_STRONG_RING_DUP_RATE = 0.05 // ≤ 5%: agreed roster → near-zero dups; margin for failover-window races
         const val CONVERGENCE_TIMEOUT_MS = 30_000L
         const val POLL_INTERVAL_MS = 100L
 
