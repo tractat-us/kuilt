@@ -154,7 +154,7 @@ reconnect convergence) is the design.
    `MuxSeam` replay buffer for the app envelope; **or** having a Quilter that receives an
    empty/lagging `FullState` push its current state back; **or** not cancelling the retry on an
    inbound `FullState` that carries less than the local state. **Trigger:** reconnect latency
-   matters in practice — tracked as a follow-up.
+   matters in practice — tracked as [#828](https://github.com/tractat-us/kuilt/issues/828).
 1. **Cross-relay prompt delta-repair.** Heal a mid-stream gap with a targeted delta-range
    resend instead of waiting for reconnect/anti-entropy. Two shapes: route `sendTo` to the
    origin (make the overlay a faithful N-peer `Seam` — needs full-membership `peers`), **or**
