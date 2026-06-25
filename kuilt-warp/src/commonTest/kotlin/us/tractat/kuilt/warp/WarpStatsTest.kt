@@ -1,5 +1,6 @@
 package us.tractat.kuilt.warp
 
+import us.tractat.kuilt.crdt.piece
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
