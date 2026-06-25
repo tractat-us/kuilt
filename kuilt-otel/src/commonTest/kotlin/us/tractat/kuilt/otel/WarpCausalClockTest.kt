@@ -6,6 +6,7 @@ import us.tractat.kuilt.crdt.Dot
 import us.tractat.kuilt.crdt.ReplicaId
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 import us.tractat.kuilt.test.assertAll
 
@@ -66,6 +67,16 @@ class WarpCausalClockTest {
         clock.recover(InMemoryDurableStore())
         val first = clock.tick()
         assertEquals(1L, first.dot.seq)
+    }
+
+    // Corrupt-but-present bytes must FAIL LOUD, not silently reset seq to 0.
+    // Resetting would re-mint dots already used by earlier spans and corrupt causality.
+    @Test
+    fun recoverThrowsOnCorruptBytes() = runTest(StandardTestDispatcher()) {
+        val store = InMemoryDurableStore()
+        store.write(StoreKey("otel.causal.clock"), byteArrayOf(0xDE.toByte(), 0xAD.toByte(), 0xBE.toByte(), 0xEF.toByte()))
+        val clock = WarpCausalClock(replicaA)
+        assertFailsWith<Exception> { clock.recover(store) }
     }
 
     @Test

@@ -108,6 +108,35 @@ class CausalLinkInferenceTest {
         assertTrue(ordered.size >= 2, "scenario should produce multiple links")
     }
 
+    // When two links share (fromSpanId, linkedSpanId) the sort must still be total:
+    // linkedTraceId breaks the tie. Two predecessors with identical spanId bytes but
+    // different traceId bytes must land in a deterministic, consistent order.
+    @Test
+    fun sortIsTotalWhenLinkedSpanIdCollides() {
+        val replicaB = ReplicaId("B")
+        // Two spans with the same spanId bytes but different traceId bytes.
+        val p1 = SpanRecord(
+            traceId = traceId(10), spanId = spanId(1), parentSpanId = null,
+            name = "p1", kind = SpanKind.INTERNAL, startEpochNanos = 1, endEpochNanos = 2,
+            causalStamp = CausalStamp(Dot(replicaB, 1L), emptySet()),
+        )
+        val p2 = SpanRecord(
+            traceId = traceId(20), spanId = spanId(1), parentSpanId = null,
+            name = "p2", kind = SpanKind.INTERNAL, startEpochNanos = 1, endEpochNanos = 2,
+            causalStamp = CausalStamp(Dot(replicaB, 2L), emptySet()),
+        )
+        // Successor points at both predecessors.
+        val s = SpanRecord(
+            traceId = traceId(30), spanId = spanId(2), parentSpanId = null,
+            name = "s", kind = SpanKind.INTERNAL, startEpochNanos = 3, endEpochNanos = 4,
+            causalStamp = CausalStamp(dot(3), setOf(Dot(replicaB, 1L), Dot(replicaB, 2L))),
+        )
+        val forward = inferCausalLinks(listOf(p1, p2, s))
+        val reversed = inferCausalLinks(listOf(s, p2, p1))
+        assertEquals(2, forward.size)
+        assertEquals(forward, reversed)
+    }
+
     @Test
     fun stampedSpanSurvivesOrSetCborRoundTrip() {
         val cbor = Cbor { alwaysUseByteString = true }
