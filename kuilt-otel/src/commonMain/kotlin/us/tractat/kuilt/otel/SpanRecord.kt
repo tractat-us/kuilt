@@ -56,6 +56,15 @@ public data class SpanRecord(
     public val attributes: Map<String, String> = emptyMap(),
     /** Span status. */
     public val status: SpanStatus = SpanStatus.Unset,
+    /**
+     * Optional happens-before position for causal-link inference.
+     *
+     * `null` (the default) means the span was not stamped — today's behavior, no
+     * inference, and byte-compatible with records written before this field existed.
+     * A span only gains inferred [SpanLink]s once it carries a stamp. Kept last so
+     * existing positional/named callers are unaffected.
+     */
+    public val causalStamp: CausalStamp? = null,
 ) {
     init {
         require(traceId.size == 16) {

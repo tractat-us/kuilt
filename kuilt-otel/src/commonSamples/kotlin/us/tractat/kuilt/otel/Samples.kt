@@ -173,3 +173,31 @@ internal suspend fun sampleWarpSpanExporter() {
     check(secondResult == ExportResult.Success)
     check(exporter.snapshot().elements.size == 1) { "duplicate was stored" }
 }
+
+/** @suppress — sample only */
+internal fun sampleInferCausalLinks() {
+    val clock = WarpCausalClock(ReplicaId("device-uuid-abc123"))
+
+    // One tick per span, in creation order — the clock chains the happens-before frontier.
+    val checkout = clock.tick()   // root span of one trace
+    val charge = clock.tick()     // caused by checkout, but in a *different* trace
+
+    fun span(id: Byte, trace: Byte, parent: Byte?, stamp: CausalStamp) = SpanRecord(
+        traceId = ByteString(ByteArray(16) { trace }),
+        spanId = ByteString(ByteArray(8) { id }),
+        parentSpanId = parent?.let { p -> ByteString(ByteArray(8) { p }) },
+        name = "span-$id",
+        kind = SpanKind.INTERNAL,
+        startEpochNanos = 1_000_000_000L,
+        endEpochNanos = 2_000_000_000L,
+        causalStamp = stamp,
+    )
+
+    val checkoutSpan = span(id = 1, trace = 1, parent = null, stamp = checkout)
+    val chargeSpan = span(id = 2, trace = 2, parent = null, stamp = charge)
+
+    // The cross-trace edge explicit context propagation would have lost.
+    val links = inferCausalLinks(listOf(checkoutSpan, chargeSpan))
+    check(links.size == 1)
+    check(links.single().attributes["kuilt.causality"] == "potential")
+}
