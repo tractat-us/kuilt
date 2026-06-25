@@ -7,8 +7,12 @@ package us.tractat.kuilt.warp
 
 import kotlinx.atomicfu.locks.reentrantLock
 import kotlinx.atomicfu.locks.withLock
+import kotlinx.coroutines.test.TestCoroutineScheduler
+import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
@@ -22,7 +26,20 @@ import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
 
-private val FIXED_CLOCK: () -> Instant = { Instant.fromEpochMilliseconds(0L) }
+/** Returns a clock that reads virtual time from [scheduler], keeping it in sync with `delay()` calls. */
+private fun schedulerClock(scheduler: TestCoroutineScheduler): () -> Instant =
+    { Instant.fromEpochMilliseconds(scheduler.currentTime) }
+
+/**
+ * Drains immediate tasks, then advances 1 s to flush one-shot settle-window
+ * delays, then drains again. See [WarpNodeTest]'s `drain()` for the rationale.
+ */
+private fun TestScope.drain() {
+    advanceUntilIdle()
+    advanceTimeBy(1.seconds)
+    runCurrent()
+}
+
 private val TEST_QUILTER_CONFIG = QuilterConfig(
     antiEntropyInterval = 100.milliseconds,
     fullStateRetryInterval = 150.milliseconds,
@@ -39,16 +56,17 @@ class WarpIntentRegisterTest {
         val seamB = loom.join(InMemoryTag("b"))
         val executed = mutableMapOf<TaskId, String>()
         val lock = reentrantLock()
+        val clock = schedulerClock(testScheduler)
         fun node(seam: us.tractat.kuilt.core.Seam) = WarpNode(
             selfId = seam.selfId, seam = seam, rosterFlow = seam.rosterSnapshot(),
-            scope = backgroundScope, quilterConfig = TEST_QUILTER_CONFIG, clock = FIXED_CLOCK,
+            scope = backgroundScope, quilterConfig = TEST_QUILTER_CONFIG, clock = clock,
             strategy = ClaimStrategy.RingWithIntent(),
             executor = { taskId -> lock.withLock { executed[taskId] = seam.selfId.value }; "r-${taskId.value}" },
         )
         val a = node(seamA); val b = node(seamB)
         val tasks = (1..10).map { TaskId("t-$it") }
         tasks.forEach { a.enqueue(it) }
-        advanceUntilIdle()
+        drain()
         assertAll(
             { assertEquals(10, lock.withLock { executed.size }, "every task executed once") },
             { assertEquals(tasks.toSet(), a.results.taskIds, "results converge on A") },
@@ -62,15 +80,16 @@ class WarpIntentRegisterTest {
     fun completedTaskClearsItsIntentEntry() = runTest(UnconfinedTestDispatcher(), timeout = 5.seconds) {
         val loom = InMemoryLoom()
         val seamA = loom.host(Pattern("intent-gc"))
+        val clock = schedulerClock(testScheduler)
         val a = WarpNode(
             selfId = seamA.selfId, seam = seamA, rosterFlow = seamA.rosterSnapshot(),
-            scope = backgroundScope, quilterConfig = TEST_QUILTER_CONFIG, clock = FIXED_CLOCK,
+            scope = backgroundScope, quilterConfig = TEST_QUILTER_CONFIG, clock = clock,
             strategy = ClaimStrategy.RingWithIntent(),
             executor = { taskId -> "r-${taskId.value}" },
         )
         val t = TaskId("gc-task")
         a.enqueue(t)
-        advanceUntilIdle()
+        drain()
         // Result present, queue drained → intent entry must be gone.
         assertEquals(setOf(t), a.results.taskIds, "task completed")
         a.close()

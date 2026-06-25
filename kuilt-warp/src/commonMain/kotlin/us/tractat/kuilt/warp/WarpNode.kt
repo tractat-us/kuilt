@@ -207,6 +207,17 @@ public class WarpNode(
     /** Task IDs we have already started executing; prevents double-execution on this node. */
     private val claimed = mutableSetOf<TaskId>()
 
+    /**
+     * Task IDs for which an [announceAndResolve] coroutine is currently in flight.
+     *
+     * Guarded by [lock]. Prevents duplicate settle coroutines spawned by repeated
+     * [claimOwned] calls (triggered on every queue-state emission and ring rebuild) while
+     * the first coroutine is waiting out the settle window. A task is added here when the
+     * coroutine is launched and removed in the terminal `finally` block so a standing-down
+     * task can be re-evaluated on a later [claimOwned] call.
+     */
+    private val inFlight = mutableSetOf<TaskId>()
+
     /** Peers currently known from [rosterFlow]. Guarded by [lock]. */
     private var rosterPeers: Set<PeerId> = emptySet()
 
@@ -434,33 +445,46 @@ public class WarpNode(
     }
 
     /**
-     * Announce this peer's claim to [taskId], then resolve the winner. Executes immediately
-     * when no competitors are seen in the current local intent state; waits
-     * [ClaimStrategy.RingWithIntent.settleWindow] when a competing claim is already present
-     * so the converged claimant set can determine the winner deterministically.
+     * Announce this peer's claim to [taskId], then resolve the winner. Steady state executes
+     * immediately; inside the disagreement window we wait [ClaimStrategy.RingWithIntent.settleWindow]
+     * for competing claims, then execute only if this peer is the winner.
+     *
+     * At most one coroutine per task is in flight at a time — [inFlight] guards against the
+     * duplicate launches that would otherwise arise from repeated [claimOwned] calls during
+     * the settle window.
      */
     private fun announceAndResolve(taskId: TaskId, strategy: ClaimStrategy.RingWithIntent) {
+        // Skip if already settling — one coroutine per task is enough.
+        val alreadyInFlight = lock.withLock { !inFlight.add(taskId) }
+        if (alreadyInFlight) return
+
         // Announce (free): union selfId into the claimant set. ORMap.put is additive.
         lock.withLock {
             intentQuilter.apply(Patch(intentQuilter.state.value.put(replica, taskId, GSet.of(selfId))))
         }
 
         val mustSettle = lock.withLock {
-            (intentQuilter.state.value[taskId]?.elements ?: emptySet()).any { it != selfId }
+            val sinceChange = clock() - lastRingChangeAt
+            val competing = (intentQuilter.state.value[taskId]?.elements ?: emptySet()).any { it != selfId }
+            sinceChange < strategy.settleWindow || competing
         }
 
         scope.launch {
-            if (mustSettle) delay(strategy.settleWindow) // suspend OUTSIDE the lock
-            val execute = lock.withLock {
-                if (taskId in claimed) return@withLock false
-                if (winner(taskId) == selfId) {
-                    claimed.add(taskId)
-                    true
-                } else {
-                    false // stand down — stay eligible to re-home later
+            try {
+                if (mustSettle) delay(strategy.settleWindow) // suspend OUTSIDE the lock
+                val execute = lock.withLock {
+                    if (taskId in claimed) return@withLock false
+                    if (winner(taskId) == selfId) {
+                        claimed.add(taskId)
+                        true
+                    } else {
+                        false // stand down — stay eligible to re-home later
+                    }
                 }
+                if (execute) doExecute(taskId)
+            } finally {
+                lock.withLock { inFlight.remove(taskId) }
             }
-            if (execute) doExecute(taskId)
         }
     }
 
