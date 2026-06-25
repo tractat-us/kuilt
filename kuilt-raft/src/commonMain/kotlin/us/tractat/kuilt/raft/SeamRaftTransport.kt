@@ -8,6 +8,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.map
 import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.core.PeerNotConnected
 import us.tractat.kuilt.core.Seam
 
 private fun Set<PeerId>.toNodeIds(): Set<NodeId> = mapTo(mutableSetOf()) { NodeId(it.value) }
@@ -47,8 +48,17 @@ public class SeamRaftTransport(private val seam: Seam) : RaftTransport {
             seam.peers.collect { set -> collector.emit(set.toNodeIds()) }
     }
 
-    override suspend fun sendTo(peer: NodeId, message: ByteArray): Unit =
-        seam.sendTo(PeerId(peer.value), message)
+    override suspend fun sendTo(peer: NodeId, message: ByteArray) {
+        try {
+            seam.sendTo(PeerId(peer.value), message)
+        } catch (_: PeerNotConnected) {
+            // Contract (RaftTransport.sendTo): "may silently drop if peer is unreachable."
+            // A voter absent from the Seam is an ordinary partition; Raft retries on the next
+            // replication/heartbeat round. Swallowing here keeps a dropped follower from
+            // crashing the engine. PeerNotConnected is an IllegalStateException, never a
+            // CancellationException, so structured-concurrency cancellation still propagates.
+        }
+    }
 
     override val incoming: Flow<RaftEnvelope> =
         seam.incoming

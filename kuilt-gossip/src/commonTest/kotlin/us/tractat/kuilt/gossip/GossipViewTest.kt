@@ -4,6 +4,7 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
@@ -214,5 +215,29 @@ class GossipViewTest {
                 before.all { it in h.view.active.value },
                 "healthy neighbours survive a roster change (churn-minimising recompute)",
             )
+        }
+
+    // ── ActiveViewPolicy ───────────────────────────────────────────────────────
+
+    @Test
+    fun fullFanoutSelectsEveryOtherPeerAsActive() =
+        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+            val self = PeerId("hub")
+            val roster = MutableStateFlow(setOf(self, PeerId("a"), PeerId("b"), PeerId("c")))
+            val view =
+                GossipView(
+                    selfId = self,
+                    seam = FakeSeam(self),
+                    roster = roster,
+                    rawIncoming = MutableSharedFlow<Swatch>().asSharedFlow(),
+                    random = Random(1L),
+                    clock = { Instant.fromEpochMilliseconds(0) },
+                    activeViewPolicy = ActiveViewPolicy.FullFanout,
+                )
+            view.start(backgroundScope)
+            advanceTimeBy(250) // past DEFAULT_JITTER max (200ms recompute window)
+            runCurrent()
+            assertEquals(setOf(PeerId("a"), PeerId("b"), PeerId("c")), view.active.value)
+            assertEquals(emptyList(), view.spares.value)
         }
 }
