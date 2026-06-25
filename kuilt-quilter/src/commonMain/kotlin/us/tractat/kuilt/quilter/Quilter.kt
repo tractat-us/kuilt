@@ -603,7 +603,7 @@ public class Quilter<S : Quilted<S>>(
         when (msg) {
             is QuiltMessage.Delta -> onDelta(sender, msg)
             is QuiltMessage.Ack -> onAck(msg)
-            is QuiltMessage.FullState -> onFullState(msg)
+            is QuiltMessage.FullState -> onFullState(sender, msg)
             is QuiltMessage.Resend -> onResend(msg)
             is QuiltMessage.Delivered -> onDelivered(sender, msg)
         }
@@ -735,14 +735,36 @@ public class Quilter<S : Quilted<S>>(
         pendingDeltas.keys.removeAll { it <= universalAck }
     }
 
-    private fun onFullState(msg: QuiltMessage.FullState<S>) {
+    /**
+     * Processes an inbound [QuiltMessage.FullState] from [sender].
+     *
+     * Three cases:
+     * - **Incoming advances our state** (`merged != current`): merge, recompute delivered.
+     * - **Incoming is strictly behind** (`merged == current && msg.state != current`): the
+     *   sender is lagging. Push our full state back to it immediately so it heals without
+     *   waiting for the anti-entropy backstop. This is the fix for the reconnect timing
+     *   gap (#828): the reconnecting Quilter sends its own empty first-contact FullState
+     *   (from `onPeersChanged → sendFullStateTo(hub)`) *after* its collector has subscribed,
+     *   so that FullState is guaranteed to reach the hub; the hub sees an empty/lagging state
+     *   and pushes its full history back in response. Prompt, not anti-entropy-cadence.
+     * - **Incoming equals our state exactly** (`msg.state == current`): steady-state tick,
+     *   no-op. No push-back here — avoids a FullState storm when all peers are already equal.
+     *
+     * `sendFullStateTo` is called under [lock] but internally schedules the suspending send
+     * via `scope.launch` (outside the lock), so this call is safe and non-suspending.
+     */
+    private fun onFullState(sender: PeerId, msg: QuiltMessage.FullState<S>) {
         val current = _state.value
         val merged = current.piece(msg.state)
-        // Idempotence guard: skip state update and the downstream recomputeDeliveredLocal()
-        // when the incoming state is dominated (its join equals current). This avoids an
-        // unnecessary O(M log M) tree rebuild on every anti-entropy full-state tick for
-        // replicas already up to date — the common case during steady-state replication.
-        if (merged == current) return
+        if (merged == current) {
+            // Incoming carries no new information for us.
+            if (msg.state != current) {
+                // Sender is strictly behind: push our full state back so it heals promptly.
+                sendFullStateTo(sender)
+            }
+            // When msg.state == current the sender is already up to date — pure no-op.
+            return
+        }
         _state.value = merged
         recomputeDeliveredLocal()
     }
