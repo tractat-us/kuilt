@@ -114,9 +114,13 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.warp.WarpNode")
  * @param strategy How owned tasks are claimed. [ClaimStrategy.Ring] is pure consistent-hash
  *   assignment; [ClaimStrategy.RingWithIntent] adds the intent-register safety net. Defaults
  *   to [ClaimStrategy.RingWithIntent].
- * @param executor Suspending function that performs the work for a given task and returns
- *   a string result. The body is called at most once per task per peer (re-entry after
- *   failover is possible; the [Results] backstop deduplicates).
+ * @param executor Suspending function for [CoordinationKind.Free] tasks. Returns a string
+ *   result. Called at most once per task per peer on the free path (re-entry after failover
+ *   is possible; the [Results] backstop deduplicates).
+ * @param coordinatedExecutor Suspending function for [CoordinationKind.Coordinated] tasks.
+ *   Routes to the escalation path; supply a Raft-backed implementation in production
+ *   (B-2, #859). Defaults to an explicit error so misuse surfaces immediately rather than
+ *   silently routing coordinated tasks down the free path.
  */
 public class WarpNode(
     public val selfId: PeerId,
@@ -128,6 +132,9 @@ public class WarpNode(
     private val heartbeatConfig: HeartbeatConfig = HeartbeatConfig(),
     private val strategy: ClaimStrategy = ClaimStrategy.RingWithIntent(),
     private val executor: suspend (TaskId) -> String,
+    private val coordinatedExecutor: suspend (TaskId) -> String = { taskId ->
+        error("No coordinatedExecutor provided for task $taskId — supply one to WarpNode (B-2, #859)")
+    },
 ) {
     private val replica = ReplicaId(selfId.value)
 
@@ -193,6 +200,25 @@ public class WarpNode(
         scope = scope,
         config = quilterConfig,
         random = kotlin.random.Random(selfId.value.hashCode().toLong() xor 0xAAAAL),
+    )
+
+    private val coordQueueSeam = mux.channel(CHANNEL_COORD_QUEUE)
+
+    /**
+     * Quilter replicating the set of pending [CoordinationKind.Coordinated] task IDs.
+     *
+     * Kept entirely separate from [queueQuilter] so the coordination-free queue is
+     * byte-for-byte unchanged. The escalation path drains from this queue and invokes
+     * [coordinatedExecutor]; Raft-backed consensus wiring is the B-2 (#859) concern.
+     */
+    private val coordQueueQuilter: Quilter<ORSet<TaskId>> = Quilter(
+        replica = replica,
+        seam = coordQueueSeam,
+        initial = ORSet.empty(),
+        messageSerializer = QuiltMessage.serializer(ORSet.serializer(serializer<TaskId>())),
+        scope = scope,
+        config = quilterConfig,
+        random = kotlin.random.Random(selfId.value.hashCode().toLong() xor 0xCCCCL),
     )
 
     // --- Shared mutable state (guarded by lock) ---
@@ -275,9 +301,14 @@ public class WarpNode(
             .onEach { peers -> onPeersChanged(peers) }
             .launchIn(scope)
 
-        // Claim newly-owned tasks whenever the pending set changes.
+        // Claim newly-owned free tasks whenever the pending set changes.
         queueQuilter.state
-            .onEach { pendingSet -> claimOwned(pendingSet) }
+            .onEach { pendingSet -> claimOwned(pendingSet, CoordinationKind.Free) }
+            .launchIn(scope)
+
+        // Claim newly-owned coordinated tasks whenever the coordinated pending set changes.
+        coordQueueQuilter.state
+            .onEach { pendingSet -> claimOwned(pendingSet, CoordinationKind.Coordinated) }
             .launchIn(scope)
     }
 
@@ -286,14 +317,37 @@ public class WarpNode(
     // ---------------------------------------------------------------------------
 
     /**
-     * Add [taskId] to the distributed work queue.
+     * Add [taskId] to the distributed work queue on the [CoordinationKind.Free] path.
      *
      * The add is replicated immediately to all current peers via the Quilter.
      * Idempotent at the ORSet level: a concurrent add of the same ID on another
      * peer survives merge (add-wins).
+     *
+     * Equivalent to `enqueue(taskId, CoordinationKind.Free)`.
      */
     public fun enqueue(taskId: TaskId) {
         queueQuilter.apply(Patch(queueQuilter.state.value.add(replica, taskId)))
+    }
+
+    /**
+     * Add [taskId] to the distributed work queue with the given [CoordinationKind].
+     *
+     * - [CoordinationKind.Free]: routes to the optimistic ring path, calling [executor].
+     *   Equivalent to `enqueue(taskId)` — no behavioral change.
+     * - [CoordinationKind.Coordinated]: routes to the escalation path, calling
+     *   `coordinatedExecutor`. The task is replicated in a separate queue so the
+     *   coordination-free path is completely unaffected. Consensus wiring (B-2, #859)
+     *   slots into `coordinatedExecutor` without any change to this routing.
+     *
+     * Idempotent at the ORSet level: a concurrent add of the same ID on another peer
+     * survives merge (add-wins).
+     */
+    public fun enqueue(taskId: TaskId, kind: CoordinationKind) {
+        when (kind) {
+            CoordinationKind.Free -> enqueue(taskId)
+            CoordinationKind.Coordinated ->
+                coordQueueQuilter.apply(Patch(coordQueueQuilter.state.value.add(replica, taskId)))
+        }
     }
 
     /**
@@ -319,6 +373,7 @@ public class WarpNode(
         queueQuilter.close()
         resultsQuilter.close()
         intentQuilter.close()
+        coordQueueQuilter.close()
     }
 
     // ---------------------------------------------------------------------------
@@ -416,27 +471,28 @@ public class WarpNode(
             ring = newRing
             lastRingChangeAt = clock()
         }
-        claimOwned(queueQuilter.state.value)
+        claimOwned(queueQuilter.state.value, CoordinationKind.Free)
+        claimOwned(coordQueueQuilter.state.value, CoordinationKind.Coordinated)
     }
 
-    private fun claimOwned(pendingSet: ORSet<TaskId>) {
+    private fun claimOwned(pendingSet: ORSet<TaskId>, kind: CoordinationKind) {
         when (val s = strategy) {
-            is ClaimStrategy.Ring -> claimOwnedRing(pendingSet)
-            is ClaimStrategy.RingWithIntent -> claimOwnedWithIntent(pendingSet, s)
+            is ClaimStrategy.Ring -> claimOwnedRing(pendingSet, kind)
+            is ClaimStrategy.RingWithIntent -> claimOwnedWithIntent(pendingSet, s, kind)
         }
     }
 
-    /** Today's behavior: execute every owned, unclaimed task immediately. */
-    private fun claimOwnedRing(pendingSet: ORSet<TaskId>) {
+    /** Execute every owned, unclaimed task immediately on the given [kind] path. */
+    private fun claimOwnedRing(pendingSet: ORSet<TaskId>, kind: CoordinationKind) {
         val toExecute = lock.withLock {
             pendingSet.elements
                 .filter { taskId -> taskId !in claimed && ring.owner(taskId) == selfId }
                 .also { tasks -> claimed.addAll(tasks) }
         }
-        toExecute.forEach { taskId -> executeAsync(taskId) }
+        toExecute.forEach { taskId -> executeAsync(taskId, kind) }
     }
 
-    private fun claimOwnedWithIntent(pendingSet: ORSet<TaskId>, strategy: ClaimStrategy.RingWithIntent) {
+    private fun claimOwnedWithIntent(pendingSet: ORSet<TaskId>, strategy: ClaimStrategy.RingWithIntent, kind: CoordinationKind) {
         // Owned, not-yet-claimed, not-already-in-flight tasks under this peer's current ring view.
         // The inFlight check is a cheap early exit: announceAndResolve re-checks under the lock,
         // but filtering here avoids redundant lock acquisitions on every queue/ring emission.
@@ -445,7 +501,7 @@ public class WarpNode(
                 taskId !in claimed && taskId !in inFlight && ring.owner(taskId) == selfId
             }
         }
-        owned.forEach { taskId -> announceAndResolve(taskId, strategy) }
+        owned.forEach { taskId -> announceAndResolve(taskId, strategy, kind) }
     }
 
     /**
@@ -456,8 +512,12 @@ public class WarpNode(
      * At most one coroutine per task is in flight at a time — [inFlight] guards against the
      * duplicate launches that would otherwise arise from repeated [claimOwned] calls during
      * the settle window.
+     *
+     * The [kind] is carried through to [doExecute] so the correct executor ([executor] for
+     * [CoordinationKind.Free] or [coordinatedExecutor] for [CoordinationKind.Coordinated])
+     * is invoked at the leaf without any change to the claiming or settlement logic.
      */
-    private fun announceAndResolve(taskId: TaskId, strategy: ClaimStrategy.RingWithIntent) {
+    private fun announceAndResolve(taskId: TaskId, strategy: ClaimStrategy.RingWithIntent, kind: CoordinationKind) {
         // Skip if already settling — one coroutine per task is enough.
         val alreadyInFlight = lock.withLock { !inFlight.add(taskId) }
         if (alreadyInFlight) return
@@ -485,7 +545,7 @@ public class WarpNode(
                         false // stand down — stay eligible to re-home later
                     }
                 }
-                if (execute) doExecute(taskId)
+                if (execute) doExecute(taskId, kind)
             } finally {
                 lock.withLock { inFlight.remove(taskId) }
             }
@@ -504,9 +564,9 @@ public class WarpNode(
         return claimants.intersect(effectiveRoster).minByOrNull { it.value }
     }
 
-    private fun executeAsync(taskId: TaskId) {
+    private fun executeAsync(taskId: TaskId, kind: CoordinationKind) {
         scope.launch {
-            runCatchingCancellable { doExecute(taskId) }
+            runCatchingCancellable { doExecute(taskId, kind) }
                 .onFailure { e ->
                     logger.warn(e) { "WarpNode($selfId): executor failed for $taskId — unclaiming" }
                     lock.withLock { claimed.remove(taskId) }
@@ -514,10 +574,21 @@ public class WarpNode(
         }
     }
 
-    private suspend fun doExecute(taskId: TaskId) {
-        val result = executor(taskId)
+    /**
+     * Invoke the correct executor for [taskId] based on [kind], record the result, and
+     * remove the task from its queue.
+     *
+     * [CoordinationKind.Free] calls [executor] (the fast ring path).
+     * [CoordinationKind.Coordinated] calls [coordinatedExecutor] (the escalation path;
+     * Raft consensus wiring lands in B-2, #859).
+     */
+    private suspend fun doExecute(taskId: TaskId, kind: CoordinationKind) {
+        val result = when (kind) {
+            CoordinationKind.Free -> executor(taskId)
+            CoordinationKind.Coordinated -> coordinatedExecutor(taskId)
+        }
         recordResult(taskId, result)
-        removeFromQueue(taskId)
+        removeFromQueue(taskId, kind)
     }
 
     private fun recordResult(taskId: TaskId, result: String) {
@@ -542,15 +613,22 @@ public class WarpNode(
         }
     }
 
-    private fun removeFromQueue(taskId: TaskId) {
+    private fun removeFromQueue(taskId: TaskId, kind: CoordinationKind) {
         // Hold the WarpNode lock so concurrent `remove` calls always operate on the
         // latest state. Without this, two concurrent removes on the same base state
         // would each produce a `remove` delta, both of which are correct (idempotent),
         // but the key invariant below is that the state read happens atomically with
         // the apply so the delta is always a subset of the current state.
         lock.withLock {
-            queueQuilter.apply(Patch(queueQuilter.state.value.remove(taskId)))
-            intentQuilter.apply(Patch(intentQuilter.state.value.remove(taskId)))
+            when (kind) {
+                CoordinationKind.Free -> {
+                    queueQuilter.apply(Patch(queueQuilter.state.value.remove(taskId)))
+                    intentQuilter.apply(Patch(intentQuilter.state.value.remove(taskId)))
+                }
+                CoordinationKind.Coordinated -> {
+                    coordQueueQuilter.apply(Patch(coordQueueQuilter.state.value.remove(taskId)))
+                }
+            }
         }
     }
 
@@ -563,6 +641,9 @@ public class WarpNode(
         const val CHANNEL_HEARTBEAT: Byte = 0x03
 
         const val CHANNEL_INTENT: Byte = 0x04
+
+        /** Mux-channel for the [CoordinationKind.Coordinated] task queue. */
+        const val CHANNEL_COORD_QUEUE: Byte = 0x05
     }
 }
 
