@@ -48,7 +48,9 @@ import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertTrue
+import us.tractat.kuilt.quilter.QuilterConfig
 import us.tractat.kuilt.test.assertAll
+import kotlin.time.Duration.Companion.seconds
 
 /**
  * Phase-1 real-Seam measurement for [WarpNode] — duplicate-execution rate over
@@ -150,19 +152,25 @@ class WarpNodeWebSocketTest {
                 val nodeRelay = WarpNode(
                     selfId = RELAY_ID,
                     seam = relaySeam,
+                    rosterFlow = relaySeam.rosterSnapshot(),
                     scope = nodeScope,
+                    quilterConfig = WS_QUILTER_CONFIG,
                     executor = { taskId -> execLog.record(RELAY_ID, taskId); "result-$taskId" },
                 )
                 val nodeA = WarpNode(
                     selfId = CLIENT_A_ID,
                     seam = clientSeamA,
+                    rosterFlow = clientSeamA.rosterSnapshot(),
                     scope = nodeScope,
+                    quilterConfig = WS_QUILTER_CONFIG,
                     executor = { taskId -> execLog.record(CLIENT_A_ID, taskId); "result-$taskId" },
                 )
                 val nodeB = WarpNode(
                     selfId = CLIENT_B_ID,
                     seam = clientSeamB,
+                    rosterFlow = clientSeamB.rosterSnapshot(),
                     scope = nodeScope,
+                    quilterConfig = WS_QUILTER_CONFIG,
                     executor = { taskId -> execLog.record(CLIENT_B_ID, taskId); "result-$taskId" },
                 )
 
@@ -243,13 +251,17 @@ class WarpNodeWebSocketTest {
                 val nodeRelay = WarpNode(
                     selfId = RELAY_ID,
                     seam = serverSeamA,
+                    rosterFlow = serverSeamA.rosterSnapshot(),
                     scope = nodeScope,
+                    quilterConfig = WS_QUILTER_CONFIG,
                     executor = { taskId -> execLog.record(RELAY_ID, taskId); "result-$taskId" },
                 )
                 val nodeA = WarpNode(
                     selfId = CLIENT_A_ID,
                     seam = clientSeamA,
+                    rosterFlow = clientSeamA.rosterSnapshot(),
                     scope = nodeScope,
+                    quilterConfig = WS_QUILTER_CONFIG,
                     executor = { taskId -> execLog.record(CLIENT_A_ID, taskId); "result-$taskId" },
                 )
 
@@ -335,6 +347,19 @@ class WarpNodeWebSocketTest {
         const val MAX_DUP_RATE = 0.35        // ≤ 35%: spike OPT@3-peers ≈ 9-17%; hub-spoke adds ring-disagreement
         const val CONVERGENCE_TIMEOUT_MS = 30_000L
         const val POLL_INTERVAL_MS = 100L
+
+        /**
+         * Short-cadence [QuilterConfig] for real-IO tests.
+         *
+         * Anti-entropy and full-state retry are short so a missed delta heals within seconds.
+         * `expectVirtualTime = true` suppresses the TestDispatcher guard — this test runs on
+         * [Dispatchers.Default] (real-IO exception; see file header), not a test dispatcher.
+         */
+        val WS_QUILTER_CONFIG = QuilterConfig(
+            antiEntropyInterval = 2.seconds,
+            fullStateRetryInterval = 3.seconds,
+            expectVirtualTime = true,
+        )
     }
 
     // ── ExecutionLog ─────────────────────────────────────────────────────────────

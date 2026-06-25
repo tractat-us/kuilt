@@ -14,6 +14,7 @@ import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.launch
 import us.tractat.kuilt.core.DeliveryPolicy
 import us.tractat.kuilt.raft.ClientId
+import us.tractat.kuilt.raft.ClusterConfig
 import us.tractat.kuilt.raft.Committed
 import us.tractat.kuilt.raft.DedupKey
 import us.tractat.kuilt.raft.LogEntry
@@ -64,6 +65,7 @@ public class FakeRaftNode(
      * pass a fixed [ClientId] to assert exact dedup keys.
      */
     public val clientId: ClientId = ClientId.auto(selfId, Random(selfId.value.hashCode())),
+    initialMembership: ClusterConfig = ClusterConfig.ofVoters(listOf(NodeId("self"))),
 ) : RaftNode {
 
     /** Monotonic auto-serial for the no-requestId [propose] form. */
@@ -74,6 +76,9 @@ public class FakeRaftNode(
 
     private val _leader = MutableStateFlow(initialLeader)
     override val leader: StateFlow<NodeId?> = _leader.asStateFlow()
+
+    private val _membership = MutableStateFlow(initialMembership)
+    override val membership: StateFlow<ClusterConfig> = _membership.asStateFlow()
 
     private val _commitIndex = MutableStateFlow(initialCommitIndex)
     override val commitIndex: StateFlow<Long> = _commitIndex.asStateFlow()
@@ -208,6 +213,11 @@ public class FakeRaftNode(
     /** Update [leader] to [newLeader]. */
     public fun setLeader(newLeader: NodeId?) {
         _leader.value = newLeader
+    }
+
+    /** Update [membership] to [newMembership]. */
+    public fun setMembership(newMembership: ClusterConfig) {
+        _membership.value = newMembership
     }
 
     /** Set [commitIndex] to [index]. Does not push any entry onto [committed]. */

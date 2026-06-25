@@ -4,7 +4,7 @@
  * Runs under [UnconfinedTestDispatcher] (the same pattern as the Quilter tests) with
  * [advanceUntilIdle] after mutations so the event-driven execution loops drain fully.
  *
- * WarpNode has no re-arming timers of its own — it is event-driven via seam.peers and
+ * WarpNode has no re-arming timers of its own — it is event-driven via rosterFlow and
  * Quilter state flows. The Quilter underneath has an anti-entropy loop, but under
  * UnconfinedTestDispatcher delays execute eagerly so advanceUntilIdle is safe.
  */
@@ -17,19 +17,118 @@ package us.tractat.kuilt.warp
 
 import kotlinx.atomicfu.locks.reentrantLock
 import kotlinx.atomicfu.locks.withLock
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
+import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.quilter.QuilterConfig
 import kotlin.test.Test
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
+import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 
+/** Short-cadence [QuilterConfig] for tests that need fast anti-entropy. */
+private val TEST_QUILTER_CONFIG = QuilterConfig(
+    antiEntropyInterval = 100.milliseconds,
+    fullStateRetryInterval = 150.milliseconds,
+    expectVirtualTime = true,
+)
+
 class WarpNodeTest {
+
+    /**
+     * When [WarpNode] is constructed with a custom [rosterFlow], it drives ring
+     * construction from that flow — not from [us.tractat.kuilt.core.Seam.peers].
+     *
+     * Proof: we hand WarpNode a single-peer roster (only selfId) via a
+     * [MutableStateFlow]. Because the ring contains only one peer, that peer owns
+     * every task. We then update the roster to add a second peer and confirm the
+     * ring rebuilds: tasks are now split between both peers.
+     *
+     * This proves the roster source is the injected flow, not a hardcoded seam binding.
+     */
+    @Test
+    fun injectedRosterFlowDrivesRingRebuild() = runTest(UnconfinedTestDispatcher(), timeout = 5.seconds) {
+        val loom = InMemoryLoom()
+        val seamA = loom.host(Pattern("roster-inject-test"))
+        val seamB = loom.join(InMemoryTag("b"))
+
+        // Start with a single-peer roster — only peer A.
+        val rosterFlow = MutableStateFlow<Set<PeerId>>(setOf(seamA.selfId))
+
+        val executedByA = mutableListOf<TaskId>()
+        val executedByB = mutableListOf<TaskId>()
+        val lock = reentrantLock()
+
+        val nodeA = WarpNode(
+            selfId = seamA.selfId,
+            seam = seamA,
+            rosterFlow = rosterFlow,
+            scope = backgroundScope,
+            quilterConfig = TEST_QUILTER_CONFIG,
+            executor = { taskId ->
+                lock.withLock { executedByA.add(taskId) }
+                "result-${taskId.value}"
+            },
+        )
+        val nodeB = WarpNode(
+            selfId = seamB.selfId,
+            seam = seamB,
+            rosterFlow = rosterFlow,
+            scope = backgroundScope,
+            quilterConfig = TEST_QUILTER_CONFIG,
+            executor = { taskId ->
+                lock.withLock { executedByB.add(taskId) }
+                "result-${taskId.value}"
+            },
+        )
+
+        // With only peer A in the roster, A owns every task.
+        val singleOwnerTasks = (1..4).map { TaskId("solo-task-$it") }
+        singleOwnerTasks.forEach { nodeA.enqueue(it) }
+        advanceUntilIdle()
+
+        val soloExecutedByA = lock.withLock { executedByA.toList() }
+        assertEquals(
+            singleOwnerTasks.toSet(),
+            soloExecutedByA.toSet(),
+            "with single-peer roster, nodeA must own all tasks",
+        )
+        assertEquals(
+            emptyList<TaskId>(),
+            lock.withLock { executedByB.toList() },
+            "nodeB must execute nothing when not in the roster",
+        )
+
+        // Expand the roster to include peer B — ring should rebuild.
+        lock.withLock {
+            executedByA.clear()
+            executedByB.clear()
+        }
+        rosterFlow.value = setOf(seamA.selfId, seamB.selfId)
+        advanceUntilIdle()
+
+        // Enqueue more tasks — now both peers are on the ring.
+        val twoOwnerTasks = (1..6).map { TaskId("two-peer-task-$it") }
+        twoOwnerTasks.forEach { nodeA.enqueue(it) }
+        advanceUntilIdle()
+
+        val allExecuted = lock.withLock { executedByA + executedByB }
+        assertEquals(
+            twoOwnerTasks.toSet(),
+            allExecuted.toSet(),
+            "all tasks must be executed after roster expansion",
+        )
+
+        nodeA.close()
+        nodeB.close()
+    }
 
     /**
      * In a two-node mesh, every task is executed by exactly its ring owner.
@@ -49,7 +148,9 @@ class WarpNodeTest {
         val nodeA = WarpNode(
             selfId = seamA.selfId,
             seam = seamA,
+            rosterFlow = seamA.rosterSnapshot(),
             scope = backgroundScope,
+            quilterConfig = TEST_QUILTER_CONFIG,
             executor = { taskId ->
                 lock.withLock { executedBy[taskId] = seamA.selfId.value }
                 "result-${taskId.value}"
@@ -58,7 +159,9 @@ class WarpNodeTest {
         val nodeB = WarpNode(
             selfId = seamB.selfId,
             seam = seamB,
+            rosterFlow = seamB.rosterSnapshot(),
             scope = backgroundScope,
+            quilterConfig = TEST_QUILTER_CONFIG,
             executor = { taskId ->
                 lock.withLock { executedBy[taskId] = seamB.selfId.value }
                 "result-${taskId.value}"
@@ -98,9 +201,9 @@ class WarpNodeTest {
             "done-$label-${taskId.value}"
         }
 
-        val nodeA = WarpNode(seamA.selfId, seamA, backgroundScope, executor("A"))
-        val nodeB = WarpNode(seamB.selfId, seamB, backgroundScope, executor("B"))
-        val nodeC = WarpNode(seamC.selfId, seamC, backgroundScope, executor("C"))
+        val nodeA = WarpNode(seamA.selfId, seamA, seamA.rosterSnapshot(), backgroundScope, TEST_QUILTER_CONFIG, executor("A"))
+        val nodeB = WarpNode(seamB.selfId, seamB, seamB.rosterSnapshot(), backgroundScope, TEST_QUILTER_CONFIG, executor("B"))
+        val nodeC = WarpNode(seamC.selfId, seamC, seamC.rosterSnapshot(), backgroundScope, TEST_QUILTER_CONFIG, executor("C"))
 
         // Let the three-peer mesh stabilise
         advanceUntilIdle()
@@ -139,13 +242,17 @@ class WarpNodeTest {
         val nodeA = WarpNode(
             selfId = seamA.selfId,
             seam = seamA,
+            rosterFlow = seamA.rosterSnapshot(),
             scope = backgroundScope,
+            quilterConfig = TEST_QUILTER_CONFIG,
             executor = { taskId -> "result-${taskId.value}" },
         )
         val nodeB = WarpNode(
             selfId = seamB.selfId,
             seam = seamB,
+            rosterFlow = seamB.rosterSnapshot(),
             scope = backgroundScope,
+            quilterConfig = TEST_QUILTER_CONFIG,
             executor = { taskId -> "result-${taskId.value}" },
         )
 
@@ -181,13 +288,17 @@ class WarpNodeTest {
         val nodeA = WarpNode(
             selfId = seamA.selfId,
             seam = seamA,
+            rosterFlow = seamA.rosterSnapshot(),
             scope = backgroundScope,
+            quilterConfig = TEST_QUILTER_CONFIG,
             executor = { taskId -> "result-${taskId.value}" },
         )
         val nodeB = WarpNode(
             selfId = seamB.selfId,
             seam = seamB,
+            rosterFlow = seamB.rosterSnapshot(),
             scope = backgroundScope,
+            quilterConfig = TEST_QUILTER_CONFIG,
             executor = { taskId -> "result-${taskId.value}" },
         )
 
