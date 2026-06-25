@@ -72,4 +72,44 @@ public sealed class DraftStage {
     public data class Embroider(override val opId: OpId) : DraftStage() {
         override val coordinationKind: CoordinationKind get() = CoordinationKind.Coordinated
     }
+
+    /**
+     * Two or more adjacent [Map] stages fused into a single pipeline unit by the E-2 optimizer.
+     *
+     * The E-2 [Draft.fuseAdjacent] rewrite collapses a run of consecutive [Map] stages into
+     * one [FusedMap] so the E-5 runtime can apply them in a single pass. All constituent
+     * transforms are monotone — per CALM, adjacent monotone stages commute, so fusion is safe
+     * by construction and never changes the convergent result.
+     *
+     * [opIds] holds the original operation names in execution order. [opId] (from
+     * [DraftStage]) returns [opIds].first() as a representative identifier; use [opIds] for the
+     * complete ordered list. The E-3 cost model should iterate [opIds] to count fused operations.
+     *
+     * @param opIds ordered list of the original [Map] operation identifiers; must be non-empty.
+     */
+    public data class FusedMap(public val opIds: List<OpId>) : DraftStage() {
+        init { require(opIds.isNotEmpty()) { "FusedMap requires at least one opId" } }
+        override val opId: OpId get() = opIds.first()
+        override val coordinationKind: CoordinationKind get() = CoordinationKind.Free
+    }
+
+    /**
+     * Two or more adjacent [Filter] stages fused into a single pipeline unit by the E-2 optimizer.
+     *
+     * The E-2 [Draft.fuseAdjacent] rewrite collapses a run of consecutive [Filter] stages into
+     * one [FusedFilter] so the E-5 runtime can evaluate all predicates in a single pass. All
+     * constituent predicates are monotone — per CALM, adjacent monotone stages commute, so fusion
+     * is safe by construction and never changes the convergent result.
+     *
+     * [opIds] holds the original predicate names in execution order. [opId] (from [DraftStage])
+     * returns [opIds].first() as a representative identifier; use [opIds] for the complete ordered
+     * list. The E-3 cost model should iterate [opIds] to count fused predicates.
+     *
+     * @param opIds ordered list of the original [Filter] operation identifiers; must be non-empty.
+     */
+    public data class FusedFilter(public val opIds: List<OpId>) : DraftStage() {
+        init { require(opIds.isNotEmpty()) { "FusedFilter requires at least one opId" } }
+        override val opId: OpId get() = opIds.first()
+        override val coordinationKind: CoordinationKind get() = CoordinationKind.Free
+    }
 }
