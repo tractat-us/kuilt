@@ -12,6 +12,24 @@ import us.tractat.kuilt.crdt.ReplicaId
  * change will break the build, not silently produce stale documentation.
  */
 
+// ── shuttle / Draft ──────────────────────────────────────────────────────────
+
+/**
+ * Build a [Draft] pipeline that maps and filters coordination-free, then embroideries
+ * (consensus) once at the end. Nothing executes — only OpIds are recorded.
+ */
+@Suppress("unused")
+internal fun sampleShuttle() {
+    val draft: Draft<ByteArray> = Warp.shuttle(OpId("docs"))
+        .map(OpId("score"))
+        .filter(OpId("above-threshold"))
+        .embroider(OpId("rank"))
+
+    check(draft.stages.size == 4)
+    check(draft.isMonotone.not())          // has an Embroider stage
+    check(draft.embroidery?.opId == OpId("rank"))
+}
+
 // ── zip ──────────────────────────────────────────────────────────────────────
 
 /**
