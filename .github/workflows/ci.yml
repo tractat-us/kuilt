@@ -305,6 +305,16 @@ jobs:
           ) &
           echo "JSTACK_PID=$!" >> "$GITHUB_ENV"
 
+      - name: Log system resources before wasm tests
+        # Snapshot memory + CPU before the Karma/Chrome burst so a resource-contention
+        # disconnect (OOM-killed Chrome, swap thrash, CPU starvation) is distinguishable
+        # from a slow test. Printed to the step log — no artifact needed.
+        run: |
+          echo "=== memory ===" && free -h
+          echo "=== cpus ===" && nproc
+          echo "=== disk ===" && df -h /
+          echo "=== load ===" && uptime
+
       - name: wasm + native tests
         # wasmJsTest (incl. wasmJsBrowserTest — Binaryen wasm-opt + Karma Chrome),
         # macosArm64Test and iosSimulatorArm64Test cover every non-JVM/Android test
@@ -324,6 +334,19 @@ jobs:
             kill "$JSTACK_PID" 2>/dev/null || true
           fi
 
+      - name: Collect OOM evidence on failure
+        # On a disconnect that looks resource-driven, the kernel OOM-killer logs the
+        # victim process (Chrome/java). Captured here and uploaded with the artifact.
+        if: failure()
+        run: |
+          mkdir -p build/jstack-dumps
+          echo "=== dmesg OOM / killed-process lines ===" >> build/jstack-dumps/oom-evidence.txt
+          dmesg 2>/dev/null | grep -iE 'killed process|oom.kill|out of memory|memory cgroup' \
+            >> build/jstack-dumps/oom-evidence.txt || echo "(no OOM lines found)" \
+            >> build/jstack-dumps/oom-evidence.txt
+          echo "=== memory at failure ===" >> build/jstack-dumps/oom-evidence.txt
+          free -h >> build/jstack-dumps/oom-evidence.txt
+
       - name: Upload test reports
         if: always()
         uses: actions/upload-artifact@v7
@@ -332,6 +355,7 @@ jobs:
           path: |
             **/build/reports/tests/
             **/build/test-results/
+            **/build/karma-config.d/
             build/jstack-dumps/
 
   # ── detekt ───────────────────────────────────────────────────────────────
