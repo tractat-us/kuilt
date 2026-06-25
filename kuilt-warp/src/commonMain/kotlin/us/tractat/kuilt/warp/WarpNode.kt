@@ -199,10 +199,20 @@ public class WarpNode(
     private val partitionedPeers = mutableSetOf<PeerId>()
 
     /**
-     * Per-peer detector collection jobs, keyed by [PeerId].
+     * Per-peer umbrella [Job]s, keyed by [PeerId].
      *
-     * Started when a peer appears in [rosterFlow] (and is not [selfId]).
-     * Cancelled when the peer departs from [rosterFlow] or the node closes.
+     * Each entry is the [Job] returned by the top-level `scope.launch { }` that owns ALL
+     * three coroutines belonging to a detector:
+     * - the [HeartbeatPartitionDetector]'s ping loop (started via `detector.start(this)`)
+     * - the [HeartbeatPartitionDetector]'s incoming-collection loop (ditto)
+     * - the events-collector coroutine (`detector.events.collect { … }`)
+     *
+     * Because `detector.start(this)` is passed the same [CoroutineScope] as the outer
+     * `launch` body, the two detector coroutines become structured children of the umbrella
+     * Job. Calling `cancel()` on the umbrella Job atomically tears down all three.
+     *
+     * Storing only the events-collector Job was the previous (buggy) approach — it left
+     * the detector's ping and incoming loops running as siblings in [scope] forever.
      *
      * Guarded by [lock].
      */
@@ -288,8 +298,9 @@ public class WarpNode(
             added to removed
         }
 
-        // Stop detectors for departed peers (outside the lock — detector.stop() is suspend-free here
-        // since we're just cancelling jobs).
+        // Cancel the umbrella Job for each departed peer. Cancelling the Job tears down
+        // the detector's ping loop, its incoming-collection loop, and the events-collector
+        // coroutine together — no coroutines leak into the parent scope.
         removed.forEach { peerId ->
             val job = lock.withLock {
                 partitionedPeers.remove(peerId)
@@ -305,15 +316,19 @@ public class WarpNode(
     }
 
     /**
-     * Starts a [HeartbeatPartitionDetector] for [peerId].
+     * Starts a [HeartbeatPartitionDetector] for [peerId] inside a dedicated umbrella coroutine.
      *
      * The detector receives a [PerPeerSeam] — a thin adapter that filters [rawIncoming]
      * to frames from [peerId] only and delegates sends to the underlying [seam]. This
      * lets the detector subscribe to per-peer ping/pong traffic without competing for
      * the single-consumer [seam.incoming] channel (which the init fan-out loop holds).
      *
-     * A separate coroutine in [scope] collects the detector's events and maps them to
-     * ring rebuilds via [handlePartitionEvent].
+     * `scope.launch { }` creates an umbrella [Job] that is a structured child of [scope].
+     * `detector.start(this)` passes the umbrella coroutine's [CoroutineScope] to the
+     * detector, so both the ping loop and the incoming-collection loop are launched as
+     * children of the umbrella Job. The events-collector (`detector.events.collect { }`)
+     * runs inside the same umbrella body. Cancelling the umbrella Job (via [detectorJobs])
+     * atomically tears down all three coroutines. The umbrella Job is stored in [detectorJobs].
      */
     private fun startDetector(peerId: PeerId) {
         val perPeerSeam = PerPeerSeam(seam, peerId, rawIncoming)
@@ -323,12 +338,14 @@ public class WarpNode(
             config = heartbeatConfig,
             clock = clock,
         )
-        detector.start(scope)
-
-        val job = scope.launch {
+        // The umbrella launch body is `this` CoroutineScope.
+        // `detector.start(this)` makes the ping loop and incoming-collection loop children
+        // of this coroutine so they are cancelled when this Job is cancelled.
+        val umbrellaJob = scope.launch {
+            detector.start(this)
             detector.events.collect { event -> handlePartitionEvent(event) }
         }
-        lock.withLock { detectorJobs[peerId] = job }
+        lock.withLock { detectorJobs[peerId] = umbrellaJob }
     }
 
     private fun handlePartitionEvent(event: PartitionEvent) {
