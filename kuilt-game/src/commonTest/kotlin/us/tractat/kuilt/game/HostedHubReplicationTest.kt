@@ -20,6 +20,7 @@ import us.tractat.kuilt.core.fabric.meshSeam
 import us.tractat.kuilt.crdt.Patch
 import us.tractat.kuilt.crdt.Rga
 import us.tractat.kuilt.gossip.GossipSeam
+import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.quilter.Quilter
 import us.tractat.kuilt.quilter.QuilterConfig
 import us.tractat.kuilt.test.fabric.Star
@@ -28,10 +29,10 @@ import us.tractat.kuilt.test.fabric.inMemoryStarOf
 import kotlin.coroutines.ContinuationInterceptor
 import kotlin.coroutines.CoroutineContext
 import kotlin.random.Random
-import kotlin.test.Ignore
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
+import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
 
@@ -92,47 +93,71 @@ class HostedHubReplicationTest {
     }
 
     /**
-     * RECONNECT (stretch) — currently blocked by the deferred roster-full reconnect gap.
+     * RECONNECT: a dropped voter's seat is freed by host liveness-eviction, so a fresh-identity
+     * reconnect is admitted and heals to the full chat history via Quilter FullState.
      *
-     * The hub hosts with `peerCount = 4` / [ReturnPolicy.FullMembership] and **no** `livenessConfig`,
-     * so once all four voters are admitted the host publishes admission-closed and its admit loop
-     * exits. Dropping `client-1` does **not** free its seat: with no liveness monitoring the leader
-     * never evicts the dead voter, so the roster stays full and admission stays closed. A
-     * reconnecting peer with a fresh identity (`client-1-recon`) is therefore rejected with
-     * [RosterFullException] inside [gameJoin] — the FullState chat heal never gets a chance because
-     * we never obtain a [GameSession] to hang the chat Quilter on.
-     *
-     * This is the [gameHost]-documented deferred concern: "A peer arriving once the roster is
-     * already full is the separate, deferred concern in #587." Healing a post-quorum reconnect needs
-     * one of: (a) the host running with `livenessConfig` so the dropped voter is evicted and its seat
-     * re-opened (then a fresh `gameJoin` succeeds and FullState heals), or (b) a reconnect entry point
-     * that re-occupies the *same* seat under the original identity. Neither exists on this base, and
-     * the brief forbids hand-wiring around `gameJoin`, so this test is ignored pending #587.
+     * The hub hosts with a [fastLivenessConfig] and a virtual-time clock, so the leader runs a
+     * [us.tractat.kuilt.liveness.HeartbeatPartitionDetector] per voter. When `client-1` drops it
+     * stops answering heartbeat pings; after [HeartbeatConfig.reconnectWindow] the leader observes
+     * `PeerLost`, evicts the dead voter (roster 4 → 3) and **re-opens admission**. A reconnecting
+     * peer with a fresh identity (`client-1-recon`) is then admitted and obtains a [GameSession].
+     * The hub's first-contact FullState races the reconnecting chat Quilter's collector start-up and
+     * is dropped (MuxSeam is replay = 0), so the heal lands on the hub's anti-entropy backstop, which
+     * re-pushes the full state — converging the reconnecting client to `[before, during]`.
      */
-    @Ignore(
-        "roster-full reconnect (deferred #587): a fresh-identity gameJoin after the roster fills " +
-            "throws RosterFullException; needs host liveness-eviction or a same-seat reconnect path.",
-    )
     @Test
     fun droppedClientReconnectsViaFullState() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
-        val game = setupStarGame(n = 3)
+        // Virtual-time clock the host's heartbeat detectors read; the test advances `nowMs`
+        // alongside advanceTimeBy so silence is measured against the same virtual clock.
+        val liveness = fastLivenessConfig()
+        var nowMs = 0L
+        // The hub pushes the reconnecting peer its first-contact FullState during gameJoin — before
+        // the reconnecting chat Quilter is collecting — so that initial frame is dropped (MuxSeam is
+        // replay = 0). The hub's anti-entropy backstop re-pushes the full state on its next round, so
+        // the heal converges. With production defaults (anti-entropy = 1 min) that would exceed the
+        // 5 s virtual-time bound; tightening the interval lets the backstop fire inside the budget.
+        val chatConfig = QuilterConfig(
+            expectVirtualTime = true,
+            antiEntropyInterval = 25.milliseconds,
+        )
+        val game = setupStarGame(
+            n = 3,
+            livenessConfig = liveness,
+            clock = { Instant.fromEpochMilliseconds(nowMs) },
+            chatConfig = chatConfig,
+        )
 
         game.clientChats[0].appendChat("before")
         advanceTimeBy(1000)
         runCurrent()
+        nowMs += 1000
 
         game.dropClient(1)
-        advanceTimeBy(1000)
-        runCurrent()
+        nowMs += 500 // dropClient advances 500 ms of virtual time internally.
 
         game.clientChats[0].appendChat("during")
         advanceTimeBy(1000)
         runCurrent()
+        nowMs += 1000
 
-        // RECONNECT: client 1 rejoins via a fresh link + gameJoin, heals to full history via FullState.
-        val rejoined = game.reconnectClient(1)
-        advanceTimeBy(2000)
+        // Advance past timeout + reconnectWindow (+ a few intervals) so the host's detector for
+        // client-1 fires PeerLost, the leader evicts it, and admission re-opens for a replacement.
+        val windowMs = liveness.timeout.inWholeMilliseconds +
+            liveness.reconnectWindow.inWholeMilliseconds +
+            liveness.interval.inWholeMilliseconds * 4
+        nowMs += windowMs
+        advanceTimeBy(windowMs)
         runCurrent()
+
+        // RECONNECT: client 1 rejoins via a fresh link + gameJoin, then heals to full history once the
+        // hub's anti-entropy backstop re-pushes the FullState. Advance in small bounded steps so the
+        // backstop rounds fire (never advanceUntilIdle — the heartbeat/election timers re-arm forever).
+        val rejoined = game.reconnectClient(1)
+        repeat(30) {
+            advanceTimeBy(20)
+            runCurrent()
+            nowMs += 20
+        }
         assertEquals(
             listOf("before", "during"),
             rejoined.state.value.toList(),
@@ -155,6 +180,7 @@ class HostedHubReplicationTest {
         val clientSessions: List<GameSession>,
         val hostChat: Quilter<Rga<String>>,
         val clientChats: List<Quilter<Rga<String>>>,
+        val chatConfig: QuilterConfig,
     ) {
         val hub get() = star.hub
         val hubMesh get() = star.hubMesh
@@ -198,7 +224,7 @@ class HostedHubReplicationTest {
                 clock = { Instant.fromEpochMilliseconds(0) },
             ).also { it.start(scope) }
             val reconSession = scope.gameJoin(reconGossip, raftConfig = fastRaftConfig(seed = 900L + i))
-            return chatQuilter(reconSession, scope)
+            return chatQuilter(reconSession, scope, chatConfig, Random(920L + i))
         }
     }
 
@@ -206,8 +232,19 @@ class HostedHubReplicationTest {
      * Build a started star of [n] clients around one hub, host a game (`peerCount = n + 1`,
      * FullMembership), join every client, and stand up a chat [Quilter] on each session's
      * `chat` app-channel. Reuses the exact concurrent host+joins bootstrap idiom across tests.
+     *
+     * When [livenessConfig] is supplied (with a virtual-time [clock] driven by the test's
+     * scheduler), the host runs per-voter [HeartbeatConfig] liveness monitoring: a dropped voter
+     * that stops answering heartbeat pings is evicted and its seat re-opened. The forward-flow and
+     * drop-survival tests pass `livenessConfig = null` so they carry no heartbeat traffic; only the
+     * reconnect test enables it.
      */
-    private suspend fun TestScope.setupStarGame(n: Int): HostedStarGame {
+    private suspend fun TestScope.setupStarGame(
+        n: Int,
+        livenessConfig: HeartbeatConfig? = null,
+        clock: () -> Instant = { Instant.fromEpochMilliseconds(0) },
+        chatConfig: QuilterConfig = QuilterConfig(expectVirtualTime = true),
+    ): HostedStarGame {
         val dispatcher = coroutineContext[ContinuationInterceptor]!!
         val star = backgroundScope.inMemoryStarOf(n = n)
         advanceTimeBy(300)
@@ -216,7 +253,13 @@ class HostedHubReplicationTest {
         // Host on the hub seam; each client joins on its own seam. The host's admit loop and the
         // joiners' admission waits must run concurrently, so launch them all before awaiting.
         val hostDeferred = async {
-            backgroundScope.gameHost(star.hub, peerCount = n + 1, raftConfig = fastRaftConfig(seed = 1L))
+            backgroundScope.gameHost(
+                star.hub,
+                peerCount = n + 1,
+                raftConfig = fastRaftConfig(seed = 1L),
+                livenessConfig = livenessConfig,
+                clock = clock,
+            )
         }
         val joinDeferreds = star.clients.mapIndexed { i, client ->
             async { backgroundScope.gameJoin(client, raftConfig = fastRaftConfig(seed = (i + 2).toLong())) }
@@ -227,24 +270,31 @@ class HostedHubReplicationTest {
         val hostSession = hostDeferred.await()
         val clientSessions = joinDeferreds.map { it.await() }
 
-        val hostChat = chatQuilter(hostSession, backgroundScope)
-        val clientChats = clientSessions.map { chatQuilter(it, backgroundScope) }
+        val hostChat = chatQuilter(hostSession, backgroundScope, chatConfig, Random(700L))
+        val clientChats = clientSessions.mapIndexed { i, session ->
+            chatQuilter(session, backgroundScope, chatConfig, Random(710L + i))
+        }
         advanceTimeBy(300)
         runCurrent()
 
-        return HostedStarGame(this, star, backgroundScope, dispatcher, clientSessions, hostChat, clientChats)
+        return HostedStarGame(
+            this, star, backgroundScope, dispatcher, clientSessions, hostChat, clientChats, chatConfig,
+        )
     }
 
     private fun chatQuilter(
         session: GameSession,
         scope: CoroutineScope,
+        config: QuilterConfig = QuilterConfig(expectVirtualTime = true),
+        random: Random = Random(700L),
     ): Quilter<Rga<String>> =
         Quilter(
             seam = session.appChannel("chat"),
             initial = Rga.empty(),
             valueSerializer = Rga.wireSerializer(String.serializer()),
             scope = scope,
-            config = QuilterConfig(expectVirtualTime = true),
+            config = config,
+            random = random,
         )
 
     /** Append [text] at the RGA tail so chat order is preserved. */
