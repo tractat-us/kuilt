@@ -14,10 +14,10 @@ package us.tractat.kuilt.warp
  *
  * Apply a coordinated task with [commit], which applies your transform to the wrapped
  * [value]. In [WarpNode], coordinated tasks are backed by a Raft cluster (supplied as
- * the `raftNode` constructor parameter) that guarantees the `coordinatedExecutor` is
- * invoked exactly once per committed log entry — giving exactly-once semantics even
- * under leadership failover. The [Results] ORMap backstop absorbs any transient
- * duplicates that arise in edge cases.
+ * the `raftNode` constructor parameter) that achieves exactly-once execution in
+ * the common case and under tested roster-churn scenarios. Two residual timing
+ * windows can cause duplicate execution or task stranding in rare cases (see #879).
+ * The [Results] ORMap backstop absorbs duplicate results from the dual-leader window.
  *
  * @param A the value type — no monotone constraint required.
  * @property value the value to be processed under coordination.
