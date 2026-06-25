@@ -1,16 +1,15 @@
 /**
  * Integration tests for [WarpNode].
  *
- * Runs under [UnconfinedTestDispatcher] (the same pattern as the Quilter tests) with
- * [advanceUntilIdle] after mutations so the event-driven execution loops drain fully.
- *
- * WarpNode has no re-arming timers of its own — it is event-driven via rosterFlow and
- * Quilter state flows. The Quilter underneath has an anti-entropy loop, but under
- * UnconfinedTestDispatcher delays execute eagerly so advanceUntilIdle is safe.
+ * Runs under [UnconfinedTestDispatcher] with virtual time driven via bounded [advanceTimeBy]
+ * steps rather than [advanceUntilIdle]. [advanceUntilIdle] is unsafe here because the Quilter's
+ * anti-entropy loop (`while(true) { delay(interval); … }`) re-arms unconditionally — under
+ * [UnconfinedTestDispatcher] each re-arm lands at the current virtual instant, so
+ * [advanceUntilIdle] would spin it indefinitely. See [drain] for the bounded alternative.
  *
  * **Clock injection:** each test derives its clock from `testScheduler.currentTime` so
  * that [WarpNode.lastRingChangeAt] and the settle-window check (`sinceChange < settleWindow`)
- * use the same virtual timeline as coroutine `delay(...)` calls.  This ensures that a
+ * use the same virtual timeline as coroutine `delay(...)` calls. This ensures that a
  * ring-change stamp and a subsequent settle-window check happen at the same virtual
  * instant — `sinceChange == 0` — so the time-based clause of `mustSettle` does not
  * trigger a spurious settle delay in steady-state tests, while still being accurate in
@@ -32,7 +31,6 @@ import kotlinx.coroutines.test.TestCoroutineScheduler
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.advanceTimeBy
-import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.InMemoryLoom
@@ -54,20 +52,26 @@ private fun schedulerClock(scheduler: TestCoroutineScheduler): () -> Instant =
     { Instant.fromEpochMilliseconds(scheduler.currentTime) }
 
 /**
- * Drains all immediately-runnable coroutines, then advances virtual time by 1 s so
- * one-shot [delay] calls inside [WarpNode.announceAndResolve] (the RingWithIntent
- * settle window, at most [ClaimStrategy.DEFAULT_SETTLE_WINDOW] = 500 ms) complete,
- * then drains again.
+ * Advances virtual time in bounded steps to flush both Quilter anti-entropy convergence
+ * and the RingWithIntent settle window, without relying on [advanceUntilIdle].
  *
- * With [UnconfinedTestDispatcher], [advanceUntilIdle] runs tasks at the current
- * virtual instant but does NOT advance the clock. Settle-window coroutines are
- * suspended via `delay(settleWindow)` — they are scheduled in the future and would
- * never run without an explicit time advance. The 1 s window covers the default
- * 500 ms settle plus any Quilter replication round-trips within that window.
+ * [advanceUntilIdle] is unsafe on systems whose timers re-arm unconditionally — the
+ * Quilter's anti-entropy loop is `while(true) { delay(antiEntropyInterval); … }`, which
+ * re-arms on every iteration regardless of convergence state. Under [UnconfinedTestDispatcher]
+ * this loop re-arms at the current virtual instant, and [advanceUntilIdle] would spin it
+ * indefinitely (it drains tasks scheduled at the current virtual time, and each re-arm lands
+ * at the current virtual time). The correct approach is bounded explicit time steps:
+ *
+ * 1. Step through enough anti-entropy intervals to allow Quilter state to converge.
+ *    [TEST_QUILTER_CONFIG.antiEntropyInterval] = 100 ms; 5 steps = 500 ms of virtual time.
+ * 2. Step through the settle window ([ClaimStrategy.DEFAULT_SETTLE_WINDOW] = 500 ms) so
+ *    one-shot [delay] calls inside [WarpNode.announceAndResolve] complete.
+ *
+ * Total virtual time advanced: 500 ms (convergence) + 500 ms (settle) = 1 s.
  */
 private fun TestScope.drain() {
-    advanceUntilIdle()
-    advanceTimeBy(1.seconds)
+    repeat(5) { advanceTimeBy(TEST_QUILTER_CONFIG.antiEntropyInterval); runCurrent() }
+    advanceTimeBy(ClaimStrategy.DEFAULT_SETTLE_WINDOW)
     runCurrent()
 }
 

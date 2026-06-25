@@ -437,9 +437,13 @@ public class WarpNode(
     }
 
     private fun claimOwnedWithIntent(pendingSet: ORSet<TaskId>, strategy: ClaimStrategy.RingWithIntent) {
-        // Owned, not-yet-claimed tasks under this peer's current ring view.
+        // Owned, not-yet-claimed, not-already-in-flight tasks under this peer's current ring view.
+        // The inFlight check is a cheap early exit: announceAndResolve re-checks under the lock,
+        // but filtering here avoids redundant lock acquisitions on every queue/ring emission.
         val owned = lock.withLock {
-            pendingSet.elements.filter { taskId -> taskId !in claimed && ring.owner(taskId) == selfId }
+            pendingSet.elements.filter { taskId ->
+                taskId !in claimed && taskId !in inFlight && ring.owner(taskId) == selfId
+            }
         }
         owned.forEach { taskId -> announceAndResolve(taskId, strategy) }
     }

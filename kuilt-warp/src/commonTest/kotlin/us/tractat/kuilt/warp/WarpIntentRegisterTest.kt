@@ -11,7 +11,6 @@ import kotlinx.coroutines.test.TestCoroutineScheduler
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.advanceTimeBy
-import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.InMemoryLoom
@@ -31,12 +30,14 @@ private fun schedulerClock(scheduler: TestCoroutineScheduler): () -> Instant =
     { Instant.fromEpochMilliseconds(scheduler.currentTime) }
 
 /**
- * Drains immediate tasks, then advances 1 s to flush one-shot settle-window
- * delays, then drains again. See [WarpNodeTest]'s `drain()` for the rationale.
+ * Advances virtual time in bounded steps to flush Quilter convergence and the
+ * RingWithIntent settle window. Mirrors [WarpNodeTest]'s `drain()` — see that file
+ * for the full rationale (short: [advanceUntilIdle] spins the Quilter anti-entropy
+ * loop indefinitely; bounded steps are the safe alternative).
  */
 private fun TestScope.drain() {
-    advanceUntilIdle()
-    advanceTimeBy(1.seconds)
+    repeat(5) { advanceTimeBy(TEST_QUILTER_CONFIG.antiEntropyInterval); runCurrent() }
+    advanceTimeBy(ClaimStrategy.DEFAULT_SETTLE_WINDOW)
     runCurrent()
 }
 
