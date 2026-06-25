@@ -10,7 +10,7 @@ import us.tractat.kuilt.crdt.ReplicaId
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
-import kotlin.test.assertAll
+import us.tractat.kuilt.test.assertAll
 
 class CausalLinkInferenceTest {
 
