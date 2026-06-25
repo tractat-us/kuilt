@@ -280,9 +280,6 @@ jobs:
           key: konan-${{ runner.os }}-${{ hashFiles('gradle/libs.versions.toml', 'gradle.properties', 'settings.gradle.kts') }}
           restore-keys: konan-${{ runner.os }}-
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v4
-
       - name: Start jstack heartbeat
         # Same background watchdog as build-jvm (see #329) — dumps thread stacks
         # every 5 min so a hung K/N test or wasm-browser run leaves a diagnosable
