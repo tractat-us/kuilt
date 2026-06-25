@@ -98,12 +98,32 @@ Over reliable transport each hub→client send is **ordered and lossless** (`bas
 suspends under backpressure, it does not drop), so A's ops arrive at every client in causal
 order and the RGA applies them immediately. **No gaps in the common case.**
 
-### Reconnect → FullState (the gap-healing baseline)
+### Reconnect → convergence (the gap-healing baseline)
 
-The only gap source on a reliable star is a client **losing its connection**. Quilter already
-heals this: on first contact with a (re)joining peer it sends a `FullState` (`sendFullStateTo`),
-so a reconnecting client converges from the hub's current state without a delta replay. **No
-cross-relay `Resend` is needed.**
+The only gap source on a reliable star is a client **losing its connection**. A reconnecting
+client converges to the hub's current state from a fresh empty replica — **no cross-relay
+`Resend` is needed**. Two layers cooperate:
+
+- **Membership.** With host liveness monitoring (`gameHost(livenessConfig = …)`), a dropped
+  voter that stops answering heartbeats is evicted after `reconnectWindow` and its seat re-opened,
+  so a reconnecting peer is re-admitted via `gameJoin`. (Without `livenessConfig` the seat never
+  frees and a full roster rejects the rejoin with `RosterFullException` — liveness is therefore
+  required for reconnect, not optional.)
+- **State.** The reconnecting replica converges to the full history.
+
+> **Known limitation — convergence is currently *eventual* (anti-entropy), not *prompt*
+> (FullState).** The intended prompt healer is Quilter's first-contact `FullState`
+> (`sendFullStateTo`). In this topology it does **not** deliver: the hub fires that `FullState`
+> during `gameJoin`, *before* the reconnecting Quilter's collector has subscribed, and `MuxSeam`
+> is `replay = 0`, so the frame is dropped; the deterministic retry is then cancelled because the
+> reconnecting peer's own (empty) `FullState` reaching the hub triggers `cancelFullStateRetry`
+> (`Quilter.dispatch`). So healing actually lands on the **anti-entropy backstop**
+> (`reconcileWithRandomPeer`), at the `antiEntropyInterval` cadence (1 min by default). For
+> steady-state chat this is invisible (forward flow is prompt); it only affects how quickly a
+> *reconnecting* client catches up. Making reconnect heal promptly is the deferred escalation
+> below (and a tracked follow-up). The reconnect gating test verifies *eventual* convergence and
+> the full drop → evict → re-open → rejoin path; it tightens `antiEntropyInterval` to keep the
+> virtual-time bound.
 
 ### Hub-centric — no spoke→spoke
 
@@ -116,15 +136,25 @@ spokes. The star is honestly hub-centric — matching the intent and the actual 
 
 - **No fabric traffic classes** — secrecy is `kuilt-deal`'s job.
 - **No spoke→spoke** addressing / routed `sendTo` / faithful-mesh masking.
-- **No Quilter change** — the forward flow is `GossipSeam` relay; gap-healing is the existing
-  FullState-on-reconnect.
+- **No Quilter change** — the forward flow is `GossipSeam` relay; reconnect gap-healing rides
+  Quilter's existing anti-entropy backstop (prompt FullState-on-reconnect is the deferred
+  escalation #0, a Quilter/MuxSeam change, not in this baseline).
 - **No multi-hop / federated routing.**
 
 ## Escalations (documented next-actions, not built now)
 
 A ladder, each with an explicit trigger. Until a trigger fires, the baseline (forward flow +
-reconnect-FullState) is the design.
+reconnect convergence) is the design.
 
+0. **Prompt reconnect heal (concrete, already-triggered next-action).** Make a reconnecting
+   client converge *promptly* instead of at anti-entropy cadence. The first-contact `FullState`
+   is dropped (joining Quilter not yet subscribed + `MuxSeam replay = 0`) and its retry is
+   cancelled by the peer's own inbound `FullState` (`cancelFullStateRetry`, `Quilter.dispatch`).
+   Candidate fixes (a Quilter/MuxSeam change, deliberately out of this baseline's scope): a small
+   `MuxSeam` replay buffer for the app envelope; **or** having a Quilter that receives an
+   empty/lagging `FullState` push its current state back; **or** not cancelling the retry on an
+   inbound `FullState` that carries less than the local state. **Trigger:** reconnect latency
+   matters in practice — tracked as a follow-up.
 1. **Cross-relay prompt delta-repair.** Heal a mid-stream gap with a targeted delta-range
    resend instead of waiting for reconnect/anti-entropy. Two shapes: route `sendTo` to the
    origin (make the overlay a faithful N-peer `Seam` — needs full-membership `peers`), **or**
@@ -150,8 +180,14 @@ RNG, never `advanceUntilIdle` (gossip timers re-arm).
 1. **Prompt forward flow (gating).** `gameHost` over a star `meshSeam` + `GossipSeam` (hub on
    `FullFanout`), spokes A/B/C. A `broadcast`s a sequence of RGA ops; assert B and C apply them
    within a bounded window **and in order**. Proves prompt, ordered chat.
-2. **Reconnect heals.** B drops; A appends ops; B reconnects → receives `FullState` → converges.
-   Proves the gap-healing baseline without cross-relay repair.
+2. **Reconnect converges.** With host `livenessConfig`: B drops; the leader evicts it after
+   `reconnectWindow` and re-opens admission; A appends ops while B is away; B rejoins (fresh
+   identity) → converges to the full history. Proves the drop → evict → re-open → rejoin path and
+   *eventual* convergence (via the anti-entropy backstop — see the reconnect limitation above; the
+   test tightens `antiEntropyInterval` to fit the virtual-time bound). A separate test proves the
+   cluster **survives** a drop at all (no crash; survivors keep replicating) — this required fixing
+   `SeamRaftTransport.sendTo` to honor its documented "may silently drop if peer is unreachable"
+   contract (it was throwing `PeerNotConnected`, crashing the engine when a voter dropped).
 3. **Leak boundary — `sendTo` is never relayed (gating).** Under `FullFanout`, the hub
    `sendTo`s a frame to spoke A; assert A receives it and **B never observes it**. Locks the
    unicast invariant that protects per-recipient payloads regardless of payload-level secrecy —
@@ -159,8 +195,13 @@ RNG, never `advanceUntilIdle` (gossip timers re-arm).
 
 ## Decisions recorded
 
-- **Hub-centric baseline** (forward flow + reconnect-FullState); **no spoke→spoke**. Supersedes
+- **Hub-centric baseline** (forward flow + reconnect convergence); **no spoke→spoke**. Supersedes
   the earlier "faithful-mesh / routed `sendTo`" framing, now demoted to an **escalation**.
+- **Reconnect heals via the anti-entropy backstop, not prompt FullState** — the first-contact
+  FullState races the joining Quilter's subscription (`MuxSeam replay = 0`) and its retry is
+  cancelled by the peer's own FullState. Prompt reconnect heal is deferred escalation #0.
+- **`SeamRaftTransport.sendTo` made best-effort** (catches `PeerNotConnected`, per its documented
+  contract) so a dropped voter no longer crashes the engine — the prerequisite for drop-survival.
 - **No fabric traffic classes.** The leak boundary is the **unicast invariant** — `sendTo` is
   never relayed/fanned-out, only `broadcast` floods — a **tested**, first-class fabric guarantee
   that holds **with or without** `kuilt-deal`. Public cryptographic dealing is an *optional*

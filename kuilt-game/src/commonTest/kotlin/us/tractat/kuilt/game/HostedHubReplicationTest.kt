@@ -94,19 +94,28 @@ class HostedHubReplicationTest {
 
     /**
      * RECONNECT: a dropped voter's seat is freed by host liveness-eviction, so a fresh-identity
-     * reconnect is admitted and heals to the full chat history via Quilter FullState.
+     * reconnect is admitted and converges to the full chat history.
      *
      * The hub hosts with a [fastLivenessConfig] and a virtual-time clock, so the leader runs a
      * [us.tractat.kuilt.liveness.HeartbeatPartitionDetector] per voter. When `client-1` drops it
      * stops answering heartbeat pings; after [HeartbeatConfig.reconnectWindow] the leader observes
      * `PeerLost`, evicts the dead voter (roster 4 → 3) and **re-opens admission**. A reconnecting
      * peer with a fresh identity (`client-1-recon`) is then admitted and obtains a [GameSession].
-     * The hub's first-contact FullState races the reconnecting chat Quilter's collector start-up and
-     * is dropped (MuxSeam is replay = 0), so the heal lands on the hub's anti-entropy backstop, which
-     * re-pushes the full state — converging the reconnecting client to `[before, during]`.
+     *
+     * **Healing path — anti-entropy, not prompt FullState (a known limitation).** The design's
+     * intended gap-healer is Quilter's first-contact FullState (`sendFullStateTo`). It does NOT
+     * deliver here: the hub fires that FullState during `gameJoin`, before the reconnecting chat
+     * Quilter's collector has subscribed, and `MuxSeam` is `replay = 0` so the frame is dropped;
+     * the deterministic retry is then cancelled because the reconnecting peer's own (empty) FullState
+     * reaching the hub triggers `cancelFullStateRetry(sender)` (`Quilter.dispatch`). So the heal
+     * actually lands on the hub's **anti-entropy backstop** (`reconcileWithRandomPeer`). At the 1-min
+     * production interval that would blow the 5 s bound, so this test tightens `antiEntropyInterval`
+     * to 25 ms to let the backstop fire inside the budget. Making this prompt is the deferred
+     * escalation (design §Escalations #1 / follow-up); this test verifies *eventual* convergence and
+     * the full drop → evict → re-open → rejoin path, not prompt FullState.
      */
     @Test
-    fun droppedClientReconnectsViaFullState() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun reconnectingClientConvergesAfterLivenessEviction() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
         // Virtual-time clock the host's heartbeat detectors read; the test advances `nowMs`
         // alongside advanceTimeBy so silence is measured against the same virtual clock.
         val liveness = fastLivenessConfig()
@@ -161,7 +170,7 @@ class HostedHubReplicationTest {
         assertEquals(
             listOf("before", "during"),
             rejoined.state.value.toList(),
-            "reconnecting client healed via FullState",
+            "reconnecting client converged to full history after eviction + rejoin (anti-entropy heal)",
         )
     }
 
