@@ -68,6 +68,26 @@ strict exactly-once — is a later slice (B in the slice taxonomy).
 The type boundary makes the trade-off explicit at the call site: callers opt into coordination
 for the tasks that need it; everything else stays on the fast path.
 
+### The intent-register layer (reducing window duplicates)
+
+The ring eliminates steady-state duplicates, but during a membership change two peers can
+briefly disagree about who owns a task and both run it. The `Results` board still converges
+to one answer — the wasted run is just thrown away. `ClaimStrategy.RingWithIntent` (the
+default) trims that waste: before running an owned task a peer *announces* its claim into a
+small shared register (a grow-only set of claimants per task), and during the brief
+disagreement window — when its ring just changed or it already sees a competing claim — it
+waits a moment and runs the task only if it is the agreed claimant (lowest peer id among the
+live claimants). The announcement is free — it rides the replication traffic already flowing —
+and the wait is paid only inside that window, so the common path keeps its zero-latency,
+zero-coordination behaviour. Choose `ClaimStrategy.Ring` to opt out.
+
+Recovery from a *failed* owner is the ring's job, not the intent layer's: a partitioned owner
+is dropped from the ring and its tasks re-home to the next peer clockwise. A *sole* owner whose
+executor hangs indefinitely on a converged ring is deliberately out of scope here — detecting
+and reassigning a stuck-but-alive worker is a per-task execution-timeout concern, not a
+coordination one. See `docs/warp-spike-results.md` for the duplicate-rate measurements that
+motivated the layer.
+
 ## Duplicate rate — the go/no-go number
 
 The [spike](warp-spike-results.md) measured the ORSet-queue + ORMap-dedup architecture

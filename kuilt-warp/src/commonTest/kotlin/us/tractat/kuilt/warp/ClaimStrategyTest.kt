@@ -13,7 +13,6 @@ class ClaimStrategyTest {
         {
             val s = ClaimStrategy.RingWithIntent()
             assertTrue(s.settleWindow > 0.seconds, "settleWindow defaults positive")
-            assertTrue(s.claimLease > s.settleWindow, "lease must exceed settle window")
         },
         { assertEquals(ClaimStrategy.RingWithIntent(), ClaimStrategy.RingWithIntent(), "data class equality") },
     )

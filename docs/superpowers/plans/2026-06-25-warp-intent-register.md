@@ -461,6 +461,8 @@ gh pr merge --auto --squash
 
 ### Task 3: Lease backstop + won-but-stuck / window-conflict timing tests (PR 3)
 
+> **DROPPED (2026-06-25):** the lease backstop was removed from scope after review — see the spec UPDATE. Tasks 1–2 shipped; Task 3 was not merged.
+
 Add the `claimLease` catch-all for a slow-but-alive winner, and the deterministic timing tests (window-conflict, won-but-stuck) that need `StandardTestDispatcher` + a scheduler-driven clock.
 
 **Files:**
