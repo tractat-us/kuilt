@@ -9,6 +9,7 @@ kotlin {
         commonMain.dependencies {
             api(project(":kuilt-core"))
             api(project(":kuilt-crdt"))
+            api(project(":kuilt-quilter"))
             api(project(":kuilt-session"))
             api(project(":kuilt-liveness"))
             api(project(":kuilt-raft"))
