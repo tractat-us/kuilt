@@ -1,0 +1,31 @@
+// wasm3.def — K/N cinterop definition for the wasm3 C interpreter.
+//
+// Vendor: github.com/wasm3/wasm3 v0.5.0 (MIT)
+// Source: src/nativeInterop/wasm3/source/
+// Prebuilt static libs: src/nativeInterop/wasm3/prebuilt/<target>/libwasm3.a
+//
+// The `---` section is compiled by the K/N cinterop tool (which has the
+// correct Apple sysroot) and included in the generated klib. The helper
+// avoids passing void** from Kotlin, which cinterop types awkwardly.
+
+package = wasm3
+
+headers = wasm3.h
+headerFilter = wasm3.h wasm3_defs.h
+
+staticLibraries = libwasm3.a
+
+---
+
+#include "wasm3.h"
+#include <stdint.h>
+
+// Typed helper: call square(arg: i32) -> i32 without exposing void** to Kotlin.
+// Returns NULL on success, an error string on failure (matches M3Result semantics).
+static inline M3Result wasm3_call_i32_ret_i32(IM3Function func, int32_t arg, int32_t* ret) {
+    const void* args[1] = { &arg };
+    M3Result r = m3_Call(func, 1, args);
+    if (r != ((const char*)0)) return r;
+    const void* rets[1] = { ret };
+    return m3_GetResults(func, 1, rets);
+}
