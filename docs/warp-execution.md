@@ -36,7 +36,7 @@ symbolic dispatch.** Every peer runs the same build; the grid distributes
 a compiler plugin (KSP) could auto-register the ops it sees so it still *reads*
 like an ordinary lambda.
 
-## Shipping real code: WASM kernels (the fantasy)
+## Shipping real code: WASM kernels
 
 Named ops can only run code already in the deployed binary. If we ever wanted to
 ship *new* computations at runtime — true code mobility — there is exactly one
@@ -45,29 +45,54 @@ native code:
 
 - **① Named ops — the default.** Ship `(opId, args)`; the code is already
   everywhere. Works on every target. Limit: no new code at runtime.
-- **③ WASM kernels — the fantasy.** Ship a compiled `.wasm` blob *as* the method.
-  It's the same bytes on every platform; it's a capability **sandbox** (decisive —
-  you'd be running code other peers sent you); and the browser runs it natively.
-  Under the hood the desktop/server runtimes (wasmtime/wasmer) JIT it to native via
-  Cranelift/LLVM, so near-native speed comes for free. The one hard constraint:
-  **iOS forbids runtime JIT**, so on iPhone you *interpret* the wasm (wasm3) —
-  slower, but real and portable.
+- **② WASM kernels — real on the JVM; browser and native follow.** Ship a compiled
+  `.wasm` blob *as* the method. It's the same bytes on every platform; it's a
+  capability **sandbox** (decisive — you'd be running code other peers sent you);
+  and the browser runs it natively. The JVM runtime lands the first rung today,
+  using the **Chicory interpreter** (interpreter-only by design — the sandbox's
+  CPU bound relies on interrupt checks at every branch, which an AOT path would
+  skip). Browser and iOS/macOS runtimes are next — same ABI, same safety rules;
+  iOS stays on an interpreter because Apple forbids runtime JIT.
 - **Not LLVM IR on the wire.** The tempting "ship LLVM bitcode for native speed"
   path is a trap: bitcode isn't portable (Google tried it — PNaCl — and retired it
   in favour of WebAssembly), it needs the JIT iOS bans, and it's unsandboxed. LLVM
   keeps its rightful job — *inside* the wasm runtime, the thing that makes wasm
   fast — not as a distribution format.
 
-The lovely inversion: the part that *sounds* like science fiction (live code
+The inversion still holds: the part that *sounds* like science fiction (live code
 crossing a phone, a server, and a browser at once) rides on the most ordinary
-substrate we already half-target — while the path that *sounds* like the
-performance win (native/LLVM) is the dead end. Code mobility is a tier, not a
-switch: names by default, sandboxed wasm kernels when you genuinely must ship code,
-never raw native.
+substrate we already half-target. Code mobility is a tier, not a switch: names by
+default, sandboxed wasm kernels when you genuinely must ship code, never raw native.
 
-![Code mobility as a ladder: named ops are the default; WASM kernels are the fantasy — same bytes everywhere, sandboxed, browser-native, JIT'd to native via Cranelift where allowed and interpreted on iOS where JIT is banned; shipping LLVM IR on the wire is the trap PNaCl already proved a dead end.](images/warp/code-mobility.svg)
+![Code mobility as a ladder: named ops are the default; WASM kernels land on the JVM first (Chicory interpreter, sandboxed), with browser and native next — same bytes everywhere, same rules; shipping LLVM IR on the wire is the trap PNaCl already proved a dead end.](images/warp/code-mobility.svg)
+
+**The kernel ABI.** A runnable kernel exports three things: `memory` (the shared
+linear buffer the host reads and writes), `warp_alloc(len) -> ptr` (the guest
+allocates `len` writable bytes and returns a pointer), and
+`warp_run(ptr, len) -> i64` (run over the arg bytes at `[ptr, ptr+len)`, return a
+packed `i64` whose upper 32 bits are the result pointer and lower 32 bits are its
+length). The host writes args in, the guest writes results out, entirely through
+guest-managed memory — the host never reaches into the guest uninvited.
+
+**The capability sandbox.** Three rules, all fail-loud:
+
+- **No imports.** A kernel that declares any host import fails at load time. Pure
+  compute only; a kernel cannot call back into the runtime.
+- **Memory ceiling.** A kernel whose declared maximum memory exceeds the configured
+  page limit is rejected at load time — before a single byte of guest code runs.
+- **Execution-time budget.** The interpreter checks `Thread.isInterrupted()` at
+  every function-call entry and every backward branch — the two points an unbounded
+  loop must pass through. A CPU-bomb is interrupted cleanly, not merely timed out at
+  the wall clock. This is why the sandbox uses the interpreter: an AOT-emitted path
+  bypasses those checks.
 
 ## Lazy bobbins: gossiping the code
+
+A peer can now run code it was never shipped. When a task arrives whose kernel is
+not yet in the local creel, the node fetches the bytes from a neighbour, verifies
+them by content hash, loads them through the capability sandbox, and runs. The full
+loop — fetch → verify → load → execute — works on the JVM today; browser and native
+targets follow the same path as their runtimes land.
 
 Shipping a kernel raises its own question — push every kernel to every peer up
 front? No. You let it spread the way everything else here spreads: **eventually**.
@@ -95,6 +120,15 @@ One honest line: the key-set converging is **safety** (the CRDT guarantees it); 
 bytes being *fetchable* is **liveness** (it does not). Pin each bobbin on ≥ k peers,
 like any peer-to-peer content store. The shape has a name — a **Merkle-CRDT**:
 CRDT state addressed by hash, advertised eagerly and fetched lazily.
+
+**Transient vs terminal.** An op whose bobbin hasn't arrived yet is *transient* —
+the task stands by and retries when the bobbin gossips in. An op whose bytes are
+present but broken (imports declared, memory oversize, malformed, or a run-time
+trap or timeout) is *terminal* — the node records a converging error result instead
+of retrying forever. A verified-but-broken kernel will never succeed on any peer;
+recording the failure once and letting it converge is cheaper and more honest than
+an infinite anti-entropy loop. The distinction in one phrase: *transient* means "not
+yet"; *terminal* means "never."
 
 ![Lazy bobbins: the op-id is the content-hash of a kernel; the creel is a CRDT GSet of hashes that every peer converges on (keys known), while the kernel bytes are a content-addressed cache each peer holds a subset of and fetches on demand (values lazy). Content-addressing makes every fetch conflict-free; the one caveat is that availability is a liveness property, so pin each bobbin on several peers.](images/warp/bobbins.svg)
 

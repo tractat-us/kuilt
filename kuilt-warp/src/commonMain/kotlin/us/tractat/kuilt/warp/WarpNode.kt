@@ -372,7 +372,10 @@ public class WarpNode(
     private var _duplicates: GCounter = GCounter.ZERO
 
     /**
-     * Cumulative count of successfully executed tasks on this node.
+     * Cumulative count of tasks this node drove to completion — including terminal
+     * failures recorded via [recordTerminalError]. A terminal [OpResult.failure]
+     * (broken or malicious kernel) is a completion, not a retry: the task converges
+     * to an error result and is not re-attempted.
      *
      * A [GCounter] snapshot — safe to merge with a remote peer's counter via
      * [GCounter.piece]. Use [us.tractat.kuilt.warp.otel.recordWarp] to forward
