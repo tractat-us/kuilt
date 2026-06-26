@@ -1,14 +1,17 @@
 package us.tractat.kuilt.core
 
+import kotlinx.atomicfu.atomic
 import kotlinx.atomicfu.locks.reentrantLock
 import kotlinx.atomicfu.locks.withLock
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.filter
-import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.shareIn
+import kotlinx.coroutines.launch
 
 /**
  * String-keyed multiplexer over a [Seam] — the unbounded-namespace sibling of [MuxSeam].
@@ -44,13 +47,22 @@ import kotlinx.coroutines.flow.shareIn
  * [Seam] instance. Thread-safe: concurrent [channel] calls are serialised by an internal
  * reentrant lock so the backing map is never raced.
  *
+ * ## Per-channel close
+ *
+ * [ChannelView.close] stops delivery to **that view only** — its [Seam.incoming] completes
+ * and further [Seam.broadcast]/[Seam.sendTo] calls become no-ops. The base [Seam] remains
+ * live for all other channel views. The base closes only when the owner calls [closeBase]
+ * (or closes the [delegate] directly). This deliberate owner-driven design avoids fragile
+ * last-channel reference-counting and keeps lifecycle ownership clear: the entity that opened
+ * the [delegate] is the entity that closes it.
+ *
  * @param delegate the underlying [Seam] whose [Seam.incoming] this class owns.
- * @param scope a [CoroutineScope] for the shared upstream collector.
+ * @param scope a [CoroutineScope] for the shared upstream collector and per-view pipes.
  * @sample us.tractat.kuilt.core.sampleNamedMuxChannels
  */
 public class NamedMux(
     private val delegate: Seam,
-    scope: CoroutineScope,
+    private val scope: CoroutineScope,
 ) {
     /**
      * A single shared subscription on [delegate.incoming]. All channel views subscribe to
@@ -81,6 +93,15 @@ public class NamedMux(
         }
         return lock.withLock { channels.getOrPut(name) { ChannelView(nameBytes) } }
     }
+
+    /**
+     * Closes the underlying [delegate] [Seam].
+     *
+     * Call this when you are done with the mux entirely and want to tear down
+     * the shared socket. Individual channel views are closed via [Seam.close] on
+     * the view itself; that does **not** close the base — only this method does.
+     */
+    public suspend fun closeBase(reason: CloseReason = CloseReason.Normal): Unit = delegate.close(reason)
 
     private fun framedPayload(nameBytes: ByteArray, payload: ByteArray): ByteArray {
         val framed = ByteArray(1 + nameBytes.size + payload.size)
@@ -113,21 +134,51 @@ public class NamedMux(
     private inner class ChannelView(
         private val nameBytes: ByteArray,
     ) : Seam {
+        private val _closed = atomic(false)
+
+        /**
+         * Per-view delivery channel. Frames are piped from [sharedIncoming] via a
+         * background coroutine; closing this channel completes [incoming].
+         */
+        private val deliveryChannel = Channel<Swatch>(Channel.UNLIMITED)
+
+        init {
+            scope.launch {
+                sharedIncoming.filter { swatch -> belongsTo(nameBytes, swatch) }.collect { swatch ->
+                    deliveryChannel.trySend(strippedPayload(swatch))
+                }
+                deliveryChannel.close()
+            }
+        }
+
         override val selfId: PeerId get() = delegate.selfId
         override val peers: StateFlow<Set<PeerId>> get() = delegate.peers
         override val state: StateFlow<SeamState> get() = delegate.state
 
-        override val incoming: Flow<Swatch> = sharedIncoming
-            .filter { swatch -> belongsTo(nameBytes, swatch) }
-            .map { swatch -> strippedPayload(swatch) }
+        override val incoming: Flow<Swatch> = deliveryChannel.receiveAsFlow()
 
-        override suspend fun broadcast(payload: ByteArray) =
+        override suspend fun broadcast(payload: ByteArray) {
+            if (_closed.value) return
             delegate.broadcast(framedPayload(nameBytes, payload))
+        }
 
-        override suspend fun sendTo(peer: PeerId, payload: ByteArray) =
+        override suspend fun sendTo(peer: PeerId, payload: ByteArray) {
+            if (_closed.value) return
             delegate.sendTo(peer, framedPayload(nameBytes, payload))
+        }
 
-        override suspend fun close(reason: CloseReason) = delegate.close(reason)
+        /**
+         * Closes this channel view only.
+         *
+         * After this call: [incoming] completes; [broadcast] and [sendTo] become no-ops.
+         * The underlying [delegate] [Seam] remains live — call [closeBase] to tear that down.
+         * Idempotent: subsequent calls are no-ops.
+         */
+        override suspend fun close(reason: CloseReason) {
+            if (_closed.compareAndSet(false, true)) {
+                deliveryChannel.close()
+            }
+        }
     }
 
     private companion object {
