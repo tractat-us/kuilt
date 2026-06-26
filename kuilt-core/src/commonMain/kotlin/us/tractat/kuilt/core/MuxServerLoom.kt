@@ -153,6 +153,7 @@ public class MuxServerLoom(
         lock.withLock { connRecords[connPeerId] = record }
 
         pumpScope.launch { readLoop(connPeerId, record) }
+        pumpScope.launch { watchDrop(connPeerId, record) }
     }
 
     /**
@@ -170,6 +171,18 @@ public class MuxServerLoom(
         } finally {
             teardownConnection(connPeerId, record)
         }
+    }
+
+    /**
+     * Detect a dropped connection. A single-peer mesh that loses its only remote peer (the link
+     * tore) does not by itself complete [Seam.incoming], so the [readLoop] would linger. Close
+     * the seam on peer-loss to complete the read loop and drive [teardownConnection], so the
+     * connection's stale membership is deregistered promptly — and a reconnect's re-association
+     * is never masked by a lingering dead registration.
+     */
+    private suspend fun watchDrop(connPeerId: PeerId, record: ConnRecord) {
+        record.rawSeam.peers.first { connPeerId !in it }
+        runCatchingCancellable { record.rawSeam.close() }
     }
 
     /** Deregister [record] from every room it joined and drop it from [connRecords] (if still current). */
