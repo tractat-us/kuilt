@@ -164,6 +164,12 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.warp.WarpNode")
  *   from `:kuilt-raft-test` configured as [us.tractat.kuilt.raft.RaftRole.Leader] for unit
  *   tests, or use [MultiNodeRaftSim][us.tractat.kuilt.raft.test.MultiNodeRaftSim] with real
  *   nodes for consensus-correct cluster tests.
+ * @param lazyFetch The all-or-nothing lazy-code-mobility bundle ([Creel] + [WasmRuntime] +
+ *   `opToBobbin`). When `null` (a symbolic-only node), an op missing from [registry] leaves the
+ *   task pending ("bobbin not loaded yet") and anti-entropy re-evaluates — today's behavior. When
+ *   non-null, an unresolved op is **fetched** via a node-owned [BobbinExchange] over a reserved mux
+ *   channel, **loaded** via [WasmRuntime], registered for reuse, and run. A verified-but-broken
+ *   kernel (load or run failure) records a terminal-error [OpResult] rather than retrying forever.
  */
 public class WarpNode(
     public val selfId: PeerId,
@@ -179,6 +185,7 @@ public class WarpNode(
         error("No coordinatedExecutor provided for task $taskId — supply one to WarpNode")
     },
     private val raftNode: RaftNode? = null,
+    private val lazyFetch: WarpLazyFetch? = null,
 ) {
     private val replica = ReplicaId(selfId.value)
 
