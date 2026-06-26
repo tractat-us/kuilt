@@ -232,4 +232,51 @@ class BobbinExchangeTest {
                 { assertContentEquals(bytes, fetched, "second fetch must return the original bytes") },
             )
         }
+
+    /**
+     * Concurrent waiters survive a sibling's cancellation.
+     *
+     * Two callers fetch the same hash and share one in-flight entry (one deferred, one Request).
+     * Cancelling one must NOT clear the shared entry: when a holder later serves the bytes, the
+     * surviving waiter still completes.
+     *
+     * Regression for the waiter-orphan defect: a naive per-waiter `finally` removed the shared
+     * in-flight entry as soon as the *first* caller was cancelled, so the response found no entry
+     * to complete and the survivor — plus the periodic re-request, which no longer saw the hash —
+     * hung forever. Reference-counting waiters fixes it: only the last departing waiter clears it.
+     */
+    @Test
+    fun cancellingOneConcurrentWaiterDoesNotOrphanTheOther() =
+        runTest(UnconfinedTestDispatcher(), timeout = 5.seconds) {
+            val loom = InMemoryLoom()
+            val seamA = loom.host(Pattern("bobbin-multi-waiter-cancel"))
+            val seamB = loom.join(InMemoryTag("b"))
+            val exchangeA = BobbinExchange(seamA, Creel(), backgroundScope, BOBBIN_QUILTER_CONFIG)
+            val exchangeB = BobbinExchange(seamB, Creel(), backgroundScope, BOBBIN_QUILTER_CONFIG)
+
+            val bytes = byteArrayOf(7, 8, 9, 10)
+            val hash = Creel().put(bytes)
+
+            // Two concurrent fetches for the same hash share one in-flight entry; nobody holds bytes yet.
+            val cancelledJob = backgroundScope.launch { exchangeA.fetch(hash) }
+            var survivorBytes: ByteArray? = null
+            val survivorJob = backgroundScope.launch { survivorBytes = exchangeA.fetch(hash) }
+            runCurrent() // both suspend on the shared deferred; A broadcast one Request, B had no bytes
+
+            // Cancel one of the two waiters; its finally must decrement the count, NOT clear the entry.
+            cancelledJob.cancel()
+            runCurrent()
+
+            // B acquires the bytes; A's periodic re-request (one interval later) reaches B.
+            exchangeB.put(bytes)
+            runCurrent()
+            advanceTimeBy(BOBBIN_QUILTER_CONFIG.antiEntropyInterval)
+            runCurrent()
+
+            assertAll(
+                { assertTrue(cancelledJob.isCancelled, "the cancelled waiter must be cancelled") },
+                { assertTrue(survivorJob.isCompleted, "the surviving waiter must still complete") },
+                { assertContentEquals(bytes, survivorBytes, "survivor must receive the original bytes") },
+            )
+        }
 }
