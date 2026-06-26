@@ -4,12 +4,10 @@ import kotlinx.atomicfu.atomic
 import kotlinx.atomicfu.locks.reentrantLock
 import kotlinx.atomicfu.locks.withLock
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.filter
-import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.shareIn
 import kotlinx.coroutines.launch
 
@@ -106,17 +104,17 @@ public class MuxSeam(
         private val _closed = atomic(false)
 
         /**
-         * Per-view delivery channel. Frames are piped from [sharedIncoming] via a
-         * background coroutine; closing this channel completes [incoming].
+         * Per-view delivery spool. Frames are piped from [sharedIncoming] via a
+         * background coroutine; closing the spool completes [incoming].
          */
-        private val deliveryChannel = Channel<Swatch>(Channel.UNLIMITED)
+        private val spool = Spool<Swatch>(DeliveryPolicy.Reliable)
 
         init {
             scope.launch {
                 sharedIncoming.filter { swatch -> belongsTo(tag, swatch) }.collect { swatch ->
-                    deliveryChannel.trySend(strippedPayload(swatch))
+                    spool.deliver(strippedPayload(swatch))
                 }
-                deliveryChannel.close()
+                spool.close()
             }
         }
 
@@ -124,7 +122,7 @@ public class MuxSeam(
         override val peers: StateFlow<Set<PeerId>> get() = delegate.peers
         override val state: StateFlow<SeamState> get() = delegate.state
 
-        override val incoming: Flow<Swatch> = deliveryChannel.receiveAsFlow()
+        override val incoming: Flow<Swatch> = spool.incoming
 
         override suspend fun broadcast(payload: ByteArray) {
             if (_closed.value) return
@@ -145,7 +143,7 @@ public class MuxSeam(
          */
         override suspend fun close(reason: CloseReason) {
             if (_closed.compareAndSet(false, true)) {
-                deliveryChannel.close()
+                spool.close()
             }
         }
     }
