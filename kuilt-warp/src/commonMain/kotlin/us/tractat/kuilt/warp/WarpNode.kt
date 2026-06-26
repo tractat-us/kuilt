@@ -719,11 +719,27 @@ public class WarpNode(
         }
     }
 
+    /**
+     * The owner of [taskId] honouring pinned execution.
+     *
+     * A free-path task whose [TaskDescriptor.pinnedOwner] is set is owned by exactly that
+     * peer, decoupling who-runs from the consistent-hash ring; an absent pin (or a
+     * coordinated task, which carries no descriptor) falls back to the ring assignment
+     * `ring.owner(taskId)`. Because only the pinned owner passes the `== selfId` filter in
+     * [claimOwnedRing] / [claimOwnedWithIntent], it is the sole claimant and the winner;
+     * and if it is partitioned or absent from the effective roster, no node claims, so the
+     * task stays pending and runs only when the owner returns (it never re-homes).
+     *
+     * Caller holds [lock].
+     */
+    private fun effectiveOwner(taskId: TaskId): PeerId? =
+        queueQuilter.state.value[taskId]?.value?.pinnedOwner ?: ring.owner(taskId)
+
     /** Execute every owned, unclaimed task immediately on the given [kind] path. */
     private fun claimOwnedRing(taskIds: Collection<TaskId>, kind: CoordinationKind) {
         val toExecute = lock.withLock {
             taskIds
-                .filter { taskId -> taskId !in claimed && ring.owner(taskId) == selfId }
+                .filter { taskId -> taskId !in claimed && effectiveOwner(taskId) == selfId }
                 .also { tasks -> claimed.addAll(tasks) }
         }
         toExecute.forEach { taskId -> executeAsync(taskId, kind) }
@@ -735,7 +751,7 @@ public class WarpNode(
         // but filtering here avoids redundant lock acquisitions on every queue/ring emission.
         val owned = lock.withLock {
             taskIds.filter { taskId ->
-                taskId !in claimed && taskId !in inFlight && ring.owner(taskId) == selfId
+                taskId !in claimed && taskId !in inFlight && effectiveOwner(taskId) == selfId
             }
         }
         owned.forEach { taskId -> announceAndResolve(taskId, strategy, kind) }
