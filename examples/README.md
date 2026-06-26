@@ -66,4 +66,4 @@ self-contained JVM test (`@Test`), compiled from `examples/src/test/kotlin/`.
 
 | File | What it teaches |
 |------|-----------------|
-| `warp/FederatedLearningExampleTest.kt` | End-to-end federated learning on the substrate: three devices fetch a wasm training kernel by content address, train on private data via the `WarpNode` free path, and converge to one shared model through the replicated results board. The data never moves; only the model update does. Runs in-process under the `raftSimTest` virtual-time cluster and prints the convergence trajectory. |
+| `warp/FederatedLearningExampleTest.kt` | End-to-end federated learning on the substrate: devices fetch a wasm training kernel by content address, train on private data via the `WarpNode` free path, and converge to one shared model through the replicated results board. The data never moves; only the model update does. The default test runs in-process under the `raftSimTest` virtual-time cluster; add `-Pwarp.fl.ws=true` to run the same round over a real Ktor WebSocket fabric (reader-run — it binds a localhost port, so CI skips it). Both print the convergence trajectory. |
