@@ -82,21 +82,22 @@ class CreelTest {
     }
 
     /**
-     * Cross-target hash golden vector. Pins FNV-1a-64 determinism across
+     * Cross-target hash golden vector. Pins SHA-256 determinism across
      * JVM, Android, iOS, macOS, and wasmJs — the hash key crosses the fabric
      * so it must be byte-identical on every platform.
      *
      * Input  : byteArrayOf(1, 2, 3, 4, 5)
-     * Expected: 0f66dcbf4f6b7d88  (FNV-1a-64, verified against canonical spec)
+     * Expected: 74f81fe167d99b4cb41d6d0ccda82278caee9f3e2f25d5e5a3936ff3dcec60d0
+     *           (SHA-256, verified independently)
      */
     @Test
     fun hashGoldenVector() {
         val creel = Creel()
         val hash = creel.put(byteArrayOf(1, 2, 3, 4, 5))
         assertEquals(
-            "0f66dcbf4f6b7d88",
+            "74f81fe167d99b4cb41d6d0ccda82278caee9f3e2f25d5e5a3936ff3dcec60d0",
             hash.value,
-            "FNV-1a-64 of [1,2,3,4,5] must be identical on every KMP target",
+            "SHA-256 of [1,2,3,4,5] must be identical on every KMP target",
         )
     }
 

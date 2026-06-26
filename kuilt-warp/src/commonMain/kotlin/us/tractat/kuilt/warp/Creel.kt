@@ -2,6 +2,7 @@ package us.tractat.kuilt.warp
 
 import kotlinx.atomicfu.locks.reentrantLock
 import kotlinx.atomicfu.locks.withLock
+import org.kotlincrypto.hash.sha2.SHA256
 
 /**
  * The local rack of loaded bobbins — a content-addressed store keyed by [BobbinHash].
@@ -34,7 +35,7 @@ public class Creel {
     private val store = mutableMapOf<BobbinHash, ByteArray>()
 
     /**
-     * Hashes [bytes] with FNV-1a-64, stores them under the resulting [BobbinHash], and
+     * Hashes [bytes] with SHA-256, stores them under the resulting [BobbinHash], and
      * returns the hash. Idempotent: if the same bytes are put again the store is unchanged
      * and the same hash is returned.
      *
@@ -102,29 +103,7 @@ public class Creel {
 
     // ── Hash ─────────────────────────────────────────────────────────────────
 
-    /**
-     * FNV-1a 64-bit hash of [bytes].
-     *
-     * Pure Kotlin integer arithmetic — no platform APIs. Output is byte-identical on
-     * every KMP target (JVM, Android, iOS, macOS, wasmJs). The 64-bit hash space makes
-     * accidental collisions negligible for practical bobbin stores.
-     *
-     * Reference: http://www.isthe.com/chongo/tech/comp/fnv/
-     */
-    private fun hash(bytes: ByteArray): BobbinHash {
-        var h = FNV_BASIS
-        for (b in bytes) {
-            h = h xor b.toUByte().toULong()
-            h *= FNV_PRIME
-        }
-        return BobbinHash(h.toString(16).padStart(16, '0'))
-    }
+    private fun hash(bytes: ByteArray): BobbinHash = BobbinHash(SHA256().digest(bytes).toHex())
 
-    private companion object {
-        // FNV-1a 64-bit parameters — ULong: const is not valid for unsigned types
-        @Suppress("MagicNumber")
-        private val FNV_BASIS = 14695981039346656037UL
-        @Suppress("MagicNumber")
-        private val FNV_PRIME = 1099511628211UL
-    }
+    private fun ByteArray.toHex(): String = joinToString("") { it.toUByte().toString(16).padStart(2, '0') }
 }
