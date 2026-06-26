@@ -65,6 +65,7 @@ genuinely need C's task-descriptor envelope, so they come after.
 | **C — code mobility** | named ops → wasm kernels + bobbin/creel cache | spike (done) | exploratory |
 | **D — compiler nodes** | distributed tiered compilation | C (via C2) | exploratory |
 | **F — federated ML** | FedAvg on the substrate, end-to-end demo | F1 none; F2/F4 need C2 | exploratory |
+| **G — Draft → DAG** | reshape `Draft` into a dependency DAG; consolidate coordination rounds (min rounds = DAG depth) | E (done) | exploratory |
 
 Every epic stays **experimental**: `:kuilt-warp` remains out of `:kuilt-bom` and
 out of `kuilt.publish` for the duration. Each of C–F carries an explicit
@@ -221,6 +222,28 @@ merges as a CRDT. The payoff demo for the whole substrate. Full design:
 
 **Go/no-go.** F1 alone shows convergent federated averaging on the sim; the full
 demo is gated on C landing.
+
+---
+
+## Epic G — `Draft` → DAG; consolidate coordination rounds
+
+**Goal.** Make round *count* an active planner lever. E-3's cost model pins
+`rounds` at ≤1 because a `Draft` is a linear pipeline with a single `Embroider`.
+Reshape `Draft` into a dependency DAG so independent agreements **batch into one
+consensus round** and only value-dependent ones force sequential rounds — *min
+rounds = depth of the coordination dependency DAG*. Full design:
+[Phase-G spec](superpowers/specs/2026-06-25-warp-phase-g-dag-consolidation-design.md).
+
+**Sub-issues.** G1 — `Draft` → DAG (path-preserving migration, no behaviour
+change) · G2 — `Draft.combine` (independent branches) · G3 —
+`consolidateEmbroideries` (batch per dependency level) · G4 — cost = DAG-depth +
+coupling term · G5 — batched Raft execution · G-polish.
+
+**Gate.** E (done). **Sibling:** native metrics (so G4 emits
+`warp.coordination.rounds` live).
+
+**Go/no-go.** G4 (analytical round-count cut on the sim) and G5 (round-count cut
+at real-Raft execution). Either failing is a legitimate stop.
 
 ---
 
