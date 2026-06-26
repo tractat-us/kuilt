@@ -53,7 +53,7 @@ class DraftRewriteTest {
             DraftStage.Filter(f1),
             DraftStage.Map(m2),
         )
-        val draft = Draft<ByteArray>(stages)
+        val draft = Draft<ByteArray>(stages.toPathNodes())
         val rewritten = draft.deferEmbroidery()
 
         assertAll(
@@ -76,7 +76,7 @@ class DraftRewriteTest {
     fun `deferEmbroidery never invents or drops the embroider`() {
         // With an embroider: it must still be present after rewrite
         val withEmb = Draft<ByteArray>(
-            listOf(DraftStage.Source(src), DraftStage.Embroider(emb), DraftStage.Map(m1))
+            listOf(DraftStage.Source(src), DraftStage.Embroider(emb), DraftStage.Map(m1)).toPathNodes()
         )
         val rewritten = withEmb.deferEmbroidery()
         assertAll(
@@ -88,7 +88,7 @@ class DraftRewriteTest {
     @Test
     fun `deferEmbroidery never changes the source`() {
         val draft = Draft<ByteArray>(
-            listOf(DraftStage.Source(src), DraftStage.Embroider(emb), DraftStage.Map(m1))
+            listOf(DraftStage.Source(src), DraftStage.Embroider(emb), DraftStage.Map(m1)).toPathNodes()
         )
         val rewritten = draft.deferEmbroidery()
         assertAll(
@@ -105,7 +105,7 @@ class DraftRewriteTest {
                 DraftStage.Embroider(emb),
                 DraftStage.Map(m1),
                 DraftStage.Filter(f1),
-            )
+            ).toPathNodes()
         )
         assertTrue(draft.isEquivalentTo(draft.deferEmbroidery()))
     }
@@ -328,7 +328,7 @@ class DraftRewriteTest {
             DraftStage.Filter(f2),
             DraftStage.Map(m3),
         )
-        val draft = Draft<ByteArray>(stages)
+        val draft = Draft<ByteArray>(stages.toPathNodes())
         val optimised = draft.optimize()
 
         assertAll(

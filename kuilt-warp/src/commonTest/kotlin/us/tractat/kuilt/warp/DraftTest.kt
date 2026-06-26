@@ -154,4 +154,73 @@ class DraftTest {
         val freeStages = draft.stages.dropLast(1)
         assertTrue(freeStages.all { it.coordinationKind == CoordinationKind.Free })
     }
+
+    // ── DAG node structure ────────────────────────────────────────────────────
+
+    @Test
+    fun `source node has no predecessors`() {
+        val draft = Warp.shuttle(sourceId)
+        assertEquals(emptySet(), draft.nodes.single().predecessors)
+    }
+
+    @Test
+    fun `path nodes have sequential predecessor edges`() {
+        val draft = Warp.shuttle(sourceId).map(mapId).filter(filterId)
+        val nodes = draft.nodes
+        assertAll(
+            { assertEquals(emptySet(), nodes[0].predecessors) },
+            { assertEquals(setOf(nodes[0].id), nodes[1].predecessors) },
+            { assertEquals(setOf(nodes[1].id), nodes[2].predecessors) },
+        )
+    }
+
+    @Test
+    fun `stages is a topological view of nodes`() {
+        val draft = Warp.shuttle(sourceId).map(mapId).filter(filterId).embroider(embroiderOpId)
+        assertEquals(draft.nodes.map { it.stage }, draft.stages)
+    }
+
+    @Test
+    fun `each node carries the stage it wraps`() {
+        val draft = Warp.shuttle(sourceId).map(mapId).filter(filterId)
+        assertAll(
+            { assertIs<DraftStage.Source>(draft.nodes[0].stage) },
+            { assertIs<DraftStage.Map>(draft.nodes[1].stage) },
+            { assertIs<DraftStage.Filter>(draft.nodes[2].stage) },
+            { assertEquals(sourceId, draft.nodes[0].stage.opId) },
+            { assertEquals(mapId, draft.nodes[1].stage.opId) },
+            { assertEquals(filterId, draft.nodes[2].stage.opId) },
+        )
+    }
+
+    @Test
+    fun `node ids are distinct across all nodes in a path`() {
+        val draft = Warp.shuttle(sourceId).map(mapId).filter(filterId)
+        val ids = draft.nodes.map { it.id }
+        assertEquals(ids.distinct(), ids)
+    }
+
+    @Test
+    fun `embroideries returns all Embroider nodes in topological order`() {
+        val draft = Warp.shuttle(sourceId).map(mapId).embroider(embroiderOpId)
+        val embroideries = draft.embroideries
+        assertAll(
+            { assertEquals(1, embroideries.size) },
+            { assertEquals(embroiderOpId, embroideries.single().opId) },
+        )
+    }
+
+    @Test
+    fun `embroideries is empty when no Embroider stage is present`() {
+        val draft = Warp.shuttle(sourceId).map(mapId).filter(filterId)
+        assertTrue(draft.embroideries.isEmpty())
+    }
+
+    @Test
+    fun `embroidery convenience returns single Embroider from embroideries`() {
+        val draft = Warp.shuttle(sourceId).embroider(embroiderOpId)
+        val fromConvenience = draft.embroidery
+        val fromList = draft.embroideries.singleOrNull()
+        assertEquals(fromList, fromConvenience)
+    }
 }
