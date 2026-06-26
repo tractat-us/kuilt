@@ -136,9 +136,11 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.warp.WarpNode")
  * @param strategy How owned tasks are claimed. [ClaimStrategy.Ring] is pure consistent-hash
  *   assignment; [ClaimStrategy.RingWithIntent] adds the intent-register safety net. Defaults
  *   to [ClaimStrategy.RingWithIntent].
- * @param executor Suspending function for [CoordinationKind.Free] tasks. Returns a string
- *   result. Called at most once per task per peer on the free path (re-entry after failover
- *   is possible; the [Results] backstop deduplicates).
+ * @param registry The local op registry that maps symbolic [OpId]s to their [Op]
+ *   implementations. A claiming peer resolves the [TaskDescriptor.op] here and runs its own
+ *   registered copy — the function never travels; only the name does. An op absent from the
+ *   registry leaves the task unclaimed and pending (the "bobbin not loaded yet" state — warp
+ *   slices C4/C5 will service it via lazy-fetch; see [TaskDescriptor]).
  * @param coordinatedExecutor Suspending function for [CoordinationKind.Coordinated] tasks.
  *   Invoked **from the committed-log listener** ([onCoordinatedCommit]) on the current Raft
  *   leader, not inline after `propose()`. This achieves exactly-once execution in the common
@@ -171,7 +173,7 @@ public class WarpNode(
     private val clock: () -> Instant,
     private val heartbeatConfig: HeartbeatConfig = HeartbeatConfig(),
     private val strategy: ClaimStrategy = ClaimStrategy.RingWithIntent(),
-    private val executor: suspend (TaskId) -> String,
+    private val registry: OpRegistry,
     private val coordinatedExecutor: suspend (TaskId) -> String = { taskId ->
         error("No coordinatedExecutor provided for task $taskId — supply one to WarpNode")
     },
@@ -204,24 +206,32 @@ public class WarpNode(
     private val queueSeam = mux.channel(CHANNEL_QUEUE)
     private val resultsSeam = mux.channel(CHANNEL_RESULTS)
 
-    /** Quilter replicating the set of pending task IDs. */
-    private val queueQuilter: Quilter<ORSet<TaskId>> = Quilter(
+    /**
+     * Quilter replicating the pending task queue.
+     *
+     * Each entry maps a [TaskId] to a [LWWRegister] holding its [TaskDescriptor].
+     * The descriptor is the unit of work that travels: it carries the op name and args
+     * so claiming peers can resolve and execute the op locally.
+     */
+    private val queueQuilter: Quilter<ORMap<TaskId, LWWRegister<TaskDescriptor>>> = Quilter(
         replica = replica,
         seam = queueSeam,
-        initial = ORSet.empty(),
-        messageSerializer = QuiltMessage.serializer(ORSet.serializer(serializer<TaskId>())),
+        initial = ORMap.empty(),
+        messageSerializer = QuiltMessage.serializer(
+            ORMap.serializer(serializer<TaskId>(), LWWRegister.serializer(serializer<TaskDescriptor>()))
+        ),
         scope = scope,
         config = quilterConfig,
         random = kotlin.random.Random(selfId.value.hashCode().toLong()),
     )
 
     /** Quilter replicating the results board. */
-    private val resultsQuilter: Quilter<ORMap<TaskId, LWWRegister<String>>> = Quilter(
+    private val resultsQuilter: Quilter<ORMap<TaskId, LWWRegister<ByteArray>>> = Quilter(
         replica = replica,
         seam = resultsSeam,
         initial = ORMap.empty(),
         messageSerializer = QuiltMessage.serializer(
-            ORMap.serializer(serializer<TaskId>(), LWWRegister.serializer(serializer<String>()))
+            ORMap.serializer(serializer<TaskId>(), LWWRegister.serializer(serializer<ByteArray>()))
         ),
         scope = scope,
         config = quilterConfig,
@@ -355,14 +365,14 @@ public class WarpNode(
             .onEach { peers -> onPeersChanged(peers) }
             .launchIn(scope)
 
-        // Claim newly-owned free tasks whenever the pending set changes.
+        // Claim newly-owned free tasks whenever the pending map changes.
         queueQuilter.state
-            .onEach { pendingSet -> claimOwned(pendingSet, CoordinationKind.Free) }
+            .onEach { pendingMap -> claimOwned(pendingMap.keys, CoordinationKind.Free) }
             .launchIn(scope)
 
         // Claim newly-owned coordinated tasks whenever the coordinated pending set changes.
         coordQueueQuilter.state
-            .onEach { pendingSet -> claimOwned(pendingSet, CoordinationKind.Coordinated) }
+            .onEach { pendingSet -> claimOwned(pendingSet.elements, CoordinationKind.Coordinated) }
             .launchIn(scope)
 
         // Drive coordinated execution from the committed Raft log — exactly-once in the common
@@ -378,37 +388,55 @@ public class WarpNode(
     // ---------------------------------------------------------------------------
 
     /**
-     * Add [taskId] to the distributed work queue on the [CoordinationKind.Free] path.
+     * Add a task to the distributed work queue on the [CoordinationKind.Free] path.
      *
-     * The add is replicated immediately to all current peers via the Quilter.
-     * Idempotent at the ORSet level: a concurrent add of the same ID on another
-     * peer survives merge (add-wins).
+     * The [descriptor] — carrying the op name and serialised args — is the unit of work
+     * that travels: claiming peers resolve [TaskDescriptor.op] in their own [OpRegistry]
+     * and run their registered copy locally. The function never crosses the fabric; only
+     * its name and args do.
      *
-     * Equivalent to `enqueue(taskId, CoordinationKind.Free)`.
+     * The enqueue is replicated immediately to all current peers via the Quilter.
+     * Idempotent at the ORMap level: a concurrent enqueue of the same [taskId] on
+     * another peer survives merge (add-wins on the key; LWW picks one descriptor if
+     * two concurrent enqueues race on the same ID).
      */
-    public fun enqueue(taskId: TaskId) {
-        queueQuilter.apply(Patch(queueQuilter.state.value.add(replica, taskId)))
+    public fun enqueue(taskId: TaskId, descriptor: TaskDescriptor) {
+        lock.withLock {
+            val ts = ++timestampCounter
+            queueQuilter.apply(
+                Patch(
+                    queueQuilter.state.value.put(
+                        replica = replica,
+                        key = taskId,
+                        value = LWWRegister.empty<TaskDescriptor>().set(replica, ts, descriptor),
+                    )
+                )
+            )
+        }
     }
 
     /**
-     * Add [taskId] to the distributed work queue with the given [CoordinationKind].
+     * Add [taskId] to the distributed work queue on the [CoordinationKind.Coordinated] path.
      *
-     * - [CoordinationKind.Free]: routes to the optimistic ring path, calling [executor].
-     *   Equivalent to `enqueue(taskId)` — no behavioral change.
-     * - [CoordinationKind.Coordinated]: routes to the Raft-backed escalation path. The ring
-     *   owner proposes the task to [raftNode] for total-order delivery, then calls
-     *   [coordinatedExecutor] in the common case exactly once per committed log entry. The task is replicated
-     *   in a separate queue so the coordination-free path is completely unaffected.
+     * Routes to the Raft-backed escalation path. The ring owner proposes the task to [raftNode]
+     * for total-order delivery, then calls [coordinatedExecutor] exactly once per committed log
+     * entry. The task is replicated in a separate queue so the free path is completely unaffected.
      *
-     *   Requires [raftNode] to be non-null — throws [IllegalStateException] immediately
-     *   if none was supplied to the constructor.
+     * Requires [raftNode] to be non-null — throws [IllegalStateException] immediately
+     * if none was supplied to the constructor.
+     *
+     * Note: [CoordinationKind.Free] is not accepted here — use [enqueue(taskId, descriptor)]
+     * for free-path tasks. A [TaskDescriptor] is required to carry the op name and args.
      *
      * Idempotent at the ORSet level: a concurrent add of the same ID on another peer
      * survives merge (add-wins).
      */
     public fun enqueue(taskId: TaskId, kind: CoordinationKind) {
         when (kind) {
-            CoordinationKind.Free -> enqueue(taskId)
+            CoordinationKind.Free -> error(
+                "WarpNode($selfId): use enqueue(taskId, descriptor) for free-path tasks — " +
+                    "CoordinationKind.Free requires a TaskDescriptor carrying op and args"
+            )
             CoordinationKind.Coordinated -> {
                 checkNotNull(raftNode) {
                     "WarpNode($selfId): raftNode is required to enqueue coordinated tasks — " +
@@ -422,11 +450,13 @@ public class WarpNode(
     /**
      * A snapshot of the current results board, as seen by this peer.
      *
-     * The board is eventually consistent: it reflects all results this peer has
-     * received from the replication layer so far. All peers converge to the same
-     * board once the network is quiescent.
+     * Each entry maps a [TaskId] to the raw [ByteArray] returned by [Op.invoke] (free path)
+     * or the UTF-8 encoding of the string returned by the coordinated executor (coordinated
+     * path). The board is eventually consistent: it reflects all results this peer has
+     * received from the replication layer so far. All peers converge to the same board once
+     * the network is quiescent.
      */
-    public val results: Results<TaskId, String>
+    public val results: Results<TaskId, ByteArray>
         get() = Results.from(resultsQuilter.state.value)
 
     /**
@@ -540,33 +570,33 @@ public class WarpNode(
             ring = newRing
             lastRingChangeAt = clock()
         }
-        claimOwned(queueQuilter.state.value, CoordinationKind.Free)
-        claimOwned(coordQueueQuilter.state.value, CoordinationKind.Coordinated)
+        claimOwned(queueQuilter.state.value.keys, CoordinationKind.Free)
+        claimOwned(coordQueueQuilter.state.value.elements, CoordinationKind.Coordinated)
     }
 
-    private fun claimOwned(pendingSet: ORSet<TaskId>, kind: CoordinationKind) {
+    private fun claimOwned(taskIds: Collection<TaskId>, kind: CoordinationKind) {
         when (val s = strategy) {
-            is ClaimStrategy.Ring -> claimOwnedRing(pendingSet, kind)
-            is ClaimStrategy.RingWithIntent -> claimOwnedWithIntent(pendingSet, s, kind)
+            is ClaimStrategy.Ring -> claimOwnedRing(taskIds, kind)
+            is ClaimStrategy.RingWithIntent -> claimOwnedWithIntent(taskIds, s, kind)
         }
     }
 
     /** Execute every owned, unclaimed task immediately on the given [kind] path. */
-    private fun claimOwnedRing(pendingSet: ORSet<TaskId>, kind: CoordinationKind) {
+    private fun claimOwnedRing(taskIds: Collection<TaskId>, kind: CoordinationKind) {
         val toExecute = lock.withLock {
-            pendingSet.elements
+            taskIds
                 .filter { taskId -> taskId !in claimed && ring.owner(taskId) == selfId }
                 .also { tasks -> claimed.addAll(tasks) }
         }
         toExecute.forEach { taskId -> executeAsync(taskId, kind) }
     }
 
-    private fun claimOwnedWithIntent(pendingSet: ORSet<TaskId>, strategy: ClaimStrategy.RingWithIntent, kind: CoordinationKind) {
+    private fun claimOwnedWithIntent(taskIds: Collection<TaskId>, strategy: ClaimStrategy.RingWithIntent, kind: CoordinationKind) {
         // Owned, not-yet-claimed, not-already-in-flight tasks under this peer's current ring view.
         // The inFlight check is a cheap early exit: announceAndResolve re-checks under the lock,
         // but filtering here avoids redundant lock acquisitions on every queue/ring emission.
         val owned = lock.withLock {
-            pendingSet.elements.filter { taskId ->
+            taskIds.filter { taskId ->
                 taskId !in claimed && taskId !in inFlight && ring.owner(taskId) == selfId
             }
         }
@@ -653,8 +683,10 @@ public class WarpNode(
      * Invoke the correct executor for [taskId] based on [kind], record the result, and
      * remove the task from its queue.
      *
-     * [CoordinationKind.Free] calls [executor] directly (the fast ring path), then
-     * records the result and removes the task from the queue.
+     * [CoordinationKind.Free] resolves the [TaskDescriptor] from the queue map, looks up
+     * [TaskDescriptor.op] in [registry], and invokes it with [TaskDescriptor.args]. A null
+     * descriptor (CRDT replication race) or an unresolved op ("bobbin not loaded yet") causes
+     * early return with the task unclaimed — anti-entropy retries on the next cycle.
      *
      * [CoordinationKind.Coordinated] only *proposes* to [raftNode] — it does **not**
      * invoke [coordinatedExecutor] here. Execution happens asynchronously in
@@ -667,7 +699,7 @@ public class WarpNode(
     private suspend fun doExecute(taskId: TaskId, kind: CoordinationKind) {
         when (kind) {
             CoordinationKind.Free -> {
-                val result = executor(taskId)
+                val result = executeViaRegistry(taskId) ?: return
                 recordResult(taskId, result)
                 removeFromQueue(taskId, kind)
             }
@@ -675,6 +707,33 @@ public class WarpNode(
             // Execution, result recording, and queue removal for Coordinated tasks
             // are handled by onCoordinatedCommit on the Raft leader.
         }
+    }
+
+    /**
+     * Resolve the [TaskDescriptor] for [taskId], look up its op in [registry], invoke it,
+     * and return the [ByteArray] result.
+     *
+     * **Null descriptor:** if the descriptor is missing from the queue state (e.g. a CRDT
+     * replication race during which the map entry has not yet arrived), the task is unclaimed
+     * and `null` is returned. This is a transient condition — the Quilter's anti-entropy will
+     * deliver the descriptor on the next cycle and [claimOwned] will re-evaluate.
+     *
+     * **Unresolved op:** if [registry] has no entry for [TaskDescriptor.op], this is the
+     * "bobbin not loaded yet" state documented in [OpRegistry]. The task is unclaimed and
+     * `null` is returned; warp slices C4/C5 will surface the op via lazy-fetch.
+     */
+    private suspend fun executeViaRegistry(taskId: TaskId): ByteArray? {
+        val descriptor = queueQuilter.state.value[taskId]?.value ?: run {
+            logger.debug { "WarpNode($selfId): no descriptor for $taskId — unclaiming (CRDT replication race; anti-entropy will retry)" }
+            lock.withLock { claimed.remove(taskId) }
+            return null
+        }
+        val op = registry.resolve(descriptor.op) ?: run {
+            logger.debug { "WarpNode($selfId): op '${descriptor.op.value}' not in registry for $taskId — standing by (C4/C5 lazy-fetch will resolve)" }
+            lock.withLock { claimed.remove(taskId) }
+            return null
+        }
+        return op.invoke(descriptor.args)
     }
 
     /**
@@ -723,7 +782,7 @@ public class WarpNode(
 
         scope.launch {
             runCatchingCancellable {
-                val result = coordinatedExecutor(taskId)
+                val result = coordinatedExecutor(taskId).encodeToByteArray()
                 recordResult(taskId, result)
                 removeFromQueue(taskId, CoordinationKind.Coordinated)
             }.onFailure { e ->
@@ -733,7 +792,7 @@ public class WarpNode(
         }
     }
 
-    private fun recordResult(taskId: TaskId, result: String) {
+    private fun recordResult(taskId: TaskId, result: ByteArray) {
         // Hold the WarpNode lock across the read-compute-apply so every concurrent
         // executor coroutine mints a *unique* dot from the latest state. Without this,
         // two concurrent `put` calls on the same base state each call `nextDot(replica)`,
@@ -748,7 +807,7 @@ public class WarpNode(
                     resultsQuilter.state.value.put(
                         replica = replica,
                         key = taskId,
-                        value = LWWRegister.empty<String>().set(replica, ts, result),
+                        value = LWWRegister.empty<ByteArray>().set(replica, ts, result),
                     )
                 )
             )

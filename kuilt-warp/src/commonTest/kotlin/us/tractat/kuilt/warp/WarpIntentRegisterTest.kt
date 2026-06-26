@@ -48,6 +48,17 @@ private val TEST_QUILTER_CONFIG = QuilterConfig(
     expectVirtualTime = true,
 )
 
+private val INTENT_OP = OpId("intent-echo")
+
+private fun intentRegistry(
+    opId: OpId = INTENT_OP,
+    onInvoke: (ByteArray) -> Unit = {},
+): OpRegistry = OpRegistry().also { r ->
+    r.register(opId, Op { args -> onInvoke(args); args })
+}
+
+private fun TaskId.intentDescriptor() = TaskDescriptor(op = INTENT_OP, args = value.encodeToByteArray())
+
 class WarpIntentRegisterTest {
 
     /** RingWithIntent still executes every task exactly once and converges results. */
@@ -63,11 +74,13 @@ class WarpIntentRegisterTest {
             selfId = seam.selfId, seam = seam, rosterFlow = seam.rosterSnapshot(),
             scope = backgroundScope, quilterConfig = TEST_QUILTER_CONFIG, clock = clock,
             strategy = ClaimStrategy.RingWithIntent(),
-            executor = { taskId -> lock.withLock { executed[taskId] = seam.selfId.value }; "r-${taskId.value}" },
+            registry = intentRegistry { args ->
+                lock.withLock { executed[TaskId(args.decodeToString())] = seam.selfId.value }
+            },
         )
         val a = node(seamA); val b = node(seamB)
         val tasks = (1..10).map { TaskId("t-$it") }
-        tasks.forEach { a.enqueue(it) }
+        tasks.forEach { a.enqueue(it, it.intentDescriptor()) }
         drain()
         assertAll(
             { assertEquals(10, lock.withLock { executed.size }, "every task executed once") },
@@ -78,7 +91,7 @@ class WarpIntentRegisterTest {
     }
 
     /**
-     * RingWithIntent executor failure must (a) not crash the node scope and (b) unclaim
+     * RingWithIntent op failure must (a) not crash the node scope and (b) unclaim
      * the task so a subsequent enqueue/re-home can execute it successfully.
      *
      * Regression for the parity gap between the Ring path (executeAsync wraps doExecute
@@ -94,6 +107,7 @@ class WarpIntentRegisterTest {
         val seam = loom.host(Pattern("intent-failure"))
         val clock = schedulerClock(testScheduler)
         val attemptCount = atomic(0)
+        val failOpId = OpId("fail-op")
         val node = WarpNode(
             selfId = seam.selfId,
             seam = seam,
@@ -102,24 +116,26 @@ class WarpIntentRegisterTest {
             quilterConfig = TEST_QUILTER_CONFIG,
             clock = clock,
             strategy = ClaimStrategy.RingWithIntent(),
-            executor = { taskId ->
-                val attempt = attemptCount.incrementAndGet()
-                if (attempt == 1) throw RuntimeException("simulated executor failure for $taskId")
-                "recovered-${taskId.value}"
+            registry = OpRegistry().also { r ->
+                r.register(failOpId, Op { args ->
+                    val attempt = attemptCount.incrementAndGet()
+                    if (attempt == 1) throw RuntimeException("simulated op failure for ${args.decodeToString()}")
+                    args
+                })
             },
         )
-        // First enqueue — executor throws; task must be unclaimed so it can be retried.
+        // First enqueue — op throws; task must be unclaimed so it can be retried.
         val t = TaskId("fail-task")
-        node.enqueue(t)
+        node.enqueue(t, TaskDescriptor(op = failOpId, args = t.value.encodeToByteArray()))
         drain()
 
         // The node must still be alive: enqueue a second task that succeeds.
         val t2 = TaskId("healthy-task")
-        node.enqueue(t2)
+        node.enqueue(t2, TaskDescriptor(op = failOpId, args = t2.value.encodeToByteArray()))
         drain()
 
         assertAll(
-            { assertEquals(true, attemptCount.value >= 2, "executor was called at least twice (fail then retry)") },
+            { assertEquals(true, attemptCount.value >= 2, "op was invoked at least twice (fail then retry)") },
             { assertEquals(setOf(t, t2), node.results.taskIds, "both tasks completed after failure+retry") },
         )
         node.close()
@@ -135,10 +151,10 @@ class WarpIntentRegisterTest {
             selfId = seamA.selfId, seam = seamA, rosterFlow = seamA.rosterSnapshot(),
             scope = backgroundScope, quilterConfig = TEST_QUILTER_CONFIG, clock = clock,
             strategy = ClaimStrategy.RingWithIntent(),
-            executor = { taskId -> "r-${taskId.value}" },
+            registry = intentRegistry(),
         )
         val t = TaskId("gc-task")
-        a.enqueue(t)
+        a.enqueue(t, t.intentDescriptor())
         drain()
         // Result present, queue drained → intent entry must be gone.
         assertEquals(setOf(t), a.results.taskIds, "task completed")

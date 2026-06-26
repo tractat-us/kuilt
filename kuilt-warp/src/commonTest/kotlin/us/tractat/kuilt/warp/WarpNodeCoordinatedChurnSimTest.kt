@@ -103,7 +103,7 @@ class WarpNodeCoordinatedChurnSimTest {
                 quilterConfig = CHURN_SIM_QUILTER_CONFIG,
                 clock = { Instant.fromEpochMilliseconds(testScheduler.currentTime) },
                 strategy = ClaimStrategy.Ring,
-                executor = { "free" },
+                registry = OpRegistry().also { it.register(OpId("free"), Op { args -> args }) },
                 coordinatedExecutor = { taskId ->
                     executionLock.withLock { executionCounts[taskId] = (executionCounts[taskId] ?: 0) + 1 }
                     "coordinated"

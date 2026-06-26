@@ -51,6 +51,15 @@ import kotlin.time.Instant
 private fun schedulerClock(scheduler: TestCoroutineScheduler): () -> Instant =
     { Instant.fromEpochMilliseconds(scheduler.currentTime) }
 
+private val ECHO_OP = OpId("echo")
+
+/** A registry with one pass-through op — suitable for tests that don't care about result content. */
+private fun echoRegistry(opId: OpId = ECHO_OP): OpRegistry =
+    OpRegistry().also { it.register(opId, Op { args -> args }) }
+
+/** Wraps this [TaskId] in a minimal [TaskDescriptor] using [ECHO_OP]. */
+private fun TaskId.descriptor(): TaskDescriptor = TaskDescriptor(op = ECHO_OP, args = value.encodeToByteArray())
+
 /**
  * Advances virtual time in bounded steps to flush both Quilter anti-entropy convergence
  * and the RingWithIntent settle window, without relying on [advanceUntilIdle].
@@ -108,6 +117,19 @@ class WarpNodeTest {
         val executedByB = mutableListOf<TaskId>()
         val lock = reentrantLock()
 
+        val trackA = OpRegistry().also { r ->
+            r.register(ECHO_OP, Op { args ->
+                lock.withLock { executedByA.add(TaskId(args.decodeToString())) }
+                args
+            })
+        }
+        val trackB = OpRegistry().also { r ->
+            r.register(ECHO_OP, Op { args ->
+                lock.withLock { executedByB.add(TaskId(args.decodeToString())) }
+                args
+            })
+        }
+
         val nodeA = WarpNode(
             selfId = seamA.selfId,
             seam = seamA,
@@ -115,10 +137,7 @@ class WarpNodeTest {
             scope = backgroundScope,
             quilterConfig = TEST_QUILTER_CONFIG,
             clock = schedulerClock(testScheduler),
-            executor ={ taskId ->
-                lock.withLock { executedByA.add(taskId) }
-                "result-${taskId.value}"
-            },
+            registry = trackA,
         )
         val nodeB = WarpNode(
             selfId = seamB.selfId,
@@ -127,15 +146,12 @@ class WarpNodeTest {
             scope = backgroundScope,
             quilterConfig = TEST_QUILTER_CONFIG,
             clock = schedulerClock(testScheduler),
-            executor ={ taskId ->
-                lock.withLock { executedByB.add(taskId) }
-                "result-${taskId.value}"
-            },
+            registry = trackB,
         )
 
         // With only peer A in the roster, A owns every task.
         val singleOwnerTasks = (1..4).map { TaskId("solo-task-$it") }
-        singleOwnerTasks.forEach { nodeA.enqueue(it) }
+        singleOwnerTasks.forEach { nodeA.enqueue(it, it.descriptor()) }
         drain()
 
         val soloExecutedByA = lock.withLock { executedByA.toList() }
@@ -160,7 +176,7 @@ class WarpNodeTest {
 
         // Enqueue more tasks — now both peers are on the ring.
         val twoOwnerTasks = (1..6).map { TaskId("two-peer-task-$it") }
-        twoOwnerTasks.forEach { nodeA.enqueue(it) }
+        twoOwnerTasks.forEach { nodeA.enqueue(it, it.descriptor()) }
         drain()
 
         val allExecuted = lock.withLock { executedByA + executedByB }
@@ -189,6 +205,14 @@ class WarpNodeTest {
         val executedBy = mutableMapOf<TaskId, String>()
         val lock = reentrantLock()
 
+        fun trackingRegistry(peerId: PeerId): OpRegistry =
+            OpRegistry().also { r ->
+                r.register(ECHO_OP, Op { args ->
+                    lock.withLock { executedBy[TaskId(args.decodeToString())] = peerId.value }
+                    args
+                })
+            }
+
         val nodeA = WarpNode(
             selfId = seamA.selfId,
             seam = seamA,
@@ -196,10 +220,7 @@ class WarpNodeTest {
             scope = backgroundScope,
             quilterConfig = TEST_QUILTER_CONFIG,
             clock = schedulerClock(testScheduler),
-            executor ={ taskId ->
-                lock.withLock { executedBy[taskId] = seamA.selfId.value }
-                "result-${taskId.value}"
-            },
+            registry = trackingRegistry(seamA.selfId),
         )
         val nodeB = WarpNode(
             selfId = seamB.selfId,
@@ -208,14 +229,11 @@ class WarpNodeTest {
             scope = backgroundScope,
             quilterConfig = TEST_QUILTER_CONFIG,
             clock = schedulerClock(testScheduler),
-            executor ={ taskId ->
-                lock.withLock { executedBy[taskId] = seamB.selfId.value }
-                "result-${taskId.value}"
-            },
+            registry = trackingRegistry(seamB.selfId),
         )
 
         val tasks = (1..10).map { TaskId("task-$it") }
-        tasks.forEach { nodeA.enqueue(it) }
+        tasks.forEach { nodeA.enqueue(it, it.descriptor()) }
 
         drain()
 
@@ -242,14 +260,16 @@ class WarpNodeTest {
         val executed = mutableSetOf<TaskId>()
         val lock = reentrantLock()
 
-        fun executor(label: String): suspend (TaskId) -> String = { taskId ->
-            lock.withLock { executed.add(taskId) }
-            "done-$label-${taskId.value}"
+        fun trackingRegistry(): OpRegistry = OpRegistry().also { r ->
+            r.register(ECHO_OP, Op { args ->
+                lock.withLock { executed.add(TaskId(args.decodeToString())) }
+                args
+            })
         }
 
-        val nodeA = WarpNode(seamA.selfId, seamA, seamA.rosterSnapshot(), backgroundScope, TEST_QUILTER_CONFIG, schedulerClock(testScheduler), executor = executor("A"))
-        val nodeB = WarpNode(seamB.selfId, seamB, seamB.rosterSnapshot(), backgroundScope, TEST_QUILTER_CONFIG, schedulerClock(testScheduler), executor = executor("B"))
-        val nodeC = WarpNode(seamC.selfId, seamC, seamC.rosterSnapshot(), backgroundScope, TEST_QUILTER_CONFIG, schedulerClock(testScheduler), executor = executor("C"))
+        val nodeA = WarpNode(seamA.selfId, seamA, seamA.rosterSnapshot(), backgroundScope, TEST_QUILTER_CONFIG, schedulerClock(testScheduler), registry = trackingRegistry())
+        val nodeB = WarpNode(seamB.selfId, seamB, seamB.rosterSnapshot(), backgroundScope, TEST_QUILTER_CONFIG, schedulerClock(testScheduler), registry = trackingRegistry())
+        val nodeC = WarpNode(seamC.selfId, seamC, seamC.rosterSnapshot(), backgroundScope, TEST_QUILTER_CONFIG, schedulerClock(testScheduler), registry = trackingRegistry())
 
         // Let the three-peer mesh stabilise
         drain()
@@ -262,7 +282,7 @@ class WarpNodeTest {
 
         // Enqueue tasks with only A and C live
         val tasks = (1..6).map { TaskId("failover-task-$it") }
-        tasks.forEach { nodeA.enqueue(it) }
+        tasks.forEach { nodeA.enqueue(it, it.descriptor()) }
 
         drain()
 
@@ -292,7 +312,7 @@ class WarpNodeTest {
             scope = backgroundScope,
             quilterConfig = TEST_QUILTER_CONFIG,
             clock = schedulerClock(testScheduler),
-            executor ={ taskId -> "result-${taskId.value}" },
+            registry = echoRegistry(),
         )
         val nodeB = WarpNode(
             selfId = seamB.selfId,
@@ -301,11 +321,11 @@ class WarpNodeTest {
             scope = backgroundScope,
             quilterConfig = TEST_QUILTER_CONFIG,
             clock = schedulerClock(testScheduler),
-            executor ={ taskId -> "result-${taskId.value}" },
+            registry = echoRegistry(),
         )
 
         val tasks = (1..8).map { TaskId("conv-task-$it") }
-        tasks.forEach { nodeA.enqueue(it) }
+        tasks.forEach { nodeA.enqueue(it, it.descriptor()) }
 
         drain()
 
@@ -340,7 +360,7 @@ class WarpNodeTest {
             scope = backgroundScope,
             quilterConfig = TEST_QUILTER_CONFIG,
             clock = schedulerClock(testScheduler),
-            executor ={ taskId -> "result-${taskId.value}" },
+            registry = echoRegistry(),
         )
         val nodeB = WarpNode(
             selfId = seamB.selfId,
@@ -349,11 +369,11 @@ class WarpNodeTest {
             scope = backgroundScope,
             quilterConfig = TEST_QUILTER_CONFIG,
             clock = schedulerClock(testScheduler),
-            executor ={ taskId -> "result-${taskId.value}" },
+            registry = echoRegistry(),
         )
 
         val taskId = TaskId("dedup-task")
-        nodeA.enqueue(taskId)
+        nodeA.enqueue(taskId, taskId.descriptor())
 
         drain()
 
@@ -392,7 +412,7 @@ class WarpNodeTest {
                 scope = backgroundScope,
                 quilterConfig = TEST_QUILTER_CONFIG,
                 clock = schedulerClock(testScheduler),
-                executor = { taskId -> "result-${taskId.value}" },
+                registry = echoRegistry(),
             )
             val nodeB = WarpNode(
                 selfId = seamB.selfId,
@@ -401,7 +421,7 @@ class WarpNodeTest {
                 scope = backgroundScope,
                 quilterConfig = TEST_QUILTER_CONFIG,
                 clock = schedulerClock(testScheduler),
-                executor = { taskId -> "result-${taskId.value}" },
+                registry = echoRegistry(),
             )
 
             // Collect the first swatch that arrives on B's rawIncoming.
@@ -411,7 +431,7 @@ class WarpNodeTest {
 
             // Enqueue tasks — these produce CRDT frames that flow from A → B.
             val tasks = (1..4).map { TaskId("fanout-task-$it") }
-            tasks.forEach { nodeA.enqueue(it) }
+            tasks.forEach { nodeA.enqueue(it, it.descriptor()) }
             drain()
 
             // rawIncoming must have fired (the job completed).
