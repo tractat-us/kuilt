@@ -26,6 +26,7 @@ import wasm3.IM3ModuleVar
 import wasm3.IM3Runtime
 import wasm3.m3_FindFunction
 import wasm3.m3_FreeModule
+import wasm3.m3_FreeRuntime
 import wasm3.m3_GetMemory
 import wasm3.m3_GetMemorySize
 import wasm3.m3_LoadModule
@@ -107,20 +108,61 @@ public class Wasm3WasmRuntime(
 
     override fun load(bytes: ByteArray): Op = loadLock.withLock { loadLocked(bytes) }
 
+    /**
+     * Parses + instantiates [bytes] under the sandbox, freeing every native resource on each
+     * rejection path. Bad kernels (malformed / import / oversize / missing-ABI) are exactly what the
+     * guards reject and arrive from untrusted peers, so a leak here would be a remotely-triggerable
+     * unbounded native-memory leak. The pin is retained (and the runtime kept alive via the [Op]
+     * closure) ONLY once load fully succeeds; until then every failure unpins, frees the module if it
+     * is still standalone, and frees the runtime if one was created.
+     */
     private fun loadLocked(bytes: ByteArray): Op {
         val pinnedBytes = bytes.pin()
-        retainedPins.add(pinnedBytes)
-        val module = parseModule(pinnedBytes, bytes.size)
-        rejectCapabilityViolations(module)
-        rejectOversizeMemory(module)
 
-        val runtime = checkNotNull(m3_NewRuntime(environment, RUNTIME_STACK_BYTES, null)) {
-            "wasm3: m3_NewRuntime returned null"
+        val module = try {
+            parseModule(pinnedBytes, bytes.size)
+        } catch (e: Throwable) {
+            pinnedBytes.unpin()
+            throw e
         }
-        loadModule(runtime, module)
-        val allocFn = findFunctionOrThrow(runtime, "warp_alloc")
-        val runFn = findFunctionOrThrow(runtime, "warp_run")
 
+        // Pre-instantiation guards: the module is standalone, so free it (not a runtime) on reject.
+        val runtime = try {
+            rejectCapabilityViolations(module)
+            rejectOversizeMemory(module)
+            checkNotNull(m3_NewRuntime(environment, RUNTIME_STACK_BYTES, null)) {
+                "wasm3: m3_NewRuntime returned null"
+            }
+        } catch (e: Throwable) {
+            m3_FreeModule(module)
+            pinnedBytes.unpin()
+            throw e
+        }
+
+        // m3_LoadModule failure detaches the module (runtime = NULL) without adding it to the
+        // runtime's list, so free BOTH the still-standalone module and the runtime.
+        try {
+            loadModuleOrThrow(runtime, module)
+        } catch (e: Throwable) {
+            m3_FreeModule(module)
+            m3_FreeRuntime(runtime)
+            pinnedBytes.unpin()
+            throw e
+        }
+
+        // Module is now owned by the runtime; m3_FreeRuntime frees it too. Do NOT free it separately.
+        val allocFn: IM3Function
+        val runFn: IM3Function
+        try {
+            allocFn = findFunctionOrThrow(runtime, "warp_alloc")
+            runFn = findFunctionOrThrow(runtime, "warp_run")
+        } catch (e: Throwable) {
+            m3_FreeRuntime(runtime)
+            pinnedBytes.unpin()
+            throw e
+        }
+
+        retainedPins.add(pinnedBytes)
         val invokeLock = reentrantLock()
         return Op { args -> invokeLock.withLock { runAbi(runtime, allocFn, runFn, args) } }
     }
@@ -141,14 +183,13 @@ public class Wasm3WasmRuntime(
 
     /**
      * Rejects any module declaring an import — a host capability the compute sandbox does not grant.
-     * Frees the parsed module before throwing (it was never loaded into a runtime).
+     * The caller ([loadLocked]) owns freeing the module on the thrown path.
      */
     private fun rejectCapabilityViolations(module: IM3Module) {
         val funcImports = warp_module_num_func_imports(module)
         val globalImports = warp_module_num_global_imports(module)
         val memoryImported = warp_module_memory_imported(module) != 0
         if (funcImports > 0u || globalImports > 0u || memoryImported) {
-            m3_FreeModule(module)
             throw WasmLoadException(
                 "module capability violation (imports not allowed): " +
                     "$funcImports function, $globalImports global imports, memoryImported=$memoryImported",
@@ -158,31 +199,32 @@ public class Wasm3WasmRuntime(
 
     /**
      * Rejects a module whose declared linear memory exceeds [WasmSandboxConfig.maxMemoryPages], or
-     * that declares no memory at all (the warp ABI needs memory to marshal args/results). Frees the
-     * parsed module before throwing.
+     * that declares no memory at all (the warp ABI needs memory to marshal args/results). The caller
+     * ([loadLocked]) owns freeing the module on the thrown path.
      */
     private fun rejectOversizeMemory(module: IM3Module) {
         if (warp_module_has_memory(module) == 0) {
-            m3_FreeModule(module)
             throw WasmLoadException("module declares no linear memory (warp ABI requires it)")
         }
         val cap = config.maxMemoryPages.toUInt()
         val initial = warp_module_init_pages(module)
         if (initial > cap) {
-            m3_FreeModule(module)
             throw WasmLoadException("module initial memory $initial pages exceeds sandbox cap $cap pages")
         }
         val declaredMax = warp_module_max_pages(module)
         if (declaredMax != 0u && declaredMax > cap) {
-            m3_FreeModule(module)
             throw WasmLoadException("module memory exceeds sandbox cap: declared max $declaredMax pages > $cap pages")
         }
     }
 
-    private fun loadModule(runtime: IM3Runtime, module: IM3Module) {
+    /**
+     * Links [module] into [runtime]. The caller ([loadLocked]) owns freeing both on the thrown path
+     * — on failure wasm3 detaches the module from the runtime, so neither is reachable for cleanup
+     * from anywhere else.
+     */
+    private fun loadModuleOrThrow(runtime: IM3Runtime, module: IM3Module) {
         val result = m3_LoadModule(runtime, module)
         if (result != null) {
-            m3_FreeModule(module)
             throw WasmLoadException("module failed to instantiate: ${result.toKString()}")
         }
     }
@@ -202,58 +244,71 @@ public class Wasm3WasmRuntime(
         checkNotNull(funcRef.value) { "wasm3: $name resolved to a null function pointer" }
     }
 
-    /** One ABI round-trip: marshal args into linear memory, run, read the packed result back. */
+    /**
+     * One ABI round-trip: marshal args into linear memory, run, read the packed result back.
+     *
+     * The `warp_alloc` return and the packed `warp_run` result are fully guest-controlled `i32`/`i64`
+     * words. They are kept as **unsigned** [Long] offsets (`0..0xFFFF_FFFF`) and bounds-validated in
+     * [memoryBaseFor] before any indexing — never narrowed to a signed [Int], which would let a value
+     * with bit 31 set wrap negative, slip past the bounds check, and index host memory (a sandbox
+     * escape) or hit `ByteArray(negative)` (a raw exception escaping [WasmException]).
+     */
     private fun runAbi(runtime: IM3Runtime, allocFn: IM3Function, runFn: IM3Function, args: ByteArray): ByteArray {
         val argPtr = callAlloc(allocFn, args.size)
         writeMemory(runtime, argPtr, args)
-        val packed = callRun(runFn, argPtr, args.size)
-        val resPtr = (packed ushr 32).toInt()
-        val resLen = (packed and 0xFFFF_FFFFL).toInt()
+        val packed = callRun(runFn, argPtr, args.size.toLong())
+        val resPtr = (packed ushr 32) and 0xFFFF_FFFFL
+        val resLen = packed and 0xFFFF_FFFFL
         return readMemory(runtime, resPtr, resLen)
     }
 
-    private fun callAlloc(allocFn: IM3Function, len: Int): Int = memScoped {
+    /** Calls `warp_alloc(args.size)`, returning the guest pointer as an unsigned [Long]. */
+    private fun callAlloc(allocFn: IM3Function, len: Int): Long = memScoped {
         val out = alloc<IntVar>()
         val result = warp_call_alloc(allocFn, len, out.ptr)
         if (result != null) {
             throw WasmExecutionException("warp_alloc trapped: ${result.toKString()}")
         }
-        out.value
+        out.value.toUInt().toLong()
     }
 
-    private fun callRun(runFn: IM3Function, ptr: Int, len: Int): Long = memScoped {
+    private fun callRun(runFn: IM3Function, ptr: Long, len: Long): Long = memScoped {
         val out = alloc<LongVar>()
-        val result = warp_call_run(runFn, ptr, len, out.ptr)
+        val result = warp_call_run(runFn, ptr.toInt(), len.toInt(), out.ptr)
         if (result != null) {
             throw WasmExecutionException("warp_run trapped: ${result.toKString()}")
         }
         out.value
     }
 
-    private fun writeMemory(runtime: IM3Runtime, ptr: Int, bytes: ByteArray) {
+    private fun writeMemory(runtime: IM3Runtime, ptr: Long, bytes: ByteArray) {
         if (bytes.isEmpty()) return
-        val base = memoryBase(runtime, ptr.toLong() + bytes.size)
+        val base = memoryBaseFor(runtime, ptr, bytes.size.toLong())
         for (i in bytes.indices) {
             base[ptr + i] = bytes[i].toUByte()
         }
     }
 
-    private fun readMemory(runtime: IM3Runtime, ptr: Int, len: Int): ByteArray {
-        if (len == 0) return ByteArray(0)
-        val base = memoryBase(runtime, ptr.toLong() + len)
-        return ByteArray(len) { base[ptr + it].toByte() }
+    private fun readMemory(runtime: IM3Runtime, ptr: Long, len: Long): ByteArray {
+        if (len == 0L) return ByteArray(0)
+        val base = memoryBaseFor(runtime, ptr, len)
+        return ByteArray(len.toInt()) { base[ptr + it].toByte() }
     }
 
     /**
-     * Returns the current linear-memory base pointer, re-fetched on every access because
-     * `warp_alloc` may have grown (reallocated) memory and invalidated an earlier pointer. Bounds
-     * the requested `end` offset against the live memory size so a malicious packed result pointing
-     * past memory traps as a [WasmExecutionException] rather than reading host memory.
+     * Returns the current linear-memory base pointer for a `[ptr, ptr+len)` window, re-fetched on
+     * every access because `warp_alloc` may have grown (reallocated) memory and invalidated an
+     * earlier pointer. Validates the guest-controlled window in [Long] space — `ptr`/`len` are
+     * non-negative, the result fits a [ByteArray], and `ptr + len` is within the live memory size —
+     * so a malicious pointer/length traps as a [WasmExecutionException] (a guest runtime fault),
+     * never an OOB host-memory access or a raw non-[WasmException].
      */
-    private fun memoryBase(runtime: IM3Runtime, end: Long): CPointer<UByteVar> {
+    private fun memoryBaseFor(runtime: IM3Runtime, ptr: Long, len: Long): CPointer<UByteVar> {
         val size = m3_GetMemorySize(runtime).toLong()
-        if (end > size) {
-            throw WasmExecutionException("WASM memory access out of bounds: needs $end bytes, have $size")
+        if (ptr < 0L || len < 0L || len > Int.MAX_VALUE.toLong() || ptr + len > size) {
+            throw WasmExecutionException(
+                "WASM memory access out of bounds: window [$ptr, ${ptr + len}) outside [0, $size)",
+            )
         }
         return checkNotNull(m3_GetMemory(runtime, null, 0u)) {
             "wasm3: m3_GetMemory returned null after load"
