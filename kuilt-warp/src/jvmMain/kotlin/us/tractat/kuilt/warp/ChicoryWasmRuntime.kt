@@ -9,6 +9,8 @@ import com.dylibso.chicory.wasm.UnlinkableException
 import com.dylibso.chicory.wasm.WasmModule
 import com.dylibso.chicory.wasm.types.MemoryLimits
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.util.concurrent.Callable
 import java.util.concurrent.ExecutionException
@@ -71,6 +73,18 @@ public class ChicoryWasmRuntime(
     private val guestExecutor = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "warp-wasm-guest").apply { isDaemon = true }
     }
+
+    /**
+     * Serializes the timed submit+get of every guest invocation. One worker serves all loaded
+     * ops, and a [WarpNode] runs owned tasks concurrently over one shared runtime, so without this
+     * an op submitted while the worker is busy would have its [WasmSandboxConfig.executionTimeout]
+     * clock consumed by *queue wait* — a concurrent innocent task could be cancelled before it ever
+     * ran, recording a spurious terminal failure. Holding this for the whole submit+get makes the
+     * timeout measure actual execution, not queueing: a waiting op gets its full budget from the
+     * moment it starts. (Latency-serialized per runtime; guest calls are short by design. A future
+     * perf step could give each instance its own worker thread for true parallelism.)
+     */
+    private val invokeMutex = Mutex()
 
     override fun load(bytes: ByteArray): Op {
         val module = parseModule(bytes)
@@ -172,21 +186,26 @@ public class ChicoryWasmRuntime(
         runFn: ExportFunction,
         args: ByteArray,
     ): ByteArray = withContext(Dispatchers.IO) {
-        val future = guestExecutor.submit(Callable { runAbi(memory, allocFn, runFn, args) })
-        try {
-            future.get(config.executionTimeout.inWholeMilliseconds, TimeUnit.MILLISECONDS)
-        } catch (e: TimeoutException) {
-            // Interrupt the worker; Chicory's interpreter throws ChicoryInterruptedException at the
-            // next call entry / backward branch, terminating the runaway guest.
-            future.cancel(true)
-            throw WasmExecutionException("WASM execution exceeded ${config.executionTimeout}", e)
-        } catch (e: ExecutionException) {
-            // A trap / unreachable / OOB / bad packed result inside a guest call.
-            val cause = e.cause
-            if (cause is ChicoryException) {
-                throw WasmExecutionException("WASM kernel trapped: ${cause.message}", cause)
+        // The whole submit+get is the critical section: only one guest call is timed at a time, so
+        // the timeout measures execution, not time spent queued behind another op (see invokeMutex).
+        // withLock is cancellation-cooperative, so coroutine cancellation still propagates.
+        invokeMutex.withLock {
+            val future = guestExecutor.submit(Callable { runAbi(memory, allocFn, runFn, args) })
+            try {
+                future.get(config.executionTimeout.inWholeMilliseconds, TimeUnit.MILLISECONDS)
+            } catch (e: TimeoutException) {
+                // Interrupt the worker; Chicory's interpreter throws ChicoryInterruptedException at
+                // the next call entry / backward branch, terminating the runaway guest.
+                future.cancel(true)
+                throw WasmExecutionException("WASM execution exceeded ${config.executionTimeout}", e)
+            } catch (e: ExecutionException) {
+                // A trap / unreachable / OOB / bad packed result inside a guest call.
+                val cause = e.cause
+                if (cause is ChicoryException) {
+                    throw WasmExecutionException("WASM kernel trapped: ${cause.message}", cause)
+                }
+                throw WasmExecutionException("WASM kernel failed: ${cause?.message ?: e.message}", cause ?: e)
             }
-            throw WasmExecutionException("WASM kernel failed: ${cause?.message ?: e.message}", cause ?: e)
         }
     }
 
