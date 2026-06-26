@@ -119,6 +119,9 @@ the pipeline computes:
    the costlier transforms. Safe because both are monotone and commute under CALM. Note:
    this assumes each filter's predicate operates on the source element, not on a map's
    output — no op-dependency metadata exists yet to verify independence at the type level.
+   (For multi-embroider components the rewrite is conservative — it returns the component
+   unchanged, since filter-before-map is provable only within a single-embroider path;
+   `consolidateEmbroideries` handles the cross-embroider structure separately.)
 3. **`fuseAdjacent`** — collapse runs of consecutive same-kind free stages (`Map`/`Filter`)
    into a single `FusedMap` or `FusedFilter` that the runtime can apply in one pass.
 
@@ -126,27 +129,100 @@ the pipeline computes:
 `isEquivalentTo` is the semantic-equivalence predicate that confirms the result is the same:
 same source, same embroider, same multiset of free operations.
 
-### The cost model
+### From a pipeline to a dependency graph
 
-`coordinationCost(stats)` scores a `Draft` as a `CoordinationCost` with two fields:
-
-- **`rounds`** — the number of `Embroider` stages. Zero for a monotone pipeline; one for
-  the common case of a single consensus step. In the current model `rounds` is structurally
-  ≤ 1, so the planner's real lever is the second field.
-- **`coordinatedVolume`** — the estimated number of elements entering the consensus step,
-  derived from `WarpStats` HyperLogLog sketches. This is what `plan(stats)` actually reduces:
-  deferring the embroider past selective filters shrinks the set that crosses the consensus
-  boundary, even though `rounds` stays at 1.
+A real query rarely has just one consensus step. A `Draft` is a dependency graph — each
+stage is a node with a set of predecessors — and a linear pipeline is the degenerate case
+where every node has exactly one predecessor. Two independent pipelines can be merged into
+one `Draft` with `combine`:
 
 ```kotlin
-val planned = draft.plan(stats)
-val cost = planned.coordinationCost(stats)
-// cost.rounds == 1; cost.coordinatedVolume << source cardinality (filters applied first)
+val docsQuery = Warp.shuttle(OpId("docs")).map(OpId("score")).embroider(OpId("rank"))
+val votesQuery = Warp.shuttle(OpId("votes")).filter(OpId("nonzero")).embroider(OpId("tally"))
+
+// Two independent branches — their embroideries share no ancestor path.
+val combined: Draft<Unit> = docsQuery.combine(votesQuery)
+check(combined.embroideries.size == 2)
 ```
 
-`CoordinationCost` implements `Comparable`: fewer rounds first, lower volume as tiebreaker.
-`plan` calls `optimize()` to determine the rewrite; `stats` is passed but currently reserved
-for future stats-aware filter reordering (e.g. most-selective first).
+The combined draft has two `Embroider` nodes with no edges between them — neither is
+the other's ancestor. This independence is structural, not declared.
+
+### Cutting coordination rounds
+
+Here is the key result. When a draft has multiple independent `Embroider` nodes, the
+minimum number of consensus rounds is **the depth of the dependency graph**, not the
+count of individual agreements. Two embroideries that are independent can share a single
+Raft round-trip; only a sequential dependency (one embroidery whose input depends on
+another's output) forces a second round.
+
+`consolidateEmbroideries()` makes this concrete: it groups `Embroider` nodes at the same
+dependency level and fuses each group into a single `BatchedEmbroider` — one Raft proposal,
+one round, regardless of how many agreements it carries.
+
+`plan(stats)` applies all the rewrite rules and then consolidates:
+
+```kotlin
+// Representative query: 3 independent embroideries (level 0) + 1 sequential (level 1).
+val branchA = Warp.shuttle(OpId("src.a")).embroider(OpId("emb.a"))
+val branchB = Warp.shuttle(OpId("src.b")).embroider(OpId("emb.b"))
+val branchC = Warp.shuttle(OpId("src.c")).embroider(OpId("emb.c"))
+    .map(OpId("map.m")).embroider(OpId("emb.d"))   // emb.d depends on emb.c
+
+val unplanned: Draft<Unit> = branchA.combine(branchB).combine(branchC)
+val planned: Draft<Unit>   = unplanned.plan(WarpStats.empty())
+
+val stats = WarpStats.empty()
+check(unplanned.coordinationCost(stats).rounds == 4)   // one per Embroider node
+check(planned.coordinationCost(stats).rounds   == 2)   // DAG depth: level 0 + level 1
+```
+
+This is the improvement that E-3 could not demonstrate — E-3 was structurally pinned at
+≤ 1 rounds on a single-embroider pipeline. `rounds` is now a real lever.
+
+### The honest tradeoff — coupling and blast radius
+
+Batching K independent agreements into one round is efficient, but it **couples their failure
+domains**: if the Raft proposal is rejected (a leader stepdown, a conflict, a node restart),
+all K agreements must retry together. `CoordinationCost.coupling` records the maximum batch
+size and is the secondary objective in the lexicographic ordering (minimise rounds first,
+then coupling, then volume). A future planner might cap batch size explicitly; for now the
+caller can inspect `coupling` and split a draft if the retry unit is too large.
+
+### The cost model
+
+`coordinationCost(stats)` scores a `Draft` as a `CoordinationCost` with three fields:
+
+- **`rounds`** — the count of coordinated nodes in the planned DAG. Zero for a fully-monotone
+  pipeline; one per dependency level otherwise. A `BatchedEmbroider` counts as one round
+  regardless of how many ops it batches.
+- **`coupling`** — the maximum batch size across all coordinated nodes: 1 for a lone
+  `Embroider`, K for a `BatchedEmbroider` carrying K agreements. The blast-radius term.
+- **`coordinatedVolume`** — the estimated number of elements entering all coordinated stages,
+  derived from `WarpStats` HyperLogLog sketches.
+
+`CoordinationCost` implements `Comparable`: fewer rounds first, then smaller coupling, then
+lower volume. `plan` calls `optimize()` (which includes `consolidateEmbroideries`) to
+minimise this cost; `stats` is passed but currently reserved for future stats-aware filter
+reordering (e.g. most-selective first).
+
+### Executing a plan
+
+`Draft.executeCoordinated { propose }` walks the coordinated nodes in topological order and
+calls `propose` once per node, returning the proposal count. A `BatchedEmbroider` encodes
+all its agreements in one payload — one Raft round-trip, not one per op. For fully-monotone
+drafts it issues zero proposals and returns immediately.
+
+```kotlin
+// Planned: BatchedEmbroider(A,B,C) + Embroider(D) → exactly 2 real Raft proposals.
+val rounds = planned.executeCoordinated { payload ->
+    raftNode.propose(payload)   // suspends until the proposal commits
+}
+check(rounds == 2)   // == coordinationCost(planned, stats).rounds
+```
+
+The analytical model's `rounds` field matches the execution count exactly — the G5 Raft
+simulation test verified this on a real three-node cluster.
 
 ### Statistics are a CRDT
 

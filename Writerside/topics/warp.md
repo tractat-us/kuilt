@@ -142,10 +142,14 @@ check(unoptimized.isEquivalentTo(optimized))              // same convergent res
 
 ### What it costs
 
-`coordinationCost(stats)` scores a draft with two numbers: how many consensus rounds it
-needs (`rounds`) and how many elements will cross that boundary (`coordinatedVolume`). In
-the common case of a single `embroider` stage, `rounds` is always 1 — the planner's real
-win is cutting `coordinatedVolume` by deferring the embroider past selective filters:
+`coordinationCost(stats)` scores a draft with three numbers:
+
+- **`rounds`** — how many consensus round-trips the plan needs.
+- **`coupling`** — the maximum batch size across all coordinated nodes (the blast-radius term — see below).
+- **`coordinatedVolume`** — how many elements will cross the consensus boundary.
+
+For a single `embroider`, `plan` reduces `coordinatedVolume` by deferring the embroider
+past selective filters:
 
 <!-- verbatim from kuilt-warp/src/commonSamples/kotlin/us/tractat/kuilt/warp/WarpSamples.kt#sampleCoordinationCost -->
 
@@ -164,6 +168,88 @@ check(plannedCost < unplannedCost)
 The cardinality estimates come from `WarpStats` — a CRDT map of per-source
 HyperLogLog sketches. Peers gossip these sketches on the same anti-entropy as everything
 else; each peer plans locally from the converged value, no round-trip needed.
+
+`CoordinationCost` implements `Comparable`: fewer rounds first, then smaller coupling,
+then lower volume.
+
+### When a query has many agreements
+
+A draft is a dependency graph, not just a pipeline. Call `combine` to merge two
+independent drafts into one plan:
+
+<!-- verbatim from kuilt-warp/src/commonSamples/kotlin/us/tractat/kuilt/warp/WarpSamples.kt#sampleCombine -->
+
+```kotlin
+val docs = Warp.shuttle(OpId("source.docs"))
+    .map(OpId("map.score"))
+    .embroider(OpId("embroider.rank"))
+val scores = Warp.shuttle(OpId("source.scores"))
+    .filter(OpId("filter.nonzero"))
+    .embroider(OpId("embroider.vote"))
+
+val combined: Draft<Unit> = docs.combine(scores)
+
+// Both branches' embroideries are present — independent, no edges connect them.
+check(combined.embroideries.size == 2)
+check(!combined.isMonotone)
+```
+
+The two branches share no ancestor path — their embroideries are independent. The
+planner can commit both in a single Raft round-trip instead of two. Calling
+`consolidateEmbroideries()` (included in `plan`) fuses them into one `BatchedEmbroider`:
+
+<!-- verbatim from kuilt-warp/src/commonSamples/kotlin/us/tractat/kuilt/warp/WarpSamples.kt#sampleConsolidateEmbroideries -->
+
+```kotlin
+val consolidated = combined.consolidateEmbroideries()
+
+// Two independent embroideries become one BatchedEmbroider — one consensus round.
+check(consolidated.nodes.any { it.stage is DraftStage.BatchedEmbroider })
+check(consolidated.nodes.count { it.stage.coordinationKind == CoordinationKind.Coordinated } == 1)
+// Semantic equivalence: same sources, same embroider multiset, same free-op multiset.
+check(combined.isEquivalentTo(consolidated))
+```
+
+The round-count cut is analytically provable and holds at real Raft execution. The
+representative query has three independent agreements (level 0) plus one that depends
+on them (level 1) — four rounds unplanned, two after `plan`:
+
+<!-- verbatim from kuilt-warp/src/commonSamples/kotlin/us/tractat/kuilt/warp/WarpSamples.kt#sampleCoordinationCostDepth -->
+
+```kotlin
+// Branch C chains two embroideries: embroider(C) must commit before embroider(D).
+val branchA = Warp.shuttle(OpId("source.a")).embroider(OpId("embroider.a"))
+val branchB = Warp.shuttle(OpId("source.b")).embroider(OpId("embroider.b"))
+val branchC = Warp.shuttle(OpId("source.c"))
+    .embroider(OpId("embroider.c"))
+    .map(OpId("map.m"))
+    .embroider(OpId("embroider.d"))
+
+val unplanned: Draft<Unit> = branchA.combine(branchB).combine(branchC)
+val planned: Draft<Unit> = unplanned.plan(WarpStats.empty())
+
+val stats = WarpStats.empty()
+
+// Unplanned: 4 separate Embroider nodes → 4 rounds (one per node).
+check(unplanned.coordinationCost(stats).rounds == 4)
+// Planned: BatchedEmbroider(A,B,C) at level 0 + Embroider(D) at level 1 → 2 rounds.
+check(planned.coordinationCost(stats).rounds == 2)
+// rounds is a real lever — the planner measurably cuts round count.
+check(planned.coordinationCost(stats) < unplanned.coordinationCost(stats))
+// Coupling = 3: the level-0 batch bundles three agreements (blast-radius = 3).
+check(planned.coordinationCost(stats).coupling == 3)
+```
+
+The minimum number of rounds is the depth of the dependency graph, not the count of
+individual agreements. Independent agreements at the same depth collapse into one round;
+a sequential dependency (one embroidery's output feeds another's input) forces one
+round per level — this is a Brent-style critical-path argument.
+
+**The honest tradeoff.** Batching K independent agreements into one round couples their
+failure domains: if the Raft proposal is rejected, all K must retry together. The
+`coupling` field records the maximum batch size; the planner minimises rounds first,
+then coupling. A caller who finds the retry unit too large can inspect `coupling` and
+split the draft before planning.
 
 ### Results that converge
 

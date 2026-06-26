@@ -132,6 +132,7 @@ public sealed class DraftStage {
      *
      * @param opIds ordered list of the original [Embroider] operation identifiers; must be
      *   non-empty.
+     * @sample us.tractat.kuilt.warp.sampleConsolidateEmbroideries
      */
     public data class BatchedEmbroider(public val opIds: List<OpId>) : DraftStage() {
         init { require(opIds.isNotEmpty()) { "BatchedEmbroider requires at least one opId" } }

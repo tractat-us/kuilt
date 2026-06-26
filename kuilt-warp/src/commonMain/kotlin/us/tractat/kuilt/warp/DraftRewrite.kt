@@ -248,6 +248,8 @@ public fun <T> Draft<T>.fuseAdjacent(): Draft<T> {
  * **Result-preserving:** the returned [Draft] is structurally equivalent to the receiver
  * under [isEquivalentTo] (same sources, same multiset of embroider opIds, same free-op
  * multiset).
+ *
+ * @sample us.tractat.kuilt.warp.sampleConsolidateEmbroideries
  */
 public fun <T> Draft<T>.consolidateEmbroideries(): Draft<T> {
     val levels = coordinationLevels()

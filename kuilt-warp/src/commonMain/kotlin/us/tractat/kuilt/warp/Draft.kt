@@ -196,6 +196,7 @@ public class Draft<out T> @PublishedApi internal constructor(
      * in `this` branch as a predecessor, and vice versa — the two branches remain
      * disconnected in the merged DAG.
      *
+     * @sample us.tractat.kuilt.warp.sampleCombine
      * @see Draft.embroideries for accessing both branches' coordination stages.
      * @see DraftRewrite.optimize for branch-aware optimisation (applies per branch).
      */
