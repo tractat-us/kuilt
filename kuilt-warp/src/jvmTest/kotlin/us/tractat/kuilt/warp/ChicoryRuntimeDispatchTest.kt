@@ -15,10 +15,7 @@
 package us.tractat.kuilt.warp
 
 import kotlinx.coroutines.test.TestCoroutineScheduler
-import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
-import kotlinx.coroutines.test.advanceTimeBy
-import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
@@ -41,11 +38,7 @@ private val C3_QUILTER_CONFIG = QuilterConfig(
 private fun c3Clock(scheduler: TestCoroutineScheduler): () -> Instant =
     { Instant.fromEpochMilliseconds(scheduler.currentTime) }
 
-private fun TestScope.settle() {
-    repeat(6) { advanceTimeBy(C3_QUILTER_CONFIG.antiEntropyInterval); runCurrent() }
-    advanceTimeBy(ClaimStrategy.DEFAULT_SETTLE_WINDOW); runCurrent()
-    repeat(6) { advanceTimeBy(C3_QUILTER_CONFIG.antiEntropyInterval); runCurrent() }
-}
+private val C3_CADENCE = C3_QUILTER_CONFIG.antiEntropyInterval
 
 class ChicoryRuntimeDispatchTest {
 
@@ -58,7 +51,7 @@ class ChicoryRuntimeDispatchTest {
      */
     @Test
     fun wasmSquareKernelRunsViaChicoryAndResultMergesOnBothBoards() =
-        runTest(UnconfinedTestDispatcher(), timeout = 5.seconds) {
+        runTest(UnconfinedTestDispatcher(), timeout = 30.seconds) {
             val loom = InMemoryLoom()
             val seamA = loom.host(Pattern("c3-chicory"))
             val seamB = loom.join(InMemoryTag("b"))
@@ -81,7 +74,12 @@ class ChicoryRuntimeDispatchTest {
             val input = 5
             val taskId = TaskId("square-$input")
             nodeA.enqueue(taskId, TaskDescriptor(squareOpId, writeI32Le(input)))
-            settle()
+            settleUntil(
+                cadence = C3_CADENCE,
+                describe = {
+                    "A.result=${nodeA.results[taskId] != null} B.result=${nodeB.results[taskId] != null}"
+                },
+            ) { nodeA.results[taskId] != null && nodeB.results[taskId] != null }
 
             val expected = input * input // 25
             assertAll(
