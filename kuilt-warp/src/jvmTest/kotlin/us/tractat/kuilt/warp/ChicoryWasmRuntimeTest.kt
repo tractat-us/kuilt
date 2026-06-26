@@ -40,6 +40,13 @@ class ChicoryWasmRuntimeTest {
     ) { "bigmem.wasm not found on classpath" }
         .readBytes()
 
+    private val largeinitWasm: ByteArray = checkNotNull(
+        ChicoryWasmRuntimeTest::class.java.getResourceAsStream(
+            "/us/tractat/kuilt/warp/largeinit.wasm",
+        ),
+    ) { "largeinit.wasm not found on classpath" }
+        .readBytes()
+
     // --- Load-guard tests (Task 3) ---
 
     @Test
@@ -50,6 +57,11 @@ class ChicoryWasmRuntimeTest {
     @Test
     fun loadRejectsModuleWithOversizeMemory() {
         assertFailsWith<WasmLoadException> { runtime.load(bigmemWasm) }
+    }
+
+    @Test
+    fun loadRejectsModuleWithOversizeInitialMemory() {
+        assertFailsWith<WasmLoadException> { runtime.load(largeinitWasm) }
     }
 
     // --- Happy-path tests (Task 2) — guards must not over-reject reverse.wasm ---

@@ -22,8 +22,8 @@ import com.dylibso.chicory.wasm.types.MemoryLimits
  * - *Import rejection* — no [withImportValues] is provided; any declared import causes
  *   Chicory's [Instance.builder] to throw [UnlinkableException], which is caught and rethrown
  *   as [WasmLoadException].
- * - *Memory cap* — before build, the module's declared memory max is compared against
- *   [WasmSandboxConfig.maxMemoryPages]. An explicit max that exceeds the cap is rejected
+ * - *Memory cap* — before build, both the declared initial and max page counts are checked
+ *   against [WasmSandboxConfig.maxMemoryPages]. An oversize initial or explicit max is rejected
  *   immediately. A module with no declared max (Chicory sentinel: [MemoryLimits.MAX_PAGES])
  *   is allowed but clamped via [Instance.Builder.withMemoryLimits] so the runtime enforces
  *   the cap at execution time.
@@ -55,24 +55,31 @@ public class ChicoryWasmRuntime(
      * Returns [MemoryLimits] to apply via [Instance.Builder.withMemoryLimits], or null if the
      * module declares no memory section.
      *
-     * Policy for the declared-max field:
+     * Policy:
+     * - If the declared initial exceeds [WasmSandboxConfig.maxMemoryPages], reject immediately.
+     *   This guards against `MemoryLimits(initial, cap)` throwing Chicory's raw `InvalidException`
+     *   ("size minimum must not be greater than maximum") when initial > cap.
      * - [MemoryLimits.MAX_PAGES] (65536) is Chicory's sentinel for "no max declared in the
      *   binary". Such a module is allowed — its maximum is clamped to [WasmSandboxConfig.maxMemoryPages].
-     * - Any other value is an explicit max. If it exceeds the cap, the module is rejected
-     *   immediately with [WasmLoadException]; otherwise it is accepted as-is (still clamped
-     *   to the cap via [withMemoryLimits] for defence in depth).
+     * - Any other (explicit) max that exceeds the cap is rejected immediately.
      */
     private fun resolvedMemoryLimits(module: WasmModule): MemoryLimits? {
         val memSection = module.memorySection().orElse(null) ?: return null
         if (memSection.memoryCount() == 0) return null
         val limits = memSection.getMemory(0).limits()
+        val initial = limits.initialPages()
+        if (initial > config.maxMemoryPages) {
+            throw WasmLoadException(
+                "module initial memory $initial pages exceeds sandbox cap ${config.maxMemoryPages} pages",
+            )
+        }
         val declaredMax = limits.maximumPages()
         if (declaredMax != MemoryLimits.MAX_PAGES && declaredMax > config.maxMemoryPages) {
             throw WasmLoadException(
                 "module memory exceeds sandbox cap: declared max $declaredMax pages > ${config.maxMemoryPages} pages",
             )
         }
-        return MemoryLimits(limits.initialPages(), config.maxMemoryPages)
+        return MemoryLimits(initial, config.maxMemoryPages)
     }
 
     private fun buildInstance(module: WasmModule, memLimits: MemoryLimits?): Instance =
