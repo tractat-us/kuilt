@@ -70,6 +70,12 @@ public class NamedMux(
     private val sharedIncoming = delegate.incoming
         .shareIn(scope = scope, started = SharingStarted.Eagerly, replay = 0)
 
+    /**
+     * Lifecycle of the underlying [delegate] [Seam]. Owners that re-weave a fresh base on tear
+     * (e.g. [MuxClientLoom]) read this to detect that this generation is dead.
+     */
+    public val baseState: StateFlow<SeamState> get() = delegate.state
+
     private val lock = reentrantLock()
     private val channels = mutableMapOf<String, Seam>()
 
