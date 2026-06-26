@@ -38,5 +38,6 @@ dependencies {
         api(project(":kuilt-test"))
         api(project(":kuilt-otel"))
         api(project(":kuilt-warp"))
+        api(project(":kuilt-warp-otel"))
     }
 }

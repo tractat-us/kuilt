@@ -1,5 +1,6 @@
 package us.tractat.kuilt.warp
 
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import us.tractat.kuilt.crdt.HyperLogLog
 import us.tractat.kuilt.crdt.Patch
@@ -33,7 +34,9 @@ import us.tractat.kuilt.crdt.piece
  */
 @Serializable
 public class WarpStats private constructor(
-    private val sketches: Map<OpId, HyperLogLog>,
+    // @SerialName preserves the "sketches" wire-format name while freeing the
+    // Kotlin identifier so the public fun sketches() accessor can use it.
+    @SerialName("sketches") private val _sketches: Map<OpId, HyperLogLog>,
 ) : Quilted<WarpStats> {
 
     /**
@@ -45,7 +48,7 @@ public class WarpStats private constructor(
      * ```
      */
     public fun observe(source: OpId, element: String): Patch<WarpStats> {
-        val current = sketches[source] ?: HyperLogLog.empty()
+        val current = _sketches[source] ?: HyperLogLog.empty()
         val hllPatch = current.add(element)
         return Patch(WarpStats(mapOf(source to hllPatch.delta)))
     }
@@ -55,7 +58,17 @@ public class WarpStats private constructor(
      * Returns `0` when [source] has never been observed (no HLL exists yet).
      */
     public fun estimatedCardinality(source: OpId): Long =
-        sketches[source]?.estimate() ?: 0L
+        _sketches[source]?.estimate() ?: 0L
+
+    /**
+     * Returns a snapshot of all per-source [HyperLogLog] sketches.
+     *
+     * Exposed so the `:kuilt-warp-otel` bridge can merge raw sketches into the
+     * [us.tractat.kuilt.otel.WarpMetricExporter]'s CARDINALITY series without
+     * re-estimating cardinality (the raw HLL carries more information than a single
+     * `Long` estimate and merges correctly via [HyperLogLog.piece]).
+     */
+    public fun sketches(): Map<OpId, HyperLogLog> = _sketches
 
     /**
      * The join: for each source key, merge the [HyperLogLog] sketches via
@@ -63,22 +76,22 @@ public class WarpStats private constructor(
      * taken as-is (the other side's implicit empty sketch contributes nothing).
      */
     override fun piece(other: WarpStats): WarpStats {
-        if (other.sketches.isEmpty()) return this
-        if (sketches.isEmpty()) return other
-        val merged = HashMap<OpId, HyperLogLog>(sketches)
-        for ((key, hll) in other.sketches) {
+        if (other._sketches.isEmpty()) return this
+        if (_sketches.isEmpty()) return other
+        val merged = HashMap<OpId, HyperLogLog>(_sketches)
+        for ((key, hll) in other._sketches) {
             merged[key] = merged[key]?.piece(hll) ?: hll
         }
         return WarpStats(merged)
     }
 
     override fun equals(other: Any?): Boolean =
-        other is WarpStats && sketches == other.sketches
+        other is WarpStats && _sketches == other._sketches
 
-    override fun hashCode(): Int = sketches.hashCode()
+    override fun hashCode(): Int = _sketches.hashCode()
 
     override fun toString(): String =
-        "WarpStats(${sketches.entries.joinToString { (k, v) -> "${k.value}~${v.estimate()}" }})"
+        "WarpStats(${_sketches.entries.joinToString { (k, v) -> "${k.value}~${v.estimate()}" }})"
 
     public companion object {
         /** An empty stats map with no observed sources. */
