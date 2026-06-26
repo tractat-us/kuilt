@@ -5,15 +5,21 @@ import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertFailsWith
+import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.Duration.Companion.seconds
 
 /**
- * Integration tests for [ChicoryWasmRuntime]: happy-path execution and sandbox load-guards.
+ * Integration tests for [ChicoryWasmRuntime]: happy-path execution plus load- and run-guards.
  *
  * Happy path: `reverse.wasm` exports the warp linear-memory ABI (`memory`, `warp_alloc`,
  * `warp_run`) and reverses its input bytes.
  *
  * Load-guard tests verify that [ChicoryWasmRuntime.load] rejects capability-violating modules
  * with [WasmLoadException] before any execution occurs.
+ *
+ * Run-guard tests verify that a runaway (`loop.wasm`) or trapping (`trap.wasm`) kernel surfaces
+ * as [WasmExecutionException] — the loop bounded by the execution timeout without hanging — and
+ * that a timed-out worker recovers for the next invocation.
  */
 class ChicoryWasmRuntimeTest {
 
@@ -46,6 +52,55 @@ class ChicoryWasmRuntimeTest {
         ),
     ) { "largeinit.wasm not found on classpath" }
         .readBytes()
+
+    private val loopWasm: ByteArray = checkNotNull(
+        ChicoryWasmRuntimeTest::class.java.getResourceAsStream(
+            "/us/tractat/kuilt/warp/loop.wasm",
+        ),
+    ) { "loop.wasm not found on classpath" }
+        .readBytes()
+
+    private val trapWasm: ByteArray = checkNotNull(
+        ChicoryWasmRuntimeTest::class.java.getResourceAsStream(
+            "/us/tractat/kuilt/warp/trap.wasm",
+        ),
+    ) { "trap.wasm not found on classpath" }
+        .readBytes()
+
+    // --- Run-guard tests (Task 4) ---
+
+    /**
+     * An infinite-loop kernel is interrupted at the (short) execution timeout and surfaces
+     * [WasmExecutionException]. The guest runs on REAL wall-clock time, so the `runTest` timeout
+     * sits well above the 200 ms sandbox bound; the test must still complete promptly (not hang).
+     */
+    @Test
+    fun infiniteLoopIsBoundedByTimeout() = runTest(timeout = 10.seconds) {
+        ChicoryWasmRuntime(WasmSandboxConfig(executionTimeout = 200.milliseconds)).use { rt ->
+            assertFailsWith<WasmExecutionException> { rt.load(loopWasm).invoke(ByteArray(0)) }
+        }
+    }
+
+    @Test
+    fun trapSurfacesAsExecutionException() = runTest(timeout = 10.seconds) {
+        assertFailsWith<WasmExecutionException> { runtime.load(trapWasm).invoke(ByteArray(0)) }
+    }
+
+    /**
+     * A timed-out invocation interrupts the dedicated worker thread; the next invocation on the
+     * SAME runtime must still produce correct bytes — proving the stale interrupt does not poison
+     * the recovered worker.
+     */
+    @Test
+    fun timeoutDoesNotPoisonNextInvoke() = runTest(timeout = 10.seconds) {
+        ChicoryWasmRuntime(WasmSandboxConfig(executionTimeout = 200.milliseconds)).use { rt ->
+            assertFailsWith<WasmExecutionException> { rt.load(loopWasm).invoke(ByteArray(0)) }
+            assertContentEquals(
+                byteArrayOf(4, 3, 2, 1),
+                rt.load(reverseWasm).invoke(byteArrayOf(1, 2, 3, 4)),
+            )
+        }
+    }
 
     // --- Load-guard tests (Task 3) ---
 
