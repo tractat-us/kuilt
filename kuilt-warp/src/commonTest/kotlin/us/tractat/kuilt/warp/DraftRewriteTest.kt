@@ -413,4 +413,192 @@ class DraftRewriteTest {
         val b = Warp.shuttle(src).map(m1).map(m2)
         assertFalse(a.isEquivalentTo(b))
     }
+
+    // ── Multi-branch (G2 combine) — rewrites preserve independent branches ─────
+    //
+    // The tests below use Draft.combine to build a two-branch DAG and verify that each
+    // rewrite operates per-branch rather than collapsing the two branches into one path.
+
+    private val src2 = OpId("source.scores")
+
+    @Test
+    fun `deferEmbroidery defers embroider in each branch independently`() {
+        // Branch 1: Source → Embroider → Map (embroider mis-placed — needs deferral)
+        val branch1 = Draft<ByteArray>(
+            listOf(
+                DraftStage.Source(src),
+                DraftStage.Embroider(emb),
+                DraftStage.Map(m1),
+            ).toPathNodes()
+        )
+        // Branch 2: already correct (Source → Map → Embroider)
+        val branch2 = Warp.shuttle(src2).map(m2).embroider(OpId("embroider.vote"))
+        val combined = branch1.combine(branch2)
+        val deferred = combined.deferEmbroidery()
+
+        // Branch 1's embroider must now be last in its sub-path (Map(m1) before Embroider)
+        val branch1Nodes = deferred.nodes.take(branch1.nodes.size)
+        assertAll(
+            { assertIs<DraftStage.Embroider>(branch1Nodes.last().stage) },
+            { assertIs<DraftStage.Map>(branch1Nodes[branch1Nodes.size - 2].stage) },
+        )
+
+        // Branch 2 must remain unchanged
+        val branch2Nodes = deferred.nodes.drop(branch1.nodes.size)
+        assertAll(
+            { assertIs<DraftStage.Embroider>(branch2Nodes.last().stage) },
+            { assertTrue(branch2Nodes[0].stage is DraftStage.Source || branch2Nodes[0].stage is DraftStage.Map) },
+        )
+
+        // Both branches still independent (two root nodes)
+        assertEquals(2, deferred.nodes.count { it.predecessors.isEmpty() })
+    }
+
+    @Test
+    fun `deferEmbroidery preserves equivalence on a combined draft`() {
+        val branch1 = Draft<ByteArray>(
+            listOf(
+                DraftStage.Source(src),
+                DraftStage.Embroider(emb),
+                DraftStage.Map(m1),
+            ).toPathNodes()
+        )
+        val branch2 = Warp.shuttle(src2).map(m2).embroider(OpId("embroider.vote"))
+        val combined = branch1.combine(branch2)
+        assertTrue(combined.isEquivalentTo(combined.deferEmbroidery()))
+    }
+
+    @Test
+    fun `pushdownFilters applies per branch and does not flatten combined draft`() {
+        // Branch 1: Source → Map(m1) → Filter(f1) → Embroider  (filter after map — needs pushdown)
+        val branch1 = Warp.shuttle(src).map(m1).filter(f1).embroider(emb)
+        // Branch 2: Source → Map(m2) → Filter(f2)  (filter after map — needs pushdown)
+        val branch2 = Warp.shuttle(src2).map(m2).filter(f2)
+        val combined = branch1.combine(branch2)
+        val pushed = combined.pushdownFilters()
+
+        // Two independent roots must still exist
+        assertEquals(2, pushed.nodes.count { it.predecessors.isEmpty() })
+
+        // Branch 1: filters must precede maps in the free section (before embroider)
+        val branch1Nodes = pushed.nodes.take(branch1.nodes.size)
+        val freeMiddle1 = branch1Nodes.drop(1).dropLast(1)  // exclude Source and Embroider
+        val firstFilter1 = freeMiddle1.indexOfFirst { it.stage.isFilterKind() }
+        val lastMap1 = freeMiddle1.indexOfLast { it.stage.isMapKind() }
+        assertTrue(firstFilter1 < lastMap1 || lastMap1 == -1, "filters must precede maps in branch 1")
+
+        // Both embroiders must still be present
+        assertEquals(1, pushed.embroideries.size)  // only branch1 has an embroider
+        assertEquals(emb, pushed.embroideries.single().opId)
+    }
+
+    @Test
+    fun `pushdownFilters preserves equivalence on a combined draft`() {
+        val branch1 = Warp.shuttle(src).map(m1).filter(f1).embroider(emb)
+        val branch2 = Warp.shuttle(src2).map(m2).filter(f2)
+        val combined = branch1.combine(branch2)
+        assertTrue(combined.isEquivalentTo(combined.pushdownFilters()))
+    }
+
+    @Test
+    fun `fuseAdjacent preserves independent branches in combined draft`() {
+        // Branch 1: Source → Map(m1) → Map(m2)  (two adjacent maps, should fuse)
+        val branch1 = Warp.shuttle(src).map(m1).map(m2)
+        // Branch 2: Source → Filter(f1) → Filter(f2)  (two adjacent filters, should fuse)
+        val branch2 = Warp.shuttle(src2).filter(f1).filter(f2)
+        val combined = branch1.combine(branch2)
+        val fused = combined.fuseAdjacent()
+
+        // Two independent root nodes must still exist after fusing
+        val roots = fused.nodes.filter { it.predecessors.isEmpty() }
+        assertEquals(2, roots.size, "two independent source nodes must remain after fuseAdjacent")
+
+        // Branch 1: should contain a FusedMap
+        val branch1Ids = fused.nodes.take(branch1.nodes.size - 1).map { it.id }.toSet() + fused.nodes.first { it.stage is DraftStage.Source && it.stage.opId == src }.id
+        assertTrue(fused.stages.any { it is DraftStage.FusedMap }, "branch 1 should have a FusedMap")
+
+        // Branch 2: should contain a FusedFilter
+        assertTrue(fused.stages.any { it is DraftStage.FusedFilter }, "branch 2 should have a FusedFilter")
+
+        // No cross-branch edges: each branch's nodes should only reference nodes in the same branch
+        val aIds = fused.nodes.filter { it.stage !is DraftStage.Source || it.stage.opId == src }
+            .let { _ ->
+                // Walk forward from the src-branch root
+                val srcRoot = fused.nodes.first { it.stage is DraftStage.Source && it.stage.opId == src }
+                val aReachable = mutableSetOf(srcRoot.id)
+                fused.nodes.forEach { n ->
+                    if (n.predecessors.any { it in aReachable }) aReachable.add(n.id)
+                }
+                aReachable
+            }
+        val bIds = fused.nodes.map { it.id }.toSet() - aIds
+        assertTrue(
+            fused.nodes.filter { it.id in aIds }.all { n -> n.predecessors.all { it in aIds } },
+            "no a-branch node should have a b-branch predecessor"
+        )
+        assertTrue(
+            fused.nodes.filter { it.id in bIds }.all { n -> n.predecessors.all { it in bIds } },
+            "no b-branch node should have an a-branch predecessor"
+        )
+    }
+
+    @Test
+    fun `fuseAdjacent preserves equivalence on a combined draft`() {
+        val branch1 = Warp.shuttle(src).map(m1).map(m2)
+        val branch2 = Warp.shuttle(src2).filter(f1).filter(f2)
+        val combined = branch1.combine(branch2)
+        assertTrue(combined.isEquivalentTo(combined.fuseAdjacent()))
+    }
+
+    @Test
+    fun `optimize preserves both branches and both embroideries on a combined draft`() {
+        // Branch 1: embroider in middle, filters after maps (worst case)
+        val branch1 = Draft<ByteArray>(
+            listOf(
+                DraftStage.Source(src),
+                DraftStage.Map(m1),
+                DraftStage.Embroider(emb),
+                DraftStage.Filter(f1),
+            ).toPathNodes()
+        )
+        // Branch 2: also needs optimisation
+        val branch2 = Warp.shuttle(src2).map(m2).map(m3).filter(f2).embroider(OpId("embroider.vote"))
+        val combined = branch1.combine(branch2)
+        val optimised = combined.optimize()
+
+        // Both embroiders still present
+        assertAll(
+            { assertEquals(2, optimised.embroideries.size) },
+            { assertTrue(optimised.embroideries.any { it.opId == emb }) },
+            { assertTrue(optimised.embroideries.any { it.opId == OpId("embroider.vote") }) },
+        )
+
+        // Two independent root nodes remain
+        assertEquals(2, optimised.nodes.count { it.predecessors.isEmpty() })
+
+        // Structurally equivalent to the unoptimised combined draft
+        assertTrue(combined.isEquivalentTo(optimised))
+    }
+
+    @Test
+    fun `isEquivalentTo compares all source opIds across branches`() {
+        val a1 = Warp.shuttle(src).map(m1).embroider(emb)
+        val b1 = Warp.shuttle(src2).filter(f1).embroider(OpId("embroider.vote"))
+        val ab = a1.combine(b1)
+
+        // Same combination, different argument order — both sources and embroiders present
+        val a2 = Warp.shuttle(src2).filter(f1).embroider(OpId("embroider.vote"))
+        val b2 = Warp.shuttle(src).map(m1).embroider(emb)
+        val ba = a2.combine(b2)
+
+        // The two combined drafts should be structurally equivalent (same multisets)
+        assertTrue(ab.isEquivalentTo(ba))
+    }
+
+    @Test
+    fun `isEquivalentTo detects a different source in a combined draft`() {
+        val ab = Warp.shuttle(src).map(m1).combine(Warp.shuttle(src2).map(m2))
+        val differentSrc = Warp.shuttle(src).map(m1).combine(Warp.shuttle(OpId("other.source")).map(m2))
+        assertFalse(ab.isEquivalentTo(differentSrc))
+    }
 }

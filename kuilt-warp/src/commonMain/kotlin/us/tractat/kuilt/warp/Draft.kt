@@ -179,6 +179,39 @@ public class Draft<out T> @PublishedApi internal constructor(
      */
     public fun embroider(opId: OpId): Draft<T> = appendPathNode(DraftStage.Embroider(opId))
 
+    /**
+     * Merges this [Draft] and [other] into a single dependency DAG with two independent
+     * branches — no edges connect the two branches, so their [DraftStage.Embroider] nodes
+     * can be consolidated into a single Raft round by the G3 planner.
+     *
+     * The result element type is [Unit]: the combined draft represents a *plan* holding
+     * both pipelines, not a single typed output. The [stages] view lists both branches'
+     * stages in topological order (all of `this` branch, then all of `other`).
+     *
+     * **NodeId remapping:** [other]'s [NodeId]s are offset by `this.nodes.size` to
+     * guarantee uniqueness. Every predecessor reference in [other]'s nodes is offset by
+     * the same amount so the graph structure is preserved exactly.
+     *
+     * **Independence guarantee:** no node in [other]'s remapped branch references a node
+     * in `this` branch as a predecessor, and vice versa — the two branches remain
+     * disconnected in the merged DAG.
+     *
+     * @see Draft.embroideries for accessing both branches' coordination stages.
+     * @see DraftRewrite.optimize for branch-aware optimisation (applies per branch).
+     */
+    public fun combine(other: Draft<*>): Draft<Unit> {
+        val offset = nodes.size
+        val remappedOther = other.nodes.map { node ->
+            DraftNode(
+                id = NodeId(node.id.value + offset),
+                stage = node.stage,
+                predecessors = node.predecessors.map { NodeId(it.value + offset) }.toSet(),
+            )
+        }
+        @Suppress("UNCHECKED_CAST")
+        return Draft<Any>(nodes + remappedOther) as Draft<Unit>
+    }
+
     private fun <R> appendPathNode(stage: DraftStage): Draft<R> {
         val newId = NodeId(nodes.size)
         val predecessors = nodes.lastOrNull()?.let { setOf(it.id) } ?: emptySet()
