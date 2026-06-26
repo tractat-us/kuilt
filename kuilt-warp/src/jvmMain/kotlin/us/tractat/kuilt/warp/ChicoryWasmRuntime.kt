@@ -1,6 +1,8 @@
 package us.tractat.kuilt.warp
 
+import com.dylibso.chicory.runtime.ExportFunction
 import com.dylibso.chicory.runtime.Instance
+import com.dylibso.chicory.runtime.Memory
 import com.dylibso.chicory.wasm.Parser
 
 /**
@@ -29,9 +31,9 @@ public class ChicoryWasmRuntime(
     }
 
     private fun invoke(
-        memory: com.dylibso.chicory.runtime.Memory,
-        allocFn: com.dylibso.chicory.runtime.ExportFunction,
-        runFn: com.dylibso.chicory.runtime.ExportFunction,
+        memory: Memory,
+        allocFn: ExportFunction,
+        runFn: ExportFunction,
         args: ByteArray,
     ): ByteArray {
         val argPtr = allocFn.apply(args.size.toLong())[0].toInt()

@@ -12,7 +12,7 @@ import kotlin.time.Duration.Companion.seconds
  * @param maxMemoryPages Maximum linear-memory pages the guest may declare (1 page = 64 KiB).
  * @param executionTimeout Maximum wall-clock time allowed for a single [Op] invocation.
  */
-public class WasmSandboxConfig(
+public data class WasmSandboxConfig(
     public val maxMemoryPages: Int = 16,
     public val executionTimeout: Duration = 1.seconds,
 )
