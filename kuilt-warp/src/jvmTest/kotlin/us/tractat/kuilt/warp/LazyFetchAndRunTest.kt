@@ -17,10 +17,7 @@
 package us.tractat.kuilt.warp
 
 import kotlinx.coroutines.test.TestCoroutineScheduler
-import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
-import kotlinx.coroutines.test.advanceTimeBy
-import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
@@ -48,15 +45,7 @@ private val C5B_QUILTER_CONFIG = QuilterConfig(
 private fun c5bClock(scheduler: TestCoroutineScheduler): () -> Instant =
     { Instant.fromEpochMilliseconds(scheduler.currentTime) }
 
-// Real-vs-virtual coupling: WarpNode runs under UnconfinedTestDispatcher virtual time, but
-// op.invoke suspends on a real Dispatchers.IO thread (the Chicory guest burns real wall-clock CPU).
-// These advances assume the microsecond-scale kernel fixtures complete in real time within the
-// window; heavier future kernel fixtures may need the advance budget adjusted.
-private fun TestScope.settle() {
-    repeat(8) { advanceTimeBy(C5B_QUILTER_CONFIG.antiEntropyInterval); runCurrent() }
-    advanceTimeBy(ClaimStrategy.DEFAULT_SETTLE_WINDOW); runCurrent()
-    repeat(8) { advanceTimeBy(C5B_QUILTER_CONFIG.antiEntropyInterval); runCurrent() }
-}
+private val C5B_CADENCE = C5B_QUILTER_CONFIG.antiEntropyInterval
 
 class LazyFetchAndRunTest {
 
@@ -85,7 +74,7 @@ class LazyFetchAndRunTest {
 
     @Test
     fun fetchingNodeFetchesLoadsAndRunsAKernelItNeverHad() =
-        runTest(UnconfinedTestDispatcher(), timeout = 5.seconds) {
+        runTest(UnconfinedTestDispatcher(), timeout = 30.seconds) {
             val loom = InMemoryLoom()
             val seamA = loom.host(Pattern("c5b-lazyfetch"))
             val seamB = loom.join(InMemoryTag("b"))
@@ -119,7 +108,12 @@ class LazyFetchAndRunTest {
                     val input = "Hello, warp!".encodeToByteArray()
                     val taskId = taskOwnedBy(seamA.selfId, setOf(seamA.selfId, seamB.selfId))
                     nodeA.enqueue(taskId, TaskDescriptor(reverseOpId, input))
-                    settle()
+                    settleUntil(
+                        cadence = C5B_CADENCE,
+                        describe = {
+                            "A.result=${nodeA.results[taskId] != null} B.result=${nodeB.results[taskId] != null}"
+                        },
+                    ) { nodeA.results[taskId] != null && nodeB.results[taskId] != null }
 
                     val expected = input.reversedArray()
                     val resultA = nodeA.results[taskId]
@@ -150,7 +144,7 @@ class LazyFetchAndRunTest {
      */
     @Test
     fun loadTimeBrokenKernelRecordsTerminalErrorOnBothBoards() =
-        runTest(UnconfinedTestDispatcher(), timeout = 5.seconds) {
+        runTest(UnconfinedTestDispatcher(), timeout = 30.seconds) {
             val loom = InMemoryLoom()
             val seamA = loom.host(Pattern("c5b-terminal-load"))
             val seamB = loom.join(InMemoryTag("b"))
@@ -182,7 +176,12 @@ class LazyFetchAndRunTest {
 
                     val taskId = taskOwnedBy(seamA.selfId, setOf(seamA.selfId, seamB.selfId))
                     nodeA.enqueue(taskId, TaskDescriptor(badOpId, ByteArray(0)))
-                    settle()
+                    settleUntil(
+                        cadence = C5B_CADENCE,
+                        describe = {
+                            "A.result=${nodeA.results[taskId] != null} B.result=${nodeB.results[taskId] != null}"
+                        },
+                    ) { nodeA.results[taskId] != null && nodeB.results[taskId] != null }
 
                     val resultA = nodeA.results[taskId]
                     val resultB = nodeB.results[taskId]
@@ -201,7 +200,7 @@ class LazyFetchAndRunTest {
                     )
 
                     // Second settle must not produce churn — no retry storm on the broken bobbin.
-                    settle()
+                    quiesce(C5B_CADENCE)
                     assertAll(
                         {
                             assertEquals(
@@ -234,7 +233,7 @@ class LazyFetchAndRunTest {
      */
     @Test
     fun runTimeTrapKernelRecordsTerminalErrorOnBothBoards() =
-        runTest(UnconfinedTestDispatcher(), timeout = 10.seconds) {
+        runTest(UnconfinedTestDispatcher(), timeout = 30.seconds) {
             val loom = InMemoryLoom()
             val seamA = loom.host(Pattern("c5b-terminal-run"))
             val seamB = loom.join(InMemoryTag("b"))
@@ -265,7 +264,12 @@ class LazyFetchAndRunTest {
 
                     val taskId = taskOwnedBy(seamA.selfId, setOf(seamA.selfId, seamB.selfId))
                     nodeA.enqueue(taskId, TaskDescriptor(trapOpId, ByteArray(0)))
-                    settle()
+                    settleUntil(
+                        cadence = C5B_CADENCE,
+                        describe = {
+                            "A.result=${nodeA.results[taskId] != null} B.result=${nodeB.results[taskId] != null}"
+                        },
+                    ) { nodeA.results[taskId] != null && nodeB.results[taskId] != null }
 
                     val resultA = nodeA.results[taskId]
                     val resultB = nodeB.results[taskId]
@@ -284,7 +288,7 @@ class LazyFetchAndRunTest {
                     )
 
                     // Second settle must be stable — trap kernel must not be retried.
-                    settle()
+                    quiesce(C5B_CADENCE)
                     assertAll(
                         {
                             assertEquals(
@@ -344,7 +348,7 @@ class LazyFetchAndRunTest {
 
             val taskId = taskOwnedBy(seamA.selfId, setOf(seamA.selfId, seamB.selfId))
             nodeA.enqueue(taskId, TaskDescriptor(fetchableOpId, ByteArray(0)))
-            settle()
+            quiesce(C5B_CADENCE)
 
             assertAll(
                 { assertNull(nodeA.results[taskId], "A lacks lazyFetch — must stand by, no result") },
