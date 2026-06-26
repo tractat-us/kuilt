@@ -24,6 +24,8 @@ import us.tractat.kuilt.warp.coordinationCost
  * | `warp.tasks.executed` | SUM | [WarpNode.executions] |
  * | `warp.tasks.duplicate` | SUM | [WarpNode.duplicates] |
  * | `warp.failover.count` | SUM | [WarpNode.failovers] |
+ * | `warp.tasks.interpreted` | SUM | [WarpNode.executionsInterpreted] |
+ * | `warp.tasks.compiled` | SUM | [WarpNode.executionsCompiled] |
  *
  * @param node The [WarpNode] whose counter snapshots to merge.
  * @param attributes Additional label attributes added to every [MetricKey].
@@ -35,6 +37,8 @@ public suspend fun WarpMetricExporter.recordWarp(
     mergeSum(MetricKey("warp.tasks.executed", MetricKind.SUM, attributes), node.executions)
     mergeSum(MetricKey("warp.tasks.duplicate", MetricKind.SUM, attributes), node.duplicates)
     mergeSum(MetricKey("warp.failover.count", MetricKind.SUM, attributes), node.failovers)
+    mergeSum(MetricKey("warp.tasks.interpreted", MetricKind.SUM, attributes), node.executionsInterpreted)
+    mergeSum(MetricKey("warp.tasks.compiled", MetricKind.SUM, attributes), node.executionsCompiled)
 }
 
 /**

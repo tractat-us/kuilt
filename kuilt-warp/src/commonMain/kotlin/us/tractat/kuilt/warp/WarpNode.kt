@@ -170,6 +170,11 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.warp.WarpNode")
  *   non-null, an unresolved op is **fetched** via a node-owned [BobbinExchange] over a reserved mux
  *   channel, **loaded** via [WasmRuntime], registered for reuse, and run. A verified-but-broken
  *   kernel (load or run failure) records a terminal-error [OpResult] rather than retrying forever.
+ * @param target This peer's compilation [Target]. When non-null **and** a [lazyFetch] is present,
+ *   a bobbin-backed op resolves the best compiled variant for this target per execution and tiers
+ *   up when one gossips in (counted in [executionsCompiled]). When null, resolution is exactly the
+ *   C5b lazy-fetch behaviour (no tiering). Required to be explicit — a platform's target is never
+ *   guessed.
  */
 public class WarpNode(
     public val selfId: PeerId,
@@ -186,6 +191,7 @@ public class WarpNode(
     },
     private val raftNode: RaftNode? = null,
     private val lazyFetch: WarpLazyFetch? = null,
+    private val target: Target? = null,
 ) {
     private val replica = ReplicaId(selfId.value)
 
@@ -370,6 +376,12 @@ public class WarpNode(
     private var _executions: GCounter = GCounter.ZERO
     private var _failovers: GCounter = GCounter.ZERO
     private var _duplicates: GCounter = GCounter.ZERO
+    private var _executionsInterpreted: GCounter = GCounter.ZERO
+    private var _executionsCompiled: GCounter = GCounter.ZERO
+
+    /** Loaded ops keyed by the BobbinHash actually executed — lets the chosen tier change per
+     *  execution without the OpId-registry short-circuit pinning the raw bobbin. Guarded by [lock]. */
+    private val bobbinToOp = mutableMapOf<BobbinHash, Op>()
 
     /**
      * Cumulative count of tasks this node drove to completion — including terminal
@@ -400,6 +412,28 @@ public class WarpNode(
      * window was hit. A [GCounter] snapshot suitable for merging across replicas.
      */
     public val duplicates: GCounter get() = lock.withLock { _duplicates }
+
+    /**
+     * Cumulative count of task executions this node ran by **interpreting the raw bobbin** —
+     * the un-tiered path. A [GCounter] snapshot; forward via [recordWarp] into a SUM series.
+     *
+     * Together with [executionsCompiled] this is a **subset** of [executions] — see that
+     * property's note: a dashboard must not assume `interpreted + compiled == executed`.
+     */
+    public val executionsInterpreted: GCounter get() = lock.withLock { _executionsInterpreted }
+
+    /**
+     * Cumulative count of task executions this node ran on a **compiled variant** after tiering
+     * up. Goes from 0 to ≥1 the first time a target-matching variant gossips in. The durable
+     * tiered-compilation signal — the same counter measures real tiering once D4 lands a real
+     * compiler. A [GCounter] snapshot; forward via [recordWarp] into a SUM series.
+     *
+     * `executionsInterpreted + executionsCompiled` is a **subset** of [executions]: it counts only
+     * successful bobbin-backed executions (lazy-fetch present, `target != null`) and excludes
+     * terminal-error executions and symbolic-registry / `target == null` runs — so a dashboard must
+     * not assume `interpreted + compiled == executed`.
+     */
+    public val executionsCompiled: GCounter get() = lock.withLock { _executionsCompiled }
 
     // ---------------------------------------------------------------------------
     // Lifecycle — fan-out loop, roster, and queue changes
@@ -501,6 +535,19 @@ public class WarpNode(
             }
         }
     }
+
+    /**
+     * Publish a compiled bobbin **variant** through this node's own [BobbinExchange] so it gossips
+     * to the mesh. This is what a *compiler node* calls after building a variant (in the spike, via
+     * the fake compiler). Requires a [lazyFetch] capability — throws [IllegalStateException] otherwise,
+     * fail-loud rather than silently dropping the variant.
+     *
+     * @return the [BobbinHash] of the published variant bytes.
+     */
+    public suspend fun publishVariant(bytes: ByteArray, variantOf: VariantKey): BobbinHash =
+        checkNotNull(bobbinExchange) {
+            "WarpNode($selfId): publishVariant requires a lazyFetch capability (no BobbinExchange)"
+        }.putVariant(bytes, variantOf)
 
     /**
      * A snapshot of the current results board, as seen by this peer.
@@ -795,22 +842,77 @@ public class WarpNode(
             lock.withLock { claimed.remove(taskId) }
             return null
         }
-        val op = registry.resolve(descriptor.op) ?: run {
-            val lf = lazyFetch ?: return standBy(taskId, descriptor.op)
-            val hash = lf.opToBobbin(descriptor.op) ?: return standBy(taskId, descriptor.op)
-            val bytes = checkNotNull(bobbinExchange).fetch(hash)
+        // Symbolic op already in the registry: run it directly (non-tiered path, unchanged).
+        registry.resolve(descriptor.op)?.let { op ->
+            return runOpOrTerminal(taskId, op, descriptor.args)
+        }
+
+        val lf = lazyFetch ?: return standBy(taskId, descriptor.op)
+        val source = lf.opToBobbin(descriptor.op) ?: return standBy(taskId, descriptor.op)
+
+        // Tiering disabled (target == null): preserve C5b behaviour — load once, register under OpId.
+        if (target == null) {
+            val bytes = checkNotNull(bobbinExchange).fetch(source)
             val loaded = try {
                 lf.runtime.load(bytes)
             } catch (e: WasmException) {
                 return recordTerminalError(taskId, e) // verified bytes, but broken/malicious — terminal
             }
-            registerOrResolve(descriptor.op, loaded)
+            val op = registerOrResolve(descriptor.op, loaded)
+            return runOpOrTerminal(taskId, op, descriptor.args)
         }
-        return try {
-            op.invoke(descriptor.args)
+
+        // Tiering enabled: resolve best variant per execution, cache loaded ops by BobbinHash.
+        val hash = bestBobbin(source)
+        val cached = lock.withLock { bobbinToOp[hash] }
+        val op = cached ?: run {
+            val bytes = checkNotNull(bobbinExchange).fetch(hash) // suspends, outside lock
+            val loaded = try {
+                lf.runtime.load(bytes)
+            } catch (e: WasmException) {
+                return recordTerminalError(taskId, e) // verified bytes, but broken/malicious — terminal
+            }
+            lock.withLock { bobbinToOp.getOrPut(hash) { loaded } }
+        }
+        val isCompiled = hash != source
+        val result = runOpOrTerminal(taskId, op, descriptor.args) ?: return null
+        lock.withLock {
+            if (isCompiled) {
+                _executionsCompiled = _executionsCompiled.piece(_executionsCompiled.inc(replica).delta)
+            } else {
+                _executionsInterpreted = _executionsInterpreted.piece(_executionsInterpreted.inc(replica).delta)
+            }
+        }
+        return result
+    }
+
+    /**
+     * Invoke [op] with [args], returning its [ByteArray] result. A [WasmException] (trap/timeout
+     * at run time) is **terminal** — it records an [OpResult.failure] via [recordTerminalError]
+     * and returns `null` so the caller short-circuits. Never swallows [WasmException] silently.
+     */
+    private suspend fun runOpOrTerminal(taskId: TaskId, op: Op, args: ByteArray): ByteArray? =
+        try {
+            op.invoke(args)
         } catch (e: WasmException) {
             recordTerminalError(taskId, e) // trap/timeout at run time — terminal
         }
+
+    /**
+     * The best bobbin to run for this node's [target]: the highest-[OptLevel] compiled variant of
+     * [source] advertised on the manifest, or [source] itself when none exists.
+     *
+     * [source] is the op's already-resolved raw bobbin hash, passed by the caller — this never
+     * re-derives it via [WarpLazyFetch.opToBobbin]. Only ever called from the tiering branch where
+     * [target] is non-null; a null [target] returns [source] unchanged.
+     */
+    private fun bestBobbin(source: BobbinHash): BobbinHash {
+        val t = target ?: return source
+        val variants = bobbinExchange?.manifest?.value.orEmpty()
+            .mapNotNull { meta -> meta.variantOf?.let { key -> meta to key } }
+            .filter { (_, key) -> key.sourceHash == source && key.target == t }
+        val best = variants.maxByOrNull { (_, key) -> key.optLevel.ordinal }
+        return best?.first?.hash ?: source
     }
 
     /**

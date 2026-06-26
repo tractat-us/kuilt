@@ -10,8 +10,10 @@ import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.InMemoryLoom
+import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.crdt.piece
 import us.tractat.kuilt.otel.InMemoryDurableStore
@@ -20,15 +22,21 @@ import us.tractat.kuilt.otel.MetricKind
 import us.tractat.kuilt.otel.WarpMetricExporter
 import us.tractat.kuilt.test.assertAll
 import us.tractat.kuilt.warp.ClaimStrategy
+import us.tractat.kuilt.warp.Creel
 import us.tractat.kuilt.warp.Draft
 import us.tractat.kuilt.warp.Op
 import us.tractat.kuilt.warp.OpId
 import us.tractat.kuilt.warp.OpRegistry
+import us.tractat.kuilt.warp.OptLevel
+import us.tractat.kuilt.warp.Target
 import us.tractat.kuilt.warp.TaskDescriptor
 import us.tractat.kuilt.warp.TaskId
+import us.tractat.kuilt.warp.VariantKey
 import us.tractat.kuilt.warp.Warp
+import us.tractat.kuilt.warp.WarpLazyFetch
 import us.tractat.kuilt.warp.WarpNode
 import us.tractat.kuilt.warp.WarpStats
+import us.tractat.kuilt.warp.WasmRuntime
 import us.tractat.kuilt.warp.coordinationCost
 import us.tractat.kuilt.warp.plan
 import kotlin.test.Test
@@ -101,6 +109,18 @@ class WarpMetricBridgeTest {
         repeat(5) { advanceTimeBy(testQuilterConfig.antiEntropyInterval); runCurrent() }
     }
 
+    /** Wider drain that also crosses the claim-settle window — needed for the tiering node. */
+    private fun TestScope.settle() {
+        repeat(6) { advanceTimeBy(testQuilterConfig.antiEntropyInterval); runCurrent() }
+        advanceTimeBy(ClaimStrategy.DEFAULT_SETTLE_WINDOW); runCurrent()
+        repeat(6) { advanceTimeBy(testQuilterConfig.antiEntropyInterval); runCurrent() }
+    }
+
+    /** A [WasmRuntime] returning a fixed [Op] for any bytes — proves the tiering mechanism only. */
+    private class FixedRuntime(private val op: Op) : WasmRuntime {
+        override fun load(bytes: ByteArray): Op = op
+    }
+
     private fun observeAll(stats: WarpStats, source: OpId, vararg elements: String): WarpStats =
         elements.fold(stats) { acc, e -> acc.piece(acc.observe(source, e)) }
 
@@ -143,6 +163,64 @@ class WarpMetricBridgeTest {
                         0L,
                         exporter.sumValue(MetricKey("warp.failover.count", MetricKind.SUM)),
                         "failovers counter must map to warp.failover.count SUM",
+                    )
+                },
+            )
+        }
+
+    // ── 1b. Tier counters (interpreted/compiled) → SUM series ───────────────
+
+    @Test
+    fun recordWarpExportsTierCounters() =
+        runTest(UnconfinedTestDispatcher(), timeout = 5.seconds) {
+            val loom = InMemoryLoom()
+            val seamC = loom.host(Pattern("tier-otel"))   // compiler node
+            val seamW = loom.join(InMemoryTag("w"))        // weak node (owns the tasks)
+            val op = OpId("square")
+
+            // Each peer caches the raw kernel and maps op→its hash; the runtime is a fixed fake.
+            fun lazyFetchFor(): Pair<Creel, WarpLazyFetch> {
+                val creel = Creel()
+                val rawHash = creel.put(byteArrayOf(0x00, 0x61, 0x73, 0x6D))
+                val lf = WarpLazyFetch(creel, FixedRuntime(Op { args -> args }), { id -> rawHash.takeIf { id == op } })
+                return creel to lf
+            }
+            val (creelC, lfC) = lazyFetchFor()
+            val (_, lfW) = lazyFetchFor()
+            val rawHash = creelC.loaded.first() // same content ⇒ same hash on both peers
+
+            val roster = MutableStateFlow<Set<PeerId>>(setOf(seamW.selfId))
+            fun tieringNode(self: PeerId, seam: Seam, lf: WarpLazyFetch) = WarpNode(
+                selfId = self, seam = seam, rosterFlow = roster, scope = backgroundScope,
+                quilterConfig = testQuilterConfig, clock = schedulerClock(testScheduler),
+                strategy = ClaimStrategy.Ring, registry = OpRegistry(), lazyFetch = lf, target = Target.Jvm,
+            )
+            val compilerNode = tieringNode(seamC.selfId, seamC, lfC)
+            val weakNode = tieringNode(seamW.selfId, seamW, lfW)
+
+            // Interpret: the weak node runs on the raw bobbin (≥1 interpreted).
+            weakNode.enqueue(TaskId("t1"), TaskDescriptor(op, byteArrayOf(5)))
+            settle()
+            // Compiler publishes a Jvm variant; weak node tiers up on the next task (≥1 compiled).
+            compilerNode.publishVariant(byteArrayOf(0x00, 0x61, 0x73, 0x6D, 0x2A), VariantKey(rawHash, Target.Jvm, OptLevel.O2))
+            settle()
+            weakNode.enqueue(TaskId("t2"), TaskDescriptor(op, byteArrayOf(6)))
+            settle()
+
+            val exporter = newExporter()
+            exporter.recordWarp(weakNode)
+
+            assertAll(
+                {
+                    assertTrue(
+                        exporter.sumValue(MetricKey("warp.tasks.interpreted", MetricKind.SUM)) >= 1L,
+                        "interpreted counter must map to warp.tasks.interpreted SUM",
+                    )
+                },
+                {
+                    assertTrue(
+                        exporter.sumValue(MetricKey("warp.tasks.compiled", MetricKind.SUM)) >= 1L,
+                        "compiled counter must map to warp.tasks.compiled SUM",
                     )
                 },
             )
