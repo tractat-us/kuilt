@@ -19,6 +19,7 @@ import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.serializer
 import us.tractat.kuilt.core.CloseReason
 import us.tractat.kuilt.core.MuxSeam
@@ -828,13 +829,17 @@ public class WarpNode(
      * on whether a [lazyFetch] capability is present:
      *
      * - **[lazyFetch] present:** the op is fetched via the node-owned [BobbinExchange]
-     *   ([BobbinExchange.fetch] suspends until a peer serves the bytes), loaded under
-     *   [WasmRuntime.load], registered in [registry] for reuse, and invoked. A [WasmException]
-     *   at either load or run time is **terminal** — it records an [OpResult.failure] that
-     *   converges on every peer and removes the task from the queue; the task is never retried.
-     * - **[lazyFetch] absent, or [WarpLazyFetch.opToBobbin] returns null, or the fetch has not
-     *   yet been served:** the task is unclaimed and `null` is returned (stand-by). This is the
-     *   transient "bobbin not loaded yet" state — anti-entropy re-evaluates on the next cycle.
+     *   ([BobbinExchange.fetch] suspends until a peer serves the bytes), **bounded** by
+     *   [WarpLazyFetch.fetchTimeout], loaded under [WasmRuntime.load], registered in [registry]
+     *   for reuse, and invoked. A [WasmException] at either load or run time is **terminal** — it
+     *   records an [OpResult.failure] that converges on every peer and removes the task from the
+     *   queue; the task is never retried.
+     * - **[lazyFetch] absent, [WarpLazyFetch.opToBobbin] returns null, the fetch has not yet been
+     *   served, or the fetch exceeds [WarpLazyFetch.fetchTimeout]:** the task is unclaimed and
+     *   `null` is returned (stand-by). A fetch timeout is **transient, not terminal** — an absent
+     *   bobbin may still be in flight from a peer that has not finished joining — so it joins the
+     *   "bobbin not loaded yet" state and anti-entropy re-evaluates on the next cycle, rather than
+     *   hanging forever holding the claim or permanently failing the task on every peer.
      */
     private suspend fun executeViaRegistry(taskId: TaskId): ByteArray? {
         val descriptor = queueQuilter.state.value[taskId]?.value ?: run {
@@ -852,7 +857,8 @@ public class WarpNode(
 
         // Tiering disabled (target == null): preserve C5b behaviour — load once, register under OpId.
         if (target == null) {
-            val bytes = checkNotNull(bobbinExchange).fetch(source)
+            val bytes = withTimeoutOrNull(lf.fetchTimeout) { checkNotNull(bobbinExchange).fetch(source) }
+                ?: return standBy(taskId, descriptor.op) // no peer served the bytes in time — transient
             val loaded = try {
                 lf.runtime.load(bytes)
             } catch (e: WasmException) {
@@ -866,7 +872,9 @@ public class WarpNode(
         val hash = bestBobbin(source)
         val cached = lock.withLock { bobbinToOp[hash] }
         val op = cached ?: run {
-            val bytes = checkNotNull(bobbinExchange).fetch(hash) // suspends, outside lock
+            // suspends, outside lock — bounded by fetchTimeout; a timeout stands by (transient).
+            val bytes = withTimeoutOrNull(lf.fetchTimeout) { checkNotNull(bobbinExchange).fetch(hash) }
+                ?: return standBy(taskId, descriptor.op)
             val loaded = try {
                 lf.runtime.load(bytes)
             } catch (e: WasmException) {
