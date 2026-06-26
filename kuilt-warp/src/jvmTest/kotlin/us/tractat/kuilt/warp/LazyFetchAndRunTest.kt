@@ -48,6 +48,10 @@ private val C5B_QUILTER_CONFIG = QuilterConfig(
 private fun c5bClock(scheduler: TestCoroutineScheduler): () -> Instant =
     { Instant.fromEpochMilliseconds(scheduler.currentTime) }
 
+// Real-vs-virtual coupling: WarpNode runs under UnconfinedTestDispatcher virtual time, but
+// op.invoke suspends on a real Dispatchers.IO thread (the Chicory guest burns real wall-clock CPU).
+// These advances assume the microsecond-scale kernel fixtures complete in real time within the
+// window; heavier future kernel fixtures may need the advance budget adjusted.
 private fun TestScope.settle() {
     repeat(8) { advanceTimeBy(C5B_QUILTER_CONFIG.antiEntropyInterval); runCurrent() }
     advanceTimeBy(ClaimStrategy.DEFAULT_SETTLE_WINDOW); runCurrent()
