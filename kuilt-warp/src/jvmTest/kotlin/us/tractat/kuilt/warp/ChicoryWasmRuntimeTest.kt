@@ -4,13 +4,16 @@ import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
+import kotlin.test.assertFailsWith
 
 /**
- * Happy-path integration test for [ChicoryWasmRuntime] over the `reverse` kernel.
+ * Integration tests for [ChicoryWasmRuntime]: happy-path execution and sandbox load-guards.
  *
- * `reverse.wasm` exports the warp linear-memory ABI (`memory`, `warp_alloc`, `warp_run`) and
- * reverses its input bytes. This verifies that [ChicoryWasmRuntime.load] correctly marshals
- * args through shared linear memory and reads results back via the packed i64 pointer/length.
+ * Happy path: `reverse.wasm` exports the warp linear-memory ABI (`memory`, `warp_alloc`,
+ * `warp_run`) and reverses its input bytes.
+ *
+ * Load-guard tests verify that [ChicoryWasmRuntime.load] rejects capability-violating modules
+ * with [WasmLoadException] before any execution occurs.
  */
 class ChicoryWasmRuntimeTest {
 
@@ -22,6 +25,34 @@ class ChicoryWasmRuntimeTest {
         ),
     ) { "reverse.wasm not found on classpath" }
         .readBytes()
+
+    private val importsWasm: ByteArray = checkNotNull(
+        ChicoryWasmRuntimeTest::class.java.getResourceAsStream(
+            "/us/tractat/kuilt/warp/imports.wasm",
+        ),
+    ) { "imports.wasm not found on classpath" }
+        .readBytes()
+
+    private val bigmemWasm: ByteArray = checkNotNull(
+        ChicoryWasmRuntimeTest::class.java.getResourceAsStream(
+            "/us/tractat/kuilt/warp/bigmem.wasm",
+        ),
+    ) { "bigmem.wasm not found on classpath" }
+        .readBytes()
+
+    // --- Load-guard tests (Task 3) ---
+
+    @Test
+    fun loadRejectsModuleWithImports() {
+        assertFailsWith<WasmLoadException> { runtime.load(importsWasm) }
+    }
+
+    @Test
+    fun loadRejectsModuleWithOversizeMemory() {
+        assertFailsWith<WasmLoadException> { runtime.load(bigmemWasm) }
+    }
+
+    // --- Happy-path tests (Task 2) — guards must not over-reject reverse.wasm ---
 
     @Test
     fun fourBytesReverse() = runTest {
