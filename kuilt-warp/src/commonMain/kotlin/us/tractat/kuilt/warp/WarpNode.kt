@@ -27,6 +27,7 @@ import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.Swatch
 import us.tractat.kuilt.core.runCatchingCancellable
+import us.tractat.kuilt.crdt.GCounter
 import us.tractat.kuilt.crdt.GSet
 import us.tractat.kuilt.crdt.LWWRegister
 import us.tractat.kuilt.crdt.ORMap
@@ -346,6 +347,38 @@ public class WarpNode(
     // Monotonic timestamp counter for LWWRegister tags.
     private var timestampCounter = 0L
 
+    // CRDT counters — guarded by [lock], incremented at the execution sites.
+    private var _executions: GCounter = GCounter.ZERO
+    private var _failovers: GCounter = GCounter.ZERO
+    private var _duplicates: GCounter = GCounter.ZERO
+
+    /**
+     * Cumulative count of successfully executed tasks on this node.
+     *
+     * A [GCounter] snapshot — safe to merge with a remote peer's counter via
+     * [GCounter.piece]. Use [us.tractat.kuilt.warp.otel.recordWarp] to forward
+     * this into a [us.tractat.kuilt.otel.WarpMetricExporter] SUM series.
+     */
+    public val executions: GCounter get() = lock.withLock { _executions }
+
+    /**
+     * Cumulative count of partition-driven ring-rebuild events on this node.
+     *
+     * Incremented in [markPartitioned] — once per peer that triggers a failover.
+     * A [GCounter] snapshot suitable for merging across replicas.
+     */
+    public val failovers: GCounter get() = lock.withLock { _failovers }
+
+    /**
+     * Cumulative count of task executions whose result was already present on the
+     * Results board when [recordResult] was called — i.e. duplicates absorbed by
+     * the LWW ORMap backstop.
+     *
+     * A non-zero value here indicates the dual-leader window or ring-disagreement
+     * window was hit. A [GCounter] snapshot suitable for merging across replicas.
+     */
+    public val duplicates: GCounter get() = lock.withLock { _duplicates }
+
     // ---------------------------------------------------------------------------
     // Lifecycle — fan-out loop, roster, and queue changes
     // ---------------------------------------------------------------------------
@@ -547,7 +580,10 @@ public class WarpNode(
     }
 
     private fun markPartitioned(peerId: PeerId) {
-        lock.withLock { partitionedPeers.add(peerId) }
+        lock.withLock {
+            partitionedPeers.add(peerId)
+            _failovers = _failovers.piece(_failovers.inc(replica).delta)
+        }
         logger.info { "WarpNode($selfId): peer $peerId partitioned — excluding from ring" }
         rebuildRingAndClaim()
     }
@@ -702,6 +738,7 @@ public class WarpNode(
                 val result = executeViaRegistry(taskId) ?: return
                 recordResult(taskId, result)
                 removeFromQueue(taskId, kind)
+                lock.withLock { _executions = _executions.piece(_executions.inc(replica).delta) }
             }
             CoordinationKind.Coordinated -> executeViaRaft(taskId)
             // Execution, result recording, and queue removal for Coordinated tasks
@@ -785,6 +822,7 @@ public class WarpNode(
                 val result = coordinatedExecutor(taskId).encodeToByteArray()
                 recordResult(taskId, result)
                 removeFromQueue(taskId, CoordinationKind.Coordinated)
+                lock.withLock { _executions = _executions.piece(_executions.inc(replica).delta) }
             }.onFailure { e ->
                 logger.warn(e) { "WarpNode($selfId): coordinatedExecutor failed for $taskId — resetting" }
                 lock.withLock { coordinatedApplied.remove(taskId) }
@@ -801,6 +839,12 @@ public class WarpNode(
         // context already witnesses). Bug: concurrent `recordResult` calls were losing
         // results non-deterministically.
         lock.withLock {
+            // A non-null existing entry means a peer (or this node in the dual-leader window)
+            // already recorded a result for this task. The LWW ORMap backstop absorbs this
+            // duplicate; the counter tracks how often the backstop fires.
+            if (resultsQuilter.state.value[taskId] != null) {
+                _duplicates = _duplicates.piece(_duplicates.inc(replica).delta)
+            }
             val ts = ++timestampCounter
             resultsQuilter.apply(
                 Patch(
