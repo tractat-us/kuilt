@@ -4,6 +4,7 @@ import us.tractat.kuilt.crdt.GCounter
 import us.tractat.kuilt.crdt.LatticeProduct
 import us.tractat.kuilt.crdt.PNCounter
 import us.tractat.kuilt.crdt.ReplicaId
+import us.tractat.kuilt.crdt.piece
 
 /**
  * Samples for the warp B3 monotone combinators used by `@sample` KDoc tags.
@@ -57,6 +58,47 @@ internal fun sampleZip() {
 
     // Idempotent: absorbing the same peer again changes nothing.
     check(merged.embroider(peerA).state == merged.state)
+}
+
+// ── coordinationCost / plan ───────────────────────────────────────────────────
+
+/**
+ * Score and plan a [Draft] pipeline using the E-3 coordination-cost model.
+ *
+ * An unplanned draft may place the [DraftStage.Embroider] before selective filters,
+ * causing the coordinated step to see the full source cardinality. [Draft.plan] defers
+ * the embroider past all free stages; [Draft.coordinationCost] measures the improvement.
+ */
+@Suppress("unused")
+internal fun sampleCoordinationCost() {
+    val src = OpId("source.docs")
+    val mapScore = OpId("map.score")
+    val filterThreshold = OpId("filter.above-threshold")
+    val embroider = OpId("embroider.rank")
+
+    // Programmer places embroider early (before the filter).
+    val unplanned: Draft<ByteArray> = Warp.shuttle(src)
+        .map(mapScore)
+        .embroider(embroider)
+        .filter(filterThreshold)
+
+    // Build stats: 1 000 source docs, 50 pass the filter.
+    var stats = WarpStats.empty()
+    for (i in 1..1_000) stats = stats.piece(stats.observe(src, "doc_$i"))
+    for (i in 1..50) stats = stats.piece(stats.observe(filterThreshold, "doc_${i * 20}"))
+
+    // Unplanned: embroider before filter → full source cardinality.
+    val unplannedCost = unplanned.coordinationCost(stats)
+    check(unplannedCost.rounds == 1)
+    check(unplannedCost.coordinatedVolume >= 900L) { "should see ~1000 docs" }
+
+    // Planned: embroider deferred past filter → only ~50 docs reach consensus.
+    val planned = unplanned.plan(stats)
+    val plannedCost = planned.coordinationCost(stats)
+    check(plannedCost.rounds == 1)
+    check(plannedCost.coordinatedVolume < 100L) { "should see only ~50 docs after filter" }
+    check(plannedCost < unplannedCost)
+    check(unplanned.isEquivalentTo(planned)) { "plan must preserve equivalence" }
 }
 
 // ── joinAllOrNull ─────────────────────────────────────────────────────────────
