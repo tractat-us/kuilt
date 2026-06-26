@@ -109,7 +109,7 @@ class FederatedLearningExampleTest {
                 clock = { Instant.fromEpochMilliseconds(testScheduler.currentTime) },
                 strategy = ClaimStrategy.Ring,
                 registry = OpRegistry(),
-                lazyFetch = WarpLazyFetch(creel, runtimes[i]) { op -> if (op == kernelOp) hash else null },
+                lazyFetch = WarpLazyFetch(creel, runtimes[i], opToBobbin = { op -> if (op == kernelOp) hash else null }),
                 raftNode = sim.nodes[id]!!,
             )
         }
@@ -180,7 +180,7 @@ class FederatedLearningExampleTest {
                 val (relaySeam, clientSeam) = coroutineScope {
                     val serverSeam = async { serverLoom.nextLink() }
                     val clientSeam = KtorClientLoom(httpClient = httpClient, selfPeerId = clientId).join(
-                        WebSocketAdvertisement(url = "ws://localhost:$port$path", serverPeerId = relayId, displayName = "fl-client"),
+                        WebSocketAdvertisement(url = "ws://localhost:$port$path", serverPeerId = relayId, sessionName = "fl-client"),
                     )
                     serverSeam.await() to clientSeam
                 }
@@ -197,7 +197,7 @@ class FederatedLearningExampleTest {
                         clock = { Clock.System.now() },
                         strategy = ClaimStrategy.Ring,
                         registry = OpRegistry(),
-                        lazyFetch = WarpLazyFetch(creel, runtimes[i]) { op -> if (op == kernelOp) hash else null },
+                        lazyFetch = WarpLazyFetch(creel, runtimes[i], opToBobbin = { op -> if (op == kernelOp) hash else null }),
                     )
                 }
                 // Both peers must see each other before the ring can assign tasks.
