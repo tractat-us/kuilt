@@ -226,12 +226,12 @@ public class WarpNode(
     )
 
     /** Quilter replicating the results board. */
-    private val resultsQuilter: Quilter<ORMap<TaskId, LWWRegister<ByteArray>>> = Quilter(
+    private val resultsQuilter: Quilter<ORMap<TaskId, LWWRegister<OpResult>>> = Quilter(
         replica = replica,
         seam = resultsSeam,
         initial = ORMap.empty(),
         messageSerializer = QuiltMessage.serializer(
-            ORMap.serializer(serializer<TaskId>(), LWWRegister.serializer(serializer<ByteArray>()))
+            ORMap.serializer(serializer<TaskId>(), LWWRegister.serializer(serializer<OpResult>()))
         ),
         scope = scope,
         config = quilterConfig,
@@ -456,7 +456,7 @@ public class WarpNode(
      * received from the replication layer so far. All peers converge to the same board once
      * the network is quiescent.
      */
-    public val results: Results<TaskId, ByteArray>
+    public val results: Results<TaskId, OpResult>
         get() = Results.from(resultsQuilter.state.value)
 
     /**
@@ -807,7 +807,7 @@ public class WarpNode(
                     resultsQuilter.state.value.put(
                         replica = replica,
                         key = taskId,
-                        value = LWWRegister.empty<ByteArray>().set(replica, ts, result),
+                        value = LWWRegister.empty<OpResult>().set(replica, ts, OpResult(result)),
                     )
                 )
             )

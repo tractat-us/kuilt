@@ -6,9 +6,9 @@
  * [OpRegistry] and runs **its own copy** of the function — the result then merges back onto
  * every peer's board. The function never crosses the wire; only its name (and args) do.
  *
- * Coroutine discipline mirrors [WarpNodeTest]: [UnconfinedTestDispatcher] with bounded
- * [advanceTimeBy] via [settle] — never [advanceUntilIdle] (the Quilter anti-entropy loop
- * re-arms forever and would spin it).
+ * Mirrors the coroutine discipline of the module's [WarpNodeTest] 2-node execution test:
+ * [UnconfinedTestDispatcher] with virtual time driven by bounded [advanceTimeBy] steps via
+ * [settle] — never [advanceUntilIdle] (the Quilter anti-entropy timers re-arm forever).
  */
 @file:OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 
@@ -46,11 +46,15 @@ private val DISPATCH_QUILTER_CONFIG = QuilterConfig(
 private fun dispatchClock(scheduler: TestCoroutineScheduler): () -> Instant =
     { Instant.fromEpochMilliseconds(scheduler.currentTime) }
 
-/** Bounded virtual-time advance: flush Quilter convergence, then the RingWithIntent settle window. */
+/**
+ * Bounded virtual-time advance: step through anti-entropy intervals to converge replication,
+ * then past the RingWithIntent settle window, then a few more to let results merge back.
+ * Never [advanceUntilIdle] (the anti-entropy timers re-arm forever).
+ */
 private fun TestScope.settle() {
-    repeat(5) { advanceTimeBy(DISPATCH_QUILTER_CONFIG.antiEntropyInterval); runCurrent() }
-    advanceTimeBy(ClaimStrategy.DEFAULT_SETTLE_WINDOW)
-    runCurrent()
+    repeat(6) { advanceTimeBy(DISPATCH_QUILTER_CONFIG.antiEntropyInterval); runCurrent() }
+    advanceTimeBy(ClaimStrategy.DEFAULT_SETTLE_WINDOW); runCurrent()
+    repeat(6) { advanceTimeBy(DISPATCH_QUILTER_CONFIG.antiEntropyInterval); runCurrent() }
 }
 
 class SymbolicDispatchTest {
@@ -100,7 +104,7 @@ class SymbolicDispatchTest {
                 {
                     tasks.forEach { t ->
                         val expected = t.value.encodeToByteArray().reversedArray().decodeToString()
-                        assertEquals(expected, nodeA.results[t]!!.decodeToString(), "wrong result bytes for $t")
+                        assertEquals(expected, nodeA.results[t]!!.bytes.decodeToString(), "wrong result bytes for $t")
                     }
                 },
                 { assertEquals(tasks.toSet(), executedBy.keys, "every task executed exactly once, by its owner") },
