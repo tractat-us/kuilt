@@ -7,6 +7,7 @@ import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.quilter.QuilterConfig
+import us.tractat.kuilt.raft.RaftRole
 import us.tractat.kuilt.raft.test.raftSimTest
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
@@ -114,6 +115,84 @@ class FedAvgWarpSimTest {
                 { assertEquals(1.0, globalModel[1], absoluteTolerance = 0.05) },
                 { assertTrue(perNode.all { it == perNode[0] }, "all nodes agree bit-for-bit: $perNode") },
             )
+        } finally {
+            warpNodes.forEach { it.close() }
+            runtimes.forEach { it.close() }
+        }
+    }
+
+    @Test
+    fun `convergence survives leader failover mid-round`() = raftSimTest(n = 3, timeout = 60.seconds) { sim ->
+        val loom = InMemoryLoom()
+        val seams = listOf(
+            loom.host(Pattern("warp-fedavg-failover")),
+            loom.join(InMemoryTag("wff-b")),
+            loom.join(InMemoryTag("wff-c")),
+        )
+        val runtimes = sim.nodeIds.map { ChicoryWasmRuntime() }
+        val warpNodes = sim.nodeIds.mapIndexed { i, nodeId ->
+            val creel = Creel()
+            val hash = creel.put(kernel)
+            WarpNode(
+                selfId = seams[i].selfId,
+                seam = seams[i],
+                rosterFlow = seams[i].rosterSnapshot(),
+                scope = backgroundScope,
+                quilterConfig = quilterConfig,
+                clock = { Instant.fromEpochMilliseconds(testScheduler.currentTime) },
+                strategy = ClaimStrategy.Ring,
+                registry = OpRegistry(),
+                lazyFetch = WarpLazyFetch(
+                    creel = creel,
+                    runtime = runtimes[i],
+                    opToBobbin = { op -> if (op == kernelOp) hash else null },
+                ),
+                raftNode = sim.nodes[nodeId]!!,
+            )
+        }
+        try {
+            sim.settle()
+            sim.awaitLeader()
+            val leaderId = sim.nodeIds.first { sim.nodes[it]!!.role.value is RaftRole.Leader }
+
+            val epochs = 500
+            val preFailover = 20
+            var globalModel = listOf(0.0, 0.0)
+            suspend fun runEpoch(epoch: Int) {
+                owners.forEach { owner ->
+                    warpNodes[0].enqueue(
+                        taskId(epoch, owner),
+                        TaskDescriptor(op = kernelOp, args = FedAvgKernelCodec.encodeInput(globalModel, batches.getValue(owner), lr)),
+                    )
+                }
+                sim.awaitTrue("epoch $epoch converged", within = 4.seconds) {
+                    warpNodes.all { node -> owners.all { node.results[taskId(epoch, it)] != null } }
+                }
+                globalModel = foldGlobalModel(warpNodes[0], epoch)
+            }
+
+            // Train normally up to the failover point.
+            for (epoch in 0 until preFailover) runEpoch(epoch)
+
+            // Fail the Raft leader mid-training, re-elect among survivors, heal, let the old leader step down.
+            val survivors = sim.nodeIds.filter { it != leaderId }.toSet()
+            sim.partitionOff(leaderId)
+            sim.awaitLeader(among = survivors)
+            sim.heal()
+            sim.awaitRole(leaderId, RaftRole.Follower)
+
+            // Keep training to convergence; the round survives the failover and every survivor agrees.
+            for (epoch in preFailover until epochs) runEpoch(epoch)
+
+            val survivorModels = sim.nodeIds.withIndex()
+                .filter { it.value in survivors }
+                .map { foldGlobalModel(warpNodes[it.index], epochs - 1) }
+            assertAll(
+                { assertEquals(2.0, globalModel[0], absoluteTolerance = 0.05) },
+                { assertEquals(1.0, globalModel[1], absoluteTolerance = 0.05) },
+                { assertTrue(survivorModels.all { it == survivorModels[0] }, "survivors agree: $survivorModels") },
+            )
+            sim.checkInvariants()
         } finally {
             warpNodes.forEach { it.close() }
             runtimes.forEach { it.close() }
