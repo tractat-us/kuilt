@@ -42,5 +42,5 @@ public object Warp {
      * @return a single-stage [Draft] ready to extend with transforms.
      */
     public fun shuttle(sourceOpId: OpId): Draft<ByteArray> =
-        Draft(listOf(DraftStage.Source(sourceOpId)))
+        Draft(listOf(DraftNode(id = NodeId(0), stage = DraftStage.Source(sourceOpId), predecessors = emptySet())))
 }
