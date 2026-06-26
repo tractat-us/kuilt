@@ -7,6 +7,7 @@ import kotlinx.atomicfu.locks.reentrantLock
 import kotlinx.atomicfu.locks.withLock
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -129,11 +130,18 @@ public class BobbinExchange(
      */
     public val manifest: StateFlow<Set<BobbinHash>> = _manifest.asStateFlow()
 
-    // In-flight fetches: hash → deferred that completes with the raw response bytes.
-    // Multiple concurrent callers for the same hash share one deferred and one Request.
-    // Guarded by [lock]; suspend calls never happen inside the locked section.
+    // In-flight fetches: hash → shared fetch state (one deferred + one Request) for all
+    // concurrent callers of that hash. The waiter count lets the *last* caller to leave a
+    // still-incomplete fetch clear the entry, so one caller's cancellation never orphans the
+    // others. Guarded by [lock]; suspend calls never happen inside the locked section.
     private val lock = reentrantLock()
-    private val inFlight = mutableMapOf<BobbinHash, CompletableDeferred<ByteArray>>()
+    private val inFlight = mutableMapOf<BobbinHash, InFlightFetch>()
+
+    /** Shared state for all concurrent [fetch] callers of one hash. [waiters] is guarded by [lock]. */
+    private class InFlightFetch {
+        val deferred = CompletableDeferred<ByteArray>()
+        var waiters: Int = 0
+    }
 
     init {
         // Keep _manifest in sync with the Quilter's converged GSet.
@@ -151,6 +159,20 @@ public class BobbinExchange(
                 when (msg) {
                     is FetchMessage.Request -> serveRequest(msg.hash, swatch.sender ?: return@collect)
                     is FetchMessage.Response -> completeWaiter(msg.hash, msg.bytes)
+                }
+            }
+        }
+
+        // Anti-entropy re-request loop: periodically re-broadcast Request for every
+        // still-pending hash so that a late holder (a peer that joins or acquires the
+        // bytes after the initial single-shot Request) is eventually reached.
+        // Snapshot under lock, then send outside the lock (no suspend inside locked section).
+        scope.launch {
+            while (true) {
+                delay(quilterConfig.antiEntropyInterval)
+                val pending = lock.withLock { inFlight.keys.toList() }
+                for (hash in pending) {
+                    sendRequest(hash)
                 }
             }
         }
@@ -184,32 +206,48 @@ public class BobbinExchange(
     public suspend fun fetch(hash: BobbinHash): ByteArray {
         creel.get(hash)?.let { return it }
 
-        val (deferred, isNew) = claimInFlight(hash)
+        val (state, isNew) = claimInFlight(hash)
         if (isNew) sendRequest(hash)
 
-        val bytes = deferred.await()
-        creel.putVerified(hash, bytes)
-        return bytes
+        try {
+            val bytes = state.deferred.await()
+            creel.putVerified(hash, bytes)
+            return bytes
+        } finally {
+            // The last waiter to leave a still-incomplete fetch clears the in-flight entry so
+            // the next fetch starts fresh and re-sends a Request. A surviving concurrent waiter
+            // keeps the entry alive, so one caller's cancellation never orphans the others. The
+            // identity guard avoids evicting a newer entry installed by a racing fetch.
+            lock.withLock {
+                state.waiters--
+                if (state.waiters == 0 && !state.deferred.isCompleted && inFlight[hash] === state) {
+                    inFlight.remove(hash)
+                }
+            }
+        }
     }
 
     // ── Private helpers ────────────────────────────────────────────────────────
 
     /**
-     * Registers an in-flight fetch for [hash].
+     * Registers a waiter on the in-flight fetch for [hash], creating the shared
+     * [InFlightFetch] if this is the first caller.
      *
-     * Returns the (possibly pre-existing) [CompletableDeferred] and whether it was
-     * newly created. Callers send a [FetchMessage.Request] only when the deferred is new,
-     * preventing duplicate requests when multiple callers race on the same hash.
+     * Returns the (possibly pre-existing) [InFlightFetch] and whether it was newly created.
+     * Callers send a [FetchMessage.Request] only when the state is new, preventing duplicate
+     * requests when multiple callers race on the same hash. The waiter count is incremented
+     * for every caller (new or joining) and decremented in [fetch]'s `finally`.
      */
-    private fun claimInFlight(hash: BobbinHash): Pair<CompletableDeferred<ByteArray>, Boolean> =
+    private fun claimInFlight(hash: BobbinHash): Pair<InFlightFetch, Boolean> =
         lock.withLock {
             val existing = inFlight[hash]
             if (existing != null) {
+                existing.waiters++
                 existing to false
             } else {
-                val deferred = CompletableDeferred<ByteArray>()
-                inFlight[hash] = deferred
-                deferred to true
+                val state = InFlightFetch().also { it.waiters = 1 }
+                inFlight[hash] = state
+                state to true
             }
         }
 
@@ -234,7 +272,7 @@ public class BobbinExchange(
      * a stale in-flight entry.
      */
     private fun completeWaiter(hash: BobbinHash, bytes: ByteArray) {
-        val deferred = lock.withLock { inFlight.remove(hash) } ?: return
-        deferred.complete(bytes)
+        val state = lock.withLock { inFlight.remove(hash) } ?: return
+        state.deferred.complete(bytes)
     }
 }
