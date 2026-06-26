@@ -5,7 +5,8 @@ import java.util.concurrent.TimeoutException
 import kotlin.time.Duration
 
 /**
- * Runs a [task] callable under a wall-clock [timeout].
+ * Runs a WASM ABI [task] callable under a wall-clock [timeout], returning the guest's
+ * [ByteArray] response.
  *
  * Returns the task's result on success; throws [TimeoutException] if the deadline is exceeded;
  * throws any exception raised by [task] directly (callers see the original exception, not an
@@ -24,5 +25,5 @@ import kotlin.time.Duration
  */
 public fun interface TimedGuestRunner {
     /** @throws TimeoutException if [task] does not finish within [timeout]. */
-    public fun <T> run(timeout: Duration, task: Callable<T>): T
+    public fun run(timeout: Duration, task: Callable<ByteArray>): ByteArray
 }
