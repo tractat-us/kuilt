@@ -863,7 +863,7 @@ public class WarpNode(
         }
 
         // Tiering enabled: resolve best variant per execution, cache loaded ops by BobbinHash.
-        val hash = bestBobbin(descriptor.op, source)
+        val hash = bestBobbin(source)
         val cached = lock.withLock { bobbinToOp[hash] }
         val op = cached ?: run {
             val bytes = checkNotNull(bobbinExchange).fetch(hash) // suspends, outside lock
@@ -899,14 +899,14 @@ public class WarpNode(
         }
 
     /**
-     * The best bobbin to run [op] on for this node's [target]: the highest-[OptLevel] compiled
-     * variant of [source] advertised on the manifest, or [source] itself when none exists.
+     * The best bobbin to run for this node's [target]: the highest-[OptLevel] compiled variant of
+     * [source] advertised on the manifest, or [source] itself when none exists.
      *
      * [source] is the op's already-resolved raw bobbin hash, passed by the caller — this never
      * re-derives it via [WarpLazyFetch.opToBobbin]. Only ever called from the tiering branch where
      * [target] is non-null; a null [target] returns [source] unchanged.
      */
-    private fun bestBobbin(op: OpId, source: BobbinHash): BobbinHash {
+    private fun bestBobbin(source: BobbinHash): BobbinHash {
         val t = target ?: return source
         val variants = bobbinExchange?.manifest?.value.orEmpty()
             .mapNotNull { meta -> meta.variantOf?.let { key -> meta to key } }
