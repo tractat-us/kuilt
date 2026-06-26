@@ -131,6 +131,39 @@ internal fun sampleNamedMuxChannels() = runTest(UnconfinedTestDispatcher()) {
     check(received.await().decodeToString() == "hello")
 }
 
+// ── MuxClientLoom ─────────────────────────────────────────────────────────────
+
+/**
+ * Join two logical sessions over **one** base socket via [MuxClientLoom].
+ *
+ * A naive client opens a fresh connection per [Loom.join]; [MuxClientLoom] weaves the
+ * base fabric once and serves each join as a named channel over a single [NamedMux].
+ * `nameOf` maps each [Rendezvous] to a channel name, so `host` and `join` for the same
+ * logical session land on the same channel.
+ */
+@Suppress("unused")
+@OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+internal fun sampleMuxClientLoom() = runTest(UnconfinedTestDispatcher()) {
+    val client = MuxClientLoom(
+        base = InMemoryLoom(),
+        baseRendezvous = Rendezvous.New(Pattern("base")),
+        scope = backgroundScope,
+        nameOf = { rendezvous ->
+            when (rendezvous) {
+                is Rendezvous.New -> rendezvous.pattern.displayName
+                is Rendezvous.Existing -> rendezvous.tag.displayName
+            }
+        },
+    )
+
+    val lobby: Seam = client.join(InMemoryTag("lobby"))
+    val table: Seam = client.join(InMemoryTag("table-7"))
+
+    // Both channels ride one base socket; the same name is idempotent.
+    check(lobby !== table)
+    check(client.join(InMemoryTag("lobby")) === lobby)
+}
+
 // ── Doc-alias samples (camelCase mirrors of backtick-named InMemoryLoomTest fns) ──
 
 /**
