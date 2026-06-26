@@ -20,6 +20,7 @@ import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
@@ -273,6 +274,118 @@ class NamedMuxTest {
         muxA.channel("chat").broadcast(byteArrayOf(99))
 
         assertEquals(rawA.selfId, received.await().sender, "sender PeerId must be preserved through NamedMux")
+    }
+
+    // ── Per-channel close: closing one view must not tear the base Seam ─────────
+
+    /**
+     * Closing channel "chat" leaves channel "cursors" incoming and broadcast fully
+     * working. The base Seam must remain live.
+     */
+    @Test
+    fun closingChatLeaveCursorsLive() = runTest(UnconfinedTestDispatcher()) {
+        val loom = InMemoryLoom()
+        val rawA = loom.host(Pattern("named-channel-close-isolation"))
+        val rawB = loom.join(InMemoryTag("b"))
+
+        val muxA = NamedMux(rawA, backgroundScope)
+        val muxB = NamedMux(rawB, backgroundScope)
+
+        // Close channel "chat" on the sender side.
+        muxA.channel("chat").close()
+
+        // Channel "cursors" must still be able to send and receive frames.
+        val received = async { muxB.channel("cursors").incoming.first() }
+        muxA.channel("cursors").broadcast(byteArrayOf(42))
+
+        val swatch = received.await()
+        assertTrue(
+            swatch.toByteArray().contentEquals(byteArrayOf(42)),
+            "channel 'cursors' must still deliver frames after 'chat' is closed",
+        )
+    }
+
+    /**
+     * After close(), the closed channel view's incoming flow completes.
+     */
+    @Test
+    fun closedChannelIncomingCompletes() = runTest(UnconfinedTestDispatcher()) {
+        val loom = InMemoryLoom()
+        val rawA = loom.host(Pattern("named-channel-close-incoming"))
+
+        val muxA = NamedMux(rawA, backgroundScope)
+        val chatChannel = muxA.channel("chat")
+
+        val collected = async { chatChannel.incoming.toList() }
+        chatChannel.close()
+
+        val result = collected.await()
+        assertTrue(result.isEmpty(), "closed channel incoming must complete with no frames delivered")
+    }
+
+    /**
+     * After close(), broadcast on the closed channel view is a no-op — does not
+     * send to remote peers and does not throw.
+     */
+    @Test
+    fun closedChannelBroadcastIsNoOp() = runTest(UnconfinedTestDispatcher()) {
+        val loom = InMemoryLoom()
+        val rawA = loom.host(Pattern("named-channel-close-noop-broadcast"))
+        val rawB = loom.join(InMemoryTag("b"))
+
+        val muxA = NamedMux(rawA, backgroundScope)
+        val muxB = NamedMux(rawB, backgroundScope)
+
+        val chatChannel = muxA.channel("chat")
+        chatChannel.close()
+
+        // A sentinel on "cursors" to prove the base is alive.
+        val sentinel = async { muxB.channel("cursors").incoming.first() }
+
+        // Must not throw — the broadcast on the closed view is a no-op.
+        chatChannel.broadcast(byteArrayOf(99))
+
+        // The sentinel on "cursors" still works.
+        muxA.channel("cursors").broadcast(byteArrayOf(1))
+        sentinel.await()
+
+        // "chat" on peer B must have received nothing.
+        val chatOnB = muxB.channel("chat").incoming.produceIn(this)
+        assertTrue(chatOnB.tryReceive().isFailure, "no-op broadcast must not reach peer B's chat channel")
+        chatOnB.cancel()
+    }
+
+    /**
+     * The base Seam is NOT closed when a channel view is closed.
+     */
+    @Test
+    fun baseSeamRemainsLiveAfterChannelClose() = runTest(UnconfinedTestDispatcher()) {
+        val loom = InMemoryLoom()
+        val rawA = loom.host(Pattern("named-base-stays-live"))
+        val rawB = loom.join(InMemoryTag("b"))
+
+        val muxA = NamedMux(rawA, backgroundScope)
+
+        muxA.channel("chat").close()
+
+        assertFalse(
+            rawA.state.value is SeamState.Torn,
+            "base Seam must remain live (not Torn) after closing a named channel view",
+        )
+    }
+
+    /**
+     * Double-close of a channel view must be a no-op — no exception thrown.
+     */
+    @Test
+    fun doubleCloseIsNoOp() = runTest(UnconfinedTestDispatcher()) {
+        val loom = InMemoryLoom()
+        val rawA = loom.host(Pattern("named-double-close"))
+        val muxA = NamedMux(rawA, backgroundScope)
+
+        val channel = muxA.channel("chat")
+        channel.close()
+        channel.close() // Must not throw.
     }
 
     // ── Multiple frames in order on one name ──────────────────────────────────
