@@ -112,4 +112,30 @@ public sealed class DraftStage {
         override val opId: OpId get() = opIds.first()
         override val coordinationKind: CoordinationKind get() = CoordinationKind.Free
     }
+
+    /**
+     * Two or more independent [Embroider] stages at the same dependency level fused into a
+     * single consensus round by the G3 [Draft.consolidateEmbroideries] rewrite.
+     *
+     * [Draft.consolidateEmbroideries] groups [Embroider] nodes that share no mutual ancestor
+     * path (i.e. neither is the other's predecessor, transitively). Independent agreements at
+     * the same dependency level can be committed in a single Raft round rather than one round
+     * each — exactly the batching that motivates G3.
+     *
+     * [opIds] holds the original agreement names in topological order. [opId] (from
+     * [DraftStage]) returns [opIds].first() as the representative identifier; use [opIds] for
+     * the full ordered list. The G4 cost model reads [opIds] to compute batch size and
+     * coupling terms.
+     *
+     * Always [CoordinationKind.Coordinated]: even as a batch, the group requires one
+     * consensus round.
+     *
+     * @param opIds ordered list of the original [Embroider] operation identifiers; must be
+     *   non-empty.
+     */
+    public data class BatchedEmbroider(public val opIds: List<OpId>) : DraftStage() {
+        init { require(opIds.isNotEmpty()) { "BatchedEmbroider requires at least one opId" } }
+        override val opId: OpId get() = opIds.first()
+        override val coordinationKind: CoordinationKind get() = CoordinationKind.Coordinated
+    }
 }
