@@ -67,6 +67,20 @@ class ChicoryWasmRuntimeTest {
     ) { "trap.wasm not found on classpath" }
         .readBytes()
 
+    private val noabiWasm: ByteArray = checkNotNull(
+        ChicoryWasmRuntimeTest::class.java.getResourceAsStream(
+            "/us/tractat/kuilt/warp/noabi.wasm",
+        ),
+    ) { "noabi.wasm not found on classpath" }
+        .readBytes()
+
+    private val nomemoryWasm: ByteArray = checkNotNull(
+        ChicoryWasmRuntimeTest::class.java.getResourceAsStream(
+            "/us/tractat/kuilt/warp/nomemory.wasm",
+        ),
+    ) { "nomemory.wasm not found on classpath" }
+        .readBytes()
+
     // --- Run-guard tests (Task 4) ---
 
     /**
@@ -117,6 +131,28 @@ class ChicoryWasmRuntimeTest {
     @Test
     fun loadRejectsModuleWithOversizeInitialMemory() {
         assertFailsWith<WasmLoadException> { runtime.load(largeinitWasm) }
+    }
+
+    /**
+     * A well-formed module that parses, declares no imports, and has legal memory, but omits the
+     * `warp_alloc`/`warp_run` ABI exports. Chicory's `Instance.export(...)` throws a raw
+     * `InvalidException` (a `ChicoryException`, NOT a [WasmException]) for the missing export;
+     * [ChicoryWasmRuntime.load] must convert that into a TERMINAL [WasmLoadException] so the
+     * executor treats the broken kernel as converged, not a transient error it retries forever.
+     */
+    @Test
+    fun loadRejectsModuleMissingAbiExports() {
+        assertFailsWith<WasmLoadException> { runtime.load(noabiWasm) }
+    }
+
+    /**
+     * A module that exports the ABI functions but no memory section: `Instance.memory()` returns
+     * null. [ChicoryWasmRuntime.load] must surface that as a terminal [WasmLoadException] rather
+     * than letting a downstream NPE escape as a transient executor error.
+     */
+    @Test
+    fun loadRejectsModuleMissingMemoryExport() {
+        assertFailsWith<WasmLoadException> { runtime.load(nomemoryWasm) }
     }
 
     // --- Happy-path tests (Task 2) — guards must not over-reject reverse.wasm ---

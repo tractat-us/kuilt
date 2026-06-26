@@ -33,6 +33,12 @@ import java.util.concurrent.TimeoutException
  *   [WasmLoadException].
  * - *Memory cap* — the declared initial and max page counts are checked against
  *   [WasmSandboxConfig.maxMemoryPages] before build, and the runtime limit is clamped.
+ * - *Total load-failure containment* — **every** [ChicoryException] is converted to a
+ *   [WasmLoadException]: build-time validation / trapping-`(start)` failures, a module that
+ *   exports no memory, and a missing `warp_alloc`/`warp_run` ABI export (Chicory's
+ *   `InvalidException`). A raw `ChicoryException` is **not** a [WasmException], so any that
+ *   escaped `load` would bypass the executor's terminal-error handling and trigger an
+ *   anti-entropy retry storm on a verified-but-broken kernel (a remotely-triggerable DoS).
  *
  * *Run-time (Task 4) — the CPU-bomb defense:*
  * - Every guest interaction (alloc, memory write, `warp_run`, result read) runs on a dedicated
@@ -71,10 +77,25 @@ public class ChicoryWasmRuntime(
         val memLimits = resolvedMemoryLimits(module)
         val instance = buildInstance(module, memLimits)
         val memory = instance.memory()
-        val allocFn = instance.export("warp_alloc")
-        val runFn = instance.export("warp_run")
+            ?: throw WasmLoadException("module exports no memory")
+        val allocFn = exportOrThrow(instance, "warp_alloc")
+        val runFn = exportOrThrow(instance, "warp_run")
         return Op { args -> invoke(memory, allocFn, runFn, args) }
     }
+
+    /**
+     * Resolves a required ABI export, converting Chicory's raw [ChicoryException] (an
+     * `InvalidException` "Unknown export…" for a missing export) into a terminal
+     * [WasmLoadException]. Without this, a well-formed module that simply omits an ABI export
+     * would throw a non-[WasmException] that escapes the executor's terminal-error handling and
+     * triggers an anti-entropy retry storm.
+     */
+    private fun exportOrThrow(instance: Instance, name: String): ExportFunction =
+        try {
+            instance.export(name)
+        } catch (e: ChicoryException) {
+            throw WasmLoadException("missing ABI export $name", e)
+        }
 
     /** Shuts down the dedicated guest-execution thread. The runtime is unusable afterwards. */
     override fun close() {
@@ -128,6 +149,11 @@ public class ChicoryWasmRuntime(
                 .build()
         } catch (e: UnlinkableException) {
             throw WasmLoadException("module capability violation (imports not allowed): ${e.message}", e)
+        } catch (e: ChicoryException) {
+            // Any other build-time failure — validation (InvalidException), a trapping (start)
+            // function (UninstantiableException), etc. — is also a terminal load failure, never a
+            // raw ChicoryException that escapes the executor's WasmException handling.
+            throw WasmLoadException("module failed to instantiate: ${e.message}", e)
         }
 
     /**
