@@ -40,7 +40,7 @@ class CoordinationCostTest {
     fun emptyDraftHasZeroCost() {
         val draft = Warp.shuttle(src)
         val cost = draft.coordinationCost(WarpStats.empty())
-        assertEquals(CoordinationCost(rounds = 0, coordinatedVolume = 0L), cost)
+        assertEquals(CoordinationCost(rounds = 0, coupling = 0, coordinatedVolume = 0L), cost)
     }
 
     // ── coordinated rounds ────────────────────────────────────────────────────
@@ -181,22 +181,22 @@ class CoordinationCostTest {
 
     @Test
     fun coordinationCostOrderingByRoundsFirst() {
-        val free = CoordinationCost(rounds = 0, coordinatedVolume = 9999L)
-        val coordinated = CoordinationCost(rounds = 1, coordinatedVolume = 1L)
+        val free = CoordinationCost(rounds = 0, coupling = 0, coordinatedVolume = 9999L)
+        val coordinated = CoordinationCost(rounds = 1, coupling = 1, coordinatedVolume = 1L)
         assertTrue(free < coordinated, "fewer rounds wins regardless of volume")
     }
 
     @Test
     fun coordinationCostOrderingByVolumeWhenRoundsEqual() {
-        val small = CoordinationCost(rounds = 1, coordinatedVolume = 50L)
-        val large = CoordinationCost(rounds = 1, coordinatedVolume = 1000L)
+        val small = CoordinationCost(rounds = 1, coupling = 1, coordinatedVolume = 50L)
+        val large = CoordinationCost(rounds = 1, coupling = 1, coordinatedVolume = 1000L)
         assertTrue(small < large, "smaller volume wins when rounds are equal")
     }
 
     @Test
     fun coordinationCostEqualityByValue() {
-        val a = CoordinationCost(rounds = 1, coordinatedVolume = 200L)
-        val b = CoordinationCost(rounds = 1, coordinatedVolume = 200L)
+        val a = CoordinationCost(rounds = 1, coupling = 1, coordinatedVolume = 200L)
+        val b = CoordinationCost(rounds = 1, coupling = 1, coordinatedVolume = 200L)
         assertEquals(a, b)
         assertEquals(0, a.compareTo(b))
     }
