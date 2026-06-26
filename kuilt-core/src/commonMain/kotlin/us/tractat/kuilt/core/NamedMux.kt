@@ -92,8 +92,8 @@ public class NamedMux(
      */
     public fun channel(name: String): Seam {
         val nameBytes = name.encodeToByteArray()
-        require(nameBytes.size in 1..MAX_NAME_BYTES) {
-            "channel name must encode to 1..$MAX_NAME_BYTES UTF-8 bytes, was ${nameBytes.size}"
+        require(nameBytes.size in 1..NamedFrame.MAX_NAME_BYTES) {
+            "channel name must encode to 1..${NamedFrame.MAX_NAME_BYTES} UTF-8 bytes, was ${nameBytes.size}"
         }
         return lock.withLock { channels.getOrPut(name) { ChannelView(nameBytes) } }
     }
@@ -106,34 +106,6 @@ public class NamedMux(
      * the view itself; that does **not** close the base — only this method does.
      */
     public suspend fun closeBase(reason: CloseReason = CloseReason.Normal): Unit = delegate.close(reason)
-
-    private fun framedPayload(nameBytes: ByteArray, payload: ByteArray): ByteArray {
-        val framed = ByteArray(1 + nameBytes.size + payload.size)
-        framed[0] = nameBytes.size.toByte()
-        nameBytes.copyInto(framed, destinationOffset = 1)
-        payload.copyInto(framed, destinationOffset = 1 + nameBytes.size)
-        return framed
-    }
-
-    /** Header length (`1 + nameLen`) of [swatch], or `-1` if it is too short to carry a name. */
-    private fun headerLength(swatch: Swatch): Int {
-        if (swatch.payloadSize == 0) return -1
-        val nameLen = swatch.byteAt(0).toInt() and 0xFF
-        val header = 1 + nameLen
-        return if (swatch.payloadSize >= header) header else -1
-    }
-
-    private fun belongsTo(nameBytes: ByteArray, swatch: Swatch): Boolean {
-        val header = headerLength(swatch)
-        if (header < 0) return false
-        if (header - 1 != nameBytes.size) return false
-        for (i in nameBytes.indices) {
-            if (swatch.byteAt(1 + i) != nameBytes[i]) return false
-        }
-        return true
-    }
-
-    private fun strippedPayload(swatch: Swatch): Swatch = swatch.dropFirst(headerLength(swatch))
 
     private inner class ChannelView(
         private val nameBytes: ByteArray,
@@ -148,8 +120,8 @@ public class NamedMux(
 
         init {
             scope.launch {
-                sharedIncoming.filter { swatch -> belongsTo(nameBytes, swatch) }.collect { swatch ->
-                    spool.deliver(strippedPayload(swatch))
+                sharedIncoming.filter { swatch -> NamedFrame.belongsTo(nameBytes, swatch) }.collect { swatch ->
+                    spool.deliver(NamedFrame.strip(swatch))
                 }
                 spool.close()
             }
@@ -163,12 +135,12 @@ public class NamedMux(
 
         override suspend fun broadcast(payload: ByteArray) {
             if (_closed.value) return
-            delegate.broadcast(framedPayload(nameBytes, payload))
+            delegate.broadcast(NamedFrame.encode(nameBytes, payload))
         }
 
         override suspend fun sendTo(peer: PeerId, payload: ByteArray) {
             if (_closed.value) return
-            delegate.sendTo(peer, framedPayload(nameBytes, payload))
+            delegate.sendTo(peer, NamedFrame.encode(nameBytes, payload))
         }
 
         /**
@@ -183,10 +155,5 @@ public class NamedMux(
                 spool.close()
             }
         }
-    }
-
-    private companion object {
-        /** Maximum UTF-8 byte length of a channel name — the 1-byte length prefix caps it at 255. */
-        const val MAX_NAME_BYTES = 255
     }
 }

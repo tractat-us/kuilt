@@ -89,8 +89,10 @@ class RoomHubSeamIsolationTest {
         muxB.channel("table-7").broadcast(byteArrayOf())
         muxC.channel("table-9").broadcast(byteArrayOf())
 
-        // Let registration propagate through virtual time.
-        testScheduler.advanceUntilIdle()
+        // Await registration on an observable (deterministic) rather than polling after
+        // advanceUntilIdle: the server admits A and B into table-7, C into table-9.
+        serverRoom7.peers.first { it.size == 2 }
+        serverRoom9.peers.first { it.size == 1 }
 
         // C starts collecting on table-7 BEFORE the broadcast (so it can't miss frames).
         val cTable7Inbox = muxC.channel("table-7").incoming.produceIn(backgroundScope)
@@ -192,15 +194,14 @@ class RoomHubSeamIsolationTest {
         val muxC = NamedMux(seamC, backgroundScope)
         muxC.channel("table-9").broadcast(byteArrayOf())
 
-        testScheduler.advanceUntilIdle()
+        // Await C's registration in table-9 deterministically.
+        serverRoom9.peers.first { it.size == 1 }
 
         // Close table-7 — table-9 must remain usable.
         serverRoom7.close()
-        testScheduler.advanceUntilIdle()
 
         val cPayload = byteArrayOf(42, 43)
         serverRoom9.broadcast(cPayload)
-        testScheduler.advanceUntilIdle()
 
         val cFrame = withTimeout(1.seconds) {
             muxC.channel("table-9").incoming.first()

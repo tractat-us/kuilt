@@ -19,12 +19,22 @@ import kotlin.random.Random
  * A server-side [Loom] that provides **structural per-room isolation** over a shared
  * [ConnectionSource].
  *
- * Each accepted [us.tractat.kuilt.core.fabric.Connection] is wrapped in a [NamedMux].
- * [host] for a given room name returns a [RoomHubSeam] — a server-centred star [Seam]
- * that forwards broadcasts **only** to connections admitted to that room. A connection
- * joins a room when its first frame arrives on that room's channel AND [authorizer]
- * grants admission. A non-member is never in the fanout list — isolation is by
+ * Each accepted [Connection] is handshaked into a 2-peer [Seam] and read **exactly once**;
+ * inbound frames are demultiplexed by channel name (the [NamedFrame] wire header) and pushed
+ * into the matching [RoomHubSeam]. [host] for a given room name returns that [RoomHubSeam] — a
+ * server-centred star [Seam] that forwards broadcasts **only** to connections admitted to that
+ * room. A connection joins a room when its first frame arrives on that room's channel AND
+ * [authorizer] grants admission. A non-member is never in the fanout list — isolation is by
  * construction, not by runtime guard.
+ *
+ * ## Why single-collection-and-demux
+ *
+ * Routing per-room registration through a [NamedMux] channel view (a replay-0 `shareIn` plus a
+ * per-view pipe) makes registration depend on subscription timing — a frame can arrive before
+ * the room's collector subscribes and be lost, leaving a peer permanently unregistered. Reading
+ * each connection's seam once and pushing demuxed frames into a bounded [Spool] inside each room
+ * removes that race: the buffered spool retains a frame delivered before the room's consumer
+ * subscribes, so registration and fanout are deterministic under virtual time.
  *
  * ## Usage
  *
@@ -39,35 +49,25 @@ import kotlin.random.Random
  * val room9 = serverLoom.host(Pattern("table-9"))
  * ```
  *
- * ## Architecture
- *
- * The accept pump runs on a child [SupervisorJob] scope so individual-spoke failures
- * don't cancel the pump. For each accepted connection:
- * 1. A 2-peer [Seam] is built via [meshSeam].
- * 2. A [NamedMux] is wrapped around it, keyed by the connection's [PeerId].
- * 3. Every existing [RoomHubSeam] starts tracking the new connection's per-room channel.
- *
- * When [host] creates a new room after connections are already alive, every live
- * connection starts tracking for the new room immediately.
- *
  * ## Reconnect / resume (server side)
  *
- * Membership is keyed by [PeerId], not by the underlying connection. When a connection
- * with a previously-seen [PeerId] is accepted (a reconnect over a fresh transport with
- * the same identity), its per-room channel is re-tracked into every room. Because
- * [RoomHubSeam] keys its registration map by [PeerId], the returning connection lands
- * back in exactly the rooms it was in before — same tag, same fanout membership — rather
- * than as a brand-new peer. Client-side resume (re-emitting tags after a drop) lives in a
- * separate concern; this [Loom] handles only the server-side re-association.
+ * Membership is keyed by [PeerId], not by the underlying connection. When a connection with a
+ * previously-seen [PeerId] is accepted (a reconnect over a fresh transport with the same
+ * identity), its demuxed frames re-register it into whatever room its tags name. Because
+ * [RoomHubSeam] keys its registration map by [PeerId] and compares the outbound handle by
+ * identity, the returning connection lands back in exactly the rooms it re-announces, and the
+ * dropped connection's later teardown does **not** evict the resumed membership. Client-side
+ * resume (re-emitting tags after a drop) lives in a separate concern; this [Loom] handles only
+ * the server-side re-association.
  *
  * [join] throws [UnsupportedOperationException] — this is a server-only [Loom].
  *
  * ## Thread safety
  *
- * [connMuxes] and [rooms] are guarded by [lock]. Suspend calls are always outside the lock.
+ * [connRecords] and [rooms] are guarded by [lock]. Suspend calls are always outside the lock.
  *
  * @param source accept source for incoming client connections.
- * @param scope scope for the accept pump and per-room tracking coroutines.
+ * @param scope scope for the accept pump, per-connection read loops, and tracking coroutines.
  * @param selfId this server's own [PeerId].
  * @param authorizer required authorization policy for per-room membership. Invoked on the
  *   first inbound frame per (connection, room) pair; a `false` return structurally excludes
@@ -91,13 +91,39 @@ public class MuxServerLoom(
 
     private val lock = reentrantLock()
 
-    /** Live connections: peerId → NamedMux. Replaced on reconnect; removed when the link tears. */
-    private val connMuxes = mutableMapOf<PeerId, NamedMux>()
+    /** Live connections: peerId → record. Replaced on reconnect; removed when the link tears. */
+    private val connRecords = mutableMapOf<PeerId, ConnRecord>()
 
     /** Hosted rooms: channelName → RoomHubSeam. Created on the first [host] call per name. */
     private val rooms = mutableMapOf<String, RoomHubSeam>()
 
     private val pumpScope = CoroutineScope(scope.coroutineContext + SupervisorJob())
+
+    /**
+     * One live connection: the handshaked [rawSeam] plus a cache of per-room [OutboundSender]s
+     * so the same handle instance is reused across frames (identity-stable for reconnect-safe
+     * deregister).
+     *
+     * The server does **not** wrap [rawSeam] in a [NamedMux]: a `NamedMux` would collect
+     * `rawSeam.incoming` for its own shared upstream, stealing the single collection the
+     * [readLoop] needs. Outbound framing is the trivial direction — the sender simply prefixes
+     * the [NamedFrame] header and broadcasts on [rawSeam] directly.
+     */
+    private inner class ConnRecord(val rawSeam: Seam) {
+        private val senderLock = reentrantLock()
+        private val senders = mutableMapOf<String, OutboundSender>()
+
+        /** Idempotent: the outbound sender for [channelName] on this connection. */
+        fun senderFor(channelName: String): OutboundSender = senderLock.withLock {
+            senders.getOrPut(channelName) {
+                val nameBytes = channelName.encodeToByteArray()
+                OutboundSender { payload -> rawSeam.broadcast(NamedFrame.encode(nameBytes, payload)) }
+            }
+        }
+
+        /** Snapshot of all per-room senders created so far (for teardown deregistration). */
+        fun knownSenders(): Map<String, OutboundSender> = senderLock.withLock { senders.toMap() }
+    }
 
     init {
         pumpScope.launch { acceptLoop() }
@@ -111,7 +137,10 @@ public class MuxServerLoom(
         }
     }
 
-    /** Handshake one accepted connection into a per-peer [NamedMux] and track it in every room. */
+    /**
+     * Handshake one accepted connection, then read it exactly once: each inbound frame is
+     * demuxed by channel name and pushed into the matching live [RoomHubSeam].
+     */
     private suspend fun admit(conn: Connection) {
         val rawSeam = meshSeam(
             selfId = selfId,
@@ -120,24 +149,39 @@ public class MuxServerLoom(
             random = random,
         )
         val connPeerId = rawSeam.peers.first { peers -> peers.any { it != selfId } }.first { it != selfId }
-        val mux = NamedMux(rawSeam, pumpScope)
-        val existingRooms = lock.withLock {
-            connMuxes[connPeerId] = mux
-            rooms.values.toList()
-        }
-        // Re-association by PeerId: every room re-tracks this connPeerId. A returning peer
-        // (same id, new connection) lands back in the rooms it was previously a member of.
-        existingRooms.forEach { room ->
-            room.trackConnection(connPeerId, mux.channel(room.channelName))
-        }
-        // Clean up the connMuxes entry when the link tears — but only if it is still THIS mux
-        // (a reconnect may have already replaced it with a fresher one).
-        pumpScope.launch {
-            rawSeam.state.collect { state ->
-                if (state is SeamState.Torn) {
-                    lock.withLock { connMuxes.remove(connPeerId, mux) }
-                }
+        val record = ConnRecord(rawSeam)
+        lock.withLock { connRecords[connPeerId] = record }
+
+        pumpScope.launch { readLoop(connPeerId, record) }
+    }
+
+    /**
+     * The single collection of one connection's inbound stream. Each frame is demuxed by its
+     * [NamedFrame] name header and pushed into the matching live room (if any). When the seam
+     * tears, the connection is deregistered from every room it joined.
+     */
+    private suspend fun readLoop(connPeerId: PeerId, record: ConnRecord) {
+        try {
+            record.rawSeam.incoming.collect { frame ->
+                val name = NamedFrame.decodeName(frame) ?: return@collect
+                val room = lock.withLock { rooms[name] } ?: return@collect
+                room.deliver(connPeerId, NamedFrame.strip(frame), record.senderFor(name))
             }
+        } finally {
+            teardownConnection(connPeerId, record)
+        }
+    }
+
+    /** Deregister [record] from every room it joined and drop it from [connRecords] (if still current). */
+    private fun teardownConnection(connPeerId: PeerId, record: ConnRecord) {
+        val (snapshot, knownSenders) = lock.withLock {
+            rooms.toMap() to record.knownSenders()
+        }
+        knownSenders.forEach { (channelName, sender) ->
+            snapshot[channelName]?.deregister(connPeerId, sender)
+        }
+        lock.withLock {
+            if (connRecords[connPeerId] === record) connRecords.remove(connPeerId)
         }
     }
 
@@ -148,22 +192,18 @@ public class MuxServerLoom(
         )
     }
 
-    private fun roomFor(channelName: String): RoomHubSeam {
-        val (room, snapshot) = lock.withLock {
-            val hub = rooms.getOrPut(channelName) {
-                RoomHubSeam(
-                    channelName = channelName,
-                    selfId = selfId,
-                    scope = pumpScope,
-                    authorizer = authorizer,
-                )
-            }
-            hub to connMuxes.toList()
+    /**
+     * Idempotent: the [RoomHubSeam] for [channelName], created on first request. Connections
+     * register lazily — as each demuxed frame for [channelName] arrives, [readLoop] pushes it
+     * into this room, which admits the peer on its first frame.
+     */
+    private fun roomFor(channelName: String): RoomHubSeam = lock.withLock {
+        rooms.getOrPut(channelName) {
+            RoomHubSeam(
+                channelName = channelName,
+                selfId = selfId,
+                authorizer = authorizer,
+            )
         }
-        // Register existing connections on the new room — outside the lock.
-        snapshot.forEach { (peerId, mux) ->
-            room.trackConnection(peerId, mux.channel(channelName))
-        }
-        return room
     }
 }
