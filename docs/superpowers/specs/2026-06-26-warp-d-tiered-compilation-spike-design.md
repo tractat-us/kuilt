@@ -120,15 +120,28 @@ a small resolver consults `BobbinExchange.manifest`:
   target (choosing the highest available `opt` when several exist), resolve to `C`.
 - Otherwise resolve to `S` (interpret the raw bobbin).
 
-Concretely, this is a variant-aware wrapper that computes `WarpLazyFetch.opToBobbin`:
-the manifest (known to `BobbinExchange`, above the bundle) informs the hash the bundle
-fetches and `runtime.load`s. The **swap is one-way** for the spike (no de-opt back to
-interpret). At the resolution site, `WarpNode` increments `executionsCompiled` when a
-variant hash was chosen, else `executionsInterpreted`.
+**The registry-cache wrinkle (important).** `WarpNode.executeViaRegistry` (#942) calls
+`registry.resolve(descriptor.op)` *first*, and once a lazily-fetched op is loaded it
+registers the `Op` under its `OpId` and reuses it. A naive "swap" therefore never tiers
+up: the second execution short-circuits on the cached registry entry and re-runs the raw
+bobbin forever. Tiering must **re-resolve per execution** for bobbin-backed ops.
 
-The swap *is* the manifest gaining a variant entry: next execution after the
-`BobbinMeta(C, …)` delta arrives resolves to `C`, loads compiled bytes, ticks the
-compiled counter.
+Fix (localized to the lazy-fetch branch; the symbolic-registry path is untouched): for an
+op whose `opToBobbin` returns non-null, resolve the **best bobbin per execution** via a
+variant resolver, and cache loaded `Op`s keyed by **`BobbinHash`**
+(`bobbinToOp: Map<BobbinHash, Op>`) rather than registering under `OpId`. Bytes are
+already Creel-cached, so each distinct bobbin loads at most once, while the chosen hash is
+free to change when a variant gossips in. The resolver:
+
+- `bestBobbin(op)`: let `S = opToBobbin(op)` (the raw source hash). Scan the
+  `BobbinExchange.manifest` for `BobbinMeta(C, variantOf = VariantKey(S, myTarget, opt))`
+  for the peer's target; return the highest-`opt` `C` if any, else `S`.
+
+At the resolution site `WarpNode` increments `executionsCompiled` when the chosen hash was
+a variant, else `executionsInterpreted`. The **swap is one-way** for the spike (no de-opt):
+once a variant exists for the target it always wins. The swap *is* the manifest gaining the
+`BobbinMeta(C, …)` entry — the next execution resolves to `C`, loads compiled bytes, ticks
+the compiled counter.
 
 ## Go/no-go test (the GO/NO-GO PR)
 
