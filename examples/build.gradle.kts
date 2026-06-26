@@ -12,6 +12,7 @@ dependencies {
     testImplementation(project(":kuilt-core"))
     testImplementation(project(":kuilt-session"))
     testImplementation(project(":kuilt-cluster"))
+    testImplementation(project(":kuilt-warp"))
     testImplementation(project(":kuilt-websocket"))
     testImplementation(libs.kotlinx.coroutines.test)
     testImplementation(libs.kotlin.test)
@@ -24,4 +25,5 @@ dependencies {
 
 tasks.test {
     useJUnitPlatform()
+    systemProperty("warp.fl.ws", (project.findProperty("warp.fl.ws") ?: "false").toString())
 }
