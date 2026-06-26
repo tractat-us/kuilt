@@ -110,10 +110,17 @@ class WarpNodePartitionFailoverTest {
             val executedLock = reentrantLock()
             val executedBy = mutableMapOf<TaskId, MutableList<PeerId>>()
 
-            fun trackExecutor(selfId: PeerId): suspend (TaskId) -> String = { taskId ->
-                executedLock.withLock { executedBy.getOrPut(taskId) { mutableListOf() }.add(selfId) }
-                "done-${selfId.value}-${taskId.value}"
+            val partitionOpId = OpId("partition-track")
+
+            fun trackRegistry(selfId: PeerId): OpRegistry = OpRegistry().also { r ->
+                r.register(partitionOpId, Op { args ->
+                    val taskId = TaskId(args.decodeToString())
+                    executedLock.withLock { executedBy.getOrPut(taskId) { mutableListOf() }.add(selfId) }
+                    args
+                })
             }
+
+            fun TaskId.descriptor() = TaskDescriptor(op = partitionOpId, args = value.encodeToByteArray())
 
             val nodeA = WarpNode(
                 selfId = seamA.selfId,
@@ -123,7 +130,7 @@ class WarpNodePartitionFailoverTest {
                 quilterConfig = PARTITION_TEST_QUILTER_CONFIG,
                 clock = clock.asClock(),
                 heartbeatConfig = FAST_HEARTBEAT,
-                executor = trackExecutor(seamA.selfId),
+                registry = trackRegistry(seamA.selfId),
             )
             val nodeB = WarpNode(
                 selfId = seamB.selfId,
@@ -133,7 +140,7 @@ class WarpNodePartitionFailoverTest {
                 quilterConfig = PARTITION_TEST_QUILTER_CONFIG,
                 clock = clock.asClock(),
                 heartbeatConfig = FAST_HEARTBEAT,
-                executor = trackExecutor(seamB.selfId),
+                registry = trackRegistry(seamB.selfId),
             )
             val nodeC = WarpNode(
                 selfId = seamC.selfId,
@@ -143,7 +150,7 @@ class WarpNodePartitionFailoverTest {
                 quilterConfig = PARTITION_TEST_QUILTER_CONFIG,
                 clock = clock.asClock(),
                 heartbeatConfig = FAST_HEARTBEAT,
-                executor = trackExecutor(seamC.selfId),
+                registry = trackRegistry(seamC.selfId),
             )
 
             // Let the mesh stabilise — tick forward so detectors start.
@@ -159,7 +166,7 @@ class WarpNodePartitionFailoverTest {
 
             // Enqueue tasks. Effective ring = {A, C} (B is partitioned/lost).
             val tasks = (1..6).map { TaskId("partition-task-$it") }
-            tasks.forEach { nodeA.enqueue(it) }
+            tasks.forEach { nodeA.enqueue(it, it.descriptor()) }
 
             // Advance to let CRDT replication and task execution complete.
             // With RingWithIntent, tasks enqueued shortly after a ring change settle for
@@ -245,7 +252,7 @@ class WarpNodePartitionFailoverTest {
                 quilterConfig = PARTITION_TEST_QUILTER_CONFIG,
                 clock = clock.asClock(),
                 heartbeatConfig = FAST_HEARTBEAT,
-                executor = { taskId -> "done-${taskId.value}" },
+                registry = OpRegistry().also { it.register(OpId("ping-test"), Op { args -> args }) },
             )
 
             // Let the detector start and fire at least one ping interval.

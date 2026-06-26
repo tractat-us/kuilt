@@ -102,7 +102,7 @@ class WarpNodeCoordinatedRaftSimTest {
                 quilterConfig = RAFT_SIM_QUILTER_CONFIG,
                 clock = schedulerClock(testScheduler),
                 strategy = ClaimStrategy.Ring,
-                executor = { "free" },
+                registry = OpRegistry().also { it.register(OpId("free"), Op { args -> args }) },
                 coordinatedExecutor = { tid ->
                     lock.withLock { events.add("executed:${tid.value}") }
                     "raft-result"
@@ -152,7 +152,7 @@ class WarpNodeCoordinatedRaftSimTest {
                 scope = backgroundScope,
                 quilterConfig = RAFT_SIM_QUILTER_CONFIG,
                 clock = schedulerClock(testScheduler),
-                executor = { "free" },
+                registry = OpRegistry().also { it.register(OpId("free"), Op { args -> args }) },
                 // raftNode intentionally omitted — must fail loud at enqueue
             )
 
@@ -204,7 +204,7 @@ class WarpNodeCoordinatedRaftSimTest {
                 quilterConfig = RAFT_SIM_QUILTER_CONFIG,
                 clock = { Instant.fromEpochMilliseconds(testScheduler.currentTime) },
                 strategy = ClaimStrategy.Ring,
-                executor = { "free" },
+                registry = OpRegistry().also { it.register(OpId("free"), Op { args -> args }) },
                 coordinatedExecutor = { _ ->
                     executionLock.withLock { executionCount++ }
                     "raft-coordinated"

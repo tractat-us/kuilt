@@ -2,7 +2,8 @@
  * Sim tests for coordination-tagged task routing in [WarpNode].
  *
  * Verifies that:
- * - A task enqueued as [CoordinationKind.Free] is dispatched to the free executor.
+ * - A task enqueued via [WarpNode.enqueue] with a [TaskDescriptor] is dispatched through the
+ *   local [OpRegistry] (the free path).
  * - A task enqueued as [CoordinationKind.Coordinated] is dispatched to the coordinated executor.
  * - The free path is byte-for-byte unchanged: results, routing, and deduplication are identical
  *   to a node that never enqueues a coordinated task.
@@ -53,11 +54,15 @@ private val COORD_TEST_QUILTER_CONFIG = QuilterConfig(
     expectVirtualTime = true,
 )
 
+private val COORD_FREE_OP = OpId("coord-free-echo")
+
+private fun TaskId.coordFreeDescriptor() = TaskDescriptor(op = COORD_FREE_OP, args = value.encodeToByteArray())
+
 class WarpNodeCoordinationTagTest {
 
     /**
-     * A task enqueued with [CoordinationKind.Free] (the default) is dispatched to the
-     * free executor. The coordination-free path is unchanged — same results, same routing.
+     * A task enqueued via [WarpNode.enqueue] with a [TaskDescriptor] is dispatched to the
+     * registry (the free path). The coordination-free path is unchanged — same results, same routing.
      */
     @Test
     fun freeTaskRoutesToFreeExecutor() = runTest(UnconfinedTestDispatcher(), timeout = 5.seconds) {
@@ -77,9 +82,11 @@ class WarpNodeCoordinationTagTest {
             scope = backgroundScope,
             quilterConfig = COORD_TEST_QUILTER_CONFIG,
             clock = clock,
-            executor = { taskId ->
-                lock.withLock { freeExecuted.add(taskId) }
-                "free-${taskId.value}"
+            registry = OpRegistry().also { r ->
+                r.register(COORD_FREE_OP, Op { args ->
+                    lock.withLock { freeExecuted.add(TaskId(args.decodeToString())) }
+                    args
+                })
             },
             coordinatedExecutor = { taskId ->
                 lock.withLock { coordExecuted.add(taskId) }
@@ -91,11 +98,11 @@ class WarpNodeCoordinationTagTest {
         val nodeB = makeNode(seamB)
 
         val freeTasks = (1..4).map { TaskId("free-task-$it") }
-        freeTasks.forEach { nodeA.enqueue(it) }
+        freeTasks.forEach { nodeA.enqueue(it, it.coordFreeDescriptor()) }
         drain()
 
         assertAll(
-            { assertEquals(freeTasks.toSet(), lock.withLock { freeExecuted.toSet() }, "all free tasks must reach the free executor") },
+            { assertEquals(freeTasks.toSet(), lock.withLock { freeExecuted.toSet() }, "all free tasks must reach the free registry op") },
             { assertTrue(lock.withLock { coordExecuted.isEmpty() }, "coordinated executor must not be called for free tasks") },
             { assertEquals(freeTasks.toSet(), nodeA.results.taskIds, "results must include all free tasks") },
         )
@@ -106,7 +113,7 @@ class WarpNodeCoordinationTagTest {
 
     /**
      * A task enqueued with [CoordinationKind.Coordinated] is dispatched to the
-     * coordinated executor, not the free executor.
+     * coordinated executor, not the free registry.
      */
     @Test
     fun coordinatedTaskRoutesToCoordinatedExecutor() = runTest(UnconfinedTestDispatcher(), timeout = 5.seconds) {
@@ -126,9 +133,11 @@ class WarpNodeCoordinationTagTest {
             scope = backgroundScope,
             quilterConfig = COORD_TEST_QUILTER_CONFIG,
             clock = clock,
-            executor = { taskId ->
-                lock.withLock { freeExecuted.add(taskId) }
-                "free-${taskId.value}"
+            registry = OpRegistry().also { r ->
+                r.register(COORD_FREE_OP, Op { args ->
+                    lock.withLock { freeExecuted.add(TaskId(args.decodeToString())) }
+                    args
+                })
             },
             coordinatedExecutor = { taskId ->
                 lock.withLock { coordExecuted.add(taskId) }
@@ -146,7 +155,7 @@ class WarpNodeCoordinationTagTest {
 
         assertAll(
             { assertEquals(coordTasks.toSet(), lock.withLock { coordExecuted.toSet() }, "all coordinated tasks must reach the coordinated executor") },
-            { assertTrue(lock.withLock { freeExecuted.isEmpty() }, "free executor must not be called for coordinated tasks") },
+            { assertTrue(lock.withLock { freeExecuted.isEmpty() }, "free registry must not be called for coordinated tasks") },
             { assertEquals(coordTasks.toSet(), nodeA.results.taskIds, "results must include all coordinated tasks") },
         )
 
@@ -156,7 +165,7 @@ class WarpNodeCoordinationTagTest {
 
     /**
      * Both routings co-exist: free and coordinated tasks on the same node are dispatched
-     * to their respective executors without interference.
+     * to their respective paths without interference.
      */
     @Test
     fun bothRoutingsCoexistOnSameNode() = runTest(UnconfinedTestDispatcher(), timeout = 5.seconds) {
@@ -176,9 +185,11 @@ class WarpNodeCoordinationTagTest {
             scope = backgroundScope,
             quilterConfig = COORD_TEST_QUILTER_CONFIG,
             clock = clock,
-            executor = { taskId ->
-                lock.withLock { freeExecuted.add(taskId) }
-                "free-${taskId.value}"
+            registry = OpRegistry().also { r ->
+                r.register(COORD_FREE_OP, Op { args ->
+                    lock.withLock { freeExecuted.add(TaskId(args.decodeToString())) }
+                    args
+                })
             },
             coordinatedExecutor = { taskId ->
                 lock.withLock { coordExecuted.add(taskId) }
@@ -193,12 +204,12 @@ class WarpNodeCoordinationTagTest {
         val freeTasks = (1..3).map { TaskId("both-free-$it") }
         val coordTasks = (1..3).map { TaskId("both-coord-$it") }
 
-        freeTasks.forEach { nodeA.enqueue(it) }
+        freeTasks.forEach { nodeA.enqueue(it, it.coordFreeDescriptor()) }
         coordTasks.forEach { nodeA.enqueue(it, CoordinationKind.Coordinated) }
         drain()
 
         assertAll(
-            { assertEquals(freeTasks.toSet(), lock.withLock { freeExecuted.toSet() }, "free tasks reach free executor") },
+            { assertEquals(freeTasks.toSet(), lock.withLock { freeExecuted.toSet() }, "free tasks reach free registry") },
             { assertEquals(coordTasks.toSet(), lock.withLock { coordExecuted.toSet() }, "coordinated tasks reach coordinated executor") },
             { assertEquals((freeTasks + coordTasks).toSet(), nodeA.results.taskIds, "all results present") },
             { assertEquals((freeTasks + coordTasks).toSet(), nodeB.results.taskIds, "results replicate to B") },

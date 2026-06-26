@@ -148,6 +148,14 @@ class WarpNodeWebSocketTest {
                 )
 
                 val execLog = ExecutionLog()
+                val wsOpId = OpId("ws-echo")
+
+                fun wsRegistry(peerId: PeerId): OpRegistry = OpRegistry().also { r ->
+                    r.register(wsOpId, Op { args ->
+                        execLog.record(peerId, TaskId(args.decodeToString()))
+                        args
+                    })
+                }
 
                 val nodeRelay = WarpNode(
                     selfId = RELAY_ID,
@@ -156,7 +164,7 @@ class WarpNodeWebSocketTest {
                     scope = nodeScope,
                     quilterConfig = WS_QUILTER_CONFIG,
                     clock = { kotlin.time.Clock.System.now() },
-                    executor ={ taskId -> execLog.record(RELAY_ID, taskId); "result-$taskId" },
+                    registry = wsRegistry(RELAY_ID),
                 )
                 val nodeA = WarpNode(
                     selfId = CLIENT_A_ID,
@@ -165,7 +173,7 @@ class WarpNodeWebSocketTest {
                     scope = nodeScope,
                     quilterConfig = WS_QUILTER_CONFIG,
                     clock = { kotlin.time.Clock.System.now() },
-                    executor ={ taskId -> execLog.record(CLIENT_A_ID, taskId); "result-$taskId" },
+                    registry = wsRegistry(CLIENT_A_ID),
                 )
                 val nodeB = WarpNode(
                     selfId = CLIENT_B_ID,
@@ -174,12 +182,12 @@ class WarpNodeWebSocketTest {
                     scope = nodeScope,
                     quilterConfig = WS_QUILTER_CONFIG,
                     clock = { kotlin.time.Clock.System.now() },
-                    executor ={ taskId -> execLog.record(CLIENT_B_ID, taskId); "result-$taskId" },
+                    registry = wsRegistry(CLIENT_B_ID),
                 )
 
                 // Enqueue all tasks on the relay.
                 val tasks = (1..TASK_COUNT).map { TaskId("ws-task-$it") }
-                tasks.forEach { nodeRelay.enqueue(it) }
+                tasks.forEach { nodeRelay.enqueue(it, TaskDescriptor(wsOpId, it.value.encodeToByteArray())) }
 
                 // Wait for all nodes to converge on all results.
                 awaitAllResults(tasks, nodeRelay, nodeA, nodeB)
@@ -250,6 +258,14 @@ class WarpNodeWebSocketTest {
                 val (serverSeamA, clientSeamA) = connectClientPair(CLIENT_A_ID)
 
                 val execLog = ExecutionLog()
+                val foOpId = OpId("failover-echo")
+
+                fun foRegistry(peerId: PeerId): OpRegistry = OpRegistry().also { r ->
+                    r.register(foOpId, Op { args ->
+                        execLog.record(peerId, TaskId(args.decodeToString()))
+                        args
+                    })
+                }
 
                 val nodeRelay = WarpNode(
                     selfId = RELAY_ID,
@@ -258,7 +274,7 @@ class WarpNodeWebSocketTest {
                     scope = nodeScope,
                     quilterConfig = WS_QUILTER_CONFIG,
                     clock = { kotlin.time.Clock.System.now() },
-                    executor ={ taskId -> execLog.record(RELAY_ID, taskId); "result-$taskId" },
+                    registry = foRegistry(RELAY_ID),
                 )
                 val nodeA = WarpNode(
                     selfId = CLIENT_A_ID,
@@ -267,12 +283,12 @@ class WarpNodeWebSocketTest {
                     scope = nodeScope,
                     quilterConfig = WS_QUILTER_CONFIG,
                     clock = { kotlin.time.Clock.System.now() },
-                    executor ={ taskId -> execLog.record(CLIENT_A_ID, taskId); "result-$taskId" },
+                    registry = foRegistry(CLIENT_A_ID),
                 )
 
                 // Enqueue tasks.
                 val tasks = (1..FAILOVER_TASK_COUNT).map { TaskId("failover-task-$it") }
-                tasks.forEach { nodeRelay.enqueue(it) }
+                tasks.forEach { nodeRelay.enqueue(it, TaskDescriptor(foOpId, it.value.encodeToByteArray())) }
 
                 // Wait for both nodes to converge on all results.
                 awaitAllResults(tasks, nodeRelay, nodeA)
@@ -367,6 +383,14 @@ class WarpNodeWebSocketTest {
                 val agreedRoster = MutableStateFlow(setOf(RELAY_ID, CLIENT_A_ID, CLIENT_B_ID))
 
                 val execLog = ExecutionLog()
+                val strongOpId = OpId("ws-strong")
+
+                fun strongRegistry(peerId: PeerId): OpRegistry = OpRegistry().also { r ->
+                    r.register(strongOpId, Op { args ->
+                        execLog.record(peerId, TaskId(args.decodeToString()))
+                        args
+                    })
+                }
 
                 val nodeRelay = WarpNode(
                     selfId = RELAY_ID,
@@ -375,7 +399,7 @@ class WarpNodeWebSocketTest {
                     scope = nodeScope,
                     quilterConfig = WS_QUILTER_CONFIG,
                     clock = { kotlin.time.Clock.System.now() },
-                    executor ={ taskId -> execLog.record(RELAY_ID, taskId); "result-$taskId" },
+                    registry = strongRegistry(RELAY_ID),
                 )
                 val nodeA = WarpNode(
                     selfId = CLIENT_A_ID,
@@ -384,7 +408,7 @@ class WarpNodeWebSocketTest {
                     scope = nodeScope,
                     quilterConfig = WS_QUILTER_CONFIG,
                     clock = { kotlin.time.Clock.System.now() },
-                    executor ={ taskId -> execLog.record(CLIENT_A_ID, taskId); "result-$taskId" },
+                    registry = strongRegistry(CLIENT_A_ID),
                 )
                 val nodeB = WarpNode(
                     selfId = CLIENT_B_ID,
@@ -393,11 +417,11 @@ class WarpNodeWebSocketTest {
                     scope = nodeScope,
                     quilterConfig = WS_QUILTER_CONFIG,
                     clock = { kotlin.time.Clock.System.now() },
-                    executor ={ taskId -> execLog.record(CLIENT_B_ID, taskId); "result-$taskId" },
+                    registry = strongRegistry(CLIENT_B_ID),
                 )
 
                 val tasks = (1..TASK_COUNT).map { TaskId("strong-task-$it") }
-                tasks.forEach { nodeRelay.enqueue(it) }
+                tasks.forEach { nodeRelay.enqueue(it, TaskDescriptor(strongOpId, it.value.encodeToByteArray())) }
 
                 awaitAllResults(tasks, nodeRelay, nodeA, nodeB)
 
