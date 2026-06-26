@@ -77,7 +77,7 @@ Chicory 1.4.0 capabilities were verified against the 1.4.0 source tag. **There i
 - **Fail-loud on trap.** Any `ChicoryException` from `warp_run` (trap, OOB memory, bad packed result) → `WasmExecutionException`. Never corrupt the results board.
 
 ```kotlin
-public class WasmSandboxConfig(
+public data class WasmSandboxConfig(
     public val maxMemoryPages: Int = 16,          // 1 MiB; conservative
     public val executionTimeout: Duration = 1.seconds,
 )

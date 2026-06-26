@@ -104,7 +104,7 @@ Instance built once at `load`, reused across `invoke` (same lifecycle as `Chicor
 
 `WasmSandboxConfig.kt` (`jvmMain`):
 ```kotlin
-public class WasmSandboxConfig(
+public data class WasmSandboxConfig(
     public val maxMemoryPages: Int = 16,          // 1 MiB
     public val executionTimeout: Duration = 1.seconds,
 )
