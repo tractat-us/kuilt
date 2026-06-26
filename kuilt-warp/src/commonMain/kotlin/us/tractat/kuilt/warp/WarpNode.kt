@@ -280,6 +280,18 @@ public class WarpNode(
         random = kotlin.random.Random(selfId.value.hashCode().toLong() xor 0xCCCCL),
     )
 
+    /**
+     * Node-owned lazy-bobbin exchange, present only when a [lazyFetch] capability was supplied.
+     *
+     * **Single-collection correct (ADR-034).** The exchange decorates the node's *own* [mux]
+     * over a reserved channel ([CHANNEL_BOBBIN]) — it never collects [seam.incoming] a second
+     * time. Handing [WarpNode] a ready-made [BobbinExchange] over the raw seam would create a
+     * second collector; instead the node builds it here so every channel shares the node's one
+     * event loop.
+     */
+    private val bobbinExchange: BobbinExchange? =
+        lazyFetch?.let { BobbinExchange(mux.channel(CHANNEL_BOBBIN), it.creel, scope, quilterConfig) }
+
     // --- Shared mutable state (guarded by lock) ---
     private val lock = reentrantLock()
 
@@ -773,12 +785,48 @@ public class WarpNode(
             return null
         }
         val op = registry.resolve(descriptor.op) ?: run {
-            logger.debug { "WarpNode($selfId): op '${descriptor.op.value}' not in registry for $taskId — standing by (C4/C5 lazy-fetch will resolve)" }
-            lock.withLock { claimed.remove(taskId) }
-            return null
+            val lf = lazyFetch ?: return standBy(taskId, descriptor.op)
+            val hash = lf.opToBobbin(descriptor.op) ?: return standBy(taskId, descriptor.op)
+            val bytes = checkNotNull(bobbinExchange).fetch(hash)
+            val loaded = try {
+                lf.runtime.load(bytes)
+            } catch (e: WasmException) {
+                return recordTerminalError(taskId, e) // verified bytes, but broken/malicious — terminal
+            }
+            registerOrResolve(descriptor.op, loaded)
         }
-        return op.invoke(descriptor.args)
+        return try {
+            op.invoke(descriptor.args)
+        } catch (e: WasmException) {
+            recordTerminalError(taskId, e) // trap/timeout at run time — terminal
+        }
     }
+
+    /**
+     * Stand by on an unresolved op — the transient "bobbin not loaded yet" state. The task is
+     * unclaimed and left pending; anti-entropy re-evaluates on the next cycle. Reached when no
+     * [lazyFetch] capability is configured, or [WarpLazyFetch.opToBobbin] names no bobbin for the
+     * op (nothing to fetch). Distinct from a terminal error: we simply *can't run it yet*.
+     */
+    private fun standBy(taskId: TaskId, op: OpId): ByteArray? {
+        logger.debug { "WarpNode($selfId): op '${op.value}' not resolvable for $taskId — standing by (transient; anti-entropy will retry)" }
+        lock.withLock { claimed.remove(taskId) }
+        return null
+    }
+
+    /**
+     * Registers [loaded] under [op] so subsequent tasks resolve it locally, returning the [Op]
+     * now in the registry. If a concurrent fetch-load on another coroutine won the register race
+     * ([OpRegistry.register] throws [IllegalStateException] on a duplicate), the winner's [Op] is
+     * resolved and used instead.
+     */
+    private fun registerOrResolve(op: OpId, loaded: Op): Op =
+        try {
+            registry.register(op, loaded)
+            loaded
+        } catch (e: IllegalStateException) {
+            registry.resolve(op) ?: throw e
+        }
 
     /**
      * Proposes the task to the Raft cluster with a stable [requestId] derived from [taskId].
@@ -837,13 +885,35 @@ public class WarpNode(
         }
     }
 
-    private fun recordResult(taskId: TaskId, result: ByteArray) {
+    private fun recordResult(taskId: TaskId, result: ByteArray) = putResult(taskId, OpResult(result))
+
+    /**
+     * Records a terminal-error [OpResult] for [taskId] and removes it from the Free queue.
+     *
+     * A *verified* kernel that fails to load (imports/oversize/malformed) or fails to run
+     * (trap/timeout) will never succeed, so retrying it forever via anti-entropy is exactly the
+     * churn the OpResult/Quilter storm guardrail warns against. The failure is therefore
+     * **terminal**: an [OpResult.failure] entry converges on every peer (diagnosable, no hot
+     * loop) and the task leaves the queue.
+     *
+     * Composes with [doExecute]'s Free branch: this records the result, removes the task, and
+     * bumps [_executions] itself, then returns `null` so the caller's `?: return` short-circuits
+     * without recording a second time.
+     */
+    private fun recordTerminalError(taskId: TaskId, e: WasmException): ByteArray? {
+        putResult(taskId, OpResult.failure(e.message ?: e.toString()))
+        removeFromQueue(taskId, CoordinationKind.Free)
+        lock.withLock { _executions = _executions.piece(_executions.inc(replica).delta) }
+        return null
+    }
+
+    private fun putResult(taskId: TaskId, opResult: OpResult) {
         // Hold the WarpNode lock across the read-compute-apply so every concurrent
         // executor coroutine mints a *unique* dot from the latest state. Without this,
         // two concurrent `put` calls on the same base state each call `nextDot(replica)`,
         // producing duplicate dots. When those patches are joined, the causal CRDT
         // tombstoning logic silently drops one entry (the entry whose dot the other's
-        // context already witnesses). Bug: concurrent `recordResult` calls were losing
+        // context already witnesses). Bug: concurrent result recordings were losing
         // results non-deterministically.
         lock.withLock {
             // A non-null existing entry means a peer (or this node in the dual-leader window)
@@ -858,7 +928,7 @@ public class WarpNode(
                     resultsQuilter.state.value.put(
                         replica = replica,
                         key = taskId,
-                        value = LWWRegister.empty<OpResult>().set(replica, ts, OpResult(result)),
+                        value = LWWRegister.empty<OpResult>().set(replica, ts, opResult),
                     )
                 )
             )
@@ -896,6 +966,9 @@ public class WarpNode(
 
         /** Mux-channel for the [CoordinationKind.Coordinated] task queue. */
         const val CHANNEL_COORD_QUEUE: Byte = 0x05
+
+        /** Mux-channel reserved for the node-owned [BobbinExchange] (lazy fetch-and-run). */
+        const val CHANNEL_BOBBIN: Byte = 0x06
     }
 }
 

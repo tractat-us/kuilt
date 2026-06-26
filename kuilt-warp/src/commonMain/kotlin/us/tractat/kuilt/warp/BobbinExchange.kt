@@ -145,7 +145,7 @@ public class BobbinExchange(
         // Serve loop — single collection of fetchSeam.incoming (ADR-034).
         scope.launch {
             fetchSeam.incoming.collect { swatch ->
-                val msg = runCatching {
+                val msg = runCatchingCancellable {
                     swatch.decode(Cbor, serializer<FetchMessage>())
                 }.getOrNull() ?: return@collect
                 when (msg) {
