@@ -20,6 +20,7 @@ dependencies {
     testImplementation(libs.ktor.serverWebsockets)
     testImplementation(libs.ktor.serverNetty)
     testImplementation(libs.ktor.client.websockets)
+    testImplementation(libs.ktor.client.okhttp)
     testRuntimeOnly(libs.logback)
 }
 
