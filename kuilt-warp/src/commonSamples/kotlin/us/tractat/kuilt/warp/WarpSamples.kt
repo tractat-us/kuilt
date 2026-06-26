@@ -1,6 +1,7 @@
 package us.tractat.kuilt.warp
 
 import kotlinx.coroutines.CoroutineScope
+import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.crdt.GCounter
 import us.tractat.kuilt.crdt.LatticeProduct
 import us.tractat.kuilt.crdt.PNCounter
@@ -419,4 +420,27 @@ internal fun sampleJoinAllOrNull() {
     )
     val merged = joinAllOrNull(contributions)
     check(merged?.state?.value == 30L)
+}
+
+// ── pinned execution ──────────────────────────────────────────────────────────
+
+/**
+ * Pin a task to a named owner, decoupling who-runs from the consistent-hash ring.
+ *
+ * A descriptor with [TaskDescriptor.pinnedOwner] set is owned by exactly that peer; absent,
+ * the task is ring-assigned. This is what [WarpNode.enqueueLocal] builds under the hood to
+ * keep a data-local step — e.g. a federated-learning training round on private data — on the
+ * peer that holds the data.
+ */
+@Suppress("unused")
+internal fun samplePinnedExecution() {
+    val alice = PeerId("alice")
+
+    // Ring-assigned: hash(taskId) picks the owner (work-stealing).
+    val free = TaskDescriptor(OpId("train"), byteArrayOf(1, 2, 3))
+    check(free.pinnedOwner == null)
+
+    // Pinned: only `alice` ever claims and runs this task — it never re-homes.
+    val pinned = TaskDescriptor(OpId("train"), byteArrayOf(1, 2, 3), pinnedOwner = alice)
+    check(pinned.pinnedOwner == alice)
 }

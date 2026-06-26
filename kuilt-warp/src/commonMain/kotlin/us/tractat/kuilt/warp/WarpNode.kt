@@ -506,6 +506,38 @@ public class WarpNode(
     }
 
     /**
+     * Add a task to the work queue **pinned to this peer** — the headline pinned-execution
+     * affordance.
+     *
+     * Pinning decouples *who-runs* from the consistent-hash ring: this node, and only this
+     * node, claims and runs the task. No other peer ever executes it, and if this peer is
+     * partitioned the task stays pending (it does **not** re-home to a survivor) until this
+     * peer returns. This makes inherently data-local workloads expressible — e.g. federated
+     * learning, where only the data owner can run its own training step on its private local
+     * data — and doubles as task affinity / sticky placement.
+     *
+     * The task is enqueued with [TaskDescriptor.pinnedOwner] forced to [selfId]; any owner the
+     * caller may have set on [descriptor] is overridden so "local" always means *this* peer.
+     * It then travels and is claimed exactly like any free-path task via [enqueue] — the pin is
+     * just the descriptor field the ring-owner filter consults (see [effectiveOwner]).
+     *
+     * @param taskId The identifier of the task to enqueue.
+     * @param descriptor The unit of work; its [TaskDescriptor.pinnedOwner] is replaced with
+     *   [selfId] before replication.
+     */
+    public fun enqueueLocal(taskId: TaskId, descriptor: TaskDescriptor) {
+        enqueue(
+            taskId,
+            TaskDescriptor(
+                op = descriptor.op,
+                args = descriptor.args,
+                traceparent = descriptor.traceparent,
+                pinnedOwner = selfId,
+            ),
+        )
+    }
+
+    /**
      * Add [taskId] to the distributed work queue on the [CoordinationKind.Coordinated] path.
      *
      * Routes to the Raft-backed escalation path. The ring owner proposes the task to [raftNode]
@@ -687,11 +719,27 @@ public class WarpNode(
         }
     }
 
+    /**
+     * The owner of [taskId] honouring pinned execution.
+     *
+     * A free-path task whose [TaskDescriptor.pinnedOwner] is set is owned by exactly that
+     * peer, decoupling who-runs from the consistent-hash ring; an absent pin (or a
+     * coordinated task, which carries no descriptor) falls back to the ring assignment
+     * `ring.owner(taskId)`. Because only the pinned owner passes the `== selfId` filter in
+     * [claimOwnedRing] / [claimOwnedWithIntent], it is the sole claimant and the winner;
+     * and if it is partitioned or absent from the effective roster, no node claims, so the
+     * task stays pending and runs only when the owner returns (it never re-homes).
+     *
+     * Caller holds [lock].
+     */
+    private fun effectiveOwner(taskId: TaskId): PeerId? =
+        queueQuilter.state.value[taskId]?.value?.pinnedOwner ?: ring.owner(taskId)
+
     /** Execute every owned, unclaimed task immediately on the given [kind] path. */
     private fun claimOwnedRing(taskIds: Collection<TaskId>, kind: CoordinationKind) {
         val toExecute = lock.withLock {
             taskIds
-                .filter { taskId -> taskId !in claimed && ring.owner(taskId) == selfId }
+                .filter { taskId -> taskId !in claimed && effectiveOwner(taskId) == selfId }
                 .also { tasks -> claimed.addAll(tasks) }
         }
         toExecute.forEach { taskId -> executeAsync(taskId, kind) }
@@ -703,7 +751,7 @@ public class WarpNode(
         // but filtering here avoids redundant lock acquisitions on every queue/ring emission.
         val owned = lock.withLock {
             taskIds.filter { taskId ->
-                taskId !in claimed && taskId !in inFlight && ring.owner(taskId) == selfId
+                taskId !in claimed && taskId !in inFlight && effectiveOwner(taskId) == selfId
             }
         }
         owned.forEach { taskId -> announceAndResolve(taskId, strategy, kind) }
