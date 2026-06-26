@@ -416,6 +416,9 @@ public class WarpNode(
     /**
      * Cumulative count of task executions this node ran by **interpreting the raw bobbin** —
      * the un-tiered path. A [GCounter] snapshot; forward via [recordWarp] into a SUM series.
+     *
+     * Together with [executionsCompiled] this is a **subset** of [executions] — see that
+     * property's note: a dashboard must not assume `interpreted + compiled == executed`.
      */
     public val executionsInterpreted: GCounter get() = lock.withLock { _executionsInterpreted }
 
@@ -424,6 +427,11 @@ public class WarpNode(
      * up. Goes from 0 to ≥1 the first time a target-matching variant gossips in. The durable
      * tiered-compilation signal — the same counter measures real tiering once D4 lands a real
      * compiler. A [GCounter] snapshot; forward via [recordWarp] into a SUM series.
+     *
+     * `executionsInterpreted + executionsCompiled` is a **subset** of [executions]: it counts only
+     * successful bobbin-backed executions (lazy-fetch present, `target != null`) and excludes
+     * terminal-error executions and symbolic-registry / `target == null` runs — so a dashboard must
+     * not assume `interpreted + compiled == executed`.
      */
     public val executionsCompiled: GCounter get() = lock.withLock { _executionsCompiled }
 
@@ -855,7 +863,7 @@ public class WarpNode(
         }
 
         // Tiering enabled: resolve best variant per execution, cache loaded ops by BobbinHash.
-        val hash = bestBobbin(descriptor.op) ?: source
+        val hash = bestBobbin(descriptor.op, source)
         val cached = lock.withLock { bobbinToOp[hash] }
         val op = cached ?: run {
             val bytes = checkNotNull(bobbinExchange).fetch(hash) // suspends, outside lock
@@ -892,11 +900,13 @@ public class WarpNode(
 
     /**
      * The best bobbin to run [op] on for this node's [target]: the highest-[OptLevel] compiled
-     * variant of the op's source bobbin advertised on the manifest, or the raw source hash when
-     * none exists. Returns null only when the op is not bobbin-backed.
+     * variant of [source] advertised on the manifest, or [source] itself when none exists.
+     *
+     * [source] is the op's already-resolved raw bobbin hash, passed by the caller — this never
+     * re-derives it via [WarpLazyFetch.opToBobbin]. Only ever called from the tiering branch where
+     * [target] is non-null; a null [target] returns [source] unchanged.
      */
-    private fun bestBobbin(op: OpId): BobbinHash? {
-        val source = lazyFetch?.opToBobbin(op) ?: return null
+    private fun bestBobbin(op: OpId, source: BobbinHash): BobbinHash {
         val t = target ?: return source
         val variants = bobbinExchange?.manifest?.value.orEmpty()
             .mapNotNull { meta -> meta.variantOf?.let { key -> meta to key } }
