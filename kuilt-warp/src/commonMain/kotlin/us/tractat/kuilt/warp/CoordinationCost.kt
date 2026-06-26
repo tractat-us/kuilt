@@ -1,54 +1,69 @@
 package us.tractat.kuilt.warp
 
 /**
- * The E-3 coordination-cost score for a [Draft] pipeline.
+ * The G4 coordination-cost score for a [Draft] pipeline.
  *
- * A planner minimises this cost; an executor pays it. Two dimensions are tracked:
+ * A planner minimises this cost; an executor pays it. Three dimensions are tracked:
  *
- * **[rounds]** — the number of genuine consensus rounds this plan requires. A
- * fully-monotone [Draft] has 0 rounds; a draft with exactly one [DraftStage.Embroider]
- * has 1. Multiple embroider stages are valid (though uncommon per CALM) and count
- * accordingly. This is the dimension a monotonicity-aware executor pays vs. the
- * pessimistic bound of `stages.size - 1` rounds an unplanned executor would spend
- * (one coordination check per stage boundary, knowing nothing about monotonicity).
+ * **[rounds]** — the count of coordinated nodes in the planned DAG. Each [DraftStage.Embroider]
+ * contributes 1 round; each [DraftStage.BatchedEmbroider] also contributes **1 round** —
+ * a batched proposal carries an entire level's worth of agreements in one Raft round-trip,
+ * regardless of how many ops it batches. So:
+ * - A fully-monotone [Draft] has 0 rounds.
+ * - K independent [DraftStage.Embroider] nodes (not consolidated) → [rounds] = K.
+ * - Those same K nodes consolidated into one [DraftStage.BatchedEmbroider] (one dependency
+ *   level) → [rounds] = 1.
+ * - A dependency chain with L levels → [rounds] = L (the DAG depth), one node per level.
  *
- * **[coordinatedVolume]** — the estimated number of elements that enter the
- * coordinated stage(s). When [rounds] == 0, this is 0. When [rounds] == 1 this is
- * the cardinality at the [DraftStage.Embroider]'s position in the pipeline —
- * meaning filters that precede the embroider reduce this number (the planner's
- * primary lever on volume). The estimate is produced by [Draft.coordinationCost]
- * from [WarpStats] HyperLogLog sketches; unknown filter selectivities are treated
- * conservatively (no reduction assumed).
+ * [rounds] is therefore an active lever: calling [Draft.plan] (which includes consolidation)
+ * drives `coordinationCost(plan(draft)).rounds ≤ coordinationCost(draft).rounds`, with strict
+ * `<` whenever independent agreements exist to batch. This is the improvement E-3 could not
+ * show (E-3 was pinned at `rounds ≤ 1` on a single-embroider linear pipeline).
  *
- * **Ordering.** Costs are compared lexicographically: fewer rounds first, then lower
- * volume. A draft with 0 rounds (fully monotone) always beats one with 1 round,
- * regardless of volume.
+ * **[coupling]** — the blast-radius term: the maximum batch size ([DraftStage.BatchedEmbroider.opIds]
+ * size) across all coordinated nodes. A [DraftStage.Embroider] contributes 1; a fully-monotone
+ * draft contributes 0. Batching K agreements into one round is efficient, but it couples their
+ * failure domains: a single rejection forces a retry of all K. The planner minimises [rounds]
+ * first; [coupling] is the secondary objective, reflecting the honest tradeoff — fewer rounds
+ * at the cost of a larger retry unit. A future planner might cap batch size explicitly.
  *
- * **Rounds vs. volume — what the planner actually optimises.** In the current model
- * a well-formed [Draft] has at most one [DraftStage.Embroider], so [rounds] is
- * structurally ≤ 1. The planner's real lever is [coordinatedVolume]: deferring
- * the embroider past selective filters means the consensus step commits over a
- * *smaller* set of elements, not over *fewer* rounds. "Minimise coordination"
- * means "shrink the set that crosses the consensus boundary" — not "reduce round
- * count", which stays at 1 in the single-embroider case. Reducing round count
- * (multi-stage coordination pipelining) is future work.
+ * **[coordinatedVolume]** — the estimated number of elements entering all coordinated stages
+ * combined. When [rounds] == 0, this is 0. For each coordinated node the estimate derives from
+ * [WarpStats] HyperLogLog sketches via a predecessor walk; unknown filter selectivities are
+ * treated conservatively. The estimate is produced by [Draft.coordinationCost].
+ *
+ * **Ordering.** Costs are compared lexicographically — minimise [rounds] first, then [coupling],
+ * then [coordinatedVolume]. A draft with fewer rounds always beats one with more, regardless of
+ * the other two dimensions. When rounds are tied, the smaller-batch option wins (less blast
+ * radius); volume is the final tiebreaker.
  *
  * @sample us.tractat.kuilt.warp.sampleCoordinationCost
  * @see Draft.coordinationCost
  * @see Draft.plan
  */
 public data class CoordinationCost(
-    /** Number of [DraftStage.Embroider] stages — 0 for fully-monotone drafts, 1 or more otherwise. */
+    /** Count of coordinated nodes in the planned DAG — 0 for fully-monotone; 1 per round otherwise. */
     public val rounds: Int,
-    /** Estimated elements entering coordinated stages; 0 when [rounds] == 0. */
+    /**
+     * Maximum batch size across all coordinated nodes — 0 when [rounds] is 0, 1 for a lone
+     * [DraftStage.Embroider], and [DraftStage.BatchedEmbroider.opIds].size for a batched node.
+     *
+     * Represents the blast-radius of the largest consensus proposal: a rejected batch forces
+     * a retry of all [coupling] agreements. Minimised as a secondary objective after [rounds].
+     */
+    public val coupling: Int,
+    /** Estimated elements entering all coordinated stage(s); 0 when [rounds] == 0. */
     public val coordinatedVolume: Long,
 ) : Comparable<CoordinationCost> {
 
     /**
-     * Lexicographic order: fewer [rounds] first; [coordinatedVolume] as tiebreaker.
+     * Lexicographic order: fewer [rounds] first; smaller [coupling] as secondary; lower
+     * [coordinatedVolume] as tertiary tiebreaker.
      */
     override fun compareTo(other: CoordinationCost): Int {
         val roundsCmp = rounds.compareTo(other.rounds)
-        return if (roundsCmp != 0) roundsCmp else coordinatedVolume.compareTo(other.coordinatedVolume)
+        if (roundsCmp != 0) return roundsCmp
+        val couplingCmp = coupling.compareTo(other.coupling)
+        return if (couplingCmp != 0) couplingCmp else coordinatedVolume.compareTo(other.coordinatedVolume)
     }
 }

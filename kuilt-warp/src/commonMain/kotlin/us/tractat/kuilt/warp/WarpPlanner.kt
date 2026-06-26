@@ -1,41 +1,40 @@
 package us.tractat.kuilt.warp
 
 /**
- * E-3 coordination-cost model and planner for [Draft] pipelines.
+ * G4 coordination-cost model and planner for [Draft] pipelines.
  *
  * ## Cost model
  *
- * [coordinationCost] scores a [Draft] by the [CoordinationCost] a monotonicity-aware
- * executor would pay: [CoordinationCost.rounds] = the number of [DraftStage.Embroider]
- * nodes; [CoordinationCost.coordinatedVolume] = estimated items entering the embroider
- * stage(s), derived from [WarpStats] HyperLogLog sketches.
+ * [coordinationCost] scores a [Draft] by the [CoordinationCost] a monotonicity-aware executor
+ * would pay:
+ * - [CoordinationCost.rounds] = count of coordinated nodes (each [DraftStage.Embroider] or
+ *   [DraftStage.BatchedEmbroider] is 1 round — a batched proposal uses one Raft round-trip
+ *   regardless of how many agreements it carries).
+ * - [CoordinationCost.coupling] = maximum batch size across all coordinated nodes (1 for a
+ *   lone [DraftStage.Embroider], `opIds.size` for a [DraftStage.BatchedEmbroider], 0 when
+ *   fully monotone). This is the blast-radius term: larger batches couple more failure domains.
+ * - [CoordinationCost.coordinatedVolume] = total estimated elements entering all coordinated
+ *   stages, summed per coordinated node via ancestor predecessor walks and [WarpStats]
+ *   HyperLogLog selectivities.
  *
  * ## Graph-local volume computation
  *
- * The volume estimate walks the predecessor graph: for a given Embroider node, the
- * algorithm traverses its ancestor nodes to collect all Filter stages that precede it on
- * the path from the Source. Only ancestors that are predecessor-reachable from the
- * Embroider (i.e. between the Source and the Embroider in topological order) contribute
- * to the volume reduction. This generalises correctly to multi-branch DAGs (G4+): filters
- * on a branch only reduce the volume on that branch's path to the embroider.
- *
- * For a path (the degenerate G1 case), walking predecessors is equivalent to
- * `stages.take(embroiderIndex)` — same result, graph-structural expression.
+ * For each coordinated node, the volume estimate walks its predecessor graph to collect all
+ * filter stages between the source and the coordinated step. Only ancestors reachable from the
+ * coordinated node contribute. This generalises to multi-branch DAGs: filters on one branch
+ * only reduce the volume on that branch's path to its embroider.
  *
  * ## Planner
  *
  * [plan] applies the three E-2 rewrite rules — [deferEmbroidery], [pushdownFilters],
- * [fuseAdjacent] — to a fixpoint (via [optimize]), minimising [coordinationCost].
+ * [fuseAdjacent] — to a fixpoint (via [optimize]), then [consolidateEmbroideries].
+ * Consolidation fuses independent [DraftStage.Embroider] nodes at the same dependency level
+ * into a single [DraftStage.BatchedEmbroider], reducing the round count from K (one per node)
+ * to the coordination DAG depth (one per level).
  *
- * Stats are used for cost **measurement** (see [coordinationCost]) but not for rewrite
- * **selection**: all rewrites are structurally determined by [CoordinationKind] tags and
- * are correct regardless of cardinality.
- *
- * **What "minimise coordination" means here.** A well-formed path [Draft] has at most one
- * [DraftStage.Embroider], so [CoordinationCost.rounds] is structurally ≤ 1. The
- * planner's demonstrated win is a cut in [CoordinationCost.coordinatedVolume] — the
- * consensus step commits over a smaller, more-filtered set. G4 will make round count an
- * active lever (DAG depth).
+ * **Active lever (G4):** on a multi-coordination [Draft], `coordinationCost(plan(draft)).rounds
+ * < coordinationCost(draft).rounds` whenever independent agreements exist at the same DAG level.
+ * This is the round-count cut that E-3 could not show (E-3 was structurally pinned at ≤1 rounds).
  *
  * @see CoordinationCost
  * @see Draft.coordinationCost
@@ -47,16 +46,14 @@ package us.tractat.kuilt.warp
 /**
  * Scores this [Draft] by the [CoordinationCost] a monotonicity-aware executor would pay.
  *
- * - [CoordinationCost.rounds] = number of [DraftStage.Embroider] nodes (0 for fully-
- *   monotone drafts, 1 when there is exactly one embroider).
- * - [CoordinationCost.coordinatedVolume] = estimated elements entering the embroider
- *   stage, derived by walking the predecessor graph and applying per-filter selectivities
- *   from [stats]. For paths, this is equivalent to counting filters that appear before
- *   the embroider in topological order.
- *
- * Selectivity of a filter: `stats.estimatedCardinality(filterOpId) / sourceCardinality`.
- * Unknown filters (zero cardinality in [stats]) are conservative — they contribute no
- * volume reduction. This ensures the estimate is never less than the true volume.
+ * - [CoordinationCost.rounds] = count of coordinated nodes (0 for fully-monotone drafts;
+ *   each [DraftStage.Embroider] or [DraftStage.BatchedEmbroider] contributes 1).
+ * - [CoordinationCost.coupling] = maximum batch size across all coordinated nodes (0 when
+ *   fully monotone, 1 for a lone [DraftStage.Embroider], `opIds.size` for a batched node).
+ * - [CoordinationCost.coordinatedVolume] = sum of volume estimates across all coordinated
+ *   nodes. Each estimate is derived by walking the predecessor graph and applying per-filter
+ *   selectivities from [stats]. Unknown filters (zero cardinality in [stats]) contribute no
+ *   reduction — a conservative choice.
  *
  * Call [plan] first to minimise this cost before scoring.
  *
@@ -65,45 +62,35 @@ package us.tractat.kuilt.warp
  * @see CoordinationCost
  */
 public fun <T> Draft<T>.coordinationCost(stats: WarpStats): CoordinationCost {
-    val embroiderNode = nodes.firstOrNull { it.stage is DraftStage.Embroider }
-        ?: return CoordinationCost(rounds = 0, coordinatedVolume = 0L)
+    val coordinatedNodes = nodes.filter { it.stage.coordinationKind == CoordinationKind.Coordinated }
+    if (coordinatedNodes.isEmpty()) return CoordinationCost(rounds = 0, coupling = 0, coordinatedVolume = 0L)
 
-    val sourceNode = nodes.firstOrNull { it.stage is DraftStage.Source }
-        ?: return CoordinationCost(rounds = 1, coordinatedVolume = 0L)
+    val rounds = coordinatedNodes.size
+    val coupling = coordinatedNodes.maxOf { it.stage.batchSize() }
+    val coordinatedVolume = coordinatedNodes.sumOf { node -> nodes.volumeForCoordinatedNode(node.id, stats) }
 
-    val sourceCardinality = stats.estimatedCardinality((sourceNode.stage as DraftStage.Source).opId)
-
-    // Walk predecessors from the embroider to collect all ancestor nodes reachable from
-    // the source. This generalises to DAG branches in G4+: only ancestors on the path
-    // through this embroider contribute to its volume estimate.
-    val ancestorNodes = nodes.ancestorsOf(embroiderNode.id)
-
-    return CoordinationCost(
-        rounds = 1,
-        coordinatedVolume = volumeAfterFilters(ancestorNodes, sourceCardinality, stats),
-    )
+    return CoordinationCost(rounds = rounds, coupling = coupling, coordinatedVolume = coordinatedVolume)
 }
 
 // ── Planner ───────────────────────────────────────────────────────────────────
 
 /**
  * Returns a [Draft] that minimises [coordinationCost] by applying the E-2 rewrite rules
- * to a fixpoint.
+ * to a fixpoint and then consolidating independent embroideries.
  *
- * The primary lever is [deferEmbroidery]: moving the [DraftStage.Embroider] past all
- * [CoordinationKind.Free] filter stages maximises the volume reduction before the
- * coordinated step. In the single-embroider case, [CoordinationCost.rounds] stays at 1
- * regardless of rewriting; the demonstrated win is a cut in
- * [CoordinationCost.coordinatedVolume]. [pushdownFilters] and [fuseAdjacent] complete
- * the optimisation.
+ * **Round-count reduction (G4):** [consolidateEmbroideries] (included in [optimize]) fuses
+ * independent [DraftStage.Embroider] nodes at the same dependency level into a single
+ * [DraftStage.BatchedEmbroider]. On a multi-coordination [Draft], this drives
+ * `coordinationCost(plan(draft)).rounds` to the coordination DAG depth — a measurable cut
+ * vs. the unplanned `rounds = K` (one per Embroider node).
  *
  * The returned [Draft] is always semantically equivalent to the receiver under
  * [isEquivalentTo] — the rewrite never changes the convergent result.
  *
  * @param stats reserved for future stats-aware reordering (e.g. ordering filters by
- *   ascending selectivity to reduce per-stage CPU cost). Currently unused — all rewrites
- *   are structurally determined by [CoordinationKind] tags and do not require cardinality
- *   data. Use [coordinationCost] to measure the plan's quality after calling [plan].
+ *   ascending selectivity). Currently unused — all rewrites are structurally determined by
+ *   [CoordinationKind] tags. Use [coordinationCost] to measure the plan's quality after
+ *   calling [plan].
  *
  * @sample us.tractat.kuilt.warp.sampleCoordinationCost
  * @see coordinationCost
@@ -114,6 +101,38 @@ public fun <T> Draft<T>.plan(
 ): Draft<T> = optimize()
 
 // ── Private helpers ───────────────────────────────────────────────────────────
+
+/**
+ * Computes the coordinated volume for a single coordinated node identified by [nodeId].
+ *
+ * Walks the predecessor graph to find the nearest ancestor [DraftStage.Source] and all
+ * [DraftStage.Filter] stages between them. Applies per-filter selectivities from [stats]
+ * conservatively (unknown filters contribute no volume reduction).
+ *
+ * For multi-source branches (e.g. a [DraftStage.BatchedEmbroider] whose ancestors span
+ * several independent branches), the first source found in topological order is used as
+ * the baseline cardinality. This is an approximation; G5 can refine per-branch accounting.
+ */
+private fun List<DraftNode>.volumeForCoordinatedNode(nodeId: NodeId, stats: WarpStats): Long {
+    val ancestorNodes = ancestorsOf(nodeId)
+    val sourceNode = ancestorNodes.firstOrNull { it.stage is DraftStage.Source } ?: return 0L
+    val sourceCardinality = stats.estimatedCardinality((sourceNode.stage as DraftStage.Source).opId)
+    return volumeAfterFilters(ancestorNodes, sourceCardinality, stats)
+}
+
+/**
+ * Returns the number of coordination proposals this stage represents.
+ *
+ * A [DraftStage.BatchedEmbroider] batches several agreements into one Raft round-trip, so
+ * its batch size equals [DraftStage.BatchedEmbroider.opIds].size. All other coordinated stages
+ * (only [DraftStage.Embroider] in practice) contribute a batch size of 1.
+ *
+ * Used to compute [CoordinationCost.coupling].
+ */
+private fun DraftStage.batchSize(): Int = when (this) {
+    is DraftStage.BatchedEmbroider -> opIds.size
+    else -> 1
+}
 
 /**
  * Returns the set of [DraftNode]s that are transitively reachable by following predecessor

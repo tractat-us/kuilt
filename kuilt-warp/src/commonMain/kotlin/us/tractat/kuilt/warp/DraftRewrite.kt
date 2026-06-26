@@ -123,7 +123,12 @@ public fun <T> Draft<T>.pushdownFilters(): Draft<T> =
 
 private fun <T> Draft<T>.pushdownFiltersOnPath(): Draft<T> {
     val sourceNode = nodes.firstOrNull { it.stage is DraftStage.Source } ?: return this
-    val embroiderNode = nodes.singleOrNull { it.stage is DraftStage.Embroider }
+    // Filter-pushdown applies only to a single-embroider path (one embroider, or none for a
+    // fully-monotone path). A component with multiple embroiders (a sequential chain) cannot
+    // be safely reordered here — return it unchanged; consolidateEmbroideries handles chains.
+    val embroiderNodes = nodes.filter { it.stage is DraftStage.Embroider }
+    if (embroiderNodes.size > 1) return this
+    val embroiderNode = embroiderNodes.firstOrNull()
 
     // Free section: nodes that are neither the source nor the embroider
     val freeNodes = nodes
