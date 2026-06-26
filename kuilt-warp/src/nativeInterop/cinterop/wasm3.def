@@ -18,6 +18,10 @@ staticLibraries = libwasm3.a
 ---
 
 #include "wasm3.h"
+// m3_env.h exposes the internal M3Module layout (import counts, declared memory
+// limits) that wasm3's public API does not surface. The sandbox load-guards must
+// inspect imports + memory BEFORE instantiation, so the glue reaches into it.
+#include "m3_env.h"
 #include <stdint.h>
 
 // Typed helper: call square(arg: i32) -> i32 without exposing void** to Kotlin.
@@ -27,5 +31,67 @@ static inline M3Result wasm3_call_i32_ret_i32(IM3Function func, int32_t arg, int
     M3Result r = m3_Call(func, 1, args);
     if (r != ((const char*)0)) return r;
     const void* rets[1] = { ret };
+    return m3_GetResults(func, 1, rets);
+}
+
+// --- Sandbox load-guard inspectors -------------------------------------------
+// wasm3 links imports lazily (a missing import only errors when the importing
+// function is compiled/called), so import rejection cannot rely on m3_LoadModule
+// failing. These read the parsed module's declared shape up front.
+
+// Number of imported functions the module declares (env-provided host calls).
+static inline uint32_t warp_module_num_func_imports(IM3Module mod) {
+    return mod->numFuncImports;
+}
+
+// 1 if the module imports its linear memory (a host capability), else 0.
+static inline int warp_module_memory_imported(IM3Module mod) {
+    return mod->memoryImported ? 1 : 0;
+}
+
+// Number of imported globals the module declares.
+static inline uint32_t warp_module_num_global_imports(IM3Module mod) {
+    uint32_t count = 0;
+    for (uint32_t i = 0; i < mod->numGlobals; i++) {
+        if (mod->globals[i].import.moduleUtf8 || mod->globals[i].import.fieldUtf8) {
+            count++;
+        }
+    }
+    return count;
+}
+
+// Declared initial linear-memory pages (1 page = 64 KiB).
+static inline uint32_t warp_module_init_pages(IM3Module mod) {
+    return mod->memoryInfo.initPages;
+}
+
+// Declared maximum linear-memory pages; 0 means "no maximum declared".
+static inline uint32_t warp_module_max_pages(IM3Module mod) {
+    return mod->memoryInfo.maxPages;
+}
+
+// 1 if the module declares any linear memory section, else 0.
+static inline int warp_module_has_memory(IM3Module mod) {
+    return (mod->memoryInfo.initPages > 0 || mod->memoryInfo.maxPages > 0 || mod->memoryImported) ? 1 : 0;
+}
+
+// --- warp ABI calls (no void** in Kotlin) ------------------------------------
+// Return NULL on success, an M3Result error string on failure.
+
+// warp_alloc(len: i32) -> i32 (writable pointer for len bytes).
+static inline M3Result warp_call_alloc(IM3Function func, int32_t len, int32_t* outPtr) {
+    const void* args[1] = { &len };
+    M3Result r = m3_Call(func, 1, args);
+    if (r != ((const char*)0)) return r;
+    const void* rets[1] = { outPtr };
+    return m3_GetResults(func, 1, rets);
+}
+
+// warp_run(ptr: i32, len: i32) -> i64 (packed (resPtr << 32) | (resLen & 0xFFFFFFFF)).
+static inline M3Result warp_call_run(IM3Function func, int32_t ptr, int32_t len, int64_t* outPacked) {
+    const void* args[2] = { &ptr, &len };
+    M3Result r = m3_Call(func, 2, args);
+    if (r != ((const char*)0)) return r;
+    const void* rets[1] = { outPacked };
     return m3_GetResults(func, 1, rets);
 }
