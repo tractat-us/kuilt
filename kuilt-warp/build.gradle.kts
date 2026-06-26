@@ -13,6 +13,7 @@ kotlin {
             api(project(":kuilt-session"))
             api(project(":kuilt-liveness"))
             api(project(":kuilt-raft"))
+            implementation(libs.kotlincrypto.hash.sha2)
             implementation(libs.kotlinx.atomicfu)
             implementation(libs.kotlinx.coroutines.core)
             implementation(libs.kotlinx.serialization.core)
