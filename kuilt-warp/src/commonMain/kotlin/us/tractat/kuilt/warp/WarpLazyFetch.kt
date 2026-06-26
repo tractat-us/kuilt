@@ -41,4 +41,10 @@ public class WarpLazyFetch(
     /** How a missing op names the bobbin to fetch. */
     public val opToBobbin: (OpId) -> BobbinHash?,
     public val fetchTimeout: Duration = 30.seconds,
-)
+) {
+    init {
+        require(fetchTimeout.isPositive()) {
+            "fetchTimeout must be positive, was $fetchTimeout"
+        }
+    }
+}
