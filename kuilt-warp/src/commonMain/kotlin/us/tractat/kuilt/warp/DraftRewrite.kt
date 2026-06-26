@@ -214,15 +214,149 @@ public fun <T> Draft<T>.fuseAdjacent(): Draft<T> {
     return if (newNodes.map { it.stage } == stages) this else Draft(newNodes)
 }
 
+// ── Rewrite 4: consolidate-embroideries ──────────────────────────────────────
+
+/**
+ * Returns a [Draft] where independent [DraftStage.Embroider] nodes at the same dependency
+ * level are fused into a single [DraftStage.BatchedEmbroider].
+ *
+ * **Theory:** the minimum number of coordination rounds equals the depth of the coordination
+ * dependency DAG, not the count of individual embroideries. Two embroidery nodes are
+ * *independent* when neither is a transitive ancestor of the other — they can be committed
+ * in a single consensus round (one `BatchedEmbroider`) rather than two sequential rounds.
+ *
+ * **Dependency level:** computed bottom-up in topological order. A coordinated node has
+ * level `0` when it has no coordinated ancestors; otherwise level
+ * `1 + max(levels of its coordinated ancestors)`. Two nodes at the same level are guaranteed
+ * independent (no mutual ancestor path), so fusion is safe.
+ *
+ * **Graph contraction:** for each level with two or more coordinated nodes, the fused set is
+ * replaced by a single new [DraftStage.BatchedEmbroider] node whose predecessors are the
+ * union of the fused nodes' predecessors outside the fused set. Successors of the fused
+ * nodes are rewired to the new node. All non-coordinated structure and all edges are
+ * preserved.
+ *
+ * **Idempotent:** a second call produces the same result as the first — a lone
+ * [DraftStage.BatchedEmbroider] at some level is the only coordinated node at that level
+ * and is not fused further.
+ *
+ * **Result-preserving:** the returned [Draft] is structurally equivalent to the receiver
+ * under [isEquivalentTo] (same sources, same multiset of embroider opIds, same free-op
+ * multiset).
+ */
+public fun <T> Draft<T>.consolidateEmbroideries(): Draft<T> {
+    val levels = coordinationLevels()
+    val byLevel = levels.entries
+        .groupBy({ it.value }, { it.key })
+        .filterValues { it.size >= 2 }
+
+    if (byLevel.isEmpty()) return this
+
+    var current = nodes
+    var nextId = nodes.maxOf { it.id.value } + 1
+
+    for (level in byLevel.keys.sorted()) {
+        val fusedIds = byLevel.getValue(level).toSet()
+        val opIds = current.filter { it.id in fusedIds }.flatMap { it.stage.coordinatedOpIds() }
+        val newId = NodeId(nextId++)
+        val mergedPreds = fusedIds
+            .flatMap { id -> current.first { it.id == id }.predecessors }
+            .filter { it !in fusedIds }
+            .toSet()
+        val batchedNode = DraftNode(
+            id = newId,
+            stage = DraftStage.BatchedEmbroider(opIds),
+            predecessors = mergedPreds,
+        )
+        current = contractFusedLevel(current, fusedIds, newId, batchedNode)
+    }
+
+    return Draft(current)
+}
+
+/**
+ * Contracts [fusedIds] into [newId]/[batchedNode] in the node list.
+ *
+ * Replaces the last fused node (in topological order) with [batchedNode], removes the
+ * remaining fused nodes, and rewires every non-fused node whose predecessor set contained
+ * a fused id to point at [newId] instead.
+ */
+private fun contractFusedLevel(
+    nodes: List<DraftNode>,
+    fusedIds: Set<NodeId>,
+    newId: NodeId,
+    batchedNode: DraftNode,
+): List<DraftNode> {
+    val result = mutableListOf<DraftNode>()
+    for (i in nodes.indices) {
+        val node = nodes[i]
+        when {
+            node.id in fusedIds -> {
+                val isLastFused = nodes.drop(i + 1).none { it.id in fusedIds }
+                if (isLastFused) result.add(batchedNode)
+            }
+            else -> result.add(rewirePredecessors(node, fusedIds, newId))
+        }
+    }
+    return result
+}
+
+/** Replaces any predecessor id in [fusedIds] with [newId]. */
+private fun rewirePredecessors(node: DraftNode, fusedIds: Set<NodeId>, newId: NodeId): DraftNode {
+    val updated = node.predecessors.map { if (it in fusedIds) newId else it }.toSet()
+    return if (updated == node.predecessors) node else node.copy(predecessors = updated)
+}
+
+/**
+ * Computes the dependency level for every coordinated node in this [Draft].
+ *
+ * A coordinated node has level `0` when it has no coordinated ancestors; otherwise
+ * `1 + max(levels of its coordinated ancestors)`. Processed bottom-up in topological
+ * order — each node's predecessors are guaranteed to have been assigned a propagated
+ * level before the node itself is visited.
+ *
+ * Non-coordinated nodes are not included in the result but propagate the highest level
+ * seen in their predecessor chain forward.
+ */
+private fun <T> Draft<T>.coordinationLevels(): Map<NodeId, Int> {
+    // propagatedLevel[id] = the highest coordination level visible from node `id`
+    // (−1 when no coordinated node has been seen yet on any path to this node).
+    val propagatedLevel = mutableMapOf<NodeId, Int>()
+    val result = mutableMapOf<NodeId, Int>()
+
+    for (node in nodes) {
+        val highestFromPreds = node.predecessors
+            .mapNotNull { propagatedLevel[it] }
+            .maxOrNull() ?: -1
+
+        if (node.stage.coordinationKind == CoordinationKind.Coordinated) {
+            val level = highestFromPreds + 1
+            result[node.id] = level
+            propagatedLevel[node.id] = level
+        } else {
+            propagatedLevel[node.id] = highestFromPreds
+        }
+    }
+
+    return result
+}
+
 // ── Compose: optimize ─────────────────────────────────────────────────────────
 
 /**
- * Applies all three rewrite rules — [deferEmbroidery], [pushdownFilters], [fuseAdjacent] —
- * in sequence and repeats until no rule changes the pipeline (fixpoint).
+ * Applies all rewrite rules in sequence, then consolidates independent embroideries.
  *
- * The standard pipeline converges in one pass: defer first (embroider goes last), then push
- * filters down (free of embroider anchor), then fuse runs of the same kind. A second pass is
- * only needed when a reorder in one rule creates an adjacency that another rule can exploit.
+ * The E-2 fixpoint — [deferEmbroidery], [pushdownFilters], [fuseAdjacent] — runs first
+ * until no rule changes the pipeline. [consolidateEmbroideries] is then applied once as
+ * a final step: it operates on the fully-deferred, filtered, and fused graph, fusing
+ * independent [DraftStage.Embroider] nodes at the same dependency level into a single
+ * [DraftStage.BatchedEmbroider].
+ *
+ * Applying consolidation after the fixpoint (not inside it) is deliberate:
+ * - [deferEmbroidery] and [pushdownFilters] do not move [DraftStage.BatchedEmbroider]
+ *   nodes, so no new fixpoint iterations arise after consolidation.
+ * - [fuseAdjacent] never fuses coordinated stages, so the structure is stable.
+ * - Consolidation is idempotent, so calling [optimize] twice is safe.
  *
  * **Branch-aware:** each constituent rule applies per branch (see [deferEmbroidery],
  * [pushdownFilters], [fuseAdjacent]). A combined draft from [Draft.combine] converges to
@@ -239,9 +373,10 @@ public fun <T> Draft<T>.optimize(): Draft<T> {
             .deferEmbroidery()
             .pushdownFilters()
             .fuseAdjacent()
-        if (next.stages == current.stages) return current
+        if (next.stages == current.stages) break
         current = next
     }
+    return current.consolidateEmbroideries()
 }
 
 // ── Structural equivalence predicate ─────────────────────────────────────────
@@ -253,20 +388,21 @@ public fun <T> Draft<T>.optimize(): Draft<T> {
  * Two drafts are **equivalent** when they would produce the same convergent result:
  * - They share the same **multiset** of [DraftStage.Source] opIds (handles multi-branch
  *   DAGs produced by [Draft.combine] — branch order is irrelevant).
- * - They share the same multiset of [DraftStage.Embroider] opIds (order-insensitive;
- *   G2+ drafts may have multiple independent embroiders).
+ * - They share the same multiset of embroider opIds (order-insensitive; a
+ *   [DraftStage.BatchedEmbroider] is treated as the multiset of its constituent opIds —
+ *   so a consolidated draft is equivalent to the un-consolidated draft it was derived from).
  * - The **multiset** of free-stage operation names is identical after flattening fused
  *   stages — so reordering monotone stages or fusing adjacent ones never breaks equivalence.
  *
- * This predicate is the proof vehicle for E-2. Execution-based proof arrives with E-5.
+ * This predicate is the proof vehicle for E-2 and G3. Execution-based proof arrives with E-5.
  */
 public fun <T> Draft<T>.isEquivalentTo(other: Draft<T>): Boolean {
     // Compare sorted multisets of source opIds (handles single and multi-branch DAGs).
     if (sourceOpIds().sorted() != other.sourceOpIds().sorted()) return false
 
-    val thisEmbroideries = embroideries.map { it.opId.value }.sorted()
-    val otherEmbroideries = other.embroideries.map { it.opId.value }.sorted()
-    if (thisEmbroideries != otherEmbroideries) return false
+    // Flatten BatchedEmbroider into its constituent opIds for comparison so that a
+    // consolidated draft is equivalent to the pre-consolidation draft.
+    if (allEmbroiderOpIds().sorted() != other.allEmbroiderOpIds().sorted()) return false
 
     return freeNonSourceOpIds().sorted() == other.freeNonSourceOpIds().sorted()
 }
@@ -358,6 +494,26 @@ private fun <T> Draft<T>.freeNonSourceOpIds(): List<String> =
         .filter { it.stage.coordinationKind == CoordinationKind.Free && it.stage !is DraftStage.Source }
         .flatMap { it.stage.allOpIds() }
         .map { it.value }
+
+/**
+ * All embroider [OpId]s in this [Draft], flattening [DraftStage.BatchedEmbroider] into
+ * its constituent opIds. Used by [isEquivalentTo] to compare the embroider multisets of
+ * a pre-consolidation and post-consolidation draft.
+ */
+private fun <T> Draft<T>.allEmbroiderOpIds(): List<String> =
+    nodes.flatMap { it.stage.coordinatedOpIds() }.map { it.value }
+
+/**
+ * Returns the embroider [OpId]s contributed by this stage: a single element for
+ * [DraftStage.Embroider], the full list for [DraftStage.BatchedEmbroider], and empty for
+ * all other stage kinds. Used by [consolidateEmbroideries] to collect opIds for batching
+ * and by [isEquivalentTo] to compare the embroider multisets.
+ */
+internal fun DraftStage.coordinatedOpIds(): List<OpId> = when (this) {
+    is DraftStage.Embroider -> listOf(opId)
+    is DraftStage.BatchedEmbroider -> opIds
+    else -> emptyList()
+}
 
 /**
  * Extracts the weakly-connected components of this node list, in the order their first

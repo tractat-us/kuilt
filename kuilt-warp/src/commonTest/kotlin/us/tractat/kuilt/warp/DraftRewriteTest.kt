@@ -566,11 +566,14 @@ class DraftRewriteTest {
         val combined = branch1.combine(branch2)
         val optimised = combined.optimize()
 
-        // Both embroiders still present
+        // G3 consolidation: two independent embroideries at level 0 are fused into one BatchedEmbroider.
+        val batchedNodes = optimised.nodes
+            .map { it.stage }
+            .filterIsInstance<DraftStage.BatchedEmbroider>()
         assertAll(
-            { assertEquals(2, optimised.embroideries.size) },
-            { assertTrue(optimised.embroideries.any { it.opId == emb }) },
-            { assertTrue(optimised.embroideries.any { it.opId == OpId("embroider.vote") }) },
+            { assertEquals(1, batchedNodes.size, "two independent embroideries must become one BatchedEmbroider") },
+            { assertTrue(batchedNodes.single().opIds.any { it == emb }) },
+            { assertTrue(batchedNodes.single().opIds.any { it == OpId("embroider.vote") }) },
         )
 
         // Two independent root nodes remain
