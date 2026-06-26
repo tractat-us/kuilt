@@ -154,30 +154,69 @@ jobs:
         uses: android-actions/setup-android@v4
 
       - name: Start jstack heartbeat
-        # Background watchdog: every 5 minutes, dump thread stacks for every live
-        # GradleWorkerMain / java process into build/jstack-dumps/. Dumps are written
-        # eagerly to disk so they survive a job cancellation or timeout kill.
-        # Killed by the next step on success; on hang/timeout the dumps are uploaded
-        # by "Upload test reports" (if: always()). Combined with kotlinx.coroutines.debug
-        # (set in build.gradle.kts) the dump shows coroutine names + creation sites —
-        # the hung runTest frame is immediately identifiable. See #329.
+        # Background watchdog: dump thread stacks for every live GradleWorkerMain /
+        # java process into build/jstack-dumps/, AND distil the forked test JVM's
+        # "Test worker" stack into a one-glance build/jstack-dumps/jstack-summary.txt.
+        # Dumps are written eagerly to disk so they survive a job cancellation or
+        # timeout kill. Killed by the next step on success; on hang/timeout the dumps
+        # are uploaded by "Upload test reports" (if: always()). Combined with
+        # kotlinx.coroutines.debug (set in build.gradle.kts) the dump shows coroutine
+        # names + creation sites — the hung runTest frame is immediately identifiable.
+        #
+        # Cadence: first dump at 90s (a test killed by a tight per-test timeout dies
+        # before the old 300s cadence ever fired), then a steady 120s cadence so a
+        # fresh dump always landed within the last ~2 min before the 15-min per-Test
+        # task timeout (build.gradle.kts) kills the forked JVM — the last-gasp dump is
+        # the most valuable, and the task timeout fires at an unknown job-relative
+        # second, so a bounded steady cadence is the only robust way to always have one.
+        #
+        # jstack-summary.txt: per dump, the forked test JVM's "Test worker" thread —
+        # header, state, and top ~25 non-JDK frames (the ones that name the test + the
+        # spinning library call). Only the forked test JVM has that thread, so this
+        # de-noises a 4-JVM dump down to the stack that matters. The last entry is the
+        # most recent (the last-gasp). See #329, #891, and PR #902 (a Quilter.onFullState
+        # anti-entropy storm found this way — but only after hand-digging "Test worker"
+        # out of the raw dump; this summary makes the next one a single glance).
+        # Backgrounded + self-guarded (|| true, no set -e escape) so it never fails the job.
         run: |
           mkdir -p build/jstack-dumps
+          SUMMARY="build/jstack-dumps/jstack-summary.txt"
+
+          summarize() {
+            dump="$1"; stamp="$2"
+            awk -v stamp="$stamp" '
+              /^"Test worker/ { blk=1; n=0; print "=== Test worker @ " stamp " (" FILENAME ") ==="; print; next }
+              blk && /^[[:space:]]*$/ { blk=0; print ""; next }
+              blk {
+                if ($0 ~ /Thread\.State/) { print; next }
+                if ($0 ~ /^[[:space:]]*at (java\.|jdk\.|sun\.)/) next
+                if ($0 ~ /^[[:space:]]*at / && n++ < 25) print
+              }
+            ' "$dump" >> "$SUMMARY" 2>/dev/null || true
+          }
+
+          dump_once() {
+            stamp=$(date +%Y%m%dT%H%M%S)
+            dump="build/jstack-dumps/jstack-${stamp}.txt"
+            echo "=== jstack heartbeat ${stamp} ===" >> "$dump"
+            pids=$(jps -l 2>/dev/null | grep -i 'GradleWorkerMain\|gradle\|java' | awk '{print $1}' || true)
+            if [ -n "$pids" ]; then
+              for pid in $pids; do
+                echo "--- PID $pid ---" >> "$dump"
+                jstack "$pid" >> "$dump" 2>&1 || echo "(jstack failed for PID $pid)" >> "$dump"
+              done
+            else
+              echo "(no matching Java processes found)" >> "$dump"
+            fi
+            summarize "$dump" "$stamp"
+          }
+
           (
+            sleep 90
+            dump_once || true
             while true; do
-              sleep 300
-              STAMP=$(date +%Y%m%dT%H%M%S)
-              DUMP_FILE="build/jstack-dumps/jstack-${STAMP}.txt"
-              echo "=== jstack heartbeat ${STAMP} ===" >> "$DUMP_FILE"
-              pids=$(jps -l 2>/dev/null | grep -i 'GradleWorkerMain\|gradle\|java' | awk '{print $1}' || true)
-              if [ -n "$pids" ]; then
-                for pid in $pids; do
-                  echo "--- PID $pid ---" >> "$DUMP_FILE"
-                  jstack "$pid" >> "$DUMP_FILE" 2>&1 || echo "(jstack failed for PID $pid)" >> "$DUMP_FILE"
-                done
-              else
-                echo "(no matching Java processes found)" >> "$DUMP_FILE"
-              fi
+              sleep 120
+              dump_once || true
             done
           ) &
           echo "JSTACK_PID=$!" >> "$GITHUB_ENV"
@@ -281,26 +320,53 @@ jobs:
           restore-keys: konan-${{ runner.os }}-
 
       - name: Start jstack heartbeat
-        # Same background watchdog as build-jvm (see #329) — dumps thread stacks
-        # every 5 min so a hung K/N test or wasm-browser run leaves a diagnosable
-        # artifact even on a timeout kill.
+        # Same background watchdog as build-jvm — kept in lockstep (see #329, #891).
+        # First dump at 90s, then a steady 120s cadence so a fresh dump always landed
+        # within the last ~2 min before the 15-min per-Test task timeout kills a hung
+        # K/N test or wasm-browser run, even on a timeout kill. jstack-summary.txt
+        # distils the forked test JVM's "Test worker" stack (top non-JDK frames) to a
+        # one-glance read; the Gradle orchestrating JVM is still captured in full for
+        # K/N / wasm hangs that don't run on a JVM "Test worker" thread.
+        # Self-guarded (|| true) so it never fails the job.
         run: |
           mkdir -p build/jstack-dumps
+          SUMMARY="build/jstack-dumps/jstack-summary.txt"
+
+          summarize() {
+            dump="$1"; stamp="$2"
+            awk -v stamp="$stamp" '
+              /^"Test worker/ { blk=1; n=0; print "=== Test worker @ " stamp " (" FILENAME ") ==="; print; next }
+              blk && /^[[:space:]]*$/ { blk=0; print ""; next }
+              blk {
+                if ($0 ~ /Thread\.State/) { print; next }
+                if ($0 ~ /^[[:space:]]*at (java\.|jdk\.|sun\.)/) next
+                if ($0 ~ /^[[:space:]]*at / && n++ < 25) print
+              }
+            ' "$dump" >> "$SUMMARY" 2>/dev/null || true
+          }
+
+          dump_once() {
+            stamp=$(date +%Y%m%dT%H%M%S)
+            dump="build/jstack-dumps/jstack-${stamp}.txt"
+            echo "=== jstack heartbeat ${stamp} ===" >> "$dump"
+            pids=$(jps -l 2>/dev/null | grep -i 'GradleWorkerMain\|gradle\|java' | awk '{print $1}' || true)
+            if [ -n "$pids" ]; then
+              for pid in $pids; do
+                echo "--- PID $pid ---" >> "$dump"
+                jstack "$pid" >> "$dump" 2>&1 || echo "(jstack failed for PID $pid)" >> "$dump"
+              done
+            else
+              echo "(no matching Java processes found)" >> "$dump"
+            fi
+            summarize "$dump" "$stamp"
+          }
+
           (
+            sleep 90
+            dump_once || true
             while true; do
-              sleep 300
-              STAMP=$(date +%Y%m%dT%H%M%S)
-              DUMP_FILE="build/jstack-dumps/jstack-${STAMP}.txt"
-              echo "=== jstack heartbeat ${STAMP} ===" >> "$DUMP_FILE"
-              pids=$(jps -l 2>/dev/null | grep -i 'GradleWorkerMain\|gradle\|java' | awk '{print $1}' || true)
-              if [ -n "$pids" ]; then
-                for pid in $pids; do
-                  echo "--- PID $pid ---" >> "$DUMP_FILE"
-                  jstack "$pid" >> "$DUMP_FILE" 2>&1 || echo "(jstack failed for PID $pid)" >> "$DUMP_FILE"
-                done
-              else
-                echo "(no matching Java processes found)" >> "$DUMP_FILE"
-              fi
+              sleep 120
+              dump_once || true
             done
           ) &
           echo "JSTACK_PID=$!" >> "$GITHUB_ENV"
