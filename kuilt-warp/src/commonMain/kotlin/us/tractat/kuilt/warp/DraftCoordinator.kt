@@ -43,6 +43,7 @@ package us.tractat.kuilt.warp
  * @return The count of proposals issued — equal to the number of coordinated nodes in this
  *   draft, and equal to [coordinationCost]`.rounds` on a planned draft.
  *
+ * @sample us.tractat.kuilt.warp.sampleExecuteCoordinated
  * @see Draft.plan
  * @see coordinationCost
  * @see CoordinationCost.rounds

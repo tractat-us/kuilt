@@ -38,6 +38,7 @@ package us.tractat.kuilt.warp
  * radius); volume is the final tiebreaker.
  *
  * @sample us.tractat.kuilt.warp.sampleCoordinationCost
+ * @sample us.tractat.kuilt.warp.sampleCoordinationCostDepth
  * @see Draft.coordinationCost
  * @see Draft.plan
  */
