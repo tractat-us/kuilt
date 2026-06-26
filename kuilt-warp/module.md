@@ -257,6 +257,17 @@ on demand, and run in the sandbox. Each peer runs the same kernel on its own exa
 only the resulting weights, which merge through `FedAvg`. See `FedAvgKernelCodec` and
 `ReferenceTrainer`.
 
+### Keeping a job on the device that owns the data (pinned execution)
+
+The default ring is *work-stealing*: `hash(taskId)` picks whoever runs a task, so the work can
+land on any peer. Some jobs cannot move — a federated-learning step can only run where its private
+data lives. **Pinned execution** says "this task belongs to exactly this peer." Set
+`TaskDescriptor.pinnedOwner`, or — the common case — call `WarpNode.enqueueLocal`, which pins the
+task to the calling node. A pinned task runs only on its owner; no other peer ever runs it; and if
+the owner is offline the task simply waits for it to come back rather than re-homing to a survivor.
+That last property is what makes the data-local model honest: the work never silently moves to a
+peer that does not have the data.
+
 ## The further out
 
 Once the ring is working, the same substrate can carry something more ambitious: tasks that

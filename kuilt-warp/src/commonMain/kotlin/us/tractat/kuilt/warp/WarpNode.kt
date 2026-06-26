@@ -506,6 +506,38 @@ public class WarpNode(
     }
 
     /**
+     * Add a task to the work queue **pinned to this peer** — the headline pinned-execution
+     * affordance.
+     *
+     * Pinning decouples *who-runs* from the consistent-hash ring: this node, and only this
+     * node, claims and runs the task. No other peer ever executes it, and if this peer is
+     * partitioned the task stays pending (it does **not** re-home to a survivor) until this
+     * peer returns. This makes inherently data-local workloads expressible — e.g. federated
+     * learning, where only the data owner can run its own training step on its private local
+     * data — and doubles as task affinity / sticky placement.
+     *
+     * The task is enqueued with [TaskDescriptor.pinnedOwner] forced to [selfId]; any owner the
+     * caller may have set on [descriptor] is overridden so "local" always means *this* peer.
+     * It then travels and is claimed exactly like any free-path task via [enqueue] — the pin is
+     * just the descriptor field the ring-owner filter consults (see [effectiveOwner]).
+     *
+     * @param taskId The identifier of the task to enqueue.
+     * @param descriptor The unit of work; its [TaskDescriptor.pinnedOwner] is replaced with
+     *   [selfId] before replication.
+     */
+    public fun enqueueLocal(taskId: TaskId, descriptor: TaskDescriptor) {
+        enqueue(
+            taskId,
+            TaskDescriptor(
+                op = descriptor.op,
+                args = descriptor.args,
+                traceparent = descriptor.traceparent,
+                pinnedOwner = selfId,
+            ),
+        )
+    }
+
+    /**
      * Add [taskId] to the distributed work queue on the [CoordinationKind.Coordinated] path.
      *
      * Routes to the Raft-backed escalation path. The ring owner proposes the task to [raftNode]
