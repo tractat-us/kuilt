@@ -46,6 +46,7 @@ class RoomHubSeamIsolationTest {
             source = source,
             scope = backgroundScope,
             selfId = PeerId("server"),
+            authorizer = RoomAuthorizer.AllowAll,
             dispatcher = dispatcher,
             random = Random(42L),
         )
@@ -130,6 +131,7 @@ class RoomHubSeamIsolationTest {
             source = source,
             scope = backgroundScope,
             selfId = PeerId("server"),
+            authorizer = RoomAuthorizer.AllowAll,
             dispatcher = dispatcher,
             random = Random(99L),
         )
@@ -176,6 +178,7 @@ class RoomHubSeamIsolationTest {
             source = source,
             scope = backgroundScope,
             selfId = PeerId("server"),
+            authorizer = RoomAuthorizer.AllowAll,
             dispatcher = dispatcher,
             random = Random(7L),
         )

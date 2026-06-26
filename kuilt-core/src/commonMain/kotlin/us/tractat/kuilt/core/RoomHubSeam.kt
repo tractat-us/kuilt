@@ -100,9 +100,14 @@ public class RoomHubSeam(
                 _incoming.emit(frame)
             }
         }.invokeOnCompletion {
+            // Deregister only if THIS channelSeam is still the registered one. A reconnect
+            // (same PeerId over a fresh connection) may have already replaced the entry; the
+            // stale tracker's completion must not evict the live re-registered membership.
             lock.withLock {
-                registered.remove(connPeerId)
-                _peers.update { it - connPeerId }
+                if (registered[connPeerId] === channelSeam) {
+                    registered.remove(connPeerId)
+                    _peers.update { it - connPeerId }
+                }
             }
         }
     }
