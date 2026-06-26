@@ -143,7 +143,7 @@ class FedAvgTest {
 
     @Test
     fun `embroider through CoordinationFree converges identically`() {
-        val rng = Random(seed = 0xB3_WEAVE)
+        val rng = Random(seed = 0xB3CAFE)
         val peers = (1..4).map { ReplicaId("w$it") }
 
         val coordFreeContribs = peers.map { peer ->
