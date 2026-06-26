@@ -1,5 +1,6 @@
 package us.tractat.kuilt.warp
 
+import kotlinx.coroutines.CoroutineScope
 import us.tractat.kuilt.crdt.GCounter
 import us.tractat.kuilt.crdt.LatticeProduct
 import us.tractat.kuilt.crdt.PNCounter
@@ -99,6 +100,138 @@ internal fun sampleCoordinationCost() {
     check(plannedCost.coordinatedVolume < 100L) { "should see only ~50 docs after filter" }
     check(plannedCost < unplannedCost)
     check(unplanned.isEquivalentTo(planned)) { "plan must preserve equivalence" }
+}
+
+// ── optimize ──────────────────────────────────────────────────────────────────
+
+/**
+ * Apply all three rewrite rules ([deferEmbroidery], [pushdownFilters], [fuseAdjacent])
+ * to a fixpoint, and verify structural equivalence is preserved.
+ *
+ * Note: [pushdownFilters] moves filters before maps assuming the filter predicate
+ * does not depend on the map's output (no op-dependency metadata exists yet).
+ */
+@Suppress("unused")
+internal fun sampleOptimize() {
+    // A draft with embroider in the middle and filters after maps.
+    val unoptimized: Draft<ByteArray> = Warp.shuttle(OpId("source.docs"))
+        .map(OpId("map.enrich"))
+        .embroider(OpId("embroider.rank"))
+        .filter(OpId("filter.threshold"))
+        .map(OpId("map.format"))
+
+    val optimized = unoptimized.optimize()
+
+    // Embroider deferred last; filters pushed before maps; adjacent same-kind fused.
+    check(optimized.stages.last() is DraftStage.Embroider) { "embroider should be last" }
+    // Structural equivalence: same source, embroider, and free-op multiset.
+    check(unoptimized.isEquivalentTo(optimized)) { "optimize must preserve equivalence" }
+}
+
+// ── WarpStats ─────────────────────────────────────────────────────────────────
+
+/**
+ * Observe elements into a [WarpStats] sketch, query estimated cardinality,
+ * and verify the CRDT convergence property (merge equals direct observation).
+ */
+@Suppress("unused")
+internal fun sampleWarpStats() {
+    val src = OpId("source.docs")
+
+    // Observe 100 distinct elements.
+    var stats = WarpStats.empty()
+    for (i in 1..100) stats = stats.piece(stats.observe(src, "doc_$i"))
+
+    // estimatedCardinality is a HyperLogLog sketch — within ~0.81% relative error.
+    val estimate = stats.estimatedCardinality(src)
+    check(estimate in 90L..110L) { "expected ~100, got $estimate" }
+
+    // Unseen sources return 0.
+    check(stats.estimatedCardinality(OpId("source.other")) == 0L)
+
+    // Two replicas that observed different halves converge to the same answer.
+    var replicaA = WarpStats.empty()
+    for (i in 1..50) replicaA = replicaA.piece(replicaA.observe(src, "doc_$i"))
+    var replicaB = WarpStats.empty()
+    for (i in 51..100) replicaB = replicaB.piece(replicaB.observe(src, "doc_$i"))
+
+    val merged = replicaA.piece(replicaB)
+    check(merged.estimatedCardinality(src) == stats.estimatedCardinality(src)) {
+        "merging two halves must equal observing all at once"
+    }
+}
+
+// ── IncrementalResult / awaitThreshold ────────────────────────────────────────
+
+/**
+ * [IncrementalResult] accumulates lattice contributions that can only grow. Each call
+ * to [IncrementalResult.contribute] joins the new delta into the running result via the
+ * lattice join — idempotent, commutative, and thread-safe.
+ *
+ * [IncrementalResult.awaitThreshold] is the LVar-style observation primitive: it
+ * suspends until the result first satisfies a monotone predicate, then returns that
+ * stable snapshot. Because the lattice only grows, once crossed the threshold stays
+ * crossed — the returned value is permanently valid without rechecking.
+ *
+ * In tests: launch `awaitThreshold` on `backgroundScope`, then drive with `runCurrent()`
+ * after each `contribute`. See `IncrementalExecutionTest.awaitThresholdSuspendsUntilCrossed`.
+ */
+@Suppress("unused")
+internal fun sampleAwaitThreshold() {
+    val alice = ReplicaId("alice")
+    val bob = ReplicaId("bob")
+
+    // Contribute is synchronous and thread-safe.
+    val result = IncrementalResult(GCounter.ZERO)
+    result.contribute(GCounter.of(alice to 3L))
+    result.contribute(GCounter.of(bob to 2L))
+
+    // The lattice only grows: current value is the join of all contributions so far.
+    check(result.state.value.value == 5L)
+
+    // Duplication is absorbed — same delta twice changes nothing.
+    result.contribute(GCounter.of(alice to 3L))
+    check(result.state.value.value == 5L)
+
+    // awaitThreshold: in a suspend context, suspends until the predicate is first true.
+    //   val crossed: GCounter = result.awaitThreshold { it.value >= 5L }
+    // Returns the first value that satisfies the predicate; the lattice cannot fall below it.
+}
+
+// ── ConvergentExecution ───────────────────────────────────────────────────────
+
+/**
+ * [ConvergentExecution] ties a [Draft] to a converging [IncrementalResult], queuing
+ * lattice deltas through an `UNLIMITED` channel processed on the caller-supplied [scope].
+ *
+ * The [scope] is **required** with no default — production wires a service scope;
+ * tests wire `backgroundScope` (sharing the test scheduler, keeping contributions
+ * in sync with virtual time). Under a `StandardTestDispatcher`, call `runCurrent()`
+ * after [ConvergentExecution.submit] to drain the queue and read the updated result.
+ *
+ * See `IncrementalExecutionTest.executionLinksMonotoneDraftToConvergentResult` for
+ * a full async example under a test dispatcher.
+ */
+@Suppress("unused")
+internal fun sampleConvergentExecution(scope: CoroutineScope) {
+    val alice = ReplicaId("alice")
+    val bob = ReplicaId("bob")
+
+    val draft = Warp.shuttle(OpId("source"))
+        .map(OpId("map.score"))
+        .filter(OpId("filter.threshold"))
+
+    // scope is a service scope in production; backgroundScope in tests.
+    val exec = ConvergentExecution(draft = draft, scope = scope, initial = GCounter.ZERO)
+
+    // submit is non-blocking — queued to an UNLIMITED channel, processed on scope.
+    exec.submit(GCounter.of(alice to 5L))
+    exec.submit(GCounter.of(bob to 3L))
+    // After scope runs: exec.result.state.value.value == 8L
+
+    // The draft is exposed for inspection and cost-model integration.
+    check(exec.draft.isMonotone)
+    check(exec.draft.stages.size == 3)
 }
 
 // ── joinAllOrNull ─────────────────────────────────────────────────────────────

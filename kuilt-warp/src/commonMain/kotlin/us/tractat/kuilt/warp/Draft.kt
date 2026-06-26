@@ -37,6 +37,7 @@ package us.tractat.kuilt.warp
  * @param T phantom type parameter representing the element type the pipeline would
  *   produce at execution time. Not instantiated in E-1; present for forward
  *   compatibility with E-5 typed wrappers.
+ * @sample us.tractat.kuilt.warp.sampleShuttle
  * @see Warp.shuttle
  * @see DraftStage
  */

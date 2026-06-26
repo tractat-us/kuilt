@@ -74,6 +74,13 @@ public fun <T> Draft<T>.deferEmbroidery(): Draft<T> {
  * `map(filter(x))` produce the same convergent result. Moving filters earlier reduces the
  * volume of data flowing into map stages, which is the pushdown-predicate optimisation
  * familiar from relational query planning — here it's free, not a correctness gamble.
+ *
+ * **Modelled assumption — filter independence:** this rewrite moves a filter before a map
+ * without checking whether the filter's predicate depends on the map's output. No
+ * op-dependency metadata exists in the current model: stages carry only symbolic [OpId]s.
+ * The contract is that a [DraftStage.Filter]'s predicate operates on the *source* element,
+ * not on the map's derived value. A future metadata layer could relax this by attaching
+ * input/output type annotations and verifying independence before reordering.
  */
 public fun <T> Draft<T>.pushdownFilters(): Draft<T> {
     val source = stages.firstOrNull() as? DraftStage.Source ?: return this
@@ -133,6 +140,8 @@ public fun <T> Draft<T>.fuseAdjacent(): Draft<T> {
  * only needed when a reorder in one rule creates an adjacency that another rule can exploit.
  *
  * The returned [Draft] is structurally equivalent to the receiver under [isEquivalentTo].
+ *
+ * @sample us.tractat.kuilt.warp.sampleOptimize
  */
 public fun <T> Draft<T>.optimize(): Draft<T> {
     var current: Draft<T> = this

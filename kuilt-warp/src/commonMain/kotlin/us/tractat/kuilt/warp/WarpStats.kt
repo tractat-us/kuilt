@@ -28,6 +28,7 @@ import us.tractat.kuilt.crdt.piece
  * no coroutines. Gossip transport is the [us.tractat.kuilt.quilter.Quilter]'s job;
  * this class only defines *what* gets gossiped.
  *
+ * @sample us.tractat.kuilt.warp.sampleWarpStats
  * @see HyperLogLog
  */
 @Serializable

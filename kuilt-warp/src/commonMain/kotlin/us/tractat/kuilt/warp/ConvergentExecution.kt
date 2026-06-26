@@ -42,6 +42,7 @@ import us.tractat.kuilt.crdt.Quilted
  * @param draft the dataflow graph whose monotone stages guide convergent execution.
  * @param scope the coroutine scope on which contributions are processed. Required — no default.
  * @param initial the lattice bottom — the result before any contributions arrive.
+ * @sample us.tractat.kuilt.warp.sampleConvergentExecution
  */
 public class ConvergentExecution<L : Quilted<L>>(
     public val draft: Draft<*>,
