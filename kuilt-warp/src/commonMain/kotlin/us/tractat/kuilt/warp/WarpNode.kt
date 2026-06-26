@@ -774,9 +774,17 @@ public class WarpNode(
      * and `null` is returned. This is a transient condition — the Quilter's anti-entropy will
      * deliver the descriptor on the next cycle and [claimOwned] will re-evaluate.
      *
-     * **Unresolved op:** if [registry] has no entry for [TaskDescriptor.op], this is the
-     * "bobbin not loaded yet" state documented in [OpRegistry]. The task is unclaimed and
-     * `null` is returned; warp slices C4/C5 will surface the op via lazy-fetch.
+     * **Unresolved op:** if [registry] has no entry for [TaskDescriptor.op] the outcome depends
+     * on whether a [lazyFetch] capability is present:
+     *
+     * - **[lazyFetch] present:** the op is fetched via the node-owned [BobbinExchange]
+     *   ([BobbinExchange.fetch] suspends until a peer serves the bytes), loaded under
+     *   [WasmRuntime.load], registered in [registry] for reuse, and invoked. A [WasmException]
+     *   at either load or run time is **terminal** — it records an [OpResult.failure] that
+     *   converges on every peer and removes the task from the queue; the task is never retried.
+     * - **[lazyFetch] absent, or [WarpLazyFetch.opToBobbin] returns null, or the fetch has not
+     *   yet been served:** the task is unclaimed and `null` is returned (stand-by). This is the
+     *   transient "bobbin not loaded yet" state — anti-entropy re-evaluates on the next cycle.
      */
     private suspend fun executeViaRegistry(taskId: TaskId): ByteArray? {
         val descriptor = queueQuilter.state.value[taskId]?.value ?: run {
