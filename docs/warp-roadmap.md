@@ -64,7 +64,7 @@ genuinely need C's task-descriptor envelope, so they come after.
 | **E — query planning** | `Draft → Draft`, coordination-cost model | B1 types (done) | exploratory |
 | **C — code mobility** | named ops → wasm kernels + bobbin/creel cache | spike (done) | exploratory |
 | **D — compiler nodes** | distributed tiered compilation | C (via C2) | exploratory |
-| **F — federated ML** | FedAvg on the substrate, end-to-end demo | F1 none; F2/F4 need C2 | exploratory |
+| **F — federated ML** | FedAvg on the substrate, end-to-end demo | F1 none; F2/F4 need a C3 wasm runtime | exploratory |
 | **G — Draft → DAG** | reshape `Draft` into a dependency DAG; consolidate coordination rounds (min rounds = DAG depth) | E (done) | exploratory |
 
 Every epic stays **experimental**: `:kuilt-warp` remains out of `:kuilt-bom` and
@@ -213,12 +213,15 @@ merges as a CRDT. The payoff demo for the whole substrate. Full design:
 - **F1 — FedAvg counter-weave.** Federated averaging as a coordination-free weave
   over CRDT counters (needs the foundation only).
 - **F2 — model-as-wasm-kernel.** The local training step as a shipped kernel (needs
-  C2).
+  a C3 wasm runtime — the C2 envelope is the minimum, but running a model *as* a
+  kernel needs a runtime to execute it).
 - **F3 — secure aggregation** *(optional).*
 - **F4 — end-to-end demo.**
 - **F-polish — polish pass.**
 
-**Gate.** F1 — none (startable now); F2 and the full F4 demo need C2.
+**Gate.** F1 — none (startable now); F2 and the full F4 demo need a C3 wasm runtime
+(the C2 task-descriptor envelope is necessary but not sufficient — a kernel needs a
+runtime to run).
 
 **Go/no-go.** F1 alone shows convergent federated averaging on the sim; the full
 demo is gated on C landing.
