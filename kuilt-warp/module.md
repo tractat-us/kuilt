@@ -87,6 +87,92 @@ The spike results (see `docs/warp-spike-results.md`) measured this boundary dire
 ~0 duplicates per task at stable membership on the coordination-free path; the coordinated
 path achieves dup-rate=0 under roster churn (measured in B-4/#861).
 
+## Choosing how to run a job — query planning
+
+Every task is more than data. It is also a *plan* for how that data should flow before the
+result is committed. Warp makes that plan inspectable before a single byte moves.
+
+A `Draft` is the plan. Call `Warp.shuttle(opId)` and chain `.map()`, `.filter()`, and
+`.embroider()` and you have a `Draft<T>` — an immutable record of what should happen, with
+nothing executed yet. The `stages` list is the ordered pipeline; `isMonotone` tells you
+whether any consensus step is needed at all.
+
+```kotlin
+val draft: Draft<ByteArray> = Warp.shuttle(OpId("docs"))
+    .map(OpId("score"))
+    .filter(OpId("above-threshold"))
+    .embroider(OpId("rank"))
+
+check(draft.stages.size == 4)
+check(draft.isMonotone.not())          // has an Embroider stage
+check(draft.embroidery?.opId == OpId("rank"))
+```
+
+### The rewrite rules
+
+Once you have a `Draft`, three pure transformations can improve it — none changes what
+the pipeline computes:
+
+1. **`deferEmbroidery`** — float the consensus step (`Embroider`) as late as possible, past
+   all free stages, so the agreement covers the smallest possible set.
+2. **`pushdownFilters`** — move filter stages ahead of map stages so less data flows into
+   the costlier transforms. Safe because both are monotone and commute under CALM. Note:
+   this assumes each filter's predicate operates on the source element, not on a map's
+   output — no op-dependency metadata exists yet to verify independence at the type level.
+3. **`fuseAdjacent`** — collapse runs of consecutive same-kind free stages (`Map`/`Filter`)
+   into a single `FusedMap` or `FusedFilter` that the runtime can apply in one pass.
+
+`optimize()` composes all three to a fixpoint and returns a structurally equivalent `Draft`.
+`isEquivalentTo` is the semantic-equivalence predicate that confirms the result is the same:
+same source, same embroider, same multiset of free operations.
+
+### The cost model
+
+`coordinationCost(stats)` scores a `Draft` as a `CoordinationCost` with two fields:
+
+- **`rounds`** — the number of `Embroider` stages. Zero for a monotone pipeline; one for
+  the common case of a single consensus step. In the current model `rounds` is structurally
+  ≤ 1, so the planner's real lever is the second field.
+- **`coordinatedVolume`** — the estimated number of elements entering the consensus step,
+  derived from `WarpStats` HyperLogLog sketches. This is what `plan(stats)` actually reduces:
+  deferring the embroider past selective filters shrinks the set that crosses the consensus
+  boundary, even though `rounds` stays at 1.
+
+```kotlin
+val planned = draft.plan(stats)
+val cost = planned.coordinationCost(stats)
+// cost.rounds == 1; cost.coordinatedVolume << source cardinality (filters applied first)
+```
+
+`CoordinationCost` implements `Comparable`: fewer rounds first, lower volume as tiebreaker.
+`plan` calls `optimize()` to determine the rewrite; `stats` is passed but currently reserved
+for future stats-aware filter reordering (e.g. most-selective first).
+
+### Statistics are a CRDT
+
+The `WarpStats` that feeds the cost model is itself a join-semilattice — a `Map<OpId,
+HyperLogLog>` with element-wise max as the join. `observe(source, element)` returns a sparse
+`Patch` delta; peers gossip these deltas on the same anti-entropy as the rest of the warp
+state. The planner reads estimates locally from the converged value; no round-trip required.
+
+```kotlin
+var stats = WarpStats.empty()
+for (doc in documents) stats = stats.piece(stats.observe(OpId("source.docs"), doc.id))
+val estimate: Long = stats.estimatedCardinality(OpId("source.docs"))  // ~±0.81% error
+```
+
+### Execution converges
+
+A monotone pipeline never "finishes" — it *converges*. `IncrementalResult<L>` holds the
+running join of all contributions received so far. `contribute(delta)` joins a new lattice
+fragment in; the state can only grow. `awaitThreshold { predicate }` is the LVar-style
+read: it suspends until the predicate is satisfied and returns a snapshot that is permanently
+valid — the lattice cannot fall back below it.
+
+`ConvergentExecution` ties a `Draft` to an `IncrementalResult` and processes submitted
+deltas asynchronously on a caller-provided scope. The scope is required with no default —
+production wires a service scope; tests wire `backgroundScope` to share the test scheduler.
+
 ## The further out
 
 Once the ring is working, the same substrate can carry something more ambitious: tasks that

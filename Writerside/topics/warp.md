@@ -87,6 +87,105 @@ and the answers board is still the final safety net for anything that slips thro
 simplest behaviour? Selecting `ClaimStrategy.Ring` turns the dibs step off and leans on the
 answers board alone.)
 
+## Choosing how to run a job
+
+Every job is more than data — it's also a plan for how that data should flow before
+the answer is committed. Warp makes that plan something you can hold in your hand,
+inspect, and rewrite before anything moves.
+
+### A Draft is the plan
+
+`Warp.shuttle(opId)` returns a `Draft` — an immutable description of a pipeline. You
+chain `.map()`, `.filter()`, and `.embroider()` on it and get a record of what should
+happen, with nothing executed yet:
+
+<!-- verbatim from kuilt-warp/src/commonSamples/kotlin/us/tractat/kuilt/warp/WarpSamples.kt#sampleShuttle -->
+
+```kotlin
+val draft: Draft<ByteArray> = Warp.shuttle(OpId("docs"))
+    .map(OpId("score"))
+    .filter(OpId("above-threshold"))
+    .embroider(OpId("rank"))
+
+check(draft.stages.size == 4)
+check(draft.isMonotone.not())          // has an Embroider stage
+check(draft.embroidery?.opId == OpId("rank"))
+```
+
+`isMonotone` tells you at a glance whether any consensus step is even needed.
+`embroidery` is the single coordination point — you can locate it, inspect it, or defer
+it without touching any data.
+
+### Making the plan better
+
+Three pure rewrites can improve a draft without changing what it computes:
+
+- **Defer the consensus step.** Push the `embroider` as far right as possible so the
+  agreement covers the smallest set of already-filtered elements.
+- **Push filters early.** Move filter stages ahead of map stages so less data flows into
+  the heavier transforms. This assumes each filter operates on the source element, not on
+  a map's derived value — the current model carries only symbolic names, not type
+  annotations, so filter-before-map is a modelled assumption rather than a proved
+  dependency check.
+- **Fuse adjacent stages.** Collapse a run of consecutive maps (or filters) into one,
+  so the runtime applies them in a single pass.
+
+`optimize()` applies all three to a fixpoint and returns a structurally equivalent draft:
+
+<!-- verbatim from kuilt-warp/src/commonSamples/kotlin/us/tractat/kuilt/warp/WarpSamples.kt#sampleOptimize -->
+
+```kotlin
+val optimized = unoptimized.optimize()
+check(optimized.stages.last() is DraftStage.Embroider)   // embroider deferred last
+check(unoptimized.isEquivalentTo(optimized))              // same convergent result
+```
+
+### What it costs
+
+`coordinationCost(stats)` scores a draft with two numbers: how many consensus rounds it
+needs (`rounds`) and how many elements will cross that boundary (`coordinatedVolume`). In
+the common case of a single `embroider` stage, `rounds` is always 1 — the planner's real
+win is cutting `coordinatedVolume` by deferring the embroider past selective filters:
+
+<!-- verbatim from kuilt-warp/src/commonSamples/kotlin/us/tractat/kuilt/warp/WarpSamples.kt#sampleCoordinationCost -->
+
+```kotlin
+// Unplanned: embroider before filter → consensus sees ~1000 docs
+val unplannedCost = unplanned.coordinationCost(stats)
+check(unplannedCost.coordinatedVolume >= 900L)
+
+// Planned: embroider deferred → consensus sees only ~50 docs
+val planned = unplanned.plan(stats)
+val plannedCost = planned.coordinationCost(stats)
+check(plannedCost.coordinatedVolume < 100L)
+check(plannedCost < unplannedCost)
+```
+
+The cardinality estimates come from `WarpStats` — a CRDT map of per-source
+HyperLogLog sketches. Peers gossip these sketches on the same anti-entropy as everything
+else; each peer plans locally from the converged value, no round-trip needed.
+
+### Results that converge
+
+A monotone pipeline never "finishes" — it **converges**, refining as contributions arrive
+from distributed peers. `IncrementalResult` holds the running join: contribute a lattice
+delta and the state grows; it can never shrink. `awaitThreshold` suspends until a monotone
+predicate is first satisfied, then returns a snapshot that stays valid permanently:
+
+```kotlin
+val result = IncrementalResult(GCounter.ZERO)
+result.contribute(GCounter.of(alice to 3L))
+result.contribute(GCounter.of(bob to 2L))
+// result.state.value.value == 5
+
+// In a coroutine: suspends until the predicate crosses, returns once, stays valid.
+val crossed = result.awaitThreshold { it.value >= 5L }
+```
+
+`ConvergentExecution` wires a `Draft` to an `IncrementalResult` and processes submitted
+deltas asynchronously. The scope is required — production wires a service scope; tests wire
+`backgroundScope` to share the virtual clock.
+
 ## The dream
 
 The scheduler above is the real, measured first step. The design docs below explore

@@ -24,6 +24,16 @@ package us.tractat.kuilt.warp
  * volume. A draft with 0 rounds (fully monotone) always beats one with 1 round,
  * regardless of volume.
  *
+ * **Rounds vs. volume — what the planner actually optimises.** In the current model
+ * a well-formed [Draft] has at most one [DraftStage.Embroider], so [rounds] is
+ * structurally ≤ 1. The planner's real lever is [coordinatedVolume]: deferring
+ * the embroider past selective filters means the consensus step commits over a
+ * *smaller* set of elements, not over *fewer* rounds. "Minimise coordination"
+ * means "shrink the set that crosses the consensus boundary" — not "reduce round
+ * count", which stays at 1 in the single-embroider case. Reducing round count
+ * (multi-stage coordination pipelining) is future work.
+ *
+ * @sample us.tractat.kuilt.warp.sampleCoordinationCost
  * @see Draft.coordinationCost
  * @see Draft.plan
  */

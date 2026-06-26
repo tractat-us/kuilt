@@ -42,6 +42,7 @@ import us.tractat.kuilt.crdt.Quilted
  *
  * @param L the lattice type — must be [Quilted] (idempotent/commutative/associative join).
  * @param initial the lattice bottom — the result before any contributions arrive.
+ * @sample us.tractat.kuilt.warp.sampleAwaitThreshold
  */
 public class IncrementalResult<L : Quilted<L>>(initial: L) {
 
@@ -79,6 +80,7 @@ public class IncrementalResult<L : Quilted<L>>(initial: L) {
      *
      * @param predicate a monotone predicate over the lattice value.
      * @return the first lattice value that satisfies [predicate].
+     * @sample us.tractat.kuilt.warp.sampleAwaitThreshold
      */
     public suspend fun awaitThreshold(predicate: (L) -> Boolean): L =
         state.first(predicate)

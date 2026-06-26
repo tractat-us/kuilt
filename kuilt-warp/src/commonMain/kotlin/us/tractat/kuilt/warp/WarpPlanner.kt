@@ -29,6 +29,13 @@ package us.tractat.kuilt.warp
  * are correct regardless of cardinality. Stats-aware filter ordering (most-selective first)
  * reduces per-stage CPU cost but not coordination cost; it is a future enhancement.
  *
+ * **What "minimise coordination" means here.** A well-formed [Draft] has at most one
+ * [DraftStage.Embroider], so [CoordinationCost.rounds] is structurally ≤ 1. The
+ * planner's demonstrated win is a cut in [CoordinationCost.coordinatedVolume] — the
+ * consensus step commits over a smaller, more-filtered set — not in round count, which
+ * stays at 1 in the single-embroider case. See [CoordinationCost] for the precise
+ * definition. Reducing round count is future work.
+ *
  * @see CoordinationCost
  * @see Draft.coordinationCost
  * @see Draft.plan
@@ -50,6 +57,7 @@ package us.tractat.kuilt.warp
  *
  * Call [plan] first to minimise this cost before scoring.
  *
+ * @sample us.tractat.kuilt.warp.sampleCoordinationCost
  * @see plan
  * @see CoordinationCost
  */
@@ -74,7 +82,11 @@ public fun <T> Draft<T>.coordinationCost(stats: WarpStats): CoordinationCost {
  *
  * The primary lever is [deferEmbroidery]: moving the [DraftStage.Embroider] past all
  * [CoordinationKind.Free] filter stages maximises the volume reduction before the
- * coordinated step. [pushdownFilters] and [fuseAdjacent] complete the optimisation.
+ * coordinated step — meaning the consensus commit covers a smaller, more-filtered
+ * element set. In the single-embroider case, [CoordinationCost.rounds] stays at 1
+ * regardless of rewriting; the demonstrated win is a cut in
+ * [CoordinationCost.coordinatedVolume]. [pushdownFilters] and [fuseAdjacent] complete
+ * the optimisation.
  *
  * The returned [Draft] is always semantically equivalent to the receiver under
  * [isEquivalentTo] — the rewrite never changes the convergent result.
@@ -82,8 +94,9 @@ public fun <T> Draft<T>.coordinationCost(stats: WarpStats): CoordinationCost {
  * @param stats reserved for future stats-aware reordering (e.g. ordering filters by
  *   ascending selectivity to reduce per-stage CPU cost). Currently unused — all rewrites
  *   are structurally determined by [CoordinationKind] tags and do not require cardinality
- *   data. Use [coordinationCost] to measure the plan's quality.
+ *   data. Use [coordinationCost] to measure the plan's quality after calling [plan].
  *
+ * @sample us.tractat.kuilt.warp.sampleCoordinationCost
  * @see coordinationCost
  * @see optimize
  */
