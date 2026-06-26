@@ -87,26 +87,45 @@ public class WasmSandboxConfig(
 
 ### 4. WarpNode wiring
 
-The capability is injected as one **all-or-nothing bundle** rather than a bare nullable runtime — so it cannot be half-configured (exchange without runtime, or vice versa), and `null` is the genuine pre-existing optional (a symbolic-only node):
+The capability is injected as one **all-or-nothing bundle** rather than a bare nullable runtime — so it cannot be half-configured (creel without runtime, or vice versa), and `null` is the genuine pre-existing optional (a symbolic-only node):
 
 ```kotlin
 public class WarpLazyFetch(
-    public val exchange: BobbinExchange,
+    /** The local content-addressed byte store a serving peer pre-populates and a fetching peer caches into. */
+    public val creel: Creel,
     public val runtime: WasmRuntime,
     /** How a missing op names the bobbin to fetch. Gossiped alongside the manifest. */
     public val opToBobbin: (OpId) -> BobbinHash?,
 )
 ```
 
+**`WarpLazyFetch` carries a `Creel`, not a pre-built `BobbinExchange`.** A `BobbinExchange`
+builds its *own* internal `MuxSeam` over the seam it is handed; `WarpNode` already owns a
+`MuxSeam` over the same fabric. Handing `WarpNode` a ready-made exchange over the *raw*
+seam would create a **second collector** on `seam.incoming` — a single-collection (ADR-034)
+violation. Instead, `WarpNode` **owns** the exchange internally, built over a reserved mux
+channel so it shares the node's one event loop:
+
+```kotlin
+private const val CHANNEL_BOBBIN: Byte = 0x06   // reserved alongside CHANNEL_QUEUE..CHANNEL_COORD_QUEUE (0x01..0x05)
+
+private val bobbinExchange: BobbinExchange? =
+    lazyFetch?.let { BobbinExchange(mux.channel(CHANNEL_BOBBIN), it.creel, scope, quilterConfig) }
+```
+
+A serving peer pre-populates its `Creel` (`Creel().also { it.put(reverseBytes) }`) before
+constructing `WarpLazyFetch`; manifest discovery is off C5b's critical path because
+`opToBobbin` hands the hash directly.
+
 New `WarpNode` constructor parameter: `private val lazyFetch: WarpLazyFetch? = null`.
 
 - **`null`** = today's exact behavior: `executeViaRegistry` stands by on an unresolved op ("bobbin not loaded yet"), task stays pending, anti-entropy re-evaluates. Documented, explicit — not a silent disable.
-- **non-null** = the unresolved-op branch in `executeViaRegistry` (`WarpNode.kt:731`) becomes a fetch-load-register-run path:
+- **non-null** = the unresolved-op branch in `executeViaRegistry` (`WarpNode.kt:731`) becomes a fetch-load-register-run path (`bobbinExchange` is the node-owned exchange above):
 
 ```kotlin
 val op = registry.resolve(descriptor.op) ?: lazyFetch?.let { lf ->
     val hash = lf.opToBobbin(descriptor.op) ?: return@let null   // unknown op → stand by (transient)
-    val bytes = lf.exchange.fetch(hash)                          // suspends until a peer serves it
+    val bytes = checkNotNull(bobbinExchange).fetch(hash)         // suspends until a peer serves it
     val loaded = try {
         lf.runtime.load(bytes)
     } catch (e: WasmException) {                                 // verified bytes, but broken/malicious
@@ -126,7 +145,7 @@ return try { op.invoke(descriptor.args) } catch (e: WasmException) {
 
 `registry.register` throws on duplicate (`OpRegistry`); a concurrent register race is contained by re-resolving under the registry lock — on `IllegalStateException` from a lost race, fall back to `registry.resolve(descriptor.op)`.
 
-The `coordinatedExecutor` path is untouched. The single-collection (ADR-034), lock-discipline, and dispatcher conventions of `WarpNode` are preserved — `fetch`/`load` are called from the existing executor coroutine, outside the `lock`.
+The `coordinatedExecutor` path is untouched. The single-collection (ADR-034), lock-discipline, and dispatcher conventions of `WarpNode` are preserved — the node-owned `bobbinExchange` decorates the node's own `MuxSeam` (no second `seam.incoming` collector), and `fetch`/`load` are called from the existing executor coroutine, outside the `lock`.
 
 ### 5. Terminal-failure handling (convergence-critical)
 
@@ -153,7 +172,7 @@ Distinction in one line: **transient = we can't run it yet; terminal = we ran it
 
 ## Testing
 
-Multi-node sim via the canonical harness (`MultiNodeRaftSim` from `:kuilt-raft-test`; `StandardTestDispatcher`, tight timeout, bounded advance — never `advanceUntilIdle`):
+Multi-node sim over the **coordination-free path** (no Raft — the reverse task is `CoordinationKind.Free`), copying the existing C3 harness `ChicoryRuntimeDispatchTest.kt`: `InMemoryLoom` host+join, `runTest(UnconfinedTestDispatcher(), timeout = 5.seconds)`, the C3 `settle()` helper (bounded `advanceTimeBy` over the anti-entropy interval — **never `advanceUntilIdle`**, the anti-entropy timers re-arm forever). Both nodes get a real `ChicoryWasmRuntime`; the *serving* node pre-populates its `Creel` with the `reverse` bytes, the *fetching* node's registry lacks `reverse`:
 
 1. **Happy path:** a node whose registry lacks `reverse` is assigned a `reverse` task; it fetches the bobbin from a peer that holds it, loads it sandboxed, runs it, and the reversed-bytes result merges onto every peer's board.
 2. **Import-declaring kernel** → `WasmLoadException` → terminal error `OpResult` on the board, never executed; board converges.
@@ -167,7 +186,7 @@ JVM only this slice. Full `./gradlew :kuilt-warp:build detektAll --rerun-tasks` 
 
 - **New (`commonMain`):** `WasmRuntime.kt` (interface + `WasmException`/`WasmLoadException`/`WasmExecutionException`), `WarpLazyFetch.kt`.
 - **New (`jvmMain`):** `ChicoryWasmRuntime.kt`, `WasmSandboxConfig.kt`.
-- **Changed (`commonMain`):** `OpResult.kt` (+ `error` discriminator), `WarpNode.kt` (`lazyFetch` param + `executeViaRegistry` fetch-load-run + `recordTerminalError`).
+- **Changed (`commonMain`):** `OpResult.kt` (+ `error` discriminator), `WarpNode.kt` (`lazyFetch: WarpLazyFetch?` param + node-owned `BobbinExchange` over `CHANNEL_BOBBIN: Byte = 0x06` + `executeViaRegistry` fetch-load-run + `recordTerminalError`).
 - **New (`jvmTest`):** `reverse.wat` + `reverse.wasm` resources, `ChicoryWasmRuntimeTest.kt` (runtime + sandbox units: imports/oversize/timeout/trap), `LazyFetchAndRunTest.kt` (multi-node sim).
 - **Docs:** update `docs/warp-execution.md` "Lazy bobbins" / "Shipping real code" sections once landed; tick C5 on epic #853.
 
