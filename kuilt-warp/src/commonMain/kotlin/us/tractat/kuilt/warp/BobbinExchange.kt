@@ -7,6 +7,7 @@ import kotlinx.atomicfu.locks.reentrantLock
 import kotlinx.atomicfu.locks.withLock
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -154,6 +155,20 @@ public class BobbinExchange(
                 }
             }
         }
+
+        // Anti-entropy re-request loop: periodically re-broadcast Request for every
+        // still-pending hash so that a late holder (a peer that joins or acquires the
+        // bytes after the initial single-shot Request) is eventually reached.
+        // Snapshot under lock, then send outside the lock (no suspend inside locked section).
+        scope.launch {
+            while (true) {
+                delay(quilterConfig.antiEntropyInterval)
+                val pending = lock.withLock { inFlight.keys.toList() }
+                for (hash in pending) {
+                    sendRequest(hash)
+                }
+            }
+        }
     }
 
     // ── Public API ─────────────────────────────────────────────────────────────
@@ -187,9 +202,19 @@ public class BobbinExchange(
         val (deferred, isNew) = claimInFlight(hash)
         if (isNew) sendRequest(hash)
 
-        val bytes = deferred.await()
-        creel.putVerified(hash, bytes)
-        return bytes
+        try {
+            val bytes = deferred.await()
+            creel.putVerified(hash, bytes)
+            return bytes
+        } finally {
+            // On any exit where the deferred is still incomplete (i.e. cancellation),
+            // remove the in-flight entry so the next fetch starts fresh and re-sends
+            // a Request. Guard against removing a newer entry installed by a racing
+            // fetch call after this one was cancelled.
+            if (!deferred.isCompleted) {
+                lock.withLock { if (inFlight[hash] === deferred) inFlight.remove(hash) }
+            }
+        }
     }
 
     // ── Private helpers ────────────────────────────────────────────────────────
