@@ -25,6 +25,10 @@ kotlin {
             implementation(project(":kuilt-raft-test"))
             implementation(libs.kotlinx.coroutines.test)
         }
+        jvmMain.dependencies {
+            // Chicory — pure-JVM wasm runtime (C3 substrate; JVM only, never touches commonMain).
+            implementation(libs.chicory.runtime)
+        }
         jvmTest.dependencies {
             implementation(project(":kuilt-websocket"))
             implementation(libs.kotlin.testJunit)
