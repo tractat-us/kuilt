@@ -249,6 +249,14 @@ valid — the lattice cannot fall back below it.
 deltas asynchronously on a caller-provided scope. The scope is required with no default —
 production wires a service scope; tests wire `backgroundScope` to share the test scheduler.
 
+### Training without sharing data (F2)
+
+Everyone's device helps train a shared model without any private data leaving it. The training
+step itself travels as a tiny WebAssembly kernel: it is content-addressed in the `Creel`, fetched
+on demand, and run in the sandbox. Each peer runs the same kernel on its own examples and shares
+only the resulting weights, which merge through `FedAvg`. See `FedAvgKernelCodec` and
+`ReferenceTrainer`.
+
 ## The further out
 
 Once the ring is working, the same substrate can carry something more ambitious: tasks that
