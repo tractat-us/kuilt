@@ -71,7 +71,7 @@ class BobbinExchangeTest {
             settle()
 
             assertAll(
-                { assertTrue(exchangeB.manifest.value.contains(hash), "B's manifest must contain the hash after settling") },
+                { assertTrue(exchangeB.manifest.value.any { it.hash == hash }, "B's manifest must contain the hash after settling") },
                 { assertFalse(creelB.contains(hash), "B must not have fetched the bytes yet (lazy)") },
             )
 
@@ -123,9 +123,40 @@ class BobbinExchangeTest {
             runCurrent()
 
             assertAll(
-                { assertTrue(exchange.manifest.value.contains(h1)) },
-                { assertTrue(exchange.manifest.value.contains(h2)) },
-                { assertTrue(exchange.manifest.value.contains(h3)) },
+                { assertTrue(exchange.manifest.value.any { it.hash == h1 }) },
+                { assertTrue(exchange.manifest.value.any { it.hash == h2 }) },
+                { assertTrue(exchange.manifest.value.any { it.hash == h3 }) },
+            )
+        }
+
+    /**
+     * A variant published via [BobbinExchange.putVariant] appears in the local manifest as a
+     * [BobbinMeta] carrying its [VariantKey] provenance, distinct from a raw bobbin (null variantOf).
+     */
+    @Test
+    fun putVariantPublishesMetaWithProvenance() =
+        runTest(UnconfinedTestDispatcher(), timeout = 5.seconds) {
+            val loom = InMemoryLoom()
+            val seam = loom.host(Pattern("variant-meta-local"))
+            val exchange = BobbinExchange(seam, Creel(), backgroundScope, BOBBIN_QUILTER_CONFIG)
+
+            val rawHash = exchange.put(byteArrayOf(1, 2, 3))
+            val variantHash = exchange.putVariant(
+                byteArrayOf(1, 2, 3, 9),
+                VariantKey(rawHash, Target.Jvm, OptLevel.O2),
+            )
+            settle()
+
+            assertAll(
+                { assertTrue(exchange.manifest.value.any { it.hash == rawHash && it.variantOf == null }, "raw bobbin has null variantOf") },
+                {
+                    assertTrue(
+                        exchange.manifest.value.any {
+                            it.hash == variantHash && it.variantOf == VariantKey(rawHash, Target.Jvm, OptLevel.O2)
+                        },
+                        "variant bobbin carries its VariantKey",
+                    )
+                },
             )
         }
 

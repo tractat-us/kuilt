@@ -29,7 +29,7 @@ import us.tractat.kuilt.quilter.QuilterConfig
 
 private val logger = KotlinLogging.logger("us.tractat.kuilt.warp.BobbinExchange")
 
-/** Mux-channel tag for the `GSet<BobbinHash>` manifest Quilter. */
+/** Mux-channel tag for the `GSet<BobbinMeta>` manifest Quilter. */
 private const val CHANNEL_MANIFEST: Byte = 0x10
 
 /** Mux-channel tag for on-demand fetch request/response frames. */
@@ -62,7 +62,7 @@ internal sealed class FetchMessage {
 /**
  * Lazy-bobbin exchange over a [Seam].
  *
- * **What it does.** Peers share a `GSet<BobbinHash>` manifest that is gossiped
+ * **What it does.** Peers share a `GSet<BobbinMeta>` manifest that is gossiped
  * eagerly via a [Quilter], so every peer knows which bobbins (content-addressed byte
  * blobs) exist across the mesh. The actual bytes are fetched **on demand**: a peer
  * that lacks a bobbin broadcasts a [FetchMessage.Request], suspends until a
@@ -104,31 +104,32 @@ public class BobbinExchange(
     private val fetchSeam = mux.channel(CHANNEL_FETCH)
 
     /**
-     * Quilter replicating the `GSet<BobbinHash>` manifest.
+     * Quilter replicating the `GSet<BobbinMeta>` manifest.
      *
-     * Each local [put] adds a hash to this set and the delta is broadcast immediately.
-     * Anti-entropy ensures eventual convergence even across late joiners or dropped frames.
+     * Each local [put] or [putVariant] adds a [BobbinMeta] to this set and the delta is
+     * broadcast immediately. Anti-entropy ensures eventual convergence even across late
+     * joiners or dropped frames.
      */
-    private val manifestQuilter: Quilter<GSet<BobbinHash>> = Quilter(
+    private val manifestQuilter: Quilter<GSet<BobbinMeta>> = Quilter(
         seam = manifestSeam,
         initial = GSet.empty(),
-        valueSerializer = GSet.serializer(serializer<BobbinHash>()),
+        valueSerializer = GSet.serializer(serializer<BobbinMeta>()),
         scope = scope,
         replica = replica,
         config = quilterConfig,
         random = kotlin.random.Random(seam.selfId.value.hashCode().toLong()),
     )
 
-    private val _manifest = MutableStateFlow<Set<BobbinHash>>(emptySet())
+    private val _manifest = MutableStateFlow<Set<BobbinMeta>>(emptySet())
 
     /**
-     * The converged set of [BobbinHash]es known across the mesh — the union of every
-     * peer's advertised bobbins. A hash appears here as soon as the manifest GSet delta
+     * The converged set of [BobbinMeta] entries known across the mesh — the union of every
+     * peer's advertised bobbins. An entry appears here as soon as the manifest GSet delta
      * propagates; the kernel bytes may not yet be cached locally (that is the lazy part).
      *
      * Collect or snapshot this flow to discover which bobbins exist before calling [fetch].
      */
-    public val manifest: StateFlow<Set<BobbinHash>> = _manifest.asStateFlow()
+    public val manifest: StateFlow<Set<BobbinMeta>> = _manifest.asStateFlow()
 
     // In-flight fetches: hash → shared fetch state (one deferred + one Request) for all
     // concurrent callers of that hash. The waiter count lets the *last* caller to leave a
@@ -181,14 +182,22 @@ public class BobbinExchange(
     // ── Public API ─────────────────────────────────────────────────────────────
 
     /**
-     * Stores [bytes] in the local [creel] and adds the resulting [BobbinHash] to the
-     * gossiped manifest so all peers learn the hash immediately.
-     *
-     * @return The [BobbinHash] under which [bytes] are stored (SHA-256 hex).
+     * Stores [bytes] as a **raw** bobbin and advertises `BobbinMeta(hash, variantOf = null)`
+     * on the gossiped manifest so all peers learn the hash immediately.
      */
     public fun put(bytes: ByteArray): BobbinHash {
         val hash = creel.put(bytes)
-        manifestQuilter.mutate { it.add(hash) }
+        manifestQuilter.mutate { it.add(BobbinMeta(hash, variantOf = null)) }
+        return hash
+    }
+
+    /**
+     * Stores [bytes] as a **compiled variant** and advertises `BobbinMeta(hash, [variantOf])`
+     * so peers can discover the compiled-for-target version of the source kernel.
+     */
+    public fun putVariant(bytes: ByteArray, variantOf: VariantKey): BobbinHash {
+        val hash = creel.put(bytes)
+        manifestQuilter.mutate { it.add(BobbinMeta(hash, variantOf)) }
         return hash
     }
 
