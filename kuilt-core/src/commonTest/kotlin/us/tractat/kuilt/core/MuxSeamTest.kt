@@ -282,6 +282,129 @@ class MuxSeamTest {
         )
     }
 
+    // ── Per-channel close: closing one view must not tear the base Seam ─────────
+
+    /**
+     * Closing channel A's view leaves channel B's incoming and broadcast fully
+     * working. The base Seam must remain live.
+     */
+    @Test
+    fun closingChannelALeavesChannelBLive() = runTest(UnconfinedTestDispatcher()) {
+        val loom = InMemoryLoom()
+        val rawA = loom.host(Pattern("mux-channel-close-isolation"))
+        val rawB = loom.join(InMemoryTag("b"))
+
+        val muxA = MuxSeam(rawA, backgroundScope)
+        val muxB = MuxSeam(rawB, backgroundScope)
+
+        val tagA = 0x0A.toByte()
+        val tagB = 0x0B.toByte()
+
+        // Close channel A on the sender side.
+        muxA.channel(tagA).close()
+
+        // Channel B must still be able to send and receive frames.
+        val received = async { muxB.channel(tagB).incoming.first() }
+        muxA.channel(tagB).broadcast(byteArrayOf(42))
+
+        val swatch = received.await()
+        assertTrue(
+            swatch.toByteArray().contentEquals(byteArrayOf(42)),
+            "channel B must still deliver frames after channel A is closed",
+        )
+    }
+
+    /**
+     * After close(), the closed channel view's incoming flow completes (terminates).
+     */
+    @Test
+    fun closedChannelIncomingCompletes() = runTest(UnconfinedTestDispatcher()) {
+        val loom = InMemoryLoom()
+        val rawA = loom.host(Pattern("mux-channel-close-incoming"))
+
+        val muxA = MuxSeam(rawA, backgroundScope)
+        val tagA = 0x0A.toByte()
+
+        val channelA = muxA.channel(tagA)
+        // Collect until completion — should finish after close().
+        val collected = async { channelA.incoming.toList() }
+        channelA.close()
+
+        val result = collected.await()
+        assertTrue(result.isEmpty(), "closed channel incoming must complete with no frames delivered")
+    }
+
+    /**
+     * After close(), broadcast on the closed channel view is a no-op (does not
+     * send to remote peers and does not throw).
+     */
+    @Test
+    fun closedChannelBroadcastIsNoOp() = runTest(UnconfinedTestDispatcher()) {
+        val loom = InMemoryLoom()
+        val rawA = loom.host(Pattern("mux-channel-close-noop-broadcast"))
+        val rawB = loom.join(InMemoryTag("b"))
+
+        val muxA = MuxSeam(rawA, backgroundScope)
+        val muxB = MuxSeam(rawB, backgroundScope)
+
+        val tagA = 0x0A.toByte()
+        val tagB = 0x0B.toByte()
+
+        val channelAonSide = muxA.channel(tagA)
+        channelAonSide.close()
+
+        // A sentinel on tag B to prove the base is alive.
+        val sentinel = async { muxB.channel(tagB).incoming.first() }
+
+        // This must not throw — the broadcast on the closed view is a no-op.
+        channelAonSide.broadcast(byteArrayOf(99))
+
+        // The sentinel on tag B still works.
+        muxA.channel(tagB).broadcast(byteArrayOf(1))
+        sentinel.await()
+
+        // Tag A on peer B must have received nothing (the no-op broadcast was swallowed).
+        val tagAChannel = muxB.channel(tagA).incoming.produceIn(this)
+        assertTrue(tagAChannel.tryReceive().isFailure, "no-op broadcast must not reach peer B's channel A")
+        tagAChannel.cancel()
+    }
+
+    /**
+     * The base Seam is NOT closed when a channel view is closed.
+     */
+    @Test
+    fun baseSeamRemainsLiveAfterChannelClose() = runTest(UnconfinedTestDispatcher()) {
+        val loom = InMemoryLoom()
+        val rawA = loom.host(Pattern("mux-base-stays-live"))
+        val rawB = loom.join(InMemoryTag("b"))
+
+        val muxA = MuxSeam(rawA, backgroundScope)
+        val tagA = 0x0A.toByte()
+
+        muxA.channel(tagA).close()
+
+        // The raw delegate must still be in Woven state — not Torn.
+        assertFalse(
+            rawA.state.value is SeamState.Torn,
+            "base Seam must remain live (not Torn) after closing a channel view",
+        )
+    }
+
+    /**
+     * Double-close of a channel view must be a no-op — no exception thrown.
+     */
+    @Test
+    fun doubleCloseIsNoOp() = runTest(UnconfinedTestDispatcher()) {
+        val loom = InMemoryLoom()
+        val rawA = loom.host(Pattern("mux-double-close"))
+        val muxA = MuxSeam(rawA, backgroundScope)
+        val tagA = 0x0A.toByte()
+
+        val channel = muxA.channel(tagA)
+        channel.close()
+        channel.close() // Must not throw.
+    }
+
     // ── concurrent channel() calls are race-free ──────────────────────────────
 
     /**
