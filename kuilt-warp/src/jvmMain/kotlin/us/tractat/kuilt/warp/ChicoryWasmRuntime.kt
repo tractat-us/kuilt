@@ -14,6 +14,7 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.util.concurrent.Callable
 import java.util.concurrent.ExecutionException
+import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException
@@ -58,10 +59,22 @@ import java.util.concurrent.TimeoutException
  * - Any [ChicoryException] from a guest call (trap, `unreachable`, OOB memory, bad packed result,
  *   or the interrupt itself) surfaces as [WasmExecutionException], preserving the cause.
  *
+ * **Deterministic testing via [TimedGuestRunner]:**
+ * The [timedRunner] seam replaces the real `guestExecutor.submit + Future.get(timeout)` so tests
+ * can drive timeout/success behaviour without real wall-clock waits. Production callers omit it
+ * (or pass `null`) to get the real executor-backed runner; tests inject a fake. See
+ * [ChicoryWasmRuntimeTimingTest] for the false-timeout regression proof.
+ *
  * Construct once and reuse across loads/invokes; call [close] to release the executor thread.
+ *
+ * @param config Sandbox configuration (memory cap, execution timeout). Must be valid per
+ *   [WasmSandboxConfig] constraints.
+ * @param timedRunner Override for the timed guest invocation strategy. Pass `null` (default) for
+ *   the real wall-clock runner backed by [guestExecutor]. Inject a fake for deterministic tests.
  */
 public class ChicoryWasmRuntime(
     public val config: WasmSandboxConfig = WasmSandboxConfig(),
+    timedRunner: TimedGuestRunner? = null,
 ) : WasmRuntime, AutoCloseable {
 
     /**
@@ -70,8 +83,34 @@ public class ChicoryWasmRuntime(
      * this one thread. A timed-out invocation interrupts the worker; the executor clears the
      * stale interrupt before the next task, so a timeout does not poison the next invoke.
      */
-    private val guestExecutor = Executors.newSingleThreadExecutor { runnable ->
+    private val guestExecutor: ExecutorService = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "warp-wasm-guest").apply { isDaemon = true }
+    }
+
+    /**
+     * The strategy for running a task under a timeout. Defaults to the real wall-clock runner
+     * backed by [guestExecutor]; tests inject a fake for deterministic control.
+     *
+     * The real default: submits the callable to [guestExecutor], calls `Future.get(timeout)`, and
+     * on [TimeoutException] interrupts the worker (so Chicory's interpreter terminates the runaway
+     * guest at the next function-call entry / backward branch). The [ExecutionException] wrapper
+     * from the executor is unwrapped before rethrowing so callers see the original exception type.
+     *
+     * Initialized after [guestExecutor] so the default lambda can safely capture it.
+     */
+    private val timedRunner: TimedGuestRunner = timedRunner ?: TimedGuestRunner { timeout, task ->
+        val future = guestExecutor.submit(task)
+        try {
+            future.get(timeout.inWholeMilliseconds, TimeUnit.MILLISECONDS)
+        } catch (e: TimeoutException) {
+            // Interrupt the worker; Chicory's interpreter throws ChicoryInterruptedException at
+            // the next call entry / backward branch, terminating the runaway guest.
+            future.cancel(true)
+            throw e
+        } catch (e: ExecutionException) {
+            // Unwrap so invoke sees the original exception (ChicoryException, etc.), not a wrapper.
+            throw e.cause ?: e
+        }
     }
 
     /**
@@ -173,12 +212,16 @@ public class ChicoryWasmRuntime(
     /**
      * Runs one ABI round-trip under the execution-time bound.
      *
-     * The blocking `future.get(timeout)` is **real wall-clock work** — the guest burns real CPU on
-     * the dedicated worker thread — so it deliberately runs on [Dispatchers.IO], a real blocking
-     * context, NOT the caller's (possibly virtual-time) scheduler. This is the sanctioned
-     * real-threading exception to the no-production-dispatcher rule: the timeout is a wall-clock CPU
-     * bound and cannot be driven by virtual time. [Dispatchers.IO] only *waits*; the guest itself
-     * runs on [guestExecutor], whose interrupt flag is what terminates a runaway kernel.
+     * The blocking work (real-executor submit + `Future.get(timeout)`) is **real wall-clock work**
+     * — the guest burns real CPU on the dedicated worker thread — so it deliberately runs on
+     * [Dispatchers.IO], a real blocking context, NOT the caller's (possibly virtual-time)
+     * scheduler. This is the sanctioned real-threading exception to the no-production-dispatcher
+     * rule: the timeout is a wall-clock CPU bound and cannot be driven by virtual time.
+     * [Dispatchers.IO] only *waits*; the guest itself runs on [guestExecutor], whose interrupt
+     * flag is what terminates a runaway kernel.
+     *
+     * Tests inject a [TimedGuestRunner] fake; [Dispatchers.IO] is still used, but the fake
+     * executes the callable synchronously (no blocking) so the switch is cheap and harmless.
      */
     private suspend fun invoke(
         memory: Memory,
@@ -186,25 +229,20 @@ public class ChicoryWasmRuntime(
         runFn: ExportFunction,
         args: ByteArray,
     ): ByteArray = withContext(Dispatchers.IO) {
-        // The whole submit+get is the critical section: only one guest call is timed at a time, so
-        // the timeout measures execution, not time spent queued behind another op (see invokeMutex).
-        // withLock is cancellation-cooperative, so coroutine cancellation still propagates.
+        // The whole timedRunner.run() call is the critical section: only one guest call is timed
+        // at a time, so the timeout measures execution, not time spent queued behind another op
+        // (see invokeMutex KDoc). withLock is cancellation-cooperative.
         invokeMutex.withLock {
-            val future = guestExecutor.submit(Callable { runAbi(memory, allocFn, runFn, args) })
             try {
-                future.get(config.executionTimeout.inWholeMilliseconds, TimeUnit.MILLISECONDS)
+                timedRunner.run(config.executionTimeout, Callable { runAbi(memory, allocFn, runFn, args) })
             } catch (e: TimeoutException) {
-                // Interrupt the worker; Chicory's interpreter throws ChicoryInterruptedException at
-                // the next call entry / backward branch, terminating the runaway guest.
-                future.cancel(true)
                 throw WasmExecutionException("WASM execution exceeded ${config.executionTimeout}", e)
-            } catch (e: ExecutionException) {
-                // A trap / unreachable / OOB / bad packed result inside a guest call.
-                val cause = e.cause
-                if (cause is ChicoryException) {
-                    throw WasmExecutionException("WASM kernel trapped: ${cause.message}", cause)
-                }
-                throw WasmExecutionException("WASM kernel failed: ${cause?.message ?: e.message}", cause ?: e)
+            } catch (e: ChicoryException) {
+                // A trap / unreachable / OOB / bad packed result / interrupt — thrown directly by
+                // the real runner (unwrapped from ExecutionException) or by a test fake's task.call().
+                throw WasmExecutionException("WASM kernel trapped: ${e.message}", e)
+            } catch (e: Exception) {
+                throw WasmExecutionException("WASM kernel failed: ${e.message}", e)
             }
         }
     }
