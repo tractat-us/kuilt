@@ -1,6 +1,7 @@
 package us.tractat.kuilt.warp
 
 import us.tractat.kuilt.crdt.ReplicaId
+import us.tractat.kuilt.test.assertAll
 import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -48,8 +49,10 @@ class FedAvgTest {
             .piece(FedAvg.contribution(peerA, sampleCount = 2L, localWeights = listOf(1.0, 4.0)))
             .piece(FedAvg.contribution(peerB, sampleCount = 3L, localWeights = listOf(3.0, 2.0)))
 
-        assertEquals(2.2, merged.weights[0], absoluteTolerance = 1e-9)
-        assertEquals(2.8, merged.weights[1], absoluteTolerance = 1e-9)
+        assertAll(
+            { assertEquals(2.2, merged.weights[0], absoluteTolerance = 1e-9) },
+            { assertEquals(2.8, merged.weights[1], absoluteTolerance = 1e-9) },
+        )
     }
 
     // ── Lattice laws ─────────────────────────────────────────────────────────────
@@ -98,8 +101,42 @@ class FedAvgTest {
         val peer = ReplicaId("p")
         val contrib = FedAvg.contribution(peer, sampleCount = 7L, localWeights = listOf(3.14))
 
-        assertEquals(contrib, FedAvg.ZERO.piece(contrib))
-        assertEquals(contrib, contrib.piece(FedAvg.ZERO))
+        assertAll(
+            { assertEquals(contrib, FedAvg.ZERO.piece(contrib)) },
+            { assertEquals(contrib, contrib.piece(FedAvg.ZERO)) },
+        )
+    }
+
+    // ── Same-peer, same-epoch collision: commutativity must hold ─────────────────
+    //
+    // If a peer retrained within the same round and rebroadcast a different slot,
+    // the join must still be commutative and associative — replicas must not diverge
+    // depending on delivery order. Fix: max over a total order on slot content.
+
+    @Test
+    fun `piece is commutative when same peer contributes same epoch different content`() {
+        val peer = ReplicaId("p")
+        // Both contributions use the default epoch=1; the second has a larger sampleCount.
+        val slotA = FedAvg.contribution(peer, sampleCount = 1L, localWeights = listOf(1.0))
+        val slotB = FedAvg.contribution(peer, sampleCount = 2L, localWeights = listOf(9.0))
+
+        val ab = slotA.piece(slotB)
+        val ba = slotB.piece(slotA)
+
+        assertEquals(ab, ba, "same-peer same-epoch collision: a.piece(b) must equal b.piece(a)")
+    }
+
+    @Test
+    fun `piece is associative when same peer contributes same epoch different content`() {
+        val peer = ReplicaId("p")
+        val slotA = FedAvg.contribution(peer, sampleCount = 1L, localWeights = listOf(1.0))
+        val slotB = FedAvg.contribution(peer, sampleCount = 2L, localWeights = listOf(9.0))
+        val slotC = FedAvg.contribution(peer, sampleCount = 3L, localWeights = listOf(5.0))
+
+        val left = slotA.piece(slotB).piece(slotC)
+        val right = slotA.piece(slotB.piece(slotC))
+
+        assertEquals(left, right, "same-peer same-epoch collision: (a⊔b)⊔c must equal a⊔(b⊔c)")
     }
 
     // ── Convergence under adversarial delivery ───────────────────────────────────
@@ -155,12 +192,15 @@ class FedAvgTest {
         val merged = coordFreeContribs.reduce { acc, c -> acc.embroider(c) }
         val reversed = coordFreeContribs.reversed().reduce { acc, c -> acc.embroider(c) }
 
-        // Order-independence
-        assertEquals(merged.state, reversed.state)
-
-        // Idempotent via embroider
-        val doubleApplied = coordFreeContribs.fold(merged) { acc, c -> acc.embroider(c) }
-        assertEquals(merged.state, doubleApplied.state)
+        assertAll(
+            // Order-independence
+            { assertEquals(merged.state, reversed.state) },
+            // Idempotent via embroider
+            {
+                val doubleApplied = coordFreeContribs.fold(merged) { acc, c -> acc.embroider(c) }
+                assertEquals(merged.state, doubleApplied.state)
+            },
+        )
     }
 
     // ── Zero-total-count guard ────────────────────────────────────────────────────
@@ -199,9 +239,11 @@ class FedAvgTest {
 
         val merged = FedAvg.ZERO.piece(contribA).piece(contribB)
 
-        // average = (100 + 0) / 2 = 50
-        assertEquals(50.0, merged.weights[0], absoluteTolerance = 1e-9)
-        // Contribution A alone would give 100, not 50
-        assertNotEquals(contribA, merged)
+        assertAll(
+            // average = (100 + 0) / 2 = 50
+            { assertEquals(50.0, merged.weights[0], absoluteTolerance = 1e-9) },
+            // Contribution A alone would give 100, not 50
+            { assertNotEquals(contribA, merged) },
+        )
     }
 }
