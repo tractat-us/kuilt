@@ -38,7 +38,7 @@ class RoomHubSeamMembershipTest {
      * connection on the same room still works.
      */
     @Test
-    fun rejectedConnectionIsStructurallyExcluded() = runTest(StandardTestDispatcher()) {
+    fun rejectedConnectionIsStructurallyExcluded() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
         val dispatcher = coroutineContext[ContinuationInterceptor]!!
         val source = InMemoryConnectionSource()
 
@@ -98,7 +98,7 @@ class RoomHubSeamMembershipTest {
      * is re-associated by id, never duplicated.
      */
     @Test
-    fun reconnectResumesMembershipByPeerId() = runTest(StandardTestDispatcher()) {
+    fun reconnectResumesMembershipByPeerId() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
         val dispatcher = coroutineContext[ContinuationInterceptor]!!
         val source = InMemoryConnectionSource()
         val serverLoom = MuxServerLoom(

@@ -39,7 +39,7 @@ class RoomHubSeamIsolationTest {
      * structural: C's inbox has zero frames — it was never in the "table-7" fanout list.
      */
     @Test
-    fun broadcastOnRoomReachesOnlyRoomMembers() = runTest(StandardTestDispatcher()) {
+    fun broadcastOnRoomReachesOnlyRoomMembers() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
         val dispatcher = coroutineContext[ContinuationInterceptor]!!
         val source = InMemoryConnectionSource()
         val serverLoom = MuxServerLoom(
@@ -126,7 +126,7 @@ class RoomHubSeamIsolationTest {
      * "table-7" sees A and B; "table-9" sees only C.
      */
     @Test
-    fun perRoomPeersReflectsOnlyRoomMembers() = runTest(StandardTestDispatcher()) {
+    fun perRoomPeersReflectsOnlyRoomMembers() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
         val dispatcher = coroutineContext[ContinuationInterceptor]!!
         val source = InMemoryConnectionSource()
         val serverLoom = MuxServerLoom(
@@ -173,7 +173,7 @@ class RoomHubSeamIsolationTest {
      * Closing room "table-7" does not drop room "table-9" or prevent further broadcasts on it.
      */
     @Test
-    fun closingOneRoomDoesNotAffectSibling() = runTest(StandardTestDispatcher()) {
+    fun closingOneRoomDoesNotAffectSibling() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
         val dispatcher = coroutineContext[ContinuationInterceptor]!!
         val source = InMemoryConnectionSource()
         val serverLoom = MuxServerLoom(
