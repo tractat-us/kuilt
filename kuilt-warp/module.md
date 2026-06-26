@@ -264,3 +264,18 @@ are not just data but *code* — serialised functions that travel to a peer, run
 return results. That is code mobility, and it is a long way off. The foundation here — a
 correct, measurement-backed distributed scheduler over kuilt's existing primitives — is the
 honest first step toward it.
+
+### Tiered compilation (mechanism spike)
+
+A peer that lacks a compiled kernel **interprets** the raw bobbin immediately, and **tiers
+up** to a compiled variant once a stronger *compiler node* builds one and gossips it across
+the mesh — a JIT smeared across the network. A variant rides the bobbin manifest additively
+as a `BobbinMeta(hash, variantOf = VariantKey(source, target, optLevel))`; a node with a
+`target` resolves the best variant for its platform per execution and counts
+interpreted-vs-compiled executions (`executionsInterpreted` / `executionsCompiled`).
+
+The current spike proves **distribution and swap**, not speedup — its compiler is a
+deterministic no-op transform. Genuine optimization (GraalWasm / Kotlin-Wasm / `wasm-opt`)
+is a later epic. The iOS ceiling stays *interpret*: Apple forbids executing
+externally-delivered machine code, so a compiler node can ship iOS an optimized wasm→wasm
+variant but never native code.
