@@ -1,3 +1,5 @@
+@file:OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
+
 package us.tractat.kuilt.otel.tap
 
 import io.github.oshai.kotlinlogging.KotlinLogging

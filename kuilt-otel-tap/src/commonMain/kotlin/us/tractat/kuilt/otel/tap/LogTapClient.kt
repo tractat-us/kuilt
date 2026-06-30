@@ -1,10 +1,13 @@
+@file:OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
+
 package us.tractat.kuilt.otel.tap
 
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
-import kotlinx.coroutines.yield
+import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.io.bytestring.ByteString
 import us.tractat.kuilt.core.ScopedCloseable
 import us.tractat.kuilt.core.Seam
@@ -26,7 +29,7 @@ import us.tractat.kuilt.quilter.Quilter
 public class LogTapClient(
     private val seam: Seam,
     parentScope: CoroutineScope,
-    config: LogTapConfig = LogTapConfig(),
+    private val config: LogTapConfig = LogTapConfig(),
 ) : ScopedCloseable(parentScope) {
 
     private val replicator: Quilter<Rga<LogRecord>> = Quilter(
@@ -39,18 +42,27 @@ public class LogTapClient(
     )
 
     /**
-     * Pull a snapshot of the device's logs: drive one reconciliation round with the
-     * host and return everything replicated so far, in the device's order, with no
-     * duplicates.
+     * Pull a snapshot of the device's logs: wait for the host's logs to replicate in,
+     * then return everything captured so far in the device's order, with no duplicates.
      *
-     * Waits until the host is connected, then lets the first-contact full-state
-     * exchange settle before reading. The result is a point-in-time snapshot; call
-     * again (or use [tail]) to observe records captured later.
+     * Waits until the host is connected and its first-contact full-state has actually
+     * merged — not merely until a peer appears — so it never returns the still-empty
+     * initial state over an asynchronous (real-network) link. Bounded by
+     * [LogTapConfig.pullTimeout]: a pull that does not converge in time throws
+     * [kotlinx.coroutines.TimeoutCancellationException] rather than returning a partial
+     * result. The result is a point-in-time snapshot; call again (or use [tail]) to
+     * observe records captured later.
+     *
+     * Note: the host pushes its **entire** log on first contact as one atomic CRDT merge,
+     * so the snapshot is always complete-or-nothing — there is no partial intermediate to
+     * observe. A host that genuinely has no logs yet has nothing to push; use [tail] for
+     * open-ended observation of a possibly-empty device.
      */
-    public suspend fun pull(): List<LogRecord> {
+    public suspend fun pull(): List<LogRecord> = withTimeout(config.pullTimeout) {
         awaitRemotePeer()
-        settle()
-        return replicator.state.value.toList()
+        // First non-empty state == the host's full backlog (one atomic merge), never a slice.
+        val firstNonEmpty = replicator.state.first { it.toList().isNotEmpty() }
+        settle(firstNonEmpty).toList()
     }
 
     /**
@@ -72,18 +84,22 @@ public class LogTapClient(
     }
 
     /**
-     * Yield until the replicated state stops changing, bounded so a permanently-churning
-     * peer can never hang the caller. Each [yield] lets the replicator drain pending
-     * inbound frames; two equal reads in a row means the round has landed.
+     * Wait for the replicated state to stop advancing, starting from [initial]. Each step
+     * waits up to [LogTapConfig.pullSettleStep] for the next distinct state; a quiet step
+     * means the snapshot has settled. Bounded by [SETTLE_ITERATIONS] *and*, via the caller,
+     * by [LogTapConfig.pullTimeout] — it cannot hang on a permanently-churning peer. Works
+     * under both real time and a virtual-time test scheduler (which auto-advances the step
+     * delay when nothing else is runnable).
      */
-    private suspend fun settle() {
-        var previous: Rga<LogRecord>? = null
+    private suspend fun settle(initial: Rga<LogRecord>): Rga<LogRecord> {
+        var current = initial
         repeat(SETTLE_ITERATIONS) {
-            val current = replicator.state.value
-            if (current == previous) return
-            previous = current
-            yield()
+            val next = withTimeoutOrNull(config.pullSettleStep) {
+                replicator.state.first { it != current }
+            } ?: return current
+            current = next
         }
+        return current
     }
 
     override fun onClose() {

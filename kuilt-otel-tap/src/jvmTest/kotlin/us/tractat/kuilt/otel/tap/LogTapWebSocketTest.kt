@@ -40,9 +40,34 @@ class LogTapWebSocketTest {
         LogRecord(recordId = recordId(i), severityText = "INFO", body = "ws log $i")
 
     @Test
-    fun loopbackWebSocketPullReconstructsLogSequence() = testApplication {
+    fun loopbackWebSocketTailStreamsLogSequence() = runTapOverLoopback(recordCount = 10) { client, n ->
+        client.tail().take(n).toList()
+    }
+
+    /**
+     * Regression guard for the asynchronous `pull()` path over a real WebSocket: `pull()`
+     * must wait for the host's first-contact full-state to actually merge — not return the
+     * still-empty initial state — so it reconstructs the full sequence in order with no
+     * duplicates. The in-memory convergence test cannot catch this because its dispatcher
+     * delivers inline; only a real round-trip exercises the await.
+     */
+    @Test
+    fun loopbackWebSocketPullReconstructsLogSequence() = runTapOverLoopback(recordCount = 10) { client, _ ->
+        client.pull()
+    }
+
+    /**
+     * Stands up a real loopback-WebSocket tap with [recordCount] pre-captured records,
+     * runs [extract] against the connected client, and asserts the result is the device's
+     * full sequence in order with no duplicates. Runs under real time, bounded by
+     * [withTimeout].
+     */
+    private fun runTapOverLoopback(
+        recordCount: Int,
+        extract: suspend (client: LogTapClient, count: Int) -> List<LogRecord>,
+    ) = testApplication {
         val exporter = WarpLogRecordExporter(replica = ReplicaId("device"), store = InMemoryDurableStore())
-        val sent = (1..10).map { record(it) }
+        val sent = (1..recordCount).map { record(it) }
         sent.forEach { exporter.export(it) }
 
         val serverLoom = KtorServerLoom(application, path)
@@ -55,7 +80,7 @@ class LogTapWebSocketTest {
 
         val replicatorScope = CoroutineScope(coroutineContext + SupervisorJob())
 
-        val streamed = withTimeout(10_000) {
+        val extracted = withTimeout(15_000) {
             coroutineScope {
                 // The server loom's host() suspends until a client connects, so install and
                 // join must run concurrently.
@@ -63,9 +88,8 @@ class LogTapWebSocketTest {
                 val clientSeam = clientLoom.join(advertisement)
                 val host = hostDeferred.await()
                 val client = LogTapClient(clientSeam, replicatorScope)
-
                 try {
-                    client.tail().take(sent.size).toList()
+                    extract(client, sent.size)
                 } finally {
                     client.close()
                     host.close()
@@ -75,8 +99,9 @@ class LogTapWebSocketTest {
 
         replicatorScope.coroutineContext[kotlinx.coroutines.Job]?.cancel()
 
-        assertEquals(sent.map { it.recordId }, streamed.map { it.recordId }, "order preserved")
-        assertEquals(sent.size, streamed.size, "no duplicates")
-        assertEquals(sent.map { it.body }, streamed.map { it.body })
+        assertEquals(sent.map { it.recordId }, extracted.map { it.recordId }, "order preserved")
+        assertEquals(sent.size, extracted.size, "no duplicates")
+        assertEquals(extracted.map { it.recordId }.toSet().size, extracted.size, "no duplicate ids")
+        assertEquals(sent.map { it.body }, extracted.map { it.body })
     }
 }
