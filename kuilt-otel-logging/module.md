@@ -6,16 +6,24 @@ buffer, through one uniform call on every platform.
 An app keeps logging exactly the way it already does. `installLogCapture` wires
 that output into a shared capture core that maps each log line to an OTLP-shaped
 `LogRecord` and hands it to the durable buffer (`WarpLogRecordExporter` in
-`kuilt-otel`). The install call, the record model, and the buffer are identical on
-JVM, Android, iOS, macOS, and wasmJs; only the thin capture *edge* that hooks into
-the platform's logging output differs.
+`kuilt-otel`). The install call, the record model, the buffer, **and the capture
+edge** are identical on JVM, Android, iOS, macOS, and wasmJs: `kotlin-logging`
+exposes one settable appender on every target, so a single appender hooks the
+output everywhere.
 
 ## Where capture happens
 
-- **Native / JS / wasm** — a `kotlin-logging` (oshai) `Appender` is registered,
-  normalizing each event and feeding the shared core.
-- **JVM / Android** — a no-op for now. `kotlin-logging` logs *through* SLF4J here,
-  so capture must sit at the SLF4J layer; that edge lands in a later milestone.
+One uniform appender is installed in common code on every platform. It feeds each
+event into the shared core and forwards it to a per-platform passthrough so the
+app's existing log output is preserved:
+
+- **JVM / Android / wasm** — forwards to the console appender that was already
+  installed.
+- **iOS / macOS** — writes to the Apple unified logging system (`os_log`). The
+  message is passed as the `%{public}s` *argument*, never as the format string, so
+  a raw `%` in a line (e.g. `url=%20`, `100% done`) renders literally and can never
+  trigger the printf-format-string crash class. The handle honours a configured
+  `KotlinLoggingConfiguration.subsystem` / `.category` for filtered Console output.
 
 ## Determinism
 

@@ -19,30 +19,58 @@ kotlin {
             implementation(libs.kotlinx.coroutines.test)
         }
 
-        // jvmAndAndroidMain: the JVM/Android capture edge is a no-op in M1. On the JVM
-        // kotlin-logging logs *through* SLF4J, so capture must sit at the SLF4J layer —
-        // a separate milestone. Adding this intermediate disables KMP's hierarchy
-        // auto-wiring, so every other intermediate is declared explicitly below
-        // (mirroring kuilt-otel / kuilt-tcp / kuilt-multipeer).
-        val jvmAndAndroidMain by creating { dependsOn(commonMain.get()) }
-        jvmMain.get().dependsOn(jvmAndAndroidMain)
-        androidMain.get().dependsOn(jvmAndAndroidMain)
+        // The capture edge is one uniform commonMain hook now (oshai 8.x makes the
+        // appender settable on every target). The only platform-specific piece is
+        // captureDelegate(previous): non-Apple targets pass console output straight
+        // through; Apple targets route it to a %-safe os_log appender. Two
+        // intermediates carry those two actuals. Declaring any intermediate disables
+        // KMP's hierarchy auto-wiring, so every intermediate is declared explicitly
+        // below (mirroring kuilt-otel / kuilt-tcp / kuilt-multipeer).
 
-        // nonJvmMain: the oshai Appender capture edge, shared by every non-JVM target
-        // (iOS, macOS, wasmJs). Off the JVM, kotlin-logging routes through its own
-        // Appender mechanism, so this is where capture hooks in.
-        val nonJvmMain by creating { dependsOn(commonMain.get()) }
-        val iosArm64Main by getting { dependsOn(nonJvmMain) }
-        val iosSimulatorArm64Main by getting { dependsOn(nonJvmMain) }
-        val macosArm64Main by getting { dependsOn(nonJvmMain) }
-        val wasmJsMain by getting { dependsOn(nonJvmMain) }
+        // nonAppleMain: captureDelegate(previous) = previous — preserve the existing
+        // console appender on JVM, Android and wasmJs.
+        val nonAppleMain by creating { dependsOn(commonMain.get()) }
+        jvmMain.get().dependsOn(nonAppleMain)
+        androidMain.get().dependsOn(nonAppleMain)
+        val wasmJsMain by getting { dependsOn(nonAppleMain) }
 
-        // nonJvmTest: exercises the oshai edge against the shared capture core on a
-        // non-JVM target.
-        val nonJvmTest by creating { dependsOn(commonTest.get()) }
-        val iosArm64Test by getting { dependsOn(nonJvmTest) }
-        val iosSimulatorArm64Test by getting { dependsOn(nonJvmTest) }
-        val macosArm64Test by getting { dependsOn(nonJvmTest) }
-        val wasmJsTest by getting { dependsOn(nonJvmTest) }
+        // appleMain: captureDelegate(previous) = OSLogAppender() — a %-safe Apple
+        // unified-logging (os_log) appender wired via the oslog cinterop below.
+        val appleMain by creating { dependsOn(commonMain.get()) }
+        val iosArm64Main by getting { dependsOn(appleMain) }
+        val iosSimulatorArm64Main by getting { dependsOn(appleMain) }
+        val macosArm64Main by getting { dependsOn(appleMain) }
+
+        // appleTest: exercises the os_log appender's %-safety natively.
+        val appleTest by creating { dependsOn(commonTest.get()) }
+        val iosArm64Test by getting { dependsOn(appleTest) }
+        val iosSimulatorArm64Test by getting { dependsOn(appleTest) }
+        val macosArm64Test by getting { dependsOn(appleTest) }
+    }
+
+    // oslog cinterop — Apple Kotlin/Native targets, main compilation.
+    //
+    // os/log.h ships in the Apple SDK, so no vendored sources or prebuilt libs are
+    // needed; the .def's `---` body is a tiny C shim that calls the os_log macros
+    // (which require a string-literal format) with the message passed as a
+    // "%{public}s" argument — never as the format string. That is what makes a raw
+    // '%' in a log line render literally instead of being read as a printf
+    // specifier. Apple targets are host-disabled on the Linux CI runner, so this
+    // cinterop is compiled on macOS (local dev + the macOS publish job).
+    val oslogDefFile = layout.projectDirectory.file("src/nativeInterop/cinterop/oslog.def")
+    macosArm64 {
+        compilations.named("main") {
+            cinterops.create("oslog") { defFile(oslogDefFile) }
+        }
+    }
+    iosArm64 {
+        compilations.named("main") {
+            cinterops.create("oslog") { defFile(oslogDefFile) }
+        }
+    }
+    iosSimulatorArm64 {
+        compilations.named("main") {
+            cinterops.create("oslog") { defFile(oslogDefFile) }
+        }
     }
 }
