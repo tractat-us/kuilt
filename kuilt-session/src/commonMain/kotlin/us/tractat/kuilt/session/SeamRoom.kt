@@ -691,6 +691,12 @@ internal class SeamRoom(
      *
      * A separate coroutine collects the detector's events and maps them to [MembershipEvent]s.
      *
+     * All of the detector's coroutines — its heartbeat loop, its inbound collector (which
+     * subscribes to the never-completing [rawIncoming]), and our event collector — are owned
+     * by one child [Job] stored in [detectorJobs]. Cancelling that job via [stopDetector]
+     * (or [leave]) tears the whole detector down; without this single owner the heartbeat and
+     * inbound coroutines would outlive the evicted member (#1001).
+     *
      * Callers must hold [lock] when invoking this method.
      */
     private fun startDetector(member: Member) {
@@ -701,16 +707,18 @@ internal class SeamRoom(
             config = heartbeatConfig,
             clock = clock,
         )
-        detector.start(scope)
-
-        val job = scope.launch {
+        val detectorJob = Job(scope.coroutineContext[Job])
+        val detectorScope = CoroutineScope(scope.coroutineContext + detectorJob)
+        detector.start(detectorScope)
+        detectorScope.launch {
             detector.events.collect { event -> handlePartitionEvent(event) }
         }
-        detectorJobs[member.id] = job
+        detectorJobs[member.id] = detectorJob
     }
 
     /**
-     * Cancels the detector job for [peerId]. Callers must hold [lock].
+     * Cancels the per-peer detector — its heartbeat loop, inbound collector, and event
+     * collector — for [peerId]. Callers must hold [lock].
      */
     private fun stopDetector(peerId: PeerId) {
         detectorJobs.remove(peerId)?.cancel()
