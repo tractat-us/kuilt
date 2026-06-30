@@ -3,6 +3,7 @@
 package us.tractat.kuilt.session
 
 import kotlinx.coroutines.async
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.filterIsInstance
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.StandardTestDispatcher
@@ -158,6 +159,89 @@ class TransportCloseWindowTest {
 
             assertIs<us.tractat.kuilt.session.partition.ResumeResult.Success>(result)
             assertIs<MembershipEvent.Resumed>(hostResumed.await())
+        }
+
+    @Test
+    fun `reconnect does not re-emit Joined for an already-admitted peer`() =
+        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+            val dispatcher = coroutineContext[ContinuationInterceptor]!!
+            var clockMs = 0L
+            val clock: () -> Instant = { Instant.fromEpochMilliseconds(clockMs) }
+
+            val source = InMemoryConnectionSource()
+            val serverLoom = MuxServerLoom(
+                source = source,
+                scope = backgroundScope,
+                selfId = PeerId("server"),
+                authorizer = RoomAuthorizer.AllowAll,
+                dispatcher = dispatcher,
+                random = Random(13L),
+            )
+            val hostSeam = serverLoom.host(Pattern("table-7"))
+            val hostRoom = SeamRoom(
+                seam = hostSeam,
+                role = SessionRole.Host,
+                displayName = "table-7",
+                scope = backgroundScope,
+                clock = clock,
+                heartbeatConfig = fastConfig,
+                roomId = RoomId("room-1"),
+            ).also { it.start() }
+
+            val client = PeerId("client")
+            val (serverConn1, clientConn1) = connectionPair()
+            source.offer(serverConn1)
+            val clientMesh1 = meshSeam(client, listOf(clientConn1), dispatcher, Random(1L))
+            val clientMux1 = NamedMux(clientMesh1, backgroundScope)
+            val joinerRoom1 = SeamRoom(
+                seam = clientMux1.channel("table-7"),
+                role = SessionRole.Joiner,
+                displayName = "client",
+                scope = backgroundScope,
+                clock = clock,
+                heartbeatConfig = fastConfig,
+                roomId = null,
+            ).also { it.start() }
+
+            hostRoom.roster.first { it.size == 1 }
+            joinerRoom1.roster.first { it.isNotEmpty() }
+            val token = joinerRoom1.resumeToken!!
+
+            // Collect ALL host events from this point through the whole reconnect flow.
+            val hostEvents = mutableListOf<MembershipEvent>()
+            backgroundScope.launch { hostRoom.events.collect { hostEvents.add(it) } }
+
+            // Drop, then reconnect a fresh transport with the SAME PeerId.
+            clientMesh1.close()
+            hostRoom.events.filterIsInstance<MembershipEvent.WindowOpened>().first()
+
+            val (serverConn2, clientConn2) = connectionPair()
+            source.offer(serverConn2)
+            val clientMesh2 = meshSeam(client, listOf(clientConn2), dispatcher, Random(2L))
+            val clientMux2 = NamedMux(clientMesh2, backgroundScope)
+            val joinerRoom2 = SeamRoom(
+                seam = clientMux2.channel("table-7"),
+                role = SessionRole.Joiner,
+                displayName = "client",
+                scope = backgroundScope,
+                clock = clock,
+                heartbeatConfig = fastConfig,
+                roomId = null,
+            ).also { it.start() }
+
+            // Fresh SeamRoom re-broadcasts Hello on Woven → host sees Hello from an
+            // already-admitted PeerId → re-admit path.
+            joinerRoom2.roster.first { it.isNotEmpty() }
+            joinerRoom2.resume(token)
+
+            // Let the re-admit / resume frames settle.
+            repeat(4) { clockMs += 100L; advanceTimeBy(100L) }
+
+            val joinedForClient = hostEvents.count {
+                it is MembershipEvent.Joined && it.member.id == client
+            }
+            assertEquals(1, joinedForClient, "expected exactly one Joined for $client across reconnect")
+            assertEquals(1, hostRoom.roster.value.size)
         }
 
     @Test

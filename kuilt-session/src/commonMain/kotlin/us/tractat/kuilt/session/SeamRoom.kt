@@ -795,15 +795,25 @@ internal class SeamRoom(
     // ── Roster management ────────────────────────────────────────────────────
 
     /**
-     * Adds [member] to [admittedById], [_roster], and [_rosterPeers], emits
-     * [MembershipEvent.Joined], and starts its detector. Callers must hold [lock].
+     * Adds (or refreshes) [member] in [admittedById], [_roster], and [_rosterPeers].
+     * Callers must hold [lock].
+     *
+     * Idempotent re-admit: when [member]'s id is already admitted (e.g. a dropped
+     * joiner reconnects mid-window and re-broadcasts [AdmitMessage.Hello]), this
+     * refreshes the roster entry but does **not** re-emit [MembershipEvent.Joined]
+     * or restart the detector — the existing per-peer detector is still alive and
+     * recovers on its own via [PartitionEvent.PeerRecovered] when frames resume.
+     * Restarting it would orphan the prior detector's coroutines (a leak).
      */
     private fun addToRoster(member: Member) {
+        val isReadmit = admittedById.containsKey(member.id)
         admittedById[member.id] = member
-        _roster.update { current -> current + member }
+        _roster.update { current -> current.filterNot { it.id == member.id }.toSet() + member }
         _rosterPeers.update { current -> current + member.id }
-        _events.tryEmit(MembershipEvent.Joined(member))
-        startDetector(member)
+        if (!isReadmit) {
+            _events.tryEmit(MembershipEvent.Joined(member))
+            startDetector(member)
+        }
     }
 
     private fun removeFromRoster(peerId: PeerId, reason: LeaveReason) {
