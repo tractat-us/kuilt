@@ -1,7 +1,7 @@
 package us.tractat.kuilt.otel.tap.test
 
 import kotlinx.coroutines.CancellationException
-import us.tractat.kuilt.core.runCatchingCancellable
+import kotlinx.coroutines.TimeoutCancellationException
 import us.tractat.kuilt.otel.LogRecord
 import us.tractat.kuilt.otel.tap.LogTapClient
 
@@ -46,8 +46,19 @@ public fun LogRecord.describe(): String {
  * [emit] rather than thrown, so a dump never masks the original test failure.
  */
 public suspend fun LogTapClient.dumpLogs(emit: (String) -> Unit = ::printLine) {
-    val records = runCatchingCancellable { pull() }.getOrElse { cause ->
-        emit("dumpLogs: could not pull device logs: ${cause.message ?: cause}")
+    val records = try {
+        pull()
+    } catch (timeout: TimeoutCancellationException) {
+        // pull()'s own scoped timeout (e.g. the device never connected). This is a
+        // reported dump failure, NOT structured cancellation — catch it before the
+        // CancellationException clause (it is a subtype) so a dump never masks the
+        // original test failure.
+        emit("dumpLogs: could not pull device logs: ${timeout.message ?: timeout}")
+        return
+    } catch (cancellation: CancellationException) {
+        throw cancellation
+    } catch (failure: Throwable) {
+        emit("dumpLogs: could not pull device logs: ${failure.message ?: failure}")
         return
     }
     emit("--- captured device logs (${records.size}) ---")

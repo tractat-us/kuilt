@@ -115,6 +115,31 @@ class LogAssertionsTest {
     }
 
     @Test
+    fun dumpingOnFailurePullTimeoutDoesNotMaskTheOriginalFailure() = runTest(UnconfinedTestDispatcher()) {
+        // A client whose device never connects: it joins a loom no host is on, so
+        // awaitRemotePeer never completes and pull() hits its own (virtual) timeout.
+        // The pull timeout must NOT replace the original test failure.
+        val orphanConfig = LogTapConfig(
+            pullTimeout = 1.seconds,
+            quilterConfig = QuilterConfig(expectVirtualTime = true),
+        )
+        val loom = InMemoryLoom()
+        val tap = LogTapClient(loom.join(InMemoryTag("orphan")), backgroundScope, orphanConfig)
+            .also { client = it }
+
+        val dumped = mutableListOf<String>()
+        val failure = assertFailsWith<AssertionError> {
+            tap.dumpingOnFailure(emit = { dumped += it }) {
+                throw AssertionError("original failure must survive")
+            }
+        }
+        assertAll(
+            { assertEquals("original failure must survive", failure.message, "pull timeout did not mask the original failure") },
+            { assertTrue(dumped.any { it.contains("could not pull") }, "the pull timeout is reported through emit") },
+        )
+    }
+
+    @Test
     fun dumpingOnFailureReturnsBlockResultOnSuccess() = runTest(UnconfinedTestDispatcher()) {
         val exporter = WarpLogRecordExporter(ReplicaId("device"), InMemoryDurableStore())
         exporter.export(record(1, "x"))
