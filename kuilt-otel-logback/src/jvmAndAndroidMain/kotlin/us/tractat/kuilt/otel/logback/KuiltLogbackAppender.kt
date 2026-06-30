@@ -35,10 +35,21 @@ import us.tractat.kuilt.otel.logging.NormalizedLogEvent
  * channel-drain pattern — it preserves insertion order without relying on
  * dispatcher confinement for mutual exclusion.
  *
+ * ## Teardown
+ *
+ * Stop this appender the standard logback way — [stop] (after
+ * `LoggerContext`/`Logger.detachAppender`). [stop] both halts the log path and
+ * **closes the channel** so the drain coroutine completes and the
+ * `capture → exporter → store` graph is released. Cancelling [scope] is only a
+ * backstop: cancelling it while the appender is still attached and started would
+ * kill the drain while [append] keeps [Channel.trySend]-ing into a channel nobody
+ * drains — an unbounded leak. Always [stop] (or detach) to tear down; don't rely
+ * on scope-cancellation alone.
+ *
  * @param capture the shared capture core mapped events are exported through.
- * @param scope the [CoroutineScope] the drain coroutine runs on. Its lifetime
- *   bounds capture: cancelling it stops capture. Inject a test scope in tests; an
- *   application-owned scope in production.
+ * @param scope the [CoroutineScope] the drain coroutine runs on. A backstop on the
+ *   appender's lifetime, not the primary teardown — see *Teardown* above. Inject a
+ *   test scope in tests; an application-owned scope in production.
  */
 public class KuiltLogbackAppender(
     private val capture: LogCapture,
@@ -60,6 +71,18 @@ public class KuiltLogbackAppender(
     protected override fun append(eventObject: ILoggingEvent) {
         val normalized = eventObject.normalize() ?: return
         events.trySend(normalized)
+    }
+
+    /**
+     * Stop the appender: logback flips `started = false` (so [append] is no longer
+     * invoked) and we close the event channel, completing the drain coroutine and
+     * releasing the `capture → exporter → store` graph. Idempotent — closing an
+     * already-closed channel is a no-op, and a [Channel.trySend] racing an in-flight
+     * [append] after close returns a closed result and is dropped harmlessly.
+     */
+    override fun stop() {
+        super.stop()
+        events.close()
     }
 }
 

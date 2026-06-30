@@ -85,6 +85,37 @@ class KuiltLogbackAppenderTest {
     }
 
     @Test
+    fun stopEndsCaptureAndClosesTheDrain() = runTest {
+        val store = InMemoryDurableStore()
+        val exporter = WarpLogRecordExporter(ReplicaId("device-1"), store)
+        val installed = installLogbackCapture(
+            exporter = exporter,
+            config = CaptureConfig(),
+            clock = fixedClock,
+            random = Random(1),
+            scope = backgroundScope,
+            loggerContext = context,
+        )
+        appender = installed
+
+        val slf4j = LoggerFactory.getLogger("com.example.Framework")
+        slf4j.warn("before stop")
+        testScheduler.runCurrent()
+
+        // Tear down the standard logback way: detach + stop. stop() closes the
+        // channel so the drain coroutine completes (no leak), and halts the log path.
+        context.getLogger(Logger.ROOT_LOGGER_NAME).detachAppender(installed)
+        installed.stop()
+        appender = null
+
+        slf4j.warn("after stop")
+        testScheduler.runCurrent()
+
+        // Only the pre-stop line was captured; the post-stop line is not.
+        assertEquals(listOf("before stop"), exporter.snapshot().toList().map { it.body })
+    }
+
+    @Test
     fun belowMinLevelEventsAreDropped() = runTest {
         val store = InMemoryDurableStore()
         val exporter = WarpLogRecordExporter(ReplicaId("device-1"), store)

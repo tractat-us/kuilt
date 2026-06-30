@@ -29,14 +29,18 @@ import kotlin.time.Clock
  * @param clock source of event timestamps (required — never the wall clock).
  * @param random source of the per-record id bytes (required — never an unseeded
  *   default).
- * @param scope the [CoroutineScope] the capture edge drains events on. Its
- *   lifetime bounds capture: cancelling it stops capture. Inject a test scope in
- *   tests; an application-owned scope in production.
+ * @param scope the [CoroutineScope] the capture edge drains events on. A backstop
+ *   on the appender's lifetime, not the primary teardown: cancelling it while the
+ *   appender is still attached leaks (see [KuiltLogbackAppender]). Uninstall via
+ *   the returned appender instead. Inject a test scope in tests; an
+ *   application-owned scope in production.
  * @param loggerContext the logback [LoggerContext] to attach to. Defaults to the
  *   process-wide context SLF4J is bound to — the one raw `LoggerFactory.getLogger`
  *   calls resolve against.
- * @return the started [KuiltLogbackAppender]; detach it
- *   (`root.detachAppender(it)`) and `stop()` it to uninstall.
+ * @return the started [KuiltLogbackAppender]. **Uninstall it** by detaching it
+ *   (`root.detachAppender(it)`) and calling [KuiltLogbackAppender.stop] — `stop()`
+ *   halts the log path *and* closes the drain, fully releasing capture. (Cancelling
+ *   [scope] alone is not sufficient — see [KuiltLogbackAppender].)
  */
 public fun installLogbackCapture(
     exporter: WarpLogRecordExporter,
