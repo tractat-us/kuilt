@@ -1,0 +1,50 @@
+package us.tractat.kuilt.otel.tap.test
+
+import kotlinx.io.Sink
+import kotlinx.io.writeString
+import kotlinx.serialization.json.Json
+import us.tractat.kuilt.otel.LogRecord
+
+/**
+ * Turn a device's extracted logs into a saveable file — one record per line, so a
+ * failed CI or simulator run can carry the device's own logs as an artifact you can
+ * open, grep, or replay later.
+ *
+ * The format is **NDJSON** (newline-delimited JSON): every line is one complete
+ * [LogRecord] as JSON, and a blank input simply yields no lines. Because each line
+ * stands alone, the file streams and appends cleanly, and a downstream tool can read
+ * it a record at a time without parsing the whole file.
+ */
+private val artifactJson: Json = Json {
+    // Drop absent (null) fields so each line stays compact and readable; present
+    // fields still round-trip back to a LogRecord.
+    explicitNulls = false
+}
+
+/**
+ * The NDJSON lines for [records]: each element is one [LogRecord] serialized to a
+ * single line of JSON, in the given order. No trailing newline is added — the
+ * sink-writing [writeLogArtifact] wrapper appends the line separators.
+ *
+ * This is the pure, sink-free core: hand it to any writer, fold it into a string, or
+ * assert on it directly in a test.
+ */
+public fun logArtifactLines(records: List<LogRecord>): Sequence<String> =
+    records.asSequence().map { artifactJson.encodeToString(LogRecord.serializer(), it) }
+
+/**
+ * Write [records] to [sink] as an NDJSON artifact: one JSON [LogRecord] per line,
+ * newline-terminated, in order. One call per booted device produces one file.
+ *
+ * Uses a kotlinx-io [Sink] so the same writer runs on every target — a file on the
+ * JVM/Android/Native, an in-memory buffer in a test. The sink is flushed before
+ * returning; closing it remains the caller's responsibility (the caller owns the
+ * file/connection lifecycle).
+ */
+public fun writeLogArtifact(records: List<LogRecord>, sink: Sink) {
+    for (line in logArtifactLines(records)) {
+        sink.writeString(line)
+        sink.writeString("\n")
+    }
+    sink.flush()
+}
