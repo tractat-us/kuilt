@@ -79,7 +79,8 @@ to a test harness).
 | Question | Decision |
 |---|---|
 | What does "the same across platforms" mean? | **Uniform surface *and* uniform mechanism.** Identical install call, `LogRecord` model, tap, and capture edge (one oshai appender) on every platform. Scope is the app's `kotlin-logging` output, identically everywhere. |
-| Capture mechanism | **A shared `commonMain` capture core fed by one uniform oshai-appender edge on every target.** `installLogCapture` sets `KotlinLoggingConfiguration.loggerFactory = DirectLoggerFactory` and registers a kuilt `CapturingAppender` via `KotlinLoggingConfiguration.direct.appender` (delegating to the prior appender so console output is preserved). Requires oshai `kotlin-logging` **8.x** (the 7.x line had no settable Native appender). |
+| Capture mechanism | **A shared `commonMain` capture core fed by one uniform oshai-appender edge on every target.** `installLogCapture` sets `KotlinLoggingConfiguration.loggerFactory = DirectLoggerFactory` and registers a kuilt `CapturingAppender` via `KotlinLoggingConfiguration.direct.appender`. Requires oshai `kotlin-logging` **8.x** (the 7.x line had no settable Native appender). |
+| What the appender delegates to (preserve existing output) | **The `CapturingAppender` delegates to a per-platform *delegate appender* so the platform's normal log output is preserved while it additionally captures.** On JVM/JS/wasm the delegate is the prior `direct.appender` (console). On **Darwin** the delegate is a kuilt **`%`-safe `OSLogAppender`** that writes to `os_log` honouring `KotlinLoggingConfiguration.subsystem`/`category` (so subsystem-filtered Console.app output keeps working) and escapes `%`→`%%` before `_os_log_internal`, sidestepping the format-string crash class that the default `DarwinKLogger` os_log path exhibits. This is the one platform-specific piece of the edge (a small Darwin `actual`); registration and the capture core stay `commonMain`. |
 | JVM capture surface | **The same `DirectLoggerFactory` + `direct.appender` path as every other target.** No SLF4J sink. Trade-off: with `DirectLoggerFactory` active, JVM `kotlin-logging` no longer routes through SLF4J, so the app's logback/log4j config and other libraries' raw SLF4J output are not captured — an accepted honest limit (an optional logback-appender variant is an M2 follow-on for apps that need SLF4J-side capture). |
 | Where do logs go | **kuilt's own offline RGA buffer** is the spine. The OpenTelemetry SDK is **not** required to use kuilt logging. |
 | Receiving end of extracted logs | **The kuilt-native log-tap peer** (a peer joins and pulls/tails the RGA). OTLP-forwarding is one *sink behind that peer*, deferred to M2. |
@@ -114,7 +115,7 @@ own `kotlin-logging` calls) can add the optional M2 logback-appender variant.
 
 | Module | Targets | Role |
 |---|---|---|
-| `:kuilt-otel-logging` | all | **Capture.** The `commonMain` core (`LogCapture` event→`LogRecord` mapping, `CaptureConfig`, `installLogCapture`) plus the one uniform `commonMain` capture edge — a kuilt `CapturingAppender` registered via oshai's `direct.appender`. No per-platform source sets, no `expect`/`actual`. Depends on `:kuilt-otel` + kotlin-logging **8.x**. |
+| `:kuilt-otel-logging` | all | **Capture.** The `commonMain` core (`LogCapture` event→`LogRecord` mapping, `CaptureConfig`, `installLogCapture`) plus the uniform `commonMain` capture edge — a kuilt `CapturingAppender` registered via oshai's `direct.appender`. The only platform-specific code is a small Darwin `actual` supplying the `%`-safe `OSLogAppender` delegate. Depends on `:kuilt-otel` + kotlin-logging **8.x**. |
 | `:kuilt-otel-tap` | all | **The log-tap peer.** Host side opens an opt-in, loopback-default log Room; client side joins and pulls a snapshot or live-tails. Replicates the log `Rga` over a `Seam` via `:kuilt-quilter`. Fabric-agnostic — the milestone wires loopback WebSocket (`:kuilt-websocket`); mDNS/Multipeer is a config swap (follow-on). Depends on `:kuilt-otel` + `:kuilt-quilter` + `:kuilt-core`. |
 | `:kuilt-otel-logging-otel` *(M2)* | JVM, Android | The OTel-SDK trace-context provider for the sampling-gate, **and** a kuilt `LogRecordExporter` so an already-instrumented OTel app can feed the same RGA. Isolates the opt-in `opentelemetry-api`/`opentelemetry-sdk` dependency. |
 | `:kuilt-otel-otlp` *(M2)* | all | Concrete Ktor OTLP/HTTP edge → a standard OpenTelemetry Collector. The OTLP-forwarding sink behind the tap peer. |
@@ -137,9 +138,10 @@ also avoids any "capture our own captured logs" feedback risk.
 - `CaptureConfig`: minimum level and attribute mapping. (The trace/sampling
   policy is M2 — M1 capture is always-on.)
 - One-call install: `installLogCapture(exporter, config, clock, random, scope)` —
-  **the single uniform entry point on every platform.** It builds the `LogCapture`
-  core and installs the capture edge below. No `expect`/`actual`; the body is the
-  same code on every target.
+  **the single uniform entry point on every platform.** Its body is common code on
+  every target; it builds the `LogCapture` core and installs the capture edge
+  below. The only `expect`/`actual` is the per-platform *delegate appender* the
+  edge wraps (Darwin supplies the `%`-safe `OSLogAppender`).
 
 ### 2. The capture edge (oshai `direct.appender`, `commonMain`)
 - oshai `kotlin-logging` 8.x exposes the `Appender` interface and `KLoggingEvent`
@@ -147,11 +149,18 @@ also avoids any "capture our own captured logs" feedback risk.
   every target (JVM, Android, iOS, macOS, wasmJs) once the active logger factory
   is `DirectLoggerFactory`.
 - `installLogCapture` therefore: sets
-  `KotlinLoggingConfiguration.loggerFactory = DirectLoggerFactory`, reads the
-  existing `direct.appender`, and replaces it with a kuilt `CapturingAppender`
-  that **delegates to the previous appender** (so the platform's default console /
-  os_log output is preserved) and additionally normalizes each `KLoggingEvent`
-  and feeds it to the shared `LogCapture` core.
+  `KotlinLoggingConfiguration.loggerFactory = DirectLoggerFactory` and replaces
+  `direct.appender` with a kuilt `CapturingAppender` that **delegates to a
+  per-platform delegate appender** (so normal log output is preserved) and
+  additionally normalizes each `KLoggingEvent` and feeds it to the shared
+  `LogCapture` core.
+- The delegate appender is selected by a small `expect`/`actual`:
+  - **default (JVM/Android/JS/wasm):** the prior `direct.appender` (console).
+  - **Darwin (`actual`):** a kuilt **`%`-safe `OSLogAppender`** — writes to
+    `os_log` using `KotlinLoggingConfiguration.subsystem`/`category` (so
+    subsystem-filtered Console.app output is preserved) and escapes `%`→`%%`
+    before the os_log format string, avoiding the crash class the default
+    `DarwinKLogger` path has. This is the only platform-specific code in the edge.
 - oshai's `log` callback is synchronous and may run on any thread; `LogCapture`
   is `suspend`. A single dedicated drain coroutine bridges them — `log` hands the
   normalized event to an unbounded `Channel`, the drain coroutine consumes in FIFO
@@ -179,9 +188,9 @@ On **every target**, an app's `kotlin-logging` output is captured into
 `WarpLogRecordExporter` through the one `installLogCapture` call; an in-test peer
 over a loopback-WebSocket `Loom` pair `pull()`s and reconstructs the host's log
 sequence in order with no duplicates; and the full build is green across all
-targets. (Concretely: the one uniform appender edge is exercised in `commonTest`,
-so it runs on JVM, Native, and wasm against the same shared core and the same
-tap — no per-platform edge to test separately.)
+targets. (Concretely: the uniform appender edge is exercised in `commonTest`, so
+it runs on JVM, Native, and wasm against the same shared core and the same tap; a
+Darwin-only test asserts the `%`-safe `OSLogAppender` delegate escapes `%`→`%%`.)
 
 ## Milestone 2 — sampling, secondary egress & reach (follow-on sub-issues)
 
@@ -210,8 +219,9 @@ tap — no per-platform edge to test separately.)
 
 - **Uniform surface and mechanism.** `installLogCapture(...)` and
   `LogTapClient.pull()/tail()` are identical on every platform, and so is the
-  capture edge — one `commonMain` oshai appender via `direct.appender`, no
-  `expect`/`actual`.
+  capture edge — one `commonMain` oshai appender via `direct.appender`. The sole
+  platform-specific piece is the Darwin `%`-safe `OSLogAppender` delegate
+  (one `expect`/`actual`), invisible to the caller.
 - **Capture** is a pure mapping plus an `export` call; the `Clock` and the RNG for
   `recordId` are injected dependencies (test determinism, repo policy).
 - **Extraction** replicates the existing `Rga<LogRecord>` over a `Seam` via
@@ -228,6 +238,9 @@ tap — no per-platform edge to test separately.)
 - **Capture edge:** in `commonTest`, install the appender, emit through a real
   `KotlinLogging.logger`, and assert the resulting `LogRecord` — runs unchanged on
   JVM, Native, and wasm (one edge, one test, every target).
+- **Darwin os_log delegate:** a Darwin-target test asserts the `%`-safe
+  `OSLogAppender` escapes `%`→`%%` so a `%`-bearing line cannot reach `os_log` as a
+  format specifier.
 - **Tap:** two exporters over an in-memory `Loom` pair (the conformance harness);
   assert the client `pull()` reconstructs the host's log sequence (order +
   no-duplicate); a loopback-WebSocket integration test for simulator realism.
@@ -243,10 +256,12 @@ tap — no per-platform edge to test separately.)
   On the JVM that means `kotlin-logging` stops routing through SLF4J while capture
   is installed — the app's logback/log4j formatting and routing no longer apply to
   its `kotlin-logging` output, and other libraries' raw SLF4J logs are not
-  captured. On Darwin it replaces the default os_log routing with the direct
-  console appender (which the `CapturingAppender` delegates to, so console output
-  is preserved). Scope is the app's own `kotlin-logging`, uniformly. Apps that need
-  SLF4J-side capture add the optional M2 logback variant (#10).
+  captured. On Darwin the default `DarwinKLogger` os_log path is replaced; the
+  `CapturingAppender` delegates to a kuilt `%`-safe `OSLogAppender` that preserves
+  subsystem-filtered Console.app output **and** escapes `%` (fixing the
+  format-string crash class the default Darwin path has). Scope is the app's own
+  `kotlin-logging`, uniformly. Apps that need SLF4J-side capture add the optional
+  M2 logback variant (#10).
 - **Sampled-gate is M2 and JVM/Android-first.** All platforms get always-on
   capture in M1; the trace gate lands later and reaches wasm/iOS only once the
   kuilt-native `TraceContextProvider` exists (M2 #9).
