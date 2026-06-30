@@ -137,6 +137,13 @@ also avoids any "capture our own captured logs" feedback risk.
   - calls `exporter.export(record)`.
 - `CaptureConfig`: minimum level and attribute mapping. (The trace/sampling
   policy is M2 — M1 capture is always-on.)
+- Because capture is **always-on and structured** (key/value pairs → `attributes`),
+  it also carries structured *diagnostic* and *duration/perf* lines an app emits
+  through `kotlin-logging` (e.g. `span=bootstrap durationMs=42`) — these are
+  captured and extractable through the same tap with no separate pipeline, and
+  always-on means a debugging session never samples them away. (Monotonic-clock
+  span *durations* as first-class structured records are a `:kuilt-otel`
+  `SpanRecord` concern, layered in M2, not part of M1 log capture.)
 - One-call install: `installLogCapture(exporter, config, clock, random, scope)` —
   **the single uniform entry point on every platform.** Its body is common code on
   every target; it builds the `LogCapture` core and installs the capture edge
