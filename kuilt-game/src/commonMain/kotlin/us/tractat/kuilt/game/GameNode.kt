@@ -922,8 +922,11 @@ private fun CoroutineScope.monitorVoterLiveness(
  * On [PartitionEvent.PeerLost], sends [voterId] to [evictions] and stops.
  * [PartitionEvent.PeerUnresponsive] and [PartitionEvent.PeerRecovered] are no-ops at this layer
  * (Raft's own replication tracks liveness; the eviction gate is [PeerLost] only).
+ *
+ * `internal` (not `private`) so the per-voter teardown contract is unit-testable: cancelling the
+ * returned [Job] must tear down *all* of the detector's coroutines, not just the events collector.
  */
-private fun CoroutineScope.launchDetectorFor(
+internal fun CoroutineScope.launchDetectorFor(
     voterId: NodeId,
     heartbeatSeam: Seam,
     rawLiveness: MutableSharedFlow<Swatch>,
@@ -934,8 +937,13 @@ private fun CoroutineScope.launchDetectorFor(
     val peerId = PeerId(voterId.value)
     val perPeerSeam = GamePerPeerSeam(heartbeatSeam, peerId, rawLiveness)
     val detector = HeartbeatPartitionDetector(perPeerSeam, peerId, config, clock)
-    detector.start(this)
+    // Own all of the detector's coroutines under one umbrella job: `detector.start(this)` makes
+    // the heartbeat loop and the inbound collector (which subscribes to the never-completing
+    // [rawLiveness]) children of this launch, so cancelling the returned job tears the whole
+    // detector down. Storing only the events-collector would orphan the other two past the
+    // voter's eviction, on the long-lived session scope (#1001-class leak).
     return launch {
+        detector.start(this)
         detector.events.collect { event ->
             if (event is PartitionEvent.PeerLost) {
                 evictions.trySend(voterId)
