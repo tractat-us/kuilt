@@ -3,6 +3,7 @@ package us.tractat.kuilt.otel.logback
 import ch.qos.logback.classic.Logger
 import ch.qos.logback.classic.LoggerContext
 import kotlinx.coroutines.CoroutineScope
+import org.slf4j.ILoggerFactory
 import org.slf4j.LoggerFactory
 import us.tractat.kuilt.otel.WarpLogRecordExporter
 import us.tractat.kuilt.otel.logging.CaptureConfig
@@ -43,7 +44,7 @@ public fun installLogbackCapture(
     clock: Clock,
     random: Random,
     scope: CoroutineScope,
-    loggerContext: LoggerContext = LoggerFactory.getILoggerFactory() as LoggerContext,
+    loggerContext: LoggerContext = defaultLoggerContext(),
 ): KuiltLogbackAppender {
     val capture = LogCapture(exporter, config, clock, random)
     val appender = KuiltLogbackAppender(capture, scope).apply {
@@ -57,3 +58,14 @@ public fun installLogbackCapture(
 
 /** The [KuiltLogbackAppender.getName] of the appender [installLogbackCapture] attaches. */
 public const val APPENDER_NAME: String = "kuilt-capture"
+
+/**
+ * The process-wide logback [LoggerContext] SLF4J is bound to — the one raw
+ * `LoggerFactory.getLogger` calls resolve against. Binds the platform-typed
+ * factory to a non-null local before the cast so it reads as a plain
+ * non-nullable cast.
+ */
+private fun defaultLoggerContext(): LoggerContext {
+    val factory: ILoggerFactory = LoggerFactory.getILoggerFactory()
+    return factory as LoggerContext
+}

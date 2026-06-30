@@ -3,6 +3,7 @@ package us.tractat.kuilt.otel.logback
 import ch.qos.logback.classic.Logger
 import ch.qos.logback.classic.LoggerContext
 import kotlinx.coroutines.test.runTest
+import org.slf4j.ILoggerFactory
 import org.slf4j.LoggerFactory
 import org.slf4j.MDC
 import us.tractat.kuilt.crdt.ReplicaId
@@ -27,7 +28,10 @@ import kotlin.time.Instant
  */
 class KuiltLogbackAppenderTest {
 
-    private val context = LoggerFactory.getILoggerFactory() as LoggerContext
+    private val context: LoggerContext = run {
+        val factory: ILoggerFactory = LoggerFactory.getILoggerFactory()
+        factory as LoggerContext
+    }
     private var appender: KuiltLogbackAppender? = null
 
     private val fixedClock = object : Clock {
