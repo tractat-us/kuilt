@@ -38,7 +38,7 @@ internal suspend fun sampleLogTapHostAndPull(scope: CoroutineScope): List<LogRec
 }
 
 /** @suppress — sample only */
-internal fun sampleLogTapTail(seamScope: CoroutineScope): Flow<LogRecord> {
+internal suspend fun sampleLogTapTail(seamScope: CoroutineScope): Flow<LogRecord> {
     val loom = InMemoryLoom()
     // Join a device that is already hosting a tap and stream its logs live: each
     // record is emitted once, in order, as it is captured. The flow replays
