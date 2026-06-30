@@ -23,7 +23,7 @@ private val log = KotlinLogging.logger {}
 log.info { "joined room ${room.id}" }
 
 // In a test or CI job — reach in and take the logs:
-val logs = LogTapClient(seam).pull()        // every line the device buffered, in order
+val logs = LogTapClient(seam, scope).pull()  // every line the device buffered, in order
 assertTrue(logs.any { it.body == "joined room lobby-7" })
 ```
 
@@ -70,7 +70,7 @@ collapse.
 ### End one — capture: your existing logs, no call-site changes
 
 ```kotlin
-installLogCapture(exporter, CaptureConfig(minLevel = Level.INFO), clock, random, scope)
+installLogCapture(exporter, CaptureConfig(minLevel = LogLevel.INFO), clock, random, scope)
 ```
 
 One call, identical on JVM, Android, iOS, macOS, and the browser. After it, every
