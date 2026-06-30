@@ -147,12 +147,31 @@ assertEquals(sent.size, pulled.size, "no duplicates")
 assertEquals(sent.map { it.body }, pulled.map { it.body })
 ```
 
-To dump the logs only when a test fails, wrap the body and `pull()` in the failure
-path — for example in a JUnit `@AfterTest`/watcher, or a `try`/`catch` that
-prints `client.pull()` before rethrowing. Dedicated test helpers for this
-assert-and-dump pattern are landing as a `:kuilt-otel-tap-test` module; until then,
-the raw `pull()` above plus your test framework's failure hook is the whole
-recipe.
+For the common patterns, add the `kuilt-otel-tap-test` module — published test
+support you depend on from your own tests.
+
+**Wait for a specific line** instead of pulling a fixed snapshot — `awaitLog`
+tails until a record matches (or a bounded timeout elapses, failing with the
+records that *did* arrive):
+
+<!-- verbatim from kuilt-otel-tap-test/src/commonTest/kotlin/us/tractat/kuilt/otel/tap/test/LogAssertionsTest.kt#awaitLogReturnsTheFirstMatchingRecord -->
+```kotlin
+val match = tap.awaitLogBodyContaining(5.seconds, "ready to serve")
+```
+
+**Dump the device's logs only when a test fails** — `dumpingOnFailure` runs your
+block and, if it throws, pulls and prints the device's logs (human-readable, then
+as NDJSON) before re-throwing the *original* failure:
+
+<!-- verbatim from kuilt-otel-tap-test/src/commonTest/kotlin/us/tractat/kuilt/otel/tap/test/LogAssertionsTest.kt#dumpingOnFailureDumpsThenRethrows -->
+```kotlin
+tap.dumpingOnFailure(emit = { dumped += it }) {
+    throw AssertionError("deliberate test failure")
+}
+```
+
+For a CI harness, `writeLogArtifact(records, sink)` writes one NDJSON file per
+booted device, so a failed run carries each device's full log as a saved artifact.
 
 ## Going deeper
 
