@@ -119,9 +119,15 @@ own `kotlin-logging` calls) can add the optional M2 logback-appender variant.
 | `:kuilt-otel-logging-otel` *(M2)* | JVM, Android | The OTel-SDK trace-context provider for the sampling-gate, **and** a kuilt `LogRecordExporter` so an already-instrumented OTel app can feed the same RGA. Isolates the opt-in `opentelemetry-api`/`opentelemetry-sdk` dependency. |
 | `:kuilt-otel-otlp` *(M2)* | all | Concrete Ktor OTLP/HTTP edge → a standard OpenTelemetry Collector. The OTLP-forwarding sink behind the tap peer. |
 
-`:kuilt-otel` already uses `kotlin-logging` for its *own* internal logging;
-capture of *application* logs is a distinct concern and a separate module, which
-also avoids any "capture our own captured logs" feedback risk.
+`:kuilt-otel` already uses `kotlin-logging` for its *own* internal logging.
+Module separation does **not** isolate this from capture: the capture edge hooks
+the *process-global* oshai config, so it would otherwise see kuilt's own log
+events too — and the durable exporter logs on its hot path (a buffer-cap eviction
+warning), which would feed a captured eviction-warn back into export → evict →
+warn → a self-sustaining loop. The real mitigation lives in the capture core
+(`LogCapture`), which drops any event whose `loggerName` is under kuilt's own
+package (`us.tractat.kuilt`) before building a record — a safety invariant every
+capture edge inherits, not a configurable filter.
 
 ## Milestone 1 — uniform capture + extraction (the useful unit)
 
