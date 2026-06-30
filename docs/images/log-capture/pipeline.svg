@@ -1,0 +1,57 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 340" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif">
+  <style>
+    .title{fill:#e5e7eb;font-size:19px;font-weight:700}
+    .sub{fill:#7f848e;font-size:12.5px}
+    .zone{font-size:11px;font-weight:700;letter-spacing:.5px}
+    .sl{font-size:13px;font-weight:700}
+    .d{font-size:10px;fill:#9aa0ab}
+    .edge{stroke:#5a6472;stroke-width:2;fill:none;marker-end:url(#m)}
+  </style>
+  <marker id="m" markerWidth="10" markerHeight="10" refX="7" refY="4" orient="auto"><path d="M0 0 L8 4 L0 8 z" fill="#5a6472"/></marker>
+  <rect fill="#161a22" width="880" height="340"/>
+  <text class="title" x="36" y="34">From a log call to a peer that pulls it</text>
+  <text class="sub" x="36" y="54">Your call sites don't change. The two install calls add the capture appender and the tap; everything between is reused.</text>
+
+  <!-- ON THE DEVICE band -->
+  <text class="zone" x="36" y="92" fill="#98c379">ON THE DEVICE</text>
+  <rect x="30" y="100" width="560" height="150" rx="14" fill="#10160f" stroke="#2f3a2c" stroke-width="1.5"/>
+
+  <rect x="48"  y="128" width="120" height="58" rx="11" fill="#16201a" stroke="#98c37966"/>
+  <text class="sl" x="62" y="153" fill="#cbe6b6">app code</text>
+  <text class="d" x="62" y="171">log.info { … }</text>
+
+  <rect x="200" y="128" width="120" height="58" rx="11" fill="#16201a" stroke="#98c37966"/>
+  <text class="sl" x="214" y="153" fill="#cbe6b6">kotlin-logging</text>
+  <text class="d" x="214" y="171">the logging library</text>
+
+  <rect x="352" y="120" width="216" height="74" rx="11" fill="#16202b" stroke="#61afef88" stroke-width="1.5"/>
+  <text class="sl" x="368" y="144" fill="#9ecbf0">capture appender</text>
+  <text class="d" x="368" y="162">= an oshai Appender</text>
+  <text class="d" x="368" y="178">installLogCapture(…)</text>
+
+  <rect x="352" y="210" width="216" height="28" rx="8" fill="#1d2330" stroke="#3a4658"/>
+  <text class="d" x="368" y="229" fill="#c3c9d4">Rga&lt;LogRecord&gt; — durable, ordered buffer</text>
+
+  <!-- edges within device -->
+  <path class="edge" d="M168 157 H200"/>
+  <path class="edge" d="M320 157 H352"/>
+  <path class="edge" d="M460 194 V210"/>
+
+  <!-- THE WIRE -->
+  <rect x="618" y="120" width="104" height="74" rx="11" fill="#16202b" stroke="#61afef88" stroke-width="1.5"/>
+  <text class="sl" x="632" y="144" fill="#9ecbf0">log tap</text>
+  <text class="d" x="632" y="162">= a Quilter</text>
+  <text class="d" x="632" y="178">over a Seam</text>
+  <path class="edge" d="M568 224 C 600 224, 612 180, 618 162"/>
+
+  <!-- THE OTHER MACHINE band -->
+  <text class="zone" x="744" y="92" fill="#e5c07b">A PEER</text>
+  <rect x="744" y="120" width="108" height="74" rx="11" fill="#211c17" stroke="#e5c07b66"/>
+  <text class="sl" x="758" y="144" fill="#e5c07b">test / CI</text>
+  <text class="d" x="758" y="162">pull() · tail()</text>
+  <text class="d" x="758" y="178">LogTapClient</text>
+  <path class="edge" d="M722 157 H744"/>
+
+  <text class="sub" x="36" y="296">The buffer survives going offline; a reconnect exchanges only the missing lines, in order, with no duplicates —</text>
+  <text class="sub" x="36" y="314">because de-duplication and ordering are properties of the Rga, not code anyone wrote.</text>
+</svg>

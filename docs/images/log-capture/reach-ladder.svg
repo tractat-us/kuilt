@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 360" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif">
+  <style>
+    .title{fill:#e5e7eb;font-size:19px;font-weight:700}
+    .sub{fill:#7f848e;font-size:12.5px}
+    .zone{font-size:11px;font-weight:700;letter-spacing:.5px}
+    .sl{font-size:13.5px;font-weight:700}
+    .d{font-size:10.5px;fill:#9aa0ab}
+    .tag{font-size:10px;font-weight:700}
+    .edge{stroke:#5a6472;stroke-width:1.6;fill:none;marker-end:url(#m)}
+  </style>
+  <marker id="m" markerWidth="10" markerHeight="10" refX="7" refY="4" orient="auto"><path d="M0 0 L8 4 L0 8 z" fill="#5a6472"/></marker>
+  <rect fill="#161a22" width="880" height="360"/>
+  <text class="title" x="36" y="34">Same two calls — widen the reach by swapping the fabric</text>
+  <text class="sub" x="36" y="54">The capture and the tap never change. Only the Seam underneath chooses how far the logs can travel.</text>
+
+  <!-- shared left column: the unchanging two calls -->
+  <rect x="30" y="86" width="214" height="222" rx="14" fill="#16202b" stroke="#61afef88" stroke-width="1.5"/>
+  <text class="zone" x="48" y="112" fill="#9ecbf0">UNCHANGED</text>
+  <text class="sl" x="48" y="140" fill="#cfe3f7">installLogCapture(…)</text>
+  <text class="d" x="48" y="158">your logs → the Rga buffer</text>
+  <text class="sl" x="48" y="190" fill="#cfe3f7">the log tap</text>
+  <text class="d" x="48" y="208">a Quilter offers the buffer</text>
+  <text class="sl" x="48" y="240" fill="#cfe3f7">pull() · tail()</text>
+  <text class="d" x="48" y="258">a peer takes the logs</text>
+  <text class="d" x="48" y="288" fill="#7f848e">…all identical across rungs</text>
+
+  <!-- rung 1: loopback (ships first) -->
+  <rect x="300" y="86" width="548" height="62" rx="11" fill="#16201a" stroke="#98c379" stroke-width="1.5"/>
+  <rect x="300" y="86" width="78" height="62" rx="11" fill="#16201a"/>
+  <text class="tag" x="316" y="112" fill="#98c379">SHIPS</text><text class="tag" x="316" y="126" fill="#98c379">FIRST</text>
+  <text class="sl" x="396" y="112" fill="#cbe6b6">loopback Seam</text>
+  <text class="d" x="396" y="132">iOS simulator &amp; CI — app hosts on the device's own loopback, a test joins on the same machine</text>
+  <path class="edge" d="M244 132 C 270 132, 280 117, 300 117"/>
+
+  <!-- rung 2: mDNS + WebSocket -->
+  <rect x="300" y="160" width="548" height="62" rx="11" fill="#211c17" stroke="#e5c07b66"/>
+  <rect x="300" y="160" width="78" height="62" rx="11" fill="#211c17"/>
+  <text class="tag" x="316" y="186" fill="#e5c07b">LAN</text>
+  <text class="sl" x="396" y="186" fill="#e5c07b">mDNS + WebSocket Seam</text>
+  <text class="d" x="396" y="206">a real iPhone on the same Wi-Fi — tail() streams its logs to your laptop, no cable</text>
+  <path class="edge" d="M244 191 H300"/>
+
+  <!-- rung 3: Multipeer -->
+  <rect x="300" y="234" width="548" height="62" rx="11" fill="#211c17" stroke="#e5c07b66"/>
+  <rect x="300" y="234" width="78" height="62" rx="11" fill="#211c17"/>
+  <text class="tag" x="316" y="260" fill="#e5c07b">NO NET</text>
+  <text class="sl" x="396" y="260" fill="#e5c07b">Apple Multipeer Seam</text>
+  <text class="d" x="396" y="280">no network at all — phone and laptop find each other over Bluetooth, logs stream across the room</text>
+  <path class="edge" d="M244 248 C 270 248, 280 263, 300 263"/>
+
+  <text class="sub" x="36" y="338">Green ships first; the wider rungs are the same code pointed at a different fabric — because reach is the fabric's job, not logging's.</text>
+</svg>

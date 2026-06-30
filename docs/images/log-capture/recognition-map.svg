@@ -1,0 +1,60 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 392" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif">
+  <style>
+    .title{fill:#e5e7eb;font-size:19px;font-weight:700}
+    .sub{fill:#7f848e;font-size:12.5px}
+    .zone{font-size:11px;font-weight:700;letter-spacing:.5px}
+    .sl{font-size:13px;font-weight:700}
+    .d{font-size:10px;fill:#9aa0ab}
+    .is{fill:#6b7280;font-size:11px;font-style:italic}
+    .edge{stroke:#5a6472;stroke-width:1.6;fill:none;marker-end:url(#m)}
+  </style>
+  <marker id="m" markerWidth="10" markerHeight="10" refX="7" refY="4" orient="auto"><path d="M0 0 L8 4 L0 8 z" fill="#5a6472"/></marker>
+  <rect fill="#161a22" width="880" height="392"/>
+  <text class="title" x="36" y="34">Each logging role is a kuilt primitive that already ships</text>
+  <text class="sub" x="36" y="54">Left: what "pull the logs off a device" seems to need. Right: what kuilt already has. The only new code is the two install calls.</text>
+
+  <text class="zone" x="60"  y="92" fill="#7f848e">THE LOGGING ROLE</text>
+  <text class="zone" x="470" y="92" fill="#98c379">ALREADY SHIPS IN KUILT</text>
+
+  <!-- row 1 -->
+  <rect x="48"  y="104" width="300" height="52" rx="11" fill="#1b212c" stroke="#3a4658"/>
+  <text class="sl" x="64" y="128" fill="#c3c9d4">capture appender</text>
+  <text class="d" x="64" y="146">catches every line the app logs</text>
+  <rect x="470" y="104" width="362" height="52" rx="11" fill="#16201a" stroke="#98c379"/>
+  <text class="sl" x="486" y="128" fill="#98c379">an oshai Appender</text>
+  <text class="d" x="486" y="146">a swappable slot the logging library already exposes</text>
+  <path class="edge" d="M348 130 H470"/>
+  <text class="is" x="392" y="125">is</text>
+
+  <!-- row 2 -->
+  <rect x="48"  y="168" width="300" height="52" rx="11" fill="#1b212c" stroke="#3a4658"/>
+  <text class="sl" x="64" y="192" fill="#c3c9d4">on-device log buffer</text>
+  <text class="d" x="64" y="210">keeps logs safely while offline</text>
+  <rect x="470" y="168" width="362" height="52" rx="11" fill="#16201a" stroke="#98c379"/>
+  <text class="sl" x="486" y="192" fill="#98c379">an Rga&lt;LogRecord&gt;</text>
+  <text class="d" x="486" y="210">ordered append-only CRDT · resend can't duplicate or reorder</text>
+  <path class="edge" d="M348 194 H470"/>
+  <text class="is" x="392" y="189">is</text>
+
+  <!-- row 3 -->
+  <rect x="48"  y="232" width="300" height="52" rx="11" fill="#1b212c" stroke="#3a4658"/>
+  <text class="sl" x="64" y="256" fill="#c3c9d4">log tap</text>
+  <text class="d" x="64" y="274">moves the buffer to another machine</text>
+  <rect x="470" y="232" width="362" height="52" rx="11" fill="#16201a" stroke="#98c379"/>
+  <text class="sl" x="486" y="256" fill="#98c379">a Quilter over a Seam</text>
+  <text class="d" x="486" y="274">live anti-entropy replication of the Rga</text>
+  <path class="edge" d="M348 258 H470"/>
+  <text class="is" x="392" y="253">is</text>
+
+  <!-- row 4 -->
+  <rect x="48"  y="296" width="300" height="52" rx="11" fill="#1b212c" stroke="#3a4658"/>
+  <text class="sl" x="64" y="320" fill="#c3c9d4">transport</text>
+  <text class="d" x="64" y="338">reaches a sim, a LAN phone, a server</text>
+  <rect x="470" y="296" width="362" height="52" rx="11" fill="#16201a" stroke="#98c379"/>
+  <text class="sl" x="486" y="320" fill="#98c379">any fabric kuilt ships</text>
+  <text class="d" x="486" y="338">loopback · mDNS · Multipeer · WebRTC · WebSocket</text>
+  <path class="edge" d="M348 322 H470"/>
+  <text class="is" x="392" y="317">is</text>
+
+  <text class="sub" x="36" y="380">New code = installLogCapture(…) and installLogTap(…) / LogTapClient. Everything else is reused.</text>
+</svg>
