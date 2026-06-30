@@ -84,6 +84,7 @@
 
     <toc-element toc-title="Extras">
         <toc-element topic="observability.md"/>
+        <toc-element topic="log-capture.md"/>
     </toc-element>
 
     <toc-element toc-title="Experimental">

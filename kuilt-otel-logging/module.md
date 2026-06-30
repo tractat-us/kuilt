@@ -11,6 +11,18 @@ edge** are identical on JVM, Android, iOS, macOS, and wasmJs: `kotlin-logging`
 exposes one settable appender on every target, so a single appender hooks the
 output everywhere.
 
+## Quick start
+
+One call turns capture on; closing the returned handle turns it off. Your log
+call sites do not change.
+
+```kotlin
+@sample us.tractat.kuilt.otel.logging.sampleInstallLogCapture
+```
+
+To then pull those captured logs off the device from a test or CI process, see
+the companion `kuilt-otel-tap` module.
+
 ## Where capture happens
 
 One uniform appender is installed in common code on every platform. It feeds each

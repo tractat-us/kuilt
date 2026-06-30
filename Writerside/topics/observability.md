@@ -91,5 +91,9 @@ never silently dropped.
 - **[Offline-first OpenTelemetry — the design](https://github.com/tractat-us/kuilt/blob/main/docs/offline-otel.md)**
   — why the replicated-data representation makes a resend safe, the local-write
   inversion, and the full limits.
+- **[Capturing & pulling logs](log-capture.html)** — record your app's existing
+  logs into this buffer, then pull them off an otherwise-unreachable device (a
+  phone or simulator) from a test or CI job. The full story is in
+  [Reaching into a device for its logs](https://github.com/tractat-us/kuilt/blob/main/docs/log-capture-and-extraction.md).
 - **[API reference](https://tractat-us.github.io/kuilt/api/)** — every type in
   `kuilt-otel`, with runnable examples.
