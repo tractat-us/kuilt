@@ -922,8 +922,11 @@ private fun CoroutineScope.monitorVoterLiveness(
  * On [PartitionEvent.PeerLost], sends [voterId] to [evictions] and stops.
  * [PartitionEvent.PeerUnresponsive] and [PartitionEvent.PeerRecovered] are no-ops at this layer
  * (Raft's own replication tracks liveness; the eviction gate is [PeerLost] only).
+ *
+ * `internal` (not `private`) so the per-voter teardown contract is unit-testable: cancelling the
+ * returned [Job] must tear down *all* of the detector's coroutines, not just the events collector.
  */
-private fun CoroutineScope.launchDetectorFor(
+internal fun CoroutineScope.launchDetectorFor(
     voterId: NodeId,
     heartbeatSeam: Seam,
     rawLiveness: MutableSharedFlow<Swatch>,
