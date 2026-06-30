@@ -153,6 +153,7 @@ class TransportCloseWindowTest {
 
             val hostResumed = async { hostRoom.events.filterIsInstance<MembershipEvent.Resumed>().first() }
 
+            joinerRoom2.roster.first { it.isNotEmpty() }
             val result = joinerRoom2.resume(token)
 
             assertIs<us.tractat.kuilt.session.partition.ResumeResult.Success>(result)
