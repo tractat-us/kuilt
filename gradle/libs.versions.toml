@@ -13,6 +13,7 @@ android-compileSdk = "36"
 android-minSdk = "24"
 jna = "5.18.1"
 logback = "1.5.32"
+slf4j = "2.0.17"
 playServicesNearby = "19.3.0"
 jqwik = "1.9.2"
 junit-platform-launcher = "1.11.4"
@@ -56,8 +57,10 @@ jmdns = { module = "org.jmdns:jmdns", version.ref = "jmdns" }
 kotlin-logging = { module = "io.github.oshai:kotlin-logging", version.ref = "kotlinLogging" }
 # JNA — JVM/macOS native bridge for kuilt-multipeer dylib:
 jna = { module = "net.java.dev.jna:jna", version.ref = "jna" }
-# logback — JVM logging backend for kuilt-multipeer tests:
+# logback — JVM logging backend for kuilt-multipeer tests and the kuilt-otel-logback appender:
 logback = { module = "ch.qos.logback:logback-classic", version.ref = "logback" }
+# slf4j-api — compile surface for the kuilt-otel-logback install helper (LoggerFactory):
+slf4j-api = { module = "org.slf4j:slf4j-api", version.ref = "slf4j" }
 # jqwik — property-based testing on JVM (JUnit Platform runner):
 jqwik = { module = "net.jqwik:jqwik", version.ref = "jqwik" }
 junit-platform-launcher = { module = "org.junit.platform:junit-platform-launcher", version.ref = "junit-platform-launcher" }
