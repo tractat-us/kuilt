@@ -186,14 +186,14 @@ class RoomLifecycleFlapTest {
      * Regression test for the double-event bug: when the host seam tears, the joiner
      * must receive exactly [MembershipEvent.HostLost] and NO [MembershipEvent.Left].
      *
-     * The bug: `tear()` sets `peers = emptySet()` before `state = Torn`, causing
-     * [runPeersWatcher] to wake first with `tornHandled == false` and emit a spurious
+     * The bug: `tear()` sets `peers = emptySet()` before `state = Torn`, causing the
+     * peers-change path to wake before the torn state was visible and emit a spurious
      * `Left(host, Normal)` — then [runTornWatcher] fired `HostLost`. Result: the joiner
      * received both events (contradictory: `Left(Normal)` reads as "left cleanly").
      *
-     * The fix: [runPeersWatcher] reads `seam.state.value is SeamState.Torn` directly
-     * (which is already set by the time any collector body resumes) rather than relying
-     * on a cross-coroutine flag.
+     * The fix: Torn-vs-peers suppression is owned solely by [runTornWatcher], which reads
+     * `seam.state.value is SeamState.Torn` directly (already set by the time any collector
+     * body resumes) rather than relying on a cross-coroutine flag.
      */
     @Test
     fun `joiner receives HostLost but no Left event when host seam tears`() = runTest {

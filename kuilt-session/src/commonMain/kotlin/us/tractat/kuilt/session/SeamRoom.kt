@@ -478,6 +478,12 @@ internal class SeamRoom(
                     handleResumeAck(sender)
                 }
             }
+            is AdmitMessage.Goodbye -> {
+                if (_role.value == SessionRole.Host) {
+                    lock.withLock { stopDetector(sender) }
+                    removeFromRoster(sender, LeaveReason.Normal)
+                }
+            }
             is AdmitMessage.Reject -> {
                 if (_role.value == SessionRole.Joiner) {
                     lock.withLock {
@@ -909,11 +915,21 @@ internal class SeamRoom(
     }
 
     override suspend fun leave(reason: LeaveReason) {
-        // Flip closed and snapshot jobs under lock; cancel + close seam outside.
-        val (jobsToCancel, detectorJobsToCancel) = lock.withLock {
+        // Flip closed + snapshot jobs under lock; announce, cancel, and close outside.
+        val plan = lock.withLock {
             if (closed) return
             closed = true
-            loopJobs to detectorJobs.values.toList().also { detectorJobs.clear() }
+            Triple(
+                _role.value == SessionRole.Joiner && reason is LeaveReason.Normal,
+                loopJobs,
+                detectorJobs.values.toList().also { detectorJobs.clear() },
+            )
+        }
+        val (announce, jobsToCancel, detectorJobsToCancel) = plan
+        // Announce a graceful leave on the still-live seam before tearing it down, so the
+        // host evicts with Normal rather than treating the close as a transport drop.
+        if (announce) {
+            runCatchingCancellable { seam.broadcast(AdmitMessage.encode(AdmitMessage.Goodbye)) }
         }
         jobsToCancel.forEach { it.cancel() }
         detectorJobsToCancel.forEach { it.cancel() }

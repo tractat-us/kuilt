@@ -104,6 +104,18 @@ public sealed interface AdmitMessage {
     @SerialName("resume-ack")
     public data object ResumeAck : AdmitMessage
 
+    /**
+     * Sent by a joiner to the host on a deliberate [us.tractat.kuilt.session.Room.leave].
+     *
+     * Distinguishes a graceful leave from a bare transport close: on receipt the host
+     * evicts the member immediately with [us.tractat.kuilt.session.LeaveReason.Normal],
+     * rather than opening a reconnect window. Best-effort — a lost Goodbye degrades to the
+     * transport-close → reconnect-window path.
+     */
+    @Serializable
+    @SerialName("goodbye")
+    public data object Goodbye : AdmitMessage
+
     public companion object {
         /**
          * First byte of every encoded admit payload. Application frames must not
