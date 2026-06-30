@@ -6,7 +6,6 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.filterIsInstance
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.StandardTestDispatcher
-import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.MuxServerLoom
 import us.tractat.kuilt.core.NamedMux
