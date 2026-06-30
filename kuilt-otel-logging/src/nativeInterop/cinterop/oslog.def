@@ -1,0 +1,55 @@
+// oslog.def — K/N cinterop for Apple unified logging (os_log).
+//
+// os/log.h is part of the Apple SDK; no vendored sources or prebuilt static
+// libs are needed. The `---` body is compiled by the K/N cinterop tool (which
+// has the correct Apple sysroot) and folded into the generated klib.
+//
+// Why a C shim instead of calling os_log directly from Kotlin: os_log /
+// os_log_with_type are variadic macros whose FIRST format argument must be a
+// compile-time string literal. We make that literal the constant "%{public}s"
+// and pass the already-formatted message as the SINGLE argument. A raw '%' in
+// the message is therefore data, never a format specifier — the printf-format
+// crash class is impossible by construction, and the line renders literally.
+//
+// `%{public}` keeps the message visible in Console.app / `log` (os_log redacts
+// dynamic strings as <private> by default).
+//
+// os_log_t is an os_object (Obj-C under the hood); we hand it to Kotlin as an
+// opaque void* so the binding needs no Obj-C object mapping. The handle is
+// either a process-lifetime subsystem log (os_log_create) or the global
+// OS_LOG_DEFAULT, so the lost ARC retain across the cast is immaterial.
+
+package = kuilt.oslog
+
+---
+
+#include <os/log.h>
+
+// Create a subsystem/category-scoped log handle (honours a configured
+// KotlinLoggingConfiguration.subsystem / .category for filtered Console output).
+static inline void *kuilt_oslog_create(const char *subsystem, const char *category) {
+    return (void *)os_log_create(subsystem, category);
+}
+
+// The default handle, used when no subsystem has been configured.
+static inline void *kuilt_oslog_default(void) {
+    return (void *)OS_LOG_DEFAULT;
+}
+
+// One emitter per severity. The message is always the "%{public}s" ARGUMENT, so
+// it is rendered verbatim regardless of any '%' it contains.
+static inline void kuilt_oslog_debug(void *log, const char *msg) {
+    os_log_debug((os_log_t)log, "%{public}s", msg);
+}
+
+static inline void kuilt_oslog_info(void *log, const char *msg) {
+    os_log_info((os_log_t)log, "%{public}s", msg);
+}
+
+static inline void kuilt_oslog_default_level(void *log, const char *msg) {
+    os_log((os_log_t)log, "%{public}s", msg);
+}
+
+static inline void kuilt_oslog_error(void *log, const char *msg) {
+    os_log_error((os_log_t)log, "%{public}s", msg);
+}
