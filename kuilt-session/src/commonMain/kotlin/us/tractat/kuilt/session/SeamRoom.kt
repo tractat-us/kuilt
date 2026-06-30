@@ -12,7 +12,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.filterIsInstance
 import kotlinx.coroutines.flow.first
@@ -134,8 +133,8 @@ public class SeamRoomFactory(
  *    (Hello/Welcome), routes application frames to [incoming], filters heartbeat frames
  *    from application delivery, and fans incoming swatches out to [rawIncoming] so that
  *    per-peer [HeartbeatPartitionDetector]s can subscribe without contending for the channel.
- * 2. **Peers watcher** — observes [Seam.peers] drops and fires [MembershipEvent.Left]
- *    for admitted members whose transport link closed.
+ * 2. **Torn watcher** — observes [Seam.state] for a [SeamState.Torn] transition and emits the
+ *    appropriate terminal membership event immediately, without waiting for heartbeat expiry.
  *
  * Additionally, a [HeartbeatPartitionDetector] is launched per admitted peer when the
  * admit handshake completes. The detector subscribes to [rawIncoming] (filtered by sender)
@@ -192,7 +191,7 @@ internal class SeamRoom(
      * `admittedById`, `closed`, `hostLost`, `hostPeerId`, `pendingResume`,
      * `resumeToken`, `detectorJobs`, `channelViews`.
      *
-     * Multiple coroutines (`runMainLoop`, `runPeersWatcher`, `runTornWatcher`,
+     * Multiple coroutines (`runMainLoop`, `runTornWatcher`,
      * `runReconnectEventLoop`, per-peer detector collectors, `scope.launch { admitPeer }`,
      * `scope.launch { handleResume }`) may run under a multithreaded dispatcher and all
      * read-modify-write that state. This reentrant lock serialises them.
@@ -321,40 +320,12 @@ internal class SeamRoom(
     internal fun start() {
         val jobs = mutableListOf(
             scope.launch { runMainLoop() },
-            scope.launch { runPeersWatcher() },
             scope.launch { runTornWatcher() },
         )
         if (reconnectController != null) {
             jobs += scope.launch { runReconnectEventLoop(reconnectController) }
         }
         loopJobs = jobs
-    }
-
-    // ── Peers watcher: detect disconnects ─────────────────────────────────────
-
-    /**
-     * Watches [Seam.peers] for removals. When a peer disappears from the mesh
-     * and was an admitted member, emits [MembershipEvent.Left].
-     *
-     * Skips the initial emission (drop(1)) since [Seam.peers] starts with the
-     * current connected set — we only care about subsequent changes.
-     *
-     * Defers to [runTornWatcher] when the seam has torn: reads [seam.state.value]
-     * directly to suppress peer-removal events that are a consequence of the transport
-     * closing (which collapses [Seam.peers] to empty). By the time this collector body
-     * executes, [SeamState.Torn] is already written — making the direct read reliable
-     * where a cross-coroutine flag is not (the flag may not yet be set when the collector
-     * body is scheduled, regardless of which StateFlow changed first).
-     */
-    private suspend fun runPeersWatcher() {
-        seam.peers.drop(1).collect { currentPeers ->
-            if (seam.state.value is SeamState.Torn) return@collect
-            val removedIds = lock.withLock { admittedById.keys.filter { it !in currentPeers } }
-            for (peerId in removedIds) {
-                lock.withLock { stopDetector(peerId) }
-                removeFromRoster(peerId, LeaveReason.Normal)
-            }
-        }
     }
 
     // ── Torn watcher: react to permanent transport closure ────────────────────
@@ -367,9 +338,6 @@ internal class SeamRoom(
      * This is faster and more correct than the heartbeat-timeout path for
      * transport-level closures: if the transport signals `Torn`, the session
      * layer should trust it directly.
-     *
-     * [runPeersWatcher] suppresses its own emissions when torn by reading
-     * [seam.state.value] directly — no cross-coroutine flag needed.
      *
      * **Joiner:** emits [MembershipEvent.HostLost] and enters terminal state.
      * **Host:** emits [MembershipEvent.Left] for each admitted peer (mirroring the
@@ -508,6 +476,12 @@ internal class SeamRoom(
             is AdmitMessage.ResumeAck -> {
                 if (_role.value == SessionRole.Joiner) {
                     handleResumeAck(sender)
+                }
+            }
+            is AdmitMessage.Goodbye -> {
+                if (_role.value == SessionRole.Host) {
+                    lock.withLock { stopDetector(sender) }
+                    removeFromRoster(sender, LeaveReason.Normal)
                 }
             }
             is AdmitMessage.Reject -> {
@@ -744,9 +718,29 @@ internal class SeamRoom(
 
     private suspend fun handlePartitionEvent(event: PartitionEvent) {
         when (event) {
-            is PartitionEvent.PeerUnresponsive -> markPartitioned(event.peerId, event.at)
+            is PartitionEvent.PeerUnresponsive -> handleUnresponsive(event)
             is PartitionEvent.PeerRecovered -> markRecovered(event.peerId, event.at)
             is PartitionEvent.PeerLost -> handlePeerLost(event.peerId, event.at)
+        }
+    }
+
+    /**
+     * Maps a [PartitionEvent.PeerUnresponsive] to a membership event by role + reason.
+     *
+     * A joiner whose **host** is lost to a definitive transport close goes terminal
+     * immediately ([markHostLost]) — there is no host-resume path, so holding a window is
+     * pointless delay. Every other case (host watching a joiner; a joiner's non-host peer;
+     * a silent [PartitionEvent.Reason.Timeout] partition that may still recover) opens the
+     * reconnect window via [markPartitioned].
+     */
+    private suspend fun handleUnresponsive(event: PartitionEvent.PeerUnresponsive) {
+        val hostTransportClose = lock.withLock {
+            _role.value == SessionRole.Joiner && event.peerId == hostPeerId
+        } && event.reason == PartitionEvent.Reason.TransportClosed
+        if (hostTransportClose) {
+            markHostLost(event.at)
+        } else {
+            markPartitioned(event.peerId, event.at)
         }
     }
 
@@ -801,15 +795,25 @@ internal class SeamRoom(
     // ── Roster management ────────────────────────────────────────────────────
 
     /**
-     * Adds [member] to [admittedById], [_roster], and [_rosterPeers], emits
-     * [MembershipEvent.Joined], and starts its detector. Callers must hold [lock].
+     * Adds (or refreshes) [member] in [admittedById], [_roster], and [_rosterPeers].
+     * Callers must hold [lock].
+     *
+     * Idempotent re-admit: when [member]'s id is already admitted (e.g. a dropped
+     * joiner reconnects mid-window and re-broadcasts [AdmitMessage.Hello]), this
+     * refreshes the roster entry but does **not** re-emit [MembershipEvent.Joined]
+     * or restart the detector — the existing per-peer detector is still alive and
+     * recovers on its own via [PartitionEvent.PeerRecovered] when frames resume.
+     * Restarting it would orphan the prior detector's coroutines (a leak).
      */
     private fun addToRoster(member: Member) {
+        val isReadmit = admittedById.containsKey(member.id)
         admittedById[member.id] = member
-        _roster.update { current -> current + member }
+        _roster.update { current -> current.filterNot { it.id == member.id }.toSet() + member }
         _rosterPeers.update { current -> current + member.id }
-        _events.tryEmit(MembershipEvent.Joined(member))
-        startDetector(member)
+        if (!isReadmit) {
+            _events.tryEmit(MembershipEvent.Joined(member))
+            startDetector(member)
+        }
     }
 
     private fun removeFromRoster(peerId: PeerId, reason: LeaveReason) {
@@ -921,11 +925,21 @@ internal class SeamRoom(
     }
 
     override suspend fun leave(reason: LeaveReason) {
-        // Flip closed and snapshot jobs under lock; cancel + close seam outside.
-        val (jobsToCancel, detectorJobsToCancel) = lock.withLock {
+        // Flip closed + snapshot jobs under lock; announce, cancel, and close outside.
+        val plan = lock.withLock {
             if (closed) return
             closed = true
-            loopJobs to detectorJobs.values.toList().also { detectorJobs.clear() }
+            Triple(
+                _role.value == SessionRole.Joiner && reason is LeaveReason.Normal,
+                loopJobs,
+                detectorJobs.values.toList().also { detectorJobs.clear() },
+            )
+        }
+        val (announce, jobsToCancel, detectorJobsToCancel) = plan
+        // Announce a graceful leave on the still-live seam before tearing it down, so the
+        // host evicts with Normal rather than treating the close as a transport drop.
+        if (announce) {
+            runCatchingCancellable { seam.broadcast(AdmitMessage.encode(AdmitMessage.Goodbye)) }
         }
         jobsToCancel.forEach { it.cancel() }
         detectorJobsToCancel.forEach { it.cancel() }
