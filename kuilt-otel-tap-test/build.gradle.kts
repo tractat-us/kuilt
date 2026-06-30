@@ -24,6 +24,10 @@ kotlin {
             // The end-to-end example captures a real kotlin-logging line through the
             // uniform install edge, then extracts it via the tap.
             implementation(project(":kuilt-otel-logging"))
+            // Tests set QuilterConfig(expectVirtualTime = true) on the tap.
+            implementation(project(":kuilt-quilter"))
+            // The end-to-end example emits through a real KotlinLogging.logger.
+            implementation(libs.kotlin.logging)
             implementation(libs.kotlinx.coroutines.test)
         }
         jvmTest.dependencies {
