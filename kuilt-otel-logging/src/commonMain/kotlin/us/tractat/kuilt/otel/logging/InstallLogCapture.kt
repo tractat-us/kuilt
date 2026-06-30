@@ -64,6 +64,8 @@ public class LogCaptureInstallation internal constructor(
  *   test scope in tests; an application-owned scope in production.
  * @return the [LogCaptureInstallation] handle — its [LogCaptureInstallation.capture]
  *   is the installed core, and [LogCaptureInstallation.close] uninstalls capture.
+ *
+ * @sample us.tractat.kuilt.otel.logging.sampleInstallLogCapture
  */
 public fun installLogCapture(
     exporter: WarpLogRecordExporter,

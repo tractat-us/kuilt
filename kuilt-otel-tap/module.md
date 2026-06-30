@@ -25,6 +25,20 @@ Two ends:
   joins that session and exposes `pull()` (a snapshot) and `tail()` (a live
   stream) of the records.
 
+## Quick start
+
+Host the tap on the device, then join and pull the backlog:
+
+```kotlin
+@sample us.tractat.kuilt.otel.tap.sampleLogTapHostAndPull
+```
+
+Or stream the logs live as they are captured:
+
+```kotlin
+@sample us.tractat.kuilt.otel.tap.sampleLogTapTail
+```
+
 ## Why it is correct, deeper down
 
 The device already stores its logs as a conflict-free replicated value (an

@@ -104,6 +104,8 @@ public class LogTapHost internal constructor(
  * @param scope the scope the host's replicator runs in. Closing the returned host (or
  *   cancelling this scope) stops the tap.
  * @param config tap tuning; the defaults suit a developer turning the tap on to debug.
+ *
+ * @sample us.tractat.kuilt.otel.tap.sampleLogTapHostAndPull
  */
 public suspend fun installLogTap(
     loom: Loom,

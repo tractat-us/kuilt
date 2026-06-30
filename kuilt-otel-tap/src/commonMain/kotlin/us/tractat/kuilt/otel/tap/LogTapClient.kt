@@ -53,6 +53,8 @@ public class LogTapClient(
      * result. The result is a point-in-time snapshot; call again (or use [tail]) to
      * observe records captured later.
      *
+     * @sample us.tractat.kuilt.otel.tap.sampleLogTapHostAndPull
+     *
      * Note: the host pushes its **entire** log on first contact as one atomic CRDT merge,
      * so the snapshot is always complete-or-nothing — there is no partial intermediate to
      * observe. A host that genuinely has no logs yet has nothing to push; use [tail] for
@@ -69,6 +71,8 @@ public class LogTapClient(
      * Tail the device's logs live: emits each [LogRecord] as it replicates in, in order
      * and exactly once. The flow replays everything already known on collection, then
      * continues with newly captured records until the collector is cancelled.
+     *
+     * @sample us.tractat.kuilt.otel.tap.sampleLogTapTail
      */
     public fun tail(): Flow<LogRecord> = flow {
         val emitted = HashSet<ByteString>()
