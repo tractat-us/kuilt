@@ -72,6 +72,24 @@ class LogCaptureTest {
     }
 
     @Test
+    fun dropsKuiltInternalLoggers() = runTest {
+        // Self-capture exclusion: kuilt's own loggers (e.g. the durable exporter's
+        // eviction warning) must never be captured, or capture would feed its own
+        // plumbing back into export and loop. The drop is unconditional — even at
+        // ERROR, the most severe level.
+        val store = InMemoryDurableStore()
+        val exp = exporter(store)
+        val capture = LogCapture(exp, CaptureConfig(), fixedClock, Random(0))
+
+        val result = capture.capture(
+            NormalizedLogEvent(LogLevel.ERROR, "us.tractat.kuilt.otel.WarpLogRecordExporter", "internal eviction warn"),
+        )
+
+        assertNull(result)
+        assertTrue(exp.snapshot().toList().isEmpty())
+    }
+
+    @Test
     fun capturesEventsAtOrAboveMinLevel() = runTest {
         val store = InMemoryDurableStore()
         val exp = exporter(store)

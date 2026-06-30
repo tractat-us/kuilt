@@ -12,7 +12,14 @@ import us.tractat.kuilt.crdt.Rga
 import us.tractat.kuilt.crdt.RgaId
 import us.tractat.kuilt.crdt.ReplicaId
 
-private val logger = KotlinLogging.logger {}
+// Explicit, package-qualified name — NOT the `logger {}` lambda form. On
+// Kotlin/Native the lambda form resolves to an EMPTY logger name, which would make
+// this internal logger indistinguishable from an application logger and defeat the
+// self-capture exclusion in :kuilt-otel-logging (`LogCapture` drops events whose
+// loggerName starts with `us.tractat.kuilt`). The exporter logs on its eviction
+// hot path, so an unnamed log here would be re-captured and re-exported in an
+// unbounded loop. Keep this name stable and under the kuilt package.
+private val logger = KotlinLogging.logger("us.tractat.kuilt.otel.WarpLogRecordExporter")
 
 /**
  * A CRDT-backed log-record exporter.
