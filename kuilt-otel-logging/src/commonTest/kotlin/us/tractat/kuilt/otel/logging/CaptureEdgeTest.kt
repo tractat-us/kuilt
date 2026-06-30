@@ -1,5 +1,6 @@
 package us.tractat.kuilt.otel.logging
 
+import io.github.oshai.kotlinlogging.DirectLoggerFactory
 import io.github.oshai.kotlinlogging.KotlinLogging
 import io.github.oshai.kotlinlogging.KotlinLoggingConfiguration
 import kotlinx.coroutines.test.runTest
@@ -10,6 +11,8 @@ import us.tractat.kuilt.test.assertAll
 import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertSame
+import kotlin.test.assertTrue
 import kotlin.time.Clock
 import kotlin.time.Instant
 
@@ -26,13 +29,10 @@ class CaptureEdgeTest {
 
     @Test
     fun loggingFlowsThroughCaptureEdgeIntoBuffer() = runTest {
-        val previousFactory = KotlinLoggingConfiguration.loggerFactory
-        val previousAppender = KotlinLoggingConfiguration.direct.appender
+        val store = InMemoryDurableStore()
+        val exporter = WarpLogRecordExporter(ReplicaId("device-1"), store)
+        val installation = installLogCapture(exporter, CaptureConfig(), fixedClock, Random(1), backgroundScope)
         try {
-            val store = InMemoryDurableStore()
-            val exporter = WarpLogRecordExporter(ReplicaId("device-1"), store)
-            installLogCapture(exporter, CaptureConfig(), fixedClock, Random(1), backgroundScope)
-
             KotlinLogging.logger("com.example.Edge").warn { "captured via the uniform edge" }
 
             // Drain the capture channel. The appender's trySend and the drain
@@ -50,8 +50,72 @@ class CaptureEdgeTest {
                 { assertEquals(8, record.recordId.size) },
             )
         } finally {
-            KotlinLoggingConfiguration.direct.appender = previousAppender
-            KotlinLoggingConfiguration.loggerFactory = previousFactory
+            installation.close()
+        }
+    }
+
+    @Test
+    fun selfCaptureStaysBoundedAndExcludesKuiltLoggers() = runTest {
+        val store = InMemoryDurableStore()
+        // maxRecords = 1 forces an eviction on the second app record. The eviction
+        // logs an internal `us.tractat.kuilt.otel` warning; absent the self-capture
+        // exclusion in LogCapture that warn would be captured and re-exported,
+        // triggering another eviction → another warn → a self-sustaining loop that
+        // crowds out the real app records (and would spin runCurrent() forever).
+        val exporter = WarpLogRecordExporter(ReplicaId("device-1"), store, maxRecords = 1)
+        val installation = installLogCapture(exporter, CaptureConfig(), fixedClock, Random(1), backgroundScope)
+        try {
+            val logger = KotlinLogging.logger("com.example.App")
+            logger.warn { "app log 1" }
+            logger.warn { "app log 2" }
+            testScheduler.runCurrent()
+
+            val records = exporter.snapshot().toList()
+            assertAll(
+                // Bounded — no runaway self-capture loop past the buffer cap.
+                { assertEquals(1, records.size) },
+                // Only application records survive — never a kuilt-internal line.
+                { assertTrue(records.all { it.attributes[LOGGER_NAME_ATTRIBUTE] == "com.example.App" }) },
+                {
+                    assertTrue(
+                        records.none { (it.attributes[LOGGER_NAME_ATTRIBUTE] ?: "").startsWith("us.tractat.kuilt") },
+                    )
+                },
+            )
+        } finally {
+            installation.close()
+        }
+    }
+
+    @Test
+    fun closeRestoresPreviousAppenderAndStopsCapture() = runTest {
+        // Baseline the factory to DirectLoggerFactory — the native default — so
+        // logging after close uses a deterministic, non-SLF4J path on every target
+        // (the JVM's auto-detected SLF4J factory isn't on this module's test
+        // classpath). The baseline *appender* stays distinct from the capturing one,
+        // so the appender-restore remains observable.
+        val outerFactory = KotlinLoggingConfiguration.loggerFactory
+        KotlinLoggingConfiguration.loggerFactory = DirectLoggerFactory
+        val baselineAppender = KotlinLoggingConfiguration.direct.appender
+        try {
+            val store = InMemoryDurableStore()
+            val exporter = WarpLogRecordExporter(ReplicaId("device-1"), store)
+            val installation = installLogCapture(exporter, CaptureConfig(), fixedClock, Random(1), backgroundScope)
+
+            installation.close()
+
+            // Logging after close is not captured — the leak fix: the appender is
+            // uninstalled (previous restored) and stops accepting events.
+            KotlinLogging.logger("com.example.AfterClose").warn { "should not be captured" }
+            testScheduler.runCurrent()
+
+            assertAll(
+                { assertSame(baselineAppender, KotlinLoggingConfiguration.direct.appender) },
+                { assertSame(DirectLoggerFactory, KotlinLoggingConfiguration.loggerFactory) },
+                { assertTrue(exporter.snapshot().toList().isEmpty()) },
+            )
+        } finally {
+            KotlinLoggingConfiguration.loggerFactory = outerFactory
         }
     }
 }

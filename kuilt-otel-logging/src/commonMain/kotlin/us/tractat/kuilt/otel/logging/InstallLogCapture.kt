@@ -2,11 +2,39 @@ package us.tractat.kuilt.otel.logging
 
 import io.github.oshai.kotlinlogging.Appender
 import io.github.oshai.kotlinlogging.DirectLoggerFactory
+import io.github.oshai.kotlinlogging.KLoggerFactory
 import io.github.oshai.kotlinlogging.KotlinLoggingConfiguration
+import kotlinx.atomicfu.atomic
 import kotlinx.coroutines.CoroutineScope
 import us.tractat.kuilt.otel.WarpLogRecordExporter
 import kotlin.random.Random
 import kotlin.time.Clock
+
+/**
+ * A live log-capture installation — the [LogCapture] core plus the way to stop it.
+ *
+ * Returned by [installLogCapture]. Hold it for as long as capture should run, then
+ * [close] it to uninstall. **`close()` is the way to stop capture** — cancelling
+ * the install scope alone is not sufficient: it kills the drain coroutine but
+ * leaves the capturing appender wired into the global logging config, buffering
+ * every subsequent log line into a channel nobody drains (a memory leak).
+ */
+public class LogCaptureInstallation internal constructor(
+    /** The installed capture core (event → `LogRecord` → exporter). */
+    public val capture: LogCapture,
+    private val onClose: () -> Unit,
+) : AutoCloseable {
+    private val closed = atomic(false)
+
+    /**
+     * Uninstall capture: restore the previously-installed appender (and logger
+     * factory) and stop the capturing appender so it accepts and buffers no more
+     * events. Idempotent — safe to call more than once.
+     */
+    override fun close() {
+        if (closed.compareAndSet(expect = false, update = true)) onClose()
+    }
+}
 
 /**
  * Install log capture — the single uniform entry point on every platform.
@@ -23,15 +51,19 @@ import kotlin.time.Clock
  * and forwards to a per-platform passthrough appender ([captureDelegate]) so the
  * platform's existing log output is preserved.
  *
+ * **Stop capture by [closing][LogCaptureInstallation.close] the returned handle**,
+ * which restores the previous appender/factory and stops the capturing appender.
+ * Cancelling [scope] alone is not enough — see [LogCaptureInstallation].
+ *
  * @param exporter the durable log buffer captured records are written into.
  * @param config which events to keep and how to shape their attributes.
  * @param clock source of event timestamps (required — never the wall clock).
  * @param random source of the per-record id bytes (required — never an unseeded
  *   default).
- * @param scope the [CoroutineScope] the capture edge drains events on. Its
- *   lifetime bounds capture: cancelling it stops capture. Inject a test scope in
- *   tests; an application-owned scope in production.
- * @return the [LogCapture] core that was installed.
+ * @param scope the [CoroutineScope] the capture edge drains events on. Inject a
+ *   test scope in tests; an application-owned scope in production.
+ * @return the [LogCaptureInstallation] handle — its [LogCaptureInstallation.capture]
+ *   is the installed core, and [LogCaptureInstallation.close] uninstalls capture.
  */
 public fun installLogCapture(
     exporter: WarpLogRecordExporter,
@@ -39,12 +71,18 @@ public fun installLogCapture(
     clock: Clock,
     random: Random,
     scope: CoroutineScope,
-): LogCapture {
+): LogCaptureInstallation {
     val capture = LogCapture(exporter, config, clock, random)
+    val previousFactory: KLoggerFactory = KotlinLoggingConfiguration.loggerFactory
     KotlinLoggingConfiguration.loggerFactory = DirectLoggerFactory
-    val previous = KotlinLoggingConfiguration.direct.appender
-    KotlinLoggingConfiguration.direct.appender = CapturingAppender(capture, captureDelegate(previous), scope)
-    return capture
+    val previousAppender: Appender = KotlinLoggingConfiguration.direct.appender
+    val appender = CapturingAppender(capture, captureDelegate(previousAppender), scope)
+    KotlinLoggingConfiguration.direct.appender = appender
+    return LogCaptureInstallation(capture) {
+        KotlinLoggingConfiguration.direct.appender = previousAppender
+        KotlinLoggingConfiguration.loggerFactory = previousFactory
+        appender.close()
+    }
 }
 
 /**

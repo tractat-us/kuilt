@@ -12,6 +12,9 @@ kotlin {
             // runCatchingCancellable — cancellation-safe best-effort capture.
             implementation(project(":kuilt-core"))
             implementation(libs.kotlinx.coroutines.core)
+            // atomicfu — the closed flag guarding CapturingAppender / installation
+            // teardown must be correct under a multi-threaded dispatcher.
+            implementation(libs.kotlinx.atomicfu)
             implementation(libs.kotlin.logging)
         }
         commonTest.dependencies {

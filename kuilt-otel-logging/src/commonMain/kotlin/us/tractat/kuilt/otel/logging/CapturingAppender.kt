@@ -3,6 +3,7 @@ package us.tractat.kuilt.otel.logging
 import io.github.oshai.kotlinlogging.Appender
 import io.github.oshai.kotlinlogging.KLoggingEvent
 import io.github.oshai.kotlinlogging.Level
+import kotlinx.atomicfu.atomic
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
@@ -18,6 +19,13 @@ import us.tractat.kuilt.core.runCatchingCancellable
  * coroutine consumes them in FIFO order. This is the legitimate single-writer
  * channel-drain pattern — it preserves per-producer insertion order without
  * relying on dispatcher confinement for mutual exclusion.
+ *
+ * [close] is the teardown counterpart: it stops the appender accepting events and
+ * closes the channel so the drain coroutine finishes. Without it, uninstalling by
+ * cancelling the drain's scope alone would leave this appender wired into the
+ * global logging config, [trySend]-ing into an unbounded channel nobody drains —
+ * an unbounded memory leak. [LogCaptureInstallation.close] calls this after
+ * restoring the previous appender.
  */
 internal class CapturingAppender(
     private val capture: LogCapture,
@@ -25,6 +33,7 @@ internal class CapturingAppender(
     scope: CoroutineScope,
 ) : Appender {
     private val events = Channel<NormalizedLogEvent>(Channel.UNLIMITED)
+    private val closed = atomic(false)
 
     init {
         scope.launch {
@@ -39,9 +48,20 @@ internal class CapturingAppender(
     }
 
     override fun log(loggingEvent: KLoggingEvent) {
+        if (closed.value) return
         delegate.log(loggingEvent)
         val normalized = loggingEvent.normalize() ?: return
         events.trySend(normalized)
+    }
+
+    /**
+     * Stop capturing: make [log] a no-op and close the channel so the drain
+     * coroutine completes. Idempotent — safe to call more than once.
+     */
+    fun close() {
+        if (closed.compareAndSet(expect = false, update = true)) {
+            events.close()
+        }
     }
 }
 

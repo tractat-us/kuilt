@@ -25,6 +25,24 @@ app's existing log output is preserved:
   trigger the printf-format-string crash class. The handle honours a configured
   `KotlinLoggingConfiguration.subsystem` / `.category` for filtered Console output.
 
+## Never captures kuilt's own logs
+
+Capture hooks the process-global logging config, so it sees every log event in the
+process — including kuilt's own. The capture core drops any event from a
+`us.tractat.kuilt` logger before recording it. This is a safety invariant, not a
+setting: the durable buffer logs when it evicts, so capturing that would feed an
+eviction back into the buffer and loop. A consumer app is never under that
+package, so only kuilt internals are excluded — and every capture edge inherits
+the rule through the one shared core.
+
+## Stopping capture
+
+`installLogCapture` returns a handle. Closing it (`installation.close()`) is the
+way to stop capture: it restores the previously-installed appender and stops the
+capturing appender from buffering any further events. Cancelling the install scope
+alone is **not** sufficient — that kills the drain but leaves the appender wired
+into the global config, buffering forever.
+
 ## Determinism
 
 Time and randomness are injected: the event timestamps come from a `Clock` and the
