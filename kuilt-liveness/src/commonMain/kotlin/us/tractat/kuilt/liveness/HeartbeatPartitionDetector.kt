@@ -6,8 +6,10 @@ import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.Swatch
@@ -105,8 +107,23 @@ public class HeartbeatPartitionDetector(
     // ── Heartbeat loop ────────────────────────────────────────────────────────
 
     private suspend fun runHeartbeatLoop() {
+        var observedPresent = false
         while (true) {
-            delay(config.interval)
+            if (!observedPresent && peerId in link.peers.value) observedPresent = true
+
+            // Wait up to one interval, but wake immediately if the target leaves the
+            // peer set after having been seen — a definitive transport close.
+            withTimeoutOrNull(config.interval.inWholeMilliseconds) {
+                link.peers.first { observedPresent && peerId !in it }
+            }
+            if (!observedPresent && peerId in link.peers.value) observedPresent = true
+
+            if (observedPresent && peerId !in link.peers.value) {
+                emitIfOpen(PartitionEvent.PeerUnresponsive(peerId, clock(), PartitionEvent.Reason.TransportClosed))
+                val recovered = awaitRecoveryOrLoss()
+                if (!recovered) return
+                continue
+            }
 
             if (backpressurePending) {
                 backpressurePending = false
