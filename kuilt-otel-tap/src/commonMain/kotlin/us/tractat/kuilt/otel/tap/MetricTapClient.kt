@@ -67,6 +67,12 @@ public class MetricTapClient(
      * [kotlinx.coroutines.TimeoutCancellationException] rather than returning a partial
      * result. The result is point-in-time; call again (or use [tail]) to observe later
      * changes.
+     *
+     * **Empty is not a fast return.** This waits for the *first non-empty* state, so a device
+     * that has recorded no metrics yet does not resolve to an empty [MetricSnapshot] — the
+     * call blocks for the full [MetricTapConfig.pullTimeout] and then throws
+     * [kotlinx.coroutines.TimeoutCancellationException]. Use [tail] if you need to observe a
+     * buffer that may legitimately be empty for a while.
      */
     public suspend fun pull(): MetricSnapshot = withTimeout(config.pullTimeout) {
         awaitRemotePeer()

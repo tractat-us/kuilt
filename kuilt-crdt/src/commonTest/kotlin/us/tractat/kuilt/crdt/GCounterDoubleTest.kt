@@ -38,6 +38,18 @@ class GCounterDoubleTest {
     }
 
     @Test
+    fun pieceIsAssociative() {
+        // Overlapping slots so a broken join (e.g. sum instead of max) would differ.
+        val ga = GCounterDouble.of(a to 2.0, b to 1.0)
+        val gb = GCounterDouble.of(b to 4.0, c to 3.0)
+        val gc = GCounterDouble.of(a to 5.0, c to 1.0)
+        // (a⊕b)⊕c == a⊕(b⊕c)
+        assertEquals(ga.piece(gb).piece(gc), ga.piece(gb.piece(gc)))
+        // a=max(2,5)=5, b=max(1,4)=4, c=max(3,1)=3 → 12.0
+        assertEquals(12.0, ga.piece(gb).piece(gc).value)
+    }
+
+    @Test
     fun valueIsCanonicalOrderIndependent() {
         // Same converged state built two ways must report the same value bit-for-bit.
         val forward = GCounterDouble.of(a to 0.1, b to 0.2, c to 0.3)
