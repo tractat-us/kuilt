@@ -42,7 +42,21 @@ public sealed interface MetricPoint {
         override fun valueHash(): Long = value.toRawBits()
     }
 
-    /** A last-writer-wins snapshot (OTLP Gauge). */
+    /**
+     * A last-writer-wins snapshot (OTLP Gauge).
+     *
+     * ## Value-return caveat (#1053)
+     *
+     * [valueHash] is over the gauge value only, matching the LWW-snapshot semantics of
+     * the backing [us.tractat.kuilt.crdt.LWWRegister]. A value that returns to a
+     * previously-sent reading (e.g. `0.5 → 0.6 → 0.5`) hashes back to the earlier
+     * digest entry, so the by-digest reconciliation **skips** the re-send and the
+     * collector keeps the observation timestamp of the *first* `0.5`. This is
+     * intentional: a gauge reports a current level, not a history, so re-observing the
+     * same level carries no new value. Consumers that need the latest observation
+     * instant for an unchanged value should read the gauge's own timestamp rather than
+     * relying on a re-send.
+     */
     public data class Gauge(
         override val key: MetricKey,
         public val value: Double,

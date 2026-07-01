@@ -60,10 +60,12 @@ public class OtlpHttpEdge(
     private val base: String = endpoint.trimEnd('/')
     private val json = Json { encodeDefaults = false }
 
-    // Per-endpoint sent-set keys.
-    private val spanKey = StoreKey("otlp.sent.spans@${endpoint.hashCode()}")
-    private val logKey = StoreKey("otlp.sent.logs@${endpoint.hashCode()}")
-    private val metricKey = StoreKey("otlp.sent.metrics@${endpoint.hashCode()}")
+    // Per-endpoint sent-set keys. Hash the *trimmed* base — the same URL that POSTs use
+    // — so `".../:4318/"` and `".../:4318"` share one sent-set over a shared store
+    // rather than splitting into two (#1053).
+    private val spanKey = StoreKey("otlp.sent.spans@${base.hashCode()}")
+    private val logKey = StoreKey("otlp.sent.logs@${base.hashCode()}")
+    private val metricKey = StoreKey("otlp.sent.metrics@${base.hashCode()}")
 
     // ── Digests (producer-local, read from the persisted sent-set) ─────────────
 
