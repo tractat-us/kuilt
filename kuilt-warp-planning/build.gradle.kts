@@ -5,12 +5,10 @@ plugins {
 kotlin {
     sourceSets {
         commonMain.dependencies {
-            implementation(project(":kuilt-warp"))
-            api(project(":kuilt-warp-planning"))
-            implementation(project(":kuilt-otel"))
-            implementation(libs.kotlinx.coroutines.core)
+            api(project(":kuilt-warp"))
         }
         commonTest.dependencies {
+            implementation(project(":kuilt-raft-test"))
             implementation(project(":kuilt-test"))
             implementation(libs.kotlinx.coroutines.test)
         }
