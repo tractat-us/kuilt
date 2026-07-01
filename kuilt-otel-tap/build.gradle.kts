@@ -20,6 +20,9 @@ kotlin {
             implementation(libs.kotlinx.serialization.cbor)
             implementation(libs.kotlinx.io.bytestring)
             implementation(libs.kotlin.logging)
+            // Join-token admission gate: HMAC-SHA256 (KMP-uniform) + reentrant lock.
+            implementation(libs.kotlincrypto.macs.hmac.sha2)
+            implementation(libs.kotlinx.atomicfu)
         }
         commonTest.dependencies {
             implementation(project(":kuilt-test"))
