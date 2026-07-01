@@ -4,6 +4,16 @@ _Design for #1025 and #1026. Part of the log-capture epic #986 (M2). The metrics
 twin of the just-shipped log pipeline
 (`2026-07-01-log-capture-m2-otel-sdk-design.md`)._
 
+> **Decisions locked (2026-07-01, @keddie on PR #1030).** Four questions this spec
+> originally left open are now settled and folded in below: (1) `DOUBLE_SUM`
+> precision uses a new **`GCounterDouble`** CRDT (#1035), **not** fixed-point
+> scaling; (2) the tap uses **separate per-signal replicators muxed over one
+> transport**, not a unified composite CRDT and not a new module; (3)
+> `KuiltMetricExporter` requests **`DELTA`** temporality; (4) `WarpMetricExporter`
+> gains the additive `snapshotAll()`/key-enumeration accessor the tap needs.
+> **`GCounterDouble` (#1035) is a hard prerequisite** — the implementation plan
+> (`docs/superpowers/plans/2026-07-01-metrics-pipeline.md`) sequences it first.
+
 ## What this adds
 
 The device-side metric **buffer** already exists — `WarpMetricExporter`
@@ -59,11 +69,24 @@ buffer kind. `MetricKey.attributes` comes from the point's OTLP attribute set;
 
 | OTLP `MetricDataType` | Condition | Buffer call | CRDT | Notes |
 |---|---|---|---|---|
-| `LONG_SUM` / `DOUBLE_SUM` | `isMonotonic == true` | `incrementSum(key, by = pointDelta)` | `GCounter` | Requires **delta** temporality (below). |
-| `LONG_SUM` / `DOUBLE_SUM` | `isMonotonic == false` (UpDownCounter) | `setGauge(key, value, timestamp)` | `LWWRegister` | Can decrease → not a `GCounter`; treat as a current value. |
+| `LONG_SUM` | `isMonotonic == true` | `incrementSum(key, by = point.value)` | `GCounter` | Requires **delta** temporality (below). `by: Long`. |
+| `DOUBLE_SUM` | `isMonotonic == true` | `incrementSumDouble(key, by = point.value)` | `GCounterDouble` | New CRDT (#1035); exact precision, **no** truncation/scaling. Requires **delta** temporality. `by: Double`. |
+| `LONG_SUM` / `DOUBLE_SUM` | `isMonotonic == false` (UpDownCounter) | `setGauge(key, value, timestamp)` | `LWWRegister` | Can decrease → not a grow-only counter; treat as a current value. |
 | `LONG_GAUGE` / `DOUBLE_GAUGE` | — | `setGauge(key, value, timestamp)` | `LWWRegister` | `timestamp = point.epochNanos`. |
 | `HISTOGRAM` / `EXPONENTIAL_HISTOGRAM` / `SUMMARY` | — | **dropped**, logged at WARN once per name | — | No mergeable quantile CRDT yet (#798). |
 | (no OTLP analog) | — | — | `HyperLogLog` | `CARDINALITY` is **not** fed by this bridge; it stays a manual `addCardinality` surface. |
+
+**`GCounterDouble` (#1035) is a hard prerequisite.** `GCounter` is `Long`-only, so a
+monotonic `DOUBLE_SUM` would have to be truncated or fixed-point-scaled — both lose
+precision and drift. The locked decision (#1035) is a typed sibling
+`GCounterDouble : Quilted<GCounterDouble>` backed by `Map<ReplicaId, Double>`,
+identical CRDT shape (elementwise-max `piece`), with one wrinkle: `value` sums the
+per-replica map in **canonical `ReplicaId` order** because floating-point `+` is not
+associative, so a naïve `.sum()` over iteration order could yield a slightly
+different `value` on different replicas from identical converged state. The plan
+adds `GCounterDouble` and the `WarpMetricExporter` double-sum store (`incrementSumDouble`
++ `doubleSumSnapshot`, store key `otel.metrics.sums.double`) **before** the ingress
+bridge. The `Long` `incrementSum` path is untouched.
 
 ### Temporality — the load-bearing decision
 
@@ -128,14 +151,15 @@ Add `opentelemetry-sdk-metrics` (holds `MetricExporter`, `MetricData`,
 
 ## Piece 2 — Metric tap (#1026)
 
-### The unified-vs-separate decision
+### The unified-vs-separate decision (LOCKED)
 
-**Recommendation: keep the two signals' replication surfaces separate, colocated
-in the existing `:kuilt-otel-tap` module — do not build a new module and do not
-collapse logs and metrics into one `Quilter`. Unify the _transport_, not the
-CRDT.**
+**Decision (@keddie, PR #1030): separate per-signal replicators, mux the
+transport.** Logs keep their append-`Rga` Quilter; metrics get their own
+merge-map Quilter; both live in the existing `:kuilt-otel-tap` module; a harness
+that wants both signals muxes them over one `Seam` (`MuxSeam`). **Not** a unified
+composite CRDT, **not** a separate module.
 
-The reasoning:
+The reasoning (why this was chosen):
 
 - Logs are an **append log** (`Rga<LogRecord>`); metrics are **merge maps** (three
   `ORMap`s of per-key CRDTs). A `Quilter` replicates exactly one `Quilted` value,
@@ -162,25 +186,34 @@ minimal, non-breaking fix (a getter, not a redesign of the buffer's semantics) i
 one composite snapshot type plus one accessor:
 
 ```kotlin
-// New Quilted composite in :kuilt-otel — the metric replication surface.
+// New Quilted composite in :kuilt-otel — the single metric replication surface
+// (metrics-internal, NOT the rejected logs+metrics union). Plain maps of per-kind
+// CRDTs; piece() = key-union + per-value join. Simpler than ORMap — the tap needs
+// no observed-remove semantics (eviction is a local cap, not a replicated delete).
 @Serializable
-public class MetricCatalog private constructor(
-    internal val sums: ORMap<MetricKey, GCounter>,
-    internal val gauges: ORMap<MetricKey, LWWRegister<Double>>,
-    internal val cardinalities: ORMap<MetricKey, HyperLogLog>,
+public class MetricCatalog(
+    public val sums: Map<MetricKey, GCounter> = emptyMap(),
+    public val doubleSums: Map<MetricKey, GCounterDouble> = emptyMap(),
+    public val gauges: Map<MetricKey, LWWRegister<Double>> = emptyMap(),
+    public val cardinalities: Map<MetricKey, HyperLogLog> = emptyMap(),
 ) : Quilted<MetricCatalog> {
-    override fun piece(delta: MetricCatalog): MetricCatalog = /* element-wise ORMap joins */
-    public companion object { public fun empty(): MetricCatalog = /* … */ }
+    override fun piece(other: MetricCatalog): MetricCatalog =
+        MetricCatalog(
+            sums = mergeMaps(sums, other.sums),               // key-union, GCounter.piece
+            doubleSums = mergeMaps(doubleSums, other.doubleSums),
+            gauges = mergeMaps(gauges, other.gauges),
+            cardinalities = mergeMaps(cardinalities, other.cardinalities),
+        )
 }
 
 // Additive read accessor on WarpMetricExporter (lock-guarded, no semantic change):
 public fun snapshotAll(): MetricCatalog
 ```
 
-`ORMap`'s value bound is `S : Quilted<S>`, which all three per-kind CRDTs satisfy,
-so the composite merges correctly by construction: union of keys, each key's value
-joined by its own CRDT lattice. This is the metric analogue of
-`WarpLogRecordExporter.snapshot(): Rga<LogRecord>`.
+Each map's values are `Quilted`, so `mergeMaps` unions keys and joins matching
+values by the value's own CRDT lattice — the composite converges by construction.
+This is the metric analogue of `WarpLogRecordExporter.snapshot(): Rga<LogRecord>`,
+carrying all four sub-stores in one replicated value.
 
 ### API sketch (`:kuilt-otel-tap`, `commonMain`)
 
@@ -207,9 +240,10 @@ public class MetricTapClient(
 
 // The reconstructed, plain-value result — CRDTs collapsed to their reported values.
 public data class MetricSnapshot(
-    val sums: Map<MetricKey, Long>,
-    val gauges: Map<MetricKey, Double>,
-    val cardinalities: Map<MetricKey, Long>,
+    val sums: Map<MetricKey, Long>,          // GCounter.value
+    val doubleSums: Map<MetricKey, Double>,  // GCounterDouble.value (canonical-order sum)
+    val gauges: Map<MetricKey, Double>,      // LWWRegister.value
+    val cardinalities: Map<MetricKey, Long>, // HyperLogLog.estimate()
 )
 ```
 
@@ -240,10 +274,11 @@ is the convenience for a live dashboard.
 
 | Module | New files |
 |---|---|
-| `:kuilt-otel` (`commonMain`) | `MetricCatalog.kt` (Quilted composite + serializer); `snapshotAll()` added to `WarpMetricExporter.kt` |
+| `:kuilt-crdt` (`commonMain`) | `GCounterDouble.kt` (#1035, the hard prerequisite) + zoo docs |
+| `:kuilt-otel` (`commonMain`) | `MetricCatalog.kt` (Quilted composite + serializer); `incrementSumDouble`/`doubleSumSnapshot`/`snapshotAll()` added to `WarpMetricExporter.kt` |
 | `:kuilt-otel-sdk` (`jvmAndAndroidMain`) | `KuiltMetricExporter.kt` |
 | `:kuilt-otel-tap` (`commonMain`) | `MetricTapHost.kt`, `MetricTapClient.kt`, `MetricTapWire.kt`, `MetricTapConfig.kt`; optional `SignalTap.kt` (`installSignalTap` over `MuxSeam`) |
-| `gradle/libs.versions.toml` | `opentelemetry-sdk-metrics` (compileOnly, via BOM) |
+| `gradle/libs.versions.toml` | `opentelemetry-sdk-metrics` (compileOnly, via `otel` version ref) |
 
 No new module and no `settings.gradle.kts` change — everything lands in modules
 that already exist.
@@ -252,12 +287,14 @@ that already exist.
 
 - **Ingress (`:kuilt-otel-sdk`, `jvmTest`)** — fake `MetricData` for each row of
   the mapping table drains into a **real** `WarpMetricExporter`: a monotonic
-  `LONG_SUM` delta point → `incrementSum` (assert `sumValue`); a `DOUBLE_GAUGE` →
-  `setGauge` (assert `gaugeValue`); a non-monotonic sum → gauge; a `HISTOGRAM` →
-  dropped (buffer untouched, WARN logged). Assert `getAggregationTemporality`
-  returns `DELTA`. Assert the returned `CompletableResultCode` succeeds after the
-  drain and `shutdown()` drains cleanly. `StandardTestDispatcher(testScheduler)`,
-  injected `scope`. JVM/Android compile is a hard acceptance bar.
+  `LONG_SUM` delta point → `incrementSum` (assert `sumValue`); a monotonic
+  `DOUBLE_SUM` → `incrementSumDouble` (assert `doubleSumValue`, exact); a
+  `DOUBLE_GAUGE` → `setGauge` (assert `gaugeValue`); a non-monotonic sum → gauge; a
+  `HISTOGRAM` → dropped (buffer untouched, WARN logged). Assert
+  `getAggregationTemporality` returns `DELTA`. Assert the returned
+  `CompletableResultCode` succeeds after the drain and `shutdown()` drains cleanly.
+  `StandardTestDispatcher(testScheduler)`, injected `scope`. JVM/Android compile is
+  a hard acceptance bar.
 - **Tap (`:kuilt-otel-tap`, `commonTest`)** — conformance-style: seed a
   `WarpMetricExporter` with a mix of sums/gauges/cardinalities, `installMetricTap`
   over an in-memory/loopback `Seam`, and assert `MetricTapClient.pull()`
@@ -268,37 +305,46 @@ that already exist.
 - **`MetricCatalog` (`:kuilt-otel`, `commonTest`)** — CRDT laws: merge
   commutativity/idempotence, key-union, per-key value join.
 
-## Alternatives & open questions for @keddie
+## Resolved decisions & remaining open questions
 
-1. **`double` monotonic-sum truncation (ingress).** `GCounter` is `Long`.
-   Options: (a) `by = value.toLong()` with a documented drift caveat [v1
-   recommendation]; (b) carry a per-key fractional-remainder accumulator in the
-   bridge so no fraction is lost; (c) reject/drop `DOUBLE_SUM` monotonic and
-   require integer counters. Which?
-2. **Temporality override scope.** Returning `DELTA` for *every* instrument type is
-   the clean choice for sums, and gauges ignore it — but do you want the bridge to
-   assert/reject if it's ever handed a cumulative sum point (defensive), or trust
-   the SDK honoured the temporality it was asked for (simpler)?
-3. **Unified vs separate tap — confirm the recommendation.** The design recommends
-   separate per-signal Quilters, colocated in `:kuilt-otel-tap`, optionally muxed
-   over one `Seam` via `MuxSeam` — not a unified composite CRDT and not a new
-   module. Confirm, or state a preference for a single "all signals" wire.
-4. **The additive `snapshotAll()` accessor.** The buffer is "done, don't redesign",
-   but the tap needs key enumeration. `snapshotAll(): MetricCatalog` is a
-   read-only getter with no semantic change — acceptable, or would you rather the
-   tap host be constructed with an explicit key-set it polls?
-5. **`tail()` semantics.** Whole-snapshot-on-change (recommended) vs. per-key change
-   events (`Flow<MetricChange>`) vs. omit `tail()` entirely for v1 (the issue says
-   "if it fits").
+**Resolved (@keddie, PR #1030 — folded into this spec):**
+
+1. ~~`double` monotonic-sum truncation~~ → **`GCounterDouble` (#1035)**, a typed
+   double counter; no truncation, no fixed-point scaling. `LONG_SUM` stays on
+   `GCounter`.
+2. ~~Unified vs separate tap~~ → **separate per-signal replicators, mux the
+   transport** (`MuxSeam`); both in `:kuilt-otel-tap`; no unified composite CRDT,
+   no new module.
+3. ~~Temporality~~ → `KuiltMetricExporter` returns **`DELTA`** for every instrument
+   type.
+4. ~~Additive accessor~~ → add `snapshotAll(): MetricCatalog` (+ `incrementSumDouble`
+   / `doubleSumSnapshot`) to `WarpMetricExporter` — a read-only getter, no semantic
+   change to the buffer.
+
+**Still open (defaults chosen; call out if you disagree):**
+
+- **Cumulative-point defensiveness.** `DELTA` is requested from the SDK; should the
+  bridge additionally **assert/reject** a point that arrives `CUMULATIVE` anyway
+  (defensive, guards a misconfigured reader), or trust the SDK honoured the
+  temporality it was asked for (simpler)? Plan default: trust + a one-line WARN if a
+  `CUMULATIVE` sum is ever seen, never `incrementSum` it.
+- **`tail()` semantics.** Whole-snapshot-on-change (plan default) vs. per-key change
+  events (`Flow<MetricChange>`) vs. omit `tail()` for v1 (the issue says "if it
+  fits"). Plan default: ship `tail(): Flow<MetricSnapshot>`.
 
 ## Done when
 
-- `KuiltMetricExporter` maps fake `MetricData` (sum/gauge/dropped-histogram) into a
-  real `WarpMetricExporter`, returns `DELTA` temporality, completes its
-  `CompletableResultCode` from the drain, and compiles on JVM/Android.
-- `MetricTapClient.pull()` reconstructs a device's sums/gauges/cardinalities over an
-  in-memory/loopback `Seam`; conformance-style test green.
-- Full `./gradlew build` green; two ready PRs (ingress #1025, tap #1026).
+- `GCounterDouble` (#1035) passes CRDT laws with canonical-order `value`
+  determinism across shuffled merges; zoo docs added.
+- `WarpMetricExporter` gains `incrementSumDouble`/`doubleSumSnapshot`/`snapshotAll()`
+  with the `Long` sum path untouched.
+- `KuiltMetricExporter` maps fake `MetricData` (long-sum/double-sum/gauge/
+  dropped-histogram) into a real `WarpMetricExporter`, returns `DELTA` temporality,
+  completes its `CompletableResultCode` from the drain, and compiles on JVM/Android.
+- `MetricTapClient.pull()` reconstructs a device's sums/double-sums/gauges/
+  cardinalities over an in-memory/loopback `Seam`; conformance-style test green.
+- Full `./gradlew build` green; PRs: `GCounterDouble` (#1035), ingress (#1025), tap
+  (#1026).
 
 ## Non-goals / notes
 
