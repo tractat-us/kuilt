@@ -25,6 +25,7 @@ ionspin-bignum = "0.3.10"
 kotlincrypto-hash = "0.7.0"
 chicory = "1.4.0"
 vanniktechMavenPublish = "0.30.0"
+otel = "1.45.0"
 
 [libraries]
 # atomicfu — multiplatform reentrant lock (locks API only; the runtime artifact is
@@ -66,6 +67,12 @@ slf4j-api = { module = "org.slf4j:slf4j-api", version.ref = "slf4j" }
 # a real backend in that module's tests; the log4j2 sibling of the logback add-on):
 log4j2-core = { module = "org.apache.logging.log4j:log4j-core", version.ref = "log4j2" }
 log4j2-api = { module = "org.apache.logging.log4j:log4j-api", version.ref = "log4j2" }
+# OpenTelemetry SDK — compile surface for the kuilt-otel-sdk bridge (JVM/Android only;
+# compileOnly in main, real deps in jvmTest):
+opentelemetry-api = { module = "io.opentelemetry:opentelemetry-api", version.ref = "otel" }
+opentelemetry-sdk-logs = { module = "io.opentelemetry:opentelemetry-sdk-logs", version.ref = "otel" }
+opentelemetry-sdk-common = { module = "io.opentelemetry:opentelemetry-sdk-common", version.ref = "otel" }
+opentelemetry-sdk-testing = { module = "io.opentelemetry:opentelemetry-sdk-testing", version.ref = "otel" }
 # jqwik — property-based testing on JVM (JUnit Platform runner):
 jqwik = { module = "net.jqwik:jqwik", version.ref = "jqwik" }
 junit-platform-launcher = { module = "org.junit.platform:junit-platform-launcher", version.ref = "junit-platform-launcher" }
