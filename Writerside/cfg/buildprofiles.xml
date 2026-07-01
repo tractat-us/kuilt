@@ -3,5 +3,8 @@
 <buildprofiles>
     <variables>
         <noIndex>false</noIndex>
+        <header-logo>kuilt-logo.svg</header-logo>
+        <custom-favicons>kuilt-favicon.png</custom-favicons>
+        <product-web-url>https://github.com/tractat-us/kuilt</product-web-url>
     </variables>
 </buildprofiles>

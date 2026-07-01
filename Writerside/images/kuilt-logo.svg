@@ -1,0 +1,31 @@
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+        <linearGradient id="tileA" x1="96" y1="96" x2="248" y2="248" gradientUnits="userSpaceOnUse">
+            <stop stop-color="#7F52FF"/>
+            <stop offset="1" stop-color="#B125EA"/>
+        </linearGradient>
+        <linearGradient id="tileB" x1="264" y1="96" x2="416" y2="248" gradientUnits="userSpaceOnUse">
+            <stop stop-color="#0095D5"/>
+            <stop offset="1" stop-color="#3BD1FF"/>
+        </linearGradient>
+        <linearGradient id="tileC" x1="96" y1="264" x2="248" y2="416" gradientUnits="userSpaceOnUse">
+            <stop stop-color="#6F6AF8"/>
+            <stop offset="1" stop-color="#5AC8FA"/>
+        </linearGradient>
+        <linearGradient id="tileD" x1="264" y1="264" x2="416" y2="416" gradientUnits="userSpaceOnUse">
+            <stop stop-color="#B125EA"/>
+            <stop offset="1" stop-color="#7F52FF"/>
+        </linearGradient>
+    </defs>
+
+    <rect width="512" height="512" rx="116" fill="#121426"/>
+
+    <rect x="96" y="96" width="152" height="152" rx="30" fill="url(#tileA)"/>
+    <rect x="264" y="96" width="152" height="152" rx="30" fill="url(#tileB)"/>
+    <rect x="96" y="264" width="152" height="152" rx="30" fill="url(#tileC)"/>
+    <rect x="264" y="264" width="152" height="152" rx="30" fill="url(#tileD)"/>
+
+    <path d="M174 174H338V338H174V174Z" fill="none" stroke="#F4F2FF" stroke-opacity="0.42" stroke-width="10" stroke-dasharray="16 16"/>
+
+    <path d="M202 148V364H245V280L312 364H364L286 268L360 148H309L245 251V148H202Z" fill="#F9FAFF"/>
+</svg>
