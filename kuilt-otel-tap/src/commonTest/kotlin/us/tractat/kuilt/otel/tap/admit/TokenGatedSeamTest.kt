@@ -96,6 +96,37 @@ class TokenGatedSeamTest {
     }
 
     /**
+     * Offline-harvest hardening (#1052): in the role-inverted topology the prover hosts the
+     * session, so any joiner can send it a [TapAdmitMessage.Challenge] purely to harvest
+     * `HMAC(code, nonce)` for an offline crack of the join code (bounded only by the token
+     * TTL on the plaintext wire). The prover binds to the first host it answers and must NOT
+     * answer a challenge from any other sender thereafter.
+     */
+    @Test
+    fun proverAnswersOnlyItsBoundHost() = runTest(UnconfinedTestDispatcher()) {
+        val loom = InMemoryLoom()
+        val proverSeam = loom.host(Pattern("prover-hosts"))
+        val hostSeam = loom.join(InMemoryTag("host")) // the legitimate verifier device
+        val attackerSeam = loom.join(InMemoryTag("attacker"))
+        val proverGate = proverSeam.tokenGated(GateRole.Prover("CODE1234"), backgroundScope)
+        val proverId = proverGate.selfId
+
+        // The legitimate host challenges first; the prover binds to it and answers.
+        hostSeam.sendTo(proverId, TapAdmitMessage.encode(TapAdmitMessage.Challenge(ByteString(ByteArray(16) { 1 }))))
+        val hostProof = withTimeoutOrNull(1.minutes) {
+            hostSeam.incoming.first { TapAdmitMessage.decode(it.toByteArray()) is TapAdmitMessage.Proof }
+        }
+        assertTrue(hostProof != null, "prover answers the host it first binds to")
+
+        // An attacker now challenges the hosting prover; it must be ignored (different sender).
+        attackerSeam.sendTo(proverId, TapAdmitMessage.encode(TapAdmitMessage.Challenge(ByteString(ByteArray(16) { 2 }))))
+        val attackerProof = withTimeoutOrNull(1.minutes) {
+            attackerSeam.incoming.first { TapAdmitMessage.decode(it.toByteArray()) is TapAdmitMessage.Proof }
+        }
+        assertNull(attackerProof, "prover must not answer a challenge from an unexpected sender")
+    }
+
+    /**
      * Wire an in-memory host/joiner [Seam] pair, wrap the host as a [GateRole.Verifier] and the
      * joiner as a [GateRole.Prover] presenting [presentedCode], and return both gated seams.
      */

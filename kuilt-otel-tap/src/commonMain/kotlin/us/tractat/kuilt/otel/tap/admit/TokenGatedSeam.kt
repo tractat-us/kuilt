@@ -43,12 +43,15 @@ internal sealed interface GateRole {
  * nor leak log state to a peer that has not proven the join code. Admission frames the
  * gate itself sends use the inner seam directly, bypassing that filter. On the
  * **prover** (pulling) side the gate is transparent apart from answering challenges and
- * stripping admit frames from what the replicator sees.
+ * stripping admit frames from what the replicator sees. A prover binds to the first host
+ * it answers and ignores challenges from any other sender — so, in the role-inverted
+ * topology where the prover hosts the session, a stray joiner cannot farm
+ * `HMAC(code, nonce)` tags for an offline crack.
  *
- * Scope-owning: two collectors (of `inner.incoming` and, for a verifier, `inner.peers`)
- * run in [scope]; cancel it to stop the gate. State is guarded by a [reentrantLock] with
- * every suspending inner-seam send performed outside the lock, so the gate is correct
- * under a multi-threaded dispatcher.
+ * Scope-owning: two collectors (of `inner.incoming` and of `inner.peers`) run in [scope];
+ * cancel it to stop the gate. State is guarded by a [reentrantLock] with every suspending
+ * inner-seam send performed outside the lock, so the gate is correct under a multi-threaded
+ * dispatcher.
  */
 internal class TokenGatedSeam(
     private val inner: Seam,
@@ -64,6 +67,13 @@ internal class TokenGatedSeam(
     // Verifier-only: peers that have proven the code. Always includes selfId (peers invariant).
     private val verified = MutableStateFlow(setOf(inner.selfId))
 
+    // Prover-only: the peer we bound to on the first challenge we answered. We answer only
+    // challenges from this sender thereafter — in the role-inverted topology the prover hosts
+    // the session, so any joiner could otherwise send a Challenge purely to harvest
+    // HMAC(code, nonce) for an offline crack of the code. Cleared when the bound host departs
+    // so a legitimate reconnect (the token is reusable) can re-bind. See LogTapJoinToken.
+    private var boundHost: PeerId? = null
+
     // Replication frames surfaced to the replicator. Buffered so the sole relay collector
     // never blocks; a fresh Seam has no subscriber for a brief construction window.
     private val relayed = MutableSharedFlow<Swatch>(extraBufferCapacity = 256)
@@ -77,8 +87,8 @@ internal class TokenGatedSeam(
     override val incoming: Flow<Swatch> get() = relayed.asSharedFlow()
 
     init {
-        if (role is GateRole.Verifier) {
-            scope.launch {
+        when (role) {
+            is GateRole.Verifier -> scope.launch {
                 var known = setOf(inner.selfId)
                 inner.peers.collect { current ->
                     // Drop admission state for peers that disconnected, so a same-PeerId
@@ -86,6 +96,16 @@ internal class TokenGatedSeam(
                     val departed = known - current
                     if (departed.isNotEmpty()) prune(departed)
                     for (peer in current) if (peer != inner.selfId) maybeChallenge(peer)
+                    known = current
+                }
+            }
+            is GateRole.Prover -> scope.launch {
+                var known = setOf(inner.selfId)
+                inner.peers.collect { current ->
+                    // Release the challenge binding when the bound host departs, so a
+                    // legitimate reconnect can re-bind rather than being locked out.
+                    val departed = known - current
+                    if (departed.isNotEmpty()) lock.withLock { if (boundHost in departed) boundHost = null }
                     known = current
                 }
             }
@@ -155,6 +175,20 @@ internal class TokenGatedSeam(
 
     private suspend fun respondToChallenge(host: PeerId, challenge: TapAdmitMessage.Challenge) {
         val prover = role as GateRole.Prover
+        // Bind to the first host we answer and refuse challenges from any other sender: this
+        // narrows the offline-harvest surface in the role-inverted topology where the prover
+        // hosts the session and a stray joiner could otherwise farm HMAC(code, nonce) tags.
+        val bound = lock.withLock {
+            when (boundHost) {
+                null -> { boundHost = host; true }
+                host -> true
+                else -> false
+            }
+        }
+        if (!bound) {
+            logger.debug { "ignoring challenge from unexpected sender $host (bound to another host)" }
+            return
+        }
         val tag = ByteString(hmacSha256(prover.code.encodeToByteArray(), challenge.nonce.toByteArray()))
         runCatchingCancellable { inner.sendTo(host, TapAdmitMessage.encode(TapAdmitMessage.Proof(tag))) }
             .onFailure { logger.debug { "proof send to $host failed: ${it.message}" } }
