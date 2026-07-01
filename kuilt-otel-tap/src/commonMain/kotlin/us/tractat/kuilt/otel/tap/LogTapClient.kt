@@ -27,13 +27,19 @@ import us.tractat.kuilt.quilter.Quilter
  * Close the client to release its replicator.
  */
 public class LogTapClient(
-    private val seam: Seam,
+    seam: Seam,
     parentScope: CoroutineScope,
     private val config: LogTapConfig = LogTapConfig(),
+    admission: LogTapAdmission = LogTapAdmission.Open,
 ) : ScopedCloseable(parentScope) {
 
+    // When admission is not Open, wrap the joined seam in the pulling-side token gate,
+    // running in this client's own [scope], so it answers the host's challenge with the
+    // presented code before any replication is expected.
+    private val seam: Seam = seam.gatedIfNeeded(admission.pullingRole(), scope)
+
     private val replicator: Quilter<Rga<LogRecord>> = Quilter(
-        seam = seam,
+        seam = this.seam,
         initial = Rga.empty(),
         valueSerializer = logRgaSerializer(),
         scope = scope,

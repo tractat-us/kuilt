@@ -51,3 +51,49 @@ or losing a record.
 The tap is fabric-agnostic: it takes a `Loom`/`Seam`, so the same code reaches a
 simulator over a loopback WebSocket or a real phone over a LAN or peer-to-peer
 fabric — the fabric is a configuration choice, not a code change.
+
+## Reaching a real phone, safely
+
+On a shared Wi-Fi network anyone nearby could otherwise connect and read your
+logs. So when you take the tap off loopback, put a **short code** in front of it:
+the phone shows a code, and only someone who types that code into the puller gets
+in.
+
+- **On the device:** issue a
+  [LogTapJoinToken][us.tractat.kuilt.otel.tap.admit.LogTapJoinToken] from a
+  cryptographically secure source
+  ([cryptoRandom()][us.tractat.kuilt.otel.tap.admit.cryptoRandom]) and pass
+  [LogTapAdmission.Verify][us.tractat.kuilt.otel.tap.LogTapAdmission.Verify]. Your app
+  shows the code however it likes — a pairing screen, or a `println` to the Xcode
+  console it controls. The library **never logs the code** (a secret must not land in
+  `os_log`/logcat), so surfacing it is the app's call.
+- **In the puller:** pass
+  [LogTapAdmission.Present][us.tractat.kuilt.otel.tap.LogTapAdmission.Present] with
+  the code you read off the device. A wrong or expired code is refused, and the
+  replicator never sees the unauthorized peer.
+
+```kotlin
+@sample us.tractat.kuilt.otel.tap.sampleGatedLogTap
+```
+
+The code itself never travels the network — the puller proves it knows the code by
+answering a one-time challenge, so a passive listener never learns it. The default
+[LogTapAdmission.Open][us.tractat.kuilt.otel.tap.LogTapAdmission.Open] keeps the
+ungated loopback behaviour unchanged.
+
+### iOS: the phone joins, the laptop hosts
+
+An iOS device can't run a server or advertise itself on the network, so it can't
+*host* the session. It doesn't need to: because replication is symmetric, the phone
+can **join** a session your laptop hosts and its logs still flow to the laptop. Use
+[installLogTapJoining][us.tractat.kuilt.otel.tap.installLogTapJoining] on the phone
+(it discovers and joins) while the laptop hosts and advertises.
+
+### The one honest limitation
+
+Over a plain LAN WebSocket the log bytes themselves travel **unencrypted**. The
+join code controls *who is allowed to pull* — it does not encrypt the traffic, so
+someone already positioned to snoop the network could read logs of a session that
+was legitimately admitted. Where that matters, use an encrypted fabric. Confidential
+transport is a separate, later capability; this module's guarantee is *admission
+control*, deliberately and only.

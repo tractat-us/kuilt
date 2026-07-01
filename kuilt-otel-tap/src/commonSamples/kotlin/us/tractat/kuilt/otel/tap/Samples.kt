@@ -8,6 +8,9 @@ import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.otel.InMemoryDurableStore
 import us.tractat.kuilt.otel.LogRecord
 import us.tractat.kuilt.otel.WarpLogRecordExporter
+import us.tractat.kuilt.otel.tap.admit.LogTapJoinToken
+import us.tractat.kuilt.otel.tap.admit.cryptoRandom
+import kotlin.time.Clock
 
 /** @suppress — sample only */
 internal suspend fun sampleLogTapHostAndPull(scope: CoroutineScope): List<LogRecord> {
@@ -32,6 +35,37 @@ internal suspend fun sampleLogTapHostAndPull(scope: CoroutineScope): List<LogRec
     val logs: List<LogRecord> = client.pull()
 
     // Release both replicators when finished.
+    client.close()
+    host.close()
+    return logs
+}
+
+/** @suppress — sample only */
+internal suspend fun sampleGatedLogTap(scope: CoroutineScope): List<LogRecord> {
+    val exporter = WarpLogRecordExporter(
+        replica = ReplicaId("device-uuid-abc123"),
+        store = InMemoryDurableStore(),
+    )
+    val loom = InMemoryLoom()
+
+    // On the device: mint a short-lived join code from a CRYPTOGRAPHICALLY SECURE source.
+    // cryptoRandom() is that source — the code is the only secret, so never Random.Default.
+    val secure = cryptoRandom()
+    val token = LogTapJoinToken.issue(random = secure, clock = Clock.System)
+    val host = installLogTap(loom, exporter, scope, admission = LogTapAdmission.Verify(token, Clock.System, secure))
+
+    // Show token.code to the operator OUT OF BAND — a pairing UI, or a deliberate println to
+    // the Xcode console the app controls. The library never logs the code itself.
+    // e.g. showJoinCodeInDebugUi(token.code)
+
+    // In the puller: present the code the device showed. A wrong or expired code is refused.
+    val client = LogTapClient(
+        loom.join(InMemoryTag("puller")),
+        scope,
+        admission = LogTapAdmission.Present(token.code),
+    )
+    val logs: List<LogRecord> = client.pull()
+
     client.close()
     host.close()
     return logs
