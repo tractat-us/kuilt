@@ -4,14 +4,13 @@ package us.tractat.kuilt.warp
 
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
-import kotlinx.coroutines.test.advanceTimeBy
-import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.quilter.QuilterConfig
 import us.tractat.kuilt.test.assertAll
+import us.tractat.kuilt.test.drainAntiEntropy
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -24,9 +23,8 @@ private val VM_QUILTER_CONFIG = QuilterConfig(
     expectVirtualTime = true,
 )
 
-private fun TestScope.settle() {
-    repeat(8) { advanceTimeBy(VM_QUILTER_CONFIG.antiEntropyInterval); runCurrent() }
-}
+private fun TestScope.settle() =
+    drainAntiEntropy(VM_QUILTER_CONFIG.antiEntropyInterval, rounds = 8)
 
 class VariantManifestTest {
 

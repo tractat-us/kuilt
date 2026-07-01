@@ -25,6 +25,7 @@ import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.quilter.QuilterConfig
 import us.tractat.kuilt.test.assertAll
+import us.tractat.kuilt.test.drainAntiEntropy
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertFailsWith
@@ -43,9 +44,8 @@ private val BOBBIN_QUILTER_CONFIG = QuilterConfig(
  * Bounded virtual-time advance: step through anti-entropy intervals to let the GSet
  * manifest converge across peers. Never [advanceUntilIdle] — anti-entropy re-arms forever.
  */
-private fun TestScope.settle() {
-    repeat(8) { advanceTimeBy(BOBBIN_QUILTER_CONFIG.antiEntropyInterval); runCurrent() }
-}
+private fun TestScope.settle() =
+    drainAntiEntropy(BOBBIN_QUILTER_CONFIG.antiEntropyInterval, rounds = 8)
 
 class BobbinExchangeTest {
 

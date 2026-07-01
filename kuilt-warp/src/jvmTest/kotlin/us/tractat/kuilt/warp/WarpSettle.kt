@@ -17,6 +17,7 @@ package us.tractat.kuilt.warp
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
+import us.tractat.kuilt.test.drainAntiEntropy
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
 
@@ -69,8 +70,10 @@ internal fun TestScope.settleUntil(
  *  - a **stand-by** node that must never produce a result, and
  *  - a **stability re-check** that the board does NOT change over further anti-entropy cycles.
  */
-internal fun TestScope.quiesce(cadence: Duration, rounds: Int = 8) {
-    repeat(rounds) { advanceTimeBy(cadence); runCurrent() }
-    advanceTimeBy(ClaimStrategy.DEFAULT_SETTLE_WINDOW); runCurrent()
-    repeat(rounds) { advanceTimeBy(cadence); runCurrent() }
-}
+internal fun TestScope.quiesce(cadence: Duration, rounds: Int = 8) =
+    drainAntiEntropy(
+        cadence,
+        rounds = rounds,
+        settleWindow = ClaimStrategy.DEFAULT_SETTLE_WINDOW,
+        postSettleRounds = rounds,
+    )
