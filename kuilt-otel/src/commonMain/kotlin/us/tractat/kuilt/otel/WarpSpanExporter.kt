@@ -5,6 +5,8 @@ package us.tractat.kuilt.otel
 import io.github.oshai.kotlinlogging.KotlinLogging
 import kotlinx.atomicfu.locks.reentrantLock
 import kotlinx.atomicfu.locks.withLock
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.cbor.Cbor
 import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.crdt.ORSet
@@ -54,14 +56,20 @@ public class WarpSpanExporter(
     private val bufferPolicy: BufferPolicy = BufferPolicy.DROP_OLDEST,
     private val causalClock: WarpCausalClock? = null,
 ) {
-    // The lock guards 'spans'. No suspend calls are made inside the locked section —
-    // Cbor encode/decode and the CRDT mutations are pure (non-suspending). The store
-    // write is performed outside the lock on the encoded snapshot.
+    // Two-tier locking, both explicit primitives (repo policy: correctness must hold under
+    // a real multi-threaded dispatcher; limitedParallelism(1) confinement is BANNED).
     //
-    // An explicit reentrant lock is the repo policy for scope-owning types: correctness
-    // must hold under a real multi-threaded dispatcher, not just the test dispatcher.
-    // limitedParallelism(1) confinement is BANNED — see CLAUDE.md thread-safety section.
+    //  - `lock` (atomicfu reentrant) guards the in-memory `spans` mutation only. No suspend
+    //    call is ever made inside it — Cbor encode/decode and CRDT ops are pure.
+    //  - `ioMutex` (coroutine Mutex) serializes the whole *durable-write* critical section
+    //    across concurrent export()/merge() calls: the clock persist and the span store
+    //    write form one ordered unit. This is what makes the crash-window invariant
+    //    (durable clock seq >= every durable span dot) hold even under concurrent export(),
+    //    and closes a spans lost-update where a stale encoded snapshot could drop a
+    //    concurrently-added span (#1053). Suspend IO is legal inside a coroutine Mutex;
+    //    `lock` is never held across an `ioMutex` acquisition, so the two never deadlock.
     private val lock = reentrantLock()
+    private val ioMutex = Mutex()
     private var spans: ORSet<SpanRecord> = ORSet.empty()
 
     private companion object {
@@ -107,6 +115,13 @@ public class WarpSpanExporter(
      * `seq=N` durable, clock still `<N`, and the next [WarpCausalClock.tick] on restart
      * re-mints `N`, violating the clock's uniqueness guarantee.
      *
+     * The invariant holds **unconditionally, including under concurrent `export()` on a
+     * multi-threaded dispatcher**: the clock persist and the span write are serialized as
+     * one ordered unit by an internal coroutine `Mutex`, so the last durable clock write
+     * always reflects a `seq` ≥ every durable span's dot rather than being clobbered by an
+     * older concurrent snapshot. The span snapshot is re-encoded inside that section, so a
+     * concurrent add is never dropped by a stale snapshot either.
+     *
      * If either durable write fails, a freshly-minted stamp is rolled back out of the
      * in-memory set so a retrying caller re-adds exactly **one** copy rather than
      * accumulating a second stamped copy of the same span. The minted dot's `seq` is
@@ -131,30 +146,37 @@ public class WarpSpanExporter(
         // or absent stamp returns `span` itself. Only a minted stamp needs rollback —
         // a re-added unstamped/explicit span is idempotent by ORSet value.
         val minted = stamped !== span
-        val encoded = lock.withLock {
+        lock.withLock {
             maybeEvict()
             spans = spans.add(replica, stamped)
-            cbor.encodeToByteArray(spanSerializer, spans)
         }
-        return runCatchingCancellable {
-            // Persist the clock BEFORE the span so the durable clock seq is always ≥
-            // every durable span's dot — a crash between the two writes can only lose
-            // the span, never re-mint its dot on recover (#1053).
-            causalClock?.persist(store)
-            store.write(STORE_KEY, encoded)
-        }.fold(
-            onSuccess = { ExportResult.Success },
-            onFailure = { cause ->
-                if (minted) {
-                    // Undo the in-memory add so a retry produces exactly one stamped
-                    // copy. remove() targets this span's unique dot value, so it never
-                    // clobbers a concurrent add of a different span.
-                    lock.withLock { spans = spans.remove(stamped) }
-                }
-                logger.error(cause) { "WarpSpanExporter: durable write failed for span ${stamped.spanId}" }
-                ExportResult.Failure(cause)
-            },
-        )
+        // Serialize the durable-write section across concurrent export()/merge() so the
+        // clock persist and the span write are one ordered unit (#1053).
+        return ioMutex.withLock {
+            runCatchingCancellable {
+                // Re-encode the *latest* spans inside the section so no concurrent add is
+                // dropped by a stale snapshot; encoding before the persist keeps the
+                // persisted seq ≥ every dot in this snapshot (seq is monotonic).
+                val encoded = lock.withLock { cbor.encodeToByteArray(spanSerializer, spans) }
+                // Persist the clock BEFORE the span so the durable clock seq is always ≥
+                // every durable span's dot — a crash between the two writes can only lose
+                // the span, never re-mint its dot on recover (#1053).
+                causalClock?.persist(store)
+                store.write(STORE_KEY, encoded)
+            }.fold(
+                onSuccess = { ExportResult.Success },
+                onFailure = { cause ->
+                    if (minted) {
+                        // Undo the in-memory add so a retry produces exactly one stamped
+                        // copy. remove() targets this span's unique dot value, so it never
+                        // clobbers a concurrent add of a different span.
+                        lock.withLock { spans = spans.remove(stamped) }
+                    }
+                    logger.error(cause) { "WarpSpanExporter: durable write failed for span ${stamped.spanId}" }
+                    ExportResult.Failure(cause)
+                },
+            )
+        }
     }
 
     /**
@@ -179,18 +201,21 @@ public class WarpSpanExporter(
         // Fold the remote replica's causal frontier so the next local tick records
         // those dots as predecessors — the cross-replica happens-before path (#846).
         causalClock?.observe(remote.elements.mapNotNull { it.causalStamp?.dot }.toSet())
-        val encoded = lock.withLock {
-            spans = spans.piece(remote)
-            cbor.encodeToByteArray(spanSerializer, spans)
-        }
-        return runCatchingCancellable { store.write(STORE_KEY, encoded) }
-            .fold(
+        lock.withLock { spans = spans.piece(remote) }
+        // Share the durable-write section with export() so a concurrent export()+merge()
+        // cannot lost-update the STORE_KEY snapshot (#1053).
+        return ioMutex.withLock {
+            runCatchingCancellable {
+                val encoded = lock.withLock { cbor.encodeToByteArray(spanSerializer, spans) }
+                store.write(STORE_KEY, encoded)
+            }.fold(
                 onSuccess = { ExportResult.Success },
                 onFailure = { cause ->
                     logger.error(cause) { "WarpSpanExporter: durable write failed during merge" }
                     ExportResult.Failure(cause)
                 },
             )
+        }
     }
 
     /** Must be called with [lock] held. */

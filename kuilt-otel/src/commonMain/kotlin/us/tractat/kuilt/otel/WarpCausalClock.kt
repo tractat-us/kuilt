@@ -48,8 +48,10 @@ public class WarpCausalClock(private val replica: ReplicaId) {
     private var seq: Long = 0L
     private var frontier: Set<Dot> = emptySet()
 
-    private companion object {
-        private val STORE_KEY = StoreKey("otel.causal.clock")
+    internal companion object {
+        /** The durable-store key this clock persists under. Exposed `internal` so a
+         *  crash-window test can target it precisely rather than duplicating the literal. */
+        internal val STORE_KEY = StoreKey("otel.causal.clock")
         private val cbor = Cbor { alwaysUseByteString = true }
         private val stateSerializer = PersistedClock.serializer()
     }

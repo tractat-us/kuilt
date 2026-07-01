@@ -29,10 +29,9 @@ class WarpSpanExporterCrashWindowTest {
         causalStamp = null,
     )
 
-    // The clock's own store key (private in WarpCausalClock); reconstructed here so the
-    // fake store can crash precisely the clock write, modelling a crash in the export's
-    // two-write window.
-    private val clockKey = StoreKey("otel.causal.clock")
+    // The clock's own store key, exposed `internal` by WarpCausalClock so a rename can't
+    // silently make CrashStore stop failing the clock write (which would pass vacuously).
+    private val clockKey = WarpCausalClock.STORE_KEY
 
     /**
      * Persists every write except those to [failKey] while [crashed] — modelling a crash
@@ -58,7 +57,9 @@ class WarpSpanExporterCrashWindowTest {
         // durable, the recovered clock must not re-mint a dot a durable span already used.
         val clock1 = WarpCausalClock(replicaA)
         val exp1 = WarpSpanExporter(replicaA, store, causalClock = clock1)
-        exp1.export(span(1)) // may fail — we only care about what is durable afterwards.
+        // The clock write fails, so export must report Failure (guards against the fake
+        // store silently not failing — e.g. after a key rename).
+        assertIs<ExportResult.Failure>(exp1.export(span(1)))
 
         // Reboot: the clock write succeeds again; recovery reads the committed state.
         store.crashed = false
