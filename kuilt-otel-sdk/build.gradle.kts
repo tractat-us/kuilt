@@ -32,13 +32,9 @@ kotlin {
         jvmMain.get().dependsOn(jvmAndAndroidMain)
         androidMain.get().dependsOn(jvmAndAndroidMain)
 
-        // Empty off-JVM intermediates (auto-wiring disabled by the manual
-        // jvmAndAndroidMain above), mirroring :kuilt-otel-logback.
-        val iosMain by creating { dependsOn(commonMain.get()) }
-        val iosArm64Main by getting { dependsOn(iosMain) }
-        val iosSimulatorArm64Main by getting { dependsOn(iosMain) }
-        val macosMain by creating { dependsOn(commonMain.get()) }
-        val macosArm64Main by getting { dependsOn(macosMain) }
+        // No native (iOS/macOS) or wasm source sets: this module is JVM/Android-only
+        // (`kuilt.jvmAndroidOnly=true` in gradle.properties), so kuilt.kmp-library
+        // does not declare those targets — the OpenTelemetry SDK is JVM-world.
 
         // jvmTest: OTel is a real runtime dep for the tests, plus sdk-testing for
         // TestLogRecordData; logback backs any SLF4J on the classpath.
