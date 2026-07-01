@@ -8,6 +8,9 @@ import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.otel.InMemoryDurableStore
 import us.tractat.kuilt.otel.LogRecord
 import us.tractat.kuilt.otel.WarpLogRecordExporter
+import us.tractat.kuilt.otel.tap.admit.LogTapJoinToken
+import kotlin.random.Random
+import kotlin.time.Clock
 
 /** @suppress — sample only */
 internal suspend fun sampleLogTapHostAndPull(scope: CoroutineScope): List<LogRecord> {
@@ -32,6 +35,34 @@ internal suspend fun sampleLogTapHostAndPull(scope: CoroutineScope): List<LogRec
     val logs: List<LogRecord> = client.pull()
 
     // Release both replicators when finished.
+    client.close()
+    host.close()
+    return logs
+}
+
+/** @suppress — sample only */
+internal suspend fun sampleGatedLogTap(scope: CoroutineScope): List<LogRecord> {
+    val exporter = WarpLogRecordExporter(
+        replica = ReplicaId("device-uuid-abc123"),
+        store = InMemoryDurableStore(),
+    )
+    val loom = InMemoryLoom()
+
+    // On the device: mint a short-lived join code and show it (installLogTap prints it to
+    // the platform log — Xcode console / logcat / stdout). Only a peer that can read this
+    // code off the screen may pull. The code never travels the wire; the puller proves it
+    // with an HMAC of a fresh challenge.
+    val token = LogTapJoinToken.issue(random = Random.Default, clock = Clock.System)
+    val host = installLogTap(loom, exporter, scope, admission = LogTapAdmission.Verify(token, Clock.System, Random.Default))
+
+    // In the puller: present the code the device showed. A wrong or expired code is refused.
+    val client = LogTapClient(
+        loom.join(InMemoryTag("puller")),
+        scope,
+        admission = LogTapAdmission.Present(token.code),
+    )
+    val logs: List<LogRecord> = client.pull()
+
     client.close()
     host.close()
     return logs
