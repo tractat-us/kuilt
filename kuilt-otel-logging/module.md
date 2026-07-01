@@ -23,6 +23,24 @@ call sites do not change.
 To then pull those captured logs off the device from a test or CI process, see
 the companion `kuilt-otel-tap` module.
 
+## Following a trace
+
+When your app runs distributed tracing, wrap the work in
+`withActiveTrace(trace) { … }` and kuilt keeps and stamps the log lines that belong
+to a kept trace — on an iPhone and in the browser too, not only on a server. Wire a
+`CoroutineContextTraceProvider` into `installLogCapture` and the sampling gate reads
+the current trace from that scope; on the JVM you can instead let the OpenTelemetry
+SDK be the source (`kuilt-otel-sdk`). Both feed the same gate.
+
+The reach of a trace differs by platform: JVM/Android propagate it across coroutine
+thread hops and to child coroutines, and wasmJs is single-threaded so it always
+holds within the block. On iOS/macOS the trace is reliable for a line logged
+synchronously within the span (the common case); if the block suspends and resumes
+on a different worker thread the trace is not carried to it — no Kotlin/Native
+primitive can mirror it, and the restore is guarded so it can never corrupt another
+scope's trace. `MutableTraceContextHolder` is a minimal escape hatch for code that
+can't express its tracing as coroutine scopes.
+
 ## Where capture happens
 
 One uniform appender is installed in common code on every platform. It feeds each
