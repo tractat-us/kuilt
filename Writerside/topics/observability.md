@@ -14,66 +14,122 @@ deliver it whenever the network comes back** — minutes or hours later. Nothing
 lost while offline, and — this is the part that's normally hard — **nothing is
 counted twice** when a flaky connection makes the device send the same note again.
 
-## How you'd use it
+The rest of this page walks the whole path, in the order you'll build it:
+
+1. **[Record](#record)** the notes as your app runs.
+2. They **[survive being offline](#offline)** and sort themselves out across devices.
+3. **[See them in a dashboard](#dashboard)** — deliver them to your telemetry backend.
+
+## 1. Record what your app is doing {id="record"}
 
 This is a normal logging/metrics setup — you record events as your app runs, and
-they show up in your dashboards later. Here's recording a few measurements:
+they show up later. There are three kinds of note, and kuilt records all of them
+through one combined entry point, `WarpTelemetry`:
 
-<!-- condensed from kuilt-otel/src/commonSamples/kotlin/us/tractat/kuilt/otel/Samples.kt#sampleWarpMetricExporter -->
-
-```kotlin
-val exporter = WarpMetricExporter(replica = ReplicaId("device-uuid-abc123"), store = InMemoryDurableStore())
-
-// Recover anything recorded during a previous session (e.g. before the app was closed).
-exporter.recover()
-
-// Count server requests — re-sending after a dropped connection can't double-count.
-val requests = MetricKey("server.requests", MetricKind.SUM, mapOf("handler" to "/api/v1"))
-exporter.incrementSum(requests, by = 1L)
-
-// Count distinct users — the same user seen twice is still one.
-val users = MetricKey("unique.users", MetricKind.CARDINALITY)
-exporter.addCardinality(users, "user-abc")
-exporter.addCardinality(users, "user-abc") // ignored — already counted
-```
-
-Recording a trace (one unit of work, with timings) and a log line works the same
-way, through one combined facade:
+- **traces** — one timed unit of work ("this checkout took 480 ms"),
+- **metrics** — numbers you count or sample ("requests served", "current memory"),
+- **logs** — text lines ("user checked out").
 
 <!-- condensed from kuilt-otel/src/commonSamples/kotlin/us/tractat/kuilt/otel/Samples.kt#sampleWarpTelemetry -->
 
 ```kotlin
 val telemetry = WarpTelemetry(replica = ReplicaId("device-uuid-abc123"), store = InMemoryDurableStore())
+
+// Recover anything recorded during a previous session (e.g. before the app was closed).
 telemetry.recover()
 
-// export() returns the moment the data is safely on the device —
+// export() returns the moment the note is safely on the device —
 // NOT when it reaches a server. Delivery happens later, on its own.
-telemetry.spans.export(span)   // a span: one timed unit of work
-telemetry.logs.export(logRecord)
+telemetry.spans.export(span)         // a span: one timed unit of work
+telemetry.logs.export(logRecord)     // a log line
 ```
 
-## What's actually going on
+Metrics read a little differently, because a metric is a running total rather than a
+one-off event — you nudge it up, set it, or add to it:
+
+<!-- condensed from kuilt-otel/src/commonSamples/kotlin/us/tractat/kuilt/otel/Samples.kt#sampleWarpMetricExporter -->
+
+```kotlin
+// Count server requests — re-sending after a dropped connection can't double-count.
+val requests = MetricKey("server.requests", MetricKind.SUM, mapOf("handler" to "/api/v1"))
+telemetry.metrics.incrementSum(requests, by = 1L)
+
+// Count *distinct* users — the same user seen twice is still one.
+val users = MetricKey("unique.users", MetricKind.CARDINALITY)
+telemetry.metrics.addCardinality(users, "user-abc")
+telemetry.metrics.addCardinality(users, "user-abc") // ignored — already counted
+```
+
+The one thing to notice: every call above finishes the instant the note is written
+to local storage. None of them wait for a network. That's the whole idea, and the
+next section is why it's safe.
+
+## 2. It survives being offline {id="offline"}
 
 The industry-standard way for apps to emit this kind of data is called
-**OpenTelemetry** — a common vocabulary of *traces* (timed units of work), *metrics*
-(numbers like counts and gauges), and *logs* (text events), plus the dashboards that
-read them (Jaeger, Prometheus, and friends). `kuilt-otel` plugs into OpenTelemetry as
-a standard *exporter*, so your existing instrumentation and dashboards keep working
-unchanged.
+**OpenTelemetry** — a shared vocabulary for exactly those three kinds of note
+(traces, metrics, logs), plus the dashboards that read them (Jaeger, Prometheus, and
+friends). `kuilt-otel` speaks that same vocabulary, so the data you record lands in
+the tools you already use.
 
-The one thing it changes is *when an export is considered done*. A normal exporter
-sends the data to a collector over the network and fails if the network is down.
-`kuilt-otel` instead succeeds the moment the data is **durably written to local
-storage**. Getting it to a backend is then the network fabric's job — gossip and
-anti-entropy carry it across whenever a connection is available, possibly much later.
-Two reconnecting devices exchange only the notes the other is *missing*, so a brief
-window of connectivity is enough.
+What it changes is *when a record is considered done*. A normal setup sends each
+note to a collector over the network and fails if the network is down. `kuilt-otel`
+instead succeeds the moment the note is **durably written to local storage**. Getting
+it onward is a separate step that happens whenever a connection is available —
+possibly much later, and possibly from a *different device* (more on that below).
 
 That "no double-counting" property isn't politeness — it's structural. Every kind of
-signal is stored as a [replicated data type](crdt-overview.md): spans as a set keyed
+note is stored as a [replicated data type](crdt-overview.md): traces as a set keyed
 by id, metrics as mergeable counters, logs as an ordered append-only sequence.
-Re-sending an item you already sent is a merge with itself, which changes nothing. The
-classic "my retry counted the request twice" bug simply can't happen here.
+Re-sending something you already sent is a merge with itself, which changes nothing.
+The classic "my retry counted the request twice" bug simply can't happen here.
+
+The same machinery reconciles notes *between devices*. Two devices that briefly meet
+exchange only the records the other is missing — so telemetry recorded on a phone
+that never once reached your servers can still arrive, carried by another device that
+did. A brief window of connectivity is enough.
+
+## 3. See it in a dashboard {id="dashboard"}
+
+Recording is half the job; eventually you want to *look* at the data. This is the
+step that delivers it onward to your telemetry backend — Jaeger, an OpenTelemetry
+Collector, whatever you already run.
+
+OpenTelemetry backends receive data over a common wire protocol, **OTLP** (the
+OpenTelemetry Protocol). You write one small adapter — an `OtlpEdge` — that knows how
+to talk OTLP to *your* backend, and hand it to a `WarpOtlpBridge`. The bridge does the
+careful part: on every reconnect it asks the backend what it already has, and sends
+only what's missing.
+
+<!-- condensed from kuilt-otel/src/commonSamples/kotlin/us/tractat/kuilt/otel/Samples.kt#sampleWarpOtlpBridge and #sampleOtlpEdge -->
+
+```kotlin
+// You implement OtlpEdge once — a tiny adapter that speaks OTLP to your collector.
+// digest(): ask the backend which records it already holds.
+// send():   hand it the rest.
+class MyCollectorEdge(private val endpoint: String) : OtlpEdge {
+    override suspend fun digest(): SpanDigest = /* GET $endpoint/v1/traces/digest */
+    override suspend fun send(spans: Set<SpanRecord>) = /* POST $endpoint/v1/traces */
+}
+
+val bridge = WarpOtlpBridge(exporter = telemetry.spans)
+
+// Safe to call on every reconnect: the bridge compares against the backend's digest
+// and sends only what's missing, so a resend can never double-count or re-flood.
+when (val result = bridge.drain(MyCollectorEdge("https://otel-collector.example.com"))) {
+    is DrainResult.Success -> log.info { "delivered ${result.spansSent} span(s)" }
+    is DrainResult.Failure -> { /* backend unreachable — just try again next reconnect */ }
+}
+```
+
+Because any device that reaches the backend can drain what it holds — including
+records that synced over from peers — you don't need every device online at once. One
+device with a connection can carry the room's telemetry to your dashboard.
+
+> **Today the bridge delivers traces.** The same `OtlpEdge` interface is designed to
+> carry metrics and logs onward without a breaking change, and those paths are landing
+> next. Until then, metrics and logs still record and sync across devices exactly as
+> above — the piece still being wired is the last hop to the backend.
 
 ## Where it runs, and the honest limits
 
@@ -88,12 +144,15 @@ never silently dropped.
 
 ## Going deeper
 
+- **[Capturing &amp; pulling logs](log-capture.md)** — record the logs your app
+  *already* writes into this same offline buffer, then reach into an otherwise-
+  unreachable device (a phone or a CI simulator) and pull them off from a test.
 - **[Offline-first OpenTelemetry — the design](https://github.com/tractat-us/kuilt/blob/main/docs/offline-otel.md)**
   — why the replicated-data representation makes a resend safe, the local-write
-  inversion, and the full limits.
-- **[Capturing & pulling logs](log-capture.html)** — record your app's existing
-  logs into this buffer, then pull them off an otherwise-unreachable device (a
-  phone or simulator) from a test or CI job. The full story is in
-  [Reaching into a device for its logs](https://github.com/tractat-us/kuilt/blob/main/docs/log-capture-and-extraction.md).
+  inversion, the digest-reconciled delivery, and the full limits.
+- **[Re-discovering which step led to which](https://github.com/tractat-us/kuilt/blob/main/docs/otel-causal-links.md)**
+  — kuilt already knows the happens-before order of events across every device, so it
+  can reconnect traces that lost their thread across an offline gap — labelled
+  *potential*, never overclaimed.
 - **[API reference](https://tractat-us.github.io/kuilt/api/)** — every type in
   `kuilt-otel`, with runnable examples.

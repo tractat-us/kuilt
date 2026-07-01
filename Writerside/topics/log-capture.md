@@ -179,9 +179,9 @@ booted device, so a failed run carries each device's full log as a saved artifac
   — the full story: how four pieces kuilt already ships become this feature, the
   one place a platform makes you look, and the reach from a simulator to a phone
   across the room.
-- **[Observability](https://tractat-us.github.io/kuilt/guide/observability.html)**
-  — the offline-first buffer the captured lines land in, shared with traces and
-  metrics.
+- **[Observability](observability.md)** — the offline-first buffer the captured
+  lines land in, shared with traces and metrics, and how all three reach a
+  dashboard.
 - **[Replicated Data — `Rga`](https://tractat-us.github.io/kuilt/guide/crdt-rga.html)**
   and **[Live Replication — `Quilter`](https://tractat-us.github.io/kuilt/guide/crdt-quilter.html)**
   — the ordered-sequence data type and the replicator that make a resend safe and
