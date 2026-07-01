@@ -11,6 +11,26 @@ spans-only egress bridge already in `:kuilt-otel`._
 > emission** below. **This design closes #846** (the implementation PR carries the
 > closing keyword; this design PR does not).
 
+## Decisions locked (@keddie)
+
+The open questions below have been resolved; the implementation plan
+(`docs/superpowers/plans/2026-07-01-otlp-egress.md`) is written against these:
+
+1. **Wire format: OTLP/JSON first**, via `kotlinx-serialization-json` (first-class
+   on all five targets). Binary protobuf is a documented follow-up — **#1040** — and
+   is **not** in this plan.
+2. **Auto-stamp ON by default** (#846 folded): `WarpSpanExporter.export()`
+   auto-stamps a `CausalStamp` (explicit-stamp-wins — only fills a `null`); the
+   `WarpCausalClock` is persisted on the export path and recovered at startup;
+   `drain()` infers causal links over the full snapshot, filters to the delta, and
+   emits them as OTLP `Span.links`.
+3. **Digest is producer-local** (OTLP is write-only): a per-endpoint sent-set
+   persisted in a `DurableStore`. Span digest unchanged; `LogDigest` = recordId set;
+   `MetricDigest` = `MetricKey`→value-hash. `OtlpEdge` grows additively.
+4. **Two-PR split.** PR1 = digest extension + auto-stamp/link-inference in
+   `:kuilt-otel`; PR2 = the concrete Ktor `:kuilt-otel-otlp` JSON edge. **#846
+   closes with PR2** (links are only real once they reach the wire).
+
 ## What this adds (the plain version)
 
 Your app already writes logs, metrics, and traces. Normally each one is shipped
@@ -487,38 +507,33 @@ digest-extension PR (see PR split in open questions).
 
 ## Alternatives & open questions for @keddie
 
-1. **Wire format: JSON-first (recommended) vs proto-first.** This design ships
-   OTLP/JSON to sidestep experimental multiplatform proto and to stay debuggable,
-   with proto as a follow-up. But proto is OTLP's *default*, is more compact, and a
-   few vendor endpoints prefer/require it. **Accept JSON-first**, or do you want
-   proto in the first edge (accepting the `kotlinx-serialization-protobuf`
-   experimental risk and wire-fidelity test burden across Native/wasm)?
+1. **RESOLVED — Wire format: JSON-first.** OTLP/JSON via `kotlinx-serialization-json`;
+   binary protobuf deferred to follow-up **#1040**. (Rationale retained: JSON
+   sidesteps experimental multiplatform proto and stays debuggable; proto is more
+   compact and OTLP's default, so it earns a follow-up, not a v1 slot.)
 
-2. **Digest source (the crux) — confirm producer-local.** The design resolves
-   `digest()` to *our persisted sent-set per endpoint*, because OTLP has no
-   read-back. The alternative — a collector-side "what do you have" — would need a
-   non-standard read API and would break against stock collectors. **Confirm the
-   producer-local sent-set model** (and its retention-cap responsibility) is what you
-   want. This also means the `SpanDigest` KDoc gets rewritten from edge-held to
+2. **RESOLVED — Digest source is producer-local.** `digest()` is our persisted
+   sent-set per endpoint, because OTLP has no read-back; the collector's own
+   span-id/record-id dedup is the correctness backstop. Retention-cap is the edge's
+   responsibility. The `SpanDigest` KDoc gets rewritten from edge-held to
    producer-local framing.
 
-3. **`OtlpEdge` shape: additive default-methods (recommended) vs sealed-signal
-   unify.** Default no-op methods keep the change non-breaking now; a
-   `digest(signal)/send(SignalBatch)` unification is cleaner but breaking. Ship
-   additive now and unify at the next major, or unify now while pre-1.0 churn is
-   cheap?
+3. **RESOLVED — `OtlpEdge` grows additively.** New defaulted methods
+   (`logDigest`/`sendLogs`/`metricDigest`/`sendMetrics`) plus a defaulted `links`
+   param on `send`; distinct method names avoid the JVM erasure clash. A
+   `digest(signal)/send(SignalBatch)` unification is left to a future major. (No
+   external `OtlpEdge` implementors exist yet, so even the `send` signature widening
+   is safe.)
 
-4. **PR split (now includes #846).** The issue allows splitting. Natural seam:
+4. **RESOLVED — Two-PR split (includes #846), #846 closes with PR2.** Natural seam:
    **PR 1** = digest extension + widened `OtlpEdge`/bridge + **auto-stamp on export +
    link inference at drain (#846)** + fake-edge tests (all in `:kuilt-otel`);
    **PR 2** = the `:kuilt-otel-otlp` module + wire encoding (**including the
-   `Span.links` serializer**) + stub-server tests. PR 1 is independently valuable,
-   unblocks any edge, and is where **#846 closes**. One caveat with this split: the
-   *link-inference* half of #846 lands in PR 1 but the *wire emission* half lands in
-   PR 2 — between the two, links are inferred but the only edge is a fake. That's
-   fine (the fake asserts the links are threaded through), but if you'd rather #846
-   not "close" until links actually reach a real collector, keep it a single PR.
-   Confirm the split and where #846 closes.
+   `Span.links` serializer**) + stub-server tests. PR 1 is independently valuable and
+   unblocks any edge. **#846 closes with PR 2** — the *link-inference* half of #846
+   lands in PR 1 but the *wire emission* half lands in PR 2, and the decision is that
+   #846 is only "done" once inferred links actually reach the wire, so the closing
+   keyword rides PR 2.
 
 5. **Endpoint config surface.** Minimal (base URL + headers for auth) vs richer
    (separate per-signal URLs, gzip, timeout/retry policy, TLS). Recommend minimal
@@ -530,16 +545,13 @@ digest-extension PR (see PR split in open questions).
    defaults' order of magnitude, documented as "must exceed your realistic offline
    window."
 
-7. **(#846) Auto-stamp default: on or opt-in?** This design makes `export()`
-   auto-stamp **by default** (fill the `null` `causalStamp`), so causal links "just
-   work" with no caller change — the accessible-first goal. The cost: every span now
-   carries a `CausalStamp` and the clock must be persisted on the export path (a
-   durable write of clock state alongside each span batch). If you'd rather keep
-   stamping **opt-in** (a flag on `WarpTelemetry`, default off) to avoid that
-   overhead for apps that don't want causal links, say so — I recommend on-by-default
-   since the whole point of folding #846 in is that links arrive without ceremony.
-   Also confirm the **explicit-stamp-wins** precedence (auto-stamp only fills a
-   `null`) is the behaviour you want.
+7. **RESOLVED — (#846) Auto-stamp ON by default**, explicit-stamp-wins (auto-stamp
+   only fills a `null` `causalStamp`). Causal links arrive with no caller change; the
+   cost (a `CausalStamp` on every span + a clock-state durable write on the export
+   path) is accepted. An opt-out flag is out of scope for this slice.
+
+Items 5–6 (endpoint config surface, sent-set retention default) remain genuinely
+open and are called out again at the bottom of the plan for @keddie.
 
 ## Done when
 
