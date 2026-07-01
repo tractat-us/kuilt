@@ -180,6 +180,23 @@ internal class SeamRoom(
      * [SeamRoomFactory] always passes the host-generated id explicitly.
      */
     private val roomId: RoomId? = null,
+    /**
+     * **Joiner only.** Re-weaves the underlying fabric after a transport tear, so the joiner
+     * can attempt an in-window resume instead of going straight to terminal
+     * [MembershipEvent.HostLost] (#1037).
+     *
+     * **Required Loom contract:** invoking this lambda must *heal the same [seam] instance* —
+     * i.e. the [Loom] must return a stable, resumable handle whose [Seam.selfId] is frozen and
+     * whose underlying channel is re-pointed onto a freshly-woven base. [MuxClientLoom]'s
+     * `ResumableChannel` satisfies this: `loom.join(tag)` on a torn base re-weaves the base once
+     * and returns the same handle. A [Loom] that mints a *new* seam per `join` does **not** satisfy
+     * the contract — the re-weave would be invisible to this room, which keeps its original [seam]
+     * reference, and the resume attempt would time out into [MembershipEvent.HostLost].
+     *
+     * Null (the default) for hosts and for joiners over non-resumable fabrics: a tear then goes
+     * directly to [MembershipEvent.HostLost], the pre-#1037 behavior.
+     */
+    private val reweave: (suspend () -> Seam)? = null,
 ) : Room {
     override val selfId: PeerId = seam.selfId
 
