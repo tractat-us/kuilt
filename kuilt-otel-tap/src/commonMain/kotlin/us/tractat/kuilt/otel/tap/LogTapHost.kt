@@ -9,6 +9,7 @@ import kotlinx.coroutines.launch
 import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.ScopedCloseable
 import us.tractat.kuilt.core.Seam
+import us.tractat.kuilt.core.Tag
 import us.tractat.kuilt.crdt.Patch
 import us.tractat.kuilt.otel.LogRecord
 import us.tractat.kuilt.otel.WarpLogRecordExporter
@@ -33,17 +34,25 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.otel.tap.LogTapHost"
  * Close the returned host to stop offering logs and release the replicator.
  */
 public class LogTapHost internal constructor(
-    private val seam: Seam,
+    seam: Seam,
     private val exporter: WarpLogRecordExporter,
     parentScope: CoroutineScope,
     private val config: LogTapConfig,
+    admission: LogTapAdmission = LogTapAdmission.Open,
 ) : ScopedCloseable(parentScope) {
+
+    // When admission is not Open, the woven seam is wrapped in a token gate that runs in
+    // this host's own [scope] — so closing the host stops the gate — and only surfaces the
+    // replicator to a peer that has proven the join code.
+    private val seam: Seam = seam.gatedIfNeeded(admission.offeringRole(), scope)
 
     // Seeded with the buffer's current contents so a puller that joins before any new
     // record is captured still receives the full backlog via the replicator's
     // first-contact full-state exchange.
     private val replicator: Quilter<us.tractat.kuilt.crdt.Rga<LogRecord>> = Quilter(
-        seam = seam,
+        // `this.seam` is the *gated* property; a bare `seam` would resolve to the raw
+        // constructor parameter and run the replicator ungated — a log-exfil hole.
+        seam = this.seam,
         initial = exporter.snapshot(),
         valueSerializer = logRgaSerializer(),
         scope = scope,
@@ -104,6 +113,9 @@ public class LogTapHost internal constructor(
  * @param scope the scope the host's replicator runs in. Closing the returned host (or
  *   cancelling this scope) stops the tap.
  * @param config tap tuning; the defaults suit a developer turning the tap on to debug.
+ * @param admission how peers are admitted. The default [LogTapAdmission.Open] keeps the
+ *   loopback-safe ungated behaviour; pass [LogTapAdmission.Verify] to require a join code
+ *   before a peer can pull (see [installLogTapJoining] for the device-joins topology).
  *
  * @sample us.tractat.kuilt.otel.tap.sampleLogTapHostAndPull
  */
@@ -112,7 +124,51 @@ public suspend fun installLogTap(
     exporter: WarpLogRecordExporter,
     scope: CoroutineScope,
     config: LogTapConfig = LogTapConfig(),
+    admission: LogTapAdmission = LogTapAdmission.Open,
 ): LogTapHost {
+    admission.announceJoinCode()
     val seam = loom.host(config.pattern)
-    return LogTapHost(seam, exporter, scope, config)
+    return LogTapHost(seam, exporter, scope, config, admission)
+}
+
+/**
+ * Install a log tap where the device **joins** a session the puller hosts, instead of
+ * hosting one itself.
+ *
+ * The tap's replication is symmetric — the replicator carries the device's log buffer to
+ * the other peer regardless of which side opened the rendezvous — so a device that cannot
+ * host a server or advertise itself (an iOS device has no WebSocket server and no mDNS
+ * advertiser) can still offer its logs by *joining* a laptop that hosts and advertises.
+ * The logs still flow device → laptop.
+ *
+ * @param loom the fabric to join on (e.g. a WebSocket client loom).
+ * @param exporter the device's captured-log buffer to offer.
+ * @param scope the scope the host's replicator runs in.
+ * @param tag the rendezvous to join (e.g. an advertisement discovered over mDNS).
+ * @param config tap tuning.
+ * @param admission how the pulling peer is admitted — [LogTapAdmission.Verify] to require a
+ *   join code, or [LogTapAdmission.Open] on a trusted link.
+ */
+public suspend fun installLogTapJoining(
+    loom: Loom,
+    exporter: WarpLogRecordExporter,
+    scope: CoroutineScope,
+    tag: Tag,
+    config: LogTapConfig = LogTapConfig(),
+    admission: LogTapAdmission = LogTapAdmission.Open,
+): LogTapHost {
+    admission.announceJoinCode()
+    val seam = loom.join(tag)
+    return LogTapHost(seam, exporter, scope, config, admission)
+}
+
+/**
+ * The single, deliberate issuance point for a join code: print it once so the operator can
+ * read it off the device (Xcode console / logcat / stdout). This is the only place the code
+ * is ever logged — it must never appear elsewhere.
+ */
+private fun LogTapAdmission.announceJoinCode() {
+    if (this is LogTapAdmission.Verify) {
+        logger.info { "Log tap join code: ${token.code} — valid for ${token.ttl}. Enter it in the puller to admit." }
+    }
 }
