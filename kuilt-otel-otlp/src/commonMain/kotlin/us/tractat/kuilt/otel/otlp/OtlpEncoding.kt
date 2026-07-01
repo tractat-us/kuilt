@@ -18,6 +18,19 @@ internal fun ByteString.toHex(): String = buildString(size * 2) {
     }
 }
 
+/** Inverse of [toHex] — decode a lowercase-hex string back to a [ByteString]. */
+internal fun String.hexToByteString(): ByteString {
+    require(length % 2 == 0) { "hex string must have an even length; got $length" }
+    val out = ByteArray(length / 2)
+    for (i in out.indices) {
+        val hi = HEX_DIGITS.indexOf(this[i * 2])
+        val lo = HEX_DIGITS.indexOf(this[i * 2 + 1])
+        require(hi >= 0 && lo >= 0) { "invalid hex char in '$this'" }
+        out[i] = ((hi shl 4) or lo).toByte()
+    }
+    return ByteString(out)
+}
+
 private fun SpanKind.toOtlp(): Int = when (this) {
     SpanKind.INTERNAL -> 1
     SpanKind.SERVER -> 2
