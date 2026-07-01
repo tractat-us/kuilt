@@ -7,6 +7,7 @@ import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.otel.InMemoryDurableStore
 import us.tractat.kuilt.otel.WarpLogRecordExporter
 import kotlin.random.Random
+import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -25,6 +26,10 @@ class NativeTraceGateEndToEndTest {
     private val fixedClock = object : Clock { override fun now(): Instant = Instant.fromEpochSeconds(1_700_000_000) }
     private val sampled = ActiveTrace(ByteString(ByteArray(16) { 5 }), ByteString(ByteArray(8) { 6 }), sampled = true)
     private val unsampled = ActiveTrace(ByteString(ByteArray(16) { 5 }), ByteString(ByteArray(8) { 6 }), sampled = false)
+
+    // The Apple active-trace slot is a `@ThreadLocal` that outlives a single test; a
+    // dirty slot would corrupt the untraced (null-stamp) cases below on native. Clear it.
+    @AfterTest fun clear() { setActiveTrace(null) }
 
     @Test
     fun sampledScopeStampsTheRecord() = runTest {
