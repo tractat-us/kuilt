@@ -189,7 +189,8 @@ The full documentation suite is published to GitHub Pages on every push to `main
 - **[API reference](https://tractat-us.github.io/kuilt/api/)** — Dokka multi-module
   reference for every public symbol, with runnable `@sample` snippets.
 - **[Observability](https://tractat-us.github.io/kuilt/guide/observability.html)**
-  — the offline-first OpenTelemetry exporter (`kuilt-otel`).
+  — the offline-first OpenTelemetry exporter (`kuilt-otel`): record on any device,
+  survive being offline, and deliver to your dashboard with no duplicates.
 - **[Playground → Warp](https://tractat-us.github.io/kuilt/guide/warp.html)**
   — the coordination-free distributed scheduler (`kuilt-warp`) and the research behind it.
 
