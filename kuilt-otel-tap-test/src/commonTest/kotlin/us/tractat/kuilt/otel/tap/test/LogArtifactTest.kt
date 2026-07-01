@@ -88,6 +88,35 @@ class LogArtifactTest {
     }
 
     @Test
+    fun readStampedArtifactRoundTripsThroughSource() {
+        val input = listOf(
+            stamped("A", lamport = 1, seq = 1, i = 1),
+            stamped("A", lamport = 3, seq = 2, i = 3),
+        )
+        val buffer = Buffer().also { writeStampedLogArtifact(input, it) }
+
+        val parsed = readStampedLogArtifact(buffer)
+
+        assertEquals(input, parsed, "record AND stamp survive the sink -> source round-trip")
+    }
+
+    @Test
+    fun parseStampedLinesInvertsStampedLogArtifactLines() {
+        val input = listOf(stamped("A", 1, 1, 1), stamped("B", 2, 1, 2))
+
+        assertEquals(input, parseStampedLogArtifactLines(stampedLogArtifactLines(input)))
+    }
+
+    @Test
+    fun readStampedArtifactIgnoresBlankTrailingLine() {
+        // writeStampedLogArtifact newline-terminates every line, so the source ends on a
+        // blank line; the reader must not decode it as an extra (empty) record.
+        val buffer = Buffer().also { writeStampedLogArtifact(listOf(stamped("A", 1, 1, 1)), it) }
+
+        assertEquals(1, readStampedLogArtifact(buffer).size, "trailing newline yields no phantom record")
+    }
+
+    @Test
     fun writeLogArtifactRoundTripsThroughSink() {
         val records = (1..4).map { record(it) }
         val buffer = Buffer()

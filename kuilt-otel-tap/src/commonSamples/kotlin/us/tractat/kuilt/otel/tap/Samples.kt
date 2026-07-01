@@ -101,3 +101,13 @@ internal suspend fun sampleLogTapTail(seamScope: CoroutineScope): Flow<LogRecord
     val client = LogTapClient(loom.join(InMemoryTag("tailer")), seamScope)
     return client.tail()
 }
+
+/** @suppress — sample only */
+internal suspend fun sampleLogTapTailStamped(seamScope: CoroutineScope): Flow<StampedLogRecord> {
+    val loom = InMemoryLoom()
+    // Stream a device's logs live, each carrying its ordering RgaId. A live per-device
+    // drain collects this flow and writes each record straight into the cross-device
+    // merge — no re-snapshotting the whole buffer on every change to recover the stamps.
+    val client = LogTapClient(loom.join(InMemoryTag("tailer")), seamScope)
+    return client.tailStamped()
+}

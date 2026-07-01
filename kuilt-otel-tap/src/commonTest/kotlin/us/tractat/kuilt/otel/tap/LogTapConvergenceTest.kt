@@ -151,4 +151,36 @@ class LogTapConvergenceTest {
         assertEquals((1..6).map { recordId(it) }, streamed.map { it.recordId }, "in order across the join")
         assertTrue(streamed.map { it.recordId }.toSet().size == 6, "no duplicates")
     }
+
+    @Test
+    fun tailStampedStreamsRecordsWithStampsInOrder() = runTest(UnconfinedTestDispatcher()) {
+        val exporter = hostExporter()
+        (1..3).forEach { exporter.export(record(it)) }
+
+        val loom = InMemoryLoom()
+        val host = installLogTap(loom, exporter, backgroundScope, config).also { host = it }
+        val client = LogTapClient(loom.join(InMemoryTag("tailer")), backgroundScope, config).also { client = it }
+
+        // Capture more after the client has joined, then offer them.
+        (4..6).forEach { exporter.export(record(it)) }
+        host.sync()
+
+        val streamed = client.tailStamped().take(6).toList()
+
+        assertAll(
+            { assertEquals((1..6).map { record(it) }, streamed.map { it.record }, "the same records tail() streams, in order across the join") },
+            { assertEquals(streamed.map { it.record.recordId }.toSet().size, 6, "no duplicates") },
+            {
+                assertTrue(
+                    streamed.all { it.rgaId.replicaId == ReplicaId("device") },
+                    "every streamed record carries the producing device's ReplicaId",
+                )
+            },
+            {
+                val keys = streamed.map { it.rgaId }
+                assertEquals(keys, keys.sorted(), "single-producer stamps ascend in FIFO order")
+                assertEquals(keys.toSet().size, keys.size, "stamps are distinct")
+            },
+        )
+    }
 }
