@@ -27,12 +27,26 @@ kotlin {
         @OptIn(ExperimentalKotlinGradlePluginApi::class)
         compilerOptions { jvmTarget.set(JvmTarget.JVM_11) }
     }
-    iosArm64()
-    iosSimulatorArm64()
-    macosArm64()
+    // Native (iOS/macOS) + wasmJs are on by default — the standard "all" target
+    // set. A JVM/Android-only module (e.g. :kuilt-otel-logback: logback + SLF4J
+    // are JVM-world, "there is no logback off the JVM") opts out with
+    // `kuilt.jvmAndAndroidOnly=true` in its own gradle.properties. Registering a
+    // native/wasm target that has no source yields a NO-SOURCE compilation and no
+    // .klib, which then fails generateMetadataFileFor<Target>Publication with a
+    // FileNotFoundException at publish time (issue #1014) — freezing the whole
+    // atomic publish. Skipping the target means no such publication is registered.
+    // findProperty (not providers.gradleProperty): the flag lives in the module's
+    // OWN gradle.properties, which Gradle loads into that project's properties —
+    // providers.gradleProperty only reads root/CLI Gradle properties.
+    val jvmAndAndroidOnly = findProperty("kuilt.jvmAndAndroidOnly")?.toString().toBoolean()
+    if (!jvmAndAndroidOnly) {
+        iosArm64()
+        iosSimulatorArm64()
+        macosArm64()
 
-    @OptIn(ExperimentalWasmDsl::class)
-    wasmJs { browser() }
+        @OptIn(ExperimentalWasmDsl::class)
+        wasmJs { browser() }
+    }
 
     sourceSets {
         commonTest.dependencies { implementation(libs.kotlin.test) }
