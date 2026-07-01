@@ -2,99 +2,144 @@ package us.tractat.kuilt.otel
 
 import io.github.oshai.kotlinlogging.KotlinLogging
 import us.tractat.kuilt.core.runCatchingCancellable
+import kotlin.time.Clock
 
 private val logger = KotlinLogging.logger("us.tractat.kuilt.otel.WarpOtlpBridge")
 
 /**
- * Drains converged CRDTs to an OTLP-capable edge, reconciling by digest.
+ * Drains converged CRDTs — spans, logs, and metrics — to an OTLP-capable [OtlpEdge],
+ * reconciling each signal by its own producer-local digest so a re-drain sends only
+ * what the endpoint lacks.
  *
- * On each [drain] call, the bridge:
- * 1. Takes a snapshot of the local CRDT (via [WarpSpanExporter.snapshot]).
- * 2. If the local set is empty, returns immediately — no edge round-trip.
- * 3. Fetches a compact [SpanDigest] from the edge (what it already has).
- * 4. Computes the delta: spans present locally but absent from the digest.
- * 5. Sends only the delta to the edge via [OtlpEdge.send].
+ * On each [drain] call, per signal, the bridge:
+ * 1. Snapshots the local CRDT.
+ * 2. Fetches a compact digest from the edge (what this producer already delivered).
+ * 3. Computes the delta — records present locally but absent from the digest (for
+ *    metrics: series whose value-hash advanced).
+ * 4. Sends only the delta.
+ *
+ * Spans additionally carry inferred causal [SpanLink]s (#846): the bridge runs
+ * [inferCausalLinks] over the **full** span snapshot (so a predecessor already
+ * delivered on an earlier drain still resolves), filters the links to those whose
+ * `fromSpanId` is in the delta, and threads them to [OtlpEdge.send] for emission on
+ * the OTLP `Span.links` wire field.
  *
  * ## Why reconcile-by-digest?
  *
  * A naive replay would retransmit the entire buffer on every reconnect. A
- * digest-gated delta means:
- * - **No double-count.** The same span sent twice is a no-op at an OTLP
- *   collector (deduped by span-id). The digest gates before the send, so the
- *   common case (edge already has the span) never touches the wire at all.
- * - **No delta-temporality retry bug.** The CRDT's idempotent merge means the
- *   local buffer can be retried freely; the digest ensure the edge only ingests
- *   each span once.
- * - **Offline-then-reconnect.** A device buffering spans for hours only sends
- *   what the edge missed — not a full queue replay.
+ * digest-gated delta means the common case (edge already has the record) never
+ * touches the wire, offline-then-reconnect sends only the gap, and the CRDT's
+ * idempotent merge makes retries harmless.
  *
- * ## Honest limits
+ * ## Best-effort, per-signal isolation
  *
- * - **Digest granularity.** The digest is a flat set of span ids. An edge that
- *   GCs or compacts old spans may over-report its digest (claiming to have spans
- *   it pruned), causing the bridge to silently under-deliver. Choose an edge
- *   retention window that comfortably exceeds the device's maximum offline
- *   duration. See [SpanDigest].
- * - **Late traces.** Spans that straddle an offline and an online producer only
- *   assemble at the collector when the offline half syncs. OTLP collectors
- *   accept late spans within a configurable assembly window.
- * - **A3/A4 deferred.** Only span export (A2) is connected here. Metric and log
- *   exporters follow in subsequent PRs; the [OtlpEdge] interface is designed to
- *   accept additional signal types without breaking changes.
+ * Each signal is drained independently and best-effort: a failing signal never
+ * aborts the others, and its CRDT is left intact for the next attempt. A drain is a
+ * [DrainResult.Failure] only when every *attempted* signal failed; a partial success
+ * reports the counts that got through.
  *
- * @param exporter The [WarpSpanExporter] that holds the local CRDT span buffer.
+ * @param telemetry the [WarpTelemetry] whose span/log/metric exporters are drained.
+ * @param clock observation time stamped onto metric points. Required — inject a fixed
+ *   clock in tests; never a real-dispatcher/wall-clock default that decouples from
+ *   virtual time.
  *
  * @sample us.tractat.kuilt.otel.sampleWarpOtlpBridge
  */
 public class WarpOtlpBridge(
-    private val exporter: WarpSpanExporter,
+    private val telemetry: WarpTelemetry,
+    private val clock: Clock,
 ) {
 
     /**
-     * Drain all spans missing from the edge.
+     * Drain everything the edge is missing, across all three signals.
      *
-     * Safe to call on every reconnect — the digest comparison ensures only new
-     * spans move over the wire. Idempotent: calling [drain] twice in a row
-     * results in exactly one batch sent (on the first call); the second call finds
-     * nothing new.
+     * Safe to call on every reconnect — the per-signal digest comparison ensures only
+     * new records move over the wire, and the CRDT merge makes a resend harmless.
      *
-     * [OtlpEdge.digest] and [OtlpEdge.send] errors are caught and returned as
-     * [DrainResult.Failure] rather than thrown — drain is best-effort; a failure
-     * leaves the local CRDT intact for the next attempt.
-     *
-     * @param edge The OTLP-capable backend to drain into.
-     * @return [DrainResult.Success] with the number of spans sent, or
-     *   [DrainResult.Failure] if the edge was unreachable.
+     * @param edge the OTLP-capable backend to drain into.
+     * @return [DrainResult.Success] with per-signal counts (partial successes report
+     *   what got through), or [DrainResult.Failure] if every attempted signal failed.
      */
     public suspend fun drain(edge: OtlpEdge): DrainResult {
-        val local = exporter.snapshot().elements
-        if (local.isEmpty()) return DrainResult.Success(spansSent = 0)
+        var anyAttempted = false
+        var anyFailed = false
 
-        val digestResult = runCatchingCancellable { edge.digest() }
-        if (digestResult.isFailure) {
-            val cause = digestResult.exceptionOrNull()!!
-            logger.debug(cause) { "WarpOtlpBridge: digest fetch failed; skipping drain" }
-            return DrainResult.Failure(cause)
+        // ── Spans (+ inferred causal links) ──────────────────────────────────
+        val spanSnapshot = telemetry.spans.snapshot().elements
+        var spansSent = 0
+        if (spanSnapshot.isNotEmpty()) {
+            anyAttempted = true
+            val r = runCatchingCancellable {
+                val digest = edge.digest()
+                val delta = spanSnapshot.filterTo(mutableSetOf()) { it.spanId !in digest.spanIds }
+                if (delta.isNotEmpty()) {
+                    val deltaIds = delta.mapTo(mutableSetOf()) { it.spanId }
+                    val links = inferCausalLinks(spanSnapshot).filter { it.fromSpanId in deltaIds }
+                    edge.send(delta, links)
+                    spansSent = delta.size
+                }
+            }
+            if (r.isFailure) { anyFailed = true; logger.debug(r.exceptionOrNull()) { "WarpOtlpBridge: span drain failed" } }
         }
-        val digest = digestResult.getOrThrow()
 
-        val delta = computeDelta(local, digest)
-        if (delta.isEmpty()) return DrainResult.Success(spansSent = 0)
+        // ── Logs ─────────────────────────────────────────────────────────────
+        val logSnapshot = telemetry.logs.snapshot().toList()
+        var logsSent = 0
+        if (logSnapshot.isNotEmpty()) {
+            anyAttempted = true
+            val r = runCatchingCancellable {
+                val digest = edge.logDigest()
+                val delta = logSnapshot.filterTo(mutableSetOf()) { it.recordId !in digest.recordIds }
+                if (delta.isNotEmpty()) { edge.sendLogs(delta); logsSent = delta.size }
+            }
+            if (r.isFailure) { anyFailed = true; logger.debug(r.exceptionOrNull()) { "WarpOtlpBridge: log drain failed" } }
+        }
 
-        val sendResult = runCatchingCancellable { edge.send(delta) }
-        return sendResult.fold(
-            onSuccess = {
-                logger.debug { "WarpOtlpBridge: sent ${delta.size} span(s) to edge" }
-                DrainResult.Success(spansSent = delta.size)
-            },
-            onFailure = { cause ->
-                logger.debug(cause) { "WarpOtlpBridge: send failed for ${delta.size} span(s)" }
-                DrainResult.Failure(cause)
-            },
-        )
+        // ── Metrics ──────────────────────────────────────────────────────────
+        val points = renderMetricPoints(telemetry.metrics.snapshotAll(), nowEpochNanos())
+        var metricsSent = 0
+        if (points.isNotEmpty()) {
+            anyAttempted = true
+            val r = runCatchingCancellable {
+                val digest = edge.metricDigest()
+                val delta = points.filterTo(mutableSetOf()) { digest.versions[it.key] != it.valueHash() }
+                if (delta.isNotEmpty()) { edge.sendMetrics(delta); metricsSent = delta.size }
+            }
+            if (r.isFailure) { anyFailed = true; logger.debug(r.exceptionOrNull()) { "WarpOtlpBridge: metric drain failed" } }
+        }
+
+        return if (anyAttempted && anyFailed && spansSent == 0 && logsSent == 0 && metricsSent == 0) {
+            DrainResult.Failure(IllegalStateException("WarpOtlpBridge: all attempted signals failed to drain"))
+        } else {
+            DrainResult.Success(spansSent = spansSent, logsSent = logsSent, metricPointsSent = metricsSent)
+        }
     }
 
-    /** Returns the subset of [local] whose span ids are absent from [digest]. */
-    private fun computeDelta(local: Set<SpanRecord>, digest: SpanDigest): Set<SpanRecord> =
-        local.filterTo(mutableSetOf()) { it.spanId !in digest.spanIds }
+    private fun nowEpochNanos(): Long = clock.now().toEpochMilliseconds() * NANOS_PER_MILLI
+
+    private companion object {
+        private const val NANOS_PER_MILLI = 1_000_000L
+    }
+}
+
+/**
+ * Render a [MetricCatalog] into OTLP [MetricPoint]s for egress, stamping
+ * [nowEpochNanos] as each point's observation time. Sums use `startEpochNanos = 0`
+ * (OTLP "unknown start" — acceptable for a cumulative total the collector tracks).
+ * A gauge that has never been written (`value == null`) is skipped.
+ */
+internal fun renderMetricPoints(catalog: MetricCatalog, nowEpochNanos: Long): List<MetricPoint> = buildList {
+    catalog.sums.forEach { (key, counter) ->
+        add(MetricPoint.Sum(key, counter.value, startEpochNanos = 0L, timeEpochNanos = nowEpochNanos))
+    }
+    catalog.doubleSums.forEach { (key, counter) ->
+        add(MetricPoint.DoubleSum(key, counter.value, startEpochNanos = 0L, timeEpochNanos = nowEpochNanos))
+    }
+    catalog.gauges.forEach { (key, register) ->
+        val v = register.value ?: return@forEach
+        add(MetricPoint.Gauge(key, v, timeEpochNanos = nowEpochNanos))
+    }
+    catalog.cardinalities.forEach { (key, hll) ->
+        add(MetricPoint.Cardinality(key, hll.estimate(), timeEpochNanos = nowEpochNanos))
+    }
 }

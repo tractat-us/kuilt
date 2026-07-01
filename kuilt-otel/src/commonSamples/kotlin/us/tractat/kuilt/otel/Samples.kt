@@ -90,14 +90,15 @@ internal suspend fun sampleWarpOtlpBridge() {
     )
     telemetry.spans.export(span)
 
-    // When connectivity returns, drain to the backend.
-    // WarpOtlpBridge reconciles by digest: only spans the edge doesn't have are sent.
-    // A resend on reconnect cannot double-count.
-    val bridge = WarpOtlpBridge(exporter = telemetry.spans)
+    // When connectivity returns, drain to the backend. WarpOtlpBridge reconciles each
+    // signal (spans, logs, metrics) by digest: only records the edge doesn't have are
+    // sent, and a resend on reconnect cannot double-count. Spans also carry inferred
+    // causal links (#846). The clock stamps metric observation time.
+    val bridge = WarpOtlpBridge(telemetry, kotlin.time.Clock.System)
 
     // Wire your OtlpEdge implementation and call drain whenever connectivity returns.
-    // DrainResult.Success(spansSent = N) — N spans sent; 0 means edge was already up to date.
-    // DrainResult.Failure(cause)         — edge unreachable; retry on next reconnect.
+    // DrainResult.Success(spansSent, logsSent, metricPointsSent) — 0s mean up to date.
+    // DrainResult.Failure(cause)         — every attempted signal failed; retry later.
     //
     // val edge: OtlpEdge = MyKtorOtlpEdge(endpoint = "https://otel-collector.example.com")
     // val result: DrainResult = bridge.drain(edge)
