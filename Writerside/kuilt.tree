@@ -37,11 +37,14 @@
             <toc-element topic="crdt-pncounter.md"/>
             <toc-element topic="crdt-bounded-counter.md"/>
             <toc-element topic="crdt-resettablecounter.md"/>
+            <toc-element topic="crdt-hyperloglog.md"/>
+            <toc-element topic="crdt-countminsketch.md"/>
         </toc-element>
         <toc-element toc-title="Sets">
             <toc-element topic="crdt-gset.md"/>
             <toc-element topic="crdt-orset.md"/>
             <toc-element topic="crdt-twophaseset.md"/>
+            <toc-element topic="crdt-bloomfilter.md"/>
         </toc-element>
         <toc-element toc-title="Registers">
             <toc-element topic="crdt-lwwregister.md"/>
@@ -64,11 +67,6 @@
         <toc-element toc-title="Presence &amp; Activity">
             <toc-element topic="crdt-ephemeralmap.md"/>
         </toc-element>
-        <toc-element toc-title="Sketches">
-            <toc-element topic="crdt-bloomfilter.md"/>
-            <toc-element topic="crdt-hyperloglog.md"/>
-            <toc-element topic="crdt-countminsketch.md"/>
-        </toc-element>
         <toc-element toc-title="Live Replication">
             <toc-element topic="crdt-quilter.md"/>
         </toc-element>
@@ -78,16 +76,16 @@
         </toc-element>
     </toc-element>
 
-    <toc-element toc-title="Internals">
-        <toc-element topic="performance.md"/>
-    </toc-element>
-
-    <toc-element toc-title="Extras">
+    <toc-element toc-title="Observability">
         <toc-element topic="observability.md"/>
         <toc-element topic="log-capture.md"/>
     </toc-element>
 
-    <toc-element toc-title="Experimental">
+    <toc-element toc-title="Internals">
+        <toc-element topic="performance.md"/>
+    </toc-element>
+
+    <toc-element toc-title="Playground">
         <toc-element topic="warp.md"/>
     </toc-element>
 

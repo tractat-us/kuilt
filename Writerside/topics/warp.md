@@ -1,6 +1,6 @@
 # Warp
 
-> **Experimental.** The scheduler described here is real and shipping, but pre-1.0 —
+> **Playground.** The scheduler described here is real and shipping, but pre-1.0 —
 > its API can change and it sits outside kuilt's stability promise. Everything past
 > "the dream" below is speculative research (epic #665, spike #680), with no
 > commitment to build. Treat this whole area as a preview, not a foundation.
