@@ -1,7 +1,9 @@
 /**
- * Membership gates for [MuxServerLoom] / [RoomHubSeam] beyond the core isolation suite
- * ([RoomHubSeamIsolationTest]): the authorizer's structural rejection, and server-side
- * reconnect/resume re-association by [PeerId].
+ * Server-side reconnect/resume re-association by [PeerId] for [MuxServerLoom] / [RoomHubSeam].
+ *
+ * The structural-isolation gate (per-room fanout, per-room teardown, authorizer rejection) is
+ * verified by the reusable [us.tractat.kuilt.conformance.RoomFanoutIsolationConformanceSuite];
+ * this file covers only the reconnect concern that suite does not.
  *
  * Uses [StandardTestDispatcher] + virtual time; registration is awaited on observable state
  * (`peers.first { … }`) rather than polled after `advanceUntilIdle`, so the data path is driven
@@ -12,7 +14,6 @@
 package us.tractat.kuilt.core
 
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.flow.produceIn
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withTimeout
@@ -28,68 +29,9 @@ import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.seconds
 
 /**
- * Verifies the authorizer gate and reconnect/resume re-association of [MuxServerLoom].
+ * Verifies reconnect/resume re-association of [MuxServerLoom].
  */
 class RoomHubSeamMembershipTest {
-
-    /**
-     * A connection the authorizer rejects for "table-7" is structurally excluded: it never
-     * appears in [RoomHubSeam.peers] and observes ZERO frames on table-7. A second, admitted
-     * connection on the same room still works.
-     */
-    @Test
-    fun rejectedConnectionIsStructurallyExcluded() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
-        val dispatcher = coroutineContext[ContinuationInterceptor]!!
-        val source = InMemoryConnectionSource()
-
-        val rejectedPeer = PeerId("client-rejected")
-        // Authorize everyone for table-7 EXCEPT the rejected peer.
-        val authorizer = RoomAuthorizer { peer, tag ->
-            !(tag == "table-7" && peer == rejectedPeer)
-        }
-        val serverLoom = MuxServerLoom(
-            source = source,
-            scope = backgroundScope,
-            selfId = PeerId("server"),
-            authorizer = authorizer,
-            dispatcher = dispatcher,
-            random = Random(11L),
-        )
-        val serverRoom7 = serverLoom.host(Pattern("table-7"))
-
-        // Admitted connection.
-        val (okServerConn, okClientConn) = connectionPair()
-        source.offer(okServerConn)
-        val okSeam = meshSeam(PeerId("client-ok"), listOf(okClientConn), dispatcher, Random(1L))
-        val okMux = NamedMux(okSeam, backgroundScope)
-
-        // Rejected connection.
-        val (noServerConn, noClientConn) = connectionPair()
-        source.offer(noServerConn)
-        val noSeam = meshSeam(rejectedPeer, listOf(noClientConn), dispatcher, Random(2L))
-        val noMux = NamedMux(noSeam, backgroundScope)
-
-        // Both clients try to join table-7.
-        okMux.channel("table-7").broadcast(byteArrayOf())
-        noMux.channel("table-7").broadcast(byteArrayOf())
-
-        // Await the admitted peer's registration; the rejected one must never register.
-        serverRoom7.peers.first { it.contains(PeerId("client-ok")) }
-
-        // Rejected client begins collecting BEFORE the broadcast so it cannot merely miss a frame.
-        val rejectedInbox = noMux.channel("table-7").incoming.produceIn(backgroundScope)
-
-        val payload = byteArrayOf(7, 7, 7)
-        serverRoom7.broadcast(payload)
-
-        val okFrame = withTimeout(1.seconds) { okMux.channel("table-7").incoming.first() }
-
-        assertAll(
-            { assertTrue(okFrame.toByteArray().contentEquals(payload), "admitted client must receive the broadcast") },
-            { assertTrue(rejectedInbox.isEmpty, "rejected client must receive ZERO frames on table-7") },
-            { assertEquals(setOf(PeerId("client-ok")), serverRoom7.peers.value, "only the admitted peer is in table-7") },
-        )
-    }
 
     /**
      * Server-side reconnect/resume by [PeerId]: a peer registers in table-7, its connection drops,
