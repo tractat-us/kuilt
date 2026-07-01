@@ -233,6 +233,21 @@ public class Rga<V> private constructor(
         .map { id -> insertsById.getValue(id).value }
 
     /**
+     * The visible elements paired with their [RgaId]s, in sequence order — the
+     * id-carrying form of [toList] (`toList() == entries().map { it.second }`).
+     *
+     * Each pair is `(id, value)`. The [RgaId] is the element's total-order key:
+     * [RgaId.compareTo] is `(lamport, replicaId)`, so a consumer holding entries
+     * from several replicas can interleave them into one deterministic order, and
+     * [RgaId.dot] gives the causal `(replicaId, seq)` handle. Use this instead of
+     * hand-zipping [sequence] against [toList] when you need each element's origin
+     * and ordering position, not just its value.
+     */
+    public fun entries(): List<Pair<RgaId, V>> = sequence
+        .filter { id -> id !in tombstones }
+        .map { id -> id to insertsById.getValue(id).value }
+
+    /**
      * The number of visible elements.
      */
     public val size: Int get() = sequence.count { it !in tombstones }

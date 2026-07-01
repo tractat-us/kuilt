@@ -66,11 +66,35 @@ public class LogTapClient(
      * observe. A host that genuinely has no logs yet has nothing to push; use [tail] for
      * open-ended observation of a possibly-empty device.
      */
-    public suspend fun pull(): List<LogRecord> = withTimeout(config.pullTimeout) {
+    public suspend fun pull(): List<LogRecord> = pullSettled().toList()
+
+    /**
+     * Like [pull], but each record carries its ordering [StampedLogRecord.rgaId] —
+     * the producer identity and cross-device total-order key needed to merge several
+     * devices' logs into one timeline. Same convergence and timeout semantics as
+     * [pull]; the only difference is that the RGA's per-element ids are surfaced
+     * rather than discarded.
+     *
+     * A collector total-orders across devices by sorting the union of every device's
+     * stamped artifact on [StampedLogRecord.rgaId] (see [StampedLogRecord]).
+     *
+     * @sample us.tractat.kuilt.otel.tap.sampleLogTapPullStamped
+     */
+    public suspend fun pullStamped(): List<StampedLogRecord> =
+        pullSettled().entries().map { (rgaId, record) -> StampedLogRecord(rgaId, record) }
+
+    /**
+     * Wait for the host to connect and its backlog to converge, then return the
+     * settled [Rga]. Shared by [pull] and [pullStamped]: waits until the host's
+     * first-contact full-state has actually merged — not merely until a peer appears —
+     * so it never returns the still-empty initial state over an asynchronous
+     * (real-network) link. Bounded by [LogTapConfig.pullTimeout].
+     */
+    private suspend fun pullSettled(): Rga<LogRecord> = withTimeout(config.pullTimeout) {
         awaitRemotePeer()
         // First non-empty state == the host's full backlog (one atomic merge), never a slice.
         val firstNonEmpty = replicator.state.first { it.toList().isNotEmpty() }
-        settle(firstNonEmpty).toList()
+        settle(firstNonEmpty)
     }
 
     /**

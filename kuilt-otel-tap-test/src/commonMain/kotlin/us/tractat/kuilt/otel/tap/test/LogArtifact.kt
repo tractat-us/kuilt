@@ -4,6 +4,7 @@ import kotlinx.io.Sink
 import kotlinx.io.writeString
 import kotlinx.serialization.json.Json
 import us.tractat.kuilt.otel.LogRecord
+import us.tractat.kuilt.otel.tap.StampedLogRecord
 
 /**
  * Turn a device's extracted logs into a saveable file — one record per line, so a
@@ -43,6 +44,35 @@ public fun logArtifactLines(records: List<LogRecord>): Sequence<String> =
  */
 public fun writeLogArtifact(records: List<LogRecord>, sink: Sink) {
     for (line in logArtifactLines(records)) {
+        sink.writeString(line)
+        sink.writeString("\n")
+    }
+    sink.flush()
+}
+
+/**
+ * The **stamped** NDJSON lines for [stamped]: each element is one [StampedLogRecord]
+ * — the log record plus its ordering stamp (producer [us.tractat.kuilt.crdt.ReplicaId]
+ * and cross-device total-order key) — serialized to a single line of JSON, in order.
+ *
+ * This is the merge-oriented artifact form. Where [logArtifactLines] writes the plain,
+ * OTLP-shaped record for a single device, this variant additionally carries the
+ * [StampedLogRecord.rgaId] each line needs to be interleaved with lines from *other*
+ * devices into one timeline. A collector concatenates every device's stamped artifact
+ * and sorts the union on [StampedLogRecord.rgaId]. No trailing newline is added.
+ */
+public fun stampedLogArtifactLines(stamped: List<StampedLogRecord>): Sequence<String> =
+    stamped.asSequence().map { artifactJson.encodeToString(StampedLogRecord.serializer(), it) }
+
+/**
+ * Write [stamped] to [sink] as a stamped NDJSON artifact: one JSON [StampedLogRecord]
+ * per line, newline-terminated, in order. The stamped counterpart of [writeLogArtifact]
+ * — use it when the artifact will be merged across devices (see [stampedLogArtifactLines]).
+ *
+ * The sink is flushed before returning; closing it remains the caller's responsibility.
+ */
+public fun writeStampedLogArtifact(stamped: List<StampedLogRecord>, sink: Sink) {
+    for (line in stampedLogArtifactLines(stamped)) {
         sink.writeString(line)
         sink.writeString("\n")
     }
