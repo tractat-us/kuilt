@@ -326,12 +326,47 @@ class JoinerReconnectTest {
             hostLost.cancel()
         }
 
+    @Test
+    fun `leave during an active reconnect stops the loop`() =
+        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+            // A leave() while a reconnect window is open must cancel the reconnect. Otherwise the
+            // loop keeps re-weaving until the window elapses (each re-weave reopens the channel
+            // leave() just closed) and then fires a spurious HostLost for a room that left cleanly.
+            val clock: () -> Instant = { Instant.fromEpochMilliseconds(0L) }
+            val reweaveGate = CompletableDeferred<Unit>()
+            val h = reconnectHarness(clock, reweaveGate = reweaveGate)
+
+            h.hostRoom.roster.first { it.size == 1 }
+            h.joinerRoom.roster.first { it.isNotEmpty() }
+            assertNotNull(h.joinerRoom.resumeToken)
+
+            val hostLost = async { h.joinerRoom.events.filterIsInstance<MembershipEvent.HostLost>().first() }
+
+            // Tear → the reconnect starts and blocks on the gated re-weave (one entry so far).
+            h.muxClient.closeBase()
+            repeat(2) { advanceTimeBy(100L) }
+            assertEquals(1, h.reweaveCount(), "the reconnect is in-flight, blocked on the first re-weave")
+
+            // Leave mid-window, then release the gate and advance well past the reconnect window.
+            h.joinerRoom.leave(LeaveReason.Normal)
+            reweaveGate.complete(Unit)
+            repeat(8) { advanceTimeBy(100L) }
+
+            // The reconnect loop must have stopped — no further re-weaves after leave() — and it must
+            // NOT have fired HostLost (the room left cleanly, it was not lost).
+            assertEquals(1, h.reweaveCount(), "leave() must stop the reconnect loop: no further re-weave")
+            assertFalse(hostLost.isCompleted, "a clean leave() must not surface a spurious HostLost")
+            hostLost.cancel()
+        }
+
     // ── Harness ─────────────────────────────────────────────────────────────────
 
     private class ReconnectHarness(
         val hostRoom: SeamRoom,
         val joinerRoom: SeamRoom,
         val muxClient: MuxClientLoom,
+        /** Number of times the joiner's `reweave` lambda has been entered (single-threaded VT). */
+        val reweaveCount: () -> Int,
     )
 
     /**
@@ -379,6 +414,7 @@ class JoinerReconnectTest {
         }
         val muxClient = MuxClientLoom(base, Rendezvous.New(Pattern("base")), backgroundScope, nameOf)
         val tag = InMemoryTag("table-7")
+        var reweaveCount = 0
         val joinerRoom = SeamRoom(
             seam = muxClient.join(tag),
             role = SessionRole.Joiner,
@@ -388,12 +424,13 @@ class JoinerReconnectTest {
             heartbeatConfig = fastConfig,
             roomId = null,
             reweave = {
+                reweaveCount++
                 reweaveGate?.await()
                 if (reweaveDelay > 0L) delay(reweaveDelay)
                 muxClient.join(tag)
             },
         ).also { it.start() }
 
-        return ReconnectHarness(hostRoom, joinerRoom, muxClient)
+        return ReconnectHarness(hostRoom, joinerRoom, muxClient, reweaveCount = { reweaveCount })
     }
 }

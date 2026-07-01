@@ -305,6 +305,17 @@ internal class SeamRoom(
     private var reconnecting = false
 
     /**
+     * **Joiner only.** The child job running the in-flight [runHostReconnect], or null when no
+     * reconnect is active.
+     *
+     * Tracked so [leave] cancels it: without this, a `leave()` during an open reconnect window
+     * would leave [runHostReconnect] looping until the window elapses — and each iteration re-weaves
+     * (for a [MuxClientLoom] that *reopens* the channel `leave()` just closed), orphaning the
+     * transport and the relaunched [incomingCollectJob]. Stored under [lock] with [reconnecting].
+     */
+    private var reconnectJob: Job? = null
+
+    /**
      * **Joiner only.** The child job running the current [seam]-`incoming` collect.
      *
      * After a re-weave heals [seam] onto a fresh generation, the old collect is still bound to
@@ -429,17 +440,19 @@ internal class SeamRoom(
      * running inline would cancel the caller mid-reconnect. Decoupling keeps the reconnect alive.
      */
     private fun attemptHostReconnect(at: Instant) {
-        val proceed = lock.withLock {
+        lock.withLock {
             when {
-                hostLost || closed -> false
-                reconnecting -> false
+                hostLost || closed -> return
+                reconnecting -> return
                 else -> {
                     reconnecting = true
-                    true
+                    // Flip the guard and record the Job atomically under the lock, so [leave] can
+                    // cancel it (see [reconnectJob]) with no window where the guard is set but the
+                    // Job is not yet stored.
+                    reconnectJob = scope.launch { runHostReconnect(at) }
                 }
             }
         }
-        if (proceed) scope.launch { runHostReconnect(at) }
     }
 
     /**
@@ -473,6 +486,9 @@ internal class SeamRoom(
         val reweaveFn = reweave
         val (token, hostId) = lock.withLock { resumeToken to hostPeerId }
         if (reweaveFn == null || token == null || hostId == null) {
+            // Clear reconnectJob FIRST (this coroutine IS it) so markHostLost → leave() doesn't
+            // cancel its own coroutine mid-teardown. See the failure branch below for the rationale.
+            lock.withLock { reconnectJob = null }
             markHostLost(at)
             return
         }
@@ -487,6 +503,10 @@ internal class SeamRoom(
         val resumed = withTimeoutOrNull(heartbeatConfig.reconnectWindow) {
             var ok = false
             while (!ok) {
+                // Bail the instant the room goes terminal (e.g. leave() mid-window), even if the
+                // cancellation of this job hasn't propagated yet — so we never re-weave (which for a
+                // MuxClientLoom would REOPEN the channel leave() just closed) after teardown begins.
+                if (lock.withLock { closed || hostLost }) return@withTimeoutOrNull false
                 val reweaved = runCatchingCancellable { reweaveFn() }
                 if (reweaved.isFailure) {
                     // Transient re-weave failure (base not back yet) — retry until the deadline.
@@ -516,9 +536,14 @@ internal class SeamRoom(
             // the guard cleared, a subsequent in-session drop auto-resumes again (repeated episodes).
             lock.withLock {
                 reconnecting = false
+                reconnectJob = null
                 admittedById[hostId]?.let { startDetector(it) }
             }
-        } else {
+        } else if (!lock.withLock { reconnectJob = null; closed }) {
+            // Not resumed and not already tearing down via leave() — the reconnect genuinely failed,
+            // so go terminal. Clear reconnectJob FIRST (this coroutine IS it): markHostLost → leave()
+            // must not cancel its own coroutine, or leave()'s seam.close() would be cancelled
+            // mid-teardown. (If closed, leave() already owns teardown; don't emit a spurious HostLost.)
             markHostLost(clock())
         }
     }
@@ -1134,7 +1159,7 @@ internal class SeamRoom(
             closed = true
             Triple(
                 _role.value == SessionRole.Joiner && reason is LeaveReason.Normal,
-                loopJobs + listOfNotNull(incomingCollectJob),
+                loopJobs + listOfNotNull(incomingCollectJob, reconnectJob),
                 detectorJobs.values.toList().also { detectorJobs.clear() },
             )
         }
