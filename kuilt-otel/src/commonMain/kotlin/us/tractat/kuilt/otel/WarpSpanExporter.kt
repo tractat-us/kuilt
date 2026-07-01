@@ -95,8 +95,22 @@ public class WarpSpanExporter(
      *
      * If a [WarpCausalClock] was supplied, an **unstamped** span is auto-stamped with
      * causal context before insert (#846) — an explicit [SpanRecord.causalStamp]
-     * always wins. The clock is persisted on the same durable path as the span, so a
-     * restart never re-mints a used dot.
+     * always wins.
+     *
+     * ## Crash-window invariant (#1053)
+     *
+     * The clock is persisted **before** the span's durable write, establishing the
+     * invariant *the durable clock `seq` is always ≥ every durable span's dot*. A crash
+     * in the two-write window can then only **lose** the span (retried on the next
+     * export) — it can never strand a persisted span at a dot the recovered clock would
+     * re-mint. Persisting the span first (the reverse order) leaves that hole: span at
+     * `seq=N` durable, clock still `<N`, and the next [WarpCausalClock.tick] on restart
+     * re-mints `N`, violating the clock's uniqueness guarantee.
+     *
+     * If either durable write fails, a freshly-minted stamp is rolled back out of the
+     * in-memory set so a retrying caller re-adds exactly **one** copy rather than
+     * accumulating a second stamped copy of the same span. The minted dot's `seq` is
+     * left spent — a harmless gap, since the durable clock already covers it.
      *
      * Returns [ExportResult.Success] after the durable write. Returns
      * [ExportResult.Failure] only if the [store] itself throws; the CRDT
@@ -113,18 +127,30 @@ public class WarpSpanExporter(
             span.causalStamp != null -> span
             else -> span.copy(causalStamp = causalClock.tick())
         }
+        // A fresh dot was minted only when copy() produced a new instance; an explicit
+        // or absent stamp returns `span` itself. Only a minted stamp needs rollback —
+        // a re-added unstamped/explicit span is idempotent by ORSet value.
+        val minted = stamped !== span
         val encoded = lock.withLock {
             maybeEvict()
             spans = spans.add(replica, stamped)
             cbor.encodeToByteArray(spanSerializer, spans)
         }
         return runCatchingCancellable {
-            store.write(STORE_KEY, encoded)
-            // Persist the clock on the durable path so a restart never re-mints a used dot.
+            // Persist the clock BEFORE the span so the durable clock seq is always ≥
+            // every durable span's dot — a crash between the two writes can only lose
+            // the span, never re-mint its dot on recover (#1053).
             causalClock?.persist(store)
+            store.write(STORE_KEY, encoded)
         }.fold(
             onSuccess = { ExportResult.Success },
             onFailure = { cause ->
+                if (minted) {
+                    // Undo the in-memory add so a retry produces exactly one stamped
+                    // copy. remove() targets this span's unique dot value, so it never
+                    // clobbers a concurrent add of a different span.
+                    lock.withLock { spans = spans.remove(stamped) }
+                }
                 logger.error(cause) { "WarpSpanExporter: durable write failed for span ${stamped.spanId}" }
                 ExportResult.Failure(cause)
             },
