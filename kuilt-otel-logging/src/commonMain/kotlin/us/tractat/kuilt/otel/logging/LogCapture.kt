@@ -42,8 +42,10 @@ import kotlin.time.Clock
  * @param random source of the per-record id bytes (required — never an unseeded
  *   default).
  * @param traceContextProvider optional trace/sampling gate. When `null` (the M1
- *   default) capture is always-on and records carry no trace ids. When set,
- *   [capture] consults it per event to drop or stamp (see [capture]).
+ *   default) capture is always-on and records carry no trace ids. When set, the
+ *   trace is resolved at the synchronous capture edge via [resolveTrace] and
+ *   carried on [NormalizedLogEvent.activeTrace]; [capture] then gates on that
+ *   snapshot (see [resolveTrace] and [capture]).
  */
 public class LogCapture(
     private val exporter: WarpLogRecordExporter,
@@ -52,6 +54,22 @@ public class LogCapture(
     private val random: Random,
     private val traceContextProvider: TraceContextProvider? = null,
 ) {
+    /**
+     * Resolve the trace active on the **current call**, for the capture edge to
+     * snapshot onto [NormalizedLogEvent.activeTrace] before handing the event off
+     * to the drain (#1034).
+     *
+     * This MUST be invoked synchronously on the thread/coroutine that logged — an
+     * ambient [TraceContextProvider] (e.g. one backed by OTel's `Span.current()`)
+     * reads the caller's thread/coroutine-local context, which is gone by the time
+     * the drain coroutine runs [capture]. Resolving here, at the edge, is the whole
+     * fix: [capture] never consults the provider off-thread.
+     *
+     * Returns `null` when no provider is wired (the M1 always-on default) or when
+     * the provider reports no active trace.
+     */
+    public fun resolveTrace(): ActiveTrace? = traceContextProvider?.current()
+
     /**
      * Map [event] to a [LogRecord] and export it.
      *
@@ -63,16 +81,22 @@ public class LogCapture(
      * trace is dropped, and an untraced event is dropped when
      * [CaptureConfig.untracedPolicy] is [UntracedPolicy.DROP]. On a sampled
      * trace the record is stamped with the trace's `traceId`/`spanId`.
+     *
+     * The gate reads [event]'s pre-resolved [NormalizedLogEvent.activeTrace]
+     * (snapshotted at the synchronous edge via [resolveTrace]) — it never calls the
+     * provider from this drain-side path, so an ambient context that only exists on
+     * the caller is honoured (#1034).
      */
     public suspend fun capture(event: NormalizedLogEvent): ExportResult? {
         if (event.loggerName.startsWith(KUILT_INTERNAL_LOGGER_PREFIX)) return null
         if (event.level.ordinal < config.minLevel.ordinal) return null
         // Trace/sampling gate. A null provider is M1 always-on capture, no stamp.
+        // The trace was resolved at the edge (resolveTrace) and rides on the event;
+        // this drain-side path never re-consults the provider (#1034).
         var traceId: ByteString? = null
         var spanId: ByteString? = null
-        val provider = traceContextProvider
-        if (provider != null) {
-            when (val trace = provider.current()) {
+        if (traceContextProvider != null) {
+            when (val trace = event.activeTrace) {
                 null -> if (config.untracedPolicy == UntracedPolicy.DROP) return null
                 else -> if (trace.sampled) {
                     traceId = trace.traceId

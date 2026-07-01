@@ -25,10 +25,15 @@ class LogCaptureGateTest {
     private fun capture(exporter: WarpLogRecordExporter, config: CaptureConfig, provider: TraceContextProvider?) =
         LogCapture(exporter, config, fixedClock, Random(0), provider)
 
+    // Mirror the production capture edge: resolve the trace synchronously (as the
+    // appender does at log() time) and carry it on the event into capture() (#1034).
+    private suspend fun LogCapture.captureAtEdge(event: NormalizedLogEvent) =
+        capture(event.copy(activeTrace = resolveTrace()))
+
     @Test
     fun nullProviderCapturesWithoutStamp() = runTest(StandardTestDispatcher()) {
         val exp = exporter()
-        val result = capture(exp, CaptureConfig(), provider = null).capture(event())
+        val result = capture(exp, CaptureConfig(), provider = null).captureAtEdge(event())
         assertNotNull(result)
         val rec = exp.snapshot().toList().single()
         assertNull(rec.traceId)
@@ -38,7 +43,7 @@ class LogCaptureGateTest {
     @Test
     fun sampledTraceCapturesAndStamps() = runTest(StandardTestDispatcher()) {
         val exp = exporter()
-        val result = capture(exp, CaptureConfig(), TraceContextProvider { trace(sampled = true) }).capture(event())
+        val result = capture(exp, CaptureConfig(), TraceContextProvider { trace(sampled = true) }).captureAtEdge(event())
         assertNotNull(result)
         val rec = exp.snapshot().toList().single()
         assertEquals(ByteString(ByteArray(16) { 1 }), rec.traceId)
@@ -48,7 +53,7 @@ class LogCaptureGateTest {
     @Test
     fun unsampledTraceDrops() = runTest(StandardTestDispatcher()) {
         val exp = exporter()
-        val result = capture(exp, CaptureConfig(), TraceContextProvider { trace(sampled = false) }).capture(event())
+        val result = capture(exp, CaptureConfig(), TraceContextProvider { trace(sampled = false) }).captureAtEdge(event())
         assertNull(result)
         assertTrue(exp.snapshot().toList().isEmpty())
     }
@@ -56,11 +61,11 @@ class LogCaptureGateTest {
     @Test
     fun untracedRespectsPolicy() = runTest(StandardTestDispatcher()) {
         val capExp = exporter()
-        assertNotNull(capture(capExp, CaptureConfig(untracedPolicy = UntracedPolicy.CAPTURE), TraceContextProvider { null }).capture(event()))
+        assertNotNull(capture(capExp, CaptureConfig(untracedPolicy = UntracedPolicy.CAPTURE), TraceContextProvider { null }).captureAtEdge(event()))
         assertEquals(1, capExp.snapshot().toList().size)
 
         val dropExp = exporter()
-        assertNull(capture(dropExp, CaptureConfig(untracedPolicy = UntracedPolicy.DROP), TraceContextProvider { null }).capture(event()))
+        assertNull(capture(dropExp, CaptureConfig(untracedPolicy = UntracedPolicy.DROP), TraceContextProvider { null }).captureAtEdge(event()))
         assertTrue(dropExp.snapshot().toList().isEmpty())
     }
 }

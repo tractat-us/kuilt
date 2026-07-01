@@ -51,7 +51,12 @@ internal class CapturingAppender(
         if (closed.value) return
         delegate.log(loggingEvent)
         val normalized = loggingEvent.normalize() ?: return
-        events.trySend(normalized)
+        // Resolve the trace HERE — synchronously, on the caller that logged — and
+        // snapshot it onto the event. An ambient TraceContextProvider reads the
+        // caller's thread/coroutine-local context, which is gone by the time the
+        // drain coroutine runs capture(). Resolving off-thread on the drain is the
+        // #1034 bug; this edge resolution is the fix.
+        events.trySend(normalized.copy(activeTrace = capture.resolveTrace()))
     }
 
     /**
