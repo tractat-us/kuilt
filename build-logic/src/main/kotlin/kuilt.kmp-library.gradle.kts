@@ -150,13 +150,44 @@ afterEvaluate {
         (task as io.gitlab.arturbosch.detekt.Detekt).config.setFrom(testDetektConfig)
     }
 
+    // #1021: JVM/Android-only modules keep their production code in a manual
+    // intermediate source set (e.g. `jvmAndAndroidMain`, created to disable KMP
+    // hierarchy auto-wiring). detekt only generates a *metadata* task for such an
+    // intermediate, and metadata tasks run WITHOUT type resolution — so the
+    // nullability rules this repo enables (UnsafeCallOnNullableType, … — all of which
+    // REQUIRE type resolution) silently never fire on it. Meanwhile the type-resolved
+    // `detektJvmMain` is NO-SOURCE, because the leaf jvm source set is empty (the code
+    // lives in the intermediate). Net effect: the intermediate's production code is
+    // unlinted, yet detektAll reports "0 smells".
+    //
+    // Fix: fold each intermediate's source dirs into the type-resolved `detektJvmMain`
+    // task. That task already carries the jvm compile classpath — full type resolution,
+    // and the intermediate's compileOnly deps are on it since `jvmMain` dependsOn the
+    // intermediate — and is already a detektAll dependency, so the intermediate is now
+    // analyzed with exactly the same rules as any other jvm source. Discover the
+    // intermediate(s) generically by walking the dependsOn closure UP from the
+    // jvm/android leaves: that reaches only JVM/Android-path ancestors, never the
+    // apple/ios/native intermediates (which are ancestors of the native leaves), so
+    // standard all-target modules — whose jvm/android closure is just commonMain — are
+    // untouched and no module names are hard-coded.
+    fun org.jetbrains.kotlin.gradle.plugin.KotlinSourceSet.dependsOnClosure(): Set<org.jetbrains.kotlin.gradle.plugin.KotlinSourceSet> =
+        dependsOn + dependsOn.flatMap { it.dependsOnClosure() }
+    val jvmAndroidIntermediates = kmpExtension.sourceSets
+        .matching { it.name == "jvmMain" || it.name == "androidMain" }
+        .flatMap { it.dependsOnClosure() }
+        .filterNot { it.name == "commonMain" || it.name == "jvmMain" || it.name == "androidMain" }
+        .toSet()
+    (tasks.findByName("detektJvmMain") as? io.gitlab.arturbosch.detekt.Detekt)?.let { jvmDetekt ->
+        jvmAndroidIntermediates.forEach { intermediate -> jvmDetekt.source(intermediate.kotlin.srcDirs) }
+    }
+
     val mainSourceSetTasks = listOf("detektMetadataCommonMain", "detektJvmMain")
         .mapNotNull { tasks.findByName(it) }
     val testSourceSetTasks = testSourceSetTaskNames
         .mapNotNull { tasks.findByName(it) }
     tasks.register("detektAll") {
         group = "verification"
-        description = "Runs detekt on main sources (commonMain + jvmMain) and test sources (jvmTest, androidUnitTest) with type resolution. Not wired into check — CI runs it as a separate job to avoid OOM."
+        description = "Runs detekt on main sources (commonMain + jvmMain, incl. any jvmAndAndroidMain intermediate folded into the jvm task) and test sources (jvmTest, androidUnitTest) with type resolution. Not wired into check — CI runs it as a separate job to avoid OOM."
         dependsOn(mainSourceSetTasks + testSourceSetTasks)
     }
     val detektBaselineLifecycle = tasks.findByName("detektBaseline") ?: return@afterEvaluate
