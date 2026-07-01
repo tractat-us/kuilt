@@ -104,20 +104,24 @@ only what's missing.
 <!-- condensed from kuilt-otel/src/commonSamples/kotlin/us/tractat/kuilt/otel/Samples.kt#sampleWarpOtlpBridge and #sampleOtlpEdge -->
 
 ```kotlin
-// You implement OtlpEdge once — a tiny adapter that speaks OTLP to your collector.
-// digest(): ask the backend which records it already holds.
-// send():   hand it the rest.
+// You implement OtlpEdge once — a small adapter that speaks OTLP to your collector.
+// digest(): ask the backend which records it already holds.  send(): hand it the rest.
+// Logs and metrics have the same pair — logDigest()/sendLogs(), metricDigest()/sendMetrics() —
+// with no-op defaults, so you override only the signals your backend accepts.
 class MyCollectorEdge(private val endpoint: String) : OtlpEdge {
-    override suspend fun digest(): SpanDigest = /* GET $endpoint/v1/traces/digest */
-    override suspend fun send(spans: Set<SpanRecord>) = /* POST $endpoint/v1/traces */
+    override suspend fun digest(): SpanDigest = /* GET  $endpoint/v1/traces/digest */
+    override suspend fun send(spans: Set<SpanRecord>, links: List<SpanLink>) = /* POST $endpoint/v1/traces */
 }
 
-val bridge = WarpOtlpBridge(exporter = telemetry.spans)
+// The bridge drains all three signals — spans, logs, metrics — reconciling each by digest.
+val bridge = WarpOtlpBridge(telemetry, Clock.System)
 
 // Safe to call on every reconnect: the bridge compares against the backend's digest
 // and sends only what's missing, so a resend can never double-count or re-flood.
 when (val result = bridge.drain(MyCollectorEdge("https://otel-collector.example.com"))) {
-    is DrainResult.Success -> log.info { "delivered ${result.spansSent} span(s)" }
+    is DrainResult.Success -> log.info {
+        "delivered ${result.spansSent} span(s), ${result.logsSent} log(s), ${result.metricPointsSent} metric point(s)"
+    }
     is DrainResult.Failure -> { /* backend unreachable — just try again next reconnect */ }
 }
 ```
@@ -126,10 +130,11 @@ Because any device that reaches the backend can drain what it holds — includin
 records that synced over from peers — you don't need every device online at once. One
 device with a connection can carry the room's telemetry to your dashboard.
 
-> **Today the bridge delivers traces.** The same `OtlpEdge` interface is designed to
-> carry metrics and logs onward without a breaking change, and those paths are landing
-> next. Until then, metrics and logs still record and sync across devices exactly as
-> above — the piece still being wired is the last hop to the backend.
+> **All three signals travel this path** — traces, metrics, and logs. The bridge reconciles
+> each one independently by digest, so every device delivers exactly what it holds and never
+> the same record twice. If your backend speaks OTLP over HTTP, you don't even write the
+> adapter: `:kuilt-otel-otlp` ships a ready-made `OtlpHttpEdge` that POSTs to `/v1/traces`,
+> `/v1/logs`, and `/v1/metrics`.
 
 ## Where it runs, and the honest limits
 
