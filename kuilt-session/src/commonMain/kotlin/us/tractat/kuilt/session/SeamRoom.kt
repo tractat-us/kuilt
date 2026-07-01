@@ -405,7 +405,7 @@ internal class SeamRoom(
     }
 
     /**
-     * **Joiner only.** On a transport `Torn`, attempt an in-window resume over a re-woven base
+     * **Joiner only.** On a transport `Torn`, trigger an in-window resume over a re-woven base
      * ([attemptHostReconnect]) instead of going straight to terminal. Races the heartbeat
      * `TransportClosed` path in [handleUnresponsive]; the [reconnecting] flag ensures only one wins.
      */
@@ -415,25 +415,15 @@ internal class SeamRoom(
     }
 
     /**
-     * **Joiner only.** Attempt to keep the session alive across a host transport tear.
+     * **Joiner only.** Claim the single in-flight reconnect and drive it on the room [scope].
      *
      * The two tear-detection paths (transport `Torn` and heartbeat `TransportClosed`) both call
-     * here; [reconnecting] guards the single attempt. When this room holds a [resumeToken] and a
-     * [reweave] lambda, it emits [MembershipEvent.Partitioned] + [MembershipEvent.WindowOpened]
-     * (the same dual-role events the host emits), then, under a single
-     * [HeartbeatConfig.reconnectWindow] budget: re-weaves the base, waits for [SeamState.Woven],
-     * restarts the main-loop `incoming` collect on the fresh generation, and calls [resume].
-     * On [ResumeResult.Success] the room stays live ([handleResumeAck] already emitted
-     * [MembershipEvent.Resumed]); on timeout / re-weave failure / a non-Success resume it falls to
-     * [markHostLost]. Transient re-weave/resume failures are retried until the window deadline.
-     *
-     * Without a [resumeToken] (torn before admit), a [reweave], or a known [hostPeerId], it goes
-     * straight to [markHostLost] — the pre-#1037 immediate-terminal behavior.
-     *
-     * All suspend work (re-weave, await Woven, resume) runs **outside** [lock]; only the flag flip
-     * and field reads are under it, so the type stays correct under a multi-threaded dispatcher.
+     * here; the [reconnecting] flag makes exactly one win. The winner **launches** [runHostReconnect]
+     * on [scope] rather than running it inline: the heartbeat path calls this from the host
+     * detector's own event-collector coroutine, and [runHostReconnect] stops that very detector —
+     * running inline would cancel the caller mid-reconnect. Decoupling keeps the reconnect alive.
      */
-    private suspend fun attemptHostReconnect(at: Instant) {
+    private fun attemptHostReconnect(at: Instant) {
         val proceed = lock.withLock {
             when {
                 hostLost || closed -> false
@@ -444,14 +434,46 @@ internal class SeamRoom(
                 }
             }
         }
-        if (!proceed) return
+        if (proceed) scope.launch { runHostReconnect(at) }
+    }
 
+    /**
+     * **Joiner only.** Attempt to keep the session alive across a host transport tear.
+     *
+     * When this room holds a [resumeToken] and a [reweave] lambda it emits
+     * [MembershipEvent.Partitioned] + [MembershipEvent.WindowOpened] (the same dual-role events the
+     * host emits), then, under a single [HeartbeatConfig.reconnectWindow] budget: re-weaves the
+     * base, waits for [SeamState.Woven], restarts the main-loop `incoming` collect on the fresh
+     * generation, and calls [resume]. On [ResumeResult.Success] the room stays live
+     * ([handleResumeAck] already emitted [MembershipEvent.Resumed]); on timeout / re-weave failure /
+     * a non-Success resume it falls to [markHostLost]. Transient re-weave/resume failures are
+     * retried until the window deadline.
+     *
+     * **Host-liveness detector is stopped for the reconnect's duration.** The host detector runs on
+     * the *same* [HeartbeatConfig.reconnectWindow]; if left running it could fire
+     * [PartitionEvent.PeerLost] → [markHostLost] on a *different* coroutine mid-reconnect, racing an
+     * in-flight resume into a contradictory `HostLost` + `Resumed`. Stopping it makes the reconnect
+     * authoritative over the host-liveness decision. On success the detector is **restarted** so the
+     * resumed room is not left unmonitored.
+     *
+     * Without a [resumeToken] (torn before admit), a [reweave], or a known [hostPeerId], it goes
+     * straight to [markHostLost] — the pre-#1037 immediate-terminal behavior.
+     *
+     * All suspend work (re-weave, await Woven, resume) runs **outside** [lock]; only flag flips,
+     * field reads, and detector start/stop are under it, so the type stays correct under a
+     * multi-threaded dispatcher.
+     */
+    private suspend fun runHostReconnect(at: Instant) {
         val reweaveFn = reweave
         val (token, hostId) = lock.withLock { resumeToken to hostPeerId }
         if (reweaveFn == null || token == null || hostId == null) {
             markHostLost(at)
             return
         }
+
+        // Silence the host-liveness detector: for the reconnect's duration WE decide host-liveness,
+        // so a late PeerLost can't tear down an in-flight resume. Restarted on success below.
+        lock.withLock { stopDetector(hostId) }
 
         _events.tryEmit(MembershipEvent.Partitioned(hostId, at))
         _events.tryEmit(MembershipEvent.WindowOpened(hostId, at + heartbeatConfig.reconnectWindow))
@@ -481,7 +503,15 @@ internal class SeamRoom(
             true
         } ?: false
 
-        if (!resumed) markHostLost(clock())
+        if (resumed) {
+            // Restart host-liveness monitoring on the healed generation so the resumed room is not
+            // left unmonitored (the detector we stopped above is gone).
+            lock.withLock {
+                admittedById[hostId]?.let { startDetector(it) }
+            }
+        } else {
+            markHostLost(clock())
+        }
     }
 
     private fun evictAllOnTear() {
@@ -868,6 +898,15 @@ internal class SeamRoom(
     private fun stopDetector(peerId: PeerId) {
         detectorJobs.remove(peerId)?.cancel()
     }
+
+    /**
+     * Test-visibility: is a live per-peer liveness detector currently registered for [peerId]?
+     *
+     * Exposed for [us.tractat.kuilt.session] tests that assert the host-liveness detector is
+     * **silenced for the duration of a reconnect** (so it can't race an in-flight resume) and
+     * **restarted on success** ([runHostReconnect], #1037). No production caller reads this.
+     */
+    internal fun hasDetector(peerId: PeerId): Boolean = lock.withLock { detectorJobs.containsKey(peerId) }
 
     private suspend fun handlePartitionEvent(event: PartitionEvent) {
         when (event) {

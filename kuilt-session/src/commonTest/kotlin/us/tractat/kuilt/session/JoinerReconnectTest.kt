@@ -2,10 +2,14 @@
 
 package us.tractat.kuilt.session
 
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.filterIsInstance
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
@@ -241,4 +245,123 @@ class JoinerReconnectTest {
             )
             assertIs<MembershipEvent.HostLost>(hostLost.await())
         }
+
+    @Test
+    fun `the host-liveness detector is silenced during a reconnect and restarted on success`() =
+        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+            // The host detector runs on the SAME reconnectWindow budget as the reconnect. If it
+            // keeps running during the reconnect it drives host-liveness on a DIFFERENT coroutine,
+            // so under a multi-threaded dispatcher its PeerLost can race an in-flight resume into a
+            // contradictory HostLost + Resumed. The reconnect must be authoritative: the detector is
+            // stopped for its duration and restarted only on success (so the resumed room is not
+            // left unmonitored). This gates the re-weave to hold the reconnect in-flight and asserts
+            // the detector's lifecycle directly — the multi-threaded race has no deterministic
+            // single-threaded event footprint, so we test the mechanism, not a downstream symptom.
+            val clock: () -> Instant = { Instant.fromEpochMilliseconds(0L) }
+            val reweaveGate = CompletableDeferred<Unit>()
+            val h = reconnectHarness(clock, reweaveGate = reweaveGate)
+
+            val hostId = h.hostRoom.selfId
+            h.hostRoom.roster.first { it.size == 1 }
+            h.joinerRoom.roster.first { it.isNotEmpty() }
+            assertNotNull(h.joinerRoom.resumeToken)
+            assertTrue(h.joinerRoom.hasDetector(hostId), "host detector runs while connected")
+
+            val resumed = async { h.joinerRoom.events.filterIsInstance<MembershipEvent.Resumed>().first() }
+            val hostLost = async { h.joinerRoom.events.filterIsInstance<MembershipEvent.HostLost>().first() }
+
+            // Tear, then let the reconnect start and block on the gated re-weave.
+            h.muxClient.closeBase()
+            repeat(2) { advanceTimeBy(100L) }
+
+            // Mid-reconnect: the detector MUST be stopped so it cannot decide host-liveness while the
+            // reconnect owns that decision. (Without the fix it is still registered here.)
+            assertFalse(
+                h.joinerRoom.hasDetector(hostId),
+                "the host detector must be silenced for the duration of the reconnect",
+            )
+
+            // Release the re-weave; the resume completes.
+            reweaveGate.complete(Unit)
+            repeat(4) { advanceTimeBy(100L) }
+
+            assertIs<MembershipEvent.Resumed>(resumed.await())
+            assertTrue(
+                h.joinerRoom.hasDetector(hostId),
+                "host-liveness monitoring must be restarted after a successful resume",
+            )
+            assertFalse(hostLost.isCompleted, "a silenced+restarted detector must not fire HostLost")
+            hostLost.cancel()
+        }
+
+    // ── Harness ─────────────────────────────────────────────────────────────────
+
+    private class ReconnectHarness(
+        val hostRoom: SeamRoom,
+        val joinerRoom: SeamRoom,
+        val muxClient: MuxClientLoom,
+    )
+
+    /**
+     * Stands up a host [SeamRoom] over a [MuxServerLoom] hub and a joiner [SeamRoom] over a
+     * [MuxClientLoom] whose base weaves a fresh mesh connection each time. [muxClient.closeBase]
+     * tears the joiner's transport; the joiner heals via `reweave = { muxClient.join(tag) }`.
+     *
+     * [reweaveDelay] (virtual ms) makes the re-weave complete late in the window. [reweaveGate], if
+     * given, holds the re-weave suspended until completed — used to observe the reconnect in-flight.
+     */
+    private suspend fun TestScope.reconnectHarness(
+        clock: () -> Instant,
+        reweaveDelay: Long = 0L,
+        reweaveGate: CompletableDeferred<Unit>? = null,
+    ): ReconnectHarness {
+        val dispatcher = coroutineContext[ContinuationInterceptor]!!
+        val source = InMemoryConnectionSource()
+        val serverLoom = MuxServerLoom(
+            source = source,
+            scope = backgroundScope,
+            selfId = PeerId("server"),
+            authorizer = RoomAuthorizer.AllowAll,
+            dispatcher = dispatcher,
+            random = Random(13L),
+        )
+        val hostSeam = serverLoom.host(Pattern("table-7"))
+        val hostRoom = SeamRoom(
+            seam = hostSeam,
+            role = SessionRole.Host,
+            displayName = "table-7",
+            scope = backgroundScope,
+            clock = clock,
+            heartbeatConfig = fastConfig,
+            roomId = RoomId("room-1"),
+        ).also { it.start() }
+
+        val clientId = PeerId("client")
+        var seed = 1
+        val base = object : Loom {
+            override suspend fun weave(rendezvous: Rendezvous): Seam {
+                val (serverConn, clientConn) = connectionPair()
+                source.offer(serverConn)
+                return meshSeam(clientId, listOf(clientConn), dispatcher, Random((seed++).toLong()))
+            }
+        }
+        val muxClient = MuxClientLoom(base, Rendezvous.New(Pattern("base")), backgroundScope, nameOf)
+        val tag = InMemoryTag("table-7")
+        val joinerRoom = SeamRoom(
+            seam = muxClient.join(tag),
+            role = SessionRole.Joiner,
+            displayName = "client",
+            scope = backgroundScope,
+            clock = clock,
+            heartbeatConfig = fastConfig,
+            roomId = null,
+            reweave = {
+                reweaveGate?.await()
+                if (reweaveDelay > 0L) delay(reweaveDelay)
+                muxClient.join(tag)
+            },
+        ).also { it.start() }
+
+        return ReconnectHarness(hostRoom, joinerRoom, muxClient)
+    }
 }
