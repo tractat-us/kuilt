@@ -41,24 +41,47 @@ import kotlin.time.Clock
  * @param clock source of the event timestamps (required — never the wall clock).
  * @param random source of the per-record id bytes (required — never an unseeded
  *   default).
+ * @param traceContextProvider optional trace/sampling gate. When `null` (the M1
+ *   default) capture is always-on and records carry no trace ids. When set,
+ *   [capture] consults it per event to drop or stamp (see [capture]).
  */
 public class LogCapture(
     private val exporter: WarpLogRecordExporter,
     private val config: CaptureConfig,
     private val clock: Clock,
     private val random: Random,
+    private val traceContextProvider: TraceContextProvider? = null,
 ) {
     /**
      * Map [event] to a [LogRecord] and export it.
      *
      * Returns the exporter's [ExportResult], or `null` if [event] was dropped
-     * before any record was built — either because its `loggerName` is one of
-     * kuilt's own (`us.tractat.kuilt`) loggers (the self-capture exclusion above)
-     * or because it was below [CaptureConfig.minLevel].
+     * before any record was built — because its `loggerName` is one of kuilt's
+     * own (`us.tractat.kuilt`) loggers (the self-capture exclusion above),
+     * because it was below [CaptureConfig.minLevel], or because the trace gate
+     * dropped it: when a [TraceContextProvider] is wired, an active-but-unsampled
+     * trace is dropped, and an untraced event is dropped when
+     * [CaptureConfig.untracedPolicy] is [UntracedPolicy.DROP]. On a sampled
+     * trace the record is stamped with the trace's `traceId`/`spanId`.
      */
     public suspend fun capture(event: NormalizedLogEvent): ExportResult? {
         if (event.loggerName.startsWith(KUILT_INTERNAL_LOGGER_PREFIX)) return null
         if (event.level.ordinal < config.minLevel.ordinal) return null
+        // Trace/sampling gate. A null provider is M1 always-on capture, no stamp.
+        var traceId: ByteString? = null
+        var spanId: ByteString? = null
+        val provider = traceContextProvider
+        if (provider != null) {
+            when (val trace = provider.current()) {
+                null -> if (config.untracedPolicy == UntracedPolicy.DROP) return null
+                else -> if (trace.sampled) {
+                    traceId = trace.traceId
+                    spanId = trace.spanId
+                } else {
+                    return null // active but unsampled → drop before export
+                }
+            }
+        }
         val now = clock.now()
         val epochNanos = now.epochSeconds * NANOS_PER_SECOND + now.nanosecondsOfSecond
         val record = LogRecord(
@@ -69,6 +92,8 @@ public class LogCapture(
             attributes = config.attributeMapper(event),
             timestampEpochNanos = epochNanos,
             observedEpochNanos = epochNanos,
+            traceId = traceId,
+            spanId = spanId,
         )
         return exporter.export(record)
     }
