@@ -250,6 +250,42 @@ at real-Raft execution). Either failing is a legitimate stop.
 
 ---
 
+## Phase H — module decomposition (landed)
+
+**Goal.** `:kuilt-warp` had grown into a monolith — the scheduler *plus* three WebAssembly
+runtimes (Chicory, wasm3's native binaries, the browser engine), the CALM query planner, and the
+federated-ML demo, all in one module. A peer that only wanted symbolic dispatch dragged in all of
+it, and every new capability (C's code mobility, D's compiler nodes, F's ML demo) added weight.
+Phase H splits the module by concern so each consumer pulls in only what it uses, and so later
+epics slot in as clean satellites rather than re-bloating the core.
+
+**Tractable because `WarpNode` never names a concrete runtime** — it references the `WasmRuntime`
+*interface* (injected via `WarpLazyFetch`), so the heavy implementations move out by file-move and
+rewire, not by re-architecture.
+
+**The new layout.**
+
+| Module | What |
+|---|---|
+| `:kuilt-warp` (core) | the engine — ring, queue, results board — plus the lightweight code-mobility *contract* (`WasmRuntime` interface, `Creel`/`BobbinExchange`, `Variant`, `WarpLazyFetch`) and the `Draft` dataflow type. No heavy dependencies. |
+| `:kuilt-warp-runtime` | the concrete wasm runtimes: Chicory (JVM), wasm3 (Apple, incl. the native `.a` binaries), the browser engine (wasmJs). |
+| `:kuilt-warp-planning` | the CALM planner — the `Draft` cost model + rewrites (`coordinationCost`, `plan`, `optimize`, `consolidateEmbroideries`). |
+| `:kuilt-warp-ml` | the FedAvg / federated-learning demo. |
+| `:kuilt-warp-otel` | metrics (predates the split; unchanged). |
+
+**Done-statement.** A consumer of only `:kuilt-warp` resolves no Chicory, no wasm3, no planner,
+and no ML on its classpath — verified against the core module's runtime classpath. Every
+satellite depends on core; the arrow never points back.
+
+**Move-only, zero behaviour change.** The whole extraction is content-preserving file moves plus
+build wiring, with a single justified visibility promotion — `Draft`'s constructor was made
+`public` so the extracted planner can rebuild `Draft` graphs across the new boundary. The existing
+test suite passing unchanged in the new layout is the proof. Landed as H-1 (`:kuilt-warp-runtime`),
+H-2 (`:kuilt-warp-planning`), H-3 (`:kuilt-warp-ml`), and H-4 (this entry). Full design:
+[Phase-H spec](superpowers/specs/2026-06-26-warp-phase-h-decomposition-design.md).
+
+---
+
 ## Reading this roadmap
 
 - **B is the only commitment.** It completes the foundation's own contract and
