@@ -41,6 +41,26 @@ internal fun sampleGCounterPiece() {
     check(left.piece(right) == GCounter.of(a to 2L, b to 3L))
 }
 
+// ── GCounterDouble ───────────────────────────────────────────────────────────
+
+/** A running fractional total several devices add to independently, always agreeing when they sync. */
+@Suppress("unused")
+internal fun sampleGCounterDouble() {
+    val phone = ReplicaId("phone")
+    val watch = ReplicaId("watch")
+
+    // Each device independently accumulates fractional seconds of CPU time.
+    var onPhone = GCounterDouble.ZERO
+    onPhone = onPhone.piece(onPhone.inc(phone, 0.75).delta)
+
+    var onWatch = GCounterDouble.ZERO
+    onWatch = onWatch.piece(onWatch.inc(watch, 0.5).delta)
+
+    // Merge either direction — the total is the same, to the bit.
+    val total = onPhone.piece(onWatch).value // 1.25
+    check(total == 1.25)
+}
+
 // ── PNCounter ────────────────────────────────────────────────────────────────
 
 /** Increment and decrement across replicas; the net converges. */

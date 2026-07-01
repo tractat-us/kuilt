@@ -14,6 +14,8 @@ kotlin {
             // runCatchingCancellable — cancellation-safe drain.
             implementation(project(":kuilt-core"))
             implementation(libs.kotlinx.coroutines.core)
+            // kotlin-logging: the metric bridge logs a WARN when it drops an unsupported point.
+            implementation(libs.kotlin.logging)
             api(libs.kotlinx.io.bytestring)
         }
 
@@ -26,6 +28,7 @@ kotlin {
             dependencies {
                 compileOnly(libs.opentelemetry.api)
                 compileOnly(libs.opentelemetry.sdk.logs)
+                compileOnly(libs.opentelemetry.sdk.metrics)
                 compileOnly(libs.opentelemetry.sdk.common)
             }
         }
@@ -43,7 +46,10 @@ kotlin {
             implementation(libs.kotlinx.coroutines.test)
             implementation(libs.opentelemetry.api)
             implementation(libs.opentelemetry.sdk.logs)
+            implementation(libs.opentelemetry.sdk.metrics)
             implementation(libs.opentelemetry.sdk.testing)
+            // The metric bridge logs a WARN on dropped points; back SLF4J so the call resolves.
+            runtimeOnly(libs.logback)
         }
     }
 }

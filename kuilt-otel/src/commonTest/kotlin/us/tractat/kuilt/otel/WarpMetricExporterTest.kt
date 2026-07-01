@@ -323,4 +323,43 @@ class WarpMetricExporterTest {
             throw RuntimeException("simulated store failure")
         override suspend fun delete(key: StoreKey) = Unit
     }
+
+    // ---- Double sum metrics (GCounterDouble — exact-precision monotonic) ----
+
+    @Test
+    fun doubleSumAccumulatesExactly() = runTest {
+        val exporter = exporterFor()
+        val key = sumKey("cpu.seconds")
+        exporter.incrementSumDouble(key, by = 0.75)
+        exporter.incrementSumDouble(key, by = 0.25)
+        assertEquals(1.0, exporter.doubleSumValue(key))
+    }
+
+    @Test
+    fun doubleSumIsSeparateFromLongSum() = runTest {
+        val exporter = exporterFor()
+        val key = sumKey("requests")
+        exporter.incrementSum(key, by = 2L)
+        exporter.incrementSumDouble(key, by = 1.5)
+        assertEquals(2L, exporter.sumValue(key))
+        assertEquals(1.5, exporter.doubleSumValue(key))
+    }
+
+    @Test
+    fun doubleSumRecoversFromStore() = runTest {
+        val store = InMemoryDurableStore()
+        exporterFor(store = store).incrementSumDouble(sumKey("cpu.seconds"), by = 3.5)
+        val recovered = exporterFor(store = store).also { it.recover() }
+        assertEquals(3.5, recovered.doubleSumValue(sumKey("cpu.seconds")))
+    }
+
+    @Test
+    fun doubleSumMergeIsIdempotent() = runTest {
+        val exporter = exporterFor()
+        val key = sumKey("cpu.seconds")
+        val remote = us.tractat.kuilt.crdt.GCounterDouble.of(replicaB to 4.0)
+        exporter.mergeSumDouble(key, remote)
+        exporter.mergeSumDouble(key, remote)
+        assertEquals(4.0, exporter.doubleSumValue(key))
+    }
 }

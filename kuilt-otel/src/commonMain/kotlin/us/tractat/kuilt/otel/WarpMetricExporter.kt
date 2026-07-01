@@ -10,6 +10,7 @@ import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.cbor.Cbor
 import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.crdt.GCounter
+import us.tractat.kuilt.crdt.GCounterDouble
 import us.tractat.kuilt.crdt.HyperLogLog
 import us.tractat.kuilt.crdt.LWWRegister
 import us.tractat.kuilt.crdt.ReplicaId
@@ -92,11 +93,13 @@ public class WarpMetricExporter(
     // eviction policies. The *insertion* of a new key records its age; we don't update
     // order on access (this is not an LRU cache).
     private val sums: LinkedHashMap<MetricKey, GCounter> = LinkedHashMap()
+    private val sumsDouble: LinkedHashMap<MetricKey, GCounterDouble> = LinkedHashMap()
     private val gauges: LinkedHashMap<MetricKey, LWWRegister<Double>> = LinkedHashMap()
     private val cardinalities: LinkedHashMap<MetricKey, HyperLogLog> = LinkedHashMap()
 
     private companion object {
         private val SUM_STORE_KEY = StoreKey("otel.metrics.sums")
+        private val SUM_DOUBLE_STORE_KEY = StoreKey("otel.metrics.sums.double")
         private val GAUGE_STORE_KEY = StoreKey("otel.metrics.gauges")
         private val CARDINALITY_STORE_KEY = StoreKey("otel.metrics.cardinalities")
 
@@ -104,10 +107,12 @@ public class WarpMetricExporter(
 
         private val metricKeySerializer = MetricKey.serializer()
         private val gcounterSerializer = GCounter.serializer()
+        private val gcounterDoubleSerializer = GCounterDouble.serializer()
         private val lwwSerializer = LWWRegister.serializer(Double.serializer())
         private val hllSerializer = HyperLogLog.serializer()
 
         private val sumsSerializer = MapSerializer(metricKeySerializer, gcounterSerializer)
+        private val sumsDoubleSerializer = MapSerializer(metricKeySerializer, gcounterDoubleSerializer)
         private val gaugesSerializer = MapSerializer(metricKeySerializer, lwwSerializer)
         private val cardinalitiesSerializer = MapSerializer(metricKeySerializer, hllSerializer)
     }
@@ -124,8 +129,20 @@ public class WarpMetricExporter(
      */
     public suspend fun recover() {
         recoverSums()
+        recoverSumsDouble()
         recoverGauges()
         recoverCardinalities()
+    }
+
+    private suspend fun recoverSumsDouble() {
+        val bytes = store.read(SUM_DOUBLE_STORE_KEY) ?: return
+        val recovered = runCatchingCancellable<Map<MetricKey, GCounterDouble>> {
+            cbor.decodeFromByteArray(sumsDoubleSerializer, bytes)
+        }.getOrNull() ?: run {
+            logger.warn { "otel.metrics.sums.double: corrupt store entry, starting fresh" }
+            return
+        }
+        lock.withLock { recovered.forEach { (k, v) -> sumsDouble[k] = v } }
     }
 
     private suspend fun recoverSums() {
@@ -205,6 +222,49 @@ public class WarpMetricExporter(
     /** Return a snapshot of the [GCounter] for [key] (for gossip/anti-entropy). */
     public fun sumSnapshot(key: MetricKey): GCounter = lock.withLock {
         sums[key] ?: GCounter.ZERO
+    }
+
+    // ── Double sum (GCounterDouble) ────────────────────────────────────────────
+
+    /**
+     * Increment the exact-precision cumulative sum for [key] by [by] on this replica.
+     * The double-precision sibling of [incrementSum]; a monotonic OTLP `DOUBLE_SUM`
+     * routes here, keeping full precision (no truncation, no fixed-point scaling).
+     * Returns [MetricExportResult.Success] after the durable write.
+     */
+    public suspend fun incrementSumDouble(key: MetricKey, by: Double): MetricExportResult {
+        val encoded = lock.withLock {
+            maybeEvictForNewKey(key, sumsDouble)
+            val current = sumsDouble.getOrPut(key) { GCounterDouble.ZERO }
+            sumsDouble[key] = current.piece(current.inc(replica, by).delta)
+            encodeSumsDouble()
+        }
+        return persistSumsDouble(encoded, key)
+    }
+
+    /**
+     * Merge a remote [GCounterDouble] snapshot into this exporter's double-sum for [key].
+     *
+     * Idempotent: merging the same snapshot twice produces the same result.
+     * Returns [MetricExportResult.Success] after the durable write.
+     */
+    public suspend fun mergeSumDouble(key: MetricKey, remote: GCounterDouble): MetricExportResult {
+        val encoded = lock.withLock {
+            val current = sumsDouble[key] ?: GCounterDouble.ZERO
+            sumsDouble[key] = current.piece(remote)
+            encodeSumsDouble()
+        }
+        return persistSumsDouble(encoded, key)
+    }
+
+    /** Read the current double-sum value for [key], or 0.0 if the key has never been incremented. */
+    public fun doubleSumValue(key: MetricKey): Double = lock.withLock {
+        sumsDouble[key]?.value ?: 0.0
+    }
+
+    /** Return a snapshot of the [GCounterDouble] for [key] (for gossip/anti-entropy). */
+    public fun doubleSumSnapshot(key: MetricKey): GCounterDouble = lock.withLock {
+        sumsDouble[key] ?: GCounterDouble.ZERO
     }
 
     // ── Gauge (LWWRegister<Double>) ────────────────────────────────────────────
@@ -313,12 +373,29 @@ public class WarpMetricExporter(
     // ── Diagnostics ───────────────────────────────────────────────────────────
 
     /** Total number of distinct [MetricKey]s tracked across all kinds. */
-    public fun metricCount(): Int = lock.withLock { sums.size + gauges.size + cardinalities.size }
+    public fun metricCount(): Int = lock.withLock { sums.size + sumsDouble.size + gauges.size + cardinalities.size }
+
+    /**
+     * A converged snapshot of **every** metric series across all four kinds, as one
+     * replicable [MetricCatalog]. The metric analogue of the log buffer's `snapshot()`;
+     * the tap host offers this value to a joining puller.
+     */
+    public fun snapshotAll(): MetricCatalog = lock.withLock {
+        MetricCatalog(
+            sums = sums.toMap(),
+            doubleSums = sumsDouble.toMap(),
+            gauges = gauges.toMap(),
+            cardinalities = cardinalities.toMap(),
+        )
+    }
 
     // ── Encoding (called inside lock) ─────────────────────────────────────────
 
     private fun encodeSums(): ByteArray =
         cbor.encodeToByteArray(sumsSerializer, sums)
+
+    private fun encodeSumsDouble(): ByteArray =
+        cbor.encodeToByteArray(sumsDoubleSerializer, sumsDouble)
 
     private fun encodeGauges(): ByteArray =
         cbor.encodeToByteArray(gaugesSerializer, gauges)
@@ -330,6 +407,9 @@ public class WarpMetricExporter(
 
     private suspend fun persistSums(encoded: ByteArray, key: MetricKey): MetricExportResult =
         persist(SUM_STORE_KEY, encoded, key)
+
+    private suspend fun persistSumsDouble(encoded: ByteArray, key: MetricKey): MetricExportResult =
+        persist(SUM_DOUBLE_STORE_KEY, encoded, key)
 
     private suspend fun persistGauges(encoded: ByteArray, key: MetricKey): MetricExportResult =
         persist(GAUGE_STORE_KEY, encoded, key)
@@ -355,7 +435,7 @@ public class WarpMetricExporter(
      * If [key] is new (not present in [map]) and [totalCount] has reached [maxMetrics],
      * evict one series from the combined pool according to [bufferPolicy].
      *
-     * Eviction selects from whichever of the three maps holds the oldest/newest entry
+     * Eviction selects from whichever of the four maps holds the oldest/newest entry
      * by insertion order. The evicted key is always logged at WARN.
      */
     private fun <V> maybeEvictForNewKey(key: MetricKey, map: LinkedHashMap<MetricKey, V>) {
@@ -364,7 +444,7 @@ public class WarpMetricExporter(
         evictOne()
     }
 
-    private fun totalCount(): Int = sums.size + gauges.size + cardinalities.size
+    private fun totalCount(): Int = sums.size + sumsDouble.size + gauges.size + cardinalities.size
 
     private fun evictOne() {
         val victim = when (bufferPolicy) {
@@ -373,21 +453,26 @@ public class WarpMetricExporter(
         } ?: return
         logEviction(victim)
         sums.remove(victim)
+        sumsDouble.remove(victim)
         gauges.remove(victim)
         cardinalities.remove(victim)
     }
 
-    /** The insertion-first key across all three maps (LinkedHashMap preserves insertion order). */
+    /** The insertion-first key across all four maps (LinkedHashMap preserves insertion order). */
     private fun pickOldest(): MetricKey? =
         // We cannot compare insertion time across maps, so we take the first key of
-        // the first non-empty map in a stable ordering (sums → gauges → cardinalities).
-        listOfNotNull(sums.keys.firstOrNull(), gauges.keys.firstOrNull(), cardinalities.keys.firstOrNull())
-            .firstOrNull()
+        // the first non-empty map in a stable ordering (sums → sumsDouble → gauges → cardinalities).
+        listOfNotNull(
+            sums.keys.firstOrNull(), sumsDouble.keys.firstOrNull(),
+            gauges.keys.firstOrNull(), cardinalities.keys.firstOrNull(),
+        ).firstOrNull()
 
-    /** The insertion-last key across all three maps. */
+    /** The insertion-last key across all four maps. */
     private fun pickNewest(): MetricKey? =
-        listOfNotNull(sums.keys.lastOrNull(), gauges.keys.lastOrNull(), cardinalities.keys.lastOrNull())
-            .lastOrNull()
+        listOfNotNull(
+            sums.keys.lastOrNull(), sumsDouble.keys.lastOrNull(),
+            gauges.keys.lastOrNull(), cardinalities.keys.lastOrNull(),
+        ).lastOrNull()
 
     private fun logEviction(victim: MetricKey) {
         logger.warn {
