@@ -25,10 +25,6 @@ kotlin {
             implementation(project(":kuilt-raft-test"))
             implementation(libs.kotlinx.coroutines.test)
         }
-        jvmMain.dependencies {
-            // Chicory — pure-JVM wasm runtime (C3 substrate; JVM only, never touches commonMain).
-            implementation(libs.chicory.runtime)
-        }
         jvmTest.dependencies {
             implementation(project(":kuilt-websocket"))
             implementation(libs.kotlin.testJunit)
@@ -41,52 +37,6 @@ kotlin {
         }
         androidUnitTest.dependencies {
             runtimeOnly(libs.logback)
-        }
-    }
-
-    // wasm3 cinterop — Apple Kotlin/Native targets, main compilation.
-    //
-    // wasm3 (github.com/wasm3/wasm3 v0.5.0, MIT) is a pure C99 wasm interpreter
-    // with no JIT; it works on iOS (which bans JIT) and macOS from one shared
-    // source tree + one .def, making it the right choice for all three apple K/N
-    // targets. The static libs in prebuilt/<target>/libwasm3.a were compiled on
-    // macOS with the Xcode sysroot and committed so CI (ubuntu) can link without
-    // needing xcrun/Xcode.
-    //
-    // Wired into the MAIN compilation: `Wasm3WasmRuntime` (appleMain) is the
-    // production native WasmRuntime impl, so the cinterop must be on the
-    // production source set. The test compilation inherits the cinterop from
-    // main (test depends on main), so the existing C3-gate dispatch tests keep
-    // resolving the wasm3.* symbols.
-    val wasm3DefFile = layout.projectDirectory.file("src/nativeInterop/cinterop/wasm3.def")
-    val wasm3IncludeDir = layout.projectDirectory.dir("src/nativeInterop/wasm3/source")
-    val wasm3PrebuiltDir = layout.projectDirectory.dir("src/nativeInterop/wasm3/prebuilt")
-
-    macosArm64 {
-        compilations.named("main") {
-            cinterops.create("wasm3") {
-                defFile(wasm3DefFile)
-                includeDirs(wasm3IncludeDir)
-                extraOpts("-libraryPath", wasm3PrebuiltDir.dir("macosArm64").asFile.absolutePath)
-            }
-        }
-    }
-    iosArm64 {
-        compilations.named("main") {
-            cinterops.create("wasm3") {
-                defFile(wasm3DefFile)
-                includeDirs(wasm3IncludeDir)
-                extraOpts("-libraryPath", wasm3PrebuiltDir.dir("iosArm64").asFile.absolutePath)
-            }
-        }
-    }
-    iosSimulatorArm64 {
-        compilations.named("main") {
-            cinterops.create("wasm3") {
-                defFile(wasm3DefFile)
-                includeDirs(wasm3IncludeDir)
-                extraOpts("-libraryPath", wasm3PrebuiltDir.dir("iosSimulatorArm64").asFile.absolutePath)
-            }
         }
     }
 }
