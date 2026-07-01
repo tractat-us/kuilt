@@ -72,6 +72,27 @@ internal suspend fun sampleGatedLogTap(scope: CoroutineScope): List<LogRecord> {
 }
 
 /** @suppress — sample only */
+internal suspend fun sampleLogTapPullStamped(scope: CoroutineScope): List<StampedLogRecord> {
+    val exporter = WarpLogRecordExporter(
+        replica = ReplicaId("device-uuid-abc123"),
+        store = InMemoryDurableStore(),
+    )
+    val loom = InMemoryLoom()
+    val host = installLogTap(loom, exporter, scope)
+
+    // Pull the backlog stamped: each record carries its ordering RgaId (producer +
+    // cross-device total-order key). To build one timeline across several devices,
+    // pull each device's stamped logs and sort the union on rgaId.
+    val client = LogTapClient(loom.join(InMemoryTag("puller")), scope)
+    val stamped: List<StampedLogRecord> = client.pullStamped()
+    val merged = stamped.sortedBy { it.rgaId }
+
+    client.close()
+    host.close()
+    return merged
+}
+
+/** @suppress — sample only */
 internal suspend fun sampleLogTapTail(seamScope: CoroutineScope): Flow<LogRecord> {
     val loom = InMemoryLoom()
     // Join a device that is already hosting a tap and stream its logs live: each

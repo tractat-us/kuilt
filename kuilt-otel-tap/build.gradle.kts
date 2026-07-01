@@ -14,7 +14,9 @@ kotlin {
             api(project(":kuilt-core"))
             api(project(":kuilt-otel"))
             implementation(project(":kuilt-quilter"))
-            implementation(project(":kuilt-crdt"))
+            // StampedLogRecord exposes RgaId on the public surface (pullStamped), so
+            // kuilt-crdt is an api dep, not implementation-only.
+            api(project(":kuilt-crdt"))
             implementation(libs.kotlinx.coroutines.core)
             implementation(libs.kotlinx.serialization.core)
             implementation(libs.kotlinx.serialization.cbor)

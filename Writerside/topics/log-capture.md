@@ -173,6 +173,27 @@ tap.dumpingOnFailure(emit = { dumped += it }) {
 For a CI harness, `writeLogArtifact(records, sink)` writes one NDJSON file per
 booted device, so a failed run carries each device's full log as a saved artifact.
 
+### Merging several devices into one timeline
+
+When a run boots more than one device, you often want the lines woven back into a
+single ordered story — this phone's line 3, then that phone's line 1, and so on.
+Wall-clock timestamps can't do that reliably: devices drift, and one may have been
+offline. So pull the logs **stamped** — each line keeps a small ordering tag from
+the device that produced it (who produced it, and where it sits relative to every
+other device's lines) — and let a collector sort by that tag:
+
+<!-- verbatim from kuilt-otel-tap-test/src/commonTest/kotlin/us/tractat/kuilt/otel/tap/test/LogArtifactTest.kt#stampedArtifactsFromTwoDevicesMergeByRgaId -->
+
+```kotlin
+val stamped = client.pullStamped()                     // each record + its ordering tag
+writeStampedLogArtifact(stamped, sink)                 // one file per device, as before
+// then, across every device's file:
+val merged = allStamped.sortedBy { it.rgaId }          // one cross-device order; each device's own lines stay in order
+```
+
+The plain `pull()` and `writeLogArtifact` paths stay unchanged — the tag rides
+*alongside* each record, so a single-device artifact is exactly as before.
+
 ## Going deeper
 
 - **[Reaching into a device for its logs](https://github.com/tractat-us/kuilt/blob/main/docs/log-capture-and-extraction.md)**

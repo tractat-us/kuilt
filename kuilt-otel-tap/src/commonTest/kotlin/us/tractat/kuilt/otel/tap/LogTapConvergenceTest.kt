@@ -14,6 +14,7 @@ import us.tractat.kuilt.otel.InMemoryDurableStore
 import us.tractat.kuilt.otel.LogRecord
 import us.tractat.kuilt.otel.WarpLogRecordExporter
 import us.tractat.kuilt.quilter.QuilterConfig
+import us.tractat.kuilt.test.assertAll
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -73,6 +74,41 @@ class LogTapConvergenceTest {
         assertEquals(sent.map { it.recordId }, pulled.map { it.recordId }, "order preserved")
         assertEquals(sent.size, pulled.size, "no duplicates")
         assertEquals(sent.map { it.body }, pulled.map { it.body })
+    }
+
+    @Test
+    fun pullStampedCarriesProducerAndOrderKeyPerRecord() = runTest(UnconfinedTestDispatcher()) {
+        val exporter = hostExporter()
+        val sent = (1..6).map { record(it) }
+        sent.forEach { exporter.export(it) }
+
+        val loom = InMemoryLoom()
+        host = installLogTap(loom, exporter, backgroundScope, config)
+        val client = LogTapClient(loom.join(InMemoryTag("puller")), backgroundScope, config).also { client = it }
+
+        val stamped = client.pullStamped()
+
+        assertAll(
+            { assertEquals(sent, stamped.map { it.record }, "records match plain pull() exactly") },
+            {
+                assertTrue(
+                    stamped.all { it.rgaId.replicaId == ReplicaId("device") },
+                    "every stamp carries the producing device's ReplicaId",
+                )
+            },
+            {
+                val keys = stamped.map { it.rgaId }
+                assertEquals(keys, keys.sorted(), "single-producer stamps ascend in FIFO order")
+                assertEquals(keys.toSet().size, keys.size, "stamps are distinct")
+            },
+            {
+                assertEquals(
+                    stamped.map { it.rgaId.dot },
+                    stamped.map { it.dot },
+                    "dot convenience mirrors rgaId.dot",
+                )
+            },
+        )
     }
 
     @Test

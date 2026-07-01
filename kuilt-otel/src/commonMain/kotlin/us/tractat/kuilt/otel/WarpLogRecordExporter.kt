@@ -208,19 +208,14 @@ public class WarpLogRecordExporter(
     }
 
     /**
-     * Rebuild the dedup map from an [Rga]'s visible sequence.
+     * Rebuild the dedup map from an [Rga]'s visible elements.
      *
-     * Zips the visible [RgaId]s (from [Rga.sequence] minus [Rga.tombstones])
-     * with the corresponding values (from [Rga.toList]) to map each
-     * [LogRecord.recordId] to its [RgaId]. Tombstoned entries are excluded —
-     * an evicted record's slot is freed for re-use.
+     * Maps each visible record's [LogRecord.recordId] to its [RgaId] via
+     * [Rga.entries]. Tombstoned entries are excluded — an evicted record's slot is
+     * freed for re-use.
      */
-    private fun buildSeenIdsFrom(rga: Rga<LogRecord>): Map<ByteString, RgaId> {
-        val visibleIds = rga.sequence.filter { it !in rga.tombstones }
-        val visibleRecords = rga.toList()
-        return visibleIds.zip(visibleRecords)
-            .associate { (rgaId, record) -> record.recordId to rgaId }
-    }
+    private fun buildSeenIdsFrom(rga: Rga<LogRecord>): Map<ByteString, RgaId> =
+        rga.entries().associate { (rgaId, record) -> record.recordId to rgaId }
 }
 
 /** Maximum number of [LogRecord]s buffered in memory before eviction. */
