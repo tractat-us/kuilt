@@ -5,6 +5,8 @@ import kotlinx.atomicfu.locks.withLock
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -98,6 +100,10 @@ public class SeamRoomFactory(
             clock = clock,
             heartbeatConfig = heartbeatConfig,
             roomId = null,
+            // Re-weave the same tag on tear. For a resumable [Loom] (e.g. [MuxClientLoom])
+            // this heals the same [seam] handle onto a fresh base; for a non-resumable Loom
+            // it is a no-op with respect to auto-resume (see the `reweave` KDoc contract).
+            reweave = { loom.join(tag) },
         ).also { room -> room.start() }
     }
 
@@ -133,15 +139,23 @@ public class SeamRoomFactory(
  *    (Hello/Welcome), routes application frames to [incoming], filters heartbeat frames
  *    from application delivery, and fans incoming swatches out to [rawIncoming] so that
  *    per-peer [HeartbeatPartitionDetector]s can subscribe without contending for the channel.
- * 2. **Torn watcher** — observes [Seam.state] for a [SeamState.Torn] transition and emits the
- *    appropriate terminal membership event immediately, without waiting for heartbeat expiry.
+ * 2. **Torn watcher** — observes [Seam.state] for a [SeamState.Torn] transition. On the **host**
+ *    it evicts all peers and closes cleanly; on a **joiner** it hands off to `attemptHostReconnect`,
+ *    which either resumes over a re-woven base within the reconnect window or falls to terminal
+ *    [MembershipEvent.HostLost] — see the `reweave` constructor parameter (#1037).
+ *
+ * The joiner's main-loop [Seam.incoming] collector runs in its own child job so a reconnect can
+ * cancel it and re-subscribe on the healed generation (`ResumableChannel.incoming` binds the base
+ * once at collection start, so the old collector goes silent after a re-weave).
  *
  * Additionally, a [HeartbeatPartitionDetector] is launched per admitted peer when the
  * admit handshake completes. The detector subscribes to [rawIncoming] (filtered by sender)
  * so it processes heartbeat ping/pong frames independently of the main loop.
  *
  * Partition event semantics by role:
- * - **Joiner**: [PartitionEvent.PeerLost] of the host → [MembershipEvent.HostLost] + terminal.
+ * - **Joiner**: a host transport close (transport `Torn`, or a heartbeat `TransportClosed`)
+ *   attempts an in-window resume before falling to [MembershipEvent.HostLost] (#1037).
+ *   [PartitionEvent.PeerLost] of the host (window expired) → [MembershipEvent.HostLost] + terminal.
  *   [PartitionEvent.PeerLost] of a non-host → [MembershipEvent.Left(PartitionExpired)].
  * - **Host**: [PartitionEvent.PeerLost] of any joiner → [MembershipEvent.Left(PartitionExpired)].
  * - Both roles: [PartitionEvent.PeerUnresponsive] → [MembershipEvent.Partitioned];
@@ -151,9 +165,10 @@ public class SeamRoomFactory(
  * become silent no-ops. No auto-election is performed.
  *
  * **Thread safety**: all mutable membership state (`admittedById`, `closed`, `hostLost`,
- * `hostPeerId`, `pendingResume`, `resumeToken`, `detectorJobs`, `channelViews`) is
- * guarded by an atomicfu [reentrantLock]. Critical sections perform only synchronous
- * map/field operations; all suspend calls (sends, broadcasts) are made outside the lock.
+ * `hostPeerId`, `pendingResume`, `resumeToken`, `reconnecting`, `incomingCollectJob`,
+ * `detectorJobs`, `channelViews`) is guarded by an atomicfu [reentrantLock]. Critical sections
+ * perform only synchronous map/field operations; all suspend calls (sends, broadcasts, re-weave,
+ * awaiting `Woven`, resume) are made outside the lock.
  *
  * [start] must be called by [SeamRoomFactory] after construction to launch these loops.
  */
@@ -206,9 +221,9 @@ internal class SeamRoom(
     /**
      * Guards every mutation of the plain membership state:
      * `admittedById`, `closed`, `hostLost`, `hostPeerId`, `pendingResume`,
-     * `resumeToken`, `detectorJobs`, `channelViews`.
+     * `resumeToken`, `reconnecting`, `incomingCollectJob`, `detectorJobs`, `channelViews`.
      *
-     * Multiple coroutines (`runMainLoop`, `runTornWatcher`,
+     * Multiple coroutines (`runMainLoop`, `runTornWatcher`, `attemptHostReconnect`,
      * `runReconnectEventLoop`, per-peer detector collectors, `scope.launch { admitPeer }`,
      * `scope.launch { handleResume }`) may run under a multithreaded dispatcher and all
      * read-modify-write that state. This reentrant lock serialises them.
@@ -281,6 +296,24 @@ internal class SeamRoom(
     private var hostLost = false
 
     /**
+     * **Joiner only.** Guards the single reconnect attempt so the two racing tear-detection
+     * paths — [runJoinerTornWatcher] (transport `Torn`) and [handleUnresponsive] (heartbeat
+     * `TransportClosed`) — cannot both drive a reconnect or both [markHostLost].
+     * First path to flip it under [lock] owns the attempt; the other becomes a no-op.
+     */
+    private var reconnecting = false
+
+    /**
+     * **Joiner only.** The child job running the current [seam]-`incoming` collect.
+     *
+     * After a re-weave heals [seam] onto a fresh generation, the old collect is still bound to
+     * the dead generation (`ResumableChannel.incoming` binds `current()` once at collection start),
+     * so it must be cancelled and relaunched or the host's `ResumeAck` is never delivered. Tracked
+     * here so [attemptHostReconnect] can restart it and [leave] can cancel it.
+     */
+    private var incomingCollectJob: Job? = null
+
+    /**
      * The host's [PeerId] as seen from a [SessionRole.Joiner].
      *
      * Identified when the joiner receives a [AdmitMessage.Welcome] whose
@@ -348,31 +381,103 @@ internal class SeamRoom(
     // ── Torn watcher: react to permanent transport closure ────────────────────
 
     /**
-     * Watches [Seam.state] for a [SeamState.Torn] transition and emits the
-     * appropriate terminal membership event **immediately**, without waiting for
-     * heartbeat expiry.
+     * Watches [Seam.state] for a [SeamState.Torn] transition and reacts **immediately**,
+     * without waiting for heartbeat expiry — if the transport signals `Torn`, the session
+     * layer trusts it directly.
      *
-     * This is faster and more correct than the heartbeat-timeout path for
-     * transport-level closures: if the transport signals `Torn`, the session
-     * layer should trust it directly.
-     *
-     * **Joiner:** emits [MembershipEvent.HostLost] and enters terminal state.
-     * **Host:** emits [MembershipEvent.Left] for each admitted peer (mirroring the
-     * heartbeat-based [LeaveReason.PartitionExpired] eviction path) and closes cleanly.
+     * - **Host:** emits [MembershipEvent.Left] for each admitted peer (mirroring the
+     *   heartbeat-based [LeaveReason.PartitionExpired] eviction path) and closes cleanly.
+     * - **Joiner:** hands off to [attemptHostReconnect], which either resumes over a re-woven
+     *   base within the reconnect window or falls to terminal [MembershipEvent.HostLost].
      */
-    private suspend fun handleTorn() {
-        val at = clock()
-        if (_role.value == SessionRole.Joiner) {
-            markHostLost(at)
-        } else {
+    private suspend fun runTornWatcher() {
+        if (_role.value == SessionRole.Host) {
+            seam.state.filterIsInstance<SeamState.Torn>().first()
             evictAllOnTear()
             leave(LeaveReason.Normal)
+        } else {
+            runJoinerTornWatcher()
         }
     }
 
-    private suspend fun runTornWatcher() {
+    /**
+     * **Joiner only.** On a transport `Torn`, attempt an in-window resume over a re-woven base
+     * ([attemptHostReconnect]) instead of going straight to terminal. Races the heartbeat
+     * `TransportClosed` path in [handleUnresponsive]; the [reconnecting] flag ensures only one wins.
+     */
+    private suspend fun runJoinerTornWatcher() {
         seam.state.filterIsInstance<SeamState.Torn>().first()
-        handleTorn()
+        attemptHostReconnect(clock())
+    }
+
+    /**
+     * **Joiner only.** Attempt to keep the session alive across a host transport tear.
+     *
+     * The two tear-detection paths (transport `Torn` and heartbeat `TransportClosed`) both call
+     * here; [reconnecting] guards the single attempt. When this room holds a [resumeToken] and a
+     * [reweave] lambda, it emits [MembershipEvent.Partitioned] + [MembershipEvent.WindowOpened]
+     * (the same dual-role events the host emits), then, under a single
+     * [HeartbeatConfig.reconnectWindow] budget: re-weaves the base, waits for [SeamState.Woven],
+     * restarts the main-loop `incoming` collect on the fresh generation, and calls [resume].
+     * On [ResumeResult.Success] the room stays live ([handleResumeAck] already emitted
+     * [MembershipEvent.Resumed]); on timeout / re-weave failure / a non-Success resume it falls to
+     * [markHostLost]. Transient re-weave/resume failures are retried until the window deadline.
+     *
+     * Without a [resumeToken] (torn before admit), a [reweave], or a known [hostPeerId], it goes
+     * straight to [markHostLost] — the pre-#1037 immediate-terminal behavior.
+     *
+     * All suspend work (re-weave, await Woven, resume) runs **outside** [lock]; only the flag flip
+     * and field reads are under it, so the type stays correct under a multi-threaded dispatcher.
+     */
+    private suspend fun attemptHostReconnect(at: Instant) {
+        val proceed = lock.withLock {
+            when {
+                hostLost || closed -> false
+                reconnecting -> false
+                else -> {
+                    reconnecting = true
+                    true
+                }
+            }
+        }
+        if (!proceed) return
+
+        val reweaveFn = reweave
+        val (token, hostId) = lock.withLock { resumeToken to hostPeerId }
+        if (reweaveFn == null || token == null || hostId == null) {
+            markHostLost(at)
+            return
+        }
+
+        _events.tryEmit(MembershipEvent.Partitioned(hostId, at))
+        _events.tryEmit(MembershipEvent.WindowOpened(hostId, at + heartbeatConfig.reconnectWindow))
+
+        val resumed = withTimeoutOrNull(heartbeatConfig.reconnectWindow) {
+            var ok = false
+            while (!ok) {
+                val reweaved = runCatchingCancellable { reweaveFn() }
+                if (reweaved.isFailure) {
+                    // Transient re-weave failure (base not back yet) — retry until the deadline.
+                    delay(heartbeatConfig.interval)
+                    continue
+                }
+                if (seam.state.value is SeamState.Torn) {
+                    // Non-conforming Loom: it minted an unrelated seam and left THIS one torn, so
+                    // there is nothing to resume onto. Stop waiting the window and go terminal now
+                    // rather than idling until it expires (the resumable-Loom contract on [reweave]).
+                    return@withTimeoutOrNull false
+                }
+                val result = runCatchingCancellable {
+                    seam.state.first { it is SeamState.Woven }
+                    restartIncomingCollect()
+                    resume(token)
+                }.getOrNull()
+                if (result is ResumeResult.Success) ok = true else delay(heartbeatConfig.interval)
+            }
+            true
+        } ?: false
+
+        if (!resumed) markHostLost(clock())
     }
 
     private fun evictAllOnTear() {
@@ -430,10 +535,11 @@ internal class SeamRoom(
     // ── Main loop ──────────────────────────────────────────────────────────────
 
     /**
-     * Single coroutine collecting [Seam.incoming]:
-     * - Sends [AdmitMessage.Hello] first if this is a joiner.
-     * - Fans each swatch to [rawIncoming] (for per-peer detectors).
-     * - Routes frames through the admit protocol or to [incoming].
+     * Sends [AdmitMessage.Hello] (joiner) once the fabric is [SeamState.Woven], then launches the
+     * single [seam]-`incoming` collector via [restartIncomingCollect].
+     *
+     * The collect runs in its own child job ([incomingCollectJob]) rather than inline so a joiner
+     * reconnect ([attemptHostReconnect]) can cancel it and relaunch on the healed generation.
      */
     private suspend fun runMainLoop() {
         if (_role.value == SessionRole.Joiner) {
@@ -446,9 +552,27 @@ internal class SeamRoom(
             seam.state.first { it is SeamState.Woven }
             sendHello()
         }
-        seam.incoming.collect { swatch ->
-            rawIncoming.emit(swatch)
-            dispatchIncoming(swatch)
+        restartIncomingCollect()
+    }
+
+    /**
+     * (Re)starts the single collector of [seam]-`incoming`, fanning each swatch to [rawIncoming]
+     * (for per-peer detectors) and routing it through the admit protocol / to [incoming].
+     *
+     * Cancels any prior collector first. After a re-weave the previous collector is bound to the
+     * dead generation (see [incomingCollectJob]); restarting binds a fresh collector to the healed
+     * generation, so the host's `ResumeAck` — buffered in the new channel's spool — is delivered.
+     * The flip is under [lock]; the coroutine body's suspend work runs on the launched child.
+     */
+    private fun restartIncomingCollect() {
+        lock.withLock {
+            incomingCollectJob?.cancel()
+            incomingCollectJob = scope.launch {
+                seam.incoming.collect { swatch ->
+                    rawIncoming.emit(swatch)
+                    dispatchIncoming(swatch)
+                }
+            }
         }
     }
 
@@ -752,18 +876,20 @@ internal class SeamRoom(
     /**
      * Maps a [PartitionEvent.PeerUnresponsive] to a membership event by role + reason.
      *
-     * A joiner whose **host** is lost to a definitive transport close goes terminal
-     * immediately ([markHostLost]) — there is no host-resume path, so holding a window is
-     * pointless delay. Every other case (host watching a joiner; a joiner's non-host peer;
-     * a silent [PartitionEvent.Reason.Timeout] partition that may still recover) opens the
-     * reconnect window via [markPartitioned].
+     * A joiner whose **host** link is lost to a definitive transport close attempts an in-window
+     * resume via [attemptHostReconnect] (#1037) — re-weaving the base and presenting the
+     * [resumeToken] rather than immediately going terminal. This path races the transport-`Torn`
+     * watcher ([runJoinerTornWatcher]); [attemptHostReconnect]'s [reconnecting] guard funnels both
+     * into one attempt. Every other case (host watching a joiner; a joiner's non-host peer; a
+     * silent [PartitionEvent.Reason.Timeout] partition that may still recover) opens the reconnect
+     * window via [markPartitioned].
      */
     private suspend fun handleUnresponsive(event: PartitionEvent.PeerUnresponsive) {
         val hostTransportClose = lock.withLock {
             _role.value == SessionRole.Joiner && event.peerId == hostPeerId
         } && event.reason == PartitionEvent.Reason.TransportClosed
         if (hostTransportClose) {
-            markHostLost(event.at)
+            attemptHostReconnect(event.at)
         } else {
             markPartitioned(event.peerId, event.at)
         }
@@ -956,7 +1082,7 @@ internal class SeamRoom(
             closed = true
             Triple(
                 _role.value == SessionRole.Joiner && reason is LeaveReason.Normal,
-                loopJobs,
+                loopJobs + listOfNotNull(incomingCollectJob),
                 detectorJobs.values.toList().also { detectorJobs.clear() },
             )
         }

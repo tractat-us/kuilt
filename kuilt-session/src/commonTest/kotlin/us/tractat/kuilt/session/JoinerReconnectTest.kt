@@ -7,7 +7,10 @@ import kotlinx.coroutines.flow.filterIsInstance
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import us.tractat.kuilt.core.FlakyLifecycleLoom
+import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.MuxClientLoom
@@ -207,41 +210,31 @@ class JoinerReconnectTest {
     @Test
     fun `joiner torn before admit goes straight to HostLost`() =
         runTest(StandardTestDispatcher(), timeout = 5.seconds) {
-            val dispatcher = coroutineContext[ContinuationInterceptor]!!
             val clock: () -> Instant = { Instant.fromEpochMilliseconds(0L) }
 
-            // No host accepts the offered connection — the joiner is never admitted,
-            // so it never mints a resume token.
-            val source = InMemoryConnectionSource()
-            val clientId = PeerId("client")
-            var seed = 1
-            val base = object : Loom {
-                override suspend fun weave(rendezvous: Rendezvous): Seam {
-                    val (serverConn, clientConn) = connectionPair()
-                    source.offer(serverConn)
-                    return meshSeam(clientId, listOf(clientConn), dispatcher, Random((seed++).toLong()))
-                }
-            }
-            val muxClient = MuxClientLoom(base, Rendezvous.New(Pattern("base")), backgroundScope, nameOf)
-            val tag = InMemoryTag("table-7")
+            // A joiner with no host to admit it: it never mints a resume token, so a tear must
+            // go straight to terminal HostLost, never holding the reconnect window open.
+            val loom = FlakyLifecycleLoom(InMemoryLoom(), backgroundScope)
+            val tag = InMemoryTag("joiner")
+            val joinerSeam = loom.join(tag)
             val joinerRoom = SeamRoom(
-                seam = muxClient.join(tag),
+                seam = joinerSeam,
                 role = SessionRole.Joiner,
-                displayName = "client",
+                displayName = "joiner",
                 scope = backgroundScope,
                 clock = clock,
                 heartbeatConfig = fastConfig,
                 roomId = null,
-                reweave = { muxClient.join(tag) },
+                reweave = { loom.join(tag) },
             ).also { it.start() }
 
             val hostLost = async { joinerRoom.events.filterIsInstance<MembershipEvent.HostLost>().first() }
             assertNull(joinerRoom.resumeToken, "joiner torn before admit has no resume token")
 
-            muxClient.closeBase()
-            // Well within the 500 ms window — HostLost must fire immediately, not wait it out.
-            advanceTimeBy(50L)
-
+            // Tear the joiner's transport. HostLost must fire with NO time advancement — the
+            // no-token path is immediate, it does not wait out the reconnect window.
+            joinerSeam.tear()
+            runCurrent()
             assertTrue(
                 hostLost.isCompleted,
                 "with no resume token the joiner must go HostLost immediately, not hold the window",
