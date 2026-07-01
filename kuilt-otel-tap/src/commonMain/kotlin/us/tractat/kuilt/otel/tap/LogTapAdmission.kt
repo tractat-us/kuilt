@@ -27,8 +27,13 @@ public sealed interface LogTapAdmission {
 
     /**
      * Offering side: challenge joiners and admit only those whose proof matches
-     * `HMAC-SHA256(token.code, nonce)` while [token] is valid. Inject a seeded [random]
-     * and a fixed [clock] in tests.
+     * `HMAC-SHA256(token.code, nonce)` while [token] is valid.
+     *
+     * **[random] MUST be cryptographically secure in production** — pass
+     * [us.tractat.kuilt.otel.tap.admit.cryptoRandom]. It sources the per-challenge nonces,
+     * whose unpredictability is what makes each challenge fresh (replay resistance); a
+     * predictable source weakens that. The `Random` parameter is injectable **only so tests
+     * can supply a seeded, deterministic source**, never as licence for `Random.Default`.
      */
     public class Verify(
         public val token: LogTapJoinToken,

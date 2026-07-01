@@ -126,7 +126,7 @@ public suspend fun installLogTap(
     config: LogTapConfig = LogTapConfig(),
     admission: LogTapAdmission = LogTapAdmission.Open,
 ): LogTapHost {
-    admission.announceJoinCode()
+    admission.announceGatedTap()
     val seam = loom.host(config.pattern)
     return LogTapHost(seam, exporter, scope, config, admission)
 }
@@ -157,18 +157,20 @@ public suspend fun installLogTapJoining(
     config: LogTapConfig = LogTapConfig(),
     admission: LogTapAdmission = LogTapAdmission.Open,
 ): LogTapHost {
-    admission.announceJoinCode()
+    admission.announceGatedTap()
     val seam = loom.join(tag)
     return LogTapHost(seam, exporter, scope, config, admission)
 }
 
 /**
- * The single, deliberate issuance point for a join code: print it once so the operator can
- * read it off the device (Xcode console / logcat / stdout). This is the only place the code
- * is ever logged — it must never appear elsewhere.
+ * Log only that a gated tap is active — **never the code**. The join code is the sole secret;
+ * emitting it through any logger would leak it to the platform console (`os_log`/logcat/stdout).
+ * The caller already holds the code (it minted the [LogTapJoinToken] it passed in
+ * [LogTapAdmission.Verify]), so the app surfaces it out-of-band on the channel it chooses —
+ * an on-device pairing UI, or a deliberate `println` to the Xcode console it controls.
  */
-private fun LogTapAdmission.announceJoinCode() {
+private fun LogTapAdmission.announceGatedTap() {
     if (this is LogTapAdmission.Verify) {
-        logger.info { "Log tap join code: ${token.code} — valid for ${token.ttl}. Enter it in the puller to admit." }
+        logger.debug { "log tap admission gate active — a valid join code is required to pull (code shown by the app, not logged)" }
     }
 }

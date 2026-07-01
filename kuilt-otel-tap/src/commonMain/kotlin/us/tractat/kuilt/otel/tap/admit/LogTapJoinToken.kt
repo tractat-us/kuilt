@@ -44,8 +44,14 @@ public class LogTapJoinToken(
          * Mint a fresh token: a [CODE_LENGTH]-character code drawn from [random], stamped with
          * [clock]'s current instant and the given [ttl].
          *
-         * [random] and [clock] are **required** — inject a seeded [Random] and a fixed [Clock]
-         * in tests; never call an unseeded RNG or the wall clock directly.
+         * **[random] MUST be cryptographically secure in production** — pass
+         * [cryptoRandom]. The code is the only secret in the admission scheme; a predictable
+         * source (`Random.Default`, or a seeded `Random`) lets an attacker guess it. The
+         * `Random` parameter is injectable **only so tests can supply a seeded, deterministic
+         * source** — it is not an invitation to use a non-secure RNG in production.
+         *
+         * [random] and [clock] are **required** — never call an unseeded RNG or the wall clock
+         * directly.
          */
         public fun issue(random: Random, clock: Clock, ttl: Duration = DEFAULT_TTL): LogTapJoinToken {
             val code = buildString(CODE_LENGTH) {

@@ -20,8 +20,9 @@ kotlin {
             implementation(libs.kotlinx.serialization.cbor)
             implementation(libs.kotlinx.io.bytestring)
             implementation(libs.kotlin.logging)
-            // Join-token admission gate: HMAC-SHA256 (KMP-uniform) + reentrant lock.
+            // Join-token admission gate: HMAC-SHA256 (KMP-uniform) + reentrant lock + CSPRNG.
             implementation(libs.kotlincrypto.macs.hmac.sha2)
+            implementation(libs.kotlincrypto.random.crypto.rand)
             implementation(libs.kotlinx.atomicfu)
         }
         commonTest.dependencies {
@@ -36,7 +37,9 @@ kotlin {
             implementation(libs.ktor.serverWebsockets)
             implementation(libs.ktor.serverNetty)
             implementation(libs.ktor.client.websockets)
-            runtimeOnly(libs.logback)
+            // Compile access (not just runtime) so the join-code-not-logged test can attach a
+            // logback ListAppender and assert the secret never reaches any log sink.
+            implementation(libs.logback)
         }
         androidUnitTest.dependencies {
             runtimeOnly(libs.logback)

@@ -24,6 +24,7 @@ dokka = "2.2.0"
 ionspin-bignum = "0.3.10"
 kotlincrypto-hash = "0.7.0"
 kotlincrypto-macs = "0.7.0"
+kotlincrypto-random = "0.6.0"
 chicory = "1.4.0"
 vanniktechMavenPublish = "0.30.0"
 otel = "1.45.0"
@@ -88,6 +89,8 @@ ionspin-bignum = { module = "com.ionspin.kotlin:bignum", version.ref = "ionspin-
 kotlincrypto-hash-sha2 = { module = "org.kotlincrypto.hash:sha2", version.ref = "kotlincrypto-hash" }
 # KotlinCrypto HMAC-SHA256 — multiplatform MAC for the log-tap join-token admission gate:
 kotlincrypto-macs-hmac-sha2 = { module = "org.kotlincrypto.macs:hmac-sha2", version.ref = "kotlincrypto-macs" }
+# KotlinCrypto CSPRNG — multiplatform cryptographically-secure random for minting the join code/nonce:
+kotlincrypto-random-crypto-rand = { module = "org.kotlincrypto.random:crypto-rand", version.ref = "kotlincrypto-random" }
 # Chicory — pure-JVM WebAssembly runtime (no native bits); JVM source sets only:
 chicory-runtime = { module = "com.dylibso.chicory:runtime", version.ref = "chicory" }
 # Gradle plugin artifacts for build-logic to depend on:

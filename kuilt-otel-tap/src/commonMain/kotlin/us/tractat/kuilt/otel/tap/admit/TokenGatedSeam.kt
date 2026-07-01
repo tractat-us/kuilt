@@ -79,12 +79,27 @@ internal class TokenGatedSeam(
     init {
         if (role is GateRole.Verifier) {
             scope.launch {
-                inner.peers.collect { current -> for (peer in current) if (peer != inner.selfId) maybeChallenge(peer) }
+                var known = setOf(inner.selfId)
+                inner.peers.collect { current ->
+                    // Drop admission state for peers that disconnected, so a same-PeerId
+                    // reconnect must re-prove and pendingNonces cannot grow without bound.
+                    val departed = known - current
+                    if (departed.isNotEmpty()) prune(departed)
+                    for (peer in current) if (peer != inner.selfId) maybeChallenge(peer)
+                    known = current
+                }
             }
         }
         // Sole collector of inner.incoming (single-collection contract): handle admit frames,
         // relay only surfaced peers' replication frames onward.
         scope.launch { inner.incoming.collect { handleFrame(it) } }
+    }
+
+    private fun prune(departed: Set<PeerId>) {
+        lock.withLock {
+            for (peer in departed) pendingNonces.remove(peer)
+            if (verified.value.any { it in departed }) verified.value = verified.value - departed
+        }
     }
 
     override suspend fun broadcast(payload: ByteArray) {
@@ -152,10 +167,11 @@ internal class TokenGatedSeam(
             val expected = hmacSha256(verifier.token.code.encodeToByteArray(), nonce.toByteArray())
             // Constant-time compare AND validity check — both under the same decision.
             val ok = constantTimeEquals(expected, proof.tag.toByteArray()) && verifier.token.isValid(verifier.clock.now())
-            if (ok) {
-                pendingNonces.remove(peer)
-                verified.value = verified.value + peer
-            }
+            // Consume the nonce whichever way it went: on success the peer is admitted; on a
+            // reject the entry is cleared so it cannot linger or be reused, and a retry needs a
+            // fresh challenge.
+            pendingNonces.remove(peer)
+            if (ok) verified.value = verified.value + peer
             ok
         }
         if (admitted) {
