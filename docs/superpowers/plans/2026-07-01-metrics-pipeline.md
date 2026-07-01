@@ -1274,6 +1274,12 @@ public class MetricTapClient(
 
 ### Task 10 (optional / stretch): `installSignalTap` — logs + metrics over one `MuxSeam`
 
+> **Status: DEFERRED (not implemented in the #1025/#1026/#1035 landing).** Tasks 1–9
+> deliver the full pipeline — both signals' taps are independently useful over their
+> own `Seam`. The transport-unification half of the locked decision (`MuxSeam`
+> channel 0 = logs, channel 1 = metrics) is a thin, orthogonal follow-up with no
+> schema churn to what shipped; tracked for a later PR.
+
 **Files:**
 - Create: `kuilt-otel-tap/src/commonMain/kotlin/us/tractat/kuilt/otel/tap/SignalTap.kt`
 - Test: `kuilt-otel-tap/src/commonTest/kotlin/us/tractat/kuilt/otel/tap/SignalTapTest.kt`
