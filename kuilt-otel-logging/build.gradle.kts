@@ -39,8 +39,12 @@ kotlin {
         // nonAppleMain: captureDelegate(previous) = previous — preserve the existing
         // console appender on JVM, Android and wasmJs.
         val nonAppleMain by creating { dependsOn(commonMain.get()) }
-        jvmMain.get().dependsOn(nonAppleMain)
-        androidMain.get().dependsOn(nonAppleMain)
+        // JVM + Android share a java.lang.ThreadLocal-backed active-trace slot; wasmJs
+        // must not see java.* so it stays directly under nonAppleMain with a plain-var
+        // slot (single-threaded, no thread-locality needed).
+        val jvmAndAndroidMain by creating { dependsOn(nonAppleMain) }
+        jvmMain.get().dependsOn(jvmAndAndroidMain)
+        androidMain.get().dependsOn(jvmAndAndroidMain)
         val wasmJsMain by getting { dependsOn(nonAppleMain) }
 
         // appleMain: captureDelegate(previous) = OSLogAppender() — a %-safe Apple

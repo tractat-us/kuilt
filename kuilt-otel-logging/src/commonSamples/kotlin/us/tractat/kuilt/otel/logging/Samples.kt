@@ -2,6 +2,7 @@ package us.tractat.kuilt.otel.logging
 
 import io.github.oshai.kotlinlogging.KotlinLogging
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.io.bytestring.ByteString
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.otel.InMemoryDurableStore
 import us.tractat.kuilt.otel.WarpLogRecordExporter
@@ -37,4 +38,27 @@ internal fun sampleInstallLogCapture(scope: CoroutineScope): LogCaptureInstallat
     // stops buffering. Cancelling `scope` alone leaks the appender — see
     // LogCaptureInstallation. Hold the handle for as long as capture should run.
     return installation
+}
+
+/** @suppress — sample only */
+internal suspend fun sampleWithActiveTrace() {
+    // installLogCapture(...) was called with CoroutineContextTraceProvider(); on
+    // wasmJs / iOS / macOS that is how the sampling gate learns the current trace.
+    val log = KotlinLogging.logger("com.example.Checkout")
+
+    // Whoever starts a span wraps the work. Every line logged inside — here and in
+    // any child coroutine — is stamped with this trace when the sampler kept it, or
+    // dropped when it didn't. No call-site change to the logging itself.
+    val trace = ActiveTrace(
+        traceId = ByteString(ByteArray(16) { 1 }),
+        spanId = ByteString(ByteArray(8) { 2 }),
+        sampled = true,
+    )
+    withActiveTrace(trace) {
+        log.info { "charged the card" } // stamped with trace/span id
+    }
+
+    // Outside any withActiveTrace scope the line is untraced — captured unstamped
+    // (default) or dropped, per CaptureConfig.untracedPolicy.
+    log.info { "background heartbeat" }
 }
