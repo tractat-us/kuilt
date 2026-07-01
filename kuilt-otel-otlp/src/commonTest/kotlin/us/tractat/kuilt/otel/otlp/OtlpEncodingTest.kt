@@ -60,6 +60,23 @@ class OtlpEncodingTest {
     }
 
     @Test
+    fun sumAlwaysEmitsTemporalityAndMonotonic() {
+        // These two fields sit at their serialization defaults (CUMULATIVE=2, monotonic=true).
+        // With encodeDefaults=false they would be omitted, and a collector reading the absent
+        // enum as AGGREGATION_TEMPORALITY_UNSPECIFIED (0) drops/mis-aggregates the Sum — silent
+        // metric loss. They MUST always be on the wire for a Sum.
+        val longSum = MetricPoint.Sum(MetricKey("req", MetricKind.SUM), value = 7L, startEpochNanos = 0L, timeEpochNanos = 5L)
+        val longJson = json.encodeToString(MetricsRequest.serializer(), metricsRequestOf(setOf(longSum)))
+        assertTrue(longJson.contains("\"aggregationTemporality\":2"), longJson)
+        assertTrue(longJson.contains("\"isMonotonic\":true"), longJson)
+
+        val doubleSum = MetricPoint.DoubleSum(MetricKey("bytes", MetricKind.SUM), value = 2.5, startEpochNanos = 0L, timeEpochNanos = 5L)
+        val doubleJson = json.encodeToString(MetricsRequest.serializer(), metricsRequestOf(setOf(doubleSum)))
+        assertTrue(doubleJson.contains("\"aggregationTemporality\":2"), doubleJson)
+        assertTrue(doubleJson.contains("\"isMonotonic\":true"), doubleJson)
+    }
+
+    @Test
     fun gaugeAndCardinalityEncode() {
         val g = MetricPoint.Gauge(MetricKey("cpu", MetricKind.GAUGE), value = 0.5, timeEpochNanos = 5L)
         val gs = json.encodeToString(MetricsRequest.serializer(), metricsRequestOf(setOf(g)))

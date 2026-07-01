@@ -1,5 +1,6 @@
 package us.tractat.kuilt.otel.otlp
 
+import kotlinx.serialization.EncodeDefault
 import kotlinx.serialization.Serializable
 
 // OTLP/JSON request envelopes and messages — the encode-side subset kuilt emits.
@@ -88,7 +89,14 @@ internal data class OtlpMetric(
 @Serializable
 internal data class OtlpSum(
     val dataPoints: List<NumberDataPoint>,
+    // @EncodeDefault(ALWAYS) forces these two onto the wire even under the encoder's
+    // encodeDefaults = false. If omitted, a collector reads the absent enum as
+    // AGGREGATION_TEMPORALITY_UNSPECIFIED (0), which makes an OTLP Sum malformed and is
+    // dropped/mis-aggregated — silent metric loss. kuilt's counter stores are grow-only
+    // cumulative (GCounter/GCounterDouble), so every emitted Sum is CUMULATIVE + monotonic.
+    @EncodeDefault(EncodeDefault.Mode.ALWAYS)
     val aggregationTemporality: Int = AGGREGATION_TEMPORALITY_CUMULATIVE,
+    @EncodeDefault(EncodeDefault.Mode.ALWAYS)
     val isMonotonic: Boolean = true,
 )
 
