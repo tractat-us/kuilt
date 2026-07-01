@@ -89,6 +89,60 @@ class TransportCloseWindowTest {
         }
 
     @Test
+    fun `host reconnect window honors heartbeatConfig reconnectWindow`() =
+        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+            val dispatcher = coroutineContext[ContinuationInterceptor]!!
+            val clock: () -> Instant = { Instant.fromEpochMilliseconds(0L) }
+
+            val source = InMemoryConnectionSource()
+            val serverLoom = MuxServerLoom(
+                source = source,
+                scope = backgroundScope,
+                selfId = PeerId("server"),
+                authorizer = RoomAuthorizer.AllowAll,
+                dispatcher = dispatcher,
+                random = Random(13L),
+            )
+            val hostSeam = serverLoom.host(Pattern("table-7"))
+            val hostRoom = SeamRoom(
+                seam = hostSeam,
+                role = SessionRole.Host,
+                displayName = "table-7",
+                scope = backgroundScope,
+                clock = clock,
+                heartbeatConfig = fastConfig,
+                roomId = RoomId("room-1"),
+            ).also { it.start() }
+
+            val (serverConn, clientConn) = connectionPair()
+            source.offer(serverConn)
+            val clientMesh = meshSeam(PeerId("client"), listOf(clientConn), dispatcher, Random(1L))
+            val clientMux = NamedMux(clientMesh, backgroundScope)
+            SeamRoom(
+                seam = clientMux.channel("table-7"),
+                role = SessionRole.Joiner,
+                displayName = "client",
+                scope = backgroundScope,
+                clock = clock,
+                heartbeatConfig = fastConfig,
+                roomId = null,
+            ).also { it.start() }
+
+            hostRoom.roster.first { it.size == 1 }
+
+            val windowOpened = async { hostRoom.events.filterIsInstance<MembershipEvent.WindowOpened>().first() }
+            clientMesh.close()
+
+            // Partition fires at clock 0; the window must expire at the CONFIGURED 500 ms, not the
+            // controller's hardcoded 60 s default (regression guard: the host and joiner windows
+            // must be the same configured duration).
+            assertEquals(
+                Instant.fromEpochMilliseconds(fastConfig.reconnectWindow.inWholeMilliseconds),
+                windowOpened.await().expiresAt,
+            )
+        }
+
+    @Test
     fun `joiner resumes within the window after transport close`() =
         runTest(StandardTestDispatcher(), timeout = 5.seconds) {
             val dispatcher = coroutineContext[ContinuationInterceptor]!!

@@ -39,10 +39,13 @@ public sealed interface MembershipEvent {
     public data class Left(val peerId: PeerId, val reason: LeaveReason) : MembershipEvent
 
     /**
-     * An admitted peer's transport link dropped; reconnect window may be open.
+     * A peer's transport link dropped; a reconnect window may be open.
      *
-     * The member's [Liveness] transitions to [Liveness.Partitioned].
-     * Driven by [us.tractat.kuilt.session.partition.PartitionEvent.PeerUnresponsive].
+     * **Dual-role.** Emitted on the **host's** events when an admitted joiner goes unresponsive
+     * (driven by [us.tractat.kuilt.session.partition.PartitionEvent.PeerUnresponsive], with the
+     * member's [Liveness] transitioning to [Liveness.Partitioned]); and on a **joiner's** events
+     * when its host link tears and the joiner begins an in-window resume attempt (#1037). Either
+     * way [peerId] identifies the peer whose link dropped (the joiner, or the host, respectively).
      */
     public data class Partitioned(val peerId: PeerId, val at: Instant) : MembershipEvent
 
@@ -55,12 +58,14 @@ public sealed interface MembershipEvent {
     public data class Recovered(val peerId: PeerId, val at: Instant) : MembershipEvent
 
     /**
-     * The host opened a reconnect window for a partitioned joiner.
+     * A reconnect window opened for a peer whose link dropped.
      *
-     * Emitted on the **host's** events stream when a joiner goes unresponsive and
-     * a reconnect window opens. [expiresAt] is the wall-clock instant at which
-     * the window closes. If the joiner resumes before [expiresAt], [Resumed]
-     * follows; otherwise [Left] with [LeaveReason.PartitionExpired].
+     * **Dual-role.** Emitted on the **host's** events when a joiner goes unresponsive and the
+     * host opens a window to admit its `resume` ([peerId] = the joiner; if the joiner resumes
+     * before [expiresAt], [Resumed] follows, otherwise [Left] with [LeaveReason.PartitionExpired]);
+     * and on a **joiner's** events when its host link tears and the joiner opens its own window to
+     * re-weave and resume ([peerId] = the host; on success [Resumed] follows, otherwise [HostLost]).
+     * [expiresAt] is the wall-clock instant at which the window closes.
      */
     public data class WindowOpened(val peerId: PeerId, val expiresAt: Instant) : MembershipEvent
 
