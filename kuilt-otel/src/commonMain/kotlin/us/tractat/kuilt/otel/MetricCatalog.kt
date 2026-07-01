@@ -51,17 +51,16 @@ public class MetricCatalog(
 
     override fun toString(): String =
         "MetricCatalog(sums=$sums, doubleSums=$doubleSums, gauges=$gauges, cardinalities=$cardinalities)"
+}
 
-    private companion object {
-        fun <K, S : Quilted<S>> mergeMaps(a: Map<K, S>, b: Map<K, S>): Map<K, S> {
-            if (b.isEmpty()) return a
-            if (a.isEmpty()) return b
-            val out = HashMap<K, S>(a)
-            for ((k, v) in b) {
-                val current = out[k]
-                out[k] = if (current == null) v else current.piece(v)
-            }
-            return out
-        }
+/** Key-union merge of two maps of CRDTs: shared keys join by the value's own lattice. */
+private fun <K, S : Quilted<S>> mergeMaps(a: Map<K, S>, b: Map<K, S>): Map<K, S> {
+    if (b.isEmpty()) return a
+    if (a.isEmpty()) return b
+    val out = HashMap<K, S>(a)
+    for ((k, v) in b) {
+        val current = out[k]
+        out[k] = if (current == null) v else current.piece(v)
     }
+    return out
 }
