@@ -30,8 +30,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestCoroutineScheduler
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
-import kotlinx.coroutines.test.advanceTimeBy
-import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
@@ -40,6 +38,7 @@ import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.quilter.QuilterConfig
 import kotlin.test.Test
 import us.tractat.kuilt.test.assertAll
+import us.tractat.kuilt.test.drainAntiEntropy
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
@@ -61,28 +60,20 @@ private fun echoRegistry(opId: OpId = ECHO_OP): OpRegistry =
 private fun TaskId.descriptor(): TaskDescriptor = TaskDescriptor(op = ECHO_OP, args = value.encodeToByteArray())
 
 /**
- * Advances virtual time in bounded steps to flush both Quilter anti-entropy convergence
- * and the RingWithIntent settle window, without relying on [advanceUntilIdle].
+ * Flushes Quilter anti-entropy convergence and the RingWithIntent settle window in bounded
+ * virtual-time steps, via the shared [drainAntiEntropy] helper — never [advanceUntilIdle],
+ * which would spin the Quilter's re-arming anti-entropy loop forever (see [drainAntiEntropy]'s
+ * KDoc for the full rationale).
  *
- * [advanceUntilIdle] is unsafe on systems whose timers re-arm unconditionally — the
- * Quilter's anti-entropy loop is `while(true) { delay(antiEntropyInterval); … }`, which
- * re-arms on every iteration regardless of convergence state. Under [UnconfinedTestDispatcher]
- * this loop re-arms at the current virtual instant, and [advanceUntilIdle] would spin it
- * indefinitely (it drains tasks scheduled at the current virtual time, and each re-arm lands
- * at the current virtual time). The correct approach is bounded explicit time steps:
- *
- * 1. Step through enough anti-entropy intervals to allow Quilter state to converge.
- *    [TEST_QUILTER_CONFIG.antiEntropyInterval] = 100 ms; 5 steps = 500 ms of virtual time.
- * 2. Step through the settle window ([ClaimStrategy.DEFAULT_SETTLE_WINDOW] = 500 ms) so
- *    one-shot [delay] calls inside [WarpNode.announceAndResolve] complete.
- *
- * Total virtual time advanced: 500 ms (convergence) + 500 ms (settle) = 1 s.
+ * 5 anti-entropy intervals (500 ms) for convergence, then one 500 ms settle window so the
+ * one-shot [delay] calls inside [WarpNode.announceAndResolve] complete — 1 s of virtual time.
  */
-private fun TestScope.drain() {
-    repeat(5) { advanceTimeBy(TEST_QUILTER_CONFIG.antiEntropyInterval); runCurrent() }
-    advanceTimeBy(ClaimStrategy.DEFAULT_SETTLE_WINDOW)
-    runCurrent()
-}
+private fun TestScope.drain() =
+    drainAntiEntropy(
+        TEST_QUILTER_CONFIG.antiEntropyInterval,
+        rounds = 5,
+        settleWindow = ClaimStrategy.DEFAULT_SETTLE_WINDOW,
+    )
 
 /** Short-cadence [QuilterConfig] for tests that need fast anti-entropy. */
 private val TEST_QUILTER_CONFIG = QuilterConfig(

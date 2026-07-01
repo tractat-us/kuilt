@@ -22,8 +22,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.TestCoroutineScheduler
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
-import kotlinx.coroutines.test.advanceTimeBy
-import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
@@ -31,6 +29,7 @@ import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.quilter.QuilterConfig
 import us.tractat.kuilt.test.assertAll
+import us.tractat.kuilt.test.drainAntiEntropy
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
@@ -51,11 +50,12 @@ private fun pinnedClock(scheduler: TestCoroutineScheduler): () -> Instant =
     { Instant.fromEpochMilliseconds(scheduler.currentTime) }
 
 /** Bounded virtual-time drain: five anti-entropy intervals then the settle window. */
-private fun TestScope.drainPinned() {
-    repeat(5) { advanceTimeBy(PINNED_QUILTER_CONFIG.antiEntropyInterval); runCurrent() }
-    advanceTimeBy(ClaimStrategy.DEFAULT_SETTLE_WINDOW)
-    runCurrent()
-}
+private fun TestScope.drainPinned() =
+    drainAntiEntropy(
+        PINNED_QUILTER_CONFIG.antiEntropyInterval,
+        rounds = 5,
+        settleWindow = ClaimStrategy.DEFAULT_SETTLE_WINDOW,
+    )
 
 /** A registry whose op records the executing peer keyed by the task id carried in [args]. */
 private fun trackingRegistry(peer: PeerId, executedBy: MutableMap<TaskId, PeerId>, lock: ReentrantLock): OpRegistry =

@@ -6,8 +6,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.TestCoroutineScheduler
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
-import kotlinx.coroutines.test.advanceTimeBy
-import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
@@ -15,6 +13,7 @@ import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.quilter.QuilterConfig
 import us.tractat.kuilt.test.assertAll
+import us.tractat.kuilt.test.drainAntiEntropy
 import kotlin.test.Test
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.milliseconds
@@ -30,11 +29,13 @@ private val GNG_CONFIG = QuilterConfig(
 private fun gngClock(scheduler: TestCoroutineScheduler): () -> Instant =
     { Instant.fromEpochMilliseconds(scheduler.currentTime) }
 
-private fun TestScope.settle() {
-    repeat(6) { advanceTimeBy(GNG_CONFIG.antiEntropyInterval); runCurrent() }
-    advanceTimeBy(ClaimStrategy.DEFAULT_SETTLE_WINDOW); runCurrent()
-    repeat(6) { advanceTimeBy(GNG_CONFIG.antiEntropyInterval); runCurrent() }
-}
+private fun TestScope.settle() =
+    drainAntiEntropy(
+        GNG_CONFIG.antiEntropyInterval,
+        rounds = 6,
+        settleWindow = ClaimStrategy.DEFAULT_SETTLE_WINDOW,
+        postSettleRounds = 6,
+    )
 
 /**
  * **Epic D go/no-go.** A weak (interpreting) peer tiers up to a compiled variant produced and

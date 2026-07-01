@@ -22,8 +22,6 @@ import kotlinx.atomicfu.locks.withLock
 import kotlinx.coroutines.test.TestCoroutineScheduler
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
-import kotlinx.coroutines.test.advanceTimeBy
-import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
@@ -32,6 +30,7 @@ import us.tractat.kuilt.quilter.QuilterConfig
 import us.tractat.kuilt.raft.RaftRole
 import us.tractat.kuilt.raft.test.FakeRaftNode
 import us.tractat.kuilt.test.assertAll
+import us.tractat.kuilt.test.drainAntiEntropy
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -42,11 +41,12 @@ import kotlin.time.Instant
 private fun schedulerClock(scheduler: TestCoroutineScheduler): () -> Instant =
     { Instant.fromEpochMilliseconds(scheduler.currentTime) }
 
-private fun TestScope.drain() {
-    repeat(5) { advanceTimeBy(COORD_TEST_QUILTER_CONFIG.antiEntropyInterval); runCurrent() }
-    advanceTimeBy(ClaimStrategy.DEFAULT_SETTLE_WINDOW)
-    runCurrent()
-}
+private fun TestScope.drain() =
+    drainAntiEntropy(
+        COORD_TEST_QUILTER_CONFIG.antiEntropyInterval,
+        rounds = 5,
+        settleWindow = ClaimStrategy.DEFAULT_SETTLE_WINDOW,
+    )
 
 private val COORD_TEST_QUILTER_CONFIG = QuilterConfig(
     antiEntropyInterval = 100.milliseconds,

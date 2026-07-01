@@ -25,8 +25,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.TestCoroutineScheduler
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
-import kotlinx.coroutines.test.advanceTimeBy
-import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
@@ -37,6 +35,7 @@ import us.tractat.kuilt.raft.RaftRole
 import us.tractat.kuilt.raft.test.FakeRaftNode
 import us.tractat.kuilt.raft.test.raftSimTest
 import us.tractat.kuilt.test.assertAll
+import us.tractat.kuilt.test.drainAntiEntropy
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -59,11 +58,12 @@ private fun schedulerClock(scheduler: TestCoroutineScheduler): () -> Instant =
  * Advances virtual time through five anti-entropy intervals then the settle window —
  * the same drain used by [WarpNodeTest] and [WarpNodeCoordinationTagTest].
  */
-private fun TestScope.drainWarp() {
-    repeat(5) { advanceTimeBy(RAFT_SIM_QUILTER_CONFIG.antiEntropyInterval); runCurrent() }
-    advanceTimeBy(ClaimStrategy.DEFAULT_SETTLE_WINDOW)
-    runCurrent()
-}
+private fun TestScope.drainWarp() =
+    drainAntiEntropy(
+        RAFT_SIM_QUILTER_CONFIG.antiEntropyInterval,
+        rounds = 5,
+        settleWindow = ClaimStrategy.DEFAULT_SETTLE_WINDOW,
+    )
 
 class WarpNodeCoordinatedRaftSimTest {
 
