@@ -73,6 +73,26 @@ class GatedTapEndToEndTest {
     }
 
     @Test
+    fun roleInvertedDeviceJoinsAndLaptopPulls() = runTest(UnconfinedTestDispatcher()) {
+        // The iOS topology: the device (offering side) JOINS a rendezvous the laptop hosts,
+        // because it cannot host itself. Logs still flow device -> laptop via the symmetric
+        // replicator. The device is the verifier (holds the token); the laptop is the prover.
+        val token = LogTapJoinToken.issue(Random(1), clock, ttl = 5.minutes)
+        val loom = InMemoryLoom()
+        val pattern = us.tractat.kuilt.core.Pattern("inverted")
+        // Laptop hosts the rendezvous AND is the puller.
+        val laptop = LogTapClient(loom.host(pattern), backgroundScope, config, LogTapAdmission.Present(token.code))
+            .also { client = it }
+        // Device joins and offers its buffer.
+        host = installLogTapJoining(
+            loom, exporterWith(4), backgroundScope, InMemoryTag("inverted"), config,
+            LogTapAdmission.Verify(token, clock, Random(9)),
+        )
+
+        assertEquals(listOf("log 1", "log 2", "log 3", "log 4"), laptop.pull().map { it.body })
+    }
+
+    @Test
     fun openAdmissionMatchesUngatedBehaviour() = runTest(UnconfinedTestDispatcher()) {
         val loom = InMemoryLoom()
         // Explicit Open on both ends == the shipped default path.
