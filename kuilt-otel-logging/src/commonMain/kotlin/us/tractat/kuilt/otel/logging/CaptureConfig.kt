@@ -10,8 +10,8 @@ public const val EXCEPTION_MESSAGE_ATTRIBUTE: String = "exception.message"
  * Policy for the capture core: which events to keep and how to shape their
  * attributes.
  *
- * M1 capture is **always-on** — there is no trace/sampling gate here (that is a
- * later milestone). The only filter is [minLevel].
+ * M1 capture is **always-on**; a trace/sampling gate applies only when a `TraceContextProvider`
+ * is wired into [LogCapture] (see [untracedPolicy]).
  */
 public data class CaptureConfig(
     /**
@@ -20,6 +20,12 @@ public data class CaptureConfig(
      * (capture everything).
      */
     public val minLevel: LogLevel = LogLevel.TRACE,
+    /**
+     * What to do with a log emitted outside any active trace, when a
+     * [TraceContextProvider] is configured on [LogCapture]. Ignored when no
+     * provider is set (M1 always-on capture). Defaults to [UntracedPolicy.CAPTURE].
+     */
+    public val untracedPolicy: UntracedPolicy = UntracedPolicy.CAPTURE,
     /**
      * Maps a [NormalizedLogEvent] to the `LogRecord` attributes. Defaults to
      * [defaultAttributeMapper], which records the logger name plus the event's
