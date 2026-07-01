@@ -24,6 +24,20 @@ class MetricCatalogTest {
     }
 
     @Test
+    fun pieceIsAssociative() {
+        // Overlapping keys and overlapping replica slots so a broken join would differ.
+        val x = MetricCatalog(sums = mapOf(sk("x") to GCounter.of(a to 1L), sk("y") to GCounter.of(a to 2L)))
+        val y = MetricCatalog(sums = mapOf(sk("x") to GCounter.of(b to 3L)))
+        val z = MetricCatalog(sums = mapOf(sk("x") to GCounter.of(a to 4L), sk("z") to GCounter.of(b to 7L)))
+        // (x⊕y)⊕z == x⊕(y⊕z)
+        assertEquals(x.piece(y).piece(z), x.piece(y.piece(z)))
+        val merged = x.piece(y).piece(z)
+        assertEquals(7L, merged.sums.getValue(sk("x")).value) // a=max(1,4)=4, b=3
+        assertEquals(2L, merged.sums.getValue(sk("y")).value)
+        assertEquals(7L, merged.sums.getValue(sk("z")).value)
+    }
+
+    @Test
     fun pieceMergesDoubleSums() {
         val left = MetricCatalog(doubleSums = mapOf(sk("cpu") to GCounterDouble.of(a to 1.5)))
         val right = MetricCatalog(doubleSums = mapOf(sk("cpu") to GCounterDouble.of(b to 2.5)))
