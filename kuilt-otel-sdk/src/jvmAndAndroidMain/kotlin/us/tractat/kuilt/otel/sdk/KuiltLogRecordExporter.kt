@@ -9,6 +9,7 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
 import kotlinx.io.bytestring.ByteString
 import us.tractat.kuilt.core.runCatchingCancellable
+import us.tractat.kuilt.otel.ExportResult
 import us.tractat.kuilt.otel.LogRecord
 import us.tractat.kuilt.otel.WarpLogRecordExporter
 import kotlin.random.Random
@@ -26,12 +27,14 @@ import kotlin.random.Random
  *
  * The SDK SPI is already non-blocking — `export`/`flush`/`shutdown` each return a
  * [CompletableResultCode], OTel's async completion handle. This bridge honours
- * that: [export] maps each [LogRecordData] to a [LogRecord], enqueues the batch on
- * an unbounded [Channel] with a fresh result code, and returns immediately. A
- * single scope-bound drain coroutine runs the `suspend`
- * [WarpLogRecordExporter.export] per record and then completes the batch's code —
- * `succeed()` on success, `fail()` otherwise. No thread ever blocks, and the SDK
- * still gets real completion signalling.
+ * that: [export] enqueues the raw [LogRecordData] batch on an unbounded [Channel]
+ * with a fresh result code and returns immediately. A single scope-bound drain
+ * coroutine maps each record to a [LogRecord] (so the seeded [random] is only ever
+ * touched from that one coroutine) and runs the `suspend`
+ * [WarpLogRecordExporter.export] per record, then completes the batch's code —
+ * `succeed()` only if every record's [ExportResult] is a success, `fail()`
+ * otherwise. No thread ever blocks, and the SDK still gets real completion
+ * signalling.
  *
  * @param exporter the durable kuilt buffer records are written into.
  * @param random source of the per-record 8-byte id (required — never unseeded).
@@ -44,7 +47,7 @@ public class KuiltLogRecordExporter(
     scope: CoroutineScope,
 ) : LogRecordExporter {
 
-    private class Batch(val records: List<LogRecord>, val code: CompletableResultCode)
+    private class Batch(val logs: List<LogRecordData>, val code: CompletableResultCode)
 
     private val queue = Channel<Batch>(Channel.UNLIMITED)
 
@@ -52,18 +55,21 @@ public class KuiltLogRecordExporter(
         for (batch in queue) {
             // Best-effort: a capture failure must never propagate to the SDK's
             // logging path. runCatchingCancellable still rethrows cancellation.
-            val result = runCatchingCancellable {
-                batch.records.forEach { exporter.export(it) }
+            // `map` (not a short-circuiting `all`) so every record is exported
+            // even when an earlier one fails, then succeed only if all succeeded.
+            // toLogRecord() runs here — inside the single drain coroutine — so the
+            // non-thread-safe seeded `random` is never touched concurrently.
+            val outcome = runCatchingCancellable {
+                batch.logs.map { exporter.export(it.toLogRecord()) }.all { it is ExportResult.Success }
             }
-            if (result.isSuccess) batch.code.succeed() else batch.code.fail()
+            if (outcome.getOrDefault(false)) batch.code.succeed() else batch.code.fail()
         }
     }
 
     override fun export(logs: Collection<LogRecordData>): CompletableResultCode {
         val code = CompletableResultCode()
-        val records = logs.map { it.toLogRecord() }
         // trySend fails only after shutdown() closed the channel.
-        if (queue.trySend(Batch(records, code)).isFailure) code.fail()
+        if (queue.trySend(Batch(logs.toList(), code)).isFailure) code.fail()
         return code
     }
 

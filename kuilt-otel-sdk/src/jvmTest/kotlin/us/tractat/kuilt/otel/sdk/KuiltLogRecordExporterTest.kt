@@ -11,11 +11,14 @@ import io.opentelemetry.sdk.resources.Resource
 import io.opentelemetry.sdk.testing.logs.TestLogRecordData
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.crdt.ReplicaId
+import us.tractat.kuilt.otel.DurableStore
 import us.tractat.kuilt.otel.InMemoryDurableStore
+import us.tractat.kuilt.otel.StoreKey
 import us.tractat.kuilt.otel.WarpLogRecordExporter
 import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
@@ -61,6 +64,22 @@ class KuiltLogRecordExporterTest {
         val flush = bridge.flush()
         testScheduler.runCurrent()
         assertTrue(flush.isSuccess)
+        assertEquals(1, warp.snapshot().toList().size)
+    }
+
+    @Test
+    fun exportReportsFailureWhenDurableWriteFails() = runTest {
+        val failing = object : DurableStore {
+            override suspend fun read(key: StoreKey): ByteArray? = null
+            override suspend fun write(key: StoreKey, bytes: ByteArray): Unit =
+                throw java.io.IOException("disk full")
+            override suspend fun delete(key: StoreKey) = Unit
+        }
+        val warp = WarpLogRecordExporter(ReplicaId("p"), failing)
+        val bridge = KuiltLogRecordExporter(warp, Random(0), backgroundScope)
+        val code = bridge.export(listOf(data()))
+        testScheduler.runCurrent()
+        assertFalse(code.isSuccess)
     }
 
     @Test
