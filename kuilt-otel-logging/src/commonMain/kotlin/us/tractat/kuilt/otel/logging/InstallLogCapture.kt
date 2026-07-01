@@ -62,6 +62,9 @@ public class LogCaptureInstallation internal constructor(
  *   default).
  * @param scope the [CoroutineScope] the capture edge drains events on. Inject a
  *   test scope in tests; an application-owned scope in production.
+ * @param traceContextProvider optional trace/sampling gate — `null` (default) is
+ *   always-on M1 capture; a provider gates and stamps per [CaptureConfig.untracedPolicy]
+ *   and the trace's `sampled` flag.
  * @return the [LogCaptureInstallation] handle — its [LogCaptureInstallation.capture]
  *   is the installed core, and [LogCaptureInstallation.close] uninstalls capture.
  *
@@ -73,8 +76,9 @@ public fun installLogCapture(
     clock: Clock,
     random: Random,
     scope: CoroutineScope,
+    traceContextProvider: TraceContextProvider? = null,
 ): LogCaptureInstallation {
-    val capture = LogCapture(exporter, config, clock, random)
+    val capture = LogCapture(exporter, config, clock, random, traceContextProvider)
     val previousFactory: KLoggerFactory = KotlinLoggingConfiguration.loggerFactory
     KotlinLoggingConfiguration.loggerFactory = DirectLoggerFactory
     val previousAppender: Appender = KotlinLoggingConfiguration.direct.appender
