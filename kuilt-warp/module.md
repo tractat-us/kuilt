@@ -268,22 +268,24 @@ the owner is offline the task simply waits for it to come back rather than re-ho
 That last property is what makes the data-local model honest: the work never silently moves to a
 peer that does not have the data.
 
-## Module map
-
-You only pay for the parts of warp you actually use. The core module — `:kuilt-warp` — is the
-scheduler itself: the ring that decides who does what, the shared task list, and the results
-board. It also holds the lightweight *contract* for sending code to a peer (the description of a
-runtime, not any runtime). A peer that only hands out named work depends on `:kuilt-warp` alone
-and pulls in nothing heavy.
+**Module map.** You only pay for the parts of warp you actually use. The core module —
+`:kuilt-warp` — is the scheduler itself: the ring that decides who does what, the shared task
+list, and the results board. It also holds the lightweight *contract* for sending code to a peer
+(the description of a runtime, not any runtime). A peer that only hands out named work depends on
+`:kuilt-warp` alone and pulls in nothing heavy.
 
 Everything else lives in a satellite module you add only when you need it:
 
-| Module | What it adds | When you need it |
-|---|---|---|
-| `:kuilt-warp-runtime` | the actual WebAssembly runtimes — Chicory on the JVM, wasm3 on Apple platforms (this is where the native binaries live), the browser engine on the web | you send real code to run, not just named tasks |
-| `:kuilt-warp-planning` | the query planner — it scores a pipeline by how many agreement round-trips it costs and rewrites it to spend fewer | you build multi-step `Draft` pipelines and want them optimised |
-| `:kuilt-warp-ml` | the federated-learning demo (FedAvg) — train on each peer's own data, share only the model update | you want the machine-learning example |
-| `:kuilt-warp-otel` | metrics, for peers that export telemetry | you collect observability data |
+- **`:kuilt-warp-runtime`** — the actual WebAssembly runtimes: Chicory on the JVM, wasm3 on
+  Apple platforms (this is where the native binaries live), the browser engine on the web. Add it
+  when you send real code to run, not just named tasks.
+- **`:kuilt-warp-planning`** — the query planner: it scores a pipeline by how many agreement
+  round-trips it costs and rewrites it to spend fewer. Add it when you build multi-step `Draft`
+  pipelines and want them optimised.
+- **`:kuilt-warp-ml`** — the federated-learning demo (FedAvg): train on each peer's own data,
+  share only the model update. Add it when you want the machine-learning example.
+- **`:kuilt-warp-otel`** — metrics, for peers that export telemetry. Add it when you collect
+  observability data.
 
 The dependency arrow only ever points *into* core: every satellite depends on `:kuilt-warp`,
 never the reverse — so adding the wasm runtimes never drags in the planner, and adding the
