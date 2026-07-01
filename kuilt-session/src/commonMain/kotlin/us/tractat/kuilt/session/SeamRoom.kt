@@ -336,6 +336,10 @@ internal class SeamRoom(
         if (role == SessionRole.Host && roomId != null) {
             DefaultJoinerReconnectController(
                 roomId = roomId,
+                // Honor the configured window rather than the controller's 60 s default, so the
+                // host-side window matches the joiner-side window ([attemptHostReconnect] also
+                // budgets on heartbeatConfig.reconnectWindow) — symmetric by construction.
+                reconnectWindowMs = heartbeatConfig.reconnectWindow.inWholeMilliseconds,
                 clock = { clock().toEpochMilliseconds() },
                 scope = scope,
             )
