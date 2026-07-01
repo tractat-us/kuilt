@@ -4,7 +4,7 @@ kuilt stitches peers together and keeps their shared data in sync — across Web
 
 It is a Kotlin Multiplatform library (JVM, Android, iOS, macOS, wasmJs).
 
-## Three building blocks — pick what you need
+## Building blocks — pick what you need
 
 - **Network Fabric** — one API for devices to find each other and exchange messages.
   kuilt calls this the network fabric (`Loom`/`Seam`).
@@ -17,11 +17,17 @@ It is a Kotlin Multiplatform library (JVM, Android, iOS, macOS, wasmJs).
 - **Consensus** — when every peer must agree on one order of decisions (turns in a game, locks, durable steps), this keeps one leader and everyone aligned.
   Under the hood this is `kuilt-raft`. `TurnSequencer` (from `kuilt-game`) wraps it for turn-based games.
 
+- **Observability** — see what your app is doing on real devices, even ones that were offline.
+  It records three kinds of note — **traces** (how long something took), **metrics** (running counts and levels), and **logs** (text lines) — saves them on the device first, and delivers them with no duplicates once the network returns.
+  Under the hood this is `kuilt-otel`.
+
 ## Pick by the guarantee you need
 
 - **Connect and send bytes** → add a fabric only.
 - **Shared state that survives offline edits and concurrent updates** → add Replicated Data.
 - **Strict turn order or globally-agreed decisions** → add Consensus on top.
+
+Observability is orthogonal to those three — turn it on whenever you want to see what your app is doing on real devices, at any guarantee level.
 
 Start with the weakest guarantee that keeps your product correct. Add stronger guarantees only where needed.
 
@@ -40,20 +46,12 @@ Every peer in a session uses the same `Seam` interface — there is no client/se
 | `kuilt-core` | The contract (`Loom`/`Seam`/`Swatch`), `InMemoryLoom` reference impl, `MuxSeam` + `NamedMux` channel splitters |
 | `kuilt-crdt` | Replication data structures (`GCounter`, `ORSet`, `LWWMap`, `JsonCrdt`, …) |
 | `kuilt-quilter` | Live replication over a `Seam`: `Quilter` propagates deltas and merges inbound changes |
-| `kuilt-gossip` | Partial-mesh overlay (`GossipSeam`): gossip with ~k neighbours so large sessions scale O(k), not O(N) |
-| `kuilt-deal` | Cryptographically fair card dealing (`DealSession`) + dealer-less fair-random (`FairRandom`) |
-| `kuilt-game` | Turn-based game facade: `gameHost`/`gameJoin`/`gameNode` → `GameSession`, `TurnSequencer`, `SpeculativeSequencer` |
 | `kuilt-raft` | Raft consensus — leader election, log replication, snapshots, dynamic membership, linearizable reads, leadership transfer |
-| `kuilt-cluster` | Server-cluster overlay: `ServerCluster` (voter mesh + relay accept loop) + `ClusterClient` (propose + observe) |
-| `kuilt-liveness` | Peer-liveness detection: `HeartbeatPartitionDetector` emits `PartitionEvent` (Unresponsive/Recovered/Lost) |
-| `kuilt-session` | Membership-aware `Room`: admit/identify handshake, roster, reconnect tokens |
+| `kuilt-game` | Turn-based game facade: `gameHost`/`gameJoin`/`gameNode` → `GameSession`, `TurnSequencer`, `SpeculativeSequencer` |
 | `kuilt-websocket` | Ktor WebSocket fabric (`KtorClientLoom` + `KtorServerLoom`) |
-| `kuilt-mdns` | Bonjour/mDNS local-network discovery feeding a WebSocket connection |
-| `kuilt-multipeer` | Apple Multipeer Connectivity fabric (iOS/macOS) |
-| `kuilt-nearby` | Google Nearby Connections fabric (Android) |
-| `kuilt-webrtc` | WebRTC data-channel fabric (wasmJs) |
-| `kuilt-conformance` | `SeamConformanceSuite` + `RoomConformanceSuite` — prove any fabric or room implementation correct |
 | `kuilt-otel` | Offline-first telemetry: record logs, metrics, and traces on any device; they sync up when the network returns, with no duplicates |
+
+→ [All modules](modules.md) — the full set, including the other fabrics (mDNS, Multipeer, Nearby, WebRTC), gossip, dealing, clustering, liveness, and sessions.
 
 **Beyond the core:** the [Observability](observability.md) page walks the whole
 telemetry path — record on any device, survive being offline, and deliver to your

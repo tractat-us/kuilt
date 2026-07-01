@@ -1,4 +1,4 @@
-# Capturing & pulling logs
+# Capturing
 
 Your app is misbehaving on a phone that isn't on your desk — a tester's device, or
 an iOS simulator on a CI machine. The lines that would tell you *why* are scrolling

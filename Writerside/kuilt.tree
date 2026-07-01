@@ -79,11 +79,16 @@
 
     <toc-element toc-title="Observability">
         <toc-element topic="observability.md"/>
-        <toc-element topic="log-capture.md"/>
+        <toc-element topic="otel-traces.md"/>
+        <toc-element topic="otel-metrics.md"/>
+        <toc-element topic="otel-logs.md">
+            <toc-element topic="log-capture.md"/>
+        </toc-element>
     </toc-element>
 
     <toc-element toc-title="Internals">
         <toc-element topic="performance.md"/>
+        <toc-element topic="modules.md"/>
     </toc-element>
 
     <toc-element toc-title="Playground">

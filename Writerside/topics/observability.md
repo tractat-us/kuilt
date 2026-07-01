@@ -1,4 +1,4 @@
-# Observability
+# Device to dashboard
 
 When your app is running on someone's phone, you want to know what it's actually
 doing — did the screen load, did the payment go through, how long did it take, did
@@ -22,13 +22,15 @@ The rest of this page walks the whole path, in the order you'll build it:
 
 ## 1. Record what your app is doing {id="record"}
 
-This is a normal logging/metrics setup — you record events as your app runs, and
-they show up later. There are three kinds of note, and kuilt records all of them
-through one combined entry point, `WarpTelemetry`:
+This is a normal logging/metrics setup — you record events as your app runs, and they
+show up later. There are three kinds of note, and each has its own page for what it is
+and how to record it:
 
-- **traces** — one timed unit of work ("this checkout took 480 ms"),
-- **metrics** — numbers you count or sample ("requests served", "current memory"),
-- **logs** — text lines ("user checked out").
+- **[Traces](otel-traces.md)** — one timed unit of work ("this checkout took 480 ms").
+- **[Metrics](otel-metrics.md)** — numbers you count or sample ("requests served", "memory in use").
+- **[Logs](otel-logs.md)** — lines of text ("user checked out").
+
+kuilt records all three through one combined entry point, `WarpTelemetry`:
 
 <!-- condensed from kuilt-otel/src/commonSamples/kotlin/us/tractat/kuilt/otel/Samples.kt#sampleWarpTelemetry -->
 
@@ -40,24 +42,9 @@ telemetry.recover()
 
 // export() returns the moment the note is safely on the device —
 // NOT when it reaches a server. Delivery happens later, on its own.
-telemetry.spans.export(span)         // a span: one timed unit of work
-telemetry.logs.export(logRecord)     // a log line
-```
-
-Metrics read a little differently, because a metric is a running total rather than a
-one-off event — you nudge it up, set it, or add to it:
-
-<!-- condensed from kuilt-otel/src/commonSamples/kotlin/us/tractat/kuilt/otel/Samples.kt#sampleWarpMetricExporter -->
-
-```kotlin
-// Count server requests — re-sending after a dropped connection can't double-count.
-val requests = MetricKey("server.requests", MetricKind.SUM, mapOf("handler" to "/api/v1"))
-telemetry.metrics.incrementSum(requests, by = 1L)
-
-// Count *distinct* users — the same user seen twice is still one.
-val users = MetricKey("unique.users", MetricKind.CARDINALITY)
-telemetry.metrics.addCardinality(users, "user-abc")
-telemetry.metrics.addCardinality(users, "user-abc") // ignored — already counted
+telemetry.spans.export(span)       // a trace  (see Traces)
+telemetry.logs.export(logRecord)   // a log    (see Logs)
+// telemetry.metrics — counters you nudge up or set (see Metrics)
 ```
 
 The one thing to notice: every call above finishes the instant the note is written
@@ -149,9 +136,9 @@ never silently dropped.
 
 ## Going deeper
 
-- **[Capturing &amp; pulling logs](log-capture.md)** — record the logs your app
-  *already* writes into this same offline buffer, then reach into an otherwise-
-  unreachable device (a phone or a CI simulator) and pull them off from a test.
+- **[Capturing](log-capture.md)** — record the logs your app *already* writes into
+  this same offline buffer, then reach into an otherwise-unreachable device (a phone or
+  a CI simulator) and pull them off from a test.
 - **[Offline-first OpenTelemetry — the design](https://github.com/tractat-us/kuilt/blob/main/docs/offline-otel.md)**
   — why the replicated-data representation makes a resend safe, the local-write
   inversion, the digest-reconciled delivery, and the full limits.
