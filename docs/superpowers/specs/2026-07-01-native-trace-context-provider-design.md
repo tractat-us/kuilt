@@ -4,6 +4,22 @@ _Design for #1029. Part of the log-capture epic #986 (M2). Builds on the samplin
 gate shipped in #990
 (`2026-07-01-log-capture-m2-otel-sdk-design.md`)._
 
+> **Status — decisions locked (2026-07-01).** Reviewed by @keddie on PR #1033. The
+> outcomes are folded into the sections below; the task-by-task build sequence is in
+> the companion plan `docs/superpowers/plans/2026-07-01-native-trace-context-provider.md`.
+>
+> - **Primary API: the coroutine-context element** (Option A) — `withActiveTrace(trace)
+>   { … }` + `CoroutineContextTraceProvider`. The plain holder (Option C) is demoted to
+>   a **minimal documented escape hatch**, not the primary surface.
+> - **The resolution-site fix already landed** as #1034 (+ follow-up #1041):
+>   `provider.current()` is now called synchronously at `CapturingAppender.log()` on the
+>   caller and carried on `NormalizedLogEvent.activeTrace`. This design plugs the native
+>   provider into that merged edge — it is no longer a change this work must make.
+> - `TraceContextProvider.current()` **stays non-`suspend`**; `withActiveTrace` is
+>   **app-owned** (there is no ambient tracer off the JVM to set it for you).
+> - Lives in `:kuilt-otel-logging` `commonMain`, **no OTel SDK dependency** — same
+>   `TraceContextProvider` interface, so JVM keeps `OtelSdkTraceContextProvider`.
+
 ## What this adds
 
 When an app runs distributed tracing, kuilt can already let the trace's sampling
@@ -51,9 +67,17 @@ logging on the platforms that couldn't before.
 resolves the current trace with no OTel dependency, so the same gate works on
 wasmJs, iOS and macOS.
 
-### A load-bearing finding about *when* the gate resolves the trace
+### A load-bearing finding about *when* the gate resolves the trace — now fixed (#1034)
 
-The gate does not consult the provider on the caller's thread. Look at the capture
+> **Resolved in #1034/#1041 (merged).** The gate now resolves the trace at the
+> synchronous edge — `CapturingAppender.log()` calls `LogCapture.resolveTrace()` on
+> the caller and stamps `NormalizedLogEvent.activeTrace`; `LogCapture.capture()`
+> gates on that snapshot and never re-consults the provider on the drain. The native
+> provider below is exactly what `resolveTrace()` invokes at that edge. The finding
+> is retained here because it is *why* the coroutine-element approach is correct and
+> why an ambient read on the drain would have been wrong.
+
+The gate must not consult the provider on the drain coroutine. Look at the capture
 edge: `CapturingAppender.log(event)` runs **synchronously on whatever
 thread/coroutine emitted the log line**, hands the event to an unbounded channel,
 and returns. A single drain coroutine (`scope.launch { for (event in events) …
@@ -148,11 +172,12 @@ entry, `holder.clear()` on exit; `current()` returns the last value.
 holder as the wasm actual and as an escape hatch for apps that can't express their
 tracing as coroutine scopes.
 
-### Recommendation
+### Recommendation — LOCKED
 
 **Option A — the coroutine-context element — as the app-facing API, resolved to
 the appender at the synchronous log edge via a thread-context mirror; Option C's
-holder is the single-threaded actual and the low-level escape hatch.** Rationale:
+holder is a minimal documented escape hatch only (not the wasm actual — the slot
+below is).** Rationale:
 it is the one source that is both idiomatic KMP *and* correct under kuilt's
 multi-threaded-dispatcher policy, it needs no dependency beyond coroutines, and it
 degrades cleanly to a plain holder on the one target (wasmJs) where locality is a
@@ -205,21 +230,19 @@ internal expect fun currentActiveTraceSlot(): ActiveTrace?
 internal expect fun setActiveTraceSlot(value: ActiveTrace?): ActiveTrace? // returns prior
 ```
 
-### The one gate change (flag for @keddie)
+### The gate change — already landed in #1034 (no work here)
 
-To make resolution correct, snapshot the trace at the caller edge instead of on
-the drain coroutine:
+Snapshotting the trace at the caller edge instead of the drain coroutine shipped
+in #1034/#1041:
 
-1. `NormalizedLogEvent` gains `activeTrace: ActiveTrace?`.
-2. `CapturingAppender.log()` — already on the caller's thread/coroutine — calls
-   `provider.current()` and stamps the result onto the normalized event.
-3. `LogCapture.capture()` reads `event.activeTrace` instead of calling
-   `provider.current()` itself; the drop/stamp table is otherwise unchanged.
+1. `NormalizedLogEvent` gained `activeTrace: ActiveTrace?`.
+2. `CapturingAppender.log()` — on the caller's thread/coroutine — calls
+   `LogCapture.resolveTrace()` (→ `provider.current()`) and stamps the event.
+3. `LogCapture.capture()` reads `event.activeTrace`; the drop/stamp table is
+   unchanged.
 
-This is behaviour-preserving for a `null` provider (M1 parity), makes the
-coroutine-element and holder sources correct on every target, and repairs the
-latent drain-time hazard for `OtelSdkTraceContextProvider` as a side effect. It is
-the only change to shipped gate code, hence the explicit flag.
+So #1029 touches **no shipped gate code** — it only adds the native provider that
+`resolveTrace()` calls, plus the `withActiveTrace` machinery that populates it.
 
 ### How an app wires it
 
@@ -269,6 +292,13 @@ CI runs the full `./gradlew build`, so the wasmJs/native compiles and the
 `commonTest` assertions on those targets are the hard acceptance bar.
 
 ## Alternatives & open questions for @keddie
+
+> **Resolved (2026-07-01):** Q1 → coroutine element is primary, holder is a minimal
+> escape hatch. Q3 → `current()` stays non-`suspend`. Q4 → the edge-snapshot fix
+> already landed separately (#1034/#1041). Q2 → `withActiveTrace` is app-owned for
+> now. Q5 (slot primitive) is settled in the plan: `ThreadLocal` on JVM/Android, a
+> Kotlin/Native `@ThreadLocal` on Apple, a plain module-level var on single-threaded
+> wasmJs. The original questions are kept below for the record.
 
 1. **Context-element vs plain holder as the *primary* API.** The recommendation is
    the coroutine element (scoped, propagates to children, multi-thread-safe) with
