@@ -129,10 +129,12 @@ The **catch** is the finding above: the oshai `log()` callback is a *synchronous
 non-`suspend`* function, so it cannot call `currentCoroutineContext()` to read the
 element. A coroutine-context element is invisible at the exact edge where we must
 snapshot. Bridging that gap is what makes this option more than a one-liner — see
-the API sketch. The bridge is a `ThreadContextElement` that mirrors the element
-into an execution-local slot the synchronous edge *can* read; on single-threaded
-wasmJs the "slot" is just a module-level holder. This keeps the ergonomics (scoped
-`withActiveTrace`) while satisfying the resolve-at-edge requirement.
+the API sketch. On the JVM the bridge is a `ThreadContextElement` that mirrors the
+element into an execution-local slot the synchronous edge *can* read; on native and
+single-threaded wasmJs — where `ThreadContextElement` does **not** exist (JVM-only,
+see the Implementation-reality note under Recommendation) — `withActiveTrace` sets
+the slot imperatively instead. This keeps the ergonomics (scoped `withActiveTrace`)
+while satisfying the resolve-at-edge requirement.
 
 ### Option B — a platform expect/actual over a native trace API (rejected)
 
@@ -184,6 +186,24 @@ degrades cleanly to a plain holder on the one target (wasmJs) where locality is 
 non-issue. The unavoidable cost — bridging a non-`suspend` edge — is small and
 contained, and it also fixes the latent drain-time resolution hazard for *every*
 provider, including the JVM one.
+
+> **Implementation reality — corrected during Task 2 (supersedes the "thread-context
+> mirror is multiplatform" wording above).** `kotlinx.coroutines.ThreadContextElement`
+> is **JVM-only** in coroutines 1.11.0 — verified: absent from the `macosArm64` and
+> `wasm-js` klibs, present only in the JVM jar. So the mirror is not multiplatform,
+> and the design was refined (with @keddie's sign-off) to an **`expect`/`actual`
+> `withActiveTrace`**:
+> - **JVM/Android** — `withContext(ActiveTraceElement(trace), block)` with the real
+>   `ThreadContextElement`: hop-safe, child-propagating, prior restored on exit.
+> - **wasmJs** — imperative `setActiveTrace` around the block; **fully correct**
+>   (single-threaded, no thread hop).
+> - **iOS/macOS** — imperative set with an **identity-guarded** restore
+>   (`currentActiveTrace() === trace`): reliable for a log emitted *synchronously
+>   within the span*; if the block suspends and resumes on a different worker thread
+>   the trace is not carried there, and the guard guarantees the restore can never
+>   overwrite another scope's trace. No Kotlin/Native primitive can do better. So the
+>   honest guarantee is **fully correct on JVM/Android/wasmJs; synchronous-within-span
+>   on native** — not uniformly multi-thread-safe as the paragraph above implies.
 
 ## Public API sketch (`:kuilt-otel-logging`, `commonMain`, no OTel dependency)
 
