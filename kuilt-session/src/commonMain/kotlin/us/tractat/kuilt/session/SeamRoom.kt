@@ -200,16 +200,22 @@ internal class SeamRoom(
      * can attempt an in-window resume instead of going straight to terminal
      * [MembershipEvent.HostLost] (#1037).
      *
-     * **Required Loom contract:** invoking this lambda must *heal the same [seam] instance* —
-     * i.e. the [Loom] must return a stable, resumable handle whose [Seam.selfId] is frozen and
-     * whose underlying channel is re-pointed onto a freshly-woven base. [MuxClientLoom]'s
-     * `ResumableChannel` satisfies this: `loom.join(tag)` on a torn base re-weaves the base once
-     * and returns the same handle. A [Loom] that mints a *new* seam per `join` does **not** satisfy
-     * the contract — the re-weave would be invisible to this room, which keeps its original [seam]
-     * reference, and the resume attempt would time out into [MembershipEvent.HostLost].
+     * **Required Loom contract — same-instance heal.** Invoking this lambda must *heal the same
+     * [seam] instance*: the [Loom] must return a stable, resumable handle whose [Seam.selfId] is
+     * frozen and whose underlying channel is re-pointed onto a freshly-woven base. [MuxClientLoom]'s
+     * `ResumableChannel` satisfies this: `loom.join(tag)` on a torn base re-weaves the base once and
+     * returns the same handle, so this room's [seam] transitions back out of [SeamState.Torn].
      *
-     * Null (the default) for hosts and for joiners over non-resumable fabrics: a tear then goes
-     * directly to [MembershipEvent.HostLost], the pre-#1037 behavior.
+     * [runHostReconnect] checks exactly that — after re-weave, whether [seam] left `Torn` — to tell a
+     * resumable loom from a non-conforming one; the [reweave] lambda being non-null is **not** that
+     * signal. A [Loom] that mints a *new* seam per `join` does **not** satisfy the contract: the heal
+     * is invisible to this room (it keeps its original [seam]), so the re-wove seam is closed and the
+     * room falls to [MembershipEvent.HostLost].
+     *
+     * Null (the default) only for hosts and for joiners constructed directly without resume support.
+     * **[SeamRoomFactory.join] always supplies a `reweave`** (`{ loom.join(tag) }`) regardless of
+     * whether the loom is resumable, so for factory-created joiners the same-instance-heal check —
+     * not `reweave == null` — is what decides resumable vs. non-resumable at tear time.
      */
     private val reweave: (suspend () -> Seam)? = null,
 ) : Room {
@@ -467,6 +473,12 @@ internal class SeamRoom(
      * a non-Success resume it falls to [markHostLost]. Transient re-weave/resume failures are
      * retried until the window deadline.
      *
+     * **Non-conforming loom.** If, after re-weave, [seam] is still [SeamState.Torn], the loom minted
+     * an unrelated seam instead of healing ours (it violates the same-instance-heal contract on
+     * [reweave]). That throwaway seam is **closed** (else a live connection leaks) and the room goes
+     * terminal — this is the resumable-vs-non-resumable decision for factory-created joiners, which
+     * always carry a [reweave].
+     *
      * **Host-liveness detector is stopped for the reconnect's duration.** The host detector runs on
      * the *same* [HeartbeatConfig.reconnectWindow]; if left running it could fire
      * [PartitionEvent.PeerLost] → [markHostLost] on a *different* coroutine mid-reconnect, racing an
@@ -475,8 +487,9 @@ internal class SeamRoom(
      * resumed room is not left unmonitored) and [reconnecting] is cleared, arming the next episode:
      * a later in-session tear re-fires `TransportClosed` → [handleUnresponsive] → a fresh reconnect.
      *
-     * Without a [resumeToken] (torn before admit), a [reweave], or a known [hostPeerId], it goes
-     * straight to [markHostLost] — the pre-#1037 immediate-terminal behavior.
+     * Without a [resumeToken] (torn before admit), a [reweave] (a directly-constructed joiner with no
+     * resume support — **not** a factory joiner, which always supplies one), or a known [hostPeerId],
+     * it goes straight to [markHostLost] — the pre-#1037 immediate-terminal behavior.
      *
      * All suspend work (re-weave, await Woven, resume) runs **outside** [lock]; only flag flips,
      * field reads, and detector start/stop are under it, so the type stays correct under a
@@ -514,9 +527,13 @@ internal class SeamRoom(
                     continue
                 }
                 if (seam.state.value is SeamState.Torn) {
-                    // Non-conforming Loom: it minted an unrelated seam and left THIS one torn, so
-                    // there is nothing to resume onto. Stop waiting the window and go terminal now
-                    // rather than idling until it expires (the resumable-Loom contract on [reweave]).
+                    // Non-conforming Loom: [reweaveFn] minted an unrelated seam and left THIS one
+                    // torn, so there is nothing to resume onto. Close the throwaway seam (a live
+                    // connection otherwise leaked) and go terminal now rather than idling until the
+                    // window expires (the same-instance-heal contract on [reweave]).
+                    reweaved.getOrNull()?.takeIf { it !== seam }?.let { throwaway ->
+                        runCatchingCancellable { throwaway.close() }
+                    }
                     return@withTimeoutOrNull false
                 }
                 val result = runCatchingCancellable {

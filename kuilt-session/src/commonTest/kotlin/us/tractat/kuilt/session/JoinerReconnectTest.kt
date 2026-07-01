@@ -14,6 +14,7 @@ import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.FlakyLifecycleLoom
+import us.tractat.kuilt.core.FlakyLifecycleSeam
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Loom
@@ -24,6 +25,7 @@ import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.RoomAuthorizer
 import us.tractat.kuilt.core.Seam
+import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.fabric.meshSeam
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.session.partition.ResumeResult
@@ -357,6 +359,58 @@ class JoinerReconnectTest {
             assertEquals(1, h.reweaveCount(), "leave() must stop the reconnect loop: no further re-weave")
             assertFalse(hostLost.isCompleted, "a clean leave() must not surface a spurious HostLost")
             hostLost.cancel()
+        }
+
+    @Test
+    fun `a discarded re-wove seam over a non-conforming loom is closed`() =
+        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+            // SeamRoomFactory.join always supplies a reweave, so a joiner can sit over a
+            // NON-resumable loom whose join() mints a NEW, unrelated seam. On a tear the reconnect
+            // re-weaves once, detects the original seam is still Torn (the same-instance-heal check),
+            // and gives up — but the throwaway seam it wove is a live connection that must be closed,
+            // not leaked.
+            val clock: () -> Instant = { Instant.fromEpochMilliseconds(0L) }
+            val loom = InMemoryLoom()
+            val hostRoom = SeamRoom(
+                seam = loom.host(Pattern("h")),
+                role = SessionRole.Host,
+                displayName = "h",
+                scope = backgroundScope,
+                clock = clock,
+                heartbeatConfig = fastConfig,
+                roomId = RoomId("room-1"),
+            ).also { it.start() }
+
+            // The joiner's live seam — torn to trigger the reconnect.
+            val joinerSeam = FlakyLifecycleSeam(loom.join(InMemoryTag("h")), backgroundScope)
+            // The throwaway the non-conforming reweave hands back (does NOT heal joinerSeam).
+            val throwaway = FlakyLifecycleSeam(InMemoryLoom().join(InMemoryTag("x")), backgroundScope)
+            val joinerRoom = SeamRoom(
+                seam = joinerSeam,
+                role = SessionRole.Joiner,
+                displayName = "j",
+                scope = backgroundScope,
+                clock = clock,
+                heartbeatConfig = fastConfig,
+                roomId = null,
+                reweave = { throwaway },
+            ).also { it.start() }
+
+            hostRoom.roster.first { it.size == 1 }
+            joinerRoom.roster.first { it.isNotEmpty() }
+            assertNotNull(joinerRoom.resumeToken, "joiner must be admitted with a token")
+
+            val hostLost = async { joinerRoom.events.filterIsInstance<MembershipEvent.HostLost>().first() }
+            assertFalse(throwaway.state.value is SeamState.Torn, "throwaway starts open")
+
+            joinerSeam.tear()
+            repeat(2) { advanceTimeBy(100L) }
+
+            assertIs<MembershipEvent.HostLost>(hostLost.await()) // non-conforming heal → terminal
+            assertTrue(
+                throwaway.state.value is SeamState.Torn,
+                "the discarded re-wove seam must be closed, not leaked",
+            )
         }
 
     // ── Harness ─────────────────────────────────────────────────────────────────
