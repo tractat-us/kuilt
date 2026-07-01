@@ -4,7 +4,7 @@ import io.github.oshai.kotlinlogging.KotlinLogging
 import kotlinx.io.bytestring.ByteString
 import us.tractat.kuilt.crdt.Dot
 
-private val logger = KotlinLogging.logger {}
+private val logger = KotlinLogging.logger("us.tractat.kuilt.otel.SpanLink")
 
 /**
  * A derived causal edge: span [fromSpanId] *could have been caused by* the

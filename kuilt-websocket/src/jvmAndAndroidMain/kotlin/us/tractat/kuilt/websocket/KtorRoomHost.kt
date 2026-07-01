@@ -18,7 +18,7 @@ import us.tractat.kuilt.session.Room
 import us.tractat.kuilt.session.RoomHost
 import us.tractat.kuilt.session.SeamRoomFactory
 
-private val log = KotlinLogging.logger {}
+private val log = KotlinLogging.logger("us.tractat.kuilt.websocket.KtorRoomHost")
 
 /**
  * Ktor-bound WebSocket [Room] host. Mounts a server-side WS route on

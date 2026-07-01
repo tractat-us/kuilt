@@ -21,7 +21,7 @@ import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.Swatch
 
-private val log = KotlinLogging.logger {}
+private val log = KotlinLogging.logger("us.tractat.kuilt.webrtc.internal.WebRTCPeerLink")
 
 /**
  * [Seam] implementation backed by an open [RtcPeerConnectionFacade] data channel.

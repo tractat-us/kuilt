@@ -24,7 +24,7 @@ import us.tractat.kuilt.core.Swatch
 import us.tractat.kuilt.multipeer.MultipeerNativeLib
 import kotlin.coroutines.CoroutineContext
 
-private val log = KotlinLogging.logger {}
+private val log = KotlinLogging.logger("us.tractat.kuilt.multipeer.internal.BridgePeerLink")
 
 /**
  * JVM-side `Seam` proxying through the macOS K/N MC bridge.

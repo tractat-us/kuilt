@@ -9,7 +9,7 @@ import kotlinx.coroutines.withTimeout
 import us.tractat.kuilt.webrtc.SignalingMessage
 import us.tractat.kuilt.webrtc.SignalingSession
 
-private val log = KotlinLogging.logger {}
+private val log = KotlinLogging.logger("us.tractat.kuilt.webrtc.internal.HandshakeRunner")
 
 /**
  * Default deadline for the offer/answer/ICE exchange to bring a data channel up.
