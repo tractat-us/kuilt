@@ -23,6 +23,33 @@ byte-for-byte unchanged:
    must present to be let in. Without it, an open tap on a shared network is a log
    exfiltration hole. With it, only the person looking at the screen gets in.
 
+## Locked decisions (v1 scope)
+
+These were resolved with @keddie on PR #1032 and are no longer open:
+
+- **mDNS + WebSocket is the only fabric in v1, with role inversion.** The laptop
+  **hosts** (WS server + mDNS advertiser); the iOS device **joins** (WS client +
+  Bonjour discoverer); the tap's symmetric `Quilter` still replicates the iOS
+  buffer to the laptop. Any puller (JVM/CI or Mac).
+- **Apple Multipeer is out of this plan** — it is the encrypted follow-up
+  (**#1042**). **`wss://`/TLS on the WS path is out** — separate follow-up
+  (**#1043**). This spec references them only as the encrypted successors.
+- **`ws://` + join-token admission for v1.** Plaintext-on-wire is the documented
+  honest seam: the token gates *who may pull*, not *confidentiality on the wire*.
+- **Admission is a fabric-agnostic token-gated `Seam` decorator**, default `Open`
+  so the shipped loopback-off behaviour is byte-unchanged. Challenge-response: the
+  device shows a short code, the puller returns `HMAC(code, nonce)` — the code
+  never crosses the wire; per-attempt nonce defeats replay; **constant-time** tag
+  compare; **reusable within a TTL**; failed peers never reach the `Quilter`. Gate
+  lives tap-local in `:kuilt-otel-tap` (no `:kuilt-session` dependency).
+- **HMAC primitive: KotlinCrypto `hmac-sha2` (`HmacSHA256`)**, version-aligned with
+  the already-vendored `kotlincrypto-hash-sha2` — KMP-uniform across every kuilt
+  target (its sibling SHA-256 already compiles on wasmJs/iOS/macOS in
+  `:kuilt-deal`), maintained (no hand-rolled MAC), gated by RFC 4231 test vectors.
+
+The design below is written to those decisions; the trailing "open questions" are
+now only minor implementation defaults.
+
 ## Current state
 
 - `installLogTap(loom, exporter, scope, config)` hosts a session on any `Loom`,
@@ -117,7 +144,7 @@ URL and server `PeerId`; discovery yields it directly.
 **Wire encryption: none.** `ws://` on a LAN is plaintext. See threat model — the
 token gates *admission*, not *confidentiality on the wire*.
 
-### Option B — Apple Multipeer (recommended second)
+### Option B — Apple Multipeer (follow-up #1042, not in this plan)
 
 iOS device hosts via `MultipeerRoomHost` (`MultipeerPeerLinkFactory` +
 `MultipeerServiceBrowser`, all `appleMain`); a **macOS** laptop discovers over the
@@ -133,7 +160,7 @@ in and brings the admit handshake for free. That coupling is an open question.
 **Wire encryption: yes.** Multipeer sessions are DTLS-encrypted by default — a
 genuine confidentiality advantage over `ws://`, at the cost of Apple-only reach.
 
-### Recommendation: mDNS+WS first, Multipeer second
+### Decision: mDNS+WS first (locked), Multipeer follow-up #1042
 
 - **Breadth of puller.** mDNS+WS lets **any** laptop pull — a plain JVM process, a
   CI runner, a Mac terminal. Multipeer's puller must be a Mac. The epic's value is
@@ -148,7 +175,8 @@ genuine confidentiality advantage over `ws://`, at the cost of Apple-only reach.
   as-is.
 
 The cost mDNS+WS pays — the role inversion and plaintext wire — is real but
-bounded, and the token gate closes the admission hole either way.
+bounded, and the token gate closes the admission hole either way. The encrypted
+experience arrives via Multipeer (#1042) and/or `wss://` (#1043) as follow-ups.
 
 ## Admission / join-token design
 
@@ -306,33 +334,23 @@ capture notes in the PR:
 4. Record device models, OS versions, network, and any Bonjour/permission prompts
    (iOS local-network permission dialog is expected on first discovery — note it).
 
-## Alternatives & open questions for @keddie
+## Resolved decisions & remaining minor defaults
 
-1. **Fabric first — mDNS+WS vs Multipeer?** Recommendation is **mDNS+WS first**
-   (any-laptop puller incl. JVM/CI, closest to tested, reaches Android), Multipeer
-   second (encrypted, Apple-native, but Mac-only puller). The counter-argument:
-   Multipeer needs **no role inversion** and gives confidentiality out of the box —
-   if the *only* real target is iPhone↔Mac, Multipeer-first is arguably simpler and
-   safer. **Which is the true primary use: JVM/CI laptop, or your Mac?**
-2. **Role inversion for iOS over mDNS+WS** — accept `installLogTapJoining` (device
-   joins, laptop hosts) as the iOS path? It's forced by iOS having no WS server / no
-   mDNS advertiser. Alternative: don't support iOS over mDNS+WS at all and make
-   Multipeer *the* iOS path. Your call on whether the inverted-role WS wiring earns
-   its keep given Multipeer covers iOS.
-3. **Token UX & issuance** — (a) code format: 6-digit numeric (easy to read aloud)
-   vs 8-char base32 (more entropy)? (b) TTL default (5 min?) and **single-use vs
-   reusable-within-TTL** (proposal: reusable, to keep reconnect seamless). (c)
-   Where shown: console print is the baseline; do you also want a first-class
-   debug-overlay API (`host.joinCode`)?
-4. **Confidentiality on `ws://`** — is admission-only protection acceptable for
-   mDNS+WS (an on-path LAN sniffer still sees admitted traffic), with Multipeer as
-   the encrypted option, or do we want `wss://`/TLS on the WS fabric as follow-up?
-5. **Compose with `SeamRoom` or keep the gate tap-local?** Tap-local avoids a
-   `:kuilt-session` dependency and is simplest; `SeamRoom` unifies admission and
-   fits the `MultipeerRoomHost` (`Room`) form. Lean tap-local for the WS-first
-   path; revisit if Multipeer-first.
-6. **HMAC primitive across all targets** — which KMP-uniform HMAC do we standardize
-   on so the gate compiles on iOS/wasm, not just JVM? Catalog decision.
+The big questions are **resolved** (see "Locked decisions" up top): mDNS+WS first
+with role inversion; Multipeer → #1042; `wss://` → #1043; `ws://` + token for v1;
+tap-local token-gated `Seam` decorator; KotlinCrypto `hmac-sha2`;
+reusable-within-TTL. What remains are small implementation defaults the plan
+carries — flag only if you disagree:
+
+1. **Code format** — proposal: **8-char Crockford base32** (~40 bits, no ambiguous
+   chars, still transcribable). Alternative was 6-digit numeric (easier to read
+   aloud, less entropy). Short TTL keeps online-guessing infeasible either way.
+2. **TTL default** — proposal: **5 minutes** from issuance, reusable for repeated
+   pulls / `tail` reconnects within the window (keeps the reconnect-is-seamless
+   property the `Quilter` gives).
+3. **Where the code is shown** — baseline: printed once to the platform log at
+   install (Xcode console / logcat / stdout) *and* exposed as `host.joinCode` so an
+   app can surface it in a debug-overlay UI. No further UX in v1.
 
 ## Done when
 
@@ -349,8 +367,10 @@ with, any non-loopback wiring so reach is never shipped un-gated.
 
 - **No new transports.** This is wiring the tap `Seam` onto `:kuilt-mdns`,
   `:kuilt-websocket`, and `:kuilt-multipeer` as they exist.
-- **Not wire confidentiality** (beyond Multipeer's built-in encryption). The token
-  is admission control; `wss://`/TLS is out of scope here (open question 4).
+- **Not wire confidentiality.** The token is admission control only; the encrypted
+  transports are follow-ups — Multipeer (#1042) and `wss://`/TLS (#1043).
+- **The task-by-task implementation plan** for this spec is
+  `docs/superpowers/plans/2026-07-01-realphone-tap-reach.md`.
 - **Not a production/always-on feature.** The tap stays a developer-invoked debug
   affordance; reach and the token are strictly opt-in over the unchanged
   loopback-off default.
