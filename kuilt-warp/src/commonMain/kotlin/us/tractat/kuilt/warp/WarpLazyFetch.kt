@@ -17,8 +17,9 @@ import kotlin.time.Duration.Companion.seconds
  *
  * **Runtime lifecycle is the caller's.** The [runtime] is **owned by the caller**, not by the
  * [us.tractat.kuilt.warp.WarpNode] it is handed to: it outlives the node, is shared freely, and is
- * **never** closed by the node. The caller MUST `close()` it when done — a [ChicoryWasmRuntime],
- * for example, holds a daemon executor thread that only the caller's `close()` releases.
+ * **never** closed by the node. The caller MUST `close()` it when done — a Chicory-backed
+ * runtime (in `:kuilt-warp-runtime`), for example, holds a daemon executor thread that only
+ * the caller's `close()` releases.
  *
  * @param creel The local content-addressed byte cache.
  * @param runtime The caller-owned sandbox that compiles WASM bytes into a runnable [Op]; the

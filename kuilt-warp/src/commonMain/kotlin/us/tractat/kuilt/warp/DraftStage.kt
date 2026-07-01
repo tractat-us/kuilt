@@ -76,8 +76,8 @@ public sealed class DraftStage {
     /**
      * Two or more adjacent [Map] stages fused into a single pipeline unit by the E-2 optimizer.
      *
-     * The E-2 [Draft.fuseAdjacent] rewrite collapses a run of consecutive [Map] stages into
-     * one [FusedMap] so the E-5 runtime can apply them in a single pass. All constituent
+     * The E-2 `fuseAdjacent` rewrite (in `:kuilt-warp-planning`) collapses a run of consecutive
+     * [Map] stages into one [FusedMap] so the E-5 runtime can apply them in a single pass. All constituent
      * transforms are monotone — per CALM, adjacent monotone stages commute, so fusion is safe
      * by construction and never changes the convergent result.
      *
@@ -96,8 +96,8 @@ public sealed class DraftStage {
     /**
      * Two or more adjacent [Filter] stages fused into a single pipeline unit by the E-2 optimizer.
      *
-     * The E-2 [Draft.fuseAdjacent] rewrite collapses a run of consecutive [Filter] stages into
-     * one [FusedFilter] so the E-5 runtime can evaluate all predicates in a single pass. All
+     * The E-2 `fuseAdjacent` rewrite (in `:kuilt-warp-planning`) collapses a run of consecutive
+     * [Filter] stages into one [FusedFilter] so the E-5 runtime can evaluate all predicates in a single pass. All
      * constituent predicates are monotone — per CALM, adjacent monotone stages commute, so fusion
      * is safe by construction and never changes the convergent result.
      *
@@ -115,9 +115,9 @@ public sealed class DraftStage {
 
     /**
      * Two or more independent [Embroider] stages at the same dependency level fused into a
-     * single consensus round by the G3 [Draft.consolidateEmbroideries] rewrite.
+     * single consensus round by the G3 `consolidateEmbroideries` rewrite (in `:kuilt-warp-planning`).
      *
-     * [Draft.consolidateEmbroideries] groups [Embroider] nodes that share no mutual ancestor
+     * That rewrite groups [Embroider] nodes that share no mutual ancestor
      * path (i.e. neither is the other's predecessor, transitively). Independent agreements at
      * the same dependency level can be committed in a single Raft round rather than one round
      * each — exactly the batching that motivates G3.
@@ -132,7 +132,6 @@ public sealed class DraftStage {
      *
      * @param opIds ordered list of the original [Embroider] operation identifiers; must be
      *   non-empty.
-     * @sample us.tractat.kuilt.warp.sampleConsolidateEmbroideries
      */
     public data class BatchedEmbroider(public val opIds: List<OpId>) : DraftStage() {
         init { require(opIds.isNotEmpty()) { "BatchedEmbroider requires at least one opId" } }
