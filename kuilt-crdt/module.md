@@ -14,6 +14,7 @@ delivery order or duplication.
 | Type | Convergence rule | Remove? |
 |------|-----------------|---------|
 | `GCounter` | Sum of per-replica maxima | No |
+| `GCounterDouble` | Sum of per-replica maxima (`Double`, canonical-order sum) | No |
 | `PNCounter` | Two GCounters: inc − dec | No |
 | `GSet` | Set union | No |
 | `TwoPhaseSet` | Union; tombstones win permanently | Once |
