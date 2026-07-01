@@ -64,7 +64,10 @@ public class LogCaptureInstallation internal constructor(
  *   test scope in tests; an application-owned scope in production.
  * @param traceContextProvider optional trace/sampling gate — `null` (default) is
  *   always-on M1 capture; a provider gates and stamps per [CaptureConfig.untracedPolicy]
- *   and the trace's `sampled` flag.
+ *   and the trace's `sampled` flag. The provider is consulted at the **synchronous
+ *   `log()` edge** on the caller (via [LogCapture.resolveTrace]), not on the drain
+ *   coroutine — so an ambient provider that reads thread/coroutine-local context is
+ *   honoured (#1034).
  * @return the [LogCaptureInstallation] handle — its [LogCaptureInstallation.capture]
  *   is the installed core, and [LogCaptureInstallation.close] uninstalls capture.
  *
