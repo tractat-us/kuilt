@@ -51,6 +51,12 @@ jobs:
     if: github.event_name != 'push' || github.ref == 'refs/heads/main'
     runs-on: macos-latest    # cinterop-bearing Apple targets require a Mac host — see header
     timeout-minutes: 30
+    # Job-level override of the workflow default (contents: read). issues: write
+    # lets the failure-alert step below open/refresh the "publish broken" issue.
+    # Scoped to THIS job only — the maven-central job keeps its own permissions.
+    permissions:
+      contents: read
+      issues: write
     env:
       S3_BUILD_CACHE_ACCESS_KEY_ID: ${{ secrets.S3_BUILD_CACHE_ACCESS_KEY_ID }}
       S3_BUILD_CACHE_SECRET_KEY: ${{ secrets.S3_BUILD_CACHE_SECRET_KEY }}
@@ -128,6 +134,49 @@ jobs:
             sleep $((attempt * 5))
             attempt=$((attempt + 1))
           done
+
+      # Backstop: a broken snapshot publish is post-merge and gates nothing, so a
+      # red run here is silent. This step makes it LOUD — it opens (or refreshes)
+      # a single tracking issue so a weeks-long silent breakage becomes a one-run
+      # notification. Idempotent by title: an existing OPEN issue is commented on,
+      # not duplicated. Best-effort — never let the alert itself fail the job (the
+      # publish already failed; that's the signal that matters).
+      - name: Alert on publish failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          COMMIT_SHA: ${{ github.sha }}
+        run: |
+          set -eu
+          TITLE="publish.yml failing on main"
+          LABEL="publish-broken"
+          BODY="The Tigris snapshot publish (\`publish.yml\`) failed.
+
+          - Failing run: ${RUN_URL}
+          - Commit: ${COMMIT_SHA}
+
+          **The Tigris snapshot channel is frozen at the last good version until this is fixed.** Consumers reading snapshots will not see new builds until a green publish lands on \`main\`."
+
+          # Best-effort label create (idempotent). Title-based search below doesn't
+          # depend on it, so a failure here is tolerated.
+          gh label create "$LABEL" --color B60205 \
+            --description "publish.yml is failing on main; snapshot channel frozen" 2>/dev/null || true
+
+          # Find an existing OPEN issue by exact title (title-based idempotency —
+          # no label dependency). Comment on it if present; otherwise open one.
+          EXISTING=$(gh issue list --state open --search "\"$TITLE\" in:title" \
+            --json number,title \
+            --jq "map(select(.title == \"$TITLE\")) | .[0].number // empty")
+
+          if [ -n "$EXISTING" ]; then
+            echo "Refreshing existing issue #$EXISTING"
+            gh issue comment "$EXISTING" --body "$BODY"
+          else
+            echo "Opening new tracking issue"
+            gh issue create --title "$TITLE" --label "$LABEL" --body "$BODY" \
+              || gh issue create --title "$TITLE" --body "$BODY"
+          fi
 
   # ── Maven Central (Central Portal) ──────────────────────────────────────────
   # RELEASE-CONTROLLED. Runs ONLY on a version tag (v<x.y.z>) or a manual dispatch
