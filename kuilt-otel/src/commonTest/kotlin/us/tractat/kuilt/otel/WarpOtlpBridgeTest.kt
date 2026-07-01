@@ -244,7 +244,7 @@ class WarpOtlpBridgeTest {
             return SpanDigest(lock.withLock { known.toSet() })
         }
 
-        override suspend fun send(spans: Set<SpanRecord>) {
+        override suspend fun send(spans: Set<SpanRecord>, links: List<SpanLink>) {
             lock.withLock {
                 sentBatches.add(spans.toList())
                 known.addAll(spans.map { it.spanId })
@@ -260,7 +260,7 @@ class WarpOtlpBridgeTest {
 
         override suspend fun digest(): SpanDigest = SpanDigest(lock.withLock { known.toSet() })
 
-        override suspend fun send(spans: Set<SpanRecord>) {
+        override suspend fun send(spans: Set<SpanRecord>, links: List<SpanLink>) {
             lock.withLock {
                 sentBatches.add(spans.toList())
                 known.addAll(spans.map { it.spanId })
@@ -271,12 +271,12 @@ class WarpOtlpBridgeTest {
     /** Edge whose [send] always throws. */
     private object FailingEdge : OtlpEdge {
         override suspend fun digest(): SpanDigest = SpanDigest(emptySet())
-        override suspend fun send(spans: Set<SpanRecord>): Unit = throw RuntimeException("network error")
+        override suspend fun send(spans: Set<SpanRecord>, links: List<SpanLink>): Unit = throw RuntimeException("network error")
     }
 
     /** Edge whose [digest] always throws. */
     private object DigestFailingEdge : OtlpEdge {
         override suspend fun digest(): SpanDigest = throw RuntimeException("digest fetch failed")
-        override suspend fun send(spans: Set<SpanRecord>) = Unit
+        override suspend fun send(spans: Set<SpanRecord>, links: List<SpanLink>) = Unit
     }
 }

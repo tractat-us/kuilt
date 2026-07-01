@@ -116,8 +116,8 @@ internal suspend fun sampleOtlpEdge() {
     //         val ids = httpClient.get("$endpoint/v1/traces/digest").body<Set<ByteString>>()
     //         return SpanDigest(ids)
     //     }
-    //     override suspend fun send(spans: Set<SpanRecord>) {
-    //         httpClient.post("$endpoint/v1/traces") { setBody(spans.toOtlpProto()) }
+    //     override suspend fun send(spans: Set<SpanRecord>, links: List<SpanLink>) {
+    //         httpClient.post("$endpoint/v1/traces") { setBody(spans.toOtlpJson(links)) }
     //     }
     // }
 }
