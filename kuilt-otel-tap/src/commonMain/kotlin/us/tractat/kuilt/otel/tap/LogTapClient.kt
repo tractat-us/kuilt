@@ -113,6 +113,28 @@ public class LogTapClient(
         }
     }
 
+    /**
+     * Like [tail], but each streamed record carries its ordering [StampedLogRecord.rgaId]
+     * — the producer identity and cross-device total-order key needed to merge several
+     * devices' logs into one timeline. Emits each record once, in order, replaying
+     * everything already known on collection and continuing with newly captured records
+     * until the collector is cancelled.
+     *
+     * The streaming sibling of [pullStamped]: a live per-device drain gets stamps
+     * directly, without re-snapshotting the whole buffer via [pullStamped] on every
+     * change (which would be O(n) per tick, O(n²) over a session).
+     *
+     * @sample us.tractat.kuilt.otel.tap.sampleLogTapTailStamped
+     */
+    public fun tailStamped(): Flow<StampedLogRecord> = flow {
+        val emitted = HashSet<ByteString>()
+        replicator.state.collect { log ->
+            for ((rgaId, record) in log.entries()) {
+                if (emitted.add(record.recordId)) emit(StampedLogRecord(rgaId, record))
+            }
+        }
+    }
+
     private suspend fun awaitRemotePeer() {
         seam.peers.first { peers -> peers.any { it != seam.selfId } }
     }

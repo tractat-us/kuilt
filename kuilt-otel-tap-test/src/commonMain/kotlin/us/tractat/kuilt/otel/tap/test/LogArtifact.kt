@@ -1,6 +1,8 @@
 package us.tractat.kuilt.otel.tap.test
 
 import kotlinx.io.Sink
+import kotlinx.io.Source
+import kotlinx.io.readLine
 import kotlinx.io.writeString
 import kotlinx.serialization.json.Json
 import us.tractat.kuilt.otel.LogRecord
@@ -78,3 +80,29 @@ public fun writeStampedLogArtifact(stamped: List<StampedLogRecord>, sink: Sink) 
     }
     sink.flush()
 }
+
+/**
+ * Decode stamped NDJSON [lines] back into [StampedLogRecord]s, the inverse of
+ * [stampedLogArtifactLines] (`parseStampedLogArtifactLines(stampedLogArtifactLines(x)) == x`).
+ * Blank lines are skipped, so the trailing newline [writeStampedLogArtifact] emits does
+ * not decode as a phantom record.
+ *
+ * This is the pure, source-free core: hand it any sequence of lines — a file read
+ * elsewhere, the union of several devices' artifacts, or literal test strings.
+ */
+public fun parseStampedLogArtifactLines(lines: Sequence<String>): List<StampedLogRecord> =
+    lines.filter { it.isNotBlank() }
+        .map { artifactJson.decodeFromString(StampedLogRecord.serializer(), it) }
+        .toList()
+
+/**
+ * Read a stamped NDJSON artifact from [source]: the inverse of [writeStampedLogArtifact],
+ * returning the [StampedLogRecord]s in file order. Reads to end-of-source a line at a
+ * time, so a consumer merging across devices decodes each `*.ndjson` back without
+ * touching [StampedLogRecord.serializer] directly.
+ *
+ * Reading is the caller's boundary to own the file/connection lifecycle — the [source]
+ * is drained but not closed.
+ */
+public fun readStampedLogArtifact(source: Source): List<StampedLogRecord> =
+    parseStampedLogArtifactLines(generateSequence { source.readLine() })
