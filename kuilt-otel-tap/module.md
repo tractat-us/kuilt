@@ -59,11 +59,14 @@ logs. So when you take the tap off loopback, put a **short code** in front of it
 the phone shows a code, and only someone who types that code into the puller gets
 in.
 
-- **On the device:** pass
-  [LogTapAdmission.Verify][us.tractat.kuilt.otel.tap.LogTapAdmission.Verify] with a
-  freshly issued
-  [LogTapJoinToken][us.tractat.kuilt.otel.tap.admit.LogTapJoinToken]. The device
-  prints the code once (Xcode console / logcat / stdout).
+- **On the device:** issue a
+  [LogTapJoinToken][us.tractat.kuilt.otel.tap.admit.LogTapJoinToken] from a
+  cryptographically secure source
+  ([cryptoRandom()][us.tractat.kuilt.otel.tap.admit.cryptoRandom]) and pass
+  [LogTapAdmission.Verify][us.tractat.kuilt.otel.tap.LogTapAdmission.Verify]. Your app
+  shows the code however it likes — a pairing screen, or a `println` to the Xcode
+  console it controls. The library **never logs the code** (a secret must not land in
+  `os_log`/logcat), so surfacing it is the app's call.
 - **In the puller:** pass
   [LogTapAdmission.Present][us.tractat.kuilt.otel.tap.LogTapAdmission.Present] with
   the code you read off the device. A wrong or expired code is refused, and the
