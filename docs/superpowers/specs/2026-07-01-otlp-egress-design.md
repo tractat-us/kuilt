@@ -1,8 +1,15 @@
 # OTLP egress — drain logs + metrics + spans by digest, plus a concrete Ktor edge
 
-_Design for #1027. Part of the log-capture epic #986 (M2). Builds on the M1
-capture buffer (`2026-06-27-log-capture-and-extraction-design.md`) and the
+_Design for #1027 **and #846**. Part of the log-capture epic #986 (M2). Builds on
+the M1 capture buffer (`2026-06-27-log-capture-and-extraction-design.md`) and the
 spans-only egress bridge already in `:kuilt-otel`._
+
+> **#846 folded in.** @keddie folded issue #846 ("A8 slice 2 — auto-stamp on export
+> + bridge link emission") into this egress slice: it lives entirely on the
+> export/drain path designed here, so it is no longer separate work. This spec
+> designs it as a first-class part — see **Auto-stamp on export & causal-link
+> emission** below. **This design closes #846** (the implementation PR carries the
+> closing keyword; this design PR does not).
 
 ## What this adds (the plain version)
 
@@ -27,7 +34,15 @@ only the difference. Reconnect ten times in a row and only the first one puts
 anything on the wire. That "send only the difference" idea is what the rest of
 this doc calls reconciling **by digest**.
 
-Two concrete deliverables:
+Traces get one extra thing here. When your code does work in one span that was
+*caused by* work in another — even on a different device, even across a network gap
+— kuilt already quietly records that "this-came-after-that" relationship on the
+device (no clocks, no manual bookkeeping). This slice makes sure that relationship
+is **stamped on automatically as spans leave** and **survives all the way to the
+collector**, so your trace view shows the causal link instead of two disconnected
+traces. You never call a "stamp this" API by hand.
+
+Three concrete deliverables:
 
 1. Teach the existing `WarpOtlpBridge` to drain **all three signals** — spans (done),
    plus **logs** and **metrics** — each by its own digest, without breaking the
@@ -35,6 +50,9 @@ Two concrete deliverables:
 2. Ship the first real transport: a new module **`:kuilt-otel-otlp`** — a Ktor
    HTTP client that serializes each signal to the OTLP wire and POSTs it to a
    collector.
+3. **(folds in #846)** Auto-stamp the causal frontier onto spans on the export path,
+   and emit the inferred causal links onto the OTLP `Span.links` wire field at drain
+   time, so cross-device happens-before edges survive to the collector.
 
 ## Current state
 
@@ -50,8 +68,19 @@ Two concrete deliverables:
 - **`OtlpEdge`** is an interface with **no concrete implementation** — its only
   members are `digest(): SpanDigest` and `send(spans: Set<SpanRecord>)`. There is
   no transport yet; tests use a recording fake.
+- **The causal-link machinery already exists but is not wired into the export
+  path** (this is the #846 gap). `WarpCausalClock.tick()` mints a `CausalStamp`
+  (a `Dot` + the observed frontier); `SpanRecord.causalStamp` is a nullable field
+  (`null` = unstamped, today's default); `inferCausalLinks(spans)` derives
+  `SpanLink`s from stamped spans with the cross-boundary filter; `SpanLink` maps
+  onto an OTLP `Span.Link` tagged `kuilt.causality=potential`. What's missing:
+  `WarpSpanExporter.export()` does **not** call `tick()` (callers would have to
+  stamp by hand), `WarpSpanExporter.merge()` does **not** call
+  `WarpCausalClock.observe()` (so cross-replica links never form), and the bridge
+  does **not** run `inferCausalLinks` or put links on the wire.
 
-So the gap is exactly: (1) two more signals through the bridge, (2) a real edge.
+So the gap is exactly: (1) two more signals through the bridge, (2) a real edge,
+(3) auto-stamp + link emission on the span path (#846).
 
 ## The digest model, per signal
 
@@ -175,9 +204,11 @@ declaration clash). So the new members get distinct names:
 ```kotlin
 public interface OtlpEdge {
 
-    // ── Spans (unchanged) ────────────────────────────────────────────────
+    // ── Spans ────────────────────────────────────────────────────────────
     public suspend fun digest(): SpanDigest
-    public suspend fun send(spans: Set<SpanRecord>)
+    // `links` param is additive with a default — span-only fakes still compile.
+    // Carries the inferred causal links (#846) for the edge to put on Span.links[].
+    public suspend fun send(spans: Set<SpanRecord>, links: List<SpanLink> = emptyList())
 
     // ── Logs (new; default no-op keeps existing impls valid) ─────────────
     public suspend fun logDigest(): LogDigest = LogDigest(emptySet())
@@ -205,7 +236,8 @@ just the span exporter, and `drain()` reconciles each signal against its own dig
 ```kotlin
 public class WarpOtlpBridge(private val telemetry: WarpTelemetry) {
     public suspend fun drain(edge: OtlpEdge): DrainResult {
-        // spans:   ORSet snapshot        − edge.digest()        → edge.send(...)
+        // spans:   ORSet snapshot        − edge.digest()        → edge.send(delta, links)
+        //          links = inferCausalLinks(snapshot) filtered to delta (#846)
         // logs:    Rga snapshot (ordered) − edge.logDigest()    → edge.sendLogs(...)
         // metrics: per-key render+hash    − edge.metricDigest() → edge.sendMetrics(...)
         // Each signal best-effort & independent: a failing signal
@@ -301,18 +333,100 @@ set and flushes. `digest()`/`logDigest()`/`metricDigest()` read it back. The
 sent-set is bounded (retention cap above). A brand-new endpoint starts with an empty
 digest → full first drain; every drain after that sends only what advanced.
 
-### `#846` interaction (span links on egress)
+### Span serializer emits `Span.links`
 
-#846 (A8 slice 2) reshapes `WarpOtlpBridge.drain()` to run `inferCausalLinks(...)`
-and thread the resulting `SpanLink`s onto each span before egress. Two touch-points
-to coordinate:
+The span→OTLP/JSON serializer **must** map inferred links onto the OTLP
+`Span.links[]` wire field (see the next section for where the links come from). An
+`OtlpSpan.Link` carries `traceId`/`spanId` (hex-encoded, from
+`SpanLink.linkedTraceId`/`linkedSpanId`) and `attributes` (carrying
+`kuilt.causality=potential`). Omit the field for spans with no links. If the
+serializer drops `links`, all of #846's value is lost silently at the wire — so this
+is a hard acceptance test, not a nicety.
 
-- Both #846 and this design **edit `drain()`** — whichever lands second rebases onto
-  the other. No conflict in intent (link-inference is span-only; this adds two more
-  signals), just the same method.
-- The concrete edge's **span→OTLP/JSON serializer must emit `Span.links`**, or
-  #846's inferred links are silently dropped at the wire. Call this out in the
-  edge's span-encoding tests.
+## Auto-stamp on export & causal-link emission (folds in #846)
+
+This is #846, designed as a first-class part of the egress slice. The building
+blocks already exist in `:kuilt-otel` (`WarpCausalClock`, `CausalStamp`,
+`SpanRecord.causalStamp`, `inferCausalLinks`, `SpanLink`); #846 is the **wiring** of
+them into the export/drain path — no new causal *types*, only connections. The
+result: a caller that never touches a stamping API still gets cross-device causal
+links on its traces at the collector.
+
+### 1 — Auto-stamp on export (no caller change)
+
+Today `WarpSpanExporter.export(span)` inserts the span as given; if the caller
+didn't populate `SpanRecord.causalStamp`, the span is unstamped and
+`inferCausalLinks` ignores it. #846 moves the stamp onto the export path so it is
+automatic:
+
+- `WarpTelemetry` **owns one `WarpCausalClock`** (constructed from the same
+  `replica`), recovered in `WarpTelemetry.recover()` alongside the exporters. It is
+  wired into `spans`.
+- `WarpSpanExporter.export(span)` calls `clock.tick()` and attaches the returned
+  `CausalStamp` to the span **before** inserting into the `ORSet` — *unless the
+  caller already supplied a `causalStamp`* (an explicit stamp always wins;
+  auto-stamp only fills the `null` default). This keeps the field's existing
+  "null = unstamped" contract and is byte-compatible with records written before the
+  field existed.
+- `WarpSpanExporter.merge(remote)` calls `clock.observe(remoteFrontier)` on each
+  anti-entropy round, folding the remote device's causal frontier into the local
+  clock. This is what makes **cross-device** links form: the next local span's
+  predecessors then point back at spans that arrived from another replica, and
+  `inferCausalLinks` emits the cross-boundary edge for free.
+- **Persistence discipline (mandatory).** `WarpCausalClock` warns that a restart
+  which reset `seq` to 0 re-mints used dots and corrupts causality. So
+  `WarpCausalClock.persist(store)` must run **after** the span batch is durably
+  exported — i.e. the export path persists the clock in the same durable step that
+  persists the span `ORSet`. Recovery (`WarpCausalClock.recover(store)` in
+  `WarpTelemetry.recover()`) is likewise mandatory. Both are on the injected
+  `DurableStore`; no new store.
+
+Because `tick()`/`observe()`/`frontier()` are pure and lock-guarded (no suspend
+inside the lock, per the clock's existing design), threading them into `export`/
+`merge` adds no new concurrency surface — the exporter's existing `reentrantLock`
+discipline is unchanged.
+
+### 2 — Link emission at drain time
+
+`WarpOtlpBridge.drain()` already snapshots the span `ORSet`. #846 adds, on the span
+leg of the drain (after computing the by-digest delta, before handing spans to the
+edge):
+
+```kotlin
+// span leg of drain():
+val snapshot = telemetry.spans.snapshot().elements
+val links: List<SpanLink> = inferCausalLinks(snapshot)   // over the FULL snapshot
+val delta = snapshot.filter { it.spanId !in edge.digest().spanIds }
+edge.send(delta, links)   // links threaded to the edge for wire emission
+```
+
+Design points:
+
+- **Infer over the full snapshot, not just the delta.** A link's *predecessor* may
+  already have been delivered on an earlier drain (so it's absent from today's
+  delta), while the *successor* is new. Running `inferCausalLinks` over the whole
+  snapshot resolves both endpoints; only links whose `fromSpanId` is in the delta
+  need to ride along (a predecessor already at the collector is referenced by id, not
+  re-sent). So: infer over the snapshot, then filter links to those whose
+  `fromSpanId ∈ delta`.
+- **Threading links to the edge.** `OtlpEdge.send` grows an additive links
+  parameter with a default so span-only fakes still compile:
+  `suspend fun send(spans: Set<SpanRecord>, links: List<SpanLink> = emptyList())`.
+  The concrete edge attaches each link to its owning span's OTLP `Span.links[]` at
+  encode time (join `SpanLink.fromSpanId` → the span's id).
+- **Idempotency holds.** Links are derived, not stored state: a re-drain that finds
+  an empty delta sends no spans and therefore no links; the collector already has
+  both the spans and their links from the first drain. `inferCausalLinks` is
+  deterministic (sorted output), so a re-drain that *did* have a delta emits exactly
+  the same links — the collector dedups spans (and thus their attached links) by
+  span-id. No link is ever emitted twice for the same span.
+
+### Coordination / ordering note
+
+This design and the pre-fold #846 both reshape `drain()` and `export()`; folding
+#846 in here means one coherent change instead of two that race on the same methods.
+There is no separate #846 PR to rebase against — it is authored as part of the
+digest-extension PR (see PR split in open questions).
 
 ## Testing
 
@@ -329,11 +443,35 @@ to coordinate:
   `Random`, injected virtual `Clock`, `backgroundScope` for any owned coroutine — no
   production dispatcher, no `advanceUntilIdle()`.
 
+**Auto-stamp + link emission (#846), `:kuilt-otel` commonTest:**
+- **Auto-stamp on export without caller change.** Export spans through
+  `WarpTelemetry.spans` *without* setting `causalStamp`; assert each stored span
+  comes out stamped (non-null `causalStamp`, monotonic `Dot` seq) and that an
+  explicitly-supplied stamp is preserved (auto-stamp only fills the `null` default).
+- **Cross-device links via merge.** Two replicas over the in-memory `DurableStore`:
+  replica A exports, B `merge`s A's `ORSet` (so `observe` folds A's frontier), B
+  exports a successor; assert `inferCausalLinks` over B's snapshot yields the
+  cross-boundary edge, and that `drain()` hands that link to the fake edge attached
+  to the correct span.
+- **Links survive a re-drain idempotently.** First drain emits spans + their links;
+  a re-drain with an empty delta sends nothing (no spans, no links); a re-drain that
+  *does* have a delta emits the identical (sorted) links — the fake asserts no span
+  or link is delivered twice.
+- **Clock persistence across restart.** Persist after export, construct a fresh
+  `WarpCausalClock`/`WarpTelemetry` over the same store, `recover()`, export again;
+  assert `seq` continues (no re-minted `Dot`) so causality is not corrupted.
+- Same coroutine discipline as above (seeded `Random`, virtual clock).
+
 **Concrete edge (`:kuilt-otel-otlp`):**
 - **Multiplatform request-shape tests** with Ktor `MockEngine` (runs on all
   targets): drive `send*`, capture the outgoing request, assert method/path/
   `Content-Type` and that the JSON body matches expected OTLP (hex ids, string
   64-bit ints, `resourceSpans`/`resourceLogs`/`resourceMetrics` envelopes).
+- **`Span.links` on the wire (#846).** Drive `send(spans, links)` and assert the
+  emitted OTLP JSON puts each link on its owning span's `links[]` with hex
+  `traceId`/`spanId` and the `kuilt.causality=potential` attribute; a span with no
+  links omits the field. This is a hard acceptance bar — a serializer that drops
+  `links` fails.
 - **JVM integration test** against a stub HTTP server (`ktor-server-test-host`):
   POST a real drain, capture bodies server-side, assert each signal's OTLP JSON and
   the correct `/v1/{traces,logs,metrics}` routing; assert a 200 folds the ids into
@@ -370,10 +508,17 @@ to coordinate:
    additive now and unify at the next major, or unify now while pre-1.0 churn is
    cheap?
 
-4. **PR split.** The issue allows splitting. Natural seam: **PR 1** = digest
-   extension + widened `OtlpEdge`/bridge + fake-edge tests (all in `:kuilt-otel`);
-   **PR 2** = the `:kuilt-otel-otlp` module + wire encoding + stub-server tests.
-   PR 1 is independently valuable and unblocks any edge. Confirm the two-PR split.
+4. **PR split (now includes #846).** The issue allows splitting. Natural seam:
+   **PR 1** = digest extension + widened `OtlpEdge`/bridge + **auto-stamp on export +
+   link inference at drain (#846)** + fake-edge tests (all in `:kuilt-otel`);
+   **PR 2** = the `:kuilt-otel-otlp` module + wire encoding (**including the
+   `Span.links` serializer**) + stub-server tests. PR 1 is independently valuable,
+   unblocks any edge, and is where **#846 closes**. One caveat with this split: the
+   *link-inference* half of #846 lands in PR 1 but the *wire emission* half lands in
+   PR 2 — between the two, links are inferred but the only edge is a fake. That's
+   fine (the fake asserts the links are threaded through), but if you'd rather #846
+   not "close" until links actually reach a real collector, keep it a single PR.
+   Confirm the split and where #846 closes.
 
 5. **Endpoint config surface.** Minimal (base URL + headers for auth) vs richer
    (separate per-signal URLs, gzip, timeout/retry policy, TLS). Recommend minimal
@@ -384,6 +529,17 @@ to coordinate:
    (metrics is naturally series-bounded)? Suggest reusing the exporter buffer-cap
    defaults' order of magnitude, documented as "must exceed your realistic offline
    window."
+
+7. **(#846) Auto-stamp default: on or opt-in?** This design makes `export()`
+   auto-stamp **by default** (fill the `null` `causalStamp`), so causal links "just
+   work" with no caller change — the accessible-first goal. The cost: every span now
+   carries a `CausalStamp` and the clock must be persisted on the export path (a
+   durable write of clock state alongside each span batch). If you'd rather keep
+   stamping **opt-in** (a flag on `WarpTelemetry`, default off) to avoid that
+   overhead for apps that don't want causal links, say so — I recommend on-by-default
+   since the whole point of folding #846 in is that links arrive without ceremony.
+   Also confirm the **explicit-stamp-wins** precedence (auto-stamp only fills a
+   `null`) is the behaviour you want.
 
 ## Done when
 
@@ -398,9 +554,17 @@ to coordinate:
   `MockEngine` request-shape tests pass on all targets and a JVM stub-server
   integration test round-trips all three signals, including sent-set persistence and
   retry-on-failure.
-- The span→OTLP serializer emits `Span.links` (so #846's inferred links survive
-  egress).
-- Full `./gradlew build` green. One or two ready PRs per the split above.
+- **(#846) Auto-stamp on export** — `WarpSpanExporter.export()` auto-stamps via a
+  `WarpTelemetry`-owned `WarpCausalClock` with **no caller change** (explicit stamps
+  preserved); `merge()` calls `observe()` so cross-replica links form; the clock is
+  recovered/persisted on the durable path (no re-minted dots across restart).
+- **(#846) Link emission** — `drain()` runs `inferCausalLinks` over the span
+  snapshot and threads the delta's links to the edge; the span→OTLP serializer emits
+  them on `Span.links` with `kuilt.causality=potential`; a re-drain emits links
+  idempotently (no double emission).
+- Full `./gradlew build` green. One or two ready PRs per the split above. The
+  digest-extension PR **closes #846** (the concrete-edge PR, if split out, still
+  carries the `Span.links` serializer test).
 
 ## Non-goals / notes
 
@@ -409,5 +573,9 @@ to coordinate:
   covers `SUM`/`GAUGE`/`CARDINALITY`.
 - Clock-skew / HLC timestamp correction stays a separate follow-up (as noted on the
   record types); egress ships timestamps as-produced.
+- **(#846) Causal stamping is span-scoped.** `WarpCausalClock` advances on span
+  events only, so links are span→span. Cross-signal causality (a log or metric
+  happens-before a span) is explicit future work, per the clock's own KDoc — not part
+  of this slice.
 - References policy: abstract use case only; OTLP is a public wire spec (the
   unavoidable shared-identifier exception). No third-party tracker citations.
