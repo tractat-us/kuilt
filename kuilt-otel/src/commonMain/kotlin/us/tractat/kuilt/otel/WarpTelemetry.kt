@@ -52,19 +52,29 @@ import us.tractat.kuilt.crdt.ReplicaId
  */
 public class WarpTelemetry(
     replica: ReplicaId,
-    store: DurableStore,
+    private val store: DurableStore,
     maxSpans: Int = DEFAULT_MAX_SPANS,
     maxLogRecords: Int = DEFAULT_MAX_LOG_RECORDS,
     bufferPolicy: BufferPolicy = BufferPolicy.DROP_OLDEST,
     maxMetrics: Int = DEFAULT_MAX_METRICS,
     metricBufferPolicy: MetricBufferPolicy = MetricBufferPolicy.DROP_OLDEST,
 ) {
-    /** The span exporter (A2). Export spans here; they are CRDT-merged on reconnect. */
+    // The causal clock is owned here and wired into `spans` so span export
+    // auto-stamps causal context (#846) with no caller change. Recovered in
+    // recover(); persisted by the span exporter on its durable export path.
+    private val causalClock: WarpCausalClock = WarpCausalClock(replica)
+
+    /**
+     * The span exporter (A2). Export spans here; they are CRDT-merged on reconnect
+     * and **auto-stamped** with causal context so cross-device happens-before links
+     * form automatically (#846).
+     */
     public val spans: WarpSpanExporter = WarpSpanExporter(
         replica = replica,
         store = store,
         maxSpans = maxSpans,
         bufferPolicy = bufferPolicy,
+        causalClock = causalClock,
     )
 
     /**
@@ -95,6 +105,7 @@ public class WarpTelemetry(
      * Idempotent: a second call simply re-reads and re-decodes the same bytes.
      */
     public suspend fun recover() {
+        causalClock.recover(store)
         spans.recover()
         metrics.recover()
         logs.recover()

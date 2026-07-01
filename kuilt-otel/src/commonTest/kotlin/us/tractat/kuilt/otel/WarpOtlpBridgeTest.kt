@@ -7,276 +7,170 @@ import kotlinx.io.bytestring.ByteString
 import us.tractat.kuilt.crdt.ReplicaId
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
+import kotlin.time.Clock
+import kotlin.time.Instant
 
 class WarpOtlpBridgeTest {
-
     private val replica = ReplicaId("test")
+    private val clock = object : Clock { override fun now() = Instant.fromEpochSeconds(1_700_000_000) }
 
-    // ---- helpers ----
-
-    private fun traceId(id: Byte): ByteString = ByteString(ByteArray(16) { id })
-    private fun spanId(id: Byte): ByteString = ByteString(ByteArray(8) { id })
-
-    private fun span(id: Byte, name: String = "op", startNanos: Long = 1_000L) = SpanRecord(
-        traceId = traceId(id),
-        spanId = spanId(id),
-        parentSpanId = null,
-        name = name,
-        kind = SpanKind.INTERNAL,
-        startEpochNanos = startNanos,
-        endEpochNanos = startNanos + 1_000L,
+    private fun tId(b: Byte) = ByteString(ByteArray(16) { b })
+    private fun sId(b: Byte) = ByteString(ByteArray(8) { b })
+    private fun recId(b: Byte) = ByteString(ByteArray(8) { b })
+    private fun span(b: Byte, parent: ByteString? = null) = SpanRecord(
+        traceId = tId(b), spanId = sId(b), parentSpanId = parent,
+        name = "op", kind = SpanKind.INTERNAL, startEpochNanos = 1_000L, endEpochNanos = 2_000L,
     )
 
-    private fun emptyExporter(): WarpSpanExporter =
-        WarpSpanExporter(replica = replica, store = InMemoryDurableStore())
+    private fun telemetry() = WarpTelemetry(replica, InMemoryDurableStore())
+    private fun bridge(t: WarpTelemetry) = WarpOtlpBridge(t, clock)
 
-    // ---- A5: reconcile sends only the delta (spans the edge does not have) ----
+    // ---- all-signal fake ----
 
-    @Test
-    fun drainSendsNothingWhenEdgeAlreadyHasAllSpans() = runTest {
-        val s1 = span(1)
-        val exporter = emptyExporter().also { it.export(s1) }
-        val edge = RecordingEdge(knownSpanIds = setOf(s1.spanId))
+    private open class FakeEdge : OtlpEdge {
+        private val lock = reentrantLock()
+        val knownSpans = mutableSetOf<ByteString>()
+        val knownLogs = mutableSetOf<ByteString>()
+        val knownMetrics = mutableMapOf<MetricKey, Long>()
+        val sentSpans = mutableListOf<SpanRecord>()
+        val sentLinks = mutableListOf<SpanLink>()
+        val sentLogs = mutableListOf<LogRecord>()
+        val sentMetrics = mutableListOf<MetricPoint>()
 
-        val bridge = WarpOtlpBridge(exporter = exporter)
-        bridge.drain(edge)
-
-        assertTrue(edge.sentBatches.isEmpty(), "edge already has the span; nothing should be sent")
+        override suspend fun digest(): SpanDigest = SpanDigest(lock.withLock { knownSpans.toSet() })
+        override suspend fun send(spans: Set<SpanRecord>, links: List<SpanLink>): Unit = lock.withLock {
+            sentSpans += spans; sentLinks += links; knownSpans += spans.map { it.spanId }
+        }
+        override suspend fun logDigest(): LogDigest = LogDigest(lock.withLock { knownLogs.toSet() })
+        override suspend fun sendLogs(logs: Set<LogRecord>): Unit = lock.withLock {
+            sentLogs += logs; knownLogs += logs.map { it.recordId }
+        }
+        override suspend fun metricDigest(): MetricDigest = MetricDigest(lock.withLock { knownMetrics.toMap() })
+        override suspend fun sendMetrics(points: Set<MetricPoint>): Unit = lock.withLock {
+            sentMetrics += points; points.forEach { knownMetrics[it.key] = it.valueHash() }
+        }
     }
 
     @Test
-    fun drainSendsOnlySpansMissingFromEdge() = runTest {
-        val s1 = span(1)
-        val s2 = span(2)
-        val exporter = emptyExporter().also { it.export(s1); it.export(s2) }
-        // Edge already has s1, missing s2.
-        val edge = RecordingEdge(knownSpanIds = setOf(s1.spanId))
+    fun drainDeliversAllThreeSignals() = runTest {
+        val t = telemetry()
+        t.spans.export(span(1))
+        t.logs.export(LogRecord(recordId = recId(1), body = "hi"))
+        t.metrics.incrementSum(MetricKey("req", MetricKind.SUM), by = 2L)
+        val edge = FakeEdge()
 
-        val bridge = WarpOtlpBridge(exporter = exporter)
-        bridge.drain(edge)
-
-        val sent = edge.sentBatches.flatten().toSet()
-        assertEquals(setOf(s2), sent, "only the missing span should be sent")
-    }
-
-    @Test
-    fun drainSendsAllSpansWhenEdgeHasNone() = runTest {
-        val s1 = span(1)
-        val s2 = span(2)
-        val exporter = emptyExporter().also { it.export(s1); it.export(s2) }
-        val edge = RecordingEdge(knownSpanIds = emptySet())
-
-        val bridge = WarpOtlpBridge(exporter = exporter)
-        bridge.drain(edge)
-
-        val sent = edge.sentBatches.flatten().toSet()
-        assertEquals(setOf(s1, s2), sent)
-    }
-
-    // ---- idempotency: a resend cannot double-count ----
-
-    @Test
-    fun drainingTwiceDoesNotDoubleCount() = runTest {
-        val s1 = span(1)
-        val exporter = emptyExporter().also { it.export(s1) }
-        // After first drain, edge has s1. A second drain must send nothing.
-        val edge = AccumulatingEdge()
-
-        val bridge = WarpOtlpBridge(exporter = exporter)
-        bridge.drain(edge) // first drain — sends s1
-        bridge.drain(edge) // second drain — edge now knows s1; nothing sent
-
-        val allSent = edge.sentBatches.flatten()
-        val distinctSpans = allSent.map { it.spanId }.toSet()
-        assertEquals(1, distinctSpans.size, "same span should appear exactly once across both drains")
-    }
-
-    @Test
-    fun reconnectDoesNotDoubleCount() = runTest {
-        // Simulates a disconnect-reconnect: after reconnect the edge still has the spans
-        // from the previous session. The bridge must not re-send them.
-        val s1 = span(1)
-        val s2 = span(2)
-        val exporter = emptyExporter().also { it.export(s1); it.export(s2) }
-        val edge = AccumulatingEdge()
-
-        val bridge = WarpOtlpBridge(exporter = exporter)
-        bridge.drain(edge) // first session — sends s1, s2
-
-        // Simulate reconnect: both spans are now at the edge.
-        bridge.drain(edge) // second session — nothing new
-
-        val allSent = edge.sentBatches.flatten()
-        assertEquals(2, allSent.size, "total send count across both sessions must be 2, not 4")
-    }
-
-    // ---- offline-then-reconnect convergence ----
-
-    @Test
-    fun offlineSpansAreDeliveredOnReconnect() = runTest {
-        val s1 = span(1)
-        val s2 = span(2)
-        val exporter = emptyExporter()
-
-        // Export s1 while offline (edge never contacted yet).
-        exporter.export(s1)
-
-        val edge = AccumulatingEdge()
-        val bridge = WarpOtlpBridge(exporter = exporter)
-
-        // Come online — s1 is delivered.
-        bridge.drain(edge)
-
-        // Export s2 offline again.
-        exporter.export(s2)
-
-        // Come online again — only s2 is new.
-        bridge.drain(edge)
-
-        val allSent = edge.sentBatches.flatten()
-        assertEquals(setOf(s1, s2), allSent.toSet())
-        // Crucially, each span appears exactly once.
-        assertEquals(2, allSent.size)
-    }
-
-    // ---- edge send failures are best-effort (logged, not thrown) ----
-
-    @Test
-    fun drainSurvivesEdgeSendFailure() = runTest {
-        val s1 = span(1)
-        val exporter = emptyExporter().also { it.export(s1) }
-
-        val bridge = WarpOtlpBridge(exporter = exporter)
-        // Must not throw — failures are best-effort.
-        bridge.drain(FailingEdge)
-    }
-
-    @Test
-    fun drainSurvivesEdgeDigestFailure() = runTest {
-        val s1 = span(1)
-        val exporter = emptyExporter().also { it.export(s1) }
-
-        val bridge = WarpOtlpBridge(exporter = exporter)
-        // Must not throw — digest failure is best-effort.
-        bridge.drain(DigestFailingEdge)
-    }
-
-    // ---- DrainResult ----
-
-    @Test
-    fun drainResultSuccessReportsSpanCount() = runTest {
-        val s1 = span(1)
-        val s2 = span(2)
-        val exporter = emptyExporter().also { it.export(s1); it.export(s2) }
-        val edge = RecordingEdge(knownSpanIds = emptySet())
-
-        val bridge = WarpOtlpBridge(exporter = exporter)
-        val result = bridge.drain(edge)
+        val result = bridge(t).drain(edge)
 
         assertIs<DrainResult.Success>(result)
-        assertEquals(2, result.spansSent)
+        assertEquals(1, edge.sentSpans.size)
+        assertEquals(1, edge.sentLogs.size)
+        assertEquals(1, edge.sentMetrics.size)
+        assertEquals(1, result.spansSent)
+        assertEquals(1, result.logsSent)
+        assertEquals(1, result.metricPointsSent)
     }
 
     @Test
-    fun drainResultNothingToSendWhenEdgeUpToDate() = runTest {
-        val s1 = span(1)
-        val exporter = emptyExporter().also { it.export(s1) }
-        val edge = RecordingEdge(knownSpanIds = setOf(s1.spanId))
+    fun reDrainSendsNothingNewForAllSignals() = runTest {
+        val t = telemetry()
+        t.spans.export(span(1))
+        t.logs.export(LogRecord(recordId = recId(1), body = "hi"))
+        t.metrics.incrementSum(MetricKey("req", MetricKind.SUM), by = 2L)
+        val edge = FakeEdge()
+        val b = bridge(t)
 
-        val bridge = WarpOtlpBridge(exporter = exporter)
-        val result = bridge.drain(edge)
+        b.drain(edge)
+        val before = Triple(edge.sentSpans.size, edge.sentLogs.size, edge.sentMetrics.size)
+        b.drain(edge) // idempotent
 
+        assertEquals(before, Triple(edge.sentSpans.size, edge.sentLogs.size, edge.sentMetrics.size))
+    }
+
+    @Test
+    fun advancedMetricReSendsExactlyOnce() = runTest {
+        val t = telemetry()
+        val key = MetricKey("req", MetricKind.SUM)
+        t.metrics.incrementSum(key, by = 1L)
+        val edge = FakeEdge()
+        val b = bridge(t)
+
+        b.drain(edge)                        // sends value=1
+        b.drain(edge)                        // unchanged → nothing
+        t.metrics.incrementSum(key, by = 1L) // value=2
+        b.drain(edge)                        // sends value=2
+
+        assertEquals(2, edge.sentMetrics.size)
+        assertEquals(listOf(1L, 2L), edge.sentMetrics.filterIsInstance<MetricPoint.Sum>().map { it.value })
+    }
+
+    @Test
+    fun linksAreInferredAndThreadedToTheEdge() = runTest {
+        // Two replicas so a cross-boundary (non-parent) link is inferred.
+        val tA = WarpTelemetry(ReplicaId("a"), InMemoryDurableStore())
+        tA.spans.export(span(1))
+        val tB = WarpTelemetry(ReplicaId("b"), InMemoryDurableStore())
+        tB.spans.merge(tA.spans.snapshot())      // B observes A's frontier
+        tB.spans.export(span(2))                 // successor, parent=null ≠ A's span ⇒ cross-boundary link
+        val edge = FakeEdge()
+
+        bridge(tB).drain(edge)
+
+        assertTrue(edge.sentLinks.any { it.fromSpanId == sId(2) && it.linkedSpanId == sId(1) })
+    }
+
+    @Test
+    fun partialFailureIsolatesSignals() = runTest {
+        val t = telemetry()
+        t.spans.export(span(1))
+        t.logs.export(LogRecord(recordId = recId(1), body = "hi"))
+        val edge = object : FakeEdge() {
+            override suspend fun sendLogs(logs: Set<LogRecord>): Unit = throw RuntimeException("logs down")
+        }
+        // spans still delivered despite logs failing; drain does not throw.
+        val result = bridge(t).drain(edge)
+        assertEquals(1, edge.sentSpans.size)
+        // A partial success still reports what got through.
+        assertIs<DrainResult.Success>(result)
+        assertEquals(1, result.spansSent)
+        assertEquals(0, result.logsSent)
+    }
+
+    @Test
+    fun drainSurvivesSpanDigestFailure() = runTest {
+        val t = telemetry()
+        t.spans.export(span(1))
+        val edge = object : FakeEdge() {
+            override suspend fun digest(): SpanDigest = throw RuntimeException("digest down")
+        }
+        // Must not throw; span leg fails, others still run.
+        bridge(t).drain(edge)
+    }
+
+    @Test
+    fun drainResultSuccessWhenNothingBuffered() = runTest {
+        val result = bridge(telemetry()).drain(FakeEdge())
         assertIs<DrainResult.Success>(result)
         assertEquals(0, result.spansSent)
+        assertEquals(0, result.logsSent)
+        assertEquals(0, result.metricPointsSent)
     }
 
     @Test
-    fun drainResultFailureOnEdgeError() = runTest {
-        val s1 = span(1)
-        val exporter = emptyExporter().also { it.export(s1) }
+    fun drainDeliversEachMetricKind() = runTest {
+        val t = telemetry()
+        t.metrics.incrementSum(MetricKey("s", MetricKind.SUM), by = 1L)
+        t.metrics.incrementSumDouble(MetricKey("ds", MetricKind.SUM), by = 1.5)
+        t.metrics.setGauge(MetricKey("g", MetricKind.GAUGE), value = 0.5, timestamp = 1L)
+        t.metrics.addCardinality(MetricKey("c", MetricKind.CARDINALITY), element = "u1")
+        val edge = FakeEdge()
 
-        val bridge = WarpOtlpBridge(exporter = exporter)
-        val result = bridge.drain(FailingEdge)
+        bridge(t).drain(edge)
 
-        assertIs<DrainResult.Failure>(result)
-    }
-
-    @Test
-    fun drainResultDigestFailureIsFailure() = runTest {
-        val s1 = span(1)
-        val exporter = emptyExporter().also { it.export(s1) }
-
-        val bridge = WarpOtlpBridge(exporter = exporter)
-        val result = bridge.drain(DigestFailingEdge)
-
-        assertIs<DrainResult.Failure>(result)
-    }
-
-    @Test
-    fun drainResultSuccessWhenNoLocalSpans() = runTest {
-        val exporter = emptyExporter()
-        val edge = RecordingEdge(knownSpanIds = emptySet())
-
-        val bridge = WarpOtlpBridge(exporter = exporter)
-        val result = bridge.drain(edge)
-
-        assertIs<DrainResult.Success>(result)
-        assertEquals(0, result.spansSent)
-        assertFalse(edge.digestCalled, "digest should be skipped when there is nothing to send")
-    }
-
-    // ---- test doubles ----
-
-    /** Edge that starts with [knownSpanIds] and accumulates spans passed to [send]. */
-    private class RecordingEdge(
-        knownSpanIds: Set<ByteString>,
-    ) : OtlpEdge {
-        private val lock = reentrantLock()
-        private val known: MutableSet<ByteString> = knownSpanIds.toMutableSet()
-        val sentBatches: MutableList<List<SpanRecord>> = mutableListOf()
-        var digestCalled: Boolean = false
-
-        override suspend fun digest(): SpanDigest {
-            digestCalled = true
-            return SpanDigest(lock.withLock { known.toSet() })
-        }
-
-        override suspend fun send(spans: Set<SpanRecord>) {
-            lock.withLock {
-                sentBatches.add(spans.toList())
-                known.addAll(spans.map { it.spanId })
-            }
-        }
-    }
-
-    /** Edge that starts empty and accumulates all sent spans into its known set. */
-    private class AccumulatingEdge : OtlpEdge {
-        private val lock = reentrantLock()
-        private val known: MutableSet<ByteString> = mutableSetOf()
-        val sentBatches: MutableList<List<SpanRecord>> = mutableListOf()
-
-        override suspend fun digest(): SpanDigest = SpanDigest(lock.withLock { known.toSet() })
-
-        override suspend fun send(spans: Set<SpanRecord>) {
-            lock.withLock {
-                sentBatches.add(spans.toList())
-                known.addAll(spans.map { it.spanId })
-            }
-        }
-    }
-
-    /** Edge whose [send] always throws. */
-    private object FailingEdge : OtlpEdge {
-        override suspend fun digest(): SpanDigest = SpanDigest(emptySet())
-        override suspend fun send(spans: Set<SpanRecord>): Unit = throw RuntimeException("network error")
-    }
-
-    /** Edge whose [digest] always throws. */
-    private object DigestFailingEdge : OtlpEdge {
-        override suspend fun digest(): SpanDigest = throw RuntimeException("digest fetch failed")
-        override suspend fun send(spans: Set<SpanRecord>) = Unit
+        assertEquals(1, edge.sentMetrics.filterIsInstance<MetricPoint.Sum>().size)
+        assertEquals(1, edge.sentMetrics.filterIsInstance<MetricPoint.DoubleSum>().size)
+        assertEquals(1, edge.sentMetrics.filterIsInstance<MetricPoint.Gauge>().size)
+        assertEquals(1, edge.sentMetrics.filterIsInstance<MetricPoint.Cardinality>().size)
     }
 }

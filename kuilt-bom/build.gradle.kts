@@ -47,6 +47,7 @@ dependencies {
         api(project(":kuilt-otel-logback"))
         api(project(":kuilt-otel-log4j2"))
         api(project(":kuilt-otel-sdk"))
+        api(project(":kuilt-otel-otlp"))
         api(project(":kuilt-warp"))
         api(project(":kuilt-warp-otel"))
     }
