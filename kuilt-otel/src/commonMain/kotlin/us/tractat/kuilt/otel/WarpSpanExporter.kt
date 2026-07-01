@@ -52,6 +52,7 @@ public class WarpSpanExporter(
     private val store: DurableStore,
     private val maxSpans: Int = DEFAULT_MAX_SPANS,
     private val bufferPolicy: BufferPolicy = BufferPolicy.DROP_OLDEST,
+    private val causalClock: WarpCausalClock? = null,
 ) {
     // The lock guards 'spans'. No suspend calls are made inside the locked section —
     // Cbor encode/decode and the CRDT mutations are pure (non-suspending). The store
@@ -92,6 +93,11 @@ public class WarpSpanExporter(
     /**
      * Export one span: insert it into the CRDT and durably flush to [store].
      *
+     * If a [WarpCausalClock] was supplied, an **unstamped** span is auto-stamped with
+     * causal context before insert (#846) — an explicit [SpanRecord.causalStamp]
+     * always wins. The clock is persisted on the same durable path as the span, so a
+     * restart never re-mints a used dot.
+     *
      * Returns [ExportResult.Success] after the durable write. Returns
      * [ExportResult.Failure] only if the [store] itself throws; the CRDT
      * mutation is never committed without a successful store write.
@@ -100,19 +106,29 @@ public class WarpSpanExporter(
      * dropped span, then the new span is inserted.
      */
     public suspend fun export(span: SpanRecord): ExportResult {
+        // Auto-stamp causal context (#846): a configured clock fills an unstamped
+        // span so causal links form with no caller change; an explicit stamp wins.
+        val stamped = when {
+            causalClock == null -> span
+            span.causalStamp != null -> span
+            else -> span.copy(causalStamp = causalClock.tick())
+        }
         val encoded = lock.withLock {
             maybeEvict()
-            spans = spans.add(replica, span)
+            spans = spans.add(replica, stamped)
             cbor.encodeToByteArray(spanSerializer, spans)
         }
-        return runCatchingCancellable { store.write(STORE_KEY, encoded) }
-            .fold(
-                onSuccess = { ExportResult.Success },
-                onFailure = { cause ->
-                    logger.error(cause) { "WarpSpanExporter: durable write failed for span ${span.spanId}" }
-                    ExportResult.Failure(cause)
-                },
-            )
+        return runCatchingCancellable {
+            store.write(STORE_KEY, encoded)
+            // Persist the clock on the durable path so a restart never re-mints a used dot.
+            causalClock?.persist(store)
+        }.fold(
+            onSuccess = { ExportResult.Success },
+            onFailure = { cause ->
+                logger.error(cause) { "WarpSpanExporter: durable write failed for span ${stamped.spanId}" }
+                ExportResult.Failure(cause)
+            },
+        )
     }
 
     /**
@@ -127,9 +143,16 @@ public class WarpSpanExporter(
      * Merge an [ORSet] received from another replica (via anti-entropy / gossip)
      * into this exporter's state, then flush the merged result to [store].
      *
+     * If a [WarpCausalClock] was supplied, the remote replica's causal frontier is
+     * folded into the local clock first, so the next auto-stamped span records those
+     * remote dots as predecessors — the cross-replica happens-before path (#846).
+     *
      * Idempotent: merging the same set twice produces the same result.
      */
     public suspend fun merge(remote: ORSet<SpanRecord>): ExportResult {
+        // Fold the remote replica's causal frontier so the next local tick records
+        // those dots as predecessors — the cross-replica happens-before path (#846).
+        causalClock?.observe(remote.elements.mapNotNull { it.causalStamp?.dot }.toSet())
         val encoded = lock.withLock {
             spans = spans.piece(remote)
             cbor.encodeToByteArray(spanSerializer, spans)
