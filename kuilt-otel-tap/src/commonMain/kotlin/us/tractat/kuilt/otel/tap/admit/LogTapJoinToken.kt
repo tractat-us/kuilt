@@ -20,6 +20,27 @@ import kotlin.time.Instant
  *
  * [code] is secret material: [toString] redacts it, and it must never be logged except
  * at the single deliberate issuance print.
+ *
+ * ### Entropy ↔ TTL: why the window is short (and must stay short)
+ *
+ * The code carries about 2⁴⁰ of entropy (8 characters over a 32-symbol alphabet). On the
+ * plaintext (`ws://`) wire that this tap targets, the code's secrecy is bounded **in time,
+ * not just in size**. Two offline-cracking paths exist within the accepted honest-seam
+ * threat model:
+ * - a **passive eavesdropper** captures a `Challenge` nonce and the matching `Proof` tag
+ *   and grinds candidate codes offline against `HMAC-SHA256(candidate, nonce)`;
+ * - in the **role-inverted topology** (the prover hosts), an attacker sends the hosting
+ *   prover a `Challenge` purely to harvest a `HMAC(code, nonce)` tag to grind.
+ * Either way the attacker only wins if they crack the code **before the token expires** —
+ * a recovered code is useless once [isValid] returns false. The short [ttl] is therefore a
+ * load-bearing security control, not a UX knob: it is what keeps a ~2⁴⁰ offline search from
+ * being worthwhile.
+ *
+ * **WARNING — do not raise [DEFAULT_TTL].** Widening the window trades directly against the
+ * code's entropy: every extra minute is extra offline-cracking budget on the plaintext wire.
+ * The 5-minute default is long enough to read and type the code and short enough to bound the
+ * search. If a longer-lived tap is genuinely needed, add entropy (a longer code) or move to an
+ * encrypted transport — never just lengthen the TTL.
  */
 public class LogTapJoinToken(
     public val code: String,
@@ -33,7 +54,13 @@ public class LogTapJoinToken(
     override fun toString(): String = "LogTapJoinToken(code=****, issuedAt=$issuedAt, ttl=$ttl)"
 
     public companion object {
-        /** Default pairing window: long enough to read and type the code, short enough to bound guessing. */
+        /**
+         * Default pairing window: long enough to read and type the code, short enough to bound
+         * an offline crack of the ~2⁴⁰ code on the plaintext wire.
+         *
+         * **Do not raise this.** The TTL bounds the attacker's offline-cracking budget; see the
+         * "Entropy ↔ TTL" note on [LogTapJoinToken]. Add entropy or encrypt the transport instead.
+         */
         public val DEFAULT_TTL: Duration = 5.minutes
 
         // Crockford base32 — omits I/L/O/U so the code is unambiguous when read aloud or typed.
