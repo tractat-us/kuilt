@@ -296,10 +296,11 @@ internal class SeamRoom(
     private var hostLost = false
 
     /**
-     * **Joiner only.** Guards the single reconnect attempt so the two racing tear-detection
+     * **Joiner only.** Guards the single in-flight reconnect attempt so the two racing tear-detection
      * paths — [runJoinerTornWatcher] (transport `Torn`) and [handleUnresponsive] (heartbeat
-     * `TransportClosed`) — cannot both drive a reconnect or both [markHostLost].
-     * First path to flip it under [lock] owns the attempt; the other becomes a no-op.
+     * `TransportClosed`) — cannot both drive a reconnect or both [markHostLost]. First path to flip
+     * it under [lock] owns the attempt; the other becomes a no-op. Cleared on a successful resume
+     * so a later in-session tear can claim a fresh attempt (repeated-episode auto-resume).
      */
     private var reconnecting = false
 
@@ -408,6 +409,10 @@ internal class SeamRoom(
      * **Joiner only.** On a transport `Torn`, trigger an in-window resume over a re-woven base
      * ([attemptHostReconnect]) instead of going straight to terminal. Races the heartbeat
      * `TransportClosed` path in [handleUnresponsive]; the [reconnecting] flag ensures only one wins.
+     *
+     * Single-shot — it fires only for the **first** tear. A subsequent in-session tear (after a
+     * successful resume) is re-triggered by the host-liveness detector [runHostReconnect] restarts:
+     * its `TransportClosed` funnels through [handleUnresponsive] into a fresh [attemptHostReconnect].
      */
     private suspend fun runJoinerTornWatcher() {
         seam.state.filterIsInstance<SeamState.Torn>().first()
@@ -453,8 +458,9 @@ internal class SeamRoom(
      * the *same* [HeartbeatConfig.reconnectWindow]; if left running it could fire
      * [PartitionEvent.PeerLost] → [markHostLost] on a *different* coroutine mid-reconnect, racing an
      * in-flight resume into a contradictory `HostLost` + `Resumed`. Stopping it makes the reconnect
-     * authoritative over the host-liveness decision. On success the detector is **restarted** so the
-     * resumed room is not left unmonitored.
+     * authoritative over the host-liveness decision. On success the detector is **restarted** (so the
+     * resumed room is not left unmonitored) and [reconnecting] is cleared, arming the next episode:
+     * a later in-session tear re-fires `TransportClosed` → [handleUnresponsive] → a fresh reconnect.
      *
      * Without a [resumeToken] (torn before admit), a [reweave], or a known [hostPeerId], it goes
      * straight to [markHostLost] — the pre-#1037 immediate-terminal behavior.
@@ -504,9 +510,12 @@ internal class SeamRoom(
         } ?: false
 
         if (resumed) {
-            // Restart host-liveness monitoring on the healed generation so the resumed room is not
-            // left unmonitored (the detector we stopped above is gone).
+            // Re-arm: clear the guard and restart host-liveness monitoring on the healed generation.
+            // The restarted detector both keeps the resumed room monitored and, on a LATER tear,
+            // re-fires TransportClosed → [handleUnresponsive] → a fresh [attemptHostReconnect]: with
+            // the guard cleared, a subsequent in-session drop auto-resumes again (repeated episodes).
             lock.withLock {
+                reconnecting = false
                 admittedById[hostId]?.let { startDetector(it) }
             }
         } else {

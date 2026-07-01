@@ -33,6 +33,7 @@ import us.tractat.kuilt.test.fabric.connectionPair
 import kotlin.coroutines.ContinuationInterceptor
 import kotlin.random.Random
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
@@ -244,6 +245,37 @@ class JoinerReconnectTest {
                 "with no resume token the joiner must go HostLost immediately, not hold the window",
             )
             assertIs<MembershipEvent.HostLost>(hostLost.await())
+        }
+
+    @Test
+    fun `joiner auto-resumes on repeated in-session tears`() =
+        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+            val clock: () -> Instant = { Instant.fromEpochMilliseconds(0L) }
+            val h = reconnectHarness(clock)
+
+            h.hostRoom.roster.first { it.size == 1 }
+            h.joinerRoom.roster.first { it.isNotEmpty() }
+            assertNotNull(h.joinerRoom.resumeToken, "joiner must hold a resume token after admit")
+
+            val resumes = mutableListOf<MembershipEvent.Resumed>()
+            backgroundScope.launch {
+                h.joinerRoom.events.filterIsInstance<MembershipEvent.Resumed>().collect { resumes += it }
+            }
+            val hostLost = async { h.joinerRoom.events.filterIsInstance<MembershipEvent.HostLost>().first() }
+
+            // Episode 1 — first tear auto-resumes (the torn watcher drives it).
+            h.muxClient.closeBase()
+            repeat(4) { advanceTimeBy(100L) }
+            assertEquals(1, resumes.size, "first in-session tear must auto-resume")
+
+            // Episode 2 — a SECOND tear must also auto-resume. The torn watcher is single-shot, so
+            // this proves the guard is cleared on success AND the host-liveness detector restarted:
+            // the restarted detector's TransportClosed re-triggers the reconnect (lobby reconnect).
+            h.muxClient.closeBase()
+            repeat(8) { advanceTimeBy(100L) }
+            assertEquals(2, resumes.size, "a second in-session tear must auto-resume again")
+            assertFalse(hostLost.isCompleted, "repeated auto-resume must not fall to HostLost")
+            hostLost.cancel()
         }
 
     @Test
