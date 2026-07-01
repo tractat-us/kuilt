@@ -27,12 +27,21 @@ kotlin {
         @OptIn(ExperimentalKotlinGradlePluginApi::class)
         compilerOptions { jvmTarget.set(JvmTarget.JVM_11) }
     }
-    iosArm64()
-    iosSimulatorArm64()
-    macosArm64()
+    // JVM/Android-only modules (e.g. a logback appender — the SLF4J/logback world
+    // has no iOS/macOS/wasm variant) opt out of the native + wasm targets by setting
+    // `kuilt.jvmAndroidOnly=true` in their own gradle.properties. This is not a
+    // convenience: declaring a native or wasm target whose compilation has NO source
+    // produces no `.klib`, which makes `generateMetadataFileFor<Target>Publication`
+    // fail the whole publish with a FileNotFoundException (see #1014). A module with
+    // no source for a target must not declare that target at all.
+    if (project.findProperty("kuilt.jvmAndroidOnly") != "true") {
+        iosArm64()
+        iosSimulatorArm64()
+        macosArm64()
 
-    @OptIn(ExperimentalWasmDsl::class)
-    wasmJs { browser() }
+        @OptIn(ExperimentalWasmDsl::class)
+        wasmJs { browser() }
+    }
 
     sourceSets {
         commonTest.dependencies { implementation(libs.kotlin.test) }

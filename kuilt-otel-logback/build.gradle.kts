@@ -35,14 +35,9 @@ kotlin {
         jvmMain.get().dependsOn(jvmAndAndroidMain)
         androidMain.get().dependsOn(jvmAndAndroidMain)
 
-        // iosMain / macosMain: declared explicitly because the manual
-        // jvmAndAndroidMain intermediate disables the KMP plugin's default hierarchy
-        // auto-wiring. Both are empty — there is no logback off the JVM.
-        val iosMain by creating { dependsOn(commonMain.get()) }
-        val iosArm64Main by getting { dependsOn(iosMain) }
-        val iosSimulatorArm64Main by getting { dependsOn(iosMain) }
-        val macosMain by creating { dependsOn(commonMain.get()) }
-        val macosArm64Main by getting { dependsOn(macosMain) }
+        // No native (iOS/macOS) or wasm source sets: this module is JVM/Android-only
+        // (`kuilt.jvmAndroidOnly=true` in gradle.properties), so kuilt.kmp-library
+        // does not declare those targets — there is no logback off the JVM.
 
         jvmTest.dependencies {
             // A real logback backend so raw-SLF4J output actually flows through the
