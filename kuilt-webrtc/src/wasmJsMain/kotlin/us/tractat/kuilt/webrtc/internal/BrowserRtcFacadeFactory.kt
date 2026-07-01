@@ -19,7 +19,7 @@ import us.tractat.kuilt.webrtc.IceTransportPolicy
 import us.tractat.kuilt.webrtc.SignalingMessage
 import kotlin.coroutines.CoroutineContext
 
-private val log = KotlinLogging.logger {}
+private val log = KotlinLogging.logger("us.tractat.kuilt.webrtc.internal.BrowserRtcFacadeFactory")
 
 /**
  * Browser-backed [RtcPeerConnectionFacade] factory. Constructs a real

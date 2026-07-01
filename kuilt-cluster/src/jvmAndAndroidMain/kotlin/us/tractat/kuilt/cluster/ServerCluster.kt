@@ -42,7 +42,7 @@ import us.tractat.kuilt.session.RoomHost
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 
-private val log = KotlinLogging.logger {}
+private val log = KotlinLogging.logger("us.tractat.kuilt.cluster.ServerCluster")
 
 /**
  * Server-side cluster facade: an M-voter [VoterMesh] plus a relay accept loop that

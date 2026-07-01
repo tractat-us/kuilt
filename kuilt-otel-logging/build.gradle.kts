@@ -21,6 +21,12 @@ kotlin {
             implementation(project(":kuilt-test"))
             implementation(libs.kotlinx.coroutines.test)
         }
+        // jvmTest carries the source-scan regression guard (InternalLoggerNameGuardTest),
+        // which walks the repo tree — a JVM-only (java.io.File) check. Declare kotlin.test
+        // here explicitly since the intermediates above disable KMP hierarchy auto-wiring.
+        jvmTest.dependencies {
+            implementation(libs.kotlin.test)
+        }
 
         // The capture edge is one uniform commonMain hook now (oshai 8.x makes the
         // appender settable on every target). The only platform-specific piece is

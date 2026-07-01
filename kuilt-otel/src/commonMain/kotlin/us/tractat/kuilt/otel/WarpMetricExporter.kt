@@ -14,7 +14,7 @@ import us.tractat.kuilt.crdt.HyperLogLog
 import us.tractat.kuilt.crdt.LWWRegister
 import us.tractat.kuilt.crdt.ReplicaId
 
-private val logger = KotlinLogging.logger {}
+private val logger = KotlinLogging.logger("us.tractat.kuilt.otel.WarpMetricExporter")
 
 /**
  * A CRDT-backed metric exporter for cumulative sums, gauges, and cardinality estimates.

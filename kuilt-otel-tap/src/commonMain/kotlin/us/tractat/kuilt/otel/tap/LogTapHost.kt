@@ -14,7 +14,7 @@ import us.tractat.kuilt.otel.LogRecord
 import us.tractat.kuilt.otel.WarpLogRecordExporter
 import us.tractat.kuilt.quilter.Quilter
 
-private val logger = KotlinLogging.logger {}
+private val logger = KotlinLogging.logger("us.tractat.kuilt.otel.tap.LogTapHost")
 
 /**
  * The device side of a log tap: a peer that offers its captured logs for extraction.

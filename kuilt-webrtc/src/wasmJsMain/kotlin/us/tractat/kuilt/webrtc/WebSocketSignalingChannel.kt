@@ -10,7 +10,7 @@ import kotlinx.coroutines.flow.receiveAsFlow
 import kotlin.JsFun
 import kotlin.js.JsAny
 
-private val log = KotlinLogging.logger {}
+private val log = KotlinLogging.logger("us.tractat.kuilt.webrtc.WebSocketSignalingChannel")
 
 /**
  * [SignalingChannel] backed by a browser `WebSocket`.

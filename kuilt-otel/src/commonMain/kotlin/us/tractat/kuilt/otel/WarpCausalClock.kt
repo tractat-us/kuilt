@@ -11,7 +11,7 @@ import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.crdt.Dot
 import us.tractat.kuilt.crdt.ReplicaId
 
-private val logger = KotlinLogging.logger {}
+private val logger = KotlinLogging.logger("us.tractat.kuilt.otel.WarpCausalClock")
 
 /**
  * Mints causal [Dot]s for spans and tracks the current happens-before frontier.

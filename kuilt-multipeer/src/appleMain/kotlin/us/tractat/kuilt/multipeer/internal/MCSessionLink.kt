@@ -35,7 +35,7 @@ import us.tractat.kuilt.core.Spool
 import us.tractat.kuilt.core.Swatch
 import kotlin.coroutines.CoroutineContext
 
-private val log = KotlinLogging.logger {}
+private val log = KotlinLogging.logger("us.tractat.kuilt.multipeer.internal.MCSessionLink")
 
 /**
  * `Seam` backed by an `MCSession`.

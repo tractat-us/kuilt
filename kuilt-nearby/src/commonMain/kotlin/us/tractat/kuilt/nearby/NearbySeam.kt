@@ -21,7 +21,7 @@ import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.Spool
 import us.tractat.kuilt.core.Swatch
 
-private val log = KotlinLogging.logger {}
+private val log = KotlinLogging.logger("us.tractat.kuilt.nearby.NearbySeam")
 
 /**
  * [Seam] implementation backed by a Nearby Connections link.

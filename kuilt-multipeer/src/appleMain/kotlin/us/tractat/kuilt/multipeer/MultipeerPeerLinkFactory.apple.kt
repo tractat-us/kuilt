@@ -23,7 +23,7 @@ import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.multipeer.internal.MCSessionLink
 
-private val log = KotlinLogging.logger {}
+private val log = KotlinLogging.logger("us.tractat.kuilt.multipeer.MultipeerPeerLinkFactory")
 
 /**
  * iOS-side `MultipeerPeerLinkFactory`. Owns the local `MCPeerID`, the active

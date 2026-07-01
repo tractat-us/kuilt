@@ -10,7 +10,7 @@ import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.crdt.ORSet
 import us.tractat.kuilt.crdt.ReplicaId
 
-private val logger = KotlinLogging.logger {}
+private val logger = KotlinLogging.logger("us.tractat.kuilt.otel.WarpSpanExporter")
 
 /**
  * A CRDT-backed span exporter.

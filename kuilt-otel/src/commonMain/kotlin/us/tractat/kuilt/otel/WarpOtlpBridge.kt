@@ -3,7 +3,7 @@ package us.tractat.kuilt.otel
 import io.github.oshai.kotlinlogging.KotlinLogging
 import us.tractat.kuilt.core.runCatchingCancellable
 
-private val logger = KotlinLogging.logger {}
+private val logger = KotlinLogging.logger("us.tractat.kuilt.otel.WarpOtlpBridge")
 
 /**
  * Drains converged CRDTs to an OTLP-capable edge, reconciling by digest.
