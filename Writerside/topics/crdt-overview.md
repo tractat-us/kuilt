@@ -42,15 +42,14 @@ Use replication when you want convergence without a central coordinator. If your
 
 | Group | Types | Convergence property |
 |-------|-------|----------------------|
-| Counters | `GCounter`, `PNCounter`, `BoundedCounter`, `ResettableCounter` | Per-replica monotone internals; deterministic integer result after merge |
-| Sets | `GSet`, `ORSet`, `TwoPhaseSet` | Set union / observe-remove semantics |
+| Counters | `GCounter`, `PNCounter`, `BoundedCounter`, `ResettableCounter`, `HyperLogLog`, `CountMinSketch` | Per-replica monotone internals; exact integer result — or a fixed-memory probabilistic estimate for the two sketches (`HyperLogLog` distinct-count, `CountMinSketch` frequency) |
+| Sets | `GSet`, `ORSet`, `TwoPhaseSet`, `BloomFilter` | Set union / observe-remove semantics; `BloomFilter` is a compact probabilistic membership set (no false negatives) |
 | Registers | `LWWRegister`, `MVRegister` | Last-write-wins or multi-value concurrent conflict |
 | Maps | `LWWMap`, `ORMap` | Key-level LWW or ORSet-keyed map |
 | Sequences | `Fugue`, `Rga` | Ordered list with stable unique ids; Fugue adds maximal non-interleaving |
 | Trees | `MovableTree` | Op-log union; Lamport-ordered replay with cycle prevention |
 | Composite | `JsonCrdt` | Recursive JSON document — ORMap objects, RGA arrays, MVRegister leaves |
 | Ephemeral | `EphemeralMap` | Per-replica presence slot, clock-ordered, with caller-driven TTL eviction |
-| Sketches | `BloomFilter`, `HyperLogLog`, `CountMinSketch` | Probabilistic structures; bitwise-OR or element-wise max merge |
 | Causal primitives | `Causal`, `DotContext`, `DotSet` | Causal-context-based remove/add reasoning |
 
 ## Using the types without kuilt
