@@ -125,6 +125,12 @@ jobs:
           set -euo pipefail
           mkdir -p site/guide
           unzip -q guide-zip/*.zip -d site/guide
+          # Writerside emits its header-logo and favicon as ROOT-ABSOLUTE URLs
+          # (/images/…, from the images web-path in writerside.cfg). The guide is served
+          # under the /kuilt/guide/ Pages subpath, so /images/… resolves to <domain>/images/…
+          # and 404s (broken header logo + favicon). Rewrite those refs to page-relative:
+          # every guide page is flat at /kuilt/guide/, so "images/…" resolves correctly.
+          grep -rlIZ '"/images/' site/guide | xargs -0 -r sed -i 's#"/images/#"images/#g'
           cp .nojekyll site/.nojekyll 2>/dev/null || touch site/.nojekyll
           cat > site/index.html <<'HTML'
           <!doctype html>

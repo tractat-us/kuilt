@@ -1,4 +1,4 @@
-# RGA (`Rga`)
+# RGA
 
 An ordered list for collaborative text and sequences. Every element gets a stable unique id, so concurrent insertions from different devices always resolve to the same final order — no index collisions, no lost edits.
 

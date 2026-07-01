@@ -1,4 +1,4 @@
-# Fugue (`Fugue`)
+# Fugue
 
 Imagine two people editing the same document while offline — Alice types a sentence at the
 top, Bob types a different sentence at the same spot. When they reconnect, a naive merge
