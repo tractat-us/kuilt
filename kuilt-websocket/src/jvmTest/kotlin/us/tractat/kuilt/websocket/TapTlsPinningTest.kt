@@ -12,13 +12,10 @@ import kotlinx.coroutines.withTimeout
 import us.tractat.kuilt.core.CloseReason
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.websocket.tls.DevTlsIdentity
-import us.tractat.kuilt.websocket.tls.fingerprintPinningTrustManager
 import us.tractat.kuilt.websocket.tls.generateDevTlsIdentity
 import us.tractat.kuilt.websocket.tls.pinnedTlsHttpClient
 import us.tractat.kuilt.websocket.tls.tapTlsConnector
 import java.net.ServerSocket
-import java.security.MessageDigest
-import java.security.cert.X509Certificate
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
@@ -31,12 +28,14 @@ import kotlin.test.assertTrue
  * [KtorServerLoom] over TLS with a self-signed [DevTlsIdentity], joined by a
  * [pinnedTlsHttpClient] that trusts only the host's certificate fingerprint.
  *
- * The three assertions together are the "done when" of the feature:
- *  - the fingerprint the host shows really is its certificate's SHA-256 ([fingerprintIdentifiesCert]);
- *  - a joiner that pins it completes a TLS handshake and exchanges frames ([wssRoundTripWithPinnedClient]) —
- *    i.e. the wire is TLS, not plaintext `ws://`;
+ * The two assertions together are the "done when" of the wire:
+ *  - a joiner that pins the host's fingerprint completes a TLS handshake and exchanges frames
+ *    ([wssRoundTripWithPinnedClient]) — i.e. the wire is TLS, not plaintext `ws://`;
  *  - a joiner that pins the wrong fingerprint is rejected at the handshake ([wrongFingerprintRejected]) —
  *    i.e. an on-path party without the pinned cert cannot connect, so it cannot read the wire.
+ *
+ * The server-engine-free half of the story — the fingerprint identity and the pin's accept/reject
+ * logic — lives in [us.tractat.kuilt.websocket.tls.TapTlsHelpersTest], which runs on Android too.
  */
 class TapTlsPinningTest {
 
@@ -61,19 +60,6 @@ class TapTlsPinningTest {
         srv.start(wait = false)
         server = srv
         return loom to port
-    }
-
-    @Test
-    fun fingerprintIdentifiesCert() {
-        val identity = generateDevTlsIdentity()
-        val cert = requireNotNull(identity.keyStore.getCertificate(identity.keyAlias)) as X509Certificate
-        val recomputed = MessageDigest.getInstance("SHA-256")
-            .digest(cert.encoded)
-            .joinToString(":") { "%02x".format(it) }
-        assertEquals(recomputed, identity.fingerprintSha256)
-        // A fingerprint given with colons and in upper case still pins the same cert.
-        fingerprintPinningTrustManager(identity.fingerprintSha256.uppercase())
-            .checkServerTrusted(arrayOf(cert), "RSA")
     }
 
     @Test
