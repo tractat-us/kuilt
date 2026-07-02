@@ -1071,7 +1071,8 @@ internal class RaftEngine(
                 // is immediately uneffected (§6 rollback safety).
                 recomputeMembership()
             }
-            val toAdd = m.entries.filter { new -> log.none { it.index == new.index } }
+            val have = log.mapTo(HashSet()) { it.index }
+            val toAdd = m.entries.filter { it.index !in have }
             if (toAdd.isNotEmpty()) {
                 log.addAll(toAdd)
                 storage.appendEntries(toAdd)
@@ -1210,7 +1211,9 @@ internal class RaftEngine(
                 }
             }
             _commitIndex.value = idx
-            pending.removeAll { (i, d) -> if (i == idx) { d.complete(entry); true } else false }
+            val matches = pending.filter { (i, _) -> i == idx }
+            pending.removeAll(matches)
+            matches.forEach { (_, d) -> d.complete(entry) }
         }
         currentCommitIndex = newCommit
         emitTrace(RaftTraceEvent.AdvanceCommitIndex(nextClock(), transport.selfId, oldCommit, newCommit))
