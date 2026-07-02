@@ -53,7 +53,9 @@ public suspend fun CoroutineScope.gameHosted(
     clock: () -> Instant = { Clock.System.now() },
     identity: ClientIdentity = ClientIdentity.Auto,
 ): GameSession {
-    val dispatcher = coroutineContext[ContinuationInterceptor]!!
+    val dispatcher = requireNotNull(coroutineContext[ContinuationInterceptor]) {
+        "weave/handshake: no dispatcher (ContinuationInterceptor) in coroutine context"
+    }
     val overlay = hostedOverlay(selfId, source, dispatcher, random, clock)
     return gameHost(
         seam = overlay,

@@ -36,6 +36,14 @@ public suspend fun inMemoryMeshOfSize(n: Int): List<Seam> = coroutineScope {
 
     // Launch all meshSeam calls concurrently — Hello exchanges must interleave.
     (0 until n).map { i ->
-        async { meshSeam(selfId = peerIds[i], connections = connsByPeer[i], dispatcher = currentCoroutineContext()[ContinuationInterceptor]!!) }
+        async {
+            meshSeam(
+                selfId = peerIds[i],
+                connections = connsByPeer[i],
+                dispatcher = requireNotNull(currentCoroutineContext()[ContinuationInterceptor]) {
+                    "weave/handshake: no dispatcher (ContinuationInterceptor) in coroutine context"
+                },
+            )
+        }
     }.awaitAll()
 }

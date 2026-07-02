@@ -43,7 +43,9 @@ public suspend fun CoroutineScope.inMemoryStarOf(
     hubId: PeerId = PeerId("hub"),
     random: Random = Random(0L),
 ): Star {
-    val dispatcher = currentCoroutineContext()[ContinuationInterceptor]!!
+    val dispatcher = requireNotNull(currentCoroutineContext()[ContinuationInterceptor]) {
+        "weave/handshake: no dispatcher (ContinuationInterceptor) in coroutine context"
+    }
     val clock: () -> Instant = { Instant.fromEpochMilliseconds(0) }
     val source = InMemoryConnectionSource()
 

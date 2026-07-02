@@ -95,7 +95,9 @@ public abstract class RoomFanoutIsolationConformanceSuite {
     @Test
     public fun broadcastOnRoomReachesOnlyRoomMembers(): TestResult =
         runTest(StandardTestDispatcher(), timeout = 5.seconds) {
-            val dispatcher = coroutineContext[ContinuationInterceptor]!!
+            val dispatcher = requireNotNull(coroutineContext[ContinuationInterceptor]) {
+                "weave/handshake: no dispatcher (ContinuationInterceptor) in coroutine context"
+            }
             val harness = newHarness(backgroundScope, dispatcher, RoomAuthorizer.AllowAll, Random(42L))
 
             val serverRoom7 = harness.serverLoom.host(Pattern("table-7"))
@@ -141,7 +143,9 @@ public abstract class RoomFanoutIsolationConformanceSuite {
     @Test
     public fun perRoomPeersReflectsOnlyRoomMembers(): TestResult =
         runTest(StandardTestDispatcher(), timeout = 5.seconds) {
-            val dispatcher = coroutineContext[ContinuationInterceptor]!!
+            val dispatcher = requireNotNull(coroutineContext[ContinuationInterceptor]) {
+                "weave/handshake: no dispatcher (ContinuationInterceptor) in coroutine context"
+            }
             val harness = newHarness(backgroundScope, dispatcher, RoomAuthorizer.AllowAll, Random(99L))
 
             val serverRoom7 = harness.serverLoom.host(Pattern("table-7"))
@@ -172,7 +176,9 @@ public abstract class RoomFanoutIsolationConformanceSuite {
     @Test
     public fun closingOneRoomDoesNotAffectSibling(): TestResult =
         runTest(StandardTestDispatcher(), timeout = 5.seconds) {
-            val dispatcher = coroutineContext[ContinuationInterceptor]!!
+            val dispatcher = requireNotNull(coroutineContext[ContinuationInterceptor]) {
+                "weave/handshake: no dispatcher (ContinuationInterceptor) in coroutine context"
+            }
             val harness = newHarness(backgroundScope, dispatcher, RoomAuthorizer.AllowAll, Random(7L))
 
             val serverRoom7 = harness.serverLoom.host(Pattern("table-7"))
@@ -204,7 +210,9 @@ public abstract class RoomFanoutIsolationConformanceSuite {
     @Test
     public fun rejectedConnectionIsStructurallyExcluded(): TestResult =
         runTest(StandardTestDispatcher(), timeout = 5.seconds) {
-            val dispatcher = coroutineContext[ContinuationInterceptor]!!
+            val dispatcher = requireNotNull(coroutineContext[ContinuationInterceptor]) {
+                "weave/handshake: no dispatcher (ContinuationInterceptor) in coroutine context"
+            }
             val rejectedPeer = PeerId("client-rejected")
             // Authorize everyone for table-7 EXCEPT the rejected peer.
             val authorizer = RoomAuthorizer { peer, tag -> !(tag == "table-7" && peer == rejectedPeer) }
