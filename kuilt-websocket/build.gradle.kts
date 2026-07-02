@@ -24,10 +24,23 @@ kotlin {
             dependencies {
                 implementation(libs.ktor.serverCore)
                 implementation(libs.ktor.serverWebsockets)
+                // Shared by JVM and Android: the wss:// dev-cert helpers (tls/) use the OkHttp
+                // client engine to pin a fingerprint, and Ktor's self-signed cert generator to
+                // mint a DevTlsIdentity. Both APIs (KeyStore/X509TrustManager) exist on Android.
+                implementation(libs.ktor.client.okhttp)
+                implementation(libs.ktor.network.tls.certificates)
             }
         }
         jvmMain.get().dependsOn(jvmAndAndroidMain)
         androidMain.get().dependsOn(jvmAndAndroidMain)
+
+        // jvmAndAndroidTest: the tls-helper coverage that needs no server engine runs on
+        // both the JVM and Android unit-test variants (the Netty round-trip stays in jvmTest).
+        // Wired by hand for the same reason as jvmAndAndroidMain — the manual intermediate
+        // disables the plugin's default test-hierarchy auto-wiring.
+        val jvmAndAndroidTest by creating { dependsOn(commonTest.get()) }
+        jvmTest.get().dependsOn(jvmAndAndroidTest)
+        androidUnitTest.get().dependsOn(jvmAndAndroidTest)
 
         // iosMain: intermediate for both iOS K/N targets. Wired explicitly because
         // adding a manual jvmAndAndroidMain intermediate disables the KMP plugin's
@@ -53,9 +66,6 @@ kotlin {
         jvmMain.dependencies {
             // Netty engine for the JVM server actual.
             implementation(libs.ktor.serverNetty)
-            implementation(libs.ktor.client.okhttp)
-            // Self-signed dev-cert generation for the optional wss:// tap-reach path.
-            implementation(libs.ktor.network.tls.certificates)
         }
         androidMain.dependencies {
             // CIO engine for the Android server actual.
