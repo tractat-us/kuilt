@@ -294,16 +294,23 @@ class MDNSServiceAdvertiserTest {
 internal class CapturingJmDNS : JmDNS() {
     var lastRegistered: ServiceInfo? = null
     var lastUnregistered: ServiceInfo? = null
+    var registerCount = 0
+    var unregisterCount = 0
+    var closeCount = 0
 
     override fun registerService(info: ServiceInfo) {
         lastRegistered = info
+        registerCount++
     }
 
     override fun unregisterService(info: ServiceInfo) {
         lastUnregistered = info
+        unregisterCount++
     }
 
-    override fun close() {}
+    override fun close() {
+        closeCount++
+    }
 
     override fun getName(): String = "fake"
 
