@@ -1,13 +1,19 @@
 name: ci
 
-# Aggregator pattern (detect → {build-jvm, build-native, detekt} → ci-required):
+# Aggregator pattern (detect → {build-jvm, build-native, detekt, dokka} → ci-required):
 #
 #   detect  →  build-jvm    ┐
 #           →  build-native ├→  ci-required (the one required check)
-#           →  detekt       ┘
+#           →  detekt       │
+#           →  dokka        ┘
 #
-# detect (ubuntu, always, cheap, no JDK) classifies whether the change is
-# docs-only by diffing the changed files.
+# detect (ubuntu, always, cheap, no JDK) classifies the change by diffing the
+# changed files, emitting TWO orthogonal flags: docs-only (every path is doc-class
+# → skip the heavy build) and dokka-inputs (any path is a Dokka input: **/module.md,
+# **/*.kt, **/commonSamples/** → run the fast Dokka module-doc check). They are
+# independent — a module.md-only PR is docs-only AND dokka-inputs, so it skips the
+# build but still MUST pass Dokka (a bad module.md header freezes the whole Pages
+# deploy silently — #1061).
 #
 # The heavy KMP build runs only when detect says NOT docs-only, and is SPLIT
 # across two jobs so the memory-heavy wasm/native codegen never co-resides with
@@ -21,10 +27,11 @@ name: ci
 #
 # ci-required (if: !cancelled()) is the SOLE required status check that branch
 # protection looks for. It passes when detect + both build jobs + detekt all
-# succeed OR when the heavy jobs were legitimately skipped (docs-only), and
-# fails when any of them failed/cancelled. This lets docs-only PRs merge
-# immediately without waiting on a build, while code PRs still gate on it.
-# Publishing stays separate (publish.yml).
+# succeed OR when the heavy jobs were legitimately skipped (docs-only), AND the
+# Dokka check passed whenever the change touched Dokka inputs; it fails when any
+# required job failed/cancelled. This lets pure guide/prose docs-only PRs merge
+# immediately without a build, while code PRs — and any PR touching a module.md /
+# KDoc — still gate on the relevant checks. Publishing stays separate (publish.yml).
 
 on:
   push:
@@ -56,13 +63,22 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       docs-only: ${{ steps.classify.outputs.docs-only }}
+      dokka-inputs: ${{ steps.classify.outputs.dokka-inputs }}
     steps:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 50
 
-      - name: Classify change (docs-only?)
+      - name: Classify change (docs-only? Dokka inputs?)
         id: classify
+        # Emits TWO orthogonal flags:
+        #   docs-only    — every changed path is doc-class (*.md / docs/** / Writerside/**);
+        #                  the heavy KMP build is skipped.
+        #   dokka-inputs — any changed path is a Dokka INPUT (**/module.md, **/*.kt,
+        #                  **/commonSamples/**); the fast Dokka module-doc check runs.
+        # They are independent: a module.md-only PR is docs-only=true AND
+        # dokka-inputs=true — it skips the build but MUST still pass Dokka, because a
+        # bad module.md header silently freezes the whole Pages deploy (#1061).
         run: |
           set -euo pipefail
           case "${{ github.event_name }}" in
@@ -72,35 +88,42 @@ jobs:
             push)
               BEFORE="${{ github.event.before }}"
               if [[ "$BEFORE" == "0000000000000000000000000000000000000000" ]]; then
-                echo "Initial push — treating as not docs-only."
-                echo "docs-only=false" >> "$GITHUB_OUTPUT"; exit 0
+                echo "Initial push — treating as not docs-only, run Dokka."
+                { echo "docs-only=false"; echo "dokka-inputs=true"; } >> "$GITHUB_OUTPUT"; exit 0
               fi
               FILES=$(git diff --name-only "$BEFORE" "${{ github.event.after }}" 2>/dev/null || echo "")
               ;;
             *)
-              echo "${{ github.event_name }} — treating as not docs-only."
-              echo "docs-only=false" >> "$GITHUB_OUTPUT"; exit 0
+              echo "${{ github.event_name }} — treating as not docs-only, run Dokka."
+              { echo "docs-only=false"; echo "dokka-inputs=true"; } >> "$GITHUB_OUTPUT"; exit 0
               ;;
           esac
 
           if [ -z "$FILES" ]; then
-            echo "No changed files detected — treating as not docs-only."
-            echo "docs-only=false" >> "$GITHUB_OUTPUT"; exit 0
+            echo "No changed files detected — treating as not docs-only, no Dokka inputs."
+            { echo "docs-only=false"; echo "dokka-inputs=false"; } >> "$GITHUB_OUTPUT"; exit 0
           fi
 
           echo "Changed files:"; echo "$FILES"
 
           DOCS_ONLY=true
+          DOKKA_INPUTS=false
           while IFS= read -r file; do
             [ -z "$file" ] && continue
-            if [[ "$file" == *.md ]] || [[ "$file" == docs/* ]] || [[ "$file" == Writerside/* ]]; then
-              continue
+            # docs-only holds only while every file is doc-class.
+            if ! { [[ "$file" == *.md ]] || [[ "$file" == docs/* ]] || [[ "$file" == Writerside/* ]]; }; then
+              DOCS_ONLY=false
             fi
-            DOCS_ONLY=false; break
+            # dokka-inputs trips on any module.md, any Kotlin source, or a doc sample.
+            if [[ "$file" == module.md ]] || [[ "$file" == */module.md ]] \
+              || [[ "$file" == *.kt ]] || [[ "$file" == *commonSamples/* ]]; then
+              DOKKA_INPUTS=true
+            fi
           done <<< "$FILES"
 
           [ "$DOCS_ONLY" = true ] && echo "::notice::All changes are docs-class — skipping the build."
-          echo "docs-only=$DOCS_ONLY" >> "$GITHUB_OUTPUT"
+          [ "$DOKKA_INPUTS" = true ] && echo "::notice::Change touches Dokka inputs — running the Dokka module-doc check."
+          { echo "docs-only=$DOCS_ONLY"; echo "dokka-inputs=$DOKKA_INPUTS"; } >> "$GITHUB_OUTPUT"
 
   # ── build-jvm ──────────────────────────────────────────────────────────────
   # The JVM/Android half of the build: full `build koverXmlReport` with the
@@ -460,9 +483,63 @@ jobs:
       - name: Run detekt (null-safety rules)
         run: ./gradlew detektAll --max-workers=4
 
+  # ── dokka ──────────────────────────────────────────────────────────────────
+  # Fast per-module Dokka module-doc build. Runs whenever a change touches a Dokka
+  # INPUT — any module.md, any *.kt (KDoc), or a commonSamples doc sample — EVEN on
+  # an otherwise docs-only PR that the heavy build skips. This is the only reliable
+  # detector for the intellij-markdown/Dokka "Wrong AST Tree" break a bad module.md
+  # header trips: it can't be linted, only run. Without this gate a module.md-only
+  # PR classifies docs-only, merges green, and freezes the ENTIRE published Pages
+  # site (the Writerside guide included) because docs.yml's single deploy needs both
+  # the Dokka and the Writerside surfaces. Scoped to Dokka inputs so guide/prose-only
+  # docs PRs stay on the fast path. dokkaGenerateModuleHtml is the per-module HTML
+  # task (seconds — no full-site aggregation) that still parses every module.md +
+  # KDoc, so it fails on exactly the input class that freezes the deploy. See #1061.
+  dokka:
+    needs: detect
+    if: needs.detect.outputs.dokka-inputs == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      S3_BUILD_CACHE_ACCESS_KEY_ID: ${{ secrets.S3_BUILD_CACHE_ACCESS_KEY_ID }}
+      S3_BUILD_CACHE_SECRET_KEY: ${{ secrets.S3_BUILD_CACHE_SECRET_KEY }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v5
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          gradle-version: wrapper
+          cache-read-only: false
+
+      # Dokka analyses every target's main sources (incl. the native source sets),
+      # so it needs the Kotlin/Native toolchain — same konan cache as the build jobs.
+      - name: Cache Kotlin/Native (~/.konan)
+        uses: actions/cache@v5
+        with:
+          path: ~/.konan
+          key: konan-${{ runner.os }}-${{ hashFiles('gradle/libs.versions.toml', 'gradle.properties', 'settings.gradle.kts') }}
+          restore-keys: konan-${{ runner.os }}-
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v4
+
+      - name: Dokka module-doc build (parses every module.md + KDoc)
+        # Aggregate per-module task: runs :<module>:dokkaGenerateModuleHtml for every
+        # subproject, so a broken module.md in ANY module fails the check. Deliberately
+        # NOT the full-site `dokkaGenerate` (which also runs the cross-module link/merge
+        # pass) — the module-doc build is what parses module.md + KDoc and is far faster.
+        run: ./gradlew dokkaGenerateModuleHtml --max-workers=2
+
   # ── ci-required ────────────────────────────────────────────────────────────
   # The SOLE required status check. Aggregates detect + build-jvm + build-native
-  # + detekt.
+  # + detekt + dokka.
   #
   # Uses if: always() unconditionally — NO draft guard here. This is the core
   # fix for the draft→ready→auto-merge race (#131): a required check that is
@@ -474,22 +551,28 @@ jobs:
   # so branch protection correctly blocks merge until a real post-ready run
   # posts a genuine success.
   #
-  # detect/build-jvm/build-native/detekt still carry their own draft/docs-only
-  # guards (cheap jobs don't burn a runner on every draft push). Only ci-required
-  # runs unconditionally, so the gate is always in a definite pass/fail state.
+  # detect/build-jvm/build-native/detekt/dokka still carry their own draft/docs-only
+  # /dokka-inputs guards (cheap jobs don't burn a runner on every draft push). Only
+  # ci-required runs unconditionally, so the gate is always in a definite pass/fail state.
   #
-  # Invariant: ci-required succeeds if and only if:
-  #   (a) detect succeeded AND docs-only=true AND build-jvm + build-native +
-  #       detekt were skipped, OR
-  #   (b) detect succeeded AND docs-only=false AND build-jvm=success AND
-  #       build-native=success AND detekt=success.
+  # Invariant: ci-required succeeds if and only if BOTH hold:
+  #   Build gate —
+  #     (a) detect succeeded AND docs-only=true AND build-jvm + build-native +
+  #         detekt were skipped, OR
+  #     (b) detect succeeded AND docs-only=false AND build-jvm=success AND
+  #         build-native=success AND detekt=success.
+  #   Dokka gate (orthogonal) —
+  #     (c) dokka-inputs=true  → dokka=success, OR
+  #     (d) dokka-inputs=false → dokka was skipped (or success).
   #
   # Any other combination fails. In particular:
   #   - detect=skipped (draft PR) → fails → merge blocked until post-ready run.
   #   - a heavy job skipped on a non-docs change → fails → closes the docs→code
   #     race too.
+  #   - dokka skipped/failed on a Dokka-input change → fails → closes the
+  #     module.md-freezes-the-deploy gap (#1061).
   ci-required:
-    needs: [detect, build-jvm, build-native, detekt]
+    needs: [detect, build-jvm, build-native, detekt, dokka]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -499,16 +582,34 @@ jobs:
           BUILD_JVM="${{ needs.build-jvm.result }}"
           BUILD_NATIVE="${{ needs.build-native.result }}"
           DETEKT="${{ needs.detekt.result }}"
+          DOKKA="${{ needs.dokka.result }}"
           DOCS_ONLY="${{ needs.detect.outputs.docs-only }}"
+          DOKKA_INPUTS="${{ needs.detect.outputs.dokka-inputs }}"
           echo "detect:        $DETECT"
           echo "build-jvm:     $BUILD_JVM"
           echo "build-native:  $BUILD_NATIVE"
           echo "detekt:        $DETEKT"
+          echo "dokka:         $DOKKA"
           echo "docs-only:     $DOCS_ONLY"
+          echo "dokka-inputs:  $DOKKA_INPUTS"
 
           # detect must always succeed — it runs unconditionally.
           if [ "$DETECT" != "success" ]; then
             echo "::error::detect job did not succeed (result: $DETECT)."; exit 1
+          fi
+
+          # Dokka gate — ORTHOGONAL to docs-only. A change touching any Dokka input
+          # (module.md / *.kt / commonSamples) MUST pass the Dokka module-doc build,
+          # so a bad module.md can't merge green and freeze the Pages deploy (#1061).
+          # skipped is accepted only when there were no Dokka inputs.
+          if [ "$DOKKA_INPUTS" = "true" ]; then
+            if [ "$DOKKA" != "success" ]; then
+              echo "::error::Change touches Dokka inputs but the Dokka module-doc check did not succeed (result: $DOKKA). skipped is not accepted."; exit 1
+            fi
+          else
+            if [ "$DOKKA" != "skipped" ] && [ "$DOKKA" != "success" ]; then
+              echo "::error::dokka had unexpected result: $DOKKA."; exit 1
+            fi
           fi
 
           if [ "$DOCS_ONLY" = "true" ]; then
