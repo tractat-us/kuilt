@@ -570,6 +570,32 @@ class FaultySeamTest {
                 { assertEquals(0L, a.framesDelayed) },
             )
         }
+
+    // ── Inbound boundedness (Spool invariant, #701) ─────────────────────────────
+
+    @Test
+    fun `inbound buffer is bounded — flooding past capacity backpressures instead of buffering unbounded`() =
+        runTest {
+            val factory = FaultyLoom(InMemoryLoom(), backgroundScope)
+            val a = factory.host(Pattern("Alice"))
+            val b = factory.join(InMemoryTag("Bob"))
+
+            // InMemoryLoom rendezvous is synchronous — both sides see the 2-peer mesh
+            // immediately — so a broadcast can never fire into an empty peer set.
+            assertEquals(2, a.peers.value.size)
+            assertEquals(2, b.peers.value.size)
+
+            // Flood past capacity with NO collector on b.incoming. A bounded Spool backpressures
+            // the inbound pump at capacity; the old Channel.UNLIMITED delivered every frame.
+            val flood = DeliveryPolicy.DEFAULT_CAPACITY + 50
+            repeat(flood) { a.broadcast(byteArrayOf(it.toByte())) }
+            testScheduler.advanceUntilIdle()
+
+            assertTrue(
+                b.framesDelivered <= DeliveryPolicy.DEFAULT_CAPACITY.toLong(),
+                "inbound must be bounded at ${DeliveryPolicy.DEFAULT_CAPACITY}; was ${b.framesDelivered}",
+            )
+        }
 }
 
 // ── Test helpers ──────────────────────────────────────────────────────────────
