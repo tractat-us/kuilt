@@ -31,6 +31,7 @@ import us.tractat.kuilt.crdt.Quilted
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.crdt.VersionVector
 import us.tractat.kuilt.crdt.piece
+import kotlin.random.Random
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
@@ -854,17 +855,17 @@ private fun contiguousHighWater(seqs: Set<Long>): Long {
  * @sample us.tractat.kuilt.quilter.sampleQuilterSparseDeltaTargets
  */
 @Suppress("LongParameterList")
-public fun <S : us.tractat.kuilt.crdt.Quilted<S>> Quilter(
-    seam: us.tractat.kuilt.core.Seam,
+public fun <S : Quilted<S>> Quilter(
+    seam: Seam,
     initial: S,
-    valueSerializer: kotlinx.serialization.KSerializer<S>,
+    valueSerializer: KSerializer<S>,
     scope: CoroutineScope,
-    replica: us.tractat.kuilt.crdt.ReplicaId = us.tractat.kuilt.crdt.ReplicaId(seam.selfId.value),
+    replica: ReplicaId = ReplicaId(seam.selfId.value),
     config: QuilterConfig = QuilterConfig(),
     clock: MonotonicMillis = SystemMonotonicMillis,
-    binaryFormat: kotlinx.serialization.BinaryFormat = kotlinx.serialization.cbor.Cbor,
+    binaryFormat: BinaryFormat = Cbor,
     deltaTargets: (Set<PeerId>) -> Set<PeerId> = { it },
-    random: kotlin.random.Random = kotlin.random.Random.Default,
+    random: Random = Random.Default,
 ): Quilter<S> = Quilter(
     replica = replica,
     seam = seam,
