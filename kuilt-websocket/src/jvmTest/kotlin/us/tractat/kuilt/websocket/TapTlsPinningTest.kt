@@ -77,7 +77,7 @@ class TapTlsPinningTest {
     }
 
     @Test
-    fun wssRoundTripWithPinnedClient() = runBlocking {
+    fun wssRoundTripWithPinnedClient(): Unit = runBlocking {
         val identity = generateDevTlsIdentity()
         val (serverLoom, port) = startTlsServer(identity)
         val httpClient = pinnedTlsHttpClient(identity.fingerprintSha256)
@@ -101,7 +101,7 @@ class TapTlsPinningTest {
     }
 
     @Test
-    fun wrongFingerprintRejected() = runBlocking {
+    fun wrongFingerprintRejected(): Unit = runBlocking {
         val identity = generateDevTlsIdentity()
         val (serverLoom, port) = startTlsServer(identity)
         // A different identity's fingerprint — a stand-in for an on-path attacker's cert.

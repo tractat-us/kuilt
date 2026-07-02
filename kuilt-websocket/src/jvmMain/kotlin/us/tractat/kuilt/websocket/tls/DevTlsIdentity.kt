@@ -1,7 +1,6 @@
 package us.tractat.kuilt.websocket.tls
 
 import io.ktor.network.tls.certificates.buildKeyStore
-import io.ktor.network.tls.certificates.certificate
 import io.ktor.server.engine.ApplicationEngine
 import io.ktor.server.engine.sslConnector
 import java.net.Inet4Address
