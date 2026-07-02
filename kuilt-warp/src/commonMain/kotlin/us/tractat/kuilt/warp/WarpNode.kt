@@ -1034,7 +1034,7 @@ public class WarpNode(
         val entry = (committed as? Committed.Entry)?.entry ?: return
         if (raftNode?.role?.value !is RaftRole.Leader) return
 
-        val taskId = runCatching { TaskId(entry.command.decodeToString()) }.getOrNull() ?: return
+        val taskId = runCatchingCancellable { TaskId(entry.command.decodeToString()) }.getOrNull() ?: return
 
         val shouldExecute = lock.withLock {
             taskId in coordQueueQuilter.state.value.elements && coordinatedApplied.add(taskId)

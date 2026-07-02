@@ -215,7 +215,7 @@ public class BoundedCounterTransferCoordinator(
             .launchIn(scope)
 
     private fun dispatch(sender: PeerId, swatch: Swatch) {
-        val msg = runCatching { swatch.decode(Cbor, serializer) }.getOrNull() ?: return
+        val msg = runCatchingCancellable { swatch.decode(Cbor, serializer) }.getOrNull() ?: return
         when (msg) {
             is BoundedCounterCoordMessage.TransferRequest -> onTransferRequest(msg, sender)
         }

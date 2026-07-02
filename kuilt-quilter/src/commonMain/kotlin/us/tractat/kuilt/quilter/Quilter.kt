@@ -599,7 +599,7 @@ public class Quilter<S : Quilted<S>>(
 
     private fun dispatch(sender: PeerId, swatch: Swatch): Unit = lock.withLock {
         cancelFullStateRetry(sender)
-        val msg = runCatching { swatch.decode(binaryFormat, messageSerializer) }.getOrNull() ?: return@withLock
+        val msg = runCatchingCancellable { swatch.decode(binaryFormat, messageSerializer) }.getOrNull() ?: return@withLock
         when (msg) {
             is QuiltMessage.Delta -> onDelta(sender, msg)
             is QuiltMessage.Ack -> onAck(msg)
