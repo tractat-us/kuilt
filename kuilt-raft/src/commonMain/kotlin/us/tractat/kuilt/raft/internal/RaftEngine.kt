@@ -839,7 +839,12 @@ internal class RaftEngine(
             sendSnapshotChunk(peer, restart = true); return
         }
         val prevIndex = ni - 1L
-        val prevTerm = if (prevIndex == snapshotIndex) snapshotTerm else entryAt(prevIndex)?.term ?: 0L
+        val prevTerm = if (prevIndex == snapshotIndex) {
+            snapshotTerm
+        } else {
+            entryAt(prevIndex)?.term
+                ?: error("prevTerm for in-window index $prevIndex missing (snapshotIndex=$snapshotIndex, lastLogIndex=$lastLogIndex)")
+        }
         val entries = logSliceFrom(log, snapshotIndex, ni)
         debug { "sendAppendEntries($peer): ni=$ni prevIndex=$prevIndex prevTerm=$prevTerm entries=${entries.size} commit=$currentCommitIndex" }
         emitTrace(
