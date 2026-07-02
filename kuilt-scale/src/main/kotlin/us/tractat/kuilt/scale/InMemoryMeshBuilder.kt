@@ -6,6 +6,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Seam
+import us.tractat.kuilt.core.fabric.Connection
 import us.tractat.kuilt.core.fabric.meshSeam
 import us.tractat.kuilt.test.fabric.connectionPair
 import kotlin.coroutines.ContinuationInterceptor
@@ -50,10 +51,11 @@ public suspend fun buildInMemoryMesh(
     require(n >= 2) { "Mesh requires at least 2 peers, got $n" }
 
     val peerIds = (0 until n).map { PeerId("peer-$it") }
-    val dispatcher = currentCoroutineContext()[ContinuationInterceptor]!!
+    val dispatcher = currentCoroutineContext()[ContinuationInterceptor]
+        ?: error("no dispatcher in test context")
 
     // Map each peer index to its list of connections for meshSeam.
-    val connsByPeer: Array<MutableList<us.tractat.kuilt.core.fabric.Connection>> =
+    val connsByPeer: Array<MutableList<Connection>> =
         Array(n) { mutableListOf() }
 
     for ((i, j) in topology.edges(n)) {
