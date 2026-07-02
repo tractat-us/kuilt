@@ -1,7 +1,7 @@
 # Cleanup & simplification epic — design
 
 **Date:** 2026-07-02
-**Status:** approved design, pre-plan
+**Status:** approved design; implementation plan at `docs/superpowers/plans/2026-07-02-cleanup-simplification-epic.md` **supersedes this spec on details** — brief-writers re-verified every finding against main and recorded per-lane divergences there (notably: the ControllableSeam dedup and the WarpLogRecordExporter nit were dropped as invalid, the ClusterClient inert-clock finding reduced to a KDoc fix, sub-issues split finer for lighter-weight workers: 40 briefs total).
 **Driver:** survey of all module families by six parallel review agents (full findings inventoried below)
 
 ## Goal
