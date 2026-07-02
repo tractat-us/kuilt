@@ -45,63 +45,36 @@ internal object HandshakeRunner {
         signaling: SignalingSession,
         handshakeTimeoutMs: Long = DEFAULT_HANDSHAKE_TIMEOUT_MS,
     ): RtcPeerConnectionFacade =
-        coroutineScope {
-            log.debug { "handshake host: starting (timeoutMs=$handshakeTimeoutMs)" }
-            // Pipe local ICE candidates out as they're gathered.
-            val iceJob =
-                launch {
-                    facade.localIceCandidates.collect { candidate ->
-                        log.debug { "handshake host: sending localIceCandidate sdpMid=${candidate.sdpMid}" }
-                        signaling.send(candidate)
-                    }
+        runHandshake(
+            role = "host",
+            facade = facade,
+            signaling = signaling,
+            handshakeTimeoutMs = handshakeTimeoutMs,
+            // Host must send its offer before the inbound loop starts.
+            preamble = {
+                val offerSdp = facade.createOffer()
+                facade.setLocalDescription(offerSdp, SdpType.Offer)
+                log.debug { "handshake host: offer created+set, sending offer" }
+                signaling.send(SignalingMessage.Offer(sdp = offerSdp))
+            },
+        ) { message ->
+            when (message) {
+                is SignalingMessage.Answer -> {
+                    log.debug { "handshake host: received Answer — setting remoteDescription" }
+                    facade.setRemoteDescription(message.sdp, SdpType.Answer)
                 }
-
-            val offerSdp = facade.createOffer()
-            facade.setLocalDescription(offerSdp, SdpType.Offer)
-            log.debug { "handshake host: offer created+set, sending offer" }
-            signaling.send(SignalingMessage.Offer(sdp = offerSdp))
-
-            // Process inbound signaling until the data channel opens.
-            val inbound =
-                launch {
-                    signaling.incoming.collect { message ->
-                        when (message) {
-                            is SignalingMessage.Answer -> {
-                                log.debug { "handshake host: received Answer — setting remoteDescription" }
-                                facade.setRemoteDescription(message.sdp, SdpType.Answer)
-                            }
-                            is SignalingMessage.IceCandidate -> {
-                                log.debug { "handshake host: received remoteIceCandidate sdpMid=${message.sdpMid}" }
-                                facade.addIceCandidate(message)
-                            }
-                            is SignalingMessage.Bye ->
-                                throw IllegalStateException("Remote sent Bye during handshake")
-                            is SignalingMessage.Offer ->
-                                throw IllegalStateException("Host received Offer; expected Answer")
-                            // Role is a relay-level frame consumed before the runner starts.
-                            // Silently skip if it somehow arrives mid-stream.
-                            is SignalingMessage.Role -> Unit
-                        }
-                    }
+                is SignalingMessage.IceCandidate -> {
+                    log.debug { "handshake host: received remoteIceCandidate sdpMid=${message.sdpMid}" }
+                    facade.addIceCandidate(message)
                 }
-
-            try {
-                log.debug { "handshake host: awaiting data channel open" }
-                awaitConnected(facade, handshakeTimeoutMs)
-                log.info { "handshake host: data channel OPEN — closing signaling" }
-            } finally {
-                iceJob.cancel()
-                // Do NOT cancel `inbound` here. Calling signaling.close() closes
-                // inboundChannel, which causes the receiveAsFlow() collector in `inbound`
-                // to complete *normally*. If we cancel `inbound` first, the race between
-                // CancellationException (from cancel()) and ClosedReceiveChannelException
-                // (from inboundChannel.close()) can let the latter win — and because
-                // ClosedReceiveChannelException is not a CancellationException, coroutineScope
-                // propagates it as a real failure, surfacing as 'Channel was closed' in the
-                // transport layer and triggering a spurious reconnect attempt.
-                signaling.close()
+                is SignalingMessage.Bye ->
+                    throw IllegalStateException("Remote sent Bye during handshake")
+                is SignalingMessage.Offer ->
+                    throw IllegalStateException("Host received Offer; expected Answer")
+                // Role is a relay-level frame consumed before the runner starts.
+                // Silently skip if it somehow arrives mid-stream.
+                is SignalingMessage.Role -> Unit
             }
-            facade
         }
 
     /**
@@ -117,55 +90,85 @@ internal object HandshakeRunner {
         signaling: SignalingSession,
         handshakeTimeoutMs: Long = DEFAULT_HANDSHAKE_TIMEOUT_MS,
     ): RtcPeerConnectionFacade =
+        runHandshake(
+            role = "joiner",
+            facade = facade,
+            signaling = signaling,
+            handshakeTimeoutMs = handshakeTimeoutMs,
+        ) { message ->
+            when (message) {
+                is SignalingMessage.Offer -> {
+                    log.debug { "handshake joiner: received Offer — creating answer" }
+                    facade.setRemoteDescription(message.sdp, SdpType.Offer)
+                    val answerSdp = facade.createAnswer()
+                    facade.setLocalDescription(answerSdp, SdpType.Answer)
+                    log.debug { "handshake joiner: sending Answer" }
+                    signaling.send(SignalingMessage.Answer(sdp = answerSdp))
+                }
+                is SignalingMessage.IceCandidate -> {
+                    log.debug { "handshake joiner: received remoteIceCandidate sdpMid=${message.sdpMid}" }
+                    facade.addIceCandidate(message)
+                }
+                is SignalingMessage.Bye ->
+                    throw IllegalStateException("Remote sent Bye during handshake")
+                is SignalingMessage.Answer ->
+                    throw IllegalStateException("Joiner received Answer; expected Offer")
+                // Role is a relay-level frame consumed before the runner starts.
+                // Silently skip if it somehow arrives mid-stream.
+                is SignalingMessage.Role -> Unit
+            }
+        }
+
+    /**
+     * The shared host/joiner handshake body. Launches ICE-candidate forwarding,
+     * runs the role-specific [preamble] (the host sends its offer here, strictly
+     * before the inbound loop starts), then processes inbound signaling via
+     * [inbound] until the data channel opens or the deadline elapses.
+     *
+     * The [role] string differs only as a log tag ("host" | "joiner").
+     */
+    private suspend fun runHandshake(
+        role: String,
+        facade: RtcPeerConnectionFacade,
+        signaling: SignalingSession,
+        handshakeTimeoutMs: Long,
+        preamble: suspend () -> Unit = {},
+        inbound: suspend (SignalingMessage) -> Unit,
+    ): RtcPeerConnectionFacade =
         coroutineScope {
-            log.debug { "handshake joiner: starting (timeoutMs=$handshakeTimeoutMs)" }
+            log.debug { "handshake $role: starting (timeoutMs=$handshakeTimeoutMs)" }
+            // Pipe local ICE candidates out as they're gathered.
             val iceJob =
                 launch {
                     facade.localIceCandidates.collect { candidate ->
-                        log.debug { "handshake joiner: sending localIceCandidate sdpMid=${candidate.sdpMid}" }
+                        log.debug { "handshake $role: sending localIceCandidate sdpMid=${candidate.sdpMid}" }
                         signaling.send(candidate)
                     }
                 }
 
-            // Process inbound signaling. The offer arrives first; subsequent
-            // messages are remote ICE candidates.
-            val inbound =
-                launch {
-                    signaling.incoming.collect { message ->
-                        when (message) {
-                            is SignalingMessage.Offer -> {
-                                log.debug { "handshake joiner: received Offer — creating answer" }
-                                facade.setRemoteDescription(message.sdp, SdpType.Offer)
-                                val answerSdp = facade.createAnswer()
-                                facade.setLocalDescription(answerSdp, SdpType.Answer)
-                                log.debug { "handshake joiner: sending Answer" }
-                                signaling.send(SignalingMessage.Answer(sdp = answerSdp))
-                            }
-                            is SignalingMessage.IceCandidate -> {
-                                log.debug { "handshake joiner: received remoteIceCandidate sdpMid=${message.sdpMid}" }
-                                facade.addIceCandidate(message)
-                            }
-                            is SignalingMessage.Bye ->
-                                throw IllegalStateException("Remote sent Bye during handshake")
-                            is SignalingMessage.Answer ->
-                                throw IllegalStateException("Joiner received Answer; expected Offer")
-                            // Role is a relay-level frame consumed before the runner starts.
-                            // Silently skip if it somehow arrives mid-stream.
-                            is SignalingMessage.Role -> Unit
-                        }
-                    }
-                    log.debug { "handshake joiner: inbound signaling flow ended" }
-                }
+            // Role-specific setup that must run before inbound collection begins
+            // (the host creates and sends its offer here).
+            preamble()
+
+            // Process inbound signaling until the data channel opens.
+            launch {
+                signaling.incoming.collect { message -> inbound(message) }
+            }
 
             try {
-                log.debug { "handshake joiner: awaiting data channel open" }
+                log.debug { "handshake $role: awaiting data channel open" }
                 awaitConnected(facade, handshakeTimeoutMs)
-                log.info { "handshake joiner: data channel OPEN — closing signaling" }
+                log.info { "handshake $role: data channel OPEN — closing signaling" }
             } finally {
                 iceJob.cancel()
-                // Do NOT cancel `inbound` here — see runHost for the full rationale.
-                // signaling.close() closes inboundChannel, which terminates the
-                // receiveAsFlow() collector in `inbound` cleanly without exception.
+                // Do NOT cancel the inbound job here. Calling signaling.close() closes
+                // inboundChannel, which causes the receiveAsFlow() collector in the inbound
+                // launch to complete *normally*. If we cancel inbound first, the race between
+                // CancellationException (from cancel()) and ClosedReceiveChannelException
+                // (from inboundChannel.close()) can let the latter win — and because
+                // ClosedReceiveChannelException is not a CancellationException, coroutineScope
+                // propagates it as a real failure, surfacing as 'Channel was closed' in the
+                // transport layer and triggering a spurious reconnect attempt.
                 signaling.close()
             }
             facade
