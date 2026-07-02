@@ -47,23 +47,34 @@ public class WebRTCPeerLinkFactory
 
         override suspend fun weave(rendezvous: Rendezvous): Seam =
             when (rendezvous) {
-                is Rendezvous.New -> {
-                    val config = rendezvous.pattern
-                    val selfId = PeerId(randomToken(config.displayName.ifBlank { "host" }))
-                    val facade = facadeFactory.create(iceConfig, hostInitiated = true)
-                    val session = signaling.open(room)
-                    HandshakeRunner.runHost(facade, session)
-                    buildLink(selfId, facade)
-                }
-                is Rendezvous.Existing -> {
-                    val advertisement = rendezvous.tag
-                    val selfId = PeerId(randomToken(advertisement.displayName.ifBlank { "peer" }))
-                    val facade = facadeFactory.create(iceConfig, hostInitiated = false)
-                    val session = signaling.open(room)
-                    HandshakeRunner.runJoiner(facade, session)
-                    buildLink(selfId, facade)
-                }
+                is Rendezvous.New ->
+                    connect(isHost = true, displayName = rendezvous.pattern.displayName, session = signaling.open(room))
+                is Rendezvous.Existing ->
+                    connect(isHost = false, displayName = rendezvous.tag.displayName, session = signaling.open(room))
             }
+
+        /**
+         * Mint a [PeerId], create the facade for this [isHost] role, run the WebRTC
+         * offer/answer/ICE handshake over the already-opened [session], then build the
+         * peer link. The session source differs by caller — [weave] opens a fresh
+         * `signaling.open(room)` per branch, while [openWithServerRoleResult] reuses the
+         * single role-assigning session — so it is acquired by the caller, not here.
+         */
+        private suspend fun connect(
+            isHost: Boolean,
+            displayName: String,
+            session: SignalingSession,
+            handshakeTimeoutMs: Long = DEFAULT_HANDSHAKE_TIMEOUT_MS,
+        ): Seam {
+            val selfId = PeerId(randomToken(displayName.ifBlank { if (isHost) "host" else "peer" }))
+            val facade = facadeFactory.create(iceConfig, hostInitiated = isHost)
+            if (isHost) {
+                HandshakeRunner.runHost(facade, session, handshakeTimeoutMs)
+            } else {
+                HandshakeRunner.runJoiner(facade, session, handshakeTimeoutMs)
+            }
+            return buildLink(selfId, facade)
+        }
 
         /**
          * Exchange [selfId] with the remote peer over the data channel so both sides
@@ -158,18 +169,7 @@ public class WebRTCPeerLinkFactory
                 signaling as? WebSocketSignalingChannel
                     ?: error("openWithServerRoleResult requires a WebSocketSignalingChannel; got $signaling")
             val (isHost, session) = wsChannel.openWithRole(room)
-            val link =
-                if (isHost) {
-                    val selfId = PeerId(randomToken(config.displayName.ifBlank { "host" }))
-                    val facade = facadeFactory.create(iceConfig, hostInitiated = true)
-                    HandshakeRunner.runHost(facade, session, handshakeTimeoutMs)
-                    buildLink(selfId, facade)
-                } else {
-                    val selfId = PeerId(randomToken(config.displayName.ifBlank { "peer" }))
-                    val facade = facadeFactory.create(iceConfig, hostInitiated = false)
-                    HandshakeRunner.runJoiner(facade, session, handshakeTimeoutMs)
-                    buildLink(selfId, facade)
-                }
+            val link = connect(isHost, config.displayName, session, handshakeTimeoutMs)
             return isHost to link
         }
 
