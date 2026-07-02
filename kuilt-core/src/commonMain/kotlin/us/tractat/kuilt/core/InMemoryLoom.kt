@@ -94,8 +94,6 @@ public class InMemoryLoom(
         }
     }
 
-    internal fun isActive(id: PeerId): Boolean = links.containsKey(id)
-
     private fun freshPeerId(): PeerId {
         peerCounter++
         return PeerId("peer-$peerCounter")
