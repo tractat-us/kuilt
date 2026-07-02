@@ -1,4 +1,7 @@
-@file:OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
+@file:OptIn(
+    kotlinx.serialization.ExperimentalSerializationApi::class,
+    kotlin.ExperimentalStdlibApi::class,
+)
 
 package us.tractat.kuilt.game
 
@@ -7,7 +10,11 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.builtins.serializer
+import kotlinx.serialization.cbor.Cbor
+import kotlinx.serialization.decodeFromByteArray
+import kotlinx.serialization.encodeToByteArray
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.crdt.EphemeralMap
 import us.tractat.kuilt.crdt.Patch
@@ -38,8 +45,10 @@ private const val VACATE_DECLARED = "vacate"
 /**
  * Prefix for the value stored under the host's slot when admission is closed.
  *
- * The full value is `"$ADMISSION_CLOSED_PREFIX<id1>,<id2>,…"` — the final voter set
- * encoded as a comma-separated list of [NodeId] string values.
+ * The full value is `"$ADMISSION_CLOSED_PREFIX<hex>"` — the final voter set serialized
+ * as CBOR (a list of [NodeId] string values) and hex-encoded. The hex body is `[0-9a-f]`
+ * only, so it can carry any [NodeId] content — including `','` or `':sc'` — without
+ * colliding with the prefix or the [SPECTATORS_CLOSED_SUFFIX] framing.
  */
 private const val ADMISSION_CLOSED_PREFIX = "admission-closed:"
 
@@ -51,6 +60,9 @@ private const val ADMISSION_CLOSED_PREFIX = "admission-closed:"
  * structurally distinct from all other marker values.
  */
 private const val SPECTATORS_CLOSED_SUFFIX = ":sc"
+
+/** Serializer for the admission-closed voter list — CBOR bytes, hex-encoded into the slot string. */
+private val VOTER_LIST_SERIALIZER = ListSerializer(String.serializer())
 
 /**
  * Lobby presence over [seam], backed by an [EphemeralMap] replicated by [Quilter].
@@ -171,8 +183,10 @@ public class GamePresence(
      */
     public fun declareAdmissionClosed(voters: Set<NodeId>) {
         val scSuffix = if (spectatorsClosedFrom(quilter.state.value)) SPECTATORS_CLOSED_SUFFIX else ""
-        val encoded = ADMISSION_CLOSED_PREFIX + voters.joinToString(",") { it.value } + scSuffix
-        declare(encoded)
+        // Hex-encoded CBOR: the body is [0-9a-f] only, so it can carry any NodeId content —
+        // commas, ':sc', anything — without colliding with the prefix/suffix framing.
+        val body = Cbor.encodeToByteArray(VOTER_LIST_SERIALIZER, voters.map { it.value }).toHexString()
+        declare(ADMISSION_CLOSED_PREFIX + body + scSuffix)
     }
 
     /**
@@ -250,8 +264,7 @@ public class GamePresence(
             ?.value
             ?.removeSuffix(SPECTATORS_CLOSED_SUFFIX)
             ?.removePrefix(ADMISSION_CLOSED_PREFIX)
-            ?.split(",")
-            ?.filter { it.isNotEmpty() }
+            ?.let { hex -> Cbor.decodeFromByteArray(VOTER_LIST_SERIALIZER, hex.hexToByteArray()) }
             ?.map { NodeId(it) }
             ?.toSet()
 
