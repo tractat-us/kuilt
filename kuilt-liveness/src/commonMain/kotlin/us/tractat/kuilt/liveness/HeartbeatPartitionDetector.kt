@@ -109,27 +109,23 @@ public class HeartbeatPartitionDetector(
     private suspend fun runHeartbeatLoop() {
         var observedPresent = false
         while (true) {
-            if (!observedPresent && peerId in link.peers.value) observedPresent = true
+            if (refreshObservedPresent(observedPresent)) observedPresent = true
 
             // Wait up to one interval, but wake immediately if the target leaves the
             // peer set after having been seen — a definitive transport close.
             withTimeoutOrNull(config.interval.inWholeMilliseconds) {
                 link.peers.first { observedPresent && peerId !in it }
             }
-            if (!observedPresent && peerId in link.peers.value) observedPresent = true
+            if (refreshObservedPresent(observedPresent)) observedPresent = true
 
             if (observedPresent && peerId !in link.peers.value) {
-                emitIfOpen(PartitionEvent.PeerUnresponsive(peerId, clock(), PartitionEvent.Reason.TransportClosed))
-                val recovered = awaitRecoveryOrLoss()
-                if (!recovered) return
+                if (!handleUnresponsive(PartitionEvent.Reason.TransportClosed)) return
                 continue
             }
 
             if (backpressurePending) {
                 backpressurePending = false
-                emitIfOpen(PartitionEvent.PeerUnresponsive(peerId, clock(), PartitionEvent.Reason.Backpressure))
-                val recovered = awaitRecoveryOrLoss()
-                if (!recovered) return
+                if (!handleUnresponsive(PartitionEvent.Reason.Backpressure)) return
                 continue
             }
 
@@ -137,11 +133,23 @@ public class HeartbeatPartitionDetector(
 
             val silenceMs = clock().toEpochMilliseconds() - lastSeenEpochMs
             if (silenceMs >= config.timeout.inWholeMilliseconds) {
-                emitIfOpen(PartitionEvent.PeerUnresponsive(peerId, clock(), PartitionEvent.Reason.Timeout))
-                val recovered = awaitRecoveryOrLoss()
-                if (!recovered) return
+                if (!handleUnresponsive(PartitionEvent.Reason.Timeout)) return
             }
         }
+    }
+
+    /** True if the peer has now been seen in the roster (idempotent latch helper). */
+    private fun refreshObservedPresent(alreadyObserved: Boolean): Boolean =
+        !alreadyObserved && peerId in link.peers.value
+
+    /**
+     * Emit [PartitionEvent.PeerUnresponsive] for [reason], then poll the recovery window.
+     * Returns `true` if the peer recovered (resume the loop), `false` if [PartitionEvent.PeerLost]
+     * was emitted (the loop should return).
+     */
+    private suspend fun handleUnresponsive(reason: PartitionEvent.Reason): Boolean {
+        emitIfOpen(PartitionEvent.PeerUnresponsive(peerId, clock(), reason))
+        return awaitRecoveryOrLoss()
     }
 
     /**
