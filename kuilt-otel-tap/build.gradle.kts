@@ -27,9 +27,20 @@ kotlin {
             implementation(libs.kotlincrypto.random.crypto.rand)
             implementation(libs.kotlinx.atomicfu)
         }
+        // Apple-only encrypted reach: the Multipeer fabric (DTLS out of the box) is the
+        // iOS/macOS complement to the plaintext mDNS+WS path. :kuilt-multipeer's real impl
+        // is Apple-native, so the Multipeer tap entry points live in appleMain only.
+        appleMain.dependencies {
+            implementation(project(":kuilt-multipeer"))
+        }
         commonTest.dependencies {
             implementation(project(":kuilt-test"))
             implementation(libs.kotlinx.coroutines.test)
+        }
+        // The Apple wiring test references MultipeerPeerLinkFactory to prove the fabric links
+        // into the tap module on the Apple variants.
+        appleTest.dependencies {
+            implementation(project(":kuilt-multipeer"))
         }
         jvmTest.dependencies {
             // Loopback-WebSocket integration test for simulator realism.

@@ -89,11 +89,39 @@ can **join** a session your laptop hosts and its logs still flow to the laptop. 
 [installLogTapJoining][us.tractat.kuilt.otel.tap.installLogTapJoining] on the phone
 (it discovers and joins) while the laptop hosts and advertises.
 
+### iPhone ↔ Mac, encrypted end to end (Apple Multipeer)
+
+On Apple devices there is a stronger path. Apple's Multipeer Connectivity fabric
+carries every frame over an encrypted link out of the box, so the logs themselves —
+not just *who may pull* — are protected from anyone snooping the network. It also
+drops the role inversion above: an iPhone advertises itself natively over Multipeer,
+so it simply **hosts** the tap and a nearby **Mac** discovers it and pulls.
+
+- **On the iPhone:** call
+  [installMultipeerLogTap][us.tractat.kuilt.otel.tap.installMultipeerLogTap] with a
+  [MultipeerPeerLinkFactory][us.tractat.kuilt.multipeer.MultipeerPeerLinkFactory].
+  The link is already encrypted; layer a join code on top with
+  [LogTapAdmission.Verify][us.tractat.kuilt.otel.tap.LogTapAdmission.Verify] when you
+  also want admission control — the *same* fabric-agnostic gate, unchanged.
+- **On the Mac:** discover the iPhone over Multipeer, join, and pull with a
+  [LogTapClient][us.tractat.kuilt.otel.tap.LogTapClient]. Metrics ride the same
+  encrypted fabric via
+  [installMultipeerMetricTap][us.tractat.kuilt.otel.tap.installMultipeerMetricTap].
+
+The one trade-off, by design: Multipeer is Apple-only, so a **Mac** must be the
+puller — there is no JVM/CI puller on this path. That is why it is the *encrypted
+complement* to the mDNS+WebSocket path, not a replacement: reach a simulator or CI
+runner over loopback/WebSocket; reach a real iPhone from a Mac over Multipeer.
+
+Real-device transport verification (a Mac pulling an iPhone's buffer over an
+encrypted Multipeer link) needs two physical Apple devices and is tracked as a
+manual step in `docs/otel-tap-multipeer-validation.md`.
+
 ### The one honest limitation
 
 Over a plain LAN WebSocket the log bytes themselves travel **unencrypted**. The
 join code controls *who is allowed to pull* — it does not encrypt the traffic, so
 someone already positioned to snoop the network could read logs of a session that
-was legitimately admitted. Where that matters, use an encrypted fabric. Confidential
-transport is a separate, later capability; this module's guarantee is *admission
-control*, deliberately and only.
+was legitimately admitted. Where that matters, use the encrypted Multipeer path
+above (Apple-only), or another encrypted fabric. On the WebSocket path this module's
+guarantee is *admission control*, deliberately and only.
