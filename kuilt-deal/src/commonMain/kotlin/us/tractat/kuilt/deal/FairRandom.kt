@@ -205,11 +205,15 @@ public class FairRandom(
     }
 
     private fun deriveSeed(secrets: Map<PeerId, ByteArray>): Long {
-        val combined = secrets.entries
+        val hashes = secrets.entries
             .sortedBy { (id, _) -> id.value }
-            .fold(ByteArray(0)) { acc, (id, secret) ->
-                acc + sha256(id.value.encodeToByteArray() + secret)
-            }
+            .map { (id, secret) -> sha256(id.value.encodeToByteArray() + secret) }
+        val combined = ByteArray(hashes.sumOf { it.size })
+        var offset = 0
+        for (hash in hashes) {
+            hash.copyInto(combined, offset)
+            offset += hash.size
+        }
         return sha256(combined).toLong()
     }
 
