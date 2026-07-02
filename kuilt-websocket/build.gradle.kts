@@ -54,6 +54,8 @@ kotlin {
             // Netty engine for the JVM server actual.
             implementation(libs.ktor.serverNetty)
             implementation(libs.ktor.client.okhttp)
+            // Self-signed dev-cert generation for the optional wss:// tap-reach path.
+            implementation(libs.ktor.network.tls.certificates)
         }
         androidMain.dependencies {
             // CIO engine for the Android server actual.
