@@ -373,7 +373,7 @@ public class WarpMetricExporter(
     // ── Diagnostics ───────────────────────────────────────────────────────────
 
     /** Total number of distinct [MetricKey]s tracked across all kinds. */
-    public fun metricCount(): Int = lock.withLock { sums.size + sumsDouble.size + gauges.size + cardinalities.size }
+    public fun metricCount(): Int = lock.withLock { totalCount() }
 
     /**
      * A converged snapshot of **every** metric series across all four kinds, as one
@@ -448,8 +448,8 @@ public class WarpMetricExporter(
 
     private fun evictOne() {
         val victim = when (bufferPolicy) {
-            MetricBufferPolicy.DROP_OLDEST -> pickOldest()
-            MetricBufferPolicy.DROP_NEWEST -> pickNewest()
+            MetricBufferPolicy.DROP_OLDEST -> pickDropOldestVictim()
+            MetricBufferPolicy.DROP_NEWEST -> pickDropNewestVictim()
         } ?: return
         logEviction(victim)
         sums.remove(victim)
@@ -458,17 +458,22 @@ public class WarpMetricExporter(
         cardinalities.remove(victim)
     }
 
-    /** The insertion-first key across all four maps (LinkedHashMap preserves insertion order). */
-    private fun pickOldest(): MetricKey? =
-        // We cannot compare insertion time across maps, so we take the first key of
-        // the first non-empty map in a stable ordering (sums → sumsDouble → gauges → cardinalities).
+    /**
+     * The eviction victim under DROP_OLDEST: the first key of the first non-empty map in
+     * fixed map order (sums → sumsDouble → gauges → cardinalities). NOT a true cross-map
+     * insertion-oldest — insertion time is not comparable across the four LinkedHashMaps.
+     */
+    private fun pickDropOldestVictim(): MetricKey? =
         listOfNotNull(
             sums.keys.firstOrNull(), sumsDouble.keys.firstOrNull(),
             gauges.keys.firstOrNull(), cardinalities.keys.firstOrNull(),
         ).firstOrNull()
 
-    /** The insertion-last key across all four maps. */
-    private fun pickNewest(): MetricKey? =
+    /**
+     * The eviction victim under DROP_NEWEST: the last key of the last non-empty map in the
+     * same fixed map order. NOT a true cross-map insertion-newest (see [pickDropOldestVictim]).
+     */
+    private fun pickDropNewestVictim(): MetricKey? =
         listOfNotNull(
             sums.keys.lastOrNull(), sumsDouble.keys.lastOrNull(),
             gauges.keys.lastOrNull(), cardinalities.keys.lastOrNull(),
