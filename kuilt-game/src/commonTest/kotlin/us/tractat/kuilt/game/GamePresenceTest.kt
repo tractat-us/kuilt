@@ -14,8 +14,10 @@ import us.tractat.kuilt.core.FaultProfile
 import us.tractat.kuilt.core.FaultySeam
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.crdt.ReplicaId
+import us.tractat.kuilt.raft.NodeId
 import kotlin.test.Test
 import kotlin.test.assertContains
+import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.milliseconds
@@ -125,4 +127,22 @@ class GamePresenceTest {
             winner.cancel()
         }
     }
+
+    /**
+     * A NodeId whose value contains the marker delimiters (',' or ':sc') must round-trip
+     * through the admission-closed encoding without corrupting the voter set.
+     */
+    @Test
+    fun admissionClosedRoundTripsNodeIdsContainingDelimiters() =
+        runTest(UnconfinedTestDispatcher(), timeout = 5.seconds) {
+            val loom = InMemoryLoom()
+            val s1 = seats(loom, 1).single()
+            val presence = GamePresence(s1, backgroundScope)
+
+            val voters = setOf(NodeId("peer,with,commas"), NodeId("ends:sc"), NodeId("plain"))
+            presence.declareAdmissionClosed(voters)
+            testScheduler.advanceUntilIdle()
+
+            assertEquals(voters, presence.admissionClosed.value)
+        }
 }
