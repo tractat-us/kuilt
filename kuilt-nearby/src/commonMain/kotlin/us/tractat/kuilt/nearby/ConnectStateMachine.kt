@@ -89,7 +89,10 @@ internal class ConnectStateMachine(
                     if (!handshake.isOurEndpoint(event.endpointId)) return@collect
                     if (event.success) {
                         handshake.connected = true
-                        api.sendBytesPayload(handshake.endpoint!!, selfId.value.encodeToByteArray())
+                        val endpoint = requireNotNull(handshake.endpoint) {
+                            "connection result for our endpoint but no claimed endpoint set"
+                        }
+                        api.sendBytesPayload(endpoint, selfId.value.encodeToByteArray())
                         handshake.maybeResolve(deferred)
                     } else {
                         deferred.completeExceptionally(
@@ -134,8 +137,12 @@ internal class ConnectStateMachine(
         fun isOurEndpoint(candidate: String): Boolean = endpoint == candidate
 
         fun maybeResolve(deferred: CompletableDeferred<ConnectedLink>) {
-            if (connected && remoteSelfId != null) {
-                deferred.complete(ConnectedLink(endpoint!!, remoteSelfId!!))
+            val resolvedRemoteSelfId = remoteSelfId
+            if (connected && resolvedRemoteSelfId != null) {
+                val resolvedEndpoint = requireNotNull(endpoint) {
+                    "resolving link while connected but no claimed endpoint set"
+                }
+                deferred.complete(ConnectedLink(resolvedEndpoint, resolvedRemoteSelfId))
             }
         }
     }

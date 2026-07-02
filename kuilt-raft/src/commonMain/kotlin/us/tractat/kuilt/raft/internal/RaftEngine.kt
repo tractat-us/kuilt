@@ -1343,8 +1343,9 @@ internal class RaftEngine(
         // §3.10: while a leadership transfer is in flight, reject new proposals so the target can
         // catch up to our log without racing additional appends. The NotLeaderException is the correct
         // signal — the caller should retry on the new leader once transfer completes.
-        if (transferTarget != null) {
-            response.completeExceptionally(NotLeaderException("leadership transfer in flight to ${transferTarget!!.value}"))
+        val transferInFlight = transferTarget
+        if (transferInFlight != null) {
+            response.completeExceptionally(NotLeaderException("leadership transfer in flight to ${transferInFlight.value}"))
             return
         }
         // §8 best-effort leader dedup: a retry of an already-committed key coalesces onto the recorded
@@ -1623,8 +1624,9 @@ internal class RaftEngine(
             return
         }
         // A second concurrent call while one is already in flight: reject the second.
-        if (transferTarget != null) {
-            response.completeExceptionally(IllegalStateException("transferLeadership: a transfer to ${transferTarget!!.value} is already in flight"))
+        val transferInFlight = transferTarget
+        if (transferInFlight != null) {
+            response.completeExceptionally(IllegalStateException("transferLeadership: a transfer to ${transferInFlight.value} is already in flight"))
             return
         }
         transferTarget = target
@@ -1824,7 +1826,10 @@ internal class RaftEngine(
                 forwardedProposals.remove(id)              // leader path completes via `pending`
                 onPropose(pf.command, pf.dedupKey, pf.deferred)
             } else {
-                send(leaderId!!, RaftMessage.Forward(id, pf.command, pf.dedupKey))
+                send(
+                    requireNotNull(leaderId) { "flushWaitingForLeader: no leader known on the non-leader forward path" },
+                    RaftMessage.Forward(id, pf.command, pf.dedupKey),
+                )
             }
         }
     }

@@ -616,7 +616,7 @@ public class Fugue<V> private constructor(
      * the reference implementation's `insertIntoSiblings` for right children.
      */
     private fun sortChildren(nodes: Map<FugueId, FugueNode>) {
-        val headNode = nodes[FugueId.HEAD]!!
+        val headNode = nodes.getValue(FugueId.HEAD)
         sortChildrenRecursive(headNode)
     }
 

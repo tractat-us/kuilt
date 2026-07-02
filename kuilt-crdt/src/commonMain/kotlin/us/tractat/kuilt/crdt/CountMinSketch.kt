@@ -219,8 +219,10 @@ public class CountMinSketch private constructor(
     /** Merge two sparse deltas into a full-state result via a combined max over their cell sets. */
     private fun mergeSparsePairs(other: CountMinSketch): CountMinSketch {
         val merged = zeroCells(width, depth)
-        for ((row, col, value) in sparseCells!!) merged[row][col] = maxOf(merged[row][col], value)
-        for ((row, col, value) in other.sparseCells!!) merged[row][col] = maxOf(merged[row][col], value)
+        val cells = requireNotNull(sparseCells) { "mergeSparsePairs requires sparse mode" }
+        val otherCells = requireNotNull(other.sparseCells) { "mergeSparsePairs requires other to be in sparse mode" }
+        for ((row, col, value) in cells) merged[row][col] = maxOf(merged[row][col], value)
+        for ((row, col, value) in otherCells) merged[row][col] = maxOf(merged[row][col], value)
         return CountMinSketch(width, depth, merged)
     }
 

@@ -55,7 +55,9 @@ private class ConnectionLoom(
     private val conn: Connection,
 ) : Loom {
     override suspend fun weave(rendezvous: Rendezvous): Seam =
-        identified(conn, self, remote, currentCoroutineContext()[ContinuationInterceptor]!!)
+        identified(conn, self, remote, requireNotNull(currentCoroutineContext()[ContinuationInterceptor]) {
+            "weave/handshake: no dispatcher (ContinuationInterceptor) in coroutine context"
+        })
 }
 
 /**
@@ -75,5 +77,7 @@ public fun handshakingLoomPair(): Pair<Loom, Loom> {
 
 private class HandshakeLoom(private val self: PeerId, private val conn: Connection) : Loom {
     override suspend fun weave(rendezvous: Rendezvous): Seam =
-        handshaking(conn, self, currentCoroutineContext()[ContinuationInterceptor]!!)
+        handshaking(conn, self, requireNotNull(currentCoroutineContext()[ContinuationInterceptor]) {
+            "weave/handshake: no dispatcher (ContinuationInterceptor) in coroutine context"
+        })
 }
