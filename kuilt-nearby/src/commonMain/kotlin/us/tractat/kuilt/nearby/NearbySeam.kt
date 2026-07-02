@@ -1,6 +1,7 @@
 package us.tractat.kuilt.nearby
 
 import io.github.oshai.kotlinlogging.KotlinLogging
+import kotlinx.atomicfu.atomic
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
@@ -71,9 +72,8 @@ internal class NearbySeam(
     private val spool = Spool<Swatch>(policy)
     override val incoming: Flow<Swatch> = spool.incoming
 
-    // Guards only the `closed` flag. All `endpointPeers` access uses `endpointPeersMutex`.
-    private val closedMutex = Mutex()
-    private var closed = false
+    // A single atomic flag, read/written across the receive, disconnect, send and close paths.
+    private val closed = atomic(false)
 
     // Per-endpoint reassemblers and sequence counters — keyed by endpointId.
     // Accessed only within endpointPeersMutex, so no separate guard needed.
@@ -101,7 +101,7 @@ internal class NearbySeam(
             // Snapshot (swatch) under the lock, then deliver OUTSIDE it so that a
             // SUSPEND-policy backpressure stall never holds endpointPeersMutex.
             val frame = endpointPeersMutex.withLock {
-                if (closed) return@collect
+                if (closed.value) return@collect
                 // Ignore payloads from unknown endpoints (e.g. not yet connected).
                 val remotePeerId = endpointPeers[event.endpointId] ?: return@collect
                 assembleFrame(event.endpointId, event.bytes, remotePeerId)
@@ -134,7 +134,7 @@ internal class NearbySeam(
     private suspend fun disconnectLoop() {
         api.endpointDisconnected.collect { event ->
             endpointPeersMutex.withLock {
-                if (closed) return@collect
+                if (closed.value) return@collect
                 val peerId = endpointPeers.remove(event.endpointId) ?: return@collect
                 reassemblers.remove(event.endpointId)?.reset()
                 sequences.remove(event.endpointId)
@@ -179,10 +179,7 @@ internal class NearbySeam(
     // ── close ─────────────────────────────────────────────────────────────────
 
     override suspend fun close(reason: CloseReason) {
-        closedMutex.withLock {
-            if (closed) return
-            closed = true
-        }
+        if (!closed.compareAndSet(expect = false, update = true)) return
         _state.value = SeamState.Torn(reason)
         // Cancel the entire scope — this cleans up the receive/disconnect loops
         // AND the background accept coroutine launched by NearbyLoom.open() into
@@ -197,7 +194,7 @@ internal class NearbySeam(
     }
 
     private fun checkNotClosed() {
-        check(!closed) { "NearbySeam for $selfId is closed" }
+        check(!closed.value) { "NearbySeam for $selfId is closed" }
     }
 }
 
