@@ -8,6 +8,7 @@ kotlin {
             api(project(":kuilt-core"))  // public API exposes Loom/PeerId — expose the contract transitively
             implementation(libs.kotlinx.coroutines.core)
             implementation(libs.kotlin.logging)
+            implementation(libs.kotlinx.atomicfu)
         }
         // Real Google Nearby Connections binding lives Android-only; the pure
         // adapter logic in commonMain stays GMS-free and JVM-testable.
