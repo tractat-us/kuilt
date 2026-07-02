@@ -388,7 +388,7 @@ public class Fugue<V> private constructor(
         val rawTombstones = tombstones + other.tombstones
         val mergedTombstones = if (mergedCompactedIds.isEmpty()) rawTombstones
             else rawTombstones.filterTo(mutableSetOf()) { it !in mergedCompactedIds }
-        val mergedMaxSeq = mergeMaxSeq(maxSeqByReplica, other.maxSeqByReplica)
+        val mergedMaxSeq = maxSeqByReplica.mergeMax(other.maxSeqByReplica)
         val mergedLamport = maxOf(lamport, other.lamport)
         val rawUnion = ops + other.ops
         val mergedOps = if (mergedCompactedIds.isEmpty()) rawUnion else purge(rawUnion, mergedCompactedIds)
@@ -831,17 +831,6 @@ public class Fugue<V> private constructor(
                     is FugueOp.Compact -> true
                 }
             }
-
-        private fun mergeMaxSeq(a: Map<ReplicaId, Long>, b: Map<ReplicaId, Long>): Map<ReplicaId, Long> {
-            if (a.isEmpty()) return b
-            if (b.isEmpty()) return a
-            val result = a.toMutableMap()
-            for ((replica, seq) in b) {
-                val current = result[replica]
-                if (current == null || seq > current) result[replica] = seq
-            }
-            return result
-        }
     }
 }
 

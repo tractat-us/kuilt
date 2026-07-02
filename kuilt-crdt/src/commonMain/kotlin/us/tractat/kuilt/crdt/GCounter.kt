@@ -39,14 +39,7 @@ public class GCounter private constructor(
     }
 
     /** The join: elementwise max of the two count maps. */
-    override fun piece(other: GCounter): GCounter {
-        val merged = HashMap<ReplicaId, Long>(counts)
-        for ((replica, c) in other.counts) {
-            val current = merged[replica]
-            if (current == null || c > current) merged[replica] = c
-        }
-        return GCounter(merged)
-    }
+    override fun piece(other: GCounter): GCounter = GCounter(counts.mergeMax(other.counts))
 
     override fun equals(other: Any?): Boolean =
         other is GCounter && counts == other.counts

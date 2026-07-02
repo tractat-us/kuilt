@@ -158,14 +158,7 @@ public class EphemeralMap<V> private constructor(
     override fun piece(other: EphemeralMap<V>): EphemeralMap<V> {
         if (other.entries.isEmpty()) return this
         if (entries.isEmpty()) return other
-        val merged = HashMap<ReplicaId, EphemeralEntry<V>>(entries)
-        for ((replica, theirEntry) in other.entries) {
-            val mine = merged[replica]
-            if (mine == null || dominates(theirEntry, mine)) {
-                merged[replica] = theirEntry
-            }
-        }
-        return EphemeralMap(merged)
+        return EphemeralMap(entries.mergeValues(other.entries) { mine, theirs -> if (dominates(theirs, mine)) theirs else mine })
     }
 
     override fun equals(other: Any?): Boolean =
