@@ -34,7 +34,7 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.otel.tap.LogTapHost"
  * Close the returned host to stop offering logs and release the replicator.
  */
 public class LogTapHost internal constructor(
-    seam: Seam,
+    rawSeam: Seam,
     private val exporter: WarpLogRecordExporter,
     parentScope: CoroutineScope,
     private val config: LogTapConfig,
@@ -44,15 +44,13 @@ public class LogTapHost internal constructor(
     // When admission is not Open, the woven seam is wrapped in a token gate that runs in
     // this host's own [scope] — so closing the host stops the gate — and only surfaces the
     // replicator to a peer that has proven the join code.
-    private val seam: Seam = seam.gatedIfNeeded(admission.offeringRole(), scope)
+    private val seam: Seam = rawSeam.gatedIfNeeded(admission.offeringRole(), scope)
 
     // Seeded with the buffer's current contents so a puller that joins before any new
     // record is captured still receives the full backlog via the replicator's
     // first-contact full-state exchange.
     private val replicator: Quilter<us.tractat.kuilt.crdt.Rga<LogRecord>> = Quilter(
-        // `this.seam` is the *gated* property; a bare `seam` would resolve to the raw
-        // constructor parameter and run the replicator ungated — a log-exfil hole.
-        seam = this.seam,
+        seam = seam,
         initial = exporter.snapshot(),
         valueSerializer = logRgaSerializer(),
         scope = scope,
