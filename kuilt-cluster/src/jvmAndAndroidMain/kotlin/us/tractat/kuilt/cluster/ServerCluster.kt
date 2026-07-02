@@ -10,7 +10,6 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.FlowCollector
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -27,7 +26,6 @@ import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.raft.ClusterConfig
 import us.tractat.kuilt.raft.Committed
 import us.tractat.kuilt.raft.InMemoryRaftStorage
-import us.tractat.kuilt.raft.MembershipChangeInProgressException
 import us.tractat.kuilt.raft.NodeId
 import us.tractat.kuilt.raft.RaftConfig
 import us.tractat.kuilt.raft.RaftEnvelope
@@ -35,11 +33,11 @@ import us.tractat.kuilt.raft.RaftNode
 import us.tractat.kuilt.raft.RaftRole
 import us.tractat.kuilt.raft.RaftStorage
 import us.tractat.kuilt.raft.RaftTransport
+import us.tractat.kuilt.raft.changeMembershipWithRetry
 import us.tractat.kuilt.raft.raftNode
 import us.tractat.kuilt.session.LeaveReason
 import us.tractat.kuilt.session.Room
 import us.tractat.kuilt.session.RoomHost
-import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 
 private val log = KotlinLogging.logger("us.tractat.kuilt.cluster.ServerCluster")
@@ -163,7 +161,15 @@ public class ServerCluster internal constructor(
             voters = voterConfig.voters,
             learners = voterConfig.learners + learnerId,
         )
-        changeMembershipWithRetry(learnerId, withLearner)
+        try {
+            mesh.awaitLeader().changeMembershipWithRetry(withLearner)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            log.warn(e) { "server-cluster: learner $learnerId admit failed — removing route" }
+            router.removeLearner(learnerId)
+            return
+        }
 
         // Hold the room open until the connection closes or scope cancels.
         // The finally block removes the learner route when the WebSocket closes.
@@ -172,42 +178,6 @@ public class ServerCluster internal constructor(
         } finally {
             router.removeLearner(learnerId)
         }
-    }
-
-    /**
-     * Call [RaftNode.changeMembership] with bounded retry on
-     * [MembershipChangeInProgressException].
-     *
-     * Raft serializes membership changes — only one may be in flight at a time. When two
-     * clients connect concurrently, the second [admitLearner] hits this exception because
-     * the first client's config change is still uncommitted. Rather than swallowing it
-     * (which leaves the learner registered in [LearnerRouter] but permanently absent from
-     * cluster membership), we wait a short interval and retry. Once the in-flight change
-     * commits, the next attempt succeeds.
-     *
-     * A bounded retry count (not an unbounded loop) ensures a genuinely stuck cluster
-     * (e.g. no leader or a leader that keeps losing leadership) gives up rather than
-     * looping forever. Any other exception is logged and returned to the caller.
-     */
-    private suspend fun changeMembershipWithRetry(learnerId: NodeId, config: ClusterConfig) {
-        val maxAttempts = 20
-        val retryDelay = 200.milliseconds
-        repeat(maxAttempts) { attempt ->
-            val leader = mesh.awaitLeader()
-            try {
-                leader.changeMembership(config)
-                return
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: MembershipChangeInProgressException) {
-                log.debug { "server-cluster: changeMembership in progress for $learnerId, attempt ${attempt + 1}/$maxAttempts — retrying" }
-                delay(retryDelay)
-            } catch (e: Throwable) {
-                log.warn(e) { "server-cluster: changeMembership failed for $learnerId" }
-                return
-            }
-        }
-        log.warn { "server-cluster: changeMembership gave up after $maxAttempts attempts for $learnerId" }
     }
 
     /** Suspend until a voter is elected leader. Delegates to [VoterMesh.awaitLeader]. */

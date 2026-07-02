@@ -16,6 +16,7 @@ import us.tractat.kuilt.raft.ClusterConfig
 import us.tractat.kuilt.raft.NodeId
 import us.tractat.kuilt.raft.RaftNode
 import us.tractat.kuilt.raft.RaftRole
+import us.tractat.kuilt.raft.changeMembershipWithRetry
 import kotlin.time.Instant
 
 /**
@@ -165,7 +166,7 @@ internal class VoterLivenessMonitor(
             // Remove the dead voter and commit the shrunken config.
             voters.remove(lostId)
             evictedVoterIds += lostId
-            changeMembershipWithRetry(node, ClusterConfig(voters = voters.toSet(), learners = spectatorIds.toSet()))
+            node.changeMembershipWithRetry(ClusterConfig(voters = voters.toSet(), learners = spectatorIds.toSet()))
 
             // Re-open admission so a new gameJoin can take the freed seat.
             presence.declareAdmissionOpen()

@@ -17,6 +17,7 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
+import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 
 
@@ -638,5 +639,104 @@ class MembershipTest {
             adoptIdx >= 0 && fConfigs.drop(adoptIdx + 1).any { it.new.voters == allVoters }
         }
         change.cancel()
+    }
+
+    // ── changeMembershipWithRetry extension (R2) ─────────────────────────────
+
+    /**
+     * Happy path against a **real** cluster: with no in-flight change, the extension commits a
+     * learner-add on the first attempt. Uses the canonical [RaftSimulation] harness.
+     */
+    @Test
+    fun changeMembershipWithRetry_commitsAgainstRealLeader() = raftRunTest {
+        val sim = simWithVotersAndBootstrappedLearner()
+        val leader = awaitLeader(sim)
+        val leaderId = sim.nodes.entries.first { it.value === leader }.key
+
+        leader.changeMembershipWithRetry(ClusterConfig(voters = voterSet, learners = setOf(learnerNode)))
+
+        // The change committed — the leader's effective membership now lists the learner.
+        val updated = sim.awaitNode(leaderId) { learnerNode in it.membership.value.learners }
+        assertTrue(learnerNode in updated.membership.value.learners)
+    }
+
+    /**
+     * Retry contract: while an earlier membership change is settling, [changeMembership] fails with
+     * [MembershipChangeInProgressException]; the extension waits [retryDelay] and retries until the
+     * in-flight change commits, then succeeds.
+     *
+     * A real cluster cannot *sustain* a repeated in-progress signal — a leader that cannot commit a
+     * change (e.g. a Joint whose new-config majority is unreachable) is stepped down by CheckQuorum
+     * rather than throwing in-progress indefinitely (see `RaftEngine` CheckQuorum-during-Joint). So
+     * the retry/give-up control flow is exercised deterministically against a single [RaftNode] whose
+     * `changeMembership` is scripted, while [commitsAgainstRealLeader] covers the real-consensus path.
+     */
+    @Test
+    fun changeMembershipWithRetry_retriesWhileInProgressThenSucceeds() = raftRunTest {
+        val target = ClusterConfig(voters = voterSet, learners = setOf(learnerNode))
+        var remainingInProgress = 2
+        val node = ScriptedMembershipNode(singleVoterNode(backgroundScope).node) { cfg ->
+            if (remainingInProgress-- > 0) throw MembershipChangeInProgressException()
+            cfg
+        }
+
+        node.changeMembershipWithRetry(target, maxAttempts = 5, retryDelay = 20.milliseconds)
+
+        assertEquals(3, node.attempts, "two in-progress rejections + one success")
+    }
+
+    /**
+     * Give-up contract: after [maxAttempts] consecutive in-progress rejections the extension **throws**
+     * [IllegalStateException] — it does not silently return, so a genuinely stuck cluster surfaces.
+     */
+    @Test
+    fun changeMembershipWithRetry_throwsAfterMaxAttemptsExhausted() = raftRunTest {
+        val node = ScriptedMembershipNode(singleVoterNode(backgroundScope).node) {
+            throw MembershipChangeInProgressException()
+        }
+
+        assertFailsWith<IllegalStateException> {
+            node.changeMembershipWithRetry(
+                ClusterConfig(voters = voterSet),
+                maxAttempts = 3,
+                retryDelay = 20.milliseconds,
+            )
+        }
+        assertEquals(3, node.attempts, "gives up after exactly maxAttempts")
+    }
+
+    /**
+     * Only [MembershipChangeInProgressException] is retried: any other failure (here
+     * [NotLeaderException], e.g. leadership lost mid-retry) propagates immediately on the first attempt.
+     */
+    @Test
+    fun changeMembershipWithRetry_rethrowsNonInProgressImmediately() = raftRunTest {
+        val node = ScriptedMembershipNode(singleVoterNode(backgroundScope).node) {
+            throw NotLeaderException()
+        }
+
+        assertFailsWith<NotLeaderException> {
+            node.changeMembershipWithRetry(ClusterConfig(voters = voterSet), maxAttempts = 5)
+        }
+        assertEquals(1, node.attempts, "non-in-progress failures are not retried")
+    }
+}
+
+/**
+ * A [RaftNode] that delegates everything to [delegate] except [changeMembership], which runs
+ * [script]. Lets a test drive the [changeMembershipWithRetry] retry/give-up control flow
+ * deterministically — a real cluster cannot sustain a repeated in-progress signal (CheckQuorum
+ * steps a non-committing leader down instead). Counts [attempts] for assertions.
+ */
+private class ScriptedMembershipNode(
+    delegate: RaftNode,
+    private val script: suspend (ClusterConfig) -> ClusterConfig,
+) : RaftNode by delegate {
+    var attempts: Int = 0
+        private set
+
+    override suspend fun changeMembership(target: ClusterConfig): ClusterConfig {
+        attempts++
+        return script(target)
     }
 }
