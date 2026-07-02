@@ -10,9 +10,11 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
+import kotlinx.atomicfu.atomic
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import us.tractat.kuilt.core.FabricAvailability
+import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
@@ -57,11 +59,12 @@ public class NearbyLoom(
     // Shared peer set — all seams on this loom observe the same StateFlow.
     private val sharedPeers = MutableStateFlow<Set<PeerId>>(emptySet())
 
-    // Guards loom-level state: peerCounter, hostLinkDeferred.
+    // Guards loom-level state: hostLinkDeferred.
     private val loomMutex = Mutex()
 
-    // Per-instance counter — uniqueness within this loom suffices.
-    private var peerCounter = 0
+    // Per-instance counter — uniqueness within this loom suffices. Atomic: freshPeerId()
+    // is called unguarded from both openSession and joinSession.
+    private val peerCounter = atomic(0)
 
     // Stored after open(); used to notify join() when the host side completes.
     private var hostLinkDeferred: CompletableDeferred<ConnectedLink>? = null
@@ -116,7 +119,7 @@ public class NearbyLoom(
         // UNDISPATCHED so the host's handshake collectors subscribe synchronously
         // during open() — before any joiner's requestConnection emits events.
         seamScope.launch(start = CoroutineStart.UNDISPATCHED) {
-            runCatching {
+            runCatchingCancellable {
                 val machine = ConnectStateMachine(
                     selfId = peerId,
                     api = api,
@@ -220,10 +223,7 @@ public class NearbyLoom(
         }
     }
 
-    private fun freshPeerId(): PeerId {
-        peerCounter++
-        return PeerId("nearby-peer-$peerCounter")
-    }
+    private fun freshPeerId(): PeerId = PeerId("nearby-peer-${peerCounter.incrementAndGet()}")
 
     public companion object {
         /** Default Nearby Connections service ID. */
