@@ -31,7 +31,7 @@ internal fun String.hexToByteString(): ByteString {
     return ByteString(out)
 }
 
-private fun SpanKind.toOtlp(): Int = when (this) {
+internal fun SpanKind.toOtlp(): Int = when (this) {
     SpanKind.INTERNAL -> 1
     SpanKind.SERVER -> 2
     SpanKind.CLIENT -> 3
