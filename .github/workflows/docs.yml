@@ -160,3 +160,33 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
+
+  # ── Alert on a frozen deploy ───────────────────────────────────────────────
+  # Backstop for the silent-freeze gap (#1061). The required Dokka check in ci.yml
+  # now catches a bad module.md / KDoc at PR time — BEFORE it can freeze this
+  # deploy — but anything that only the full-site build surfaces post-merge (a
+  # cross-module Dokka link/merge failure, a Writerside builder change, a Pages
+  # outage) still lands on main unwatched. On any failure this opens (or reuses) a
+  # tracking issue so a frozen published site is loud, not discovered by eye hours
+  # later. Push-only: a manual workflow_dispatch is already being watched.
+  notify-failure:
+    needs: [build-guide, build-api, deploy]
+    if: failure() && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Open or reuse a tracking issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          TITLE="docs deploy failing on main — published site frozen"
+          BODY="The Pages docs deploy failed on main. GitHub Pages serves ONE deployment for the whole site, so the published guide + API reference are frozen at the last good build until this is green again. Failing run: ${RUN_URL}"
+          existing=$(gh issue list --state open --search "\"${TITLE}\" in:title" --json number --jq '.[0].number' || echo "")
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "$BODY"
+          else
+            gh issue create --title "$TITLE" --body "$BODY" --label bug
+          fi
