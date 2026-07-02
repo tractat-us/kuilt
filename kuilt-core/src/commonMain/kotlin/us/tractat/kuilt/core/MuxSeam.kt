@@ -1,15 +1,6 @@
 package us.tractat.kuilt.core
 
-import kotlinx.atomicfu.atomic
-import kotlinx.atomicfu.locks.reentrantLock
-import kotlinx.atomicfu.locks.withLock
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.SharingStarted
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.filter
-import kotlinx.coroutines.flow.shareIn
-import kotlinx.coroutines.launch
 
 /**
  * N-way multiplexer over a [Seam].
@@ -54,19 +45,10 @@ import kotlinx.coroutines.launch
  * @param scope a [CoroutineScope] for the shared upstream collector and per-view pipes.
  */
 public class MuxSeam(
-    private val delegate: Seam,
-    private val scope: CoroutineScope,
+    delegate: Seam,
+    scope: CoroutineScope,
 ) {
-    /**
-     * A single shared subscription on [delegate.incoming]. All channel views
-     * subscribe to this rather than [delegate] directly, ensuring exactly one
-     * collection of the underlying seam.
-     */
-    private val sharedIncoming = delegate.incoming
-        .shareIn(scope = scope, started = SharingStarted.Eagerly, replay = 0)
-
-    private val lock = reentrantLock()
-    private val channels = mutableMapOf<Byte, Seam>()
+    private val base = MuxBase<Byte>(delegate, scope, ByteFraming)
 
     /**
      * Returns a [Seam] view carrying only frames tagged with [tag].
@@ -77,7 +59,7 @@ public class MuxSeam(
      * This method is idempotent: multiple calls with the same [tag] return the
      * same [Seam] instance. Thread-safe.
      */
-    public fun channel(tag: Byte): Seam = lock.withLock { channels.getOrPut(tag) { ChannelView(tag) } }
+    public fun channel(tag: Byte): Seam = base.channel(tag)
 
     /**
      * Closes the underlying [delegate] [Seam].
@@ -86,65 +68,22 @@ public class MuxSeam(
      * the shared socket. Individual channel views are closed via [Seam.close] on
      * the view itself; that does **not** close the base — only this method does.
      */
-    public suspend fun closeBase(reason: CloseReason = CloseReason.Normal): Unit = delegate.close(reason)
+    public suspend fun closeBase(reason: CloseReason = CloseReason.Normal): Unit = base.closeBase(reason)
+}
 
-    private fun taggedPayload(tag: Byte, payload: ByteArray): ByteArray {
-        val tagged = ByteArray(payload.size + 1)
-        tagged[0] = tag
-        payload.copyInto(tagged, destinationOffset = 1)
-        return tagged
-    }
-
-    private fun strippedPayload(swatch: Swatch): Swatch = swatch.dropFirst(1)
-
-    private fun belongsTo(tag: Byte, swatch: Swatch): Boolean =
-        swatch.payloadSize > 0 && swatch.byteAt(0) == tag
-
-    private inner class ChannelView(private val tag: Byte) : Seam {
-        private val _closed = atomic(false)
-
-        /**
-         * Per-view delivery spool. Frames are piped from [sharedIncoming] via a
-         * background coroutine; closing the spool completes [incoming].
-         */
-        private val spool = Spool<Swatch>(DeliveryPolicy.Reliable)
-
-        init {
-            scope.launch {
-                sharedIncoming.filter { swatch -> belongsTo(tag, swatch) }.collect { swatch ->
-                    spool.deliver(strippedPayload(swatch))
-                }
-                spool.close()
-            }
+/** Byte-tag framing: a single leading [tag] byte identifies the channel. */
+private object ByteFraming : MuxFraming<Byte> {
+    override fun forKey(key: Byte): ChannelFraming = object : ChannelFraming {
+        override fun wrap(payload: ByteArray): ByteArray {
+            val tagged = ByteArray(payload.size + 1)
+            tagged[0] = key
+            payload.copyInto(tagged, destinationOffset = 1)
+            return tagged
         }
 
-        override val selfId: PeerId get() = delegate.selfId
-        override val peers: StateFlow<Set<PeerId>> get() = delegate.peers
-        override val state: StateFlow<SeamState> get() = delegate.state
+        override fun strip(swatch: Swatch): Swatch = swatch.dropFirst(1)
 
-        override val incoming: Flow<Swatch> = spool.incoming
-
-        override suspend fun broadcast(payload: ByteArray) {
-            if (_closed.value) return
-            delegate.broadcast(taggedPayload(tag, payload))
-        }
-
-        override suspend fun sendTo(peer: PeerId, payload: ByteArray) {
-            if (_closed.value) return
-            delegate.sendTo(peer, taggedPayload(tag, payload))
-        }
-
-        /**
-         * Closes this channel view only.
-         *
-         * After this call: [incoming] completes; [broadcast] and [sendTo] become no-ops.
-         * The underlying [delegate] [Seam] remains live — call [closeBase] to tear that down.
-         * Idempotent: subsequent calls are no-ops.
-         */
-        override suspend fun close(reason: CloseReason) {
-            if (_closed.compareAndSet(false, true)) {
-                spool.close()
-            }
-        }
+        override fun belongsTo(swatch: Swatch): Boolean =
+            swatch.payloadSize > 0 && swatch.byteAt(0) == key
     }
 }
