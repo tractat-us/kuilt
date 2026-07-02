@@ -1,6 +1,7 @@
 package us.tractat.kuilt.otel.log4j2
 
 import kotlinx.coroutines.test.runTest
+import kotlinx.io.bytestring.ByteString
 import org.apache.logging.log4j.Level
 import org.apache.logging.log4j.LogManager
 import org.apache.logging.log4j.ThreadContext
@@ -9,10 +10,13 @@ import org.apache.logging.log4j.core.config.Configurator
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.otel.InMemoryDurableStore
 import us.tractat.kuilt.otel.WarpLogRecordExporter
+import us.tractat.kuilt.otel.logging.ActiveTrace
 import us.tractat.kuilt.otel.logging.CaptureConfig
 import us.tractat.kuilt.otel.logging.EXCEPTION_MESSAGE_ATTRIBUTE
 import us.tractat.kuilt.otel.logging.LOGGER_NAME_ATTRIBUTE
+import us.tractat.kuilt.otel.logging.LogCapture
 import us.tractat.kuilt.otel.logging.LogLevel
+import us.tractat.kuilt.otel.logging.TraceContextProvider
 import us.tractat.kuilt.test.assertAll
 import kotlin.random.Random
 import kotlin.test.AfterTest
@@ -171,6 +175,35 @@ class KuiltLog4j2AppenderTest {
         assertAll(
             { assertEquals(1, records.size) },
             { assertEquals("a warning at the floor", records.single().body) },
+        )
+    }
+
+    @Test
+    fun traceIsResolvedAtTheSynchronousAppendEdgeNotOnTheDrain() = runTest {
+        val store = InMemoryDurableStore()
+        val exporter = WarpLogRecordExporter(ReplicaId("device-1"), store)
+        val atLogEdge = ActiveTrace(ByteString(ByteArray(16) { 7 }), ByteString(ByteArray(8) { 9 }), sampled = true)
+
+        var current: ActiveTrace? = atLogEdge
+        val provider = TraceContextProvider { current }
+
+        Configurator.setRootLevel(Level.TRACE)
+        val capture = LogCapture(exporter, CaptureConfig(), fixedClock, Random(0), provider)
+        val edge = KuiltLog4j2Appender(APPENDER_NAME, capture, backgroundScope).apply { start() }
+        val configuration = context.configuration
+        configuration.addAppender(edge)
+        configuration.rootLogger.addAppender(edge, null, null)
+        context.updateLoggers()
+        appender = edge
+
+        LogManager.getLogger("com.example.Edge").warn("traced at the edge")
+        current = null
+        testScheduler.runCurrent()
+
+        val record = exporter.snapshot().toList().single()
+        assertAll(
+            { assertEquals(atLogEdge.traceId, record.traceId, "traceId must be resolved at the append edge, not on the drain") },
+            { assertEquals(atLogEdge.spanId, record.spanId, "spanId must be resolved at the append edge, not on the drain") },
         )
     }
 }
