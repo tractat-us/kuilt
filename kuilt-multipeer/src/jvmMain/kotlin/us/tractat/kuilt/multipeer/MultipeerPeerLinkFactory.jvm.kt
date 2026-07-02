@@ -111,26 +111,16 @@ public actual class MultipeerPeerLinkFactory actual constructor(
             }
         }
 
-    private fun openSession(): BridgePeerLink {
+    private fun openSession(): BridgePeerLink = startSession { runtime -> mc_runtime_open(runtime) }
+
+    private fun joinSession(advertisement: MultipeerAdvertisement): BridgePeerLink =
+        startSession { runtime -> mc_runtime_join(runtime, advertisement.handle) }
+
+    private fun startSession(open: MultipeerNativeLib.(runtime: Pointer) -> Pointer?): BridgePeerLink {
         val lib = nativeLib ?: throwUnsupportedPlatform()
         val runtime = runtimeHandle ?: error("mc_runtime_create returned null on a macOS host — likely a stale dylib")
         check(activeSession == null) { "MultipeerPeerLinkFactory already has an active session" }
-        val session = lib.mc_runtime_open(runtime) ?: error("mc_runtime_open failed for runtime $runtime")
-        activeSession = session
-        return BridgePeerLink(
-            nativeLib = lib,
-            sessionHandle = session,
-            selfId = PeerId(displayName),
-        )
-    }
-
-    private fun joinSession(advertisement: MultipeerAdvertisement): BridgePeerLink {
-        val lib = nativeLib ?: throwUnsupportedPlatform()
-        val runtime = runtimeHandle ?: error("mc_runtime_create returned null on a macOS host")
-        check(activeSession == null) { "MultipeerPeerLinkFactory already has an active session" }
-        val session =
-            lib.mc_runtime_join(runtime, advertisement.handle)
-                ?: error("mc_runtime_join failed for ${advertisement.handle}")
+        val session = lib.open(runtime) ?: error("mc_runtime session open failed for runtime $runtime")
         activeSession = session
         return BridgePeerLink(
             nativeLib = lib,
