@@ -6,6 +6,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.io.bytestring.ByteString
@@ -104,14 +105,7 @@ public class LogTapClient(
      *
      * @sample us.tractat.kuilt.otel.tap.sampleLogTapTail
      */
-    public fun tail(): Flow<LogRecord> = flow {
-        val emitted = HashSet<ByteString>()
-        replicator.state.collect { log ->
-            for (record in log.toList()) {
-                if (emitted.add(record.recordId)) emit(record)
-            }
-        }
-    }
+    public fun tail(): Flow<LogRecord> = tailStamped().map { it.record }
 
     /**
      * Like [tail], but each streamed record carries its ordering [StampedLogRecord.rgaId]
