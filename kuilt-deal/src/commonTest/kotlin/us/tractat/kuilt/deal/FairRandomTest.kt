@@ -144,6 +144,38 @@ class FairRandomTest {
         assertEquals(seed1, seed2, "Identical secrets + nonces must produce an identical seed")
     }
 
+    // ── R6: golden-seed pin (byte-identical deriveSeed) ───────────────────────
+
+    @Test
+    fun deriveSeed_matchesGoldenValue_forFixedInputs() = runTest {
+        // SEED-AGREEMENT-CRITICAL: pins the concrete Long deriveSeed() produces for
+        // fixed peer ids + secrets + nonces. A refactor of deriveSeed's internals
+        // (R6: linear copyInto instead of fold + reallocation) must not move this
+        // value — any change to the byte layout or concatenation order breaks
+        // cross-peer seed agreement.
+        val scope = CoroutineScope(UnconfinedTestDispatcher(testScheduler))
+        val peers = setOf(alice, bob)
+
+        val fixedAliceSecret = ByteArray(32) { 0xAA.toByte() }
+        val fixedBobSecret = ByteArray(32) { 0xBB.toByte() }
+        val fixedAliceNonce = ByteArray(16) { 0x11.toByte() }
+        val fixedBobNonce = ByteArray(16) { 0x22.toByte() }
+
+        val (aliceSeam, bobSeam) = fakeSeamPair(alice, bob)
+
+        val aliceDef = scope.async {
+            FairRandom(aliceSeam, peers, fixedSecret = fixedAliceSecret, fixedNonce = fixedAliceNonce).roll()
+        }
+        val bobDef = scope.async {
+            FairRandom(bobSeam, peers, fixedSecret = fixedBobSecret, fixedNonce = fixedBobNonce).roll()
+        }
+
+        val aliceSeed = aliceDef.await()
+        bobDef.await()
+
+        assertEquals(6733418063457564066L, aliceSeed, "deriveSeed must stay byte-identical across refactors")
+    }
+
     // ── F3: participant validation ────────────────────────────────────────────
 
     @Test
