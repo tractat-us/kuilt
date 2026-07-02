@@ -12,6 +12,7 @@ kotlin {
             implementation(project(":kuilt-core"))
             implementation(libs.kotlinx.coroutines.core)
             implementation(libs.kotlinx.serialization.json)
+            implementation(libs.kotlinx.serialization.protobuf) // OTLP/protobuf wire (selectable alongside JSON)
             implementation(libs.kotlinx.serialization.cbor) // producer-local sent-set persistence
             implementation(libs.ktor.client.core)
             implementation(libs.ktor.client.contentNegotiation)
