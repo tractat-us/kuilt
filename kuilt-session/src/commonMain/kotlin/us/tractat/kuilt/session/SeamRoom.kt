@@ -129,6 +129,14 @@ public class SeamRoomFactory(
 }
 
 /**
+ * Size of the [Room.events] replay cache (#692). Large enough to retain the startup-window
+ * membership burst (the per-connection host room emits a single [MembershipEvent.Joined]; a
+ * mesh room may admit several peers near-simultaneously) so a late subscriber can't miss it,
+ * yet bounded so a long-lived room never accumulates unbounded history.
+ */
+private const val MEMBERSHIP_EVENT_REPLAY = 64
+
+/**
  * [Seam]-backed [Room] implementation.
  *
  * Owns the admit-protocol state: a map of admitted peers (keyed by [PeerId]),
@@ -172,14 +180,6 @@ public class SeamRoomFactory(
  *
  * [start] must be called by [SeamRoomFactory] after construction to launch these loops.
  */
-/**
- * Size of the [Room.events] replay cache (#692). Large enough to retain the startup-window
- * membership burst (the per-connection host room emits a single [MembershipEvent.Joined]; a
- * mesh room may admit several peers near-simultaneously) so a late subscriber can't miss it,
- * yet bounded so a long-lived room never accumulates unbounded history.
- */
-private const val MEMBERSHIP_EVENT_REPLAY = 64
-
 internal class SeamRoom(
     private val seam: Seam,
     role: SessionRole,
