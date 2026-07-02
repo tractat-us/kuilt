@@ -14,7 +14,7 @@ import kotlinx.serialization.descriptors.SerialDescriptor
 import kotlinx.serialization.encodeToByteArray
 import kotlinx.serialization.encoding.Decoder
 import kotlinx.serialization.encoding.Encoder
-import us.tractat.kuilt.otel.tap.LogTapCbor
+import us.tractat.kuilt.otel.tap.TapCbor
 
 /**
  * Wire frames for the tap's token-gated admission handshake, multiplexed onto the
@@ -62,7 +62,7 @@ public sealed interface TapAdmitMessage {
 
         /** Encode a [message] to bytes with the [PREFIX_BYTE] framing prefix. */
         public fun encode(message: TapAdmitMessage): ByteArray {
-            val cbor = LogTapCbor.encodeToByteArray(message)
+            val cbor = TapCbor.encodeToByteArray(message)
             return ByteArray(cbor.size + 1).also { out ->
                 out[0] = PREFIX_BYTE
                 cbor.copyInto(out, destinationOffset = 1)
@@ -78,7 +78,7 @@ public sealed interface TapAdmitMessage {
             // Non-suspend parse of an untrusted frame — bare runCatching is correct here
             // (no coroutine context, so there is no CancellationException to swallow).
             return runCatching {
-                LogTapCbor.decodeFromByteArray<TapAdmitMessage>(bytes.copyOfRange(1, bytes.size))
+                TapCbor.decodeFromByteArray<TapAdmitMessage>(bytes.copyOfRange(1, bytes.size))
             }.getOrNull()
         }
 
@@ -90,7 +90,7 @@ public sealed interface TapAdmitMessage {
 
 /**
  * Serializes a [ByteString] as a raw byte array. Local to the admit package because
- * `:kuilt-otel`'s equivalent is `internal`. With `LogTapCbor`'s `alwaysUseByteString`,
+ * `:kuilt-otel`'s equivalent is `internal`. With `TapCbor`'s `alwaysUseByteString`,
  * this encodes as a CBOR byte string; content-based [ByteString] equality keeps the wire
  * frames value-comparable (used by the round-trip tests).
  */

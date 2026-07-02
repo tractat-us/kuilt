@@ -55,7 +55,7 @@ public class LogTapHost internal constructor(
         valueSerializer = logRgaSerializer(),
         scope = scope,
         config = config.quilterConfig,
-        binaryFormat = LogTapCbor,
+        binaryFormat = TapCbor,
     )
 
     init {

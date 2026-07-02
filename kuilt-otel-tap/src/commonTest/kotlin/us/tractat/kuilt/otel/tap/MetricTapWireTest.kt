@@ -15,8 +15,8 @@ class MetricTapWireTest {
     @Test
     fun metricCatalogRoundTripsThroughCbor() {
         val cat = MetricCatalog(sums = mapOf(MetricKey("x", MetricKind.SUM) to GCounter.of(ReplicaId("A") to 3L)))
-        val bytes = MetricTapCbor.encodeToByteArray(metricCatalogSerializer(), cat)
-        val back = MetricTapCbor.decodeFromByteArray(metricCatalogSerializer(), bytes)
+        val bytes = TapCbor.encodeToByteArray(metricCatalogSerializer(), cat)
+        val back = TapCbor.decodeFromByteArray(metricCatalogSerializer(), bytes)
         assertEquals(cat, back)
     }
 
@@ -30,8 +30,8 @@ class MetricTapWireTest {
             gauges = mapOf(MetricKey("temp", MetricKind.GAUGE) to LWWRegister.empty<Double>().set(a, timestamp = 1L, value = 21.0)),
             cardinalities = mapOf(MetricKey("users", MetricKind.CARDINALITY) to hll.piece(hll.add("u1").delta)),
         )
-        val bytes = MetricTapCbor.encodeToByteArray(metricCatalogSerializer(), cat)
-        val back = MetricTapCbor.decodeFromByteArray(metricCatalogSerializer(), bytes)
+        val bytes = TapCbor.encodeToByteArray(metricCatalogSerializer(), cat)
+        val back = TapCbor.decodeFromByteArray(metricCatalogSerializer(), bytes)
         assertEquals(cat, back)
     }
 

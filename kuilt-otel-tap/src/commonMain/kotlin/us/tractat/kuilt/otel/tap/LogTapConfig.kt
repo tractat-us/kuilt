@@ -25,6 +25,8 @@ import kotlin.time.Duration.Companion.seconds
  * @param quilterConfig replication tuning passed through to the underlying replicator.
  *   Tests set `expectVirtualTime = true` to silence the test-dispatcher diagnostic.
  */
+// Identical to MetricTapConfig except the default [pattern]; unifying the two is
+// source+binary-breaking (both are public data classes) — deferred to the A-lane (A6).
 public data class LogTapConfig(
     val pattern: Pattern = Pattern("kuilt-log-tap"),
     val syncInterval: Duration = 1.seconds,
