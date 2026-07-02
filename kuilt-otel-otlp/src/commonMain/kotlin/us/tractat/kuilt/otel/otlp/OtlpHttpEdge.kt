@@ -15,6 +15,7 @@ import kotlinx.serialization.builtins.SetSerializer
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.cbor.Cbor
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.protobuf.ProtoBuf
 import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.otel.DurableStore
 import us.tractat.kuilt.otel.LogDigest
@@ -28,10 +29,24 @@ import us.tractat.kuilt.otel.SpanLink
 import us.tractat.kuilt.otel.SpanRecord
 import us.tractat.kuilt.otel.StoreKey
 
+/** Which OTLP/HTTP wire encoding an [OtlpHttpEdge] emits. */
+public enum class OtlpWireFormat {
+    /** OTLP/JSON (`application/json`) — the default; mature on every target. */
+    JSON,
+
+    /** OTLP/protobuf (`application/x-protobuf`) — the canonical, more compact OTLP wire. */
+    PROTOBUF,
+}
+
 /**
- * A Ktor OTLP/HTTP **JSON** [OtlpEdge]. POSTs each signal to `/v1/{traces,logs,metrics}`
- * as `application/json` and reconciles by a **producer-local** sent-set persisted in
- * [store] — because OTLP/HTTP is write-only, there is no collector read-back.
+ * A Ktor OTLP/HTTP [OtlpEdge]. POSTs each signal to `/v1/{traces,logs,metrics}` and
+ * reconciles by a **producer-local** sent-set persisted in [store] — because OTLP/HTTP
+ * is write-only, there is no collector read-back.
+ *
+ * The wire encoding is selectable via [wire]: **OTLP/JSON** (`application/json`, the
+ * default) or **OTLP/protobuf** (`application/x-protobuf`, the canonical, more compact
+ * OTLP wire many collectors default to). The digest/bridge reconciliation is identical
+ * for both — only the request body bytes and `Content-Type` differ.
  *
  * The digest is what *this* producer has already successfully delivered to *this*
  * endpoint: span and log ids in a bounded id-set, metric series as `MetricKey → value
@@ -49,12 +64,14 @@ import us.tractat.kuilt.otel.StoreKey
  * @param store durable persistence for the per-endpoint sent-set.
  * @param maxSentIds cap on the span/log sent-set size (drop-oldest). Metrics are
  *   naturally bounded by series count.
+ * @param wire OTLP wire encoding to emit. Defaults to [OtlpWireFormat.JSON].
  */
 public class OtlpHttpEdge(
     private val client: HttpClient,
     endpoint: String,
     private val store: DurableStore,
     private val maxSentIds: Int = DEFAULT_MAX_SENT_IDS,
+    private val wire: OtlpWireFormat = OtlpWireFormat.JSON,
 ) : OtlpEdge {
 
     private val base: String = endpoint.trimEnd('/')
@@ -80,25 +97,56 @@ public class OtlpHttpEdge(
     // ── Sends (POST, then fold into the sent-set on success) ───────────────────
 
     override suspend fun send(spans: Set<SpanRecord>, links: List<SpanLink>) {
-        postJson("/v1/traces", json.encodeToString(TracesRequest.serializer(), tracesRequestOf(spans, links)))
+        post(
+            "/v1/traces",
+            when (wire) {
+                OtlpWireFormat.JSON ->
+                    json.encodeToString(TracesRequest.serializer(), tracesRequestOf(spans, links))
+                OtlpWireFormat.PROTOBUF ->
+                    protobuf.encodeToByteArray(ProtoTracesRequest.serializer(), tracesProtoOf(spans, links))
+            },
+        )
         recordIds(spanKey, spans.map { it.spanId.toHex() })
     }
 
     override suspend fun sendLogs(logs: Set<LogRecord>) {
-        postJson("/v1/logs", json.encodeToString(LogsRequest.serializer(), logsRequestOf(logs)))
+        post(
+            "/v1/logs",
+            when (wire) {
+                OtlpWireFormat.JSON ->
+                    json.encodeToString(LogsRequest.serializer(), logsRequestOf(logs))
+                OtlpWireFormat.PROTOBUF ->
+                    protobuf.encodeToByteArray(ProtoLogsRequest.serializer(), logsProtoOf(logs))
+            },
+        )
         recordIds(logKey, logs.map { it.recordId.toHex() })
     }
 
     override suspend fun sendMetrics(points: Set<MetricPoint>) {
-        postJson("/v1/metrics", json.encodeToString(MetricsRequest.serializer(), metricsRequestOf(points)))
+        post(
+            "/v1/metrics",
+            when (wire) {
+                OtlpWireFormat.JSON ->
+                    json.encodeToString(MetricsRequest.serializer(), metricsRequestOf(points))
+                OtlpWireFormat.PROTOBUF ->
+                    protobuf.encodeToByteArray(ProtoMetricsRequest.serializer(), metricsProtoOf(points))
+            },
+        )
         recordVersions(points.associate { it.key to it.valueHash() })
     }
 
     // ── HTTP ───────────────────────────────────────────────────────────────────
 
-    private suspend fun postJson(path: String, body: String) {
+    // body is a JSON String or a protobuf ByteArray; Ktor's default transformers set
+    // the entity from either. contentType is keyed to the selected wire.
+    private suspend fun post(path: String, body: Any) {
         val response: HttpResponse = client.post(base + path) {
-            contentType(ContentType.Application.Json)
+            contentType(
+                when (wire) {
+                    OtlpWireFormat.JSON -> ContentType.Application.Json
+                    OtlpWireFormat.PROTOBUF -> ContentType("application", "x-protobuf")
+                },
+            )
             setBody(body)
         }
         if (!response.status.isSuccess()) {
@@ -141,6 +189,7 @@ public class OtlpHttpEdge(
         /** Default cap on the span/log producer-local sent-set (drop-oldest). */
         public const val DEFAULT_MAX_SENT_IDS: Int = 50_000
 
+        private val protobuf = ProtoBuf
         private val cbor = Cbor { alwaysUseByteString = true }
         private val idSetSerializer = SetSerializer(String.serializer())
         private val versionsSerializer = MapSerializer(MetricKey.serializer(), Long.serializer())

@@ -37,6 +37,29 @@ class OtlpHttpEdgeTest {
     }
 
     @Test
+    fun protobufWirePostsAsXProtobufBytes() = runTest {
+        var contentType = ""
+        var bodyBytes = ByteArray(0)
+        val engine = MockEngine { req ->
+            contentType = req.body.contentType?.toString() ?: ""
+            bodyBytes = (req.body as io.ktor.http.content.OutgoingContent.ByteArrayContent).bytes()
+            respond("", HttpStatusCode.OK)
+        }
+        val edge = OtlpHttpEdge(
+            HttpClient(engine), "https://collector.example:4318", InMemoryDurableStore(),
+            wire = OtlpWireFormat.PROTOBUF,
+        )
+        edge.send(setOf(span(1)))
+        assertTrue(contentType.contains("application/x-protobuf"), contentType)
+        // Binary, not JSON: the first byte is the resource_spans tag 0x0a, not '{' (0x7b).
+        assertEquals(0x0a.toByte(), bodyBytes.first())
+        // The 8-byte span id (all 0x01) appears verbatim as raw bytes, never as hex text.
+        assertTrue(bodyBytes.toList().windowed(8).any { w -> w.all { it == 0x01.toByte() } }, "raw span-id bytes")
+        // Digest reconciliation is wire-agnostic — the send still records the span id.
+        assertTrue(edge.digest().spanIds.contains(sId(1)))
+    }
+
+    @Test
     fun digestReflectsPriorSends() = runTest {
         val engine = MockEngine { respond("{}", HttpStatusCode.OK) }
         val store = InMemoryDurableStore()
