@@ -38,7 +38,7 @@ public class DevTlsIdentity internal constructor(
 ) {
     /** The self-signed leaf certificate this identity presents on the `wss://` handshake. */
     public val certificate: X509Certificate =
-        keyStore.getCertificate(keyAlias) as X509Certificate
+        (keyStore.getCertificate(keyAlias) ?: error("no certificate under alias '$keyAlias'")) as X509Certificate
 
     public val fingerprintSha256: String = sha256Fingerprint(certificate)
 

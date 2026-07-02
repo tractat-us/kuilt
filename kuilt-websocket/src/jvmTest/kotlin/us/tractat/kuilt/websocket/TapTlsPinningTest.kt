@@ -66,7 +66,7 @@ class TapTlsPinningTest {
     @Test
     fun fingerprintIdentifiesCert() {
         val identity = generateDevTlsIdentity()
-        val cert = identity.keyStore.getCertificate(identity.keyAlias) as X509Certificate
+        val cert = requireNotNull(identity.keyStore.getCertificate(identity.keyAlias)) as X509Certificate
         val recomputed = MessageDigest.getInstance("SHA-256")
             .digest(cert.encoded)
             .joinToString(":") { "%02x".format(it) }
