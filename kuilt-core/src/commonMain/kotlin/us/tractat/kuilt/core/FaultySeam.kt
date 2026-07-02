@@ -1,12 +1,11 @@
 package us.tractat.kuilt.core
 
+import kotlinx.atomicfu.atomic
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -35,27 +34,28 @@ public class FaultySeam(
     private val delegate: Seam,
     private val scope: CoroutineScope,
     initialProfile: FaultProfile = FaultProfile.Healthy,
+    policy: DeliveryPolicy = DeliveryPolicy.Reliable,
 ) : Seam {
     private val faultState = FaultState(initialProfile)
     private val mutex = Mutex()
 
-    // Incoming channel — inbound fault logic runs here before delivery.
-    private val incomingChannel = Channel<Swatch>(capacity = Channel.UNLIMITED)
+    // Incoming — bounded per the injected DeliveryPolicy (the Spool invariant, #701).
+    private val spool = Spool<Swatch>(policy)
 
-    // Counters
-    private var _framesDropped = 0L
-    private var _framesDelayed = 0L
-    private var _framesDelivered = 0L
+    // Counters — atomic so concurrent sender coroutines and the inbound pump race-free.
+    private val _framesDropped = atomic(0L)
+    private val _framesDelayed = atomic(0L)
+    private val _framesDelivered = atomic(0L)
 
-    public val framesDropped: Long get() = _framesDropped
-    public val framesDelayed: Long get() = _framesDelayed
-    public val framesDelivered: Long get() = _framesDelivered
+    public val framesDropped: Long get() = _framesDropped.value
+    public val framesDelayed: Long get() = _framesDelayed.value
+    public val framesDelivered: Long get() = _framesDelivered.value
 
     init {
         // Pipe from the delegate's incoming flow through fault injection.
         scope.launch {
             delegate.incoming.collect { frame -> injectInbound(frame) }
-            incomingChannel.close()
+            spool.close()
         }
     }
 
@@ -78,7 +78,7 @@ public class FaultySeam(
 
     override val state: StateFlow<SeamState> get() = delegate.state
 
-    override val incoming: Flow<Swatch> = incomingChannel.receiveAsFlow()
+    override val incoming: Flow<Swatch> = spool.incoming
 
     override suspend fun broadcast(payload: ByteArray) {
         val decision = mutex.withLock { faultState.evaluateOutbound(payload) }
@@ -104,16 +104,16 @@ public class FaultySeam(
         when (decision) {
             is OutboundDecision.Send -> {
                 send(decision.payload)
-                _framesDelivered++
+                _framesDelivered.incrementAndGet()
             }
             is OutboundDecision.Delay -> {
-                _framesDelayed++
+                _framesDelayed.incrementAndGet()
                 delay(decision.delay)
                 send(decision.payload)
-                _framesDelivered++
+                _framesDelivered.incrementAndGet()
             }
             is OutboundDecision.Drop -> {
-                _framesDropped++
+                _framesDropped.incrementAndGet()
             }
             is OutboundDecision.Buffer -> {
                 // Frame is held in FaultState's reorder window; nothing to do here.
@@ -121,7 +121,7 @@ public class FaultySeam(
             is OutboundDecision.SendBurst -> {
                 for (p in decision.payloads) {
                     send(p)
-                    _framesDelivered++
+                    _framesDelivered.incrementAndGet()
                 }
             }
             is OutboundDecision.CloseLink -> {
@@ -137,16 +137,16 @@ public class FaultySeam(
         val inboundDelay = faultState.inboundDelay(faultState.profile)
 
         if (toDeliver.isEmpty()) {
-            _framesDropped++
+            _framesDropped.incrementAndGet()
             return
         }
         if (inboundDelay != null) {
-            _framesDelayed++
+            _framesDelayed.incrementAndGet()
             delay(inboundDelay)
         }
         for (f in toDeliver) {
-            incomingChannel.trySend(f)
-            _framesDelivered++
+            spool.deliver(f)
+            _framesDelivered.incrementAndGet()
         }
     }
 }
