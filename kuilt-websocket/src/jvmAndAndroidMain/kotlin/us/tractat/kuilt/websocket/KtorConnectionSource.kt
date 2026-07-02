@@ -18,6 +18,12 @@ import us.tractat.kuilt.core.fabric.ConnectionSource
  *
  * A WS session is *either* a relay seam ([KtorServerLoom]) *or* a hub spoke (this) — decided by
  * which accept object the server installs on the route.
+ *
+ * **Pairing:** feed this source to a [us.tractat.kuilt.core.MuxServerLoom] hub, and have spokes
+ * join it with [KtorMeshClientLoom] — both sides speak the in-band `MeshHello` preamble. A
+ * [KtorClientLoom] is the wrong client here: it returns a 2-peer [WebSocketSeam] with no in-band
+ * handshake, so admit against this hub never completes. ([KtorClientLoom] pairs with the relay
+ * topology — [KtorServerLoom]/[KtorRoomHost] — instead.)
  */
 public class KtorConnectionSource(
     application: Application,

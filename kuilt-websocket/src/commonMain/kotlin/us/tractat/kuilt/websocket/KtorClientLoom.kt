@@ -17,6 +17,12 @@ import kotlin.uuid.Uuid
  * [join] connects directly to a [WebSocketAdvertisement] URL and returns a
  * 2-peer [WebSocketSeam] — no intermediate contract [Session] adapter.
  *
+ * **Pairing:** `KtorClientLoom` ↔ [KtorServerLoom]/[KtorRoomHost] — a 2-peer relay with **no**
+ * in-band handshake. It is **not** the client for a [us.tractat.kuilt.core.MuxServerLoom] hub:
+ * that hub handshakes every spoke with an in-band `MeshHello` preamble a [WebSocketSeam] never
+ * sends, so pointing this loom at one silently never completes admit. Use [KtorMeshClientLoom]
+ * (hub-spoke mesh) for a `MuxServerLoom` hub.
+ *
  * **PeerId discovery:**
  *  - Client's own [PeerId] is fixed at construction as [selfPeerId] and
  *    appended as `?peer=<id>` on every join so the server can read it.
