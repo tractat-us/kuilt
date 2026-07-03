@@ -263,7 +263,7 @@ public actual class MultipeerPeerLinkFactory actual constructor(
             val ad =
                 MultipeerAdvertisement(
                     handle = handle,
-                    displayName = handle,
+                    sessionName = handle,
                     serviceType = factory.serviceType,
                 )
             factory._visiblePeers.update { current -> current.filterNot { it.handle == handle }.toSet() + ad }

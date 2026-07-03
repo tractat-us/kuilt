@@ -74,6 +74,6 @@ class WebSocketConformanceTest : SeamConformanceSuite() {
     override fun joinTag(): Tag = WebSocketAdvertisement(
         url = "ws://localhost:$port$serverPath",
         serverPeerId = serverLoom.selfPeerId,
-        displayName = "conformance-client",
+        sessionName = "conformance-client",
     )
 }

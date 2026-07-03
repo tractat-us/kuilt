@@ -67,8 +67,8 @@ class JoinerReconnectTest {
 
     private val nameOf: (Rendezvous) -> String = { rv ->
         when (rv) {
-            is Rendezvous.New -> rv.pattern.displayName
-            is Rendezvous.Existing -> rv.tag.displayName
+            is Rendezvous.New -> rv.pattern.sessionName
+            is Rendezvous.Existing -> rv.tag.sessionName
         }
     }
 
@@ -91,7 +91,7 @@ class JoinerReconnectTest {
             val hostRoom = SeamRoom(
                 seam = hostSeam,
                 role = SessionRole.Host,
-                displayName = "table-7",
+                memberName = "table-7",
                 scope = backgroundScope,
                 clock = clock,
                 heartbeatConfig = fastConfig,
@@ -112,7 +112,7 @@ class JoinerReconnectTest {
             val joinerRoom = SeamRoom(
                 seam = muxClient.join(tag),
                 role = SessionRole.Joiner,
-                displayName = "client",
+                memberName = "client",
                 scope = backgroundScope,
                 clock = clock,
                 heartbeatConfig = fastConfig,
@@ -167,7 +167,7 @@ class JoinerReconnectTest {
             SeamRoom(
                 seam = hostSeam,
                 role = SessionRole.Host,
-                displayName = "table-7",
+                memberName = "table-7",
                 scope = backgroundScope,
                 clock = clock,
                 heartbeatConfig = fastConfig,
@@ -190,7 +190,7 @@ class JoinerReconnectTest {
             val joinerRoom = SeamRoom(
                 seam = muxClient.join(tag),
                 role = SessionRole.Joiner,
-                displayName = "client",
+                memberName = "client",
                 scope = backgroundScope,
                 clock = clock,
                 heartbeatConfig = fastConfig,
@@ -227,7 +227,7 @@ class JoinerReconnectTest {
             val joinerRoom = SeamRoom(
                 seam = joinerSeam,
                 role = SessionRole.Joiner,
-                displayName = "joiner",
+                memberName = "joiner",
                 scope = backgroundScope,
                 clock = clock,
                 heartbeatConfig = fastConfig,
@@ -374,7 +374,7 @@ class JoinerReconnectTest {
             val hostRoom = SeamRoom(
                 seam = loom.host(Pattern("h")),
                 role = SessionRole.Host,
-                displayName = "h",
+                memberName = "h",
                 scope = backgroundScope,
                 clock = clock,
                 heartbeatConfig = fastConfig,
@@ -388,7 +388,7 @@ class JoinerReconnectTest {
             val joinerRoom = SeamRoom(
                 seam = joinerSeam,
                 role = SessionRole.Joiner,
-                displayName = "j",
+                memberName = "j",
                 scope = backgroundScope,
                 clock = clock,
                 heartbeatConfig = fastConfig,
@@ -450,7 +450,7 @@ class JoinerReconnectTest {
         val hostRoom = SeamRoom(
             seam = hostSeam,
             role = SessionRole.Host,
-            displayName = "table-7",
+            memberName = "table-7",
             scope = backgroundScope,
             clock = clock,
             heartbeatConfig = fastConfig,
@@ -472,7 +472,7 @@ class JoinerReconnectTest {
         val joinerRoom = SeamRoom(
             seam = muxClient.join(tag),
             role = SessionRole.Joiner,
-            displayName = "client",
+            memberName = "client",
             scope = backgroundScope,
             clock = clock,
             heartbeatConfig = fastConfig,

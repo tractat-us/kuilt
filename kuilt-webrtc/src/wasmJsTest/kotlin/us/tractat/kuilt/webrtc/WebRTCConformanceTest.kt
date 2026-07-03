@@ -40,10 +40,10 @@ class WebRTCConformanceTest : SeamConformanceSuite() {
 
     /**
      * The joiner's tag. [WebRTCPeerLinkFactory] ignores [Tag.peerKey] and uses its
-     * own pinned [room]; [Tag.displayName] is used only for peer-id labelling.
+     * own pinned [room]; [Tag.sessionName] is used only for peer-id labelling.
      */
     override fun joinTag(): Tag = object : Tag {
-        override val displayName = "host"
+        override val sessionName = "host"
         override val peerKey = room
     }
 }

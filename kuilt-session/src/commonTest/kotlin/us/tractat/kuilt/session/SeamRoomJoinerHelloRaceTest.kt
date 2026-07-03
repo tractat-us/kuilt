@@ -71,7 +71,7 @@ class SeamRoomJoinerHelloRaceTest {
                 SeamRoom(
                     seam = fakeSeam,
                     role = SessionRole.Joiner,
-                    displayName = "joiner",
+                    memberName = "joiner",
                     scope = backgroundScope,
                     clock = { Instant.fromEpochMilliseconds(0L) },
                     heartbeatConfig = HeartbeatConfig(),

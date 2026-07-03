@@ -14,7 +14,7 @@ import us.tractat.kuilt.session.SessionRole
 /**
  * A test double for [RoomFactory] that returns [FakeRoom] instances.
  *
- * [host] seeds the room's [FakeRoom.selfId] from the pattern's display name and
+ * [host] seeds the room's [FakeRoom.selfId] from the pattern's session name and
  * sets the role to [SessionRole.Host]. [join] does the same with [SessionRole.Joiner].
  *
  * For wired two-room scenarios, prefer [fakeRoomPair].
@@ -26,15 +26,15 @@ import us.tractat.kuilt.session.SessionRole
  * ```
  */
 public class FakeRoomFactory : RoomFactory {
-    override suspend fun host(pattern: Pattern): Room =
+    override suspend fun host(pattern: Pattern, memberName: String?): Room =
         FakeRoom(
-            selfId = PeerId(pattern.displayName),
+            selfId = PeerId(pattern.sessionName),
             initialRole = SessionRole.Host,
         )
 
-    override suspend fun join(tag: Tag): Room =
+    override suspend fun join(tag: Tag, memberName: String?): Room =
         FakeRoom(
-            selfId = PeerId(tag.displayName),
+            selfId = PeerId(tag.sessionName),
             initialRole = SessionRole.Joiner,
         )
 }

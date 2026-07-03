@@ -42,7 +42,7 @@ public fun mc_runtime_open(handle: COpaquePointer?): COpaquePointer? {
     val factory = handle.asStableRef<MultipeerPeerLinkFactory>().get()
     val link =
         runCatching {
-            runBlocking { factory.host(Pattern(displayName = factory.displayName)) }
+            runBlocking { factory.host(Pattern(sessionName = factory.displayName)) }
         }.getOrElse { return null }
     return StableRef.create(BridgeSessionState(link)).asCPointer()
 }

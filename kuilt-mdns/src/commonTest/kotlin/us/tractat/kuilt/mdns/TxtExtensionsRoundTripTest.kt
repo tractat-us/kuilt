@@ -68,7 +68,7 @@ class TxtExtensionsRoundTripTest {
             host = "10.0.0.1",
             port = 9000,
             serverPeerId = PeerId("p"),
-            displayName = "test",
+            sessionName = "test",
         )
         assertTrue(ad.txtExtensions.isEmpty())
     }
@@ -80,7 +80,7 @@ class TxtExtensionsRoundTripTest {
             host = "10.0.0.1",
             port = 9000,
             serverPeerId = PeerId("p"),
-            displayName = "test",
+            sessionName = "test",
             txtExtensions = extensions,
         )
         assertEquals(extensions, ad.txtExtensions)
@@ -95,7 +95,7 @@ class TxtExtensionsRoundTripTest {
             host = "10.0.0.1",
             port = 9000,
             serverPeerId = PeerId("p"),
-            displayName = "test",
+            sessionName = "test",
             roomKey = "room-xyz",
         )
         assertEquals("room-xyz", ad.roomKey)
@@ -107,7 +107,7 @@ class TxtExtensionsRoundTripTest {
             host = "10.0.0.1",
             port = 9000,
             serverPeerId = PeerId("p"),
-            displayName = "test",
+            sessionName = "test",
         )
         assertEquals(null, ad.roomKey)
         assertTrue(MDNSAdvertisement.TXT_KEY_ROOM in kuiltReservedTxtKeys)

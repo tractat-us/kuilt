@@ -16,7 +16,7 @@ import us.tractat.kuilt.core.Tag
  * @property handle Stable opaque identifier for this peer within the current
  *   browse session. Treat it as an opaque token — its only valid use is round-
  *   tripping back to the `MultipeerPeerLinkFactory` that produced it.
- * @property displayName Human-readable name as broadcast by the advertising
+ * @property sessionName Human-readable name as broadcast by the advertising
  *   peer (matches its `MCPeerID.displayName`).
  * @property serviceType MultipeerConnectivity service type string the peer
  *   advertised under (matches the `serviceType` passed to [MultipeerPeerLinkFactory]).
@@ -27,7 +27,7 @@ import us.tractat.kuilt.core.Tag
  */
 public data class MultipeerAdvertisement(
     val handle: String,
-    override val displayName: String,
+    override val sessionName: String,
     val serviceType: String,
     override val roomKey: String? = null,
 ) : Tag {

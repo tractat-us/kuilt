@@ -55,7 +55,7 @@ public interface RoomHost : AutoCloseable {
  * multi-connection accept loop (Ktor) and platform cleanup live in those adapters.
  *
  * @param loom the [Loom] to host over.
- * @param pattern the session [Pattern] (display name) to advertise.
+ * @param pattern the session [Pattern] (session name) to advertise.
  * @param clock time source for partition detection; defaults to wall-clock
  *   [kotlin.time.Clock.System]. Inject a virtual clock in tests.
  * @param heartbeatConfig partition-detection timing.

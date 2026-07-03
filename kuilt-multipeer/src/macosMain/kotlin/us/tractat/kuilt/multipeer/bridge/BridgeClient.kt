@@ -79,7 +79,7 @@ public fun mc_runtime_join(
     val advertisement =
         MultipeerAdvertisement(
             handle = handleStr,
-            displayName = handleStr,
+            sessionName = handleStr,
             serviceType = factory.serviceType,
         )
     val link =

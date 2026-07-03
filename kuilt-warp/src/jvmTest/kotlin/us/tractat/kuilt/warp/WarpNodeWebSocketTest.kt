@@ -490,7 +490,7 @@ class WarpNodeWebSocketTest {
             WebSocketAdvertisement(
                 url = "ws://localhost:$port$serverPath",
                 serverPeerId = RELAY_ID,
-                displayName = clientId.value,
+                sessionName = clientId.value,
             ),
         )
         val serverSeam = serverDeferred.await()

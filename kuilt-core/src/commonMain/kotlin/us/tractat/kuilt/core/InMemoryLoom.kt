@@ -141,11 +141,11 @@ public class InMemoryLoom(
 /**
  * A [Tag] implementation for the in-memory transport. Since
  * the in-memory factory does not need network discovery, this carries only
- * the display name. The factory itself provides the mesh context.
+ * the session name. The factory itself provides the mesh context.
  */
 public data class InMemoryTag(
-    override val displayName: String,
-    override val peerKey: String = displayName,
+    override val sessionName: String,
+    override val peerKey: String = sessionName,
     override val roomKey: String? = null,
 ) : Tag
 

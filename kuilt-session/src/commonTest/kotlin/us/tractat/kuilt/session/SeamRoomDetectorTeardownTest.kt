@@ -41,7 +41,7 @@ class SeamRoomDetectorTeardownTest {
             val hostRoom = SeamRoom(
                 seam = loom.host(Pattern("Alice")),
                 role = SessionRole.Host,
-                displayName = "Alice",
+                memberName = "Alice",
                 scope = roomScope,
                 clock = clock,
                 heartbeatConfig = HeartbeatConfig(),
@@ -52,7 +52,7 @@ class SeamRoomDetectorTeardownTest {
             SeamRoom(
                 seam = loom.join(InMemoryTag("Bob")),
                 role = SessionRole.Joiner,
-                displayName = "Bob",
+                memberName = "Bob",
                 scope = backgroundScope,
                 clock = clock,
                 heartbeatConfig = HeartbeatConfig(),

@@ -131,7 +131,7 @@ class MDNSConformanceTest : SeamConformanceSuite() {
             host = "localhost",
             port = port,
             serverPeerId = hostFactory.selfPeerId,
-            displayName = "host",
+            sessionName = "host",
             wsPath = hostWsPath,
         )
 

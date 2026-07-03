@@ -35,8 +35,8 @@ import kotlin.random.Random
  *
  * ## Rendezvous names must agree
  *
- * A client routes to a server room by the rendezvous **display name**: a joiner reaches the room a
- * host opened with `Pattern(name)` only by joining a `Tag` whose `displayName` is that same `name`
+ * A client routes to a server room by the rendezvous **session name**: a joiner reaches the room a
+ * host opened with `Pattern(name)` only by joining a `Tag` whose `sessionName` is that same `name`
  * (or, via [clientLoom], by weaving a rendezvous that maps to it). Hosts and joiners of one logical
  * room must therefore agree on the name. This mirrors production: the client selects its room by
  * the name the host advertised.
@@ -48,7 +48,7 @@ import kotlin.random.Random
  *   rooms over the one link — the low-level handle the fanout conformance suite uses.
  * - [clientLoom] wraps that raw seam in a [MuxClientLoom] so it presents as a real [Loom] and plugs
  *   straight into `SeamRoomFactory` (or any `Loom` consumer). `host(pattern)` / `join(tag)` route by
- *   the rendezvous display name.
+ *   the rendezvous session name.
  *
  * @param scope owns the server accept pump, per-connection read loops, and the client mux
  *   collectors. **Required** — no real-dispatcher default (test determinism).
@@ -98,8 +98,8 @@ public class InMemoryRoomFabric(
      * A client [Loom] over one shared in-memory link. Multiplexes each hosted/joined room name onto
      * its own channel (via [MuxClientLoom]), so it plugs straight into `SeamRoomFactory`.
      *
-     * `host(pattern)` and `join(tag)` route by the rendezvous **display name**, which must match a
-     * server room's `Pattern.displayName`.
+     * `host(pattern)` and `join(tag)` route by the rendezvous **session name**, which must match a
+     * server room's `Pattern.sessionName`.
      *
      * @param peerId this client's identity.
      * @param random seeded [Random] for this client's mesh-seam nonce generation — pass a distinct
@@ -118,8 +118,8 @@ public class InMemoryRoomFabric(
     }
 }
 
-/** The channel name a [Rendezvous] routes to: the `Pattern` / `Tag` display name. */
+/** The channel name a [Rendezvous] routes to: the `Pattern` / `Tag` session name. */
 internal fun rendezvousName(rendezvous: Rendezvous): String = when (rendezvous) {
-    is Rendezvous.New -> rendezvous.pattern.displayName
-    is Rendezvous.Existing -> rendezvous.tag.displayName
+    is Rendezvous.New -> rendezvous.pattern.sessionName
+    is Rendezvous.Existing -> rendezvous.tag.sessionName
 }

@@ -95,7 +95,7 @@ class MDNSMultiAcceptHostTest {
                 WebSocketAdvertisement(
                     url = "ws://localhost:$port$wsPath",
                     serverPeerId = host.selfPeerId,
-                    displayName = "joiner",
+                    sessionName = "joiner",
                 ),
             )
             openSeams += clientSeam

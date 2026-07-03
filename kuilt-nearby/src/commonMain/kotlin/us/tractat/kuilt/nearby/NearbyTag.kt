@@ -10,6 +10,6 @@ import us.tractat.kuilt.core.Tag
  * identity is exchanged during the connect handshake — see [ConnectStateMachine].
  */
 public data class NearbyTag(
-    override val displayName: String,
+    override val sessionName: String,
     override val peerKey: String,
 ) : Tag

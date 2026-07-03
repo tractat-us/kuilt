@@ -39,7 +39,7 @@ val seam = client.join(
     WebSocketAdvertisement(
         url = "ws://192.168.1.10:8080/live",
         serverPeerId = PeerId("server-1"),
-        displayName = "alice",
+        sessionName = "alice",
     ),
 )
 ```
@@ -144,7 +144,7 @@ reconnect behavior), add `kuilt-session`.
 
 ```kotlin
 val factory: RoomFactory = SeamRoomFactory(loom, scope)
-val room: Room = factory.host(Pattern(displayName = "alice", maxPeers = 4))
+val room: Room = factory.host(Pattern(sessionName = "alice", maxPeers = 4))
 
 scope.launch { room.roster.collect { members -> render(members) } }
 scope.launch { room.events.collect { event -> handle(event) } }

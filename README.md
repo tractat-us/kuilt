@@ -50,7 +50,7 @@ fabric module.
 
 ```kotlin
 val loom = InMemoryLoom()                            // swap for any real fabric
-val host  = loom.host(Pattern(displayName = "alice"))
+val host  = loom.host(Pattern(sessionName = "alice"))
 val guest = loom.join(InMemoryTag("bob"))
 
 scope.launch { host.incoming.collect { println(it.payload.decodeToString()) } }
@@ -173,7 +173,7 @@ symmetric model.
 ```kotlin
 // In a test, or any layer above the wire, the in-memory fabric needs no network:
 val loom: Loom = InMemoryLoom()
-val host = loom.host(Pattern(displayName = "alice"))
+val host = loom.host(Pattern(sessionName = "alice"))
 
 launch { host.incoming.collect { swatch -> handle(swatch.payload) } } // collect once
 host.broadcast("hello".encodeToByteArray())

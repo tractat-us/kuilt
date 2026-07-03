@@ -12,7 +12,7 @@ import us.tractat.kuilt.core.Swatch
  * A test double for [Loom] that returns [FakeSeam] instances.
  *
  * [weave] with [Rendezvous.New] seeds the seam's [FakeSeam.selfId] from the
- * pattern's display name. For wired two-peer scenarios, prefer [fakeSeamPair].
+ * pattern's session name. For wired two-peer scenarios, prefer [fakeSeamPair].
  *
  * ```kotlin
  * val loom = FakeLoom()
@@ -23,8 +23,8 @@ import us.tractat.kuilt.core.Swatch
 public class FakeLoom : Loom {
     override suspend fun weave(rendezvous: Rendezvous): FakeSeam =
         when (rendezvous) {
-            is Rendezvous.New -> seam(rendezvous.pattern.displayName)
-            is Rendezvous.Existing -> seam(rendezvous.tag.displayName)
+            is Rendezvous.New -> seam(rendezvous.pattern.sessionName)
+            is Rendezvous.Existing -> seam(rendezvous.tag.sessionName)
         }
 
     private fun seam(displayName: String): FakeSeam =

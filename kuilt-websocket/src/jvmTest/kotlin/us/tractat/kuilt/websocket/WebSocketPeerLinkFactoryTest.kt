@@ -424,7 +424,7 @@ class WebSocketPeerLinkFactoryTest {
                     WebSocketAdvertisement(
                         url = "ws://localhost$serverPath",
                         serverPeerId = factory.selfPeerId,
-                        displayName = "x",
+                        sessionName = "x",
                     ),
                 )
             }
@@ -454,7 +454,7 @@ class WebSocketPeerLinkFactoryTest {
                             WebSocketAdvertisement(
                                 url = "ws://localhost$serverPath",
                                 serverPeerId = serverFactory.selfPeerId,
-                                displayName = "client",
+                                sessionName = "client",
                             ),
                         )
                     val serverLink = serverLinkDeferred.await()
@@ -486,7 +486,7 @@ class WebSocketPeerLinkFactoryTest {
                         WebSocketAdvertisement(
                             url = "ws://localhost$serverPath",
                             serverPeerId = serverFactory.selfPeerId,
-                            displayName = "client",
+                            sessionName = "client",
                         ),
                     )
                 val serverLink = serverLinkDeferred.await()

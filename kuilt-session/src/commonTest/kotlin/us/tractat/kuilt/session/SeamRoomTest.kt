@@ -67,8 +67,8 @@ class SeamRoomTest {
     fun `joiner appears in host roster only after completing handshake`() =
         runTest {
             val loom = loom()
-            val hostRoom = factory(loom, backgroundScope).host(Pattern("Alice"))
-            val joinerRoom = factory(loom, backgroundScope).join(InMemoryTag("Bob"))
+            val hostRoom = factory(loom, backgroundScope).host(Pattern("Alice"), memberName = "Alice")
+            val joinerRoom = factory(loom, backgroundScope).join(InMemoryTag("Bob"), memberName = "Bob")
 
             val hostRoster = hostRoom.roster.first { it.size == 1 }
 
@@ -86,8 +86,8 @@ class SeamRoomTest {
     fun `host appears in joiner roster after handshake completes`() =
         runTest {
             val loom = loom()
-            val hostRoom = factory(loom, backgroundScope).host(Pattern("Alice"))
-            val joinerRoom = factory(loom, backgroundScope).join(InMemoryTag("Bob"))
+            val hostRoom = factory(loom, backgroundScope).host(Pattern("Alice"), memberName = "Alice")
+            val joinerRoom = factory(loom, backgroundScope).join(InMemoryTag("Bob"), memberName = "Bob")
 
             val joinerRoster = joinerRoom.roster.first { it.isNotEmpty() }
 
@@ -138,7 +138,7 @@ class SeamRoomTest {
             }
             yield()
 
-            factory(loom, backgroundScope).join(InMemoryTag("Bob"))
+            factory(loom, backgroundScope).join(InMemoryTag("Bob"), memberName = "Bob")
 
             val event = joinedDeferred.await()
             collectJob.cancel()
@@ -295,8 +295,8 @@ class SeamRoomTest {
         runTest {
             val loom = loom()
             val hostRoom = factory(loom, backgroundScope).host(Pattern("Alice"))
-            factory(loom, backgroundScope).join(InMemoryTag("Bob"))
-            factory(loom, backgroundScope).join(InMemoryTag("Charlie"))
+            factory(loom, backgroundScope).join(InMemoryTag("Bob"), memberName = "Bob")
+            factory(loom, backgroundScope).join(InMemoryTag("Charlie"), memberName = "Charlie")
 
             val roster = hostRoom.roster.first { it.size == 2 }
             val names = roster.map { it.identity.displayName }.toSet()

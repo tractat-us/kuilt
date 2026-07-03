@@ -159,7 +159,7 @@ class MDNSRoomKeySourcingTest {
                 WebSocketAdvertisement(
                     url = "ws://localhost:$port$wsPath",
                     serverPeerId = factory.selfPeerId,
-                    displayName = "joiner",
+                    sessionName = "joiner",
                 ),
             )
             openSeams += joinerSeam

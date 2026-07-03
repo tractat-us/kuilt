@@ -32,7 +32,7 @@ class KtorClientLoomIdentityTest {
             val advertisement = WebSocketAdvertisement(
                 url = "ws://localhost$serverPath",
                 serverPeerId = serverLoom.selfPeerId,
-                displayName = "client",
+                sessionName = "client",
             )
 
             val (firstServerSeam, firstClientSeam) = connectPair(serverLoom, advertisement, clientLoom)
@@ -62,7 +62,7 @@ class KtorClientLoomIdentityTest {
             val advertisement = WebSocketAdvertisement(
                 url = "ws://localhost$serverPath",
                 serverPeerId = serverLoom.selfPeerId,
-                displayName = "client",
+                sessionName = "client",
             )
 
             val (_, firstClientSeam) = connectPair(serverLoom, advertisement, clientLoom)

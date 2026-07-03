@@ -122,7 +122,7 @@ public class MDNSServiceDiscoverer(
             host = host,
             port = info.port,
             serverPeerId = PeerId(peerId),
-            displayName = info.name,
+            sessionName = info.name,
             wsPath = wsPath,
             hostOs =
                 info

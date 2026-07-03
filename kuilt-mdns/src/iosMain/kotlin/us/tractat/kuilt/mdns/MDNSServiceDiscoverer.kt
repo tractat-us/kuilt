@@ -106,7 +106,7 @@ private class ServiceDelegate(
                 host = host,
                 port = port,
                 serverPeerId = PeerId(peerId),
-                displayName = sender.name(),
+                sessionName = sender.name(),
                 wsPath = wsPath,
                 hostOs =
                     dict[MDNSAdvertisement.TXT_KEY_HOST_OS]

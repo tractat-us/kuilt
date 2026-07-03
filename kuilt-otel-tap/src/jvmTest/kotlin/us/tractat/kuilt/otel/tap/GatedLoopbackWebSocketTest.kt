@@ -58,7 +58,7 @@ class GatedLoopbackWebSocketTest {
         val advertisement = WebSocketAdvertisement(
             url = "ws://localhost$path",
             serverPeerId = serverLoom.selfPeerId,
-            displayName = "puller",
+            sessionName = "puller",
         )
         val replicatorScope = CoroutineScope(coroutineContext + SupervisorJob())
 
@@ -96,7 +96,7 @@ class GatedLoopbackWebSocketTest {
         val advertisement = WebSocketAdvertisement(
             url = "ws://localhost$path",
             serverPeerId = serverLoom.selfPeerId,
-            displayName = "attacker",
+            sessionName = "attacker",
         )
         val replicatorScope = CoroutineScope(coroutineContext + SupervisorJob())
         // Short pull timeout so the refusal is observed quickly under real time.

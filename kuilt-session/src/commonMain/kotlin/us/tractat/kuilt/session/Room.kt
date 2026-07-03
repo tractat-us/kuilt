@@ -155,9 +155,23 @@ public interface Room {
  * rooms via [host] (new session) or [join] (existing session).
  */
 public interface RoomFactory {
-    /** Host a new room. The caller's peer becomes the [SessionRole.Host]. */
-    public suspend fun host(pattern: Pattern): Room
+    /**
+     * Host a new room. The caller's peer becomes the [SessionRole.Host].
+     *
+     * [memberName] is this peer's own roster name — the label other members see for it.
+     * It defaults to null, in which case the peer's own id ([Room.selfId]) is used. It is
+     * deliberately *not* derived from [Pattern.sessionName]: the session name names the
+     * session, not this member (#1177).
+     */
+    public suspend fun host(pattern: Pattern, memberName: String? = null): Room
 
-    /** Join an existing room. The caller's peer becomes a [SessionRole.Joiner]. */
-    public suspend fun join(tag: Tag): Room
+    /**
+     * Join an existing room. The caller's peer becomes a [SessionRole.Joiner].
+     *
+     * [memberName] is this peer's own roster name — the label other members see for it.
+     * It defaults to null, in which case the peer's own id ([Room.selfId]) is used. It is
+     * deliberately *not* derived from the discovered [Tag.sessionName]: the session name
+     * names the session being joined, not this joiner (#1177).
+     */
+    public suspend fun join(tag: Tag, memberName: String? = null): Room
 }

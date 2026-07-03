@@ -147,7 +147,7 @@ class RoomLifecycleFlapTest {
         val hostRoom = SeamRoom(
             seam = faultyHostSeam,
             role = SessionRole.Host,
-            displayName = "host",
+            memberName = "host",
             scope = backgroundScope,
             clock = clock,
             heartbeatConfig = fastConfig,
@@ -156,7 +156,7 @@ class RoomLifecycleFlapTest {
         val joinerRoom = SeamRoom(
             seam = innerLoom.join(InMemoryTag("joiner")),
             role = SessionRole.Joiner,
-            displayName = "joiner",
+            memberName = "joiner",
             scope = backgroundScope,
             clock = clock,
             heartbeatConfig = fastConfig,
