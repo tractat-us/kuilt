@@ -52,19 +52,30 @@ public suspend fun installMultipeerLogTap(
  * Multipeer fabric as [installMultipeerLogTap].
  *
  * The iPhone hosts and offers its [WarpMetricExporter] buffer; a Mac discovers it and pulls with
- * a [MetricTapClient]. Metrics ride the encrypted link too — the transport confidentiality is the
- * fabric's, not the tap's — so no separate join code is layered on here. As with the log tap,
- * there is no JVM/CI puller: a Mac must be the puller because Multipeer is Apple-only.
+ * a [MetricTapClient]. Metrics ride the encrypted link too, but the link's encryption only
+ * answers *what* a snooper can read off the wire (nothing) — it says nothing about *who* is
+ * allowed to connect in the first place. [MultipeerPeerLinkFactory] auto-accepts every Multipeer
+ * invitation, so any Mac on the LAN that discovers the advertised service can otherwise join and
+ * pull; admission is a separate, layered concern, exactly as for [installMultipeerLogTap]. As
+ * with the log tap, there is no JVM/CI puller: a Mac must be the puller because Multipeer is
+ * Apple-only.
  *
  * @param factory the Multipeer fabric for this device (construct one per device, share via DI;
  *   the caller owns closing it).
  * @param exporter the device's metric buffer to offer.
  * @param scope the scope the host's replicator runs in.
  * @param config tap tuning.
+ * @param admission how the pulling Mac is admitted. The Multipeer link is already encrypted, so
+ *   [LogTapAdmission.Open] is safe on a trusted pairing; pass [LogTapAdmission.Verify] to *also*
+ *   require a short join code (admission control layered over the encrypted transport — the same
+ *   fabric-agnostic gate the log path and the plain path use, unchanged). The offering side must
+ *   hold [LogTapAdmission.Verify] or [LogTapAdmission.Open]; [LogTapAdmission.Present] is the
+ *   puller's role.
  */
 public suspend fun installMultipeerMetricTap(
     factory: MultipeerPeerLinkFactory,
     exporter: WarpMetricExporter,
     scope: CoroutineScope,
     config: MetricTapConfig = MetricTapConfig(),
-): MetricTapHost = installMetricTap(factory, exporter, scope, config)
+    admission: LogTapAdmission = LogTapAdmission.Open,
+): MetricTapHost = installMetricTap(factory, exporter, scope, config, admission)

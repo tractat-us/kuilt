@@ -43,7 +43,8 @@ import kotlin.time.Instant
  *  2. the gated pull re-merges without gaps or duplicates when a puller drops and a fresh one
  *     rejoins — the automatable half of the manual reconnect check,
  *  3. the metric reach path ([installMultipeerMetricTap]'s underlying [installMetricTap]) round-
- *     trips a converged metric buffer over the same injected fabric, and
+ *     trips a converged metric buffer over the same injected fabric, gated exactly like the log
+ *     path (a valid code pulls, a wrong code never converges), and
  *  4. the `:kuilt-multipeer` fabric links into the tap module's Apple variants: a
  *     [MultipeerPeerLinkFactory] constructs (no IO until it weaves) and is a [Loom], so it is a
  *     valid argument to [installMultipeerLogTap].
@@ -138,10 +139,11 @@ class MultipeerLogTapReachTest {
 
     @Test
     fun metricTapRoundTripsOverAnInjectedFabricOnApple() = runTest(UnconfinedTestDispatcher()) {
-        // The metric reach path carries no join code — confidentiality is the Multipeer fabric's
-        // (DTLS-encrypted link), not the tap's — so there is nothing to gate here. This proves the
-        // metric entry point's replication round-trips a converged buffer on the Apple variants
-        // over an injected fabric, the automatable core of the manual metric check.
+        // Proves the metric entry point's replication round-trips a converged buffer on the
+        // Apple variants over an injected fabric with the default Open admission — the
+        // automatable core of the manual metric check. Gated admission is proven separately
+        // below: Multipeer's DTLS encryption governs what a snooper can read off the wire, not
+        // who may connect, so admission is still this tap's own concern.
         val exporter = WarpMetricExporter(replica = ReplicaId("iphone"), store = InMemoryDurableStore())
         exporter.incrementSum(MetricKey("frames", MetricKind.SUM), by = 7L)
         exporter.setGauge(MetricKey("fps", MetricKind.GAUGE), 60.0, timestamp = 1L)
@@ -156,6 +158,48 @@ class MultipeerLogTapReachTest {
             { assertEquals(7L, snap.sums.getValue(MetricKey("frames", MetricKind.SUM))) },
             { assertEquals(60.0, snap.gauges.getValue(MetricKey("fps", MetricKind.GAUGE))) },
         )
+    }
+
+    @Test
+    fun gatedMetricTapComposesOverAnInjectedFabricOnApple() = runTest(UnconfinedTestDispatcher()) {
+        // Same topology as the log path's gatedTapComposesOverAnInjectedFabricOnApple, but for
+        // the metric buffer: the iPhone hosts and verifies (holds the join code); the Mac joins,
+        // presents the code, and pulls.
+        val token = LogTapJoinToken.issue(Random(1), clock, ttl = 5.minutes)
+        val exporter = WarpMetricExporter(replica = ReplicaId("iphone"), store = InMemoryDurableStore())
+        exporter.incrementSum(MetricKey("frames", MetricKind.SUM), by = 7L)
+
+        val loom = InMemoryLoom()
+        metricHost = installMetricTap(loom, exporter, backgroundScope, metricConfig, LogTapAdmission.Verify(token, clock, Random(7)))
+        val mac = MetricTapClient(
+            loom.join(InMemoryTag("mac")),
+            backgroundScope,
+            metricConfig,
+            LogTapAdmission.Present(token.code),
+        ).also { metricClient = it }
+
+        assertEquals(7L, mac.pull().sums.getValue(MetricKey("frames", MetricKind.SUM)))
+    }
+
+    @Test
+    fun wrongCodeNeverConvergesTheMetricPullOnApple() = runTest(UnconfinedTestDispatcher()) {
+        // The metric-path twin of wrongCodeNeverConvergesThePullOnApple: any Mac on the LAN that
+        // discovers the advertised service is auto-accepted by Multipeer, so without this gate
+        // it could otherwise pull the entire metric buffer ungated.
+        val token = LogTapJoinToken.issue(Random(1), clock, ttl = 5.minutes)
+        val exporter = WarpMetricExporter(replica = ReplicaId("iphone"), store = InMemoryDurableStore())
+        exporter.incrementSum(MetricKey("frames", MetricKind.SUM), by = 7L)
+
+        val loom = InMemoryLoom()
+        metricHost = installMetricTap(loom, exporter, backgroundScope, metricConfig, LogTapAdmission.Verify(token, clock, Random(7)))
+        val impostor = MetricTapClient(
+            loom.join(InMemoryTag("impostor")),
+            backgroundScope,
+            metricConfig,
+            LogTapAdmission.Present("WRONGGGG"),
+        ).also { metricClient = it }
+
+        assertFailsWith<TimeoutCancellationException> { impostor.pull() }
     }
 
     @Test
