@@ -45,8 +45,19 @@ on:
 permissions:
   contents: read
 
+# The group discriminator (…-ready vs …-push) exists to survive the draft→ready
+# cancel race (#1132). When a worker pushes its final commit AND readies a PR
+# within the same second, two pull_request runs fire on the SAME head sha: a
+# synchronize (draft==true, fast SKIPPED→FAILURE) and a ready_for_review
+# (draft==false, real build). With a single shared group + cancel-in-progress,
+# the later-starting synchronize run cancels the in-flight ready_for_review run,
+# leaving the fast draft FAILURE authoritative forever with no event to supersede
+# it. Splitting ready_for_review into its own …-ready group means a racing
+# synchronize (…-push group) can NEVER cancel the ready build — it always
+# completes and its ci-required check run supersedes the draft's on the same sha.
+# Rapid successive pushes still cancel each other (both in the …-push group).
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.ref }}-${{ github.event.action == 'ready_for_review' && 'ready' || 'push' }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 defaults:
@@ -541,15 +552,19 @@ jobs:
   # The SOLE required status check. Aggregates detect + build-jvm + build-native
   # + detekt + dokka.
   #
-  # Uses if: always() unconditionally — NO draft guard here. This is the core
-  # fix for the draft→ready→auto-merge race (#131): a required check that is
-  # itself *skipped* is treated as "passed" by branch protection. If this job
-  # had a draft guard, draft runs would post a SKIPPED ci-required (= green),
-  # then gh pr ready + gh pr merge --auto would fire on the stale skip before
-  # the real build completed. Without the guard, draft runs execute this job,
-  # see detect=skipped (its draft guard still stands), and FAIL the gate —
-  # so branch protection correctly blocks merge until a real post-ready run
-  # posts a genuine success.
+  # Uses if: always() unconditionally — NO draft guard on the JOB. A required
+  # check that is itself *skipped* is treated as "passed" by branch protection
+  # (the #131 hazard), so ci-required must always RUN to a definite state.
+  #
+  # Draft handling lives in the STEP (see the draft short-circuit at the top of
+  # "Check gate results"): a draft run parks ci-required GREEN and exits 0,
+  # rather than the older FAIL-by-design behaviour. This is safe because of the
+  # concurrency-group split above (#1132): GitHub blocks merging drafts outright,
+  # and the ready_for_review transition starts a fresh, uncancellable build whose
+  # ci-required check supersedes the draft green on the same sha — so auto-merge
+  # always waits for the real post-ready build. (Parking green rather than red
+  # also stops a same-sha synchronize/ready race from wedging the gate at a stale
+  # FAILURE that no later event supersedes — the concrete #1132 bug.)
   #
   # detect/build-jvm/build-native/detekt/dokka still carry their own draft/docs-only
   # /dokka-inputs guards (cheap jobs don't burn a runner on every draft push). Only
@@ -578,6 +593,19 @@ jobs:
     steps:
       - name: Check gate results
         run: |
+          # Draft short-circuit — park draft ci-required GREEN instead of red (#1132).
+          # SAFE ONLY because of the concurrency-group split above: GitHub blocks
+          # merging drafts outright, and when the PR is readied the ready_for_review
+          # run (now uncancellable by a racing synchronize) starts a fresh in-progress
+          # ci-required check for the sha, so auto-merge waits for the real build and
+          # its real result supersedes this draft green. Must sit ABOVE all gate logic
+          # and trigger ONLY on draft==true — the non-draft path below is unchanged and
+          # still requires real green builds.
+          if [ "${{ github.event.pull_request.draft }}" = "true" ]; then
+            echo "Draft PR — ci-required parked green. A real build runs on ready_for_review and supersedes this (see #1132)."
+            exit 0
+          fi
+
           DETECT="${{ needs.detect.result }}"
           BUILD_JVM="${{ needs.build-jvm.result }}"
           BUILD_NATIVE="${{ needs.build-native.result }}"
