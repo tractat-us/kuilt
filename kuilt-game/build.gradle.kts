@@ -19,6 +19,7 @@ kotlin {
         commonTest.dependencies {
             implementation(project(":kuilt-raft-test"))
             implementation(project(":kuilt-test"))
+            implementation(project(":kuilt-gossip-test"))
             implementation(libs.kotlinx.coroutines.test)
         }
         jvmTest.dependencies {
