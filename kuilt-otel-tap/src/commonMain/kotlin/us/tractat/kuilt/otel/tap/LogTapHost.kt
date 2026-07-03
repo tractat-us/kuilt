@@ -166,9 +166,12 @@ public suspend fun installLogTapJoining(
  * The caller already holds the code (it minted the [LogTapJoinToken] it passed in
  * [LogTapAdmission.Verify]), so the app surfaces it out-of-band on the channel it chooses —
  * an on-device pairing UI, or a deliberate `println` to the Xcode console it controls.
+ *
+ * Shared by the log and metric taps — both admit peers through the same [LogTapAdmission]
+ * type, so the announce breadcrumb is the same for both.
  */
-private fun LogTapAdmission.announceGatedTap() {
+internal fun LogTapAdmission.announceGatedTap() {
     if (this is LogTapAdmission.Verify) {
-        logger.debug { "log tap admission gate active — a valid join code is required to pull (code shown by the app, not logged)" }
+        logger.debug { "tap admission gate active — a valid join code is required to pull (code shown by the app, not logged)" }
     }
 }

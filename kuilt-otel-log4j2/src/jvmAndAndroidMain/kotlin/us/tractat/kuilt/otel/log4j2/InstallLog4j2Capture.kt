@@ -6,6 +6,7 @@ import org.apache.logging.log4j.core.LoggerContext
 import us.tractat.kuilt.otel.WarpLogRecordExporter
 import us.tractat.kuilt.otel.logging.CaptureConfig
 import us.tractat.kuilt.otel.logging.LogCapture
+import us.tractat.kuilt.otel.logging.TraceContextProvider
 import kotlin.random.Random
 import kotlin.time.Clock
 
@@ -37,6 +38,11 @@ import kotlin.time.Clock
  * @param loggerContext the log4j2 [LoggerContext] to attach to. Defaults to the
  *   process-wide context log4j2 is bound to — the one raw `LogManager.getLogger`
  *   calls resolve against.
+ * @param traceContextProvider optional trace/sampling gate — `null` (default) is
+ *   always-on M1 capture; a provider gates and stamps per [CaptureConfig.untracedPolicy]
+ *   and the trace's `sampled` flag. Threaded straight into the [LogCapture] core, so the
+ *   log4j2 add-on honours the same ambient trace context as
+ *   [us.tractat.kuilt.otel.logging.installLogCapture] (#1034).
  * @return the started [KuiltLog4j2Appender]. **Uninstall it** by removing it from the
  *   root logger config ([uninstallLog4j2Capture]) and calling
  *   [KuiltLog4j2Appender.stop] — `stop()` halts the log path *and* closes the drain,
@@ -50,8 +56,9 @@ public fun installLog4j2Capture(
     random: Random,
     scope: CoroutineScope,
     loggerContext: LoggerContext = defaultLoggerContext(),
+    traceContextProvider: TraceContextProvider? = null,
 ): KuiltLog4j2Appender {
-    val capture = LogCapture(exporter, config, clock, random)
+    val capture = LogCapture(exporter, config, clock, random, traceContextProvider)
     val appender = KuiltLog4j2Appender(APPENDER_NAME, capture, scope).apply { start() }
     val configuration = loggerContext.configuration
     configuration.addAppender(appender)

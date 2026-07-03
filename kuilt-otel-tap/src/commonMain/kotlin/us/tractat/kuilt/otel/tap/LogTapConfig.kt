@@ -24,9 +24,13 @@ import kotlin.time.Duration.Companion.seconds
  *   quiet window absorbs records that land in the same burst without padding the common case.
  * @param quilterConfig replication tuning passed through to the underlying replicator.
  *   Tests set `expectVirtualTime = true` to silence the test-dispatcher diagnostic.
+ *
+ * Field-for-field identical to [MetricTapConfig] except the default [pattern]
+ * (`kuilt-log-tap` vs `kuilt-metric-tap`). The two are deliberately **not** unified into
+ * one type: a `typealias` cannot carry a per-alias default argument, so collapsing them
+ * would erase the distinct default rendezvous names — a silent wire-name change. They
+ * stay separate so each keeps its own default [pattern].
  */
-// Identical to MetricTapConfig except the default [pattern]; unifying the two is
-// source+binary-breaking (both are public data classes) — deferred to the A-lane (A6).
 public data class LogTapConfig(
     val pattern: Pattern = Pattern("kuilt-log-tap"),
     val syncInterval: Duration = 1.seconds,

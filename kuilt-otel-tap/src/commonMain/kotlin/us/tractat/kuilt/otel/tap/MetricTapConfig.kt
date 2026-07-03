@@ -25,9 +25,13 @@ import kotlin.time.Duration.Companion.seconds
  *   for the replicated state to stop advancing before treating the snapshot as complete.
  * @param quilterConfig replication tuning passed through to the underlying replicator.
  *   Tests set `expectVirtualTime = true` to silence the test-dispatcher diagnostic.
+ *
+ * Field-for-field identical to [LogTapConfig] except the default [pattern]
+ * (`kuilt-metric-tap` vs `kuilt-log-tap`). The two are deliberately **not** unified into
+ * one type: a `typealias` cannot carry a per-alias default argument, so collapsing them
+ * would erase the distinct default rendezvous names — a silent wire-name change. They
+ * stay separate so each keeps its own default [pattern].
  */
-// Identical to LogTapConfig except the default [pattern]; unifying the two is
-// source+binary-breaking (both are public data classes) — deferred to the A-lane (A6).
 public data class MetricTapConfig(
     val pattern: Pattern = Pattern("kuilt-metric-tap"),
     val syncInterval: Duration = 1.seconds,
