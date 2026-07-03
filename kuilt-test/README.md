@@ -38,6 +38,28 @@ val seam = loom.host(Pattern("alice"))
 // seam.selfId == PeerId("alice")
 ```
 
+## InMemoryRoomFabric — room-isolating in-memory double
+
+For tests that stand up **more than one room**, reach for this instead of the flat
+`InMemoryLoom`. `InMemoryLoom` is a single broadcast domain: a joiner of one room is silently
+cross-admitted into every other room hosted on the same loom. `InMemoryRoomFabric`'s `serverLoom`
+is a `MuxServerLoom`, so rooms hosted over it are structurally isolated by name (the Seam-layer
+fanout isolation pinned by `RoomFanoutIsolationConformanceSuite`).
+
+```kotlin
+val fabric = InMemoryRoomFabric(scope = backgroundScope, dispatcher = dispatcher)
+val hostFactory = SeamRoomFactory(fabric.serverLoom, backgroundScope, clock = zeroClock)
+val room1 = hostFactory.host(Pattern("room-1"))
+val room2 = hostFactory.host(Pattern("room-2"))
+
+val joinerFactory = SeamRoomFactory(fabric.clientLoom(PeerId("joiner"), Random(1L)), backgroundScope, clock = zeroClock)
+val joiner = joinerFactory.join(InMemoryTag("room-1"))   // reaches room-1 only; room-2 stays empty
+```
+
+`clientSeam(peerId, random)` returns the raw multi-channel seam (wrap in a `NamedMux`);
+`clientLoom(peerId, random)` wraps it in a `MuxClientLoom` so it plugs straight into
+`SeamRoomFactory`. Hosts and joiners of one room must agree on the rendezvous display name.
+
 ## Why this module
 
 When `Seam` evolves, only this module updates. Consumers pin to a version and get stable doubles.
