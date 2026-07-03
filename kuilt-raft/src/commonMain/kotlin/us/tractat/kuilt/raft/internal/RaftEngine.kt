@@ -1107,7 +1107,10 @@ internal class RaftEngine(
         lastAckRound[from] = m.echoedRound          // credit ACK to the round it actually responded to (BLOCKER 1a)
         resolveReadsIfQuorumFresh()                 // ReadIndex: check if any pending reads can now be confirmed
         if (m.success) {
-            matchIndex[from] = maxOf(matchIndex[from] ?: 0L, m.matchIndex)
+            // Clamp to lastLogIndex: a leader can never have replicated entries it doesn't hold, so a
+            // real follower's match never exceeds lastLogIndex; the clamp only bites on a malformed/
+            // foreign response, turning a downstream prevTerm-missing crash (#1175) into a benign no-op.
+            matchIndex[from] = maxOf(matchIndex[from] ?: 0L, minOf(m.matchIndex, lastLogIndex))
             nextIndex[from] = matchIndex.getValue(from) + 1L
             tryAdvanceLeaderCommit()
             // §3.10: if a transfer is in flight and the target is now caught up, send TimeoutNow.
