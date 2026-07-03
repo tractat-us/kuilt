@@ -18,44 +18,83 @@ import kotlin.test.assertTrue
  * joiner's [AdmitMessage.Hello.targetRoom] agrees with the host's own
  * [Pattern.roomKey] — or names no room at all (permissive).
  *
- * These live in `kuilt-session` (not the TCK): they need **two hosts on one flat mesh**,
- * which the conformance-suite fabrics can't express.
+ * The gate is fully exercised with a **single host** per [InMemoryLoom]: the joiner
+ * broadcasts its Hello on the flat mesh, the host receives it, and the gate accepts or
+ * rejects based on the target. (Raw multi-room on one `InMemoryLoom` is forbidden by the
+ * #1184 second-`host()` guard; multi-room *isolation* on a shared substrate is proven
+ * separately by `MultiRoomIsolationTest` over `InMemoryRoomFabric` — not duplicated here.)
  */
 class RoomBoundAdmissionTest {
     private fun factory(loom: InMemoryLoom, scope: CoroutineScope) =
         SeamRoomFactory(loom, scope, clock = { kotlin.time.Instant.fromEpochMilliseconds(0L) })
 
     /**
-     * The #1172 regression, made local. Two independent `host()` rooms share ONE
-     * [InMemoryLoom] (a flat mesh — every seam hears every Hello). A joiner that targets
-     * room A must land only in room A; room B's roster must stay empty. Without the gate,
-     * both hosts passively admit the same Hello → cross-room admission.
+     * Match → admitted. A joiner whose target room equals the host's [Pattern.roomKey]
+     * completes the handshake normally.
      */
     @Test
-    fun `joiner targeting one room is not admitted by another room on the same loom`() =
+    fun `joiner whose target room matches the host is admitted`() =
         runTest {
             val loom = InMemoryLoom()
-            val roomA = factory(loom, backgroundScope).host(Pattern("HostA", roomKey = "room-A"))
-            val roomB = factory(loom, backgroundScope).host(Pattern("HostB", roomKey = "room-B"))
+            val host = factory(loom, backgroundScope).host(Pattern("HostA", roomKey = "room-A"))
 
             val joiner = factory(loom, backgroundScope).join(InMemoryTag("Bob", roomKey = "room-A"))
 
-            // Room A admits the joiner; the joiner sees only room-A members.
-            val roomARoster = roomA.roster.first { it.size == 1 }
+            val hostRoster = host.roster.first { it.size == 1 }
             val joinerRoster = joiner.roster.first { it.isNotEmpty() }
 
-            // Let any errant admit from room B land before asserting it stayed empty.
-            delay(100)
-
             assertAll(
-                { assertEquals("Bob", roomARoster.single().identity.displayName) },
-                { assertEquals(emptySet(), roomB.roster.value, "room B must not admit a room-A joiner") },
-                { assertEquals(setOf("HostA"), joinerRoster.map { it.identity.displayName }.toSet()) },
+                { assertEquals("Bob", hostRoster.single().identity.displayName) },
+                { assertEquals("HostA", joinerRoster.single().identity.displayName) },
             )
 
             joiner.leave()
-            roomA.leave()
-            roomB.leave()
+            host.leave()
+        }
+
+    /**
+     * The #1172 property, proven with one host: a joiner whose target room differs from the
+     * host's own key is **not** admitted — the host roster stays empty and the joiner observes
+     * a loud [AdmitMessage.Reject] (`"room-mismatch: …"`), never a silent drop (a silent drop
+     * reproduces the #1172-adjacent hang). One host suffices: the mismatched Hello reaches the
+     * host on the flat mesh and the gate rejects it.
+     */
+    @Test
+    fun `joiner whose target room mismatches the host is rejected`() =
+        runTest {
+            val loom = InMemoryLoom()
+            val host = factory(loom, backgroundScope).host(Pattern("HostA", roomKey = "room-A"))
+
+            // Drive the joiner at the wire level so the Reject is directly observable.
+            val joinerSeam = loom.join(InMemoryTag("Bob", roomKey = "room-B"))
+            joinerSeam.broadcast(
+                AdmitMessage.encode(
+                    AdmitMessage.Hello(
+                        displayName = "Bob",
+                        sessionId = "session-bob",
+                        targetRoom = "room-B",
+                    ),
+                ),
+            )
+
+            val reply = joinerSeam.incoming.first { AdmitMessage.decode(it.toByteArray()) is AdmitMessage.Reject }
+            val reject = AdmitMessage.decode(reply.toByteArray()) as AdmitMessage.Reject
+
+            // Let any errant admit land before asserting the host roster stayed empty.
+            delay(100)
+
+            assertAll(
+                {
+                    assertTrue(
+                        reject.reason.startsWith("room-mismatch"),
+                        "expected a room-mismatch Reject, got: ${reject.reason}",
+                    )
+                },
+                { assertEquals(emptySet(), host.roster.value, "host must not admit a mismatched-room joiner") },
+            )
+
+            joinerSeam.close()
+            host.leave()
         }
 
     /**
@@ -67,7 +106,7 @@ class RoomBoundAdmissionTest {
     fun `joiner with null target room is admitted`() =
         runTest {
             val loom = InMemoryLoom()
-            val host = factory(loom, backgroundScope).host(Pattern("Alice"))
+            val host = factory(loom, backgroundScope).host(Pattern("Alice", roomKey = "room-A"))
 
             val joiner = factory(loom, backgroundScope).join(InMemoryTag("Bob")) // roomKey defaults null
 
@@ -80,40 +119,6 @@ class RoomBoundAdmissionTest {
             )
 
             joiner.leave()
-            host.leave()
-        }
-
-    /**
-     * Mismatch → the host replies with a loud [AdmitMessage.Reject] (`"room-mismatch: …"`),
-     * never a silent drop. Driven at the wire level: a raw seam sends a Hello naming the
-     * wrong room and observes the Reject on its own incoming.
-     */
-    @Test
-    fun `host rejects a Hello whose target room mismatches`() =
-        runTest {
-            val loom = InMemoryLoom()
-            val host = factory(loom, backgroundScope).host(Pattern("Alice", roomKey = "room-A"))
-
-            val rawSeam = loom.join(InMemoryTag("Mallory"))
-            rawSeam.broadcast(
-                AdmitMessage.encode(
-                    AdmitMessage.Hello(
-                        displayName = "Mallory",
-                        sessionId = "session-mallory",
-                        targetRoom = "room-B",
-                    ),
-                ),
-            )
-
-            val reply = rawSeam.incoming.first { AdmitMessage.decode(it.toByteArray()) is AdmitMessage.Reject }
-            val reject = AdmitMessage.decode(reply.toByteArray()) as AdmitMessage.Reject
-
-            assertTrue(
-                reject.reason.startsWith("room-mismatch"),
-                "expected a room-mismatch Reject, got: ${reject.reason}",
-            )
-
-            rawSeam.close()
             host.leave()
         }
 }
