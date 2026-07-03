@@ -114,7 +114,7 @@ public class ControllableLoom(
                     holdQueues.getOrPut(target) { ArrayDeque() }.addLast(sender to payload)
                     null
                 } else {
-                    snapshotDeliveryLocked(target, sender, payload)
+                    snapshotDelivery(target, sender, payload)
                 }
             }
         }
@@ -152,21 +152,7 @@ public class ControllableLoom(
     private fun recipientsFor(sender: PeerId, recipient: PeerId?): List<PeerId> =
         if (recipient == null) seams.keys.filter { it != sender } else listOf(recipient)
 
-    /** Assigns a sequence number and builds the [Swatch]; must be called under [mutex]. */
-    private fun snapshotDeliveryLocked(
-        target: PeerId,
-        sender: PeerId,
-        payload: ByteArray,
-    ): Pair<ControllableSeam, Swatch>? {
-        val seam = seams[target] ?: return null
-        val frame = Swatch(payload = payload, sender = sender, sequence = seam.nextSequence())
-        return seam to frame
-    }
-
-    /**
-     * Builds a delivery pair for a single (target, sender, payload) triple without
-     * holding the [mutex] — used by the control surface which runs outside [dispatch].
-     */
+    /** Assigns a sequence number and builds the [Swatch] for a single (target, sender, payload) triple. */
     private fun snapshotDelivery(
         target: PeerId,
         sender: PeerId,
