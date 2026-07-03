@@ -10,8 +10,8 @@ import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
-import us.tractat.kuilt.core.FaultProfile
-import us.tractat.kuilt.core.FaultySeam
+import us.tractat.kuilt.test.FaultProfile
+import us.tractat.kuilt.test.FaultySeam
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.raft.NodeId

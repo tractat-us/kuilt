@@ -1,4 +1,4 @@
-package us.tractat.kuilt.core.internal
+package us.tractat.kuilt.test.internal
 
 import us.tractat.kuilt.core.CloseReason
 import us.tractat.kuilt.core.SeamState

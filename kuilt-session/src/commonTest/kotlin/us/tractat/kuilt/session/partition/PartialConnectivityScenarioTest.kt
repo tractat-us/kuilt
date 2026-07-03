@@ -9,8 +9,8 @@ import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runTest
-import us.tractat.kuilt.core.Direction
-import us.tractat.kuilt.core.FaultProfile
+import us.tractat.kuilt.test.Direction
+import us.tractat.kuilt.test.FaultProfile
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.liveness.PartitionEvent
@@ -31,7 +31,7 @@ import kotlin.time.Instant
  * point; joiners have no direct peer-to-peer links with each other.
  *
  * **Fault injection technique:**
- * - [Direction.Inbound] on a joiner's [us.tractat.kuilt.core.FaultySeam]
+ * - [Direction.Inbound] on a joiner's [us.tractat.kuilt.test.FaultySeam]
  *   drops frames arriving at that joiner from the host. The host's ping never arrives
  *   at J1 → J1 cannot pong → detector times out. Models "H→J1 outbound dropped" (S1).
  * - [Direction.Outbound] on a joiner's link drops frames the joiner sends back to the

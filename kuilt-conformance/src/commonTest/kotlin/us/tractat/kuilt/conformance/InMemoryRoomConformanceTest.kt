@@ -10,7 +10,7 @@ package us.tractat.kuilt.conformance
  * as [InMemoryLoomConformanceTest] for [us.tractat.kuilt.conformance.SeamConformanceSuite].
  *
  * The default [newHarness] implementation from [RoomConformanceSuite] is used:
- * a [us.tractat.kuilt.core.FaultyLoom]-wrapped [us.tractat.kuilt.core.InMemoryLoom]
+ * a [us.tractat.kuilt.test.FaultyLoom]-wrapped [us.tractat.kuilt.core.InMemoryLoom]
  * with [fastHeartbeatConfig] and an injected clock. All 10 acceptance contracts
  * are covered, including partition / HostLost / resume tests.
  */

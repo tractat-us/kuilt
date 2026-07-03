@@ -13,8 +13,8 @@ import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
-import us.tractat.kuilt.core.FlakyLifecycleLoom
-import us.tractat.kuilt.core.FlakyLifecycleSeam
+import us.tractat.kuilt.test.FlakyLifecycleLoom
+import us.tractat.kuilt.test.FlakyLifecycleSeam
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Loom

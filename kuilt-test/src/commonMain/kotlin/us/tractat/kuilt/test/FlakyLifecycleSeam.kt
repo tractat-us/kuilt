@@ -1,4 +1,4 @@
-package us.tractat.kuilt.core
+package us.tractat.kuilt.test
 
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -11,10 +11,20 @@ import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import us.tractat.kuilt.core.internal.initialLifecycleState
-import us.tractat.kuilt.core.internal.onEnterWeaving
-import us.tractat.kuilt.core.internal.onRecover
-import us.tractat.kuilt.core.internal.onTear
+import us.tractat.kuilt.core.CloseReason
+import us.tractat.kuilt.core.Loom
+import us.tractat.kuilt.core.Pattern
+import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.core.PeerNotConnected
+import us.tractat.kuilt.core.Rendezvous
+import us.tractat.kuilt.core.Seam
+import us.tractat.kuilt.core.SeamState
+import us.tractat.kuilt.core.Swatch
+import us.tractat.kuilt.core.Tag
+import us.tractat.kuilt.test.internal.initialLifecycleState
+import us.tractat.kuilt.test.internal.onEnterWeaving
+import us.tractat.kuilt.test.internal.onRecover
+import us.tractat.kuilt.test.internal.onTear
 import kotlin.math.roundToLong
 import kotlin.random.Random
 import kotlin.time.Duration

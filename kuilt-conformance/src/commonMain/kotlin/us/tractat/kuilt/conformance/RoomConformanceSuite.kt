@@ -9,9 +9,9 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestResult
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runTest
-import us.tractat.kuilt.core.Direction
-import us.tractat.kuilt.core.FaultProfile
-import us.tractat.kuilt.core.FaultyLoom
+import us.tractat.kuilt.test.Direction
+import us.tractat.kuilt.test.FaultProfile
+import us.tractat.kuilt.test.FaultyLoom
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern

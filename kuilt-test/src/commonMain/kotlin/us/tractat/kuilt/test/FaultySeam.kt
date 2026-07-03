@@ -1,4 +1,4 @@
-package us.tractat.kuilt.core
+package us.tractat.kuilt.test
 
 import kotlinx.atomicfu.atomic
 import kotlinx.coroutines.CoroutineScope
@@ -9,6 +9,18 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import us.tractat.kuilt.core.CloseReason
+import us.tractat.kuilt.core.DeliveryPolicy
+import us.tractat.kuilt.core.InMemoryLoom
+import us.tractat.kuilt.core.Loom
+import us.tractat.kuilt.core.Pattern
+import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.core.Rendezvous
+import us.tractat.kuilt.core.Seam
+import us.tractat.kuilt.core.SeamState
+import us.tractat.kuilt.core.Spool
+import us.tractat.kuilt.core.Swatch
+import us.tractat.kuilt.core.Tag
 
 /**
  * A [Seam] wrapper that injects configurable faults for use in tests.

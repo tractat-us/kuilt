@@ -1,4 +1,4 @@
-package us.tractat.kuilt.core
+package us.tractat.kuilt.test
 
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
@@ -8,7 +8,11 @@ import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.yield
-import us.tractat.kuilt.test.assertAll
+import us.tractat.kuilt.core.CloseReason
+import us.tractat.kuilt.core.InMemoryLoom
+import us.tractat.kuilt.core.InMemoryTag
+import us.tractat.kuilt.core.Pattern
+import us.tractat.kuilt.core.SeamState
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFails

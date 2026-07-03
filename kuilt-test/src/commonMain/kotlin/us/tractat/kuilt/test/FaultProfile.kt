@@ -1,5 +1,7 @@
-package us.tractat.kuilt.core
+package us.tractat.kuilt.test
 
+import us.tractat.kuilt.core.CloseReason
+import us.tractat.kuilt.core.Swatch
 import kotlin.random.Random
 import kotlin.time.Duration
 
