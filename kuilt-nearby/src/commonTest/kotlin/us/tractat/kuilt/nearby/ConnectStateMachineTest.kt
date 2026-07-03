@@ -80,7 +80,7 @@ class ConnectStateMachineTest {
             val machine = ConnectStateMachine(PeerId("me"), api, endpointId = "ep1", serviceId = "svc")
 
             val outcome =
-                runCatching {
+                runCatchingCancellable {
                     machine.run(backgroundScope) {
                         api.connInit.emit(ConnectionInitiated("ep1", "host"))
                         api.connResult.emit(ConnectionResult("ep1", success = false, reason = "rejected"))
@@ -101,6 +101,9 @@ class ConnectStateMachineTest {
                 ConnectStateMachine(PeerId("me"), api, endpointId = "ep1", serviceId = "svc", timeoutMs = 1_000)
 
             // trigger emits nothing → withTimeout fires on the virtual clock.
+            // deliberate: asserts the captured TimeoutCancellationException — a CancellationException the
+            // test must catch; runCatchingCancellable would rethrow it and break the assertion.
+            @Suppress("ForbiddenMethodCall")
             val outcome = runCatching { machine.run(backgroundScope) {} }
 
             assertTrue(

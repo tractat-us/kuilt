@@ -5,6 +5,7 @@ package us.tractat.kuilt.raft
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
+import us.tractat.kuilt.core.runCatchingCancellable
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -298,7 +299,7 @@ internal class LeadershipTransferTest {
         sim.dropLink(from = leaderId, to = targetId)
         sim.dropLink(from = targetId, to = leaderId)
 
-        runCatching { leader.transferLeadership(targetId) }
+        runCatchingCancellable { leader.transferLeadership(targetId) }
 
         sim.awaitTrue("LeadershipTransferAbandoned emitted") {
             traceEvents.any { it is RaftTraceEvent.LeadershipTransferAbandoned }

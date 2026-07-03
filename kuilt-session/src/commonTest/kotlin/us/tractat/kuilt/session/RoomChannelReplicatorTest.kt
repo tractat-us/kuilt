@@ -14,6 +14,7 @@ import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.cbor.Cbor
 import us.tractat.kuilt.core.InMemoryLoom
+import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.Seam
@@ -83,7 +84,7 @@ class RoomChannelReplicatorTest {
     private fun decodeChannelFrame(payload: ByteArray): QuiltMessage<GCounter>? {
         if (!RoomChannel.isChannelFrame(payload)) return null
         val inner = payload.copyOfRange(3, payload.size)
-        return runCatching { Cbor.decodeFromByteArray(messageSer, inner) }.getOrNull()
+        return runCatchingCancellable { Cbor.decodeFromByteArray(messageSer, inner) }.getOrNull()
     }
 
     // ── Convergence ───────────────────────────────────────────────────────────
