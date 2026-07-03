@@ -15,19 +15,27 @@ import us.tractat.kuilt.core.SeamState.Woven
  * integration harnesses. All [Seam] instances produced by the same
  * factory instance share a single in-memory mesh.
  *
- * **One instance is exactly one flat mesh — hence exactly one hosted room.**
+ * **One instance is exactly one flat mesh — hence one *concurrently* hosted room.**
  * A single [InMemoryLoom] has no notion of separate sessions: every seam it
  * weaves (whether via [host]/[Rendezvous.New] or [join]/[Rendezvous.Existing])
  * joins the *same* peer set and receives every broadcast on it. So the correct
  * shape is **one [host] plus any number of [join]s** — that is the whole mesh.
  *
- * Hosting a **second** room on one instance (a second [Rendezvous.New]) is a
- * misuse: the two "rooms" would silently cross-admit each other's members over
- * the shared mesh rather than being isolated. To make that loud rather than
- * silently corrupt, a second [Rendezvous.New] throws [IllegalStateException].
- * For multi-room tests, use one [InMemoryLoom] per room, or the
- * `InMemoryRoomFabric` helper in `:kuilt-test`. [Rendezvous.Existing] (joiners)
- * stays unlimited.
+ * Hosting a **second, concurrent** room on one instance (a second
+ * [Rendezvous.New] while the first host seam is still live) is a misuse: the two
+ * "rooms" would silently cross-admit each other's members over the shared mesh
+ * rather than being isolated. To make that loud rather than silently corrupt, a
+ * second concurrent [Rendezvous.New] throws [IllegalStateException]. For
+ * multi-room tests, use one [InMemoryLoom] per room, or the `InMemoryRoomFabric`
+ * helper in `:kuilt-test`.
+ *
+ * **Re-hosting after the prior host tears is allowed.** Once the hosting seam is
+ * closed/removed, a fresh [Rendezvous.New] is permitted again — this models a
+ * real fabric's re-host-after-drop and keeps client-side resume (`MuxClientLoom`
+ * re-weaves its base after a tear) and dynamic ply re-attach (`CompositeLoom`
+ * re-weaves a detached ply) working over the in-memory bedrock. The guard rejects
+ * two *live* hosts, never a sequential re-weave. [Rendezvous.Existing] (joiners)
+ * stays unlimited and never touches the guard.
  *
  * Thread-safe: the shared mesh state is protected by a [Mutex]. Frame
  * delivery is bounded and backpressured via one [Spool] per link, with
@@ -56,20 +64,21 @@ public class InMemoryLoom(
     // Monotonically increasing counter used to generate unique peer IDs.
     private var peerCounter = 0
 
-    // A single flat mesh hosts exactly one room. Set true when the first
-    // Rendezvous.New is woven; a second New would silently cross-admit.
-    private var hosted = false
+    // A single flat mesh hosts one room at a time. Holds the PeerId of the live
+    // host seam while one exists; null when no host is live. A second New while
+    // this is non-null would silently cross-admit two concurrent rooms; it is
+    // cleared when the host seam is removed, so a sequential re-host is allowed.
+    private var hostId: PeerId? = null
 
     override suspend fun weave(rendezvous: Rendezvous): Seam =
         when (rendezvous) {
             is Rendezvous.New -> mutex.withLock {
-                check(!hosted) {
+                check(hostId == null) {
                     "InMemoryLoom is a single flat mesh — hosting two rooms on one instance cross-admits " +
                         "their members. Use InMemoryRoomFabric (:kuilt-test) for multi-room tests, or one " +
                         "InMemoryLoom per room."
                 }
-                hosted = true
-                newSeam()
+                newSeam().also { hostId = it.selfId }
             }
             is Rendezvous.Existing -> mutex.withLock {
                 require(rendezvous.tag is InMemoryTag) {
@@ -117,6 +126,9 @@ public class InMemoryLoom(
         mutex.withLock {
             links.remove(id)
             _peers.update { it - id }
+            // The host seam tore/left: clear the guard so a sequential re-host
+            // (client-side resume, dynamic ply re-attach) can weave a fresh New.
+            if (id == hostId) hostId = null
         }
     }
 

@@ -352,6 +352,33 @@ class SeamRoomTest {
                 "SeamRoomFactory.host must propagate non-cancellation Loom failures to its caller",
             )
         }
+
+    /**
+     * The #1172 root cause, at the Room layer: hosting a second room on ONE
+     * [InMemoryLoom] would silently cross-admit both rooms' members over the
+     * single flat mesh. The loom's concurrent-host guard makes the second
+     * `host()` fail loudly instead — a factory (or two factories) over one loom
+     * hosts exactly one live room.
+     */
+    @Test
+    fun `two concurrent SeamRoomFactory hosts on one loom — the second is rejected`() =
+        runTest {
+            val loom = loom()
+            val room = factory(loom, backgroundScope).host(Pattern("Alice"))
+
+            val result = runCatching { factory(loom, backgroundScope).host(Pattern("Bob")) }
+
+            val failure = result.exceptionOrNull()
+            assertIs<IllegalStateException>(
+                failure,
+                "a second concurrent host over one InMemoryLoom must be rejected, not silently cross-admitted",
+            )
+            assertTrue(
+                failure.message?.contains("single flat mesh") == true,
+                "the guard message must explain the single-mesh contract, got: ${failure.message}",
+            )
+            room.leave()
+        }
 }
 
 /** Test stub: [Loom] that always throws the given [error] from [weave]. */
