@@ -51,6 +51,34 @@ class InMemoryLoomTest {
         }
 
     @Test
+    fun `a second host on one loom throws — single flat mesh hosts one room`() =
+        runTest {
+            val factory = InMemoryLoom()
+            factory.host(Pattern("Alice"))
+
+            val failure = assertFailsWith<IllegalStateException> {
+                factory.host(Pattern("Bob"))
+            }
+            assertTrue(
+                failure.message?.contains("single flat mesh") == true,
+                "guard message must explain the single-mesh contract, got: ${failure.message}",
+            )
+        }
+
+    @Test
+    fun `one host plus many joins is allowed — only a second host is rejected`() =
+        runTest {
+            val factory = InMemoryLoom()
+            val host = factory.host(Pattern("Alice"))
+            val b = factory.join(InMemoryTag("Bob"))
+            val c = factory.join(InMemoryTag("Charlie"))
+            val d = factory.join(InMemoryTag("Dana"))
+
+            val expected = setOf(host.selfId, b.selfId, c.selfId, d.selfId)
+            assertEquals(expected, host.peers.value)
+        }
+
+    @Test
     fun `close removes the closing peer from every other peer's peers set`() =
         runTest {
             val factory = InMemoryLoom()
