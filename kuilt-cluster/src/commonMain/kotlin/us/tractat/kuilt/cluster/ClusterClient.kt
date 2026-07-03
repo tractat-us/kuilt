@@ -183,7 +183,10 @@ public data class ClusterEndpoints(
  *   cross-crash exactly-once.
  * @param clock Injected clock for session resume-token timestamps. **Required** — no real-clock
  *   default (prevents silent virtual-time breakage per the "optional ≠ tuning" policy).
- *   Reserved for future session-layer resume; currently unused at the Seam level.
+ *   Threaded into the room-layer [SeamRoomFactory], which stamps reconnect-token `issuedAt`
+ *   timestamps and drives partition detection. (Cross-*server* resume is always `WindowClosed`
+ *   per the in-memory per-room reconnect registry, so the token is issued but never consumed
+ *   across a failover — the clock still governs same-server room timing.)
  */
 public fun CoroutineScope.clusterClient(
     loom: Loom,

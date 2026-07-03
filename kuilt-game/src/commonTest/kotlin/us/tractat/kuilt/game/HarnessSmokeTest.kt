@@ -19,6 +19,7 @@ import us.tractat.kuilt.raft.raftNode
 import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertIs
+import kotlin.time.Instant
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 
@@ -59,3 +60,11 @@ internal fun fastRaftConfig(seed: Long): RaftConfig = RaftConfig(
     expectVirtualTime = true,
     random = Random(seed),
 )
+
+/**
+ * A fixed, inert clock for [gameHost] callers that don't exercise liveness monitoring. `gameHost`
+ * requires a `clock` (the wall-clock default was dropped so virtual-time callers can't silently
+ * fall through to the system clock), but it is read only when `livenessConfig != null`; these
+ * callers pass this to satisfy the signature without introducing a wall-clock dependency.
+ */
+internal val inertTestClock: () -> Instant = { Instant.fromEpochMilliseconds(0) }

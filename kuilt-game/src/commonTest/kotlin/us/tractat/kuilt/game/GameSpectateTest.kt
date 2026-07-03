@@ -56,6 +56,7 @@ class GameSpectateTest {
                 allowSpectators = true,
                 maxSpectators = 1,
                 raftConfig = fastRaftConfig(seed = 1L),
+                clock = inertTestClock,
             )
         }
         val j1Deferred = async { backgroundScope.gameJoin(j1Seam, raftConfig = fastRaftConfig(seed = 2L)) }
@@ -101,6 +102,7 @@ class GameSpectateTest {
                 allowSpectators = true,
                 maxSpectators = 1,
                 raftConfig = fastRaftConfig(seed = 1L),
+                clock = inertTestClock,
             )
         }
         val j1Deferred = async { backgroundScope.gameJoin(j1Seam, raftConfig = fastRaftConfig(seed = 2L)) }
@@ -137,6 +139,7 @@ class GameSpectateTest {
                 hostSeam,
                 peerCount = 1,
                 raftConfig = fastRaftConfig(seed = 1L),
+                clock = inertTestClock,
             )
         }
         hostDeferred.await()
@@ -169,6 +172,7 @@ class GameSpectateTest {
                 allowSpectators = true,
                 maxSpectators = 1,
                 raftConfig = fastRaftConfig(seed = 1L),
+                clock = inertTestClock,
             )
         }
         val j1Deferred = async { backgroundScope.gameJoin(j1Seam, raftConfig = fastRaftConfig(seed = 2L)) }

@@ -36,7 +36,6 @@ import us.tractat.kuilt.raft.RaftStorage
 import us.tractat.kuilt.raft.SeamRaftTransport
 import us.tractat.kuilt.raft.changeMembershipWithRetry
 import us.tractat.kuilt.raft.raftNode
-import kotlin.time.Clock
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
@@ -300,9 +299,11 @@ public fun CoroutineScope.gameNode(
  *   automatic seat reclamation must pass a [HeartbeatConfig]. This is an explicit opt-in
  *   because the feature carries observable timing state; omitting it for sessions that have
  *   their own membership management (e.g. `gameNode`) is a supported use case.
- * @param clock Clock for heartbeat liveness measurements. Production callers use the default
- *   ([kotlin.time.Clock.System.now]); tests inject a controllable clock so virtual time drives
- *   all timing without wall-clock dependency. Ignored when [livenessConfig] is null.
+ * @param clock Clock for heartbeat liveness measurements. **Required** — no wall-clock default,
+ *   so a virtual-time caller can never silently fall through to the system clock (the same
+ *   "optional ≠ tuning" convention `clusterClient` follows). Production callers pass
+ *   `{ kotlin.time.Clock.System.now() }`; tests inject a controllable clock. Read only when
+ *   [livenessConfig] is non-null — still pass a clock when omitting liveness.
  * @param hostDeclarationTimeout Upper bound on the presence-convergence wait before the
  *   duplicate-host check proceeds regardless. This is genuine tuning, not a functional
  *   switch: a connected-but-silent peer (or a real fabric whose round-trip exceeds the
@@ -327,7 +328,7 @@ public suspend fun CoroutineScope.gameHost(
     storage: RaftStorage = InMemoryRaftStorage(),
     raftConfig: RaftConfig = RaftConfig(),
     livenessConfig: HeartbeatConfig? = null,
-    clock: () -> Instant = { Clock.System.now() },
+    clock: () -> Instant,
     hostDeclarationTimeout: Duration = DEFAULT_HOST_DECLARATION_TIMEOUT,
     identity: ClientIdentity = ClientIdentity.Auto,
 ): GameSession {

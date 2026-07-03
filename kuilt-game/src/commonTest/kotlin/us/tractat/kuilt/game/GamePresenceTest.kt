@@ -61,8 +61,8 @@ class GamePresenceTest {
         // supervisorScope prevents a failing async child from cancelling the test scope
         // before assertFailsWith can catch the DuplicateHostException.
         supervisorScope {
-            val h1 = async { backgroundScope.gameHost(s1, peerCount = 2, raftConfig = cfg) }
-            val h2 = async { backgroundScope.gameHost(s2, peerCount = 2, raftConfig = cfg) }
+            val h1 = async { backgroundScope.gameHost(s1, peerCount = 2, raftConfig = cfg, clock = inertTestClock) }
+            val h2 = async { backgroundScope.gameHost(s2, peerCount = 2, raftConfig = cfg, clock = inertTestClock) }
 
             val ex = assertFailsWith<DuplicateHostException> { h2.await() }
             assertTrue(ex.message!!.contains("host"), "message should mention 'host': ${ex.message}")
@@ -91,8 +91,8 @@ class GamePresenceTest {
         val cfg = fastRaftConfig(seed = 1L)
 
         supervisorScope {
-            val h1 = async { backgroundScope.gameHost(s1, peerCount = 2, raftConfig = cfg) }
-            val h2 = async { backgroundScope.gameHost(s2, peerCount = 2, raftConfig = cfg) }
+            val h1 = async { backgroundScope.gameHost(s1, peerCount = 2, raftConfig = cfg, clock = inertTestClock) }
+            val h2 = async { backgroundScope.gameHost(s2, peerCount = 2, raftConfig = cfg, clock = inertTestClock) }
 
             assertFailsWith<DuplicateHostException> { h2.await() }
             h1.cancel()
@@ -116,8 +116,8 @@ class GamePresenceTest {
         val cfg = fastRaftConfig(seed = 1L)
 
         supervisorScope {
-            val winner = async { backgroundScope.gameHost(s1, peerCount = 2, raftConfig = cfg) }
-            val loser = async { backgroundScope.gameHost(s2, peerCount = 2, raftConfig = cfg) }
+            val winner = async { backgroundScope.gameHost(s1, peerCount = 2, raftConfig = cfg, clock = inertTestClock) }
+            val loser = async { backgroundScope.gameHost(s2, peerCount = 2, raftConfig = cfg, clock = inertTestClock) }
 
             // Higher-NodeId host loses arbitration and fails fast.
             assertFailsWith<DuplicateHostException> { loser.await() }
