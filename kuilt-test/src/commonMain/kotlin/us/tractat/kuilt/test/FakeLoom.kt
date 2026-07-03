@@ -12,7 +12,7 @@ import us.tractat.kuilt.core.Swatch
  * A test double for [Loom] that returns [FakeSeam] instances.
  *
  * [weave] with [Rendezvous.New] seeds the seam's [FakeSeam.selfId] from the
- * pattern's display name. For wired two-peer scenarios, prefer [fakeSeamPair].
+ * pattern's session name. For wired two-peer scenarios, prefer [fakeSeamPair].
  *
  * ```kotlin
  * val loom = FakeLoom()

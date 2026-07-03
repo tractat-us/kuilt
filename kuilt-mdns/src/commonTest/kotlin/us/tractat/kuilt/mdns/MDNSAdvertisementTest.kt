@@ -34,7 +34,7 @@ class MDNSAdvertisementTest {
     }
 
     @Test
-    fun `displayName is preserved`() {
+    fun `sessionName is preserved`() {
         val ad =
             MDNSAdvertisement(
                 host = "10.0.0.1",

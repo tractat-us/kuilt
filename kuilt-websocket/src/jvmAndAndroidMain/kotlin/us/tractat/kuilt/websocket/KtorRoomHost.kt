@@ -85,7 +85,7 @@ public class KtorRoomHost internal constructor(
             check(!started) { "KtorRoomHost.start already running" }
             started = true
         }
-        log.info { "ws.room.start path=$path displayName=${pattern.sessionName}" }
+        log.info { "ws.room.start path=$path sessionName=${pattern.sessionName}" }
         coroutineScope {
             val factory = SeamRoomFactory.systemClock(loom = loom, scope = this)
             while (true) {

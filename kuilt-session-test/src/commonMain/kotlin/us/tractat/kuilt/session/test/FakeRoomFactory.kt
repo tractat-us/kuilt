@@ -14,7 +14,7 @@ import us.tractat.kuilt.session.SessionRole
 /**
  * A test double for [RoomFactory] that returns [FakeRoom] instances.
  *
- * [host] seeds the room's [FakeRoom.selfId] from the pattern's display name and
+ * [host] seeds the room's [FakeRoom.selfId] from the pattern's session name and
  * sets the role to [SessionRole.Host]. [join] does the same with [SessionRole.Joiner].
  *
  * For wired two-room scenarios, prefer [fakeRoomPair].

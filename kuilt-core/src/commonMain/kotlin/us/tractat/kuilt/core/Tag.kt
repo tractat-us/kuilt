@@ -22,7 +22,7 @@ public interface Tag {
      *
      * For mDNS peers this is the server's [PeerId] value. For Multipeer peers
      * this is the `MCPeerID` handle. For test fixtures it can be any unique
-     * string (e.g. the display name if unique across the test).
+     * string (e.g. the session name if unique across the test).
      */
     public val peerKey: String
 
