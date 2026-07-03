@@ -36,7 +36,7 @@ embeddedServer(Netty, port = 8080) {
 
 ```kotlin
 val seam: Seam = KtorClientLoom(HttpClient { install(WebSockets) }).join(
-    WebSocketAdvertisement("ws://localhost:8080/live", PeerId("server"), displayName = "alice")
+    WebSocketAdvertisement("ws://localhost:8080/live", PeerId("server"), sessionName = "alice")
 )
 ```
 

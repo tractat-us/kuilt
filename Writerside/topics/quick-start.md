@@ -30,7 +30,7 @@ When a peer closes, it is removed from every other peer's `peers` set atomically
 
 ```kotlin
 // 1. Get a Seam — host or join, depending on your role.
-val seam: Seam = loom.host(Pattern(displayName = "alice", maxPeers = 4))
+val seam: Seam = loom.host(Pattern(sessionName = "alice", maxPeers = 4))
 
 // 2. Collect incoming frames once. Fan out with shareIn if needed.
 scope.launch {

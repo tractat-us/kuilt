@@ -81,11 +81,14 @@ of `pattern.sessionName` / `tag.sessionName`. Null → derive from `seam.selfId`
 
 ### 4. TCK pin in `RoomConformanceSuite`
 
-Add a conformance test — runs against **every** fabric — that a joiner joining with
-`memberName = "Bob"` into a session advertised as `sessionName = "Alice's Game"` appears
-as **"Bob"** in the host's roster (and the host with `memberName = "Alice"` appears as
-"Alice", not the session name). This is the test that would have caught #1177 on every
-fabric, and it prevents regression.
+Add a conformance test — runs against every `RoomConformanceSuite` subclass (today the
+in-memory reference `InMemoryRoomConformanceTest`; the suite hardcodes `InMemoryTag`, so
+fabric modules subclass the transport-level `SeamConformanceSuite`, not this one) — that a
+joiner joining with `memberName = "Bob"` into a session advertised as
+`sessionName = "Alice's Game"` appears as **"Bob"** in the host's roster (and the host with
+`memberName = "Alice"` appears as "Alice", not the session name). This is the structural
+regression pin that would have caught #1177, and any future membership-level fabric
+subclass inherits it.
 
 ## Migration & blast radius
 
