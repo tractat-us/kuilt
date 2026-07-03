@@ -12,8 +12,9 @@ import us.tractat.kuilt.core.fabric.Connection
 public const val DEFAULT_MAX_FRAME_SIZE: Int = 16 * 1024 * 1024
 
 /**
- * Thrown when a received length prefix exceeds [framed]'s [maxFrameSize].
- * The oversized allocation is never performed; the flow terminates immediately.
+ * Thrown when a frame exceeds [framed]'s [maxFrameSize], in either direction: an oversize
+ * `send` throws before writing, and a received length prefix over the limit throws before any
+ * allocation is performed (the flow terminates immediately).
  */
 public class FrameTooLargeException(size: Int, max: Int) :
     Exception("frame length $size exceeds max $max")
@@ -25,8 +26,9 @@ public class FrameTooLargeException(size: Int, max: Int) :
  * - **Framing:** each `send` writes a 4-byte int (big-endian) followed by [frame.size] bytes.
  * - **Reassembly:** [Source.readByteArray] blocks the collecting coroutine until all bytes
  *   arrive — the stream side is pull-based. Real transports (TCP) collect on an IO dispatcher.
- * - **Oversize protection:** the prefix is validated against [maxFrameSize] before any
- *   allocation. A hostile prefix throws [FrameTooLargeException].
+ * - **Oversize protection (symmetric):** both directions are checked against [maxFrameSize].
+ *   An oversize `send` throws [FrameTooLargeException] before writing; on read, a hostile
+ *   prefix throws [FrameTooLargeException] before any allocation.
  * - **Clean EOF:** an [EOFException] thrown by [Source.readInt] at a frame boundary
  *   closes [incoming] normally. An EOF mid-frame propagates as [EOFException].
  *
@@ -46,7 +48,7 @@ private class FramedConnection(
     private val maxFrameSize: Int,
 ) : Connection {
     override suspend fun send(frame: ByteArray) {
-        require(frame.size <= maxFrameSize) { "frame ${frame.size} exceeds max $maxFrameSize" }
+        if (frame.size > maxFrameSize) throw FrameTooLargeException(frame.size, maxFrameSize)
         sink.writeInt(frame.size)
         sink.write(frame)
         sink.flush()
