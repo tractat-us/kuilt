@@ -95,8 +95,13 @@ public actual class MultipeerPeerLinkFactory actual constructor(
     public actual override suspend fun weave(rendezvous: Rendezvous): Seam =
         when (rendezvous) {
             is Rendezvous.New -> openSession()
-            is Rendezvous.Existing -> joinSession(rendezvous.tag as? MultipeerAdvertisement
-                ?: error("MultipeerPeerLinkFactory.weave requires a MultipeerAdvertisement, got ${rendezvous.tag::class}"))
+            is Rendezvous.Existing -> {
+                val advertisement = rendezvous.tag
+                require(advertisement is MultipeerAdvertisement) {
+                    "MultipeerPeerLinkFactory.weave requires a MultipeerAdvertisement, got ${advertisement::class}"
+                }
+                joinSession(advertisement)
+            }
         }
 
     private fun openSession(): Seam {
