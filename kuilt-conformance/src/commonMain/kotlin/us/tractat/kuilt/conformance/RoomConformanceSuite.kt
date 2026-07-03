@@ -196,12 +196,12 @@ public abstract class RoomConformanceSuite {
             val h = newHarness(backgroundScope)
             val hostRoom = h.hostFactory.host(Pattern("Alice"))
 
-            val firstJoiner = h.joinerFactory.join(InMemoryTag("Bob"))
+            val firstJoiner = h.joinerFactory.join(InMemoryTag("Bob"), memberName = "Bob")
             hostRoom.roster.first { it.size == 1 }
             firstJoiner.leave()
             hostRoom.roster.first { it.isEmpty() }
 
-            val secondJoiner = h.joinerFactory.join(InMemoryTag("Bob"))
+            val secondJoiner = h.joinerFactory.join(InMemoryTag("Bob"), memberName = "Bob")
             val rosterAfterRejoin = hostRoom.roster.first { it.size == 1 }
 
             assertEquals(1, rosterAfterRejoin.size, "roster must contain the rejoiner")

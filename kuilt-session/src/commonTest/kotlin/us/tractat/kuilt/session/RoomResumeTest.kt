@@ -291,7 +291,7 @@ class RoomResumeTest {
         SeamRoom(
             seam = seam,
             role = role,
-            displayName = displayName,
+            memberName = displayName,
             scope = backgroundScope,
             clock = clock,
             heartbeatConfig = fastConfig,

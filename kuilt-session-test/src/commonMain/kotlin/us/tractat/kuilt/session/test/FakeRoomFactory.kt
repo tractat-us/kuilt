@@ -26,13 +26,13 @@ import us.tractat.kuilt.session.SessionRole
  * ```
  */
 public class FakeRoomFactory : RoomFactory {
-    override suspend fun host(pattern: Pattern): Room =
+    override suspend fun host(pattern: Pattern, memberName: String?): Room =
         FakeRoom(
             selfId = PeerId(pattern.sessionName),
             initialRole = SessionRole.Host,
         )
 
-    override suspend fun join(tag: Tag): Room =
+    override suspend fun join(tag: Tag, memberName: String?): Room =
         FakeRoom(
             selfId = PeerId(tag.sessionName),
             initialRole = SessionRole.Joiner,

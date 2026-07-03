@@ -33,8 +33,10 @@ class JoinerWelcomeGateTest {
     fun `a Welcome from a non-host sender is dropped once the host is established`() =
         runTest {
             val loom = InMemoryLoom()
-            val host = factory(loom, backgroundScope).host(Pattern("HostA", roomKey = "room-A"))
-            val joiner = factory(loom, backgroundScope).join(InMemoryTag("Bob", roomKey = "room-A"))
+            val host = factory(loom, backgroundScope)
+                .host(Pattern("HostA", roomKey = "room-A"), memberName = "HostA")
+            val joiner = factory(loom, backgroundScope)
+                .join(InMemoryTag("Bob", roomKey = "room-A"), memberName = "Bob")
 
             // Admitted: the joiner's roster now holds exactly its host.
             val admittedRoster = joiner.roster.first { it.isNotEmpty() }

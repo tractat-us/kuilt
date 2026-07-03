@@ -87,13 +87,16 @@ public class SeamRoomFactory(
     private val heartbeatConfig: HeartbeatConfig = HeartbeatConfig(),
     private val admitTimeout: Duration = DEFAULT_ADMIT_TIMEOUT,
 ) : RoomFactory {
-    override suspend fun host(pattern: Pattern): Room {
+    override suspend fun host(pattern: Pattern, memberName: String?): Room {
         val seam = loom.host(pattern)
         val roomId = RoomId(seam.selfId.value + "-room")
         return SeamRoom(
             seam = seam,
             role = SessionRole.Host,
-            displayName = pattern.sessionName,
+            // This peer's own roster name. Null → peer-id-derived (see SeamRoom.resolvedMemberName).
+            // Deliberately NOT pattern.sessionName — the session name names the session, not this
+            // host (#1177).
+            memberName = memberName,
             scope = scope,
             clock = clock,
             heartbeatConfig = heartbeatConfig,
@@ -106,12 +109,15 @@ public class SeamRoomFactory(
         ).also { room -> room.start() }
     }
 
-    override suspend fun join(tag: Tag): Room {
+    override suspend fun join(tag: Tag, memberName: String?): Room {
         val seam = loom.join(tag)
         return SeamRoom(
             seam = seam,
             role = SessionRole.Joiner,
-            displayName = tag.sessionName,
+            // This peer's own roster name. Null → peer-id-derived (see SeamRoom.resolvedMemberName).
+            // Deliberately NOT tag.sessionName — the discovered session name names the session being
+            // joined, not this joiner (the #1177 latent-bug fix).
+            memberName = memberName,
             scope = scope,
             clock = clock,
             heartbeatConfig = heartbeatConfig,
@@ -215,7 +221,13 @@ private const val MEMBERSHIP_EVENT_REPLAY = 64
 internal class SeamRoom(
     private val seam: Seam,
     role: SessionRole,
-    private val displayName: String,
+    /**
+     * This peer's **own** roster name — the label other members see for this peer. Null means
+     * "derive from the peer id" ([resolvedMemberName]); it is never derived from the session name
+     * ([us.tractat.kuilt.core.Pattern.sessionName] / [us.tractat.kuilt.core.Tag.sessionName]),
+     * which names the *session*, not this member (#1177).
+     */
+    private val memberName: String? = null,
     private val scope: CoroutineScope,
     private val clock: () -> Instant,
     private val heartbeatConfig: HeartbeatConfig,
@@ -277,6 +289,9 @@ internal class SeamRoom(
     private val reweave: (suspend () -> Seam)? = null,
 ) : Room {
     override val selfId: PeerId = seam.selfId
+
+    /** This peer's roster name: the caller-supplied [memberName], else its own peer id. */
+    private val resolvedMemberName: String get() = memberName ?: selfId.value
 
     private val _role = MutableStateFlow(role)
     override val role: StateFlow<SessionRole> = _role.asStateFlow()
@@ -932,7 +947,7 @@ internal class SeamRoom(
         val hostIntro = AdmitMessage.encode(
             AdmitMessage.Welcome(
                 assignedPeerId = selfId.value,
-                displayName = displayName,
+                displayName = resolvedMemberName,
                 sessionId = selfId.value,
             ),
         )
@@ -941,7 +956,7 @@ internal class SeamRoom(
 
     private suspend fun sendHello() {
         val hello = AdmitMessage.Hello(
-            displayName = displayName,
+            displayName = resolvedMemberName,
             sessionId = selfId.value,
             targetRoom = roomKey,
         )

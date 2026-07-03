@@ -99,7 +99,7 @@ class PartitionRoleTest {
         val hostRoom = SeamRoom(
             seam = hostSeam,
             role = SessionRole.Host,
-            displayName = "Alice",
+            memberName = "Alice",
             scope = backgroundScope,
             clock = clock,
             heartbeatConfig = fastConfig,
@@ -111,7 +111,7 @@ class PartitionRoleTest {
         val joinerRoom = SeamRoom(
             seam = faultyJoinerSeam,
             role = SessionRole.Joiner,
-            displayName = "Bob",
+            memberName = "Bob",
             scope = backgroundScope,
             clock = clock,
             heartbeatConfig = fastConfig,
@@ -161,7 +161,7 @@ class PartitionRoleTest {
         val hostRoom = SeamRoom(
             seam = faultyHostSeam,
             role = SessionRole.Host,
-            displayName = "Alice",
+            memberName = "Alice",
             scope = backgroundScope,
             clock = clock,
             heartbeatConfig = fastConfig,
@@ -170,7 +170,7 @@ class PartitionRoleTest {
         val joinerRoom = SeamRoom(
             seam = rawJoinerSeam,
             role = SessionRole.Joiner,
-            displayName = "Bob",
+            memberName = "Bob",
             scope = backgroundScope,
             clock = clock,
             heartbeatConfig = fastConfig,
@@ -224,7 +224,7 @@ class PartitionRoleTest {
         val hostRoom = SeamRoom(
             seam = faultyHostSeam,
             role = SessionRole.Host,
-            displayName = "Alice",
+            memberName = "Alice",
             scope = backgroundScope,
             clock = clock,
             heartbeatConfig = fastConfig,
@@ -233,7 +233,7 @@ class PartitionRoleTest {
         val joinerRoom = SeamRoom(
             seam = loom.join(InMemoryTag("Bob")),
             role = SessionRole.Joiner,
-            displayName = "Bob",
+            memberName = "Bob",
             scope = backgroundScope,
             clock = clock,
             heartbeatConfig = fastConfig,
@@ -298,7 +298,7 @@ class PartitionRoleTest {
         val hostRoom = SeamRoom(
             seam = faultyHostSeam,
             role = SessionRole.Host,
-            displayName = "Alice",
+            memberName = "Alice",
             scope = backgroundScope,
             clock = clock,
             heartbeatConfig = fastConfig,
@@ -307,7 +307,7 @@ class PartitionRoleTest {
         SeamRoom(
             seam = loom.join(InMemoryTag("Bob")),
             role = SessionRole.Joiner,
-            displayName = "Bob",
+            memberName = "Bob",
             scope = backgroundScope,
             clock = clock,
             heartbeatConfig = fastConfig,

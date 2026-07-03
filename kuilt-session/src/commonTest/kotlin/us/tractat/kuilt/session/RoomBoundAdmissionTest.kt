@@ -36,9 +36,11 @@ class RoomBoundAdmissionTest {
     fun `joiner whose target room matches the host is admitted`() =
         runTest {
             val loom = InMemoryLoom()
-            val host = factory(loom, backgroundScope).host(Pattern("HostA", roomKey = "room-A"))
+            val host = factory(loom, backgroundScope)
+                .host(Pattern("HostA", roomKey = "room-A"), memberName = "HostA")
 
-            val joiner = factory(loom, backgroundScope).join(InMemoryTag("Bob", roomKey = "room-A"))
+            val joiner = factory(loom, backgroundScope)
+                .join(InMemoryTag("Bob", roomKey = "room-A"), memberName = "Bob")
 
             val hostRoster = host.roster.first { it.size == 1 }
             val joinerRoster = joiner.roster.first { it.isNotEmpty() }
@@ -106,9 +108,12 @@ class RoomBoundAdmissionTest {
     fun `joiner with null target room is admitted`() =
         runTest {
             val loom = InMemoryLoom()
-            val host = factory(loom, backgroundScope).host(Pattern("Alice", roomKey = "room-A"))
+            val host = factory(loom, backgroundScope)
+                .host(Pattern("Alice", roomKey = "room-A"), memberName = "Alice")
 
-            val joiner = factory(loom, backgroundScope).join(InMemoryTag("Bob")) // roomKey defaults null
+            // roomKey defaults null
+            val joiner = factory(loom, backgroundScope)
+                .join(InMemoryTag("Bob"), memberName = "Bob")
 
             val hostRoster = host.roster.first { it.size == 1 }
             val joinerRoster = joiner.roster.first { it.isNotEmpty() }

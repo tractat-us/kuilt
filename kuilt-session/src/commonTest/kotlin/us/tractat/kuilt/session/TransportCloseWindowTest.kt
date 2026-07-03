@@ -55,7 +55,7 @@ class TransportCloseWindowTest {
             val hostRoom = SeamRoom(
                 seam = hostSeam,
                 role = SessionRole.Host,
-                displayName = "table-7",
+                memberName = "table-7",
                 scope = backgroundScope,
                 clock = clock,
                 heartbeatConfig = fastConfig,
@@ -69,7 +69,7 @@ class TransportCloseWindowTest {
             SeamRoom(
                 seam = clientMux.channel("table-7"),
                 role = SessionRole.Joiner,
-                displayName = "client",
+                memberName = "client",
                 scope = backgroundScope,
                 clock = clock,
                 heartbeatConfig = fastConfig,
@@ -107,7 +107,7 @@ class TransportCloseWindowTest {
             val hostRoom = SeamRoom(
                 seam = hostSeam,
                 role = SessionRole.Host,
-                displayName = "table-7",
+                memberName = "table-7",
                 scope = backgroundScope,
                 clock = clock,
                 heartbeatConfig = fastConfig,
@@ -121,7 +121,7 @@ class TransportCloseWindowTest {
             SeamRoom(
                 seam = clientMux.channel("table-7"),
                 role = SessionRole.Joiner,
-                displayName = "client",
+                memberName = "client",
                 scope = backgroundScope,
                 clock = clock,
                 heartbeatConfig = fastConfig,
@@ -162,7 +162,7 @@ class TransportCloseWindowTest {
             val hostRoom = SeamRoom(
                 seam = hostSeam,
                 role = SessionRole.Host,
-                displayName = "table-7",
+                memberName = "table-7",
                 scope = backgroundScope,
                 clock = clock,
                 heartbeatConfig = fastConfig,
@@ -177,7 +177,7 @@ class TransportCloseWindowTest {
             val joinerRoom1 = SeamRoom(
                 seam = clientMux1.channel("table-7"),
                 role = SessionRole.Joiner,
-                displayName = "client",
+                memberName = "client",
                 scope = backgroundScope,
                 clock = clock,
                 heartbeatConfig = fastConfig,
@@ -199,7 +199,7 @@ class TransportCloseWindowTest {
             val joinerRoom2 = SeamRoom(
                 seam = clientMux2.channel("table-7"),
                 role = SessionRole.Joiner,
-                displayName = "client",
+                memberName = "client",
                 scope = backgroundScope,
                 clock = clock,
                 heartbeatConfig = fastConfig,
@@ -235,7 +235,7 @@ class TransportCloseWindowTest {
             val hostRoom = SeamRoom(
                 seam = hostSeam,
                 role = SessionRole.Host,
-                displayName = "table-7",
+                memberName = "table-7",
                 scope = backgroundScope,
                 clock = clock,
                 heartbeatConfig = fastConfig,
@@ -250,7 +250,7 @@ class TransportCloseWindowTest {
             val joinerRoom1 = SeamRoom(
                 seam = clientMux1.channel("table-7"),
                 role = SessionRole.Joiner,
-                displayName = "client",
+                memberName = "client",
                 scope = backgroundScope,
                 clock = clock,
                 heartbeatConfig = fastConfig,
@@ -276,7 +276,7 @@ class TransportCloseWindowTest {
             val joinerRoom2 = SeamRoom(
                 seam = clientMux2.channel("table-7"),
                 role = SessionRole.Joiner,
-                displayName = "client",
+                memberName = "client",
                 scope = backgroundScope,
                 clock = clock,
                 heartbeatConfig = fastConfig,
@@ -318,7 +318,7 @@ class TransportCloseWindowTest {
             val hostRoom = SeamRoom(
                 seam = hostSeam,
                 role = SessionRole.Host,
-                displayName = "table-7",
+                memberName = "table-7",
                 scope = backgroundScope,
                 clock = clock,
                 heartbeatConfig = fastConfig,
@@ -332,7 +332,7 @@ class TransportCloseWindowTest {
             SeamRoom(
                 seam = clientMux.channel("table-7"),
                 role = SessionRole.Joiner,
-                displayName = "client",
+                memberName = "client",
                 scope = backgroundScope,
                 clock = clock,
                 heartbeatConfig = fastConfig,

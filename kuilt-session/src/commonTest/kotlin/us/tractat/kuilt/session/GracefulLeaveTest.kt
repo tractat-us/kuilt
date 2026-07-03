@@ -52,7 +52,7 @@ class GracefulLeaveTest {
             val hostRoom = SeamRoom(
                 seam = hostSeam,
                 role = SessionRole.Host,
-                displayName = "table-7",
+                memberName = "table-7",
                 scope = backgroundScope,
                 clock = clock,
                 heartbeatConfig = fastConfig,
@@ -66,7 +66,7 @@ class GracefulLeaveTest {
             val joinerRoom = SeamRoom(
                 seam = clientMux.channel("table-7"),
                 role = SessionRole.Joiner,
-                displayName = "client",
+                memberName = "client",
                 scope = backgroundScope,
                 clock = clock,
                 heartbeatConfig = fastConfig,
