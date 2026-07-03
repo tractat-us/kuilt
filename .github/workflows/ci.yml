@@ -548,6 +548,59 @@ jobs:
         # pass) — the module-doc build is what parses module.md + KDoc and is far faster.
         run: ./gradlew dokkaGenerateModuleHtml --max-workers=2
 
+  # ── concurrency-probes ──────────────────────────────────────────────────────
+  # The three real-threaded concurrency probes (CompositeSeamConcurrencyTest,
+  # LinkSeamConcurrencyTest, MeshSeamConcurrencyTest) run on real threads, not
+  # virtual time, so they are starved when other test JVMs saturate the box (the
+  # #1135 hang — root-caused as OS-CPU contention, not a code defect; see #1158).
+  # They are -P-gated OUT of the normal build (kuilt-core/build.gradle.kts) and run
+  # here ALONE on a dedicated runner with no sibling test forks, so they finish in
+  # seconds. Mirrors build-jvm's setup + docs-only guard.
+  #
+  # INTENTIONALLY NOT in ci-required's needs/aggregation: these are non-blocking
+  # quality-hardening probes. Running them for signal must never wedge the merge
+  # gate — that is the whole point of isolating them (#1158). The #1151 mitigation
+  # (5-min cap + thread dump) stays as the in-test backstop.
+  concurrency-probes:
+    needs: detect
+    if: needs.detect.outputs.docs-only != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      S3_BUILD_CACHE_ACCESS_KEY_ID: ${{ secrets.S3_BUILD_CACHE_ACCESS_KEY_ID }}
+      S3_BUILD_CACHE_SECRET_KEY: ${{ secrets.S3_BUILD_CACHE_SECRET_KEY }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v5
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          gradle-version: wrapper
+          cache-read-only: false
+
+      - name: Run real-threaded concurrency probes (isolated runner)
+        # -Pconcurrency.stress.tests=true un-gates the three *ConcurrencyTest classes
+        # (excluded from the normal run in kuilt-core/build.gradle.kts); --tests scopes
+        # the JVM test task to exactly them so nothing else co-schedules on this runner.
+        run: >-
+          ./gradlew :kuilt-core:jvmTest -Pconcurrency.stress.tests=true
+          --tests "*ConcurrencyTest"
+
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-reports-concurrency-probes
+          path: |
+            kuilt-core/build/reports/tests/
+            kuilt-core/build/test-results/
+
   # ── ci-required ────────────────────────────────────────────────────────────
   # The SOLE required status check. Aggregates detect + build-jvm + build-native
   # + detekt + dokka.
