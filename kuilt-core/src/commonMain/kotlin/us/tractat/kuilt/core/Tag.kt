@@ -25,4 +25,20 @@ public interface Tag {
      * string (e.g. the display name if unique across the test).
      */
     public val peerKey: String
+
+    /**
+     * The stable room identity this joiner intends to enter — matched against the
+     * host's [Pattern.roomKey] before admission.
+     *
+     * Defaults to `null` (**permissive**): most discovery transports name a single
+     * room per connection (a WS URL, an mDNS service record, a 2-peer link *is* the
+     * room), so the transport already binds the target and no host-side room check
+     * is needed. `null` therefore means "the transport chose the room for me" and
+     * the host admits without comparing. A non-null value is only required on a
+     * *flat* fabric where one mesh carries several rooms (e.g. a shared
+     * [InMemoryLoom]): there the host must reject a joiner whose target names a
+     * different room than its own [Pattern.roomKey]. Note this is room identity,
+     * **not** [displayName]/[peerKey] (member/peer identity) — do not conflate them.
+     */
+    public val roomKey: String? get() = null
 }

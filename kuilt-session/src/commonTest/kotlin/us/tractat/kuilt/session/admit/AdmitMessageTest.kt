@@ -117,6 +117,10 @@ class AdmitMessageTest {
             AdmitMessage.Hello(displayName = "Alice", sessionId = "session-123", deviceId = "device-abc"),
             decoded,
         )
+        // #1172 A2 added Hello.targetRoom. The golden bytes predate it and carry no such key,
+        // so an old frame must decode with targetRoom = null (the permissive default). This pins
+        // that the new field is wire-safe backward-compatible.
+        assertNull((decoded as AdmitMessage.Hello).targetRoom)
     }
 
     /**

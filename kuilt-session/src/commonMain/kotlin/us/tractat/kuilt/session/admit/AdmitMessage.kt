@@ -37,6 +37,14 @@ public sealed interface AdmitMessage {
      * [displayName] — human-readable display name.
      * [sessionId] — joiner-minted session identifier (UUID-style).
      * [deviceId] — optional hardware-stable identifier for reconnect dedup.
+     * [targetRoom] — the host [us.tractat.kuilt.core.Pattern.roomKey] this joiner
+     *   intends to enter, from [us.tractat.kuilt.core.Tag.roomKey]. `null` (the
+     *   default) means the transport already bound the room, so the host admits
+     *   without comparing; a non-null value that mismatches the host's own room key
+     *   is rejected. Nullable + defaulted so it is wire-safe: an older build that
+     *   never sends it decodes as `null` (see the shared [cbor] codec's
+     *   `ignoreUnknownKeys`), and an old encoded frame with no `targetRoom` key
+     *   still decodes to `null`.
      */
     @Serializable
     @SerialName("hello")
@@ -44,6 +52,7 @@ public sealed interface AdmitMessage {
         val displayName: String,
         val sessionId: String,
         val deviceId: String? = null,
+        val targetRoom: String? = null,
     ) : AdmitMessage
 
     /**
