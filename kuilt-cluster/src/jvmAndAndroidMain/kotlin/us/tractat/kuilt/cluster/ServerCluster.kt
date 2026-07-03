@@ -1,5 +1,3 @@
-@file:OptIn(kotlinx.coroutines.ExperimentalForInheritanceCoroutinesApi::class)
-
 package us.tractat.kuilt.cluster
 
 import io.github.oshai.kotlinlogging.KotlinLogging
@@ -11,13 +9,14 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.FlowCollector
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.receiveAsFlow
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
@@ -392,7 +391,7 @@ private fun buildVoterChannelMesh(
             voterChannels.getValue(id).receiveAsFlow().collect { inbound.emit(it) }
         }
 
-        val transport = voterChannelTransport(id, voterChannels, voterPeersFlow, inbound, router)
+        val transport = voterChannelTransport(id, voterChannels, voterPeersFlow, inbound, router, childScope)
         val storage = storageFactory(id)
         childScope.raftNode(clusterConfig, transport, storage, raftConfig)
     }
@@ -407,29 +406,20 @@ private fun voterChannelTransport(
     voterPeersState: MutableStateFlow<Set<NodeId>>,
     inbound: MutableSharedFlow<RaftEnvelope>,
     router: LearnerRouter,
+    peersScope: CoroutineScope,
 ): RaftTransport = object : RaftTransport {
 
     override val selfId: NodeId = id
 
     /** Combined voter + learner peer set, excluding this voter's own id. */
-    override val peers: StateFlow<Set<NodeId>> = object : StateFlow<Set<NodeId>> {
-        override val value: Set<NodeId>
-            get() = voterPeersState.value - id + router.learnersFlow.value
-
-        override val replayCache: List<Set<NodeId>> get() = listOf(value)
-
-        // Emit whenever either sub-flow changes. We never return here because
-        // collect on an infinite flow never returns normally; the suppress marks that
-        // the Nothing requirement is satisfied by the fact that the collect block is
-        // an infinite loop (no normal exit path exists).
-        override suspend fun collect(collector: FlowCollector<Set<NodeId>>): Nothing {
-            combine(voterPeersState, router.learnersFlow) { voters, learners ->
-                voters - id + learners
-            }.collect(collector)
-            // Unreachable: an infinite flow's collect never returns normally.
-            error("unreachable")
-        }
-    }
+    override val peers: StateFlow<Set<NodeId>> =
+        combine(voterPeersState, router.learnersFlow) { voters, learners ->
+            voters - id + learners
+        }.stateIn(
+            scope = peersScope,
+            started = SharingStarted.Eagerly,
+            initialValue = voterPeersState.value - id + router.learnersFlow.value,
+        )
 
     override val incoming: Flow<RaftEnvelope> = inbound
 
