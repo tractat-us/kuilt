@@ -24,6 +24,7 @@ import us.tractat.kuilt.session.SeamRoomFactory
 import us.tractat.kuilt.session.SessionRole
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.session.partition.ResumeResult
+import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -123,6 +124,28 @@ public abstract class RoomConformanceSuite {
             val joiner = h.joinerFactory.join(InMemoryTag("Bob"))
             assertEquals(SessionRole.Joiner, joiner.role.value, "join() must produce SessionRole.Joiner")
             joiner.leave()
+        }
+
+    // ── (2b) a member's roster identity is its own member name, never the ──
+    // ── discovered session name (#1177) ──────────────────────────────────────
+
+    @Test
+    public fun membersAppearUnderTheirOwnMemberName(): TestResult =
+        runTest {
+            val h = newHarness(backgroundScope)
+            val host = h.hostFactory.host(Pattern("Alice's game"), memberName = "Alice")
+            val joiner = h.joinerFactory.join(InMemoryTag("Alice's game"), memberName = "Bob")
+
+            val hostRoster = host.roster.first { it.size == 1 }
+            val joinerRoster = joiner.roster.first { it.isNotEmpty() }
+            assertAll(
+                // The joiner shows under its OWN name, not the discovered session name.
+                { assertEquals("Bob", hostRoster.single().identity.displayName) },
+                { assertEquals("Alice", joinerRoster.single().identity.displayName) },
+            )
+
+            joiner.leave()
+            host.leave()
         }
 
     // ── (3) roster is empty before any admit handshake ───────────────────────
