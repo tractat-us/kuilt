@@ -8,6 +8,7 @@ import org.slf4j.LoggerFactory
 import us.tractat.kuilt.otel.WarpLogRecordExporter
 import us.tractat.kuilt.otel.logging.CaptureConfig
 import us.tractat.kuilt.otel.logging.LogCapture
+import us.tractat.kuilt.otel.logging.TraceContextProvider
 import kotlin.random.Random
 import kotlin.time.Clock
 
@@ -37,6 +38,11 @@ import kotlin.time.Clock
  * @param loggerContext the logback [LoggerContext] to attach to. Defaults to the
  *   process-wide context SLF4J is bound to — the one raw `LoggerFactory.getLogger`
  *   calls resolve against.
+ * @param traceContextProvider optional trace/sampling gate — `null` (default) is
+ *   always-on M1 capture; a provider gates and stamps per [CaptureConfig.untracedPolicy]
+ *   and the trace's `sampled` flag. Threaded straight into the [LogCapture] core, so the
+ *   logback add-on honours the same ambient trace context as
+ *   [us.tractat.kuilt.otel.logging.installLogCapture] (#1034).
  * @return the started [KuiltLogbackAppender]. **Uninstall it** by detaching it
  *   (`root.detachAppender(it)`) and calling [KuiltLogbackAppender.stop] — `stop()`
  *   halts the log path *and* closes the drain, fully releasing capture. (Cancelling
@@ -49,8 +55,9 @@ public fun installLogbackCapture(
     random: Random,
     scope: CoroutineScope,
     loggerContext: LoggerContext = defaultLoggerContext(),
+    traceContextProvider: TraceContextProvider? = null,
 ): KuiltLogbackAppender {
-    val capture = LogCapture(exporter, config, clock, random)
+    val capture = LogCapture(exporter, config, clock, random, traceContextProvider)
     val appender = KuiltLogbackAppender(capture, scope).apply {
         context = loggerContext
         name = APPENDER_NAME

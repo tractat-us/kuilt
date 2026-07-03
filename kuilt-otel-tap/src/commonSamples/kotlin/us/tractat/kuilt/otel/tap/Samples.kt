@@ -8,6 +8,7 @@ import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.otel.InMemoryDurableStore
 import us.tractat.kuilt.otel.LogRecord
 import us.tractat.kuilt.otel.WarpLogRecordExporter
+import us.tractat.kuilt.otel.WarpMetricExporter
 import us.tractat.kuilt.otel.tap.admit.LogTapJoinToken
 import us.tractat.kuilt.otel.tap.admit.cryptoRandom
 import kotlin.time.Clock
@@ -110,4 +111,60 @@ internal suspend fun sampleLogTapTailStamped(seamScope: CoroutineScope): Flow<St
     // merge — no re-snapshotting the whole buffer on every change to recover the stamps.
     val client = LogTapClient(loom.join(InMemoryTag("tailer")), seamScope)
     return client.tailStamped()
+}
+
+/** @suppress — sample only */
+internal suspend fun sampleMetricTapHostAndPull(scope: CoroutineScope): MetricSnapshot {
+    // The device's converged metric buffer — the same one the metric pipeline fills.
+    val exporter = WarpMetricExporter(
+        replica = ReplicaId("device-uuid-abc123"),
+        store = InMemoryDurableStore(),
+    )
+
+    // The fabric the two peers meet over. An in-memory/loopback Loom is the
+    // simulator-and-CI case; swap it for a LAN or peer-to-peer Loom to reach a real phone.
+    val loom = InMemoryLoom()
+
+    // On the device: turn the opt-in metric tap on. It does nothing until called and is
+    // loopback-bound by default. Hold the host; close it to stop offering metrics.
+    val host = installMetricTap(loom, exporter, scope)
+
+    // In the test / CI harness: join the same session and pull the converged snapshot —
+    // every counter, gauge and cardinality collapsed to the numbers the device reports.
+    val client = MetricTapClient(loom.join(InMemoryTag("puller")), scope)
+    val metrics: MetricSnapshot = client.pull()
+
+    // Release both replicators when finished.
+    client.close()
+    host.close()
+    return metrics
+}
+
+/** @suppress — sample only */
+internal suspend fun sampleGatedMetricTap(scope: CoroutineScope): MetricSnapshot {
+    val exporter = WarpMetricExporter(
+        replica = ReplicaId("device-uuid-abc123"),
+        store = InMemoryDurableStore(),
+    )
+    val loom = InMemoryLoom()
+
+    // Expose the metric tap on a real network behind the same admission gate the log tap
+    // uses. Mint a short-lived join code from a CRYPTOGRAPHICALLY SECURE source —
+    // cryptoRandom() — the code is the only secret, so never Random.Default.
+    val secure = cryptoRandom()
+    val token = LogTapJoinToken.issue(random = secure, clock = Clock.System)
+    val host = installMetricTap(loom, exporter, scope, admission = LogTapAdmission.Verify(token, Clock.System, secure))
+
+    // Show token.code to the operator OUT OF BAND (the library never logs it), then present
+    // it from the puller. A wrong or expired code is refused before any metric replicates.
+    val client = MetricTapClient(
+        loom.join(InMemoryTag("puller")),
+        scope,
+        admission = LogTapAdmission.Present(token.code),
+    )
+    val metrics: MetricSnapshot = client.pull()
+
+    client.close()
+    host.close()
+    return metrics
 }
