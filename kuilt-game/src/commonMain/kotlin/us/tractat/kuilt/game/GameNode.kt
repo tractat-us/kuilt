@@ -345,58 +345,11 @@ public suspend fun CoroutineScope.gameHost(
     val node = raftNode(ClusterConfig.ofVoters(setOf(self)), SeamRaftTransport(raftSeam), storage, raftConfig, identity)
     node.awaitLeadership()
 
-    // Admit synchronously up to the return watermark: the full roster in FullMembership mode, a
-    // majority in Quorum mode.
-    val returnThreshold = when (returnAt) {
-        ReturnPolicy.FullMembership -> peerCount
-        ReturnPolicy.Quorum -> peerCount / 2 + 1
-    }
     val voters = mutableSetOf(self)
     // spectatorIds tracks NodeIds admitted as spectators so the voter loop skips them.
     val spectatorIds = mutableSetOf<NodeId>()
-    admitVotersUntil(node, seam, voters, spectatorIds, target = returnThreshold, presence)
-
-    // Quorum mode: keep admitting the remaining voters in the background for the life of the
-    // session. The loop runs on the caller's scope (this), so it stays alive until the roster
-    // reaches peerCount or the scope is cancelled at session end — the admission door does not close
-    // on a timer, so a latecomer is admitted whenever it connects, however late. A give-up failure
-    // propagates to the caller (fail-loud, no swallow); cancellation tears admission down. After
-    // this point only the background coroutine touches `voters`, so no synchronization is needed.
-    if (voters.size < peerCount) {
-        launch {
-            admitVotersUntil(node, seam, voters, spectatorIds, target = peerCount, presence)
-            presence.declareAdmissionClosed(voters)
-        }
-    } else {
-        // FullMembership mode (or Quorum with peerCount == 1): the roster is already full.
-        // Publish the signal synchronously so any joiner that arrives after this point can
-        // detect the full roster immediately without waiting for the background loop.
-        presence.declareAdmissionClosed(voters)
-    }
-
-    // Reactive spectator management — runs persistently in the background. On every new spectator
-    // declaration:
-    //   - If spectators are enabled and the cap is not yet reached → admit the peer as a permanent
-    //     learner.
-    //   - Otherwise → publish spectators-closed and exit.
-    //
-    // Rejection is REACTIVE, not proactive: the `:sc` signal is only published AFTER a would-be
-    // spectator has declared, guaranteeing that its Quilter is already subscribed and will receive
-    // the rejection Delta. Publishing `:sc` eagerly (before any declaration) would race against the
-    // peer's MuxSeam setup and silently lose the frame under StandardTestDispatcher.
-    launch {
-        var admitted = spectatorIds.size
-        while (true) {
-            val spectatorId = nextSpectatorPeer(presence, seam, spectatorIds)
-            if (!allowSpectators || admitted >= maxSpectators) {
-                presence.declareSpectatorsClosed()
-                break
-            }
-            admitSpectatorLearner(node, voters, spectatorIds, spectatorId)
-            spectatorIds += spectatorId
-            admitted++
-        }
-    }
+    admitToReturnPolicy(node, seam, voters, spectatorIds, peerCount, presence, returnAt)
+    launchSpectatorManagement(node, seam, voters, spectatorIds, presence, allowSpectators, maxSpectators)
 
     // Voter liveness monitoring — optional; enabled when the caller supplies a [livenessConfig].
     // The leader observes PeerLost events and evicts the dead voter, then re-opens the admission
@@ -588,25 +541,34 @@ private suspend fun awaitSpectatorAdmissionOrThrow(
 }
 
 /**
+ * Suspends until [predicate] matches an element of this flow, then emits [value] — the shared
+ * shape behind [asSpectatorAdmissionFlow], [asSpectatorRejectionFlow], [asAdmissionFlow], and
+ * [asRejectionFlow]: each races a "did the thing happen" signal against a timeout via [merge]
+ * and [kotlinx.coroutines.flow.first], so they all reduce to "wait for a match, then emit a
+ * fixed Boolean".
+ */
+private fun <T> Flow<T>.firstMatchThenEmit(value: Boolean, predicate: (T) -> Boolean): Flow<Boolean> =
+    flow {
+        first(predicate)
+        emit(value)
+    }
+
+/**
  * Maps the commit-index flow to a Boolean emission: `true` once the index advances past zero.
  *
  * This is the spectator admission signal: `commitIndex > 0` means the host has committed the
  * membership change that adds this spectator to the cluster learner set and is replicating.
  */
-private fun StateFlow<Long>.asSpectatorAdmissionFlow(): Flow<Boolean> = flow {
-    first { index -> index > 0L }
-    emit(true)
-}
+private fun StateFlow<Long>.asSpectatorAdmissionFlow(): Flow<Boolean> =
+    firstMatchThenEmit(true) { index -> index > 0L }
 
 /**
  * Maps the spectators-closed flow to a Boolean emission: `false` once the signal is `true`.
  *
  * Emits nothing while spectators are still open.
  */
-private fun Flow<Boolean>.asSpectatorRejectionFlow(): Flow<Boolean> = flow {
-    first { closed -> closed }
-    emit(false)
-}
+private fun Flow<Boolean>.asSpectatorRejectionFlow(): Flow<Boolean> =
+    firstMatchThenEmit(false) { closed -> closed }
 
 /**
  * Races admission against roster-full signal, with a backstop timeout.
@@ -635,10 +597,8 @@ private suspend fun awaitAdmissionOrThrow(
  * Maps the role flow to a Boolean emission: `true` when this peer leaves [RaftRole.Learner]
  * (i.e. has been admitted as a voter).
  */
-private fun Flow<RaftRole>.asAdmissionFlow(): Flow<Boolean> = flow {
-    first { it !is RaftRole.Learner }
-    emit(true)
-}
+private fun Flow<RaftRole>.asAdmissionFlow(): Flow<Boolean> =
+    firstMatchThenEmit(true) { it !is RaftRole.Learner }
 
 /**
  * Maps the admission-closed flow to a Boolean emission: `false` when admission is closed and
@@ -646,10 +606,8 @@ private fun Flow<RaftRole>.asAdmissionFlow(): Flow<Boolean> = flow {
  *
  * Emits nothing if `self` IS in the final voter set — the admission flow wins in that case.
  */
-private fun Flow<Set<NodeId>?>.asRejectionFlow(self: NodeId): Flow<Boolean> = flow {
-    val closedVoters = first { voters -> voters != null && self !in voters }
-    if (closedVoters != null) emit(false)
-}
+private fun Flow<Set<NodeId>?>.asRejectionFlow(self: NodeId): Flow<Boolean> =
+    firstMatchThenEmit(false) { voters -> voters != null && self !in voters }
 
 /**
  * Declares this peer as host via [GamePresence] on [presenceSeam], waits — bounded by
@@ -721,6 +679,83 @@ private val DEFAULT_JOIN_ADMISSION_TIMEOUT = 10.seconds
  * Exposed as the [gameSpectate] `spectateAdmissionTimeout` parameter for tuning.
  */
 private val DEFAULT_SPECTATE_ADMISSION_TIMEOUT = 10.seconds
+
+/**
+ * Admits synchronously up to [gameHost]'s return watermark — the full roster in
+ * [ReturnPolicy.FullMembership] mode, a majority in [ReturnPolicy.Quorum] mode — then either
+ * keeps admitting the remaining voters in the background or, if the roster is already full,
+ * publishes admission-closed synchronously.
+ *
+ * The background loop (Quorum mode) runs on `this` (the caller's scope), so it stays alive until
+ * the roster reaches [peerCount] or the scope is cancelled at session end — the admission door
+ * does not close on a timer, so a latecomer is admitted whenever it connects, however late. A
+ * give-up failure propagates to the caller (fail-loud, no swallow); cancellation tears admission
+ * down. After the synchronous phase, only the background coroutine touches [voters], so no
+ * synchronization is needed.
+ */
+private suspend fun CoroutineScope.admitToReturnPolicy(
+    node: RaftNode,
+    seam: Seam,
+    voters: MutableSet<NodeId>,
+    spectatorIds: MutableSet<NodeId>,
+    peerCount: Int,
+    presence: GamePresence,
+    returnAt: ReturnPolicy,
+) {
+    val returnThreshold = when (returnAt) {
+        ReturnPolicy.FullMembership -> peerCount
+        ReturnPolicy.Quorum -> peerCount / 2 + 1
+    }
+    admitVotersUntil(node, seam, voters, spectatorIds, target = returnThreshold, presence)
+
+    if (voters.size < peerCount) {
+        launch {
+            admitVotersUntil(node, seam, voters, spectatorIds, target = peerCount, presence)
+            presence.declareAdmissionClosed(voters)
+        }
+    } else {
+        // FullMembership mode (or Quorum with peerCount == 1): the roster is already full.
+        // Publish the signal synchronously so any joiner that arrives after this point can
+        // detect the full roster immediately without waiting for the background loop.
+        presence.declareAdmissionClosed(voters)
+    }
+}
+
+/**
+ * Launches [gameHost]'s reactive spectator management, running persistently in the background.
+ * On every new spectator declaration:
+ *   - If [allowSpectators] and the [maxSpectators] cap is not yet reached → admit the peer as a
+ *     permanent learner.
+ *   - Otherwise → publish spectators-closed and exit.
+ *
+ * Rejection is REACTIVE, not proactive: the `:sc` signal is only published AFTER a would-be
+ * spectator has declared, guaranteeing that its Quilter is already subscribed and will receive
+ * the rejection Delta. Publishing `:sc` eagerly (before any declaration) would race against the
+ * peer's MuxSeam setup and silently lose the frame under StandardTestDispatcher.
+ */
+private fun CoroutineScope.launchSpectatorManagement(
+    node: RaftNode,
+    seam: Seam,
+    voters: MutableSet<NodeId>,
+    spectatorIds: MutableSet<NodeId>,
+    presence: GamePresence,
+    allowSpectators: Boolean,
+    maxSpectators: Int,
+) {
+    launch {
+        var admitted = spectatorIds.size
+        while (true) {
+            val spectatorId = nextSpectatorPeer(presence, seam, spectatorIds)
+            if (!allowSpectators || admitted >= maxSpectators) {
+                presence.declareSpectatorsClosed()
+                break
+            }
+            admitSpectatorLearner(node, voters, spectatorIds, spectatorId)
+            spectatorIds += spectatorId
+            admitted++
+        }
+    }
+}
 
 /**
  * Admit connecting voter peers as learner→voter until the cluster reaches [target] voters.
