@@ -1,18 +1,21 @@
 package us.tractat.kuilt.mdns
 
 import io.ktor.client.HttpClient
+import io.ktor.client.engine.okhttp.OkHttp
 import io.ktor.server.engine.EmbeddedServer
 import io.ktor.server.engine.embeddedServer
 import io.ktor.server.netty.Netty
 import io.ktor.server.netty.NettyApplicationEngine
+import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.withTimeoutOrNull
+import us.tractat.kuilt.core.CloseReason
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.Rendezvous
+import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.test.assertAll
+import us.tractat.kuilt.websocket.KtorClientLoom
+import us.tractat.kuilt.websocket.WebSocketAdvertisement
 import java.net.ServerSocket
 import javax.jmdns.ServiceInfo
 import kotlin.test.AfterTest
@@ -20,6 +23,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
+import io.ktor.client.plugins.websocket.WebSockets as ClientWebSockets
 
 /**
  * Verifies that the mDNS **host entry points** — [MDNSMultiAcceptHost] and
@@ -37,18 +41,28 @@ import kotlin.test.assertNull
  * third meaning to `displayName` (see #1177).
  *
  * All JmDNS multicast is absorbed by [CapturingJmDNS] (defined in
- * [MDNSServiceAdvertiserTest]), so these are **not** `-P`-gated. The byte path
- * is exercised only as far as the advertised [ServiceInfo]; the round-trip back
- * to a joiner's `Tag` is closed by parsing that record through the real
- * [MDNSServiceDiscoverer.toAdvertisement].
+ * [MDNSServiceAdvertiserTest]), so these are **not** `-P`-gated. Both entry points
+ * are driven over the **real localhost byte path** (real Netty server + real OkHttp
+ * client) exactly as [MDNSConformanceTest] does. `MDNSPeerLinkFactory.weave(New)`
+ * blocks until a joiner connects, so a real joiner is driven concurrently to let it
+ * complete — rather than cancelling a blocked coroutine, which deadlocks under a
+ * constrained CI worker pool. The round-trip back to a joiner's `Tag` is closed by
+ * parsing the advertised record through the real [MDNSServiceDiscoverer.toAdvertisement].
+ *
+ * Teardown mirrors [MDNSConformanceTest]: accepted seams closed ([CloseReason.Normal])
+ * first, then the [HttpClient]s, then the servers — avoiding the documented
+ * EOF-in-next-test flake.
  */
 class MDNSRoomKeySourcingTest {
 
     private val servers = mutableListOf<EmbeddedServer<NettyApplicationEngine, NettyApplicationEngine.Configuration>>()
     private val clients = mutableListOf<HttpClient>()
+    private val openSeams = mutableListOf<Seam>()
 
     @AfterTest
     fun tearDown() {
+        runBlocking { openSeams.forEach { runCatching { it.close(CloseReason.Normal) } } }
+        openSeams.clear()
         clients.forEach { it.close() }
         clients.clear()
         servers.forEach { it.stop(gracePeriodMillis = 100, timeoutMillis = 1_000) }
@@ -116,13 +130,14 @@ class MDNSRoomKeySourcingTest {
 
     /**
      * Drives [MDNSPeerLinkFactory.weave] on a `Rendezvous.New` for [pattern]. `weave`
-     * registers the mDNS service and then blocks awaiting the first joiner, so it runs
-     * on a bounded child coroutine of this scope (inheriting the test dispatcher — no
-     * real-dispatcher import) and we wait for the registration to land, then cancel it.
+     * registers the mDNS service and then blocks until the first joiner connects, so a real
+     * OkHttp joiner is driven concurrently to let `weave` complete. The registration lands
+     * during `weave` (before the block); the captured record is returned once both sides settle.
      */
-    private suspend fun advertisePeerLink(pattern: Pattern): ServiceInfo = coroutineScope {
+    private suspend fun advertisePeerLink(pattern: Pattern): ServiceInfo {
         val port = ServerSocket(0).use { it.localPort }
         val jmdns = CapturingJmDNS()
+        val wsPath = "/ws/room-source-link"
         lateinit var factory: MDNSPeerLinkFactory
         val server = embeddedServer(Netty, port = port) {
             factory = MDNSPeerLinkFactory(
@@ -130,21 +145,27 @@ class MDNSRoomKeySourcingTest {
                 application = this,
                 jmdns = jmdns,
                 port = port,
-                wsPath = "/ws/room-source-link",
-                httpClientFactory = { HttpClient().also { clients += it } },
+                wsPath = wsPath,
+                httpClientFactory = { HttpClient(OkHttp) { install(ClientWebSockets) }.also { clients += it } },
             )
         }.also { servers += it }
         server.start(wait = false)
 
-        // weave(New) registers the service, then suspends awaiting a joiner that never
-        // comes — bound it with a timeout and cancel once the registration is captured.
-        val job = launch { withTimeoutOrNull(2_000) { factory.weave(Rendezvous.New(pattern)) } }
-        val registered = withTimeoutOrNull(1_500) {
-            while (jmdns.lastRegistered == null) delay(10)
-            jmdns.lastRegistered
+        return coroutineScope {
+            // weave(New) registers then blocks awaiting a joiner — connect one so it completes.
+            val hostSeam = async { factory.weave(Rendezvous.New(pattern)) }
+            val joinerClient = HttpClient(OkHttp) { install(ClientWebSockets) }.also { clients += it }
+            val joinerSeam = KtorClientLoom(joinerClient).join(
+                WebSocketAdvertisement(
+                    url = "ws://localhost:$port$wsPath",
+                    serverPeerId = factory.selfPeerId,
+                    displayName = "joiner",
+                ),
+            )
+            openSeams += joinerSeam
+            openSeams += hostSeam.await()
+            assertNotNull(jmdns.lastRegistered, "weave(New) must register the mDNS service")
         }
-        job.cancel()
-        assertNotNull(registered, "weave(New) must register the mDNS service")
     }
 
     /** Closes the round-trip: parse the advertised record back into the Tag a joiner would discover. */
