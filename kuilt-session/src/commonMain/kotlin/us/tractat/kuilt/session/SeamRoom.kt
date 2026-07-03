@@ -42,7 +42,7 @@ import us.tractat.kuilt.session.partition.RoomId
 import kotlin.time.Clock
 import kotlin.time.Instant
 
-private val logger = KotlinLogging.logger {}
+private val logger = KotlinLogging.logger("us.tractat.kuilt.session.SeamRoom")
 
 /**
  * [Loom]-backed implementation of [RoomFactory].
