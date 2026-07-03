@@ -1,10 +1,8 @@
 package us.tractat.kuilt.game
 
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -30,17 +28,16 @@ import us.tractat.kuilt.liveness.PartitionEvent
 import us.tractat.kuilt.raft.ClientIdentity
 import us.tractat.kuilt.raft.ClusterConfig
 import us.tractat.kuilt.raft.InMemoryRaftStorage
-import us.tractat.kuilt.raft.MembershipChangeInProgressException
 import us.tractat.kuilt.raft.NodeId
 import us.tractat.kuilt.raft.RaftConfig
 import us.tractat.kuilt.raft.RaftNode
 import us.tractat.kuilt.raft.RaftRole
 import us.tractat.kuilt.raft.RaftStorage
 import us.tractat.kuilt.raft.SeamRaftTransport
+import us.tractat.kuilt.raft.changeMembershipWithRetry
 import us.tractat.kuilt.raft.raftNode
 import kotlin.time.Clock
 import kotlin.time.Duration
-import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
 
@@ -803,8 +800,7 @@ private suspend fun admitSpectatorLearner(
     currentLearners: Set<NodeId>,
     spectatorId: NodeId,
 ) {
-    changeMembershipWithRetry(
-        node,
+    node.changeMembershipWithRetry(
         ClusterConfig(voters = currentVoters, learners = currentLearners + spectatorId),
     )
 }
@@ -815,32 +811,6 @@ private suspend fun admitLearnerThenVoter(
     currentVoters: Set<NodeId>,
     joiner: NodeId,
 ) {
-    changeMembershipWithRetry(node, ClusterConfig(voters = currentVoters, learners = setOf(joiner)))
-    changeMembershipWithRetry(node, ClusterConfig(voters = currentVoters + joiner))
-}
-
-/**
- * Calls [RaftNode.changeMembership] with bounded retry on [MembershipChangeInProgressException].
- *
- * Raft serializes membership changes: only one may be in flight at a time. When the prior
- * change is still uncommitted, retrying after a short delay allows it to commit first.
- * Any other exception (including [CancellationException]) propagates immediately.
- */
-internal suspend fun changeMembershipWithRetry(
-    node: RaftNode,
-    config: ClusterConfig,
-    maxAttempts: Int = 20,
-    retryDelay: kotlin.time.Duration = 200.milliseconds,
-) {
-    repeat(maxAttempts) {
-        try {
-            node.changeMembership(config)
-            return
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: MembershipChangeInProgressException) {
-            delay(retryDelay)
-        }
-    }
-    error("changeMembership gave up after $maxAttempts attempts for config=$config")
+    node.changeMembershipWithRetry(ClusterConfig(voters = currentVoters, learners = setOf(joiner)))
+    node.changeMembershipWithRetry(ClusterConfig(voters = currentVoters + joiner))
 }
