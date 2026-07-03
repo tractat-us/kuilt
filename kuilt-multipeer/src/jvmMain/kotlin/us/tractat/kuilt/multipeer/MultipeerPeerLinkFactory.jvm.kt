@@ -5,6 +5,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import us.tractat.kuilt.core.FabricAvailability
 import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Rendezvous
@@ -20,7 +21,8 @@ import us.tractat.kuilt.multipeer.internal.BridgePeerLink
  *
  * Non-macOS hosts (Linux/Windows): the factory loads no native library and
  * every call throws with a clear error pointing to mDNS as the alternative
- * cross-platform LAN transport.
+ * cross-platform LAN transport. [availability] reports [FabricAvailability.Unavailable]
+ * on such hosts, so callers can probe for support before attempting to `weave`.
  */
 public actual class MultipeerPeerLinkFactory actual constructor(
     private val displayName: String,
@@ -98,6 +100,16 @@ public actual class MultipeerPeerLinkFactory actual constructor(
 
     @Volatile
     private var activeSession: Pointer? = null
+
+    public override fun availability(): FabricAvailability =
+        if (nativeLib != null) {
+            FabricAvailability.Available
+        } else {
+            FabricAvailability.Unavailable(
+                "MultipeerConnectivity is macOS-only on the JVM target; " +
+                    "use mDNS for cross-platform LAN on Linux/Windows.",
+            )
+        }
 
     public actual override suspend fun weave(rendezvous: Rendezvous): Seam =
         when (rendezvous) {
