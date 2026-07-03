@@ -259,12 +259,18 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
       - name: Update README coordinates to released version
-        # Rewrites every us.tractat.kuilt:<module>:<old-version> in README.md to
-        # the new version and opens a PR (branch protection prevents direct main push
-        # from Actions even with contents:write).
+        # Rewrites every us.tractat.kuilt:<module>:<old-version> coordinate AND the
+        # backticked prose version in README.md to the new version, then opens a PR
+        # (branch protection prevents direct main push from Actions even with
+        # contents:write). Uses perl, not `sed -i`: this job runs on a macOS runner
+        # whose BSD sed treats the arg after `-i` as an in-place backup suffix, so
+        # `sed -i -E` never enables extended regex and the capture groups error out.
+        # perl is preinstalled on GitHub macOS runners and behaves identically to the
+        # manual bump.
         run: |
           set -eu
-          sed -i -E "s|(us\.tractat\.kuilt:[a-z-]+:)[0-9A-Za-z._-]+|\1${{ env.PUBLISH_VERSION }}|g" README.md
+          perl -0pi -e "s|(us\.tractat\.kuilt:[a-z-]+:)[0-9A-Za-z._-]+|\${1}${{ env.PUBLISH_VERSION }}|g" README.md
+          perl -0pi -e "s|Replace \`[0-9]+\.[0-9]+\.[0-9]+\`|Replace \`${{ env.PUBLISH_VERSION }}\`|g" README.md
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           BRANCH="docs/readme-coords-${{ env.PUBLISH_VERSION }}"
