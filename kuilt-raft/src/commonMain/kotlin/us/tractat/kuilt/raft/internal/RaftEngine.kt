@@ -309,6 +309,20 @@ internal class RaftEngine(
     /** Term for which [electionStartTime] was recorded — used to emit [RaftMetric.ElectionTimedOut]. */
     private var electionStartTerm: Long = 0L
 
+    // ── Client-proposal forwarding state (§8) — actor-teardown-touched ─────────
+    // MUST stay declared BEFORE the `init` block below (which launches the actor).
+    // The actor's `finally` teardown calls failForwardedProposals, which dereferences
+    // both fields; when the scope is cancelled during construction that teardown can
+    // run before the constructor reaches a declaration placed after `init` → NPE.
+    // Keep alongside the other pending-state fields the teardown touches
+    // (pending/pendingConfigChange/pendingReads/transfer*). See #1077.
+
+    /** reqId -> pending forward awaiting a ForwardResponse. */
+    private val forwardedProposals = mutableMapOf<Long, PendingForward>()
+
+    /** reqIds queued because no leader was known yet; flushed when a leader appears. */
+    private val waitingForLeader = mutableListOf<Long>()
+
     init {
         scope.launch {
             // Restore persisted state
@@ -1764,12 +1778,6 @@ internal class RaftEngine(
         val command: ByteArray,
         val dedupKey: DedupKey?,
     )
-
-    /** reqId -> pending forward awaiting a ForwardResponse. */
-    private val forwardedProposals = mutableMapOf<Long, PendingForward>()
-
-    /** reqIds queued because no leader was known yet; flushed when a leader appears. */
-    private val waitingForLeader = mutableListOf<Long>()
 
     /** Leader handles a forwarded proposal: run the normal propose path, reply with its fate. */
     private suspend fun onForward(from: NodeId, m: RaftMessage.Forward) {
