@@ -1,5 +1,6 @@
 package us.tractat.kuilt.gossip
 
+import io.github.oshai.kotlinlogging.KotlinLogging
 import kotlinx.atomicfu.locks.reentrantLock
 import kotlinx.atomicfu.locks.withLock
 import kotlinx.coroutines.CoroutineScope
@@ -21,6 +22,8 @@ import us.tractat.kuilt.liveness.HeartbeatPartitionDetector
 import kotlin.random.Random
 import kotlin.time.Duration
 import kotlin.time.Instant
+
+private val logger = KotlinLogging.logger("us.tractat.kuilt.gossip.GossipSeam")
 
 /**
  * A partial-mesh [Seam] over a [base] full-membership seam, exposing **two views
@@ -207,6 +210,7 @@ public class GossipSeam(
         for (peer in view.active.value) {
             if (peer == except) continue
             runCatchingCancellable { base.sendTo(peer, encoded) }
+                .onFailure { logger.debug { "gossip flood: dropping frame to $peer — ${it.message}" } }
         }
     }
 
@@ -222,10 +226,13 @@ public class GossipSeam(
 
     override suspend fun close(reason: CloseReason): Unit = base.close(reason)
 
-    private fun Swatch.isHeartbeat(): Boolean {
-        val decoded = decodeToString()
-        return decoded.startsWith(HeartbeatPartitionDetector.PING_PREFIX) ||
-            decoded.startsWith(HeartbeatPartitionDetector.PONG_PREFIX)
+    private fun Swatch.isHeartbeat(): Boolean =
+        startsWithBytes(PING_PREFIX_BYTES) || startsWithBytes(PONG_PREFIX_BYTES)
+
+    private fun Swatch.startsWithBytes(prefix: ByteArray): Boolean {
+        if (payloadSize < prefix.size) return false
+        for (i in prefix.indices) if (byteAt(i) != prefix[i]) return false
+        return true
     }
 
     private companion object {
@@ -235,5 +242,9 @@ public class GossipSeam(
         // pathological loops. Comfortably above the diameter of a k-regular overlay
         // at tens–low-hundreds peers (k ≈ 4–7 ⇒ diameter ≲ 4).
         const val DEFAULT_TTL = 16
+
+        // ASCII prefixes ⇒ a UTF-8 byte-prefix match is equivalent to the old decoded-String startsWith.
+        private val PING_PREFIX_BYTES = HeartbeatPartitionDetector.PING_PREFIX.encodeToByteArray()
+        private val PONG_PREFIX_BYTES = HeartbeatPartitionDetector.PONG_PREFIX.encodeToByteArray()
     }
 }

@@ -159,6 +159,7 @@ class GossipSeamTest {
 
             val neighbour = seam.activePeers.value.first()
             val appPayload = byteArrayOf(1, 2, 3)
+            base.deliver(neighbour, HeartbeatPartitionDetector.PING_PREFIX.encodeToByteArray())
             base.deliver(neighbour, HeartbeatPartitionDetector.PONG_PREFIX.encodeToByteArray())
             base.deliver(neighbour, appPayload)
             runCurrent()
