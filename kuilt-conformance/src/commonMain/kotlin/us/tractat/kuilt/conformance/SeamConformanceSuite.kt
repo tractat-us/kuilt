@@ -1,5 +1,6 @@
 package us.tractat.kuilt.conformance
 
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.first
@@ -16,6 +17,7 @@ import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.PeerNotConnected
+import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.Tag
 import kotlin.test.Test
@@ -89,21 +91,31 @@ public abstract class SeamConformanceSuite {
     /** The advertisement the joiner uses. Defaults to the in-memory tag. */
     public open fun joinTag(): Tag = InMemoryTag("joiner")
 
+    /**
+     * Drive [newLoomPair] to a connected host/joiner pair and hand both live [Seam]s to
+     * [block]. Hosts and joins **concurrently** — a role-split server Loom's host() suspends
+     * until a joiner connects, so the two must run at once; in-process (loom, loom) fabrics
+     * are unaffected. [block] runs inside the connecting `coroutineScope`.
+     */
+    protected suspend fun TestScope.connectedPair(
+        block: suspend CoroutineScope.(host: Seam, joiner: Seam) -> Unit,
+    ) {
+        val (hostLoom, joinerLoom) = newLoomPair(this)
+        coroutineScope {
+            val hostDeferred = async { hostLoom.host(Pattern("host")) }
+            val joinerDeferred = async { joinerLoom.join(joinTag()) }
+            val host = hostDeferred.await()
+            val joiner = joinerDeferred.await()
+            block(host, joiner)
+        }
+    }
+
     // ── (1) host yields a usable Seam with a non-empty selfId ───────────────
 
     @Test
     public fun hostYieldsUsableSeamWithNonEmptySelfId(): TestResult =
         runTest {
-            // Establish a real connection: a role-split server/handshake Loom's host()
-            // suspends until a joiner connects, so this test must drive host()/join()
-            // concurrently (radio fabrics returning (loom, loom) are unaffected).
-            val (hostLoom, joinerLoom) = newLoomPair(this)
-            coroutineScope {
-                val hostDeferred = async { hostLoom.host(Pattern("host")) }
-                val joinerDeferred = async { joinerLoom.join(joinTag()) }
-                val host = hostDeferred.await()
-                joinerDeferred.await()
-
+            connectedPair { host, joiner ->
                 assertFalse(host.selfId.value.isEmpty(), "selfId must be non-empty")
             }
         }
@@ -113,13 +125,7 @@ public abstract class SeamConformanceSuite {
     @Test
     public fun broadcastFromHostDeliversToJoinedPeer(): TestResult =
         runTest {
-            val (hostLoom, joinerLoom) = newLoomPair(this)
-            coroutineScope {
-                val hostDeferred = async { hostLoom.host(Pattern("host")) }
-                val joinerDeferred = async { joinerLoom.join(joinTag()) }
-                val host = hostDeferred.await()
-                val joiner = joinerDeferred.await()
-
+            connectedPair { host, joiner ->
                 val received = async { joiner.incoming.take(1).toList() }
 
                 val payload = byteArrayOf(10, 20, 30)
@@ -137,13 +143,7 @@ public abstract class SeamConformanceSuite {
     @Test
     public fun incomingPreservesSendOrderToSingleCollector(): TestResult =
         runTest {
-            val (hostLoom, joinerLoom) = newLoomPair(this)
-            coroutineScope {
-                val hostDeferred = async { hostLoom.host(Pattern("host")) }
-                val joinerDeferred = async { joinerLoom.join(joinTag()) }
-                val host = hostDeferred.await()
-                val joiner = joinerDeferred.await()
-
+            connectedPair { host, joiner ->
                 val received = async { joiner.incoming.take(5).toList() }
 
                 repeat(5) { i -> host.broadcast(byteArrayOf(i.toByte())) }
@@ -159,13 +159,7 @@ public abstract class SeamConformanceSuite {
     @Test
     public fun peersReportsSelfIdAndAtLeastTwoAfterJoin(): TestResult =
         runTest {
-            val (hostLoom, joinerLoom) = newLoomPair(this)
-            coroutineScope {
-                val hostDeferred = async { hostLoom.host(Pattern("host")) }
-                val joinerDeferred = async { joinerLoom.join(joinTag()) }
-                val host = hostDeferred.await()
-                val joiner = joinerDeferred.await()
-
+            connectedPair { host, joiner ->
                 assertTrue(host.selfId in host.peers.value, "host peers must include its own selfId")
                 assertTrue(joiner.selfId in joiner.peers.value, "joiner peers must include its own selfId")
                 assertTrue(host.peers.value.size >= 2, "peer set must have ≥2 after join")
@@ -177,18 +171,9 @@ public abstract class SeamConformanceSuite {
     @Test
     public fun closeIsIdempotent(): TestResult =
         runTest {
-            // Connect concurrently (see hostYieldsUsableSeamWithNonEmptySelfId): a server
-            // Loom's host() blocks until a joiner connects, so close the host seam of a
-            // genuinely-established connection rather than an unconnected one.
-            val (hostLoom, joinerLoom) = newLoomPair(this)
-            coroutineScope {
-                val hostDeferred = async { hostLoom.host(Pattern("host")) }
-                val joinerDeferred = async { joinerLoom.join(joinTag()) }
-                val seam = hostDeferred.await()
-                joinerDeferred.await()
-
-                seam.close()
-                seam.close() // must not throw
+            connectedPair { host, joiner ->
+                host.close()
+                host.close() // must not throw
             }
         }
 
@@ -210,13 +195,7 @@ public abstract class SeamConformanceSuite {
     @Test
     public fun stateIsWovenAfterConnect(): TestResult =
         runTest {
-            val (hostLoom, joinerLoom) = newLoomPair(this)
-            coroutineScope {
-                val hostDeferred = async { hostLoom.host(Pattern("host")) }
-                val joinerDeferred = async { joinerLoom.join(joinTag()) }
-                val host = hostDeferred.await()
-                val joiner = joinerDeferred.await()
-
+            connectedPair { host, joiner ->
                 // Both sides must reach Woven — await in case a radio fabric needs a tick.
                 assertIs<SeamState.Woven>(
                     host.state.first { it is SeamState.Woven },
@@ -234,13 +213,7 @@ public abstract class SeamConformanceSuite {
     @Test
     public fun hostStateIsWovenEvenAlone(): TestResult =
         runTest {
-            val (hostLoom, joinerLoom) = newLoomPair(this)
-            coroutineScope {
-                val hostDeferred = async { hostLoom.host(Pattern("host")) }
-                val joinerDeferred = async { joinerLoom.join(joinTag()) }
-                val host = hostDeferred.await()
-                joinerDeferred.await()
-
+            connectedPair { host, joiner ->
                 // Relay fabrics are Woven at construction; radio fabrics on first connect.
                 // Either way, after the connection completes, host must be Woven.
                 val hostState = host.state.first { it is SeamState.Woven }
@@ -253,16 +226,10 @@ public abstract class SeamConformanceSuite {
     @Test
     public fun closeDrivesStateTornNormal(): TestResult =
         runTest {
-            val (hostLoom, joinerLoom) = newLoomPair(this)
-            coroutineScope {
-                val hostDeferred = async { hostLoom.host(Pattern("host")) }
-                val joinerDeferred = async { joinerLoom.join(joinTag()) }
-                val seam = hostDeferred.await()
-                joinerDeferred.await()
+            connectedPair { host, joiner ->
+                host.close()
 
-                seam.close()
-
-                assertIs<SeamState.Torn>(seam.state.value, "state must be Torn after close()")
+                assertIs<SeamState.Torn>(host.state.value, "state must be Torn after close()")
             }
         }
 
@@ -271,13 +238,7 @@ public abstract class SeamConformanceSuite {
     @Test
     public fun sendToAbsentPeerThrowsPeerNotConnected(): TestResult =
         runTest {
-            val (hostLoom, joinerLoom) = newLoomPair(this)
-            coroutineScope {
-                val hostDeferred = async { hostLoom.host(Pattern("host")) }
-                val joinerDeferred = async { joinerLoom.join(joinTag()) }
-                val host = hostDeferred.await()
-                joinerDeferred.await()
-
+            connectedPair { host, joiner ->
                 val phantom = PeerId("phantom-peer-not-in-session")
                 assertFailsWith<PeerNotConnected> {
                     host.sendTo(phantom, byteArrayOf(1))
@@ -298,13 +259,7 @@ public abstract class SeamConformanceSuite {
     @Test
     public open fun incomingCompletesWhenSeamCloses(): TestResult =
         runTest {
-            val (hostLoom, joinerLoom) = newLoomPair(this)
-            coroutineScope {
-                val hostDeferred = async { hostLoom.host(Pattern("host")) }
-                val joinerDeferred = async { joinerLoom.join(joinTag()) }
-                val host = hostDeferred.await()
-                joinerDeferred.await()
-
+            connectedPair { host, joiner ->
                 // Collect host.incoming in the background; it should complete once host closes.
                 val collectingJob = async {
                     withTimeout(5.seconds) {
