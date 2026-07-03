@@ -2,11 +2,8 @@ package us.tractat.kuilt.conformance
 
 import kotlinx.coroutines.CoroutineScope
 import us.tractat.kuilt.core.MuxServerLoom
-import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.RoomAuthorizer
-import us.tractat.kuilt.core.fabric.meshSeam
-import us.tractat.kuilt.test.fabric.InMemoryConnectionSource
-import us.tractat.kuilt.test.fabric.connectionPair
+import us.tractat.kuilt.test.fabric.InMemoryRoomFabric
 import kotlin.coroutines.CoroutineContext
 import kotlin.random.Random
 
@@ -19,8 +16,10 @@ import kotlin.random.Random
  * pattern as [InMemoryLoomConformanceTest]. It replaces the former in-core
  * `RoomHubSeamIsolationTest`: the both-ends isolation gate now lives once, as this reusable suite.
  *
- * The harness wires a loopback fabric: an [InMemoryConnectionSource] the [MuxServerLoom] accepts
- * from, and clients created by [meshSeam] over a [connectionPair].
+ * The harness is the packaged [InMemoryRoomFabric] double: its [InMemoryRoomFabric.serverLoom] is
+ * the [MuxServerLoom] under test, and each client is a raw multi-channel seam from
+ * [InMemoryRoomFabric.clientSeam]. Dogfooding the double here proves it is a faithful packaging of
+ * the manual `InMemoryConnectionSource` + `MuxServerLoom` + `meshSeam` wiring this test used before.
  */
 class MuxServerLoomFanoutIsolationTest : RoomFanoutIsolationConformanceSuite() {
 
@@ -30,19 +29,7 @@ class MuxServerLoomFanoutIsolationTest : RoomFanoutIsolationConformanceSuite() {
         authorizer: RoomAuthorizer,
         random: Random,
     ): FanoutHarness {
-        val source = InMemoryConnectionSource()
-        val serverLoom = MuxServerLoom(
-            source = source,
-            scope = scope,
-            selfId = PeerId("server"),
-            authorizer = authorizer,
-            dispatcher = dispatcher,
-            random = random,
-        )
-        return FanoutHarness(serverLoom) { peerId, rng ->
-            val (serverConn, clientConn) = connectionPair()
-            source.offer(serverConn)
-            meshSeam(peerId, listOf(clientConn), dispatcher, rng)
-        }
+        val fabric = InMemoryRoomFabric(scope, dispatcher, authorizer, random)
+        return FanoutHarness(fabric.serverLoom) { peerId, rng -> fabric.clientSeam(peerId, rng) }
     }
 }
