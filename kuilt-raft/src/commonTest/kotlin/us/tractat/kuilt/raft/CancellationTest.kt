@@ -87,6 +87,9 @@ class CancellationTest {
         sim.partition(setOf(id), followerIds(sim, id))
 
         val jobs = (1..5).map { i ->
+            // deliberate: swallows the foreign CancellationException propose() throws when the leader's
+            // scope is cancelled — rethrowing it here would cancel the test coroutine, not this job.
+            @Suppress("ForbiddenMethodCall")
             launch { runCatching { leader.propose(byteArrayOf(i.toByte())) } }
         }
         delay(5)
@@ -140,6 +143,9 @@ class CancellationTest {
         val leader = awaitLeader(sim)
         leader.close()
         delay(5) // let close command process
+        // deliberate: the withTimeout guard may raise TimeoutCancellationException (a
+        // CancellationException); the test asserts result.isFailure, so it must be caught, not rethrown.
+        @Suppress("ForbiddenMethodCall")
         val result = runCatching {
             withTimeout(200) { leader.propose(byteArrayOf(1)) }
         }

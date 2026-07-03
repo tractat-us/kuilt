@@ -6,6 +6,7 @@ import io.ktor.client.engine.mock.respond
 import io.ktor.http.HttpStatusCode
 import kotlinx.coroutines.test.runTest
 import kotlinx.io.bytestring.ByteString
+import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.otel.InMemoryDurableStore
 import us.tractat.kuilt.otel.SpanKind
 import us.tractat.kuilt.otel.SpanRecord
@@ -77,7 +78,7 @@ class OtlpHttpEdgeTest {
         val engine = MockEngine { respond("boom", HttpStatusCode.InternalServerError) }
         val store = InMemoryDurableStore()
         val edge = OtlpHttpEdge(HttpClient(engine), "https://c.example:4318", store)
-        runCatching { edge.send(setOf(span(1))) } // non-2xx throws
+        runCatchingCancellable { edge.send(setOf(span(1))) } // non-2xx throws
         assertTrue(edge.digest().spanIds.isEmpty(), "a 5xx must leave the sent-set untouched so drain retries")
     }
 }

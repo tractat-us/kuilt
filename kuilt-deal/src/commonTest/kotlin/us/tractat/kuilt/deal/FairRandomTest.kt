@@ -7,6 +7,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.test.fakeSeamPair
 import kotlin.test.Test
 import kotlin.test.assertContains
@@ -73,8 +74,8 @@ class FairRandomTest {
         val dishonestAlice = FairRandom(aliceSeam, peers, tamperedReveal = true)
         val honestBob = FairRandom(bobSeam, peers)
 
-        val aliceDef = scope.async { runCatching { dishonestAlice.roll() } }
-        val bobDef = scope.async { runCatching { honestBob.roll() } }
+        val aliceDef = scope.async { runCatchingCancellable { dishonestAlice.roll() } }
+        val bobDef = scope.async { runCatchingCancellable { honestBob.roll() } }
 
         aliceDef.await()
         val bobResult = bobDef.await()
@@ -96,8 +97,8 @@ class FairRandomTest {
         val dishonestAlice = FairRandom(aliceSeam, peers, fixedSecret = ByteArray(33) { 0xCC.toByte() })
         val honestBob = FairRandom(bobSeam, peers)
 
-        val aliceDef = scope.async { runCatching { dishonestAlice.roll() } }
-        val bobDef = scope.async { runCatching { honestBob.roll() } }
+        val aliceDef = scope.async { runCatchingCancellable { dishonestAlice.roll() } }
+        val bobDef = scope.async { runCatchingCancellable { honestBob.roll() } }
 
         aliceDef.await()
         val bobResult = bobDef.await()

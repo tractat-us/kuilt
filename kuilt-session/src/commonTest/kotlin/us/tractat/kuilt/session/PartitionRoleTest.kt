@@ -13,6 +13,7 @@ import us.tractat.kuilt.test.Direction
 import us.tractat.kuilt.test.FaultProfile
 import us.tractat.kuilt.test.FaultySeam
 import us.tractat.kuilt.core.InMemoryLoom
+import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.liveness.HeartbeatConfig
@@ -138,7 +139,7 @@ class PartitionRoleTest {
         assertIs<MembershipEvent.HostLost>(hostLost)
 
         // After HostLost, broadcast is a silent no-op (does not throw, delivers nothing).
-        val broadcastThrew = runCatching { joinerRoom.broadcast("after-host-lost".encodeToByteArray()) }
+        val broadcastThrew = runCatchingCancellable { joinerRoom.broadcast("after-host-lost".encodeToByteArray()) }
         assertTrue(broadcastThrew.isSuccess, "broadcast after HostLost must not throw")
     }
 
@@ -202,7 +203,7 @@ class PartitionRoleTest {
 
         // Host room must remain operational (not terminal — host never loses itself).
         assertFalse(hostRoom.role.value == SessionRole.Joiner, "host role should not change")
-        val broadcastSucceeded = runCatching { hostRoom.broadcast("still-alive".encodeToByteArray()) }
+        val broadcastSucceeded = runCatchingCancellable { hostRoom.broadcast("still-alive".encodeToByteArray()) }
         assertTrue(broadcastSucceeded.isSuccess, "host broadcast after joiner-lost must not throw")
     }
 

@@ -10,6 +10,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
+import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -491,7 +492,7 @@ class MembershipTest {
         // (adopt-on-append) but can never commit it — no reachable majority.
         sim.partition(setOf(leaderId), survivors)
         val change = backgroundScope.async {
-            runCatching { leaderNode.changeMembership(ClusterConfig(voters = fiveVoters)) }
+            runCatchingCancellable { leaderNode.changeMembership(ClusterConfig(voters = fiveVoters)) }
         }
         // Wait until the leader has appended & adopted the Joint (effective voters = the 5-voter target).
         sim.awaitTrue("leader appends the joint mid-transition") {
@@ -619,7 +620,7 @@ class MembershipTest {
         sim.partition(setOf(leaderId, follower), majority)
         val jointTarget = ClusterConfig(voters = setOf(leaderId, follower))   // a clearly-different shrink-to-2
         val change = backgroundScope.async {
-            runCatching { sim.nodes.getValue(leaderId).changeMembership(jointTarget) }
+            runCatchingCancellable { sim.nodes.getValue(leaderId).changeMembership(jointTarget) }
         }
         sim.awaitTrue("F adopts the uncommitted joint") {
             fConfigs.any { it.new.voters == jointTarget.voters }

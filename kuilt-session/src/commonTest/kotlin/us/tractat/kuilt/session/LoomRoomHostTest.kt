@@ -5,6 +5,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.InMemoryLoom
+import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
 import kotlin.test.Test
@@ -54,7 +55,7 @@ class LoomRoomHostTest {
         }
         firstStarted.await()
 
-        val ex = runCatching { host.start { } }.exceptionOrNull()
+        val ex = runCatchingCancellable { host.start { } }.exceptionOrNull()
         assertTrue(ex is IllegalStateException, "second start must throw IllegalStateException, got $ex")
         job.cancel()
     }

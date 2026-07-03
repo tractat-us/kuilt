@@ -7,6 +7,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.yield
 import us.tractat.kuilt.core.InMemoryLoom
+import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.session.Room
 import kotlin.test.Test
@@ -48,7 +49,7 @@ class MultipeerRoomHostTest {
             firstStarted.await()
             yield()
 
-            val ex = runCatching { host.start { } }.exceptionOrNull()
+            val ex = runCatchingCancellable { host.start { } }.exceptionOrNull()
             assertNotNull(ex, "second start must throw")
             assertTrue(ex is IllegalStateException, "expected IllegalStateException, got ${ex::class}")
             job.cancel()

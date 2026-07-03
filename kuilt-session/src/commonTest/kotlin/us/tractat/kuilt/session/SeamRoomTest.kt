@@ -10,6 +10,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.yield
 import us.tractat.kuilt.core.InMemoryLoom
+import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.Pattern
@@ -345,7 +346,7 @@ class SeamRoomTest {
             val failingLoom = FailingLoom(IllegalStateException("loom closed"))
             val factory = SeamRoomFactory(failingLoom, backgroundScope, clock)
 
-            val result = runCatching { factory.host(Pattern("Alice")) }
+            val result = runCatchingCancellable { factory.host(Pattern("Alice")) }
 
             assertIs<IllegalStateException>(
                 result.exceptionOrNull(),
@@ -366,7 +367,7 @@ class SeamRoomTest {
             val loom = loom()
             val room = factory(loom, backgroundScope).host(Pattern("Alice"))
 
-            val result = runCatching { factory(loom, backgroundScope).host(Pattern("Bob")) }
+            val result = runCatchingCancellable { factory(loom, backgroundScope).host(Pattern("Bob")) }
 
             val failure = result.exceptionOrNull()
             assertIs<IllegalStateException>(

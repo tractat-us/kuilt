@@ -10,6 +10,7 @@ import us.tractat.kuilt.test.FaultySeam
 import us.tractat.kuilt.test.FaultyLoom
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.InMemoryLoom
+import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.core.Swatch
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.liveness.HeartbeatConfig
@@ -120,7 +121,7 @@ class Mesh(
                             val text = frame.decodeToString()
                             val sender = frame.sender
                             if (sender != null && text.startsWith(HeartbeatPartitionDetector.PING_PREFIX)) {
-                                runCatching {
+                                runCatchingCancellable {
                                     joiner.sendTo(sender, HeartbeatPartitionDetector.PONG_PREFIX.encodeToByteArray())
                                 }
                             }

@@ -9,6 +9,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestResult
 import kotlinx.coroutines.test.runTest
+import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.raft.ClientId
 import us.tractat.kuilt.raft.ClientSessionTable
 import us.tractat.kuilt.raft.Committed
@@ -195,7 +196,7 @@ class ClusterClientTest {
     @Test
     fun `ClusterEndpoints requires non-empty endpoint list`(): TestResult =
         runTest(StandardTestDispatcher(), timeout = 5.seconds) {
-            val result = runCatching { ClusterEndpoints(endpoints = emptyList()) }
+            val result = runCatchingCancellable { ClusterEndpoints(endpoints = emptyList()) }
             assertTrue(result.isFailure, "empty endpoint list must throw")
         }
 }
