@@ -14,8 +14,8 @@ import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.CloseReason
-import us.tractat.kuilt.core.FlapSchedule
-import us.tractat.kuilt.core.FlakyLifecycleLoom
+import us.tractat.kuilt.test.FlapSchedule
+import us.tractat.kuilt.test.FlakyLifecycleLoom
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern

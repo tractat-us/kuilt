@@ -5,9 +5,9 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.launch
-import us.tractat.kuilt.core.FaultProfile
-import us.tractat.kuilt.core.FaultySeam
-import us.tractat.kuilt.core.FaultyLoom
+import us.tractat.kuilt.test.FaultProfile
+import us.tractat.kuilt.test.FaultySeam
+import us.tractat.kuilt.test.FaultyLoom
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.Swatch
