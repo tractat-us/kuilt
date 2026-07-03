@@ -193,7 +193,7 @@ class WebSocketSeamRoundTripTest {
                     WebSocketAdvertisement(
                         url = "ws://localhost$serverPath",
                         serverPeerId = serverLoom.selfPeerId,
-                        displayName = "client",
+                        sessionName = "client",
                     )
                 val clientLink = clientLoom.join(advertisement)
                 val serverLink = serverLinkDeferred.await()

@@ -15,7 +15,7 @@ class MultipeerAdvertisementTest {
         val ad =
             MultipeerAdvertisement(
                 handle = "peer-a",
-                displayName = "peer-a",
+                sessionName = "peer-a",
                 serviceType = "kuilt-mc",
             )
         assertNull(ad.roomKey)
@@ -26,7 +26,7 @@ class MultipeerAdvertisementTest {
         val ad: Tag =
             MultipeerAdvertisement(
                 handle = "peer-a",
-                displayName = "peer-a",
+                sessionName = "peer-a",
                 serviceType = "kuilt-mc",
                 roomKey = "room-3",
             )

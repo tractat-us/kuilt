@@ -37,6 +37,6 @@ class MetricTapWireTest {
 
     @Test
     fun configDefaultsMatchTheTapPattern() {
-        assertEquals("kuilt-metric-tap", MetricTapConfig().pattern.displayName)
+        assertEquals("kuilt-metric-tap", MetricTapConfig().pattern.sessionName)
     }
 }

@@ -75,7 +75,7 @@ class LogTapWebSocketTest {
         val advertisement = WebSocketAdvertisement(
             url = "ws://localhost$path",
             serverPeerId = serverLoom.selfPeerId,
-            displayName = "puller",
+            sessionName = "puller",
         )
 
         val replicatorScope = CoroutineScope(coroutineContext + SupervisorJob())

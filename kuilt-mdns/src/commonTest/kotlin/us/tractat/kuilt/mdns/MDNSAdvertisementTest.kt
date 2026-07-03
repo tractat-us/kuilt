@@ -15,7 +15,7 @@ class MDNSAdvertisementTest {
                 host = "192.168.1.42",
                 port = 9000,
                 serverPeerId = PeerId("peer-1"),
-                displayName = "Alice",
+                sessionName = "Alice",
                 wsPath = "/peer",
             )
         assertEquals("ws://192.168.1.42:9000/peer", ad.wsUrl)
@@ -28,7 +28,7 @@ class MDNSAdvertisementTest {
                 host = "localhost",
                 port = 8080,
                 serverPeerId = PeerId("peer-2"),
-                displayName = "Bob",
+                sessionName = "Bob",
             )
         assertEquals(MDNSAdvertisement.DEFAULT_WS_PATH, ad.wsPath)
     }
@@ -40,9 +40,9 @@ class MDNSAdvertisementTest {
                 host = "10.0.0.1",
                 port = 7777,
                 serverPeerId = PeerId("my-peer"),
-                displayName = "My Session",
+                sessionName = "My Session",
             )
-        assertEquals("My Session", ad.displayName)
+        assertEquals("My Session", ad.sessionName)
     }
 
     @Test
@@ -52,7 +52,7 @@ class MDNSAdvertisementTest {
                 host = "10.0.0.1",
                 port = 7777,
                 serverPeerId = PeerId("my-peer"),
-                displayName = "My Session",
+                sessionName = "My Session",
             )
         assertEquals(PeerId("my-peer"), ad.serverPeerId)
     }
@@ -64,7 +64,7 @@ class MDNSAdvertisementTest {
                 host = "localhost",
                 port = 1234,
                 serverPeerId = PeerId("x"),
-                displayName = "test",
+                sessionName = "test",
             )
         assertIs<us.tractat.kuilt.core.Tag>(ad)
     }
@@ -112,7 +112,7 @@ class MDNSAdvertisementTest {
                 host = "10.0.0.1",
                 port = 9000,
                 serverPeerId = PeerId("p"),
-                displayName = "test",
+                sessionName = "test",
             )
         assertNull(ad.hostOs)
         assertNull(ad.fabrics)
@@ -127,7 +127,7 @@ class MDNSAdvertisementTest {
                 host = "10.0.0.1",
                 port = 9000,
                 serverPeerId = PeerId("p"),
-                displayName = "test",
+                sessionName = "test",
                 hostOs = MDNSAdvertisement.HostOs.Jvm,
                 fabrics = "ws,mc",
                 mcPeer = "MCPeer-abc123",

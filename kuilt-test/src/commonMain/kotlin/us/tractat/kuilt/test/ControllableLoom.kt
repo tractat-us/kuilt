@@ -143,8 +143,8 @@ public class ControllableLoom(
 
     private fun peerId(rendezvous: Rendezvous): PeerId =
         when (rendezvous) {
-            is Rendezvous.New -> PeerId(rendezvous.pattern.displayName.ifBlank { freshId() })
-            is Rendezvous.Existing -> PeerId(rendezvous.tag.displayName.ifBlank { freshId() })
+            is Rendezvous.New -> PeerId(rendezvous.pattern.sessionName.ifBlank { freshId() })
+            is Rendezvous.Existing -> PeerId(rendezvous.tag.sessionName.ifBlank { freshId() })
         }
 
     private fun freshId(): String = "peer-${++counter}"

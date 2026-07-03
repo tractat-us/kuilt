@@ -94,7 +94,7 @@ public actual class MultipeerServiceBrowser actual constructor(
                             val ad =
                                 MultipeerAdvertisement(
                                     handle = handle,
-                                    displayName = displayName,
+                                    sessionName = displayName,
                                     serviceType = factory.serviceType,
                                 )
                             factory.setVisiblePeer(handle, ad)

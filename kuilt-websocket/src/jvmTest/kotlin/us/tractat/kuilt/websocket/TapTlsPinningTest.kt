@@ -113,7 +113,7 @@ class TapTlsPinningTest {
         val advertisement = WebSocketAdvertisement(
             url = "wss://localhost:$port$path",
             serverPeerId = serverLoom.selfPeerId,
-            displayName = "tls-client",
+            sessionName = "tls-client",
         )
         val clientLink = clientLoom.join(advertisement)
         val serverLink = serverLinkDeferred.await()

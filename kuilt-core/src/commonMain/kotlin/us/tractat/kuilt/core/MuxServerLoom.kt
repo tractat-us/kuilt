@@ -199,7 +199,7 @@ public class MuxServerLoom(
     }
 
     override suspend fun weave(rendezvous: Rendezvous): Seam = when (rendezvous) {
-        is Rendezvous.New -> roomFor(rendezvous.pattern.displayName)
+        is Rendezvous.New -> roomFor(rendezvous.pattern.sessionName)
         is Rendezvous.Existing -> throw UnsupportedOperationException(
             "MuxServerLoom is a server-only Loom — use a client-side Loom to join",
         )

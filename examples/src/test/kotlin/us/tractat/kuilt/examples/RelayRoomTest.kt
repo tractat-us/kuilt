@@ -169,7 +169,7 @@ class RelayRoomTest {
                         WebSocketAdvertisement(
                             url = "ws://localhost$serverPath",
                             serverPeerId = serverPeerId,
-                            displayName = "learner-client",
+                            sessionName = "learner-client",
                         )
                     )
                 val clientSeam = clientRoom.channel("raft")

@@ -99,7 +99,7 @@ public class InMemoryRoomFabric(
      * its own channel (via [MuxClientLoom]), so it plugs straight into `SeamRoomFactory`.
      *
      * `host(pattern)` and `join(tag)` route by the rendezvous **display name**, which must match a
-     * server room's `Pattern.displayName`.
+     * server room's `Pattern.sessionName`.
      *
      * @param peerId this client's identity.
      * @param random seeded [Random] for this client's mesh-seam nonce generation — pass a distinct
@@ -120,6 +120,6 @@ public class InMemoryRoomFabric(
 
 /** The channel name a [Rendezvous] routes to: the `Pattern` / `Tag` display name. */
 internal fun rendezvousName(rendezvous: Rendezvous): String = when (rendezvous) {
-    is Rendezvous.New -> rendezvous.pattern.displayName
-    is Rendezvous.Existing -> rendezvous.tag.displayName
+    is Rendezvous.New -> rendezvous.pattern.sessionName
+    is Rendezvous.Existing -> rendezvous.tag.sessionName
 }

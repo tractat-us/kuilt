@@ -44,8 +44,8 @@ class MuxClientLoomTest {
             scope = scope,
             nameOf = { rendezvous ->
                 when (rendezvous) {
-                    is Rendezvous.New -> rendezvous.pattern.displayName
-                    is Rendezvous.Existing -> rendezvous.tag.displayName
+                    is Rendezvous.New -> rendezvous.pattern.sessionName
+                    is Rendezvous.Existing -> rendezvous.tag.sessionName
                 }
             },
         )

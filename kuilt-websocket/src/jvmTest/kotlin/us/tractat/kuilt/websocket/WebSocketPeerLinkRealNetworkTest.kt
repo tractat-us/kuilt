@@ -115,7 +115,7 @@ class WebSocketPeerLinkRealNetworkTest {
                     WebSocketAdvertisement(
                         url = "ws://localhost:$port$path",
                         serverPeerId = serverFactory.selfPeerId,
-                        displayName = "real-net-client",
+                        sessionName = "real-net-client",
                     ),
                 )
             val serverLink = serverDeferred.await()

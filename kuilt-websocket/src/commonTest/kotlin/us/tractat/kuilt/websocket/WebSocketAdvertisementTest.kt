@@ -17,7 +17,7 @@ class WebSocketAdvertisementTest {
             WebSocketAdvertisement(
                 url = "ws://10.0.0.1:8080/peer",
                 serverPeerId = PeerId("p1"),
-                displayName = "host",
+                sessionName = "host",
             )
         assertNull(ad.roomKey)
     }
@@ -28,7 +28,7 @@ class WebSocketAdvertisementTest {
             WebSocketAdvertisement(
                 url = "ws://10.0.0.1:8080/peer",
                 serverPeerId = PeerId("p1"),
-                displayName = "host",
+                sessionName = "host",
                 roomKey = "room-7",
             )
         assertEquals("room-7", ad.roomKey)

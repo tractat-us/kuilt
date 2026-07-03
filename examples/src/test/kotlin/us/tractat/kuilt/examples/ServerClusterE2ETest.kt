@@ -153,7 +153,7 @@ class ServerClusterE2ETest {
                         WebSocketAdvertisement(
                             url = "ws://localhost$serverPath",
                             serverPeerId = serverPeerId,
-                            displayName = "cluster-client",
+                            sessionName = "cluster-client",
                         ),
                     )
                 val clientSeam = clientRoom.channel("raft")

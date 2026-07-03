@@ -36,14 +36,14 @@ class WebRTCPeerLinkFactoryTest {
 
             val ad =
                 object : Tag {
-                    override val displayName = "host-display"
+                    override val sessionName = "host-display"
                     override val peerKey = room
                 }
 
             coroutineScope {
                 val hostLink =
                     async {
-                        hostFactory.host(Pattern(displayName = "host"))
+                        hostFactory.host(Pattern(sessionName = "host"))
                     }
                 val joinerLink =
                     async {
@@ -62,7 +62,7 @@ class WebRTCPeerLinkFactoryTest {
      * Guards #454: injecting a seeded [Random] produces a deterministic token prefix
      * on the [PeerId] assigned during [WebRTCPeerLinkFactory.weave].
      *
-     * The host's [PeerId] is built from [Pattern.displayName] + '-' + 8 random letters.
+     * The host's [PeerId] is built from [Pattern.sessionName] + '-' + 8 random letters.
      * With a fixed seed the 8-letter suffix is deterministic; the test confirms the
      * peer-id starts with the expected prefix and has the right length.
      */
@@ -98,12 +98,12 @@ class WebRTCPeerLinkFactoryTest {
 
             val ad =
                 object : Tag {
-                    override val displayName = "peer"
+                    override val sessionName = "peer"
                     override val peerKey = room
                 }
 
             coroutineScope {
-                val hostLink = async { hostFactory.host(Pattern(displayName = "host")) }
+                val hostLink = async { hostFactory.host(Pattern(sessionName = "host")) }
                 val joinerLink = async { joinerFactory.join(ad) }
                 val host = hostLink.await()
                 joinerLink.await()

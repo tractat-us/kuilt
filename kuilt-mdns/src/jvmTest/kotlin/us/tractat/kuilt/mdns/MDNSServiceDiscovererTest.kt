@@ -88,7 +88,7 @@ class MDNSServiceDiscovererParserTest {
 
         val result = discoverer.toAdvertisement(info, "10.0.0.4")
 
-        assertEquals("Kuilt LAN", result?.displayName)
+        assertEquals("Kuilt LAN", result?.sessionName)
     }
 
     // ── v2 TXT field parsing ──────────────────────────────────────────────────

@@ -129,7 +129,7 @@ class FakeRoomFactoryTest {
     // ── helpers ───────────────────────────────────────────────────────────────
 
     private fun simpleTag(name: String) = object : us.tractat.kuilt.core.Tag {
-        override val displayName: String = name
+        override val sessionName: String = name
         override val peerKey: String = name
     }
 }

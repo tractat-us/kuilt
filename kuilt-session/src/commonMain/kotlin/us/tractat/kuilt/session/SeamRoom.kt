@@ -93,7 +93,7 @@ public class SeamRoomFactory(
         return SeamRoom(
             seam = seam,
             role = SessionRole.Host,
-            displayName = pattern.displayName,
+            displayName = pattern.sessionName,
             scope = scope,
             clock = clock,
             heartbeatConfig = heartbeatConfig,
@@ -111,7 +111,7 @@ public class SeamRoomFactory(
         return SeamRoom(
             seam = seam,
             role = SessionRole.Joiner,
-            displayName = tag.displayName,
+            displayName = tag.sessionName,
             scope = scope,
             clock = clock,
             heartbeatConfig = heartbeatConfig,

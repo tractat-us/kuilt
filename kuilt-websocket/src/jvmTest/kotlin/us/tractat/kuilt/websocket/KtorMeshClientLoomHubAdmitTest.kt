@@ -58,7 +58,7 @@ class KtorMeshClientLoomHubAdmitTest {
             try {
                 val seam = loom.weave(
                     Rendezvous.Existing(
-                        WebSocketAdvertisement(url = "/hub", serverPeerId = hubId, displayName = "client"),
+                        WebSocketAdvertisement(url = "/hub", serverPeerId = hubId, sessionName = "client"),
                     ),
                 )
 

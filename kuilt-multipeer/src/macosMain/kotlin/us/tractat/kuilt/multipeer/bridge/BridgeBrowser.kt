@@ -99,7 +99,7 @@ public fun mc_browser_start(
         browser.discoveries().collect { ad ->
             if (ad is MultipeerAdvertisement) {
                 memScoped {
-                    peerFoundCb.invoke(ad.handle.cstr.ptr, ad.displayName.cstr.ptr)
+                    peerFoundCb.invoke(ad.handle.cstr.ptr, ad.sessionName.cstr.ptr)
                 }
             }
         }

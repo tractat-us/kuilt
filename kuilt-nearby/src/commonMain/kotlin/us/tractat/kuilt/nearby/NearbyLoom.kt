@@ -113,7 +113,7 @@ public class NearbyLoom(
 
         sharedPeers.update { it + peerId }
 
-        api.startAdvertising(config.displayName, serviceId)
+        api.startAdvertising(config.sessionName, serviceId)
 
         // Background: accept first joiner, exchange identity, update host seam.
         // UNDISPATCHED so the host's handshake collectors subscribe synchronously
@@ -182,7 +182,7 @@ public class NearbyLoom(
 
         // run() subscribes the handshake collectors before triggering requestConnection.
         val joinLink = machine.run(seamScope) {
-            api.requestConnection(advertisement.displayName, hostEndpointId)
+            api.requestConnection(advertisement.sessionName, hostEndpointId)
         }
         endpointPeersMutex.withLock {
             endpointPeers[joinLink.endpointId] = joinLink.remotePeerId

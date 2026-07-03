@@ -14,8 +14,8 @@ package us.tractat.kuilt.core
  * the peer leaves.
  */
 public interface Tag {
-    /** Human-readable service name as broadcast by the advertising peer. */
-    public val displayName: String
+    /** Human-readable **session** name as broadcast by the advertising peer. */
+    public val sessionName: String
 
     /**
      * Stable, unique identifier for this peer within its discovery transport.
@@ -38,7 +38,7 @@ public interface Tag {
      * *flat* fabric where one mesh carries several rooms (e.g. a shared
      * [InMemoryLoom]): there the host must reject a joiner whose target names a
      * different room than its own [Pattern.roomKey]. Note this is room identity,
-     * **not** [displayName]/[peerKey] (member/peer identity) — do not conflate them.
+     * **not** [sessionName]/[peerKey] (member/peer identity) — do not conflate them.
      */
     public val roomKey: String? get() = null
 }

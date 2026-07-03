@@ -87,7 +87,7 @@ public class MDNSPeerLinkFactory(
                     WebSocketAdvertisement(
                         url = advertisement.wsUrl,
                         serverPeerId = advertisement.serverPeerId,
-                        displayName = advertisement.displayName,
+                        sessionName = advertisement.sessionName,
                     )
                 KtorClientLoom(httpClientFactory()).join(wsAdvertisement)
             }
@@ -111,7 +111,7 @@ public class MDNSPeerLinkFactory(
                 MDNSServiceAdvertiser(
                     serviceType = serviceType,
                     jmdns = jmdns,
-                    displayName = pattern.displayName,
+                    displayName = pattern.sessionName,
                     port = port,
                     selfId = serverFactory.selfPeerId,
                     wsPath = wsPath,

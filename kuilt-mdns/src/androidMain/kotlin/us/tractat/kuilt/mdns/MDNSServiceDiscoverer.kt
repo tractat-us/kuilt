@@ -70,7 +70,7 @@ public class MDNSServiceDiscoverer(
                                             host = host,
                                             port = info.port,
                                             serverPeerId = PeerId(peerId),
-                                            displayName = info.serviceName,
+                                            sessionName = info.serviceName,
                                             wsPath = wsPath,
                                             hostOs =
                                                 attrs[MDNSAdvertisement.TXT_KEY_HOST_OS]

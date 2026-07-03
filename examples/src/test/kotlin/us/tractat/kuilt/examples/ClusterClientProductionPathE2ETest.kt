@@ -104,7 +104,7 @@ class ClusterClientProductionPathE2ETest {
             val advertisementA = WebSocketAdvertisement(
                 url = "ws://localhost$pathA",
                 serverPeerId = serverPeerIdA,
-                displayName = "cluster-client",
+                sessionName = "cluster-client",
             )
 
             val clientCommitted = CompletableDeferred<ByteArray>()

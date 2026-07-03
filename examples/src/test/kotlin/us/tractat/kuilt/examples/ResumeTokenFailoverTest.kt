@@ -115,7 +115,7 @@ class ResumeTokenFailoverTest {
                         WebSocketAdvertisement(
                             url = "ws://localhost$pathA",
                             serverPeerId = serverPeerIdA,
-                            displayName = "failover-client",
+                            sessionName = "failover-client",
                         )
                     )
 
@@ -137,12 +137,12 @@ class ResumeTokenFailoverTest {
                 val endpointA = WebSocketAdvertisement(
                     url = "ws://localhost$pathA",
                     serverPeerId = serverPeerIdA,
-                    displayName = "failover-client",
+                    sessionName = "failover-client",
                 )
                 val endpointB = WebSocketAdvertisement(
                     url = "ws://localhost$pathB",
                     serverPeerId = serverPeerIdB,
-                    displayName = "failover-client",
+                    sessionName = "failover-client",
                 )
                 val reconnect = ServerClusterReconnect(
                     endpoints = listOf(endpointA, endpointB),

@@ -67,8 +67,8 @@ class JoinerReconnectTest {
 
     private val nameOf: (Rendezvous) -> String = { rv ->
         when (rv) {
-            is Rendezvous.New -> rv.pattern.displayName
-            is Rendezvous.Existing -> rv.tag.displayName
+            is Rendezvous.New -> rv.pattern.sessionName
+            is Rendezvous.Existing -> rv.tag.sessionName
         }
     }
 

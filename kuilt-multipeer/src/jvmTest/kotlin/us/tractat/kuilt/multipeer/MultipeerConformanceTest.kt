@@ -62,7 +62,7 @@ class MultipeerConformanceTest : SeamConformanceSuite() {
      */
     override fun joinTag(): Tag = MultipeerAdvertisement(
         handle = FAKE_HOST_HANDLE,
-        displayName = HOST_DISPLAY_NAME,
+        sessionName = HOST_DISPLAY_NAME,
         serviceType = FAKE_SERVICE_TYPE,
     )
 }

@@ -117,14 +117,14 @@ public object MultipeerCrossProcessProbe {
                     launch {
                         browser.discoveries().collect { ad ->
                             if (ad is MultipeerAdvertisement) {
-                                if (ad.displayName.startsWith(targetPrefix) && !firstAd.isCompleted) {
+                                if (ad.sessionName.startsWith(targetPrefix) && !firstAd.isCompleted) {
                                     log(
-                                        "[joiner] found target=${ad.displayName} handle=${ad.handle} " +
+                                        "[joiner] found target=${ad.sessionName} handle=${ad.handle} " +
                                             "(elapsed ${nowMs() - t0}ms)",
                                     )
                                     firstAd.complete(ad)
                                 } else {
-                                    log("[joiner] saw (skipped) ${ad.displayName}")
+                                    log("[joiner] saw (skipped) ${ad.sessionName}")
                                 }
                             }
                         }

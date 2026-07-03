@@ -262,6 +262,6 @@ class NoDoubleApplyFailoverTest {
 
 /** A [Tag] backed by a [NodeId] — a voter's identity as a [ServerClusterReconnect] endpoint. */
 private data class NodeId2Tag(val nodeId: NodeId) : Tag {
-    override val displayName: String = nodeId.value
+    override val sessionName: String = nodeId.value
     override val peerKey: String = nodeId.value
 }

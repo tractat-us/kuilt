@@ -144,8 +144,8 @@ public class InMemoryLoom(
  * the display name. The factory itself provides the mesh context.
  */
 public data class InMemoryTag(
-    override val displayName: String,
-    override val peerKey: String = displayName,
+    override val sessionName: String,
+    override val peerKey: String = sessionName,
     override val roomKey: String? = null,
 ) : Tag
 

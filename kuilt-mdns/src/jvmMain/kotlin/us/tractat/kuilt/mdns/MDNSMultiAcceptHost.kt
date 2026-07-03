@@ -70,7 +70,7 @@ import javax.jmdns.JmDNS
  * @param application Ktor [Application] to mount the WebSocket accept route on.
  * @param jmdns The [JmDNS] instance to register on. Shared and **not** closed here.
  * @param port TCP port the local WebSocket server listens on — advertised in the TXT record.
- * @param pattern Session descriptor; its [Pattern.displayName] is the advertised service name.
+ * @param pattern Session descriptor; its [Pattern.sessionName] is the advertised service name.
  * @param wsPath WebSocket path to mount and advertise (default: [MDNSAdvertisement.DEFAULT_WS_PATH]).
  * @param selfPeerId This host's [PeerId], embedded in the advertisement and presented to
  *   every joiner. Defaults to a fresh per-host UUID.
@@ -110,7 +110,7 @@ public class MDNSMultiAcceptHost(
         MDNSServiceAdvertiser(
             serviceType = serviceType,
             jmdns = jmdns,
-            displayName = pattern.displayName,
+            displayName = pattern.sessionName,
             port = port,
             selfId = server.selfPeerId,
             wsPath = wsPath,

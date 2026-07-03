@@ -14,12 +14,12 @@ package us.tractat.kuilt.core
  * A joiner declares which room it wants via [Tag.roomKey]; the host admits only
  * when the targets agree (or either side names none — see [Tag.roomKey]).
  *
- * Keeping this nullable — rather than defaulting it to [displayName] — keeps
+ * Keeping this nullable — rather than defaulting it to [sessionName] — keeps
  * room identity an explicit, opt-in concept, orthogonal to the (already
- * overloaded) display name.
+ * overloaded) session name.
  */
 public data class Pattern(
-    val displayName: String,
+    val sessionName: String,
     val maxPeers: Int = 6,
     val roomKey: String? = null,
 )

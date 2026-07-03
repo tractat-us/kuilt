@@ -48,9 +48,9 @@ public class WebRTCPeerLinkFactory
         override suspend fun weave(rendezvous: Rendezvous): Seam =
             when (rendezvous) {
                 is Rendezvous.New ->
-                    connect(isHost = true, displayName = rendezvous.pattern.displayName, session = signaling.open(room))
+                    connect(isHost = true, displayName = rendezvous.pattern.sessionName, session = signaling.open(room))
                 is Rendezvous.Existing ->
-                    connect(isHost = false, displayName = rendezvous.tag.displayName, session = signaling.open(room))
+                    connect(isHost = false, displayName = rendezvous.tag.sessionName, session = signaling.open(room))
             }
 
         /**
@@ -169,7 +169,7 @@ public class WebRTCPeerLinkFactory
                 signaling as? WebSocketSignalingChannel
                     ?: error("openWithServerRoleResult requires a WebSocketSignalingChannel; got $signaling")
             val (isHost, session) = wsChannel.openWithRole(room)
-            val link = connect(isHost, config.displayName, session, handshakeTimeoutMs)
+            val link = connect(isHost, config.sessionName, session, handshakeTimeoutMs)
             return isHost to link
         }
 

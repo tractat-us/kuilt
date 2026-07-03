@@ -178,7 +178,7 @@ class ServerClusterM3E2ETest {
                         WebSocketAdvertisement(
                             url = "ws://localhost$serverPath",
                             serverPeerId = serverPeerId,
-                            displayName = "cluster-client-m3",
+                            sessionName = "cluster-client-m3",
                         ),
                     )
                 val clientSeam = clientRoom.channel("raft")

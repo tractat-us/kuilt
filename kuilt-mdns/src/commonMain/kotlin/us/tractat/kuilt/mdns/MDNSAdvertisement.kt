@@ -25,7 +25,7 @@ import us.tractat.kuilt.core.Tag
  * @property host IP address or hostname of the advertising peer.
  * @property port TCP port the advertising peer's WebSocket server listens on.
  * @property serverPeerId The advertising peer's [PeerId].
- * @property displayName Human-readable service name from the mDNS TXT record.
+ * @property sessionName Human-readable service name from the mDNS TXT record.
  * @property wsPath WebSocket path to connect to (default: [DEFAULT_WS_PATH]).
  * @property hostOs OS family of the advertising host — for fabric selection.
  * @property fabrics Comma-separated transports the host accepts (e.g. `"ws,mc"`).
@@ -43,7 +43,7 @@ public data class MDNSAdvertisement(
     val host: String,
     val port: Int,
     val serverPeerId: PeerId,
-    override val displayName: String,
+    override val sessionName: String,
     val wsPath: String = DEFAULT_WS_PATH,
     val hostOs: HostOs? = null,
     val fabrics: String? = null,

@@ -53,7 +53,7 @@ class KtorRoomHostTest {
                     WebSocketAdvertisement(
                         url = "ws://localhost$serverPath",
                         serverPeerId = serverPeerId,
-                        displayName = "client",
+                        sessionName = "client",
                     )
                 val clientLink = clientLoom.join(advertisement)
                 val room = withTimeout(5_000) { firstRoom.await() }
@@ -81,7 +81,7 @@ class KtorRoomHostTest {
                     WebSocketAdvertisement(
                         url = "ws://localhost$serverPath",
                         serverPeerId = serverPeerId,
-                        displayName = "client",
+                        sessionName = "client",
                     )
                 val clientLink = clientLoom.join(advertisement)
                 val seam = withTimeout(5_000) { seamDeferred.await() }
