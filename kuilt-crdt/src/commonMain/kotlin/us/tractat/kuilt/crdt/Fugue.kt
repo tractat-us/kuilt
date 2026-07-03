@@ -600,7 +600,7 @@ public class Fugue<V> private constructor(
             }
         }
 
-        sortChildren(nodes)
+        sortChildrenRecursive(nodes.getValue(FugueId.HEAD))
         return nodes
     }
 
@@ -615,11 +615,6 @@ public class Fugue<V> private constructor(
      * Right-child ordering is determined by the [isLess] traversal order, mirroring
      * the reference implementation's `insertIntoSiblings` for right children.
      */
-    private fun sortChildren(nodes: Map<FugueId, FugueNode>) {
-        val headNode = nodes.getValue(FugueId.HEAD)
-        sortChildrenRecursive(headNode)
-    }
-
     private fun sortChildrenRecursive(node: FugueNode) {
         // Left children: ascending FugueId.
         node.leftChildren.sortWith(compareBy { it.id })

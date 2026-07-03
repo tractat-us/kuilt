@@ -351,7 +351,7 @@ public class MovableTree<V> private constructor(
     private fun firstDivergenceIndex(newLog: List<MoveOp<V>>): Int {
         val limit = minOf(log.size, newLog.size)
         for (i in 0 until limit) {
-            if (log[i] !== newLog[i] && log[i] != newLog[i]) return i
+            if (log[i] != newLog[i]) return i
         }
         // If newLog is shorter than log, there are missing ops from log's tail — divergence at newLog.size.
         // If newLog is longer or equal length, log's prefix is fully matched — divergence (new ops) at log.size.
