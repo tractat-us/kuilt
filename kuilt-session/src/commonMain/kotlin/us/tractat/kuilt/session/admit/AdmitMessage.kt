@@ -126,13 +126,24 @@ public sealed interface AdmitMessage {
          */
         public const val PREFIX_BYTE: Byte = 0x61
 
+        /**
+         * The shared CBOR codec for admit frames. `ignoreUnknownKeys = true` makes decode
+         * **forward-compatible**: a frame minted by a newer build that carries an extra field
+         * (a future addition to [Hello]/[Welcome]/…) still decodes on an older build instead of
+         * throwing — which, given [decode]'s malformed-frame guard, would otherwise silently drop
+         * the frame and hang the handshake (there is no admit timeout). Leniency affects decode
+         * only; encoding output is byte-identical to the default codec, so the wire is unchanged.
+         */
+        @OptIn(ExperimentalSerializationApi::class)
+        private val cbor = Cbor { ignoreUnknownKeys = true }
+
         /** Encode an [AdmitMessage] to bytes with the [PREFIX_BYTE] framing prefix. */
         @OptIn(ExperimentalSerializationApi::class)
         public fun encode(message: AdmitMessage): ByteArray {
-            val cbor = Cbor.encodeToByteArray(message)
-            return ByteArray(cbor.size + 1).also { out ->
+            val encoded = cbor.encodeToByteArray(message)
+            return ByteArray(encoded.size + 1).also { out ->
                 out[0] = PREFIX_BYTE
-                cbor.copyInto(out, destinationOffset = 1)
+                encoded.copyInto(out, destinationOffset = 1)
             }
         }
 
@@ -140,13 +151,14 @@ public sealed interface AdmitMessage {
          * Attempt to decode bytes as an [AdmitMessage].
          *
          * Returns null if the payload does not start with [PREFIX_BYTE] (app frame),
-         * or if decoding fails (malformed).
+         * or if decoding fails (malformed). Unknown fields are tolerated (see [cbor]) so a
+         * newer sender's frame decodes rather than being dropped as malformed.
          */
         @OptIn(ExperimentalSerializationApi::class)
         public fun decode(bytes: ByteArray): AdmitMessage? {
             if (bytes.isEmpty() || bytes[0] != PREFIX_BYTE) return null
             return runCatching {
-                Cbor.decodeFromByteArray<AdmitMessage>(bytes.copyOfRange(1, bytes.size))
+                cbor.decodeFromByteArray<AdmitMessage>(bytes.copyOfRange(1, bytes.size))
             }.getOrNull()
         }
 
