@@ -164,5 +164,5 @@ private object JsonCrdtSerializer : KSerializer<JsonCrdt> {
         innerSerializer.serialize(encoder, value.root)
 
     override fun deserialize(decoder: Decoder): JsonCrdt =
-        JsonCrdt(innerSerializer.deserialize(decoder), ReplicaId(""))
+        JsonCrdt(innerSerializer.deserialize(decoder), ReplicaId.Bottom)
 }

@@ -14,6 +14,6 @@ internal class BoundedCounterConformanceTest : QuiltedConformanceSuite<BoundedCo
         val afterASpend = start.piece(start.trySpend(a, 2L)!!)
         val afterTransfer = start.piece(start.transfer(a, b, 3L)!!)
         val afterBothSpends = afterASpend.piece(afterASpend.trySpend(b, 3L)!!)
-        return listOf(BoundedCounter.EMPTY, start, afterASpend, afterTransfer, afterBothSpends)
+        return listOf(BoundedCounter.ZERO, start, afterASpend, afterTransfer, afterBothSpends)
     }
 }

@@ -22,6 +22,16 @@ import kotlin.jvm.JvmInline
  * name nods to kuilt's quilting metaphor: a whole pieced from independent
  * patches.
  *
+ * **Two mutator shapes, one absorption path.** A mutator may return either a
+ * [Patch] (the minimal lattice fragment for the change — counters do this, e.g.
+ * [BoundedCounter.trySpend]) or a full new state `S` (registers and maps do
+ * this, e.g. `LWWRegister.set`). Both are absorbed by the identical [piece]
+ * join: a `Patch` is applied with `piece(patch)`, and a returned full state is
+ * itself a valid join argument (`a.piece(newState)`). The register/map form is
+ * not a second mechanism — for an LWW register the whole state *is* a minimal
+ * delta (one tagged cell); the `Patch` wrapper is reserved for CRDTs whose
+ * delta is a strict, non-obvious subset of their state.
+ *
  * @param S the self-type — implementors write `class Foo : Quilted<Foo>`.
  */
 public interface Quilted<S : Quilted<S>> {
