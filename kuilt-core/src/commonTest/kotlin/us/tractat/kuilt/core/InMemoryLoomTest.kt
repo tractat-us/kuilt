@@ -51,6 +51,49 @@ class InMemoryLoomTest {
         }
 
     @Test
+    fun `a second CONCURRENT host on one loom throws — one live mesh hosts one live room`() =
+        runTest {
+            val factory = InMemoryLoom()
+            factory.host(Pattern("Alice")) // first host stays live
+
+            val failure = assertFailsWith<IllegalStateException> {
+                factory.host(Pattern("Bob"))
+            }
+            assertTrue(
+                failure.message?.contains("single flat mesh") == true,
+                "guard message must explain the single-mesh contract, got: ${failure.message}",
+            )
+        }
+
+    @Test
+    fun `one host plus many joins is allowed — only a second live host is rejected`() =
+        runTest {
+            val factory = InMemoryLoom()
+            val host = factory.host(Pattern("Alice"))
+            val b = factory.join(InMemoryTag("Bob"))
+            val c = factory.join(InMemoryTag("Charlie"))
+            val d = factory.join(InMemoryTag("Dana"))
+
+            val expected = setOf(host.selfId, b.selfId, c.selfId, d.selfId)
+            assertEquals(expected, host.peers.value)
+        }
+
+    @Test
+    fun `re-hosting after the prior host tears is allowed — sequential resume path`() =
+        runTest {
+            val factory = InMemoryLoom()
+            val first = factory.host(Pattern("Alice"))
+
+            // Tear the host seam — this removes it from the mesh and clears the guard.
+            first.close()
+
+            // A fresh host is now permitted (models re-host-after-drop / resume).
+            val second = factory.host(Pattern("Alice-again"))
+            assertNotEquals(first.selfId, second.selfId, "the re-host must be a fresh mesh peer")
+            assertEquals(setOf(second.selfId), second.peers.value)
+        }
+
+    @Test
     fun `close removes the closing peer from every other peer's peers set`() =
         runTest {
             val factory = InMemoryLoom()
