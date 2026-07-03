@@ -15,6 +15,7 @@ import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.channels.ClosedSendChannelException
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.SeamState
+import us.tractat.kuilt.core.runConcurrencyStress
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
@@ -63,10 +64,10 @@ class LinkSeamConcurrencyTest {
      * the caller's reason or `RemoteRequested` is correct.
      */
     @Test
-    fun broadcastNeverLeaksClosedChannelAndTeardownIsSingleShot() = runRealThreaded {
+    fun broadcastNeverLeaksClosedChannelAndTeardownIsSingleShot() = runConcurrencyStress { stage ->
         val iterations = 200
         val broadcasters = 4
-        repeat(iterations) {
+        repeat(iterations) { iter ->
             val dispatcher = Dispatchers.Default.limitedParallelism(1)
             val conn = ControllableConnection()
             val seam = identified(conn, self, remote, dispatcher)
@@ -75,6 +76,7 @@ class LinkSeamConcurrencyTest {
             // `outbox.close()` lands while a broadcaster sits between its `check(!closed)` and its
             // `outbox.send()` — that in-flight send hits a closed channel. This is the issue's
             // repro: on the unfixed code it leaks a raw ClosedSendChannelException.
+            stage.at("iter=$iter hammer")
             coroutineScope {
                 val ready = CompletableDeferred<Unit>()
                 val senders = (0 until broadcasters).map {
@@ -94,6 +96,7 @@ class LinkSeamConcurrencyTest {
             }
 
             // Teardown (driven by the EOF) is single-shot: exactly one clean Torn, peers = {self}.
+            stage.at("iter=$iter awaitTorn")
             awaitTorn(seam)
             assertIs<SeamState.Torn>(seam.state.value, "teardown did not produce a clean Torn state")
             assertEquals(setOf(self), seam.peers.value, "peers corrupted by concurrent teardown")
@@ -118,10 +121,5 @@ class LinkSeamConcurrencyTest {
     /** Suspend until the seam reaches [SeamState.Torn] (teardown completes on the dispatcher). */
     private suspend fun awaitTorn(seam: us.tractat.kuilt.core.Seam) {
         seam.state.first { it is SeamState.Torn }
-    }
-
-    /** Drive a coroutine body on a real multi-threaded dispatcher (no virtual time). */
-    private fun runRealThreaded(body: suspend () -> Unit) = kotlinx.coroutines.runBlocking(Dispatchers.Default) {
-        body()
     }
 }

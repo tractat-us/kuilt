@@ -15,6 +15,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.receiveAsFlow
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.SeamState
+import us.tractat.kuilt.core.runConcurrencyStress
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
@@ -82,16 +83,17 @@ class MeshSeamConcurrencyTest {
      * it while a `readLoop` removes a peer throws `ConcurrentModificationException`.
      */
     @Test
-    fun broadcastIsRaceFreeAndTeardownIsSingleShotOnMultiThreadedDispatcher() = runRealThreaded {
+    fun broadcastIsRaceFreeAndTeardownIsSingleShotOnMultiThreadedDispatcher() = runConcurrencyStress { stage ->
         val iterations = 200
         val broadcasters = 4
         val peerCount = 5
-        repeat(iterations) {
+        repeat(iterations) { iter ->
             // Real multi-threaded scheduling: NOT limitedParallelism(1).
             val dispatcher = Dispatchers.Default
             val conns = (0 until peerCount).map { HelloConnection(PeerId("peer-$it")) }
             val seam = meshSeam(self, conns, dispatcher)
 
+            stage.at("iter=$iter broadcast-race hammer")
             coroutineScope {
                 val ready = CompletableDeferred<Unit>()
                 val senders = (0 until broadcasters).map {
@@ -114,6 +116,7 @@ class MeshSeamConcurrencyTest {
                 awaitAll(closer, *droppers.toTypedArray(), *senders.toTypedArray())
             }
 
+            stage.at("iter=$iter broadcast-race awaitTorn")
             awaitTorn(seam)
             assertIs<SeamState.Torn>(seam.state.value, "teardown did not produce a clean Torn state")
             assertEquals(setOf(self), seam.peers.value, "peers corrupted by concurrent teardown")
@@ -128,10 +131,11 @@ class MeshSeamConcurrencyTest {
      * closed-seam [IllegalStateException] once torn is the contract).
      */
     @Test
-    fun addLinkIsRaceFreeAgainstConcurrentClose() = runRealThreaded {
+    fun addLinkIsRaceFreeAgainstConcurrentClose() = runConcurrencyStress { stage ->
         val iterations = 200
-        repeat(iterations) {
+        repeat(iterations) { iter ->
             val seam = meshSeam(self, emptyList(), Dispatchers.Default)
+            stage.at("iter=$iter addLink hammer")
             coroutineScope {
                 val ready = CompletableDeferred<Unit>()
                 val joiners = (0 until 6).map { i ->
@@ -147,6 +151,7 @@ class MeshSeamConcurrencyTest {
                 ready.complete(Unit)
                 awaitAll(closer, *joiners.toTypedArray())
             }
+            stage.at("iter=$iter addLink awaitTorn")
             awaitTorn(seam)
             assertIs<SeamState.Torn>(seam.state.value, "teardown did not produce a clean Torn state")
             assertEquals(setOf(self), seam.peers.value, "peers corrupted by concurrent addLink/close")
@@ -183,9 +188,5 @@ class MeshSeamConcurrencyTest {
 
     private suspend fun awaitTorn(seam: us.tractat.kuilt.core.Seam) {
         seam.state.first { it is SeamState.Torn }
-    }
-
-    private fun runRealThreaded(body: suspend () -> Unit) = kotlinx.coroutines.runBlocking(Dispatchers.Default) {
-        body()
     }
 }

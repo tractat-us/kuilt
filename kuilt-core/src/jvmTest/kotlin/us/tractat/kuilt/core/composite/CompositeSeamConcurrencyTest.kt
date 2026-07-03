@@ -17,6 +17,7 @@ import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PlyId
 import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.Seam
+import us.tractat.kuilt.core.runConcurrencyStress
 import kotlin.test.Test
 import kotlin.test.assertIs
 
@@ -66,11 +67,11 @@ class CompositeSeamConcurrencyTest {
      * `idMap` from two pumps at once) throws `ConcurrentModificationException`.
      */
     @Test
-    fun broadcastIsRaceFreeAndTeardownIsCleanOnMultiThreadedDispatcher() = runRealThreaded {
+    fun broadcastIsRaceFreeAndTeardownIsCleanOnMultiThreadedDispatcher() = runConcurrencyStress { stage ->
         val iterations = 200
         val broadcasters = 4
         val plyCount = 4
-        repeat(iterations) {
+        repeat(iterations) { iter ->
             // Real multi-threaded scheduling: NOT limitedParallelism(1).
             val dispatcher = Dispatchers.Default
             val plies = (0 until plyCount).map { PlyId("ply-$it") to (InMemoryLoom() as Loom) }
@@ -80,9 +81,12 @@ class CompositeSeamConcurrencyTest {
             val joiner = CompositeLoom(desired, dispatcher).join(InMemoryTag("join"))
 
             // Wait for the two composite peers to discover each other across the plies.
+            stage.at("iter=$iter host.peers==2")
             host.peers.first { it.size == 2 }
+            stage.at("iter=$iter joiner.peers==2")
             joiner.peers.first { it.size == 2 }
 
+            stage.at("iter=$iter hammer")
             coroutineScope {
                 val ready = CompletableDeferred<Unit>()
 
@@ -114,6 +118,7 @@ class CompositeSeamConcurrencyTest {
 
             host.close()
             joiner.close()
+            stage.at("iter=$iter host awaitTorn")
             awaitTorn(host)
             assertIs<SeamState.Torn>(host.state.value, "teardown did not produce a clean Torn state")
         }
@@ -135,9 +140,5 @@ class CompositeSeamConcurrencyTest {
 
     private suspend fun awaitTorn(seam: Seam) {
         seam.state.first { it is SeamState.Torn }
-    }
-
-    private fun runRealThreaded(body: suspend () -> Unit) = kotlinx.coroutines.runBlocking(Dispatchers.Default) {
-        body()
     }
 }
