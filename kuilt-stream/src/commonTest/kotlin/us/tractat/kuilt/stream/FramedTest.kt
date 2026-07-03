@@ -29,6 +29,13 @@ class FramedTest {
     }
 
     @Test
+    fun rejectsOversizeSendWithFrameTooLargeException() = runTest {
+        val wire = Buffer()
+        val conn = framed(source = wire, sink = wire, maxFrameSize = 16)
+        assertFailsWith<FrameTooLargeException> { conn.send(ByteArray(17)) }
+    }
+
+    @Test
     fun cleanEofAtFrameBoundaryCompletesIncoming() = runTest {
         val wire = Buffer()
         val conn = framed(source = wire, sink = wire, maxFrameSize = 1024)
