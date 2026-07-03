@@ -68,7 +68,7 @@ public class LWWRegister<V> private constructor(
     override fun toString(): String = "LWWRegister(value=$value, ts=$timestamp, by=$origin)"
 
     public companion object {
-        private val BOTTOM_REPLICA = ReplicaId("")
+        private val BOTTOM_REPLICA = ReplicaId.Bottom
 
         /** An empty register. Any [set] supersedes it. */
         public fun <V> empty(): LWWRegister<V> = LWWRegister(Long.MIN_VALUE, BOTTOM_REPLICA, null)

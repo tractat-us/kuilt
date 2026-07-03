@@ -42,7 +42,7 @@ public data class RgaId(
          * Sentinel predecessor meaning "insert at the very beginning of the list".
          * Sorts before every real [RgaId]; its [seq] is `0` (never an author dot).
          */
-        public val HEAD: RgaId = RgaId(lamport = Long.MIN_VALUE, replicaId = ReplicaId(""), seq = 0L)
+        public val HEAD: RgaId = RgaId(lamport = Long.MIN_VALUE, replicaId = ReplicaId.Bottom, seq = 0L)
     }
 }
 

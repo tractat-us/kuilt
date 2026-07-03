@@ -43,6 +43,13 @@ val next: GCounter = counter.piece(delta)        // apply it
 replicator.apply(Patch(delta))
 ```
 
+Some mutators return a full new state instead of a `Patch` — a last-writer-wins
+register's `set` is like this, because its whole state is already the minimal
+delta (a single tagged cell). Both shapes flow through the same `piece` join, so
+you absorb a full state exactly as you would a patch: `state.piece(newState)`.
+Reach for the `Patch` wrapper only when a type's delta is a genuine subset of its
+state.
+
 ## Your custom CRDT
 
 Start with a tiny type whose merge rule is obvious. `MaxInt` keeps the highest

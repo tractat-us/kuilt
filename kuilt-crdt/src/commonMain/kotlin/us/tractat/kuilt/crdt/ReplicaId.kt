@@ -25,4 +25,9 @@ import kotlin.jvm.JvmInline
 @JvmInline
 public value class ReplicaId(public val value: String) : Comparable<ReplicaId> {
     override fun compareTo(other: ReplicaId): Int = value.compareTo(other.value)
+
+    public companion object {
+        /** The bottom sentinel — sorts before every real id; used as list-HEAD / empty-register origin. */
+        public val Bottom: ReplicaId = ReplicaId("")
+    }
 }

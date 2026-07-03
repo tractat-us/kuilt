@@ -43,7 +43,7 @@ public data class FugueId(
          * Virtual root of the Fugue tree. Sorts before every real [FugueId].
          * Its [seq] is `0` — it is never an author dot.
          */
-        public val HEAD: FugueId = FugueId(lamport = Long.MIN_VALUE, replicaId = ReplicaId(""), seq = 0L)
+        public val HEAD: FugueId = FugueId(lamport = Long.MIN_VALUE, replicaId = ReplicaId.Bottom, seq = 0L)
     }
 }
 

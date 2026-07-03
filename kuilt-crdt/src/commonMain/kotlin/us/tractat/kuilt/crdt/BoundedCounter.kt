@@ -125,7 +125,10 @@ public class BoundedCounter private constructor(
 
     public companion object {
         /** A bounded counter with no participants and no budget. */
-        public val EMPTY: BoundedCounter = BoundedCounter(GCounter.ZERO, emptyMap(), GCounter.ZERO)
+        public val ZERO: BoundedCounter = BoundedCounter(GCounter.ZERO, emptyMap(), GCounter.ZERO)
+
+        @Deprecated("Renamed to ZERO for counter-zoo consistency", ReplaceWith("ZERO"))
+        public val EMPTY: BoundedCounter get() = ZERO
 
         /**
          * Seed the counter with initial per-replica quotas. Quotas must be
