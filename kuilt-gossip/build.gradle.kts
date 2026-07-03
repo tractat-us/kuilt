@@ -11,6 +11,7 @@ kotlin {
             api(project(":kuilt-liveness"))
             implementation(libs.kotlinx.coroutines.core)
             implementation(libs.kotlinx.atomicfu)
+            implementation(libs.kotlin.logging)
         }
         commonTest.dependencies {
             implementation(project(":kuilt-test"))

@@ -1,5 +1,6 @@
 package us.tractat.kuilt.gossip
 
+import io.github.oshai.kotlinlogging.KotlinLogging
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -12,6 +13,8 @@ import kotlin.coroutines.CoroutineContext
 import kotlin.random.Random
 import kotlin.time.Clock
 import kotlin.time.Instant
+
+private val logger = KotlinLogging.logger("us.tractat.kuilt.gossip.HostedOverlay")
 
 /**
  * Compose a started hub [Seam] from a [ConnectionSource]: an initially-empty [meshSeam] wrapped in
@@ -46,7 +49,7 @@ public suspend fun CoroutineScope.hostedOverlay(
         while (isActive) {
             val conn = source.accept()
             runCatchingCancellable { hubMesh.addLink(conn) }
-                .onFailure { /* best-effort: torn/garbled spoke — drop it, keep accepting */ }
+                .onFailure { logger.debug { "hostedOverlay: dropping torn/garbled spoke — ${it.message}" } }
         }
     }
     return hub
