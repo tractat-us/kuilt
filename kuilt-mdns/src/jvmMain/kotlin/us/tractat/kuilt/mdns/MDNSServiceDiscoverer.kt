@@ -131,6 +131,7 @@ public class MDNSServiceDiscoverer(
             fabrics = info.getPropertyString(MDNSAdvertisement.TXT_KEY_FABRICS),
             mcPeer = info.getPropertyString(MDNSAdvertisement.TXT_KEY_MC_PEER),
             txtExtensions = extensions,
+            roomKey = info.getPropertyString(MDNSAdvertisement.TXT_KEY_ROOM),
         )
     }
 

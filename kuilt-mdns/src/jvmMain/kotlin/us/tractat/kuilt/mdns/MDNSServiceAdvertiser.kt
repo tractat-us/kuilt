@@ -27,6 +27,8 @@ import javax.jmdns.ServiceInfo
  * @param hostOs OS family of this host — written as [MDNSAdvertisement.TXT_KEY_HOST_OS].
  * @param fabrics Comma-separated transport labels this host accepts (e.g. `"ws,mc"`).
  * @param mcPeer Optional MultipeerConnectivity handle — include when `"mc"` is in [fabrics].
+ * @param roomKey Optional room identity this host advertises — written as
+ *   [MDNSAdvertisement.TXT_KEY_ROOM] when non-null, so a discovering joiner can target it.
  * @param txtExtensions Arbitrary application-supplied TXT record key–value pairs that are
  *   written alongside the kuilt-reserved fields and recovered by [MDNSServiceDiscoverer].
  */
@@ -40,6 +42,7 @@ public class MDNSServiceAdvertiser(
     private val hostOs: MDNSAdvertisement.HostOs? = null,
     private val fabrics: String? = null,
     private val mcPeer: String? = null,
+    private val roomKey: String? = null,
     private val txtExtensions: Map<String, String> = emptyMap(),
 ) {
     private var serviceInfo: ServiceInfo? = null
@@ -68,7 +71,7 @@ public class MDNSServiceAdvertiser(
         )
 
     private fun buildTxtMapWithMcPeer(): Map<String, String> {
-        val base = buildTxtMap(selfId, wsPath, hostOs, fabrics, txtExtensions)
+        val base = buildTxtMap(selfId, wsPath, hostOs, fabrics, roomKey, txtExtensions)
         return if (mcPeer != null) base + (MDNSAdvertisement.TXT_KEY_MC_PEER to mcPeer) else base
     }
 }

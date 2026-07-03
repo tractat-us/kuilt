@@ -34,6 +34,10 @@ import us.tractat.kuilt.core.Tag
  *   These are written into the mDNS TXT record alongside the kuilt-owned fields and
  *   recovered verbatim by [MDNSServiceDiscoverer]. Keys must not collide with the
  *   kuilt-reserved constants in [Companion].
+ * @property roomKey The stable room identity this host advertises — carried in the
+ *   [TXT_KEY_ROOM] TXT entry when non-null. A joiner reads it back and targets it in
+ *   its admission handshake; `null` (the backward-compatible default) means the host
+ *   advertises no explicit room and admits without a room check. See [Tag.roomKey].
  */
 public data class MDNSAdvertisement(
     val host: String,
@@ -45,6 +49,7 @@ public data class MDNSAdvertisement(
     val fabrics: String? = null,
     val mcPeer: String? = null,
     val txtExtensions: Map<String, String> = emptyMap(),
+    override val roomKey: String? = null,
 ) : Tag {
     /** The server's stable peer ID — unique across all mDNS advertisements. */
     override val peerKey: String get() = serverPeerId.value
@@ -79,6 +84,9 @@ public data class MDNSAdvertisement(
         public const val TXT_KEY_FABRICS: String = "fabrics"
         public const val TXT_KEY_MC_PEER: String = "mcPeer"
 
+        /** Optional TXT key carrying the host's advertised room identity ([roomKey]). */
+        public const val TXT_KEY_ROOM: String = "room"
+
         public const val PROTOCOL_VERSION: String = "2"
 
         /** Fabric label written into [TXT_KEY_FABRICS] for WebSocket. */
@@ -101,4 +109,5 @@ internal val kuiltReservedTxtKeys: Set<String> =
         MDNSAdvertisement.TXT_KEY_HOST_OS,
         MDNSAdvertisement.TXT_KEY_FABRICS,
         MDNSAdvertisement.TXT_KEY_MC_PEER,
+        MDNSAdvertisement.TXT_KEY_ROOM,
     )

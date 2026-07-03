@@ -115,6 +115,7 @@ private class ServiceDelegate(
                 fabrics = dict[MDNSAdvertisement.TXT_KEY_FABRICS]?.toUtf8String(),
                 mcPeer = dict[MDNSAdvertisement.TXT_KEY_MC_PEER]?.toUtf8String(),
                 txtExtensions = extensions,
+                roomKey = dict[MDNSAdvertisement.TXT_KEY_ROOM]?.toUtf8String(),
             ),
         )
     }

@@ -105,6 +105,7 @@ class MDNSServiceDiscovererParserTest {
                         MDNSAdvertisement.TXT_KEY_HOST_OS to "jvm",
                         MDNSAdvertisement.TXT_KEY_FABRICS to "ws,mc",
                         MDNSAdvertisement.TXT_KEY_MC_PEER to "MCPeer-xyz",
+                        MDNSAdvertisement.TXT_KEY_ROOM to "room-v2",
                     ),
             )
 
@@ -113,6 +114,7 @@ class MDNSServiceDiscovererParserTest {
         assertEquals(MDNSAdvertisement.HostOs.Jvm, result?.hostOs)
         assertEquals("ws,mc", result?.fabrics)
         assertEquals("MCPeer-xyz", result?.mcPeer)
+        assertEquals("room-v2", result?.roomKey)
     }
 
     @Test
@@ -155,6 +157,7 @@ class MDNSServiceDiscovererParserTest {
         assertNull(result.hostOs)
         assertNull(result.fabrics)
         assertNull(result.mcPeer)
+        assertNull(result.roomKey)
         assertTrue(result.txtExtensions.isEmpty())
     }
 

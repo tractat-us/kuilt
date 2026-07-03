@@ -32,6 +32,8 @@ import us.tractat.kuilt.core.PeerId
  * @param hostOs OS family of this host — written as [MDNSAdvertisement.TXT_KEY_HOST_OS].
  *   Defaults to [MDNSAdvertisement.HostOs.Android].
  * @param fabrics Comma-separated transport labels this host accepts (e.g. `"ws"`).
+ * @param roomKey Optional room identity this host advertises — written as
+ *   [MDNSAdvertisement.TXT_KEY_ROOM] when non-null, so a discovering joiner can target it.
  * @param txtExtensions Arbitrary application-supplied TXT record key–value pairs that are
  *   written alongside the kuilt-reserved fields and recovered by [MDNSServiceDiscoverer].
  */
@@ -44,6 +46,7 @@ public class MDNSServiceAdvertiser(
     private val wsPath: String = MDNSAdvertisement.DEFAULT_WS_PATH,
     private val hostOs: MDNSAdvertisement.HostOs? = MDNSAdvertisement.HostOs.Android,
     private val fabrics: String? = null,
+    private val roomKey: String? = null,
     private val txtExtensions: Map<String, String> = emptyMap(),
 ) {
     private var registrationListener: NsdManager.RegistrationListener? = null
@@ -102,7 +105,7 @@ public class MDNSServiceAdvertiser(
             serviceName = displayName
             serviceType = this@MDNSServiceAdvertiser.serviceType.forNsd()
             port = this@MDNSServiceAdvertiser.port
-            buildTxtMap(selfId, wsPath, hostOs, fabrics, txtExtensions)
+            buildTxtMap(selfId, wsPath, hostOs, fabrics, roomKey, txtExtensions)
                 .forEach { (key, value) -> setAttribute(key, value) }
         }
 }

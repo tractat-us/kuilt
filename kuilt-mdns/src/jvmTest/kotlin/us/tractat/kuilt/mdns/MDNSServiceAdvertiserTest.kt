@@ -209,6 +209,25 @@ class MDNSServiceAdvertiserTest {
     }
 
     @Test
+    fun `register embeds roomKey in TXT record when supplied`() {
+        val fake = CapturingJmDNS()
+        val advertiser =
+            MDNSServiceAdvertiser(
+                serviceType = TEST_SERVICE_TYPE,
+                jmdns = fake,
+                displayName = "RoomSession",
+                port = 19016,
+                selfId = PeerId("peer-16"),
+                roomKey = "room-99",
+            )
+
+        advertiser.register()
+
+        val roomKey = fake.lastRegistered?.getPropertyString(MDNSAdvertisement.TXT_KEY_ROOM)
+        assertEquals("room-99", roomKey)
+    }
+
+    @Test
     fun `register embeds txtExtensions in TXT record`() {
         val fake = CapturingJmDNS()
         val advertiser =
@@ -248,6 +267,7 @@ class MDNSServiceAdvertiserTest {
         assertNull(info.getPropertyString(MDNSAdvertisement.TXT_KEY_HOST_OS))
         assertNull(info.getPropertyString(MDNSAdvertisement.TXT_KEY_FABRICS))
         assertNull(info.getPropertyString(MDNSAdvertisement.TXT_KEY_MC_PEER))
+        assertNull(info.getPropertyString(MDNSAdvertisement.TXT_KEY_ROOM))
     }
 
     @Test
