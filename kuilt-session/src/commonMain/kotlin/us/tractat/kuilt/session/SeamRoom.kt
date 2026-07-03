@@ -992,6 +992,15 @@ internal class SeamRoom(
         lock.withLock {
             val assignedId = PeerId(welcome.assignedPeerId)
 
+            // Joiner-side cross-admit hardening (#1180): once we've identified our host, ignore
+            // Welcomes from anyone else — a foreign host on a flat loom must not pollute our roster
+            // or hijack hostPeerId. The host sends *every* legitimate Welcome (self-admission,
+            // bootstrap, host-intro), so they all share the host's sender; a differing sender is
+            // foreign. (Cannot gate on Welcome.roomId — bootstrap/host-intro Welcomes carry null.)
+            // Complements the #1172 Change A host-side gate that stops foreign Welcomes at the source.
+            val establishedHost = hostPeerId
+            if (establishedHost != null && sender != establishedHost) return@withLock
+
             // Self-admission welcome: mint the resume token (once) from the roomId carried here.
             if (assignedId == selfId) {
                 mintResumeTokenIfAbsent(welcome.roomId)
