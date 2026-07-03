@@ -88,4 +88,39 @@ public sealed interface MembershipEvent {
      * host peer. The room does not auto-elect a new host.
      */
     public data class HostLost(val at: Instant) : MembershipEvent
+
+    /**
+     * The joiner's admit handshake failed terminally — it never entered a roster
+     * (joiner perspective only).
+     *
+     * Terminal state — no further events follow. [Room.broadcast] and [Room.sendTo]
+     * become silent no-ops after this event.
+     *
+     * Distinct from [HostLost]: [HostLost] means an *already-admitted* joiner lost its host;
+     * [AdmissionFailed] means admission never completed at all. Emitting it is the loud
+     * alternative to the pre-#1178 silent hang — without it, a dropped or refused `Hello`
+     * left the consumer waiting on [Room.roster] forever with no signal.
+     *
+     * [reason] separates an active host refusal from silence — see [AdmissionFailure].
+     */
+    public data class AdmissionFailed(val reason: AdmissionFailure, val at: Instant) : MembershipEvent
+}
+
+/**
+ * Why a joiner's admit handshake failed terminally. See [MembershipEvent.AdmissionFailed].
+ */
+public sealed interface AdmissionFailure {
+    /**
+     * The host actively refused admission with an [us.tractat.kuilt.session.admit.AdmitMessage.Reject]
+     * — for example the #1172 room-mismatch gate. [message] is the host's stated reason.
+     * Retrying the same request is futile; the joiner needs to change something (e.g. its target room).
+     */
+    public data class Rejected(val message: String) : AdmissionFailure
+
+    /**
+     * No [us.tractat.kuilt.session.admit.AdmitMessage.Welcome] arrived within the admit deadline —
+     * the host may be absent, or the joiner's `Hello` was dropped. Unlike [Rejected] this is silence,
+     * not a refusal, so a later retry may succeed.
+     */
+    public data object TimedOut : AdmissionFailure
 }

@@ -40,6 +40,8 @@ import us.tractat.kuilt.session.partition.ResumeResult
 import us.tractat.kuilt.session.partition.ResumeToken
 import us.tractat.kuilt.session.partition.RoomId
 import kotlin.time.Clock
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
 
 private val logger = KotlinLogging.logger("us.tractat.kuilt.session.SeamRoom")
@@ -71,6 +73,11 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.session.SeamRoom")
  *
  * [heartbeatConfig] controls partition-detection timing.
  *
+ * [admitTimeout] bounds the joiner's admit handshake: if no
+ * [AdmitMessage.Welcome] arrives within this window after the joiner's `Hello`,
+ * the room surfaces a terminal [MembershipEvent.AdmissionFailed] with
+ * [AdmissionFailure.TimedOut] instead of waiting forever (#1178). Hosts ignore it.
+ *
  * @see SeamRoomFactory.systemClock for the production convenience constructor.
  */
 public class SeamRoomFactory(
@@ -78,6 +85,7 @@ public class SeamRoomFactory(
     private val scope: CoroutineScope,
     private val clock: () -> Instant,
     private val heartbeatConfig: HeartbeatConfig = HeartbeatConfig(),
+    private val admitTimeout: Duration = DEFAULT_ADMIT_TIMEOUT,
 ) : RoomFactory {
     override suspend fun host(pattern: Pattern): Room {
         val seam = loom.host(pattern)
@@ -89,6 +97,7 @@ public class SeamRoomFactory(
             scope = scope,
             clock = clock,
             heartbeatConfig = heartbeatConfig,
+            admitTimeout = admitTimeout,
             roomId = roomId,
             // Host's own room identity — the value a joiner's Hello.targetRoom must
             // match (or leave null) to be admitted. Always non-null for hosts:
@@ -106,6 +115,7 @@ public class SeamRoomFactory(
             scope = scope,
             clock = clock,
             heartbeatConfig = heartbeatConfig,
+            admitTimeout = admitTimeout,
             roomId = null,
             // Joiner's declared target room — travels in Hello.targetRoom so the host
             // can reject cross-room admission on a flat fabric. Null (the common case)
@@ -130,12 +140,22 @@ public class SeamRoomFactory(
             loom: Loom,
             scope: CoroutineScope,
             heartbeatConfig: HeartbeatConfig = HeartbeatConfig(),
+            admitTimeout: Duration = DEFAULT_ADMIT_TIMEOUT,
         ): SeamRoomFactory = SeamRoomFactory(
             loom = loom,
             scope = scope,
             clock = { Clock.System.now() },
             heartbeatConfig = heartbeatConfig,
+            admitTimeout = admitTimeout,
         )
+
+        /**
+         * Default joiner admit deadline (#1178). Generous enough to cover a relay round-trip and
+         * host-side admit work on a slow link, short enough that a dropped/refused `Hello` fails
+         * loudly in seconds rather than hanging. Override per deployment via the [admitTimeout]
+         * constructor parameter.
+         */
+        internal val DEFAULT_ADMIT_TIMEOUT: Duration = 30.seconds
     }
 }
 
@@ -185,7 +205,8 @@ private const val MEMBERSHIP_EVENT_REPLAY = 64
  *
  * **Thread safety**: all mutable membership state (`admittedById`, `closed`, `hostLost`,
  * `hostPeerId`, `pendingResume`, `resumeToken`, `reconnecting`, `incomingCollectJob`,
- * `detectorJobs`, `channelViews`) is guarded by an atomicfu [reentrantLock]. Critical sections
+ * `admissionFailed`, `admitDeadlineJob`, `detectorJobs`, `channelViews`) is guarded by an
+ * atomicfu [reentrantLock]. Critical sections
  * perform only synchronous map/field operations; all suspend calls (sends, broadcasts, re-weave,
  * awaiting `Woven`, resume) are made outside the lock.
  *
@@ -198,6 +219,15 @@ internal class SeamRoom(
     private val scope: CoroutineScope,
     private val clock: () -> Instant,
     private val heartbeatConfig: HeartbeatConfig,
+    /**
+     * **Joiner only.** Admit deadline: if no [AdmitMessage.Welcome] admits this joiner within
+     * this window after its `Hello`, the room fails loudly with
+     * [MembershipEvent.AdmissionFailed] ([AdmissionFailure.TimedOut]) instead of hanging (#1178).
+     *
+     * Defaulted so tests that construct [SeamRoom] directly still compile; [SeamRoomFactory]
+     * always passes its configured value. Ignored on the host side.
+     */
+    private val admitTimeout: Duration = SeamRoomFactory.DEFAULT_ADMIT_TIMEOUT,
     /**
      * Stable room identifier. Non-null for hosts (generated at room creation);
      * initially null for joiners (received from the host's [AdmitMessage.Welcome]).
@@ -357,6 +387,30 @@ internal class SeamRoom(
      * here so [attemptHostReconnect] can restart it and [leave] can cancel it.
      */
     private var incomingCollectJob: Job? = null
+
+    /**
+     * **Joiner only.** Completed once this joiner is admitted (its own self-admission
+     * [AdmitMessage.Welcome] arrives). The admit-deadline watcher awaits it: completion
+     * means "admitted in time" and disarms the timeout; a completion that never comes
+     * within [admitTimeout] fires [MembershipEvent.AdmissionFailed] ([AdmissionFailure.TimedOut]).
+     * Never completed on a host (hosts don't wait to be admitted).
+     */
+    private val admitted = CompletableDeferred<Unit>()
+
+    /**
+     * **Joiner only.** Latches once the admit handshake has failed terminally
+     * ([MembershipEvent.AdmissionFailed] emitted), so the two failure paths — a `Reject`
+     * during initial join and the admit-deadline elapsing — emit exactly one event. Guarded by [lock].
+     */
+    private var admissionFailed = false
+
+    /**
+     * **Joiner only.** The child job running the admit-deadline watcher ([watchAdmitDeadline]),
+     * or null on a host / after teardown. Tracked so [leave] cancels it. The watcher itself
+     * hands the actual failure off to a *detached* coroutine so [leave]'s cancellation of this
+     * job can never cancel [failAdmission] mid-teardown (same discipline as [reconnectJob]).
+     */
+    private var admitDeadlineJob: Job? = null
 
     /**
      * The host's [PeerId] as seen from a [SessionRole.Joiner].
@@ -663,8 +717,43 @@ internal class SeamRoom(
             // signal that the link is live and the broadcast will be carried.
             seam.state.first { it is SeamState.Woven }
             sendHello()
+            // Arm the admit deadline (#1178): a dropped/refused Hello must fail loudly, not hang.
+            lock.withLock { admitDeadlineJob = scope.launch { watchAdmitDeadline() } }
         }
         restartIncomingCollect()
+    }
+
+    /**
+     * **Joiner only.** Waits up to [admitTimeout] for admission ([admitted]); if it never
+     * completes, fails the room loudly with [AdmissionFailure.TimedOut].
+     *
+     * The failure is handed to a **detached** `scope.launch` rather than run inline: [failAdmission]
+     * calls [leave], and [leave] cancels [admitDeadlineJob] — the very coroutine this runs on — which
+     * would otherwise cancel the teardown mid-flight (the [reconnectJob] discipline). Detaching makes
+     * the failure a sibling of this job, immune to that cancellation.
+     */
+    private suspend fun watchAdmitDeadline() {
+        val admittedInTime = withTimeoutOrNull(admitTimeout) { admitted.await() } != null
+        if (!admittedInTime) {
+            scope.launch { failAdmission(AdmissionFailure.TimedOut, clock()) }
+        }
+    }
+
+    /**
+     * **Joiner only.** Terminally fail the admit handshake: emit [MembershipEvent.AdmissionFailed]
+     * (once) and tear the room down via [leave]. No-op if the room already went terminal or the
+     * joiner was admitted after all (a late [admitted] completion or a stray post-admission `Reject`).
+     *
+     * Always invoked on a detached [scope] coroutine (see [watchAdmitDeadline] and the `Reject`
+     * handler), so [leave] cancelling [admitDeadlineJob] never cancels this call.
+     */
+    private suspend fun failAdmission(reason: AdmissionFailure, at: Instant) {
+        lock.withLock {
+            if (closed || hostLost || admissionFailed || admitted.isCompleted) return
+            admissionFailed = true
+        }
+        _events.tryEmit(MembershipEvent.AdmissionFailed(reason, at))
+        leave(LeaveReason.Error("admission failed: $reason"))
     }
 
     /**
@@ -756,9 +845,18 @@ internal class SeamRoom(
             }
             is AdmitMessage.Reject -> {
                 if (_role.value == SessionRole.Joiner) {
-                    lock.withLock {
-                        pendingResume?.complete(ResumeResult.WindowClosed)
+                    // A Reject means one of two things depending on where we are:
+                    //  - resume in flight  → resolve the parked resume as WindowClosed (existing behavior);
+                    //  - initial join      → the host refused admission; fail loudly (#1178) instead of
+                    //                         swallowing it and leaving join()'s consumer hanging.
+                    val hadPendingResume = lock.withLock {
+                        val d = pendingResume
                         pendingResume = null
+                        d?.complete(ResumeResult.WindowClosed)
+                        d != null
+                    }
+                    if (!hadPendingResume) {
+                        scope.launch { failAdmission(AdmissionFailure.Rejected(msg.reason), clock()) }
                     }
                 }
             }
@@ -897,6 +995,8 @@ internal class SeamRoom(
             // Self-admission welcome: mint the resume token (once) from the roomId carried here.
             if (assignedId == selfId) {
                 mintResumeTokenIfAbsent(welcome.roomId)
+                // The host explicitly admitted us — disarm the admit deadline (#1178).
+                admitted.complete(Unit)
                 return@withLock
             }
 
@@ -1221,7 +1321,7 @@ internal class SeamRoom(
             closed = true
             Triple(
                 _role.value == SessionRole.Joiner && reason is LeaveReason.Normal,
-                loopJobs + listOfNotNull(incomingCollectJob, reconnectJob),
+                loopJobs + listOfNotNull(incomingCollectJob, reconnectJob, admitDeadlineJob),
                 detectorJobs.values.toList().also { detectorJobs.clear() },
             )
         }
