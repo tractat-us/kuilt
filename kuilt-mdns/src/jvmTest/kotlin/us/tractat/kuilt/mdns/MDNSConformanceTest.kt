@@ -12,6 +12,7 @@ import us.tractat.kuilt.core.CloseReason
 import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.Seam
+import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.core.Tag
 import java.net.ServerSocket
 import kotlin.test.AfterTest
@@ -87,7 +88,7 @@ class MDNSConformanceTest : SeamConformanceSuite() {
      */
     @AfterTest
     fun tearDown() {
-        runBlocking { openSeams.forEach { runCatching { it.close(CloseReason.Normal) } } }
+        runBlocking { openSeams.forEach { runCatchingCancellable { it.close(CloseReason.Normal) } } }
         openSeams.clear()
         joinerClients.forEach { it.close() }
         joinerClients.clear()

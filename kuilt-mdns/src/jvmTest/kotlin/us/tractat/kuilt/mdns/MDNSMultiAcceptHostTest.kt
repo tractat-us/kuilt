@@ -13,6 +13,7 @@ import us.tractat.kuilt.core.CloseReason
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Seam
+import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.test.assertAll
 import us.tractat.kuilt.websocket.KtorClientLoom
 import us.tractat.kuilt.websocket.WebSocketAdvertisement
@@ -69,7 +70,7 @@ class MDNSMultiAcceptHostTest {
 
     @AfterTest
     fun tearDown() {
-        runBlocking { openSeams.forEach { runCatching { it.close(CloseReason.Normal) } } }
+        runBlocking { openSeams.forEach { runCatchingCancellable { it.close(CloseReason.Normal) } } }
         openSeams.clear()
         clients.forEach { it.close() }
         clients.clear()

@@ -6,6 +6,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.deal.SraScheme
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -41,7 +42,7 @@ class DealSessionTest {
         assertEquals(originalCard.toList(), revealed.toList())
 
         // Secrecy: bob is not in the quorum — he cannot recover the plaintext.
-        val bobAttempt = runCatching { bobSession.decrypt(0) }.getOrNull()
+        val bobAttempt = runCatchingCancellable { bobSession.decrypt(0) }.getOrNull()
         assertNotEquals(originalCard.toList(), bobAttempt?.toList())
     }
 
@@ -72,7 +73,7 @@ class DealSessionTest {
         assertEquals(originalCard.toList(), revealed.toList())
 
         // Secrecy: alice is not in the quorum — she cannot recover the plaintext.
-        val aliceAttempt = runCatching { aliceSession.decrypt(0) }.getOrNull()
+        val aliceAttempt = runCatchingCancellable { aliceSession.decrypt(0) }.getOrNull()
         assertNotEquals(originalCard.toList(), aliceAttempt?.toList())
     }
 }
