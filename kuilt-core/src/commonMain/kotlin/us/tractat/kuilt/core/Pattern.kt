@@ -7,15 +7,19 @@ package us.tractat.kuilt.core
  * callers are unaffected.
  *
  * [roomKey] is this host's stable room identity — the value a joiner must target
- * to be admitted. It defaults to [displayName] so every host has a room identity
- * without extra ceremony; set it explicitly when several hosts share a display
- * name but must remain distinct rooms (e.g. two `host()` sessions on one flat
- * in-memory mesh). A joiner declares which room it wants via
- * [Tag.roomKey]; the host admits only when the targets agree (or the joiner
- * names none — see [Tag.roomKey]).
+ * to be admitted. It defaults to `null`, meaning **this host declares no room**
+ * and admits any joiner (the permissive default); set it explicitly to bind
+ * admission to a room, e.g. when several hosts share a display name but must
+ * remain distinct rooms (e.g. two `host()` sessions on one flat in-memory mesh).
+ * A joiner declares which room it wants via [Tag.roomKey]; the host admits only
+ * when the targets agree (or either side names none — see [Tag.roomKey]).
+ *
+ * Keeping this nullable — rather than defaulting it to [displayName] — keeps
+ * room identity an explicit, opt-in concept, orthogonal to the (already
+ * overloaded) display name.
  */
 public data class Pattern(
     val displayName: String,
     val maxPeers: Int = 6,
-    val roomKey: String = displayName,
+    val roomKey: String? = null,
 )

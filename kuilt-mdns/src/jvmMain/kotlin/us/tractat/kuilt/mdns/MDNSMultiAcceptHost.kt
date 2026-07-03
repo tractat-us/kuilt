@@ -116,6 +116,10 @@ public class MDNSMultiAcceptHost(
             wsPath = wsPath,
             hostOs = hostOs,
             fabrics = fabrics,
+            // Source the room identity from the host Pattern so the room-bound
+            // admission guard is default-on for any host that declared a room.
+            // Null (the Pattern default) advertises no room and stays permissive.
+            roomKey = pattern.roomKey,
             txtExtensions = txtExtensions,
         )
 

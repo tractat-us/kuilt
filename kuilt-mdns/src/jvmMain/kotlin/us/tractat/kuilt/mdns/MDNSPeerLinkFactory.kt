@@ -4,6 +4,7 @@ import io.ktor.server.application.Application
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import us.tractat.kuilt.core.Loom
+import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.Seam
@@ -74,7 +75,7 @@ public class MDNSPeerLinkFactory(
     override suspend fun weave(rendezvous: Rendezvous): Seam =
         when (rendezvous) {
             is Rendezvous.New -> {
-                registerMDNS(rendezvous.pattern.displayName)
+                registerMDNS(rendezvous.pattern)
                 serverFactory.host(rendezvous.pattern)
             }
             is Rendezvous.Existing -> {
@@ -104,16 +105,19 @@ public class MDNSPeerLinkFactory(
      */
     public val selfPeerId: PeerId get() = serverFactory.selfPeerId
 
-    private suspend fun registerMDNS(displayName: String) =
+    private suspend fun registerMDNS(pattern: Pattern) =
         withContext(Dispatchers.IO) {
             val a =
                 MDNSServiceAdvertiser(
                     serviceType = serviceType,
                     jmdns = jmdns,
-                    displayName = displayName,
+                    displayName = pattern.displayName,
                     port = port,
                     selfId = serverFactory.selfPeerId,
                     wsPath = wsPath,
+                    // Default-on room-bound admission (#1189): advertise the host's
+                    // room identity when the Pattern declared one; null = permissive.
+                    roomKey = pattern.roomKey,
                 )
             a.register()
             advertiser = a

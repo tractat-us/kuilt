@@ -100,8 +100,8 @@ public class SeamRoomFactory(
             admitTimeout = admitTimeout,
             roomId = roomId,
             // Host's own room identity — the value a joiner's Hello.targetRoom must
-            // match (or leave null) to be admitted. Always non-null for hosts:
-            // Pattern.roomKey defaults to displayName.
+            // match (or leave null) to be admitted. Null (the Pattern default) means
+            // this host declared no room and admits permissively.
             roomKey = pattern.roomKey,
         ).also { room -> room.start() }
     }
