@@ -50,7 +50,7 @@ public class MetricTapHost internal constructor(
         valueSerializer = metricCatalogSerializer(),
         scope = scope,
         config = config.quilterConfig,
-        binaryFormat = MetricTapCbor,
+        binaryFormat = TapCbor,
     )
 
     init {

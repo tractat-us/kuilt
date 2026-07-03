@@ -8,7 +8,6 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withTimeout
-import kotlinx.coroutines.withTimeoutOrNull
 import us.tractat.kuilt.core.ScopedCloseable
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.otel.MetricCatalog
@@ -53,7 +52,7 @@ public class MetricTapClient(
         valueSerializer = metricCatalogSerializer(),
         scope = scope,
         config = config.quilterConfig,
-        binaryFormat = MetricTapCbor,
+        binaryFormat = TapCbor,
     )
 
     /**
@@ -75,9 +74,9 @@ public class MetricTapClient(
      * buffer that may legitimately be empty for a while.
      */
     public suspend fun pull(): MetricSnapshot = withTimeout(config.pullTimeout) {
-        awaitRemotePeer()
+        seam.awaitRemotePeer()
         val firstNonEmpty = replicator.state.first { it.isNotEmpty() }
-        collapse(settle(firstNonEmpty))
+        collapse(replicator.state.settle(config.pullSettleStep, firstNonEmpty))
     }
 
     /**
@@ -100,32 +99,7 @@ public class MetricTapClient(
     private fun MetricCatalog.isNotEmpty(): Boolean =
         sums.isNotEmpty() || doubleSums.isNotEmpty() || gauges.isNotEmpty() || cardinalities.isNotEmpty()
 
-    private suspend fun awaitRemotePeer() {
-        seam.peers.first { peers -> peers.any { it != seam.selfId } }
-    }
-
-    /**
-     * Wait for the replicated state to stop advancing, starting from [initial]. Each step
-     * waits up to [MetricTapConfig.pullSettleStep] for the next distinct state; a quiet
-     * step means the snapshot has settled. Bounded by [SETTLE_ITERATIONS] and, via the
-     * caller, by [MetricTapConfig.pullTimeout].
-     */
-    private suspend fun settle(initial: MetricCatalog): MetricCatalog {
-        var current = initial
-        repeat(SETTLE_ITERATIONS) {
-            val next = withTimeoutOrNull(config.pullSettleStep) {
-                replicator.state.first { it != current }
-            } ?: return current
-            current = next
-        }
-        return current
-    }
-
     override fun onClose() {
         replicator.close()
-    }
-
-    private companion object {
-        const val SETTLE_ITERATIONS = 32
     }
 }

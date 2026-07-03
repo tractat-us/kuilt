@@ -8,7 +8,6 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withTimeout
-import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.io.bytestring.ByteString
 import us.tractat.kuilt.core.ScopedCloseable
 import us.tractat.kuilt.core.Seam
@@ -45,7 +44,7 @@ public class LogTapClient(
         valueSerializer = logRgaSerializer(),
         scope = scope,
         config = config.quilterConfig,
-        binaryFormat = LogTapCbor,
+        binaryFormat = TapCbor,
     )
 
     /**
@@ -92,10 +91,10 @@ public class LogTapClient(
      * (real-network) link. Bounded by [LogTapConfig.pullTimeout].
      */
     private suspend fun pullSettled(): Rga<LogRecord> = withTimeout(config.pullTimeout) {
-        awaitRemotePeer()
+        seam.awaitRemotePeer()
         // First non-empty state == the host's full backlog (one atomic merge), never a slice.
         val firstNonEmpty = replicator.state.first { it.toList().isNotEmpty() }
-        settle(firstNonEmpty)
+        replicator.state.settle(config.pullSettleStep, firstNonEmpty)
     }
 
     /**
@@ -129,34 +128,7 @@ public class LogTapClient(
         }
     }
 
-    private suspend fun awaitRemotePeer() {
-        seam.peers.first { peers -> peers.any { it != seam.selfId } }
-    }
-
-    /**
-     * Wait for the replicated state to stop advancing, starting from [initial]. Each step
-     * waits up to [LogTapConfig.pullSettleStep] for the next distinct state; a quiet step
-     * means the snapshot has settled. Bounded by [SETTLE_ITERATIONS] *and*, via the caller,
-     * by [LogTapConfig.pullTimeout] — it cannot hang on a permanently-churning peer. Works
-     * under both real time and a virtual-time test scheduler (which auto-advances the step
-     * delay when nothing else is runnable).
-     */
-    private suspend fun settle(initial: Rga<LogRecord>): Rga<LogRecord> {
-        var current = initial
-        repeat(SETTLE_ITERATIONS) {
-            val next = withTimeoutOrNull(config.pullSettleStep) {
-                replicator.state.first { it != current }
-            } ?: return current
-            current = next
-        }
-        return current
-    }
-
     override fun onClose() {
         replicator.close()
-    }
-
-    private companion object {
-        const val SETTLE_ITERATIONS = 32
     }
 }
