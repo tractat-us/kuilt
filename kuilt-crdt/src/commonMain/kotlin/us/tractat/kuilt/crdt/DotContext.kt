@@ -53,14 +53,7 @@ public class DotContext private constructor(
     public fun add(dot: Dot): DotContext = compact(vv, cloud + dot)
 
     /** The join: the union of two causal histories. */
-    override fun piece(other: DotContext): DotContext {
-        val mergedVv = HashMap<ReplicaId, Long>(vv)
-        for ((replica, seq) in other.vv) {
-            val current = mergedVv[replica]
-            if (current == null || seq > current) mergedVv[replica] = seq
-        }
-        return compact(mergedVv, cloud + other.cloud)
-    }
+    override fun piece(other: DotContext): DotContext = compact(vv.mergeMax(other.vv), cloud + other.cloud)
 
     override fun equals(other: Any?): Boolean =
         other is DotContext && vv == other.vv && cloud == other.cloud

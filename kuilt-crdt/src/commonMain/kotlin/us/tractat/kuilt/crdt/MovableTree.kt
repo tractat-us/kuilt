@@ -206,7 +206,7 @@ public class MovableTree<V> private constructor(
      */
     override fun piece(other: MovableTree<V>): MovableTree<V> {
         val merged = mergeDistinctLogs(log, other.log)
-        val mergedSeq = mergeSeqs(seqByReplica, other.seqByReplica)
+        val mergedSeq = seqByReplica.mergeMax(other.seqByReplica)
         val mergedCompacted = compactedDots + other.compactedDots
         // Apply any compacted dots from the other side — remove ops that were GC'd there.
         val prunedLog = if (mergedCompacted.isEmpty()) merged
@@ -660,18 +660,6 @@ internal fun ancestorPath(nodeId: String, parents: Map<String, String>): List<St
     }
     if (current == MovableTree.ROOT_ID) path += MovableTree.ROOT_ID
     return path
-}
-
-/** Merge two seqByReplica maps, taking the max per replica. */
-internal fun mergeSeqs(a: Map<ReplicaId, Long>, b: Map<ReplicaId, Long>): Map<ReplicaId, Long> {
-    if (a.isEmpty()) return b
-    if (b.isEmpty()) return a
-    val result = a.toMutableMap()
-    for ((replica, seq) in b) {
-        val current = result[replica]
-        if (current == null || seq > current) result[replica] = seq
-    }
-    return result
 }
 
 /** Total order for ops: ascending `ts`, then ascending `replica.value`. */

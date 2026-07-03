@@ -104,14 +104,8 @@ public class BoundedCounter private constructor(
             spent = spent.piece(other.spent),
         )
 
-    private fun mergeTransfers(other: Map<ReplicaId, GCounter>): Map<ReplicaId, GCounter> {
-        val merged = HashMap<ReplicaId, GCounter>(transfers)
-        for ((sender, theirRow) in other) {
-            val mine = merged[sender]
-            merged[sender] = if (mine == null) theirRow else mine.piece(theirRow)
-        }
-        return merged
-    }
+    private fun mergeTransfers(other: Map<ReplicaId, GCounter>): Map<ReplicaId, GCounter> =
+        transfers.mergeValues(other) { mine, theirs -> mine.piece(theirs) }
 
     override fun equals(other: Any?): Boolean =
         other is BoundedCounter &&

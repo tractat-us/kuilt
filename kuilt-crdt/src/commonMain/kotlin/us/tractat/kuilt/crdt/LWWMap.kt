@@ -48,14 +48,8 @@ public class LWWMap<K, V> private constructor(
     }
 
     /** The join: per-key max-tag of the underlying registers. */
-    override fun piece(other: LWWMap<K, V>): LWWMap<K, V> {
-        val merged = HashMap<K, LWWRegister<V>>(cells)
-        for ((key, theirReg) in other.cells) {
-            val mine = merged[key]
-            merged[key] = if (mine == null) theirReg else mine.piece(theirReg)
-        }
-        return LWWMap(merged)
-    }
+    override fun piece(other: LWWMap<K, V>): LWWMap<K, V> =
+        LWWMap(cells.mergeValues(other.cells) { mine, theirs -> mine.piece(theirs) })
 
     override fun equals(other: Any?): Boolean = other is LWWMap<*, *> && cells == other.cells
     override fun hashCode(): Int = cells.hashCode()
