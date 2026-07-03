@@ -12,7 +12,6 @@ import us.tractat.kuilt.raft.RaftStorage
 import kotlin.coroutines.ContinuationInterceptor
 import kotlin.coroutines.coroutineContext
 import kotlin.random.Random
-import kotlin.time.Clock
 import kotlin.time.Instant
 
 /**
@@ -38,7 +37,10 @@ import kotlin.time.Instant
  *   evicted and re-admitted automatically. See [gameHost] for details.
  * @param random RNG for gossip jitter and overlay bookkeeping. Production uses [Random.Default];
  *   tests inject a seeded instance for deterministic virtual-time execution.
- * @param clock Clock for heartbeat measurements. Tests inject a controllable clock.
+ * @param clock Clock for heartbeat measurements. **Required** — no wall-clock default (the same
+ *   "optional ≠ tuning" convention `gameHost` and `clusterClient` follow). Fed unconditionally
+ *   into the overlay [hostedOverlay] as well as [gameHost], so it is always live here. Production
+ *   callers pass `{ kotlin.time.Clock.System.now() }`; tests inject a controllable clock.
  * @param identity How the hub obtains its Raft §8 dedup id. See [gameHost].
  */
 public suspend fun CoroutineScope.gameHosted(
@@ -50,7 +52,7 @@ public suspend fun CoroutineScope.gameHosted(
     raftConfig: RaftConfig = RaftConfig(),
     livenessConfig: HeartbeatConfig? = null,
     random: Random = Random.Default,
-    clock: () -> Instant = { Clock.System.now() },
+    clock: () -> Instant,
     identity: ClientIdentity = ClientIdentity.Auto,
 ): GameSession {
     val dispatcher = requireNotNull(coroutineContext[ContinuationInterceptor]) {

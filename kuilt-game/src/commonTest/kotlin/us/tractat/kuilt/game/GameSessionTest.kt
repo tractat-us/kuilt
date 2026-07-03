@@ -36,7 +36,7 @@ class GameSessionTest {
         val loom = InMemoryLoom()
         val (hostSeam, joinSeam) = seats(loom, 2)
 
-        val hostDeferred = async { backgroundScope.gameHost(hostSeam, peerCount = 2, raftConfig = fastRaftConfig(seed = 1L)) }
+        val hostDeferred = async { backgroundScope.gameHost(hostSeam, peerCount = 2, raftConfig = fastRaftConfig(seed = 1L), clock = inertTestClock) }
         val joinDeferred = async { backgroundScope.gameJoin(joinSeam, raftConfig = fastRaftConfig(seed = 2L)) }
         val host = hostDeferred.await()
         val joiner = joinDeferred.await()

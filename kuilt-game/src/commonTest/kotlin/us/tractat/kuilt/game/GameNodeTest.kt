@@ -74,7 +74,7 @@ class GameNodeTest {
         // signal. The CoroutineScope receiver must be backgroundScope so the RaftNode lifetime is
         // tied to backgroundScope (not to the async block), allowing the async to complete once
         // the suspend work is done while nodes keep running on backgroundScope.
-        val hostDeferred = async { backgroundScope.gameHost(hostSeam, peerCount = 2, raftConfig = fastRaftConfig(seed = 1L)).node }
+        val hostDeferred = async { backgroundScope.gameHost(hostSeam, peerCount = 2, raftConfig = fastRaftConfig(seed = 1L), clock = inertTestClock).node }
         val joinDeferred = async { backgroundScope.gameJoin(joinSeam, raftConfig = fastRaftConfig(seed = 2L)).node }
 
         val host = hostDeferred.await()
@@ -125,7 +125,7 @@ class GameNodeTest {
         // Launch all three concurrently: host's admit loop blocks until voters.size == 3;
         // both joiners must be running so they can receive the membership change commits.
         // Use backgroundScope receiver so RaftNode lifetime ties to backgroundScope, not async.
-        val hostDeferred = async { backgroundScope.gameHost(hostSeam, peerCount = 3, raftConfig = fastRaftConfig(seed = 1L)).node }
+        val hostDeferred = async { backgroundScope.gameHost(hostSeam, peerCount = 3, raftConfig = fastRaftConfig(seed = 1L), clock = inertTestClock).node }
         val j1Deferred = async { backgroundScope.gameJoin(j1, raftConfig = fastRaftConfig(seed = 2L)).node }
         val j2Deferred = async { backgroundScope.gameJoin(j2, raftConfig = fastRaftConfig(seed = 3L)).node }
 
@@ -245,6 +245,7 @@ class GameNodeTest {
                 peerCount = 3,
                 returnAt = ReturnPolicy.Quorum,
                 raftConfig = fastRaftConfig(seed = 1L),
+                clock = inertTestClock,
             ).node
         }
         val j1Deferred = async { backgroundScope.gameJoin(j1, raftConfig = fastRaftConfig(seed = 2L)).node }
@@ -311,6 +312,7 @@ class GameNodeTest {
                 peerCount = 2,
                 returnAt = ReturnPolicy.Quorum,
                 raftConfig = fastRaftConfig(seed = 1L),
+                clock = inertTestClock,
             )
         }
         val j1Deferred = async { backgroundScope.gameJoin(j1Seam, raftConfig = fastRaftConfig(seed = 2L)) }

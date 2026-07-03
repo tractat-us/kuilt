@@ -29,6 +29,7 @@ import us.tractat.kuilt.raft.RaftConfig
 import us.tractat.kuilt.raft.RaftRole
 import us.tractat.kuilt.raft.test.FakeRaftNode
 import kotlin.test.assertEquals
+import kotlin.time.Clock
 import kotlin.time.Duration.Companion.seconds
 
 /**
@@ -70,6 +71,8 @@ internal fun sampleGameHostJoin() = runTest(StandardTestDispatcher(), timeout = 
             hostSeam,
             peerCount = 2,
             raftConfig = RaftConfig(expectVirtualTime = true),
+            // clock is required (no wall-clock default); production callers pass the system clock.
+            clock = { Clock.System.now() },
         )
     }
     val joinDeferred = async {
