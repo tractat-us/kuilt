@@ -20,11 +20,16 @@ import us.tractat.kuilt.core.Tag
  *   peer (matches its `MCPeerID.displayName`).
  * @property serviceType MultipeerConnectivity service type string the peer
  *   advertised under (matches the `serviceType` passed to [MultipeerPeerLinkFactory]).
+ * @property roomKey The stable room identity this joiner targets, matched against the
+ *   host's room before admission. Defaults to `null` (**permissive**) — the MC service
+ *   type already scopes discovery to a single room, so the transport binds the target
+ *   and no host-side room check is needed. See [Tag.roomKey].
  */
 public data class MultipeerAdvertisement(
     val handle: String,
     override val displayName: String,
     val serviceType: String,
+    override val roomKey: String? = null,
 ) : Tag {
     /** The MC peer handle — stable within the current browse session. */
     override val peerKey: String get() = handle

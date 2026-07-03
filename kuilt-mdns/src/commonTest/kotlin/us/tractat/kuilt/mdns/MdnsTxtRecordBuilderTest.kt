@@ -18,76 +18,88 @@ class MdnsTxtRecordBuilderTest {
 
     @Test
     fun `peerId is always present`() {
-        val map = buildTxtMap(PeerId("my-peer"), "/peer", null, null, emptyMap())
+        val map = buildTxtMap(PeerId("my-peer"), "/peer", null, null, null, emptyMap())
         assertEquals("my-peer", map[MDNSAdvertisement.TXT_KEY_PEER_ID])
     }
 
     @Test
     fun `wsPath is always present`() {
-        val map = buildTxtMap(selfId, "/custom", null, null, emptyMap())
+        val map = buildTxtMap(selfId, "/custom", null, null, null, emptyMap())
         assertEquals("/custom", map[MDNSAdvertisement.TXT_KEY_WS_PATH])
     }
 
     @Test
     fun `protocol version is always present and is v2`() {
-        val map = buildTxtMap(selfId, "/peer", null, null, emptyMap())
+        val map = buildTxtMap(selfId, "/peer", null, null, null, emptyMap())
         assertEquals(MDNSAdvertisement.PROTOCOL_VERSION, map[MDNSAdvertisement.TXT_KEY_PROTOCOL_VERSION])
         assertEquals("2", map[MDNSAdvertisement.TXT_KEY_PROTOCOL_VERSION])
     }
 
     @Test
     fun `default wsPath produces DEFAULT_WS_PATH`() {
-        val map = buildTxtMap(selfId, MDNSAdvertisement.DEFAULT_WS_PATH, null, null, emptyMap())
+        val map = buildTxtMap(selfId, MDNSAdvertisement.DEFAULT_WS_PATH, null, null, null, emptyMap())
         assertEquals(MDNSAdvertisement.DEFAULT_WS_PATH, map[MDNSAdvertisement.TXT_KEY_WS_PATH])
     }
 
     @Test
     fun `hostOs is included when supplied`() {
-        val map = buildTxtMap(selfId, "/peer", MDNSAdvertisement.HostOs.Android, null, emptyMap())
+        val map = buildTxtMap(selfId, "/peer", MDNSAdvertisement.HostOs.Android, null, null, emptyMap())
         assertEquals("android", map[MDNSAdvertisement.TXT_KEY_HOST_OS])
     }
 
     @Test
     fun `hostOs jvm value is correct`() {
-        val map = buildTxtMap(selfId, "/peer", MDNSAdvertisement.HostOs.Jvm, null, emptyMap())
+        val map = buildTxtMap(selfId, "/peer", MDNSAdvertisement.HostOs.Jvm, null, null, emptyMap())
         assertEquals("jvm", map[MDNSAdvertisement.TXT_KEY_HOST_OS])
     }
 
     @Test
     fun `hostOs apple value is correct`() {
-        val map = buildTxtMap(selfId, "/peer", MDNSAdvertisement.HostOs.Apple, null, emptyMap())
+        val map = buildTxtMap(selfId, "/peer", MDNSAdvertisement.HostOs.Apple, null, null, emptyMap())
         assertEquals("apple", map[MDNSAdvertisement.TXT_KEY_HOST_OS])
     }
 
     @Test
     fun `hostOs is absent when null`() {
-        val map = buildTxtMap(selfId, "/peer", null, null, emptyMap())
+        val map = buildTxtMap(selfId, "/peer", null, null, null, emptyMap())
         assertFalse(MDNSAdvertisement.TXT_KEY_HOST_OS in map)
     }
 
     @Test
     fun `fabrics is included when supplied`() {
-        val map = buildTxtMap(selfId, "/peer", null, "ws,nearby", emptyMap())
+        val map = buildTxtMap(selfId, "/peer", null, "ws,nearby", null, emptyMap())
         assertEquals("ws,nearby", map[MDNSAdvertisement.TXT_KEY_FABRICS])
     }
 
     @Test
     fun `fabrics is absent when null`() {
-        val map = buildTxtMap(selfId, "/peer", null, null, emptyMap())
+        val map = buildTxtMap(selfId, "/peer", null, null, null, emptyMap())
         assertFalse(MDNSAdvertisement.TXT_KEY_FABRICS in map)
     }
 
     @Test
     fun `txtExtensions keys are merged into the map`() {
         val extensions = mapOf("appVersion" to "3", "sessionId" to "abc")
-        val map = buildTxtMap(selfId, "/peer", null, null, extensions)
+        val map = buildTxtMap(selfId, "/peer", null, null, null, extensions)
         assertEquals("3", map["appVersion"])
         assertEquals("abc", map["sessionId"])
     }
 
     @Test
+    fun `roomKey is included when supplied`() {
+        val map = buildTxtMap(selfId, "/peer", null, null, "room-42", emptyMap())
+        assertEquals("room-42", map[MDNSAdvertisement.TXT_KEY_ROOM])
+    }
+
+    @Test
+    fun `roomKey is absent when null`() {
+        val map = buildTxtMap(selfId, "/peer", null, null, null, emptyMap())
+        assertFalse(MDNSAdvertisement.TXT_KEY_ROOM in map)
+    }
+
+    @Test
     fun `minimal v1 map has exactly three keys`() {
-        val map = buildTxtMap(selfId, MDNSAdvertisement.DEFAULT_WS_PATH, null, null, emptyMap())
+        val map = buildTxtMap(selfId, MDNSAdvertisement.DEFAULT_WS_PATH, null, null, null, emptyMap())
         assertEquals(3, map.size)
     }
 
@@ -99,6 +111,7 @@ class MdnsTxtRecordBuilderTest {
                 wsPath = "/peer",
                 hostOs = MDNSAdvertisement.HostOs.Android,
                 fabrics = "ws",
+                roomKey = null,
                 txtExtensions = emptyMap(),
             )
         // peerId, wsPath, protoVersion, hostOs, fabrics
@@ -113,6 +126,7 @@ class MdnsTxtRecordBuilderTest {
                 wsPath = "/peer",
                 hostOs = MDNSAdvertisement.HostOs.Android,
                 fabrics = "ws",
+                roomKey = null,
                 txtExtensions = mapOf("extra1" to "a", "extra2" to "b"),
             )
         // peerId, wsPath, protoVersion, hostOs, fabrics, extra1, extra2
@@ -121,7 +135,7 @@ class MdnsTxtRecordBuilderTest {
 
     @Test
     fun `no game domain keys appear in a default map`() {
-        val map = buildTxtMap(selfId, "/peer", null, null, emptyMap())
+        val map = buildTxtMap(selfId, "/peer", null, null, null, emptyMap())
         assertFalse("gameMinVersion" in map)
         assertFalse("gameMaxVersion" in map)
     }

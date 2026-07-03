@@ -83,6 +83,9 @@ public class MDNSServiceDiscoverer(
                                                 attrs[MDNSAdvertisement.TXT_KEY_MC_PEER]
                                                     ?.decodeToString(),
                                             txtExtensions = extractExtensions(attrs),
+                                            roomKey =
+                                                attrs[MDNSAdvertisement.TXT_KEY_ROOM]
+                                                    ?.decodeToString(),
                                         ),
                                     )
                                 }

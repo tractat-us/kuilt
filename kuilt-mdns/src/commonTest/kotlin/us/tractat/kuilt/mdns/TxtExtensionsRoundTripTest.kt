@@ -21,7 +21,7 @@ class TxtExtensionsRoundTripTest {
     @Test
     fun `txtExtensions keys are written into the TXT map`() {
         val extensions = mapOf("appVersion" to "42", "roomId" to "room-abc")
-        val map = buildTxtMap(selfId, "/peer", null, null, extensions)
+        val map = buildTxtMap(selfId, "/peer", null, null, null, extensions)
 
         assertEquals("42", map["appVersion"])
         assertEquals("room-abc", map["roomId"])
@@ -29,7 +29,7 @@ class TxtExtensionsRoundTripTest {
 
     @Test
     fun `empty txtExtensions produces only the three mandatory keys`() {
-        val map = buildTxtMap(selfId, "/peer", null, null, emptyMap())
+        val map = buildTxtMap(selfId, "/peer", null, null, null, emptyMap())
 
         assertEquals(3, map.size)
         assertTrue(MDNSAdvertisement.TXT_KEY_PEER_ID in map)
@@ -40,7 +40,7 @@ class TxtExtensionsRoundTripTest {
     @Test
     fun `txtExtensions do not clobber mandatory keys when they share no name`() {
         val extensions = mapOf("custom" to "value")
-        val map = buildTxtMap(selfId, "/peer", null, null, extensions)
+        val map = buildTxtMap(selfId, "/peer", null, null, null, extensions)
 
         assertEquals(selfId.value, map[MDNSAdvertisement.TXT_KEY_PEER_ID])
         assertEquals("/peer", map[MDNSAdvertisement.TXT_KEY_WS_PATH])
@@ -55,6 +55,7 @@ class TxtExtensionsRoundTripTest {
             "/peer",
             MDNSAdvertisement.HostOs.Jvm,
             "ws,mc",
+            null,
             extensions,
         )
         // peerId + wsPath + protoVersion + hostOs + fabrics + appVersion
@@ -86,12 +87,39 @@ class TxtExtensionsRoundTripTest {
     }
 
     @Test
+    fun `roomKey round-trips through the TXT map and MDNSAdvertisement`() {
+        val map = buildTxtMap(selfId, "/peer", null, null, "room-xyz", emptyMap())
+        assertEquals("room-xyz", map[MDNSAdvertisement.TXT_KEY_ROOM])
+
+        val ad = MDNSAdvertisement(
+            host = "10.0.0.1",
+            port = 9000,
+            serverPeerId = PeerId("p"),
+            displayName = "test",
+            roomKey = "room-xyz",
+        )
+        assertEquals("room-xyz", ad.roomKey)
+    }
+
+    @Test
+    fun `MDNSAdvertisement roomKey defaults to null and is excluded from extensions`() {
+        val ad = MDNSAdvertisement(
+            host = "10.0.0.1",
+            port = 9000,
+            serverPeerId = PeerId("p"),
+            displayName = "test",
+        )
+        assertEquals(null, ad.roomKey)
+        assertTrue(MDNSAdvertisement.TXT_KEY_ROOM in kuiltReservedTxtKeys)
+    }
+
+    @Test
     fun `no game domain keys exist in MDNSAdvertisement companion`() {
         // Regression test: game-domain TXT keys must not exist in the public API.
         // If the constants are removed, this test becomes a compile-time check
         // (the field references won't compile). Verify at the companion-object level
         // by checking the TXT map produced without extensions contains no game keys.
-        val map = buildTxtMap(selfId, "/peer", null, null, emptyMap())
+        val map = buildTxtMap(selfId, "/peer", null, null, null, emptyMap())
         assertFalse("gameMinVersion" in map)
         assertFalse("gameMaxVersion" in map)
     }
