@@ -5,9 +5,7 @@ import io.ktor.server.engine.EmbeddedServer
 import io.ktor.server.engine.embeddedServer
 import io.ktor.server.netty.Netty
 import io.ktor.server.netty.NettyApplicationEngine
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
@@ -30,7 +28,7 @@ import kotlin.test.assertNull
  * guard (#1172) is **default-on** for any host that declared a room (#1189).
  *
  * The policy wired here (fable second opinion, 2026-07-03): [Pattern.roomKey]
- * is now nullable and defaults to `null`, and the entry points source it
+ * is nullable and defaults to `null`, and the entry points source it
  * **unconditionally**. A plain `Pattern(displayName)` therefore advertises **no**
  * room and stays permissive; a `Pattern(displayName, roomKey = …)` advertises
  * the room and a discovering joiner ends up with a matching non-null
@@ -40,20 +38,17 @@ import kotlin.test.assertNull
  *
  * All JmDNS multicast is absorbed by [CapturingJmDNS] (defined in
  * [MDNSServiceAdvertiserTest]), so these are **not** `-P`-gated. The byte path
- * is only exercised as far as the advertised [ServiceInfo]; the round-trip back
+ * is exercised only as far as the advertised [ServiceInfo]; the round-trip back
  * to a joiner's `Tag` is closed by parsing that record through the real
  * [MDNSServiceDiscoverer.toAdvertisement].
  */
 class MDNSRoomKeySourcingTest {
 
     private val servers = mutableListOf<EmbeddedServer<NettyApplicationEngine, NettyApplicationEngine.Configuration>>()
-    private val jobs = mutableListOf<Job>()
     private val clients = mutableListOf<HttpClient>()
 
     @AfterTest
     fun tearDown() {
-        jobs.forEach { it.cancel() }
-        jobs.clear()
         clients.forEach { it.close() }
         clients.clear()
         servers.forEach { it.stop(gracePeriodMillis = 100, timeoutMillis = 1_000) }
@@ -122,9 +117,10 @@ class MDNSRoomKeySourcingTest {
     /**
      * Drives [MDNSPeerLinkFactory.weave] on a `Rendezvous.New` for [pattern]. `weave`
      * registers the mDNS service and then blocks awaiting the first joiner, so it runs
-     * on a tracked [Job] and we wait (bounded) for the registration to land.
+     * on a bounded child coroutine of this scope (inheriting the test dispatcher — no
+     * real-dispatcher import) and we wait for the registration to land, then cancel it.
      */
-    private suspend fun advertisePeerLink(pattern: Pattern): ServiceInfo {
+    private suspend fun advertisePeerLink(pattern: Pattern): ServiceInfo = coroutineScope {
         val port = ServerSocket(0).use { it.localPort }
         val jmdns = CapturingJmDNS()
         lateinit var factory: MDNSPeerLinkFactory
@@ -140,13 +136,15 @@ class MDNSRoomKeySourcingTest {
         }.also { servers += it }
         server.start(wait = false)
 
-        // weave(New) registers, then suspends forever awaiting a joiner — run it detached.
-        jobs += CoroutineScope(Dispatchers.IO).launch { factory.weave(Rendezvous.New(pattern)) }
-        val registered = withTimeoutOrNull(3_000) {
+        // weave(New) registers the service, then suspends awaiting a joiner that never
+        // comes — bound it with a timeout and cancel once the registration is captured.
+        val job = launch { withTimeoutOrNull(2_000) { factory.weave(Rendezvous.New(pattern)) } }
+        val registered = withTimeoutOrNull(1_500) {
             while (jmdns.lastRegistered == null) delay(10)
             jmdns.lastRegistered
         }
-        return assertNotNull(registered, "weave(New) must register the mDNS service")
+        job.cancel()
+        assertNotNull(registered, "weave(New) must register the mDNS service")
     }
 
     /** Closes the round-trip: parse the advertised record back into the Tag a joiner would discover. */
