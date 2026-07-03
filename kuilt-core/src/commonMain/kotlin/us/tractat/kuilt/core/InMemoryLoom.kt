@@ -146,6 +146,7 @@ public class InMemoryLoom(
 public data class InMemoryTag(
     override val displayName: String,
     override val peerKey: String = displayName,
+    override val roomKey: String? = null,
 ) : Tag
 
 private class InMemorySeam(

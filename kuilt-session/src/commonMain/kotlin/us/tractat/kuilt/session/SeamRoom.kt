@@ -1,5 +1,6 @@
 package us.tractat.kuilt.session
 
+import io.github.oshai.kotlinlogging.KotlinLogging
 import kotlinx.atomicfu.locks.reentrantLock
 import kotlinx.atomicfu.locks.withLock
 import kotlinx.coroutines.CompletableDeferred
@@ -40,6 +41,8 @@ import us.tractat.kuilt.session.partition.ResumeToken
 import us.tractat.kuilt.session.partition.RoomId
 import kotlin.time.Clock
 import kotlin.time.Instant
+
+private val logger = KotlinLogging.logger("us.tractat.kuilt.session.SeamRoom")
 
 /**
  * [Loom]-backed implementation of [RoomFactory].
@@ -87,6 +90,10 @@ public class SeamRoomFactory(
             clock = clock,
             heartbeatConfig = heartbeatConfig,
             roomId = roomId,
+            // Host's own room identity — the value a joiner's Hello.targetRoom must
+            // match (or leave null) to be admitted. Always non-null for hosts:
+            // Pattern.roomKey defaults to displayName.
+            roomKey = pattern.roomKey,
         ).also { room -> room.start() }
     }
 
@@ -100,6 +107,10 @@ public class SeamRoomFactory(
             clock = clock,
             heartbeatConfig = heartbeatConfig,
             roomId = null,
+            // Joiner's declared target room — travels in Hello.targetRoom so the host
+            // can reject cross-room admission on a flat fabric. Null (the common case)
+            // means the transport already bound the room; the host admits permissively.
+            roomKey = tag.roomKey,
             // Re-weave the same tag on tear. For a resumable [Loom] (e.g. [MuxClientLoom])
             // this heals the same [seam] handle onto a fresh base; for a non-resumable Loom
             // it is a no-op with respect to auto-resume (see the `reweave` KDoc contract).
@@ -195,6 +206,22 @@ internal class SeamRoom(
      * [SeamRoomFactory] always passes the host-generated id explicitly.
      */
     private val roomId: RoomId? = null,
+    /**
+     * Room identity for the admit gate (A2, #1172). Its meaning depends on [role]:
+     *
+     * - **Host:** this room's own stable key ([us.tractat.kuilt.core.Pattern.roomKey]).
+     *   A joiner's [AdmitMessage.Hello.targetRoom] is admitted only if it is null
+     *   (permissive — the transport bound the room) or equal to this key; a non-null
+     *   mismatch is rejected with [AdmitMessage.Reject] `"room-mismatch: …"`. This is
+     *   the structural guard against cross-room admission on a flat fabric (a shared
+     *   [us.tractat.kuilt.core.InMemoryLoom] where one mesh carries several rooms).
+     * - **Joiner:** the target room to advertise in [AdmitMessage.Hello.targetRoom]
+     *   ([us.tractat.kuilt.core.Tag.roomKey]).
+     *
+     * Null (the default) is permissive on both sides: a host without a declared room
+     * key can't gate; a joiner without one names no target and is admitted anywhere.
+     */
+    private val roomKey: String? = null,
     /**
      * **Joiner only.** Re-weaves the underlying fabric after a transport tear, so the joiner
      * can attempt an in-window resume instead of going straight to terminal
@@ -686,7 +713,24 @@ internal class SeamRoom(
         when (val msg = AdmitMessage.decode(bytes)) {
             is AdmitMessage.Hello -> {
                 if (_role.value == SessionRole.Host) {
-                    scope.launch { admitPeer(sender, msg) }
+                    val target = msg.targetRoom
+                    // Room-bound admission gate (A2, #1172). Reject only a *positive*
+                    // mismatch — both sides name a room and they differ. A null target
+                    // (transport already bound the room) or a host without a declared
+                    // room key stays permissive, preserving existing single-room fabrics.
+                    if (target != null && roomKey != null && target != roomKey) {
+                        logger.debug {
+                            "Rejecting Hello from $sender: room-mismatch ($target != $roomKey)"
+                        }
+                        scope.launch {
+                            val rejectBytes = AdmitMessage.encode(
+                                AdmitMessage.Reject("room-mismatch: $target != $roomKey"),
+                            )
+                            runCatchingCancellable { seam.sendTo(sender, rejectBytes) }
+                        }
+                    } else {
+                        scope.launch { admitPeer(sender, msg) }
+                    }
                 }
             }
             is AdmitMessage.Welcome -> {
@@ -801,6 +845,7 @@ internal class SeamRoom(
         val hello = AdmitMessage.Hello(
             displayName = displayName,
             sessionId = selfId.value,
+            targetRoom = roomKey,
         )
         runCatchingCancellable { seam.broadcast(AdmitMessage.encode(hello)) }
     }

@@ -10,6 +10,7 @@ kotlin {
             implementation(project(":kuilt-liveness"))
             implementation(project(":kuilt-crdt"))
             implementation(project(":kuilt-quilter"))
+            implementation(libs.kotlin.logging)
             implementation(libs.kotlinx.atomicfu)
             implementation(libs.kotlinx.coroutines.core)
             implementation(libs.kotlinx.serialization.core)
