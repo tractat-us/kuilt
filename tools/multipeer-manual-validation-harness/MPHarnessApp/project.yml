@@ -1,0 +1,29 @@
+name: MPHarnessApp
+options:
+  bundleIdPrefix: us.tractat.kuilt.scratch
+settings:
+  base:
+    DEVELOPMENT_TEAM: F4S2NUR9VL
+    CODE_SIGN_STYLE: Automatic
+    IPHONEOS_DEPLOYMENT_TARGET: "16.0"
+    FRAMEWORK_SEARCH_PATHS: "$(SRCROOT)/../harness/build/bin/iosArm64/debugFramework $(inherited)"
+    LD_RUNPATH_SEARCH_PATHS: "@executable_path/Frameworks $(inherited)"
+targets:
+  MPHarnessApp:
+    type: application
+    platform: iOS
+    deploymentTarget: "16.0"
+    sources:
+      - path: MPHarnessApp
+    info:
+      path: MPHarnessApp/Info.plist
+      properties:
+        UILaunchScreen: {}
+        NSLocalNetworkUsageDescription: "Multipeer validation harness needs local network access to discover the Mac puller."
+        NSBonjourServices:
+          - _kuiltmplog._tcp
+          - _kuiltmpmet._tcp
+    dependencies:
+      - framework: ../harness/build/bin/iosArm64/debugFramework/Harness.framework
+        embed: true
+        codeSign: true
