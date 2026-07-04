@@ -100,6 +100,7 @@ class KtorRoomHostTest {
                 // Yield twice so the launched coroutine reaches `withLock`.
                 yield()
                 yield()
+                // TODO(#1125): convert to runCatchingCancellable — bare runCatching swallows CancellationException. Deferred: this module has active worktree work.
                 val ex = runCatching { host.start { } }.exceptionOrNull()
                 assertNotNull(ex, "second start() must throw")
                 assertTrue(
@@ -145,6 +146,7 @@ class KtorRoomHostTest {
                 pattern = serverPattern,
                 loom = FailingLoom(error),
             )
+            // TODO(#1125): convert to runCatchingCancellable — bare runCatching swallows CancellationException. Deferred: this module has active worktree work.
             val result = runCatching {
                 coroutineScope {
                     host.start { awaitCancellation() }

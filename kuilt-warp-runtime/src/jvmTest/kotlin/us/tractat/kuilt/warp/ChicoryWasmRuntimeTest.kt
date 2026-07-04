@@ -144,6 +144,7 @@ class ChicoryWasmRuntimeTest {
             val loop = rt.load(loopWasm)
             val reverse = rt.load(reverseWasm)
             coroutineScope {
+                // TODO(#1125): convert to runCatchingCancellable — bare runCatching swallows CancellationException. Deferred: this module has active worktree work.
                 val runaway = async { runCatching { loop.invoke(ByteArray(0)) } }
                 val innocent = async { reverse.invoke(byteArrayOf(1, 2, 3, 4)) }
                 val innocentBytes = innocent.await()
