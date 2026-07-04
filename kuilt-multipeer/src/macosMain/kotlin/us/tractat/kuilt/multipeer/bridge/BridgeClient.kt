@@ -37,6 +37,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import platform.posix.memcpy
 import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.multipeer.MultipeerAdvertisement
 import us.tractat.kuilt.multipeer.MultipeerPeerLinkFactory
 import kotlin.experimental.ExperimentalNativeApi
@@ -83,7 +84,7 @@ public fun mc_runtime_join(
             serviceType = factory.serviceType,
         )
     val link =
-        runCatching {
+        runCatchingCancellable {
             runBlocking { factory.join(advertisement) }
         }.getOrElse { return null }
     return StableRef.create(BridgeSessionState(link)).asCPointer()
@@ -189,7 +190,7 @@ public fun mc_session_send_to(
             memcpy(pinned.addressOf(0), data, len.toULong())
         }
     }
-    return runCatching {
+    return runCatchingCancellable {
         runBlocking { state.link.sendTo(target, bytes) }
         len
     }.getOrDefault(-1)

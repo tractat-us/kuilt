@@ -28,6 +28,7 @@ import kotlinx.cinterop.set
 import kotlinx.cinterop.toKString
 import kotlinx.cinterop.usePinned
 import platform.posix.memcpy
+import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.multipeer.MultipeerPeerLinkFactory
 import kotlin.experimental.ExperimentalNativeApi
 import kotlin.native.CName
@@ -66,7 +67,7 @@ public fun mc_runtime_create(
 @Suppress("ktlint:standard:function-naming")
 public fun mc_runtime_destroy(handle: COpaquePointer?) {
     val ref = handle?.asStableRef<MultipeerPeerLinkFactory>() ?: return
-    runCatching { ref.get().close() }
+    runCatchingCancellable { ref.get().close() }
     ref.dispose()
 }
 
@@ -81,7 +82,7 @@ public fun mc_runtime_destroy(handle: COpaquePointer?) {
 @Suppress("ktlint:standard:function-naming")
 public fun mc_runtime_close(handle: COpaquePointer?) {
     val ref = handle?.asStableRef<MultipeerPeerLinkFactory>() ?: return
-    runCatching { ref.get().close() }
+    runCatchingCancellable { ref.get().close() }
 }
 
 /**

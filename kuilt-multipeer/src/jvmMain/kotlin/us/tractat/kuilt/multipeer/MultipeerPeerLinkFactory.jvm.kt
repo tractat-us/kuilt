@@ -10,6 +10,7 @@ import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.Seam
+import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.multipeer.internal.BridgePeerLink
 
 /**
@@ -150,8 +151,8 @@ public actual class MultipeerPeerLinkFactory actual constructor(
     public actual fun close() {
         val lib = nativeLib ?: return
         val runtime = runtimeHandle ?: return
-        activeSession?.let { runCatching { lib.mc_session_close(it) } }
+        activeSession?.let { runCatchingCancellable { lib.mc_session_close(it) } }
         activeSession = null
-        runCatching { lib.mc_runtime_close(runtime) }
+        runCatchingCancellable { lib.mc_runtime_close(runtime) }
     }
 }

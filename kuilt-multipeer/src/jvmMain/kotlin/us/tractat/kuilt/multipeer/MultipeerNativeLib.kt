@@ -4,6 +4,7 @@ import com.sun.jna.Callback
 import com.sun.jna.Library
 import com.sun.jna.Native
 import com.sun.jna.Pointer
+import us.tractat.kuilt.core.runCatchingCancellable
 
 /**
  * JNA façade over `libkuilt.dylib` — the macOS-only Kotlin/Native
@@ -250,7 +251,7 @@ internal interface MultipeerNativeLib : Library {
          */
         fun load(): MultipeerNativeLib? {
             if (!isMacOs) return null
-            return runCatching { Native.load(LIBRARY_NAME, MultipeerNativeLib::class.java) }
+            return runCatchingCancellable { Native.load(LIBRARY_NAME, MultipeerNativeLib::class.java) }
                 .getOrNull()
         }
 
