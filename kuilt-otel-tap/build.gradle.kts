@@ -8,6 +8,25 @@ plugins {
 
 kotlin {
     sourceSets {
+        // MANUAL appleMain — the default hierarchy template's auto-created appleMain
+        // works fine for compilation, but Dokka's Kotlin-source-set auto-discovery loses
+        // track of it once it holds real files (as of the Multipeer entry points added
+        // here): it registers coarse "ios"/"macos" groupings that depend on "appleMain"
+        // for their actual source, but never registers "appleMain" itself, so
+        // dokkaGenerateModuleHtml fails with "There is no source module for
+        // :kuilt-otel-tap/appleMain". Manually creating it (same pattern as
+        // :kuilt-multipeer/:kuilt-websocket, which already have real appleMain content
+        // and build Dokka fine) sidesteps the auto-discovery path entirely.
+        val appleMain by creating { dependsOn(commonMain.get()) }
+        val iosArm64Main by getting { dependsOn(appleMain) }
+        val iosSimulatorArm64Main by getting { dependsOn(appleMain) }
+        val macosArm64Main by getting { dependsOn(appleMain) }
+
+        val appleTest by creating { dependsOn(commonTest.get()) }
+        val iosArm64Test by getting { dependsOn(appleTest) }
+        val iosSimulatorArm64Test by getting { dependsOn(appleTest) }
+        val macosArm64Test by getting { dependsOn(appleTest) }
+
         commonMain.dependencies {
             // The tap's public surface returns Loom/Seam types and the exporter's
             // Rga<LogRecord>, so both the contract and the otel buffer are api deps.
