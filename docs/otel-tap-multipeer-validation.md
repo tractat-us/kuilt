@@ -32,27 +32,42 @@ Multipeer, join its session, and construct a `LogTapClient(seam, scope, admissio
 LogTapAdmission.Present(code))` with the code shown on the phone. The discovery and real
 Multipeer transport are what only two devices can exercise.
 
-- [ ] **[manual]** Confirm `client.pull()` returns the iPhone's captured log records, in order,
+- [x] **[manual]** Confirm `client.pull()` returns the iPhone's captured log records, in order,
       with no duplicates. *(The pull ordering + admission logic itself is **[automated]** over an
       injected fabric by `gatedTapComposesOverAnInjectedFabricOnApple`; only the real Multipeer
       transport is manual.)*
-- [ ] **[manual]** Confirm a **wrong** code never converges the pull (it times out) — admission
+- [x] **[manual]** Confirm a **wrong** code never converges the pull (it times out) — admission
       control still holds over the encrypted link. *(**[automated]** over an injected fabric by
       `wrongCodeNeverConvergesThePullOnApple`; only the real transport is manual.)*
-- [ ] **[manual]** Repeat with `installMultipeerMetricTap` + `MetricTapClient` and confirm the
+- [x] **[manual]** Repeat with `installMultipeerMetricTap` + `MetricTapClient` and confirm the
       iPhone's converged metric buffer pulls across. *(The metric round-trip is **[automated]** over
       an injected fabric by `metricTapRoundTripsOverAnInjectedFabricOnApple`; the metric path carries
       no join code — confidentiality is the fabric's — so there is no wrong-code variant to check.)*
-- [ ] **[manual]** Confirm the transport is **encrypted end to end**: the underlying `MCSession`
+- [x] **[manual]** Confirm the transport is **encrypted end to end**: the underlying `MCSession`
       is created with `encryptionPreference = MCEncryptionRequired`. Verify no plaintext log/metric
       bytes are observable on the wire (e.g. a packet capture on the shared network shows only
       encrypted Multipeer traffic, not readable log bodies). *(Genuinely manual — no in-memory fabric
       can prove a wire is ciphertext.)*
-- [ ] **[manual]** Confirm reconnect behaviour: drop and re-establish the Multipeer link
+- [x] **[manual]** Confirm reconnect behaviour: drop and re-establish the Multipeer link
       mid-session; the pull re-merges without gaps or repeats. *(The re-merge invariant — a rejoining
       puller re-admits through the gate and reconstructs the same sequence with no gap or repeat — is
       **[automated]** by `gatedReconnectReMergesWithoutGapsOrDuplicatesOnApple`, which models the
       rejoin as a client close + fresh join over the injected fabric. Only the real DTLS session
       tearing and healing is manual.)*
 
-Leave the boxes unchecked until validated on real hardware.
+## Validated
+
+2026-07-03, iPhone 17 Pro (iOS 26.5.1) hosting, MacBook (macOS 26.5.1) pulling, same LAN.
+Both taps discovered and joined over real Multipeer; the reconnect check forced a real link
+drop by toggling Wi-Fi off/on on the phone mid-session (host left running throughout) and a
+fresh Mac-side join converged cleanly afterward. The encryption check captured the live
+session's traffic (`en0`, ~300 packets during a pull) and grepped the raw payloads for every
+plaintext marker the test data would produce (log bodies, the metric value, both join codes)
+— zero hits, all payload bytes high-entropy, consistent with `MCEncryptionRequired`.
+
+One discovery-side gotcha worth recording for whoever builds the next manual harness: the
+`MultipeerServiceBrowser.discoveries()` Flow must stay **collected** across the `join()` call
+itself — cancelling it beforehand (e.g. via `Flow.first()`) tears down the native browser
+before `join()` can use it and fails with `mc_runtime session open failed`. Keep the browse
+collector running (e.g. into a `CompletableDeferred`) until after `join()` returns, matching
+`MultipeerCrossProcessProbe.runJoinFirst`'s existing pattern.
