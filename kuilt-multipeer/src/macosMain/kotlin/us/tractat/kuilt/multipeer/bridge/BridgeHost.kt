@@ -23,6 +23,7 @@ import kotlinx.cinterop.usePinned
 import kotlinx.coroutines.runBlocking
 import platform.posix.memcpy
 import us.tractat.kuilt.core.Pattern
+import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.multipeer.MultipeerPeerLinkFactory
 import kotlin.experimental.ExperimentalNativeApi
 import kotlin.native.CName
@@ -41,7 +42,7 @@ public fun mc_runtime_open(handle: COpaquePointer?): COpaquePointer? {
     if (handle == null) return null
     val factory = handle.asStableRef<MultipeerPeerLinkFactory>().get()
     val link =
-        runCatching {
+        runCatchingCancellable {
             runBlocking { factory.host(Pattern(sessionName = factory.displayName)) }
         }.getOrElse { return null }
     return StableRef.create(BridgeSessionState(link)).asCPointer()
@@ -60,7 +61,7 @@ public fun mc_session_close(session: COpaquePointer?) {
     val ref = session.asStableRef<BridgeSessionState>()
     val state = ref.get()
     state.cancelPumps()
-    runCatching { runBlocking { state.link.close() } }
+    runCatchingCancellable { runBlocking { state.link.close() } }
     ref.dispose()
 }
 
@@ -87,6 +88,6 @@ public fun mc_session_broadcast(
             memcpy(pinned.addressOf(0), data, len.toULong())
         }
     }
-    runCatching { runBlocking { state.link.broadcast(bytes) } }
+    runCatchingCancellable { runBlocking { state.link.broadcast(bytes) } }
     return len
 }

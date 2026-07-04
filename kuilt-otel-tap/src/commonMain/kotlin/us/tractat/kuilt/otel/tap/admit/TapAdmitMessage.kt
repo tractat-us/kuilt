@@ -2,6 +2,8 @@
 
 package us.tractat.kuilt.otel.tap.admit
 
+import us.tractat.kuilt.core.runCatchingCancellable
+
 import kotlinx.io.bytestring.ByteString
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.SerialName
@@ -75,9 +77,10 @@ public sealed interface TapAdmitMessage {
          */
         public fun decode(bytes: ByteArray): TapAdmitMessage? {
             if (!isAdmitFrame(bytes)) return null
-            // Non-suspend parse of an untrusted frame — bare runCatching is correct here
-            // (no coroutine context, so there is no CancellationException to swallow).
-            return runCatching {
+            // Non-suspend parse of an untrusted frame; runCatchingCancellable is used
+            // uniformly across the codebase and is behaviour-identical here (no coroutine
+            // context, so there is no CancellationException to rethrow).
+            return runCatchingCancellable {
                 TapCbor.decodeFromByteArray<TapAdmitMessage>(bytes.copyOfRange(1, bytes.size))
             }.getOrNull()
         }

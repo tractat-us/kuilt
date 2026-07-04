@@ -6,6 +6,7 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.cbor.Cbor
 import kotlinx.serialization.decodeFromByteArray
 import kotlinx.serialization.encodeToByteArray
+import us.tractat.kuilt.core.runCatchingCancellable
 
 /**
  * Wire messages that implement the admit/identify handshake.
@@ -166,7 +167,7 @@ public sealed interface AdmitMessage {
         @OptIn(ExperimentalSerializationApi::class)
         public fun decode(bytes: ByteArray): AdmitMessage? {
             if (bytes.isEmpty() || bytes[0] != PREFIX_BYTE) return null
-            return runCatching {
+            return runCatchingCancellable {
                 cbor.decodeFromByteArray<AdmitMessage>(bytes.copyOfRange(1, bytes.size))
             }.getOrNull()
         }

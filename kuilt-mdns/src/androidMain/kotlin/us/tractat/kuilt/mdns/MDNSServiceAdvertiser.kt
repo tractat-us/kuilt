@@ -4,6 +4,7 @@ import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
 import kotlinx.coroutines.CompletableDeferred
 import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.core.runCatchingCancellable
 
 /**
  * Registers a peer as a DNS-SD service so that other peers on the
@@ -95,7 +96,7 @@ public class MDNSServiceAdvertiser(
      */
     public fun unregister() {
         registrationListener?.let {
-            runCatching { nsdManager.unregisterService(it) }
+            runCatchingCancellable { nsdManager.unregisterService(it) }
         }
         registrationListener = null
     }

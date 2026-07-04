@@ -7,6 +7,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import us.tractat.kuilt.core.Pattern
+import us.tractat.kuilt.core.runCatchingCancellable
 
 /**
  * CLI-style probes for cross-process Multipeer bisection. Two bundled
@@ -50,7 +51,7 @@ public object MultipeerCrossProcessProbe {
         return try {
             runBlocking {
                 val link =
-                    runCatching { factory.host(Pattern(displayName)) }
+                    runCatchingCancellable { factory.host(Pattern(displayName)) }
                         .getOrElse { e ->
                             log("[host] factory.host failed: ${e::class.simpleName}: ${e.message}")
                             return@runBlocking Result(passed = false, message = "host failed: ${e.message}")
@@ -78,11 +79,11 @@ public object MultipeerCrossProcessProbe {
                 }
                 peersJob.cancel()
                 incomingJob.cancel()
-                runCatching { link.close() }
+                runCatchingCancellable { link.close() }
                 Result(passed = true, message = "host ran cleanly for ${nowMs() - t0}ms")
             }
         } finally {
-            runCatching { (factory as? MultipeerPeerLinkFactory)?.close() }
+            runCatchingCancellable { (factory as? MultipeerPeerLinkFactory)?.close() }
         }
     }
 
@@ -130,7 +131,7 @@ public object MultipeerCrossProcessProbe {
                         }
                     }
                 val ad =
-                    runCatching { withTimeout(discoveryTimeoutMs) { firstAd.await() } }
+                    runCatchingCancellable { withTimeout(discoveryTimeoutMs) { firstAd.await() } }
                         .getOrElse { e ->
                             log("[joiner] discovery timeout: ${e::class.simpleName}: ${e.message}")
                             browseJob.cancel()
@@ -143,7 +144,7 @@ public object MultipeerCrossProcessProbe {
                 log("[joiner] invoking factory.join (timeout ${joinTimeoutMs}ms)")
                 val tInvite = nowMs()
                 val link =
-                    runCatching { withTimeout(joinTimeoutMs) { factory.join(ad) } }
+                    runCatchingCancellable { withTimeout(joinTimeoutMs) { factory.join(ad) } }
                         .getOrElse { e ->
                             log("[joiner] factory.join failed: ${e::class.simpleName}: ${e.message}")
                             browseJob.cancel()
@@ -177,11 +178,11 @@ public object MultipeerCrossProcessProbe {
                 peersJob.cancel()
                 incomingJob.cancel()
                 browseJob.cancel()
-                runCatching { link.close() }
+                runCatchingCancellable { link.close() }
                 Result(passed = true, message = "joiner ran cleanly for ${nowMs() - t0}ms")
             }
         } finally {
-            runCatching { (factory as? MultipeerPeerLinkFactory)?.close() }
+            runCatchingCancellable { (factory as? MultipeerPeerLinkFactory)?.close() }
         }
     }
 }

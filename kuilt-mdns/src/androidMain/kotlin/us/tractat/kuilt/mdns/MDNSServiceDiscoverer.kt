@@ -8,6 +8,7 @@ import kotlinx.coroutines.flow.callbackFlow
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.discovery.DiscoveryKind
 import us.tractat.kuilt.core.discovery.PeerDiscoverySource
+import us.tractat.kuilt.core.runCatchingCancellable
 
 /**
  * Discovers peers on the local network via mDNS / Bonjour using Android's [NsdManager].
@@ -129,7 +130,7 @@ public class MDNSServiceDiscoverer(
             )
 
             awaitClose {
-                runCatching { nsdManager.stopServiceDiscovery(listener) }
+                runCatchingCancellable { nsdManager.stopServiceDiscovery(listener) }
             }
         }
 }

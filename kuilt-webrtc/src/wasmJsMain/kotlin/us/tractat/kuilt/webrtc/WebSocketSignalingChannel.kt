@@ -7,6 +7,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.receiveAsFlow
+import us.tractat.kuilt.core.runCatchingCancellable
 import kotlin.JsFun
 import kotlin.js.JsAny
 
@@ -47,7 +48,7 @@ public class WebSocketSignalingChannel(
             incoming.close()
         }
         wsSetOnMessage(ws) { text ->
-            runCatching { SignalingMessageCodec.decode(text) }
+            runCatchingCancellable { SignalingMessageCodec.decode(text) }
                 .onSuccess { msg ->
                     log.debug { "signaling ws.onmessage room=$room type=${msg::class.simpleName}" }
                     incoming.trySend(msg)
