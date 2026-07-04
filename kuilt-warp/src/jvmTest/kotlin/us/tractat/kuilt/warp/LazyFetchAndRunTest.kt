@@ -7,18 +7,21 @@
  * sandbox, registers it for reuse, runs it, and the reversed-bytes [OpResult] merges onto both
  * boards. This is the first point a peer executes a kernel it did not compile or hold.
  *
- * Coordination-free path (no Raft). Coroutine discipline mirrors [ChicoryRuntimeDispatchTest]:
- * [UnconfinedTestDispatcher] with bounded [advanceTimeBy] — never [advanceUntilIdle] (anti-entropy
- * timers re-arm forever). The wasm guest runs on real wall-clock time inside the runtime; the
- * `runTest` timeout sits well above it.
+ * Coordination-free path (no Raft). Coroutine discipline: [StandardTestDispatcher] (FIFO at each
+ * virtual instant — deterministic ordering of the inter-node anti-entropy round-trips) with bounded
+ * [advanceTimeBy] — never [advanceUntilIdle] (anti-entropy timers re-arm forever). These tests stood
+ * up two timer-driven [WarpNode]s and previously ran on [kotlinx.coroutines.test.UnconfinedTestDispatcher],
+ * whose eager-inline execution made convergence load-dependent and flaked under CPU load (#966); FIFO
+ * ordering fixes it. The wasm guest runs on real wall-clock time inside the runtime; the `runTest`
+ * timeout sits well above it.
  */
 @file:OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 
 package us.tractat.kuilt.warp
 
+import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestCoroutineScheduler
 import kotlinx.coroutines.test.TestScope
-import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
@@ -35,9 +38,11 @@ import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
+import kotlin.time.TimeSource
 
 private val C5B_QUILTER_CONFIG = QuilterConfig(
     antiEntropyInterval = 100.milliseconds,
@@ -48,14 +53,38 @@ private val C5B_QUILTER_CONFIG = QuilterConfig(
 private fun c5bClock(scheduler: TestCoroutineScheduler): () -> Instant =
     { Instant.fromEpochMilliseconds(scheduler.currentTime) }
 
-// Real-vs-virtual coupling: WarpNode runs under UnconfinedTestDispatcher virtual time, but
-// op.invoke suspends on a real Dispatchers.IO thread (the Chicory guest burns real wall-clock CPU).
-// These advances assume the microsecond-scale kernel fixtures complete in real time within the
-// window; heavier future kernel fixtures may need the advance budget adjusted.
+// Real-vs-virtual coupling: WarpNode's anti-entropy timers run under StandardTestDispatcher virtual
+// time, but op.invoke suspends on a *real* Dispatchers.IO thread (the Chicory guest burns real
+// wall-clock CPU — see ChicoryWasmRuntime.invoke). A purely virtual settle never waits for that IO
+// crossing: advanceTimeBy/runCurrent are synchronous and return before a CPU-starved guest run has
+// enqueued its result, so under load the fetch→load→run→record→converge race is lost and the board
+// reads null. That is the #966 flake — it is the real-IO wall-clock dependency, not virtual ordering.
+//
+// [settleUntil] removes the race: it interleaves bounded virtual-time anti-entropy pumps with a
+// *real* wall-clock yield so the guest IO can complete and resume onto the scheduler between pumps,
+// returning the instant the board converges (fast path) and otherwise failing fast at [maxReal].
+// The blind [settle] is retained only for phases with no in-flight IO (post-convergence stability;
+// the symbolic-only standby case where no op ever executes).
+private val REAL_IO_YIELD_MILLIS = 5L
+
 private fun TestScope.settle() {
     repeat(8) { advanceTimeBy(C5B_QUILTER_CONFIG.antiEntropyInterval); runCurrent() }
     advanceTimeBy(ClaimStrategy.DEFAULT_SETTLE_WINDOW); runCurrent()
     repeat(8) { advanceTimeBy(C5B_QUILTER_CONFIG.antiEntropyInterval); runCurrent() }
+}
+
+private fun TestScope.settleUntil(maxReal: Duration = 4.seconds, converged: () -> Boolean) {
+    val start = TimeSource.Monotonic.markNow()
+    while (true) {
+        repeat(4) { advanceTimeBy(C5B_QUILTER_CONFIG.antiEntropyInterval); runCurrent() }
+        advanceTimeBy(ClaimStrategy.DEFAULT_SETTLE_WINDOW); runCurrent()
+        if (converged() || start.elapsedNow() >= maxReal) return
+        // Deliberate real wall-clock yield: the Chicory guest runs on a real Dispatchers.IO thread,
+        // so the only way for the test thread to let it finish (and enqueue its result) is to pause
+        // real time. Thread.sleep blocks only this single test thread, never the real IO worker.
+        @Suppress("ForbiddenMethodCall") // deliberate: real-IO crossing yield, see settleUntil KDoc
+        Thread.sleep(REAL_IO_YIELD_MILLIS)
+    }
 }
 
 class LazyFetchAndRunTest {
@@ -85,7 +114,7 @@ class LazyFetchAndRunTest {
 
     @Test
     fun fetchingNodeFetchesLoadsAndRunsAKernelItNeverHad() =
-        runTest(UnconfinedTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
             val loom = InMemoryLoom()
             val seamA = loom.host(Pattern("c5b-lazyfetch"))
             val seamB = loom.join(InMemoryTag("b"))
@@ -119,7 +148,7 @@ class LazyFetchAndRunTest {
                     val input = "Hello, warp!".encodeToByteArray()
                     val taskId = taskOwnedBy(seamA.selfId, setOf(seamA.selfId, seamB.selfId))
                     nodeA.enqueue(taskId, TaskDescriptor(reverseOpId, input))
-                    settle()
+                    settleUntil { nodeA.results[taskId] != null && nodeB.results[taskId] != null }
 
                     val expected = input.reversedArray()
                     val resultA = nodeA.results[taskId]
@@ -150,7 +179,7 @@ class LazyFetchAndRunTest {
      */
     @Test
     fun loadTimeBrokenKernelRecordsTerminalErrorOnBothBoards() =
-        runTest(UnconfinedTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
             val loom = InMemoryLoom()
             val seamA = loom.host(Pattern("c5b-terminal-load"))
             val seamB = loom.join(InMemoryTag("b"))
@@ -182,7 +211,7 @@ class LazyFetchAndRunTest {
 
                     val taskId = taskOwnedBy(seamA.selfId, setOf(seamA.selfId, seamB.selfId))
                     nodeA.enqueue(taskId, TaskDescriptor(badOpId, ByteArray(0)))
-                    settle()
+                    settleUntil { nodeA.results[taskId] != null && nodeB.results[taskId] != null }
 
                     val resultA = nodeA.results[taskId]
                     val resultB = nodeB.results[taskId]
@@ -234,7 +263,7 @@ class LazyFetchAndRunTest {
      */
     @Test
     fun runTimeTrapKernelRecordsTerminalErrorOnBothBoards() =
-        runTest(UnconfinedTestDispatcher(), timeout = 10.seconds) {
+        runTest(StandardTestDispatcher(), timeout = 10.seconds) {
             val loom = InMemoryLoom()
             val seamA = loom.host(Pattern("c5b-terminal-run"))
             val seamB = loom.join(InMemoryTag("b"))
@@ -265,7 +294,7 @@ class LazyFetchAndRunTest {
 
                     val taskId = taskOwnedBy(seamA.selfId, setOf(seamA.selfId, seamB.selfId))
                     nodeA.enqueue(taskId, TaskDescriptor(trapOpId, ByteArray(0)))
-                    settle()
+                    settleUntil { nodeA.results[taskId] != null && nodeB.results[taskId] != null }
 
                     val resultA = nodeA.results[taskId]
                     val resultB = nodeB.results[taskId]
@@ -319,7 +348,7 @@ class LazyFetchAndRunTest {
      */
     @Test
     fun symbolicOnlyNodeStandsByWhenLazyFetchAbsent() =
-        runTest(UnconfinedTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
             val loom = InMemoryLoom()
             val seamA = loom.host(Pattern("c5b-symbolic-only"))
             val seamB = loom.join(InMemoryTag("b"))
