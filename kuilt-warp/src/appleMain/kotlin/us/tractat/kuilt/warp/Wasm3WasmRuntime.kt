@@ -59,9 +59,11 @@ import wasm3.warp_module_num_global_imports
  *   parsed module's declared shape is inspected up front: any imported function, imported global,
  *   or imported memory is a capability violation → [WasmLoadException].
  * - *Memory ceiling* — a declared initial or maximum linear-memory page count exceeding
- *   [WasmSandboxConfig.maxMemoryPages] → [WasmLoadException] (a `max` of 0 means "no maximum
- *   declared" and is allowed). A module declaring no linear memory at all is also rejected — the
- *   warp ABI requires memory to marshal args/results.
+ *   [WasmSandboxConfig.maxMemoryPages] → [WasmLoadException]. A module declaring memory with **no
+ *   explicit max** is also rejected: wasm3 defaults the runtime ceiling to 65536 pages (~4 GiB) for
+ *   such a module, so its kernel could `memory.grow` unbounded — a memory-bomb DoS. Requiring a
+ *   bounded `max <= cap` closes it; wasm3 enforces the declared max at grow time. A module declaring
+ *   no linear memory at all is rejected too — the warp ABI requires memory to marshal args/results.
  * - *Malformed bytes* — `m3_ParseModule` failure → [WasmLoadException].
  * - *Missing ABI export* — `m3_FindFunction` failure for `warp_alloc`/`warp_run` →
  *   [WasmLoadException]. This is terminal, not a transient error: a verified-but-broken kernel
@@ -198,9 +200,14 @@ public class Wasm3WasmRuntime(
     }
 
     /**
-     * Rejects a module whose declared linear memory exceeds [WasmSandboxConfig.maxMemoryPages], or
-     * that declares no memory at all (the warp ABI needs memory to marshal args/results). The caller
-     * ([loadLocked]) owns freeing the module on the thrown path.
+     * Rejects a module whose declared linear memory exceeds [WasmSandboxConfig.maxMemoryPages],
+     * declares memory with no explicit max, or declares no memory at all (the warp ABI needs memory
+     * to marshal args/results). The caller ([loadLocked]) owns freeing the module on the thrown path.
+     *
+     * A no-max module is rejected because wasm3 defaults the runtime ceiling to 65536 pages (~4 GiB)
+     * when `memoryInfo.maxPages == 0`, so its kernel could `memory.grow` unbounded — a memory-bomb
+     * DoS (the native counterpart of the browser fix). Requiring a bounded `max <= cap` closes it:
+     * wasm3 then enforces that declared max at grow time.
      */
     private fun rejectOversizeMemory(module: IM3Module) {
         if (warp_module_has_memory(module) == 0) {
@@ -212,7 +219,13 @@ public class Wasm3WasmRuntime(
             throw WasmLoadException("module initial memory $initial pages exceeds sandbox cap $cap pages")
         }
         val declaredMax = warp_module_max_pages(module)
-        if (declaredMax != 0u && declaredMax > cap) {
+        if (declaredMax == 0u) {
+            throw WasmLoadException(
+                "module declares memory with no explicit max (unbounded growth not allowed); " +
+                    "declare a max <= $cap pages",
+            )
+        }
+        if (declaredMax > cap) {
             throw WasmLoadException("module memory exceeds sandbox cap: declared max $declaredMax pages > $cap pages")
         }
     }
