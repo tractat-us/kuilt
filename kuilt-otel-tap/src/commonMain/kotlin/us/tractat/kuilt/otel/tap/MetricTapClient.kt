@@ -39,6 +39,10 @@ public data class MetricSnapshot(
  * the whole converged [MetricSnapshot], re-emitted whenever it changes.
  *
  * Close the client to release its replicator.
+ *
+ * @param admission how this client is admitted by the host. The default [LogTapAdmission.Open]
+ *   matches an ungated host; pass [LogTapAdmission.Present] with the shown code when the host
+ *   was installed with [LogTapAdmission.Verify].
  */
 public class MetricTapClient(
     seam: Seam,
