@@ -617,6 +617,7 @@ class WarpNodeWebSocketTest {
         }
 
         override suspend fun broadcast(payload: ByteArray) {
+            // TODO(#1125): convert to runCatchingCancellable — bare runCatching swallows CancellationException. Deferred: this module has active worktree work.
             arms.forEach { arm -> runCatching { arm.broadcast(payload) } }
         }
 
@@ -628,6 +629,7 @@ class WarpNodeWebSocketTest {
         override suspend fun close(reason: CloseReason) {
             _state.value = SeamState.Torn(reason)
             spool.close()
+            // TODO(#1125): convert to runCatchingCancellable — bare runCatching swallows CancellationException. Deferred: this module has active worktree work.
             arms.forEach { arm -> runCatching { arm.close(reason) } }
         }
     }
