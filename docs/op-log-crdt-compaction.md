@@ -1,6 +1,6 @@
 # Op-log CRDT compaction design
 
-**Status:** Design note — implementation pending (#714 Fugue, #725 MovableTree)
+**Status:** Design note — implemented for `Rga`, `Fugue`, and `MovableTree` (#714, #725)
 
 ## The problem, in plain terms
 
@@ -10,7 +10,7 @@ This is invisible at first. But it compounds: every time a new peer joins, they 
 
 Three types in `:kuilt-crdt` accumulate ops this way: `Rga`, `Fugue`, and `MovableTree`. They are the **op-log CRDTs** — their state *is* the log. (The other types in the module — `ORSet`, `MVRegister`, `ORMap`, `ResettableCounter` — carry a compact dot-context that self-trims; they are not discussed here.)
 
-`Rga` already has a working compaction path, implemented in #262/#639. `Fugue` and `MovableTree` do not — their op-logs grow forever. This note:
+`Rga` already has a working compaction path, implemented in #262/#639; `Fugue` and `MovableTree` now do too, following the same design (#714, #725). This note:
 
 1. Explains what "safe to discard" means for each type.
 2. Proposes the `causalDots()` and compaction API each should implement.
@@ -57,6 +57,8 @@ This distinction determines whether a CRDT author needs to implement `causalDots
 | **Value / counter** | `GCounter`, `PNCounter`, `LWWRegister`, `LWWMap`, `GSet`, `TwoPhaseSet`, `BoundedCounter`, `EphemeralMap` | No per-op log; state is a fixed-size lattice value — already O(peers), not O(ops) |
 
 A new CRDT author must decide which category applies. The test: does the CRDT's state grow proportionally to the number of **operations ever performed**, regardless of current observable value? If yes, it is op-log and needs `causalDots()`.
+
+Op-log CRDTs carry one more implementation constraint: any traversal that *materializes* the sequence or tree from the log (`Rga.computeSequence`, `Fugue.buildTree`, and friends) must be iterative — no native-stack recursion whose depth scales with persisted structure size. A long append-only chain degenerates into a deep, near-linear spine, and a naive recursive DFS over it overflows the stack once the chain is long enough; this hit production as a real crash (see #1206, #1207). Each op-log CRDT type should carry a regression test that builds a large (~100k element) linear/append-heavy chain to catch a reintroduction of unbounded recursion.
 
 ---
 
