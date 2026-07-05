@@ -356,16 +356,7 @@ public class Fugue<V> private constructor(
      * [FugueOp.Compact] ids re-emit the compacted inserts' dots so the contiguous
      * frontier does not develop holes after GC.
      */
-    override fun causalDots(): Set<Dot> =
-        ops.asSequence()
-            .flatMap { op ->
-                when (op) {
-                    is FugueOp.Insert -> sequenceOf(op.id.dot)
-                    is FugueOp.Compact -> op.positions.keys.asSequence().map { it.dot }
-                    is FugueOp.Remove -> emptySequence()
-                }
-            }
-            .toSet()
+    override fun causalDots(): Set<Dot> = engine<V>().causalDots(ops)
 
     /**
      * Merge two replicas' op-logs. The result is idempotent set-union — both
@@ -522,27 +513,11 @@ public class Fugue<V> private constructor(
 
     /**
      * Compute the maxSeqByReplica map from the op-log (fallback when no cache is provided).
-     *
-     * Folds in **compacted ids** from [FugueOp.Compact.positions] keys as well as live
-     * [FugueOp.Insert]s. A self-compaction purges the Insert from the log, so scanning
-     * only surviving inserts would regress the per-author high-water and let [nextSeqFor]
-     * reuse a seq (same as [Rga] #639 fix).
+     * Delegates to the shared [OpLogEngine], which folds in **compacted ids** as well as
+     * live [FugueOp.Insert]s so a self-compaction can't regress the per-author high-water
+     * and let [nextSeqFor] reuse a seq (same as [Rga] #639 fix).
      */
-    private fun computeMaxSeqByReplica(): Map<ReplicaId, Long> {
-        val result = mutableMapOf<ReplicaId, Long>()
-        fun consider(id: FugueId) {
-            val current = result[id.replicaId]
-            if (current == null || id.seq > current) result[id.replicaId] = id.seq
-        }
-        for (op in ops) {
-            when (op) {
-                is FugueOp.Insert -> consider(op.id)
-                is FugueOp.Compact -> op.positions.keys.forEach(::consider)
-                is FugueOp.Remove -> {}
-            }
-        }
-        return result
-    }
+    private fun computeMaxSeqByReplica(): Map<ReplicaId, Long> = engine<V>().maxSeqByReplica(ops)
 
     /**
      * Build the in-memory Fugue tree from the current op-log.
@@ -805,6 +780,21 @@ public class Fugue<V> private constructor(
             FugueSerializer(vSerializer)
 
         /**
+         * The shared op-log core (op classification + causal-dot projection) for [Fugue].
+         * See [OpLogEngine].
+         */
+        private fun <V> engine(): OpLogEngine<FugueId, FugueOp<V>> = OpLogEngine(
+            view = { op ->
+                when (op) {
+                    is FugueOp.Insert -> LogOp.Insert(op.id)
+                    is FugueOp.Remove -> LogOp.Remove(op.id)
+                    is FugueOp.Compact -> LogOp.Compact(op.positions.keys)
+                }
+            },
+            dotOf = { it.dot },
+        )
+
+        /**
          * Strip Insert and Remove ops for all [gcIds] from [ops], merging the
          * [compactOp] in. The Compact op itself is retained.
          */
@@ -812,20 +802,14 @@ public class Fugue<V> private constructor(
             ops: Set<FugueOp<V>>,
             gcIds: Set<FugueId>,
             compactOp: FugueOp.Compact,
-        ): Set<FugueOp<V>> = purge(ops, gcIds) + compactOp
+        ): Set<FugueOp<V>> = engine<V>().purgeAndRecord(ops, gcIds, compactOp)
 
         /**
          * Remove all [FugueOp.Insert] and [FugueOp.Remove] ops whose id is in [gcIds].
          * [FugueOp.Compact] ops are left intact.
          */
         internal fun <V> purge(ops: Set<FugueOp<V>>, gcIds: Set<FugueId>): Set<FugueOp<V>> =
-            ops.filterTo(mutableSetOf()) { op ->
-                when (op) {
-                    is FugueOp.Insert -> op.id !in gcIds
-                    is FugueOp.Remove -> op.id !in gcIds
-                    is FugueOp.Compact -> true
-                }
-            }
+            engine<V>().purge(ops, gcIds)
     }
 }
 

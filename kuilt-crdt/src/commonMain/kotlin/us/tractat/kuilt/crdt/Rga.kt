@@ -482,16 +482,7 @@ public class Rga<V> private constructor(
      *   reporting `x` delivered while holding only the tombstone, prematurely advancing
      *   the stable cut (the #275-class hazard).
      */
-    override fun causalDots(): Set<Dot> =
-        ops.asSequence()
-            .flatMap { op ->
-                when (op) {
-                    is RgaOp.Insert -> sequenceOf(op.id.dot)
-                    is RgaOp.Compact -> op.positions.keys.asSequence().map { it.dot }
-                    is RgaOp.Remove -> emptySequence()
-                }
-            }
-            .toSet()
+    override fun causalDots(): Set<Dot> = engine<V>().causalDots(ops)
 
     /**
      * Merge two replicas' op-logs. The result is the idempotent union — both
@@ -518,7 +509,7 @@ public class Rga<V> private constructor(
         val rawTombstones = tombstones + other.tombstones
         val mergedTombstones = if (mergedCompactedIds.isEmpty()) rawTombstones
             else rawTombstones.filterTo(mutableSetOf()) { it !in mergedCompactedIds }
-        val mergedMaxSeq = mergeMaxSeq(maxSeqByReplica, other.maxSeqByReplica)
+        val mergedMaxSeq = maxSeqByReplica.mergeMax(other.maxSeqByReplica)
         val mergedOps = if (mergedCompactedIds.isEmpty()) rawUnion else purge(rawUnion, mergedCompactedIds)
         val newCache = RgaCache(
             insertsById = mergedInsertsById,
@@ -556,31 +547,11 @@ public class Rga<V> private constructor(
 
     /**
      * Compute the maxSeqByReplica map from the op-log (fallback when no cache is provided).
-     *
-     * Folds in **compacted ids** as well as live [RgaOp.Insert]s. A self-compaction purges a
-     * replica's own [RgaOp.Insert] from the log, so scanning only surviving inserts would
-     * regress the per-author high-water and let [nextSeqFor] reuse a seq it already minted
-     * (#639). The purged ids survive in the retained [RgaOp.Compact.positions] keys — each
-     * carries its full [RgaId] (hence its seq) — so the true high-water is recoverable from
-     * exactly the data that is already persisted. (Like the rest of the CRDT zoo, which mints
-     * from the monotonic version vector that compaction only raises, the seq counter must
-     * never go backwards.)
+     * Delegates to the shared [OpLogEngine], which folds in **compacted ids** as well as
+     * live [RgaOp.Insert]s so a self-compaction can't regress the per-author high-water
+     * and let [nextSeqFor] reuse a seq it already minted (#639).
      */
-    private fun computeMaxSeqByReplica(): Map<ReplicaId, Long> {
-        val result = mutableMapOf<ReplicaId, Long>()
-        fun consider(id: RgaId) {
-            val current = result[id.replicaId]
-            if (current == null || id.seq > current) result[id.replicaId] = id.seq
-        }
-        for (op in ops) {
-            when (op) {
-                is RgaOp.Insert -> consider(op.id)
-                is RgaOp.Compact -> op.positions.keys.forEach(::consider)
-                is RgaOp.Remove<*> -> {} // a Remove mints no seq; its insert (or its compacted id) is counted
-            }
-        }
-        return result
-    }
+    private fun computeMaxSeqByReplica(): Map<ReplicaId, Long> = engine<V>().maxSeqByReplica(ops)
 
     /** Compute compactedIds from the op-log (fallback when no cache is provided). */
     private fun computeCompactedIds(): Set<RgaId> =
@@ -701,48 +672,41 @@ public class Rga<V> private constructor(
             RgaSerializer(vSerializer)
 
         /**
+         * The shared op-log core (op classification + causal-dot projection) for [Rga].
+         * See [OpLogEngine].
+         */
+        private fun <V> engine(): OpLogEngine<RgaId, RgaOp<V>> = OpLogEngine(
+            view = { op ->
+                when (op) {
+                    is RgaOp.Insert -> LogOp.Insert(op.id)
+                    is RgaOp.Remove -> LogOp.Remove(op.id)
+                    is RgaOp.Compact -> LogOp.Compact(op.positions.keys)
+                }
+            },
+            dotOf = { it.dot },
+        )
+
+        /**
          * Strip Insert and Remove ops for all [gcIds] from [ops], merging the
-         * [compactOp] in (replacing any prior Compact op with the same or smaller
-         * id set — or adding if absent). The Compact op itself is retained.
+         * [compactOp] in. The Compact op itself is retained.
          */
         internal fun <V> purgeAndRecord(
             ops: Set<RgaOp<V>>,
             gcIds: Set<RgaId>,
             compactOp: RgaOp.Compact,
-        ): Set<RgaOp<V>> {
-            val purged = purge(ops, gcIds)
-            return purged + compactOp
-        }
+        ): Set<RgaOp<V>> = engine<V>().purgeAndRecord(ops, gcIds, compactOp)
 
         /**
          * Remove all [RgaOp.Insert] and [RgaOp.Remove] ops whose id is in [gcIds].
          * [RgaOp.Compact] ops are left intact.
          */
         internal fun <V> purge(ops: Set<RgaOp<V>>, gcIds: Set<RgaId>): Set<RgaOp<V>> =
-            ops.filterTo(mutableSetOf()) { op ->
-                when (op) {
-                    is RgaOp.Insert -> op.id !in gcIds
-                    is RgaOp.Remove -> op.id !in gcIds
-                    is RgaOp.Compact -> true
-                }
-            }
+            engine<V>().purge(ops, gcIds)
 
         /** Update [map] with a single new [id], returning a new map only if the seq is higher. */
         private fun updateMaxSeq(map: Map<ReplicaId, Long>, id: RgaId): Map<ReplicaId, Long> {
             val current = map[id.replicaId]
             return if (current != null && id.seq <= current) map else map + (id.replicaId to id.seq)
-        }
-
-        /** Merge two maxSeqByReplica maps, taking the max per replica. */
-        private fun mergeMaxSeq(a: Map<ReplicaId, Long>, b: Map<ReplicaId, Long>): Map<ReplicaId, Long> {
-            if (a.isEmpty()) return b
-            if (b.isEmpty()) return a
-            val result = a.toMutableMap()
-            for ((replica, seq) in b) {
-                val current = result[replica]
-                if (current == null || seq > current) result[replica] = seq
-            }
-            return result
         }
     }
 }
