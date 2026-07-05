@@ -40,7 +40,6 @@ class DeepChainStackSafetyTest {
 
         val list = rga.toList()
 
-        assertEquals(chainLength, list.size)
         assertEquals((0 until chainLength).toList(), list)
     }
 
@@ -59,7 +58,6 @@ class DeepChainStackSafetyTest {
 
         val list = fugue.toList()
 
-        assertEquals(chainLength, list.size)
         assertEquals((0 until chainLength).toList(), list)
     }
 }
