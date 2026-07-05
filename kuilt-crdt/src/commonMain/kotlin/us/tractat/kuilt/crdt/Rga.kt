@@ -649,17 +649,28 @@ public class Rga<V> private constructor(
     }
 
     /**
-     * Depth-first traversal of the RGA tree, appending children in descending-id
-     * order at each node (the concurrent-insert tiebreak).
+     * Depth-first pre-order traversal of the RGA tree, appending children in
+     * descending-id order at each node (the concurrent-insert tiebreak).
+     *
+     * Iterative (explicit LIFO stack) rather than recursive so a degenerate
+     * single-spine tree — a long append-only chain — cannot overflow the native
+     * stack (#1206). Children are pushed in reverse so the first child pops first,
+     * reproducing "each child immediately followed by its full subtree, siblings
+     * in listed order."
      */
     private fun appendChildren(
         parent: RgaId,
         childrenOf: Map<RgaId, List<RgaId>>,
         result: MutableList<RgaId>,
     ) {
-        for (child in childrenOf[parent].orEmpty()) {
-            result.add(child)
-            appendChildren(child, childrenOf, result)
+        val stack = ArrayDeque<RgaId>()
+        val roots = childrenOf[parent].orEmpty()
+        for (i in roots.indices.reversed()) stack.addLast(roots[i])
+        while (stack.isNotEmpty()) {
+            val node = stack.removeLast()
+            result.add(node)
+            val children = childrenOf[node].orEmpty()
+            for (i in children.indices.reversed()) stack.addLast(children[i])
         }
     }
 

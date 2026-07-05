@@ -141,6 +141,16 @@ private class FugueNode(
 }
 
 /**
+ * A work item for the iterative (stack-based) sequence traversal in
+ * [Fugue.traverseSubtree]. A plain node stack cannot express "emit self between
+ * the left and right subtrees", so the traversal is driven by tagged steps.
+ */
+private sealed interface FugueTraversalStep {
+    data class Traverse(val node: FugueNode, val emitSelf: Boolean) : FugueTraversalStep
+    data class Emit(val id: FugueId) : FugueTraversalStep
+}
+
+/**
  * A Fugue sequence CRDT: an ordered list with a provable **maximal
  * non-interleaving** guarantee for concurrent insertions.
  *
@@ -616,15 +626,25 @@ public class Fugue<V> private constructor(
      * the reference implementation's `insertIntoSiblings` for right children.
      */
     private fun sortChildrenRecursive(node: FugueNode) {
-        // Left children: ascending FugueId.
-        node.leftChildren.sortWith(compareBy { it.id })
+        // Iterative (explicit LIFO stack) so a degenerate single-spine tree — a
+        // long append-only chain — cannot overflow the native stack (#1207). The
+        // sort comparators read only the node currently being visited, so any
+        // top-down DFS order is correct; we push rightChildren then leftChildren
+        // (each reversed) so a node's left subtree is visited before its right —
+        // matching the previous recursive order.
+        val stack = ArrayDeque<FugueNode>()
+        stack.addLast(node)
+        while (stack.isNotEmpty()) {
+            val cur = stack.removeLast()
+            // Left children: ascending FugueId.
+            cur.leftChildren.sortWith(compareBy { it.id })
+            // Right children: reverse rightOrigin order (later rightOrigin comes first),
+            // tiebreak by sender-id descending.
+            cur.rightChildren.sortWith(rightSiblingComparator())
 
-        // Right children: reverse rightOrigin order (later rightOrigin comes first),
-        // tiebreak by sender-id descending.
-        node.rightChildren.sortWith(rightSiblingComparator())
-
-        for (child in node.leftChildren) sortChildrenRecursive(child)
-        for (child in node.rightChildren) sortChildrenRecursive(child)
+            for (i in cur.rightChildren.indices.reversed()) stack.addLast(cur.rightChildren[i])
+            for (i in cur.leftChildren.indices.reversed()) stack.addLast(cur.leftChildren[i])
+        }
     }
 
     /**
@@ -771,9 +791,31 @@ public class Fugue<V> private constructor(
     }
 
     private fun traverseSubtree(node: FugueNode, result: MutableList<FugueId>, emitSelf: Boolean = true) {
-        for (child in node.leftChildren) traverseSubtree(child, result)
-        if (emitSelf) result.add(node.id)
-        for (child in node.rightChildren) traverseSubtree(child, result)
+        // Iterative (explicit LIFO stack) so a degenerate single-spine tree — a long
+        // append-only chain — cannot overflow the native stack (#1207). Self is emitted
+        // BETWEEN the left- and right-child subtrees (and not at all for the top-level
+        // HEAD call, which passes emitSelf = false), so a plain node stack won't do:
+        // we push tagged steps. To expand Traverse(n, emitSelf) we push, in reverse of
+        // the desired pop order, right children (Traverse, emitSelf = true), then
+        // Emit(n) if emitSelf, then left children (Traverse, emitSelf = true) — so they
+        // pop in left → self → right order, siblings in listed order.
+        val stack = ArrayDeque<FugueTraversalStep>()
+        stack.addLast(FugueTraversalStep.Traverse(node, emitSelf))
+        while (stack.isNotEmpty()) {
+            when (val step = stack.removeLast()) {
+                is FugueTraversalStep.Emit -> result.add(step.id)
+                is FugueTraversalStep.Traverse -> {
+                    val n = step.node
+                    for (i in n.rightChildren.indices.reversed()) {
+                        stack.addLast(FugueTraversalStep.Traverse(n.rightChildren[i], emitSelf = true))
+                    }
+                    if (step.emitSelf) stack.addLast(FugueTraversalStep.Emit(n.id))
+                    for (i in n.leftChildren.indices.reversed()) {
+                        stack.addLast(FugueTraversalStep.Traverse(n.leftChildren[i], emitSelf = true))
+                    }
+                }
+            }
+        }
     }
 
     public companion object {
