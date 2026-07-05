@@ -141,6 +141,16 @@ private class FugueNode(
 }
 
 /**
+ * A work item for the iterative (stack-based) sequence traversal in
+ * [Fugue.traverseSubtree]. A plain node stack cannot express "emit self between
+ * the left and right subtrees", so the traversal is driven by tagged steps.
+ */
+private sealed interface FugueTraversalStep {
+    data class Traverse(val node: FugueNode, val emitSelf: Boolean) : FugueTraversalStep
+    data class Emit(val id: FugueId) : FugueTraversalStep
+}
+
+/**
  * A Fugue sequence CRDT: an ordered list with a provable **maximal
  * non-interleaving** guarantee for concurrent insertions.
  *
@@ -591,15 +601,25 @@ public class Fugue<V> private constructor(
      * the reference implementation's `insertIntoSiblings` for right children.
      */
     private fun sortChildrenRecursive(node: FugueNode) {
-        // Left children: ascending FugueId.
-        node.leftChildren.sortWith(compareBy { it.id })
+        // Iterative (explicit LIFO stack) so a degenerate single-spine tree — a
+        // long append-only chain — cannot overflow the native stack (#1207). The
+        // sort comparators read only the node currently being visited, so any
+        // top-down DFS order is correct; we push rightChildren then leftChildren
+        // (each reversed) so a node's left subtree is visited before its right —
+        // matching the previous recursive order.
+        val stack = ArrayDeque<FugueNode>()
+        stack.addLast(node)
+        while (stack.isNotEmpty()) {
+            val cur = stack.removeLast()
+            // Left children: ascending FugueId.
+            cur.leftChildren.sortWith(compareBy { it.id })
+            // Right children: reverse rightOrigin order (later rightOrigin comes first),
+            // tiebreak by sender-id descending.
+            cur.rightChildren.sortWith(rightSiblingComparator())
 
-        // Right children: reverse rightOrigin order (later rightOrigin comes first),
-        // tiebreak by sender-id descending.
-        node.rightChildren.sortWith(rightSiblingComparator())
-
-        for (child in node.leftChildren) sortChildrenRecursive(child)
-        for (child in node.rightChildren) sortChildrenRecursive(child)
+            for (i in cur.rightChildren.indices.reversed()) stack.addLast(cur.rightChildren[i])
+            for (i in cur.leftChildren.indices.reversed()) stack.addLast(cur.leftChildren[i])
+        }
     }
 
     /**
@@ -746,9 +766,112 @@ public class Fugue<V> private constructor(
     }
 
     private fun traverseSubtree(node: FugueNode, result: MutableList<FugueId>, emitSelf: Boolean = true) {
-        for (child in node.leftChildren) traverseSubtree(child, result)
+        // Iterative (explicit LIFO stack) so a degenerate single-spine tree — a long
+        // append-only chain — cannot overflow the native stack (#1207). Self is emitted
+        // BETWEEN the left- and right-child subtrees (and not at all for the top-level
+        // HEAD call, which passes emitSelf = false), so a plain node stack won't do:
+        // we push tagged steps. To expand Traverse(n, emitSelf) we push, in reverse of
+        // the desired pop order, right children (Traverse, emitSelf = true), then
+        // Emit(n) if emitSelf, then left children (Traverse, emitSelf = true) — so they
+        // pop in left → self → right order, siblings in listed order.
+        val stack = ArrayDeque<FugueTraversalStep>()
+        stack.addLast(FugueTraversalStep.Traverse(node, emitSelf))
+        while (stack.isNotEmpty()) {
+            when (val step = stack.removeLast()) {
+                is FugueTraversalStep.Emit -> result.add(step.id)
+                is FugueTraversalStep.Traverse -> {
+                    val n = step.node
+                    for (i in n.rightChildren.indices.reversed()) {
+                        stack.addLast(FugueTraversalStep.Traverse(n.rightChildren[i], emitSelf = true))
+                    }
+                    if (step.emitSelf) stack.addLast(FugueTraversalStep.Emit(n.id))
+                    for (i in n.leftChildren.indices.reversed()) {
+                        stack.addLast(FugueTraversalStep.Traverse(n.leftChildren[i], emitSelf = true))
+                    }
+                }
+            }
+        }
+    }
+
+    // ── Test-only differential oracle (#1207) ───────────────────────────────
+    //
+    // Not used by buildTree/computeSequence above (production). Preserves the
+    // pre-#1207 *recursive* tree-build/sort/traverse exactly, so a differential
+    // test can assert the iterative rewrite produces identical output to this
+    // oracle across many randomized trees. Recursion depth here is only ever
+    // bounded by the depth of the bushy (not deep-chain) trees such a test
+    // generates — never call this against a real, potentially-deep op-log.
+
+    /**
+     * Test-only oracle for [computeSequence]: rebuilds the Fugue tree and
+     * walks it with the pre-#1207 recursive sort/traverse instead of the
+     * production iterative rewrite. `internal` purely so a dual-track ordering
+     * test can differentially verify the fix.
+     */
+    internal fun computeSequenceViaRecursiveOracle(): List<V> {
+        val tree = buildTreeRecursiveOracle()
+        val headNode = tree[FugueId.HEAD] ?: return emptyList()
+        val result = mutableListOf<FugueId>()
+        traverseSubtreeRecursiveOracle(headNode, result, emitSelf = false)
+        return result
+            .filter { id -> id !in tombstones }
+            .map { id -> insertsById.getValue(id).value }
+    }
+
+    private fun buildTreeRecursiveOracle(): Map<FugueId, FugueNode> {
+        val present = insertsById.keys
+        val positions = compactPositions
+
+        fun nearestAncestor(start: FugueId): FugueId {
+            var cur = start
+            while (cur != FugueId.HEAD && cur !in present) cur = positions[cur] ?: FugueId.HEAD
+            return cur
+        }
+
+        val nodes = mutableMapOf<FugueId, FugueNode>()
+        val headNode = FugueNode(id = FugueId.HEAD, parent = null, side = FugueSide.Right, rightOrigin = null)
+        nodes[FugueId.HEAD] = headNode
+
+        val sortedInserts = insertsById.values.sortedWith(compareBy({ it.id.lamport }, { it.id.replicaId.value }))
+        for (insert in sortedInserts) {
+            val effectiveParentId = if (insert.parent == FugueId.HEAD || insert.parent in present) {
+                insert.parent
+            } else {
+                nearestAncestor(insert.parent)
+            }
+            val parentNode = nodes[effectiveParentId]
+                ?: error("Fugue tree oracle: parent $effectiveParentId not found for ${insert.id}.")
+            val rightOriginNode = insert.rightOrigin?.let { ro ->
+                val effectiveRo = if (ro == FugueId.HEAD || ro in present) ro else nearestAncestor(ro)
+                nodes[effectiveRo]
+            }
+            val node = FugueNode(id = insert.id, parent = parentNode, side = insert.side, rightOrigin = rightOriginNode)
+            nodes[insert.id] = node
+            when (insert.side) {
+                FugueSide.Left -> parentNode.leftChildren.add(node)
+                FugueSide.Right -> parentNode.rightChildren.add(node)
+            }
+        }
+
+        sortChildrenRecursiveOracle(nodes.getValue(FugueId.HEAD))
+        return nodes
+    }
+
+    private fun sortChildrenRecursiveOracle(node: FugueNode) {
+        node.leftChildren.sortWith(compareBy { it.id })
+        node.rightChildren.sortWith(rightSiblingComparator())
+        for (child in node.leftChildren) sortChildrenRecursiveOracle(child)
+        for (child in node.rightChildren) sortChildrenRecursiveOracle(child)
+    }
+
+    private fun traverseSubtreeRecursiveOracle(
+        node: FugueNode,
+        result: MutableList<FugueId>,
+        emitSelf: Boolean = true,
+    ) {
+        for (child in node.leftChildren) traverseSubtreeRecursiveOracle(child, result)
         if (emitSelf) result.add(node.id)
-        for (child in node.rightChildren) traverseSubtree(child, result)
+        for (child in node.rightChildren) traverseSubtreeRecursiveOracle(child, result)
     }
 
     public companion object {

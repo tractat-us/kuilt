@@ -620,17 +620,77 @@ public class Rga<V> private constructor(
     }
 
     /**
-     * Depth-first traversal of the RGA tree, appending children in descending-id
-     * order at each node (the concurrent-insert tiebreak).
+     * Depth-first pre-order traversal of the RGA tree, appending children in
+     * descending-id order at each node (the concurrent-insert tiebreak).
+     *
+     * Iterative (explicit LIFO stack) rather than recursive so a degenerate
+     * single-spine tree — a long append-only chain — cannot overflow the native
+     * stack (#1206). Children are pushed in reverse so the first child pops first,
+     * reproducing "each child immediately followed by its full subtree, siblings
+     * in listed order."
      */
     private fun appendChildren(
         parent: RgaId,
         childrenOf: Map<RgaId, List<RgaId>>,
         result: MutableList<RgaId>,
     ) {
+        val stack = ArrayDeque<RgaId>()
+        val roots = childrenOf[parent].orEmpty()
+        for (i in roots.indices.reversed()) stack.addLast(roots[i])
+        while (stack.isNotEmpty()) {
+            val node = stack.removeLast()
+            result.add(node)
+            val children = childrenOf[node].orEmpty()
+            for (i in children.indices.reversed()) stack.addLast(children[i])
+        }
+    }
+
+    // ── Test-only differential oracle (#1206) ───────────────────────────────
+    //
+    // Not used by computeSequence/appendChildren above (production). Preserves
+    // the pre-#1206 *recursive* traversal exactly, so a differential test can
+    // assert the iterative rewrite produces identical output to this oracle
+    // across many randomized trees. Recursion depth here is only ever bounded
+    // by the depth of the bushy (not deep-chain) trees such a test generates —
+    // never call this against a real, potentially-deep op-log.
+
+    /**
+     * Test-only oracle for [computeSequence]: recomputes the same childrenOf
+     * grouping, then walks it with the pre-#1206 recursive
+     * [appendChildrenRecursiveOracle] instead of the production iterative
+     * [appendChildren]. `internal` purely so a dual-track ordering test can
+     * differentially verify the fix.
+     */
+    internal fun computeSequenceViaRecursiveOracle(): List<V> {
+        val present = insertsById.keys
+        val positions = compactPositions
+        fun nearestAncestor(start: RgaId): RgaId {
+            var cur = start
+            while (cur != RgaId.HEAD && cur !in present) cur = positions[cur] ?: RgaId.HEAD
+            return cur
+        }
+        val childrenOf = insertsById.values
+            .groupBy(
+                keySelector = { ins ->
+                    val a = ins.after
+                    if (a == RgaId.HEAD || a in present) a else nearestAncestor(a)
+                },
+                valueTransform = { it.id },
+            )
+            .mapValues { (_, ids) -> ids.sortedDescending() }
+        val result = mutableListOf<RgaId>()
+        appendChildrenRecursiveOracle(RgaId.HEAD, childrenOf, result)
+        return result.map { insertsById.getValue(it).value }
+    }
+
+    private fun appendChildrenRecursiveOracle(
+        parent: RgaId,
+        childrenOf: Map<RgaId, List<RgaId>>,
+        result: MutableList<RgaId>,
+    ) {
         for (child in childrenOf[parent].orEmpty()) {
             result.add(child)
-            appendChildren(child, childrenOf, result)
+            appendChildrenRecursiveOracle(child, childrenOf, result)
         }
     }
 
