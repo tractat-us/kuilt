@@ -674,6 +674,55 @@ public class Rga<V> private constructor(
         }
     }
 
+    // ── Test-only differential oracle (#1206) ───────────────────────────────
+    //
+    // Not used by computeSequence/appendChildren above (production). Preserves
+    // the pre-#1206 *recursive* traversal exactly, so a differential test can
+    // assert the iterative rewrite produces identical output to this oracle
+    // across many randomized trees. Recursion depth here is only ever bounded
+    // by the depth of the bushy (not deep-chain) trees such a test generates —
+    // never call this against a real, potentially-deep op-log.
+
+    /**
+     * Test-only oracle for [computeSequence]: recomputes the same childrenOf
+     * grouping, then walks it with the pre-#1206 recursive
+     * [appendChildrenRecursiveOracle] instead of the production iterative
+     * [appendChildren]. `internal` purely so a dual-track ordering test can
+     * differentially verify the fix.
+     */
+    internal fun computeSequenceViaRecursiveOracle(): List<V> {
+        val present = insertsById.keys
+        val positions = compactPositions
+        fun nearestAncestor(start: RgaId): RgaId {
+            var cur = start
+            while (cur != RgaId.HEAD && cur !in present) cur = positions[cur] ?: RgaId.HEAD
+            return cur
+        }
+        val childrenOf = insertsById.values
+            .groupBy(
+                keySelector = { ins ->
+                    val a = ins.after
+                    if (a == RgaId.HEAD || a in present) a else nearestAncestor(a)
+                },
+                valueTransform = { it.id },
+            )
+            .mapValues { (_, ids) -> ids.sortedDescending() }
+        val result = mutableListOf<RgaId>()
+        appendChildrenRecursiveOracle(RgaId.HEAD, childrenOf, result)
+        return result.map { insertsById.getValue(it).value }
+    }
+
+    private fun appendChildrenRecursiveOracle(
+        parent: RgaId,
+        childrenOf: Map<RgaId, List<RgaId>>,
+        result: MutableList<RgaId>,
+    ) {
+        for (child in childrenOf[parent].orEmpty()) {
+            result.add(child)
+            appendChildrenRecursiveOracle(child, childrenOf, result)
+        }
+    }
+
     public companion object {
         /** The empty sequence with no ops. */
         public fun <V> empty(): Rga<V> = Rga(

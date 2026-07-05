@@ -818,6 +818,87 @@ public class Fugue<V> private constructor(
         }
     }
 
+    // ── Test-only differential oracle (#1207) ───────────────────────────────
+    //
+    // Not used by buildTree/computeSequence above (production). Preserves the
+    // pre-#1207 *recursive* tree-build/sort/traverse exactly, so a differential
+    // test can assert the iterative rewrite produces identical output to this
+    // oracle across many randomized trees. Recursion depth here is only ever
+    // bounded by the depth of the bushy (not deep-chain) trees such a test
+    // generates — never call this against a real, potentially-deep op-log.
+
+    /**
+     * Test-only oracle for [computeSequence]: rebuilds the Fugue tree and
+     * walks it with the pre-#1207 recursive sort/traverse instead of the
+     * production iterative rewrite. `internal` purely so a dual-track ordering
+     * test can differentially verify the fix.
+     */
+    internal fun computeSequenceViaRecursiveOracle(): List<V> {
+        val tree = buildTreeRecursiveOracle()
+        val headNode = tree[FugueId.HEAD] ?: return emptyList()
+        val result = mutableListOf<FugueId>()
+        traverseSubtreeRecursiveOracle(headNode, result, emitSelf = false)
+        return result
+            .filter { id -> id !in tombstones }
+            .map { id -> insertsById.getValue(id).value }
+    }
+
+    private fun buildTreeRecursiveOracle(): Map<FugueId, FugueNode> {
+        val present = insertsById.keys
+        val positions = compactPositions
+
+        fun nearestAncestor(start: FugueId): FugueId {
+            var cur = start
+            while (cur != FugueId.HEAD && cur !in present) cur = positions[cur] ?: FugueId.HEAD
+            return cur
+        }
+
+        val nodes = mutableMapOf<FugueId, FugueNode>()
+        val headNode = FugueNode(id = FugueId.HEAD, parent = null, side = FugueSide.Right, rightOrigin = null)
+        nodes[FugueId.HEAD] = headNode
+
+        val sortedInserts = insertsById.values.sortedWith(compareBy({ it.id.lamport }, { it.id.replicaId.value }))
+        for (insert in sortedInserts) {
+            val effectiveParentId = if (insert.parent == FugueId.HEAD || insert.parent in present) {
+                insert.parent
+            } else {
+                nearestAncestor(insert.parent)
+            }
+            val parentNode = nodes[effectiveParentId]
+                ?: error("Fugue tree oracle: parent $effectiveParentId not found for ${insert.id}.")
+            val rightOriginNode = insert.rightOrigin?.let { ro ->
+                val effectiveRo = if (ro == FugueId.HEAD || ro in present) ro else nearestAncestor(ro)
+                nodes[effectiveRo]
+            }
+            val node = FugueNode(id = insert.id, parent = parentNode, side = insert.side, rightOrigin = rightOriginNode)
+            nodes[insert.id] = node
+            when (insert.side) {
+                FugueSide.Left -> parentNode.leftChildren.add(node)
+                FugueSide.Right -> parentNode.rightChildren.add(node)
+            }
+        }
+
+        sortChildrenRecursiveOracle(nodes.getValue(FugueId.HEAD))
+        return nodes
+    }
+
+    private fun sortChildrenRecursiveOracle(node: FugueNode) {
+        node.leftChildren.sortWith(compareBy { it.id })
+        node.rightChildren.sortWith(rightSiblingComparator())
+        for (child in node.leftChildren) sortChildrenRecursiveOracle(child)
+        for (child in node.rightChildren) sortChildrenRecursiveOracle(child)
+    }
+
+    private fun traverseSubtreeRecursiveOracle(
+        node: FugueNode,
+        result: MutableList<FugueId>,
+        emitSelf: Boolean = true,
+    ) {
+        for (child in node.leftChildren) traverseSubtreeRecursiveOracle(child, result)
+        if (emitSelf) result.add(node.id)
+        for (child in node.rightChildren) traverseSubtreeRecursiveOracle(child, result)
+    }
+
     public companion object {
         /** The empty sequence with no ops. */
         public fun <V> empty(): Fugue<V> = Fugue(
