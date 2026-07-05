@@ -583,7 +583,7 @@ public class Rga<V> private constructor(
      * that have seen the same op-log, regardless of insertion order.
      *
      * **Positional reroot (#293).** An [RgaOp.Insert] whose `after` has been compacted away
-     * does not simply jump to [RgaId.HEAD]. Instead, `nearestAncestor` chain-walks
+     * does not simply jump to [RgaId.HEAD]. Instead, [nearestPresentAncestor] chain-walks
      * [compactPositions] — the union of all [RgaOp.Compact] `positions` maps — until it
      * reaches either a present (non-compacted) id or [RgaId.HEAD]. This preserves the
      * relative order of surviving elements: a successor of a GC'd element stays below
@@ -600,16 +600,11 @@ public class Rga<V> private constructor(
         // reroot, #293) — preserves relative order when GC removes an intermediate element.
         val present = insertsById.keys
         val positions = compactPositions
-        fun nearestAncestor(start: RgaId): RgaId {
-            var cur = start
-            while (cur != RgaId.HEAD && cur !in present) cur = positions[cur] ?: RgaId.HEAD
-            return cur
-        }
         val childrenOf = insertsById.values
             .groupBy(
                 keySelector = { ins ->
                     val a = ins.after
-                    if (a == RgaId.HEAD || a in present) a else nearestAncestor(a)
+                    if (a == RgaId.HEAD || a in present) a else nearestPresentAncestor(a, RgaId.HEAD, present, positions)
                 },
                 valueTransform = { it.id },
             )
@@ -664,16 +659,11 @@ public class Rga<V> private constructor(
     internal fun computeSequenceViaRecursiveOracle(): List<V> {
         val present = insertsById.keys
         val positions = compactPositions
-        fun nearestAncestor(start: RgaId): RgaId {
-            var cur = start
-            while (cur != RgaId.HEAD && cur !in present) cur = positions[cur] ?: RgaId.HEAD
-            return cur
-        }
         val childrenOf = insertsById.values
             .groupBy(
                 keySelector = { ins ->
                     val a = ins.after
-                    if (a == RgaId.HEAD || a in present) a else nearestAncestor(a)
+                    if (a == RgaId.HEAD || a in present) a else nearestPresentAncestor(a, RgaId.HEAD, present, positions)
                 },
                 valueTransform = { it.id },
             )

@@ -330,7 +330,7 @@ public class Fugue<V> private constructor(
         if (!delivered.dominates(frontierMax)) return null  // condition 3 — frontier-complete
         // Condition 4: id must not be a live anchor — guard both parent AND rightOrigin.
         // A compacted id that is still a rightOrigin of a surviving insert would break
-        // buildTree's nearestAncestor chain, causing wrong sibling ordering.
+        // buildTree's nearestPresentAncestor chain, causing wrong sibling ordering.
         val liveAnchors = insertsById.values.flatMapTo(mutableSetOf()) {
             listOfNotNull(it.parent, it.rightOrigin)
         }
@@ -542,7 +542,7 @@ public class Fugue<V> private constructor(
      *   sender-id descending.
      *
      * **Positional re-root (#714).** An [FugueOp.Insert] whose [FugueOp.Insert.parent]
-     * has been compacted away does not drop from the tree. Instead, `nearestAncestor`
+     * has been compacted away does not drop from the tree. Instead, [nearestPresentAncestor]
      * chain-walks [compactPositions] until it reaches a present (non-compacted) id or
      * [FugueId.HEAD]. This preserves the traversal order of surviving nodes: a child of
      * a GC'd node stays below the GC'd node's own surviving ancestor rather than
@@ -551,12 +551,6 @@ public class Fugue<V> private constructor(
     private fun buildTree(): Map<FugueId, FugueNode> {
         val present = insertsById.keys
         val positions = compactPositions
-
-        fun nearestAncestor(start: FugueId): FugueId {
-            var cur = start
-            while (cur != FugueId.HEAD && cur !in present) cur = positions[cur] ?: FugueId.HEAD
-            return cur
-        }
 
         val nodes = mutableMapOf<FugueId, FugueNode>()
         val headNode = FugueNode(id = FugueId.HEAD, parent = null, side = FugueSide.Right, rightOrigin = null)
@@ -569,12 +563,12 @@ public class Fugue<V> private constructor(
             val effectiveParentId = if (insert.parent == FugueId.HEAD || insert.parent in present) {
                 insert.parent
             } else {
-                nearestAncestor(insert.parent)
+                nearestPresentAncestor(insert.parent, FugueId.HEAD, present, positions)
             }
             val parentNode = nodes[effectiveParentId]
                 ?: error("Fugue tree: parent $effectiveParentId not found for ${insert.id}.")
             val rightOriginNode = insert.rightOrigin?.let { ro ->
-                val effectiveRo = if (ro == FugueId.HEAD || ro in present) ro else nearestAncestor(ro)
+                val effectiveRo = if (ro == FugueId.HEAD || ro in present) ro else nearestPresentAncestor(ro, FugueId.HEAD, present, positions)
                 nodes[effectiveRo]
             }
             val node = FugueNode(id = insert.id, parent = parentNode, side = insert.side, rightOrigin = rightOriginNode)
@@ -822,12 +816,6 @@ public class Fugue<V> private constructor(
         val present = insertsById.keys
         val positions = compactPositions
 
-        fun nearestAncestor(start: FugueId): FugueId {
-            var cur = start
-            while (cur != FugueId.HEAD && cur !in present) cur = positions[cur] ?: FugueId.HEAD
-            return cur
-        }
-
         val nodes = mutableMapOf<FugueId, FugueNode>()
         val headNode = FugueNode(id = FugueId.HEAD, parent = null, side = FugueSide.Right, rightOrigin = null)
         nodes[FugueId.HEAD] = headNode
@@ -837,12 +825,12 @@ public class Fugue<V> private constructor(
             val effectiveParentId = if (insert.parent == FugueId.HEAD || insert.parent in present) {
                 insert.parent
             } else {
-                nearestAncestor(insert.parent)
+                nearestPresentAncestor(insert.parent, FugueId.HEAD, present, positions)
             }
             val parentNode = nodes[effectiveParentId]
                 ?: error("Fugue tree oracle: parent $effectiveParentId not found for ${insert.id}.")
             val rightOriginNode = insert.rightOrigin?.let { ro ->
-                val effectiveRo = if (ro == FugueId.HEAD || ro in present) ro else nearestAncestor(ro)
+                val effectiveRo = if (ro == FugueId.HEAD || ro in present) ro else nearestPresentAncestor(ro, FugueId.HEAD, present, positions)
                 nodes[effectiveRo]
             }
             val node = FugueNode(id = insert.id, parent = parentNode, side = insert.side, rightOrigin = rightOriginNode)

@@ -101,3 +101,32 @@ internal class OpLogEngine<Id : Any, Op : Any>(
             is LogOp.Remove -> emptySequence()
         }
 }
+
+/**
+ * Chain-walk [positions] from [start] to the nearest ancestor that is still
+ * [present] — or the [head] sentinel. This is the positional-reroot resolution
+ * shared by [Rga]'s `computeSequence` and [Fugue]'s `buildTree`: when an insert's
+ * predecessor/parent has been garbage-collected, its successor reattaches to the
+ * GC'd element's own surviving ancestor rather than floating to [head], preserving
+ * the relative order of surviving elements across compaction (Rga #293, Fugue #714).
+ *
+ * [positions] is the union of every [LogOp.Compact] op's recorded position map
+ * (`compactPositions`); [present] is the set of live (non-compacted) ids.
+ *
+ * The walk is bounded: compaction only removes causally-stable elements with no
+ * surviving successor, so [positions] is acyclic and terminates at [head] or a
+ * present id within O(compacted depth) steps.
+ *
+ * Pure `Id`-and-`Map<Id, Id>` logic — it needs neither the op-view nor dot adapters,
+ * so it lives as a free function beside [OpLogEngine] rather than as a method on it.
+ */
+internal fun <Id> nearestPresentAncestor(
+    start: Id,
+    head: Id,
+    present: Set<Id>,
+    positions: Map<Id, Id>,
+): Id {
+    var cur = start
+    while (cur != head && cur !in present) cur = positions[cur] ?: head
+    return cur
+}
