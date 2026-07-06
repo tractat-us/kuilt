@@ -55,9 +55,10 @@ internal sealed interface EngineCommand {
 
     /**
      * Auto-timeout for a leadership transfer: fired by a timer after one election timeout window.
-     * If the transfer is still in flight, it is abandoned and normal operation resumes.
+     * If the transfer identified by [epoch] is still the in-flight one, it is abandoned and normal
+     * operation resumes; a stale [epoch] from an already-resolved transfer's timer is ignored (#1232).
      */
-    data object TransferTimeout : EngineCommand
+    data class TransferTimeout(val epoch: Long) : EngineCommand
 }
 
 /** The result of an [EngineCommand.CommitCut]: committed application entries plus the cut index. */

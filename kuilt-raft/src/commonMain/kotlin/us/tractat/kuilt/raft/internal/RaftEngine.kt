@@ -234,7 +234,7 @@ internal class RaftEngine(
     private val transfer = LeadershipTransferMachine(
         scope = scope,
         raftConfig = raftConfig,
-        signalTimeout = { cmd.trySend(EngineCommand.TransferTimeout) },
+        signalTimeout = { epoch -> cmd.trySend(EngineCommand.TransferTimeout(epoch)) },
     )
 
     // ── Metric instrumentation state (actor-only) ─────────────────────────────
@@ -341,7 +341,7 @@ internal class RaftEngine(
                         is EngineCommand.RequestReadIndex -> onRequestReadIndex(c.deferred)
                         is EngineCommand.TransferLeadership -> onTransferLeadership(c.target, c.response)
                         is EngineCommand.CancelTransfer   -> onCancelTransfer()
-                        is EngineCommand.TransferTimeout  -> onTransferTimeout()
+                        is EngineCommand.TransferTimeout  -> onTransferTimeout(c.epoch)
                         is EngineCommand.Close            -> { cmd.close(); break }
                     }
                     if (!closing) flushWaitingForLeader()
@@ -517,7 +517,7 @@ internal class RaftEngine(
             send(from, RaftMessage.RequestVoteResponse(state.currentTerm, false))
             return
         }
-        if (m.term > state.currentTerm) stepDown(m.term, StepDownReason.HigherTermObserved)
+        if (m.term > state.currentTerm) stepDown(m.term, StepDownReason.HigherTermObserved, from)
         val logOk = isLogUpToDate(state.log.lastOrNull(), m.lastLogIndex, m.lastLogTerm)
         val grant = m.term == state.currentTerm && logOk && (state.votedFor == null || state.votedFor == m.candidateId)
         if (grant) {
@@ -536,7 +536,7 @@ internal class RaftEngine(
     }
 
     private suspend fun onRequestVoteResponse(from: NodeId, m: RaftMessage.RequestVoteResponse) {
-        if (m.term > state.currentTerm) { stepDown(m.term, StepDownReason.HigherTermObserved); return }
+        if (m.term > state.currentTerm) { stepDown(m.term, StepDownReason.HigherTermObserved, from); return }
         if (_role.value !is RaftRole.Candidate || m.term != state.currentTerm) return
         if (m.voteGranted) {
             votesGranted += from
@@ -566,7 +566,7 @@ internal class RaftEngine(
     }
 
     private suspend fun onPreVoteResponse(from: NodeId, m: RaftMessage.PreVoteResponse) {
-        if (m.term > state.currentTerm) { stepDown(m.term, StepDownReason.HigherTermObserved); return }
+        if (m.term > state.currentTerm) { stepDown(m.term, StepDownReason.HigherTermObserved, from); return }
         if (preVoteTerm == null || m.proposedTerm != preVoteTerm || m.round != preVoteRound) return
         if (m.voteGranted) {
             preVotesGranted += from
@@ -628,15 +628,16 @@ internal class RaftEngine(
         tryAdvanceLeaderCommit()
     }
 
-    private suspend fun stepDown(newTerm: Long, reason: StepDownReason) {
+    private suspend fun stepDown(newTerm: Long, reason: StepDownReason, from: NodeId) {
         // higher term: adopt it, then relinquish leadership
         persistTermAndVote(newTerm, null)
-        relinquishToFollower(reason)
+        relinquishToFollower(reason, from)
     }
 
     /**
      * Same-term step-down: relinquish leadership without bumping the term (CheckQuorum path).
-     * The term is already current — no persistence required.
+     * The term is already current — no persistence required. Carries no originating peer: a same-term
+     * step-down never signals a transfer target's win, so any in-flight transfer is failed.
      */
     private suspend fun stepDownToFollower(reason: StepDownReason) = relinquishToFollower(reason)
 
@@ -645,11 +646,12 @@ internal class RaftEngine(
      * reset follower state, emit the trace event, and restart the election timer.
      * Called by both [stepDown] (after a term adoption) and [stepDownToFollower] (same-term).
      *
-     * If a leadership transfer is in flight and the step-down was triggered by observing a
-     * higher term (the transfer target won its election), the transfer is completed successfully.
-     * In all other cases the transfer is failed (leader stepped down for an unrelated reason).
+     * If a leadership transfer is in flight and the step-down was triggered by observing a higher term
+     * **from the transfer target** ([from] == target), the transfer is completed successfully — the target
+     * winning its election is the contract's success condition. In all other cases (a higher term from an
+     * unrelated node, or a non-term step-down) the transfer is failed.
      */
-    private suspend fun relinquishToFollower(reason: StepDownReason) {
+    private suspend fun relinquishToFollower(reason: StepDownReason, from: NodeId? = null) {
         if (_role.value is RaftRole.Leader) {
             heartbeatJob?.cancel()
             quorumCheckJob?.cancel()
@@ -660,10 +662,11 @@ internal class RaftEngine(
             debug { "relinquishToFollower($reason): failed in-flight proposals, config change, and pending reads" }
             snapshotSender.abandonAll()   // leader-only transfer state — abandon any in-flight snapshot sends
             dedupCache.clear()     // leader-only best-effort dedup cache — a new leader starts cold
-            // Leadership transfer: a HigherTermObserved step-down while a transfer is active means the
-            // target won its election — complete the transfer deferred successfully. Any other reason
-            // (CheckQuorum, RemovedFromConfig) is an unrelated step-down — fail the transfer.
-            transfer.onLeadershipRelinquished(reason)
+            // Leadership transfer: a HigherTermObserved step-down whose higher term came from the transfer
+            // target means the target won its election — complete the transfer deferred successfully. A
+            // higher term from any other node, or any non-term step-down (CheckQuorum, RemovedFromConfig),
+            // means the target did not win — fail the transfer.
+            transfer.onLeadershipRelinquished(reason, from)
         }
         leaderAlive = false
         leaderLeaseJob?.cancel()
@@ -831,7 +834,7 @@ internal class RaftEngine(
 
     /** Leader: advance or finish a snapshot transfer in response to a follower's ack. */
     private suspend fun onInstallSnapshotResponse(from: NodeId, m: RaftMessage.InstallSnapshotResponse) {
-        if (m.term > state.currentTerm) { stepDown(m.term, StepDownReason.HigherTermObserved); return }
+        if (m.term > state.currentTerm) { stepDown(m.term, StepDownReason.HigherTermObserved, from); return }
         if (_role.value !is RaftRole.Leader || m.term != state.currentTerm) return
         recentVoterContacts += from                // reachability signal for CheckQuorum
         readIndexTracker.recordAck(from, m.echoedRound)   // credit ACK to the round it actually responded to (BLOCKER 1a)
@@ -855,7 +858,7 @@ internal class RaftEngine(
     /** Follower: reassemble chunks in order, then install the snapshot once the final chunk arrives. */
     private suspend fun onInstallSnapshot(from: NodeId, m: RaftMessage.InstallSnapshot) {
         if (m.term < state.currentTerm) { send(from, RaftMessage.InstallSnapshotResponse(state.currentTerm, 0L)); return }
-        if (m.term > state.currentTerm) stepDown(m.term, StepDownReason.HigherTermObserved)
+        if (m.term > state.currentTerm) stepDown(m.term, StepDownReason.HigherTermObserved, from)
         _role.value = followerRole
         preVoteTerm = null          // a live leader appeared — cancel any in-flight pre-vote probe
         _leader.value = m.leaderId
@@ -935,7 +938,7 @@ internal class RaftEngine(
             send(from, RaftMessage.AppendEntriesResponse(state.currentTerm, false, echoedRound = m.round))
             return
         }
-        if (m.term > state.currentTerm) stepDown(m.term, StepDownReason.HigherTermObserved)
+        if (m.term > state.currentTerm) stepDown(m.term, StepDownReason.HigherTermObserved, from)
         // higher term: already adopted it via stepDown above, continue processing in new term
         _role.value = followerRole
         preVoteTerm = null          // a live leader appeared — cancel any in-flight pre-vote probe
@@ -1025,7 +1028,7 @@ internal class RaftEngine(
 
     private suspend fun onAppendEntriesResponse(from: NodeId, m: RaftMessage.AppendEntriesResponse) {
         // stale-term peer response: step down and discard
-        if (m.term > state.currentTerm) { stepDown(m.term, StepDownReason.HigherTermObserved); return }
+        if (m.term > state.currentTerm) { stepDown(m.term, StepDownReason.HigherTermObserved, from); return }
         if (_role.value !is RaftRole.Leader || m.term != state.currentTerm) return
         recentVoterContacts += from                 // reachability signal for CheckQuorum (success or failure)
         readIndexTracker.recordAck(from, m.echoedRound)   // credit ACK to the round it actually responded to (BLOCKER 1a)
@@ -1556,8 +1559,8 @@ internal class RaftEngine(
      * Auto-timeout fired: the target did not win an election within one election-timeout window.
      * Resume normal operation (re-enable proposals) and fail the transfer deferred.
      */
-    private suspend fun onTransferTimeout() {
-        val target = transfer.onTimeout() ?: return   // already resolved — ignore stale timer
+    private suspend fun onTransferTimeout(epoch: Long) {
+        val target = transfer.onTimeout(epoch) ?: return   // already resolved or superseded — ignore stale timer
         debug { "onTransferTimeout: transfer to ${target.value} timed out — resuming normal operation" }
         emitTrace(RaftTraceEvent.LeadershipTransferAbandoned(
             nextClock(), transport.selfId, target, LeadershipTransferAbandonReason.Timeout,
@@ -1612,7 +1615,7 @@ internal class RaftEngine(
             debug { "onTimeoutNow: self is a learner — ignoring" }
             return
         }
-        if (m.term > state.currentTerm) stepDown(m.term, StepDownReason.HigherTermObserved)
+        if (m.term > state.currentTerm) stepDown(m.term, StepDownReason.HigherTermObserved, from)
         // Start a real election immediately (skip pre-vote — we are already up-to-date per the leader's sync).
         debug { "onTimeoutNow: starting immediate election (skipping pre-vote)" }
         startRealElection()

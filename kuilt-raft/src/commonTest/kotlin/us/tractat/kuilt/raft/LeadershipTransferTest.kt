@@ -58,6 +58,72 @@ internal class LeadershipTransferTest {
         sim.checkInvariants()
     }
 
+    // ── §3.10 contract: success ⇔ the TARGET wins (issue #1231) ───────────────
+
+    /**
+     * The transfer contract is: `transferLeadership()` succeeds **only** when the transfer *target* wins
+     * an election. The old completion trigger — "the old leader observed ANY higher term" — reports
+     * success even when an **unrelated** node deposes the old leader mid-transfer, which the caller reads
+     * as "the target is now leader" when it is not.
+     *
+     * Repro: start a transfer A→B (target B partitioned so the transfer stays in flight and cannot
+     * auto-complete), then have an unrelated node C depose A with a higher-term AppendEntries. A steps
+     * down observing a higher term **from C, not from B** — the target never won. The transfer must FAIL,
+     * and leadership must not have moved to the target.
+     */
+    @Test
+    fun transferLeadership_unrelatedNodeDeposesLeader_transferFails() = raftRunTest(timeout = 10.seconds) {
+        val sim = raftSim(this, backgroundScope, n = 3)
+        val leader = awaitLeader(sim)
+        val leaderId = sim.nodeIds.first { sim.nodes[it] === leader }
+        val targetId = sim.nodeIds.first { it != leaderId }
+        val unrelatedId = sim.nodeIds.first { it != leaderId && it != targetId }
+
+        sim.proposeOnLeader("base".encodeToByteArray())
+        sim.awaitCommit(1L)
+        sim.settle()
+
+        // Isolate the target so the transfer stays in flight: it can neither receive TimeoutNow nor win.
+        sim.dropLink(from = leaderId, to = targetId)
+        sim.dropLink(from = targetId, to = leaderId)
+
+        val leaderTerm = sim.storages.getValue(leaderId).term()
+
+        val transferOutcome = CompletableDeferred<Result<Unit>>()
+        backgroundScope.launch { transferOutcome.complete(runCatchingCancellable { leader.transferLeadership(targetId) }) }
+        sim.settle()   // let the transfer engage (inFlightTarget == target)
+
+        // An UNRELATED node deposes the old leader with a higher-term AppendEntries — the higher term is
+        // observed from C, not from the transfer target.
+        sim.deliverAppendEntries(to = leaderId, from = unrelatedId, term = leaderTerm + 1)
+        sim.settle()   // process the injected message at this instant (no time advance → no re-election yet)
+
+        val result = transferOutcome.await()
+        assertAll(
+            {
+                assertTrue(
+                    result.isFailure,
+                    "transfer must FAIL when an unrelated node deposes the leader — the target did not win",
+                )
+            },
+            {
+                assertTrue(
+                    result.exceptionOrNull() is LeadershipTransferException,
+                    "expected LeadershipTransferException, got ${result.exceptionOrNull()}",
+                )
+            },
+            // The old leader stepped down recognising the UNRELATED node, and the target never became leader.
+            { assertEquals(RaftRole.Follower, sim.nodes.getValue(leaderId).role.value) },
+            { assertEquals(unrelatedId, sim.nodes.getValue(leaderId).leader.value) },
+            {
+                assertTrue(
+                    sim.nodes.getValue(targetId).role.value != RaftRole.Leader,
+                    "the transfer target must not have become leader",
+                )
+            },
+        )
+    }
+
     // ── Proposal blocking during transfer ────────────────────────────────────
 
     /**
