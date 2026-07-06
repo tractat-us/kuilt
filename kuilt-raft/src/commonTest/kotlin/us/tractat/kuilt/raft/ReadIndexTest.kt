@@ -8,6 +8,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.supervisorScope
+import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.cbor.Cbor
 import kotlinx.serialization.encodeToByteArray
 import us.tractat.kuilt.raft.internal.RaftMessage
@@ -16,6 +17,7 @@ import kotlin.test.Test
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 
@@ -213,6 +215,114 @@ class ReadIndexTest {
             // The read must fail with LeadershipLostException.
             assertFailsWith<LeadershipLostException> { read.await() }
         }
+    }
+
+    /**
+     * §6.4 liveness (#1235) — a read still parked in the current-term no-op gate when the leader loses
+     * leadership must fail with [LeadershipLostException], not hang forever.
+     *
+     * This is the sibling of [readIndexFailsWithLeadershipLostWhenLeaderLosesQuorum], but exercises the
+     * distinct **no-op-gate** path. That test proposes+commits an entry first (satisfying the §8 gate),
+     * so its read parks in `pendingReads`. This one commits NOTHING beyond the fresh leader's own no-op
+     * — which never commits — so the read parks in `pendingNoOpGate` instead. The bug: `failAll`
+     * completed only the `pendingReads` deferreds and `clear()`ed the gate WITHOUT completing the caller
+     * deferreds captured inside the parked re-invocation closures, so a gated read hung its caller
+     * forever (untimed `await()`) instead of throwing.
+     *
+     * **Why a phantom-follower election, not `raftSim` + `partitionOff`.** In a real cluster the votes
+     * that elect a leader and the ACKs that commit its no-op both flow from the same followers in the
+     * same virtual instant, so the no-op commits the moment the leader is elected — the §8 gate window
+     * is closed by the time `awaitLeader` returns (empirically `commitIndex == 1`). To hold the gate
+     * open deterministically we drive `l` to leadership over an in-memory network whose only real node
+     * is `l`: phantom voters `f1`/`f2` grant the pre-vote and vote (injected off the wire) but never ACK
+     * the no-op, so `commitIndex` stays at 0 < noOpIndex(1) — the gate stays closed indefinitely, until
+     * CheckQuorum (no reachable voter quorum) steps `l` down and fails the gated read.
+     *
+     * Scenario (voters = {l, f1, f2}; quorum = 2; only `l` is a real node):
+     * 1. `l` times out and probes; we read its actual PreVote/RequestVote (term + round) off the
+     *    recording tap and inject matching grants from phantom `f1` → `l` wins term T.
+     * 2. `becomeLeader` appends the current-term no-op (index 1) and arms the gate; no follower ACKs, so
+     *    it never commits (`commitIndex == 0`).
+     * 3. `readIndex()` gates (parks in `pendingNoOpGate`); a brief advance confirms it neither resolved
+     *    (the no-op did not commit) nor threw yet.
+     * 4. CheckQuorum (contacted = {} → self 1 < quorum 2) steps `l` down → `relinquishToFollower` →
+     *    `failAll`, which must now complete the gated deferred exceptionally.
+     */
+    @Test
+    fun gatedReadIndexFailsWithLeadershipLostBeforeNoOpCommits() = raftRunTest(timeout = 10.seconds) {
+        val l = NodeId("l")
+        val f1 = NodeId("f1")
+        val f2 = NodeId("f2")
+
+        val network = InMemoryRaftNetwork()
+        network.recording = true // capture l's outgoing PreVote/RequestVote so we can echo its term/round
+
+        // Only l is a real node; f1/f2 are phantom voters that grant votes but never ACK the no-op.
+        val leaderNode = backgroundScope.raftNode(
+            ClusterConfig(voters = setOf(l, f1, f2)),
+            network.transport(l), InMemoryRaftStorage(), SLOW_ELECTION_CONFIG,
+        )
+
+        // Drive the election from injected grants. PreVoteResponse.term must NOT exceed l's currentTerm
+        // (still proposed-1 during pre-vote) or l would step down; RequestVoteResponse.term must equal
+        // the candidate term l bumped to.
+        val pv = awaitSent(network) { it is RaftMessage.PreVote } as RaftMessage.PreVote
+        network.deliver(
+            from = f1, to = l,
+            bytes = Cbor.encodeToByteArray<RaftMessage>(
+                RaftMessage.PreVoteResponse(term = pv.term - 1, voteGranted = true, proposedTerm = pv.term, round = pv.round),
+            ),
+        )
+        val rv = awaitSent(network) { it is RaftMessage.RequestVote } as RaftMessage.RequestVote
+        network.deliver(
+            from = f1, to = l,
+            bytes = Cbor.encodeToByteArray<RaftMessage>(
+                RaftMessage.RequestVoteResponse(term = rv.term, voteGranted = true),
+            ),
+        )
+
+        // l wins term T. Its no-op (index 1) is appended but never commits — no follower ACKs it.
+        leaderNode.awaitLeadership()
+        assertTrue(
+            leaderNode.commitIndex.value < 1L,
+            "the fresh leader's no-op must stay uncommitted for the read to gate: commitIndex=${leaderNode.commitIndex.value}",
+        )
+
+        supervisorScope {
+            // Gates in pendingNoOpGate (commitIndex 0 < currentTermNoOpIndex 1).
+            val read = async { leaderNode.readIndex() }
+
+            // One heartbeat tick lets the actor park the read; CheckQuorum (300–400 ms) has NOT fired,
+            // so the read must be neither resolved (no-op never committed) nor failed yet.
+            delay(3)
+            assertFalse(
+                read.isCompleted,
+                "gated read must still be parked while the no-op is uncommitted and leadership is held",
+            )
+
+            // CheckQuorum fires (300–400 ms in SLOW_ELECTION_CONFIG): contacted = {} → 1 < 2 → step
+            // down → relinquishToFollower → failAll must complete the GATED read exceptionally. Before
+            // the fix, failAll dropped the gated closure and this await() hung to the test timeout.
+            delay(1200)
+            assertFailsWith<LeadershipLostException> { read.await() }
+        }
+    }
+
+    /**
+     * Bounded poll for the most recent captured send matching [pred] (requires `network.recording`).
+     * Advances virtual time in 1 ms steps so l's election timers fire; fails fast via [withTimeout]
+     * rather than hanging if the expected message never appears.
+     */
+    private suspend fun awaitSent(
+        network: InMemoryRaftNetwork,
+        within: Duration = 2.seconds,
+        pred: (RaftMessage) -> Boolean,
+    ): RaftMessage = withTimeout(within) {
+        while (true) {
+            network.sent.lastOrNull { pred(it.message) }?.let { return@withTimeout it.message }
+            delay(1)
+        }
+        @Suppress("UNREACHABLE_CODE") error("unreachable")
     }
 
     // ── Acceptance criterion 7: awaitRead helper ──────────────────────────────
