@@ -36,16 +36,15 @@ internal class SnapshotSender(
     private val snapshotXfer = mutableMapOf<NodeId, SnapshotXfer>()
 
     /**
-     * The next chunk to send to [peer]. [restart] (or no in-flight transfer) loads the stored snapshot
-     * and starts from offset 0; otherwise it resumes from the peer's acked offset. Returns null when no
+     * The next chunk for [peer]'s in-flight transfer, loading the stored snapshot fresh (from offset 0)
+     * iff there is none in flight; otherwise it resumes from the peer's acked offset. A restart is never
+     * initiated here — the follower drives any rewind via its `ReAdvertise(0)` ack. Returns null when no
      * snapshot is stored yet (nothing to send).
      */
-    suspend fun nextChunk(peer: NodeId, restart: Boolean): Chunk? {
-        val xfer = if (restart || snapshotXfer[peer] == null) {
+    suspend fun nextChunk(peer: NodeId): Chunk? {
+        val xfer = snapshotXfer[peer] ?: run {
             val stored = storage.loadSnapshot() ?: return null   // nothing to send yet
             SnapshotXfer(stored.meta, stored.state, 0L).also { snapshotXfer[peer] = it }
-        } else {
-            snapshotXfer.getValue(peer)
         }
         val start = xfer.nextOffset.toInt()
         val end = minOf(start + chunkBytes(), xfer.state.size)

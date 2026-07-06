@@ -830,7 +830,13 @@ internal class RaftEngine(
         // §7: the prefix the follower still needs has been compacted away — divert to InstallSnapshot.
         if (ni <= state.snapshotIndex) {
             debug { "sendAppendEntries($peer): ni=$ni <= snapshotIndex=${state.snapshotIndex} → divert to InstallSnapshot" }
-            sendSnapshotChunk(peer, restart = true); return
+            // #1222: onHeartbeat diverts here every tick for the whole transfer (nextIndex stays
+            // ≤ snapshotIndex until it completes), so [sendSnapshotChunk] must RESUME an in-flight
+            // transfer from the follower's acked offset — never restart it from offset 0. It loads a
+            // fresh snapshot only when there is no transfer in flight; any rewind is follower-driven
+            // via ReAdvertise(0). (A `restart = true` affordance once lived here and caused the
+            // livelock — it is deliberately gone so it cannot be reintroduced.)
+            sendSnapshotChunk(peer); return
         }
         val prevIndex = ni - 1L
         val prevTerm = if (prevIndex == state.snapshotIndex) {
@@ -880,15 +886,17 @@ internal class RaftEngine(
     }
 
     /**
-     * Sends the next snapshot chunk to [peer]. [restart] (or no in-flight transfer) loads the stored
-     * snapshot and starts from offset 0; otherwise it resumes from the peer's acked offset. The load/
-     * slice/advance arithmetic lives in [snapshotSender]; the engine keeps the trace/send side-effects.
+     * Sends the next snapshot chunk to [peer], resuming its in-flight transfer from the peer's acked
+     * offset (loading the stored snapshot fresh from offset 0 only when no transfer is in flight). A
+     * restart is never initiated here — the follower drives any rewind via its `ReAdvertise(0)` ack.
+     * The load/slice/advance arithmetic lives in [snapshotSender]; the engine keeps the trace/send
+     * side-effects.
      */
-    private suspend fun sendSnapshotChunk(peer: NodeId, restart: Boolean) {
-        val chunk = snapshotSender.nextChunk(peer, restart) ?: return   // nothing to send yet
+    private suspend fun sendSnapshotChunk(peer: NodeId) {
+        val chunk = snapshotSender.nextChunk(peer) ?: return   // nothing to send yet
         val start = chunk.offset.toInt()
         val end = start + chunk.data.size
-        debug { "sendSnapshotChunk($peer): through=${chunk.meta.lastIncludedIndex} offset=$start..$end/${chunk.totalBytes} done=${chunk.done} restart=$restart" }
+        debug { "sendSnapshotChunk($peer): through=${chunk.meta.lastIncludedIndex} offset=$start..$end/${chunk.totalBytes} done=${chunk.done}" }
         emitTrace(
             RaftTraceEvent.InstallSnapshot(
                 nextClock(), transport.selfId, peer, chunk.meta.lastIncludedIndex, chunk.offset, chunk.done,
@@ -928,7 +936,7 @@ internal class RaftEngine(
             }
             SnapshotSender.AckOutcome.SendNext -> {
                 debug { "onInstallSnapshotResponse($from): ack offset=${m.nextOffset}, send next chunk" }
-                sendSnapshotChunk(from, restart = false)          // next chunk
+                sendSnapshotChunk(from)                            // next chunk
             }
         }
     }
