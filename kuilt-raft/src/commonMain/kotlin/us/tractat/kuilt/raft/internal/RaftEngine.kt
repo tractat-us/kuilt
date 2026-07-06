@@ -256,22 +256,16 @@ internal class RaftEngine(
     private var leaderAlive = false
     private var leaderLeaseJob: Job? = null
 
-    // §3.10 Leadership transfer state — leader-only. Cleared on becomeLeader and relinquishToFollower.
-
-    /**
-     * In-flight leadership transfer target. Non-null iff a transfer is in progress.
-     * When set, [onPropose] rejects all new proposals with [NotLeaderException].
-     */
-    private var transferTarget: NodeId? = null
-
-    /**
-     * Deferred completed when the transfer resolves (success = Unit, failure = exception).
-     * Non-null iff [transferTarget] is non-null.
-     */
-    private var transferDeferred: CompletableDeferred<Unit>? = null
-
-    /** Timer job that fires [EngineCommand.TransferTimeout] after one election-timeout window. */
-    private var transferTimeoutJob: Job? = null
+    // §3.10 Leadership transfer state — leader-only, extracted to LeadershipTransferMachine. It owns the
+    // tri-state (target/deferred/auto-timeout-job) as one all-or-none InFlight record. Cleared on
+    // becomeLeader (reset) and relinquishToFollower (onLeadershipRelinquished). Declared before `init` per
+    // the machine-field ordering rule (#1077) — the actor's teardown calls transfer.fail(...). The machine
+    // launches only the auto-timeout timer, which re-enters the actor via cmd.trySend(TransferTimeout).
+    private val transfer = LeadershipTransferMachine(
+        scope = scope,
+        raftConfig = raftConfig,
+        signalTimeout = { cmd.trySend(EngineCommand.TransferTimeout) },
+    )
 
     // ── Metric instrumentation state (actor-only) ─────────────────────────────
 
@@ -387,7 +381,7 @@ internal class RaftEngine(
                 failPending(cause)
                 failPendingConfigChange(cause)
                 failPendingReads(cause)
-                failPendingTransfer(LeadershipTransferException("node scope cancelled"))
+                transfer.fail(LeadershipTransferException("node scope cancelled"))
                 failForwardedProposals(cause)
             }
         }
@@ -434,27 +428,6 @@ internal class RaftEngine(
         forwardedProposals.values.forEach { it.deferred.completeExceptionally(cause) }
         forwardedProposals.clear()
         waitingForLeader.clear()
-    }
-
-    /**
-     * Fail the in-flight leadership transfer (if any) with [cause], cancel its timeout job,
-     * and clear all transfer state. Safe to call when no transfer is in flight (no-op then).
-     */
-    private fun failPendingTransfer(cause: Throwable) {
-        transferTimeoutJob?.cancel()
-        transferTimeoutJob = null
-        transferDeferred?.completeExceptionally(cause)
-        transferDeferred = null
-        transferTarget = null
-    }
-
-    /** Succeed the in-flight leadership transfer — this leader stepped down normally. */
-    private fun completePendingTransfer() {
-        transferTimeoutJob?.cancel()
-        transferTimeoutJob = null
-        transferDeferred?.complete(Unit)
-        transferDeferred = null
-        transferTarget = null
     }
 
     // ── Role helper ───────────────────────────────────────────────────────────
@@ -581,7 +554,7 @@ internal class RaftEngine(
         // §3.10 exception: if we are the leader and a transfer to `from` is in flight, we must
         // NOT apply leader-stickiness — the transfer explicitly authorises this candidate to run
         // an election. Step down before normal vote processing so the vote is granted naturally.
-        val isTransferCandidate = _role.value is RaftRole.Leader && transferTarget == from
+        val isTransferCandidate = _role.value is RaftRole.Leader && transfer.inFlightTarget == from
         if (!isTransferCandidate && leaderAlive && m.term > state.currentTerm) {
             emitTrace(RaftTraceEvent.VoteDenied(nextClock(), transport.selfId, from, m.term, DenyReason.LeaderAlive))
             send(from, RaftMessage.RequestVoteResponse(state.currentTerm, false))
@@ -683,10 +656,7 @@ internal class RaftEngine(
         lastAckRound.clear()
         // Transfer state: always clear on becoming leader so a re-elected-after-stepdown node
         // doesn't carry stale transfer state from a previous term.
-        transferTarget = null
-        transferDeferred = null
-        transferTimeoutJob?.cancel()
-        transferTimeoutJob = null
+        transfer.reset()
         // §5.4.2: append a no-op from the new term so the commit guard (entry.term == currentTerm)
         // can advance commitIndex over any prior-term entries inherited from a previous leader.
         // currentTermNoOpIndex is set inside appendNoOp so readIndex() knows when to gate.
@@ -739,13 +709,7 @@ internal class RaftEngine(
             // Leadership transfer: a HigherTermObserved step-down while a transfer is active means the
             // target won its election — complete the transfer deferred successfully. Any other reason
             // (CheckQuorum, RemovedFromConfig) is an unrelated step-down — fail the transfer.
-            if (transferTarget != null) {
-                if (reason == StepDownReason.HigherTermObserved) {
-                    completePendingTransfer()
-                } else {
-                    failPendingTransfer(LeadershipTransferException("leader stepped down before transfer completed: $reason"))
-                }
-            }
+            transfer.onLeadershipRelinquished(reason)
         }
         leaderAlive = false
         leaderLeaseJob?.cancel()
@@ -1127,7 +1091,7 @@ internal class RaftEngine(
             state.nextIndex[from] = state.matchIndex.getValue(from) + 1L
             tryAdvanceLeaderCommit()
             // §3.10: if a transfer is in flight and the target is now caught up, send TimeoutNow.
-            sendTimeoutNowIfReady(from)
+            if (transfer.onPeerAck(from, state.matchIndex[from] ?: 0L, state.currentCommitIndex)) sendTimeoutNow(from)
         } else {
             // §5.3 fast backup: jump nextIndex to reduce O(n) recovery to O(#terms)
             state.nextIndex[from] = nextIndexAfterFailure(state.nextIndex[from] ?: 1L, m, state.log)
@@ -1362,7 +1326,7 @@ internal class RaftEngine(
         // §3.10: while a leadership transfer is in flight, reject new proposals so the target can
         // catch up to our log without racing additional appends. The NotLeaderException is the correct
         // signal — the caller should retry on the new leader once transfer completes.
-        val transferInFlight = transferTarget
+        val transferInFlight = transfer.inFlightTarget
         if (transferInFlight != null) {
             response.completeExceptionally(NotLeaderException("leadership transfer in flight to ${transferInFlight.value}"))
             return
@@ -1642,42 +1606,21 @@ internal class RaftEngine(
             response.completeExceptionally(IllegalArgumentException("transferLeadership: target ${target.value} is not a voter in the current config ($currentVoters)"))
             return
         }
-        // A second concurrent call while one is already in flight: reject the second.
-        val transferInFlight = transferTarget
-        if (transferInFlight != null) {
-            response.completeExceptionally(IllegalStateException("transferLeadership: a transfer to ${transferInFlight.value} is already in flight"))
+        // A second concurrent call while one is already in flight: reject the second. `start` arms the
+        // auto-timeout timer (one election-timeout window) and parks `response`, returning false iff a
+        // transfer is already in flight — in which case `inFlightTarget` is the existing target.
+        if (!transfer.start(target, response)) {
+            response.completeExceptionally(IllegalStateException("transferLeadership: a transfer to ${transfer.inFlightTarget?.value} is already in flight"))
             return
         }
-        transferTarget = target
-        transferDeferred = response
         emitTrace(RaftTraceEvent.LeadershipTransferStarted(nextClock(), transport.selfId, target))
         debug { "onTransferLeadership: transfer started to ${target.value}" }
 
-        // Arm auto-timeout: one election-timeout window.
-        transferTimeoutJob = scope.launch {
-            delay(raftConfig.electionTimeoutMax.inWholeMilliseconds)
-            cmd.trySend(EngineCommand.TransferTimeout)
-        }
-
-        // Sync target's log and send TimeoutNow.
-        sendTransferSync(target)
-    }
-
-    /**
-     * Send AppendEntries to bring [target] up to [currentCommitIndex], then send [TimeoutNow].
-     *
-     * If the target is already up to date (matchIndex == lastLogIndex), skip straight to TimeoutNow.
-     * AppendEntries delivery is best-effort — the normal heartbeat loop will keep retrying;
-     * we send here to minimise the sync delay before TimeoutNow.
-     */
-    private suspend fun sendTransferSync(target: NodeId) {
+        // Sync target's log; send TimeoutNow now iff it is already caught up (matchIndex >= commitIndex).
+        // Otherwise the AppendEntries ACK path (onAppendEntriesResponse → transfer.onPeerAck) sends it once
+        // the target catches up. AppendEntries delivery is best-effort — the heartbeat loop keeps retrying.
         sendAppendEntries(target)
-        // Only send TimeoutNow once the target is caught up (matchIndex >= commitIndex).
-        // When the AppendEntries ACK arrives (onAppendEntriesResponse) and the target is caught up,
-        // sendTimeoutNowIfReady is called there too. Here we handle the already-caught-up case.
-        if ((state.matchIndex[target] ?: 0L) >= state.currentCommitIndex) {
-            sendTimeoutNow(target)
-        }
+        if (transfer.onPeerAck(target, state.matchIndex[target] ?: 0L, state.currentCommitIndex)) sendTimeoutNow(target)
     }
 
     /** Send a [RaftMessage.TimeoutNow] to [target]. */
@@ -1687,40 +1630,26 @@ internal class RaftEngine(
     }
 
     /**
-     * Called from [onAppendEntriesResponse] when a successful ACK arrives during an active transfer.
-     * If the target is now caught up to [currentCommitIndex], send [TimeoutNow] to trigger the election.
-     */
-    private suspend fun sendTimeoutNowIfReady(from: NodeId) {
-        val target = transferTarget ?: return
-        if (from != target) return
-        if ((state.matchIndex[target] ?: 0L) >= state.currentCommitIndex) {
-            sendTimeoutNow(target)
-        }
-    }
-
-    /**
      * Auto-timeout fired: the target did not win an election within one election-timeout window.
      * Resume normal operation (re-enable proposals) and fail the transfer deferred.
      */
     private suspend fun onTransferTimeout() {
-        val target = transferTarget ?: return   // already resolved — ignore stale timer
+        val target = transfer.onTimeout() ?: return   // already resolved — ignore stale timer
         debug { "onTransferTimeout: transfer to ${target.value} timed out — resuming normal operation" }
         emitTrace(RaftTraceEvent.LeadershipTransferAbandoned(
             nextClock(), transport.selfId, target, LeadershipTransferAbandonReason.Timeout,
         ))
-        failPendingTransfer(LeadershipTransferException("leadership transfer to ${target.value} timed out"))
     }
 
     /**
      * Explicit cancel from the application: abort the in-flight transfer and resume proposals.
      */
     private suspend fun onCancelTransfer() {
-        val target = transferTarget ?: return   // nothing in flight — no-op
+        val target = transfer.onCancel() ?: return   // nothing in flight — no-op
         debug { "onCancelTransfer: transfer to ${target.value} cancelled" }
         emitTrace(RaftTraceEvent.LeadershipTransferAbandoned(
             nextClock(), transport.selfId, target, LeadershipTransferAbandonReason.Cancelled,
         ))
-        failPendingTransfer(LeadershipTransferException("leadership transfer to ${target.value} was cancelled"))
     }
 
     /**
