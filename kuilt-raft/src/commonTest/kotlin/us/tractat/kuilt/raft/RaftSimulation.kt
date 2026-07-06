@@ -236,6 +236,28 @@ class RaftSimulation(
     }
 
     /**
+     * Encode and inject a [RaftMessage.InstallSnapshotResponse] directly into the leader [to]'s
+     * incoming channel, bypassing the normal partition/drop rules — a hand-driven follower ack.
+     * [nextOffset] is the byte offset the follower reports as next-expected; the leader advances the
+     * in-flight transfer to it. [term] must equal the leader's current term (else the leader ignores
+     * the ack). Use to drive a snapshot transfer partway forward from a crashed/absent follower so a
+     * heartbeat can be interleaved mid-transfer (issue #1222).
+     */
+    @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
+    suspend fun deliverInstallSnapshotResponse(
+        to: NodeId,
+        from: NodeId,
+        term: Long,
+        nextOffset: Long,
+        echoedRound: Long = 0L,
+    ) {
+        val bytes = Cbor.encodeToByteArray<RaftMessage>(
+            RaftMessage.InstallSnapshotResponse(term, nextOffset, echoedRound)
+        )
+        network.deliver(from = from, to = to, bytes = bytes)
+    }
+
+    /**
      * Let pending work at the current virtual instant run without advancing the clock: deliberately
      * yield-only (no `delay`). Under [StandardTestDispatcher]'s FIFO scheduling, yielding hands the
      * single test thread back to the scheduler so already-scheduled coroutines (e.g. a freshly
