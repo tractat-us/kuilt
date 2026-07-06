@@ -304,12 +304,12 @@ internal class LeadershipTransferTest {
      * before, and the target's resulting `RequestVote` must carry the full log. Without the fix the
      * leader emits `TimeoutNow` in the transfer-init step, before the tail ACK is even in flight.
      *
-     * NOTE: at ≥4 voters the target does **not** actually win here — the *other* followers still reject
-     * its `RequestVote` under leader-stickiness because a TimeoutNow-triggered election carries no
-     * disruption-bypass flag (a separate bug, #1230). This test therefore asserts the withhold-until-
-     * caught-up property of #1229 only; end-to-end "target becomes leader" with an uncommitted tail is
-     * shown at n=3 in [transferLeadership_uncommittedTail_n3_targetBecomesLeader], where a single peer
-     * vote plus the leader's own suffices.
+     * NOTE: this test asserts only the withhold-until-caught-up property of #1229 (the TimeoutNow
+     * ordering and that the target campaigns on the full log). End-to-end "target becomes leader" with
+     * an uncommitted tail is shown at n=3 in [transferLeadership_uncommittedTail_n3_targetBecomesLeader];
+     * that the target wins its *first* election at n≥4 (the other voters granting its disrupt-flagged
+     * RequestVote, §4.2.3 / #1230) is shown in
+     * [transferLeadership_n4_targetWinsFirstElection_bypassingOtherVotersStickiness].
      */
     @Test
     fun transferLeadership_uncommittedTail_withholdsTimeoutNowUntilCaughtUp() = raftRunTest(timeout = 10.seconds) {
@@ -376,9 +376,10 @@ internal class LeadershipTransferTest {
     /**
      * End-to-end companion to [transferLeadership_uncommittedTail_withholdsTimeoutNowUntilCaughtUp]:
      * with an uncommitted tail at transfer time, once the target catches up to lastLogIndex the transfer
-     * completes for real — the target actually becomes leader. Uses n=3 because at ≥4 voters the target
-     * cannot win a TimeoutNow-triggered election under the current code (leader-stickiness on the other
-     * followers, #1230); at n=3 the target's own vote plus the transferring leader's is a quorum.
+     * completes for real — the target actually becomes leader. Uses n=3 to keep the focus on the
+     * uncommitted-tail catch-up path; the n≥4 case (where the target needs the *other* voters to grant
+     * its disrupt-flagged RequestVote, §4.2.3 / #1230) is covered by
+     * [transferLeadership_n4_targetWinsFirstElection_bypassingOtherVotersStickiness].
      *
      * The uncommitted tail is still created atomically with the transfer (propose then transfer, ahead of
      * any ACK), so the fix's withhold-until-caught-up path is exercised — not the trivial commit-first

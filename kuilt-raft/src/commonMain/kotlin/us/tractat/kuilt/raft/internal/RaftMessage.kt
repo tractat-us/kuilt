@@ -9,12 +9,21 @@ import us.tractat.kuilt.raft.NodeId
 @Serializable
 internal sealed interface RaftMessage {
 
+    /**
+     * [leadershipTransfer] carries the dissertation §4.2.3 "permission to disrupt" flag: when the
+     * candidate is campaigning because its leader sent it a [TimeoutNow] (a §3.10 graceful transfer),
+     * the vote must be processed by the other servers *even when they believe a current leader exists*
+     * — the recipient's leader-stickiness (`leaderAlive`) deny is bypassed. It is a pure wire hint;
+     * every other check (term, §5.4.1 log-up-to-date, already-voted) still applies. Defaulted `false`
+     * so it is wire-compatible and a normal election never disrupts a healthy leader.
+     */
     @Serializable
     data class RequestVote(
         val term: Long,
         val candidateId: NodeId,
         val lastLogIndex: Long,
         val lastLogTerm: Long,
+        val leadershipTransfer: Boolean = false,
     ) : RaftMessage
 
     @Serializable

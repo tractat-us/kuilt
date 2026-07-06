@@ -474,8 +474,15 @@ internal class RaftEngine(
         otherVoters.forEach { send(it, pv) }
     }
 
-    /** Gate the actual term bump behind a pre-vote quorum. Verbatim body of the old [onElectionTimeout]. */
-    private suspend fun startRealElection() {
+    /**
+     * Gate the actual term bump behind a pre-vote quorum. Verbatim body of the old [onElectionTimeout].
+     *
+     * [leadershipTransfer] is threaded onto every [RaftMessage.RequestVote] this election emits. It is
+     * `true` only when the election was triggered by a [RaftMessage.TimeoutNow] (a §3.10 graceful
+     * transfer), granting the candidate §4.2.3 "permission to disrupt" a leader the recipients still
+     * believe is alive. A normal (pre-vote-gated) election leaves it `false` so leader-stickiness holds.
+     */
+    private suspend fun startRealElection(leadershipTransfer: Boolean = false) {
         preVoteTerm = null
         // If a prior election is still pending, it timed out — emit before overwriting the term.
         if (electionStartTime != null) {
@@ -496,7 +503,7 @@ internal class RaftEngine(
         // Single-voter cluster: self-vote already satisfies quorum — become leader immediately.
         if (state.membershipState.voterQuorumReached(votesGranted - transport.selfId, transport.selfId)) { becomeLeader(); return }
         emitTrace(RaftTraceEvent.Timeout(nextClock(), transport.selfId, state.currentTerm))
-        val rv = RaftMessage.RequestVote(state.currentTerm, transport.selfId, state.lastLogIndex, state.lastLogTerm)
+        val rv = RaftMessage.RequestVote(state.currentTerm, transport.selfId, state.lastLogIndex, state.lastLogTerm, leadershipTransfer)
         otherVoters.forEach { peer ->
             emitTrace(RaftTraceEvent.RequestVote(nextClock(), transport.selfId, peer, state.currentTerm, state.lastLogIndex, state.lastLogTerm))
             send(peer, rv)
@@ -511,8 +518,14 @@ internal class RaftEngine(
         // §3.10 exception: if we are the leader and a transfer to `from` is in flight, we must
         // NOT apply leader-stickiness — the transfer explicitly authorises this candidate to run
         // an election. Step down before normal vote processing so the vote is granted naturally.
+        //
+        // §4.2.3 exception: a transfer target's RequestVote carries the [leadershipTransfer] "permission
+        // to disrupt" flag. Every OTHER voter (not just the old leader) must process it even while it
+        // believes a leader is alive — otherwise at n>=4 the target loses its first election to
+        // lease-holding voters. The flag ONLY bypasses this stickiness deny; term / §5.4.1 log / already-
+        // voted checks below still run.
         val isTransferCandidate = _role.value is RaftRole.Leader && transfer.inFlightTarget == from
-        if (!isTransferCandidate && leaderAlive && m.term > state.currentTerm) {
+        if (!isTransferCandidate && !m.leadershipTransfer && leaderAlive && m.term > state.currentTerm) {
             emitTrace(RaftTraceEvent.VoteDenied(nextClock(), transport.selfId, from, m.term, DenyReason.LeaderAlive))
             send(from, RaftMessage.RequestVoteResponse(state.currentTerm, false))
             return
@@ -1614,8 +1627,10 @@ internal class RaftEngine(
         }
         if (m.term > state.currentTerm) stepDown(m.term, StepDownReason.HigherTermObserved)
         // Start a real election immediately (skip pre-vote — we are already up-to-date per the leader's sync).
+        // §4.2.3: this election's RequestVotes carry the disrupt flag so the OTHER voters grant it despite
+        // their leader-lease being live (needed at n>=4, where the transferring leader alone is not a quorum).
         debug { "onTimeoutNow: starting immediate election (skipping pre-vote)" }
-        startRealElection()
+        startRealElection(leadershipTransfer = true)
     }
 
     // ── Client-proposal forwarding (§8) ──────────────────────────────────────
