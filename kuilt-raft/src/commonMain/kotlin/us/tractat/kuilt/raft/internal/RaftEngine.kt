@@ -1652,8 +1652,13 @@ internal class RaftEngine(
         val actions = forwarder.flush(_leader.value, transport.selfId, _role.value is RaftRole.Leader)
         for (action in actions) {
             when (action) {
-                is ProposalForwarder.FlushAction.ReProposeLocally ->
+                is ProposalForwarder.FlushAction.ReProposeLocally -> {
+                    // The forward stays in the forwarder's map across this suspendable onPropose so teardown
+                    // (forwarder.failAll) still owns the deferred until it lands in `pending`; evict it only
+                    // AFTER onPropose returns (deferred now in `pending`).
                     onPropose(action.pf.command, action.pf.dedupKey, action.pf.deferred)
+                    forwarder.reProposed(action.id)
+                }
                 is ProposalForwarder.FlushAction.SendToLeader ->
                     send(action.leaderId, RaftMessage.Forward(action.id, action.command, action.dedupKey))
             }

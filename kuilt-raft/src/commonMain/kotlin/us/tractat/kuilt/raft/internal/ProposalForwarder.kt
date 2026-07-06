@@ -108,9 +108,10 @@ internal class ProposalForwarder {
      * when this node is neither leader nor knows a distinct leader yet (the parked entries stay queued).
      *
      * Entries whose deferred is already completed (cancelled by the caller, or resolved) are dropped and
-     * removed here — never re-sent or re-proposed. Leader-path entries are removed from the map because
-     * the local propose path then owns their completion via the engine's `pending` queue; non-leader-path
-     * entries stay in the map awaiting their `ForwardResponse`.
+     * removed here — never re-sent or re-proposed. Leader-path entries are LEFT in the map here and evicted
+     * by the engine via [reProposed] only after its `onPropose` returns, so [failAll] still owns the
+     * deferred across the suspendable propose window; non-leader-path entries stay in the map awaiting their
+     * `ForwardResponse`.
      */
     fun flush(leaderId: NodeId?, selfId: NodeId, amLeader: Boolean): List<FlushAction> {
         if (waitingForLeader.isEmpty()) return emptyList()
@@ -125,8 +126,11 @@ internal class ProposalForwarder {
                 continue
             }
             if (amLeader) {
-                forwardedProposals.remove(id)         // leader path completes via the engine's `pending`
-                actions += FlushAction.ReProposeLocally(pf)
+                // Keep the entry in forwardedProposals across the engine's suspendable onPropose call so
+                // teardown (failAll) still owns the deferred until it lands in the engine's `pending`; the
+                // engine calls reProposed(id) to remove it once onPropose returns. Removing it here would
+                // orphan the deferred in the onPropose suspension window (cancel/append-throw → hang).
+                actions += FlushAction.ReProposeLocally(id, pf)
             } else {
                 actions += FlushAction.SendToLeader(
                     requireNotNull(leaderId) { "flush: no leader known on the non-leader forward path" },
@@ -148,6 +152,18 @@ internal class ProposalForwarder {
         waitingForLeader.clear()
     }
 
+    /**
+     * Remove the re-proposed forward [id] from [forwardedProposals] — called by the engine ONLY after its
+     * [onPropose] has returned for a [FlushAction.ReProposeLocally] entry, i.e. once the deferred is safely
+     * in the engine's `pending` queue. Until this call the entry stays in the map so [failAll] still owns
+     * the deferred across the suspendable propose window (cancel/append-throw completes it rather than
+     * leaking it). The brief overlap where the deferred is in BOTH `pending` and [forwardedProposals] is
+     * safe: `pending` fails it first and `completeExceptionally` on an already-completed deferred is a no-op.
+     */
+    fun reProposed(id: Long) {
+        forwardedProposals.remove(id)
+    }
+
     /** The engine's next action after registering a proposal to forward. */
     sealed interface ForwardDecision {
         /** A distinct leader is known — the engine sends `Forward([id], [command], [dedupKey])` to [leaderId]. */
@@ -160,8 +176,13 @@ internal class ProposalForwarder {
 
     /** One action the engine must carry out while draining the parked-forward queue in [flush]. */
     sealed interface FlushAction {
-        /** This node is now the leader — the engine re-runs its propose path for [pf] (which owns completion). */
-        data class ReProposeLocally(val pf: PendingForward) : FlushAction
+        /**
+         * This node is now the leader — the engine re-runs its propose path for [pf] (which then owns
+         * completion via `pending`), and calls [reProposed] with [id] AFTER `onPropose` returns to evict
+         * the entry from [forwardedProposals]. The entry is intentionally NOT removed before the propose so
+         * [failAll] still owns the deferred across the suspendable window.
+         */
+        data class ReProposeLocally(val id: Long, val pf: PendingForward) : FlushAction
 
         /** Send the parked forward `Forward([id], [command], [dedupKey])` to the now-known [leaderId]. */
         data class SendToLeader(val leaderId: NodeId, val id: Long, val command: ByteArray, val dedupKey: DedupKey?) :
