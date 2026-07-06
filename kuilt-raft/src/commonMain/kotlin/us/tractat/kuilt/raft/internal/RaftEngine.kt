@@ -201,8 +201,7 @@ internal class RaftEngine(
     private val snapshotSender = SnapshotSender(storage, ::chunkBytes)
 
     // §7 InstallSnapshot reassembly state — follower-only (in-order chunk accumulation).
-    private class SnapshotReassembly(val meta: SnapshotMeta, val buffer: ArrayList<Byte> = ArrayList())
-    private var incomingSnapshot: SnapshotReassembly? = null
+    private val snapshotReceiver = SnapshotReceiver()
 
     // Timer jobs (cancelled/restarted by actor)
     // timer jobs are children of scope and die with it; Close only stops the actor loop
@@ -940,23 +939,17 @@ internal class RaftEngine(
         armLeaderLease()
 
         val meta = SnapshotMeta(m.lastIncludedIndex, m.lastIncludedTerm, m.config)
-        val r = if (m.offset == 0L) SnapshotReassembly(meta).also { incomingSnapshot = it } else incomingSnapshot
-        // Out-of-order or stale chunk: re-advertise the offset we actually hold and wait for a resend.
-        if (r == null || r.meta != meta || m.offset != r.buffer.size.toLong()) {
-            val have = if (r?.meta == meta) r.buffer.size.toLong() else 0L
-            if (have == 0L) incomingSnapshot = null
-            debug { "onInstallSnapshot($from): out-of-order offset=${m.offset} (have=$have) → re-advertise, await resend" }
-            send(from, RaftMessage.InstallSnapshotResponse(state.currentTerm, have, echoedRound = m.round))
-            return
+        when (val outcome = snapshotReceiver.onChunk(meta, m.offset, m.data, m.done)) {
+            is SnapshotReceiver.ChunkOutcome.ReAdvertise -> {
+                debug { "onInstallSnapshot($from): out-of-order offset=${m.offset} (have=${outcome.haveOffset}) → re-advertise, await resend" }
+                send(from, RaftMessage.InstallSnapshotResponse(state.currentTerm, outcome.haveOffset, echoedRound = m.round))
+            }
+            is SnapshotReceiver.ChunkOutcome.AwaitMore -> {
+                debug { "onInstallSnapshot($from): chunk offset=${m.offset} accepted (have=${outcome.haveOffset}), await more" }
+                send(from, RaftMessage.InstallSnapshotResponse(state.currentTerm, outcome.haveOffset, echoedRound = m.round))
+            }
+            is SnapshotReceiver.ChunkOutcome.Complete -> finalizeInstalledSnapshot(from, m, outcome.bytes)
         }
-        r.buffer.addAll(m.data.asList())
-
-        if (!m.done) {
-            debug { "onInstallSnapshot($from): chunk offset=${m.offset} accepted (have=${r.buffer.size}), await more" }
-            send(from, RaftMessage.InstallSnapshotResponse(state.currentTerm, r.buffer.size.toLong(), echoedRound = m.round))
-            return
-        }
-        finalizeInstalledSnapshot(from, m, r.buffer.toByteArray())
     }
 
     /** Persist + apply a fully-reassembled snapshot, reset the log around it, and emit the install. */
@@ -986,7 +979,7 @@ internal class RaftEngine(
         state.snapshotConfig = m.config
         recomputeMembership()
         _committed.emit(Committed.Install(Snapshot(m.lastIncludedIndex, bytes)))
-        incomingSnapshot = null
+        snapshotReceiver.reset()
         debug { "finalizeInstalledSnapshot($from): INSTALLED through=${m.lastIncludedIndex} term=${m.lastIncludedTerm} commit=${state.currentCommitIndex} logTail=${state.log.firstOrNull()?.index}..${state.log.lastOrNull()?.index} membershipState=${state.membershipState}" }
         emitTrace(RaftTraceEvent.InstallSnapshotAccepted(nextClock(), from, transport.selfId, m.lastIncludedIndex))
         send(from, RaftMessage.InstallSnapshotResponse(state.currentTerm, bytes.size.toLong(), echoedRound = m.round))
