@@ -90,8 +90,10 @@ internal class LeadershipTransferMachine(
      * §3.10 step 2 requires the target to be brought up to the leader's *last* log index — not merely its
      * commit index — before `TimeoutNow`: any uncommitted tail at transfer time (a just-appended proposal,
      * the §5.4.2 term-start no-op, a pending config entry) would otherwise trigger a premature `TimeoutNow`
-     * to a not-caught-up target, whose election then fails. The propose/membership gates (§3.10 step 1) hold
-     * `lastLogIdx` stable for the duration of the transfer.
+     * to a not-caught-up target, whose election then fails. `lastLogIdx` stays stable for the duration of the
+     * transfer because §3.10 step 1 is enforced in both directions: the engine rejects new proposals and new
+     * membership changes while a transfer is in flight, and symmetrically refuses to *start* a transfer while a
+     * membership change is still converging — so no entry can be appended between this ack and the `TimeoutNow`.
      */
     fun onPeerAck(from: NodeId, matchIdx: Long, lastLogIdx: Long): Boolean {
         val current = inFlight ?: return false

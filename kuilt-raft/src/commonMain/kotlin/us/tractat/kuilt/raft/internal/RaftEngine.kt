@@ -1045,7 +1045,7 @@ internal class RaftEngine(
             tryAdvanceLeaderCommit()
             // §3.10 step 2: if a transfer is in flight and the target's log now fully matches ours
             // (matchIndex == lastLogIndex, not merely commitIndex), send TimeoutNow.
-            if (transfer.onPeerAck(from, state.matchIndex[from] ?: 0L, state.lastLogIndex)) sendTimeoutNow(from)
+            if (transfer.onPeerAck(from, state.matchIndex.getValue(from), state.lastLogIndex)) sendTimeoutNow(from)
         } else {
             // §5.3 fast backup: jump nextIndex to reduce O(n) recovery to O(#terms)
             state.nextIndex[from] = nextIndexAfterFailure(state.nextIndex[from] ?: 1L, m, state.log)
@@ -1525,6 +1525,17 @@ internal class RaftEngine(
         val currentVoters = state.membershipState.effectiveConfig.voters
         if (target !in currentVoters) {
             response.completeExceptionally(IllegalArgumentException("transferLeadership: target ${target.value} is not a voter in the current config ($currentVoters)"))
+            return
+        }
+        // §3.10 step 1, the reverse direction of the onChangeMembership gate: refuse to start a transfer
+        // while a membership change is still converging. pendingConfigChange stays non-null from
+        // changeMembership until the resulting Simple entry commits (onConfigCommitted), and the
+        // Joint→Simple auto-append fires inside that window — appending an entry that would grow
+        // lastLogIndex mid-transfer, moving the goalpost the target is chasing. Transfer and membership
+        // change are thus mutually exclusive in both directions, which is what keeps lastLogIndex stable
+        // for the duration of the transfer (the onPeerAck predicate relies on this).
+        if (pendingConfigChange != null) {
+            response.completeExceptionally(MembershipChangeInProgressException("transferLeadership: a membership change is in progress"))
             return
         }
         // A second concurrent call while one is already in flight: reject the second. `start` arms the

@@ -2,6 +2,7 @@
 
 package us.tractat.kuilt.raft
 
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
@@ -465,6 +466,50 @@ internal class LeadershipTransferTest {
 
         leader.cancelTransfer()
         transferJob.join()
+    }
+
+    /**
+     * The reverse direction of [changeMembership_duringTransfer_rejected], closing the §3.10 step-1
+     * asymmetry: a leadership transfer must not *start* while a membership change is still converging.
+     * `pendingConfigChange` stays non-null from `changeMembership` until the resulting `Simple` entry
+     * commits, and the Joint→Simple auto-append fires inside that window — an entry that would grow
+     * lastLogIndex mid-transfer, exactly the goalpost move the transfer's `onPeerAck` predicate assumes
+     * cannot happen. Transfer and membership change are mutually exclusive in both directions.
+     *
+     * The change is left pending-but-uncommitted at the instant of the transfer by enqueuing the two
+     * requests back-to-back into the leader's actor channel (change first, transfer second): both are
+     * processed in a single actor turn ahead of any follower ACK, so `pendingConfigChange` is set — and
+     * the config entry not yet committed — when `onTransferLeadership` runs.
+     */
+    @Test
+    fun transferLeadership_duringMembershipChange_rejected() = raftRunTest(timeout = 10.seconds) {
+        val sim = raftSim(this, backgroundScope, n = 3)
+        val leader = awaitLeader(sim)
+        val leaderId = sim.nodeIds.first { sim.nodes[it] === leader }
+        val targetId = sim.nodeIds.first { it != leaderId }
+
+        sim.proposeOnLeader("base".encodeToByteArray())
+        sim.awaitCommit(1L)
+        sim.settle()
+
+        // Enqueue the membership change, then the transfer, back-to-back and ahead of any ACK — the actor
+        // processes both in one turn, so pendingConfigChange is set (config entry uncommitted) when the
+        // transfer is validated. changeMembership is left to commit naturally afterwards.
+        val newConfig = ClusterConfig(voters = sim.nodeIds.toSet(), learners = setOf(NodeId("learner-x")))
+        backgroundScope.launch { runCatchingCancellable { leader.changeMembership(newConfig) } }
+        val transferOutcome = CompletableDeferred<Result<Unit>>()
+        backgroundScope.launch { transferOutcome.complete(runCatchingCancellable { leader.transferLeadership(targetId) }) }
+
+        val result = transferOutcome.await()
+        assertAll(
+            { assertTrue(result.isFailure, "transfer must be rejected while a membership change is in progress") },
+            {
+                assertTrue(
+                    result.exceptionOrNull() is MembershipChangeInProgressException,
+                    "expected MembershipChangeInProgressException, got ${result.exceptionOrNull()}",
+                )
+            },
+        )
     }
 
     // ── Trace event ───────────────────────────────────────────────────────────
