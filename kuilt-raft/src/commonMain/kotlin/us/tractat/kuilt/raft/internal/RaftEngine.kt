@@ -314,11 +314,9 @@ internal class RaftEngine(
             // Restore persisted state
             state.currentTerm = storage.term()
             state.votedFor = storage.votedFor()
-            state.log.addAll(storage.entries())
-            // Recover the snapshot baseline: a persisted snapshot is by definition committed, so
-            // seed snapshotIndex/Term, the compaction floor, and commitIndex from it. The persisted
-            // log already excludes the discarded prefix, so `entries()` above loaded only entries
-            // with index > snapshotIndex.
+            // Recover the snapshot baseline FIRST: a persisted snapshot is by definition committed, so
+            // seed snapshotIndex/Term, the compaction floor, and commitIndex from it. This must happen
+            // BEFORE the log load so `snapshotIndex` is known when we filter the persisted entries.
             storage.loadSnapshot()?.let { stored ->
                 state.snapshotIndex = stored.meta.lastIncludedIndex
                 state.snapshotTerm = stored.meta.lastIncludedTerm
@@ -331,6 +329,13 @@ internal class RaftEngine(
                     _commitIndex.value = state.snapshotIndex
                 }
             }
+            // Load only entries ABOVE the snapshot floor. `saveSnapshot` is durable-before-discardLogPrefix
+            // (#1221): a crash in that window leaves storage holding the snapshot AND the un-discarded prefix
+            // (entries with index <= snapshotIndex). Loading `entries()` unfiltered would put the compacted
+            // prefix into the in-memory log, and the positional log math (RaftLogMath: log[index - snapshotIndex
+            // - 1], which assumes the list begins at snapshotIndex + 1) would then silently return the wrong
+            // entry for every lookup. Filtering here restores the invariant regardless of the crash window.
+            state.log.addAll(storage.entries(state.snapshotIndex + 1))
             // Recompute effective membershipState from the recovered log + snapshot (restart recovery).
             // This is load-bearing: a node that crashed mid-transition comes back under exactly
             // the config its durable log justifies — no special restart path needed.
