@@ -253,17 +253,18 @@ internal class RaftEngine(
 
     // ── Client-proposal forwarding state (§8) — actor-teardown-touched ─────────
     // MUST stay declared BEFORE the `init` block below (which launches the actor).
-    // The actor's `finally` teardown calls failForwardedProposals, which dereferences
-    // both fields; when the scope is cancelled during construction that teardown can
-    // run before the constructor reaches a declaration placed after `init` → NPE.
+    // The actor's `finally` teardown calls forwarder.failAll(...), which dereferences
+    // the machine's maps; when the scope is cancelled during construction that teardown
+    // can run before the constructor reaches a declaration placed after `init` → NPE.
     // Keep alongside the other pending-state fields the teardown touches
     // (pending/pendingConfigChange/readIndexTracker/transfer*). See #1077.
-
-    /** reqId -> pending forward awaiting a ForwardResponse. */
-    private val forwardedProposals = mutableMapOf<Long, PendingForward>()
-
-    /** reqIds queued because no leader was known yet; flushed when a leader appears. */
-    private val waitingForLeader = mutableListOf<Long>()
+    //
+    // Extracted to ProposalForwarder (§8): it owns the outstanding forwards awaiting a
+    // ForwardResponse, the ones parked while no leader is known, and the monotonic
+    // correlation nonce; the engine keeps all send/deferred.complete side-effects at the
+    // call site. Drained by flushWaitingForLeader after every non-Close command; failed on
+    // actor teardown.
+    private val forwarder = ProposalForwarder()
 
     /**
      * The shared consensus core — term/vote, log, commit/snapshot boundary, membership, and the
@@ -352,7 +353,7 @@ internal class RaftEngine(
                 failPendingConfigChange(cause)
                 readIndexTracker.failAll(cause)
                 transfer.fail(LeadershipTransferException("node scope cancelled"))
-                failForwardedProposals(cause)
+                forwarder.failAll(cause)
             }
         }
     }
@@ -384,13 +385,6 @@ internal class RaftEngine(
     private fun failPendingConfigChange(cause: Throwable) {
         pendingConfigChange?.completeExceptionally(cause)
         pendingConfigChange = null
-    }
-
-    /** Fail all forwarded proposals awaiting a leader or a ForwardResponse, and clear the maps. */
-    private fun failForwardedProposals(cause: Throwable) {
-        forwardedProposals.values.forEach { it.deferred.completeExceptionally(cause) }
-        forwardedProposals.clear()
-        waitingForLeader.clear()
     }
 
     // ── Role helper ───────────────────────────────────────────────────────────
@@ -1222,16 +1216,13 @@ internal class RaftEngine(
         if (_role.value !is RaftRole.Leader) {
             // Follower/Candidate/Learner: forward to the leader (Raft §8). Wait, cancellably,
             // if none is known yet. Cleanup of cancelled entries is handled on the actor loop
-            // in flushWaitingForLeader (isCompleted check) and failForwardedProposals (finally).
-            // Do NOT use invokeOnCompletion to mutate forwardedProposals — that runs on the
-            // caller's thread and races the actor loop, which is the sole owner of the map.
-            val id = nextForwardId++
-            forwardedProposals[id] = PendingForward(response, command, dedupKey)
-            val leaderId = _leader.value
-            if (leaderId != null && leaderId != transport.selfId) {
-                send(leaderId, RaftMessage.Forward(id, command, dedupKey))
-            } else {
-                waitingForLeader += id
+            // in flushWaitingForLeader (isCompleted check) and forwarder.failAll (finally).
+            // Do NOT use invokeOnCompletion to mutate the forwarder maps — that runs on the
+            // caller's thread and races the actor loop, which is the sole owner of the maps.
+            when (val d = forwarder.forward(response, command, dedupKey, _leader.value, transport.selfId)) {
+                is ProposalForwarder.ForwardDecision.SendToLeader ->
+                    send(d.leaderId, RaftMessage.Forward(d.id, d.command, d.dedupKey))
+                ProposalForwarder.ForwardDecision.Queued -> Unit
             }
             return
         }
@@ -1628,16 +1619,10 @@ internal class RaftEngine(
     }
 
     // ── Client-proposal forwarding (§8) ──────────────────────────────────────
-
-    /** Monotonic correlation nonce for outbound forwards. */
-    private var nextForwardId: Long = 0L
-
-    /** A forward awaiting its [RaftMessage.ForwardResponse]: the caller's deferred, the original command, and the proposer-stamped [dedupKey]. */
-    private data class PendingForward(
-        val deferred: CompletableDeferred<LogEntry>,
-        val command: ByteArray,
-        val dedupKey: DedupKey?,
-    )
+    // Forwarding state (the outstanding forwards, the no-leader queue, and the correlation
+    // nonce) lives in `forwarder` (ProposalForwarder), declared before `init` above (#1077).
+    // onForward (the LEADER side) stays here — it is a propose-path entry point, not
+    // forwarder state.
 
     /** Leader handles a forwarded proposal: run the normal propose path, reply with its fate. */
     private suspend fun onForward(from: NodeId, m: RaftMessage.Forward) {
@@ -1669,7 +1654,7 @@ internal class RaftEngine(
 
     /** Follower handles the leader's reply to a forward it sent. */
     private fun onForwardResponse(from: NodeId, m: RaftMessage.ForwardResponse) {
-        val pf = forwardedProposals.remove(m.clientRequestId) ?: return
+        val pf = forwarder.onResponse(m.clientRequestId) ?: return
         when (val o = m.outcome) {
             // Re-wrap with the proposer's own dedupKey so the returned entry matches what the leader appended.
             is ForwardOutcome.Committed -> pf.deferred.complete(LogEntry(o.index, o.term, pf.command, dedupKey = pf.dedupKey))
@@ -1681,29 +1666,22 @@ internal class RaftEngine(
     /**
      * Drain forwards queued while no leader was known. If we are now the leader, propose them
      * locally; otherwise send them to the current leader. No-op when nothing is queued or no
-     * leader is known yet.
+     * leader is known yet. The forwarder decides *which* action per parked entry; the engine
+     * keeps the propose/send side-effects here.
      */
     private suspend fun flushWaitingForLeader() {
-        if (waitingForLeader.isEmpty()) return
-        val leaderId = _leader.value
-        val amLeader = _role.value is RaftRole.Leader
-        if (!amLeader && (leaderId == null || leaderId == transport.selfId)) return
-        val batch = waitingForLeader.toList()
-        waitingForLeader.clear()
-        for (id in batch) {
-            val pf = forwardedProposals[id] ?: continue
-            if (pf.deferred.isCompleted) {            // cancelled or already completed → drop, never send
-                forwardedProposals.remove(id)
-                continue
-            }
-            if (amLeader) {
-                forwardedProposals.remove(id)              // leader path completes via `pending`
-                onPropose(pf.command, pf.dedupKey, pf.deferred)
-            } else {
-                send(
-                    requireNotNull(leaderId) { "flushWaitingForLeader: no leader known on the non-leader forward path" },
-                    RaftMessage.Forward(id, pf.command, pf.dedupKey),
-                )
+        val actions = forwarder.flush(_leader.value, transport.selfId, _role.value is RaftRole.Leader)
+        for (action in actions) {
+            when (action) {
+                is ProposalForwarder.FlushAction.ReProposeLocally -> {
+                    // The forward stays in the forwarder's map across this suspendable onPropose so teardown
+                    // (forwarder.failAll) still owns the deferred until it lands in `pending`; evict it only
+                    // AFTER onPropose returns (deferred now in `pending`).
+                    onPropose(action.pf.command, action.pf.dedupKey, action.pf.deferred)
+                    forwarder.reProposed(action.id)
+                }
+                is ProposalForwarder.FlushAction.SendToLeader ->
+                    send(action.leaderId, RaftMessage.Forward(action.id, action.command, action.dedupKey))
             }
         }
     }
