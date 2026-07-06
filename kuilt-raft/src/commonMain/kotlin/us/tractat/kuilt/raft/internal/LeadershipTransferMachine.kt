@@ -120,6 +120,7 @@ internal class LeadershipTransferMachine(
      */
     fun onTimeout(epoch: Long): NodeId? {
         val current = inFlight ?: return null
+        if (epoch != current.epoch) return null   // stale timer from a resolved/superseded transfer — ignore
         failWith(current, LeadershipTransferException("leadership transfer to ${current.target.value} timed out"))
         return current.target
     }
@@ -144,12 +145,12 @@ internal class LeadershipTransferMachine(
      */
     fun onLeadershipRelinquished(reason: StepDownReason, from: NodeId?) {
         val current = inFlight ?: return
-        if (reason == StepDownReason.HigherTermObserved) {
+        if (reason == StepDownReason.HigherTermObserved && from == current.target) {
             current.timeoutJob.cancel()
             current.deferred.complete(Unit)
             inFlight = null
         } else {
-            failWith(current, LeadershipTransferException("leader stepped down before transfer completed: $reason"))
+            failWith(current, LeadershipTransferException("leader stepped down before transfer completed: $reason (higher term from ${from?.value})"))
         }
     }
 
