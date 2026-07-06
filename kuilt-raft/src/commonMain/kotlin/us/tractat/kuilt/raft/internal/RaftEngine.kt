@@ -152,24 +152,11 @@ internal class RaftEngine(
     )
     override val trace: Flow<RaftTraceEvent> = _trace
 
-    // ── Effective membership (actor-only mutable state) ──────────────────────
-    // Named `membershipState` to avoid shadowing the `membership: StateFlow<ClusterConfig>` override.
-
-    /**
-     * The effective membership: pure function of (log + snapshotConfig + bootstrapConfig).
-     * Recomputed by [recomputeMembership] on every append, truncate, and snapshot install —
-     * never mutated ad hoc. Starts as Simple(bootstrapConfig) until the first log load.
-     */
-    private var membershipState: MembershipState = MembershipState.Simple(bootstrapConfig)
-
-    /**
-     * The effective config as of the baseline of the most recently installed or compacted snapshot
-     * ([SnapshotMeta.config]), or null when no snapshot is in force or its covered prefix held no config
-     * change. Seeded on restart-load, on snapshot install, and on local compaction; consumed by
-     * [recomputeMembership] as the "else snapshot's config" branch when the live log no longer carries a
-     * config entry (the entry that set the membershipState was compacted away).
-     */
-    private var snapshotConfig: ConfigPayload? = null
+    // ── Shared consensus core (see [RaftState]) ──────────────────────────────
+    // `currentTerm`/`votedFor`/`log`/`currentCommitIndex`/`snapshotIndex`/`snapshotTerm`/
+    // `snapshotConfig`/`membershipState`/`nextIndex`/`matchIndex` and the derived log helpers
+    // now live on `state`, declared just before the `init` block (below).
+    // `membershipState` is named to avoid shadowing the `membership: StateFlow<ClusterConfig>` override.
 
     // ── Peer-set helpers ─────────────────────────────────────────────────────
 
@@ -178,24 +165,16 @@ internal class RaftEngine(
      * Joint: union of both voter sets minus self.
      */
     private val otherVoters: Set<NodeId>
-        get() = membershipState.electionTargets(transport.selfId)
+        get() = state.membershipState.electionTargets(transport.selfId)
 
     /**
      * All members (voters + learners) other than self — the AppendEntries recipients.
      * Joint: union of all members from both configs minus self.
      */
     private val otherMembers: Set<NodeId>
-        get() = membershipState.replicationTargets(transport.selfId)
+        get() = state.membershipState.replicationTargets(transport.selfId)
 
     // ── Actor-only mutable state ──────────────────────────────────────────────
-    private var currentTerm = 0L
-    private var votedFor: NodeId? = null
-    private val log = mutableListOf<LogEntry>()
-    private var currentCommitIndex = 0L
-
-    // Snapshot / compaction state
-    private var snapshotIndex = 0L
-    private var snapshotTerm = 0L
 
     // Candidate state
     private val votesGranted = mutableSetOf<NodeId>()
@@ -206,8 +185,6 @@ internal class RaftEngine(
     private val preVotesGranted = mutableSetOf<NodeId>()
 
     // Leader state
-    private val nextIndex = mutableMapOf<NodeId, Long>()
-    private val matchIndex = mutableMapOf<NodeId, Long>()
     private val pending = mutableListOf<Pair<Long, CompletableDeferred<LogEntry>>>()
 
     /**
@@ -323,26 +300,34 @@ internal class RaftEngine(
     /** reqIds queued because no leader was known yet; flushed when a leader appears. */
     private val waitingForLeader = mutableListOf<Long>()
 
+    /**
+     * The shared consensus core — term/vote, log, commit/snapshot boundary, membership, and the
+     * leader-side replication indices. Declared BEFORE the `init` block (#1077): the actor's
+     * teardown and the init-restore coroutine both dereference these fields, so `state` must be
+     * initialized before the launch below.
+     */
+    private val state = RaftState(bootstrapConfig)
+
     init {
         scope.launch {
             // Restore persisted state
-            currentTerm = storage.term()
-            votedFor = storage.votedFor()
-            log.addAll(storage.entries())
+            state.currentTerm = storage.term()
+            state.votedFor = storage.votedFor()
+            state.log.addAll(storage.entries())
             // Recover the snapshot baseline: a persisted snapshot is by definition committed, so
             // seed snapshotIndex/Term, the compaction floor, and commitIndex from it. The persisted
             // log already excludes the discarded prefix, so `entries()` above loaded only entries
             // with index > snapshotIndex.
             storage.loadSnapshot()?.let { stored ->
-                snapshotIndex = stored.meta.lastIncludedIndex
-                snapshotTerm = stored.meta.lastIncludedTerm
+                state.snapshotIndex = stored.meta.lastIncludedIndex
+                state.snapshotTerm = stored.meta.lastIncludedTerm
                 // Seed the membershipState baseline from the snapshot so a node that crashed after compacting
                 // past a config change recovers under that change (the config entry is gone from the log).
-                snapshotConfig = stored.meta.config
-                _compactionFloor.value = snapshotIndex
-                if (currentCommitIndex < snapshotIndex) {
-                    currentCommitIndex = snapshotIndex
-                    _commitIndex.value = snapshotIndex
+                state.snapshotConfig = stored.meta.config
+                _compactionFloor.value = state.snapshotIndex
+                if (state.currentCommitIndex < state.snapshotIndex) {
+                    state.currentCommitIndex = state.snapshotIndex
+                    _commitIndex.value = state.snapshotIndex
                 }
             }
             // Recompute effective membershipState from the recovered log + snapshot (restart recovery).
@@ -407,14 +392,14 @@ internal class RaftEngine(
     /** Persist term+vote durably, THEN update in-memory — uniform crash-consistent ordering. */
     private suspend fun persistTermAndVote(term: Long, vote: NodeId?) {
         storage.saveTermAndVotedFor(term, vote)
-        currentTerm = term
-        votedFor = vote
+        state.currentTerm = term
+        state.votedFor = vote
     }
 
     /** Persist a vote grant durably, then in-memory (term unchanged). */
     private suspend fun persistVote(vote: NodeId?) {
         storage.saveVotedFor(vote)
-        votedFor = vote
+        state.votedFor = vote
     }
 
     // ── Pending-failure helper ────────────────────────────────────────────────
@@ -477,22 +462,11 @@ internal class RaftEngine(
      * via a config log entry correctly reflects its new classification.
      */
     private val followerRole: RaftRole
-        get() = if (membershipState.isLearner(transport.selfId)) RaftRole.Learner else RaftRole.Follower
+        get() = if (state.membershipState.isLearner(transport.selfId)) RaftRole.Learner else RaftRole.Follower
 
     // ── Log helpers ───────────────────────────────────────────────────────────
-
-    private fun entryAt(index: Long): LogEntry? = logEntryAt(log, snapshotIndex, index)
-
-    private val lastLogIndex: Long get() = log.lastOrNull()?.index ?: snapshotIndex
-
-    private val lastLogTerm: Long get() = log.lastOrNull()?.term ?: snapshotTerm
-
-    /** Term at [index], or `null` if [index] is in the compacted prefix (unknowable from in-memory state). */
-    private fun termAt(index: Long): Long? = when {
-        index == snapshotIndex -> snapshotTerm
-        index < snapshotIndex  -> null
-        else                   -> entryAt(index)?.term
-    }
+    // `entryAt`/`lastLogIndex`/`lastLogTerm`/`termAt` now live on [RaftState] (`state.*`) —
+    // pure functions of the moved log/snapshot fields.
 
     // ── Trace helper ──────────────────────────────────────────────────────────
 
@@ -551,16 +525,16 @@ internal class RaftEngine(
         // A re-timing-out Candidate (probe didn't gather quorum) drops back to follower role
         // for the probe phase so the role accurately reflects "not yet a candidate".
         _role.value = followerRole
-        val proposed = currentTerm + 1
+        val proposed = state.currentTerm + 1
         preVoteTerm = proposed
         preVoteRound++
         preVotesGranted.clear()
         preVotesGranted += transport.selfId
         resetElectionTimeout()
         // Single-voter (or all other voters already granted): self pre-vote satisfies quorum — skip probe.
-        if (membershipState.voterQuorumReached(preVotesGranted - transport.selfId, transport.selfId)) { startRealElection(); return }
+        if (state.membershipState.voterQuorumReached(preVotesGranted - transport.selfId, transport.selfId)) { startRealElection(); return }
         emitTrace(RaftTraceEvent.PreVoteStarted(nextClock(), transport.selfId, proposed))
-        val pv = RaftMessage.PreVote(proposed, transport.selfId, lastLogIndex, lastLogTerm, preVoteRound)
+        val pv = RaftMessage.PreVote(proposed, transport.selfId, state.lastLogIndex, state.lastLogTerm, preVoteRound)
         otherVoters.forEach { send(it, pv) }
     }
 
@@ -572,7 +546,7 @@ internal class RaftEngine(
             emitMetric(RaftMetric.ElectionTimedOut(electionStartTerm))
             logger.warn { "[raft:${transport.selfId}] election timed out for term $electionStartTerm" }
         }
-        persistTermAndVote(currentTerm + 1, transport.selfId)
+        persistTermAndVote(state.currentTerm + 1, transport.selfId)
         votesGranted.clear()
         votesGranted += transport.selfId
         _role.value = RaftRole.Candidate
@@ -580,15 +554,15 @@ internal class RaftEngine(
         resetElectionTimeout()
         // Record the election start time and emit the metric.
         electionStartTime = TimeSource.Monotonic.markNow()
-        electionStartTerm = currentTerm
-        emitMetric(RaftMetric.ElectionStarted(currentTerm))
-        logger.debug { "[raft:${transport.selfId}] election started for term $currentTerm" }
+        electionStartTerm = state.currentTerm
+        emitMetric(RaftMetric.ElectionStarted(state.currentTerm))
+        logger.debug { "[raft:${transport.selfId}] election started for term ${state.currentTerm}" }
         // Single-voter cluster: self-vote already satisfies quorum — become leader immediately.
-        if (membershipState.voterQuorumReached(votesGranted - transport.selfId, transport.selfId)) { becomeLeader(); return }
-        emitTrace(RaftTraceEvent.Timeout(nextClock(), transport.selfId, currentTerm))
-        val rv = RaftMessage.RequestVote(currentTerm, transport.selfId, lastLogIndex, lastLogTerm)
+        if (state.membershipState.voterQuorumReached(votesGranted - transport.selfId, transport.selfId)) { becomeLeader(); return }
+        emitTrace(RaftTraceEvent.Timeout(nextClock(), transport.selfId, state.currentTerm))
+        val rv = RaftMessage.RequestVote(state.currentTerm, transport.selfId, state.lastLogIndex, state.lastLogTerm)
         otherVoters.forEach { peer ->
-            emitTrace(RaftTraceEvent.RequestVote(nextClock(), transport.selfId, peer, currentTerm, lastLogIndex, lastLogTerm))
+            emitTrace(RaftTraceEvent.RequestVote(nextClock(), transport.selfId, peer, state.currentTerm, state.lastLogIndex, state.lastLogTerm))
             send(peer, rv)
         }
     }
@@ -602,35 +576,35 @@ internal class RaftEngine(
         // NOT apply leader-stickiness — the transfer explicitly authorises this candidate to run
         // an election. Step down before normal vote processing so the vote is granted naturally.
         val isTransferCandidate = _role.value is RaftRole.Leader && transferTarget == from
-        if (!isTransferCandidate && leaderAlive && m.term > currentTerm) {
+        if (!isTransferCandidate && leaderAlive && m.term > state.currentTerm) {
             emitTrace(RaftTraceEvent.VoteDenied(nextClock(), transport.selfId, from, m.term, DenyReason.LeaderAlive))
-            send(from, RaftMessage.RequestVoteResponse(currentTerm, false))
+            send(from, RaftMessage.RequestVoteResponse(state.currentTerm, false))
             return
         }
-        if (m.term > currentTerm) stepDown(m.term, StepDownReason.HigherTermObserved)
-        val logOk = isLogUpToDate(log.lastOrNull(), m.lastLogIndex, m.lastLogTerm)
-        val grant = m.term == currentTerm && logOk && (votedFor == null || votedFor == m.candidateId)
+        if (m.term > state.currentTerm) stepDown(m.term, StepDownReason.HigherTermObserved)
+        val logOk = isLogUpToDate(state.log.lastOrNull(), m.lastLogIndex, m.lastLogTerm)
+        val grant = m.term == state.currentTerm && logOk && (state.votedFor == null || state.votedFor == m.candidateId)
         if (grant) {
             persistVote(m.candidateId)
             resetElectionTimeout()
             emitTrace(RaftTraceEvent.VoteGranted(nextClock(), transport.selfId, from, m.term))
         } else {
             val reason = when {
-                m.term < currentTerm -> DenyReason.StaleTerm
-                votedFor != null && votedFor != m.candidateId -> DenyReason.AlreadyVoted
+                m.term < state.currentTerm -> DenyReason.StaleTerm
+                state.votedFor != null && state.votedFor != m.candidateId -> DenyReason.AlreadyVoted
                 else -> DenyReason.LogNotUpToDate
             }
             emitTrace(RaftTraceEvent.VoteDenied(nextClock(), transport.selfId, from, m.term, reason))
         }
-        send(from, RaftMessage.RequestVoteResponse(currentTerm, grant))
+        send(from, RaftMessage.RequestVoteResponse(state.currentTerm, grant))
     }
 
     private suspend fun onRequestVoteResponse(from: NodeId, m: RaftMessage.RequestVoteResponse) {
-        if (m.term > currentTerm) { stepDown(m.term, StepDownReason.HigherTermObserved); return }
-        if (_role.value !is RaftRole.Candidate || m.term != currentTerm) return
+        if (m.term > state.currentTerm) { stepDown(m.term, StepDownReason.HigherTermObserved); return }
+        if (_role.value !is RaftRole.Candidate || m.term != state.currentTerm) return
         if (m.voteGranted) {
             votesGranted += from
-            if (membershipState.voterQuorumReached(votesGranted - transport.selfId, transport.selfId)) becomeLeader()
+            if (state.membershipState.voterQuorumReached(votesGranted - transport.selfId, transport.selfId)) becomeLeader()
         }
     }
 
@@ -640,8 +614,8 @@ internal class RaftEngine(
      * Does NOT mutate term, votedFor, or timers — pre-vote is hypothesis-only.
      */
     private suspend fun onPreVote(from: NodeId, m: RaftMessage.PreVote) {
-        val logOk = isLogUpToDate(log.lastOrNull(), m.lastLogIndex, m.lastLogTerm)
-        val grant = m.term > currentTerm && logOk && !leaderAlive
+        val logOk = isLogUpToDate(state.log.lastOrNull(), m.lastLogIndex, m.lastLogTerm)
+        val grant = m.term > state.currentTerm && logOk && !leaderAlive
         if (grant) {
             emitTrace(RaftTraceEvent.PreVoteGranted(nextClock(), transport.selfId, from, m.term))
         } else {
@@ -652,35 +626,35 @@ internal class RaftEngine(
             }
             emitTrace(RaftTraceEvent.PreVoteDenied(nextClock(), transport.selfId, from, m.term, reason))
         }
-        send(from, RaftMessage.PreVoteResponse(currentTerm, grant, m.term, m.round))
+        send(from, RaftMessage.PreVoteResponse(state.currentTerm, grant, m.term, m.round))
     }
 
     private suspend fun onPreVoteResponse(from: NodeId, m: RaftMessage.PreVoteResponse) {
-        if (m.term > currentTerm) { stepDown(m.term, StepDownReason.HigherTermObserved); return }
+        if (m.term > state.currentTerm) { stepDown(m.term, StepDownReason.HigherTermObserved); return }
         if (preVoteTerm == null || m.proposedTerm != preVoteTerm || m.round != preVoteRound) return
         if (m.voteGranted) {
             preVotesGranted += from
-            if (membershipState.voterQuorumReached(preVotesGranted - transport.selfId, transport.selfId)) startRealElection()
+            if (state.membershipState.voterQuorumReached(preVotesGranted - transport.selfId, transport.selfId)) startRealElection()
         }
     }
 
     private suspend fun becomeLeader() {
         val elapsed = electionStartTime?.elapsedNow() ?: Duration.ZERO
         electionStartTime = null
-        emitMetric(RaftMetric.ElectionWon(currentTerm, elapsed))
-        logger.debug { "[raft:${transport.selfId}] won election for term $currentTerm in ${elapsed.inWholeMilliseconds}ms" }
+        emitMetric(RaftMetric.ElectionWon(state.currentTerm, elapsed))
+        logger.debug { "[raft:${transport.selfId}] won election for term ${state.currentTerm} in ${elapsed.inWholeMilliseconds}ms" }
 
         _role.value = RaftRole.Leader
         _leader.value = transport.selfId
         electionJob?.cancel()
         leaderAlive = true
         leaderLeaseJob?.cancel()
-        val nextIdx = lastLogIndex + 1L
+        val nextIdx = state.lastLogIndex + 1L
         otherMembers.forEach { p ->
-            nextIndex[p] = nextIdx
-            matchIndex[p] = 0L
+            state.nextIndex[p] = nextIdx
+            state.matchIndex[p] = 0L
         }
-        emitTrace(RaftTraceEvent.BecomeLeader(nextClock(), transport.selfId, currentTerm))
+        emitTrace(RaftTraceEvent.BecomeLeader(nextClock(), transport.selfId, state.currentTerm))
         heartbeatJob = scope.launch {
             while (true) {
                 cmd.trySend(EngineCommand.HeartbeatTick)
@@ -714,10 +688,10 @@ internal class RaftEngine(
     }
 
     private suspend fun appendNoOp() {
-        val noOpIndex = lastLogIndex + 1L
+        val noOpIndex = state.lastLogIndex + 1L
         currentTermNoOpIndex = noOpIndex   // gate for readIndex(): must not return before this commits
-        val noOp = LogEntry(noOpIndex, currentTerm, byteArrayOf(), isNoOp = true)
-        log += noOp
+        val noOp = LogEntry(noOpIndex, state.currentTerm, byteArrayOf(), isNoOp = true)
+        state.log += noOp
         storage.appendEntries(listOf(noOp))
         otherMembers.forEach { sendAppendEntries(it) }
         // Single-voter: no peers will ACK — check for immediate commit.
@@ -777,7 +751,7 @@ internal class RaftEngine(
         }
         _role.value = followerRole
         _leader.value = null
-        emitTrace(RaftTraceEvent.BecomeFollower(nextClock(), transport.selfId, currentTerm, reason))
+        emitTrace(RaftTraceEvent.BecomeFollower(nextClock(), transport.selfId, state.currentTerm, reason))
         resetElectionTimeout()
     }
 
@@ -791,8 +765,8 @@ internal class RaftEngine(
         val contacted = recentVoterContacts.toSet()
         recentVoterContacts.clear()
         // membershipState.quorumOfContacts credits self per voter set (only when self ∈ that set).
-        if (!membershipState.quorumOfContacts(contacted, transport.selfId)) {
-            debug { "onQuorumCheck: lost quorum — contacted=$contacted membershipState=$membershipState" }
+        if (!state.membershipState.quorumOfContacts(contacted, transport.selfId)) {
+            debug { "onQuorumCheck: lost quorum — contacted=$contacted membershipState=${state.membershipState}" }
             stepDownToFollower(StepDownReason.LostQuorum)
         }
     }
@@ -819,12 +793,12 @@ internal class RaftEngine(
             return
         }
         // §8 leader-completeness gate: block until the current-term no-op commits.
-        if (currentCommitIndex < currentTermNoOpIndex) {
+        if (state.currentCommitIndex < currentTermNoOpIndex) {
             pendingNoOpGate += { onRequestReadIndex(deferred) }
             return
         }
-        val ri = currentCommitIndex
-        if (membershipState.quorumOfContacts(emptySet(), transport.selfId)) {
+        val ri = state.currentCommitIndex
+        if (state.membershipState.quorumOfContacts(emptySet(), transport.selfId)) {
             // Self alone constitutes a quorum of every active voter set (Simple single-voter, or
             // Joint where self is a majority of BOTH old and new). Freshness is trivially satisfied.
             // NOTE: gating on effectiveConfig.quorumSize == 1 is wrong during a shrinking Joint:
@@ -846,42 +820,42 @@ internal class RaftEngine(
     }
 
     private suspend fun sendAppendEntries(peer: NodeId) {
-        val ni = nextIndex[peer] ?: 1L
+        val ni = state.nextIndex[peer] ?: 1L
         // §7: the prefix the follower still needs has been compacted away — divert to InstallSnapshot.
-        if (ni <= snapshotIndex) {
-            debug { "sendAppendEntries($peer): ni=$ni <= snapshotIndex=$snapshotIndex → divert to InstallSnapshot" }
+        if (ni <= state.snapshotIndex) {
+            debug { "sendAppendEntries($peer): ni=$ni <= snapshotIndex=${state.snapshotIndex} → divert to InstallSnapshot" }
             sendSnapshotChunk(peer, restart = true); return
         }
         val prevIndex = ni - 1L
-        val prevTerm = if (prevIndex == snapshotIndex) {
-            snapshotTerm
+        val prevTerm = if (prevIndex == state.snapshotIndex) {
+            state.snapshotTerm
         } else {
-            entryAt(prevIndex)?.term
-                ?: error("prevTerm for in-window index $prevIndex missing (snapshotIndex=$snapshotIndex, lastLogIndex=$lastLogIndex)")
+            state.entryAt(prevIndex)?.term
+                ?: error("prevTerm for in-window index $prevIndex missing (snapshotIndex=${state.snapshotIndex}, lastLogIndex=${state.lastLogIndex})")
         }
-        val entries = logSliceFrom(log, snapshotIndex, ni)
-        debug { "sendAppendEntries($peer): ni=$ni prevIndex=$prevIndex prevTerm=$prevTerm entries=${entries.size} commit=$currentCommitIndex" }
+        val entries = logSliceFrom(state.log, state.snapshotIndex, ni)
+        debug { "sendAppendEntries($peer): ni=$ni prevIndex=$prevIndex prevTerm=$prevTerm entries=${entries.size} commit=${state.currentCommitIndex}" }
         emitTrace(
             RaftTraceEvent.AppendEntries(
                 clock = nextClock(),
                 from = transport.selfId,
                 to = peer,
-                term = currentTerm,
+                term = state.currentTerm,
                 prevLogIndex = prevIndex,
                 prevLogTerm = prevTerm,
                 entryCount = entries.size,
-                leaderCommit = currentCommitIndex,
+                leaderCommit = state.currentCommitIndex,
             )
         )
         send(
             peer,
             RaftMessage.AppendEntries(
-                term = currentTerm,
+                term = state.currentTerm,
                 leaderId = transport.selfId,
                 prevLogIndex = prevIndex,
                 prevLogTerm = prevTerm,
                 entries = entries,
-                leaderCommit = currentCommitIndex,
+                leaderCommit = state.currentCommitIndex,
                 round = heartbeatRound,
             )
         )
@@ -922,7 +896,7 @@ internal class RaftEngine(
         send(
             peer,
             RaftMessage.InstallSnapshot(
-                term = currentTerm,
+                term = state.currentTerm,
                 leaderId = transport.selfId,
                 lastIncludedIndex = xfer.meta.lastIncludedIndex,
                 lastIncludedTerm = xfer.meta.lastIncludedTerm,
@@ -937,18 +911,18 @@ internal class RaftEngine(
 
     /** Leader: advance or finish a snapshot transfer in response to a follower's ack. */
     private suspend fun onInstallSnapshotResponse(from: NodeId, m: RaftMessage.InstallSnapshotResponse) {
-        if (m.term > currentTerm) { stepDown(m.term, StepDownReason.HigherTermObserved); return }
-        if (_role.value !is RaftRole.Leader || m.term != currentTerm) return
+        if (m.term > state.currentTerm) { stepDown(m.term, StepDownReason.HigherTermObserved); return }
+        if (_role.value !is RaftRole.Leader || m.term != state.currentTerm) return
         recentVoterContacts += from                // reachability signal for CheckQuorum
         lastAckRound[from] = m.echoedRound         // credit ACK to the round it actually responded to (BLOCKER 1a)
         resolveReadsIfQuorumFresh()                // ReadIndex: snapshot ACKs count as freshness evidence
         val xfer = snapshotXfer[from] ?: return
         xfer.nextOffset = m.nextOffset
         if (xfer.nextOffset >= xfer.state.size) {                 // fully received
-            matchIndex[from] = maxOf(matchIndex[from] ?: 0L, xfer.meta.lastIncludedIndex)
-            nextIndex[from] = xfer.meta.lastIncludedIndex + 1L
+            state.matchIndex[from] = maxOf(state.matchIndex[from] ?: 0L, xfer.meta.lastIncludedIndex)
+            state.nextIndex[from] = xfer.meta.lastIncludedIndex + 1L
             snapshotXfer.remove(from)
-            debug { "onInstallSnapshotResponse($from): COMPLETE through=${xfer.meta.lastIncludedIndex} → nextIndex=${nextIndex[from]}, resume AppendEntries" }
+            debug { "onInstallSnapshotResponse($from): COMPLETE through=${xfer.meta.lastIncludedIndex} → nextIndex=${state.nextIndex[from]}, resume AppendEntries" }
             sendAppendEntries(from)                               // resume normal replication
             tryAdvanceLeaderCommit()
         } else {
@@ -959,8 +933,8 @@ internal class RaftEngine(
 
     /** Follower: reassemble chunks in order, then install the snapshot once the final chunk arrives. */
     private suspend fun onInstallSnapshot(from: NodeId, m: RaftMessage.InstallSnapshot) {
-        if (m.term < currentTerm) { send(from, RaftMessage.InstallSnapshotResponse(currentTerm, 0L)); return }
-        if (m.term > currentTerm) stepDown(m.term, StepDownReason.HigherTermObserved)
+        if (m.term < state.currentTerm) { send(from, RaftMessage.InstallSnapshotResponse(state.currentTerm, 0L)); return }
+        if (m.term > state.currentTerm) stepDown(m.term, StepDownReason.HigherTermObserved)
         _role.value = followerRole
         preVoteTerm = null          // a live leader appeared — cancel any in-flight pre-vote probe
         _leader.value = m.leaderId
@@ -974,14 +948,14 @@ internal class RaftEngine(
             val have = if (r?.meta == meta) r.buffer.size.toLong() else 0L
             if (have == 0L) incomingSnapshot = null
             debug { "onInstallSnapshot($from): out-of-order offset=${m.offset} (have=$have) → re-advertise, await resend" }
-            send(from, RaftMessage.InstallSnapshotResponse(currentTerm, have, echoedRound = m.round))
+            send(from, RaftMessage.InstallSnapshotResponse(state.currentTerm, have, echoedRound = m.round))
             return
         }
         r.buffer.addAll(m.data.asList())
 
         if (!m.done) {
             debug { "onInstallSnapshot($from): chunk offset=${m.offset} accepted (have=${r.buffer.size}), await more" }
-            send(from, RaftMessage.InstallSnapshotResponse(currentTerm, r.buffer.size.toLong(), echoedRound = m.round))
+            send(from, RaftMessage.InstallSnapshotResponse(state.currentTerm, r.buffer.size.toLong(), echoedRound = m.round))
             return
         }
         finalizeInstalledSnapshot(from, m, r.buffer.toByteArray())
@@ -993,39 +967,39 @@ internal class RaftEngine(
         storage.saveSnapshot(meta, bytes)
         // Keep the suffix only if our entry at the boundary matches the snapshot's term (Log Matching);
         // otherwise the whole local log is suspect — discard it and rebuild from the snapshot.
-        if (entryAt(m.lastIncludedIndex)?.term == m.lastIncludedTerm) {
+        if (state.entryAt(m.lastIncludedIndex)?.term == m.lastIncludedTerm) {
             storage.discardLogPrefix(m.lastIncludedIndex)
-            log.removeAll { it.index <= m.lastIncludedIndex }
+            state.log.removeAll { it.index <= m.lastIncludedIndex }
         } else {
             storage.truncateFrom(0L)
-            log.clear()
+            state.log.clear()
         }
-        snapshotIndex = m.lastIncludedIndex
-        snapshotTerm = m.lastIncludedTerm
-        if (currentCommitIndex < m.lastIncludedIndex) {
-            currentCommitIndex = m.lastIncludedIndex
+        state.snapshotIndex = m.lastIncludedIndex
+        state.snapshotTerm = m.lastIncludedTerm
+        if (state.currentCommitIndex < m.lastIncludedIndex) {
+            state.currentCommitIndex = m.lastIncludedIndex
             _commitIndex.value = m.lastIncludedIndex
         }
-        _compactionFloor.value = snapshotIndex
+        _compactionFloor.value = state.snapshotIndex
         // Adopt the snapshot's effective config as the recompute baseline, then recompute membershipState:
         // the config entries that produced this membershipState were compacted away on the leader, so the
         // snapshot is the only place the installer can learn them. A non-null joint payload resumes the
         // joint phase. Falls through to log-based or bootstrapConfig when the snapshot carries no config.
-        snapshotConfig = m.config
+        state.snapshotConfig = m.config
         recomputeMembership()
         _committed.emit(Committed.Install(Snapshot(m.lastIncludedIndex, bytes)))
         incomingSnapshot = null
-        debug { "finalizeInstalledSnapshot($from): INSTALLED through=${m.lastIncludedIndex} term=${m.lastIncludedTerm} commit=$currentCommitIndex logTail=${log.firstOrNull()?.index}..${log.lastOrNull()?.index} membershipState=$membershipState" }
+        debug { "finalizeInstalledSnapshot($from): INSTALLED through=${m.lastIncludedIndex} term=${m.lastIncludedTerm} commit=${state.currentCommitIndex} logTail=${state.log.firstOrNull()?.index}..${state.log.lastOrNull()?.index} membershipState=${state.membershipState}" }
         emitTrace(RaftTraceEvent.InstallSnapshotAccepted(nextClock(), from, transport.selfId, m.lastIncludedIndex))
-        send(from, RaftMessage.InstallSnapshotResponse(currentTerm, bytes.size.toLong(), echoedRound = m.round))
+        send(from, RaftMessage.InstallSnapshotResponse(state.currentTerm, bytes.size.toLong(), echoedRound = m.round))
     }
 
     private suspend fun onAppendEntries(from: NodeId, m: RaftMessage.AppendEntries) {
-        if (m.term < currentTerm) {
-            send(from, RaftMessage.AppendEntriesResponse(currentTerm, false, echoedRound = m.round))
+        if (m.term < state.currentTerm) {
+            send(from, RaftMessage.AppendEntriesResponse(state.currentTerm, false, echoedRound = m.round))
             return
         }
-        if (m.term > currentTerm) stepDown(m.term, StepDownReason.HigherTermObserved)
+        if (m.term > state.currentTerm) stepDown(m.term, StepDownReason.HigherTermObserved)
         // higher term: already adopted it via stepDown above, continue processing in new term
         _role.value = followerRole
         preVoteTerm = null          // a live leader appeared — cancel any in-flight pre-vote probe
@@ -1043,14 +1017,14 @@ internal class RaftEngine(
         // install→reject→install loop spins with no delay — freezing virtual time in tests. The
         // snapshot prefix is committed and cluster-agreed, so any `prevLogIndex <= snapshotIndex`
         // already matches; only check entries strictly above the floor.
-        if (m.prevLogIndex > snapshotIndex) {
-            val prev = entryAt(m.prevLogIndex)
+        if (m.prevLogIndex > state.snapshotIndex) {
+            val prev = state.entryAt(m.prevLogIndex)
             if (prev == null || prev.term != m.prevLogTerm) {
                 // §5.3 fast backup: report conflict info
-                val conflictTerm = prev?.term ?: log.lastOrNull { it.index <= m.prevLogIndex }?.term
-                val conflictIndex = conflictTerm?.let { t -> log.firstOrNull { it.term == t }?.index }
+                val conflictTerm = prev?.term ?: state.log.lastOrNull { it.index <= m.prevLogIndex }?.term
+                val conflictIndex = conflictTerm?.let { t -> state.log.firstOrNull { it.term == t }?.index }
                 val resolvedConflictIndex = conflictIndex ?: m.prevLogIndex
-                debug { "onAppendEntries($from): REJECT prevLogIndex=${m.prevLogIndex} prevLogTerm=${m.prevLogTerm} (have=${prev?.term}) snapshotIndex=$snapshotIndex → conflictIndex=$resolvedConflictIndex" }
+                debug { "onAppendEntries($from): REJECT prevLogIndex=${m.prevLogIndex} prevLogTerm=${m.prevLogTerm} (have=${prev?.term}) snapshotIndex=${state.snapshotIndex} → conflictIndex=$resolvedConflictIndex" }
                 emitTrace(
                     RaftTraceEvent.AppendEntriesRejected(
                         clock = nextClock(),
@@ -1063,7 +1037,7 @@ internal class RaftEngine(
                 send(
                     from,
                     RaftMessage.AppendEntriesResponse(
-                        term = currentTerm,
+                        term = state.currentTerm,
                         success = false,
                         conflictIndex = resolvedConflictIndex,
                         conflictTerm = conflictTerm,
@@ -1077,18 +1051,18 @@ internal class RaftEngine(
         // Truncate conflicting entries and append new ones
         if (m.entries.isNotEmpty()) {
             val first = m.entries.first()
-            val conflict = log.firstOrNull { it.index == first.index && it.term != first.term }
+            val conflict = state.log.firstOrNull { it.index == first.index && it.term != first.term }
             if (conflict != null) {
                 storage.truncateFrom(conflict.index)
-                log.removeAll { it.index >= conflict.index }
+                state.log.removeAll { it.index >= conflict.index }
                 // Adopt-on-append: recompute membershipState after rollback so a truncated config entry
                 // is immediately uneffected (§6 rollback safety).
                 recomputeMembership()
             }
-            val have = log.mapTo(HashSet()) { it.index }
+            val have = state.log.mapTo(HashSet()) { it.index }
             val toAdd = m.entries.filter { it.index !in have }
             if (toAdd.isNotEmpty()) {
-                log.addAll(toAdd)
+                state.log.addAll(toAdd)
                 storage.appendEntries(toAdd)
                 // Adopt-on-append: recompute membershipState after adding entries — a config entry
                 // in toAdd takes effect immediately on the follower.
@@ -1096,12 +1070,12 @@ internal class RaftEngine(
             }
         }
 
-        if (m.leaderCommit > currentCommitIndex) {
-            advanceCommit(minOf(m.leaderCommit, lastLogIndex))
+        if (m.leaderCommit > state.currentCommitIndex) {
+            advanceCommit(minOf(m.leaderCommit, state.lastLogIndex))
         }
 
-        val acceptedMatchIndex = lastLogIndex
-        debug { "onAppendEntries($from): ACCEPT prevLogIndex=${m.prevLogIndex} +${m.entries.size} entries → matchIndex=$acceptedMatchIndex commit=$currentCommitIndex" }
+        val acceptedMatchIndex = state.lastLogIndex
+        debug { "onAppendEntries($from): ACCEPT prevLogIndex=${m.prevLogIndex} +${m.entries.size} entries → matchIndex=$acceptedMatchIndex commit=${state.currentCommitIndex}" }
         emitTrace(
             RaftTraceEvent.AppendEntriesAccepted(
                 clock = nextClock(),
@@ -1110,13 +1084,13 @@ internal class RaftEngine(
                 matchIndex = acceptedMatchIndex,
             )
         )
-        send(from, RaftMessage.AppendEntriesResponse(currentTerm, true, acceptedMatchIndex, echoedRound = m.round))
+        send(from, RaftMessage.AppendEntriesResponse(state.currentTerm, true, acceptedMatchIndex, echoedRound = m.round))
     }
 
     private suspend fun onAppendEntriesResponse(from: NodeId, m: RaftMessage.AppendEntriesResponse) {
         // stale-term peer response: step down and discard
-        if (m.term > currentTerm) { stepDown(m.term, StepDownReason.HigherTermObserved); return }
-        if (_role.value !is RaftRole.Leader || m.term != currentTerm) return
+        if (m.term > state.currentTerm) { stepDown(m.term, StepDownReason.HigherTermObserved); return }
+        if (_role.value !is RaftRole.Leader || m.term != state.currentTerm) return
         recentVoterContacts += from                 // reachability signal for CheckQuorum (success or failure)
         lastAckRound[from] = m.echoedRound          // credit ACK to the round it actually responded to (BLOCKER 1a)
         resolveReadsIfQuorumFresh()                 // ReadIndex: check if any pending reads can now be confirmed
@@ -1124,15 +1098,15 @@ internal class RaftEngine(
             // Clamp to lastLogIndex: a leader can never have replicated entries it doesn't hold, so a
             // real follower's match never exceeds lastLogIndex; the clamp only bites on a malformed/
             // foreign response, turning a downstream prevTerm-missing crash (#1175) into a benign no-op.
-            matchIndex[from] = maxOf(matchIndex[from] ?: 0L, minOf(m.matchIndex, lastLogIndex))
-            nextIndex[from] = matchIndex.getValue(from) + 1L
+            state.matchIndex[from] = maxOf(state.matchIndex[from] ?: 0L, minOf(m.matchIndex, state.lastLogIndex))
+            state.nextIndex[from] = state.matchIndex.getValue(from) + 1L
             tryAdvanceLeaderCommit()
             // §3.10: if a transfer is in flight and the target is now caught up, send TimeoutNow.
             sendTimeoutNowIfReady(from)
         } else {
             // §5.3 fast backup: jump nextIndex to reduce O(n) recovery to O(#terms)
-            nextIndex[from] = nextIndexAfterFailure(nextIndex[from] ?: 1L, m, log)
-            debug { "onAppendEntriesResponse($from): REJECTED → backup nextIndex=${nextIndex[from]} (snapshotIndex=$snapshotIndex), resend" }
+            state.nextIndex[from] = nextIndexAfterFailure(state.nextIndex[from] ?: 1L, m, state.log)
+            debug { "onAppendEntriesResponse($from): REJECTED → backup nextIndex=${state.nextIndex[from]} (snapshotIndex=${state.snapshotIndex}), resend" }
             sendAppendEntries(from)
         }
     }
@@ -1178,12 +1152,12 @@ internal class RaftEngine(
             // Only voters whose ACK arrived strictly after the read was queued count as fresh.
             val freshContacts = lastAckRound.filterValues { ackRound -> ackRound > read.sinceRound }.keys
             // BLOCKER 2: require fresh quorum of BOTH old and new voter sets for Joint config.
-            membershipState.quorumOfContacts(freshContacts, transport.selfId) && now > read.sinceRound
+            state.membershipState.quorumOfContacts(freshContacts, transport.selfId) && now > read.sinceRound
         }
         if (ready.isEmpty()) return
         pendingReads.removeAll(ready)
         ready.forEach {
-            emitTrace(RaftTraceEvent.ReadIndexConfirmed(nextClock(), it.readIndex, currentTerm))
+            emitTrace(RaftTraceEvent.ReadIndexConfirmed(nextClock(), it.readIndex, state.currentTerm))
             it.deferred.complete(it.readIndex)
         }
     }
@@ -1192,15 +1166,15 @@ internal class RaftEngine(
         // membershipState.committedIndex accounts for Simple vs Joint quorum, self-credit per voter set,
         // and the §5.4.2 term-guard (only entries from currentTerm can be used to advance commit
         // via replica-count — older entries only commit by implication via Log Matching).
-        val majorityIdx = membershipState.committedIndex(matchIndex, lastLogIndex, transport.selfId) ?: return
-        val entry = entryAt(majorityIdx)
-        if (entry != null && entry.term == currentTerm && majorityIdx > currentCommitIndex) {
+        val majorityIdx = state.membershipState.committedIndex(state.matchIndex, state.lastLogIndex, transport.selfId) ?: return
+        val entry = state.entryAt(majorityIdx)
+        if (entry != null && entry.term == state.currentTerm && majorityIdx > state.currentCommitIndex) {
             advanceCommit(majorityIdx)
         }
     }
 
     private suspend fun advanceCommit(newCommit: Long) {
-        val oldCommit = currentCommitIndex
+        val oldCommit = state.currentCommitIndex
         // Capture only the LAST committed config entry in this advance window; side-effects run AFTER
         // the loop so currentCommitIndex is already bumped and entryAt is not racing a mutation.
         // Keeping only the last is safe even if a Joint and its trailing Simple(C_new) both commit in
@@ -1208,8 +1182,8 @@ internal class RaftEngine(
         // re-append an entry C_new identical to what already exists — skipping it is harmless, and we
         // run the Simple(C_new) side-effects (complete the deferred, removed-leader step-down) directly.
         var committedConfigEntry: LogEntry? = null
-        for (idx in (currentCommitIndex + 1)..newCommit) {
-            val entry = entryAt(idx) ?: continue
+        for (idx in (state.currentCommitIndex + 1)..newCommit) {
+            val entry = state.entryAt(idx) ?: continue
             when {
                 entry.config != null -> {
                     // Config entry: advance commitIndex but withhold from _committed (internal, like no-op).
@@ -1232,11 +1206,11 @@ internal class RaftEngine(
             pending.removeAll(matches)
             matches.forEach { (_, d) -> d.complete(entry) }
         }
-        currentCommitIndex = newCommit
+        state.currentCommitIndex = newCommit
         emitTrace(RaftTraceEvent.AdvanceCommitIndex(nextClock(), transport.selfId, oldCommit, newCommit))
         // ReadIndex leader-completeness gate: if the current-term no-op just committed, re-deliver
         // any readIndex() requests that were parked waiting for it.
-        if (currentCommitIndex >= currentTermNoOpIndex && pendingNoOpGate.isNotEmpty()) {
+        if (state.currentCommitIndex >= currentTermNoOpIndex && pendingNoOpGate.isNotEmpty()) {
             val gated = pendingNoOpGate.toList()
             pendingNoOpGate.clear()
             gated.forEach { it() }
@@ -1298,34 +1272,34 @@ internal class RaftEngine(
      * prepends a [Committed.Install] so the subscriber can reset its state machine.
      */
     private suspend fun onCommitCut(c: EngineCommand.CommitCut) {
-        val install = if (c.fromIndex <= snapshotIndex && snapshotIndex > 0L)
+        val install = if (c.fromIndex <= state.snapshotIndex && state.snapshotIndex > 0L)
             storage.loadSnapshot()?.let { Snapshot(it.meta.lastIncludedIndex, it.state) } else null
-        val from = maxOf(c.fromIndex, snapshotIndex + 1)
-        val replay = logSliceFrom(log, snapshotIndex, from)
-            .filter { it.index <= currentCommitIndex && !it.isNoOp }
-        c.response.complete(CommitCutResult(replay, currentCommitIndex, install))
+        val from = maxOf(c.fromIndex, state.snapshotIndex + 1)
+        val replay = logSliceFrom(state.log, state.snapshotIndex, from)
+            .filter { it.index <= state.currentCommitIndex && !it.isNoOp }
+        c.response.complete(CommitCutResult(replay, state.currentCommitIndex, install))
     }
 
     private suspend fun onCompact() {
         val s = snapshots.value ?: return
-        if (s.throughIndex <= snapshotIndex || s.throughIndex > currentCommitIndex) return
-        val term = termAt(s.throughIndex) ?: return   // must be a live, committed entry
+        if (s.throughIndex <= state.snapshotIndex || s.throughIndex > state.currentCommitIndex) return
+        val term = state.termAt(s.throughIndex) ?: return   // must be a live, committed entry
         // The membershipState the snapshot must carry is the config as of `throughIndex` — the highest-index
         // config entry at or below the cut, else the config the prior snapshot already recorded. It must
         // NOT be the live `membershipState`, which may reflect a later config entry between the cut and the
         // log tail (that would stamp the snapshot with a future config and corrupt an installer's view).
-        val configAsOfCut = log.lastOrNull { it.config != null && it.index <= s.throughIndex }?.config
-            ?: snapshotConfig
+        val configAsOfCut = state.log.lastOrNull { it.config != null && it.index <= s.throughIndex }?.config
+            ?: state.snapshotConfig
         storage.saveSnapshot(SnapshotMeta(s.throughIndex, term, configAsOfCut), s.state)   // durable FIRST
         storage.discardLogPrefix(s.throughIndex)                             // then drop prefix
-        log.removeAll { it.index <= s.throughIndex }
-        snapshotIndex = s.throughIndex
-        snapshotTerm = term
+        state.log.removeAll { it.index <= s.throughIndex }
+        state.snapshotIndex = s.throughIndex
+        state.snapshotTerm = term
         // Retain the compacted config as the snapshot baseline so a subsequent recompute (or restart)
         // still resolves membershipState correctly once the config entry is gone from the live log.
-        snapshotConfig = configAsOfCut
-        _compactionFloor.value = snapshotIndex
-        emitTrace(RaftTraceEvent.Compacted(nextClock(), transport.selfId, snapshotIndex, snapshotTerm))
+        state.snapshotConfig = configAsOfCut
+        _compactionFloor.value = state.snapshotIndex
+        emitTrace(RaftTraceEvent.Compacted(nextClock(), transport.selfId, state.snapshotIndex, state.snapshotTerm))
     }
 
     // ── propose() ─────────────────────────────────────────────────────────────
@@ -1372,14 +1346,14 @@ internal class RaftEngine(
         // result instead of appending a second entry. The consumer's ClientSessionTable is the durable
         // backstop; this only catches the common lost-ack retry on a still-leading node.
         dedupCache.lookup(dedupKey)?.let { response.complete(it); return }
-        val index = lastLogIndex + 1L
-        val entry = LogEntry(index, currentTerm, command, dedupKey = dedupKey)
-        log += entry
+        val index = state.lastLogIndex + 1L
+        val entry = LogEntry(index, state.currentTerm, command, dedupKey = dedupKey)
+        state.log += entry
         storage.appendEntries(listOf(entry))
-        emitTrace(RaftTraceEvent.ClientRequest(nextClock(), transport.selfId, index, currentTerm))
+        emitTrace(RaftTraceEvent.ClientRequest(nextClock(), transport.selfId, index, state.currentTerm))
         proposeStartTimes[index] = TimeSource.Monotonic.markNow()
-        emitMetric(RaftMetric.ProposeAccepted(index, currentTerm))
-        logger.debug { "[raft:${transport.selfId}] propose accepted at index $index term $currentTerm" }
+        emitMetric(RaftMetric.ProposeAccepted(index, state.currentTerm))
+        logger.debug { "[raft:${transport.selfId}] propose accepted at index $index term ${state.currentTerm}" }
         pending += index to response
         otherMembers.forEach { sendAppendEntries(it) }
         // Single-voter: no peers will ACK — check for immediate commit (peerQuorum == 0).
@@ -1438,10 +1412,10 @@ internal class RaftEngine(
      * on truncate as well.
      */
     private suspend fun recomputeMembership() {
-        val prior = membershipState
-        val configEntry = log.lastOrNull { it.config != null }
+        val prior = state.membershipState
+        val configEntry = state.log.lastOrNull { it.config != null }
         val logConfig = configEntry?.config
-        val resolved = logConfig ?: snapshotConfig
+        val resolved = logConfig ?: state.snapshotConfig
         val newMembership = when {
             resolved == null           -> MembershipState.Simple(bootstrapConfig)
             resolved.old != null       -> MembershipState.Joint(resolved.old, resolved.new)
@@ -1449,18 +1423,18 @@ internal class RaftEngine(
         }
         val branch = when {
             configEntry != null    -> "log[${configEntry.index}]"
-            snapshotConfig != null -> "snapshot"
+            state.snapshotConfig != null -> "snapshot"
             else                   -> "bootstrap"
         }
         val changed = newMembership != prior
-        membershipState = newMembership
+        state.membershipState = newMembership
         reevaluateSelfRole()
         if (changed) {
             _membership.value = newMembership.effectiveConfig
             debug { "recomputeMembership: $prior → $newMembership (source=$branch)" }
             // `old` is the prior effective config — on the first ever change that is the
             // bootstrap config, which is more informative than null.
-            val configIndex = configEntry?.index ?: if (snapshotConfig != null) snapshotIndex else lastLogIndex
+            val configIndex = configEntry?.index ?: if (state.snapshotConfig != null) state.snapshotIndex else state.lastLogIndex
             emitTrace(
                 RaftTraceEvent.ConfigChange(
                     nextClock(), transport.selfId, configIndex, prior.effectiveConfig, newMembership.effectiveConfig,
@@ -1506,15 +1480,15 @@ internal class RaftEngine(
      * (the C_new Simple entry that finalises a Joint after it commits).
      */
     private suspend fun appendConfigEntry(payload: ConfigPayload) {
-        val index = lastLogIndex + 1L
-        val entry = LogEntry(index, currentTerm, byteArrayOf(), config = payload)
-        log += entry
+        val index = state.lastLogIndex + 1L
+        val entry = LogEntry(index, state.currentTerm, byteArrayOf(), config = payload)
+        state.log += entry
         storage.appendEntries(listOf(entry))
         // recomputeMembership() emits the ConfigChange trace event (unified leader+follower path),
         // so we do not emit it here — doing so would double-emit on the leader.
         recomputeMembership()
-        debug { "appendConfigEntry: index=$index payload=$payload membershipState=$membershipState" }
-        membershipState.replicationTargets(transport.selfId).forEach { sendAppendEntries(it) }
+        debug { "appendConfigEntry: index=$index payload=$payload membershipState=${state.membershipState}" }
+        state.membershipState.replicationTargets(transport.selfId).forEach { sendAppendEntries(it) }
         tryAdvanceLeaderCommit()
     }
 
@@ -1546,7 +1520,7 @@ internal class RaftEngine(
         // A change may only start from a settled Simple config. An in-flight — or orphaned, after a
         // leader crash mid-transition — Joint config means a §6 transition is still converging; reject
         // until C_new commits. This also makes the `current.config` read below total.
-        val current = membershipState
+        val current = state.membershipState
         if (current !is MembershipState.Simple) {
             debug { "onChangeMembership: rejected — joint transition in progress ($current)" }
             deferred.completeExceptionally(MembershipChangeInProgressException())
@@ -1590,11 +1564,11 @@ internal class RaftEngine(
             // term, diverges from the existing C_new, and wedges replication in an infinite
             // AppendEntries backup loop. Skipping is safe — C_new already exists; the Simple branch
             // will complete the deferred and run the step-down when that existing C_new commits.
-            if (membershipState is MembershipState.Joint) {
+            if (state.membershipState is MembershipState.Joint) {
                 debug { "onConfigCommitted: Joint committed — appending Simple(C_new=${payload.new})" }
                 appendConfigEntry(ConfigPayload(old = null, new = payload.new))
             } else {
-                debug { "onConfigCommitted: Joint committed but C_new already in log (membershipState=$membershipState) — skip duplicate append" }
+                debug { "onConfigCommitted: Joint committed but C_new already in log (membershipState=${state.membershipState}) — skip duplicate append" }
             }
         } else {
             // Simple committed → transition complete; wake the changeMembership caller.
@@ -1638,7 +1612,7 @@ internal class RaftEngine(
             response.completeExceptionally(IllegalArgumentException("transferLeadership: target must not be this node (${transport.selfId.value})"))
             return
         }
-        val currentVoters = membershipState.effectiveConfig.voters
+        val currentVoters = state.membershipState.effectiveConfig.voters
         if (target !in currentVoters) {
             response.completeExceptionally(IllegalArgumentException("transferLeadership: target ${target.value} is not a voter in the current config ($currentVoters)"))
             return
@@ -1676,15 +1650,15 @@ internal class RaftEngine(
         // Only send TimeoutNow once the target is caught up (matchIndex >= commitIndex).
         // When the AppendEntries ACK arrives (onAppendEntriesResponse) and the target is caught up,
         // sendTimeoutNowIfReady is called there too. Here we handle the already-caught-up case.
-        if ((matchIndex[target] ?: 0L) >= currentCommitIndex) {
+        if ((state.matchIndex[target] ?: 0L) >= state.currentCommitIndex) {
             sendTimeoutNow(target)
         }
     }
 
     /** Send a [RaftMessage.TimeoutNow] to [target]. */
     private suspend fun sendTimeoutNow(target: NodeId) {
-        debug { "sendTimeoutNow: sending TimeoutNow to ${target.value} term=$currentTerm" }
-        send(target, RaftMessage.TimeoutNow(currentTerm, transport.selfId))
+        debug { "sendTimeoutNow: sending TimeoutNow to ${target.value} term=${state.currentTerm}" }
+        send(target, RaftMessage.TimeoutNow(state.currentTerm, transport.selfId))
     }
 
     /**
@@ -1694,7 +1668,7 @@ internal class RaftEngine(
     private suspend fun sendTimeoutNowIfReady(from: NodeId) {
         val target = transferTarget ?: return
         if (from != target) return
-        if ((matchIndex[target] ?: 0L) >= currentCommitIndex) {
+        if ((state.matchIndex[target] ?: 0L) >= state.currentCommitIndex) {
             sendTimeoutNow(target)
         }
     }
@@ -1736,10 +1710,10 @@ internal class RaftEngine(
      * and would only delay the election. We jump straight to a real RequestVote.
      */
     private suspend fun onTimeoutNow(from: NodeId, m: RaftMessage.TimeoutNow) {
-        debug { "onTimeoutNow: from=${from.value} term=${m.term} currentTerm=$currentTerm role=${_role.value}" }
+        debug { "onTimeoutNow: from=${from.value} term=${m.term} currentTerm=${state.currentTerm} role=${_role.value}" }
         // Ignore if from a stale leader or if we are already leader/candidate.
-        if (m.term < currentTerm) {
-            debug { "onTimeoutNow: stale term ${m.term} < currentTerm=$currentTerm — ignoring" }
+        if (m.term < state.currentTerm) {
+            debug { "onTimeoutNow: stale term ${m.term} < currentTerm=${state.currentTerm} — ignoring" }
             return
         }
         if (_role.value is RaftRole.Leader || _role.value is RaftRole.Candidate) {
@@ -1752,7 +1726,7 @@ internal class RaftEngine(
         // advanced past us (we step down below), and _leader is stale, so the check applies only when
         // m.term == currentTerm. _leader may be null before we have heard from any leader this term;
         // in that case accept (the sender asserts current-term leadership, validated by the term guards).
-        if (m.term == currentTerm && _leader.value != null && from != _leader.value) {
+        if (m.term == state.currentTerm && _leader.value != null && from != _leader.value) {
             debug { "onTimeoutNow: sender ${from.value} is not the current leader (${_leader.value?.value}) — ignoring" }
             return
         }
@@ -1761,7 +1735,7 @@ internal class RaftEngine(
             debug { "onTimeoutNow: self is a learner — ignoring" }
             return
         }
-        if (m.term > currentTerm) stepDown(m.term, StepDownReason.HigherTermObserved)
+        if (m.term > state.currentTerm) stepDown(m.term, StepDownReason.HigherTermObserved)
         // Start a real election immediately (skip pre-vote — we are already up-to-date per the leader's sync).
         debug { "onTimeoutNow: starting immediate election (skipping pre-vote)" }
         startRealElection()
