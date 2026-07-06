@@ -317,8 +317,11 @@ public interface RaftNode {
      * the transfer either completes (target wins an election) or fails.
      *
      * **Protocol**:
-     * 1. The leader stops accepting new [propose] calls (they receive [NotLeaderException]).
-     * 2. The leader sends AppendEntries to bring [target]'s log up to the current [commitIndex].
+     * 1. The leader stops accepting new [propose] and [changeMembership] calls (they receive
+     *    [NotLeaderException]).
+     * 2. The leader sends AppendEntries to bring [target]'s log **fully up to the leader's last log
+     *    index** (§3.10 step 2 — not merely the current [commitIndex], so an uncommitted tail cannot
+     *    trigger a premature transfer to a not-caught-up target).
      * 3. The leader sends a `TimeoutNow` message to [target].
      * 4. [target] immediately starts a real election (bypassing its election-timeout wait).
      * 5. If [target] wins, the old leader steps down naturally on seeing the higher term.
@@ -333,7 +336,7 @@ public interface RaftNode {
      * - Only the leader may call this. Non-leaders throw [NotLeaderException] immediately.
      * - [target] must be a voter in the current cluster config, and must not be `this` node's own id.
      *   Invalid targets throw [IllegalArgumentException] immediately.
-     * - While a transfer is in flight, [propose] throws [NotLeaderException].
+     * - While a transfer is in flight, [propose] and [changeMembership] throw [NotLeaderException].
      *
      * @param target The [NodeId] of the voter to transfer leadership to.
      * @throws NotLeaderException if this node is not currently the leader.

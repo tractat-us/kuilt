@@ -300,8 +300,15 @@ internal class LeadershipTransferTest {
      *
      * Observed via the network tap ([InMemoryRaftNetwork.sent]): the first `TimeoutNow` to the target
      * must be emitted **after** the target ACKs the tail entry (matchIndex reaching lastLogIndex), never
-     * before. The transfer then completes for real — the target actually becomes leader. Without the fix
-     * the leader emits `TimeoutNow` in the transfer-init step, before the tail ACK is even in flight.
+     * before, and the target's resulting `RequestVote` must carry the full log. Without the fix the
+     * leader emits `TimeoutNow` in the transfer-init step, before the tail ACK is even in flight.
+     *
+     * NOTE: at ≥4 voters the target does **not** actually win here — the *other* followers still reject
+     * its `RequestVote` under leader-stickiness because a TimeoutNow-triggered election carries no
+     * disruption-bypass flag (a separate bug, #1230). This test therefore asserts the withhold-until-
+     * caught-up property of #1229 only; end-to-end "target becomes leader" with an uncommitted tail is
+     * shown at n=3 in [transferLeadership_uncommittedTail_n3_targetBecomesLeader], where a single peer
+     * vote plus the leader's own suffices.
      */
     @Test
     fun transferLeadership_uncommittedTail_withholdsTimeoutNowUntilCaughtUp() = raftRunTest(timeout = 10.seconds) {
@@ -324,9 +331,76 @@ internal class LeadershipTransferTest {
         // Create the uncommitted tail atomically with the transfer: propose(tail) then transferLeadership
         // enqueue back-to-back, both ahead of any follower ACK — see the KDoc above.
         backgroundScope.launch { runCatchingCancellable { leader.propose("tail".encodeToByteArray()) } }
+        backgroundScope.launch { runCatchingCancellable { leader.transferLeadership(targetId) } }
+
+        // Drive time until the leader emits TimeoutNow to the target (the transfer authorises the election).
+        sim.awaitTrue("leader sends TimeoutNow to target") {
+            sim.network.sent.drop(mark).any { it.from == leaderId && it.to == targetId && it.message is RaftMessage.TimeoutNow }
+        }
+
+        val log = sim.network.sent.drop(mark)
+        val firstTailAckFromTarget = log.indexOfFirst {
+            it.from == targetId && it.to == leaderId &&
+                (it.message as? RaftMessage.AppendEntriesResponse)?.let { r -> r.success && r.matchIndex > commitBefore } == true
+        }
+        val firstTimeoutNowToTarget = log.indexOfFirst {
+            it.from == leaderId && it.to == targetId && it.message is RaftMessage.TimeoutNow
+        }
+        // The election the target then runs must campaign on the full log (lastLogIndex == the tail).
+        val targetVoteRequest = log.firstOrNull {
+            it.from == targetId && it.message is RaftMessage.RequestVote
+        }?.message as? RaftMessage.RequestVote
+
+        assertAll(
+            { assertTrue(firstTailAckFromTarget >= 0, "target must ACK the uncommitted tail entry") },
+            { assertTrue(firstTimeoutNowToTarget >= 0, "leader must send TimeoutNow to the target") },
+            {
+                assertTrue(
+                    firstTimeoutNowToTarget > firstTailAckFromTarget,
+                    "§3.10 step 2: TimeoutNow (sent at index $firstTimeoutNowToTarget) must be withheld until the " +
+                        "target's log matches the leader's lastLogIndex — it must not precede the tail ACK " +
+                        "(index $firstTailAckFromTarget)",
+                )
+            },
+            {
+                assertTrue(
+                    targetVoteRequest != null && targetVoteRequest.lastLogIndex > commitBefore,
+                    "target must campaign on the full log (lastLogIndex > $commitBefore), proving it was caught " +
+                        "up before TimeoutNow: was $targetVoteRequest",
+                )
+            },
+        )
+    }
+
+    /**
+     * End-to-end companion to [transferLeadership_uncommittedTail_withholdsTimeoutNowUntilCaughtUp]:
+     * with an uncommitted tail at transfer time, once the target catches up to lastLogIndex the transfer
+     * completes for real — the target actually becomes leader. Uses n=3 because at ≥4 voters the target
+     * cannot win a TimeoutNow-triggered election under the current code (leader-stickiness on the other
+     * followers, #1230); at n=3 the target's own vote plus the transferring leader's is a quorum.
+     *
+     * The uncommitted tail is still created atomically with the transfer (propose then transfer, ahead of
+     * any ACK), so the fix's withhold-until-caught-up path is exercised — not the trivial commit-first
+     * path — and the tap confirms TimeoutNow is not sent before the target's tail ACK.
+     */
+    @Test
+    fun transferLeadership_uncommittedTail_n3_targetBecomesLeader() = raftRunTest(timeout = 10.seconds) {
+        val sim = raftSim(this, backgroundScope, n = 3)
+        val leader = awaitLeader(sim)
+        val leaderId = sim.nodeIds.first { sim.nodes[it] === leader }
+        val targetId = sim.nodeIds.first { it != leaderId }
+
+        repeat(3) { sim.proposeOnLeader("base$it".encodeToByteArray()) }
+        sim.awaitCommit(3L)
+        sim.settle()
+        val commitBefore = leader.commitIndex.value
+
+        sim.network.recording = true
+        val mark = sim.network.sent.size
+
+        backgroundScope.launch { runCatchingCancellable { leader.propose("tail".encodeToByteArray()) } }
         val transferJob = backgroundScope.launch { runCatchingCancellable { leader.transferLeadership(targetId) } }
 
-        // Drive to real success: the target catches up to lastLogIndex, then wins.
         sim.awaitRole(targetId, RaftRole.Leader)
         sim.awaitRole(leaderId, RaftRole.Follower)
         transferJob.join()
@@ -339,15 +413,13 @@ internal class LeadershipTransferTest {
         val firstTimeoutNowToTarget = log.indexOfFirst {
             it.from == leaderId && it.to == targetId && it.message is RaftMessage.TimeoutNow
         }
-
         assertAll(
             { assertTrue(firstTailAckFromTarget >= 0, "target must ACK the uncommitted tail entry") },
-            { assertTrue(firstTimeoutNowToTarget >= 0, "leader must eventually send TimeoutNow to the target") },
+            { assertTrue(firstTimeoutNowToTarget >= 0, "leader must send TimeoutNow to the target") },
             {
                 assertTrue(
                     firstTimeoutNowToTarget > firstTailAckFromTarget,
-                    "§3.10 step 2: TimeoutNow (sent at index $firstTimeoutNowToTarget) must be withheld until the " +
-                        "target's log matches the leader's lastLogIndex — it must not precede the tail ACK " +
+                    "§3.10 step 2: TimeoutNow (index $firstTimeoutNowToTarget) must not precede the tail ACK " +
                         "(index $firstTailAckFromTarget)",
                 )
             },
