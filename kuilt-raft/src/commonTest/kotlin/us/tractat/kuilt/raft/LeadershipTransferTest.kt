@@ -6,10 +6,13 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
 import us.tractat.kuilt.core.runCatchingCancellable
+import us.tractat.kuilt.raft.internal.RaftMessage
+import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 
@@ -277,6 +280,119 @@ internal class LeadershipTransferTest {
             targetTrace.any { it is RaftTraceEvent.RequestVote || it is RaftTraceEvent.Timeout },
             "target must not start an election from a non-leader TimeoutNow",
         )
+    }
+
+    // ── §3.10 step 2: TimeoutNow gated on lastLogIndex, not commitIndex (issue #1229) ──────────
+
+    /**
+     * Dissertation §3.10 step 2 requires the leader to bring the target's log **fully up to its own
+     * lastLogIndex** before sending `TimeoutNow` — not merely to the commit index. With an uncommitted
+     * tail at transfer time (matchIndex[target] == commitIndex < lastLogIndex), a `commitIndex`
+     * predicate fires `TimeoutNow` prematurely, to a target that has not yet caught up.
+     *
+     * This needs **≥4 voters**: the n≤3 happy-path tests await commit before transferring, so
+     * commitIndex == lastLogIndex there and the two predicates are indistinguishable — exactly why the
+     * bug was missed. Here the uncommitted tail is created *atomically with the transfer*: the propose
+     * and the transfer are enqueued back-to-back into the leader's actor channel, ahead of any follower
+     * ACK (both are processed in a single actor turn with no intervening suspension, then the peer
+     * collectors run), so `onTransferLeadership` observes matchIndex[target] == commitIndex, one below
+     * lastLogIndex.
+     *
+     * Observed via the network tap ([InMemoryRaftNetwork.sent]): the first `TimeoutNow` to the target
+     * must be emitted **after** the target ACKs the tail entry (matchIndex reaching lastLogIndex), never
+     * before. The transfer then completes for real — the target actually becomes leader. Without the fix
+     * the leader emits `TimeoutNow` in the transfer-init step, before the tail ACK is even in flight.
+     */
+    @Test
+    fun transferLeadership_uncommittedTail_withholdsTimeoutNowUntilCaughtUp() = raftRunTest(timeout = 10.seconds) {
+        val sim = raftSim(this, backgroundScope, n = 4)
+        val leader = awaitLeader(sim)
+        val leaderId = sim.nodeIds.first { sim.nodes[it] === leader }
+        val targetId = sim.nodeIds.first { it != leaderId }
+
+        // Steady state: every voter (incl. the target) caught up to commitIndex == lastLogIndex.
+        repeat(3) { sim.proposeOnLeader("base$it".encodeToByteArray()) }
+        sim.awaitCommit(3L)
+        sim.settle()
+        // At rest, commitIndex == lastLogIndex; the tail we are about to append lands at commitBefore + 1,
+        // so the target's tail ACK carries matchIndex > commitBefore.
+        val commitBefore = leader.commitIndex.value
+
+        sim.network.recording = true
+        val mark = sim.network.sent.size
+
+        // Create the uncommitted tail atomically with the transfer: propose(tail) then transferLeadership
+        // enqueue back-to-back, both ahead of any follower ACK — see the KDoc above.
+        backgroundScope.launch { runCatchingCancellable { leader.propose("tail".encodeToByteArray()) } }
+        val transferJob = backgroundScope.launch { runCatchingCancellable { leader.transferLeadership(targetId) } }
+
+        // Drive to real success: the target catches up to lastLogIndex, then wins.
+        sim.awaitRole(targetId, RaftRole.Leader)
+        sim.awaitRole(leaderId, RaftRole.Follower)
+        transferJob.join()
+
+        val log = sim.network.sent.drop(mark)
+        val firstTailAckFromTarget = log.indexOfFirst {
+            it.from == targetId && it.to == leaderId &&
+                (it.message as? RaftMessage.AppendEntriesResponse)?.let { r -> r.success && r.matchIndex > commitBefore } == true
+        }
+        val firstTimeoutNowToTarget = log.indexOfFirst {
+            it.from == leaderId && it.to == targetId && it.message is RaftMessage.TimeoutNow
+        }
+
+        assertAll(
+            { assertTrue(firstTailAckFromTarget >= 0, "target must ACK the uncommitted tail entry") },
+            { assertTrue(firstTimeoutNowToTarget >= 0, "leader must eventually send TimeoutNow to the target") },
+            {
+                assertTrue(
+                    firstTimeoutNowToTarget > firstTailAckFromTarget,
+                    "§3.10 step 2: TimeoutNow (sent at index $firstTimeoutNowToTarget) must be withheld until the " +
+                        "target's log matches the leader's lastLogIndex — it must not precede the tail ACK " +
+                        "(index $firstTailAckFromTarget)",
+                )
+            },
+        )
+        sim.checkInvariants()
+    }
+
+    // ── §3.10 step 1: no new requests during a transfer — membership changes too (issue #1233) ──
+
+    /**
+     * §3.10 step 1: while a leadership transfer is in flight the leader stops accepting new requests, so
+     * the target's log stops moving and can actually catch up. Proposals are already gated; a **membership
+     * change** must be gated the same way — otherwise a config entry appended mid-transfer moves the
+     * lastLogIndex goalpost the target is chasing.
+     *
+     * With the target partitioned from the leader (so the transfer stays in flight and does not
+     * auto-complete) but the leader still reaching the other two voters (quorum, so it keeps leadership),
+     * a `changeMembership` call must be rejected with the same [NotLeaderException] `propose` throws.
+     */
+    @Test
+    fun changeMembership_duringTransfer_rejected() = raftRunTest(timeout = 10.seconds) {
+        val sim = raftSim(this, backgroundScope, n = 4)
+        val leader = awaitLeader(sim)
+        val leaderId = sim.nodeIds.first { sim.nodes[it] === leader }
+        val targetId = sim.nodeIds.first { it != leaderId }
+
+        sim.proposeOnLeader("base".encodeToByteArray())
+        sim.awaitCommit(1L)
+
+        // Isolate the target from the leader so the transfer stays in flight (the target can neither
+        // receive TimeoutNow nor win an election — the other voters still hear the leader, so they
+        // reject its pre-vote). The leader keeps quorum via those two voters and stays leader.
+        sim.dropLink(from = leaderId, to = targetId)
+        sim.dropLink(from = targetId, to = leaderId)
+
+        val transferJob = backgroundScope.launch { runCatchingCancellable { leader.transferLeadership(targetId) } }
+        sim.settle()  // let the transfer start so inFlightTarget is engaged
+
+        // §3.10 step 1: a membership change is a new request — rejected exactly like a proposal.
+        assertFailsWith<NotLeaderException> {
+            leader.changeMembership(ClusterConfig(voters = sim.nodeIds.toSet(), learners = setOf(NodeId("learner-x"))))
+        }
+
+        leader.cancelTransfer()
+        transferJob.join()
     }
 
     // ── Trace event ───────────────────────────────────────────────────────────
