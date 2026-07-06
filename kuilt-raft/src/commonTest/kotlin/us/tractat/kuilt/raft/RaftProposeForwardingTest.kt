@@ -2,11 +2,13 @@
 
 package us.tractat.kuilt.raft
 
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
+import us.tractat.kuilt.raft.internal.RaftMessage
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -211,6 +213,57 @@ class RaftProposeForwardingTest {
         // proposal from the other partition should work.
         sim.heal()
         sim.awaitCommit(sim.awaitLeader(setOf(v2, v3)).commitIndex.value.coerceAtLeast(1L))
+        sim.checkInvariants()
+    }
+
+    // ── #1238: reaping a sent forward when the leader it was sent to crashes ────
+
+    /**
+     * A forward already SENT to a leader that then CRASHES must not park the caller forever (Raft §8).
+     *
+     * Once the follower learns a *different* leader (via a fresh election), the outstanding sent
+     * forward is reaped — failed with [LeadershipLostException] so the caller retries (exactly-once
+     * under its `requestId`) — rather than suspending until the node is torn down. Before the fix the
+     * `d.await()` in `proposeWithRequestId` hangs forever, since a sent forward's deferred is completed
+     * only by a matching `ForwardResponse` (which never comes from a crashed leader) or actor teardown.
+     * Regression test for #1238.
+     */
+    @Test
+    fun sentForward_leaderCrashesThenNewLeader_reapsInsteadOfHanging() = raftRunTest(timeout = 10.seconds) {
+        val sim = raftSim(this, backgroundScope)
+        val leader = awaitLeader(sim)
+        val leaderId = sim.nodeIds.first { sim.nodes[it] === leader }
+        sim.awaitCommit(1L) // every follower has heard L1's no-op → each knows L1 as the leader
+        val (fId, gId) = sim.nodeIds.filter { it != leaderId }
+
+        // Drop only F→L1 so F's Forward never reaches L1 (no ForwardResponse will EVER come), while
+        // L1→F heartbeats keep flowing so F stays a follower that believes L1 is leader — no spurious
+        // election churn. L1 keeps quorum via G, so it remains leader right up until we crash it.
+        sim.dropLink(from = fId, to = leaderId)
+        sim.network.recording = true
+
+        // F forwards a propose to L1 — the Forward is SENT (recorded into forwardedProposals) then
+        // dropped on the wire. Run it off the caller so we can prove it neither commits nor hangs.
+        val outcome = CompletableDeferred<Result<LogEntry>>()
+        backgroundScope.launch { outcome.complete(runCatching { sim.nodes.getValue(fId).propose(byteArrayOf(88)) }) }
+        sim.settle()
+        assertTrue(
+            sim.network.sent.any { it.from == fId && it.to == leaderId && it.message is RaftMessage.Forward },
+            "precondition: F must have SENT the Forward to L1 before L1 crashes",
+        )
+        assertTrue(!outcome.isCompleted, "the forwarded propose must still be in flight (no ForwardResponse)")
+
+        // L1 crashes — its ForwardResponse will never arrive. F and G elect a new leader; F learns it.
+        sim.crash(leaderId)
+        sim.awaitLeader(among = setOf(fId, gId))
+
+        // The sent forward must be reaped on the leader change: the caller fails fast, never hangs.
+        val result = withTimeout(3.seconds) { outcome.await() }
+        assertTrue(
+            result.exceptionOrNull() is LeadershipLostException,
+            "sent forward must be reaped with LeadershipLostException on leader change, was: $result",
+        )
+        // The dropped command never reached any log, so cluster safety is intact.
         sim.checkInvariants()
     }
 }
