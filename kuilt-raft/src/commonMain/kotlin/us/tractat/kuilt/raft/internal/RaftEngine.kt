@@ -954,6 +954,20 @@ internal class RaftEngine(
 
     /** Persist + apply a fully-reassembled snapshot, reset the log around it, and emit the install. */
     private suspend fun finalizeInstalledSnapshot(from: NodeId, m: RaftMessage.InstallSnapshot, bytes: ByteArray) {
+        // A snapshot at or below our applied frontier can only regress state — ack and ignore it
+        // (Raft Fig 13 rule 5). Without this a stale/duplicate snapshot below `snapshotIndex` hits the
+        // discard-whole branch (entryAt is null) and wipes the committed suffix (#1219); this also keeps
+        // the `Committed.Install` emit below reachable only when the snapshot genuinely advances the
+        // frontier, so a behind-commit retain-suffix snapshot never resets the state machine backward
+        // (#1220). `currentCommitIndex` is the strictly stronger bound — it covers both `<= snapshotIndex`
+        // and `<= commitIndex`, since `snapshotIndex <= currentCommitIndex` always holds. The ack is a
+        // safe no-op at the leader: `SnapshotSender.onAck` returns `NoTransfer` when there is no live
+        // transfer for this peer (the common case for a delayed duplicate), and it is byte-identical to
+        // the ack the normal finalize path sends below.
+        if (m.lastIncludedIndex <= state.currentCommitIndex) {
+            send(from, RaftMessage.InstallSnapshotResponse(state.currentTerm, bytes.size.toLong(), echoedRound = m.round))
+            return
+        }
         val meta = SnapshotMeta(m.lastIncludedIndex, m.lastIncludedTerm, m.config)
         storage.saveSnapshot(meta, bytes)
         // Keep the suffix only if our entry at the boundary matches the snapshot's term (Log Matching);
