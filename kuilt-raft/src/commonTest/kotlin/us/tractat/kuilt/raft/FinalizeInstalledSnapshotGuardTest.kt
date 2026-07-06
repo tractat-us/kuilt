@@ -3,6 +3,7 @@
 package us.tractat.kuilt.raft
 
 import kotlinx.coroutines.delay
+import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -58,18 +59,28 @@ class FinalizeInstalledSnapshotGuardTest {
         )
         delay(20) // bounded: let the follower's actor drain the injected message (cf. MatchIndexClampTest)
 
+        // Hoist the suspend storage reads out of the (non-suspend) assertAll lambdas.
         val survivedSuffix = sim.storages.getValue(followerId).entries(floor + 1).map { it.index }
-        assertEquals(
-            floor, follower.compactionFloor.value,
-            "compaction floor must not regress when a stale snapshot below it is (re)delivered",
-        )
-        assertEquals(
-            floor, sim.storages.getValue(followerId).loadSnapshot()?.meta?.lastIncludedIndex,
-            "a stale snapshot must not overwrite the newer stored snapshot",
-        )
-        assertEquals(
-            ((floor + 1)..commit).toList(), survivedSuffix,
-            "the retained committed log suffix must survive a stale InstallSnapshot",
+        val storedSnapshotIndex = sim.storages.getValue(followerId).loadSnapshot()?.meta?.lastIncludedIndex
+        assertAll(
+            {
+                assertEquals(
+                    floor, follower.compactionFloor.value,
+                    "compaction floor must not regress when a stale snapshot below it is (re)delivered",
+                )
+            },
+            {
+                assertEquals(
+                    floor, storedSnapshotIndex,
+                    "a stale snapshot must not overwrite the newer stored snapshot",
+                )
+            },
+            {
+                assertEquals(
+                    ((floor + 1)..commit).toList(), survivedSuffix,
+                    "the retained committed log suffix must survive a stale InstallSnapshot",
+                )
+            },
         )
     }
 
@@ -114,14 +125,20 @@ class FinalizeInstalledSnapshotGuardTest {
         )
         delay(20)
 
-        assertTrue(
-            installs.isEmpty(),
-            "a behind-commit snapshot must not emit Committed.Install (would reset the state machine " +
-                "backward and lose (${boundaryIndex}, $commit]): $installs",
-        )
-        assertTrue(
-            follower.commitIndex.value >= commit,
-            "commit index must not regress below $commit; was ${follower.commitIndex.value}",
+        assertAll(
+            {
+                assertTrue(
+                    installs.isEmpty(),
+                    "a behind-commit snapshot must not emit Committed.Install (would reset the state machine " +
+                        "backward and lose (${boundaryIndex}, $commit]): $installs",
+                )
+            },
+            {
+                assertTrue(
+                    follower.commitIndex.value >= commit,
+                    "commit index must not regress below $commit; was ${follower.commitIndex.value}",
+                )
+            },
         )
     }
 }
