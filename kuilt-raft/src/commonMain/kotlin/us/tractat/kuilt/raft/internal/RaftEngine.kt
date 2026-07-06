@@ -213,43 +213,13 @@ internal class RaftEngine(
     // Reset each tick. Leader-only.
     private val recentVoterContacts = mutableSetOf<NodeId>()
 
-    // ReadIndex state — leader-only. Cleared on becomeLeader; failed on relinquishToFollower.
-
-    /** Captures a pending readIndex() call, to be resolved when a quorum heartbeat round confirms freshness. */
-    private data class PendingRead(val readIndex: Long, val sinceRound: Long, val deferred: CompletableDeferred<Long>)
-
-    /** In-flight readIndex() calls awaiting a quorum heartbeat ACK in a round after sinceRound. */
-    private val pendingReads = mutableListOf<PendingRead>()
-
-    /**
-     * Per-voter last-ACK round: maps each voter to the [heartbeatRound] value at the time of its
-     * most recent AppendEntriesResponse or InstallSnapshotResponse ACK. Used by
-     * [resolveReadsIfQuorumFresh] to count only voters whose ACK arrived *strictly after* a read
-     * was queued (BLOCKER 1 fix: replaces the cumulative [recentVoterContacts] check which allowed
-     * a stale in-flight ACK from a prior round to inflate the fresh-voter count).
-     *
-     * Seeded/cleared on [becomeLeader]. Leader-only.
-     */
-    private val lastAckRound = mutableMapOf<NodeId, Long>()
-
-    /** Monotonically increasing per-leadership heartbeat round counter; bumped on each broadcast. */
-    private var heartbeatRound = 0L
-
-    /**
-     * The log index of the no-op appended on becoming leader (§5.4.2).
-     * readIndex() must wait until commitIndex reaches this before returning — the
-     * leader-completeness gate (§8): the leader's commitIndex may not yet reflect all
-     * prior-term entries until the no-op commits, so a read before that point could
-     * return a stale index.
-     */
-    private var currentTermNoOpIndex = 0L
-
-    /**
-     * Deferred readIndex handlers waiting for the current-term no-op to commit.
-     * Each is a re-invocation lambda for onRequestReadIndex, drained from advanceCommit
-     * once commitIndex ≥ currentTermNoOpIndex.
-     */
-    private val pendingNoOpGate = mutableListOf<() -> Unit>()
+    // §6.4 ReadIndex state — leader-only, extracted to ReadIndexTracker. It owns the pending-read queue,
+    // the per-voter last-ACK round, the heartbeat round nonce (the engine stamps sends via
+    // readIndexTracker.round and bumps it in onHeartbeat), the current-term no-op gate, and the
+    // freshness/quorum arithmetic; the engine keeps all send/trace/deferred.complete side-effects at the
+    // call site. Reset on becomeLeader; failed on relinquishToFollower. Declared before `init` per the
+    // machine-field ordering rule (#1077) — the actor's teardown calls readIndexTracker.failAll(...).
+    private val readIndexTracker = ReadIndexTracker()
 
     // Leader-lease state: true while this node has heard from a live leader recently enough
     // that triggering an election would be disruptive. Cleared on stepDown and after electionTimeoutMin.
@@ -287,7 +257,7 @@ internal class RaftEngine(
     // both fields; when the scope is cancelled during construction that teardown can
     // run before the constructor reaches a declaration placed after `init` → NPE.
     // Keep alongside the other pending-state fields the teardown touches
-    // (pending/pendingConfigChange/pendingReads/transfer*). See #1077.
+    // (pending/pendingConfigChange/readIndexTracker/transfer*). See #1077.
 
     /** reqId -> pending forward awaiting a ForwardResponse. */
     private val forwardedProposals = mutableMapOf<Long, PendingForward>()
@@ -380,7 +350,7 @@ internal class RaftEngine(
                 val cause = LeadershipLostException("node scope cancelled")
                 failPending(cause)
                 failPendingConfigChange(cause)
-                failPendingReads(cause)
+                readIndexTracker.failAll(cause)
                 transfer.fail(LeadershipTransferException("node scope cancelled"))
                 failForwardedProposals(cause)
             }
@@ -414,13 +384,6 @@ internal class RaftEngine(
     private fun failPendingConfigChange(cause: Throwable) {
         pendingConfigChange?.completeExceptionally(cause)
         pendingConfigChange = null
-    }
-
-    /** Fail all in-flight readIndex() deferreds, drain the no-op gate queue, and clear both. */
-    private fun failPendingReads(cause: Throwable) {
-        pendingReads.forEach { it.deferred.completeExceptionally(cause) }
-        pendingReads.clear()
-        pendingNoOpGate.clear()
     }
 
     /** Fail all forwarded proposals awaiting a leader or a ForwardResponse, and clear the maps. */
@@ -650,22 +613,19 @@ internal class RaftEngine(
         }
         // ReadIndex state: reset for this leadership term. Any reads queued from a prior term
         // are already failed by relinquishToFollower; start fresh.
-        pendingReads.clear()
-        pendingNoOpGate.clear()
-        heartbeatRound = 0L
-        lastAckRound.clear()
+        readIndexTracker.reset()
         // Transfer state: always clear on becoming leader so a re-elected-after-stepdown node
         // doesn't carry stale transfer state from a previous term.
         transfer.reset()
         // §5.4.2: append a no-op from the new term so the commit guard (entry.term == currentTerm)
         // can advance commitIndex over any prior-term entries inherited from a previous leader.
-        // currentTermNoOpIndex is set inside appendNoOp so readIndex() knows when to gate.
+        // appendNoOp arms readIndexTracker's no-op gate (onNoOpAppended) so readIndex() knows when to gate.
         appendNoOp()
     }
 
     private suspend fun appendNoOp() {
         val noOpIndex = state.lastLogIndex + 1L
-        currentTermNoOpIndex = noOpIndex   // gate for readIndex(): must not return before this commits
+        readIndexTracker.onNoOpAppended(noOpIndex)   // gate for readIndex(): must not return before this commits
         val noOp = LogEntry(noOpIndex, state.currentTerm, byteArrayOf(), isNoOp = true)
         state.log += noOp
         storage.appendEntries(listOf(noOp))
@@ -702,7 +662,7 @@ internal class RaftEngine(
             val cause = LeadershipLostException()
             failPending(cause)
             failPendingConfigChange(cause)
-            failPendingReads(LeadershipLostException("lost leadership before read confirmed"))
+            readIndexTracker.failAll(LeadershipLostException("lost leadership before read confirmed"))
             debug { "relinquishToFollower($reason): failed in-flight proposals, config change, and pending reads" }
             snapshotSender.abandonAll()   // leader-only transfer state — abandon any in-flight snapshot sends
             dedupCache.clear()     // leader-only best-effort dedup cache — a new leader starts cold
@@ -746,46 +706,39 @@ internal class RaftEngine(
     /**
      * Handle a readIndex() request from the actor channel.
      *
-     * Non-leader: complete exceptionally with [NotLeaderException] immediately.
-     * Single-voter: self is the quorum — complete immediately with [currentCommitIndex].
-     * Multi-voter: queue a [PendingRead] to be resolved after the next heartbeat round
-     * that collects a voter-quorum ACK. The next scheduled [onHeartbeat] will bump
-     * [heartbeatRound] and broadcast; the ACK via [onAppendEntriesResponse] calls
-     * [resolveReadsIfQuorumFresh] which resolves the deferred.
-     *
-     * Leader-completeness gate (§8): if the current-term no-op has not yet committed,
-     * park the request in [pendingNoOpGate] — it will be re-delivered once [advanceCommit]
-     * crosses [currentTermNoOpIndex].
+     * Non-leader: complete exceptionally with [NotLeaderException] immediately. The leadership check is
+     * engine state; the freshness/gate arithmetic is delegated to [readIndexTracker]. On a
+     * [ReadIndexTracker.ReadDecision.ResolveNow] (self alone is a fresh quorum) the engine completes the
+     * deferred here; on [ReadIndexTracker.ReadDecision.Queued] it logs and awaits a later quorum ACK via
+     * [onAppendEntriesResponse] → [ReadIndexTracker.resolve]; on [ReadIndexTracker.ReadDecision.Gated]
+     * (the §8 current-term-no-op gate is not yet crossed) the tracker parks the re-invocation below —
+     * redelivered from [advanceCommit] via [ReadIndexTracker.onNoOpCommitted] once the no-op commits.
      */
     private fun onRequestReadIndex(deferred: CompletableDeferred<Long>) {
         if (_role.value !is RaftRole.Leader) {
             deferred.completeExceptionally(NotLeaderException("readIndex: not the current leader"))
             return
         }
-        // §8 leader-completeness gate: block until the current-term no-op commits.
-        if (state.currentCommitIndex < currentTermNoOpIndex) {
-            pendingNoOpGate += { onRequestReadIndex(deferred) }
-            return
+        val decision = readIndexTracker.request(
+            deferred = deferred,
+            commitIndex = state.currentCommitIndex,
+            membership = state.membershipState,
+            selfId = transport.selfId,
+            reinvoke = { onRequestReadIndex(deferred) },
+        )
+        when (decision) {
+            ReadIndexTracker.ReadDecision.Gated -> Unit
+            is ReadIndexTracker.ReadDecision.ResolveNow -> deferred.complete(decision.readIndex)
+            is ReadIndexTracker.ReadDecision.Queued ->
+                debug { "onRequestReadIndex: queued ri=${decision.readIndex} sinceRound=${decision.sinceRound} pendingReads=${decision.pendingCount}" }
         }
-        val ri = state.currentCommitIndex
-        if (state.membershipState.quorumOfContacts(emptySet(), transport.selfId)) {
-            // Self alone constitutes a quorum of every active voter set (Simple single-voter, or
-            // Joint where self is a majority of BOTH old and new). Freshness is trivially satisfied.
-            // NOTE: gating on effectiveConfig.quorumSize == 1 is wrong during a shrinking Joint:
-            // effectiveConfig = new, so quorumSize = 1 fires even when old still needs a majority.
-            deferred.complete(ri)
-            return
-        }
-        // Multi-voter: queue the read to be resolved when a post-queue heartbeat round ACK majority arrives.
-        pendingReads += PendingRead(ri, heartbeatRound, deferred)
-        debug { "onRequestReadIndex: queued ri=$ri sinceRound=$heartbeatRound pendingReads=${pendingReads.size}" }
     }
 
     // ── Log replication ───────────────────────────────────────────────────────
 
     private suspend fun onHeartbeat() {
         if (_role.value !is RaftRole.Leader) return
-        heartbeatRound++   // bump the round counter before sending so ACKs that arrive back reference a round > any pre-send sinceRound
+        readIndexTracker.bumpRound()   // bump the round counter before sending so ACKs that arrive back reference a round > any pre-send sinceRound
         otherMembers.forEach { sendAppendEntries(it) }
     }
 
@@ -832,7 +785,7 @@ internal class RaftEngine(
                 prevLogTerm = prevTerm,
                 entries = entries,
                 leaderCommit = state.currentCommitIndex,
-                round = heartbeatRound,
+                round = readIndexTracker.round,
             )
         )
     }
@@ -877,7 +830,7 @@ internal class RaftEngine(
                 data = chunk.data,
                 done = chunk.done,
                 config = chunk.meta.config,
-                round = heartbeatRound,
+                round = readIndexTracker.round,
             )
         )
     }
@@ -887,8 +840,8 @@ internal class RaftEngine(
         if (m.term > state.currentTerm) { stepDown(m.term, StepDownReason.HigherTermObserved); return }
         if (_role.value !is RaftRole.Leader || m.term != state.currentTerm) return
         recentVoterContacts += from                // reachability signal for CheckQuorum
-        lastAckRound[from] = m.echoedRound         // credit ACK to the round it actually responded to (BLOCKER 1a)
-        resolveReadsIfQuorumFresh()                // ReadIndex: snapshot ACKs count as freshness evidence
+        readIndexTracker.recordAck(from, m.echoedRound)   // credit ACK to the round it actually responded to (BLOCKER 1a)
+        confirmFreshReads()                        // ReadIndex: snapshot ACKs count as freshness evidence
         when (val outcome = snapshotSender.onAck(from, m.nextOffset)) {
             SnapshotSender.AckOutcome.NoTransfer -> return
             is SnapshotSender.AckOutcome.Complete -> {            // fully received
@@ -1081,8 +1034,8 @@ internal class RaftEngine(
         if (m.term > state.currentTerm) { stepDown(m.term, StepDownReason.HigherTermObserved); return }
         if (_role.value !is RaftRole.Leader || m.term != state.currentTerm) return
         recentVoterContacts += from                 // reachability signal for CheckQuorum (success or failure)
-        lastAckRound[from] = m.echoedRound          // credit ACK to the round it actually responded to (BLOCKER 1a)
-        resolveReadsIfQuorumFresh()                 // ReadIndex: check if any pending reads can now be confirmed
+        readIndexTracker.recordAck(from, m.echoedRound)   // credit ACK to the round it actually responded to (BLOCKER 1a)
+        confirmFreshReads()                         // ReadIndex: check if any pending reads can now be confirmed
         if (m.success) {
             // Clamp to lastLogIndex: a leader can never have replicated entries it doesn't hold, so a
             // real follower's match never exceeds lastLogIndex; the clamp only bites on a malformed/
@@ -1101,51 +1054,13 @@ internal class RaftEngine(
     }
 
     /**
-     * ReadIndex: resolve any pending reads whose sinceRound predates the current heartbeatRound,
-     * provided a voter-quorum has ACKed in a round *strictly after* the read was queued.
-     *
-     * BLOCKER 1 fix (per-voter lastAckRound map, echoed round nonce):
-     * A voter is counted as fresh only when [lastAckRound][v] > read.sinceRound. [lastAckRound] is
-     * now set to [AppendEntriesResponse.echoedRound] (the round the follower actually responded to),
-     * not to the current [heartbeatRound] at receipt. This fixes the round-slip bug: an ACK that
-     * was generated in response to a round-H heartbeat but arrived when heartbeatRound=H+1 was
-     * previously credited to H+1 (appearing fresh for a read queued at sinceRound=H). With the
-     * nonce, it is correctly credited to H = sinceRound and therefore excluded.
-     *
-     * BLOCKER 2 fix (joint-consensus dual-majority via [MembershipState.quorumOfContacts]):
-     * During a Joint config, both the old and new voter sets must independently reach a fresh
-     * quorum. Counting only [effectiveConfig] (= new) voters would allow a new-only majority to
-     * confirm a read while the old majority is unreachable — violating linearizability for writes
-     * committed under the old majority that have not yet been covered by the new one.
-     * [quorumOfContacts] already handles Simple vs Joint correctly (same logic used by CheckQuorum).
-     * The single-voter fast-path in [onRequestReadIndex] is similarly corrected to use
-     * [MembershipState.quorumOfContacts] instead of [effectiveConfig.quorumSize == 1] so a
-     * shrinking Joint (old={v1,v2,v3}, new={v1}) does not bypass the old-majority requirement.
-     *
-     * Design note (Raft §6.4): reads fail only on step-down (no per-read timeout). A partitioned
-     * leader that cannot form a quorum will be stepped down by CheckQuorum within one
-     * election-timeout window, at which point [failPendingReads] delivers [LeadershipLostException]
-     * to all callers. This is intentional: adding per-read timeouts would require a separate timer
-     * per read and would not improve safety — only latency in the partition case.
-     *
-     * Also opportunistically drops reads whose deferred has already been completed (caller cancelled)
-     * to avoid an unbounded accumulation of dead waiters.
+     * ReadIndex: ask [readIndexTracker] which pending reads a fresh voter-quorum now confirms (the
+     * round-slip and joint dual-majority freshness arithmetic — BLOCKER 1 and 2 — live in the tracker,
+     * documented on [ReadIndexTracker]), then emit the trace and complete each read's deferred here.
+     * Called after every AppendEntries/InstallSnapshot ACK is credited via [ReadIndexTracker.recordAck].
      */
-    private suspend fun resolveReadsIfQuorumFresh() {
-        if (pendingReads.isEmpty()) return
-        // Drop reads whose caller cancelled before we resolved them.
-        pendingReads.removeAll { it.deferred.isCompleted }
-        if (pendingReads.isEmpty()) return
-        val now = heartbeatRound
-        val ready = pendingReads.filter { read ->
-            // Only voters whose ACK arrived strictly after the read was queued count as fresh.
-            val freshContacts = lastAckRound.filterValues { ackRound -> ackRound > read.sinceRound }.keys
-            // BLOCKER 2: require fresh quorum of BOTH old and new voter sets for Joint config.
-            state.membershipState.quorumOfContacts(freshContacts, transport.selfId) && now > read.sinceRound
-        }
-        if (ready.isEmpty()) return
-        pendingReads.removeAll(ready)
-        ready.forEach {
+    private suspend fun confirmFreshReads() {
+        readIndexTracker.resolve(state.membershipState, transport.selfId).forEach {
             emitTrace(RaftTraceEvent.ReadIndexConfirmed(nextClock(), it.readIndex, state.currentTerm))
             it.deferred.complete(it.readIndex)
         }
@@ -1199,11 +1114,7 @@ internal class RaftEngine(
         emitTrace(RaftTraceEvent.AdvanceCommitIndex(nextClock(), transport.selfId, oldCommit, newCommit))
         // ReadIndex leader-completeness gate: if the current-term no-op just committed, re-deliver
         // any readIndex() requests that were parked waiting for it.
-        if (state.currentCommitIndex >= currentTermNoOpIndex && pendingNoOpGate.isNotEmpty()) {
-            val gated = pendingNoOpGate.toList()
-            pendingNoOpGate.clear()
-            gated.forEach { it() }
-        }
+        readIndexTracker.onNoOpCommitted(state.currentCommitIndex).forEach { it() }
         // Config-commit side effects AFTER commitIndex is bumped — safe to call appendConfigEntry.
         committedConfigEntry?.let { onConfigCommitted(it) }
     }

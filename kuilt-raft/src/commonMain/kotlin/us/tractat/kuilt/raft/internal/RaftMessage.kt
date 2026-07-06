@@ -35,9 +35,9 @@ internal sealed interface RaftMessage {
         val entries: List<LogEntry>,
         val leaderCommit: Long,
         /**
-         * The leader's [RaftEngine.heartbeatRound] at send time, echoed back by the follower
+         * The leader's [ReadIndexTracker.round] at send time, echoed back by the follower
          * in [AppendEntriesResponse.echoedRound]. Used by the leader to credit an ACK to the
-         * round it actually responded to — not to the current heartbeatRound at receipt, which
+         * round it actually responded to — not to the current round at receipt, which
          * may have advanced during transit (round-slip bug, BLOCKER 1a).
          */
         val round: Long = 0L,
@@ -53,8 +53,8 @@ internal sealed interface RaftMessage {
         val conflictTerm: Long? = null,
         /**
          * Echoes the [AppendEntries.round] from the request that triggered this response.
-         * The leader uses this to set [RaftEngine.lastAckRound] to the round the follower
-         * actually responded to, preventing a round-slip stale ACK from being credited to a
+         * The leader uses this (via [ReadIndexTracker.recordAck]) to credit the ACK to the round the
+         * follower actually responded to, preventing a round-slip stale ACK from being credited to a
          * later round that the follower has not yet confirmed (BLOCKER 1a fix).
          */
         val echoedRound: Long = 0L,
@@ -69,7 +69,7 @@ internal sealed interface RaftMessage {
      * Carried on every chunk (it is tiny relative to the state) so the installer can adopt it
      * regardless of which chunk it finalizes on; `null` when the covered prefix held no config change.
      *
-     * [round] echoes the leader's [RaftEngine.heartbeatRound] at send time; it is returned in
+     * [round] echoes the leader's [ReadIndexTracker.round] at send time; it is returned in
      * [InstallSnapshotResponse.echoedRound] so the leader can credit the ACK to the correct round
      * (BLOCKER 1a fix, same as [AppendEntries.round]).
      *
