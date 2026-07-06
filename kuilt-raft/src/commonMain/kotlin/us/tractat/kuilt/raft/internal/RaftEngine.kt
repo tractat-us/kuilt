@@ -194,9 +194,11 @@ internal class RaftEngine(
      */
     private var pendingConfigChange: CompletableDeferred<ClusterConfig>? = null
 
-    // §7 InstallSnapshot transfer state — leader-only (one chunk in flight per peer; await-ack-then-next).
-    private class SnapshotXfer(val meta: SnapshotMeta, val state: ByteArray, var nextOffset: Long)
-    private val snapshotXfer = mutableMapOf<NodeId, SnapshotXfer>()
+    // §7 InstallSnapshot transfer — leader-only chunked send, extracted to SnapshotSender (one chunk in
+    // flight per peer; await-ack-then-next). Declared before `init` per the machine-field ordering rule
+    // (#1077). chunkBytes stays in the engine (it reads transport/raftConfig); the machine's only
+    // side-effect is loading the stored snapshot bytes.
+    private val snapshotSender = SnapshotSender(storage, ::chunkBytes)
 
     // §7 InstallSnapshot reassembly state — follower-only (in-order chunk accumulation).
     private class SnapshotReassembly(val meta: SnapshotMeta, val buffer: ArrayList<Byte> = ArrayList())
@@ -728,7 +730,7 @@ internal class RaftEngine(
             failPendingConfigChange(cause)
             failPendingReads(LeadershipLostException("lost leadership before read confirmed"))
             debug { "relinquishToFollower($reason): failed in-flight proposals, config change, and pending reads" }
-            snapshotXfer.clear()   // leader-only transfer state — abandon any in-flight snapshot sends
+            snapshotSender.abandonAll()   // leader-only transfer state — abandon any in-flight snapshot sends
             dedupCache.clear()     // leader-only best-effort dedup cache — a new leader starts cold
             // Leadership transfer: a HigherTermObserved step-down while a transfer is active means the
             // target won its election — complete the transfer deferred successfully. Any other reason
@@ -875,22 +877,17 @@ internal class RaftEngine(
 
     /**
      * Sends the next snapshot chunk to [peer]. [restart] (or no in-flight transfer) loads the stored
-     * snapshot and starts from offset 0; otherwise it resumes from the peer's acked [SnapshotXfer.nextOffset].
+     * snapshot and starts from offset 0; otherwise it resumes from the peer's acked offset. The load/
+     * slice/advance arithmetic lives in [snapshotSender]; the engine keeps the trace/send side-effects.
      */
     private suspend fun sendSnapshotChunk(peer: NodeId, restart: Boolean) {
-        val xfer = if (restart || snapshotXfer[peer] == null) {
-            val stored = storage.loadSnapshot() ?: return   // nothing to send yet
-            SnapshotXfer(stored.meta, stored.state, 0L).also { snapshotXfer[peer] = it }
-        } else {
-            snapshotXfer.getValue(peer)
-        }
-        val start = xfer.nextOffset.toInt()
-        val end = minOf(start + chunkBytes(), xfer.state.size)
-        val done = end >= xfer.state.size
-        debug { "sendSnapshotChunk($peer): through=${xfer.meta.lastIncludedIndex} offset=$start..$end/${xfer.state.size} done=$done restart=$restart" }
+        val chunk = snapshotSender.nextChunk(peer, restart) ?: return   // nothing to send yet
+        val start = chunk.offset.toInt()
+        val end = start + chunk.data.size
+        debug { "sendSnapshotChunk($peer): through=${chunk.meta.lastIncludedIndex} offset=$start..$end/${chunk.totalBytes} done=${chunk.done} restart=$restart" }
         emitTrace(
             RaftTraceEvent.InstallSnapshot(
-                nextClock(), transport.selfId, peer, xfer.meta.lastIncludedIndex, xfer.nextOffset, done,
+                nextClock(), transport.selfId, peer, chunk.meta.lastIncludedIndex, chunk.offset, chunk.done,
             )
         )
         send(
@@ -898,12 +895,12 @@ internal class RaftEngine(
             RaftMessage.InstallSnapshot(
                 term = state.currentTerm,
                 leaderId = transport.selfId,
-                lastIncludedIndex = xfer.meta.lastIncludedIndex,
-                lastIncludedTerm = xfer.meta.lastIncludedTerm,
-                offset = xfer.nextOffset,
-                data = xfer.state.copyOfRange(start, end),
-                done = done,
-                config = xfer.meta.config,
+                lastIncludedIndex = chunk.meta.lastIncludedIndex,
+                lastIncludedTerm = chunk.meta.lastIncludedTerm,
+                offset = chunk.offset,
+                data = chunk.data,
+                done = chunk.done,
+                config = chunk.meta.config,
                 round = heartbeatRound,
             )
         )
@@ -916,18 +913,19 @@ internal class RaftEngine(
         recentVoterContacts += from                // reachability signal for CheckQuorum
         lastAckRound[from] = m.echoedRound         // credit ACK to the round it actually responded to (BLOCKER 1a)
         resolveReadsIfQuorumFresh()                // ReadIndex: snapshot ACKs count as freshness evidence
-        val xfer = snapshotXfer[from] ?: return
-        xfer.nextOffset = m.nextOffset
-        if (xfer.nextOffset >= xfer.state.size) {                 // fully received
-            state.matchIndex[from] = maxOf(state.matchIndex[from] ?: 0L, xfer.meta.lastIncludedIndex)
-            state.nextIndex[from] = xfer.meta.lastIncludedIndex + 1L
-            snapshotXfer.remove(from)
-            debug { "onInstallSnapshotResponse($from): COMPLETE through=${xfer.meta.lastIncludedIndex} → nextIndex=${state.nextIndex[from]}, resume AppendEntries" }
-            sendAppendEntries(from)                               // resume normal replication
-            tryAdvanceLeaderCommit()
-        } else {
-            debug { "onInstallSnapshotResponse($from): ack offset=${xfer.nextOffset}/${xfer.state.size}, send next chunk" }
-            sendSnapshotChunk(from, restart = false)              // next chunk
+        when (val outcome = snapshotSender.onAck(from, m.nextOffset)) {
+            SnapshotSender.AckOutcome.NoTransfer -> return
+            is SnapshotSender.AckOutcome.Complete -> {            // fully received
+                state.matchIndex[from] = maxOf(state.matchIndex[from] ?: 0L, outcome.lastIncludedIndex)
+                state.nextIndex[from] = outcome.lastIncludedIndex + 1L
+                debug { "onInstallSnapshotResponse($from): COMPLETE through=${outcome.lastIncludedIndex} → nextIndex=${state.nextIndex[from]}, resume AppendEntries" }
+                sendAppendEntries(from)                           // resume normal replication
+                tryAdvanceLeaderCommit()
+            }
+            SnapshotSender.AckOutcome.SendNext -> {
+                debug { "onInstallSnapshotResponse($from): ack offset=${m.nextOffset}, send next chunk" }
+                sendSnapshotChunk(from, restart = false)          // next chunk
+            }
         }
     }
 
