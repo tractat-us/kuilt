@@ -1043,8 +1043,9 @@ internal class RaftEngine(
             state.matchIndex[from] = maxOf(state.matchIndex[from] ?: 0L, minOf(m.matchIndex, state.lastLogIndex))
             state.nextIndex[from] = state.matchIndex.getValue(from) + 1L
             tryAdvanceLeaderCommit()
-            // §3.10: if a transfer is in flight and the target is now caught up, send TimeoutNow.
-            if (transfer.onPeerAck(from, state.matchIndex[from] ?: 0L, state.currentCommitIndex)) sendTimeoutNow(from)
+            // §3.10 step 2: if a transfer is in flight and the target's log now fully matches ours
+            // (matchIndex == lastLogIndex, not merely commitIndex), send TimeoutNow.
+            if (transfer.onPeerAck(from, state.matchIndex.getValue(from), state.lastLogIndex)) sendTimeoutNow(from)
         } else {
             // §5.3 fast backup: jump nextIndex to reduce O(n) recovery to O(#terms)
             state.nextIndex[from] = nextIndexAfterFailure(state.nextIndex[from] ?: 1L, m, state.log)
@@ -1407,6 +1408,15 @@ internal class RaftEngine(
             deferred.completeExceptionally(NotLeaderException())
             return
         }
+        // §3.10 step 1: while a leadership transfer is in flight, reject new requests — a membership
+        // change is a new request, exactly like a proposal (mirrors the onPropose gate). Appending a
+        // config entry mid-transfer would move the lastLogIndex goalpost the target is chasing.
+        val transferInFlight = transfer.inFlightTarget
+        if (transferInFlight != null) {
+            debug { "onChangeMembership: rejected — leadership transfer in flight to ${transferInFlight.value}" }
+            deferred.completeExceptionally(NotLeaderException("leadership transfer in flight to ${transferInFlight.value}"))
+            return
+        }
         if (pendingConfigChange != null) {
             debug { "onChangeMembership: rejected — change already in progress" }
             deferred.completeExceptionally(MembershipChangeInProgressException())
@@ -1517,6 +1527,17 @@ internal class RaftEngine(
             response.completeExceptionally(IllegalArgumentException("transferLeadership: target ${target.value} is not a voter in the current config ($currentVoters)"))
             return
         }
+        // §3.10 step 1, the reverse direction of the onChangeMembership gate: refuse to start a transfer
+        // while a membership change is still converging. pendingConfigChange stays non-null from
+        // changeMembership until the resulting Simple entry commits (onConfigCommitted), and the
+        // Joint→Simple auto-append fires inside that window — appending an entry that would grow
+        // lastLogIndex mid-transfer, moving the goalpost the target is chasing. Transfer and membership
+        // change are thus mutually exclusive in both directions, which is what keeps lastLogIndex stable
+        // for the duration of the transfer (the onPeerAck predicate relies on this).
+        if (pendingConfigChange != null) {
+            response.completeExceptionally(MembershipChangeInProgressException("transferLeadership: a membership change is in progress"))
+            return
+        }
         // A second concurrent call while one is already in flight: reject the second. `start` arms the
         // auto-timeout timer (one election-timeout window) and parks `response`, returning false iff a
         // transfer is already in flight — in which case `inFlightTarget` is the existing target.
@@ -1527,11 +1548,11 @@ internal class RaftEngine(
         emitTrace(RaftTraceEvent.LeadershipTransferStarted(nextClock(), transport.selfId, target))
         debug { "onTransferLeadership: transfer started to ${target.value}" }
 
-        // Sync target's log; send TimeoutNow now iff it is already caught up (matchIndex >= commitIndex).
-        // Otherwise the AppendEntries ACK path (onAppendEntriesResponse → transfer.onPeerAck) sends it once
-        // the target catches up. AppendEntries delivery is best-effort — the heartbeat loop keeps retrying.
+        // Sync target's log; send TimeoutNow now iff it is already fully caught up (matchIndex >= lastLogIndex,
+        // §3.10 step 2). Otherwise the AppendEntries ACK path (onAppendEntriesResponse → transfer.onPeerAck)
+        // sends it once the target catches up. AppendEntries delivery is best-effort — the heartbeat loop retries.
         sendAppendEntries(target)
-        if (transfer.onPeerAck(target, state.matchIndex[target] ?: 0L, state.currentCommitIndex)) sendTimeoutNow(target)
+        if (transfer.onPeerAck(target, state.matchIndex[target] ?: 0L, state.lastLogIndex)) sendTimeoutNow(target)
     }
 
     /** Send a [RaftMessage.TimeoutNow] to [target]. */
