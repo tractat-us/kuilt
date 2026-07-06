@@ -204,6 +204,38 @@ class RaftSimulation(
     }
 
     /**
+     * Encode and inject a single-chunk (`offset = 0`, [done]) [RaftMessage.InstallSnapshot] directly
+     * into [to]'s incoming channel, bypassing the normal partition/drop rules. Models a delayed /
+     * duplicate or behind-commit snapshot arriving at a caught-up follower — the safety regressions
+     * in #1219 (stale duplicate below the compaction floor) and #1220 (behind-commit retain-suffix).
+     */
+    @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
+    suspend fun deliverInstallSnapshot(
+        to: NodeId,
+        from: NodeId,
+        term: Long,
+        lastIncludedIndex: Long,
+        lastIncludedTerm: Long,
+        data: ByteArray = byteArrayOf(0),
+        done: Boolean = true,
+        round: Long = 0L,
+    ) {
+        val bytes = Cbor.encodeToByteArray<RaftMessage>(
+            RaftMessage.InstallSnapshot(
+                term = term,
+                leaderId = from,
+                lastIncludedIndex = lastIncludedIndex,
+                lastIncludedTerm = lastIncludedTerm,
+                offset = 0L,
+                data = data,
+                done = done,
+                round = round,
+            )
+        )
+        network.deliver(from = from, to = to, bytes = bytes)
+    }
+
+    /**
      * Let pending work at the current virtual instant run without advancing the clock: deliberately
      * yield-only (no `delay`). Under [StandardTestDispatcher]'s FIFO scheduling, yielding hands the
      * single test thread back to the scheduler so already-scheduled coroutines (e.g. a freshly
