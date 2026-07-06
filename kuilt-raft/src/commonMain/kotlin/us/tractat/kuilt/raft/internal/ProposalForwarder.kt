@@ -44,8 +44,11 @@ internal data class PendingForward(
  * **Deferred completion is exactly-once — every [PendingForward] deferred is completed exactly once.**
  * A forward's deferred is completed by exactly one of: the engine on the [onResponse] resolve path
  * (leader replied); the local re-propose path (a [FlushAction.ReProposeLocally] hands the deferred to the
- * engine's propose path, which completes it via its own `pending` queue); or [failAll] on
- * step-down/teardown. Cancellation is safe throughout: [proposeWithRequestId]'s `finally` cancels the
+ * engine's propose path, which completes it via its own `pending` queue); the leader-change reap
+ * ([onLeaderChanged], the engine fails it with `LeadershipLostException` when a *crashed* leader's sent
+ * forward is stranded by a new election); or [failAll] on step-down/teardown. Each of these removes the
+ * entry from [forwardedProposals] first, so no other path can touch it again. Cancellation is safe
+ * throughout: [proposeWithRequestId]'s `finally` cancels the
  * caller deferred, [flush] drops any entry whose deferred is already completed (never re-sending a
  * cancelled forward), and `completeExceptionally` on an already-cancelled deferred is a harmless no-op —
  * so a cancelled forwarding propose never commits later, and a follower propose cancelled while parked in
@@ -70,6 +73,15 @@ internal class ProposalForwarder {
     private var nextForwardId: Long = 0L
 
     /**
+     * The leader every currently *sent* forward (in [forwardedProposals] but no longer in
+     * [waitingForLeader]) was dispatched to, or `null` when none are in flight to a leader. Because
+     * [onLeaderChanged] reaps all sent forwards the instant the known leader changes, every sent forward
+     * at any moment targets this one node — so a single field, not a per-forward record, suffices. Never
+     * this node's own id: [forward]/[flush] only send when the leader is a *distinct* peer.
+     */
+    private var sentLeader: NodeId? = null
+
+    /**
      * Register a proposal this non-leader node must forward (Raft §8). Records a [PendingForward] under a
      * fresh correlation id and returns [ForwardDecision.SendToLeader] when a distinct leader is known — the
      * engine then sends the `Forward` — or [ForwardDecision.Queued] when none is (parked in
@@ -86,6 +98,7 @@ internal class ProposalForwarder {
         val id = nextForwardId++
         forwardedProposals[id] = PendingForward(response, command, dedupKey)
         return if (leaderId != null && leaderId != selfId) {
+            sentLeader = leaderId
             ForwardDecision.SendToLeader(leaderId, id, command, dedupKey)
         } else {
             waitingForLeader += id
@@ -132,13 +145,45 @@ internal class ProposalForwarder {
                 // orphan the deferred in the onPropose suspension window (cancel/append-throw → hang).
                 actions += FlushAction.ReProposeLocally(id, pf)
             } else {
-                actions += FlushAction.SendToLeader(
-                    requireNotNull(leaderId) { "flush: no leader known on the non-leader forward path" },
-                    id, pf.command, pf.dedupKey,
-                )
+                val target = requireNotNull(leaderId) { "flush: no leader known on the non-leader forward path" }
+                sentLeader = target
+                actions += FlushAction.SendToLeader(target, id, pf.command, pf.dedupKey)
             }
         }
         return actions
+    }
+
+    /**
+     * Reap the sent forwards stranded by a leader change (Raft §8). Called by the engine the instant a
+     * *different* concrete leader becomes known (a follower learning a new leader via AppendEntries /
+     * InstallSnapshot, or this node winning an election). Every forward already *sent* to the old leader
+     * — in [forwardedProposals] but not still parked in [waitingForLeader] — is removed and returned so
+     * the engine fails its deferred with [LeadershipLostException]; the caller then retries, exactly-once
+     * under its `requestId`, via the new leader. Without this the deferred would only ever be completed by
+     * a `ForwardResponse` that a *crashed* leader never sends — the [proposeWithRequestId] caller parks
+     * forever (#1238).
+     *
+     * **Only a genuine CHANGE reaps.** When [newLeaderId] equals the leader the sent forwards went to
+     * ([sentLeader]) — the repeated-heartbeat-from-the-same-leader case — nothing is reaped and a healthy
+     * in-flight forward keeps awaiting its response. Queued (not-yet-sent) forwards are untouched: [flush]
+     * dispatches them to the new leader. Reaping clears [sentLeader] (no sent forwards remain).
+     *
+     * **Exactly-once holds.** A reaped id is removed from [forwardedProposals], so a late `ForwardResponse`
+     * from the old leader resolves to `null` in [onResponse] and completes nothing a second time; and
+     * `completeExceptionally` on an already-cancelled caller deferred is a harmless no-op.
+     */
+    fun onLeaderChanged(newLeaderId: NodeId): List<PendingForward> {
+        if (newLeaderId == sentLeader) return emptyList()   // same leader — a repeated heartbeat, not a change
+        val reaped = mutableListOf<PendingForward>()
+        val it = forwardedProposals.iterator()
+        while (it.hasNext()) {
+            val (id, pf) = it.next()
+            if (id in waitingForLeader) continue            // not yet sent — flush will dispatch it to the new leader
+            it.remove()
+            reaped += pf
+        }
+        sentLeader = null
+        return reaped
     }
 
     /**
@@ -150,6 +195,7 @@ internal class ProposalForwarder {
         forwardedProposals.values.forEach { it.deferred.completeExceptionally(cause) }
         forwardedProposals.clear()
         waitingForLeader.clear()
+        sentLeader = null
     }
 
     /**

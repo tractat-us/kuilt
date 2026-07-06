@@ -581,7 +581,7 @@ internal class RaftEngine(
         logger.debug { "[raft:${transport.selfId}] won election for term ${state.currentTerm} in ${elapsed.inWholeMilliseconds}ms" }
 
         _role.value = RaftRole.Leader
-        _leader.value = transport.selfId
+        setKnownLeader(transport.selfId)     // reap forwards sent to the prior leader we just replaced (#1238)
         electionJob?.cancel()
         leaderAlive = true
         leaderLeaseJob?.cancel()
@@ -858,7 +858,7 @@ internal class RaftEngine(
         if (m.term > state.currentTerm) stepDown(m.term, StepDownReason.HigherTermObserved)
         _role.value = followerRole
         preVoteTerm = null          // a live leader appeared — cancel any in-flight pre-vote probe
-        _leader.value = m.leaderId
+        setKnownLeader(m.leaderId)  // reap forwards stranded if this is a *different* leader (#1238)
         resetElectionTimeout()
         armLeaderLease()
 
@@ -939,7 +939,7 @@ internal class RaftEngine(
         // higher term: already adopted it via stepDown above, continue processing in new term
         _role.value = followerRole
         preVoteTerm = null          // a live leader appeared — cancel any in-flight pre-vote probe
-        _leader.value = m.leaderId
+        setKnownLeader(m.leaderId)  // reap forwards stranded if this is a *different* leader (#1238)
         resetElectionTimeout()
         armLeaderLease()
 
@@ -1683,6 +1683,30 @@ internal class RaftEngine(
                 is ProposalForwarder.FlushAction.SendToLeader ->
                     send(action.leaderId, RaftMessage.Forward(action.id, action.command, action.dedupKey))
             }
+        }
+    }
+
+    /**
+     * Record the currently-known leader and reap any forward stranded by a leadership *change* (§8, #1238).
+     *
+     * The sole path that updates [_leader] to a *concrete* node: a follower learning a leader
+     * ([onAppendEntries]/[onInstallSnapshot]) or this node winning an election ([becomeLeader]). When the
+     * new leader differs from the one outstanding forwards were sent to, [ProposalForwarder.onLeaderChanged]
+     * hands back those sent forwards so we fail them with [LeadershipLostException] — a crashed leader never
+     * sends the `ForwardResponse` that would otherwise complete them, so without this the
+     * [proposeWithRequestId] caller parks forever. The caller retries (exactly-once under its `requestId`).
+     *
+     * A *repeated heartbeat from the same leader* is not a change: [ProposalForwarder.onLeaderChanged]
+     * short-circuits when the id is unchanged, so a healthy in-flight forward is never reaped. Stepping down
+     * to a leaderless state ([_leader] = null) is likewise not a reap trigger — the same leader may resume,
+     * and its response is still valid; those forwards are reaped only if a *different* leader then appears.
+     */
+    private fun setKnownLeader(newLeader: NodeId) {
+        _leader.value = newLeader
+        forwarder.onLeaderChanged(newLeader).forEach {
+            it.deferred.completeExceptionally(
+                LeadershipLostException("leader changed to ${newLeader.value} before the forwarded proposal was answered; retry"),
+            )
         }
     }
 
