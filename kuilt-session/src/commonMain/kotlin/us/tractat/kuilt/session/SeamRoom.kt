@@ -206,6 +206,11 @@ private const val MEMBERSHIP_EVENT_REPLAY = 64
  * - **Host**: [PartitionEvent.PeerLost] of any joiner → [MembershipEvent.Left(PartitionExpired)].
  * - Both roles: [PartitionEvent.PeerUnresponsive] → [MembershipEvent.Partitioned];
  *   [PartitionEvent.PeerRecovered] → [MembershipEvent.Recovered].
+ * - **Clean leave** (a peer's [AdmitMessage.Goodbye]): the host evicts with
+ *   [MembershipEvent.Left(Normal)] and propagates an authoritative [AdmitMessage.Farewell]
+ *   to every remaining member ([propagateFarewell]), so joiners also evict promptly with
+ *   `Normal` instead of waiting out the heartbeat window (#1292). The detector paths above
+ *   remain the fallback for peers that vanish without a Goodbye.
  *
  * **Terminal state**: once [MembershipEvent.HostLost] fires, [broadcast] and [sendTo]
  * become silent no-ops. No auto-election is performed.
@@ -857,6 +862,12 @@ internal class SeamRoom(
                 if (_role.value == SessionRole.Host) {
                     lock.withLock { stopDetector(sender) }
                     removeFromRoster(sender, LeaveReason.Normal)
+                    propagateFarewell(sender)
+                }
+            }
+            is AdmitMessage.Farewell -> {
+                if (_role.value == SessionRole.Joiner) {
+                    handleFarewell(sender, msg)
                 }
             }
             is AdmitMessage.Reject -> {
@@ -1073,6 +1084,50 @@ internal class SeamRoom(
         }
         _events.tryEmit(MembershipEvent.Resumed(selfId))
         deferred?.complete(ResumeResult.Success)
+    }
+
+    /**
+     * Host-side: propagate an authoritative [AdmitMessage.Farewell] for [departed] to every
+     * remaining member, so joiners evict the cleanly-departed peer promptly with
+     * [LeaveReason.Normal] instead of waiting out their own heartbeat window and
+     * mislabelling the clean leave as [LeaveReason.PartitionExpired] (#1292).
+     *
+     * The eviction counterpart of the [AdmitMessage.Welcome] roster-sync broadcast in
+     * [admitPeer]: the host is the membership authority for joins *and* leaves. Best-effort —
+     * a lost Farewell degrades to that member's heartbeat-window eviction. Roster snapshot
+     * under [lock]; the suspend sends run on a launched child, outside the lock.
+     */
+    private fun propagateFarewell(departed: PeerId) {
+        val remaining = lock.withLock { admittedById.keys.toList() }
+        if (remaining.isEmpty()) return
+        val farewellBytes = AdmitMessage.encode(AdmitMessage.Farewell(departed.value))
+        scope.launch {
+            for (peerId in remaining) {
+                runCatchingCancellable { seam.sendTo(peerId, farewellBytes) }
+            }
+        }
+    }
+
+    /**
+     * Joiner-side: handle an authoritative [AdmitMessage.Farewell] — the host's notification
+     * that [farewell]'s peer departed cleanly. Stop that peer's liveness detector and remove
+     * it from the roster with [LeaveReason.Normal] (#1292).
+     *
+     * **Host-authoritative gate:** only a Farewell from the identified host ([hostPeerId]) is
+     * honored. Anything else — a forged Farewell from another joiner, or one arriving before
+     * the host is identified — is dropped; the [HeartbeatPartitionDetector] fallback still
+     * evicts genuinely-vanished peers. A Farewell naming the host itself is also ignored:
+     * host departure is transport-level ([runJoinerTornWatcher] / host-liveness detection),
+     * never a roster eviction.
+     */
+    private fun handleFarewell(sender: PeerId, farewell: AdmitMessage.Farewell) {
+        val departed = PeerId(farewell.peerId)
+        lock.withLock {
+            val host = hostPeerId
+            if (host == null || sender != host || departed == host) return
+            stopDetector(departed)
+        }
+        removeFromRoster(departed, LeaveReason.Normal)
     }
 
     // ── Partition detection ───────────────────────────────────────────────────
