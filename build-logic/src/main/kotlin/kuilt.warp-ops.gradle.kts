@@ -46,12 +46,18 @@ tasks.withType<KotlinCompilationTask<*>>().configureEach {
     if (name != "kspCommonMainKotlinMetadata") dependsOn("kspCommonMainKotlinMetadata")
 }
 
-// Non-compilation consumers of commonMain sources: detekt (lint) and the
-// per-target sources jars (publishing). Without these, Gradle 9 flags an
-// implicit dependency on kspCommonMainKotlinMetadata's outputs.
+// Non-compilation consumers of commonMain sources: detekt (lint), the sources
+// jars (publishing — the KMP metadata publication's jar is named plain
+// `sourcesJar`, the per-target ones `<target>SourcesJar`), and Dokka (which
+// reads the source roots the kmp-library convention registers). Without these,
+// Gradle 9 fails the task graph with an implicit-dependency validation error on
+// kspCommonMainKotlinMetadata's output directory.
 tasks.withType<io.gitlab.arturbosch.detekt.Detekt>().configureEach {
     dependsOn("kspCommonMainKotlinMetadata")
 }
-tasks.matching { it.name.endsWith("SourcesJar") }.configureEach {
+tasks.matching { it.name == "sourcesJar" || it.name.endsWith("SourcesJar") }.configureEach {
+    dependsOn("kspCommonMainKotlinMetadata")
+}
+tasks.withType<org.jetbrains.dokka.gradle.tasks.DokkaBaseTask>().configureEach {
     dependsOn("kspCommonMainKotlinMetadata")
 }
