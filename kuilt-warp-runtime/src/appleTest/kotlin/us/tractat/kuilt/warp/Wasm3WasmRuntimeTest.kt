@@ -3,8 +3,11 @@ package us.tractat.kuilt.warp
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
+import kotlin.test.assertContains
 import kotlin.test.assertContentEquals
 import kotlin.test.assertFailsWith
+import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.Duration.Companion.seconds
 
 /**
  * Integration tests for [Wasm3WasmRuntime]: happy-path execution plus the load-time sandbox
@@ -19,9 +22,9 @@ import kotlin.test.assertFailsWith
  * ceiling (declared max or initial), malformed bytes, a missing `warp_alloc`/`warp_run` ABI
  * export, and a module that exports the ABI but no linear memory.
  *
- * Run-guard: a trapping kernel surfaces as [WasmExecutionException]. wasm3 has no safe
- * cross-thread abort surface, so a CPU-bomb execution-timeout bound is deferred (see the
- * [Wasm3WasmRuntime] KDoc); only the load-time guards are asserted here.
+ * Run-guards: a trapping kernel surfaces as [WasmExecutionException], and a runaway CPU-bomb
+ * kernel (`loop`/`br` spin with no calls) is terminated at [WasmSandboxConfig.executionTimeout]
+ * via the interpreter's cooperative deadline check (see the [Wasm3WasmRuntime] KDoc).
  *
  * wasm fixtures are embedded as byte literals — Kotlin/Native has no classpath resource loading,
  * so the same kernels the JVM test reads from `src/jvmTest/resources` are inlined verbatim here.
@@ -91,11 +94,40 @@ class Wasm3WasmRuntimeTest {
         assertFailsWith<WasmLoadException> { runtime.load(NOMEMORY_WASM) }
     }
 
-    // --- Run-guard test ---
+    // --- Run-guard tests ---
 
     @Test
     fun trapSurfacesAsExecutionException() = runTest {
         assertFailsWith<WasmExecutionException> { runtime.load(TRAP_WASM).invoke(ByteArray(0)) }
+    }
+
+    /**
+     * The CPU-bomb defense: a kernel whose `warp_run` spins forever on a backward branch
+     * (`loop`/`br` — no function calls, so the stock wasm3 Call-entry yield never fires) must be
+     * terminated at [WasmSandboxConfig.executionTimeout] and surface [WasmExecutionException] —
+     * never hang the host. The guest burns REAL wall-clock CPU, so the `runTest` timeout cannot
+     * pre-empt it; the deadline check inside the interpreter is the only thing that can.
+     */
+    @Test
+    fun runawayLoopKernelIsBoundedByExecutionTimeout() = runTest(timeout = 10.seconds) {
+        val bounded = Wasm3WasmRuntime(WasmSandboxConfig(executionTimeout = 250.milliseconds))
+        val op = bounded.load(LOOP_WASM)
+        val ex = assertFailsWith<WasmExecutionException> { op.invoke(ByteArray(0)) }
+        assertContains(ex.message ?: "", "exceeded", message = "names the budget, not a generic trap")
+    }
+
+    /**
+     * A deadline trap must not poison the runtime: after a runaway kernel is terminated, a
+     * well-behaved kernel loaded on the SAME runtime still executes (the deadline is cleared
+     * per-invocation, not left armed).
+     */
+    @Test
+    fun timeoutDoesNotPoisonNextInvoke() = runTest(timeout = 10.seconds) {
+        val bounded = Wasm3WasmRuntime(WasmSandboxConfig(executionTimeout = 250.milliseconds))
+        val runaway = bounded.load(LOOP_WASM)
+        val reverse = bounded.load(REVERSE_WASM)
+        assertFailsWith<WasmExecutionException> { runaway.invoke(ByteArray(0)) }
+        assertContentEquals(byteArrayOf(3, 2, 1), reverse.invoke(byteArrayOf(1, 2, 3)))
     }
 
     /**
@@ -199,6 +231,21 @@ private val NOMEMORY_WASM = byteArrayOf(
     0x61, 0x6c, 0x6c, 0x6f, 0x63, 0x00, 0x00, 0x08, 0x77, 0x61, 0x72, 0x70,
     0x5f, 0x72, 0x75, 0x6e, 0x00, 0x01, 0x0a, 0x0b, 0x02, 0x04, 0x00, 0x41,
     0x00, 0x0b, 0x04, 0x00, 0x42, 0x00, 0x0b,
+)
+
+// loop.wasm variant (86 bytes) — warp_run spins forever on a backward branch (`loop $l (br $l)`),
+// with NO function call inside the loop body: the pure CPU-bomb. Memory declared `1 16` (explicit
+// max = the default cap) so only the execution-time bound can stop it. Same .wat provenance as
+// jvmTest/resources loop.wat, memory bounded.
+private val LOOP_WASM = byteArrayOf(
+    0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x01, 0x0c, 0x02, 0x60,
+    0x01, 0x7f, 0x01, 0x7f, 0x60, 0x02, 0x7f, 0x7f, 0x01, 0x7e, 0x03, 0x03,
+    0x02, 0x00, 0x01, 0x05, 0x04, 0x01, 0x01, 0x01, 0x10, 0x07, 0x22, 0x03,
+    0x06, 0x6d, 0x65, 0x6d, 0x6f, 0x72, 0x79, 0x02, 0x00, 0x0a, 0x77, 0x61,
+    0x72, 0x70, 0x5f, 0x61, 0x6c, 0x6c, 0x6f, 0x63, 0x00, 0x00, 0x08, 0x77,
+    0x61, 0x72, 0x70, 0x5f, 0x72, 0x75, 0x6e, 0x00, 0x01, 0x0a, 0x10, 0x02,
+    0x04, 0x00, 0x41, 0x00, 0x0b, 0x09, 0x00, 0x03, 0x40, 0x0c, 0x00, 0x0b,
+    0x42, 0x00, 0x0b,
 )
 
 // trap.wasm (80 bytes) — warp_run executes `unreachable`, trapping at runtime.

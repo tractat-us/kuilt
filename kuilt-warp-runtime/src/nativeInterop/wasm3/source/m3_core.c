@@ -18,11 +18,9 @@ void m3_Abort(const char* message) {
     abort();
 }
 
-M3_WEAK
-M3Result m3_Yield ()
-{
-    return m3Err_none;
-}
+// WARP PATCH (kuilt): the upstream M3_WEAK no-op m3_Yield default is removed. The one and
+// only definition lives in warp_deadline.c (the sandbox's cooperative execution deadline),
+// so static-link resolution never depends on weak-symbol override semantics.
 
 #if d_m3FixedHeap
 

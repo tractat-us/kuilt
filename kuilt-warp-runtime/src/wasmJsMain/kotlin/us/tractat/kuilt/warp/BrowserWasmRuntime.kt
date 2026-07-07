@@ -2,15 +2,19 @@
 
 package us.tractat.kuilt.warp
 
-import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.await
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlin.JsFun
 import kotlin.js.JsAny
+import kotlin.js.Promise
 
 /**
  * Browser (wasmJs) implementation of [WasmRuntime] backed by the native WebAssembly JS API.
  *
- * [load] compiles + instantiates the module once over an **empty imports object**; the returned
- * [Op] drives every invocation over the module's shared linear memory via the warp ABI:
+ * [load] compiles + instantiates the module once over an **empty imports object** to run the
+ * load-time sandbox guards; the returned [Op] drives every invocation over the module's linear
+ * memory via the warp ABI:
  * - `warp_alloc(len: i32) -> i32`   — guest returns a writable pointer for `len` bytes.
  * - `warp_run(ptr: i32, len: i32) -> i64` — guest processes `memory[ptr..ptr+len)` and returns a
  *   packed pointer/length: `(resPtr.toLong() shl 32) or (resLen.toLong() and 0xFFFF_FFFF)`.
@@ -35,19 +39,29 @@ import kotlin.js.JsAny
  *   handling and trigger an anti-entropy retry storm on a verified-but-broken kernel (a
  *   remotely-triggerable DoS).
  *
- * **Run-time trap** — any error from a guest call (trap, `unreachable`, OOB) surfaces as
- * [WasmExecutionException], preserving the cause.
+ * **Execution timeout — the CPU-bomb defense.** Browser JS is single-threaded, so a synchronous
+ * WASM runaway on the main thread could never be pre-empted. The guest therefore executes in a
+ * dedicated **Web Worker** per [Op] (spawned lazily on first invocation from an inline
+ * `Blob`-URL script, re-instantiating the already-validated bytes): each ABI round trip is raced
+ * against a wall-clock `setTimeout` of [WasmSandboxConfig.executionTimeout] on the main thread,
+ * and on expiry the worker is `terminate()`d — a hard pre-emptive kill the guest cannot resist —
+ * surfacing [WasmExecutionException] naming the exceeded budget. A later invocation on the same
+ * [Op] transparently respawns a fresh worker (guest linear-memory state does not survive a
+ * timeout; per the [Op] contract an op must not rely on state outliving a call). The race timer
+ * is pure JS wall-clock, deliberately independent of any (possibly virtual-time) coroutine
+ * scheduler driving the caller. The timer starts when the run request is posted, so a CPU-bomb in
+ * a module's `(start)` function (run at worker instantiation, before the first ABI call) is
+ * bounded by the first invocation's budget too.
  *
- * **Execution-timeout limitation (known soft spot).** Browser JS is single-threaded; a synchronous
- * WASM runaway cannot be pre-empted without moving execution to a Web Worker. This impl therefore
- * does NOT enforce [WasmSandboxConfig.executionTimeout] for a CPU-bound guest — the load-time guards
- * above are the `ready` defense. A true synchronous-CPU-bound bound needs a Worker-based redesign
- * (a `needs-design` follow-up); it is deliberately not faked here.
+ * **Run-time trap** — any guest error inside the worker (trap, `unreachable`, OOB) surfaces as
+ * [WasmExecutionException], preserving the message.
  *
- * No mutable state, no owned scope — safe to share across loads/invokes on the single JS thread.
+ * Invocations on one [Op] are serialized by a per-op [Mutex] (mirroring [ChicoryWasmRuntime]'s
+ * invoke mutex) so a queued innocent call never has its budget consumed by a predecessor still on
+ * the wire. Workers are never explicitly closed — like the JVM runtime's guest executor they live
+ * for the op's lifetime (the page session).
  *
- * @param config Sandbox configuration (memory cap, execution timeout). The memory cap is enforced;
- *   the timeout is not (see limitation above).
+ * @param config Sandbox configuration (memory cap, execution timeout). Both are enforced.
  */
 public class BrowserWasmRuntime(
     public val config: WasmSandboxConfig = WasmSandboxConfig(),
@@ -59,7 +73,7 @@ public class BrowserWasmRuntime(
         rejectOversizeMemory(bytes)
         val instance = instantiate(module)
         requireWarpAbi(instance)
-        return Op { args -> invoke(instance, args) }
+        return WorkerBackedOp(bytes.toUint8Array(), config)
     }
 
     private fun compileModule(bytes: ByteArray): JsAny =
@@ -109,20 +123,39 @@ public class BrowserWasmRuntime(
             throw WasmLoadException("missing ABI export (warp_alloc/warp_run/memory)")
         }
     }
+}
 
-    /**
-     * Runs one ABI round-trip. The guest call is synchronous on the single JS thread; any thrown JS
-     * error surfaces as [WasmExecutionException]. The [CancellationException] rethrow is defensive —
-     * no suspension occurs inside, but it keeps the catch honest per the no-swallow-cancellation rule.
-     */
-    private fun invoke(instance: JsAny, args: ByteArray): ByteArray =
-        try {
-            wasmRunAbi(instance, args.toUint8Array()).toByteArray()
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Throwable) {
-            throw WasmExecutionException("WASM kernel trapped: ${e.message}", e)
+/**
+ * An [Op] whose guest executes in a dedicated Web Worker so the main thread can pre-empt it
+ * (see [BrowserWasmRuntime]'s execution-timeout KDoc). The worker is spawned lazily on first
+ * invocation and respawned after a timeout kill; [moduleBytes] were already validated by the
+ * load-time guards, so worker-side instantiation cannot fail for a sandbox reason.
+ */
+private class WorkerBackedOp(
+    private val moduleBytes: JsAny,
+    private val config: WasmSandboxConfig,
+) : Op {
+
+    /** Serializes invocations so a queued call's budget measures execution, not queue wait. */
+    private val invokeMutex = Mutex()
+
+    /** The live guest-executor handle, or null before first use / after a timeout kill. */
+    private var executor: JsAny? = null
+
+    override suspend fun invoke(args: ByteArray): ByteArray = invokeMutex.withLock {
+        val handle = executor?.takeIf { !guestExecutorIsDead(it) }
+            ?: guestExecutorCreate(moduleBytes).also { executor = it }
+        val timeoutMs = config.executionTimeout.inWholeMilliseconds.coerceAtLeast(1L).toInt()
+        val outcome = guestExecutorRun(handle, args.toUint8Array(), timeoutMs).await()
+        when (outcomeKind(outcome)) {
+            "ok" -> outcomeResult(outcome).toByteArray()
+            "timeout" -> {
+                executor = null
+                throw WasmExecutionException("WASM execution exceeded ${config.executionTimeout}")
+            }
+            else -> throw WasmExecutionException("WASM kernel trapped: ${outcomeMessage(outcome)}")
         }
+    }
 }
 
 // ── Declared-memory parsing ─────────────────────────────────────────────────────────────────────
@@ -182,7 +215,7 @@ private class WasmByteReader(private val bytes: ByteArray, private var pos: Int)
     }
 }
 
-// ── WebAssembly JS API interop ──────────────────────────────────────────────────────────────────
+// ── WebAssembly JS API interop (load-time guards) ───────────────────────────────────────────────
 
 /** Synchronously compile a WASM module from a Uint8Array. Throws on malformed bytes. */
 @JsFun("(bytes) => new WebAssembly.Module(bytes)")
@@ -204,25 +237,98 @@ private external fun wasmInstantiateModule(module: JsAny): JsAny
 )
 private external fun wasmHasWarpAbi(instance: JsAny): Boolean
 
+// ── Worker guest executor ───────────────────────────────────────────────────────────────────────
+// The guest runs OFF the main thread so a runaway kernel can be pre-empted by worker.terminate().
+// The worker script is inlined via a Blob URL: it instantiates the (already-validated) module and
+// services `run` requests over the warp ABI, posting back {id, ok, result|message}. The main-side
+// handle keeps a pending map keyed by request id; each request races a setTimeout that terminates
+// the worker, marks the handle dead, and resolves {kind:'timeout'}. Outcomes are always RESOLVED
+// (never rejected) as {kind:'ok'|'timeout'|'error'} so Kotlin sees one uniform shape.
+
 /**
- * One ABI round-trip: alloc, write args into linear memory, call `warp_run`, unpack the i64 result
- * pointer/length, and copy the result bytes out. A fresh `Uint8Array` view is taken on each access
- * because `warp_alloc`/`warp_run` may grow (and thus detach) the memory buffer. `.slice()` copies the
- * result region out so the returned view survives any later growth.
+ * Spawns the guest Worker for one op and posts the module bytes for instantiation.
+ * Returns the executor handle `{worker, pending, nextId, dead}`.
  */
 @JsFun(
-    "(instance, argsView) => {" +
-        " const exports = instance.exports;" +
-        " const len = argsView.length;" +
-        " const argPtr = exports.warp_alloc(len);" +
-        " new Uint8Array(exports.memory.buffer).set(argsView, argPtr);" +
-        " const packed = exports.warp_run(argPtr, len);" +
-        " const resPtr = Number(BigInt.asUintN(32, packed >> 32n));" +
-        " const resLen = Number(BigInt.asUintN(32, packed));" +
-        " return new Uint8Array(exports.memory.buffer, resPtr, resLen).slice();" +
-        " }",
+    """(bytes) => {
+        const src =
+            "let instance = null;\n" +
+            "let loadFailure = null;\n" +
+            "onmessage = function (e) {\n" +
+            "  const m = e.data;\n" +
+            "  if (m.kind === 'load') {\n" +
+            "    try { instance = new WebAssembly.Instance(new WebAssembly.Module(m.bytes), {}); }\n" +
+            "    catch (err) { loadFailure = String((err && err.message) || err); }\n" +
+            "    return;\n" +
+            "  }\n" +
+            "  try {\n" +
+            "    if (instance === null) throw new Error('guest instantiation failed: ' + loadFailure);\n" +
+            "    const exports = instance.exports;\n" +
+            "    const args = m.args;\n" +
+            "    const argPtr = exports.warp_alloc(args.length);\n" +
+            "    new Uint8Array(exports.memory.buffer).set(args, argPtr);\n" +
+            "    const packed = exports.warp_run(argPtr, args.length);\n" +
+            "    const resPtr = Number(BigInt.asUintN(32, packed >> 32n));\n" +
+            "    const resLen = Number(BigInt.asUintN(32, packed));\n" +
+            "    const result = new Uint8Array(exports.memory.buffer, resPtr, resLen).slice();\n" +
+            "    postMessage({ id: m.id, ok: true, result: result });\n" +
+            "  } catch (err) {\n" +
+            "    postMessage({ id: m.id, ok: false, message: String((err && err.message) || err) });\n" +
+            "  }\n" +
+            "};\n";
+        const url = URL.createObjectURL(new Blob([src], { type: 'application/javascript' }));
+        const worker = new Worker(url);
+        URL.revokeObjectURL(url);
+        const handle = { worker: worker, pending: new Map(), nextId: 0, dead: false };
+        worker.onmessage = (e) => {
+            const entry = handle.pending.get(e.data.id);
+            if (!entry) return;
+            handle.pending.delete(e.data.id);
+            clearTimeout(entry.timer);
+            entry.resolve(e.data.ok
+                ? { kind: 'ok', result: e.data.result }
+                : { kind: 'error', message: e.data.message });
+        };
+        worker.postMessage({ kind: 'load', bytes: bytes });
+        return handle;
+    }""",
 )
-private external fun wasmRunAbi(instance: JsAny, argsView: JsAny): JsAny
+private external fun guestExecutorCreate(bytes: JsAny): JsAny
+
+/**
+ * Posts one ABI round trip to the guest worker, racing a wall-clock timeout that terminates the
+ * worker (and marks the handle dead) on expiry. Always resolves — never rejects — with
+ * `{kind:'ok', result}` / `{kind:'timeout'}` / `{kind:'error', message}`.
+ */
+@JsFun(
+    """(handle, args, timeoutMs) => new Promise((resolve) => {
+        const id = handle.nextId++;
+        const timer = setTimeout(() => {
+            handle.pending.delete(id);
+            handle.dead = true;
+            handle.worker.terminate();
+            resolve({ kind: 'timeout' });
+        }, timeoutMs);
+        handle.pending.set(id, { resolve: resolve, timer: timer });
+        handle.worker.postMessage({ kind: 'run', id: id, args: args });
+    })""",
+)
+private external fun guestExecutorRun(handle: JsAny, args: JsAny, timeoutMs: Int): Promise<JsAny?>
+
+/** True once the handle's worker has been terminated by a timeout — it must be respawned. */
+@JsFun("(handle) => handle.dead")
+private external fun guestExecutorIsDead(handle: JsAny): Boolean
+
+@JsFun("(outcome) => outcome.kind")
+private external fun outcomeKind(outcome: JsAny?): String
+
+@JsFun("(outcome) => outcome.result")
+private external fun outcomeResult(outcome: JsAny?): JsAny
+
+@JsFun("(outcome) => outcome.message")
+private external fun outcomeMessage(outcome: JsAny?): String
+
+// ── Uint8Array bridging ─────────────────────────────────────────────────────────────────────────
 
 @JsFun("(length) => new Uint8Array(length)")
 private external fun newUint8Array(length: Int): JsAny

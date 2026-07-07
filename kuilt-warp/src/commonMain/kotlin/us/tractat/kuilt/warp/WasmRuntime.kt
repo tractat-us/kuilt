@@ -11,13 +11,22 @@ package us.tractat.kuilt.warp
  * exceeds the runtime's memory ceiling. Malformed bytes are also rejected. All three cases
  * surface as [WasmLoadException].
  *
+ * **Execution-time bound.** A conforming implementation MUST also bound each invocation of a
+ * returned [Op] by the configured execution timeout ([WasmSandboxConfig.executionTimeout]): a
+ * runaway kernel — e.g. an infinite `loop`/`br` spin (a CPU bomb) — is terminated and surfaces
+ * as [WasmExecutionException], never a hung host. The mechanism is per-target (JVM: interpreter
+ * interrupt; native: cooperative interpreter deadline; browser: Web Worker terminate) but the
+ * contract is uniform: kernels arrive from untrusted peers, so an unbounded guest is a
+ * remotely-triggerable denial of service.
+ *
  * @see WasmException
  * @see WasmLoadException
  * @see WasmExecutionException
  */
 public interface WasmRuntime {
     /**
-     * Compile + instantiate [bytes] under the capability sandbox, returning a runnable [Op].
+     * Compile + instantiate [bytes] under the capability sandbox, returning a runnable [Op]
+     * whose invocations are bounded by the configured execution timeout.
      *
      * @throws WasmLoadException if the module declares an import, exceeds the memory ceiling,
      *   or is malformed.
@@ -45,6 +54,7 @@ public class WasmLoadException(message: String, cause: Throwable? = null) : Wasm
 
 /**
  * Thrown by an [Op] returned from [WasmRuntime.load] when the WASM module traps or raises
- * an unhandled exception at runtime.
+ * an unhandled exception at runtime, or exceeds the sandbox's execution-time budget
+ * ([WasmSandboxConfig.executionTimeout]).
  */
 public class WasmExecutionException(message: String, cause: Throwable? = null) : WasmException(message, cause)

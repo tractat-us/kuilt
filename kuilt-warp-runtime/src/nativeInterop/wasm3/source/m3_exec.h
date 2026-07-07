@@ -855,6 +855,17 @@ d_m3Op  (Loop)
         trace_rt->callDepth--;
         d_m3TracePrint("}");
 #endif
+        // WARP PATCH (kuilt): poll the yield hook on every backward branch. Upstream only
+        // polls m3_Yield at function-call entry (op Call), so a pure `loop`/`br` spin with
+        // no calls could never be bounded — the canonical CPU-bomb. Together with the
+        // Call-entry poll this covers every construct that can run unbounded. The strong
+        // m3_Yield (warp_deadline.c) enforces the sandbox's execution deadline.
+        if (r == _pc)
+        {
+            m3ret_t yield_trap = m3_Yield ();
+            if (UNLIKELY (yield_trap)) r = yield_trap;
+        }
+
         // linear memory pointer needs refreshed here because the block it's looping over
         // can potentially invoke the grow operation.
         _mem = memory->mallocated;

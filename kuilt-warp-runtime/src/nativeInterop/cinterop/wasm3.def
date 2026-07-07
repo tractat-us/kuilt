@@ -75,6 +75,15 @@ static inline int warp_module_has_memory(IM3Module mod) {
     return (mod->memoryInfo.initPages > 0 || mod->memoryInfo.maxPages > 0 || mod->memoryImported) ? 1 : 0;
 }
 
+// --- Execution-deadline controls (defined in source/warp_deadline.c) ---------
+// Cooperative wall-clock CPU bound (the CPU-bomb defense): the interpreter polls
+// m3_Yield() at every function-call entry and — via the "WARP PATCH (kuilt)" in
+// m3_exec.h — every loop backward branch; warp_deadline.c's strong m3_Yield traps
+// with "warp execution deadline exceeded" once the armed thread-local deadline
+// passes. Arm before a guest call, clear after; 0/disarmed means no bound.
+extern void warp_set_execution_deadline_ns(uint64_t timeout_ns);
+extern void warp_clear_execution_deadline(void);
+
 // --- warp ABI calls (no void** in Kotlin) ------------------------------------
 // Return NULL on success, an M3Result error string on failure.
 

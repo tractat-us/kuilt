@@ -35,12 +35,14 @@ import wasm3.m3_NewRuntime
 import wasm3.m3_ParseModule
 import wasm3.warp_call_alloc
 import wasm3.warp_call_run
+import wasm3.warp_clear_execution_deadline
 import wasm3.warp_module_has_memory
 import wasm3.warp_module_init_pages
 import wasm3.warp_module_max_pages
 import wasm3.warp_module_memory_imported
 import wasm3.warp_module_num_func_imports
 import wasm3.warp_module_num_global_imports
+import wasm3.warp_set_execution_deadline_ns
 
 /**
  * Kotlin/Native implementation of [WasmRuntime] backed by the wasm3 C interpreter (Apple targets).
@@ -71,21 +73,24 @@ import wasm3.warp_module_num_global_imports
  * *Run-time:* any `M3Result` error from `warp_alloc`/`warp_run`/the result read — a trap,
  * `unreachable`, out-of-bounds access, or a bad packed result — surfaces as [WasmExecutionException].
  *
- * **Execution timeout — NOT enforced on this runtime (known soft spot).** wasm3 exposes no safe
- * cooperative or cross-thread abort surface in its public API, so a CPU-bomb kernel that loops
- * forever inside `warp_run` cannot be bounded here the way [ChicoryWasmRuntime] bounds it (Chicory's
- * interpreter checks `Thread.isInterrupted()` at every call entry / backward branch). Abandoning a
- * runaway worker thread is unsafe on Kotlin/Native (no thread kill), so no fake timeout is wired:
- * [WasmSandboxConfig.executionTimeout] is accepted for API parity but is a no-op here. The hard
- * CPU-bound defense needs a design decision (e.g. a wasm3 fork with an interrupt flag, or an
- * out-of-process executor) — tracked as a `needs-design` follow-up.
+ * **Execution timeout — the CPU-bomb defense.** The vendored wasm3 interpreter is patched (grep
+ * `WARP PATCH` under `src/nativeInterop/wasm3/source/`) to poll its `m3_Yield` hook on every loop
+ * backward branch in addition to upstream's every-function-call-entry poll — the two sites an
+ * unbounded computation must pass through, mirroring where [ChicoryWasmRuntime]'s interpreter
+ * checks `Thread.isInterrupted()`. `warp_deadline.c` supplies the strong `m3_Yield`: a
+ * thread-local wall-clock deadline armed around each ABI round trip
+ * ([WasmSandboxConfig.executionTimeout]) and cleared after, trapping a runaway guest
+ * cooperatively on its own thread — no cross-thread abort, no abandoned worker. The deadline trap
+ * surfaces as [WasmExecutionException] naming the exceeded budget. wasm3 runs a module's `(start)`
+ * function lazily on the first guest call, so a CPU-bomb start section is bounded too.
  *
  * **Thread-safety.** wasm3 is not thread-safe: the shared [environment] is guarded by [loadLock]
  * across [load], and each [Op]'s runtime is guarded by its own lock across an invocation. Both are
- * real [reentrantLock]s, not dispatcher confinement.
+ * real [reentrantLock]s, not dispatcher confinement. The execution deadline is thread-local in the
+ * C shim and armed/cleared inside the [Op]'s lock on the invoking thread, so concurrent runtimes
+ * never see each other's budgets.
  *
- * @param config Sandbox configuration (memory cap; [WasmSandboxConfig.executionTimeout] is a no-op
- *   here — see above).
+ * @param config Sandbox configuration (memory cap, execution timeout).
  */
 public class Wasm3WasmRuntime(
     public val config: WasmSandboxConfig = WasmSandboxConfig(),
@@ -245,7 +250,11 @@ public class Wasm3WasmRuntime(
     }
 
     /**
-     * One ABI round-trip: marshal args into linear memory, run, read the packed result back.
+     * One ABI round-trip: marshal args into linear memory, run, read the packed result back —
+     * all under the armed execution deadline (see the class KDoc). The deadline covers the whole
+     * round trip (`warp_alloc` + `warp_run`, plus any lazily-run `(start)` function), matching
+     * [ChicoryWasmRuntime]'s whole-invocation budget, and is cleared even on a trap so the next
+     * invocation on this thread starts disarmed.
      *
      * The `warp_alloc` return and the packed `warp_run` result are fully guest-controlled `i32`/`i64`
      * words. They are kept as **unsigned** [Long] offsets (`0..0xFFFF_FFFF`) and bounds-validated in
@@ -254,20 +263,36 @@ public class Wasm3WasmRuntime(
      * escape) or hit `ByteArray(negative)` (a raw exception escaping [WasmException]).
      */
     private fun runAbi(runtime: IM3Runtime, allocFn: IM3Function, runFn: IM3Function, args: ByteArray): ByteArray {
-        val argPtr = callAlloc(allocFn, args.size)
-        writeMemory(runtime, argPtr, args)
-        val packed = callRun(runFn, argPtr, args.size.toLong())
-        val resPtr = (packed ushr 32) and 0xFFFF_FFFFL
-        val resLen = packed and 0xFFFF_FFFFL
-        return readMemory(runtime, resPtr, resLen)
+        warp_set_execution_deadline_ns(config.executionTimeout.inWholeNanoseconds.toULong())
+        try {
+            val argPtr = callAlloc(allocFn, args.size)
+            writeMemory(runtime, argPtr, args)
+            val packed = callRun(runFn, argPtr, args.size.toLong())
+            val resPtr = (packed ushr 32) and 0xFFFF_FFFFL
+            val resLen = packed and 0xFFFF_FFFFL
+            return readMemory(runtime, resPtr, resLen)
+        } finally {
+            warp_clear_execution_deadline()
+        }
     }
+
+    /**
+     * Translates a non-null `M3Result` from a guest call into [WasmExecutionException],
+     * distinguishing the sandbox's own deadline trap (see `warp_deadline.c`) from a guest fault.
+     */
+    private fun guestTrap(phase: String, message: String): WasmExecutionException =
+        if (message == DEADLINE_EXCEEDED_TRAP) {
+            WasmExecutionException("WASM execution exceeded ${config.executionTimeout}")
+        } else {
+            WasmExecutionException("$phase trapped: $message")
+        }
 
     /** Calls `warp_alloc(args.size)`, returning the guest pointer as an unsigned [Long]. */
     private fun callAlloc(allocFn: IM3Function, len: Int): Long = memScoped {
         val out = alloc<IntVar>()
         val result = warp_call_alloc(allocFn, len, out.ptr)
         if (result != null) {
-            throw WasmExecutionException("warp_alloc trapped: ${result.toKString()}")
+            throw guestTrap("warp_alloc", result.toKString())
         }
         out.value.toUInt().toLong()
     }
@@ -276,7 +301,7 @@ public class Wasm3WasmRuntime(
         val out = alloc<LongVar>()
         val result = warp_call_run(runFn, ptr.toInt(), len.toInt(), out.ptr)
         if (result != null) {
-            throw WasmExecutionException("warp_run trapped: ${result.toKString()}")
+            throw guestTrap("warp_run", result.toKString())
         }
         out.value
     }
@@ -318,5 +343,11 @@ public class Wasm3WasmRuntime(
     private companion object {
         /** wasm3 operand-stack size (bytes) = 64 KiB. Independent of the linear-memory page cap. */
         private const val RUNTIME_STACK_BYTES: UInt = 65536u
+
+        /**
+         * The exact `M3Result` text the patched interpreter's deadline check traps with — must
+         * match `warp_err_deadline_exceeded` in `warp_deadline.c`.
+         */
+        private const val DEADLINE_EXCEEDED_TRAP: String = "warp execution deadline exceeded"
     }
 }
