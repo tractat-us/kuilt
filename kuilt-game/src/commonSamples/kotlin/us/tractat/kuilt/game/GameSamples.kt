@@ -17,6 +17,7 @@ import kotlinx.serialization.serializer
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
+import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.crdt.Patch
 import us.tractat.kuilt.crdt.Rga
 import us.tractat.kuilt.crdt.ReplicaId
@@ -28,10 +29,12 @@ import us.tractat.kuilt.raft.NodeId
 import us.tractat.kuilt.raft.RaftConfig
 import us.tractat.kuilt.raft.RaftRole
 import us.tractat.kuilt.raft.test.FakeRaftNode
+import us.tractat.kuilt.test.fabric.InMemoryRoomFabric
 import kotlin.random.Random
 import kotlin.test.assertEquals
 import kotlin.time.Clock
 import kotlin.time.Duration.Companion.seconds
+import kotlin.time.Instant
 
 /**
  * Samples for the game facade API used by `@sample` KDoc tags.
@@ -342,4 +345,60 @@ internal fun sampleGameChat() = runTest(StandardTestDispatcher(), timeout = 5.se
 
     alice.close()
     bob.close()
+}
+
+// ── Game-per-room: many games over one connection set ────────────────────────
+
+/**
+ * [gameHostedRoom] / [gameJoinRoom] / [gameNodeRoom] over one session-mux fabric: **two
+ * concurrent games on one server, one connection per client, each game with its own
+ * [ConsensusPlacement]**.
+ *
+ * The server weaves a single `MuxServerLoom` (here via the packaged
+ * [InMemoryRoomFabric][us.tractat.kuilt.test.fabric.InMemoryRoomFabric] double); each game
+ * lives in its own named room. Room `"casual"` is an appoint-the-host game — the server hosts
+ * and the player is promoted to voter. Room `"ranked"` is a server-core game — quorum stays on
+ * the server and the player rides as a learner. Both run at the same time over the same
+ * connection set, structurally isolated: a peer that never sent a frame on a room's channel is
+ * absent from that room's fanout and membership.
+ */
+@Suppress("unused")
+internal fun sampleGameRooms() = runTest(StandardTestDispatcher(), timeout = 10.seconds) {
+    val dispatcher = requireNotNull(coroutineContext[kotlin.coroutines.ContinuationInterceptor])
+    val fabric = InMemoryRoomFabric(backgroundScope, dispatcher, random = Random(0))
+    val clock = { Instant.fromEpochMilliseconds(0) }
+    fun config(seed: Long) = RaftConfig(expectVirtualTime = true, random = Random(seed))
+
+    // Room "casual": appoint-the-host — the server hosts, alice takes a voter seat.
+    val casualHost = async {
+        backgroundScope.gameHostedRoom(
+            fabric.serverLoom, "casual", peerCount = 2,
+            raftConfig = config(1), random = Random(11), clock = clock,
+        )
+    }
+    val casualAlice = async {
+        backgroundScope.gameJoinRoom(
+            fabric.clientLoom(PeerId("alice"), Random(21)), "casual",
+            raftConfig = config(2), random = Random(12), clock = clock,
+        )
+    }
+
+    // Room "ranked": server-core — every voter seat is the server's; bob rides as a learner.
+    val core = setOf(NodeId("server"))
+    val placement = ConsensusPlacement.serverCore(core)
+    backgroundScope.gameNodeRoom(
+        fabric.serverLoom, "ranked", voterIds = core,
+        raftConfig = config(3), random = Random(13), clock = clock, placement = placement,
+    )
+    val rankedBob = backgroundScope.gameNodeRoom(
+        fabric.clientLoom(PeerId("bob"), Random(22)), "ranked", voterIds = core,
+        raftConfig = config(4), random = Random(14), clock = clock, placement = placement,
+    )
+
+    // Both games converge independently — same TurnSequencer code, different authority.
+    val casualMove = TurnSequencer(casualAlice.await().node, Int.serializer()).propose(1)
+    val rankedMove = TurnSequencer(rankedBob.node, Int.serializer()).propose(2)
+    assertEquals(1, casualMove.action)
+    assertEquals(2, rankedMove.action)
+    casualHost.await().close()
 }
