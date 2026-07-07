@@ -138,10 +138,12 @@ internal class LeadershipTransferMachine(
     /**
      * The leader is stepping down while a transfer is in flight, having observed a higher term from [from]
      * (null when the step-down carries no originating peer — e.g. a same-term CheckQuorum step-down). The
-     * transfer completes successfully **only** when the higher term came from the transfer target — that is
-     * the sole evidence the target won its election. Any other step-down (a higher term from an unrelated
-     * node, CheckQuorum, RemovedFromConfig) means the target did **not** win — fail the transfer. No-op when
-     * no transfer is in flight.
+     * transfer completes successfully **only** when the higher term came from the transfer target — a
+     * **best-effort** confirmation: a higher term observed *from* the target strongly (but not conclusively,
+     * on a degraded/partitioned network — the message may be an echo, or arrive at the target's RequestVote
+     * before its win) indicates the target became leader. The conclusive signal — a leader-authored message
+     * from the target — is tracked by #1243. Any other step-down (a higher term from an unrelated node,
+     * CheckQuorum, RemovedFromConfig) fails the transfer. No-op when no transfer is in flight.
      */
     fun onLeadershipRelinquished(reason: StepDownReason, from: NodeId?) {
         val current = inFlight ?: return
