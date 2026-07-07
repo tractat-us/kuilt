@@ -77,6 +77,28 @@ class OtlpEncodingTest {
     }
 
     @Test
+    fun exponentialHistogramEncodesBucketsScaleAndTemporality() {
+        val p = MetricPoint.ExponentialHistogram(
+            key = MetricKey("lat", MetricKind.EXPONENTIAL_HISTOGRAM),
+            scale = 5, count = 4L, zeroCount = 1L, zeroThreshold = 0.001,
+            positiveOffset = -1, positiveBucketCounts = listOf(1L, 0L, 2L),
+            negativeOffset = 0, negativeBucketCounts = emptyList(),
+            startEpochNanos = 0L, timeEpochNanos = 5L,
+        )
+        val s = json.encodeToString(MetricsRequest.serializer(), metricsRequestOf(setOf(p)))
+        assertTrue(s.contains("\"exponentialHistogram\""), s)
+        assertTrue(s.contains("\"scale\":5"), s)
+        assertTrue(s.contains("\"count\":\"4\""), s) // uint64 as string, like asInt
+        assertTrue(s.contains("\"zeroCount\":\"1\""), s)
+        assertTrue(s.contains("\"zeroThreshold\":0.001"), s)
+        assertTrue(s.contains("\"offset\":-1"), s)
+        assertTrue(s.contains("\"bucketCounts\":[\"1\",\"0\",\"2\"]"), s)
+        // Absent temporality reads as UNSPECIFIED and the histogram is dropped — must be on the wire.
+        assertTrue(s.contains("\"aggregationTemporality\":2"), s)
+        assertTrue(!s.contains("\"negative\""), s) // a sign with no buckets is omitted
+    }
+
+    @Test
     fun gaugeAndCardinalityEncode() {
         val g = MetricPoint.Gauge(MetricKey("cpu", MetricKind.GAUGE), value = 0.5, timeEpochNanos = 5L)
         val gs = json.encodeToString(MetricsRequest.serializer(), metricsRequestOf(setOf(g)))

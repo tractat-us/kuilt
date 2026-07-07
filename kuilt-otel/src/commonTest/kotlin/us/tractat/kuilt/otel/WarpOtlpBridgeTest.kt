@@ -164,6 +164,7 @@ class WarpOtlpBridgeTest {
         t.metrics.incrementSumDouble(MetricKey("ds", MetricKind.SUM), by = 1.5)
         t.metrics.setGauge(MetricKey("g", MetricKind.GAUGE), value = 0.5, timestamp = 1L)
         t.metrics.addCardinality(MetricKey("c", MetricKind.CARDINALITY), element = "u1")
+        t.metrics.recordHistogram(MetricKey("h", MetricKind.EXPONENTIAL_HISTOGRAM), value = 12.5)
         val edge = FakeEdge()
 
         bridge(t).drain(edge)
@@ -172,5 +173,23 @@ class WarpOtlpBridgeTest {
         assertEquals(1, edge.sentMetrics.filterIsInstance<MetricPoint.DoubleSum>().size)
         assertEquals(1, edge.sentMetrics.filterIsInstance<MetricPoint.Gauge>().size)
         assertEquals(1, edge.sentMetrics.filterIsInstance<MetricPoint.Cardinality>().size)
+        assertEquals(1, edge.sentMetrics.filterIsInstance<MetricPoint.ExponentialHistogram>().size)
+    }
+
+    @Test
+    fun advancedHistogramReSendsExactlyOnce() = runTest {
+        val t = telemetry()
+        val key = MetricKey("lat", MetricKind.EXPONENTIAL_HISTOGRAM)
+        t.metrics.recordHistogram(key, 10.0)
+        val edge = FakeEdge()
+        val b = bridge(t)
+
+        b.drain(edge)                       // sends count=1
+        b.drain(edge)                       // unchanged sketch → nothing
+        t.metrics.recordHistogram(key, 20.0)
+        b.drain(edge)                       // sends count=2
+
+        val sent = edge.sentMetrics.filterIsInstance<MetricPoint.ExponentialHistogram>()
+        assertEquals(listOf(1L, 2L), sent.map { it.count })
     }
 }

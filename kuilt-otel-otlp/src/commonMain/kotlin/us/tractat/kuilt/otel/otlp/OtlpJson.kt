@@ -84,6 +84,7 @@ internal data class OtlpMetric(
     val name: String,
     val sum: OtlpSum? = null,
     val gauge: OtlpGauge? = null,
+    val exponentialHistogram: OtlpExponentialHistogram? = null,
 )
 
 @Serializable
@@ -110,6 +111,37 @@ internal data class NumberDataPoint(
     val timeUnixNano: String,
     val asInt: String? = null,
     val asDouble: Double? = null,
+)
+
+@Serializable
+internal data class OtlpExponentialHistogram(
+    val dataPoints: List<OtlpExponentialHistogramDataPoint>,
+    // Always on the wire for the same reason as OtlpSum's temporality: an absent enum
+    // reads as UNSPECIFIED (0) and the histogram is dropped/mis-aggregated. kuilt's
+    // DDSketch store is grow-only, so every emitted histogram is CUMULATIVE.
+    @EncodeDefault(EncodeDefault.Mode.ALWAYS)
+    val aggregationTemporality: Int = AGGREGATION_TEMPORALITY_CUMULATIVE,
+)
+
+// count/zeroCount are proto uint64 → strings in OTLP/JSON (same convention as
+// NumberDataPoint.asInt); scale/offset are sint32 → plain numbers.
+@Serializable
+internal data class OtlpExponentialHistogramDataPoint(
+    val attributes: List<KeyValue> = emptyList(),
+    val startTimeUnixNano: String? = null,
+    val timeUnixNano: String,
+    val count: String,
+    val scale: Int,
+    val zeroCount: String,
+    val positive: OtlpExponentialHistogramBuckets? = null,
+    val negative: OtlpExponentialHistogramBuckets? = null,
+    val zeroThreshold: Double,
+)
+
+@Serializable
+internal data class OtlpExponentialHistogramBuckets(
+    val offset: Int,
+    val bucketCounts: List<String>,
 )
 
 /** OTLP `AGGREGATION_TEMPORALITY_CUMULATIVE`. */

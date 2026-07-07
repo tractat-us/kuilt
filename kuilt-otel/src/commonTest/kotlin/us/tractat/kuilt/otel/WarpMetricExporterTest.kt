@@ -362,4 +362,94 @@ class WarpMetricExporterTest {
         exporter.mergeSumDouble(key, remote)
         assertEquals(4.0, exporter.doubleSumValue(key))
     }
+
+    // ---- Exponential histogram metrics (DDSketch — mergeable quantile sketch) ----
+
+    private fun histKey(name: String) = MetricKey(name, MetricKind.EXPONENTIAL_HISTOGRAM)
+
+    @Test
+    fun histogramRecordReturnsSuccess() = runTest {
+        val exporter = exporterFor()
+        assertEquals(MetricExportResult.Success, exporter.recordHistogram(histKey("latency"), 12.5))
+    }
+
+    @Test
+    fun histogramQuantileWithinRelativeAccuracy() = runTest {
+        val exporter = exporterFor()
+        val key = histKey("latency")
+        (1..100).forEach { exporter.recordHistogram(key, it.toDouble()) }
+        val alpha = alphaForOtlpScale(DEFAULT_OTLP_HISTOGRAM_SCALE)
+        val p50 = exporter.histogramQuantile(key, 0.5)!!
+        assertTrue(kotlin.math.abs(p50 - 50.0) <= alpha * 50.0, "p50 $p50 must be within α=$alpha of 50")
+    }
+
+    @Test
+    fun histogramQuantileNullBeforeFirstRecord() = runTest {
+        assertEquals(null, exporterFor().histogramQuantile(histKey("never.recorded"), 0.5))
+    }
+
+    @Test
+    fun histogramMergeConvergesTwoReplicas() = runTest {
+        val exporterA = exporterFor(replica = replicaA)
+        val exporterB = exporterFor(replica = replicaB)
+        val key = histKey("cross.device.latency")
+        (1..50).forEach { exporterA.recordHistogram(key, it * 2.0) }        // evens
+        (1..50).forEach { exporterB.recordHistogram(key, it * 2.0 - 1.0) } // odds
+
+        exporterA.mergeHistogram(key, exporterB.histogramSnapshot(key))
+        exporterB.mergeHistogram(key, exporterA.histogramSnapshot(key))
+
+        assertEquals(exporterA.histogramSnapshot(key), exporterB.histogramSnapshot(key))
+        assertEquals(100L, exporterA.histogramSnapshot(key).count)
+    }
+
+    @Test
+    fun histogramMergeIsIdempotent() = runTest {
+        val exporterA = exporterFor(replica = replicaA)
+        val exporterB = exporterFor(replica = replicaB)
+        val key = histKey("dedup")
+        exporterB.recordHistogram(key, 7.0)
+        val remote = exporterB.histogramSnapshot(key)
+
+        exporterA.mergeHistogram(key, remote)
+        val after1 = exporterA.histogramSnapshot(key)
+        exporterA.mergeHistogram(key, remote)
+        val after2 = exporterA.histogramSnapshot(key)
+
+        assertEquals(after1, after2)
+        assertEquals(1L, after2.count)
+    }
+
+    @Test
+    fun histogramRecoveryRestoresState() = runTest {
+        val store = InMemoryDurableStore()
+        val exporter1 = exporterFor(store = store)
+        val key = histKey("recovered.latency")
+        exporter1.recordHistogram(key, 42.0)
+
+        val exporter2 = exporterFor(store = store)
+        exporter2.recover()
+        assertEquals(exporter1.histogramSnapshot(key), exporter2.histogramSnapshot(key))
+    }
+
+    @Test
+    fun histogramRejectsNonOtlpAlignedPrototype() {
+        // α = 0.01 has no integer OTLP scale — the exporter must fail fast, not at drain.
+        kotlin.test.assertFailsWith<IllegalArgumentException> {
+            WarpMetricExporter(
+                replica = replicaA,
+                store = InMemoryDurableStore(),
+                histogramPrototype = us.tractat.kuilt.crdt.DDSketch.empty(relativeAccuracy = 0.01),
+            )
+        }
+    }
+
+    @Test
+    fun histogramMergeRejectsNonOtlpAlignedRemote() = runTest {
+        val exporter = exporterFor()
+        val misaligned = us.tractat.kuilt.crdt.DDSketch.empty(relativeAccuracy = 0.01)
+        kotlin.test.assertFailsWith<IllegalArgumentException> {
+            exporter.mergeHistogram(histKey("x"), misaligned)
+        }
+    }
 }

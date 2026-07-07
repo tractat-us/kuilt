@@ -1,6 +1,7 @@
 package us.tractat.kuilt.otel
 
 import kotlinx.coroutines.test.runTest
+import us.tractat.kuilt.crdt.DDSketch
 import us.tractat.kuilt.crdt.GCounter
 import us.tractat.kuilt.crdt.GCounterDouble
 import us.tractat.kuilt.crdt.ReplicaId
@@ -45,16 +46,29 @@ class MetricCatalogTest {
     }
 
     @Test
+    fun pieceMergesHistograms() {
+        val hk = MetricKey("lat", MetricKind.EXPONENTIAL_HISTOGRAM)
+        val proto = DDSketch.empty(relativeAccuracy = alphaForOtlpScale(DEFAULT_OTLP_HISTOGRAM_SCALE))
+        val mine = proto.piece(proto.add(a, 5.0).delta)
+        val theirs = proto.piece(proto.add(b, 50.0).delta)
+        val merged = MetricCatalog(histograms = mapOf(hk to mine))
+            .piece(MetricCatalog(histograms = mapOf(hk to theirs)))
+        assertEquals(2L, merged.histograms.getValue(hk).count)
+    }
+
+    @Test
     fun snapshotAllReflectsEveryStore() = runTest {
         val exporter = WarpMetricExporter(replica = a, store = InMemoryDurableStore())
         exporter.incrementSum(MetricKey("req", MetricKind.SUM), by = 4L)
         exporter.incrementSumDouble(MetricKey("cpu", MetricKind.SUM), by = 2.5)
         exporter.setGauge(MetricKey("temp", MetricKind.GAUGE), 21.0, timestamp = 1L)
         exporter.addCardinality(MetricKey("users", MetricKind.CARDINALITY), "u1")
+        exporter.recordHistogram(MetricKey("lat", MetricKind.EXPONENTIAL_HISTOGRAM), 8.0)
         val cat = exporter.snapshotAll()
         assertEquals(4L, cat.sums.getValue(MetricKey("req", MetricKind.SUM)).value)
         assertEquals(2.5, cat.doubleSums.getValue(MetricKey("cpu", MetricKind.SUM)).value)
         assertEquals(21.0, cat.gauges.getValue(MetricKey("temp", MetricKind.GAUGE)).value)
         assertEquals(1L, cat.cardinalities.getValue(MetricKey("users", MetricKind.CARDINALITY)).estimate())
+        assertEquals(1L, cat.histograms.getValue(MetricKey("lat", MetricKind.EXPONENTIAL_HISTOGRAM)).count)
     }
 }

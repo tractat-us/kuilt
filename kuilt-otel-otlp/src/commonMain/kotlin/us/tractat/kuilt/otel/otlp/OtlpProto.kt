@@ -5,6 +5,7 @@ package us.tractat.kuilt.otel.otlp
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.protobuf.ProtoIntegerType
 import kotlinx.serialization.protobuf.ProtoNumber
+import kotlinx.serialization.protobuf.ProtoPacked
 import kotlinx.serialization.protobuf.ProtoType
 
 // OTLP/protobuf request envelopes — the encode-side subset kuilt emits, mirroring the
@@ -124,9 +125,10 @@ internal data class ProtoScopeMetrics(
 @Serializable
 internal data class ProtoMetric(
     @ProtoNumber(1) val name: String,
-    // oneof data { Gauge gauge = 5; Sum sum = 7; }
+    // oneof data { Gauge gauge = 5; Sum sum = 7; ExponentialHistogram exponential_histogram = 10; }
     @ProtoNumber(7) val sum: ProtoSum? = null,
     @ProtoNumber(5) val gauge: ProtoGauge? = null,
+    @ProtoNumber(10) val exponentialHistogram: ProtoExponentialHistogram? = null,
 )
 
 @Serializable
@@ -152,4 +154,34 @@ internal data class ProtoNumberDataPoint(
     // oneof value { double as_double = 4; sfixed64 as_int = 6; }
     @ProtoNumber(4) val asDouble: Double? = null,
     @ProtoNumber(6) @ProtoType(ProtoIntegerType.FIXED) val asInt: Long? = null,
+)
+
+@Serializable
+internal data class ProtoExponentialHistogram(
+    @ProtoNumber(1) val dataPoints: List<ProtoExponentialHistogramDataPoint>,
+    // Always on the wire (no default → always encoded); see ProtoSum.
+    @ProtoNumber(2) val aggregationTemporality: Int,
+)
+
+// Fields declared in field-number order so the emitted bytes are in canonical ascending
+// order (kotlinx-protobuf encodes in declaration order); pinned by the golden vector in
+// OtlpProtoEncodingTest. scale/offset are `sint32` (zigzag → SIGNED), count/zero_count
+// are `fixed64`, bucket_counts is packed `uint64` — exactly the OTLP proto3 declarations.
+@Serializable
+internal data class ProtoExponentialHistogramDataPoint(
+    @ProtoNumber(1) val attributes: List<ProtoKeyValue> = emptyList(),
+    @ProtoNumber(2) @ProtoType(ProtoIntegerType.FIXED) val startTimeUnixNano: Long? = null,
+    @ProtoNumber(3) @ProtoType(ProtoIntegerType.FIXED) val timeUnixNano: Long,
+    @ProtoNumber(4) @ProtoType(ProtoIntegerType.FIXED) val count: Long,
+    @ProtoNumber(6) @ProtoType(ProtoIntegerType.SIGNED) val scale: Int,
+    @ProtoNumber(7) @ProtoType(ProtoIntegerType.FIXED) val zeroCount: Long,
+    @ProtoNumber(8) val positive: ProtoExponentialHistogramBuckets? = null,
+    @ProtoNumber(9) val negative: ProtoExponentialHistogramBuckets? = null,
+    @ProtoNumber(14) val zeroThreshold: Double,
+)
+
+@Serializable
+internal data class ProtoExponentialHistogramBuckets(
+    @ProtoNumber(1) @ProtoType(ProtoIntegerType.SIGNED) val offset: Int,
+    @ProtoNumber(2) @ProtoPacked val bucketCounts: List<Long> = emptyList(),
 )

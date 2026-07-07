@@ -146,6 +146,13 @@ internal suspend fun sampleWarpMetricExporter() {
     exporter.addCardinality(users, "user-abc")
     exporter.addCardinality(users, "user-abc") // idempotent — no double-count
     check(exporter.cardinalityEstimate(users) > 0L)
+
+    // Exponential histogram: record latencies — any quantile within ~1% relative accuracy.
+    // Exports as an OTLP ExponentialHistogramDataPoint (see alphaForOtlpScale).
+    val latency = MetricKey("request.latency.ms", MetricKind.EXPONENTIAL_HISTOGRAM)
+    exporter.recordHistogram(latency, 12.5)
+    exporter.recordHistogram(latency, 480.0)
+    check(exporter.histogramQuantile(latency, 0.5) != null)
 }
 
 /** @suppress — sample only */

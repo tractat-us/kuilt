@@ -9,9 +9,10 @@ package us.tractat.kuilt.otel
  * re-render of an unchanged series produces the same hash and is skipped by
  * [MetricDigest] — while a value that advanced re-sends exactly once.
  *
- * The four variants mirror the four kinds a [MetricCatalog] holds: a long cumulative
+ * The five variants mirror the five kinds a [MetricCatalog] holds: a long cumulative
  * sum ([Sum]), a double-precision cumulative sum ([DoubleSum]), a last-writer-wins
- * gauge ([Gauge]), and a distinct-count estimate ([Cardinality]).
+ * gauge ([Gauge]), a distinct-count estimate ([Cardinality]), and a quantile sketch
+ * ([ExponentialHistogram]).
  */
 public sealed interface MetricPoint {
     /** The series this point belongs to. */
@@ -72,5 +73,44 @@ public sealed interface MetricPoint {
         public val timeEpochNanos: Long,
     ) : MetricPoint {
         override fun valueHash(): Long = estimate
+    }
+
+    /**
+     * A quantile sketch rendered as an OTLP `ExponentialHistogramDataPoint`
+     * (cumulative temporality — the backing [us.tractat.kuilt.crdt.DDSketch] is
+     * grow-only).
+     *
+     * Bucket layout is OTLP's: bucket `j` of a sign's array counts values whose
+     * magnitude is in `(base^(offset+j), base^(offset+j+1)]` with
+     * `base = 2^(2^−scale)`. `sum`/`min`/`max` are not carried — a DDSketch does not
+     * track them, and they are optional in OTLP.
+     */
+    public data class ExponentialHistogram(
+        override val key: MetricKey,
+        public val scale: Int,
+        public val count: Long,
+        public val zeroCount: Long,
+        public val zeroThreshold: Double,
+        public val positiveOffset: Int,
+        public val positiveBucketCounts: List<Long>,
+        public val negativeOffset: Int,
+        public val negativeBucketCounts: List<Long>,
+        public val startEpochNanos: Long,
+        public val timeEpochNanos: Long,
+    ) : MetricPoint {
+        // Fold every OTLP value field (not the observation time): any recorded value
+        // moves a bucket count (or zeroCount) and therefore the hash.
+        override fun valueHash(): Long {
+            var h = count
+            h = 31 * h + zeroCount
+            h = 31 * h + scale
+            h = 31 * h + positiveOffset
+            h = 31 * h + negativeOffset
+            h = 31 * h + positiveBucketCounts.size
+            positiveBucketCounts.forEach { h = 31 * h + it }
+            h = 31 * h + negativeBucketCounts.size
+            negativeBucketCounts.forEach { h = 31 * h + it }
+            return h
+        }
     }
 }

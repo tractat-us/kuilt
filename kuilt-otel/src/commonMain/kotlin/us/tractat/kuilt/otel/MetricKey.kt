@@ -56,4 +56,15 @@ public enum class MetricKind {
      * deduplicated.
      */
     CARDINALITY,
+
+    /**
+     * A distribution of measurements answering quantile queries (e.g. p50/p99 latency).
+     *
+     * Backed by a [us.tractat.kuilt.crdt.DDSketch]. Every quantile estimate is
+     * within the sketch's relative accuracy α; the merge is lossless, so two
+     * replicas' sketches combine into exactly the sketch of the combined stream.
+     * Exports as an OTLP `ExponentialHistogramDataPoint` — the sketch's α must be
+     * OTLP-aligned via [alphaForOtlpScale] (the exporter enforces this).
+     */
+    EXPONENTIAL_HISTOGRAM,
 }

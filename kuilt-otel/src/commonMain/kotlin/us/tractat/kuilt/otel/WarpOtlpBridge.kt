@@ -142,4 +142,7 @@ internal fun renderMetricPoints(catalog: MetricCatalog, nowEpochNanos: Long): Li
     catalog.cardinalities.forEach { (key, hll) ->
         add(MetricPoint.Cardinality(key, hll.estimate(), timeEpochNanos = nowEpochNanos))
     }
+    catalog.histograms.forEach { (key, sketch) ->
+        add(sketch.toExponentialHistogramPoint(key, startEpochNanos = 0L, timeEpochNanos = nowEpochNanos))
+    }
 }

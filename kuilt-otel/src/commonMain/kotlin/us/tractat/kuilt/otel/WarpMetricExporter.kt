@@ -9,6 +9,7 @@ import kotlinx.serialization.builtins.MapSerializer
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.cbor.Cbor
 import us.tractat.kuilt.core.runCatchingCancellable
+import us.tractat.kuilt.crdt.DDSketch
 import us.tractat.kuilt.crdt.GCounter
 import us.tractat.kuilt.crdt.GCounterDouble
 import us.tractat.kuilt.crdt.HyperLogLog
@@ -37,6 +38,15 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.otel.WarpMetricExpor
  *   counts (~0.81% relative error at default precision `p=14`). The join is
  *   element-wise max of register arrays: two replicas that independently added
  *   overlapping sets produce the same merged estimate — no double-counting.
+ *
+ * - **Exponential histogram** — a [DDSketch] per [MetricKey]. Answers quantile
+ *   queries ("p99 latency?") within a relative accuracy α; the join is lossless,
+ *   so merged replicas equal the sketch of the combined stream. Exports as an OTLP
+ *   `ExponentialHistogramDataPoint`, which requires α to align with an integer OTLP
+ *   scale — configure via [alphaForOtlpScale] (the default [histogramPrototype] is
+ *   scale-[DEFAULT_OTLP_HISTOGRAM_SCALE]-aligned, α ≈ 1.08%). Like [HyperLogLog]
+ *   precision, the sketch configuration is a cluster-wide constant: sketches merge
+ *   only when it matches exactly.
  *
  * ## Key inversion
  *
@@ -67,14 +77,19 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.otel.WarpMetricExpor
  * - **Cardinality bound.** HyperLogLog precision is fixed at `p=14` (~0.81% error,
  *   12 KB per series). Very small cardinalities (< ~5 distinct elements) have higher
  *   relative error; the linear-counting correction reduces but does not eliminate this.
- * - **Histogram deferred.** Histogram metrics are not implemented here; they require
- *   a merge-able approximate quantile structure (DDSketch / t-digest). Filed as a
- *   follow-up: see [issue #798](https://github.com/tractat-us/kuilt/issues/798).
+ * - **Histogram α is OTLP-gated.** Only OTLP-aligned sketch accuracies are accepted
+ *   ([alphaForOtlpScale]); a free-form α has no integer OTLP scale, and re-bucketing
+ *   would break the accuracy guarantee, so ingestion rejects it up front rather than
+ *   letting an OTLP drain fail later.
  *
  * @param replica Stable unique identity for this device/process (use a UUID).
  * @param store Durable persistence backend. [InMemoryDurableStore] in tests.
  * @param maxMetrics Maximum number of distinct [MetricKey]s across all kinds.
  * @param bufferPolicy Eviction strategy when [maxMetrics] is exceeded.
+ * @param histogramPrototype The empty [DDSketch] every new histogram series starts
+ *   from — its `(relativeAccuracy, minIndexedValue, maxIndexedValue)` is the
+ *   cluster-wide histogram configuration. Must be empty and OTLP-aligned; defaults to
+ *   scale [DEFAULT_OTLP_HISTOGRAM_SCALE] (α ≈ 1.08%) over the DDSketch default range.
  *
  * @sample us.tractat.kuilt.otel.sampleWarpMetricExporter
  */
@@ -83,8 +98,18 @@ public class WarpMetricExporter(
     private val store: DurableStore,
     private val maxMetrics: Int = DEFAULT_MAX_METRICS,
     private val bufferPolicy: MetricBufferPolicy = MetricBufferPolicy.DROP_OLDEST,
+    private val histogramPrototype: DDSketch =
+        DDSketch.empty(relativeAccuracy = alphaForOtlpScale(DEFAULT_OTLP_HISTOGRAM_SCALE)),
 ) {
-    // The lock guards all three CRDT maps. No suspend calls are made inside the locked
+    init {
+        require(histogramPrototype.count == 0L) {
+            "histogramPrototype must be an empty sketch, had count ${histogramPrototype.count}"
+        }
+        // Fail fast on a non-OTLP-aligned accuracy (throws IllegalArgumentException).
+        otlpScaleFor(histogramPrototype.relativeAccuracy)
+    }
+
+    // The lock guards all five CRDT maps. No suspend calls are made inside the locked
     // section — CBOR encode/decode and CRDT mutations are pure (non-suspending).
     // An explicit reentrantLock is the repo policy; limitedParallelism(1) is banned.
     private val lock = reentrantLock()
@@ -96,12 +121,14 @@ public class WarpMetricExporter(
     private val sumsDouble: LinkedHashMap<MetricKey, GCounterDouble> = LinkedHashMap()
     private val gauges: LinkedHashMap<MetricKey, LWWRegister<Double>> = LinkedHashMap()
     private val cardinalities: LinkedHashMap<MetricKey, HyperLogLog> = LinkedHashMap()
+    private val histograms: LinkedHashMap<MetricKey, DDSketch> = LinkedHashMap()
 
     private companion object {
         private val SUM_STORE_KEY = StoreKey("otel.metrics.sums")
         private val SUM_DOUBLE_STORE_KEY = StoreKey("otel.metrics.sums.double")
         private val GAUGE_STORE_KEY = StoreKey("otel.metrics.gauges")
         private val CARDINALITY_STORE_KEY = StoreKey("otel.metrics.cardinalities")
+        private val HISTOGRAM_STORE_KEY = StoreKey("otel.metrics.histograms")
 
         private val cbor = Cbor { alwaysUseByteString = true }
 
@@ -110,11 +137,13 @@ public class WarpMetricExporter(
         private val gcounterDoubleSerializer = GCounterDouble.serializer()
         private val lwwSerializer = LWWRegister.serializer(Double.serializer())
         private val hllSerializer = HyperLogLog.serializer()
+        private val ddSketchSerializer = DDSketch.serializer()
 
         private val sumsSerializer = MapSerializer(metricKeySerializer, gcounterSerializer)
         private val sumsDoubleSerializer = MapSerializer(metricKeySerializer, gcounterDoubleSerializer)
         private val gaugesSerializer = MapSerializer(metricKeySerializer, lwwSerializer)
         private val cardinalitiesSerializer = MapSerializer(metricKeySerializer, hllSerializer)
+        private val histogramsSerializer = MapSerializer(metricKeySerializer, ddSketchSerializer)
     }
 
     // ── Recovery ───────────────────────────────────────────────────────────────
@@ -132,6 +161,18 @@ public class WarpMetricExporter(
         recoverSumsDouble()
         recoverGauges()
         recoverCardinalities()
+        recoverHistograms()
+    }
+
+    private suspend fun recoverHistograms() {
+        val bytes = store.read(HISTOGRAM_STORE_KEY) ?: return
+        val recovered = runCatchingCancellable<Map<MetricKey, DDSketch>> {
+            cbor.decodeFromByteArray(histogramsSerializer, bytes)
+        }.getOrNull() ?: run {
+            logger.warn { "otel.metrics.histograms: corrupt store entry, starting fresh" }
+            return
+        }
+        lock.withLock { recovered.forEach { (k, v) -> histograms[k] = v } }
     }
 
     private suspend fun recoverSumsDouble() {
@@ -370,13 +411,70 @@ public class WarpMetricExporter(
         cardinalities[key] ?: HyperLogLog.empty()
     }
 
+    // ── Exponential histogram (DDSketch) ──────────────────────────────────────
+
+    /**
+     * Record one measurement [value] into the histogram for [key]. A new series starts
+     * from [histogramPrototype], so every series shares the cluster-wide configuration.
+     * Returns [MetricExportResult.Success] after the durable write.
+     *
+     * **No double-count under merge-retry.** The per-bucket counts are per-replica
+     * [GCounter] slots, so re-merging the same remote snapshot never inflates them.
+     * Sequential [recordHistogram] calls each *do* count — the correct cumulative
+     * distribution semantics.
+     *
+     * @throws IllegalArgumentException if [value] is NaN or infinite.
+     */
+    public suspend fun recordHistogram(key: MetricKey, value: Double): MetricExportResult {
+        val encoded = lock.withLock {
+            maybeEvictForNewKey(key, histograms)
+            val current = histograms.getOrPut(key) { histogramPrototype }
+            histograms[key] = current.piece(current.add(replica, value).delta)
+            encodeHistograms()
+        }
+        return persistHistograms(encoded, key)
+    }
+
+    /**
+     * Merge a remote [DDSketch] snapshot into this exporter's histogram for [key].
+     *
+     * Idempotent and lossless: the merged sketch equals the sketch of the combined
+     * measurement stream. Returns [MetricExportResult.Success] after the durable write.
+     *
+     * @throws IllegalArgumentException if [remote]'s relative accuracy is not
+     *   OTLP-aligned (see [alphaForOtlpScale]), or if [key] already holds a sketch
+     *   with a different configuration (DDSketch configs must match exactly to merge).
+     */
+    public suspend fun mergeHistogram(key: MetricKey, remote: DDSketch): MetricExportResult {
+        otlpScaleFor(remote.relativeAccuracy) // reject non-OTLP-aligned sketches up front
+        val encoded = lock.withLock {
+            val current = histograms[key]
+            histograms[key] = current?.piece(remote) ?: remote
+            encodeHistograms()
+        }
+        return persistHistograms(encoded, key)
+    }
+
+    /**
+     * Estimate the [q]-quantile (`q` in `[0, 1]`) of all values recorded for [key],
+     * within the sketch's relative accuracy — or `null` if the series holds no values.
+     */
+    public fun histogramQuantile(key: MetricKey, q: Double): Double? = lock.withLock {
+        histograms[key]?.takeIf { it.count > 0L }?.quantile(q)
+    }
+
+    /** Return a snapshot of the [DDSketch] for [key] (for gossip/anti-entropy). */
+    public fun histogramSnapshot(key: MetricKey): DDSketch = lock.withLock {
+        histograms[key] ?: histogramPrototype
+    }
+
     // ── Diagnostics ───────────────────────────────────────────────────────────
 
     /** Total number of distinct [MetricKey]s tracked across all kinds. */
     public fun metricCount(): Int = lock.withLock { totalCount() }
 
     /**
-     * A converged snapshot of **every** metric series across all four kinds, as one
+     * A converged snapshot of **every** metric series across all five kinds, as one
      * replicable [MetricCatalog]. The metric analogue of the log buffer's `snapshot()`;
      * the tap host offers this value to a joining puller.
      */
@@ -386,6 +484,7 @@ public class WarpMetricExporter(
             doubleSums = sumsDouble.toMap(),
             gauges = gauges.toMap(),
             cardinalities = cardinalities.toMap(),
+            histograms = histograms.toMap(),
         )
     }
 
@@ -403,6 +502,9 @@ public class WarpMetricExporter(
     private fun encodeCardinalities(): ByteArray =
         cbor.encodeToByteArray(cardinalitiesSerializer, cardinalities)
 
+    private fun encodeHistograms(): ByteArray =
+        cbor.encodeToByteArray(histogramsSerializer, histograms)
+
     // ── Persistence (called outside lock) ────────────────────────────────────
 
     private suspend fun persistSums(encoded: ByteArray, key: MetricKey): MetricExportResult =
@@ -416,6 +518,9 @@ public class WarpMetricExporter(
 
     private suspend fun persistCardinalities(encoded: ByteArray, key: MetricKey): MetricExportResult =
         persist(CARDINALITY_STORE_KEY, encoded, key)
+
+    private suspend fun persistHistograms(encoded: ByteArray, key: MetricKey): MetricExportResult =
+        persist(HISTOGRAM_STORE_KEY, encoded, key)
 
     private suspend fun persist(storeKey: StoreKey, encoded: ByteArray, metricKey: MetricKey): MetricExportResult =
         runCatchingCancellable { store.write(storeKey, encoded) }
@@ -444,7 +549,8 @@ public class WarpMetricExporter(
         evictOne()
     }
 
-    private fun totalCount(): Int = sums.size + sumsDouble.size + gauges.size + cardinalities.size
+    private fun totalCount(): Int =
+        sums.size + sumsDouble.size + gauges.size + cardinalities.size + histograms.size
 
     private fun evictOne() {
         val victim = when (bufferPolicy) {
@@ -456,17 +562,20 @@ public class WarpMetricExporter(
         sumsDouble.remove(victim)
         gauges.remove(victim)
         cardinalities.remove(victim)
+        histograms.remove(victim)
     }
 
     /**
      * The eviction victim under DROP_OLDEST: the first key of the first non-empty map in
-     * fixed map order (sums → sumsDouble → gauges → cardinalities). NOT a true cross-map
-     * insertion-oldest — insertion time is not comparable across the four LinkedHashMaps.
+     * fixed map order (sums → sumsDouble → gauges → cardinalities → histograms). NOT a
+     * true cross-map insertion-oldest — insertion time is not comparable across the five
+     * LinkedHashMaps.
      */
     private fun pickDropOldestVictim(): MetricKey? =
         listOfNotNull(
             sums.keys.firstOrNull(), sumsDouble.keys.firstOrNull(),
             gauges.keys.firstOrNull(), cardinalities.keys.firstOrNull(),
+            histograms.keys.firstOrNull(),
         ).firstOrNull()
 
     /**
@@ -477,6 +586,7 @@ public class WarpMetricExporter(
         listOfNotNull(
             sums.keys.lastOrNull(), sumsDouble.keys.lastOrNull(),
             gauges.keys.lastOrNull(), cardinalities.keys.lastOrNull(),
+            histograms.keys.lastOrNull(),
         ).lastOrNull()
 
     private fun logEviction(victim: MetricKey) {
