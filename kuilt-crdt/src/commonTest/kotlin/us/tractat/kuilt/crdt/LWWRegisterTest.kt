@@ -5,6 +5,7 @@ import kotlinx.serialization.json.Json
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
+import us.tractat.kuilt.test.assertAll
 
 class LWWRegisterTest {
 
@@ -42,6 +43,34 @@ class LWWRegisterTest {
     fun mergeIsIdempotent() {
         val r = LWWRegister.empty<String>().set(a, 10L, "x")
         assertEquals(r, r.piece(r))
+    }
+
+    @Test
+    fun unsetClearsTheValue() {
+        assertNull(LWWRegister.empty<String>().set(a, 10L, "x").unset(a, 20L).value)
+    }
+
+    @Test
+    fun unsetVsConcurrentSet_laterTagWins() {
+        val base = LWWRegister.empty<String>().set(a, 10L, "x")
+        val removed = base.unset(a, 20L)
+        val rewritten = base.set(b, 30L, "y")
+        assertAll(
+            { assertEquals("y", removed.piece(rewritten).value) },
+            { assertEquals("y", rewritten.piece(removed).value) },
+            { assertNull(rewritten.unset(a, 40L).piece(removed).value) },
+        )
+    }
+
+    @Test
+    fun unsetVsSetSameTimestamp_tieBreaksOnReplicaId() {
+        val base = LWWRegister.empty<String>().set(a, 10L, "x")
+        val removedByB = base.unset(b, 20L) // B > A lexicographically
+        val setByA = base.set(a, 20L, "y")
+        assertAll(
+            { assertNull(removedByB.piece(setByA).value) },
+            { assertNull(setByA.piece(removedByB).value) },
+        )
     }
 
     @Test
