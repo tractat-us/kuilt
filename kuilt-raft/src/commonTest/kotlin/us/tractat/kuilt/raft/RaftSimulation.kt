@@ -204,6 +204,29 @@ class RaftSimulation(
     }
 
     /**
+     * Encode and inject a [RaftMessage.AppendEntries] directly into [to]'s incoming channel, bypassing
+     * the normal partition/drop rules. Models a higher-term leader's heartbeat reaching a peer: a
+     * higher-[term] AppendEntries from [from] deposes the recipient (if it is a leader) and makes it
+     * recognise [from] as the new leader. Defaults describe an empty heartbeat at the log origin.
+     */
+    @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
+    suspend fun deliverAppendEntries(
+        to: NodeId,
+        from: NodeId,
+        term: Long,
+        prevLogIndex: Long = 0L,
+        prevLogTerm: Long = 0L,
+        entries: List<LogEntry> = emptyList(),
+        leaderCommit: Long = 0L,
+        round: Long = 0L,
+    ) {
+        val bytes = Cbor.encodeToByteArray<RaftMessage>(
+            RaftMessage.AppendEntries(term, from, prevLogIndex, prevLogTerm, entries, leaderCommit, round)
+        )
+        network.deliver(from = from, to = to, bytes = bytes)
+    }
+
+    /**
      * Encode and inject a single-chunk (`offset = 0`, [done]) [RaftMessage.InstallSnapshot] directly
      * into [to]'s incoming channel, bypassing the normal partition/drop rules. Models a delayed /
      * duplicate or behind-commit snapshot arriving at a caught-up follower — the safety regressions

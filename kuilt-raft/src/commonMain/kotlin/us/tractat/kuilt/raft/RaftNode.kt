@@ -313,8 +313,12 @@ public interface RaftNode {
     }
 
     /**
-     * Initiates a graceful leadership transfer to [target] per Raft §3.10, and suspends until
-     * the transfer either completes (target wins an election) or fails.
+     * Initiates a graceful leadership transfer to [target] per Raft §3.10, and suspends until the
+     * transfer is **confirmed as likely succeeded** or fails. It returns normally when the old leader
+     * steps down to a higher term observed *from* [target] — best-effort evidence the target won.
+     * Failure means the transfer **could not be confirmed**: on a degraded/partitioned network the
+     * target may still have won (as was already true for the auto-timeout path). The conclusive signal
+     * — a leader-authored message from [target] — that would make this exact is tracked by #1243.
      *
      * **Protocol**:
      * 1. The leader stops accepting new [propose] and [changeMembership] calls (they receive
