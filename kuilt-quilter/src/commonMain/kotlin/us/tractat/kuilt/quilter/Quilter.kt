@@ -642,7 +642,18 @@ public class Quilter<S : Quilted<S>>(
         recomputeDeliveredLocal()
         sendAck(to = ackTarget, originalSender = senderReplica, seq = seq)
         drainPendingInbound(senderReplica, ackTarget)
-        cancelResendRetry(senderReplica)
+        // Cancel the Resend retry only when the gap has fully closed — the
+        // [QuilterConfig.resendRetryInterval] contract. After a *partial* drain (the drain
+        // stopped at a still-missing seq with later deltas still buffered) the retry must
+        // stay armed for the remaining range: in a low-traffic system it is the only
+        // mechanism that heals a gap whose retransmission was itself dropped.
+        val remaining = pendingInbound[senderReplica]
+        if (remaining == null) {
+            cancelResendRetry(senderReplica)
+        } else {
+            val stillExpected = expectedReceiveSeq[senderReplica] ?: 1L
+            scheduleResendRetry(ackTarget, senderReplica, stillExpected, remaining.keys.max())
+        }
     }
 
     private fun drainPendingInbound(senderReplica: ReplicaId, ackTarget: PeerId) {
