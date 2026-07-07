@@ -169,6 +169,78 @@ class GossipDisseminationTest {
         }
 
     @Test
+    fun deliversSameOriginRelayedFramesInSendOrder() =
+        runTest {
+            val (base, seam) = gossipSeam(members(12), seed = 8)
+            seam.start(backgroundScope)
+            settle()
+
+            val received = mutableListOf<Swatch>()
+            backgroundScope.launch { seam.incoming.toList(received) }
+            runCurrent()
+
+            // Two relay paths race: the origin's seq 2 arrives first (fast relay),
+            // seq 1 second (slow relay). Seam.incoming promises frames "in send
+            // order", and GossipSeam re-stamps sender = origin — so the collector
+            // must observe the origin's frames in the origin's send order.
+            val fastRelay = seam.activePeers.value.first()
+            val slowRelay = seam.activePeers.value.last()
+            val origin = PeerId("origin-x")
+            base.deliver(fastRelay, GossipFrame.origin(origin, seq = 2, ttl = 5, byteArrayOf(2)).encode())
+            base.deliver(slowRelay, GossipFrame.origin(origin, seq = 1, ttl = 5, byteArrayOf(1)).encode())
+            runCurrent()
+
+            assertAll(
+                { assertEquals(2, received.size, "both frames are delivered") },
+                {
+                    assertEquals(
+                        listOf(1L, 2L),
+                        received.map { it.sequence },
+                        "same-origin broadcasts surface in the origin's send order",
+                    )
+                },
+                {
+                    assertEquals(
+                        listOf<Byte>(1, 2),
+                        received.map { it.toByteArray().single() },
+                        "payloads surface in the origin's send order",
+                    )
+                },
+            )
+        }
+
+    @Test
+    fun heldOutOfOrderFrameIsStillRelayedImmediately() =
+        runTest {
+            val (base, seam) = gossipSeam(members(12), seed = 9)
+            seam.start(backgroundScope)
+            settle()
+
+            val received = mutableListOf<Swatch>()
+            backgroundScope.launch { seam.incoming.toList(received) }
+            runCurrent()
+
+            // seq 2 arrives ahead of seq 1: local delivery must wait for seq 1,
+            // but the relay must not — holding the flood would add a full gap-fill
+            // latency per hop and break the O(k) dissemination path.
+            val sender = seam.activePeers.value.first()
+            val origin = PeerId("origin-x")
+            base.deliver(sender, GossipFrame.origin(origin, seq = 2, ttl = 5, byteArrayOf(2)).encode())
+            runCurrent()
+
+            assertAll(
+                { assertEquals(0, received.size, "delivery of the out-of-order frame is held for the gap") },
+                {
+                    assertEquals(
+                        seam.activePeers.value - sender,
+                        base.relaySends().map { it.first }.toSet(),
+                        "the held frame is still re-flooded immediately",
+                    )
+                },
+            )
+        }
+
+    @Test
     fun reorderStormDeliversEachPayloadOnceAndStaysBounded() =
         runTest {
             val (base, seam) = gossipSeam(members(12), seed = 7)
