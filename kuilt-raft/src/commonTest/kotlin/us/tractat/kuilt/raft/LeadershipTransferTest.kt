@@ -99,27 +99,38 @@ internal class LeadershipTransferTest {
         sim.deliverAppendEntries(to = leaderId, from = unrelatedId, term = leaderTerm + 1)
         sim.settle()   // process the injected message at this instant (no time advance → no re-election yet)
 
-        val result = transferOutcome.await()
+        // Frozen instant: the old leader stepped down recognising the UNRELATED node, the target never
+        // became leader — and the transfer must NOT have completed successfully. (It stays pending: only
+        // a leader-authored message from the TARGET can complete it, #1243; here none can ever arrive.)
+        val prematureSuccess = transferOutcome.isCompleted && transferOutcome.getCompleted().isSuccess
         assertAll(
             {
-                assertTrue(
-                    result.isFailure,
-                    "transfer must FAIL when an unrelated node deposes the leader — the target did not win",
+                assertFalse(
+                    prematureSuccess,
+                    "transfer must not report SUCCESS when an unrelated node deposes the leader — the target did not win",
                 )
             },
-            {
-                assertTrue(
-                    result.exceptionOrNull() is LeadershipTransferException,
-                    "expected LeadershipTransferException, got ${result.exceptionOrNull()}",
-                )
-            },
-            // The old leader stepped down recognising the UNRELATED node, and the target never became leader.
             { assertEquals(RaftRole.Follower, sim.nodes.getValue(leaderId).role.value) },
             { assertEquals(unrelatedId, sim.nodes.getValue(leaderId).leader.value) },
             {
                 assertTrue(
                     sim.nodes.getValue(targetId).role.value != RaftRole.Leader,
                     "the transfer target must not have become leader",
+                )
+            },
+        )
+
+        // Resolve the pending transfer deterministically (rather than waiting out the auto-timeout while
+        // the leaderless cluster evolves) and confirm it FAILS.
+        sim.nodes.getValue(leaderId).cancelTransfer()
+        sim.awaitTrue("transfer resolves") { transferOutcome.isCompleted }
+        val result = transferOutcome.await()
+        assertAll(
+            { assertTrue(result.isFailure, "transfer must FAIL — the target never won") },
+            {
+                assertTrue(
+                    result.exceptionOrNull() is LeadershipTransferException,
+                    "expected LeadershipTransferException, got ${result.exceptionOrNull()}",
                 )
             },
         )
