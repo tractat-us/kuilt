@@ -56,26 +56,36 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.warp.WarpNode")
  * board.
  *
  * **Coordinated-path execution guarantee.** The [CoordinationKind.Coordinated] path
- * achieves exactly-once execution in the common case (stable leader) and under the tested
- * roster-churn scenarios. Two narrow timing windows remain and are tracked in #879:
- * - **Transient dual-leader window:** a deposed-but-unaware leader and the new leader can
- *   both see `role == Leader` concurrently. [coordinatedApplied] is per-node so it does not
- *   dedup cross-node; duplicate executions in this window are absorbed by the [Results] LWW
- *   ORMap backstop (dup-*result* = 0; dup-*execution* > 0 is possible).
- * - **Mid-election liveness gap:** if every node is `Candidate`/`Follower` when a committed
- *   entry fires, no node executes it. There is no re-drive path (`committed` is replay=0);
- *   the task strands until re-proposed. See #879 for candidate fixes.
- *
- * The mechanisms that achieve exactly-once in the common case:
+ * achieves exactly-once execution under stable leadership, leadership failover, and the
+ * tested roster-churn scenarios. The mechanisms:
+ * - Coordinated tasks **bypass the intent register** entirely (#873): consensus — the Raft
+ *   log plus the leader-side gates below — is the sole arbiter of who executes, so the
+ *   intent path's ad-hoc lowest-PeerId election never runs for them (and can no longer
+ *   leak per-task intent entries).
  * - Each ring owner *proposes* the task to [raftNode] with a stable `requestId` (derived
  *   from [TaskId]) — preventing the same node from double-proposing after a retry.
  * - Execution is *driven from the committed log*, not from the `propose()` return. The
- *   background [onCoordinatedCommit] listener fires on every committed entry; **only the
- *   current Raft leader** invokes [coordinatedExecutor], so at most one peer executes any
- *   committed entry at any given Raft instant (outside the dual-leader window above).
- * - A local [coordinatedApplied] set deduplicates if two proposals for the same task both
- *   committed (possible under warp-roster churn when two ring owners each proposed before
- *   the first entry's removal propagated). The leader skips the second entry.
+ *   background [onCoordinatedCommit] listener fires on every committed entry; only the
+ *   current Raft leader proceeds, and it must first pass the **quorum fence** — a
+ *   [RaftNode.readIndex] round confirming it still holds a voter quorum at its current
+ *   term. A deposed-but-unaware leader cannot pass the fence (any quorum it could
+ *   assemble intersects the majority that elected its successor at a higher term), so
+ *   the transient dual-leader window (#879 a) closes at the execution decision point.
+ * - A committed entry consumed while *no* node held leadership (mid-election — every node
+ *   skips it on the role check, and `committed` is replay=0) is **re-driven**: on acquiring
+ *   leadership a node re-proposes every coordinated-queue task it has not executed and
+ *   that has no replicated result, giving the stranded task a fresh committed entry to
+ *   fire from (#879 b).
+ * - A local [coordinatedApplied] set plus the replicated coordinated-queue membership and
+ *   [Results]-board gates deduplicate when two entries for the same task both committed
+ *   (ring churn double-propose, or a re-drive racing the original entry).
+ *
+ * The residual window is execution *duration*: a leader that passes the fence and is
+ * deposed while [coordinatedExecutor] is still running cannot be distinguished from a
+ * crashed one, so the next leader's re-drive may run the task again (at-least-once in
+ * that narrow case). Duplicate *results* are absorbed by the [Results] LWW ORMap backstop
+ * and counted in [duplicates]; a non-idempotent executor should be tolerant of a rerun
+ * that follows its own mid-flight interruption.
  *
  * **Roster source.** [WarpNode] drives the consistent-hash ring from [rosterFlow] — a
  * [Flow] of the live peer set. Two pluggable sources are provided:
@@ -145,19 +155,21 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.warp.WarpNode")
  *   slices C4/C5 will service it via lazy-fetch; see [TaskDescriptor]).
  * @param coordinatedExecutor Suspending function for [CoordinationKind.Coordinated] tasks.
  *   Invoked **from the committed-log listener** ([onCoordinatedCommit]) on the current Raft
- *   leader, not inline after `propose()`. This achieves exactly-once execution in the common
- *   case: at most one leader fires this function per committed log entry, and
- *   [coordinatedApplied] prevents re-invocation if two proposals for the same task both
- *   committed (the expected churn scenario). Two residual timing windows may still cause
- *   duplicate execution or task stranding in rare cases — see #879. Defaults to an explicit
- *   error so a caller who provides a [raftNode] but forgets to supply an executor surfaces
- *   the omission immediately rather than silently doing nothing.
+ *   leader, not inline after `propose()` — and only after the leader passes the
+ *   [RaftNode.readIndex] quorum fence, so a deposed-but-unaware leader never fires it.
+ *   [coordinatedApplied] plus the replicated queue/results gates prevent re-invocation when
+ *   two entries for the same task both committed (churn double-propose or a re-drive racing
+ *   the original entry). The one residual window is a leader deposed while this function is
+ *   *mid-flight* — the next leader's re-drive may then run the task again; see the
+ *   class-level guarantee note. Defaults to an explicit error so a caller who provides a
+ *   [raftNode] but forgets to supply an executor surfaces the omission immediately rather
+ *   than silently doing nothing.
  * @param raftNode [RaftNode] backing the [CoordinationKind.Coordinated] execution path.
  *   When supplied, the ring owner proposes the task to this Raft cluster for total-order
  *   delivery. Execution then fires from [raftNode.committed] on the Raft leader's [WarpNode],
- *   achieving exactly-once semantics in the common case under leadership failover and
- *   warp-roster churn. Residual timing windows are tracked in #879; the [Results] LWW
- *   ORMap backstop absorbs duplicate results from the dual-leader window.
+ *   fenced by [RaftNode.readIndex] and backstopped by leadership-acquisition re-drive of
+ *   stranded queue entries — exactly-once under leadership failover and warp-roster churn
+ *   (see the class-level guarantee note for the one mid-execution-deposition residual).
  *
  *   **Required for coordinated tasks.** If `null`, calling [enqueue] with
  *   [CoordinationKind.Coordinated] throws [IllegalStateException] immediately — fail-loud,
@@ -323,15 +335,17 @@ public class WarpNode(
     private val inFlight = mutableSetOf<TaskId>()
 
     /**
-     * Task IDs for which [coordinatedExecutor] has been invoked via [onCoordinatedCommit].
+     * Task IDs for which [coordinatedExecutor] has been invoked via [onCoordinatedCommit]
+     * (or the leadership-acquisition re-drive's re-proposal thereof).
      *
      * Guarded by [lock]. Prevents double-execution when the same task's command commits
      * more than once — possible under warp-roster churn when two ring owners each proposed
-     * the same task and both entries appeared in the Raft log.
+     * the same task, or when a re-drive's re-proposal races the original entry.
      *
-     * Only the current Raft leader calls [coordinatedExecutor] (checked in
+     * Only the quorum-fenced Raft leader calls [coordinatedExecutor] (checked in
      * [onCoordinatedCommit]), so this set is the local safety net for the same leader
-     * seeing two committed entries for the same [TaskId].
+     * seeing two committed entries for the same [TaskId]. Cross-node dedup rides the
+     * replicated coordinated-queue removal and [Results]-board gates.
      */
     private val coordinatedApplied = mutableSetOf<TaskId>()
 
@@ -465,11 +479,17 @@ public class WarpNode(
             .onEach { pendingSet -> claimOwned(pendingSet.elements, CoordinationKind.Coordinated) }
             .launchIn(scope)
 
-        // Drive coordinated execution from the committed Raft log — exactly-once in the common
-        // case under churn. Only the Raft leader executes; [coordinatedApplied] prevents double-execution on
-        // the same node if two proposals for the same task both committed.
+        // Drive coordinated execution from the committed Raft log. Only the quorum-fenced
+        // Raft leader executes; [coordinatedApplied] and the replicated queue/results gates
+        // prevent double-execution if two entries for the same task both committed.
         raftNode?.committed
             ?.onEach { committed -> onCoordinatedCommit(committed) }
+            ?.launchIn(scope)
+
+        // Re-drive coordinated tasks stranded by a commit that fired while no node held
+        // leadership (#879 window b) whenever this node acquires leadership.
+        raftNode?.role
+            ?.onEach { role -> if (role is RaftRole.Leader) redriveStrandedCoordinated() }
             ?.launchIn(scope)
     }
 
@@ -721,6 +741,15 @@ public class WarpNode(
     }
 
     private fun claimOwned(taskIds: Collection<TaskId>, kind: CoordinationKind) {
+        // Coordinated tasks bypass the intent register entirely (#873): "claiming" one only
+        // *proposes* it to Raft, and consensus — the log plus the leader-side commit gates —
+        // is the sole arbiter of who executes. Routing them through the intent path's ad-hoc
+        // lowest-PeerId election was redundant with that arbitration and leaked one
+        // never-tombstoned intent-map entry per coordinated task.
+        if (kind is CoordinationKind.Coordinated) {
+            claimOwnedRing(taskIds, kind)
+            return
+        }
         when (val s = strategy) {
             is ClaimStrategy.Ring -> claimOwnedRing(taskIds, kind)
             is ClaimStrategy.RingWithIntent -> claimOwnedWithIntent(taskIds, s, kind)
@@ -852,11 +881,9 @@ public class WarpNode(
      *
      * [CoordinationKind.Coordinated] only *proposes* to [raftNode] — it does **not**
      * invoke [coordinatedExecutor] here. Execution happens asynchronously in
-     * [onCoordinatedCommit] when the committed log entry is observed by the Raft leader.
-     * This is the mechanism that achieves exactly-once execution in the common case under
-     * warp-roster churn: at most one leader exists at any Raft instant, so at most one
-     * [WarpNode] fires [coordinatedExecutor] per committed entry (outside the dual-leader
-     * window; see #879).
+     * [onCoordinatedCommit] when the committed log entry is observed by the Raft leader,
+     * behind the [RaftNode.readIndex] quorum fence — so exactly one quorum-confirmed
+     * leader fires [coordinatedExecutor] per committed entry.
      */
     private suspend fun doExecute(taskId: TaskId, kind: CoordinationKind) {
         when (kind) {
@@ -1028,28 +1055,51 @@ public class WarpNode(
      * Called for each [Committed] event emitted by [raftNode]. Executes a coordinated task
      * exactly once across the cluster per committed entry.
      *
-     * **Exactly-once in the common case:**
-     * - Only the current Raft leader executes. At most one [WarpNode] holds the leader role
-     *   at any given Raft instant, so at most one peer enters the execution branch — except
-     *   during a transient dual-leader window (see #879 window a).
-     * - [coordinatedApplied] prevents re-execution if two proposals for the same [TaskId]
-     *   both committed (possible under warp-roster churn when the original ring owner and
-     *   its successor each proposed the task before the first removal propagated).
+     * **The execution gates, in order:**
+     * - Only a node that believes it is the current Raft leader proceeds (cheap pre-filter;
+     *   a follower/candidate never executes — an entry stranded by that filter firing on
+     *   every node mid-election is recovered by [redriveStrandedCoordinated]).
+     * - The **quorum fence** (#879 window a): [RaftNode.readIndex] confirms this node still
+     *   holds a voter quorum at its current term before anything runs. A deposed-but-unaware
+     *   leader cannot pass it — any quorum it could assemble intersects the majority that
+     *   elected its successor at a higher term, and that intersection rejects the stale-term
+     *   round — so it fails with [us.tractat.kuilt.raft.NotLeaderException] /
+     *   [us.tractat.kuilt.raft.LeadershipLostException] and stands down without executing.
+     * - [coordinatedApplied] plus queue-membership and [Results]-board checks (under [lock])
+     *   prevent re-execution when two entries for the same [TaskId] committed — warp-roster
+     *   churn double-propose, or a re-drive re-proposal racing the original entry.
      * - [Committed.Install] (snapshot installs) are ignored — coordinated tasks are not part
      *   of the persistent Raft state machine.
      */
     private fun onCoordinatedCommit(committed: Committed) {
         val entry = (committed as? Committed.Entry)?.entry ?: return
-        if (raftNode?.role?.value !is RaftRole.Leader) return
+        val raft = raftNode ?: return
+        if (raft.role.value !is RaftRole.Leader) return
 
         val taskId = runCatchingCancellable { TaskId(entry.command.decodeToString()) }.getOrNull() ?: return
 
-        val shouldExecute = lock.withLock {
-            taskId in coordQueueQuilter.state.value.elements && coordinatedApplied.add(taskId)
+        // Quick gate before paying for a quorum round: skip entries whose task has already
+        // been executed here or is no longer queued. Re-checked under the lock after the fence.
+        val worthFencing = lock.withLock {
+            taskId in coordQueueQuilter.state.value.elements && taskId !in coordinatedApplied
         }
-        if (!shouldExecute) return
+        if (!worthFencing) return
 
         scope.launch {
+            val fence = runCatchingCancellable { raft.readIndex() }
+            if (fence.isFailure) {
+                logger.debug {
+                    "WarpNode($selfId): quorum fence failed for $taskId — deposed; standing down " +
+                        "(${fence.exceptionOrNull()?.message})"
+                }
+                return@launch
+            }
+            val shouldExecute = lock.withLock {
+                taskId in coordQueueQuilter.state.value.elements &&
+                    resultsQuilter.state.value[taskId] == null &&
+                    coordinatedApplied.add(taskId)
+            }
+            if (!shouldExecute) return@launch
             runCatchingCancellable {
                 val result = coordinatedExecutor(taskId).encodeToByteArray()
                 recordResult(taskId, result)
@@ -1058,6 +1108,46 @@ public class WarpNode(
             }.onFailure { e ->
                 logger.warn(e) { "WarpNode($selfId): coordinatedExecutor failed for $taskId — resetting" }
                 lock.withLock { coordinatedApplied.remove(taskId) }
+            }
+        }
+    }
+
+    /**
+     * Re-drives coordinated tasks stranded by a commit that fired while no node held
+     * leadership (#879 window b). Launched on every transition of [raftNode]'s role into
+     * [RaftRole.Leader].
+     *
+     * [RaftNode.committed] is replay=0: an entry whose commit every node consumed as a
+     * `Follower`/`Candidate` (mid-election) is skipped by every [onCoordinatedCommit] role
+     * check and never re-fires. On acquiring leadership this node therefore **re-proposes**
+     * every task still in the replicated coordinated queue that it has not executed and that
+     * has no replicated result — giving the stranded task a fresh committed entry to fire
+     * from. Execution stays solely in [onCoordinatedCommit]: the re-proposal flows through
+     * the same fence and dedup gates, which keep the task exactly-once when the original
+     * entry also committed (the gates skip whichever entry fires second).
+     *
+     * Fenced by [RaftNode.readIndex] like execution itself: a node that lost leadership
+     * between the role emission and the scan stands down; the fence on a fresh leader also
+     * waits for its current-term no-op to commit, so the scan runs against a settled view.
+     * A re-propose failure (e.g. leadership lost mid-re-drive) is logged and dropped — the
+     * next leader's re-drive picks the task up again.
+     */
+    private fun redriveStrandedCoordinated() {
+        val raft = raftNode ?: return
+        scope.launch {
+            val fence = runCatchingCancellable { raft.readIndex() }
+            if (fence.isFailure) return@launch
+            val stranded = lock.withLock {
+                coordQueueQuilter.state.value.elements.filter { taskId ->
+                    taskId !in coordinatedApplied && resultsQuilter.state.value[taskId] == null
+                }
+            }
+            stranded.forEach { taskId ->
+                logger.info { "WarpNode($selfId): re-driving stranded coordinated task $taskId" }
+                runCatchingCancellable { executeViaRaft(taskId) }
+                    .onFailure { e ->
+                        logger.debug { "WarpNode($selfId): re-drive propose failed for $taskId: ${e.message}" }
+                    }
             }
         }
     }
@@ -1126,6 +1216,10 @@ public class WarpNode(
                 }
                 CoordinationKind.Coordinated -> {
                     coordQueueQuilter.apply(Patch(coordQueueQuilter.state.value.remove(taskId)))
+                    // Coordinated tasks no longer write intent entries (#873), but reclaim any
+                    // stray entry a peer running a pre-#873 build may have replicated to us —
+                    // a no-op delta when the key is absent.
+                    intentQuilter.apply(Patch(intentQuilter.state.value.remove(taskId)))
                 }
             }
         }
