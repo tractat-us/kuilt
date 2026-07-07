@@ -586,7 +586,7 @@ internal class RaftEngine(
             return
         }
         if (m.term > state.currentTerm) stepDown(m.term, StepDownReason.HigherTermObserved)
-        val logOk = isLogUpToDate(state.lastLogTerm, state.lastLogIndex, m.lastLogIndex, m.lastLogTerm)
+        val logOk = isLogUpToDate(ours = state.lastLogPosition, candidate = m.lastLogPosition)
         val grant = m.term == state.currentTerm && logOk && (state.votedFor == null || state.votedFor == m.candidateId)
         if (grant) {
             persistVote(m.candidateId)
@@ -618,7 +618,7 @@ internal class RaftEngine(
      * Does NOT mutate term, votedFor, or timers — pre-vote is hypothesis-only.
      */
     private suspend fun onPreVote(from: NodeId, m: RaftMessage.PreVote) {
-        val logOk = isLogUpToDate(state.lastLogTerm, state.lastLogIndex, m.lastLogIndex, m.lastLogTerm)
+        val logOk = isLogUpToDate(ours = state.lastLogPosition, candidate = m.lastLogPosition)
         val grant = m.term > state.currentTerm && logOk && !leaderAlive
         if (grant) {
             emitTrace(RaftTraceEvent.PreVoteGranted(nextClock(), transport.selfId, from, m.term))

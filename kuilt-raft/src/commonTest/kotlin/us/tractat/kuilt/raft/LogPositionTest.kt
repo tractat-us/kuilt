@@ -1,8 +1,8 @@
 package us.tractat.kuilt.raft
 
 import us.tractat.kuilt.raft.internal.LogPosition
+import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
-import kotlin.test.assertAll
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 

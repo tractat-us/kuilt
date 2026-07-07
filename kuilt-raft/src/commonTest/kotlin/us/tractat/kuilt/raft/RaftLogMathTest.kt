@@ -1,5 +1,6 @@
 package us.tractat.kuilt.raft
 
+import us.tractat.kuilt.raft.internal.LogPosition
 import us.tractat.kuilt.raft.internal.RaftMessage
 import us.tractat.kuilt.raft.internal.isLogUpToDate
 import us.tractat.kuilt.raft.internal.majorityCommitIndex
@@ -14,39 +15,41 @@ class RaftLogMathTest {
 
     // ── isLogUpToDate ─────────────────────────────────────────────────────────
 
+    private fun at(term: Long, index: Long) = LogPosition(term = term, index = index)
+
     @Test
     fun isLogUpToDate_emptyOurLog_emptyCandidate_granted() {
-        assertTrue(isLogUpToDate(ourLastTerm = 0L, ourLastIndex = 0L, candidateLastIndex = 0L, candidateLastTerm = 0L))
+        assertTrue(isLogUpToDate(ours = at(term = 0L, index = 0L), candidate = at(term = 0L, index = 0L)))
     }
 
     @Test
     fun isLogUpToDate_emptyOurLog_candidateHasEntries_granted() {
-        assertTrue(isLogUpToDate(ourLastTerm = 0L, ourLastIndex = 0L, candidateLastIndex = 5L, candidateLastTerm = 3L))
+        assertTrue(isLogUpToDate(ours = at(term = 0L, index = 0L), candidate = at(term = 3L, index = 5L)))
     }
 
     @Test
     fun isLogUpToDate_candidateHigherTerm_granted() {
-        assertTrue(isLogUpToDate(ourLastTerm = 2L, ourLastIndex = 10L, candidateLastIndex = 1L, candidateLastTerm = 3L))
+        assertTrue(isLogUpToDate(ours = at(term = 2L, index = 10L), candidate = at(term = 3L, index = 1L)))
     }
 
     @Test
     fun isLogUpToDate_candidateLowerTerm_denied() {
-        assertFalse(isLogUpToDate(ourLastTerm = 3L, ourLastIndex = 10L, candidateLastIndex = 99L, candidateLastTerm = 2L))
+        assertFalse(isLogUpToDate(ours = at(term = 3L, index = 10L), candidate = at(term = 2L, index = 99L)))
     }
 
     @Test
     fun isLogUpToDate_sameTerm_equalIndex_granted() {
-        assertTrue(isLogUpToDate(ourLastTerm = 3L, ourLastIndex = 5L, candidateLastIndex = 5L, candidateLastTerm = 3L))
+        assertTrue(isLogUpToDate(ours = at(term = 3L, index = 5L), candidate = at(term = 3L, index = 5L)))
     }
 
     @Test
     fun isLogUpToDate_sameTerm_longerCandidateLog_granted() {
-        assertTrue(isLogUpToDate(ourLastTerm = 3L, ourLastIndex = 5L, candidateLastIndex = 6L, candidateLastTerm = 3L))
+        assertTrue(isLogUpToDate(ours = at(term = 3L, index = 5L), candidate = at(term = 3L, index = 6L)))
     }
 
     @Test
     fun isLogUpToDate_sameTerm_shorterCandidateLog_denied() {
-        assertFalse(isLogUpToDate(ourLastTerm = 3L, ourLastIndex = 5L, candidateLastIndex = 4L, candidateLastTerm = 3L))
+        assertFalse(isLogUpToDate(ours = at(term = 3L, index = 5L), candidate = at(term = 3L, index = 4L)))
     }
 
     // §5.4.1 across a compaction boundary (issue #1245): the voter's last is snapshot-aware
@@ -54,12 +57,12 @@ class RaftLogMathTest {
     @Test
     fun isLogUpToDate_compactedVoter_staleCandidateBelowSnapshot_denied() {
         // Voter compacted through (term=3, index=100); candidate's log ends at index 50 in the same term.
-        assertFalse(isLogUpToDate(ourLastTerm = 3L, ourLastIndex = 100L, candidateLastIndex = 50L, candidateLastTerm = 3L))
+        assertFalse(isLogUpToDate(ours = at(term = 3L, index = 100L), candidate = at(term = 3L, index = 50L)))
     }
 
     @Test
     fun isLogUpToDate_compactedVoter_candidateAtSnapshot_granted() {
-        assertTrue(isLogUpToDate(ourLastTerm = 3L, ourLastIndex = 100L, candidateLastIndex = 100L, candidateLastTerm = 3L))
+        assertTrue(isLogUpToDate(ours = at(term = 3L, index = 100L), candidate = at(term = 3L, index = 100L)))
     }
 
     // ── nextIndexAfterFailure ─────────────────────────────────────────────────

@@ -10,33 +10,47 @@ import us.tractat.kuilt.raft.LogEntry
  */
 
 /**
+ * The position of a log's last entry, ordered by the §5.4.1 "up-to-date" relation:
+ * higher [term] wins; equal terms compare by [index].
+ *
+ * This is a value type on purpose (issue #1254): the previous `isLogUpToDate(ourLastTerm,
+ * ourLastIndex, candidateLastIndex, candidateLastTerm)` signature ordered the two sides
+ * oppositely (inherited from the wire-message field order), so transposing two bare `Long`s
+ * at a call site compiled silently — in the vote-restriction path, an election-safety hazard.
+ * With [LogPosition] each side is constructed once, next to its source fields
+ * (`RaftState.lastLogPosition`, `RequestVote.lastLogPosition`, `PreVote.lastLogPosition`),
+ * and a term/index swap is a compile error.
+ */
+internal data class LogPosition(
+    val term: Long,
+    val index: Long,
+) : Comparable<LogPosition> {
+    override fun compareTo(other: LogPosition): Int =
+        compareValuesBy(this, other, LogPosition::term, LogPosition::index)
+}
+
+/**
  * §5.4.1 election restriction: is a candidate's log at least as up-to-date as ours?
  *
  * A candidate's log is "at least as up-to-date" if:
  * - its last log term is greater than ours, OR
  * - its last log term equals ours AND its last log index is at least as large.
  *
- * The voter's last position is passed as raw `(ourLastTerm, ourLastIndex)` — NOT the live log's
- * last entry. This is deliberate and safety-critical (issue #1245): after compaction empties the
- * live log the voter still holds committed entries in its snapshot, so callers MUST pass the
- * **snapshot-aware** last (`RaftState.lastLogTerm`/`lastLogIndex`, which fall back to
- * `snapshotTerm`/`snapshotIndex` when the live log is empty). Reading `log.lastOrNull()` here would
- * map an empty live log to `(0, 0)`, making every candidate look up-to-date and letting a compacted
- * voter grant a vote to an arbitrarily stale candidate — a Leader Completeness violation.
+ * i.e. `candidate >= ours` under [LogPosition]'s ordering.
  *
- * @param ourLastTerm the voter's snapshot-aware last log term (`snapshotTerm` if the live log is empty)
- * @param ourLastIndex the voter's snapshot-aware last log index (`snapshotIndex` if the live log is empty)
- * @param candidateLastIndex the candidate's reported lastLogIndex
- * @param candidateLastTerm the candidate's reported lastLogTerm
+ * The voter's position is [ours] — NOT the live log's last entry. This is deliberate and
+ * safety-critical (issue #1245): after compaction empties the live log the voter still holds
+ * committed entries in its snapshot, so callers MUST pass the **snapshot-aware** last position
+ * (`RaftState.lastLogPosition`, which falls back to `snapshotTerm`/`snapshotIndex` when the live
+ * log is empty). Reading `log.lastOrNull()` here would map an empty live log to `(0, 0)`, making
+ * every candidate look up-to-date and letting a compacted voter grant a vote to an arbitrarily
+ * stale candidate — a Leader Completeness violation.
+ *
+ * @param ours the voter's snapshot-aware last log position
+ * @param candidate the candidate's reported last log position
  */
-internal fun isLogUpToDate(
-    ourLastTerm: Long,
-    ourLastIndex: Long,
-    candidateLastIndex: Long,
-    candidateLastTerm: Long,
-): Boolean =
-    candidateLastTerm > ourLastTerm ||
-        (candidateLastTerm == ourLastTerm && candidateLastIndex >= ourLastIndex)
+internal fun isLogUpToDate(ours: LogPosition, candidate: LogPosition): Boolean =
+    candidate >= ours
 
 /**
  * §5.3 fast-backup: where should the leader set nextIndex after a rejected AppendEntries?
