@@ -246,7 +246,8 @@ private fun Cluster.onRequestVote(m: ModelMsg.RequestVote): Cluster {
         updated = copy(replicas = updated.replicas + (r.id to r))
     }
 
-    val logOk = isLogUpToDate(r.log.lastOrNull(), m.lastLogIndex, m.lastLogTerm)
+    // §5.4.1 (issue #1245): compare against the snapshot-aware last, not the live log's last entry.
+    val logOk = isLogUpToDate(r.lastLogTerm, r.lastLogIndex, m.lastLogIndex, m.lastLogTerm)
     val canGrant = m.term == r.term && logOk && (r.votedFor == null || r.votedFor == m.from)
 
     if (canGrant) {
