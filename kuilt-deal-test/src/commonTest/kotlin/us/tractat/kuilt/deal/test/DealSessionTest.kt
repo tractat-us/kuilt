@@ -7,9 +7,13 @@ import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.runCatchingCancellable
+import us.tractat.kuilt.deal.DealSession
 import us.tractat.kuilt.deal.SraScheme
+import us.tractat.kuilt.test.FakeSeam
+import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertNotEquals
 
 class DealSessionTest {
@@ -75,5 +79,55 @@ class DealSessionTest {
         // Secrecy: alice is not in the quorum — she cannot recover the plaintext.
         val aliceAttempt = runCatchingCancellable { aliceSession.decrypt(0) }.getOrNull()
         assertNotEquals(originalCard.toList(), aliceAttempt?.toList())
+    }
+
+    @Test
+    fun communityCard_quorumOfAllPlayers_everyPlayerCanDecrypt() = runTest {
+        val alice = PeerId("alice")
+        val bob = PeerId("bob")
+        val scheme = SraScheme()
+        val (aliceSession, bobSession) =
+            fakeDealSessionPair(alice, bob, scheme, CoroutineScope(UnconfinedTestDispatcher(testScheduler)))
+
+        val originalCard = "QUEEN_OF_DIAMONDS".encodeToByteArray()
+        val deck = listOf(originalCard)
+
+        aliceSession.shuffle(deck)
+        bobSession.shuffle(deck)
+
+        // Community card: everyone is in the visibility quorum (issue #1274).
+        val community = mapOf(0 to setOf(alice, bob))
+        aliceSession.assignQuorums(community)
+        bobSession.assignQuorums(community)
+
+        // Everyone strips — a community card has no secrecy to preserve.
+        aliceSession.strip()
+        bobSession.strip()
+
+        assertAll(
+            { assertEquals(originalCard.toList(), aliceSession.decrypt(0).toList()) },
+            { assertEquals(originalCard.toList(), bobSession.decrypt(0).toList()) },
+        )
+    }
+
+    @Test
+    fun assignQuorums_rejectsPartialMultiMemberQuorum() = runTest {
+        // A quorum with 1 < |quorum| < |allPlayers| can never be decrypted by its
+        // members without private re-encryption (issue #1274) — reject it up front.
+        val alice = PeerId("alice")
+        val bob = PeerId("bob")
+        val carol = PeerId("carol")
+        val scheme = SraScheme()
+        val session = DealSession(
+            seam = FakeSeam(selfId = alice),
+            scheme = scheme,
+            myKey = scheme.generateKey(),
+            allPlayers = setOf(alice, bob, carol),
+            myId = alice,
+            scope = CoroutineScope(UnconfinedTestDispatcher(testScheduler)),
+        )
+        assertFailsWith<IllegalArgumentException> {
+            session.assignQuorums(mapOf(0 to setOf(alice, bob)))
+        }
     }
 }

@@ -207,6 +207,31 @@ class CardStateTest {
     }
 
     @Test
+    fun communityCardIsNotRevealedUntilEveryPlayerStrips() {
+        // quorum == allPlayers (community card): everyone may read, so everyone
+        // must strip before the card is REVEALED (issue #1274).
+        val community = emptyCard(quorum = allPlayers).copy(
+            encryptedBy = GSet.of(alice, bob, carol),
+        )
+        assertAll(
+            { assertEquals(CardPhase.FULLY_ENCRYPTED, community.phase()) },
+            { assertEquals(CardPhase.REVEALING, community.copy(strippedBy = GSet.of(alice)).phase()) },
+            { assertEquals(CardPhase.REVEALED, community.copy(strippedBy = GSet.of(alice, bob, carol)).phase()) },
+        )
+    }
+
+    @Test
+    fun stripOpIsAcceptedForQuorumMemberWhenQuorumIsAllPlayers() {
+        // Community card: quorum members must be allowed to strip, or the card
+        // reaches REVEALED with all layers still on (issue #1274).
+        val state = emptyCard(quorum = allPlayers).copy(
+            encryptedBy = GSet.of(alice, bob, carol),
+        )
+        val op = CardOp.Strip(alice, byteArrayOf(1), StripProof(ByteArray(0)))
+        assertTrue(state.canApply(op))
+    }
+
+    @Test
     fun encodeDecodePlaintextRoundTripsLeadingZeros() {
         val original = byteArrayOf(0, 0, 5, 7)
         assertEquals(original.toList(), decodePlaintext(encodePlaintext(original)).toList())
