@@ -461,6 +461,50 @@ internal fun sampleCountMinSketchMerge() {
     check(merged.piece(a) == merged.piece(a).piece(a))
 }
 
+// ── DDSketch ──────────────────────────────────────────────────────────────────
+
+/** Track latency quantiles: every estimate is within the configured relative accuracy. */
+@Suppress("unused")
+internal fun sampleDDSketch() {
+    val replica = ReplicaId("api-server-1")
+
+    // α = 0.01 → every quantile estimate is within 1% of the true value.
+    var latencies = DDSketch.empty(relativeAccuracy = 0.01)
+
+    // add() returns a one-bucket delta; absorb it with piece().
+    for (ms in listOf(12.0, 15.0, 14.0, 250.0, 13.0, 16.0, 900.0, 14.5)) {
+        latencies = latencies.piece(latencies.add(replica, ms))
+    }
+
+    // The p50 sits among the fast requests; the p99 reflects the slow tail.
+    check(latencies.quantile(0.5) in 13.0..17.0)
+    check(latencies.quantile(1.0) in 890.0..910.0) // within 1% of 900
+}
+
+/** Merging two peers' sketches is exactly the sketch of the combined stream — zero added error. */
+@Suppress("unused")
+internal fun sampleDDSketchMerge() {
+    val serverA = ReplicaId("server-a")
+    val serverB = ReplicaId("server-b")
+
+    // Two servers record their own request latencies.
+    var a = DDSketch.empty()
+    var b = DDSketch.empty()
+    repeat(100) { a = a.piece(a.add(serverA, 10.0 + it)) }   // 10–109 ms
+    repeat(100) { b = b.piece(b.add(serverB, 500.0 + it)) }  // 500–599 ms
+
+    // Merge: pointwise GCounter join of the bucket counts.
+    val merged = a.piece(b)
+    check(merged.count == 200L)
+
+    // The merged p50 sits at the boundary between the two servers' ranges.
+    check(merged.quantile(0.5) in 100.0..120.0)
+
+    // Idempotent: merging again with either side changes nothing.
+    check(merged.piece(a) == merged)
+    check(merged.piece(b) == merged)
+}
+
 // ── LatticeProduct ───────────────────────────────────────────────────────────
 
 /**

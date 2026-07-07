@@ -36,13 +36,14 @@ Use replication when you want convergence without a central coordinator. If your
 | "Have I seen this?" deduplication, compact | [`BloomFilter`](crdt-bloomfilter.md) — probabilistic membership; no false negatives; bitwise-OR merge |
 | How many distinct items (e.g. unique visitors)? | [`HyperLogLog`](crdt-hyperloglog.md) — ~1% error estimate; 16 KB for any cardinality |
 | How often does X appear (trending topics, heavy hitters)? | [`CountMinSketch`](crdt-countminsketch.md) — frequency sketch; never underestimates; fixed memory |
+| What's the median / 99th-percentile (latency, sizes)? | [`DDSketch`](crdt-ddsketch.md) — quantile sketch; every estimate within a chosen relative error; lossless merge |
 | Causal stability / building your own CRDT | [`Causal` primitives](crdt-causal.md) — `DotContext`, `DotSet`, `DotFun`, `DotMap` |
 
 ## Structure at a glance
 
 | Group | Types | Convergence property |
 |-------|-------|----------------------|
-| Counters | `GCounter`, `PNCounter`, `BoundedCounter`, `ResettableCounter`, `HyperLogLog`, `CountMinSketch` | Per-replica monotone internals; exact integer result — or a fixed-memory probabilistic estimate for the two sketches (`HyperLogLog` distinct-count, `CountMinSketch` frequency) |
+| Counters | `GCounter`, `PNCounter`, `BoundedCounter`, `ResettableCounter`, `HyperLogLog`, `CountMinSketch`, `DDSketch` | Per-replica monotone internals; exact integer result — or a bounded-memory probabilistic estimate for the sketches (`HyperLogLog` distinct-count, `CountMinSketch` frequency, `DDSketch` quantiles) |
 | Sets | `GSet`, `ORSet`, `TwoPhaseSet`, `BloomFilter` | Set union / observe-remove semantics; `BloomFilter` is a compact probabilistic membership set (no false negatives) |
 | Registers | `LWWRegister`, `MVRegister` | Last-write-wins or multi-value concurrent conflict |
 | Maps | `LWWMap`, `ORMap` | Key-level LWW or ORSet-keyed map |
