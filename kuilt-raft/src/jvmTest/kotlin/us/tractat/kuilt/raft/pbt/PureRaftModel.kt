@@ -297,9 +297,20 @@ private fun Cluster.onAppendEntries(m: ModelMsg.AppendEntries): Cluster {
     if (m.prevLogIndex > 0L) {
         val prev = r.entryAt(m.prevLogIndex)
         if (prev == null || prev.term != m.prevLogTerm) {
-            val conflictTerm = prev?.term ?: r.log.lastOrNull { it.index <= m.prevLogIndex }?.term
-            val conflictIndex = conflictTerm?.let { t -> r.log.firstOrNull { it.term == t }?.index }
-            val resolvedConflictIndex = conflictIndex ?: m.prevLogIndex
+            // Mirrors RaftEngine.onAppendEntries: distinguish "log too short" from a real term conflict
+            // (issue #1246). The model has no snapshots, so a null `prev` is always the too-short case:
+            // report no term and point the leader straight at our end (lastLogIndex + 1) rather than
+            // synthesising a term — the latter reproduces the same nextIndex every round (fast-backup
+            // livelock). Keep the real-term-conflict branch as-is.
+            val conflictTerm: Long?
+            val resolvedConflictIndex: Long
+            if (prev == null) {
+                conflictTerm = null
+                resolvedConflictIndex = r.lastLogIndex + 1L
+            } else {
+                conflictTerm = prev.term
+                resolvedConflictIndex = r.log.first { it.term == prev.term }.index
+            }
             val reject = ModelMsg.AppendEntriesResp(
                 from = m.to, to = m.from, term = r.term, success = false,
                 conflictIndex = resolvedConflictIndex, conflictTerm = conflictTerm,

@@ -984,11 +984,30 @@ internal class RaftEngine(
         if (m.prevLogIndex > state.snapshotIndex) {
             val prev = state.entryAt(m.prevLogIndex)
             if (prev == null || prev.term != m.prevLogTerm) {
-                // §5.3 fast backup: report conflict info
-                val conflictTerm = prev?.term ?: state.log.lastOrNull { it.index <= m.prevLogIndex }?.term
-                val conflictIndex = conflictTerm?.let { t -> state.log.firstOrNull { it.term == t }?.index }
-                val resolvedConflictIndex = conflictIndex ?: m.prevLogIndex
-                debug { "onAppendEntries($from): REJECT prevLogIndex=${m.prevLogIndex} prevLogTerm=${m.prevLogTerm} (have=${prev?.term}) snapshotIndex=${state.snapshotIndex} → conflictIndex=$resolvedConflictIndex" }
+                // §5.3 fast backup: report conflict info. Two distinct rejection causes need distinct
+                // replies, or the leader can never make progress:
+                val conflictTerm: Long?
+                val resolvedConflictIndex: Long
+                if (prev == null) {
+                    // "Log too short" — prevLogIndex is beyond our lastLogIndex, so there is no
+                    // conflicting *term* to skip, only a gap to close. Report no term and point the
+                    // leader straight at our end (lastLogIndex + 1, snapshot-aware) so it backs
+                    // nextIndex to exactly where we can begin appending. Synthesising a term from our
+                    // last entry here would make the leader's `lastOfTerm(term)+1` reproduce the SAME
+                    // nextIndex every heartbeat — an identical AppendEntries, an identical rejection,
+                    // forever: the §5.3 fast-backup livelock (issue #1246).
+                    conflictTerm = null
+                    resolvedConflictIndex = state.lastLogIndex + 1L
+                } else {
+                    // A real term conflict at an existing index: report our term there and the first
+                    // index carrying it, so the leader skips the whole conflicting term in one step.
+                    // `prev` is an element of `state.log` (returned by entryAt), so the scan always
+                    // finds at least it — a missing match is an impossible state, so crash loudly
+                    // rather than shipping a plausible-but-wrong index.
+                    conflictTerm = prev.term
+                    resolvedConflictIndex = state.log.first { it.term == prev.term }.index
+                }
+                debug { "onAppendEntries($from): REJECT prevLogIndex=${m.prevLogIndex} prevLogTerm=${m.prevLogTerm} (have=${prev?.term}) snapshotIndex=${state.snapshotIndex} → conflictIndex=$resolvedConflictIndex conflictTerm=$conflictTerm" }
                 emitTrace(
                     RaftTraceEvent.AppendEntriesRejected(
                         clock = nextClock(),
