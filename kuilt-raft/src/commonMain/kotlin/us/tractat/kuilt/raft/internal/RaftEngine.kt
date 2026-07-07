@@ -54,6 +54,18 @@ import kotlin.time.TimeSource
 
 private val logger = KotlinLogging.logger("us.tractat.kuilt.raft.RaftEngine")
 
+/**
+ * Codec for the [RaftMessage] wire envelope. [Cbor.ignoreUnknownKeys] is `true` so a peer running an
+ * OLDER build tolerates a field a NEWER peer added — e.g. [RaftMessage.RequestVote.leadershipTransfer].
+ * Without it the default `Cbor` throws on the unknown key and the transport-collect coroutine (which
+ * only guards [ClosedSendChannelException]) would take the node's scope down. Adding a defaulted field
+ * to any `RaftMessage` is therefore forward- and backward-compatible: an old peer that receives it just
+ * drops the field and behaves as if it were absent (for the disrupt flag: denies under stickiness — the
+ * correct graceful degradation). [Cbor.encodeDefaults] stays at its default `false`, so a new peer with
+ * `leadershipTransfer = false` omits the field entirely and the byte stream is unchanged for old peers.
+ */
+private val raftCbor = Cbor { ignoreUnknownKeys = true }
+
 internal class RaftEngine(
     private val bootstrapConfig: ClusterConfig,
     private val transport: RaftTransport,
@@ -313,7 +325,7 @@ internal class RaftEngine(
             launch {
                 transport.incoming.collect {
                     try {
-                        cmd.send(EngineCommand.IncomingMessage(it.from, Cbor.decodeFromByteArray(it.bytes)))
+                        cmd.send(EngineCommand.IncomingMessage(it.from, raftCbor.decodeFromByteArray(it.bytes)))
                     } catch (_: ClosedSendChannelException) {
                         return@collect // channel closed — node is shutting down
                     }
@@ -1718,7 +1730,7 @@ internal class RaftEngine(
     }
 
     private suspend fun send(peer: NodeId, m: RaftMessage) =
-        transport.sendTo(peer, Cbor.encodeToByteArray(m))
+        transport.sendTo(peer, raftCbor.encodeToByteArray(m))
 
     override suspend fun transferLeadership(target: NodeId) {
         val d = CompletableDeferred<Unit>()
