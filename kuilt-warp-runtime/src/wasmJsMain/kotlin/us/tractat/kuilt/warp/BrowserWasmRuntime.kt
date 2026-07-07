@@ -27,11 +27,11 @@ import kotlin.js.Promise
  * - *Memory ceiling* — the binary's memory section is parsed and checked against
  *   [WasmSandboxConfig.maxMemoryPages]; a module is rejected with [WasmLoadException] if its declared
  *   initial exceeds the cap, its explicit max exceeds the cap, **or it declares no explicit max at
- *   all**. The JS API exposes no declared memory limits and cannot re-impose a max after compile
- *   (unlike the JVM [ChicoryWasmRuntime], which clamps the runtime max), so a no-max module could
- *   otherwise `memory.grow` unbounded to ~4 GiB — a memory-exhaustion DoS. Requiring kernels to
- *   declare a bounded max ≤ cap closes that hole: the browser then enforces the declared max at
- *   runtime (a `memory.grow` past it fails).
+ *   all**. The JS API exposes no declared memory limits and cannot re-impose a max after compile,
+ *   so a no-max module could otherwise `memory.grow` unbounded to ~4 GiB — a memory-exhaustion
+ *   DoS. Requiring kernels to declare a bounded max ≤ cap closes that hole (and is the uniform
+ *   contract every [WasmRuntime] impl enforces — see [WasmRuntime]'s memory-ceiling KDoc): the
+ *   browser then enforces the declared max at runtime (a `memory.grow` past it fails).
  * - *Malformed bytes* — `new WebAssembly.Module(bytes)` throws on invalid WASM → [WasmLoadException].
  * - *Missing ABI export* — a well-formed module lacking `warp_alloc`/`warp_run`/`memory` throws
  *   [WasmLoadException], NOT a raw JS error. This preserves the property [ChicoryWasmRuntime]

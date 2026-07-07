@@ -12,7 +12,7 @@
 ;; To regenerate fedavg_train.wasm:
 ;;   /opt/homebrew/bin/wat2wasm fedavg_train.wat -o fedavg_train.wasm
 (module
-  (memory (export "memory") 2)   ;; 2 pages = 128 KiB; input [0,65536), result [65536,65568)
+  (memory (export "memory") 2 2)   ;; 2 pages = 128 KiB (explicit max: the sandbox rejects no-max memory); input [0,65536), result [65536,65568)
 
   (func $warp_alloc (export "warp_alloc") (param $len i32) (result i32)
     i32.const 0)
