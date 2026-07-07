@@ -211,7 +211,11 @@ public enum class StepDownReason {
     /** A message from a peer carried a term higher than this node's current term. */
     HigherTermObserved,
 
-    /** A valid AppendEntries arrived from a legitimate leader, resetting the election timer. */
+    /**
+     * A valid AppendEntries or InstallSnapshot arrived from a legitimate leader, resetting the
+     * election timer. Also the reason a node that was somehow still Leader at the same term
+     * relinquishes on such leader contact — the Election-Safety defense-in-depth path.
+     */
     AppendEntriesFromLeader,
 
     /**
