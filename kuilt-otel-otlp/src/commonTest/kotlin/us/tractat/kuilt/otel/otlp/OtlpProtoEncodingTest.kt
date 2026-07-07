@@ -133,6 +133,82 @@ class OtlpProtoEncodingTest {
         )
     }
 
+    // Hand-verified against opentelemetry-proto metrics.proto. Layout (field, wire type):
+    //   0a 47                  ExportMetricsServiceRequest.resource_metrics (f1, len 71)
+    //     12 45                ResourceMetrics.scope_metrics (f2, len 69)
+    //       12 43              ScopeMetrics.metrics (f2, len 67)
+    //         0a 03 6c 61 74   Metric.name (f1, "lat")
+    //         52 3c            Metric.exponential_histogram (f10, len 60)
+    //           0a 38          ExponentialHistogram.data_points (f1, len 56)
+    //             11 <fixed64 0>   start_time_unix_nano (f2)
+    //             19 <fixed64 5>   time_unix_nano       (f3)
+    //             21 <fixed64 3>   count                (f4)
+    //             30 0a            scale (f6, sint32 zigzag(5)=10)
+    //             39 <fixed64 1>   zero_count           (f7)
+    //             42 07            positive (f8, Buckets, len 7)
+    //               08 01            offset (f1, sint32 zigzag(−1)=1)
+    //               12 03 01 00 01   bucket_counts (f2, packed uint64 [1,0,1])
+    //             71 <double 1.0>  zero_threshold (f14)
+    //           10 02          ExponentialHistogram.aggregation_temporality (f2, CUMULATIVE)
+    // negative (f9) is absent (no buckets). Pins sint32 zigzag + fixed64 + packed layout.
+    private val goldenExpHistHex =
+        "0a47" + "1245" + "1243" +
+            "0a03" + "6c6174" +
+            "523c" +
+            "0a38" +
+            "11" + "0000000000000000" +
+            "19" + "0500000000000000" +
+            "21" + "0300000000000000" +
+            "30" + "0a" +
+            "39" + "0100000000000000" +
+            "42" + "07" + "0801" + "1203" + "010001" +
+            "71" + "000000000000f03f" +
+            "1002"
+
+    @Test
+    fun exponentialHistogramMatchesGoldenBytes() {
+        val p = MetricPoint.ExponentialHistogram(
+            key = MetricKey("lat", MetricKind.EXPONENTIAL_HISTOGRAM),
+            scale = 5, count = 3L, zeroCount = 1L, zeroThreshold = 1.0,
+            positiveOffset = -1, positiveBucketCounts = listOf(1L, 0L, 1L),
+            negativeOffset = 0, negativeBucketCounts = emptyList(),
+            startEpochNanos = 0L, timeEpochNanos = 5L,
+        )
+        val bytes = proto.encodeToByteArray(ProtoMetricsRequest.serializer(), metricsProtoOf(setOf(p)))
+        assertEquals(goldenExpHistHex, bytes.toHex())
+    }
+
+    @Test
+    fun exponentialHistogramRoundTripsWithNegativeScaleAndOffsets() {
+        // Negative scale and offsets exercise the sint32 zigzag path in both directions.
+        val p = MetricPoint.ExponentialHistogram(
+            key = MetricKey("lat", MetricKind.EXPONENTIAL_HISTOGRAM, mapOf("path" to "/api")),
+            scale = -3, count = 7L, zeroCount = 2L, zeroThreshold = 1e-9,
+            positiveOffset = -4, positiveBucketCounts = listOf(3L, 0L, 1L),
+            negativeOffset = 2, negativeBucketCounts = listOf(1L),
+            startEpochNanos = 0L, timeEpochNanos = 9L,
+        )
+        val m = proto.decodeFromByteArray(
+            ProtoMetricsRequest.serializer(),
+            proto.encodeToByteArray(ProtoMetricsRequest.serializer(), metricsProtoOf(setOf(p))),
+        ).resourceMetrics.single().scopeMetrics.single().metrics.single()
+        val dp = m.exponentialHistogram?.dataPoints?.single()
+        assertAll(
+            { assertTrue(m.exponentialHistogram != null, "exponential_histogram oneof branch must be set") },
+            { assertTrue(m.sum == null && m.gauge == null, "other oneof branches must be unset") },
+            { assertEquals(AGGREGATION_TEMPORALITY_CUMULATIVE, m.exponentialHistogram?.aggregationTemporality) },
+            { assertEquals(-3, dp?.scale) },
+            { assertEquals(7L, dp?.count) },
+            { assertEquals(2L, dp?.zeroCount) },
+            { assertEquals(1e-9, dp?.zeroThreshold) },
+            { assertEquals(-4, dp?.positive?.offset) },
+            { assertEquals(listOf(3L, 0L, 1L), dp?.positive?.bucketCounts) },
+            { assertEquals(2, dp?.negative?.offset) },
+            { assertEquals(listOf(1L), dp?.negative?.bucketCounts) },
+            { assertEquals("path", dp?.attributes?.single()?.key) },
+        )
+    }
+
     @Test
     fun gaugeAndCardinalityRoundTripAsGaugeOneof() {
         val g = MetricPoint.Gauge(MetricKey("cpu", MetricKind.GAUGE), value = 0.5, timeEpochNanos = 5L)

@@ -59,7 +59,10 @@ internal fun logsProtoOf(logs: Set<LogRecord>): ProtoLogsRequest {
     return ProtoLogsRequest(listOf(ProtoResourceLogs(listOf(ProtoScopeLogs(recs)))))
 }
 
-/** Render metric points into an OTLP/protobuf metrics request (Sum for sums, Gauge otherwise). */
+/**
+ * Render metric points into an OTLP/protobuf metrics request (Sum for sums, Gauge for
+ * gauge/cardinality, ExponentialHistogram for histograms).
+ */
 internal fun metricsProtoOf(points: Set<MetricPoint>): ProtoMetricsRequest {
     val metrics = points.map { p ->
         when (p) {
@@ -117,7 +120,31 @@ internal fun metricsProtoOf(points: Set<MetricPoint>): ProtoMetricsRequest {
                     ),
                 ),
             )
+            is MetricPoint.ExponentialHistogram -> ProtoMetric(
+                name = p.key.name,
+                exponentialHistogram = ProtoExponentialHistogram(
+                    dataPoints = listOf(
+                        ProtoExponentialHistogramDataPoint(
+                            attributes = protoAttrs(p.key.attributes),
+                            startTimeUnixNano = p.startEpochNanos,
+                            timeUnixNano = p.timeEpochNanos,
+                            count = p.count,
+                            scale = p.scale,
+                            zeroCount = p.zeroCount,
+                            positive = protoBuckets(p.positiveOffset, p.positiveBucketCounts),
+                            negative = protoBuckets(p.negativeOffset, p.negativeBucketCounts),
+                            zeroThreshold = p.zeroThreshold,
+                        ),
+                    ),
+                    aggregationTemporality = AGGREGATION_TEMPORALITY_CUMULATIVE,
+                ),
+            )
         }
     }
     return ProtoMetricsRequest(listOf(ProtoResourceMetrics(listOf(ProtoScopeMetrics(metrics)))))
 }
+
+/** A sign's bucket array as OTLP/protobuf, or null (field absent) when no buckets are populated. */
+private fun protoBuckets(offset: Int, counts: List<Long>): ProtoExponentialHistogramBuckets? =
+    if (counts.isEmpty()) null
+    else ProtoExponentialHistogramBuckets(offset = offset, bucketCounts = counts)

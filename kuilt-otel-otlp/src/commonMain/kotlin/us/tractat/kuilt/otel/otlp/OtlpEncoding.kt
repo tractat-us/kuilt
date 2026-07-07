@@ -80,7 +80,10 @@ internal fun logsRequestOf(logs: Set<LogRecord>): LogsRequest {
     return LogsRequest(listOf(ResourceLogs(listOf(ScopeLogs(recs)))))
 }
 
-/** Render metric points into an OTLP/JSON metrics request (Sum for sums, Gauge for gauge/cardinality). */
+/**
+ * Render metric points into an OTLP/JSON metrics request (Sum for sums, Gauge for
+ * gauge/cardinality, ExponentialHistogram for histograms).
+ */
 internal fun metricsRequestOf(points: Set<MetricPoint>): MetricsRequest {
     val metrics = points.map { p ->
         when (p) {
@@ -134,7 +137,30 @@ internal fun metricsRequestOf(points: Set<MetricPoint>): MetricsRequest {
                     ),
                 ),
             )
+            is MetricPoint.ExponentialHistogram -> OtlpMetric(
+                name = p.key.name,
+                exponentialHistogram = OtlpExponentialHistogram(
+                    listOf(
+                        OtlpExponentialHistogramDataPoint(
+                            attributes = attrs(p.key.attributes),
+                            startTimeUnixNano = p.startEpochNanos.toString(),
+                            timeUnixNano = p.timeEpochNanos.toString(),
+                            count = p.count.toString(),
+                            scale = p.scale,
+                            zeroCount = p.zeroCount.toString(),
+                            positive = jsonBuckets(p.positiveOffset, p.positiveBucketCounts),
+                            negative = jsonBuckets(p.negativeOffset, p.negativeBucketCounts),
+                            zeroThreshold = p.zeroThreshold,
+                        ),
+                    ),
+                ),
+            )
         }
     }
     return MetricsRequest(listOf(ResourceMetrics(listOf(ScopeMetrics(metrics)))))
 }
+
+/** A sign's bucket array as OTLP/JSON, or null (field omitted) when no buckets are populated. */
+private fun jsonBuckets(offset: Int, counts: List<Long>): OtlpExponentialHistogramBuckets? =
+    if (counts.isEmpty()) null
+    else OtlpExponentialHistogramBuckets(offset = offset, bucketCounts = counts.map { it.toString() })

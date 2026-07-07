@@ -1,6 +1,7 @@
 package us.tractat.kuilt.otel
 
 import kotlinx.serialization.Serializable
+import us.tractat.kuilt.crdt.DDSketch
 import us.tractat.kuilt.crdt.GCounter
 import us.tractat.kuilt.crdt.GCounterDouble
 import us.tractat.kuilt.crdt.HyperLogLog
@@ -8,11 +9,12 @@ import us.tractat.kuilt.crdt.LWWRegister
 import us.tractat.kuilt.crdt.Quilted
 
 /**
- * A converged snapshot of every metric series a device holds — counters, gauges, and
- * distinct-count estimates — bundled into one value that replicates as a whole.
+ * A converged snapshot of every metric series a device holds — counters, gauges,
+ * distinct-count estimates, and quantile sketches — bundled into one value that
+ * replicates as a whole.
  *
  * This is the metric tap's replication surface: the analogue of the log buffer's
- * `Rga<LogRecord>`. It is a **metrics-internal** composite (four maps of per-kind
+ * `Rga<LogRecord>`. It is a **metrics-internal** composite (five maps of per-kind
  * CRDTs); it deliberately does **not** bundle logs — signals replicate as separate
  * values muxed over one transport, never a unified CRDT.
  *
@@ -28,6 +30,7 @@ public class MetricCatalog(
     public val doubleSums: Map<MetricKey, GCounterDouble> = emptyMap(),
     public val gauges: Map<MetricKey, LWWRegister<Double>> = emptyMap(),
     public val cardinalities: Map<MetricKey, HyperLogLog> = emptyMap(),
+    public val histograms: Map<MetricKey, DDSketch> = emptyMap(),
 ) : Quilted<MetricCatalog> {
 
     override fun piece(other: MetricCatalog): MetricCatalog = MetricCatalog(
@@ -35,22 +38,26 @@ public class MetricCatalog(
         doubleSums = mergeMaps(doubleSums, other.doubleSums),
         gauges = mergeMaps(gauges, other.gauges),
         cardinalities = mergeMaps(cardinalities, other.cardinalities),
+        histograms = mergeMaps(histograms, other.histograms),
     )
 
     override fun equals(other: Any?): Boolean =
         other is MetricCatalog && sums == other.sums && doubleSums == other.doubleSums &&
-            gauges == other.gauges && cardinalities == other.cardinalities
+            gauges == other.gauges && cardinalities == other.cardinalities &&
+            histograms == other.histograms
 
     override fun hashCode(): Int {
         var h = sums.hashCode()
         h = 31 * h + doubleSums.hashCode()
         h = 31 * h + gauges.hashCode()
         h = 31 * h + cardinalities.hashCode()
+        h = 31 * h + histograms.hashCode()
         return h
     }
 
     override fun toString(): String =
-        "MetricCatalog(sums=$sums, doubleSums=$doubleSums, gauges=$gauges, cardinalities=$cardinalities)"
+        "MetricCatalog(sums=$sums, doubleSums=$doubleSums, gauges=$gauges, " +
+            "cardinalities=$cardinalities, histograms=$histograms)"
 }
 
 /** Key-union merge of two maps of CRDTs: shared keys join by the value's own lattice. */
