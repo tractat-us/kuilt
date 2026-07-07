@@ -595,6 +595,14 @@ public class WarpNode(
         get() = Results.from(resultsQuilter.state.value)
 
     /**
+     * The [TaskId]s currently holding an entry in the intent register, as seen by this peer.
+     *
+     * Test observability only: lets module tests assert that completed tasks' intent entries
+     * are tombstoned and that coordinated tasks never write one (#873).
+     */
+    internal fun intentTaskIds(): Set<TaskId> = intentQuilter.state.value.keys
+
+    /**
      * Close this node's Quilter connections and stop all detectors. Idempotent.
      */
     public fun close() {
