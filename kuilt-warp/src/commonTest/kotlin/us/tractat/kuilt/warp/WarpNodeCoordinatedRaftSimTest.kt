@@ -75,8 +75,15 @@ class WarpNodeCoordinatedRaftSimTest {
      * A coordinated task's Raft proposal is sent BEFORE [coordinatedExecutor] is invoked,
      * and the proposal encodes the [TaskId] bytes.
      *
-     * Proof: we intercept [FakeRaftNode.proposeBehavior] and record the sequence. The order
-     * must be `proposed:<id>` then `executed:<id>` — never the reverse.
+     * Proof: we intercept [FakeRaftNode.proposeBehavior] and record the sequence. Execution is
+     * driven from the committed log ([onCoordinatedCommit]), so every `executed:<id>` is preceded
+     * by a `proposed:<id>` — never the reverse. Under [StandardTestDispatcher] a single
+     * always-leader [FakeRaftNode] replays `Leader` immediately, so the leadership-acquisition
+     * re-drive ([redriveStrandedCoordinated]) and the claim path can each propose the same task
+     * before [onCoordinatedCommit] records it in `coordinatedApplied` — a harmless redundant
+     * proposal that the fence/dedup gates collapse to a single execution. The assertion pins the
+     * durable invariant (proposal precedes execution; the executor runs exactly once), not the
+     * exact proposal count, which the eager-inline `UnconfinedTestDispatcher` happened to fix at 1.
      */
     @Test
     fun coordinatedTaskProposesToRaftBeforeExecuting() =
@@ -118,19 +125,28 @@ class WarpNodeCoordinatedRaftSimTest {
             drainWarp()
 
             val captured = lock.withLock { events.toList() }
+            val proposed = "proposed:${taskId.value}"
+            val executed = "executed:${taskId.value}"
+            val firstExecuted = captured.indexOf(executed)
             assertAll(
                 {
                     assertEquals(
-                        "proposed:${taskId.value}",
+                        proposed,
                         captured.firstOrNull(),
-                        "Raft proposal must precede coordinatedExecutor",
+                        "the first event is a Raft proposal, never an execution: $captured",
+                    )
+                },
+                {
+                    assertTrue(
+                        firstExecuted > 0 && captured.take(firstExecuted).all { it == proposed },
+                        "coordinatedExecutor runs only after a Raft commit — every prior event is a proposal: $captured",
                     )
                 },
                 {
                     assertEquals(
-                        "executed:${taskId.value}",
-                        captured.getOrNull(1),
-                        "coordinatedExecutor called after Raft commit",
+                        1,
+                        captured.count { it == executed },
+                        "the fence/dedup gates collapse redundant proposals to exactly one execution: $captured",
                     )
                 },
                 { assertNotNull(nodeA.results[taskId], "result present after execution") },

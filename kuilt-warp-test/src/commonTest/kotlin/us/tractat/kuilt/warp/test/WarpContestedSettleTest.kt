@@ -19,6 +19,7 @@
 package us.tractat.kuilt.warp.test
 
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.test.TestResult
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.test.assertAll
 import us.tractat.kuilt.warp.ClaimStrategy
@@ -43,7 +44,7 @@ class WarpContestedSettleTest {
      * behaviour under test — asserted directly as "the task executed exactly once, by the winner".
      */
     @Test
-    fun contestedClaimSettlesToOneWinnerAndTheLoserStandsDown() {
+    fun contestedClaimSettlesToOneWinnerAndTheLoserStandsDown(): TestResult {
         // Populated inside nodeFactory (invoked in join order during harness init); keyed by
         // PeerId so the body can converge the host's view once the contest has been announced.
         val rosterFlows = mutableMapOf<PeerId, MutableStateFlow<Set<PeerId>>>()
