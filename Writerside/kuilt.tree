@@ -40,6 +40,7 @@
             <toc-element topic="crdt-resettablecounter.md"/>
             <toc-element topic="crdt-hyperloglog.md"/>
             <toc-element topic="crdt-countminsketch.md"/>
+            <toc-element topic="crdt-ddsketch.md"/>
         </toc-element>
         <toc-element toc-title="Sets">
             <toc-element topic="crdt-gset.md"/>

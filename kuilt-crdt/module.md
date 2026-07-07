@@ -33,6 +33,7 @@ delivery order or duplication.
 | `BloomFilter` | Bitwise-OR of bit array; probabilistic membership, bounded FP rate | No (union-only) |
 | `HyperLogLog` | Element-wise max of registers; ~0.8% error at p=14 | N/A (sketch, not a set) |
 | `CountMinSketch` | Approximate frequency sketch; element-wise max merge (idempotent CMS) | No |
+| `DDSketch` | Quantile sketch (log-γ buckets → GCounter); lossless per-bucket join, α relative-error bound | No |
 
 ## Replication
 
@@ -51,7 +52,7 @@ changed are non-zero. The join (`piece`) then applies that fragment via
 element-wise max (or OR, or whichever lattice operation applies), so a
 re-delivered or duplicate patch is safe and idempotent.
 
-All three probabilistic sketch types in the zoo implement this idiom, each in the
+The probabilistic sketch types in the zoo implement this idiom, each in the
 encoding that fits its structure:
 
 | Type | Backing store | Delta encoding | Wire size per add |
@@ -59,8 +60,9 @@ encoding that fits its structure:
 | `CountMinSketch` | `Long` matrix (`depth × width`) | `List<CellDelta(row, col, value)>` — one triple per hash row | O(depth) cells |
 | `HyperLogLog` | 6-bit-packed `ByteArray` | Same-length `ByteArray` with at most one non-zero 6-bit register slot | O(1) registers |
 | `BloomFilter` | `LongArray` of bit-words | Same-length `LongArray` with only touched words non-zero; `BloomFilterSerializer` encodes as `(wordIndex, wordValue)` pairs | O(hashCount) words |
+| `DDSketch` | Sparse `Map<Int, GCounter>` per sign + zero/overflow counters | Same-shaped map with a single bucket's `GCounter` delta (plus the overflow cell when clamping) | O(1) cells |
 
-The three encodings are intentionally type-specific:
+The encodings are intentionally type-specific:
 - **CountMinSketch** needs `(row, col)` addressing — a 2D matrix cell requires
   both dimensions.
 - **HyperLogLog** packs six bits per register; the "sparse" delta is structurally
@@ -68,6 +70,8 @@ The three encodings are intentionally type-specific:
   and the packed accessor is non-trivial.
 - **BloomFilter** uses bit-word addressing (`wordIndex`); the sparse encoding lives
   in the serializer layer (`BloomFilterSerializer`), not in the type.
+- **DDSketch** is sparse-map-backed, so the minimal fragment is simply a one-entry
+  map — no custom encoding needed.
 
 A `SparseArrayDelta<Cell>` shared helper would need to unify three incompatible
 carriers (`LongArray`, `ByteArray`, `List<CellDelta>`) or force them all into a
