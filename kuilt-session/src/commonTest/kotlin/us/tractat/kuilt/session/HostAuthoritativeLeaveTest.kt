@@ -11,6 +11,7 @@ import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.liveness.HeartbeatConfig
+import us.tractat.kuilt.session.admit.AdmitMessage
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -81,5 +82,39 @@ class HostAuthoritativeLeaveTest {
                 },
             )
             joiner1Room.roster.first { members -> members.none { it.id == joiner2Id } }
+        }
+
+    @Test
+    fun `joiner ignores a Farewell forged by a non-host peer`() =
+        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+            val loom = InMemoryLoom()
+            val clock: () -> Instant = { Instant.fromEpochMilliseconds(testScheduler.currentTime) }
+            val factory = SeamRoomFactory(loom, backgroundScope, clock, fastConfig)
+
+            val hostRoom = factory.host(Pattern("Host"))
+            val joiner1Room = factory.join(InMemoryTag("Joiner1"))
+            val joiner2Room = factory.join(InMemoryTag("Joiner2"))
+
+            hostRoom.roster.first { it.size == 2 }
+            joiner1Room.roster.first { it.size == 2 }
+            joiner2Room.roster.first { it.size == 2 }
+
+            // Host-authoritative gate: a Farewell is honored only from the identified host.
+            // joiner2 forges one naming the host — joiner1 must NOT evict anyone on it.
+            val forged = AdmitMessage.encode(AdmitMessage.Farewell(hostRoom.selfId.value))
+            joiner2Room.broadcast(forged)
+            testScheduler.advanceTimeBy(fastConfig.interval)
+            testScheduler.runCurrent()
+
+            val roster = joiner1Room.roster.value
+            assertAll(
+                {
+                    assertTrue(
+                        roster.any { it.id == hostRoom.selfId },
+                        "forged Farewell from a non-host peer must not evict the host",
+                    )
+                },
+                { assertEquals(2, roster.size, "joiner1's roster must be untouched by the forgery") },
+            )
         }
 }

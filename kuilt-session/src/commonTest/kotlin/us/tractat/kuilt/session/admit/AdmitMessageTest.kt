@@ -102,6 +102,12 @@ class AdmitMessageTest {
         assertEquals(AdmitMessage.Goodbye, AdmitMessage.decode(AdmitMessage.encode(AdmitMessage.Goodbye)))
     }
 
+    @Test
+    fun `Farewell round-trips`() {
+        val original = AdmitMessage.Farewell(peerId = "peer-7")
+        assertEquals(original, AdmitMessage.decode(AdmitMessage.encode(original)))
+    }
+
     /**
      * Golden vector (backward compat): a Hello captured from the current wire format. Decoding it
      * must yield the exact known value — this pins the wire so a future codec tweak (e.g. adding a

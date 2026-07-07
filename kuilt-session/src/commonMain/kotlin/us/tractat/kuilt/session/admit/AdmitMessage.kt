@@ -119,12 +119,36 @@ public sealed interface AdmitMessage {
      *
      * Distinguishes a graceful leave from a bare transport close: on receipt the host
      * evicts the member immediately with [us.tractat.kuilt.session.LeaveReason.Normal],
-     * rather than opening a reconnect window. Best-effort — a lost Goodbye degrades to the
+     * rather than opening a reconnect window, and propagates a [Farewell] to all remaining
+     * members so they evict promptly too. Best-effort — a lost Goodbye degrades to the
      * transport-close → reconnect-window path.
      */
     @Serializable
     @SerialName("goodbye")
     public data object Goodbye : AdmitMessage
+
+    /**
+     * Sent by the host to every remaining member when a member departs cleanly
+     * (the host received that member's [Goodbye]).
+     *
+     * The host is the membership authority — it admits via [Welcome]; this is the
+     * eviction counterpart. On receipt each member removes the departed peer promptly
+     * with [us.tractat.kuilt.session.LeaveReason.Normal], instead of waiting out its
+     * own heartbeat window and mislabelling the clean leave as
+     * [us.tractat.kuilt.session.LeaveReason.PartitionExpired].
+     *
+     * **Host-authoritative, not peer-trust:** receivers act on a Farewell only when it
+     * comes from their identified host — never on another joiner's raw [Goodbye] (a
+     * spoof surface, and hub/relay topologies may lack direct joiner↔joiner edges).
+     *
+     * [peerId] — the departed member's [us.tractat.kuilt.core.PeerId] value.
+     *
+     * Wire-compatible: an older build that doesn't know this message drops it as
+     * malformed and degrades to its own heartbeat-window eviction (the prior behavior).
+     */
+    @Serializable
+    @SerialName("farewell")
+    public data class Farewell(val peerId: String) : AdmitMessage
 
     public companion object {
         /**
