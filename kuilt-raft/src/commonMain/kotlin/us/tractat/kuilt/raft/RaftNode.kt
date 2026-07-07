@@ -359,9 +359,16 @@ public interface RaftNode {
     public fun cancelTransfer(): Unit = Unit
 
     /**
-     * Shuts down this node, cancelling all internal coroutines.
+     * Shuts down this node: stops the actor command loop, cancels the leader's election/heartbeat/
+     * quorum-check/lease timer coroutines, and fails every in-flight or still-buffered request
+     * ([propose]/[readIndex]/[changeMembership]/[transferLeadership] and the internal commit-cut) so no
+     * caller's `await()` hangs.
      *
-     * Idempotent. Equivalent to cancelling the owning [CoroutineScope].
+     * Idempotent. This is **not** the same as cancelling the owning [CoroutineScope]: coroutines whose
+     * lifecycle is tied directly to the scope — notably the transport-message and snapshot collectors
+     * launched at construction — end only when that scope is cancelled. For a full teardown that also
+     * releases those, cancel the owning [CoroutineScope] (which additionally runs the same request-failing
+     * cleanup). Call [close] when you want to retire the node but keep its scope alive.
      */
     public suspend fun close()
 }

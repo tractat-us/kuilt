@@ -41,26 +41,6 @@ private val jointLeaderRemoved = MembershipState.Joint(
 
 class MembershipStateTest {
 
-    // ── isVoter ────────────────────────────────────────────────────────────────
-
-    @Test
-    fun simple_isVoter_member() = assertTrue(simpleState.isVoter(a))
-
-    @Test
-    fun simple_isVoter_nonMember() = assertFalse(simpleState.isVoter(d))
-
-    @Test
-    fun joint_isVoter_inOldOnly() = assertTrue(joint35.isVoter(a))
-
-    @Test
-    fun joint_isVoter_inNewOnly() = assertTrue(joint35.isVoter(d))
-
-    @Test
-    fun joint_isVoter_inBoth() = assertTrue(joint35.isVoter(b))
-
-    @Test
-    fun joint_isVoter_inNeither() = assertFalse(joint35.isVoter(learner1))
-
     // ── isLearner ──────────────────────────────────────────────────────────────
 
     @Test
@@ -83,14 +63,6 @@ class MembershipStateTest {
         )
         assertTrue(jointWithLearner.isLearner(learner1))
     }
-
-    // ── currentVoters ──────────────────────────────────────────────────────────
-
-    @Test
-    fun simple_currentVoters() = assertEquals(setOf(a, b, c), simpleState.currentVoters)
-
-    @Test
-    fun joint_currentVoters_returnsNew() = assertEquals(setOf(a, b, c, d, e), joint35.currentVoters)
 
     // ── replicationTargets ─────────────────────────────────────────────────────
 

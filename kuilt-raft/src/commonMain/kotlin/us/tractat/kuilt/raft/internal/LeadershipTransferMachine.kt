@@ -24,11 +24,16 @@ import us.tractat.kuilt.raft.StepDownReason
  * it is a single atomic assignment, so the three can never drift out of step. This is a
  * representation change only — behavior is byte-for-byte the pre-extraction engine's.
  *
- * **Deferred completion is exactly-once.** Every resolution path ([onTimeout], [onCancel],
- * [onLeadershipRelinquished], [fail]) both cancels the timer and completes the deferred exactly once,
- * then clears [InFlight] so no later path can double-complete. [reset] (leader re-election) is the one
- * path that clears *without* completing — it mirrors the pre-extraction `becomeLeader` clear, which by
- * construction only ever runs after `relinquishToFollower` has already resolved any in-flight transfer.
+ * **Deferred completion is exactly-once — and done *inside* the machine.** Unlike [ReadIndexTracker] and
+ * [ProposalForwarder], which hand their outcome back for the engine to complete the caller's deferred at
+ * the call site, this machine completes its own deferred: the single `Unit` deferred lives inside the
+ * all-or-none [InFlight] record, so setting and clearing it is one atomic assignment and exactly-once is a
+ * trivially *local* property here — routing it back through the engine would only add a boundary crossing
+ * with no safety gained. Every resolution path ([onTimeout], [onCancel], [onLeadershipRelinquished],
+ * [fail]) both cancels the timer and completes the deferred exactly once, then clears [InFlight] so no
+ * later path can double-complete. [reset] (leader re-election) is the one path that clears *without*
+ * completing — it mirrors the pre-extraction `becomeLeader` clear, which by construction only ever runs
+ * after `relinquishToFollower` has already resolved any in-flight transfer.
  *
  * **The timer.** [start] launches a single coroutine on [scope] that, after
  * [RaftConfig.electionTimeoutMax], calls [signalTimeout] with this transfer's generation epoch — which the
@@ -107,7 +112,7 @@ internal class LeadershipTransferMachine(
      * membership changes while a transfer is in flight, and symmetrically refuses to *start* a transfer while a
      * membership change is still converging — so no entry can be appended between this ack and the `TimeoutNow`.
      */
-    fun onPeerAck(from: NodeId, matchIdx: Long, lastLogIdx: Long): Boolean {
+    fun isTargetCaughtUp(from: NodeId, matchIdx: Long, lastLogIdx: Long): Boolean {
         val current = inFlight ?: return false
         if (from != current.target) return false
         return matchIdx >= lastLogIdx

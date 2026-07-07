@@ -171,7 +171,7 @@ internal class ProposalForwarder {
             ForwardDecision
 
         /** No leader known yet — the forward was parked; the engine does nothing until [flush]. */
-        object Queued : ForwardDecision
+        data object Queued : ForwardDecision
     }
 
     /** One action the engine must carry out while draining the parked-forward queue in [flush]. */
