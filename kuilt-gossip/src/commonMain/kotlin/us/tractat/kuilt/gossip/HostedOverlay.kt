@@ -13,6 +13,7 @@ import us.tractat.kuilt.core.runCatchingCancellable
 import kotlin.coroutines.CoroutineContext
 import kotlin.random.Random
 import kotlin.time.Clock
+import kotlin.time.Duration
 import kotlin.time.Instant
 
 private val logger = KotlinLogging.logger("us.tractat.kuilt.gossip.HostedOverlay")
@@ -56,6 +57,12 @@ public suspend fun CoroutineScope.hostedOverlay(
         random = random,
         clock = clock,
         activeViewPolicy = ActiveViewPolicy.FullFanout,
+        // Zero recompute jitter: the FullFanout view is deterministic (everyone), so the
+        // anti-lockstep jitter buys nothing here and only opens a window where a freshly
+        // admitted spoke is missing from the hub's flood targets — a broadcast in that
+        // window would skip the spoke and leave a per-origin seq gap it then reorder-holds
+        // behind (#1309). Recompute synchronously with each roster change instead.
+        jitter = Duration.ZERO..Duration.ZERO,
     ).also { it.start(this) }
     launch {
         while (isActive) {

@@ -275,6 +275,69 @@ class GossipDisseminationTest {
         }
 
     @Test
+    fun releasesHeldFramesUnderAFrozenLivenessClock() =
+        runTest {
+            // The injected clock is the *liveness* time source and may legitimately be frozen
+            // (harnesses freeze it to keep the heartbeat detectors quiescent under virtual
+            // time). The reorder-grace release must therefore run on dispatcher time, never
+            // that clock — regression #1309: a hub one-shot first-sighted mid-stream was
+            // otherwise held forever, and an un-replicated broadcast has no anti-entropy
+            // backstop to recover it.
+            val self = PeerId("self")
+            val base = FakeSeam(selfId = self, initialPeers = members(12) + self)
+            val seam =
+                GossipSeam(
+                    base = base,
+                    random = Random(11),
+                    clock = { Instant.fromEpochMilliseconds(0) },
+                    config = config,
+                    reorderGrace = 400.milliseconds,
+                )
+            seam.start(backgroundScope)
+            settle()
+
+            val received = mutableListOf<Swatch>()
+            backgroundScope.launch { seam.incoming.toList(received) }
+            runCurrent()
+
+            val sender = seam.activePeers.value.first()
+            base.deliver(sender, GossipFrame.origin(PeerId("origin-x"), seq = 7, ttl = 5, byteArrayOf(7)).encode())
+            runCurrent()
+            assertEquals(0, received.size, "the mid-stream first sighting is held for its grace")
+
+            advanceTimeBy(1_000)
+            runCurrent()
+            assertEquals(
+                listOf(7L),
+                received.map { it.sequence },
+                "the held frame is released by the dispatcher-time sweep despite the frozen liveness clock",
+            )
+        }
+
+    @Test
+    fun broadcastToAnEmptyActiveViewDoesNotConsumeASeq() =
+        runTest {
+            val (base, seam) = gossipSeam(members(12), seed = 12)
+            seam.start(backgroundScope)
+
+            // No settle: the first jittered view recompute has not run, so this flood has no
+            // targets. It must not burn per-origin seq 1 — a burned seq is a permanent phantom
+            // gap that makes every future receiver first-sight this origin mid-stream and hold
+            // (up to a full reorder grace) everything sent after it (#1309).
+            seam.broadcast(byteArrayOf(1))
+            settle()
+
+            seam.broadcast(byteArrayOf(2))
+            runCurrent()
+
+            assertEquals(
+                setOf(1L),
+                base.relaySends().map { it.second.seq }.toSet(),
+                "the first *flooded* broadcast carries seq 1 — an unflooded broadcast burns no seq",
+            )
+        }
+
+    @Test
     fun reorderStormDeliversEachPayloadOnceAndStaysBounded() =
         runTest {
             val (base, seam) = gossipSeam(members(12), seed = 7)

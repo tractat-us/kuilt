@@ -91,7 +91,10 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.gossip.GossipSeam")
  *   [GossipDedup]). Multi-path relay reordering resolves within a few hops'
  *   latency, so a gap older than this is a genuine flood drop (anti-entropy
  *   backstops it) or a pre-join seq (a late joiner first sights an origin
- *   mid-stream) — either way the held frames must not wait forever.
+ *   mid-stream) — either way the held frames must not wait forever. Measured on
+ *   the seam's own sweep ticker (dispatcher time — virtual under a test
+ *   dispatcher), never on [clock], which is the liveness time source and may be
+ *   frozen (#1309).
  */
 public class GossipSeam(
     private val base: Seam,
@@ -133,6 +136,17 @@ public class GossipSeam(
     // high-water mark plus a small reorder window (#675). Mutated only inside the single
     // inbound event loop (ADR-034 single-collection), so it needs no lock.
     private val dedup = GossipDedup()
+
+    // The dedup/reorder time source: a monotonic ms counter advanced by the sweep ticker
+    // on the single inbound event loop — i.e. **dispatcher time** (virtual under a test
+    // dispatcher), quantized to reorderGrace/2. NEVER the injected [clock]: that is the
+    // liveness time source and may legitimately be frozen (harnesses freeze it to keep the
+    // heartbeat detectors quiescent), and a held frame's release must not depend on it —
+    // an un-replicated one-shot broadcast has no anti-entropy backstop, so an unbounded
+    // hold is a silent drop (#1309). Quantization means a blocked gap releases within
+    // [reorderGrace/2, reorderGrace] of the frame being held — the grace is a straggler
+    // heuristic, not a precise deadline.
+    private var dedupNowMs = 0L
 
     private val view =
         GossipView(
@@ -215,7 +229,10 @@ public class GossipSeam(
                     .collect { event ->
                         when (event) {
                             is InboundEvent.Frame -> dispatchInbound(event.swatch)
-                            is InboundEvent.Sweep -> deliver(dedup.releaseExpired(nowMs(), reorderGrace.inWholeMilliseconds))
+                            is InboundEvent.Sweep -> {
+                                dedupNowMs += (reorderGrace / 2).inWholeMilliseconds
+                                deliver(dedup.releaseExpired(dedupNowMs, reorderGrace.inWholeMilliseconds))
+                            }
                             is InboundEvent.BaseCompleted -> Unit
                         }
                     }
@@ -251,7 +268,7 @@ public class GossipSeam(
         // Seam.incoming promises per-sender send order and we re-stamp sender = origin,
         // so same-origin frames are released contiguously (#1272). Relay is never held —
         // gap-fill latency must not compound per hop.
-        val admission = dedup.admit(frame, nowMs())
+        val admission = dedup.admit(frame, dedupNowMs)
         if (!admission.isNew) return
 
         deliver(admission.deliverable)
@@ -266,8 +283,6 @@ public class GossipSeam(
             spool.deliver(Swatch(payload = frame.payload, sender = frame.origin, sequence = frame.seq))
         }
     }
-
-    private fun nowMs(): Long = clock().toEpochMilliseconds()
 
     /**
      * Answers an inbound heartbeat ping from a peer this node does not itself watch
@@ -298,12 +313,22 @@ public class GossipSeam(
 
     /**
      * Eager-flood to the active neighbours only. A defined no-op when the active
-     * view is empty (alone in the session), matching the [Seam] broadcast contract.
+     * view is empty (alone in the session, or the view has not reconciled yet),
+     * matching the [Seam] broadcast contract.
+     *
+     * The no-op **must not consume a per-origin seq**: the flood reaches nobody, so
+     * a burned seq would be a permanent phantom gap — every future receiver would
+     * first-sight this origin mid-stream and reorder-hold (up to a full
+     * [reorderGrace]) everything sent after it (#1309). The check races benignly
+     * with view reconciliation: a view that empties between the check and the flood
+     * burns one seq into a gap the grace bounds, and a view that fills gains
+     * receivers for the already-stamped frame.
      *
      * The payload is wrapped in a fresh origin-stamped [GossipFrame] so receivers
      * can dedup and relay it across the overlay (see the class KDoc).
      */
     override suspend fun broadcast(payload: ByteArray) {
+        if (view.active.value.isEmpty()) return
         flood(GossipFrame.origin(selfId, nextSeq(), initialTtl, payload), except = null)
     }
 
