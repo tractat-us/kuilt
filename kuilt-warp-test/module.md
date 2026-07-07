@@ -1,6 +1,17 @@
 # Module kuilt-warp-test
 
-The conformance TCK for warp's sandboxed WASM execution contract.
+Warp's published test infrastructure: the sandboxed-WASM conformance TCK and the
+multi-node simulation harness.
+
+`MultiNodeWarpSim` (entry point `warpSimTest`) stands up several coordination-free
+`WarpNode`s over an in-memory mesh under deterministic virtual time —
+`StandardTestDispatcher`, a tight test timeout, bounded `settle()`/`await*` helpers
+(never `advanceUntilIdle()`, which spins forever on re-arming anti-entropy timers),
+and a `dumpState()` that turns non-convergence into a fast, legible failure. Reach
+for it in any test that runs more than one `WarpNode`; hand-rolled dispatcher and
+settle-loop choices are how the load-dependent multi-node flakes happened.
+
+The rest of the module is the conformance TCK for warp's sandboxed WASM execution contract.
 
 Every `WasmRuntime` implementation — on any platform — must keep untrusted compute kernels
 inside the same safety envelope: no host capabilities, bounded memory, bounded CPU time, and
