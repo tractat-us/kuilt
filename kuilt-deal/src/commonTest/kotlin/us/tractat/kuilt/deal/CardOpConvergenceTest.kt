@@ -36,11 +36,15 @@ class CardOpConvergenceTest {
             player = alice,
             newCiphertext = c1,
             proof = EncryptProof(ByteArray(0)),
+            baseEncryptedBy = emptySet(),
+            baseStrippedBy = emptySet(),
         )
         val op2 = CardOp.Encrypt(
             player = bob,
             newCiphertext = c2,
             proof = EncryptProof(ByteArray(0)),
+            baseEncryptedBy = setOf(alice),
+            baseStrippedBy = emptySet(),
         )
         // A third peer's virgin placeholder card (remote ops can arrive before local shuffle).
         val virgin = CardState(

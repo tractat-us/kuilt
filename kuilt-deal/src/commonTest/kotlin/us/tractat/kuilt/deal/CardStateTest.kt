@@ -25,6 +25,20 @@ class CardStateTest {
         allPlayers = allPlayers,
     )
 
+    /** An Encrypt op computed against a base with [baseEncryptedBy] layers (none stripped). */
+    private fun encryptOp(
+        player: PlayerId,
+        newCiphertext: ByteArray,
+        baseEncryptedBy: Set<PlayerId> = emptySet(),
+    ) = CardOp.Encrypt(player, newCiphertext, EncryptProof(ByteArray(0)), baseEncryptedBy, emptySet())
+
+    /** A Strip op computed against a fully encrypted base with [baseStrippedBy] already off. */
+    private fun stripOp(
+        player: PlayerId,
+        newCiphertext: ByteArray,
+        baseStrippedBy: Set<PlayerId> = emptySet(),
+    ) = CardOp.Strip(player, newCiphertext, StripProof(ByteArray(0)), allPlayers, baseStrippedBy)
+
     @Test
     fun phaseIsUnencryptedWhenNobodyHasEncrypted() {
         assertEquals(CardPhase.UNENCRYPTED, emptyCard().phase())
@@ -119,14 +133,14 @@ class CardStateTest {
     @Test
     fun encryptOpIsRejectedIfPlayerAlreadyEncrypted() {
         val state = emptyCard().copy(encryptedBy = GSet.of(alice))
-        val op = CardOp.Encrypt(alice, byteArrayOf(1), EncryptProof(ByteArray(0)))
+        val op = encryptOp(alice, byteArrayOf(1))
         assertFalse(state.canApply(op))
     }
 
     @Test
     fun encryptOpIsAcceptedIfPlayerHasNotYetEncrypted() {
         val state = emptyCard()
-        val op = CardOp.Encrypt(alice, byteArrayOf(1), EncryptProof(ByteArray(0)))
+        val op = encryptOp(alice, byteArrayOf(1))
         assertTrue(state.canApply(op))
     }
 
@@ -136,14 +150,14 @@ class CardStateTest {
         val state = emptyCard(quorum = quorumAlice).copy(
             encryptedBy = GSet.of(alice, bob, carol),
         )
-        val op = CardOp.Strip(alice, byteArrayOf(1), StripProof(ByteArray(0)))
+        val op = stripOp(alice, byteArrayOf(1))
         assertFalse(state.canApply(op))
     }
 
     @Test
     fun stripOpIsRejectedIfPlayerHasNotEncrypted() {
         val state = emptyCard().copy(encryptedBy = GSet.empty())
-        val op = CardOp.Strip(bob, byteArrayOf(1), StripProof(ByteArray(0)))
+        val op = stripOp(bob, byteArrayOf(1))
         assertFalse(state.canApply(op))
     }
 
@@ -153,7 +167,7 @@ class CardStateTest {
             encryptedBy = GSet.of(alice, bob, carol),
             strippedBy = GSet.of(bob),
         )
-        val op = CardOp.Strip(bob, byteArrayOf(1), StripProof(ByteArray(0)))
+        val op = stripOp(bob, byteArrayOf(1))
         assertFalse(state.canApply(op))
     }
 
@@ -162,13 +176,13 @@ class CardStateTest {
         val state = emptyCard().copy(
             encryptedBy = GSet.of(alice, bob, carol),
         )
-        val op = CardOp.Strip(bob, byteArrayOf(1), StripProof(ByteArray(0)))
+        val op = stripOp(bob, byteArrayOf(1))
         assertTrue(state.canApply(op))
     }
 
     @Test
     fun applyEncryptAddsPlayerAndSwapsCiphertext() {
-        val next = emptyCard().applyOp(CardOp.Encrypt(alice, byteArrayOf(7), EncryptProof(ByteArray(0))))
+        val next = emptyCard().applyOp(encryptOp(alice, byteArrayOf(7)))
         assertAll(
             { assertTrue(next != null) },
             { assertEquals(setOf(alice), next!!.encryptedBy.elements) },
@@ -179,7 +193,7 @@ class CardStateTest {
     @Test
     fun applyStripAddsPlayerAndSwapsCiphertext() {
         val card = emptyCard().copy(encryptedBy = GSet.of(alice, bob, carol))
-        val next = card.applyOp(CardOp.Strip(bob, byteArrayOf(9), StripProof(ByteArray(0))))
+        val next = card.applyOp(stripOp(bob, byteArrayOf(9)))
         assertAll(
             { assertTrue(next != null) },
             { assertEquals(setOf(bob), next!!.strippedBy.elements) },
@@ -191,7 +205,7 @@ class CardStateTest {
     fun applyInvalidOpReturnsNull() {
         val card = emptyCard().copy(encryptedBy = GSet.of(alice))
         // alice already encrypted — re-encrypt is invalid
-        assertEquals(null, card.applyOp(CardOp.Encrypt(alice, byteArrayOf(1), EncryptProof(ByteArray(0)))))
+        assertEquals(null, card.applyOp(encryptOp(alice, byteArrayOf(1))))
     }
 
     @Test
@@ -227,7 +241,7 @@ class CardStateTest {
         val state = emptyCard(quorum = allPlayers).copy(
             encryptedBy = GSet.of(alice, bob, carol),
         )
-        val op = CardOp.Strip(alice, byteArrayOf(1), StripProof(ByteArray(0)))
+        val op = stripOp(alice, byteArrayOf(1))
         assertTrue(state.canApply(op))
     }
 

@@ -24,16 +24,20 @@ import us.tractat.kuilt.crdt.GSet
  * Each card is a [CardState]; players sequentially encrypt the deck (SRA layers
  * compose because the cipher is commutative), then non-quorum players strip their
  * layer so only the visibility quorum can read each card. State converges via the
- * [CardOp] stream broadcast over the seam.
+ * [CardOp] stream broadcast over the seam: each op carries the base sets it was
+ * computed against and is folded in via [CardState.merge], so convergence holds
+ * under per-sender FIFO delivery even when ops from different senders interleave
+ * differently at different peers (cross-sender transport reorder).
  *
- * **Single-writer assumption.** The [shuffle] and [strip] helpers read the base
- * ciphertext from [state] outside the `_state.update` block, run crypto, then
- * commit. If the incoming-op collector races to apply a remote op to the same card
- * in that window, the commit can overwrite converged state with a stale-base
- * ciphertext (`canApply` checks GSet membership, not ciphertext provenance). This
- * is safe under the current model where each session has exactly one local writer;
- * concurrent local shuffle/strip while remote ops mutate the same card is a
- * production hazard that needs an "await my turn" gate (deferred).
+ * **Single-local-writer assumption.** The [shuffle] and [strip] helpers read the
+ * base ciphertext from [state] outside the `_state.update` block, run crypto, then
+ * commit. If the incoming-op collector races to apply a remote op to the *same
+ * card* in that window, the local op was computed against a stale base and its
+ * merged ciphertext can lose the remote layer while the metadata claims it. This
+ * is safe under the current model where writes to a card are serialized by the
+ * protocol (one shuffler/stripper at a time); concurrent local shuffle/strip while
+ * remote ops mutate the same card is a production hazard that needs an "await my
+ * turn" gate (deferred).
  */
 public class DealSession(
     private val seam: Seam,
@@ -118,13 +122,42 @@ public class DealSession(
         val card = _state.value.cards[index]
         if (myId in card.encryptedBy.elements) return
         val (newCiphertext, proof) = scheme.encrypt(card.ciphertext, myKey.encryptKey)
-        val op = CardOp.Encrypt(myId, newCiphertext, proof)
+        val op = CardOp.Encrypt(
+            player = myId,
+            newCiphertext = newCiphertext,
+            proof = proof,
+            baseEncryptedBy = card.encryptedBy.elements,
+            baseStrippedBy = card.strippedBy.elements,
+        )
         _state.update { deck -> deck.applyLocalOp(index, op) }
         seam.broadcast(Cbor.encodeToByteArray(IndexedCardOp(index, op)))
     }
 
-    /** Set visibility quorums for each card (local state — no broadcast). */
+    /**
+     * Set visibility quorums for each card (local state — no broadcast).
+     *
+     * Supported quorums: a single reader (`|quorum| == 1`), a public/community
+     * card (`quorum == allPlayers`, or an empty quorum), and nothing in between —
+     * a partial multi-member quorum's members could never decrypt (the card would
+     * still carry the *other* members' layers, which [CardOp.Strip] structurally
+     * refuses to remove) so it is rejected here rather than discovered as a
+     * permanently unreadable card at reveal time.
+     *
+     * @throws IllegalArgumentException if a quorum contains an unknown player or
+     *   has `1 < |quorum| < |allPlayers|`.
+     */
     public fun assignQuorums(assignments: Map<Int, Set<PlayerId>>) {
+        assignments.forEach { (index, quorum) ->
+            require(allPlayers.containsAll(quorum)) {
+                "Quorum for card $index contains players not in this deal: ${quorum - allPlayers}"
+            }
+            require(quorum.size <= 1 || quorum == allPlayers) {
+                "Unsupported visibility quorum for card $index (${quorum.size} of ${allPlayers.size} players): " +
+                    "only a single reader, a community card (quorum == allPlayers), or an empty quorum is " +
+                    "supported — a partial multi-member quorum can never be decrypted by its members " +
+                    "without private re-encryption"
+            }
+        }
         _state.update { deck ->
             val cards = deck.cards.toMutableList()
             assignments.forEach { (index, quorum) ->
@@ -134,7 +167,11 @@ public class DealSession(
         }
     }
 
-    /** Strip my encryption layer from all cards where I am not in the visibility quorum. */
+    /**
+     * Strip my encryption layer from all cards that don't need it for secrecy:
+     * cards where I am not in the visibility quorum, plus community cards
+     * (quorum == allPlayers), which every player must strip.
+     */
     public suspend fun strip() {
         for (index in _state.value.cards.indices) {
             stripCard(index)
@@ -143,29 +180,48 @@ public class DealSession(
 
     private suspend fun stripCard(index: Int) {
         val card = _state.value.cards[index]
-        if (myId in card.visibilityQuorum) return
+        val keepsQuorumSecrecy = myId in card.visibilityQuorum && card.visibilityQuorum != allPlayers
+        if (keepsQuorumSecrecy) return
         if (myId !in card.encryptedBy.elements) return
         if (myId in card.strippedBy.elements) return
         val (newCiphertext, proof) = scheme.strip(card.ciphertext, myKey.stripKey)
-        val op = CardOp.Strip(myId, newCiphertext, proof)
+        val op = CardOp.Strip(
+            player = myId,
+            newCiphertext = newCiphertext,
+            proof = proof,
+            baseEncryptedBy = card.encryptedBy.elements,
+            baseStrippedBy = card.strippedBy.elements,
+        )
         _state.update { deck -> deck.applyLocalOp(index, op) }
         seam.broadcast(Cbor.encodeToByteArray(IndexedCardOp(index, op)))
     }
 
     /**
-     * Remove my own encryption layer from the card at [cardIndex] and decode the
-     * original plaintext. Call once the card is [CardPhase.REVEALED] (all non-quorum
-     * players have stripped). Local — does not broadcast.
+     * Decode the plaintext of the card at [cardIndex]. Call once the card is
+     * [CardPhase.REVEALED]. If my own layer is the one remaining (single-reader
+     * quorum), it is stripped locally first; a community card (everyone stripped)
+     * decodes directly. Local — does not broadcast.
      *
-     * @throws IllegalArgumentException if the card is not yet [CardPhase.REVEALED].
+     * @throws IllegalArgumentException if the card is not yet [CardPhase.REVEALED],
+     *   or is revealed to a quorum I am not part of.
      */
     public fun decrypt(cardIndex: Int): ByteArray {
         val card = _state.value.cards[cardIndex]
         require(card.phase() == CardPhase.REVEALED) {
             "Card $cardIndex is not REVEALED (phase=${card.phase()}); cannot decrypt until all non-quorum players have stripped"
         }
-        val (stripped, _) = scheme.strip(card.ciphertext, myKey.stripKey)
-        return decodePlaintext(stripped)
+        val remainingLayers = card.encryptedBy.elements - card.strippedBy.elements
+        return when {
+            remainingLayers.isEmpty() -> decodePlaintext(card.ciphertext)
+            remainingLayers == setOf(myId) -> {
+                val (stripped, _) = scheme.strip(card.ciphertext, myKey.stripKey)
+                decodePlaintext(stripped)
+            }
+            else -> throw IllegalArgumentException(
+                "Card $cardIndex is REVEALED but still carries encryption layers $remainingLayers " +
+                    "that are not mine ($myId); only the visibility quorum can decrypt it",
+            )
+        }
     }
 
     /** Optionally escrow my key to a trusted server for liveness recovery. */
