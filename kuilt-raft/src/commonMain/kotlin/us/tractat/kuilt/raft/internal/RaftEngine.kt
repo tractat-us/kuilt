@@ -704,6 +704,28 @@ internal class RaftEngine(
     private suspend fun stepDownToFollower(reason: StepDownReason) = relinquishToFollower(reason)
 
     /**
+     * Demote to the appropriate follower/learner role on contact from a live leader — a valid
+     * AppendEntries or InstallSnapshot ([onAppendEntries] / [onInstallSnapshot]). The common case, a
+     * Follower/Candidate/Learner recognising the leader, is a cheap role assignment.
+     *
+     * Defense-in-depth (#1250): if this node is somehow STILL [RaftRole.Leader] when a same-term
+     * leader-contact message arrives, Election Safety was violated (two leaders in one term — an
+     * F1-class bug, or storage misbehaviour). A bare `_role.value = followerRole` would leave the
+     * deposed leader's heartbeat/quorum-check/lease jobs running, its pending proposals/config-changes/
+     * reads unresolved, and its dedup cache populated. Route that demotion through the same-term
+     * relinquish path so all of it tears down. Unreachable while Election Safety holds; free otherwise.
+     * (A higher-term message already relinquished via [stepDown] before we get here, so this only ever
+     * observes Leader in the same-term, Election-Safety-violating case.)
+     */
+    private suspend fun demoteToFollowerOnLeaderContact() {
+        if (_role.value is RaftRole.Leader) {
+            stepDownToFollower(StepDownReason.AppendEntriesFromLeader)
+        } else {
+            _role.value = followerRole
+        }
+    }
+
+    /**
      * Shared leadership-relinquish body: cancel all leader jobs, fail pending proposals,
      * reset follower state, emit the trace event, and restart the election timer.
      * Called by both [stepDown] (after a term adoption) and [stepDownToFollower] (same-term).
@@ -921,7 +943,7 @@ internal class RaftEngine(
     private suspend fun onInstallSnapshot(from: NodeId, m: RaftMessage.InstallSnapshot) {
         if (m.term < state.currentTerm) { send(from, RaftMessage.InstallSnapshotResponse(state.currentTerm, 0L)); return }
         if (m.term > state.currentTerm) stepDown(m.term, StepDownReason.HigherTermObserved, from)
-        _role.value = followerRole
+        demoteToFollowerOnLeaderContact()
         preVoteTerm = null          // a live leader appeared — cancel any in-flight pre-vote probe
         _leader.value = m.leaderId
         resetElectionTimeout()
@@ -1001,8 +1023,10 @@ internal class RaftEngine(
             return
         }
         if (m.term > state.currentTerm) stepDown(m.term, StepDownReason.HigherTermObserved, from)
-        // higher term: already adopted it via stepDown above, continue processing in new term
-        _role.value = followerRole
+        // higher term: already adopted it via stepDown above, continue processing in new term.
+        // Same-term: normally a cheap role flip, but if we were somehow still Leader (Election Safety
+        // violated), route through the relinquish path so timers/deferreds/dedup tear down (#1250).
+        demoteToFollowerOnLeaderContact()
         preVoteTerm = null          // a live leader appeared — cancel any in-flight pre-vote probe
         _leader.value = m.leaderId
         resetElectionTimeout()
