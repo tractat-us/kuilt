@@ -2,6 +2,8 @@ package us.tractat.kuilt.crdt
 
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.Serializable
+import kotlin.concurrent.atomics.AtomicReference
+import kotlin.concurrent.atomics.ExperimentalAtomicApi
 
 /**
  * A unique, totally-ordered identity for a single Fugue element.
@@ -127,10 +129,11 @@ public sealed interface FugueOp<out V> {
 }
 
 /**
- * In-memory tree node, used only during sequence materialisation.
- * Not serialized — rebuilt from the op-log on each [computeSequence] call.
+ * In-memory tree node, used during sequence materialisation. Not serialized —
+ * built from the op-log by `buildTree()` and thereafter maintained
+ * incrementally across local edits via [FugueSeqState] (#1211).
  */
-private class FugueNode(
+internal class FugueNode(
     val id: FugueId,
     val parent: FugueNode?,
     val side: FugueSide,
@@ -138,6 +141,15 @@ private class FugueNode(
 ) {
     val leftChildren: MutableList<FugueNode> = mutableListOf()
     val rightChildren: MutableList<FugueNode> = mutableListOf()
+
+    /**
+     * The node that follows this one in the depth-first traversal (the
+     * materialized sequence), or `null` for the last node. On the HEAD
+     * sentinel it points at the first element. Maintained by [FugueSeqState]:
+     * a local insert splices the new node in immediately after its left
+     * origin.
+     */
+    var next: FugueNode? = null
 }
 
 /**
@@ -185,6 +197,13 @@ private sealed interface FugueTraversalStep {
  * is no longer a live tree parent. This bounds op-log growth under long-running
  * replication. See `docs/op-log-crdt-compaction.md` for the safety argument.
  *
+ * **Performance.** Local [insertAt]/[removeAt] maintain the materialized tree and
+ * sequence incrementally ([FugueSeqState], #1211): an append is O(1) tree work
+ * instead of the pre-#1211 O(n log n) full tree rebuild per insert (quadratic
+ * overall for append-heavy sequences). Remote [apply], [piece], [compact], and
+ * deserialization don't thread the incremental state — the next local edit or
+ * read rebuilds it once and resumes incremental maintenance.
+ *
  * **Serialization.** Use [wireSerializer] rather than the compiler-generated
  * serializer to correctly thread the element-type serializer through the op-log.
  *
@@ -192,13 +211,30 @@ private sealed interface FugueTraversalStep {
  *
  * @sample us.tractat.kuilt.crdt.sampleFugue
  */
+@OptIn(ExperimentalAtomicApi::class)
 public class Fugue<V> private constructor(
     internal val ops: Set<FugueOp<V>>,
     /** This replica's current Lamport timestamp (max seen + 1 after any op). */
     public val lamport: Long,
     /** Pre-computed derived caches to avoid rescanning the op-log on every call. */
     private val cache: FugueCache<V>?,
+    /**
+     * The incrementally-maintained tree + sequence threaded forward by local
+     * [insertAt]/[removeAt] (#1211). `null` on the remote/merge/deserialization
+     * paths — the next local edit or read rebuilds it once. See [FugueSeqState]
+     * for the single-owner steal contract.
+     */
+    seqState: FugueSeqState? = null,
 ) : Quilted<Fugue<V>> {
+
+    /**
+     * Ownership slot for the mutable [FugueSeqState]. Mutating operations
+     * *steal* the state (atomic [AtomicReference.exchange] with `null`) and
+     * hand it to the instance they produce; reads steal, snapshot, and return
+     * it. A caller that finds the slot empty rebuilds from the op-log, so the
+     * state is never shared and never observed mid-mutation.
+     */
+    private val seqStateSlot: AtomicReference<FugueSeqState?> = AtomicReference(seqState)
 
     // ── Lazy caches ───────────────────────────────────────────────────────────
 
@@ -227,10 +263,17 @@ public class Fugue<V> private constructor(
     }
 
     /**
-     * The materialized sequence of all [FugueId]s in Fugue tree-traversal order,
-     * including tombstoned elements.
+     * Snapshot of the visible (non-tombstoned) [FugueId]s in sequence order,
+     * memoized per instance. Steals the [FugueSeqState] (rebuilding it from the
+     * op-log if absent), copies its visible list, and returns the state to the
+     * slot so a later local edit can still thread it forward.
      */
-    private val sequence: List<FugueId> by lazy { computeSequence() }
+    private val visibleIds: List<FugueId> by lazy {
+        val state = stealOrRebuildSeqState()
+        val snapshot = state.visible.toList()
+        releaseSeqState(state)
+        snapshot
+    }
 
     /** Canonical sorted op list, cached across encodes. Used by [FugueSerializer]. */
     internal val sortedOps: List<FugueOp<V>> by lazy { ops.sortedWith(compareBy { it.id }) }
@@ -238,18 +281,22 @@ public class Fugue<V> private constructor(
     // ── Public API ────────────────────────────────────────────────────────────
 
     /** The current visible (non-tombstoned) elements, in sequence order. */
-    public fun toList(): List<V> = sequence
-        .filter { id -> id !in tombstones }
-        .map { id -> insertsById.getValue(id).value }
+    public fun toList(): List<V> = visibleIds.map { id -> insertsById.getValue(id).value }
 
     /** The number of visible elements. */
-    public val size: Int get() = sequence.count { it !in tombstones }
+    public val size: Int get() = visibleIds.size
 
     /**
      * Insert [value] at visible position [index] (0 = prepend before first
      * visible element).
      *
      * Returns the new [Fugue] state and the [FugueOp.Insert] op to broadcast.
+     *
+     * Runs on the incremental [FugueSeqState] fast path (#1211): O(1) tree work
+     * for an append (amortized — a state rebuild after a remote merge is O(n log n)
+     * once), instead of the previous unconditional O(n log n) full tree rebuild
+     * per insert. The op minted is bit-identical to the rebuild path's — see
+     * [insertOpViaRebuildOracle] and its differential test.
      *
      * @throws IllegalArgumentException if [index] is outside `0..size`.
      */
@@ -258,17 +305,54 @@ public class Fugue<V> private constructor(
         index: Int,
         value: V,
     ): Pair<Fugue<V>, FugueOp.Insert<V>> {
-        val tree = buildTree()
-        val visible = visibleSequenceFrom(tree)
-        require(index in 0..visible.size) {
-            "insertAt($index) out of range; visible size is ${visible.size}"
+        val state = stealOrRebuildSeqState()
+        if (index !in 0..state.visible.size) {
+            val visibleSize = state.visible.size
+            releaseSeqState(state)
+            throw IllegalArgumentException("insertAt($index) out of range; visible size is $visibleSize")
         }
         val newLamport = lamport + 1L
-        val seq = nextSeqFor(replica)
-        val id = FugueId(lamport = newLamport, replicaId = replica, seq = seq)
-        val op = buildInsertOp(id, value, visible, index, tree)
-        return applyInsert(op, newLamport) to op
+        val id = FugueId(lamport = newLamport, replicaId = replica, seq = nextSeqFor(replica))
+        val leftOrigin = state.nodes.getValue(if (index == 0) FugueId.HEAD else state.visible[index - 1])
+        val op = buildInsertOpIncremental(id, value, leftOrigin)
+        if (op.id in insertsById || op.id in compactedIds) {
+            releaseSeqState(state)
+            return this to op
+        }
+        state.applyLocalInsert(op, leftOrigin, index)
+        val newCache = FugueCache(
+            insertsById = insertsById + (op.id to op),
+            tombstones = tombstones,
+            compactedIds = compactedIds,
+            compactPositions = compactPositions,
+            maxSeqByReplica = maxSeqByReplica + (replica to id.seq),
+        )
+        return Fugue(ops + op, newLamport, newCache, state) to op
     }
+
+    /**
+     * Derive the [FugueOp.Insert] for a new element after [leftOrigin], reading
+     * the incrementally-maintained tree instead of a fresh rebuild. Mirrors
+     * [buildInsertOp] exactly (differentially pinned against it):
+     * - No right children → RIGHT child of [leftOrigin]; its rightOrigin is
+     *   [nextNonDescendantId], with an O(1) shortcut — when [leftOrigin] is the
+     *   last node in the traversal the walk provably returns `null` (every walk
+     *   branch would name a node emitted after [leftOrigin]'s subtree, which
+     *   cannot exist).
+     * - Right children present → LEFT child of the leftmost descendant of the
+     *   first right child, which **is** the traversal successor
+     *   [FugueNode.next] of [leftOrigin] (the first node emitted after it).
+     */
+    private fun buildInsertOpIncremental(id: FugueId, value: V, leftOrigin: FugueNode): FugueOp.Insert<V> =
+        if (leftOrigin.rightChildren.isEmpty()) {
+            val rightOriginId = if (leftOrigin.next == null) null else nextNonDescendantId(leftOrigin)
+            FugueOp.Insert(id = id, value = value, parent = leftOrigin.id, side = FugueSide.Right, rightOrigin = rightOriginId)
+        } else {
+            val parent = checkNotNull(leftOrigin.next) {
+                "Fugue incremental insert: ${leftOrigin.id} has right children but no traversal successor"
+            }
+            FugueOp.Insert(id = id, value = value, parent = parent.id, side = FugueSide.Left, rightOrigin = null)
+        }
 
     private fun nextSeqFor(replica: ReplicaId): Long = (maxSeqByReplica[replica] ?: 0L) + 1L
 
@@ -279,9 +363,13 @@ public class Fugue<V> private constructor(
      * `null` if [index] is out of bounds.
      */
     public fun removeAt(index: Int): Pair<Fugue<V>, FugueOp.Remove<V>>? {
-        val visible = visibleSequence()
-        if (index !in visible.indices) return null
-        val id = visible[index]
+        val state = stealOrRebuildSeqState()
+        if (index !in state.visible.indices) {
+            releaseSeqState(state)
+            return null
+        }
+        // Tombstoning does not change the traversal — only the visible projection.
+        val id = state.visible.removeAt(index)
         val op = FugueOp.Remove<V>(id = id)
         val newCache = FugueCache(
             insertsById = insertsById,
@@ -290,7 +378,7 @@ public class Fugue<V> private constructor(
             compactPositions = compactPositions,
             maxSeqByReplica = maxSeqByReplica,
         )
-        return Fugue(ops + op, lamport, newCache) to op
+        return Fugue(ops + op, lamport, newCache, state) to op
     }
 
     /**
@@ -419,7 +507,52 @@ public class Fugue<V> private constructor(
 
     // ── Private helpers ───────────────────────────────────────────────────────
 
-    private fun visibleSequence(): List<FugueId> = sequence.filter { it !in tombstones }
+    /**
+     * Take exclusive ownership of the incremental [FugueSeqState], rebuilding it
+     * from the op-log (O(n log n), once) when this instance doesn't hold one —
+     * e.g. after a remote [apply], [piece], [compact], or deserialization, or
+     * when the state was already handed to a derived instance.
+     */
+    private fun stealOrRebuildSeqState(): FugueSeqState =
+        seqStateSlot.exchange(null) ?: rebuildSeqState()
+
+    /**
+     * Return an **unmutated** state to this instance's slot after a read (or a
+     * bailed-out mutation). If a concurrent caller already rebuilt and returned
+     * one, this state is simply dropped.
+     */
+    private fun releaseSeqState(state: FugueSeqState) {
+        seqStateSlot.compareAndSet(null, state)
+    }
+
+    private fun rebuildSeqState(): FugueSeqState {
+        val nodes = buildTree()
+        val traversal = mutableListOf<FugueId>()
+        traverseSubtree(nodes.getValue(FugueId.HEAD), traversal, emitSelf = false)
+        return FugueSeqState.from(nodes, traversal, tombstones)
+    }
+
+    /** Peek at the current [FugueSeqState] handle. Test-only: pins state threading (#1211). */
+    internal fun seqStateForTest(): Any? = seqStateSlot.load()
+
+    // ── Test-only differential oracle (#1211) ─────────────────────────────────
+
+    /**
+     * Test-only oracle preserving the pre-#1211 rebuild-per-insert [insertAt] op
+     * derivation verbatim: build the whole tree, materialise the visible
+     * sequence from it, and derive the op via [buildInsertOp]. `internal` purely
+     * so a differential test can assert the incremental fast path mints
+     * bit-identical ops. Does not mutate or consume the incremental state.
+     */
+    internal fun insertOpViaRebuildOracle(replica: ReplicaId, index: Int, value: V): FugueOp.Insert<V> {
+        val tree = buildTree()
+        val visible = visibleSequenceFrom(tree)
+        require(index in 0..visible.size) {
+            "insertAt($index) out of range; visible size is ${visible.size}"
+        }
+        val id = FugueId(lamport = lamport + 1L, replicaId = replica, seq = nextSeqFor(replica))
+        return buildInsertOp(id, value, visible, index, tree)
+    }
 
     private fun visibleSequenceFrom(tree: Map<FugueId, FugueNode>): List<FugueId> {
         val all = mutableListOf<FugueId>()
@@ -428,7 +561,10 @@ public class Fugue<V> private constructor(
     }
 
     /**
-     * Build the [FugueOp.Insert] for a new element at [index] in the visible sequence.
+     * Build the [FugueOp.Insert] for a new element at [index] in the visible sequence,
+     * against a freshly-rebuilt tree. Since #1211 this is only reached through
+     * [insertOpViaRebuildOracle] — production inserts use the equivalent (and
+     * differentially-pinned) [buildInsertOpIncremental].
      *
      * Following the Fugue tree construction rule:
      * - Find `leftOrigin` = the node at `visible[index-1]` (or HEAD if index=0).
@@ -548,7 +684,7 @@ public class Fugue<V> private constructor(
      * a GC'd node stays below the GC'd node's own surviving ancestor rather than
      * floating to HEAD arbitrarily.
      */
-    private fun buildTree(): Map<FugueId, FugueNode> {
+    private fun buildTree(): MutableMap<FugueId, FugueNode> {
         val present = insertsById.keys
         val positions = compactPositions
 
@@ -747,18 +883,11 @@ public class Fugue<V> private constructor(
     }
 
     /**
-     * Materialise the sequence by depth-first traversal of the Fugue tree:
+     * Materialise the traversal order of [node]'s subtree into [result]:
      * for each node, emit all left children (recursively), then the node itself
-     * (unless it is HEAD), then all right children (recursively).
+     * (unless [emitSelf] is false — the top-level HEAD call), then all right
+     * children (recursively). Used by [rebuildSeqState] and [visibleSequenceFrom].
      */
-    private fun computeSequence(): List<FugueId> {
-        val tree = buildTree()
-        val headNode = tree[FugueId.HEAD] ?: return emptyList()
-        val result = mutableListOf<FugueId>()
-        traverseSubtree(headNode, result, emitSelf = false)
-        return result
-    }
-
     private fun traverseSubtree(node: FugueNode, result: MutableList<FugueId>, emitSelf: Boolean = true) {
         // Iterative (explicit LIFO stack) so a degenerate single-spine tree — a long
         // append-only chain — cannot overflow the native stack (#1207). Self is emitted
@@ -789,7 +918,7 @@ public class Fugue<V> private constructor(
 
     // ── Test-only differential oracle (#1207) ───────────────────────────────
     //
-    // Not used by buildTree/computeSequence above (production). Preserves the
+    // Not used by buildTree/rebuildSeqState above (production). Preserves the
     // pre-#1207 *recursive* tree-build/sort/traverse exactly, so a differential
     // test can assert the iterative rewrite produces identical output to this
     // oracle across many randomized trees. Recursion depth here is only ever
@@ -797,10 +926,10 @@ public class Fugue<V> private constructor(
     // generates — never call this against a real, potentially-deep op-log.
 
     /**
-     * Test-only oracle for [computeSequence]: rebuilds the Fugue tree and
-     * walks it with the pre-#1207 recursive sort/traverse instead of the
-     * production iterative rewrite. `internal` purely so a dual-track ordering
-     * test can differentially verify the fix.
+     * Test-only oracle for the materialized sequence ([toList]): rebuilds the
+     * Fugue tree and walks it with the pre-#1207 recursive sort/traverse instead
+     * of the production iterative rewrite. `internal` purely so a dual-track
+     * ordering test can differentially verify the fix.
      */
     internal fun computeSequenceViaRecursiveOracle(): List<V> {
         val tree = buildTreeRecursiveOracle()
@@ -868,6 +997,7 @@ public class Fugue<V> private constructor(
             ops = emptySet(),
             lamport = 0L,
             cache = FugueCache.empty(),
+            seqState = FugueSeqState.empty(),
         )
 
         /**
