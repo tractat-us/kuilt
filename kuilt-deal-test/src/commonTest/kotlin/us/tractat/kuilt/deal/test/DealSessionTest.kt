@@ -111,23 +111,57 @@ class DealSessionTest {
     }
 
     @Test
-    fun assignQuorums_rejectsPartialMultiMemberQuorum() = runTest {
-        // A quorum with 1 < |quorum| < |allPlayers| can never be decrypted by its
-        // members without private re-encryption (issue #1274) — reject it up front.
+    fun assignQuorums_rejectsUnknownPlayers() = runTest {
         val alice = PeerId("alice")
         val bob = PeerId("bob")
-        val carol = PeerId("carol")
         val scheme = SraScheme()
         val session = DealSession(
             seam = FakeSeam(selfId = alice),
             scheme = scheme,
             myKey = scheme.generateKey(),
-            allPlayers = setOf(alice, bob, carol),
+            allPlayers = setOf(alice, bob),
             myId = alice,
             scope = CoroutineScope(UnconfinedTestDispatcher(testScheduler)),
         )
         assertFailsWith<IllegalArgumentException> {
-            session.assignQuorums(mapOf(0 to setOf(alice, bob)))
+            session.assignQuorums(mapOf(0 to setOf(alice, PeerId("mallory"))))
         }
+    }
+
+    @Test
+    fun partialQuorum_membersDecrypt_nonMemberCannot() = runTest {
+        // A card visible to exactly 2 of 3 players (issue #1281): after carol (the
+        // non-member) strips, the quorum members cooperatively strip per-member
+        // reveal tracks so each member ends up holding a copy carrying only their
+        // own layer — without the plaintext ever becoming public.
+        val alice = PeerId("alice")
+        val bob = PeerId("bob")
+        val carol = PeerId("carol")
+        val sessions = fakeDealSessionGroup(
+            playerIds = listOf(alice, bob, carol),
+            scheme = SraScheme(),
+            scope = CoroutineScope(UnconfinedTestDispatcher(testScheduler)),
+        )
+        val (aliceSession, bobSession, carolSession) = sessions
+
+        val originalCard = "ACE_OF_SPADES".encodeToByteArray()
+        val deck = listOf(originalCard)
+        sessions.forEach { it.shuffle(deck) }
+
+        val partialQuorum = mapOf(0 to setOf(alice, bob))
+        sessions.forEach { it.assignQuorums(partialQuorum) }
+
+        // Non-member strips first (main chain), then each member strips the
+        // other member's reveal track.
+        carolSession.strip()
+        aliceSession.strip()
+        bobSession.strip()
+
+        val carolAttempt = runCatchingCancellable { carolSession.decrypt(0) }.getOrNull()
+        assertAll(
+            { assertEquals(originalCard.toList(), aliceSession.decrypt(0).toList()) },
+            { assertEquals(originalCard.toList(), bobSession.decrypt(0).toList()) },
+            { assertNotEquals(originalCard.toList(), carolAttempt?.toList()) },
+        )
     }
 }
