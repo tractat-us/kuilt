@@ -612,9 +612,9 @@ public class Quilter<S : Quilted<S>>(
         val msg = runCatchingCancellable { swatch.decode(binaryFormat, messageSerializer) }.getOrNull() ?: return@withLock
         when (msg) {
             is QuiltMessage.Delta -> onDelta(sender, msg)
-            is QuiltMessage.Ack -> onAck(msg)
+            is QuiltMessage.Ack -> onAck(sender, msg)
             is QuiltMessage.FullState -> onFullState(sender, msg)
-            is QuiltMessage.Resend -> onResend(msg)
+            is QuiltMessage.Resend -> onResend(sender, msg)
             is QuiltMessage.Delivered -> onDelivered(sender, msg)
         }
     }
@@ -712,9 +712,16 @@ public class Quilter<S : Quilted<S>>(
         }
     }
 
-    private fun onAck(msg: QuiltMessage.Ack<S>) {
+    /**
+     * Records the acker's progress on MY deltas, keyed by [acker] — the transport-level
+     * [PeerId] the ack arrived from. It must never be a PeerId fabricated from the wire
+     * message's [ReplicaId]: the two identity domains are decoupled (the convenience
+     * factory explicitly supports a custom [replica] id), so a fabricated key would never
+     * match [knownPeers] and [recomputeUniversalAck]'s watermark would be frozen at 0
+     * forever, pinning [pendingDeltas] unboundedly.
+     */
+    private fun onAck(acker: PeerId, msg: QuiltMessage.Ack<S>) {
         if (msg.sender != replica) return
-        val acker = PeerId(msg.acker.value)
         val current = ackedThrough[acker] ?: 0L
         if (msg.seq > current) ackedThrough[acker] = msg.seq
         recomputeUniversalAck()
@@ -789,12 +796,19 @@ public class Quilter<S : Quilted<S>>(
         recomputeCut()
     }
 
-    private fun onResend(msg: QuiltMessage.Resend<S>) {
+    /**
+     * Re-broadcasts the requested delta range, or — when part of the range is already
+     * GC'd — heals the requester with a [QuiltMessage.FullState] instead. The fallback is
+     * addressed to [requester], the transport-level [PeerId] the Resend arrived from,
+     * never a PeerId fabricated from the wire message's [ReplicaId]: with a custom
+     * replica id the fabricated peer is unknown to the seam and the resulting
+     * PeerNotConnected is swallowed, silently disabling the gap-heal path.
+     */
+    private fun onResend(requester: PeerId, msg: QuiltMessage.Resend<S>) {
         if (msg.sender != replica) return
-        val requesterPeer = PeerId(msg.requester.value)
         val allPresent = (msg.fromSeq..msg.toSeq).all { seq -> seq in pendingDeltas }
         if (!allPresent) {
-            sendFullStateTo(requesterPeer)
+            sendFullStateTo(requester)
             return
         }
         for (seq in msg.fromSeq..msg.toSeq) {
