@@ -43,6 +43,18 @@ public class LWWRegister<V> private constructor(
     public fun set(replica: ReplicaId, timestamp: Long, value: V): LWWRegister<V> =
         LWWRegister(timestamp, replica, value)
 
+    /**
+     * Clear the value tagged with ([timestamp], [replica]) — a last-writer-wins
+     * *tombstone*. It competes under [piece] exactly like a [set]: an unset at a
+     * later tag hides an earlier value, and a set at a later tag revives the
+     * register. After an unset wins, [value] reads `null`.
+     *
+     * The tag-uniqueness precondition on [set] applies equally here: never reuse
+     * a `(replica, timestamp)` pair across writes.
+     */
+    public fun unset(replica: ReplicaId, timestamp: Long): LWWRegister<V> =
+        LWWRegister(timestamp, replica, null)
+
     /** The join: pick the larger `(timestamp, replicaId)` tag. */
     override fun piece(other: LWWRegister<V>): LWWRegister<V> = when {
         other.timestamp > timestamp -> other

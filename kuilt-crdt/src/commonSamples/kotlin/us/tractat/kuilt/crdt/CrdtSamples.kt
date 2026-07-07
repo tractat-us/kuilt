@@ -172,6 +172,14 @@ internal fun sampleLWWMap() {
 
     val merged = left.piece(right)
     check(merged["score"] == 20)  // ts=2 wins for this key
+
+    // remove is a write like any other: a later remove hides the key…
+    val removed = merged.remove(a, timestamp = 3L, key = "score")
+    check(removed["score"] == null)
+
+    // …and a concurrent later set beats a concurrent earlier remove.
+    val rewritten = merged.set(b, timestamp = 4L, key = "score", value = 30)
+    check(removed.piece(rewritten)["score"] == 30)
 }
 
 // ── ORMap ─────────────────────────────────────────────────────────────────────

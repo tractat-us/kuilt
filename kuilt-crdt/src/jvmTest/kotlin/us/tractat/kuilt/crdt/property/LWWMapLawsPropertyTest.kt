@@ -31,9 +31,14 @@ internal class LWWMapLawsPropertyTest {
         }
         return opArb.list().ofMinSize(0).ofMaxSize(6).map { ops: List<Op> ->
             ops.fold(LWWMap.empty<String, String>()) { s: LWWMap<String, String>, op: Op ->
-                // value is a pure function of (replicaIndex, timestamp, key) — deterministic
-                val value = "v-${op.replicaIndex}-${op.timestamp}-${op.key}"
-                s.set(replicas[op.replicaIndex], op.timestamp, op.key, value)
+                // op kind and value are pure functions of (replicaIndex, timestamp, key) —
+                // deterministic, so shared tags always carry the same write (set or remove)
+                if ((op.timestamp + op.replicaIndex) % 4L == 3L) {
+                    s.remove(replicas[op.replicaIndex], op.timestamp, op.key)
+                } else {
+                    val value = "v-${op.replicaIndex}-${op.timestamp}-${op.key}"
+                    s.set(replicas[op.replicaIndex], op.timestamp, op.key, value)
+                }
             }
         }
     }

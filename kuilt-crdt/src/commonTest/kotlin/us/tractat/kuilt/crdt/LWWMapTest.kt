@@ -53,7 +53,7 @@ class LWWMapTest {
             .remove(a, 20L, "lang")
         assertAll(
             { assertNull(m["lang"]) },
-            { assertEquals(emptyMap(), m.entries) },
+            { assertEquals(emptyMap<String, String>(), m.entries) },
         )
     }
 
