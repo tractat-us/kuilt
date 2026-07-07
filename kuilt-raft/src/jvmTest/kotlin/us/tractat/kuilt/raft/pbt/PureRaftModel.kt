@@ -3,6 +3,7 @@ package us.tractat.kuilt.raft.pbt
 import us.tractat.kuilt.raft.LogEntry
 import us.tractat.kuilt.raft.NodeId
 import us.tractat.kuilt.raft.RaftRole
+import us.tractat.kuilt.raft.internal.LogPosition
 import us.tractat.kuilt.raft.internal.isLogUpToDate
 import us.tractat.kuilt.raft.internal.majorityCommitIndex
 import us.tractat.kuilt.raft.internal.nextIndexAfterFailure
@@ -28,7 +29,10 @@ internal sealed interface ModelMsg {
         val term: Long,
         val lastLogIndex: Long,
         val lastLogTerm: Long,
-    ) : ModelMsg
+    ) : ModelMsg {
+        /** The candidate's reported last position, for the §5.4.1 [isLogUpToDate] comparison. */
+        val lastLogPosition: LogPosition get() = LogPosition(term = lastLogTerm, index = lastLogIndex)
+    }
 
     data class RequestVoteResp(
         override val from: NodeId,
@@ -78,6 +82,9 @@ internal data class Replica(
 ) {
     val lastLogIndex: Long get() = log.lastOrNull()?.index ?: snapshotIndex
     val lastLogTerm: Long get() = log.lastOrNull()?.term ?: snapshotTerm
+
+    /** Snapshot-aware last position for the §5.4.1 [isLogUpToDate] comparison. */
+    val lastLogPosition: LogPosition get() = LogPosition(term = lastLogTerm, index = lastLogIndex)
     fun entryAt(index: Long): LogEntry? = log.firstOrNull { it.index == index }
 
     /** A committed index is "present" if it is in the retained log or covered by the snapshot baseline. */
@@ -247,7 +254,7 @@ private fun Cluster.onRequestVote(m: ModelMsg.RequestVote): Cluster {
     }
 
     // §5.4.1 (issue #1245): compare against the snapshot-aware last, not the live log's last entry.
-    val logOk = isLogUpToDate(r.lastLogTerm, r.lastLogIndex, m.lastLogIndex, m.lastLogTerm)
+    val logOk = isLogUpToDate(ours = r.lastLogPosition, candidate = m.lastLogPosition)
     val canGrant = m.term == r.term && logOk && (r.votedFor == null || r.votedFor == m.from)
 
     if (canGrant) {

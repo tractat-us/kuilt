@@ -27,7 +27,10 @@ internal sealed interface RaftMessage {
         val lastLogIndex: Long,
         val lastLogTerm: Long,
         val leadershipTransfer: Boolean = false,
-    ) : RaftMessage
+    ) : RaftMessage {
+        /** The candidate's reported last position, for §5.4.1 comparisons — see [isLogUpToDate]. */
+        val lastLogPosition: LogPosition get() = LogPosition(term = lastLogTerm, index = lastLogIndex)
+    }
 
     @Serializable
     data class RequestVoteResponse(
@@ -130,7 +133,10 @@ internal sealed interface RaftMessage {
         val lastLogIndex: Long,
         val lastLogTerm: Long,
         val round: Long,
-    ) : RaftMessage
+    ) : RaftMessage {
+        /** The candidate's reported last position, for §5.4.1 comparisons — see [isLogUpToDate]. */
+        val lastLogPosition: LogPosition get() = LogPosition(term = lastLogTerm, index = lastLogIndex)
+    }
 
     /**
      * Response to [PreVote]. [proposedTerm] echoes the [PreVote.term] and [round] echoes the

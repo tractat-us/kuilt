@@ -92,6 +92,9 @@ internal class RaftState(bootstrapConfig: ClusterConfig) {
 
     val lastLogTerm: Long get() = log.lastOrNull()?.term ?: snapshotTerm
 
+    /** Snapshot-aware last position for §5.4.1 comparisons — see [isLogUpToDate]. */
+    val lastLogPosition: LogPosition get() = LogPosition(term = lastLogTerm, index = lastLogIndex)
+
     /** Term at [index], or `null` if [index] is in the compacted prefix (unknowable from in-memory state). */
     fun termAt(index: Long): Long? = when {
         index == snapshotIndex -> snapshotTerm
