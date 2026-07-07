@@ -7,9 +7,19 @@ package us.tractat.kuilt.warp
  * Tests inject a fake that returns a known [Op] without compiling real WASM bytes.
  *
  * **Capability sandbox.** A conforming implementation MUST reject any WASM module that
- * declares an import (i.e. requests host capabilities beyond the compute sandbox) or that
- * exceeds the runtime's memory ceiling. Malformed bytes are also rejected. All three cases
- * surface as [WasmLoadException].
+ * declares an import (i.e. requests host capabilities beyond the compute sandbox). Malformed
+ * bytes and modules missing the warp ABI exports are also rejected. All cases surface as
+ * [WasmLoadException].
+ *
+ * **Memory ceiling — a bounded declared max is REQUIRED.** A conforming implementation MUST
+ * reject at load any module whose declared linear memory has an initial size or explicit max
+ * exceeding [WasmSandboxConfig.maxMemoryPages], declares memory with **no explicit max**, or
+ * declares no linear memory at all (the warp ABI marshals args/results through memory). The
+ * no-max rule is uniform across targets because it is the only one enforceable identically
+ * everywhere — the browser cannot re-impose a max on a compiled module, so clamping is not an
+ * option there, and a no-max module could otherwise `memory.grow` to ~4 GiB (a memory-bomb
+ * DoS). Requiring a bounded `max <= cap` delegates growth enforcement to the engine: every
+ * conforming engine traps/denies a `memory.grow` past the declared max.
  *
  * **Execution-time bound.** A conforming implementation MUST also bound each invocation of a
  * returned [Op] by the configured execution timeout ([WasmSandboxConfig.executionTimeout]): a
@@ -28,8 +38,9 @@ public interface WasmRuntime {
      * Compile + instantiate [bytes] under the capability sandbox, returning a runnable [Op]
      * whose invocations are bounded by the configured execution timeout.
      *
-     * @throws WasmLoadException if the module declares an import, exceeds the memory ceiling,
-     *   or is malformed.
+     * @throws WasmLoadException if the module declares an import, violates the memory ceiling
+     *   (over-cap initial or max, no explicit max, or no memory at all), is malformed, or
+     *   lacks the `warp_alloc`/`warp_run` ABI exports.
      */
     public fun load(bytes: ByteArray): Op
 }
@@ -47,8 +58,10 @@ public sealed class WasmException(message: String, cause: Throwable?) : Exceptio
 /**
  * Thrown by [WasmRuntime.load] when a WASM module cannot be loaded into the sandbox.
  *
- * Covers three cases: the module declares an import (capability violation), the module
- * exceeds the runtime's memory ceiling, or the bytes are malformed / not valid WASM.
+ * Covers every load-time guard: the module declares an import (capability violation), it
+ * violates the memory ceiling (over-cap initial or max, no explicit max, or no linear memory
+ * at all), the bytes are malformed / not valid WASM, or a required warp ABI export
+ * (`warp_alloc`/`warp_run`) is missing.
  */
 public class WasmLoadException(message: String, cause: Throwable? = null) : WasmException(message, cause)
 

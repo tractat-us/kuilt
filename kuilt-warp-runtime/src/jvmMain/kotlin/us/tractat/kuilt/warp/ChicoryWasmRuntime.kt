@@ -35,8 +35,14 @@ import java.util.concurrent.TimeoutException
  * - *Import rejection* — no [withImportValues] is provided; any declared import causes
  *   Chicory's [Instance.builder] to throw [UnlinkableException], caught and rethrown as
  *   [WasmLoadException].
- * - *Memory cap* — the declared initial and max page counts are checked against
- *   [WasmSandboxConfig.maxMemoryPages] before build, and the runtime limit is clamped.
+ * - *Memory ceiling* — the uniform declared-memory contract (see [WasmRuntime]): the declared
+ *   initial and max page counts are checked against [WasmSandboxConfig.maxMemoryPages] before
+ *   build, and a module declaring memory with **no explicit max** is rejected outright —
+ *   matching the native and browser runtimes, which cannot clamp a compiled module's limits.
+ *   No runtime clamp is applied: every loaded module carries a bounded declared max that
+ *   Chicory itself enforces at `memory.grow` time. (The previous clamp was not just
+ *   redundant — it *widened* a module's declared max up to the cap, silently granting more
+ *   memory than the kernel declared.)
  * - *Total load-failure containment* — **every** [ChicoryException] is converted to a
  *   [WasmLoadException]: build-time validation / trapping-`(start)` failures, a module that
  *   exports no memory, and a missing `warp_alloc`/`warp_run` ABI export (Chicory's
@@ -128,8 +134,8 @@ public class ChicoryWasmRuntime(
 
     override fun load(bytes: ByteArray): Op {
         val module = parseModule(bytes)
-        val memLimits = resolvedMemoryLimits(module)
-        val instance = buildInstance(module, memLimits)
+        rejectUnboundedOrOversizeMemory(module)
+        val instance = buildInstance(module)
         val memory = instance.memory()
             ?: throw WasmLoadException("module exports no memory")
         val allocFn = exportOrThrow(instance, "warp_alloc")
@@ -164,20 +170,25 @@ public class ChicoryWasmRuntime(
         }
 
     /**
-     * Returns [MemoryLimits] to apply via [Instance.Builder.withMemoryLimits], or null if the
-     * module declares no memory section.
+     * Enforces the uniform declared-memory contract (see [WasmRuntime]) on the module's declared
+     * limits before build. A module with no memory section passes here — the missing warp-ABI
+     * memory is caught after instantiation ("module exports no memory").
      *
-     * Policy:
-     * - If the declared initial exceeds [WasmSandboxConfig.maxMemoryPages], reject immediately.
-     *   This guards against `MemoryLimits(initial, cap)` throwing Chicory's raw `InvalidException`
-     *   ("size minimum must not be greater than maximum") when initial > cap.
-     * - [MemoryLimits.MAX_PAGES] (65536) is Chicory's sentinel for "no max declared in the
-     *   binary". Such a module is allowed — its maximum is clamped to [WasmSandboxConfig.maxMemoryPages].
-     * - Any other (explicit) max that exceeds the cap is rejected immediately.
+     * Policy (checked in this order, matching the native and browser runtimes):
+     * - A declared initial exceeding [WasmSandboxConfig.maxMemoryPages] is rejected.
+     * - A missing declared max — [MemoryLimits.MAX_PAGES] (65536) is Chicory's sentinel for "no
+     *   max declared in the binary" — is rejected: an unbounded module could `memory.grow` to
+     *   ~4 GiB (a memory-bomb DoS), and the browser runtime cannot clamp post-compile, so the
+     *   only contract enforceable identically everywhere is a required bounded max.
+     * - An explicit max exceeding the cap is rejected.
+     *
+     * No [MemoryLimits] clamp is applied to the instance: the surviving declared max is bounded
+     * and Chicory enforces it at `memory.grow` time. (The previous clamp-to-cap silently
+     * *widened* a declared max below the cap — a kernel that declared 1 page could grow to 16.)
      */
-    private fun resolvedMemoryLimits(module: WasmModule): MemoryLimits? {
-        val memSection = module.memorySection().orElse(null) ?: return null
-        if (memSection.memoryCount() == 0) return null
+    private fun rejectUnboundedOrOversizeMemory(module: WasmModule) {
+        val memSection = module.memorySection().orElse(null) ?: return
+        if (memSection.memoryCount() == 0) return
         val limits = memSection.getMemory(0).limits()
         val initial = limits.initialPages()
         if (initial > config.maxMemoryPages) {
@@ -186,21 +197,26 @@ public class ChicoryWasmRuntime(
             )
         }
         val declaredMax = limits.maximumPages()
-        if (declaredMax != MemoryLimits.MAX_PAGES && declaredMax > config.maxMemoryPages) {
+        if (declaredMax == MemoryLimits.MAX_PAGES) {
+            throw WasmLoadException(
+                "module declares memory with no explicit max (unbounded growth not allowed); " +
+                    "declare a max <= ${config.maxMemoryPages} pages",
+            )
+        }
+        if (declaredMax > config.maxMemoryPages) {
             throw WasmLoadException(
                 "module memory exceeds sandbox cap: declared max $declaredMax pages > ${config.maxMemoryPages} pages",
             )
         }
-        return MemoryLimits(initial, config.maxMemoryPages)
     }
 
-    private fun buildInstance(module: WasmModule, memLimits: MemoryLimits?): Instance =
+    private fun buildInstance(module: WasmModule): Instance =
         try {
             // No withMachineFactory(...): the default InterpreterMachine is required so the
             // execution-time interrupt checks fire (see class KDoc — interpreter-only).
-            Instance.builder(module)
-                .apply { if (memLimits != null) withMemoryLimits(memLimits) }
-                .build()
+            // No withMemoryLimits(...): the declared limits were validated above and the
+            // engine enforces them natively.
+            Instance.builder(module).build()
         } catch (e: UnlinkableException) {
             throw WasmLoadException("module capability violation (imports not allowed): ${e.message}", e)
         } catch (e: ChicoryException) {

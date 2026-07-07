@@ -25,6 +25,7 @@ import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.quilter.QuilterConfig
 import us.tractat.kuilt.test.assertAll
+import us.tractat.kuilt.warp.test.WasmKernelFixtures
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -49,20 +50,11 @@ private val C5B_CADENCE = C5B_QUILTER_CONFIG.antiEntropyInterval
 
 class LazyFetchAndRunTest {
 
-    private val reverseWasm: ByteArray = checkNotNull(
-        LazyFetchAndRunTest::class.java.getResourceAsStream("/us/tractat/kuilt/warp/reverse.wasm"),
-    ) { "reverse.wasm not found on classpath" }
-        .readBytes()
+    private val reverseWasm: ByteArray = WasmKernelFixtures.REVERSE
 
-    private val importsWasm: ByteArray = checkNotNull(
-        LazyFetchAndRunTest::class.java.getResourceAsStream("/us/tractat/kuilt/warp/imports.wasm"),
-    ) { "imports.wasm not found on classpath" }
-        .readBytes()
+    private val importsWasm: ByteArray = WasmKernelFixtures.IMPORTS
 
-    private val trapWasm: ByteArray = checkNotNull(
-        LazyFetchAndRunTest::class.java.getResourceAsStream("/us/tractat/kuilt/warp/trap.wasm"),
-    ) { "trap.wasm not found on classpath" }
-        .readBytes()
+    private val trapWasm: ByteArray = WasmKernelFixtures.TRAP
 
     /** A task id the ring assigns to [owner] under the [peers] roster (default seed/vnodes). */
     private fun taskOwnedBy(owner: PeerId, peers: Set<PeerId>): TaskId {
@@ -136,7 +128,7 @@ class LazyFetchAndRunTest {
         }
 
     /**
-     * C5b terminal-error (load-time): a node fetches [imports.wasm], [WasmRuntime.load] throws
+     * C5b terminal-error (load-time): a node fetches the imports kernel ([WasmKernelFixtures.IMPORTS]), [WasmRuntime.load] throws
      * [WasmLoadException], and [WarpNode] records a terminal [OpResult.failure] that converges
      * onto both boards.  The second [settle] must produce no churn — the board is stable and the
      * executions counter does not advance again, proving anti-entropy is not hot-looping on the
@@ -226,7 +218,7 @@ class LazyFetchAndRunTest {
         }
 
     /**
-     * C5b terminal-error (run-time): [trap.wasm] loads cleanly but traps during [Op.invoke],
+     * C5b terminal-error (run-time): the trap kernel ([WasmKernelFixtures.TRAP]) loads cleanly but traps during [Op.invoke],
      * surfacing as [WasmExecutionException].  Same convergence + stability assertions as the
      * load-time case, exercising the second [recordTerminalError] call site in
      * [WarpNode.executeViaRegistry].

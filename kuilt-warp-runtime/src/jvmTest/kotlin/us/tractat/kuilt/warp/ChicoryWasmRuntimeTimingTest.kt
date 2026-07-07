@@ -5,6 +5,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.test.assertAll
+import us.tractat.kuilt.warp.test.WasmKernelFixtures
 import java.util.concurrent.TimeoutException
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.Test
@@ -43,12 +44,7 @@ import kotlin.time.Duration.Companion.seconds
  */
 class ChicoryWasmRuntimeTimingTest {
 
-    private val reverseWasm: ByteArray = checkNotNull(
-        ChicoryWasmRuntimeTimingTest::class.java.getResourceAsStream(
-            "/us/tractat/kuilt/warp/reverse.wasm",
-        ),
-    ) { "reverse.wasm not found on classpath" }
-        .readBytes()
+    private val reverseWasm: ByteArray = WasmKernelFixtures.REVERSE
 
     /**
      * Negative control: a fake runner that always throws [TimeoutException] surfaces every
