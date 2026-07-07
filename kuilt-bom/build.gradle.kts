@@ -34,6 +34,7 @@ mavenPublishing {
 val deliberatelyUnpublished = setOf(
     ":kuilt-scale", // JVM-only scaling/bench harness (plain kotlinJvm)
     ":examples", // test-only usage examples (plain kotlinJvm)
+    ":demo-shared", // Patchwork demo app core (plain KMP jvm+wasmJs, never published)
 )
 
 val publishedSiblings = rootProject.subprojects
