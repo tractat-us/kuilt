@@ -3,6 +3,7 @@ package us.tractat.kuilt.warp.test
 import kotlinx.coroutines.test.TestResult
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.test.assertAll
+import us.tractat.kuilt.warp.WasmException
 import us.tractat.kuilt.warp.WasmExecutionException
 import us.tractat.kuilt.warp.WasmLoadException
 import us.tractat.kuilt.warp.WasmRuntime
@@ -48,10 +49,12 @@ import kotlin.time.Duration.Companion.seconds
  * - guest-controlled ABI words (alloc pointer, packed result pointer/length) with the high
  *   bit set are bounds-rejected, never sign-wrapped into host-memory access.
  *
- * **Explicit non-coverage** — [WasmRuntime.load] itself is not execution-time-bounded; a
- * kernel whose `(start)` function is a CPU bomb is outside this suite (it would hang rather
- * than fail on a non-conforming impl). Tracked separately; do not add such a vector here
- * without a load-time budget in the contract.
+ * **Load-phase execution bound** — a module's `(start)` function runs at instantiation,
+ * before any ABI call, so the invocation budget alone cannot bound it. The contract is
+ * phase-agnostic: whether an impl runs `(start)` eagerly under a bounded `load` (surfacing
+ * [WasmLoadException]) or defers instantiation to the first bounded invocation (surfacing
+ * [WasmExecutionException]), a `(start)` CPU bomb must fail terminally near the budget —
+ * never hang the host (see [startSectionCpuBombIsBoundedNotHung]).
  *
  * The CPU-bomb vectors burn REAL wall-clock CPU: the sandbox budget is dropped to 250 ms and
  * `runTest` timeouts are kept tight so a non-conforming impl fails fast instead of wedging
@@ -161,6 +164,26 @@ public abstract class WasmRuntimeConformanceSuite {
         val bounded = newRuntime(WasmSandboxConfig(executionTimeout = 250.milliseconds))
         val op = bounded.load(WasmKernelFixtures.CPU_BOMB)
         val ex = assertFailsWith<WasmExecutionException> { op.invoke(ByteArray(0)) }
+        assertContains(ex.message ?: "", "exceeded", message = "names the budget, not a generic trap")
+    }
+
+    /**
+     * The load-phase CPU bomb: a `(start)` function spinning forever runs at instantiation —
+     * before any ABI call — so the per-invocation budget alone cannot bound it; an impl that
+     * instantiates outside its execution budget hangs at `load` (a remotely-triggerable DoS:
+     * kernels arrive from untrusted peers via lazy fetch). The contract is phase-agnostic —
+     * an impl may run `(start)` eagerly under a bounded `load` (JVM: a load-time
+     * [WasmLoadException]) or defer instantiation to the first bounded invocation (native,
+     * browser: a run-time [WasmExecutionException]) — so the vector drives load + first
+     * invoke together and accepts either [us.tractat.kuilt.warp.WasmException] arm, as long
+     * as it terminates near the budget and names it.
+     */
+    @Test
+    public fun startSectionCpuBombIsBoundedNotHung(): TestResult = runTest(timeout = 10.seconds) {
+        val bounded = newRuntime(WasmSandboxConfig(executionTimeout = 250.milliseconds))
+        val ex = assertFailsWith<WasmException> {
+            bounded.load(WasmKernelFixtures.START_CPU_BOMB).invoke(ByteArray(0))
+        }
         assertContains(ex.message ?: "", "exceeded", message = "names the budget, not a generic trap")
     }
 
