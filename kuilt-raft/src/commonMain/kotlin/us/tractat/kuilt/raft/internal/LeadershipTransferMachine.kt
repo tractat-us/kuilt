@@ -8,7 +8,6 @@ import kotlinx.coroutines.launch
 import us.tractat.kuilt.raft.LeadershipTransferException
 import us.tractat.kuilt.raft.NodeId
 import us.tractat.kuilt.raft.RaftConfig
-import us.tractat.kuilt.raft.StepDownReason
 
 /**
  * Leader-side leadership-transfer state machine (§3.10). Owns the in-flight transfer target, the
@@ -18,22 +17,31 @@ import us.tractat.kuilt.raft.StepDownReason
  * call site; the machine only reports *what* the engine should do next (send a `TimeoutNow`,
  * trace-abandon a target) and completes the caller's deferred.
  *
+ * **Success is gated on a leader-authored message from the target (#1243).** A transfer completes
+ * successfully **only** via [onLeaderElected] — the engine's cue that a leader-authored message
+ * (`AppendEntries`/`InstallSnapshot` with `leaderId == target`) arrived at a term above the transfer's
+ * start term, i.e. the target *actually is* leader. The old leader's step-down is deliberately NOT a
+ * resolution point: the *sender* of the first higher-term message identifies neither the winner nor
+ * even a campaigner — a higher-term echo *from* the target (adopted from an unrelated new leader)
+ * would be a false SUCCESS, and a non-target voter's higher-term reject outracing the target's genuine
+ * win would be a false FAILURE. The transfer therefore stays pending across a step-down and resolves
+ * by confirmation ([onLeaderElected]), by the auto-timeout ([onTimeout]), by explicit cancel
+ * ([onCancel]), by this node re-winning leadership itself ([onSelfElected]), or at actor teardown
+ * ([fail]).
+ *
  * **All-or-none invariant, made structural.** The pre-extraction engine held the target, the
  * deferred, and the timer as three independent `var`s that had to be set and cleared together. Here
  * they are one nullable [InFlight] record: non-null iff a transfer is in flight; setting and clearing
- * it is a single atomic assignment, so the three can never drift out of step. This is a
- * representation change only — behavior is byte-for-byte the pre-extraction engine's.
+ * it is a single atomic assignment, so they can never drift out of step.
  *
  * **Deferred completion is exactly-once — and done *inside* the machine.** Unlike [ReadIndexTracker] and
  * [ProposalForwarder], which hand their outcome back for the engine to complete the caller's deferred at
  * the call site, this machine completes its own deferred: the single `Unit` deferred lives inside the
  * all-or-none [InFlight] record, so setting and clearing it is one atomic assignment and exactly-once is a
  * trivially *local* property here — routing it back through the engine would only add a boundary crossing
- * with no safety gained. Every resolution path ([onTimeout], [onCancel], [onLeadershipRelinquished],
- * [fail]) both cancels the timer and completes the deferred exactly once, then clears [InFlight] so no
- * later path can double-complete. [reset] (leader re-election) is the one path that clears *without*
- * completing — it mirrors the pre-extraction `becomeLeader` clear, which by construction only ever runs
- * after `relinquishToFollower` has already resolved any in-flight transfer.
+ * with no safety gained. Every resolution path ([onLeaderElected], [onTimeout], [onCancel],
+ * [onSelfElected], [fail]) both cancels the timer and completes the deferred exactly once, then clears
+ * [InFlight] so no later path can double-complete.
  *
  * **The timer.** [start] launches a single coroutine on [scope] that, after
  * [RaftConfig.electionTimeoutMax], calls [signalTimeout] with this transfer's generation epoch — which the
@@ -42,7 +50,9 @@ import us.tractat.kuilt.raft.StepDownReason
  * asynchrony is always expressed as an [us.tractat.kuilt.raft.internal.EngineCommand]. The job is cancelled
  * on every resolution. The epoch is the generation guard: [onTimeout] ignores a signal whose epoch no longer
  * matches the in-flight transfer, so a late timeout from an already-resolved transfer cannot abort its
- * successor (#1232) — a `cancel()` cannot stop a timer already past its `delay` and mid-`trySend`.
+ * successor (#1232) — a `cancel()` cannot stop a timer already past its `delay` and mid-`trySend`. Because
+ * a pending transfer now survives the old leader's step-down, this timer (plus [onSelfElected] and actor
+ * teardown) is what bounds the wait: an unconfirmed transfer always fails within one election timeout.
  *
  * **Concurrency:** actor-confined exactly like the fields it holds — every method is called only from
  * inside the engine's single dispatch loop (or the init-restore coroutine that strictly precedes it).
@@ -61,13 +71,16 @@ internal class LeadershipTransferMachine(
     private val signalTimeout: (epoch: Long) -> Unit,
 ) {
     /**
-     * One in-flight transfer: its [target], the caller's [deferred], the auto-abandon [timeoutJob], and
-     * the [epoch] that stamps this transfer's timer. The epoch is the generation guard for the auto-timeout:
-     * the timer coroutine captures it and passes it back through [signalTimeout]/[onTimeout], so a late
-     * `TransferTimeout` from an already-resolved transfer's timer is recognised as stale and ignored (#1232).
+     * One in-flight transfer: its [target], the term the transfer [start]ed at ([startTerm] — success
+     * requires a leader-authored message from the target at a term strictly above it), the caller's
+     * [deferred], the auto-abandon [timeoutJob], and the [epoch] that stamps this transfer's timer. The
+     * epoch is the generation guard for the auto-timeout: the timer coroutine captures it and passes it
+     * back through [signalTimeout]/[onTimeout], so a late `TransferTimeout` from an already-resolved
+     * transfer's timer is recognised as stale and ignored (#1232).
      */
     private data class InFlight(
         val target: NodeId,
+        val startTerm: Long,
         val deferred: CompletableDeferred<Unit>,
         val timeoutJob: Job,
         val epoch: Long,
@@ -83,18 +96,19 @@ internal class LeadershipTransferMachine(
         get() = inFlight?.target
 
     /**
-     * Begin a transfer to [target], parking [response] until it resolves and arming the one-election-timeout
-     * auto-abandon timer. Returns false (and does nothing) if a transfer is already in flight — the caller
-     * rejects the second request; the existing transfer keeps its own deferred and timer.
+     * Begin a transfer to [target] at the leader's current term [startTerm], parking [response] until it
+     * resolves and arming the one-election-timeout auto-abandon timer. Returns false (and does nothing)
+     * if a transfer is already in flight — the caller rejects the second request; the existing transfer
+     * keeps its own deferred and timer.
      */
-    fun start(target: NodeId, response: CompletableDeferred<Unit>): Boolean {
+    fun start(target: NodeId, startTerm: Long, response: CompletableDeferred<Unit>): Boolean {
         if (inFlight != null) return false
         val epoch = ++epochCounter
         val timeoutJob = scope.launch {
             delay(raftConfig.electionTimeoutMax.inWholeMilliseconds)
             signalTimeout(epoch)
         }
-        inFlight = InFlight(target, response, timeoutJob, epoch)
+        inFlight = InFlight(target, startTerm, response, timeoutJob, epoch)
         return true
     }
 
@@ -116,6 +130,24 @@ internal class LeadershipTransferMachine(
         val current = inFlight ?: return false
         if (from != current.target) return false
         return matchIdx >= lastLogIdx
+    }
+
+    /**
+     * A **leader-authored** message (`AppendEntries`/`InstallSnapshot`) from [leaderId] at [term] reached
+     * this node — the engine calls this wherever it resolves its leader StateFlow from a live leader's
+     * message. Returns true iff this confirmed the in-flight transfer: [leaderId] is the transfer target
+     * and [term] is strictly above the transfer's start term — proof the target actually won an election
+     * (#1243, the §3.10 success condition). Completes the deferred successfully and clears state. Returns
+     * false otherwise (no transfer in flight, a different leader, or a not-higher term — the latter only
+     * reachable under an Election Safety violation, which must not report transfer success).
+     */
+    fun onLeaderElected(leaderId: NodeId, term: Long): Boolean {
+        val current = inFlight ?: return false
+        if (leaderId != current.target || term <= current.startTerm) return false
+        current.timeoutJob.cancel()
+        current.deferred.complete(Unit)
+        inFlight = null
+        return true
     }
 
     /**
@@ -141,35 +173,21 @@ internal class LeadershipTransferMachine(
     }
 
     /**
-     * The leader is stepping down while a transfer is in flight, having observed a higher term from [from]
-     * (null when the step-down carries no originating peer — e.g. a same-term CheckQuorum step-down). The
-     * transfer completes successfully **only** when the higher term came from the transfer target — a
-     * **best-effort** confirmation: a higher term observed *from* the target strongly (but not conclusively,
-     * on a degraded/partitioned network — the message may be an echo, or arrive at the target's RequestVote
-     * before its win) indicates the target became leader. The conclusive signal — a leader-authored message
-     * from the target — is tracked by #1243. Any other step-down (a higher term from an unrelated node,
-     * CheckQuorum, RemovedFromConfig) fails the transfer. No-op when no transfer is in flight.
+     * This node won an election itself while a transfer was still pending (it stepped down mid-transfer,
+     * the target never confirmed, and this node was re-elected): the target did not become leader first —
+     * fail the deferred and clear state, so the resumed leadership does not inherit a stale transfer (whose
+     * propose gate would otherwise re-engage). Returns the abandoned target for the engine to trace, or
+     * null when nothing was in flight (the normal first-election case — no-op).
      */
-    fun onLeadershipRelinquished(reason: StepDownReason, from: NodeId?) {
-        val current = inFlight ?: return
-        if (reason == StepDownReason.HigherTermObserved && from == current.target) {
-            current.timeoutJob.cancel()
-            current.deferred.complete(Unit)
-            inFlight = null
-        } else {
-            failWith(current, LeadershipTransferException("leader stepped down before transfer completed: $reason (higher term from ${from?.value})"))
-        }
-    }
-
-    /**
-     * Clear any transfer state on becoming leader — cancels the timer and drops [InFlight] *without*
-     * completing the deferred (a re-elected-after-stepdown node must not carry stale transfer state).
-     * By construction this only runs after `relinquishToFollower` has already resolved any in-flight
-     * transfer, so there is no deferred left to complete.
-     */
-    fun reset() {
-        inFlight?.timeoutJob?.cancel()
-        inFlight = null
+    fun onSelfElected(): NodeId? {
+        val current = inFlight ?: return null
+        failWith(
+            current,
+            LeadershipTransferException(
+                "this node was re-elected leader before the transfer target ${current.target.value} was confirmed",
+            ),
+        )
+        return current.target
     }
 
     /** Fail the in-flight transfer (if any) with [cause] — actor-teardown path. No-op when none is in flight. */

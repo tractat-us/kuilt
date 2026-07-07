@@ -49,7 +49,7 @@ internal class LeadershipTransferMachineTest {
         // Transfer 1: start it, then let its auto-timeout timer fire so we capture the epoch it signals —
         // the stale TransferTimeout that is now "in flight" toward the actor for generation 1.
         val d1 = CompletableDeferred<Unit>()
-        assertTrue(machine.start(targetB, d1))
+        assertTrue(machine.start(targetB, startTerm = 1L, response = d1))
         advanceTimeBy(window); runCurrent()
         val staleEpoch = lastSignaledEpoch
         assertTrue(staleEpoch != null, "transfer 1's timer must have signalled its epoch")
@@ -60,7 +60,7 @@ internal class LeadershipTransferMachineTest {
 
         // Transfer 2 starts — a fresh generation with its own deferred.
         val d2 = CompletableDeferred<Unit>()
-        assertTrue(machine.start(targetC, d2))
+        assertTrue(machine.start(targetC, startTerm = 1L, response = d2))
 
         // The stale TransferTimeout for transfer 1 is finally processed. It must be a no-op.
         val abandonedStale = machine.onTimeout(staleEpoch)
@@ -78,6 +78,73 @@ internal class LeadershipTransferMachineTest {
             { assertTrue(ownEpoch != staleEpoch, "transfer 2 must carry a distinct generation from transfer 1") },
             { assertEquals(targetC, abandonedOwn, "transfer 2's own-generation timeout must abort it") },
             { assertTrue(d2CompletedAfterOwn, "transfer 2's deferred must be failed by its own timeout") },
+        )
+    }
+
+    /**
+     * #1243 — [LeadershipTransferMachine.onLeaderElected] gating: the transfer completes successfully
+     * **only** for the transfer target at a term strictly above the transfer's start term. A different
+     * leader at a higher term keeps it pending (that node winning says nothing about the target's
+     * still-possible win within the window); the target at a not-higher term (an Election Safety
+     * violation) must not report success either.
+     */
+    @Test
+    fun leaderElected_completesOnlyForTargetAtHigherTerm() = raftRunTest(timeout = 5.seconds) {
+        val targetB = NodeId("B")
+        val machine = LeadershipTransferMachine(
+            scope = backgroundScope,
+            raftConfig = FAST_RAFT_CONFIG,
+            signalTimeout = { },
+        )
+        val d = CompletableDeferred<Unit>()
+        assertTrue(machine.start(targetB, startTerm = 3L, response = d))
+
+        val nonTargetHigherTerm = machine.onLeaderElected(NodeId("C"), term = 4L)
+        val pendingAfterNonTarget = !d.isCompleted
+        val targetSameTerm = machine.onLeaderElected(targetB, term = 3L)
+        val pendingAfterSameTerm = !d.isCompleted
+        val targetHigherTerm = machine.onLeaderElected(targetB, term = 4L)
+
+        assertAll(
+            { assertFalse(nonTargetHigherTerm, "a non-target leader must not complete the transfer") },
+            { assertTrue(pendingAfterNonTarget, "transfer must stay pending after a non-target leader") },
+            { assertFalse(targetSameTerm, "the target at a not-higher term must not complete the transfer") },
+            { assertTrue(pendingAfterSameTerm, "transfer must stay pending after a not-higher-term signal") },
+            { assertTrue(targetHigherTerm, "the target at a higher term must complete the transfer") },
+            { assertTrue(d.isCompleted && !d.isCancelled, "the deferred must be completed successfully") },
+            { assertNull(machine.inFlightTarget, "the resolved transfer must be cleared") },
+        )
+    }
+
+    /**
+     * #1243 — [LeadershipTransferMachine.onSelfElected]: a transfer that survived a step-down and is
+     * still pending when this node wins an election itself must FAIL (the target did not become leader
+     * first), so the resumed leadership does not inherit a stale transfer and its propose gate.
+     */
+    @Test
+    fun selfElected_failsPendingTransfer() = raftRunTest(timeout = 5.seconds) {
+        val targetB = NodeId("B")
+        val machine = LeadershipTransferMachine(
+            scope = backgroundScope,
+            raftConfig = FAST_RAFT_CONFIG,
+            signalTimeout = { },
+        )
+        val noTransfer = machine.onSelfElected()
+
+        val d = CompletableDeferred<Unit>()
+        assertTrue(machine.start(targetB, startTerm = 3L, response = d))
+        val abandoned = machine.onSelfElected()
+
+        assertAll(
+            { assertNull(noTransfer, "onSelfElected with nothing in flight is a no-op") },
+            { assertEquals(targetB, abandoned, "onSelfElected must report the abandoned target") },
+            {
+                assertTrue(
+                    d.getCompletionExceptionOrNull() is LeadershipTransferException,
+                    "the pending deferred must be failed with LeadershipTransferException",
+                )
+            },
+            { assertNull(machine.inFlightTarget, "the failed transfer must be cleared") },
         )
     }
 }

@@ -323,11 +323,15 @@ public interface RaftNode {
 
     /**
      * Initiates a graceful leadership transfer to [target] per Raft §3.10, and suspends until the
-     * transfer is **confirmed as likely succeeded** or fails. It returns normally when the old leader
-     * steps down to a higher term observed *from* [target] — best-effort evidence the target won.
-     * Failure means the transfer **could not be confirmed**: on a degraded/partitioned network the
-     * target may still have won (as was already true for the auto-timeout path). The conclusive signal
-     * — a leader-authored message from [target] — that would make this exact is tracked by #1243.
+     * transfer is **confirmed** or fails. It returns normally only when this node observes a
+     * **leader-authored message from [target]** — an AppendEntries/InstallSnapshot with
+     * `leaderId == target` at a term above the transfer's start term — proof the target actually won
+     * an election. An intervening step-down does *not* resolve the call (the sender of the first
+     * higher-term message identifies neither the winner nor even a campaigner): the transfer stays
+     * pending until the confirmation arrives or the one-election-timeout auto-abandon fires. Failure
+     * still means only that the transfer **could not be confirmed within the window**: on a
+     * degraded/partitioned network the target may have won without its first leader message reaching
+     * this node in time.
      *
      * **Protocol**:
      * 1. The leader stops accepting new [propose] and [changeMembership] calls (they receive
@@ -337,10 +341,13 @@ public interface RaftNode {
      *    trigger a premature transfer to a not-caught-up target).
      * 3. The leader sends a `TimeoutNow` message to [target].
      * 4. [target] immediately starts a real election (bypassing its election-timeout wait).
-     * 5. If [target] wins, the old leader steps down naturally on seeing the higher term.
-     *    This call returns normally.
-     * 6. If [target] does not win within one election-timeout window, the auto-timeout fires:
-     *    the old leader resumes accepting proposals and this call throws [LeadershipTransferException].
+     * 5. If [target] wins, the old leader steps down on seeing the higher term, and this call
+     *    returns normally once [target]'s first leader-authored message (typically its initial
+     *    heartbeat) reaches this node.
+     * 6. If that confirmation does not arrive within one election-timeout window, the auto-timeout
+     *    fires: the node resumes normal operation (accepting proposals again if still leader) and
+     *    this call throws [LeadershipTransferException]. The same exception is thrown if this node
+     *    is re-elected leader itself before the confirmation arrives.
      *
      * **Cancellation**: call [cancelTransfer] from a separate coroutine to abort early.
      * The [LeadershipTransferException] will carry `"cancelled"` in its message.
