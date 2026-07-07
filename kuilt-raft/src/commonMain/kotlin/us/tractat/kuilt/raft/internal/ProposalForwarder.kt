@@ -17,6 +17,13 @@ internal data class PendingForward(
 )
 
 /**
+ * A leader identified by [node] **and** the leadership [term] a forward was sent under. The reap key for
+ * [ProposalForwarder.onLeaderChanged]: a *change* in either component (different node, OR the same node at
+ * a higher term after a crash+restart+re-election) strands any forward still awaiting a `ForwardResponse`.
+ */
+internal data class LeaderRef(val node: NodeId, val term: Long)
+
+/**
  * Client-proposal forwarding state machine (Raft §8). A follower/candidate/learner can't append to the
  * log, so when its consumer calls `propose()` it forwards the request to the leader and waits for the
  * leader's reply. This machine owns that in-flight bookkeeping — the outstanding forwards awaiting a
@@ -73,13 +80,21 @@ internal class ProposalForwarder {
     private var nextForwardId: Long = 0L
 
     /**
-     * The leader every currently *sent* forward (in [forwardedProposals] but no longer in
-     * [waitingForLeader]) was dispatched to, or `null` when none are in flight to a leader. Because
-     * [onLeaderChanged] reaps all sent forwards the instant the known leader changes, every sent forward
-     * at any moment targets this one node — so a single field, not a per-forward record, suffices. Never
-     * this node's own id: [forward]/[flush] only send when the leader is a *distinct* peer.
+     * The leader **and its leadership term** every currently *sent* forward (in [forwardedProposals] but
+     * no longer in [waitingForLeader]) was dispatched to, or `null` when none are in flight to a leader.
+     * Because [onLeaderChanged] reaps all sent forwards the instant the known leader changes, every sent
+     * forward at any moment targets this one [LeaderRef] — so a single field, not a per-forward record,
+     * suffices. Never this node's own id: [forward]/[flush] only send when the leader is a *distinct* peer.
+     *
+     * The term is part of the key, not just the node: a leader can crash, restart (term/vote persisted),
+     * and re-win at a **higher** term while a forward it never answered is still outstanding. Keying on
+     * node alone would treat that re-elected same-node leader as "unchanged" and never reap — the caller
+     * would park forever again (#1238). Reaping on a term advance is safe: once a leader's term has moved
+     * past the one a forward was sent under, that forward can only have been lost in transit or lost to the
+     * crash — had the leader received it, it either replied `Committed` or its `onForward` watcher replied
+     * `NotLeader` on losing leadership.
      */
-    private var sentLeader: NodeId? = null
+    private var sentLeader: LeaderRef? = null
 
     /**
      * Register a proposal this non-leader node must forward (Raft §8). Records a [PendingForward] under a
@@ -94,11 +109,12 @@ internal class ProposalForwarder {
         dedupKey: DedupKey?,
         leaderId: NodeId?,
         selfId: NodeId,
+        currentTerm: Long,
     ): ForwardDecision {
         val id = nextForwardId++
         forwardedProposals[id] = PendingForward(response, command, dedupKey)
         return if (leaderId != null && leaderId != selfId) {
-            sentLeader = leaderId
+            sentLeader = LeaderRef(leaderId, currentTerm)
             ForwardDecision.SendToLeader(leaderId, id, command, dedupKey)
         } else {
             waitingForLeader += id
@@ -126,7 +142,7 @@ internal class ProposalForwarder {
      * deferred across the suspendable propose window; non-leader-path entries stay in the map awaiting their
      * `ForwardResponse`.
      */
-    fun flush(leaderId: NodeId?, selfId: NodeId, amLeader: Boolean): List<FlushAction> {
+    fun flush(leaderId: NodeId?, selfId: NodeId, amLeader: Boolean, currentTerm: Long): List<FlushAction> {
         if (waitingForLeader.isEmpty()) return emptyList()
         if (!amLeader && (leaderId == null || leaderId == selfId)) return emptyList()
         val batch = waitingForLeader.toList()
@@ -146,7 +162,7 @@ internal class ProposalForwarder {
                 actions += FlushAction.ReProposeLocally(id, pf)
             } else {
                 val target = requireNotNull(leaderId) { "flush: no leader known on the non-leader forward path" }
-                sentLeader = target
+                sentLeader = LeaderRef(target, currentTerm)
                 actions += FlushAction.SendToLeader(target, id, pf.command, pf.dedupKey)
             }
         }
@@ -163,17 +179,22 @@ internal class ProposalForwarder {
      * a `ForwardResponse` that a *crashed* leader never sends — the [proposeWithRequestId] caller parks
      * forever (#1238).
      *
-     * **Only a genuine CHANGE reaps.** When [newLeaderId] equals the leader the sent forwards went to
-     * ([sentLeader]) — the repeated-heartbeat-from-the-same-leader case — nothing is reaped and a healthy
-     * in-flight forward keeps awaiting its response. Queued (not-yet-sent) forwards are untouched: [flush]
-     * dispatches them to the new leader. Reaping clears [sentLeader] (no sent forwards remain).
+     * **Only a genuine CHANGE reaps.** The key is ([newLeaderId], [newTerm]) — not the node alone. Nothing
+     * is reaped only when BOTH match the [LeaderRef] the sent forwards went to ([sentLeader]): the same
+     * leader at the same term, i.e. a repeated heartbeat, whose healthy in-flight forward keeps awaiting
+     * its response. A *different* node — OR the *same* node at a **higher** term (crash → restart → re-win)
+     * — reaps: that latter case is the residual #1238 hang a node-only key would miss. Queued (not-yet-sent)
+     * forwards are untouched: [flush] dispatches them to the new leader. Reaping clears [sentLeader] (no
+     * sent forwards remain).
      *
      * **Exactly-once holds.** A reaped id is removed from [forwardedProposals], so a late `ForwardResponse`
      * from the old leader resolves to `null` in [onResponse] and completes nothing a second time; and
      * `completeExceptionally` on an already-cancelled caller deferred is a harmless no-op.
      */
-    fun onLeaderChanged(newLeaderId: NodeId): List<PendingForward> {
-        if (newLeaderId == sentLeader) return emptyList()   // same leader — a repeated heartbeat, not a change
+    fun onLeaderChanged(newLeaderId: NodeId, newTerm: Long): List<PendingForward> {
+        val sent = sentLeader
+        // Same leader AND same term — a repeated heartbeat, not a change. Do not disturb a healthy forward.
+        if (sent != null && newLeaderId == sent.node && newTerm == sent.term) return emptyList()
         val reaped = mutableListOf<PendingForward>()
         val it = forwardedProposals.iterator()
         while (it.hasNext()) {
