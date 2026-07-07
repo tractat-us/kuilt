@@ -7,6 +7,14 @@ import us.tractat.kuilt.raft.NodeId
 internal data class PendingRead(val readIndex: Long, val sinceRound: Long, val deferred: CompletableDeferred<Long>)
 
 /**
+ * A readIndex() call parked on the current-term no-op gate (§8). Holds both the caller's [deferred] and
+ * the [reinvoke] closure that re-runs the request once the no-op commits ([ReadIndexTracker.onNoOpCommitted]).
+ * Pairing them lets [ReadIndexTracker.failAll] complete the captured [deferred] on leadership loss/teardown
+ * instead of dropping it (#1235) — the happy path still drains via [reinvoke].
+ */
+internal data class GatedRead(val deferred: CompletableDeferred<Long>, val reinvoke: () -> Unit)
+
+/**
  * Leader-side linearizable-read (readIndex, §3.6–3.7 / §6.4) state machine. Owns the read-freshness
  * bookkeeping — the in-flight [PendingRead] queue, the per-voter last-ACK round, the monotonic
  * heartbeat [round] nonce, the current-term no-op gate index, and the parked re-invocations waiting on
@@ -52,17 +60,15 @@ internal data class PendingRead(val readIndex: Long, val sinceRound: Long, val d
  * at which point [failAll] delivers `LeadershipLostException` to all callers. Adding per-read timeouts
  * would require a timer per read and improve latency only in the partition case, not safety.
  *
- * **Deferred completion is exactly-once — for queued [PendingRead]s.** Every [PendingRead]'s deferred is
- * completed exactly once — by the engine on the resolve/self-quorum path (from [resolve] /
- * [ReadDecision.ResolveNow]) or by [failAll] on step-down/teardown. [reset] (leader re-election) drops any
- * residual [PendingRead]s without completing them; by construction it only runs after
+ * **Deferred completion is exactly-once — for both queued and gated reads.** Every read's deferred is
+ * completed exactly once. A queued [PendingRead] completes on the resolve/self-quorum path (from [resolve] /
+ * [ReadDecision.ResolveNow]) or via [failAll] on step-down/teardown. A read still parked in the §8 no-op
+ * gate is a [GatedRead] holding the caller's deferred alongside its re-invocation: on the happy path
+ * [onNoOpCommitted] re-runs the re-invocation once the no-op commits, and on leadership loss/teardown
+ * [failAll] completes the captured deferred with `LeadershipLostException` (§6.4) rather than dropping it —
+ * closing the pre-existing #1235 liveness hole where a gated read hung its caller forever. [reset] (leader
+ * re-election) drops any residual reads without completing them; by construction it only runs after
  * `relinquishToFollower` has already failed the prior term's reads, so nothing is leaked there.
- * **Known exception — no-op-gated reads (#1235).** A read still parked in [pendingNoOpGate] (§8 gate not
- * yet crossed) is NOT a [PendingRead] yet: its live `readIndex()` caller deferred is captured inside the
- * parked re-invocation closure. [failAll] `clear()`s that queue WITHOUT completing those closures, so a
- * gated read whose leader loses leadership before the no-op commits hangs its caller forever instead of
- * throwing `LeadershipLostException`. This is a pre-existing §6.4 liveness gap faithfully preserved by the
- * extraction (behavior-identical to before); the fix lands separately under #1235.
  *
  * **Concurrency:** actor-confined exactly like the fields it holds — every method is called only from
  * inside the engine's single dispatch loop (or the init-restore coroutine that strictly precedes it).
@@ -96,11 +102,12 @@ internal class ReadIndexTracker {
     private var currentTermNoOpIndex = 0L
 
     /**
-     * Deferred readIndex handlers waiting for the current-term no-op to commit. Each is a re-invocation
-     * of the engine's read-request entry point, drained by [onNoOpCommitted] once
-     * commitIndex ≥ [currentTermNoOpIndex].
+     * readIndex() calls waiting for the current-term no-op to commit. Each holds the caller's deferred
+     * alongside the re-invocation of the engine's read-request entry point: [onNoOpCommitted] drains the
+     * re-invocations once commitIndex ≥ [currentTermNoOpIndex] (the happy path), while [failAll] completes
+     * the captured deferreds exceptionally on leadership loss/teardown so a gated read never hangs (#1235).
      */
-    private val pendingNoOpGate = mutableListOf<() -> Unit>()
+    private val pendingNoOpGate = mutableListOf<GatedRead>()
 
     /** Bump the heartbeat round before a broadcast so ACKs referencing it are strictly newer than any pre-send read. */
     fun bumpRound() {
@@ -138,9 +145,10 @@ internal class ReadIndexTracker {
         selfId: NodeId,
         reinvoke: () -> Unit,
     ): ReadDecision {
-        // §8 leader-completeness gate: block until the current-term no-op commits.
+        // §8 leader-completeness gate: block until the current-term no-op commits. Park the caller's
+        // deferred alongside its re-invocation so failAll can complete it on leadership loss (#1235).
         if (commitIndex < currentTermNoOpIndex) {
-            pendingNoOpGate += reinvoke
+            pendingNoOpGate += GatedRead(deferred, reinvoke)
             return ReadDecision.Gated
         }
         val ri = commitIndex
@@ -191,7 +199,7 @@ internal class ReadIndexTracker {
      */
     fun onNoOpCommitted(commitIndex: Long): List<() -> Unit> {
         if (commitIndex < currentTermNoOpIndex || pendingNoOpGate.isEmpty()) return emptyList()
-        val gated = pendingNoOpGate.toList()
+        val gated = pendingNoOpGate.map { it.reinvoke }
         pendingNoOpGate.clear()
         return gated
     }
@@ -211,18 +219,19 @@ internal class ReadIndexTracker {
     }
 
     /**
-     * Fail the *queued* readIndex() deferreds with [cause] and clear the no-op gate — the
-     * relinquish/step-down and actor-teardown path. Each queued [PendingRead] deferred is completed
-     * exactly once.
+     * Fail every in-flight readIndex() deferred with [cause] — the relinquish/step-down and
+     * actor-teardown path. Completes both the queued [PendingRead]s and the no-op-[GatedRead]s exactly
+     * once, then clears both queues.
      *
-     * **Known gap (#1235):** the [pendingNoOpGate] closures are `clear()`ed but NOT invoked, so the live
-     * `readIndex()` caller deferreds captured inside them are dropped, not completed — a read still gated on
-     * the current-term no-op at the moment leadership is lost hangs its caller forever instead of throwing
-     * `LeadershipLostException`. This preserves the pre-extraction behavior verbatim; the fix lands in #1235.
+     * **#1235 fix:** the [pendingNoOpGate] entries now carry the caller's deferred (not just the opaque
+     * re-invocation closure), so a read still gated on the current-term no-op at the moment leadership is
+     * lost is completed with `LeadershipLostException` here instead of being dropped — it no longer hangs
+     * its caller forever. The happy-path drain ([onNoOpCommitted], on no-op commit) is unchanged.
      */
     fun failAll(cause: Throwable) {
         pendingReads.forEach { it.deferred.completeExceptionally(cause) }
         pendingReads.clear()
+        pendingNoOpGate.forEach { it.deferred.completeExceptionally(cause) }
         pendingNoOpGate.clear()
     }
 
