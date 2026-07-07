@@ -314,6 +314,15 @@ and the held run released in order, which also covers a late joiner whose first
 sighting of an origin lands mid-stream. Relay is never held — only local
 delivery — so the O(N·k) flood cost and per-hop latency are unchanged.
 
+Two hardening notes from #1309 (a hub one-shot broadcast withheld from passive
+spokes): the grace is measured on the seam's own sweep ticker (dispatcher time),
+never on the injected liveness clock — that clock may legitimately be frozen
+(harnesses freeze it to keep heartbeat detectors quiescent), and an unbounded
+hold silently drops un-replicated one-shots, which have no anti-entropy
+backstop. And a `broadcast()` whose active view is empty (not yet reconciled, or
+alone) is a no-op that must **not** consume a per-origin seq — a seq flooded to
+nobody is a permanent phantom gap every future receiver reorder-holds behind.
+
 ## Phase 4 as shipped: GossipSeam through the TCK + the O(k) broadcast measurement
 
 Phase 4 wraps Phases 2–3 as a conforming `Seam` and measures the broadcast win.
