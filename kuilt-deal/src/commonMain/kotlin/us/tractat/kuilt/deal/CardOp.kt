@@ -74,6 +74,42 @@ public sealed class CardOp {
         }
     }
 
+    /**
+     * A quorum member's strip on another member's private-copy reveal track
+     * ([QuorumTrack]) of a partial multi-member quorum card. [player] stripped
+     * their layer from [forMember]'s track; [newCiphertext] is the resulting
+     * track ciphertext. Broadcast like every other op — the intermediate values
+     * are ciphertexts still carrying at least [forMember]'s layer, so making
+     * them public reveals nothing a quorum-revealed single-reader card doesn't.
+     */
+    @Serializable
+    public data class QuorumStrip(
+        val player: PlayerId,
+        val forMember: PlayerId,
+        val newCiphertext: ByteArray,
+        val proof: StripProof,
+        /** [QuorumTrack.strippedBy] of the track state this op was computed against. */
+        val baseTrackStrippedBy: Set<PlayerId>,
+    ) : CardOp() {
+        // proof is excluded from identity: exactly-once is enforced by the GSet
+        // membership check in canApply, not by op-equality dedup.
+        override fun equals(other: Any?): Boolean {
+            if (other !is QuorumStrip) return false
+            return player == other.player &&
+                forMember == other.forMember &&
+                newCiphertext.contentEquals(other.newCiphertext) &&
+                baseTrackStrippedBy == other.baseTrackStrippedBy
+        }
+
+        override fun hashCode(): Int {
+            var result = player.hashCode()
+            result = 31 * result + forMember.hashCode()
+            result = 31 * result + newCiphertext.contentHashCode()
+            result = 31 * result + baseTrackStrippedBy.hashCode()
+            return result
+        }
+    }
+
     @Serializable
     public data class DepositKey(
         val player: PlayerId,
@@ -100,6 +136,19 @@ public fun CardState.canApply(op: CardOp): Boolean = when (op) {
         // strip for everyone to read.
         val allowedToStrip = op.player !in visibilityQuorum || visibilityQuorum == allPlayers
         selfConsistent && newLocally && allowedToStrip
+    }
+    is CardOp.QuorumStrip -> {
+        // Reveal tracks exist only on partial multi-member quorum cards, and only
+        // quorum members may strip them — a non-member has no layer on the track,
+        // and forMember's own layer must never come off publicly (it is what keeps
+        // the plaintext private to forMember).
+        val quorumMembersOnly = isPartialQuorum() &&
+            op.player in visibilityQuorum &&
+            op.forMember in visibilityQuorum &&
+            op.player != op.forMember
+        val selfConsistent = op.player !in op.baseTrackStrippedBy && op.forMember !in op.baseTrackStrippedBy
+        val newLocally = op.player !in (quorumTracks[op.forMember]?.strippedBy?.elements ?: emptySet())
+        quorumMembersOnly && selfConsistent && newLocally
     }
     // DepositKey is only valid once the card is at least FULLY_ENCRYPTED — escrowing
     // key material earlier would let a holder leverage key knowledge before the deck
@@ -134,6 +183,17 @@ public fun CardState.applyOp(op: CardOp): CardState? {
                 strippedBy = gSetOf(op.baseStrippedBy + op.player),
             ),
         )
+        is CardOp.QuorumStrip -> {
+            // Reconstruct the sender's resulting track (its base strippers plus its
+            // own strip) and join it with the local track — the same
+            // carry-your-causal-base pattern as Encrypt/Strip, scoped to one track.
+            val incoming = QuorumTrack(
+                ciphertext = op.newCiphertext,
+                strippedBy = gSetOf(op.baseTrackStrippedBy + op.player),
+            )
+            val merged = quorumTracks[op.forMember]?.merge(incoming) ?: incoming
+            copy(quorumTracks = quorumTracks + (op.forMember to merged))
+        }
         // DepositKey has no card-state effect; the escrow side-effect is the session's concern.
         is CardOp.DepositKey -> this
     }

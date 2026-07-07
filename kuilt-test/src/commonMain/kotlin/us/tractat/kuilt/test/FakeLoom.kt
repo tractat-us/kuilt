@@ -75,3 +75,35 @@ private fun wireDelivery(sender: FakeSeam, receiver: FakeSeam) {
         )
     }
 }
+
+/**
+ * Build a wired group of [FakeSeam]s, one per id in [peerIds], whose
+ * [FakeSeam.broadcast] calls cross-deliver into every *other* seam's
+ * [Seam.incoming] — the N-peer generalisation of [fakeSeamPair].
+ *
+ * - Each seam's peers set contains all of [peerIds].
+ * - A broadcast on one seam stamps the sender's [FakeSeam.selfId] and a
+ *   monotonically increasing per-receiver sequence at each receiver.
+ * - Delivery is synchronous — no coroutine substrate required.
+ */
+public fun fakeSeamGroup(peerIds: List<PeerId>): List<FakeSeam> {
+    require(peerIds.size >= 2) { "A seam group needs at least 2 peers, got ${peerIds.size}" }
+    require(peerIds.toSet().size == peerIds.size) { "Duplicate peer ids in $peerIds" }
+    val allPeers = peerIds.toSet()
+    val seams = peerIds.map { FakeSeam(selfId = it, initialPeers = allPeers) }
+    for (sender in seams) {
+        val receivers = seams.filter { it !== sender }
+        sender.onBroadcast = { payload ->
+            for (receiver in receivers) {
+                receiver.deliver(
+                    Swatch(
+                        payload = payload,
+                        sender = sender.selfId,
+                        sequence = receiver.nextSequence(),
+                    ),
+                )
+            }
+        }
+    }
+    return seams
+}

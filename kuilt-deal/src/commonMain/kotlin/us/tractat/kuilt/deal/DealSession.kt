@@ -23,7 +23,10 @@ import us.tractat.kuilt.crdt.GSet
  *
  * Each card is a [CardState]; players sequentially encrypt the deck (SRA layers
  * compose because the cipher is commutative), then non-quorum players strip their
- * layer so only the visibility quorum can read each card. State converges via the
+ * layer so only the visibility quorum can read each card. A partial multi-member
+ * quorum (`1 < |quorum| < N`) additionally runs per-member reveal tracks
+ * ([QuorumTrack]) so each member — and no one else — ends up able to decrypt
+ * (see [strip]). State converges via the
  * [CardOp] stream broadcast over the seam: each op carries the base sets it was
  * computed against and is folded in via [CardState.merge], so convergence holds
  * under per-sender FIFO delivery even when ops from different senders interleave
@@ -137,25 +140,21 @@ public class DealSession(
      * Set visibility quorums for each card (local state — no broadcast).
      *
      * Supported quorums: a single reader (`|quorum| == 1`), a public/community
-     * card (`quorum == allPlayers`, or an empty quorum), and nothing in between —
-     * a partial multi-member quorum's members could never decrypt (the card would
-     * still carry the *other* members' layers, which [CardOp.Strip] structurally
-     * refuses to remove) so it is rejected here rather than discovered as a
-     * permanently unreadable card at reveal time.
+     * card (`quorum == allPlayers`, or an empty quorum), and a partial
+     * multi-member quorum (`1 < |quorum| < |allPlayers|`) — the last is revealed
+     * to exactly its members via per-member reveal tracks (see [QuorumTrack] and
+     * [strip]).
      *
-     * @throws IllegalArgumentException if a quorum contains an unknown player or
-     *   has `1 < |quorum| < |allPlayers|`.
+     * Call on every peer **before** any peer strips: quorum membership gates
+     * which strip ops are accepted ([canApply]), and a [CardOp.QuorumStrip]
+     * arriving before the local quorum assignment is dropped, not retried.
+     *
+     * @throws IllegalArgumentException if a quorum contains an unknown player.
      */
     public fun assignQuorums(assignments: Map<Int, Set<PlayerId>>) {
         assignments.forEach { (index, quorum) ->
             require(allPlayers.containsAll(quorum)) {
                 "Quorum for card $index contains players not in this deal: ${quorum - allPlayers}"
-            }
-            require(quorum.size <= 1 || quorum == allPlayers) {
-                "Unsupported visibility quorum for card $index (${quorum.size} of ${allPlayers.size} players): " +
-                    "only a single reader, a community card (quorum == allPlayers), or an empty quorum is " +
-                    "supported — a partial multi-member quorum can never be decrypted by its members " +
-                    "without private re-encryption"
             }
         }
         _state.update { deck ->
@@ -171,10 +170,19 @@ public class DealSession(
      * Strip my encryption layer from all cards that don't need it for secrecy:
      * cards where I am not in the visibility quorum, plus community cards
      * (quorum == allPlayers), which every player must strip.
+     *
+     * On a partial multi-member quorum card whose non-members have all stripped,
+     * additionally advances the per-member reveal tracks I owe a strip to (see
+     * [QuorumTrack]): the other members of each track strip in canonical order
+     * (ascending [PlayerId.value]), so with `|quorum| > 2` a single pass cannot
+     * finish every track — call [strip] again as remote ops arrive (each member
+     * needs at most `|quorum| - 1` passes) until the card is
+     * [CardPhase.REVEALED]. Idempotent: already-performed strips are skipped.
      */
     public suspend fun strip() {
         for (index in _state.value.cards.indices) {
             stripCard(index)
+            quorumStripCard(index)
         }
     }
 
@@ -197,10 +205,52 @@ public class DealSession(
     }
 
     /**
+     * Advance the reveal tracks of a partial multi-member quorum card I am a
+     * member of: for each *other* member's track where it is my canonical turn,
+     * strip my layer from the track ciphertext and broadcast the result. No-op
+     * until every non-member has stripped the main chain (the tracks seed from
+     * the quorum-revealed ciphertext).
+     */
+    private suspend fun quorumStripCard(index: Int) {
+        val card = _state.value.cards[index]
+        if (!card.isPartialQuorum() || myId !in card.visibilityQuorum) return
+        if (card.strippedBy.elements != allPlayers - card.visibilityQuorum) return
+        for (member in (card.visibilityQuorum - myId).sortedBy { it.value }) {
+            quorumStripTrack(index, member)
+        }
+    }
+
+    private suspend fun quorumStripTrack(index: Int, member: PlayerId) {
+        val card = _state.value.cards[index]
+        val done = card.quorumTracks[member]?.strippedBy?.elements ?: emptySet()
+        if (myId in done) return
+        // Members strip each track sequentially in ascending PlayerId order —
+        // concurrent strips of one track from the same base would fork it (each
+        // removes a different layer; the merge tie-break would drop one). Wait
+        // until exactly my predecessors have stripped.
+        val strippers = (card.visibilityQuorum - member).sortedBy { it.value }
+        val predecessors = strippers.take(strippers.indexOf(myId)).toSet()
+        if (done != predecessors) return
+        val base = card.quorumTracks[member]?.ciphertext ?: card.ciphertext
+        val (newCiphertext, proof) = scheme.strip(base, myKey.stripKey)
+        val op = CardOp.QuorumStrip(
+            player = myId,
+            forMember = member,
+            newCiphertext = newCiphertext,
+            proof = proof,
+            baseTrackStrippedBy = done,
+        )
+        _state.update { deck -> deck.applyLocalOp(index, op) }
+        seam.broadcast(Cbor.encodeToByteArray(IndexedCardOp(index, op)))
+    }
+
+    /**
      * Decode the plaintext of the card at [cardIndex]. Call once the card is
      * [CardPhase.REVEALED]. If my own layer is the one remaining (single-reader
      * quorum), it is stripped locally first; a community card (everyone stripped)
-     * decodes directly. Local — does not broadcast.
+     * decodes directly; a partial multi-member quorum member reads their own
+     * reveal track ([QuorumTrack]) and strips their layer locally. Local — does
+     * not broadcast.
      *
      * @throws IllegalArgumentException if the card is not yet [CardPhase.REVEALED],
      *   or is revealed to a quorum I am not part of.
@@ -209,6 +259,14 @@ public class DealSession(
         val card = _state.value.cards[cardIndex]
         require(card.phase() == CardPhase.REVEALED) {
             "Card $cardIndex is not REVEALED (phase=${card.phase()}); cannot decrypt until all non-quorum players have stripped"
+        }
+        if (card.isPartialQuorum()) {
+            val track = card.quorumTracks[myId] ?: throw IllegalArgumentException(
+                "Card $cardIndex is revealed to quorum ${card.visibilityQuorum} which does not include me ($myId); " +
+                    "only the visibility quorum can decrypt it",
+            )
+            val (stripped, _) = scheme.strip(track.ciphertext, myKey.stripKey)
+            return decodePlaintext(stripped)
         }
         val remainingLayers = card.encryptedBy.elements - card.strippedBy.elements
         return when {

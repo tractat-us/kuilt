@@ -72,6 +72,50 @@ class CardOpConvergenceTest {
     }
 
     @Test
+    fun crossSenderQuorumStripReorderConvergesToCompleteTrack() {
+        // Quorum {alice, bob, carol} of four; dave (non-member) has stripped. Alice's
+        // reveal track takes bob's strip then carol's (canonical order). A peer that
+        // receives carol's op first must converge to the same completed track.
+        val dave = PeerId("dave")
+        val base = CardState(
+            ciphertext = byteArrayOf(10),
+            encryptedBy = GSet.of(alice, bob, carol, dave),
+            strippedBy = GSet.of(dave),
+            visibilityQuorum = setOf(alice, bob, carol),
+            allPlayers = setOf(alice, bob, carol, dave),
+        )
+        val op1 = CardOp.QuorumStrip(
+            player = bob,
+            forMember = alice,
+            newCiphertext = byteArrayOf(11),
+            proof = StripProof(ByteArray(0)),
+            baseTrackStrippedBy = emptySet(),
+        )
+        val op2 = CardOp.QuorumStrip(
+            player = carol,
+            forMember = alice,
+            newCiphertext = byteArrayOf(12),
+            proof = StripProof(ByteArray(0)),
+            baseTrackStrippedBy = setOf(bob),
+        )
+
+        val inOrder = base.applied(op1).applied(op2)
+        val reordered = base.applied(op2).applied(op1)
+
+        assertAll(
+            { assertEquals(inOrder, reordered, "quorum-strip application must be order-independent") },
+            { assertEquals(setOf(bob, carol), reordered.quorumTracks[alice]?.strippedBy?.elements) },
+            {
+                assertEquals(
+                    listOf<Byte>(12),
+                    reordered.quorumTracks[alice]?.ciphertext?.toList(),
+                    "converged track ciphertext must be the chain tip (both member layers off except alice's)",
+                )
+            },
+        )
+    }
+
+    @Test
     fun mergePrefersStateFurtherAlongTheStripChain() {
         // After full encryption both sides have equal |encryptedBy|; the side that has
         // additionally applied a strip is strictly further along the op chain and its
