@@ -1,4 +1,4 @@
-package us.tractat.kuilt.demo.cli
+package us.tractat.kuilt.demo
 
 import io.ktor.client.HttpClient
 import kotlinx.coroutines.CoroutineScope
@@ -20,7 +20,8 @@ import kotlin.uuid.Uuid
  * fresh WebSocket spoke into the relay hub and wraps it in a started
  * [GossipSeam], so broadcasts ride the hub's full-fanout flood to every other
  * peer (`:demo-relay`'s `hostedOverlay` counterpart — hub-spoke mesh over
- * [KtorMeshClientLoom]).
+ * [KtorMeshClientLoom]). Shared by every Patchwork client surface: the
+ * `:demo-cli` terminal peer (JVM) and the `:demo-web` browser page (wasmJs).
  *
  * **Fresh fabric identity per connection.** A reconnecting peer that reused
  * its previous [PeerId] would collide with every other peer's gossip-dedup

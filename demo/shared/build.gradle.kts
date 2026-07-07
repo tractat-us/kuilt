@@ -32,6 +32,11 @@ kotlin {
     sourceSets {
         commonMain.dependencies {
             implementation(project(":kuilt-quilter")) // api-exposes :kuilt-core + :kuilt-crdt
+            // RelaySpokeLoom — the client half of the Patchwork star, shared by
+            // the :demo-cli terminal peer (JVM) and the :demo-web page (wasmJs).
+            implementation(project(":kuilt-gossip"))
+            implementation(project(":kuilt-websocket"))
+            implementation(libs.ktor.client.core)
             implementation(libs.kotlinx.atomicfu)
             implementation(libs.kotlinx.coroutines.core)
             implementation(libs.kotlinx.serialization.core)

@@ -13,6 +13,7 @@ import kotlinx.coroutines.runBlocking
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.demo.PatchworkSession
+import us.tractat.kuilt.demo.RelaySpokeLoom
 import us.tractat.kuilt.demo.StitchClock
 import us.tractat.kuilt.quilter.QuilterConfig
 import us.tractat.kuilt.websocket.WebSocketAdvertisement

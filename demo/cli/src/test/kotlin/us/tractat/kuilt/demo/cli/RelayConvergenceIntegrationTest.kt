@@ -14,6 +14,7 @@ import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.demo.Cell
 import us.tractat.kuilt.demo.Colour
 import us.tractat.kuilt.demo.PatchworkSession
+import us.tractat.kuilt.demo.RelaySpokeLoom
 import us.tractat.kuilt.demo.StitchClock
 import us.tractat.kuilt.demo.relay.PatchworkRelay
 import us.tractat.kuilt.quilter.QuilterConfig
