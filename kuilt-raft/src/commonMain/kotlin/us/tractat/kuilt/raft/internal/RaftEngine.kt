@@ -1068,33 +1068,72 @@ internal class RaftEngine(
             }
         }
 
-        // Truncate conflicting entries and append new ones
+        // Truncate conflicting entries and append new ones — Fig.2 rule 3, applied to EVERY entry in the
+        // batch, not just the first (issue #1248). Scan the batch in index order for the first entry that
+        // diverges from our log:
+        //   • an entry at index <= snapshotIndex is in the committed, cluster-agreed snapshot prefix — it
+        //     can never diverge, and appending it would break `logEntryAt`'s offset invariant (the live log
+        //     must begin at snapshotIndex + 1). Skip it — the explicit contiguity guard flagged in #1248.
+        //   • an entry whose index exists locally with the SAME term is an exact duplicate — a no-op. Do
+        //     NOT truncate on a match, so an idempotent re-delivery never rolls the log back.
+        //   • the first entry whose index exists locally with a DIFFERENT term is a conflict: delete it and
+        //     every following entry (§6 rollback safety), then append this entry and the rest of the batch.
+        //   • the first entry past our tail begins the new suffix: append it and the rest of the batch.
+        //
+        // The old code checked only `m.entries.first()` for a conflict and then appended any entry whose
+        // index we lacked — silently keeping a LATER entry whose index existed locally with a different
+        // term, and over-attesting. Safe today only because the leader always ships the full suffix from
+        // `nextIndex` (an emergent invariant), so the first batch entry already sits at/above the first
+        // divergence and this per-entry scan lands on exactly the same truncate/append. This is
+        // behaviour-preserving hardening for every reachable input; it removes the standing proof-obligation.
         if (m.entries.isNotEmpty()) {
-            val first = m.entries.first()
-            val conflict = state.log.firstOrNull { it.index == first.index && it.term != first.term }
-            if (conflict != null) {
-                storage.truncateFrom(conflict.index)
-                state.log.removeAll { it.index >= conflict.index }
-                // Adopt-on-append: recompute membershipState after rollback so a truncated config entry
-                // is immediately uneffected (§6 rollback safety).
-                recomputeMembership()
+            var appendFrom = -1
+            for ((i, entry) in m.entries.withIndex()) {
+                if (entry.index <= state.snapshotIndex) continue        // committed snapshot prefix — no-op
+                val existing = state.entryAt(entry.index)
+                if (existing == null) { appendFrom = i; break }         // first index past our tail
+                if (existing.term != entry.term) {                      // term conflict — truncate from here
+                    storage.truncateFrom(entry.index)
+                    state.log.removeAll { it.index >= entry.index }
+                    // Adopt-on-append: recompute membershipState after rollback so a truncated config entry
+                    // is immediately uneffected (§6 rollback safety).
+                    recomputeMembership()
+                    appendFrom = i
+                    break
+                }
+                // same index+term: exact duplicate — keep scanning (idempotent)
             }
-            val have = state.log.mapTo(HashSet()) { it.index }
-            val toAdd = m.entries.filter { it.index !in have }
-            if (toAdd.isNotEmpty()) {
-                state.log.addAll(toAdd)
-                storage.appendEntries(toAdd)
-                // Adopt-on-append: recompute membershipState after adding entries — a config entry
-                // in toAdd takes effect immediately on the follower.
-                recomputeMembership()
+            if (appendFrom >= 0) {
+                // The batch suffix from the first divergence onward. Indices are ascending, so any entry
+                // at index <= snapshotIndex can only precede `appendFrom`; the guard is a defensive no-op.
+                val toAdd = m.entries.subList(appendFrom, m.entries.size).filter { it.index > state.snapshotIndex }
+                if (toAdd.isNotEmpty()) {
+                    state.log.addAll(toAdd)
+                    storage.appendEntries(toAdd)
+                    // Adopt-on-append: recompute membershipState after adding entries — a config entry
+                    // in toAdd takes effect immediately on the follower.
+                    recomputeMembership()
+                }
             }
         }
+
+        // Exact attestation + Fig.2 rule 5 (issues #1248/#1249). `lastNewIndex` is the index of the last
+        // entry THIS AppendEntries covered (`prevLogIndex + entries.size`; == prevLogIndex for a heartbeat).
+        // Both the follower-commit bound and the success reply's matchIndex are keyed to it — NOT to
+        // `state.lastLogIndex`, which can exceed the just-verified prefix when a stale suffix survives beyond
+        // the batch. For the currently-reachable full-suffix send `lastNewIndex == state.lastLogIndex`, so
+        // this is behaviour-preserving; it removes the proof-obligation that the two always coincide.
+        val lastNewIndex = m.prevLogIndex + m.entries.size
 
         if (m.leaderCommit > state.currentCommitIndex) {
-            advanceCommit(minOf(m.leaderCommit, state.lastLogIndex))
+            // Commit only up to what this AE verified. Clamp forward-only (`maxOf(_, currentCommitIndex)`)
+            // so a reordered/partial batch whose `lastNewIndex` sits below our committed prefix can never
+            // regress commitIndex (advanceCommit assigns it unconditionally). For the reachable full-suffix
+            // send `lastNewIndex >= currentCommitIndex`, so the clamp is a no-op and behaviour is unchanged.
+            advanceCommit(minOf(m.leaderCommit, maxOf(lastNewIndex, state.currentCommitIndex)))
         }
 
-        val acceptedMatchIndex = state.lastLogIndex
+        val acceptedMatchIndex = lastNewIndex
         debug { "onAppendEntries($from): ACCEPT prevLogIndex=${m.prevLogIndex} +${m.entries.size} entries → matchIndex=$acceptedMatchIndex commit=${state.currentCommitIndex}" }
         emitTrace(
             RaftTraceEvent.AppendEntriesAccepted(
