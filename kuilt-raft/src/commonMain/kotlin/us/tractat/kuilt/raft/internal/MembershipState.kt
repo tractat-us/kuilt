@@ -77,27 +77,6 @@ internal sealed interface MembershipState {
     }
 
     /**
-     * The "current" voter set — the target config's voters.
-     * Used by [RaftEngine] to check whether a requested config change is a
-     * learner-set-only change (target.voters == currentVoters) or a voter-set change.
-     *
-     * Simple: config.voters.
-     * Joint: new.voters (the intended target — a second change on top of an in-flight
-     * transition is rejected by the one-change-at-a-time guard anyway).
-     */
-    val currentVoters: Set<NodeId>
-        get() = when (this) {
-            is Simple -> config.voters
-            is Joint  -> new.voters
-        }
-
-    /** True iff [id] is a voter in any active configuration. */
-    fun isVoter(id: NodeId): Boolean = when (this) {
-        is Simple -> id in config.voters
-        is Joint  -> id in old.voters || id in new.voters
-    }
-
-    /**
      * True iff [id] is a learner and NOT a voter in any active configuration.
      * A node in both voter and learner sets (malformed config) is treated as a voter.
      */
@@ -200,20 +179,17 @@ internal sealed interface MembershipState {
             self: NodeId,
         ): Long? {
             val leaderIsVoter = self in voterSet
+            // Peer acks needed. When the leader is a voter it counts as one implicit match, so it needs one
+            // fewer peer; when it is NOT a voter (removed-leader case, §6.4.1) it counts for nothing and
+            // needs a full peer quorum. quorumSize is always >= 1, so a non-voter leader's peerQuorum is
+            // always >= 1 — [majorityCommitIndex]'s `peerQuorum == 0` branch (leader-alone commit) is only
+            // ever reached via the leaderIsVoter path, so the single shared primitive is correct for both.
             val peerQuorum = quorumSize(voterSet) - (if (leaderIsVoter) 1 else 0)
             val peerMatches = matchIndex
                 .filterKeys { it in voterSet && it != self }
                 .values
                 .toList()
-            return if (leaderIsVoter) {
-                majorityCommitIndex(peerMatches, peerQuorum, leaderLastIndex)
-            } else {
-                // Leader is not in this voter set (removed-leader case).
-                // It does not count toward the quorum; use a pure peer count.
-                if (peerMatches.size < peerQuorum) return null
-                if (peerQuorum == 0) return if (peerMatches.isNotEmpty()) peerMatches.max() else null
-                peerMatches.sortedDescending()[peerQuorum - 1]
-            }
+            return majorityCommitIndex(peerMatches, peerQuorum, leaderLastIndex)
         }
     }
 }

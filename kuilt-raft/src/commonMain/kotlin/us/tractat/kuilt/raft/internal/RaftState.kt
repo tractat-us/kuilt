@@ -33,7 +33,25 @@ import us.tractat.kuilt.raft.NodeId
 internal class RaftState(bootstrapConfig: ClusterConfig) {
 
     // ── Election / term ───────────────────────────────────────────────────────
+
+    /**
+     * Raft §5.1 `currentTerm` — the latest term this node has seen.
+     *
+     * **Write invariant:** mutate only via `RaftEngine.persistTermAndVote` / `persistVote` (the sole
+     * exception being the `init`-restore load, which reads it straight from storage). Those choke-points
+     * are **storage-first** — they persist to [RaftStorage] durably *before* updating this field, so the
+     * durable term never lags the in-memory one across a crash. A bare `state.currentTerm = t` would
+     * silently break that ordering; never write it directly.
+     */
     var currentTerm: Long = 0L
+
+    /**
+     * Raft §5.1 `votedFor` — the candidate this node granted its vote to in [currentTerm], or null.
+     *
+     * **Write invariant:** same as [currentTerm] — mutate only via `RaftEngine.persistTermAndVote` /
+     * `persistVote` (or the `init`-restore load). Storage-first: the vote is durable before this field
+     * changes, so a crash can never resurrect a node that forgot a vote it already cast (double-voting).
+     */
     var votedFor: NodeId? = null
 
     // ── Log / commit ──────────────────────────────────────────────────────────

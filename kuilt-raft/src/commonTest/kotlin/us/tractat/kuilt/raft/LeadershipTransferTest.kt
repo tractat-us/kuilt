@@ -619,7 +619,7 @@ internal class LeadershipTransferTest {
      * asymmetry: a leadership transfer must not *start* while a membership change is still converging.
      * `pendingConfigChange` stays non-null from `changeMembership` until the resulting `Simple` entry
      * commits, and the Joint→Simple auto-append fires inside that window — an entry that would grow
-     * lastLogIndex mid-transfer, exactly the goalpost move the transfer's `onPeerAck` predicate assumes
+     * lastLogIndex mid-transfer, exactly the goalpost move the transfer's `isTargetCaughtUp` predicate assumes
      * cannot happen. Transfer and membership change are mutually exclusive in both directions.
      *
      * The change is left pending-but-uncommitted at the instant of the transfer by enqueuing the two

@@ -143,7 +143,7 @@ internal class RaftEngine(
             val result = CompletableDeferred<CommitCutResult>()
             cmd.send(EngineCommand.CommitCut(fromIndex, result))
             val cut = result.await()
-            cut.install?.let { emit(Committed.Install(it)) }     // null until Task 3 wires it
+            cut.install?.let { emit(Committed.Install(it)) }
             cut.replay.forEach { emit(Committed.Entry(it)) }
             // Tail live, deduped against the replayed prefix. Entries with index <= cutIndex
             // were already replayed from the snapshot; no-ops never surface.
@@ -164,11 +164,8 @@ internal class RaftEngine(
     )
     override val trace: Flow<RaftTraceEvent> = _trace
 
-    // ── Shared consensus core (see [RaftState]) ──────────────────────────────
-    // `currentTerm`/`votedFor`/`log`/`currentCommitIndex`/`snapshotIndex`/`snapshotTerm`/
-    // `snapshotConfig`/`membershipState`/`nextIndex`/`matchIndex` and the derived log helpers
-    // now live on `state`, declared just before the `init` block (below).
-    // `membershipState` is named to avoid shadowing the `membership: StateFlow<ClusterConfig>` override.
+    // ── Shared consensus core (see [RaftState], the `state` field) ────────────
+    // Its `membershipState` is named to avoid shadowing the `membership: StateFlow<ClusterConfig>` override.
 
     // ── Peer-set helpers ─────────────────────────────────────────────────────
 
@@ -283,6 +280,15 @@ internal class RaftEngine(
      * leader-side replication indices. Declared BEFORE the `init` block (#1077): the actor's
      * teardown and the init-restore coroutine both dereference these fields, so `state` must be
      * initialized before the launch below.
+     *
+     * **Ordering foot-gun.** Because `state` is declared this far down the class body, every field or
+     * property *above* it that touches `state` must do so **lazily** — the peer-set helpers (`otherVoters`
+     * / `otherMembers`) and the log-derived getters are `get()`-computed, so they read `state` only when
+     * *invoked* (always after construction), never during field initialization. A new **eager** `val x =
+     * state.something` placed above this line would observe an uninitialized `state` and NPE. When adding a
+     * field that needs `state` in its initializer, either keep the reference lazy or move `state` up to the
+     * top of this pre-`init` block (its only constructor input is the `bootstrapConfig` parameter, so it can
+     * be initialized first without depending on any other field).
      */
     private val state = RaftState(bootstrapConfig)
 
@@ -452,10 +458,6 @@ internal class RaftEngine(
      */
     private val followerRole: RaftRole
         get() = if (state.membershipState.isLearner(transport.selfId)) RaftRole.Learner else RaftRole.Follower
-
-    // ── Log helpers ───────────────────────────────────────────────────────────
-    // `entryAt`/`lastLogIndex`/`lastLogTerm`/`termAt` now live on [RaftState] (`state.*`) —
-    // pure functions of the moved log/snapshot fields.
 
     // ── Trace helper ──────────────────────────────────────────────────────────
 
@@ -1000,12 +1002,17 @@ internal class RaftEngine(
                 debug { "onInstallSnapshot($from): chunk offset=${m.offset} accepted (have=${outcome.haveOffset}), await more" }
                 send(from, RaftMessage.InstallSnapshotResponse(state.currentTerm, outcome.haveOffset, echoedRound = m.round))
             }
-            is SnapshotReceiver.ChunkOutcome.Complete -> finalizeInstalledSnapshot(from, m, outcome.bytes)
+            is SnapshotReceiver.ChunkOutcome.Complete -> finalizeInstalledSnapshot(from, m, outcome.meta, outcome.bytes)
         }
     }
 
     /** Persist + apply a fully-reassembled snapshot, reset the log around it, and emit the install. */
-    private suspend fun finalizeInstalledSnapshot(from: NodeId, m: RaftMessage.InstallSnapshot, bytes: ByteArray) {
+    private suspend fun finalizeInstalledSnapshot(
+        from: NodeId,
+        m: RaftMessage.InstallSnapshot,
+        meta: SnapshotMeta,
+        bytes: ByteArray,
+    ) {
         // A snapshot at or below our applied frontier can only regress state — ack and ignore it.
         // This is the etcd-style `<= committed` restore guard: Raft Fig 13 rule 6 (when our existing
         // entry already covers the snapshot's last index/term, retain the suffix and *reply* — do NOT
@@ -1027,7 +1034,9 @@ internal class RaftEngine(
             send(from, RaftMessage.InstallSnapshotResponse(state.currentTerm, bytes.size.toLong(), echoedRound = m.round))
             return
         }
-        val meta = SnapshotMeta(m.lastIncludedIndex, m.lastIncludedTerm, m.config)
+        // `meta` is the SnapshotReceiver.Complete outcome's meta — identical to the per-chunk meta the
+        // receiver reassembled under (SnapshotMeta(m.lastIncludedIndex, m.lastIncludedTerm, m.config)),
+        // so we reuse it here instead of rebuilding it from `m`.
         storage.saveSnapshot(meta, bytes)
         // Keep the suffix only if our entry at the boundary matches the snapshot's term (Log Matching);
         // otherwise the whole local log is suspect — discard it and rebuild from the snapshot.
@@ -1227,7 +1236,7 @@ internal class RaftEngine(
             tryAdvanceLeaderCommit()
             // §3.10 step 2: if a transfer is in flight and the target's log now fully matches ours
             // (matchIndex == lastLogIndex, not merely commitIndex), send TimeoutNow.
-            if (transfer.onPeerAck(from, state.matchIndex.getValue(from), state.lastLogIndex)) sendTimeoutNow(from)
+            if (transfer.isTargetCaughtUp(from, state.matchIndex.getValue(from), state.lastLogIndex)) sendTimeoutNow(from)
         } else {
             // §5.3 fast backup: jump nextIndex to reduce O(n) recovery to O(#terms)
             state.nextIndex[from] = nextIndexAfterFailure(state.nextIndex[from] ?: 1L, m, state.log)
@@ -1728,7 +1737,7 @@ internal class RaftEngine(
         // Joint→Simple auto-append fires inside that window — appending an entry that would grow
         // lastLogIndex mid-transfer, moving the goalpost the target is chasing. Transfer and membership
         // change are thus mutually exclusive in both directions, which is what keeps lastLogIndex stable
-        // for the duration of the transfer (the onPeerAck predicate relies on this).
+        // for the duration of the transfer (the isTargetCaughtUp predicate relies on this).
         if (pendingConfigChange != null) {
             response.completeExceptionally(MembershipChangeInProgressException("transferLeadership: a membership change is in progress"))
             return
@@ -1744,10 +1753,10 @@ internal class RaftEngine(
         debug { "onTransferLeadership: transfer started to ${target.value}" }
 
         // Sync target's log; send TimeoutNow now iff it is already fully caught up (matchIndex >= lastLogIndex,
-        // §3.10 step 2). Otherwise the AppendEntries ACK path (onAppendEntriesResponse → transfer.onPeerAck)
+        // §3.10 step 2). Otherwise the AppendEntries ACK path (onAppendEntriesResponse → transfer.isTargetCaughtUp)
         // sends it once the target catches up. AppendEntries delivery is best-effort — the heartbeat loop retries.
         sendAppendEntries(target)
-        if (transfer.onPeerAck(target, state.matchIndex[target] ?: 0L, state.lastLogIndex)) sendTimeoutNow(target)
+        if (transfer.isTargetCaughtUp(target, state.matchIndex[target] ?: 0L, state.lastLogIndex)) sendTimeoutNow(target)
     }
 
     /** Send a [RaftMessage.TimeoutNow] to [target]. */

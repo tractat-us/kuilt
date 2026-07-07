@@ -238,7 +238,7 @@ internal class ReadIndexTracker {
     /** The engine's next action after a readIndex() request whose leadership was already confirmed. */
     sealed interface ReadDecision {
         /** Gated on the current-term no-op — the request's re-invocation was parked for redelivery. */
-        object Gated : ReadDecision
+        data object Gated : ReadDecision
 
         /** Self alone is a fresh quorum — the engine completes the deferred with [readIndex] now. */
         data class ResolveNow(val readIndex: Long) : ReadDecision
