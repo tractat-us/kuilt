@@ -53,11 +53,18 @@ public fun interface LinkAdmission {
 }
 
 /**
- * Thrown by [Mesh.addLink] (or `meshSeam` construction) when a handshaked link is rejected
- * by the mesh's [LinkAdmission] policy. The offending connection is already closed.
+ * The per-link signal raised by [Mesh.addLink] when a handshaked link is rejected by the mesh's
+ * [LinkAdmission] policy. The offending connection is already closed and was never published.
  *
- * The message deliberately reports only whether the link was attested — never the
- * [Principal] value itself, which may be sensitive and does not belong in logs.
+ * **Non-fatal by design.** Rejection affects only the one link — it never tears down the seam or
+ * any other admitted link. A hub accept-pump (`hostedOverlay`) absorbs this and debug-logs it, then
+ * keeps serving; kuilt-core stays logger-free (its dependency contract), so the rejection is raised
+ * here and logged by the pump, which owns a logger. `meshSeam` **construction** does not throw at
+ * all: a rejected construction link is closed and dropped, and the mesh is built from the survivors
+ * (reject-and-continue, no sibling teardown).
+ *
+ * The message deliberately reports only whether the link was attested — never the [Principal] value
+ * itself, which may be sensitive and does not belong in logs.
  */
 public class LinkRejectedException(
     /** The peer id the rejected link claimed in its `MeshHello` preamble. */

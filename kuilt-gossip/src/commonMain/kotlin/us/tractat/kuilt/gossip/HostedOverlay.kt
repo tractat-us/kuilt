@@ -61,7 +61,13 @@ public suspend fun CoroutineScope.hostedOverlay(
         while (isActive) {
             val conn = source.accept()
             runCatchingCancellable { hubMesh.addLink(conn) }
-                .onFailure { logger.debug { "hostedOverlay: dropping torn/garbled spoke — ${it.message}" } }
+                .onFailure {
+                    // Reject-and-continue: a torn/garbled spoke (client dropped during the MeshHello
+                    // preamble) or an admission-rejected link (LinkRejectedException) surfaces here.
+                    // Log the one dropped spoke at debug and keep accepting — the hub and every
+                    // admitted link stay intact.
+                    logger.debug { "hostedOverlay: dropping rejected/torn spoke — ${it.message}" }
+                }
         }
     }
     return hub

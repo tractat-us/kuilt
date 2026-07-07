@@ -51,10 +51,17 @@ public interface Mesh : Seam, PrincipalRoster {
      * The admission check runs **between** the handshake and link publication — the first
      * moment the joiner's self-asserted [PeerId] is known, and the last moment before the
      * link can contend in duplicate-link dedup or receive frames. A rejected connection is
-     * closed and [LinkRejectedException] is thrown; it never reaches the dedup tiebreak, so
-     * a forged link can never displace a live one.
+     * closed and never published — it never reaches the dedup tiebreak (so a forged link can
+     * never displace a live one), never joins [peers], and never lands in [attestedPrincipals].
      *
-     * @throws LinkRejectedException if the mesh's [LinkAdmission] policy rejects the link.
+     * **Reject-and-continue:** rejection affects **only** the one link. It is surfaced as a
+     * [LinkRejectedException] — the per-link signal a hub accept-pump (`hostedOverlay`) absorbs and
+     * debug-logs — and never tears down the seam or any other admitted link. Because the mesh
+     * admits many joiners one at a time, an unauthorized joiner cannot disturb the live session or
+     * concurrent legitimate ones.
+     *
+     * @throws LinkRejectedException if the mesh's [LinkAdmission] policy rejects the link — a
+     *   non-fatal per-link signal; the seam and all other links stay intact.
      * @param conn A fresh, unread [Connection]. The mesh wraps it with [singleCollection] before reading,
      *   so the preamble read and the read loop share ONE collection of [Connection.incoming] — a cold,
      *   single-collection conn (a stream fabric's `framed()`) works as well as a hot channel-backed
@@ -171,9 +178,11 @@ private class Link(
  * @param admission Per-link admission policy, applied after each link's handshake and before it is
  *   published — both to construction-time connections and to every later [Mesh.addLink]. Defaults
  *   to [LinkAdmission.AcceptAll] (byte-identical to today's open behaviour); once supplied, the
- *   policy is authoritative for **every** link, including unattested ones. A construction-time
- *   rejection closes the offending connection and fails construction with [LinkRejectedException]
- *   (sibling handshakes are cancelled, matching the existing failed-handshake behaviour).
+ *   policy is authoritative for **every** link, including unattested ones. **Reject-and-continue:**
+ *   a construction-time connection the policy declines is closed and dropped, and the mesh is still
+ *   built from the surviving links — one rejected joiner never fails construction nor cancels the
+ *   concurrent sibling handshakes. A rejected link is never published, so it can never contend in
+ *   dedup, join [Seam.peers], or land in the [attestedPrincipals] roster.
  */
 public suspend fun meshSeam(
     selfId: PeerId,
@@ -183,11 +192,13 @@ public suspend fun meshSeam(
     policy: DeliveryPolicy = DeliveryPolicy.Reliable,
     admission: LinkAdmission = LinkAdmission.AcceptAll,
 ): Mesh {
-    val links = coroutineScope {
-        connections.map { conn ->
-            async { handshakeLink(selfId, conn, dispatcher, random).also { admitOrThrow(admission, it) } }
-        }.awaitAll()
+    val handshaked = coroutineScope {
+        connections.map { conn -> async { handshakeLink(selfId, conn, dispatcher, random) } }.awaitAll()
     }
+    // Reject-and-continue: drop (and close) the links the policy declines; keep the survivors. A
+    // rejected link never reaches the dedup lottery below or publication, and a rejection neither
+    // fails construction nor tears down the concurrent sibling handshakes above.
+    val links = handshaked.filter { admitLink(admission, it) }
 
     // Dedup duplicate links to the same peer, keeping the canonical survivor on every node.
     val winners = mutableMapOf<PeerId, Link>()
@@ -234,13 +245,14 @@ private fun canonicalLinkNonce(a: ByteArray, b: ByteArray): String {
  * THE CHECK (design 2026-07-07-hub-accept-attestation, P1 + P2): apply [admission] to a freshly
  * handshaked [link], after the `MeshHello` (the first moment the self-asserted remote id is known)
  * and before publication (the last moment before the link can contend in dedup or receive frames).
- * On rejection the connection is closed and [LinkRejectedException] thrown — a forged link never
- * reaches the dedup lottery, so it can never displace a live link.
+ * Returns `true` to admit; on rejection it closes the connection and returns `false` — the link is
+ * simply dropped, never reaching the dedup lottery, so a forged link can never displace a live one.
+ * Rejection is per-link and non-fatal: it never fails construction nor tears down sibling links.
  */
-private suspend fun admitOrThrow(admission: LinkAdmission, link: Link) {
-    if (admission.admit(link.principal, link.remoteId)) return
+private suspend fun admitLink(admission: LinkAdmission, link: Link): Boolean {
+    if (admission.admit(link.principal, link.remoteId)) return true
     runCatchingCancellable { link.conn.close() }
-    throw LinkRejectedException(link.remoteId, attested = link.principal != null)
+    return false
 }
 
 private class MeshSeam(
@@ -300,8 +312,13 @@ private class MeshSeam(
         check(!closed.value) { closedMessage }
         val link = handshakeLink(selfId, conn, dispatcher, random)
         // THE CHECK: between the handshake (remote id now known) and admitOrReject (link not yet
-        // live). A rejected link is closed and thrown before it can contend in the dedup lottery.
-        admitOrThrow(admission, link)
+        // live). A rejected link is closed here and never published — it cannot contend in the
+        // dedup lottery, join `peers`, or land in the roster. Reject-and-continue: the rejection is
+        // surfaced as a LinkRejectedException — the per-link signal the accept-pump (hostedOverlay)
+        // absorbs and debug-logs — so one rejected joiner never tears down the seam or other links.
+        // (kuilt-core is logger-free by contract, so the signal is raised here and logged by the
+        // pump, which owns a logger.)
+        if (!admitLink(admission, link)) throw LinkRejectedException(link.remoteId, attested = link.principal != null)
         // Dedup against any existing link to the same peer using the canonical nonce, then publish.
         // Snapshot the loser under the lock, close it outside.
         val loser = admitOrReject(link)

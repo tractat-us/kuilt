@@ -10,6 +10,7 @@ import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Principal
+import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.withPrincipal
 import us.tractat.kuilt.test.assertAll
 import us.tractat.kuilt.test.fabric.connectionPair
@@ -34,26 +35,49 @@ class MeshAdmissionTest {
     /** The consumer-side spoofing check: verified principal must match the claimed peer id. */
     private val binding = LinkAdmission { principal, remoteId -> principal?.value == remoteId.value }
 
-    // ── P1: closed mode ──────────────────────────────────────────────────────
+    // ── P1: closed mode — reject-and-continue ─────────────────────────────────
 
+    /**
+     * A rejected joiner is dropped, but the seam and a concurrently-admitted legitimate joiner
+     * stay intact: the hub keeps serving. The rejection is a non-fatal per-link
+     * [LinkRejectedException] signal (the accept-pump absorbs and debug-logs it); it never tears
+     * down the seam or the good link.
+     */
     @Test
-    fun requireAttestedRejectsUnattestedAddLink() = runTest {
+    fun requireAttestedDropsUnattestedButKeepsTheSeamAndValidLinks() = runTest {
         val dispatcher = StandardTestDispatcher(testScheduler)
         val hub = PeerId("hub")
+        val good = PeerId("good")
         val mesh = meshSeam(hub, emptyList(), dispatcher, Random(0), admission = LinkAdmission.RequireAttested)
 
-        val (hubEnd, farEnd) = connectionPair()
-        val far = launch { handshakeRemote(farEnd, PeerId("joiner"), nonce = byteArrayOf(1)) }
-        val rejection = assertFailsWith<LinkRejectedException> { mesh.addLink(hubEnd) }
-        far.join()
+        // A legitimate attested joiner is admitted and stays admitted.
+        val (goodHubEnd, goodFarEnd) = connectionPair()
+        val goodHandshake = launch { handshakeRemote(goodFarEnd, good, nonce = byteArrayOf(2)) }
+        mesh.addLink(goodHubEnd.withPrincipal(Principal("user-good")))
+        goodHandshake.join()
+        assertEquals(setOf(hub, good), mesh.peers.value)
 
-        val remainingFrames = farEnd.incoming.toList()
+        // An unattested joiner is rejected — closed, never published — but the seam survives.
+        val (badHubEnd, badFarEnd) = connectionPair()
+        val badHandshake = launch { handshakeRemote(badFarEnd, PeerId("joiner"), nonce = byteArrayOf(1)) }
+        val rejection = assertFailsWith<LinkRejectedException> { mesh.addLink(badHubEnd) }
+        badHandshake.join()
+        val badRemainingFrames = badFarEnd.incoming.toList()
+
+        // The good link still works after the rejection: a frame to it still lands.
+        val payload = byteArrayOf(4, 2)
+        val received = async { goodFarEnd.incoming.first() }
+        mesh.sendTo(good, payload)
+        val goodGotFrame = received.await()
+
         assertAll(
             { assertEquals(PeerId("joiner"), rejection.remoteId) },
             { assertFalse(rejection.attested, "the rejected link carried no principal") },
-            { assertEquals(setOf(hub), mesh.peers.value, "a rejected link must never appear in peers") },
-            { assertTrue(mesh.attestedPrincipals.value.isEmpty(), "a rejected link must never land in the roster") },
-            { assertTrue(remainingFrames.isEmpty(), "the rejected connection must be closed") },
+            { assertEquals(setOf(hub, good), mesh.peers.value, "rejected link absent; good link intact") },
+            { assertEquals(mapOf(good to Principal("user-good")), mesh.attestedPrincipals.value) },
+            { assertTrue(badRemainingFrames.isEmpty(), "the rejected connection must be closed") },
+            { assertContentEquals(payload, goodGotFrame, "the seam keeps serving the admitted link after a rejection") },
+            { assertEquals(SeamState.Woven, mesh.state.value, "one rejection must not tear down the seam") },
         )
     }
 
@@ -118,6 +142,8 @@ class MeshAdmissionTest {
             { assertContentEquals(payload, victimGotFrame, "the victim's live link must survive the spoof attempt") },
             { assertTrue(attackerFrames.isEmpty(), "the attacker's connection must be closed, having received nothing") },
             { assertEquals(mapOf(victim to Principal("victim")), mesh.attestedPrincipals.value) },
+            { assertEquals(setOf(hub, victim), mesh.peers.value, "the spoof must not disturb the live roster") },
+            { assertEquals(SeamState.Woven, mesh.state.value, "a rejected spoof must not tear down the seam") },
         )
     }
 
@@ -152,18 +178,44 @@ class MeshAdmissionTest {
         assertContentEquals(payload, received.await(), "the spoofed link displaced the victim (dedup lottery won)")
     }
 
-    // ── Construction-time symmetry ───────────────────────────────────────────
+    // ── Construction-time symmetry — reject-and-continue, no sibling teardown ──
 
+    /**
+     * Construction applies the policy per link and **rejects-and-continues**: given a batch of
+     * concurrently-handshaking connections — one attested (admitted), one unattested (rejected) —
+     * `meshSeam` does NOT throw, does NOT cancel the sibling handshake, and returns a live mesh
+     * built from the survivor. One unauthorized joiner never tears down the concurrent legitimate
+     * handshake or the seam.
+     */
     @Test
-    fun constructionTimeConnectionsAreSubjectToAdmission() = runTest {
+    fun constructionRejectsAndContinuesWithoutTearingDownSiblings() = runTest {
         val dispatcher = StandardTestDispatcher(testScheduler)
-        val (mine, theirs) = connectionPair()
-        val far = launch { handshakeRemote(theirs, PeerId("joiner"), nonce = byteArrayOf(1)) }
-        assertFailsWith<LinkRejectedException> {
-            meshSeam(PeerId("hub"), listOf(mine), dispatcher, Random(0), admission = LinkAdmission.RequireAttested)
-        }
-        far.join()
-        assertTrue(theirs.incoming.toList().isEmpty(), "the rejected construction connection must be closed")
+        val hub = PeerId("hub")
+        val good = PeerId("good")
+
+        val (goodMine, goodTheirs) = connectionPair()
+        val (badMine, badTheirs) = connectionPair()
+        val goodHandshake = launch { handshakeRemote(goodTheirs, good, nonce = byteArrayOf(1)) }
+        val badHandshake = launch { handshakeRemote(badTheirs, PeerId("joiner"), nonce = byteArrayOf(2)) }
+
+        // Mixed batch: the good link is attested, the bad one is not. Construction must not throw.
+        val mesh = meshSeam(
+            hub,
+            listOf(goodMine.withPrincipal(Principal("user-good")), badMine),
+            dispatcher,
+            Random(0),
+            admission = LinkAdmission.RequireAttested,
+        )
+        goodHandshake.join()
+        badHandshake.join()
+        val badRemainingFrames = badTheirs.incoming.toList()
+
+        assertAll(
+            { assertEquals(setOf(hub, good), mesh.peers.value, "the survivor is admitted; the rejected link is dropped") },
+            { assertEquals(mapOf(good to Principal("user-good")), mesh.attestedPrincipals.value) },
+            { assertEquals(SeamState.Woven, mesh.state.value, "construction rejection must not tear down the seam") },
+            { assertTrue(badRemainingFrames.isEmpty(), "the rejected construction connection must be closed") },
+        )
     }
 
     // ── P3: the roster — atomic with the link set ────────────────────────────
