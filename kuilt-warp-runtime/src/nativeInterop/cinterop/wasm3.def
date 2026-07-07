@@ -2,7 +2,9 @@
 //
 // Vendor: github.com/wasm3/wasm3 v0.5.0 (MIT)
 // Source: src/nativeInterop/wasm3/source/
-// Prebuilt static libs: src/nativeInterop/wasm3/prebuilt/<target>/libwasm3.a
+// Static libs: built from that source by the buildWasm3<Target> Gradle tasks
+// into build/wasm3/<target>/libwasm3.a (see build.gradle.kts; no committed
+// binaries — #934).
 //
 // The `---` section is compiled by the K/N cinterop tool (which has the
 // correct Apple sysroot) and included in the generated klib. The helper
