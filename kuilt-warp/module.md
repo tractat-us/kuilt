@@ -312,6 +312,14 @@ as a `BobbinMeta(hash, variantOf = VariantKey(source, target, optLevel))`; a nod
 `target` resolves the best variant for its platform per execution and counts
 interpreted-vs-compiled executions (`executionsInterpreted` / `executionsCompiled`).
 
+Compilation itself is **just another warp op**: a peer enqueues a compile request
+(`CompileOp.descriptor(CompileRequest(sourceHash, target, optLevel), compiler)`) as an
+ordinary task, and the *compiler node* — simply a peer that called
+`WarpNode.registerCompiler` — claims it off the ring, builds the variant, and publishes it
+so it gossips out. The task's replicated result is the variant's hash:
+`compile(sourceHash, target, optLevel) → variantHash`. No imperative call into the
+compiler node is needed; the ring routes the work like any other task.
+
 The current spike proves **distribution and swap**, not speedup — its compiler is a
 deterministic no-op transform. Genuine optimization (GraalWasm / Kotlin-Wasm / `wasm-opt`)
 is a later epic. The iOS ceiling stays *interpret*: Apple forbids executing

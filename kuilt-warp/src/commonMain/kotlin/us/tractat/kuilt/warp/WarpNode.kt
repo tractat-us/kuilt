@@ -603,6 +603,58 @@ public class WarpNode(
         }.putVariant(bytes, variantOf)
 
     /**
+     * Register this node as a **compiler node**: installs the well-known [CompileOp.ID] op in
+     * [registry] so `compile(sourceHash, target, optLevel)` requests reach this node as
+     * ordinary **ring-dispatched tasks** rather than requiring a direct imperative
+     * [publishVariant] call.
+     *
+     * Any peer enqueues a compile task with [CompileOp.descriptor]; when this node claims it,
+     * the registered op:
+     *
+     * 1. decodes the [CompileRequest] from the task args,
+     * 2. resolves the source bytes — from the local [Creel] if cached, otherwise lazily
+     *    fetched from the mesh (bounded by [WarpLazyFetch.fetchTimeout]; a timeout throws,
+     *    which unclaims the task so it is retried on a later cycle — transient, not terminal),
+     * 3. invokes [compile] to build the variant bytes, and
+     * 4. publishes them via [publishVariant] so the variant gossips to the mesh exactly as an
+     *    imperative publish would.
+     *
+     * The task's result on the [results] board is the variant's [BobbinHash] hex value as
+     * UTF-8 bytes — `compile(sourceHash, target, optLevel) → variantHash`.
+     *
+     * Requires a [lazyFetch] capability (the compiler must be able to fetch sources and
+     * publish variants) — throws [IllegalStateException] otherwise, fail-loud like
+     * [publishVariant]. Call once at startup; a duplicate registration throws (see
+     * [OpRegistry.register]).
+     *
+     * @param compile Builds the variant bytes from the source kernel bytes for the requested
+     *   [Target] and [OptLevel]. Must be deterministic and pure — same input, same output,
+     *   same content hash on every compiler node.
+     */
+    public fun registerCompiler(
+        compile: suspend (source: ByteArray, target: Target, optLevel: OptLevel) -> ByteArray,
+    ) {
+        val exchange = checkNotNull(bobbinExchange) {
+            "WarpNode($selfId): registerCompiler requires a lazyFetch capability (no BobbinExchange)"
+        }
+        val fetchTimeout = checkNotNull(lazyFetch).fetchTimeout
+        registry.register(
+            CompileOp.ID,
+            Op { args ->
+                val request = CompileRequest.decode(args)
+                val source = withTimeoutOrNull(fetchTimeout) { exchange.fetch(request.sourceHash) }
+                    ?: error(
+                        "WarpNode($selfId): compile source ${request.sourceHash.value} not served " +
+                            "within $fetchTimeout — transient; the task is retried on a later cycle"
+                    )
+                val compiled = compile(source, request.target, request.optLevel)
+                val variantKey = VariantKey(request.sourceHash, request.target, request.optLevel)
+                publishVariant(compiled, variantKey).value.encodeToByteArray()
+            },
+        )
+    }
+
+    /**
      * A snapshot of the current results board, as seen by this peer.
      *
      * Each entry maps a [TaskId] to the raw [ByteArray] returned by [Op.invoke] (free path)
