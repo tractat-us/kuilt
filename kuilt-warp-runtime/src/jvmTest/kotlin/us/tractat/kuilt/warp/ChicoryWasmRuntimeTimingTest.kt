@@ -1,5 +1,6 @@
 package us.tractat.kuilt.warp
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.test.runTest
@@ -60,6 +61,22 @@ class ChicoryWasmRuntimeTimingTest {
         ChicoryWasmRuntime(timedRunner = alwaysTimeout).use { rt ->
             val op = rt.load(reverseWasm)
             assertFailsWith<WasmExecutionException> { op.invoke(ByteArray(0)) }
+        }
+    }
+
+    /**
+     * Exception discipline (#1123): a [CancellationException] surfacing from the guest invocation
+     * must propagate unchanged so structured-concurrency cancellation flows through
+     * [ChicoryWasmRuntime]'s invoke — never be swallowed into a [WasmExecutionException]
+     * (parity with the wasmJs sibling's guard in `BrowserWasmRuntime`).
+     */
+    @Test
+    fun cancellationPropagatesUnwrappedFromInvoke() = runTest {
+        val cancelling = TimedGuestRunner { _, _ -> throw CancellationException("caller cancelled") }
+        ChicoryWasmRuntime(timedRunner = cancelling).use { rt ->
+            val op = rt.load(reverseWasm)
+            val thrown = assertFailsWith<CancellationException> { op.invoke(ByteArray(0)) }
+            assertEquals("caller cancelled", thrown.message, "the original cancellation, not a wrapper")
         }
     }
 
