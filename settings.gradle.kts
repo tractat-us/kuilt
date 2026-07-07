@@ -121,3 +121,7 @@ include(":examples")
 // Patchwork demo app modules (unpublished; see docs/superpowers/specs/2026-07-07-demo-app-design.md).
 include(":demo-shared")
 project(":demo-shared").projectDir = file("demo/shared")
+include(":demo-relay")
+project(":demo-relay").projectDir = file("demo/relay")
+include(":demo-cli")
+project(":demo-cli").projectDir = file("demo/cli")
