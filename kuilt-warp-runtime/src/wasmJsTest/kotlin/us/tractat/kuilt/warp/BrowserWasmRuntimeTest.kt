@@ -6,6 +6,8 @@ import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertContentEquals
 import kotlin.test.assertFailsWith
+import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.Duration.Companion.seconds
 
 /**
  * Guard + happy-path tests for [BrowserWasmRuntime], mirroring the JVM `ChicoryWasmRuntimeTest`
@@ -99,6 +101,40 @@ class BrowserWasmRuntimeTest {
             { assertContentEquals(expected, second, "second invoke reuses the same instance") },
         )
     }
+
+    // --- Run-guard tests: the CPU-bomb execution-timeout defense ---
+
+    /**
+     * The CPU-bomb defense: a kernel whose `warp_run` spins forever (`loop`/`br`, no calls) must
+     * be terminated at [WasmSandboxConfig.executionTimeout] and surface [WasmExecutionException] —
+     * never wedge the host. Browser JS is single-threaded, so this only holds if the guest executes
+     * OFF the main thread (a Web Worker the host can `terminate()`); a synchronous main-thread
+     * runaway could never be pre-empted.
+     */
+    @Test
+    fun runawayLoopKernelIsBoundedByExecutionTimeout() = runTest(timeout = 10.seconds) {
+        val bounded = BrowserWasmRuntime(WasmSandboxConfig(executionTimeout = 250.milliseconds))
+        val op = bounded.load(LOOP_WASM)
+        val ex = assertFailsWith<WasmExecutionException> { op.invoke(ByteArray(0)) }
+        assertContains(ex.message ?: "", "exceeded", message = "names the budget, not a generic trap")
+    }
+
+    /**
+     * A timed-out op's worker is terminated, so the op must transparently respawn a fresh guest on
+     * the next invocation — a second invoke times out again (same runaway kernel) rather than
+     * failing on a dead worker; and a separate well-behaved op is unaffected.
+     */
+    @Test
+    fun timeoutDoesNotPoisonSubsequentInvokes() = runTest(timeout = 10.seconds) {
+        val bounded = BrowserWasmRuntime(WasmSandboxConfig(executionTimeout = 250.milliseconds))
+        val runaway = bounded.load(LOOP_WASM)
+        val reverse = bounded.load(REVERSE_WASM)
+        assertFailsWith<WasmExecutionException> { runaway.invoke(ByteArray(0)) }
+        assertFailsWith<WasmExecutionException>("respawned guest times out again") {
+            runaway.invoke(ByteArray(0))
+        }
+        assertContentEquals(byteArrayOf(3, 2, 1), reverse.invoke(byteArrayOf(1, 2, 3)))
+    }
 }
 
 // ── Embedded fixtures ────────────────────────────────────────────────────────────────────────────
@@ -171,6 +207,21 @@ private val NOMEMORY_WASM: ByteArray = wasm(
     0x61, 0x72, 0x70, 0x5f, 0x61, 0x6c, 0x6c, 0x6f, 0x63, 0x00, 0x00, 0x08, 0x77, 0x61, 0x72, 0x70,
     0x5f, 0x72, 0x75, 0x6e, 0x00, 0x01, 0x0a, 0x0b, 0x02, 0x04, 0x00, 0x41, 0x00, 0x0b, 0x04, 0x00,
     0x42, 0x00, 0x0b,
+)
+
+/**
+ * loop.wat variant — warp_run spins forever on a backward branch (`loop $l (br $l)`), with NO
+ * function call inside the loop body: the pure CPU-bomb. Memory declared `1 16` (explicit max =
+ * the default cap) so every load-time guard passes and only the execution-time bound can stop it.
+ * Same .wat provenance as jvmTest/resources loop.wat, memory bounded.
+ */
+private val LOOP_WASM: ByteArray = wasm(
+    0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x01, 0x0c, 0x02, 0x60, 0x01, 0x7f, 0x01, 0x7f,
+    0x60, 0x02, 0x7f, 0x7f, 0x01, 0x7e, 0x03, 0x03, 0x02, 0x00, 0x01, 0x05, 0x04, 0x01, 0x01, 0x01,
+    0x10, 0x07, 0x22, 0x03, 0x06, 0x6d, 0x65, 0x6d, 0x6f, 0x72, 0x79, 0x02, 0x00, 0x0a, 0x77, 0x61,
+    0x72, 0x70, 0x5f, 0x61, 0x6c, 0x6c, 0x6f, 0x63, 0x00, 0x00, 0x08, 0x77, 0x61, 0x72, 0x70, 0x5f,
+    0x72, 0x75, 0x6e, 0x00, 0x01, 0x0a, 0x10, 0x02, 0x04, 0x00, 0x41, 0x00, 0x0b, 0x09, 0x00, 0x03,
+    0x40, 0x0c, 0x00, 0x0b, 0x42, 0x00, 0x0b,
 )
 
 /**
