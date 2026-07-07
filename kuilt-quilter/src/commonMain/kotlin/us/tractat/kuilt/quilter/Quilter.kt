@@ -386,8 +386,15 @@ public class Quilter<S : Quilted<S>>(
     }
 
     /**
-     * Apply a local mutation expressed as a transform on the current state. Equivalent to
-     * `apply(state.value.let(transform))` but avoids reading [state].value at every call site.
+     * Apply a local mutation expressed as a transform on the current state — the **atomic
+     * read-modify-write** entry point.
+     *
+     * The read of [state].value and the [transform] run inside the same internal reentrant
+     * [lock] as the [apply], so the state the transform sees cannot change before its patch
+     * lands. Two concurrent `mutate` calls therefore serialise instead of both reading the
+     * same snapshot and max-joining each other's update away — the lost-update class that
+     * bit same-replica counter increments. [transform] must be pure, fast, and
+     * non-suspending: it runs inside the locked section (I/O stays outside, as everywhere).
      *
      * ```kotlin
      * tally.mutate { it.increment(replica, 3L) }
@@ -396,7 +403,9 @@ public class Quilter<S : Quilted<S>>(
      * @sample us.tractat.kuilt.quilter.sampleQuilterConvenience
      * @throws IllegalStateException if this replicator has been [close]d.
      */
-    public fun mutate(transform: (S) -> Patch<S>): Unit = apply(state.value.let(transform))
+    public fun mutate(transform: (S) -> Patch<S>): Unit = lock.withLock {
+        apply(state.value.let(transform))
+    }
 
     // ---- private helpers ----
 
