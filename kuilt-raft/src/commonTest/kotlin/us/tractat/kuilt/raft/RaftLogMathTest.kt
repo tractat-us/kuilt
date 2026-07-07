@@ -16,42 +16,50 @@ class RaftLogMathTest {
 
     @Test
     fun isLogUpToDate_emptyOurLog_emptyCandidate_granted() {
-        assertTrue(isLogUpToDate(null, candidateLastIndex = 0L, candidateLastTerm = 0L))
+        assertTrue(isLogUpToDate(ourLastTerm = 0L, ourLastIndex = 0L, candidateLastIndex = 0L, candidateLastTerm = 0L))
     }
 
     @Test
     fun isLogUpToDate_emptyOurLog_candidateHasEntries_granted() {
-        assertTrue(isLogUpToDate(null, candidateLastIndex = 5L, candidateLastTerm = 3L))
+        assertTrue(isLogUpToDate(ourLastTerm = 0L, ourLastIndex = 0L, candidateLastIndex = 5L, candidateLastTerm = 3L))
     }
 
     @Test
     fun isLogUpToDate_candidateHigherTerm_granted() {
-        val ourLast = LogEntry(index = 10L, term = 2L, command = byteArrayOf())
-        assertTrue(isLogUpToDate(ourLast, candidateLastIndex = 1L, candidateLastTerm = 3L))
+        assertTrue(isLogUpToDate(ourLastTerm = 2L, ourLastIndex = 10L, candidateLastIndex = 1L, candidateLastTerm = 3L))
     }
 
     @Test
     fun isLogUpToDate_candidateLowerTerm_denied() {
-        val ourLast = LogEntry(index = 10L, term = 3L, command = byteArrayOf())
-        assertFalse(isLogUpToDate(ourLast, candidateLastIndex = 99L, candidateLastTerm = 2L))
+        assertFalse(isLogUpToDate(ourLastTerm = 3L, ourLastIndex = 10L, candidateLastIndex = 99L, candidateLastTerm = 2L))
     }
 
     @Test
     fun isLogUpToDate_sameTerm_equalIndex_granted() {
-        val ourLast = LogEntry(index = 5L, term = 3L, command = byteArrayOf())
-        assertTrue(isLogUpToDate(ourLast, candidateLastIndex = 5L, candidateLastTerm = 3L))
+        assertTrue(isLogUpToDate(ourLastTerm = 3L, ourLastIndex = 5L, candidateLastIndex = 5L, candidateLastTerm = 3L))
     }
 
     @Test
     fun isLogUpToDate_sameTerm_longerCandidateLog_granted() {
-        val ourLast = LogEntry(index = 5L, term = 3L, command = byteArrayOf())
-        assertTrue(isLogUpToDate(ourLast, candidateLastIndex = 6L, candidateLastTerm = 3L))
+        assertTrue(isLogUpToDate(ourLastTerm = 3L, ourLastIndex = 5L, candidateLastIndex = 6L, candidateLastTerm = 3L))
     }
 
     @Test
     fun isLogUpToDate_sameTerm_shorterCandidateLog_denied() {
-        val ourLast = LogEntry(index = 5L, term = 3L, command = byteArrayOf())
-        assertFalse(isLogUpToDate(ourLast, candidateLastIndex = 4L, candidateLastTerm = 3L))
+        assertFalse(isLogUpToDate(ourLastTerm = 3L, ourLastIndex = 5L, candidateLastIndex = 4L, candidateLastTerm = 3L))
+    }
+
+    // §5.4.1 across a compaction boundary (issue #1245): the voter's last is snapshot-aware
+    // (snapshotTerm, snapshotIndex) even when the live log is empty — a stale candidate is denied.
+    @Test
+    fun isLogUpToDate_compactedVoter_staleCandidateBelowSnapshot_denied() {
+        // Voter compacted through (term=3, index=100); candidate's log ends at index 50 in the same term.
+        assertFalse(isLogUpToDate(ourLastTerm = 3L, ourLastIndex = 100L, candidateLastIndex = 50L, candidateLastTerm = 3L))
+    }
+
+    @Test
+    fun isLogUpToDate_compactedVoter_candidateAtSnapshot_granted() {
+        assertTrue(isLogUpToDate(ourLastTerm = 3L, ourLastIndex = 100L, candidateLastIndex = 100L, candidateLastTerm = 3L))
     }
 
     // ── nextIndexAfterFailure ─────────────────────────────────────────────────

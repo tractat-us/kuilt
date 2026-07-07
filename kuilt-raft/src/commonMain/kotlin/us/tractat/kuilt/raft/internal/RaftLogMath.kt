@@ -16,16 +16,27 @@ import us.tractat.kuilt.raft.LogEntry
  * - its last log term is greater than ours, OR
  * - its last log term equals ours AND its last log index is at least as large.
  *
- * @param ourLast our own last log entry, or null if our log is empty
+ * The voter's last position is passed as raw `(ourLastTerm, ourLastIndex)` — NOT the live log's
+ * last entry. This is deliberate and safety-critical (issue #1245): after compaction empties the
+ * live log the voter still holds committed entries in its snapshot, so callers MUST pass the
+ * **snapshot-aware** last (`RaftState.lastLogTerm`/`lastLogIndex`, which fall back to
+ * `snapshotTerm`/`snapshotIndex` when the live log is empty). Reading `log.lastOrNull()` here would
+ * map an empty live log to `(0, 0)`, making every candidate look up-to-date and letting a compacted
+ * voter grant a vote to an arbitrarily stale candidate — a Leader Completeness violation.
+ *
+ * @param ourLastTerm the voter's snapshot-aware last log term (`snapshotTerm` if the live log is empty)
+ * @param ourLastIndex the voter's snapshot-aware last log index (`snapshotIndex` if the live log is empty)
  * @param candidateLastIndex the candidate's reported lastLogIndex
  * @param candidateLastTerm the candidate's reported lastLogTerm
  */
-internal fun isLogUpToDate(ourLast: LogEntry?, candidateLastIndex: Long, candidateLastTerm: Long): Boolean {
-    val ourLastTerm = ourLast?.term ?: 0L
-    val ourLastIndex = ourLast?.index ?: 0L
-    return candidateLastTerm > ourLastTerm ||
+internal fun isLogUpToDate(
+    ourLastTerm: Long,
+    ourLastIndex: Long,
+    candidateLastIndex: Long,
+    candidateLastTerm: Long,
+): Boolean =
+    candidateLastTerm > ourLastTerm ||
         (candidateLastTerm == ourLastTerm && candidateLastIndex >= ourLastIndex)
-}
 
 /**
  * §5.3 fast-backup: where should the leader set nextIndex after a rejected AppendEntries?
