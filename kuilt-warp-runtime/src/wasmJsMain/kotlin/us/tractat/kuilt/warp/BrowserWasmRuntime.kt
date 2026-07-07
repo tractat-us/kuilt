@@ -12,9 +12,10 @@ import kotlin.js.Promise
 /**
  * Browser (wasmJs) implementation of [WasmRuntime] backed by the native WebAssembly JS API.
  *
- * [load] compiles + instantiates the module once over an **empty imports object** to run the
- * load-time sandbox guards; the returned [Op] drives every invocation over the module's linear
- * memory via the warp ABI:
+ * [load] compiles the module and runs the load-time sandbox guards **statically** — it never
+ * instantiates on the main thread (instantiation runs a module's `(start)` function; see the
+ * execution-timeout KDoc below). The returned [Op] drives every invocation over the module's
+ * linear memory via the warp ABI:
  * - `warp_alloc(len: i32) -> i32`   — guest returns a writable pointer for `len` bytes.
  * - `warp_run(ptr: i32, len: i32) -> i64` — guest processes `memory[ptr..ptr+len)` and returns a
  *   packed pointer/length: `(resPtr.toLong() shl 32) or (resLen.toLong() and 0xFFFF_FFFF)`.
@@ -37,7 +38,13 @@ import kotlin.js.Promise
  *   [WasmLoadException], NOT a raw JS error. This preserves the property [ChicoryWasmRuntime]
  *   documents: a non-[WasmException] escaping `load` would bypass the executor's terminal-error
  *   handling and trigger an anti-entropy retry storm on a verified-but-broken kernel (a
- *   remotely-triggerable DoS).
+ *   remotely-triggerable DoS). Checked statically via `WebAssembly.Module.exports` — never by
+ *   instantiating on the main thread, which would run a hostile `(start)` function outside any
+ *   budget (#1290/#1298): a `(start)` CPU bomb would wedge the un-pre-emptible main thread at
+ *   `load`. Instantiation happens only inside the worker (below), so a trapping or spinning
+ *   `(start)` surfaces as a budget-bounded run-time [WasmExecutionException] on the first
+ *   invocation — matching the native runtime, whose engine also runs `(start)` lazily at the
+ *   first guest call.
  *
  * **Execution timeout — the CPU-bomb defense.** Browser JS is single-threaded, so a synchronous
  * WASM runaway on the main thread could never be pre-empted. The guest therefore executes in a
@@ -71,8 +78,7 @@ public class BrowserWasmRuntime(
         val module = compileModule(bytes)
         rejectImports(module)
         rejectOversizeMemory(bytes)
-        val instance = instantiate(module)
-        requireWarpAbi(instance)
+        requireWarpAbi(module)
         return WorkerBackedOp(bytes.toUint8Array(), config)
     }
 
@@ -111,15 +117,8 @@ public class BrowserWasmRuntime(
         }
     }
 
-    private fun instantiate(module: JsAny): JsAny =
-        try {
-            wasmInstantiateModule(module)
-        } catch (e: Throwable) {
-            throw WasmLoadException("module failed to instantiate: ${e.message}", e)
-        }
-
-    private fun requireWarpAbi(instance: JsAny) {
-        if (!wasmHasWarpAbi(instance)) {
+    private fun requireWarpAbi(module: JsAny) {
+        if (!wasmHasWarpAbi(module)) {
             throw WasmLoadException("missing ABI export (warp_alloc/warp_run/memory)")
         }
     }
@@ -128,8 +127,10 @@ public class BrowserWasmRuntime(
 /**
  * An [Op] whose guest executes in a dedicated Web Worker so the main thread can pre-empt it
  * (see [BrowserWasmRuntime]'s execution-timeout KDoc). The worker is spawned lazily on first
- * invocation and respawned after a timeout kill; [moduleBytes] were already validated by the
- * load-time guards, so worker-side instantiation cannot fail for a sandbox reason.
+ * invocation and respawned after a timeout kill. [moduleBytes] passed the static load-time
+ * guards, but worker-side instantiation is the FIRST execution of the module's `(start)`
+ * function — a trap there surfaces as [WasmExecutionException] ("guest instantiation failed")
+ * and a spinning `(start)` is terminated by the first invocation's budget timer.
  */
 private class WorkerBackedOp(
     private val moduleBytes: JsAny,
@@ -225,17 +226,22 @@ private external fun wasmCompile(bytes: JsAny): JsAny
 @JsFun("(module) => WebAssembly.Module.imports(module).length")
 private external fun wasmImportCount(module: JsAny): Int
 
-/** Instantiate with an EMPTY imports object — a module needing any import fails here. */
-@JsFun("(module) => new WebAssembly.Instance(module, {})")
-private external fun wasmInstantiateModule(module: JsAny): JsAny
-
-/** True iff the instance exports the full warp ABI: `warp_alloc`, `warp_run`, and `memory`. */
+/**
+ * True iff the module's export section declares the full warp ABI: `warp_alloc` and `warp_run`
+ * functions plus a `memory`. A **static** check over `WebAssembly.Module.exports` — deliberately
+ * no `new WebAssembly.Instance(...)` on the main thread: instantiation runs a module's `(start)`
+ * function, and a CPU-bomb `(start)` would wedge the un-pre-emptible main thread. The guest is
+ * only ever instantiated inside the terminate()-able worker, under an invocation budget.
+ */
 @JsFun(
-    "(instance) => (typeof instance.exports.warp_alloc === 'function' && " +
-        "typeof instance.exports.warp_run === 'function' && " +
-        "instance.exports.memory instanceof WebAssembly.Memory)",
+    """(module) => {
+        const kinds = {};
+        for (const e of WebAssembly.Module.exports(module)) kinds[e.name] = e.kind;
+        return kinds['warp_alloc'] === 'function' && kinds['warp_run'] === 'function' &&
+            kinds['memory'] === 'memory';
+    }""",
 )
-private external fun wasmHasWarpAbi(instance: JsAny): Boolean
+private external fun wasmHasWarpAbi(module: JsAny): Boolean
 
 // ── Worker guest executor ───────────────────────────────────────────────────────────────────────
 // The guest runs OFF the main thread so a runaway kernel can be pre-empted by worker.terminate().

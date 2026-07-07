@@ -83,8 +83,11 @@ import wasm3.warp_set_execution_deadline_ns
  * thread-local wall-clock deadline armed around each ABI round trip
  * ([WasmSandboxConfig.executionTimeout]) and cleared after, trapping a runaway guest
  * cooperatively on its own thread — no cross-thread abort, no abandoned worker. The deadline trap
- * surfaces as [WasmExecutionException] naming the exceeded budget. wasm3 runs a module's `(start)`
- * function lazily on the first guest call, so a CPU-bomb start section is bounded too.
+ * surfaces as [WasmExecutionException] naming the exceeded budget. The deadline is armed around
+ * **every** guest execution, including load: wasm3 runs a module's `(start)` function lazily
+ * inside the first `m3_FindFunction` — the ABI-export lookup in [load] — so that lookup runs
+ * under the armed deadline too, and a CPU-bomb `(start)` fails as a terminal [WasmLoadException]
+ * naming the exceeded budget instead of hanging `load()`.
  *
  * **Thread-safety.** wasm3 is not thread-safe: the shared [environment] is guarded by [loadLock]
  * across [load], and each [Op]'s runtime is guarded by its own lock across an invocation. Both are
@@ -252,12 +255,30 @@ public class Wasm3WasmRuntime(
      * terminal [WasmLoadException]. Without this, a well-formed module that simply omits an ABI
      * export would surface a non-[WasmException] that escapes terminal-error handling and triggers
      * an anti-entropy retry storm on a verified-but-broken kernel.
+     *
+     * `m3_FindFunction` is **guest execution**, not just a lookup: wasm3 lazily runs the module's
+     * `(start)` function on the first successful find (see `m3_FindFunction` → `m3_RunStart` in
+     * `m3_env.c`). The execution deadline is therefore armed around the call — the load-phase
+     * sibling of [runAbi]'s CPU-bomb defense: a `(start)` spinning forever would otherwise hang
+     * `load()` outside any budget. A deadline trap here surfaces as a terminal [WasmLoadException]
+     * naming the exceeded budget.
      */
     private fun findFunctionOrThrow(runtime: IM3Runtime, name: String): IM3Function = memScoped {
         val funcRef = alloc<IM3FunctionVar>()
-        val result = m3_FindFunction(funcRef.ptr, runtime, name)
+        warp_set_execution_deadline_ns(config.executionTimeout.inWholeNanoseconds.toULong())
+        val result = try {
+            m3_FindFunction(funcRef.ptr, runtime, name)
+        } finally {
+            warp_clear_execution_deadline()
+        }
         if (result != null) {
-            throw WasmLoadException("missing ABI export $name: ${result.toKString()}")
+            val message = result.toKString()
+            if (message == DEADLINE_EXCEEDED_TRAP) {
+                throw WasmLoadException(
+                    "module instantiation exceeded ${config.executionTimeout} ((start)-section execution budget)",
+                )
+            }
+            throw WasmLoadException("missing ABI export $name: $message")
         }
         checkNotNull(funcRef.value) { "wasm3: $name resolved to a null function pointer" }
     }
@@ -265,9 +286,9 @@ public class Wasm3WasmRuntime(
     /**
      * One ABI round-trip: marshal args into linear memory, run, read the packed result back —
      * all under the armed execution deadline (see the class KDoc). The deadline covers the whole
-     * round trip (`warp_alloc` + `warp_run`, plus any lazily-run `(start)` function), matching
-     * [ChicoryWasmRuntime]'s whole-invocation budget, and is cleared even on a trap so the next
-     * invocation on this thread starts disarmed.
+     * round trip (`warp_alloc` + `warp_run`; the module's `(start)` function already ran, bounded,
+     * inside [findFunctionOrThrow] at load), matching [ChicoryWasmRuntime]'s whole-invocation
+     * budget, and is cleared even on a trap so the next invocation on this thread starts disarmed.
      *
      * The `warp_alloc` return and the packed `warp_run` result are fully guest-controlled `i32`/`i64`
      * words. They are kept as **unsigned** [Long] offsets (`0..0xFFFF_FFFF`) and bounds-validated in

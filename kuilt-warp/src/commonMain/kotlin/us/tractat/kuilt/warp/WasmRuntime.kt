@@ -29,6 +29,13 @@ package us.tractat.kuilt.warp
  * contract is uniform: kernels arrive from untrusted peers, so an unbounded guest is a
  * remotely-triggerable denial of service.
  *
+ * **Load-phase execution bound.** Instantiation runs a module's `(start)` function — guest
+ * code, before any [Op] invocation exists — so the execution budget MUST also bound it. The
+ * phase is impl-defined: an implementation may run `(start)` eagerly under a bounded [load]
+ * (surfacing a budget-exceeded [WasmLoadException]) or defer instantiation to the first
+ * bounded invocation (surfacing [WasmExecutionException]); either way a `(start)` CPU bomb
+ * fails terminally near the budget, never a hung host.
+ *
  * @see WasmException
  * @see WasmLoadException
  * @see WasmExecutionException
@@ -39,8 +46,10 @@ public interface WasmRuntime {
      * whose invocations are bounded by the configured execution timeout.
      *
      * @throws WasmLoadException if the module declares an import, violates the memory ceiling
-     *   (over-cap initial or max, no explicit max, or no memory at all), is malformed, or
-     *   lacks the `warp_alloc`/`warp_run` ABI exports.
+     *   (over-cap initial or max, no explicit max, or no memory at all), is malformed, lacks
+     *   the `warp_alloc`/`warp_run` ABI exports, or — on implementations that instantiate
+     *   eagerly — its `(start)` function traps or exceeds the execution budget (see the
+     *   load-phase execution bound above).
      */
     public fun load(bytes: ByteArray): Op
 }
@@ -61,7 +70,8 @@ public sealed class WasmException(message: String, cause: Throwable?) : Exceptio
  * Covers every load-time guard: the module declares an import (capability violation), it
  * violates the memory ceiling (over-cap initial or max, no explicit max, or no linear memory
  * at all), the bytes are malformed / not valid WASM, or a required warp ABI export
- * (`warp_alloc`/`warp_run`) is missing.
+ * (`warp_alloc`/`warp_run`) is missing. On implementations that instantiate eagerly at load,
+ * also covers a `(start)` function that traps or exceeds the execution budget.
  */
 public class WasmLoadException(message: String, cause: Throwable? = null) : WasmException(message, cause)
 
