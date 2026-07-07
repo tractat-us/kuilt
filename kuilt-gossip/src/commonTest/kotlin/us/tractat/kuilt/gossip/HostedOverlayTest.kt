@@ -6,12 +6,19 @@ import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.core.Principal
+import us.tractat.kuilt.core.PrincipalRoster
+import us.tractat.kuilt.core.fabric.LinkAdmission
 import us.tractat.kuilt.core.fabric.meshSeam
+import us.tractat.kuilt.core.withPrincipal
 import us.tractat.kuilt.test.fabric.InMemoryConnectionSource
 import us.tractat.kuilt.test.fabric.connectionPair
 import kotlin.coroutines.ContinuationInterceptor
 import kotlin.random.Random
 import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertIs
 import kotlin.test.assertTrue
 import kotlin.time.Instant
 
@@ -76,5 +83,48 @@ class HostedOverlayTest {
 
         hub.peers.first { PeerId("client-good") in it }
         assertTrue(PeerId("client-good") in hub.peers.value)
+    }
+
+    /**
+     * The admission policy threads through [hostedOverlay] to the hub mesh: a spoke the policy
+     * rejects never joins the roster AND does not kill the accept-pump — the next, policy-passing
+     * spoke still joins. The admitted spoke's principal is observable on the hub seam, which
+     * delegates [PrincipalRoster] to its base mesh.
+     */
+    @Test
+    fun admissionRejectedSpokeNeverJoinsAndPumpSurvives() = runTest(StandardTestDispatcher()) {
+        val dispatcher = coroutineContext[ContinuationInterceptor]!!
+        val clock: () -> Instant = { Instant.fromEpochMilliseconds(0) }
+        val source = InMemoryConnectionSource()
+
+        val hub = backgroundScope.hostedOverlay(
+            PeerId("hub"), source, dispatcher, Random(0L), clock,
+            admission = LinkAdmission.RequireAttested,
+        )
+
+        // An unattested spoke: the handshake completes, then the policy rejects the link — the
+        // pump logs one drop and keeps accepting.
+        val (badHubEnd, badClientEnd) = connectionPair()
+        val badClientBuild = backgroundScope.async {
+            meshSeam(PeerId("client-bad"), listOf(badClientEnd), dispatcher, Random(1L))
+        }
+        source.offer(badHubEnd)
+        badClientBuild.await()
+        runCurrent()
+        assertFalse(PeerId("client-bad") in hub.peers.value, "rejected spoke must never join the hub")
+
+        // An attested spoke joins, and its principal is observable on the hub's roster.
+        val (goodHubEnd, goodClientEnd) = connectionPair()
+        val goodClientBuild = backgroundScope.async {
+            GossipSeam(meshSeam(PeerId("client-good"), listOf(goodClientEnd), dispatcher, Random(2L)), Random(3L), clock)
+                .also { it.start(backgroundScope) }
+        }
+        source.offer(goodHubEnd.withPrincipal(Principal("user-good")))
+        goodClientBuild.await()
+        hub.peers.first { PeerId("client-good") in it }
+
+        val roster = assertIs<PrincipalRoster>(hub, "the hosted overlay seam must expose the principal roster")
+        assertEquals(Principal("user-good"), roster.attestedPrincipals.value[PeerId("client-good")])
+        assertFalse(PeerId("client-bad") in hub.peers.value)
     }
 }

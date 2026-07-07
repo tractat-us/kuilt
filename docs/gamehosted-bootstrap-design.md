@@ -82,7 +82,7 @@ hub spoke, decided by which accept object the server installs on the route.
 public class KtorConnectionSource(
     application: Application,
     path: String,
-    // selfPeerId, dispatcher, (principalExtractor — see Deferred)
+    // selfPeerId, dispatcher, (principalExtractor — since landed, see Deferred)
 ) : ConnectionSource {
     override suspend fun accept(): Connection // = channel.receive()
 }
@@ -144,13 +144,17 @@ layering is deliberate (the composer is the primitive; `gameHosted` is the sugar
 
 ## Deferred (call out explicitly, do not silently drop)
 
-**Principal / attestation on the hub-accept path.** `KtorServerLoom` carries a
-`principalExtractor: (ApplicationCall) -> Principal?` that rides the connection through to
-`Member.principal`. The `Connection`-yielding accept path has no equivalent yet; the MVP relies on
-the mesh's peer-id handshake (`MeshHello`) for identity, with no host-verified attestation. Adding
-attestation to `KtorConnectionSource` (and threading it through `hostedOverlay`/`gameHosted`) is a
-follow-up issue, filed when this lands. The core composition and the leak invariant do not depend
-on it.
+**Principal / attestation on the hub-accept path — since landed** (design:
+[`docs/superpowers/specs/2026-07-07-hub-accept-attestation.md`](superpowers/specs/2026-07-07-hub-accept-attestation.md)).
+At the time this document was written, the `Connection`-yielding accept path had no equivalent of
+`KtorServerLoom`'s `principalExtractor`, and the MVP relied on the mesh's peer-id handshake
+(`MeshHello`) for identity with no host-verified attestation. That gap is now closed:
+`KtorConnectionSource` carries the same `principalExtractor: (ApplicationCall) -> Principal?`
+shape; the extracted principal rides the accepted `Connection` (`Connection.withPrincipal`), is
+verified against the `MeshHello`-claimed `PeerId` by a `LinkAdmission` policy inside `Mesh.addLink`
+(threaded via `hostedOverlay(admission)` / `gameHosted(admission)`), and lands on the hub's
+`PrincipalRoster` (`GameSession.attestedPrincipals` / `principalFor`). Open by default: no
+extractor + `LinkAdmission.AcceptAll` is byte-identical to the MVP behaviour described here.
 
 ## Delivery — three stacked PRs, each independently green
 

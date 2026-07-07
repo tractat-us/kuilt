@@ -3,6 +3,7 @@ package us.tractat.kuilt.game
 import kotlinx.coroutines.CoroutineScope
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.fabric.ConnectionSource
+import us.tractat.kuilt.core.fabric.LinkAdmission
 import us.tractat.kuilt.gossip.hostedOverlay
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.raft.ClientIdentity
@@ -42,6 +43,13 @@ import kotlin.time.Instant
  *   into the overlay [hostedOverlay] as well as [gameHost], so it is always live here. Production
  *   callers pass `{ kotlin.time.Clock.System.now() }`; tests inject a controllable clock.
  * @param identity How the hub obtains its Raft §8 dedup id. See [gameHost].
+ * @param admission Per-link admission policy for the hub's accepted connections, enforced at the
+ *   overlay mesh between each spoke's `MeshHello` handshake and its publication (see
+ *   [LinkAdmission]). Defaults to [LinkAdmission.AcceptAll] — open, today's behaviour. Once
+ *   supplied, the policy is authoritative for **every** spoke, including unattested ones. Pair it
+ *   with a principal-extracting [source] (a `KtorConnectionSource` `principalExtractor`) so the
+ *   policy sees verified identities; admitted principals are observable via
+ *   [GameSession.attestedPrincipals].
  */
 public suspend fun CoroutineScope.gameHosted(
     selfId: PeerId,
@@ -54,11 +62,12 @@ public suspend fun CoroutineScope.gameHosted(
     random: Random = Random.Default,
     clock: () -> Instant,
     identity: ClientIdentity = ClientIdentity.Auto,
+    admission: LinkAdmission = LinkAdmission.AcceptAll,
 ): GameSession {
     val dispatcher = requireNotNull(coroutineContext[ContinuationInterceptor]) {
         "weave/handshake: no dispatcher (ContinuationInterceptor) in coroutine context"
     }
-    val overlay = hostedOverlay(selfId, source, dispatcher, random, clock)
+    val overlay = hostedOverlay(selfId, source, dispatcher, random, clock, admission)
     return gameHost(
         seam = overlay,
         peerCount = peerCount,
