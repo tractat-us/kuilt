@@ -514,7 +514,7 @@ public class Quilter<S : Quilted<S>>(
     private fun reconcileWithRandomPeer() {
         if (knownPeers.isEmpty()) return
         val peer = knownPeers.elementAt(random.nextInt(knownPeers.size))
-        val bytes = encode(QuiltMessage.FullState(sender = replica, state = _state.value))
+        val bytes = encode(QuiltMessage.FullState(sender = replica, state = _state.value, upThrough = nextSeq))
         scope.launch {
             runCatchingCancellable { seam.sendTo(peer, bytes) }
                 .onFailure { logger.debug { "antiEntropy reconcile to $peer failed: ${it.message}" } }
@@ -574,7 +574,7 @@ public class Quilter<S : Quilted<S>>(
     }
 
     private fun sendFullStateTo(peer: PeerId) {
-        val msg = QuiltMessage.FullState(sender = replica, state = _state.value)
+        val msg = QuiltMessage.FullState(sender = replica, state = _state.value, upThrough = nextSeq)
         val bytes = encode(msg)
         scope.launch {
             runCatchingCancellable { seam.sendTo(peer, bytes) }
@@ -595,7 +595,7 @@ public class Quilter<S : Quilted<S>>(
             // reschedule under the lock again — the lock is never held across `seam.sendTo`.
             val bytes = lock.withLock {
                 if (peer !in knownPeers) return@launch
-                encode(QuiltMessage.FullState(sender = replica, state = _state.value))
+                encode(QuiltMessage.FullState(sender = replica, state = _state.value, upThrough = nextSeq))
             }
             runCatchingCancellable { seam.sendTo(peer, bytes) }
                 .onFailure { logger.debug { "fullStateRetry sendTo $peer failed: ${it.message}" } }
@@ -780,21 +780,55 @@ public class Quilter<S : Quilted<S>>(
      *
      * `sendFullStateTo` is called under [lock] but internally schedules the suspending send
      * via `scope.launch` (outside the lock), so this call is safe and non-suspending.
+     *
+     * Whatever the merge outcome, the heal also resynchronises the receive watermark
+     * ([resyncReceiveCursor]) — a FullState is a statement that the sender's history through
+     * [QuiltMessage.FullState.upThrough] is absorbed, so the receive cursor, inbound buffer,
+     * and the sender's ack bookkeeping must all reflect it.
      */
     private fun onFullState(sender: PeerId, msg: QuiltMessage.FullState<S>) {
         val current = _state.value
         val merged = current.piece(msg.state)
-        if (merged == current) {
-            // Incoming carries no new information for us.
-            if (msg.state != current) {
-                // Sender is strictly behind: push our full state back so it heals promptly.
-                sendFullStateTo(sender)
-            }
-            // When msg.state == current the sender is already up to date — pure no-op.
-            return
+        if (merged != current) {
+            _state.value = merged
+            recomputeDeliveredLocal()
+        } else if (msg.state != current) {
+            // Sender is strictly behind: push our full state back so it heals promptly.
+            // When msg.state == current the sender is already up to date — no push-back,
+            // avoiding a FullState storm when all peers are already equal.
+            sendFullStateTo(sender)
         }
-        _state.value = merged
-        recomputeDeliveredLocal()
+        resyncReceiveCursor(sender, msg)
+    }
+
+    /**
+     * Fast-forwards the per-sender receive cursor past the history a just-absorbed
+     * [QuiltMessage.FullState] already covers (#1266). Without this, a receiver whose gap
+     * range outlives the sender's GC — the late-joiner case — livelocks: every subsequent
+     * delta is buffered against a cursor that can never advance, each one costs a
+     * Resend → FullState round-trip, the receiver never acks via the delta path, and the
+     * sender's [pendingDeltas] (plus this side's [pendingInbound]) grow without bound.
+     *
+     * Drops buffered inbound deltas at or below the snapshot's high-water (their effects
+     * are already merged), acks the high-water so the sender's watermark can advance,
+     * drains anything now contiguous, and cancels the Resend retry once no gap remains.
+     */
+    private fun resyncReceiveCursor(sender: PeerId, msg: QuiltMessage.FullState<S>) {
+        if (msg.upThrough <= 0L) return
+        val senderReplica = msg.sender
+        val expected = expectedReceiveSeq[senderReplica] ?: 1L
+        if (msg.upThrough >= expected) {
+            expectedReceiveSeq[senderReplica] = msg.upThrough + 1
+            pendingInbound[senderReplica]?.let { buffer ->
+                buffer.keys.removeAll { it <= msg.upThrough }
+                if (buffer.isEmpty()) pendingInbound.remove(senderReplica)
+            }
+        }
+        // Ack the snapshot's high-water even when no fast-forward was needed: the ack is
+        // idempotent at the sender (it keeps the max) and heals a previously-lost ack.
+        sendAck(to = sender, originalSender = senderReplica, seq = msg.upThrough)
+        drainPendingInbound(senderReplica, sender)
+        if (senderReplica !in pendingInbound) cancelResendRetry(senderReplica)
     }
 
     /**

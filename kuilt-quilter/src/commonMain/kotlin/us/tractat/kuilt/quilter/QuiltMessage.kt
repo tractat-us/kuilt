@@ -45,12 +45,20 @@ public sealed class QuiltMessage<S> {
     /**
      * The complete current state — sent once on first contact with a peer that
      * has never been seen before. The recipient absorbs it with [us.tractat.kuilt.crdt.Quilted.piece].
+     *
+     * [upThrough] is [sender]'s own-delta high-water: the snapshot already reflects every
+     * delta [sender] has minted with `seq <= upThrough` (`0` when it has minted none).
+     * The recipient fast-forwards its per-sender receive cursor past that history, drops
+     * buffered inbound deltas the snapshot covers, and acks [upThrough] — without this a
+     * receiver whose gap outlives the sender's GC (e.g. a late joiner) can never ack via
+     * the delta path, permanently pinning the sender's pending-delta buffer.
      */
     @Serializable
     @SerialName("fullState")
     public class FullState<S>(
         public val sender: ReplicaId,
         public val state: S,
+        public val upThrough: Long = 0L,
     ) : QuiltMessage<S>()
 
     /**

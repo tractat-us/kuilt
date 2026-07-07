@@ -36,11 +36,12 @@ class QuiltMessageTest {
 
     @Test
     fun fullStateRoundTripsThroughCbor() {
-        val msg = QuiltMessage.FullState(sender = a, state = GCounter.of(a to 5L))
+        val msg = QuiltMessage.FullState(sender = a, state = GCounter.of(a to 5L), upThrough = 7L)
         val bytes = Cbor.encodeToByteArray(msgSerializer, msg)
         val decoded = Cbor.decodeFromByteArray(msgSerializer, bytes)
         assertEquals(msg.sender, (decoded as QuiltMessage.FullState).sender)
         assertEquals(msg.state, decoded.state)
+        assertEquals(msg.upThrough, decoded.upThrough)
     }
 
     @Test
