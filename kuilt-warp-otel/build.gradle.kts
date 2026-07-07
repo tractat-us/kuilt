@@ -12,6 +12,8 @@ kotlin {
         }
         commonTest.dependencies {
             implementation(project(":kuilt-test"))
+            // WarpOps — the generated registrar carrying the auto-registered echo op.
+            implementation(project(":kuilt-warp-test"))
             implementation(libs.kotlinx.coroutines.test)
         }
         jvmTest.dependencies {

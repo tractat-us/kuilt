@@ -27,6 +27,8 @@ import us.tractat.kuilt.warp.Draft
 import us.tractat.kuilt.warp.Op
 import us.tractat.kuilt.warp.OpId
 import us.tractat.kuilt.warp.OpRegistry
+import us.tractat.kuilt.warp.opRegistryOf
+import us.tractat.kuilt.warp.test.WarpOps
 import us.tractat.kuilt.warp.OptLevel
 import us.tractat.kuilt.warp.Target
 import us.tractat.kuilt.warp.TaskDescriptor
@@ -81,8 +83,10 @@ class WarpMetricBridgeTest {
     private fun TaskId.descriptor(): TaskDescriptor =
         TaskDescriptor(op = OpId("echo"), args = value.encodeToByteArray())
 
-    private fun echoRegistry() =
-        OpRegistry().also { it.register(OpId("echo"), Op { args -> args }) }
+    // The echo op is @WarpOp-auto-registered (#925): opRegistryOf(WarpOps) installs
+    // kuilt-warp-test's annotated `echo` val via its generated registrar — no manual
+    // register(OpId("echo"), ...) entry.
+    private fun echoRegistry() = opRegistryOf(WarpOps)
 
     /**
      * Creates a single-node WarpNode using [ClaimStrategy.Ring] so tasks are claimed and

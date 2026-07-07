@@ -1,4 +1,9 @@
-plugins { id("kuilt.kmp-library") }
+plugins {
+    id("kuilt.kmp-library")
+    // Dogfoods @WarpOp auto-registration: the echo op in WarpTestOps.kt is collected
+    // into a generated us.tractat.kuilt.warp.test.WarpOps registrar at build time.
+    id("kuilt.warp-ops")
+}
 
 kotlin {
     sourceSets {
