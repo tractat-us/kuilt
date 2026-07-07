@@ -752,9 +752,10 @@ private val DEFAULT_HOST_DECLARATION_TIMEOUT = 2.seconds
  * Default backstop for [gameJoin]'s admission wait. Sized to clear a typical WAN round-trip
  * plus a full Raft election cycle. The structural signal ([GamePresence.admissionClosed]) is
  * the primary path; this fires only when the host crashes or the network partitions. Exposed
- * as the [gameJoin] `joinAdmissionTimeout` parameter for tuning (lower it in tests).
+ * as the [gameJoin] `joinAdmissionTimeout` parameter for tuning (lower it in tests). Internal
+ * (not private) so [gameJoinRoom] can reuse the same default.
  */
-private val DEFAULT_JOIN_ADMISSION_TIMEOUT = 10.seconds
+internal val DEFAULT_JOIN_ADMISSION_TIMEOUT = 10.seconds
 
 /**
  * Default backstop for [gameSpectate]'s admission wait. Sized similarly to [gameJoin]'s.

@@ -146,10 +146,11 @@ public interface ConsensusPlacement {
          * the committed log — the same [TurnSequencer]/[GameSession] code as [SessionOwned].
          *
          * Bootstrap via [gameNode] with `placement = serverCore(core)` on **every** peer, core
-         * and player alike. The appoint-the-host paths ([gameHost]/[gameJoin]/[gameSpectate])
-         * reject this seating — their admission machinery promotes session peers to voters,
-         * which contradicts a fixed core; the server-core equivalent of the hosted path is a
-         * later slice of the unified-overlay plan.
+         * and player alike — or, for many concurrent games over one connection set, via
+         * [gameNodeRoom] per game (the game-per-room composition: each game's room seam scopes
+         * the admission loop to exactly that game's players). The appoint-the-host paths
+         * ([gameHost]/[gameJoin]/[gameSpectate]) reject this seating — their admission
+         * machinery promotes session peers to voters, which contradicts a fixed core.
          *
          * @param core The [NodeId]s of the server core — every one of them votes in this game.
          *   Must be non-empty.
@@ -209,6 +210,11 @@ private val CORE_ADMISSION_RETRY_BACKOFF = 200.milliseconds
  * Launched by [gameNode] on every core member; the role gate inside the [combine] ensures only
  * the current leader acts, so leadership moving between core nodes hands the loop over
  * automatically. Runs for the life of the bootstrap caller's scope.
+ *
+ * The admission domain is [seam]'s roster — the loop admits exactly the peers the seam can see.
+ * Under the game-per-room composition ([gameNodeRoom]) that seam is one game's room, so each
+ * game admits only its own players: per-game admission falls out of the room's structural
+ * isolation rather than any bookkeeping here.
  *
  * A failed membership change (leadership moved between observation and call, or the bounded
  * retry gave up) is tolerated and re-attempted after [CORE_ADMISSION_RETRY_BACKOFF] — the
