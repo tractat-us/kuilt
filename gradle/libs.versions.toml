@@ -28,6 +28,9 @@ kotlincrypto-random = "0.6.0"
 chicory = "1.4.0"
 vanniktechMavenPublish = "0.30.0"
 otel = "1.45.0"
+# KSP versions ≥2.3.0 are decoupled from the Kotlin version (KSP2 only) — no
+# Kotlin-prefix matching required, works with the catalog's Kotlin 2.3.x.
+ksp = "2.3.9"
 
 [libraries]
 # atomicfu — multiplatform reentrant lock (locks API only; the runtime artifact is
@@ -112,6 +115,10 @@ vanniktech-mavenPublish-gradlePlugin = { module = "com.vanniktech:gradle-maven-p
 kover-gradlePlugin = { module = "org.jetbrains.kotlinx:kover-gradle-plugin", version.ref = "kover" }
 # Dokka — KMP-aware API-doc generation; applied by the kmp-library convention.
 dokka-gradlePlugin = { module = "org.jetbrains.dokka:dokka-gradle-plugin", version.ref = "dokka" }
+# KSP — symbol-processing API for :kuilt-warp-ksp, plus the gradle plugin the
+# kuilt.warp-ops convention applies to op-carrying modules.
+ksp-api = { module = "com.google.devtools.ksp:symbol-processing-api", version.ref = "ksp" }
+ksp-gradlePlugin = { module = "com.google.devtools.ksp:symbol-processing-gradle-plugin", version.ref = "ksp" }
 
 [plugins]
 detekt = { id = "io.gitlab.arturbosch.detekt", version.ref = "detekt" }
@@ -121,3 +128,4 @@ kotlinSerialization = { id = "org.jetbrains.kotlin.plugin.serialization", versio
 androidLibrary = { id = "com.android.library", version.ref = "agp" }
 kover = { id = "org.jetbrains.kotlinx.kover", version.ref = "kover" }
 dokka = { id = "org.jetbrains.dokka", version.ref = "dokka" }
+ksp = { id = "com.google.devtools.ksp", version.ref = "ksp" }
