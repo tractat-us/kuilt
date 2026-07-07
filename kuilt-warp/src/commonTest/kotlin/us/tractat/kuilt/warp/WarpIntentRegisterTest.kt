@@ -8,6 +8,8 @@ package us.tractat.kuilt.warp
 import kotlinx.atomicfu.atomic
 import kotlinx.atomicfu.locks.reentrantLock
 import kotlinx.atomicfu.locks.withLock
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.TestCoroutineScheduler
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
@@ -139,6 +141,92 @@ class WarpIntentRegisterTest {
             { assertEquals(setOf(t, t2), node.results.taskIds, "both tasks completed after failure+retry") },
         )
         node.close()
+    }
+
+    /**
+     * Deterministic pin of the poisoned-claim standoff behind the real-WebSocket failover
+     * flake (issue #931).
+     *
+     * The race: [WarpNode] seeds `ring = TaskRing({selfId})` but `rosterPeers = emptySet()`,
+     * and the two are only reconciled when the first `rosterFlow` emission is *processed* —
+     * asynchronously, racing inbound queue deltas. A task that lands in that window is
+     * claimed under the self-only ring (intent announced into the **grow-only** claimant
+     * GSet), then resolved against the still-empty roster: `winner() == null`, so the node
+     * stands down — leaving a permanent claim it will never re-evaluate once its ring
+     * converges and assigns the task elsewhere. The true owner then announces, computes
+     * `winner == the stale claimant` (lowest live PeerId) and deterministically stands down
+     * too. Nobody executes; the WebSocket test burned its 30 s convergence timeout.
+     *
+     * The contract pinned here: an announced claim is **binding** — the winning claimant
+     * must follow through and execute even when its converged ring no longer assigns it
+     * the task.
+     */
+    @Test
+    fun staleSelfRingClaim_winnerFollowsThrough_taskStillExecutes() = runTest(
+        UnconfinedTestDispatcher(),
+        timeout = 5.seconds,
+    ) {
+        val loom = InMemoryLoom()
+        val seamA = loom.host(Pattern("intent-stale-claim")) // peer-1 — the lowest PeerId
+        val seamB = loom.join(InMemoryTag("b"))              // peer-2
+        val a = seamA.selfId
+        val b = seamB.selfId
+
+        // A task the *converged* two-peer ring assigns to B.
+        val ring = TaskRing(setOf(a, b))
+        val task = generateSequence(1) { it + 1 }
+            .map { TaskId("stale-claim-$it") }
+            .first { ring.owner(it) == b }
+
+        val executed = mutableListOf<PeerId>()
+        val lock = reentrantLock()
+        val clock = schedulerClock(testScheduler)
+
+        // A's first roster emission is still in flight: nothing processed yet, so A's ring
+        // is the seeded self-only ring while rosterPeers is still empty — the exact startup
+        // window the WarpNodeWebSocketTest race hits under load.
+        val lateRosterA = MutableSharedFlow<Set<PeerId>>()
+        val nodeA = WarpNode(
+            selfId = a, seam = seamA, rosterFlow = lateRosterA,
+            scope = backgroundScope, quilterConfig = TEST_QUILTER_CONFIG, clock = clock,
+            strategy = ClaimStrategy.RingWithIntent(),
+            registry = intentRegistry { lock.withLock { executed += a } },
+        )
+        // Lands before any roster emission: A claims under the self-only ring, announces
+        // intent, resolves against the empty roster (winner == null) and stands down —
+        // the claim is now poisoned into the grow-only register.
+        nodeA.enqueue(task, task.intentDescriptor())
+        drain()
+
+        // B starts with the converged roster, syncs queue + intent, sees the stale claimant
+        // (lower PeerId ⇒ the winner) and deterministically stands down.
+        val nodeB = WarpNode(
+            selfId = b, seam = seamB, rosterFlow = MutableStateFlow(setOf(a, b)),
+            scope = backgroundScope, quilterConfig = TEST_QUILTER_CONFIG, clock = clock,
+            strategy = ClaimStrategy.RingWithIntent(),
+            registry = intentRegistry { lock.withLock { executed += b } },
+        )
+        drain()
+
+        // A's delayed roster emission finally lands: the converged ring no longer assigns
+        // the task to A. Pre-fix, A dropped its stale claim on re-evaluation (non-owner)
+        // while B kept standing down to it — permanent standoff, task never executed.
+        lateRosterA.emit(setOf(a, b))
+        drain()
+
+        assertAll(
+            {
+                assertEquals(
+                    listOf(a),
+                    lock.withLock { executed.toList() },
+                    "the winning claimant follows through exactly once",
+                )
+            },
+            { assertEquals(setOf(task), nodeA.results.taskIds, "result converges on A") },
+            { assertEquals(setOf(task), nodeB.results.taskIds, "result converges on B") },
+        )
+        nodeA.close()
+        nodeB.close()
     }
 
     /** A completed task's intent entry is tombstoned (register tracks only pending work). */
