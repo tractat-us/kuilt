@@ -1,7 +1,7 @@
 /**
  * Settle helpers for the JVM warp end-to-end tests.
  *
- * These tests drive [WarpNode]s under [kotlinx.coroutines.test.UnconfinedTestDispatcher] virtual
+ * These tests drive [WarpNode]s under [kotlinx.coroutines.test.StandardTestDispatcher] virtual
  * time, but a real wasm kernel runs on a **real** `Dispatchers.IO` thread inside
  * [ChicoryWasmRuntime] — the guest burns real wall-clock CPU. Its [OpResult] is therefore posted
  * back to the test dispatcher only once that real thread finishes. A fixed number of pure
