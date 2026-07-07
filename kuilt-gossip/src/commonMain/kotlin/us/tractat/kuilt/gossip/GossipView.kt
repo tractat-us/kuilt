@@ -34,13 +34,15 @@ import kotlin.time.Instant
  * manager" of `docs/gossip-mesh-design.md` Phase 2 — the runtime counterpart of
  * the pure [partialView] selection function.
  *
- * **Derivation.** On every roster change the view is recomputed as a seeded
- * random k-out sample (`k = recommendedActiveViewSize(N)`), after a per-peer
+ * **Derivation.** On every roster change the view is reconciled against the
+ * [topology] policy's target view — for the default [RandomKRegular], a seeded
+ * random k-out sample (`k = recommendedActiveViewSize(N)`) — after a per-peer
  * **jitter** drawn from [jitter] so peers don't recompute in lockstep and storm
- * the overlay. Recompute is *churn-minimising*: healthy active neighbours are
- * retained across recomputes and only freed slots are filled (from [spares]
- * first, then a fresh random draw), so a single join/leave does not reshuffle
- * the whole overlay.
+ * the overlay. The policy owns *selection* (which peers, and any randomness);
+ * this manager owns *stability*: recompute is churn-minimising — healthy active
+ * neighbours are retained across recomputes and only freed slots are filled
+ * (from [spares] first, then fresh policy picks) — so a single join/leave does
+ * not reshuffle the whole overlay.
  *
  * **Liveness.** One [HeartbeatPartitionDetector] runs per active neighbour over a
  * shared [rawIncoming] fan-out (the SeamRoom-style composer the design calls for;
@@ -53,8 +55,9 @@ import kotlin.time.Instant
  * `gossip-mesh-design.md`).
  *
  * **Determinism (required).** All scheduling runs on the [start] scope's
- * dispatcher; all randomness draws from the single injected [random]; the clock
- * is the injected [clock]. State is confined to a single command-processing
+ * dispatcher; all randomness draws from the injected [random] and the
+ * [topology]'s own seeded RNG (the same instance, with the default policy); the
+ * clock is the injected [clock]. State is confined to a single command-processing
  * coroutine (an actor over [commands]) so there are no locks and event ordering
  * is deterministic. Tests drive virtual time with `StandardTestDispatcher` +
  * bounded `advanceTimeBy`/`runCurrent` and **never** `advanceUntilIdle` (the
@@ -68,8 +71,11 @@ import kotlin.time.Instant
  *   [Swatch] here, so the per-peer detectors can subscribe without contending for
  *   the single-consumer `seam.incoming` channel (ADR-034).
  * @param random a **seeded** RNG, seeded per-peer by the caller so peers choose
- *   independently. Drives both jitter and neighbour selection.
+ *   independently. Drives the recompute jitter; with the default [topology] the
+ *   same instance also seeds neighbour selection.
  * @param clock injected time source for the per-peer detectors; never the wall clock.
+ * @param topology the overlay shape — which peers fill the active view. Owns all
+ *   selection randomness; defaults to a [RandomKRegular] seeded from [random].
  */
 public class GossipView(
     private val selfId: PeerId,
@@ -81,7 +87,7 @@ public class GossipView(
     private val config: HeartbeatConfig = HeartbeatConfig(),
     private val spareCount: Int = DEFAULT_SPARE_COUNT,
     private val jitter: ClosedRange<Duration> = DEFAULT_JITTER,
-    private val activeViewPolicy: ActiveViewPolicy = ActiveViewPolicy.RandomKRegular,
+    private val topology: TopologyPolicy = RandomKRegular(random),
 ) {
     private val _active = MutableStateFlow<Set<PeerId>>(emptySet())
 
@@ -144,32 +150,44 @@ public class GossipView(
     }
 
     /**
-     * Recomputes the view against [currentRoster], retaining healthy active
-     * neighbours and filling freed slots from spares-then-random, then reconciles
-     * the running detector set to match [active].
+     * Recomputes the view against [currentRoster]: asks [topology] for a fresh
+     * target view over the live (non-failed) roster, retains healthy active
+     * neighbours, and fills freed slots from spares-then-target, then reconciles
+     * the running detector set to match [active]. Selection — which peers, and
+     * any randomness — is the policy's; this manager owns only stability:
+     * retention, spare promotion, and failed-peer exclusion.
      */
     private suspend fun reconcile(
         scope: CoroutineScope,
         currentRoster: Set<PeerId>,
     ) {
         failed = failed intersect currentRoster
+        val liveRoster = currentRoster - failed
+        val candidates = liveRoster - selfId
 
-        val k = activeViewPolicy.activeViewSize(currentRoster.size)
-        val candidates = currentRoster - selfId - failed
+        // The policy's ideal view for the live roster; its size is the target k.
+        val target = topology.activeView(selfId, liveRoster)
 
         val keep = _active.value.filter { it in candidates }
         val keepSet = keep.toSet()
-        val needed = (k - keep.size).coerceAtLeast(0)
+        val needed = (target.size - keep.size).coerceAtLeast(0)
 
-        // Promote existing spares before drawing fresh peers, so a freed slot is
+        // Promote existing spares before fresh target picks, so a freed slot is
         // healed by the next spare deterministically.
         val spareFirst = _spares.value.filter { it in candidates && it !in keepSet }
-        val freshPool = (candidates - keepSet - spareFirst.toSet()).shuffled(random)
-        val fillOrder = spareFirst + freshPool
+        val spareFirstSet = spareFirst.toSet()
+        val fillOrder = spareFirst + target.filter { it !in keepSet && it !in spareFirstSet }
 
         val promoted = fillOrder.take(needed)
         val newActive = (keep + promoted).toSet()
-        val newSpares = fillOrder.drop(needed).take(spareCount)
+
+        // Refill the standby list: unconsumed fill candidates first, topped up by a
+        // fresh policy draw over the not-selected remainder (empty for FullFanout,
+        // whose view already covers everyone).
+        val leftover = fillOrder.drop(needed)
+        val leftoverSet = leftover.toSet()
+        val standby = topology.activeView(selfId, liveRoster - newActive).filter { it !in leftoverSet }
+        val newSpares = (leftover + standby).take(spareCount)
 
         reconcileDetectors(scope, newActive)
         _spares.value = newSpares

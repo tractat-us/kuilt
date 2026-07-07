@@ -8,7 +8,7 @@ import kotlinx.coroutines.currentCoroutineContext
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.fabric.meshSeam
-import us.tractat.kuilt.gossip.ActiveViewPolicy
+import us.tractat.kuilt.gossip.FullFanout
 import us.tractat.kuilt.gossip.GossipSeam
 import us.tractat.kuilt.gossip.hostedOverlay
 import kotlin.coroutines.ContinuationInterceptor
@@ -27,7 +27,7 @@ public class Star(
 
 /**
  * Build a star of [n] clients around one hub over [connectionPair] links, wrap each end in a
- * [GossipSeam] (hub = [ActiveViewPolicy.FullFanout], clients = default), and [GossipSeam.start]
+ * [GossipSeam] (hub = [FullFanout], clients = default), and [GossipSeam.start]
  * them on the receiver scope. The hub is composed by [hostedOverlay] over an
  * [InMemoryConnectionSource] — one composition path, not two; [Star.source] is the production-
  * faithful reconnect handle. Client i is `PeerId("client-i")`. Per-peer seeded RNG.

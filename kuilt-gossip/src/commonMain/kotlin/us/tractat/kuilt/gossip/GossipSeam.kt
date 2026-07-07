@@ -38,7 +38,8 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.gossip.GossipSeam")
  * of the endpoints** (`docs/gossip-mesh-design.md`):
  *
  * - **active-neighbour view** ([activePeers]) — the ~k peers this node pushes
- *   deltas to and GCs against. Maintained by an internal [GossipView].
+ *   deltas to and GCs against. Shaped by the injected [TopologyPolicy] and
+ *   maintained by an internal [GossipView].
  * - **full-membership view** ([peers]) — everyone in the room, the pool
  *   anti-entropy samples. Delegated straight from [base].
  *
@@ -79,8 +80,13 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.gossip.GossipSeam")
  * randomness on the injected seeded [random], time via the injected [clock].
  *
  * @param base the underlying full-membership seam.
- * @param random seeded RNG, seeded per-peer by the caller (drives view selection + jitter).
+ * @param random seeded RNG, seeded per-peer by the caller (drives view-recompute jitter;
+ *   with the default [topology] it also seeds neighbour selection).
  * @param clock injected time source for the per-neighbour detectors; never the wall clock.
+ * @param topology the overlay shape — which peers this node eager-floods to (see
+ *   [TopologyPolicy]). Defaults to the [RandomKRegular] partial mesh seeded from
+ *   [random]; pass [FullFanout] for a hub star. Only broadcast dissemination is
+ *   shaped; [sendTo] always passes through unwrapped.
  * @param jitter per-peer view-recompute jitter window (see [GossipView]); a zero range
  *   makes recompute synchronous, which deterministic tests rely on.
  * @param initialTtl hop budget stamped on a locally-originated broadcast. Dedup is
@@ -104,7 +110,7 @@ public class GossipSeam(
     spareCount: Int = GossipView.DEFAULT_SPARE_COUNT,
     jitter: ClosedRange<Duration> = GossipView.DEFAULT_JITTER,
     private val initialTtl: Int = DEFAULT_TTL,
-    activeViewPolicy: ActiveViewPolicy = ActiveViewPolicy.RandomKRegular,
+    topology: TopologyPolicy = RandomKRegular(random),
     policy: DeliveryPolicy = DeliveryPolicy.Reliable,
     private val reorderGrace: Duration = DEFAULT_REORDER_GRACE,
 ) : Seam, PrincipalRoster {
@@ -159,7 +165,7 @@ public class GossipSeam(
             config = config,
             spareCount = spareCount,
             jitter = jitter,
-            activeViewPolicy = activeViewPolicy,
+            topology = topology,
         )
 
     /** The active-neighbour view — deltas/GC target set. Strict subset of [peers]. */

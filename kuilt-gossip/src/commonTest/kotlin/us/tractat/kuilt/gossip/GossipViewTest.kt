@@ -264,7 +264,7 @@ class GossipViewTest {
                     rawIncoming = MutableSharedFlow<Swatch>().asSharedFlow(),
                     random = Random(1L),
                     clock = { Instant.fromEpochMilliseconds(0) },
-                    activeViewPolicy = ActiveViewPolicy.FullFanout,
+                    topology = FullFanout,
                 )
             view.start(backgroundScope)
             advanceTimeBy(250) // past DEFAULT_JITTER max (200ms recompute window)

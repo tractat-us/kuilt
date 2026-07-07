@@ -20,7 +20,7 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.gossip.HostedOverlay
 
 /**
  * Compose a started hub [Seam] from a [ConnectionSource]: an initially-empty [meshSeam] wrapped in
- * a [GossipSeam] with [ActiveViewPolicy.FullFanout] (the hub floods every broadcast to all spokes),
+ * a [GossipSeam] with [FullFanout] (the hub floods every broadcast to all spokes),
  * plus an accept-pump that [addLink][us.tractat.kuilt.core.fabric.Mesh.addLink]s each accepted
  * [us.tractat.kuilt.core.fabric.Connection] so clients join the running hub as they connect. The
  * pump coroutine lives on the receiver scope and is torn down with it.
@@ -56,7 +56,7 @@ public suspend fun CoroutineScope.hostedOverlay(
         base = hubMesh,
         random = random,
         clock = clock,
-        activeViewPolicy = ActiveViewPolicy.FullFanout,
+        topology = FullFanout,
         // Zero recompute jitter: the FullFanout view is deterministic (everyone), so the
         // anti-lockstep jitter buys nothing here and only opens a window where a freshly
         // admitted spoke is missing from the hub's flood targets — a broadcast in that
