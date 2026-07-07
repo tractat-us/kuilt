@@ -115,7 +115,7 @@ source ~/.sdkman/bin/sdkman-init.sh && sdk use java 21.0.5-tem
 
 **Use `detektAll`, not bare `detekt`.** Plain `detekt` is `NO-SOURCE` in this KMP setup (the per-target tasks have no aggregated source) and reports BUILD SUCCESSFUL without analyzing anything. `detektAll` is the real check — and the one CI runs. "Detekt passed locally" via bare `detekt` is a false green.
 
-**Verify cache-disabled before auto-merge: `./gradlew :<module>:build detektAll --rerun-tasks`.** Two false greens recur here. (1) `jvmTest` (or a scoped `:module:jvmTest`) does **not** compile the Android variant — a `commonTest` source can compile on JVM yet fail `compileDebugUnitTestKotlinAndroid` (and Kotlin/Native test targets) on a type-inference difference the JVM compiler accepts. CI runs the full `./gradlew build`, so it catches this; your local `jvmTest` won't. (2) Gradle's **build cache** can serve a stale `FROM-CACHE` "success" for a test-compile task whose source is actually broken, so a re-run "passes locally" without executing the failing code. Before enabling auto-merge on a code PR, run the **full module build** with `--rerun-tasks` (add `--no-build-cache` if any test-compile task still shows `FROM-CACHE`) and confirm the tasks are genuinely `EXECUTED`. "Built locally" via `jvmTest` or a cached build is not proof the Android/Native variants compile.
+**Verify cache-disabled before auto-merge: `./gradlew :<module>:build detektAll --rerun-tasks`.** Two false greens recur here. (1) `jvmTest` (or a scoped `:module:jvmTest`) does **not** compile the Android variant — a `commonTest` source can compile on JVM yet fail `compileDebugUnitTestKotlinAndroid` (and Kotlin/Native test targets) on a type-inference difference the JVM compiler accepts. CI runs the full `./gradlew build`, so it catches this; your local `jvmTest` won't. (2) Gradle's **build cache** can serve a stale `FROM-CACHE` "success" for a test-compile task whose source is actually broken, so a re-run "passes locally" without executing the failing code. Before enabling auto-merge on a code PR, run the **full module build** with `--rerun-tasks` (add `--no-build-cache` if any test-compile task still shows `FROM-CACHE`) and confirm the tasks are genuinely `EXECUTED`. "Built locally" via `jvmTest` or a cached build is not proof the Android/Native variants compile. (3) A **`:<module>:build`-scoped build is a false green for consensus/runtime *behavior* changes** — even the full *module* build (not just `jvmTest`) skips the downstream `:examples`/`:kuilt-cluster` **E2E cluster tests**, which exercise the whole runtime stack. A change to `:kuilt-raft` consensus *behavior* (election / replication / membership / forwarding) that passes every `:kuilt-raft` test can still break a cluster E2E invariant — e.g. a forward-reaping change broke `ClusterClientMultiClientHardeningE2ETest`'s "no double-apply", entirely invisible to `:kuilt-raft:build`. For any consensus-*behavior* change, run the **full `./gradlew build`** (or at minimum add `:examples:test`), not a module-scoped build.
 
 The mDNS multicast suite is opt-in because it sends real multicast packets; the
 `-P` flag is forwarded to JVM tests as a system property and to K/N simulator
@@ -141,6 +141,16 @@ tests as the `MDNS_MULTICAST_TESTS` env var (see `kuilt-mdns/build.gradle.kts`).
   twice; role-split fabrics return distinct host/joiner Looms wired to each other.
   Real-radio/real-network tests stay separate and `-P`-gated; the conformance suite
   runs against an in-memory or loopback harness.
+- **Spec-critical refactors get a spec-conformance review, not just a behavior-preservation
+  review.** When you extract or refactor code that implements a formal spec (Raft consensus,
+  a wire protocol, a CRDT lattice), a diff/behavior review only proves "same as before" — it is
+  structurally blind to a bug that *predates* the refactor. The refactor is precisely the moment
+  the mechanism becomes legible, so **also audit the changed unit against the spec itself** (cite
+  the section — Ongaro's Raft dissertation, an RFC), treating the pre-existing code as UNPROVEN.
+  During the `RaftEngine` decomposition (#1121) this dimension found **~18 real pre-existing bugs**
+  the behavior reviews had passed — a snapshot log-wipe, a §5.4.1 election-safety hole, a §5.3
+  fast-backup livelock, a joint-consensus wedge, and more (epics #1218 / #1228 / #1244). Findings
+  become their own TDD-fix track, separate from the refactor PRs.
 - Test methods: no `test` prefix (the `@Test` annotation suffices); multi-assert
   tests use `assertAll()`.
 - **Coroutine test determinism:** types that own a `CoroutineScope` take an
