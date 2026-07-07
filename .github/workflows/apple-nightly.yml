@@ -43,6 +43,11 @@ jobs:
   apple:
     runs-on: macos-latest
     timeout-minutes: 60
+    # Job-level override of the workflow default (contents: read). issues: write
+    # lets the failure-alert step below open/refresh the "apple-nightly red" issue.
+    permissions:
+      contents: read
+      issues: write
     steps:
       - uses: actions/checkout@v6
 
@@ -69,8 +74,26 @@ jobs:
           key: konan-${{ runner.os }}-${{ hashFiles('gradle/libs.versions.toml', 'gradle.properties', 'settings.gradle.kts') }}
           restore-keys: konan-${{ runner.os }}-
 
+      # Resource caps — the arm64 macos-latest runner is the SMALLEST in the fleet
+      # (3 vCPU / 7 GB), and without these this lane has never been green (#1299).
+      # gradle.properties is tuned for a workstation: org.gradle.workers.max=16 and
+      # -Xmx4g for BOTH long-lived daemons (Gradle + Kotlin). Inherited bare onto
+      # this runner that means up to 16 concurrent workers (several CPU-bound K/N
+      # test binaries + the iOS simulator at once) on 3 cores, under ~8 GB of daemon
+      # heap on a 7 GB box — measured ~10-20x wall-clock slowdown vs a dev Mac
+      # (DealSessionTest: 11.5s local → 223s here). The K/N tests are virtual-time
+      # runTest bodies whose timeouts (5s/30s/60s) are WALL-clock, so the slowdown
+      # surfaces as UncompletedCoroutinesError on whichever tests are heaviest that
+      # run — not a code regression. Same two levers as ci.yml's build jobs:
+      # --max-workers=2 caps the additive peak (2 workers on 3 vCPU, matching
+      # ci.yml's 2-on-4 ratio) and CI-only daemon-heap caps drop the resident floor
+      # (2g+3g = 5 GB, leaving headroom for the OS, test binaries, and simulator on
+      # 7 GB; the Kotlin daemon keeps the larger share — K/N compilation lives there).
       - name: macOS + iOS-sim K/N tests
-        run: ./gradlew macosArm64Test iosSimulatorArm64Test
+        run: >-
+          ./gradlew macosArm64Test iosSimulatorArm64Test --max-workers=2
+          -Dorg.gradle.jvmargs="-Xmx2g -Dfile.encoding=UTF-8"
+          -Dkotlin.daemon.jvmargs="-Xmx3g"
 
       - name: Upload test reports
         if: always()
@@ -80,3 +103,47 @@ jobs:
           path: |
             **/build/reports/tests/
             **/build/test-results/
+
+      # Backstop: this lane is out of band and gates nothing, so a red run is
+      # silent (that's how #1299 stayed red for a week unnoticed). Mirror of
+      # publish.yml's alert: open (or refresh) ONE tracking issue per breakage.
+      # Idempotent by exact title; best-effort — the failed tests are the signal
+      # that matters, so the alert never fails the job further. Scheduled runs
+      # only: a red workflow_dispatch on a topic branch is the dispatcher's
+      # business, not a main-lane breakage.
+      - name: Alert on nightly failure
+        if: failure() && github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          COMMIT_SHA: ${{ github.sha }}
+        run: |
+          set -eu
+          TITLE="apple-nightly failing on main"
+          LABEL="apple-nightly-red"
+          BODY="The Apple K/N nightly lane (\`apple-nightly.yml\`) failed.
+
+          - Failing run: ${RUN_URL}
+          - Commit: ${COMMIT_SHA}
+
+          This is the ONLY lane that executes the Apple K/N tests (ci-required's ubuntu build skips them), so Apple-target regressions are invisible until this is green again. Test reports are attached to the run as the \`test-reports-apple\` artifact."
+
+          # Best-effort label create (idempotent). Title-based search below doesn't
+          # depend on it, so a failure here is tolerated.
+          gh label create "$LABEL" --color B60205 \
+            --description "apple-nightly.yml is failing on main; Apple K/N regressions invisible" 2>/dev/null || true
+
+          # Find an existing OPEN issue by exact title (title-based idempotency —
+          # no label dependency). Comment on it if present; otherwise open one.
+          EXISTING=$(gh issue list --state open --search "\"$TITLE\" in:title" \
+            --json number,title \
+            --jq "map(select(.title == \"$TITLE\")) | .[0].number // empty")
+
+          if [ -n "$EXISTING" ]; then
+            echo "Refreshing existing issue #$EXISTING"
+            gh issue comment "$EXISTING" --body "$BODY"
+          else
+            echo "Opening new tracking issue"
+            gh issue create --title "$TITLE" --label "$LABEL" --body "$BODY" \
+              || gh issue create --title "$TITLE" --body "$BODY"
+          fi
