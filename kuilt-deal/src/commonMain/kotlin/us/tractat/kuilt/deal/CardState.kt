@@ -23,19 +23,39 @@ public data class CardState(
         encryptedBy.elements.isEmpty() -> CardPhase.UNENCRYPTED
         encryptedBy.elements != allPlayers -> CardPhase.SHUFFLING
         strippedBy.elements.isEmpty() -> CardPhase.FULLY_ENCRYPTED
-        strippedBy.elements != (allPlayers - visibilityQuorum) -> CardPhase.REVEALING
+        strippedBy.elements != requiredStrippers() -> CardPhase.REVEALING
         else -> CardPhase.REVEALED
     }
 
+    /**
+     * The players whose layers must come off before the card is [CardPhase.REVEALED].
+     *
+     * - `|visibilityQuorum| == 1`: everyone except the single reader — their own
+     *   layer is what keeps the card private to them.
+     * - `visibilityQuorum == allPlayers` (community card): *everyone* — the card
+     *   is public, so every layer must come off.
+     * - An empty quorum behaves like a community card (no reader to protect).
+     *
+     * Partial multi-member quorums (`1 < |quorum| < |allPlayers|`) are rejected at
+     * assignment ([DealSession.assignQuorums]): their members could never decrypt
+     * without private re-encryption.
+     */
+    private fun requiredStrippers(): Set<PlayerId> =
+        if (visibilityQuorum == allPlayers) allPlayers else allPlayers - visibilityQuorum
+
     public fun merge(other: CardState): CardState {
-        // Ciphertext convergence: the side with more encryption layers wins.
-        // On a tie (equal encryptor count — possibly divergent members mid-shuffle),
-        // break deterministically by ciphertext byte order so merge stays commutative.
-        // Once encryptedBy converges the two ciphertexts are byte-identical, so the
+        // Ciphertext convergence: the side further along the op chain wins — each
+        // Encrypt/Strip adds exactly one element to exactly one GSet, so
+        // |encryptedBy| + |strippedBy| totally orders the states of an honest,
+        // sequential op chain (comparing |encryptedBy| alone would mis-merge
+        // reordered Strip states, whose encryptor counts are all equal).
+        // On a tie (states not on one chain — a protocol-violating fork), break
+        // deterministically by ciphertext byte order so merge stays commutative.
+        // Once both sides converge the ciphertexts are byte-identical, so the
         // tie-break is invisible in steady state.
         val winningCiphertext = when {
-            encryptedBy.elements.size > other.encryptedBy.elements.size -> ciphertext
-            encryptedBy.elements.size < other.encryptedBy.elements.size -> other.ciphertext
+            progress() > other.progress() -> ciphertext
+            progress() < other.progress() -> other.ciphertext
             else -> if (compareCiphertext(ciphertext, other.ciphertext) <= 0) ciphertext else other.ciphertext
         }
         return copy(
@@ -44,6 +64,9 @@ public data class CardState(
             ciphertext = winningCiphertext,
         )
     }
+
+    /** How many ops (encrypts + strips) this state reflects — its position on the op chain. */
+    private fun progress(): Int = encryptedBy.elements.size + strippedBy.elements.size
 
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
