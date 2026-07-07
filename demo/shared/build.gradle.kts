@@ -41,5 +41,8 @@ kotlin {
             implementation(libs.kotlin.test)
             implementation(libs.kotlinx.coroutines.test)
         }
+        jvmTest.dependencies {
+            runtimeOnly(libs.logback) // SLF4J backend for :kuilt-quilter's kotlin-logging
+        }
     }
 }
