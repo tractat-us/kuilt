@@ -14,6 +14,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import kotlin.random.Random
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 
@@ -122,6 +123,142 @@ internal class LeadershipTransferTest {
                 )
             },
         )
+    }
+
+    // ── §3.10 contract: complete only on a LEADER-AUTHORED message from the target (issue #1243) ──
+
+    /**
+     * The residual false-SUCCESS of #1243, the echo route: a higher-term message whose *sender* is the
+     * transfer target is not proof the target won — the target may merely have adopted a higher term from
+     * elsewhere and echoed it. The §3.10-faithful success signal is a **leader-authored** message
+     * (AppendEntries/InstallSnapshot with `leaderId == target`) at a higher term.
+     *
+     * Repro: transfer A→B in flight with B fully isolated (it can never campaign or win). B "echoes" a
+     * higher term at A via an injected `AppendEntriesResponse(term+1)` — exactly what B would send after
+     * adopting term+1 from an unrelated new leader. A steps down observing the higher term *from B*, but
+     * B is NOT leader: the transfer must NOT complete successfully at that instant, and must ultimately
+     * FAIL (auto-timeout), because no leader-authored message from B ever arrives.
+     */
+    @Test
+    fun transferLeadership_higherTermEchoFromTarget_doesNotCompleteTransfer() = raftRunTest(timeout = 10.seconds) {
+        val sim = raftSim(this, backgroundScope, n = 3)
+        val leader = awaitLeader(sim)
+        val leaderId = sim.nodeIds.first { sim.nodes[it] === leader }
+        val targetId = sim.nodeIds.first { it != leaderId }
+        val thirdId = sim.nodeIds.first { it != leaderId && it != targetId }
+
+        sim.proposeOnLeader("base".encodeToByteArray())
+        sim.awaitCommit(1L)
+        sim.settle()
+
+        // Fully isolate the target: it can neither receive TimeoutNow nor campaign nor win, so no
+        // leader-authored message from it can ever reach the old leader.
+        sim.dropLink(from = leaderId, to = targetId)
+        sim.dropLink(from = targetId, to = leaderId)
+        sim.dropLink(from = thirdId, to = targetId)
+        sim.dropLink(from = targetId, to = thirdId)
+
+        val leaderTerm = sim.storages.getValue(leaderId).term()
+
+        val transferOutcome = CompletableDeferred<Result<Unit>>()
+        backgroundScope.launch { transferOutcome.complete(runCatchingCancellable { leader.transferLeadership(targetId) }) }
+        sim.settle()   // let the transfer engage (inFlightTarget == target)
+
+        // The ECHO: a higher-term AppendEntriesResponse whose sender is the TARGET — a non-leader-authored
+        // message. The old leader steps down (higher term observed from B), but B did not win anything.
+        sim.deliverAppendEntriesResponse(to = leaderId, from = targetId, term = leaderTerm + 1)
+        sim.settle()   // process the injected message at this instant (no time advance)
+
+        // Frozen instant: the step-down alone must NOT resolve the transfer — the echo is not a
+        // leader-authored message from the target.
+        assertFalse(
+            transferOutcome.isCompleted,
+            "transfer must not complete on a higher-term echo from the target — only a leader-authored " +
+                "message (AppendEntries/InstallSnapshot with leaderId == target) proves the target won",
+        )
+
+        // With the target isolated, no confirmation can ever arrive: the transfer fails on the auto-timeout.
+        sim.awaitTrue("transfer resolves") { transferOutcome.isCompleted }
+        val result = transferOutcome.await()
+        assertAll(
+            { assertTrue(result.isFailure, "transfer must FAIL — the target never became leader") },
+            {
+                assertTrue(
+                    result.exceptionOrNull() is LeadershipTransferException,
+                    "expected LeadershipTransferException, got ${result.exceptionOrNull()}",
+                )
+            },
+            {
+                assertTrue(
+                    sim.nodes.getValue(targetId).role.value != RaftRole.Leader,
+                    "the transfer target must not have become leader",
+                )
+            },
+        )
+    }
+
+    /**
+     * The residual false-FAILURE of #1243, the non-target-first route: the target genuinely wins, but a
+     * higher-term message from a *different* node outraces the target's first leader-authored message to
+     * the old leader. The step-down (from the non-target) must NOT fail the transfer — it stays pending,
+     * and the target's leader-authored heartbeat then completes it successfully.
+     *
+     * Repro: 3 voters, target→old-leader link dropped (the old leader cannot see any message from the
+     * target). Transfer A→B: TimeoutNow still reaches B (A→B intact), B campaigns and wins with C's vote.
+     * C adopts the higher term and its next AppendEntries reject deposes A — a higher term observed
+     * from C, not from B. Then the link heals and B's leader-authored heartbeat reaches A: the transfer
+     * must resolve SUCCESS.
+     *
+     * Uses a widened election-timeout config (seeded, per suite policy) so the transfer's
+     * one-election-timeout auto-abandon window comfortably contains the heal.
+     */
+    @Test
+    fun transferLeadership_nonTargetHigherTermOutracesTargetsWin_stillSucceeds() = raftRunTest(timeout = 10.seconds) {
+        val config = RaftConfig(
+            electionTimeoutMin = 30.milliseconds,
+            electionTimeoutMax = 60.milliseconds,
+            heartbeatInterval = 2.milliseconds,
+            expectVirtualTime = true,
+            random = Random(RAFT_TEST_SEED),
+        )
+        val sim = raftSim(this, backgroundScope, n = 3, config = config)
+        val leader = awaitLeader(sim)
+        val leaderId = sim.nodeIds.first { sim.nodes[it] === leader }
+        val targetId = sim.nodeIds.first { it != leaderId }
+
+        // Commit-first so the target is already caught up: TimeoutNow is sent at transfer init.
+        sim.proposeOnLeader("base".encodeToByteArray())
+        sim.awaitCommit(1L)
+        sim.settle()
+
+        // Slow target→leader direction: the old leader sees nothing from the target — the higher term
+        // reaches it first via the third voter's AppendEntries reject.
+        sim.dropLink(from = targetId, to = leaderId)
+
+        val transferOutcome = CompletableDeferred<Result<Unit>>()
+        backgroundScope.launch { transferOutcome.complete(runCatchingCancellable { leader.transferLeadership(targetId) }) }
+
+        // The target wins its TimeoutNow election with the third voter's vote (quorum 2 of 3).
+        sim.awaitRole(targetId, RaftRole.Leader)
+        // The old leader is deposed by the higher term echoed from the THIRD voter (never from the target).
+        sim.awaitRole(leaderId, RaftRole.Follower)
+
+        assertFalse(
+            transferOutcome.isCompleted,
+            "transfer must stay pending across a step-down triggered by a non-target higher-term message — " +
+                "the target DID win; failing here is a false FAILURE",
+        )
+
+        // Heal: the target's leader-authored heartbeat reaches the old leader — conclusive confirmation.
+        sim.heal()
+        sim.awaitTrue("transfer resolves") { transferOutcome.isCompleted }
+        val result = transferOutcome.await()
+        assertAll(
+            { assertTrue(result.isSuccess, "transfer must SUCCEED — the target won: ${result.exceptionOrNull()}") },
+            { assertEquals(targetId, sim.nodes.getValue(leaderId).leader.value) },
+            { assertEquals(RaftRole.Leader, sim.nodes.getValue(targetId).role.value) },
+        )
+        sim.checkInvariants()
     }
 
     // ── Proposal blocking during transfer ────────────────────────────────────

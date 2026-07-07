@@ -227,6 +227,26 @@ class RaftSimulation(
     }
 
     /**
+     * Encode and inject a [RaftMessage.AppendEntriesResponse] directly into [to]'s incoming channel,
+     * bypassing the normal partition/drop rules. Models a **non-leader-authored** higher-term message
+     * reaching an old leader — e.g. a follower that adopted a higher term from elsewhere echoing it in
+     * an AppendEntries reject (the #1243 false-SUCCESS route: the echo's *sender* is not the new leader).
+     */
+    @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
+    suspend fun deliverAppendEntriesResponse(
+        to: NodeId,
+        from: NodeId,
+        term: Long,
+        success: Boolean = false,
+        matchIndex: Long = 0L,
+    ) {
+        val bytes = Cbor.encodeToByteArray<RaftMessage>(
+            RaftMessage.AppendEntriesResponse(term, success, matchIndex)
+        )
+        network.deliver(from = from, to = to, bytes = bytes)
+    }
+
+    /**
      * Encode and inject a single-chunk (`offset = 0`, [done]) [RaftMessage.InstallSnapshot] directly
      * into [to]'s incoming channel, bypassing the normal partition/drop rules. Models a delayed /
      * duplicate or behind-commit snapshot arriving at a caught-up follower — the safety regressions
