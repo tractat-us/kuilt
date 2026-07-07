@@ -19,8 +19,10 @@
 
 package us.tractat.kuilt.warp
 
+import kotlinx.atomicfu.atomic
 import kotlinx.atomicfu.locks.reentrantLock
 import kotlinx.atomicfu.locks.withLock
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.TestCoroutineScheduler
 import kotlinx.coroutines.test.TestScope
@@ -31,6 +33,7 @@ import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.quilter.QuilterConfig
+import us.tractat.kuilt.raft.NodeId
 import us.tractat.kuilt.raft.RaftRole
 import us.tractat.kuilt.raft.test.FakeRaftNode
 import us.tractat.kuilt.raft.test.raftSimTest
@@ -40,6 +43,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNotNull
+import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
@@ -247,6 +251,99 @@ class WarpNodeCoordinatedRaftSimTest {
         sim.awaitTrue("phase-2 executions complete (6 total)", within = 4.seconds) {
             executionLock.withLock { executionCount } == 6
         }
+        sim.checkInvariants()
+
+        warpNodes.forEach { it.close() }
+    }
+
+    /**
+     * #879 window (b) at cluster level: a coordinated task stranded by an incapacitated
+     * leader is re-driven to completion by the next leader.
+     *
+     * Interleaving: the leader picks the committed entry off its log and starts executing,
+     * but never finishes (its executor hangs — the crash-mid-execution shape). The commit
+     * has been *consumed* on every node ([RaftNode.committed] is replay-0): the followers
+     * skipped it on the role check and the leader will never record a result or remove the
+     * task from the coordinated queue. Pre-fix there is no re-drive path, so once the leader
+     * is deposed the task strands forever and the second await below times out.
+     *
+     * With the fix, the new leader's leadership-acquisition re-drive re-proposes the stranded
+     * queue entry; the fresh committed entry fires the (fenced) execution path on the new
+     * leader and the task completes exactly once.
+     */
+    @Test
+    fun strandedCoordinatedTaskIsRedrivenByTheNextLeader() = raftSimTest(n = 3) { sim ->
+        val loom = InMemoryLoom()
+        val seams = listOf(
+            loom.host(Pattern("warp-raft-redrive")),
+            loom.join(InMemoryTag("wrr-b")),
+            loom.join(InMemoryTag("wrr-c")),
+        )
+
+        val lock = reentrantLock()
+        val started = mutableListOf<NodeId>()
+        val completed = mutableListOf<NodeId>()
+        val hangOn = atomic<NodeId?>(null)
+
+        val warpNodes = sim.nodeIds.mapIndexed { i, nodeId ->
+            WarpNode(
+                selfId = seams[i].selfId,
+                seam = seams[i],
+                rosterFlow = seams[i].rosterSnapshot(),
+                scope = backgroundScope,
+                quilterConfig = RAFT_SIM_QUILTER_CONFIG,
+                clock = { Instant.fromEpochMilliseconds(testScheduler.currentTime) },
+                strategy = ClaimStrategy.Ring,
+                registry = OpRegistry().also { it.register(OpId("free"), Op { args -> args }) },
+                coordinatedExecutor = { _ ->
+                    lock.withLock { started.add(nodeId) }
+                    // The initial leader is incapacitated mid-execution: it consumed the
+                    // committed entry but never completes, records, or removes the task.
+                    if (nodeId == hangOn.value) awaitCancellation()
+                    lock.withLock { completed.add(nodeId) }
+                    "redriven"
+                },
+                raftNode = sim.nodes[nodeId]!!,
+            )
+        }
+
+        sim.settle()
+        sim.awaitLeader()
+        val initialLeaderId = sim.nodeIds.first { sim.nodes[it]!!.role.value is RaftRole.Leader }
+        hangOn.value = initialLeaderId
+
+        warpNodes[0].enqueue(TaskId("stranded-task"), CoordinationKind.Coordinated)
+
+        sim.awaitTrue("initial leader started executing (and hung)") {
+            lock.withLock { initialLeaderId in started }
+        }
+        // Every node must consume the entry's commit *as a follower* before the leader is
+        // deposed — otherwise the next leader's current-term no-op would advance commitIndex
+        // and emit the entry fresh while it already holds leadership, which is not the
+        // stranded interleaving this test pins.
+        val committedThrough = sim.nodes[initialLeaderId]!!.commitIndex.value
+        sim.awaitCommit(committedThrough)
+
+        // Depose the incapacitated leader. The task is now stranded: every survivor observed
+        // the commit as a follower and skipped it, and committed is replay-0.
+        sim.partitionOff(initialLeaderId)
+        val survivors = sim.nodeIds.filter { it != initialLeaderId }.toSet()
+        sim.awaitLeader(among = survivors)
+
+        // Without the leadership-acquisition re-drive this await times out.
+        sim.awaitTrue("new leader re-drives the stranded task", within = 4.seconds) {
+            lock.withLock { completed.size } == 1
+        }
+        sim.heal()
+        // Drain the transient dual-leader overlap before checking election safety.
+        sim.awaitRole(initialLeaderId, RaftRole.Follower)
+
+        val executedBy = lock.withLock { completed.single() }
+        val executedByWarp = warpNodes[sim.nodeIds.indexOf(executedBy)]
+        assertAll(
+            { assertTrue(executedBy in survivors, "re-driven execution ran on a surviving voter") },
+            { assertNotNull(executedByWarp.results[TaskId("stranded-task")], "result recorded after re-drive") },
+        )
         sim.checkInvariants()
 
         warpNodes.forEach { it.close() }

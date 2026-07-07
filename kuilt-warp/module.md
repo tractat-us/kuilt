@@ -60,8 +60,11 @@ val snapshot = score.zip(CoordinationFree(GCounter.of(replica to 3L))) // pair t
 ordering requirements, or must run exactly once globally. Wrap the value in `Coordinated`, call
 `enqueue(taskId, CoordinationKind.Coordinated)`, and supply a `raftNode` and
 `coordinatedExecutor` to `WarpNode`. The ring owner proposes the task to the Raft cluster; only
-the current Raft leader's `WarpNode` fires `coordinatedExecutor` when the entry commits. The
-`Results` ORMap backstop absorbs any duplicate results from the brief dual-leader window.
+the current Raft leader's `WarpNode` fires `coordinatedExecutor` when the entry commits — and
+only after passing a `readIndex` quorum fence, so a deposed-but-unaware leader stands down
+instead of duplicating the execution. A task whose commit landed while no node held leadership
+is re-driven by the next elected leader. The `Results` ORMap backstop absorbs any duplicate
+results from the one residual window (a leader deposed mid-execution).
 
 ```kotlin
 // Opt into the Raft-backed path for a non-idempotent task:

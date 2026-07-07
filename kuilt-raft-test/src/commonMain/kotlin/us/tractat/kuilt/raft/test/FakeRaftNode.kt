@@ -172,12 +172,30 @@ public class FakeRaftNode(
         pushCommitted(command)
     }
 
+    /**
+     * Behavior of [readIndex]. Defaults to contract-faithful: throws [NotLeaderException]
+     * unless [role] is [RaftRole.Leader], otherwise confirms immediately and returns the
+     * current [commitIndex] (the single-voter fast path — this double has no peers to poll).
+     *
+     * Override to script a **deposed-but-unaware leader** — a node whose [role] still reads
+     * [RaftRole.Leader] but that can no longer assemble a voter quorum at its term:
+     * ```kotlin
+     * node.readIndexBehavior = { throw LeadershipLostException("deposed") }
+     * ```
+     */
+    public var readIndexBehavior: suspend () -> Long = {
+        if (_role.value !is RaftRole.Leader) throw NotLeaderException("readIndex: not the current leader")
+        _commitIndex.value
+    }
+
     // ── RaftNode interface ────────────────────────────────────────────────────
 
     override suspend fun propose(command: ByteArray): LogEntry = proposeStamped(command, ++serial)
 
     override suspend fun propose(command: ByteArray, requestId: Long): LogEntry =
         proposeStamped(command, requestId)
+
+    override suspend fun readIndex(): Long = readIndexBehavior()
 
     /**
      * Run [proposeBehavior] for [command] with `DedupKey(clientId, requestId)` stamped onto both the
