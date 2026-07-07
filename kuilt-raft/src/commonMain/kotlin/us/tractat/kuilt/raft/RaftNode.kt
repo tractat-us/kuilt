@@ -226,6 +226,15 @@ public interface RaftNode {
      * the leader may still commit even if the caller cancels; Raft does not support revocation
      * of in-flight proposals.
      *
+     * **A forwarded proposal relies on caller-side timeout for a leader *crash*.** If the leader a
+     * proposal was forwarded to *steps down*, its rejection surfaces here as [LeadershipLostException]
+     * (retry below). But if that leader *crashes*, no rejection is ever delivered, so this call
+     * suspends until the caller cancels it — the library does not spontaneously fail such a proposal.
+     * Wrap `propose` in your own timeout and retry against the next leader; use the
+     * [requestId][propose] overload so the retry is exactly-once-safe. (This is the standard
+     * distributed-propose contract: eventual completion of a forwarded proposal is a caller
+     * timeout+retry responsibility, not a library guarantee.)
+     *
      * @throws LeadershipLostException if a forwarded proposal is rejected by the target leader
      *   (e.g. the leader stepped down); the caller may retry on the new leader.
      * @throws NotLeaderException only in terminal cases: the node is [close]d, or the leader
