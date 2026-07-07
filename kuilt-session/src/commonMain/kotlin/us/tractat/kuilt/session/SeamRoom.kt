@@ -1128,6 +1128,14 @@ internal class SeamRoom(
      */
     internal fun hasDetector(peerId: PeerId): Boolean = lock.withLock { detectorJobs.containsKey(peerId) }
 
+    /**
+     * Test-visibility: is a [resume] attempt currently in flight (its reply slot installed)?
+     *
+     * Exposed for [us.tractat.kuilt.session] tests that interleave a public [resume] with the
+     * internal auto-reconnect's own resume (#1280). No production caller reads this.
+     */
+    internal fun hasPendingResume(): Boolean = lock.withLock { pendingResume != null }
+
     private suspend fun handlePartitionEvent(event: PartitionEvent) {
         when (event) {
             is PartitionEvent.PeerUnresponsive -> handleUnresponsive(event)
