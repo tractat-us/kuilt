@@ -217,6 +217,38 @@ class GossipViewTest {
             )
         }
 
+    // ── Behaviour preservation (#794 slice 1: size → shape) ───────────────────
+
+    /**
+     * Pins the exact neighbour selection for a given seed + roster: one RNG draw
+     * for the recompute jitter, then a seeded k-out shuffle of the roster minus
+     * self. Written against the pre-`TopologyPolicy` [GossipView] (where the view
+     * owned the shuffle) and kept green across the size→shape refactor, so
+     * "same seed + roster ⇒ same neighbours" is checked by CI, not by review.
+     */
+    @Test
+    fun selectionIsTheSeededKOutShuffleOfTheRoster() =
+        runTest {
+            val members = peers(10)
+            val h = harness(members, seed = 42)
+            h.view.start(backgroundScope)
+            settle()
+
+            val rng = Random(42)
+            // Draw 1: the roster-recompute jitter (GossipView.jitterMillis).
+            val lo = GossipView.DEFAULT_JITTER.start.inWholeMilliseconds
+            val hi = GossipView.DEFAULT_JITTER.endInclusive.inWholeMilliseconds
+            rng.nextLong(hi - lo + 1)
+            // Draw 2: the k-out shuffle of the candidates (roster minus self).
+            val expected =
+                (h.roster.value - h.self)
+                    .shuffled(rng)
+                    .take(recommendedActiveViewSize(h.roster.value.size))
+                    .toSet()
+
+            assertEquals(expected, h.view.active.value, "same seed + roster selects the same neighbours")
+        }
+
     // ── ActiveViewPolicy ───────────────────────────────────────────────────────
 
     @Test
