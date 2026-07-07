@@ -1478,6 +1478,22 @@ internal class RaftEngine(
             deferred.completeExceptionally(MembershipChangeInProgressException())
             return
         }
+        // One-change-at-a-time, log-grounded: reject while the last config entry is still UNCOMMITTED —
+        // a superset of the in-memory `pendingConfigChange` guard above that also covers the
+        // inherited-config paths where `pendingConfigChange` is null (no local caller): the Simple(C_new)
+        // appended by `finalizeInheritedCommittedJoint` on election, and by `onConfigCommitted` when a
+        // leader inherits an in-flight Joint. Adopt-on-append flips `membershipState` to Simple the instant
+        // that entry is appended, so without this guard a change arriving in the window before it commits
+        // passes BOTH the settled-Simple and `pendingConfigChange` checks, appends a Joint above the
+        // uncommitted Simple, and can hand the new caller the wrong committed config. The normal path is
+        // unaffected: a genuine in-flight Joint's entry is already > commitIndex (rejected identically to
+        // today), and a fully-settled config's last config entry is <= commitIndex (a new change is allowed).
+        val lastConfigIndex = state.log.lastOrNull { it.config != null }?.index ?: -1L
+        if (lastConfigIndex > state.currentCommitIndex) {
+            debug { "onChangeMembership: rejected — last config entry (index=$lastConfigIndex) not yet committed (commit=${state.currentCommitIndex})" }
+            deferred.completeExceptionally(MembershipChangeInProgressException())
+            return
+        }
         if (target.voters.isEmpty()) {
             debug { "onChangeMembership: rejected — target voters is empty" }
             deferred.completeExceptionally(IllegalArgumentException("target voter set must not be empty"))
