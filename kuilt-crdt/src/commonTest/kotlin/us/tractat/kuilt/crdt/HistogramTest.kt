@@ -171,8 +171,9 @@ class HistogramTest {
         val base = seededHistogram(r1, seed = 8, n = 500)
         val patch = base.record(r1, 77.7)
         assertAll(
+            // A single touched cell — the GCounter delta carries the replica's new slot total.
             { assertEquals(1, patch.delta.bucketCounts.count { it > 0L }) },
-            { assertEquals(1L, patch.delta.count) },
+            { assertEquals(2, patch.delta.bucketCounts.indexOfFirst { it > 0L }) }, // 77.7 → (50, 100]
         )
     }
 

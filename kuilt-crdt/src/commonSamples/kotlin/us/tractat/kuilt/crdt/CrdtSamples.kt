@@ -505,6 +505,73 @@ internal fun sampleDDSketchMerge() {
     check(merged.piece(b) == merged)
 }
 
+// ── Gauge ─────────────────────────────────────────────────────────────────────
+
+/** The newest observation wins on merge — deterministic tie-break on replica id. */
+@Suppress("unused")
+internal fun sampleGauge() {
+    val phone = ReplicaId("phone")
+    val laptop = ReplicaId("laptop")
+
+    // Each device observes the players-online level at its own time.
+    var onPhone = Gauge.empty()
+    var onLaptop = Gauge.empty()
+    onPhone = onPhone.piece(onPhone.observe(phone, timestamp = 100L, value = 4.0))
+    onLaptop = onLaptop.piece(onLaptop.observe(laptop, timestamp = 250L, value = 7.0))
+
+    // Merge: the observation with the larger (timestamp, replicaId) tag wins.
+    val merged = onPhone.piece(onLaptop)
+    check(merged.value == 7.0)
+    check(merged.timestamp == 250L)
+
+    // Commutative and idempotent: any merge order, any duplication, same answer.
+    check(onLaptop.piece(onPhone) == merged)
+    check(merged.piece(onPhone) == merged)
+}
+
+// ── Histogram ─────────────────────────────────────────────────────────────────
+
+/** Fixed buckets you choose up front; each recorded value lands in exactly one. */
+@Suppress("unused")
+internal fun sampleHistogram() {
+    val replica = ReplicaId("api-server-1")
+
+    // Buckets: (-inf, 10], (10, 50], (50, 100], (100, +inf) — SLA thresholds in ms.
+    var latencies = Histogram.empty(boundaries = listOf(10.0, 50.0, 100.0))
+
+    // record() returns a one-bucket delta; absorb it with piece().
+    for (ms in listOf(7.0, 12.0, 45.0, 50.0, 220.0)) {
+        latencies = latencies.piece(latencies.record(replica, ms))
+    }
+
+    check(latencies.bucketCounts == listOf(1L, 3L, 0L, 1L)) // 50.0 is upper-inclusive in (10, 50]
+    check(latencies.count == 5L)
+    check(latencies.sum == 334.0)
+}
+
+/** Merging two peers' histograms is exactly the histogram of the combined stream. */
+@Suppress("unused")
+internal fun sampleHistogramMerge() {
+    val serverA = ReplicaId("server-a")
+    val serverB = ReplicaId("server-b")
+    val boundaries = listOf(10.0, 100.0)
+
+    // Two servers count their own request latencies.
+    var a = Histogram.empty(boundaries)
+    var b = Histogram.empty(boundaries)
+    repeat(30) { a = a.piece(a.record(serverA, 5.0)) } // 30 fast requests
+    repeat(20) { b = b.piece(b.record(serverB, 500.0)) } // 20 slow requests
+
+    // Merge: pointwise GCounter join of the bucket counts.
+    val merged = a.piece(b)
+    check(merged.bucketCounts == listOf(30L, 0L, 20L))
+    check(merged.count == 50L)
+
+    // Idempotent: merging again with either side changes nothing.
+    check(merged.piece(a) == merged)
+    check(merged.piece(b) == merged)
+}
+
 // ── LatticeProduct ───────────────────────────────────────────────────────────
 
 /**

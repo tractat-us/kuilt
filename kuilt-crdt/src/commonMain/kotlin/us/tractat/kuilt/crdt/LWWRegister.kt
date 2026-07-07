@@ -20,7 +20,8 @@ import kotlinx.serialization.Serializable
  */
 @Serializable
 public class LWWRegister<V> private constructor(
-    private val timestamp: Long,
+    /** The timestamp half of the winning write's tag; `Long.MIN_VALUE` when the register is empty. */
+    public val timestamp: Long,
     private val origin: ReplicaId,
     public val value: V?,
 ) : Quilted<LWWRegister<V>> {
