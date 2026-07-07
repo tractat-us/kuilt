@@ -9,7 +9,7 @@ The technical name for these structures is **CRDTs** (Conflict-free Replicated D
 
 Use replication when you want convergence without a central coordinator. If your feature needs strict, globally ordered decisions instead (like turn order in a game), use [Consensus](raft.md) for that part.
 
-`kuilt-crdt` provides nineteen types, grouped by what they model.
+`kuilt-crdt` provides more than twenty types, grouped by what they model.
 
 **`kuilt-crdt` depends on nothing else in kuilt** — not even `kuilt-core`. Add it to any project on its own and replicate over whatever transport you already have. Live replication over a `Seam` (via [`Quilter`](crdt-quilter.md)) is opt-in, not required.
 
@@ -25,6 +25,7 @@ Use replication when you want convergence without a central coordinator. If your
 | Collaborative labels where items can be re-added | [`ORSet`](crdt-orset.md) — add-wins on concurrent conflict |
 | Shared status field (last writer wins) | [`LWWRegister`](crdt-lwwregister.md) — concurrent writes silently resolve by timestamp |
 | Shared status field (surface conflicts) | [`MVRegister`](crdt-mvregister.md) — concurrent writes surface as multiple values; caller resolves |
+| Current level of something (temperature, players online) | [`Gauge`](crdt-gauge.md) — newest observation wins; deterministic tie-break |
 | Online presence / roster (key → last-write value) | [`LWWMap`](crdt-lwwmap.md) — per-key LWWRegister |
 | Presence / roster (key → nested CRDT value) | [`ORMap`](crdt-ormap.md) — add-wins key set; values merge via their own CRDT |
 | Seat or inventory reservation (can't oversell) | [`BoundedCounter`](crdt-bounded-counter.md) — quota-per-replica; total spend can never exceed budget |
@@ -36,6 +37,7 @@ Use replication when you want convergence without a central coordinator. If your
 | "Have I seen this?" deduplication, compact | [`BloomFilter`](crdt-bloomfilter.md) — probabilistic membership; no false negatives; bitwise-OR merge |
 | How many distinct items (e.g. unique visitors)? | [`HyperLogLog`](crdt-hyperloglog.md) — ~1% error estimate; 16 KB for any cardinality |
 | How often does X appear (trending topics, heavy hitters)? | [`CountMinSketch`](crdt-countminsketch.md) — frequency sketch; never underestimates; fixed memory |
+| How many values fell in each range I care about (SLA bands)? | [`Histogram`](crdt-histogram.md) — fixed buckets you choose; exact per-bucket counts; lossless merge |
 | What's the median / 99th-percentile (latency, sizes)? | [`DDSketch`](crdt-ddsketch.md) — quantile sketch; every estimate within a chosen relative error; lossless merge |
 | Causal stability / building your own CRDT | [`Causal` primitives](crdt-causal.md) — `DotContext`, `DotSet`, `DotFun`, `DotMap` |
 
@@ -43,9 +45,9 @@ Use replication when you want convergence without a central coordinator. If your
 
 | Group | Types | Convergence property |
 |-------|-------|----------------------|
-| Counters | `GCounter`, `PNCounter`, `BoundedCounter`, `ResettableCounter`, `HyperLogLog`, `CountMinSketch`, `DDSketch` | Per-replica monotone internals; exact integer result — or a bounded-memory probabilistic estimate for the sketches (`HyperLogLog` distinct-count, `CountMinSketch` frequency, `DDSketch` quantiles) |
+| Counters | `GCounter`, `PNCounter`, `BoundedCounter`, `ResettableCounter`, `Histogram`, `HyperLogLog`, `CountMinSketch`, `DDSketch` | Per-replica monotone internals; exact integer result (`Histogram` counts exactly per fixed bucket) — or a bounded-memory probabilistic estimate for the sketches (`HyperLogLog` distinct-count, `CountMinSketch` frequency, `DDSketch` quantiles) |
 | Sets | `GSet`, `ORSet`, `TwoPhaseSet`, `BloomFilter` | Set union / observe-remove semantics; `BloomFilter` is a compact probabilistic membership set (no false negatives) |
-| Registers | `LWWRegister`, `MVRegister` | Last-write-wins or multi-value concurrent conflict |
+| Registers | `LWWRegister`, `MVRegister`, `Gauge` | Last-write-wins or multi-value concurrent conflict; `Gauge` is the last-value metric form of LWW |
 | Maps | `LWWMap`, `ORMap` | Key-level LWW or ORSet-keyed map |
 | Sequences | `Fugue`, `Rga` | Ordered list with stable unique ids; Fugue adds maximal non-interleaving |
 | Trees | `MovableTree` | Op-log union; Lamport-ordered replay with cycle prevention |

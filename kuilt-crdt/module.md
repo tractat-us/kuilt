@@ -20,6 +20,7 @@ delivery order or duplication.
 | `TwoPhaseSet` | Union; tombstones win permanently | Once |
 | `ORSet` | Causal: add-wins over concurrent remove | Yes |
 | `LWWRegister` | Largest `(timestamp, replicaId)` tag wins | Via overwrite |
+| `Gauge` | Last-value metric: largest `(timestamp, replicaId)` tag wins (wraps `LWWRegister<Double>`) | Via overwrite |
 | `MVRegister` | Retain all concurrent writes | Via supersede |
 | `LWWMap` | Per-key LWWRegister | Via overwrite |
 | `ORMap` | Per-key add-wins; values merge via `piece` | Yes |
@@ -33,6 +34,7 @@ delivery order or duplication.
 | `BloomFilter` | Bitwise-OR of bit array; probabilistic membership, bounded FP rate | No (union-only) |
 | `HyperLogLog` | Element-wise max of registers; ~0.8% error at p=14 | N/A (sketch, not a set) |
 | `CountMinSketch` | Approximate frequency sketch; element-wise max merge (idempotent CMS) | No |
+| `Histogram` | Explicit-bucket metric (fixed boundaries → GCounter); lossless per-bucket join | No |
 | `DDSketch` | Quantile sketch (log-γ buckets → GCounter); lossless per-bucket join, α relative-error bound | No |
 
 ## Replication
@@ -61,6 +63,7 @@ encoding that fits its structure:
 | `HyperLogLog` | 6-bit-packed `ByteArray` | Same-length `ByteArray` with at most one non-zero 6-bit register slot | O(1) registers |
 | `BloomFilter` | `LongArray` of bit-words | Same-length `LongArray` with only touched words non-zero; `BloomFilterSerializer` encodes as `(wordIndex, wordValue)` pairs | O(hashCount) words |
 | `DDSketch` | Sparse `Map<Int, GCounter>` per sign + zero/overflow counters | Same-shaped map with a single bucket's `GCounter` delta (plus the overflow cell when clamping) | O(1) cells |
+| `Histogram` | Sparse `Map<Int, GCounter>` over fixed boundaries + sum counters | Same-shaped map with a single bucket's `GCounter` delta (plus a sum cell) | O(1) cells |
 
 The encodings are intentionally type-specific:
 - **CountMinSketch** needs `(row, col)` addressing — a 2D matrix cell requires
@@ -70,8 +73,8 @@ The encodings are intentionally type-specific:
   and the packed accessor is non-trivial.
 - **BloomFilter** uses bit-word addressing (`wordIndex`); the sparse encoding lives
   in the serializer layer (`BloomFilterSerializer`), not in the type.
-- **DDSketch** is sparse-map-backed, so the minimal fragment is simply a one-entry
-  map — no custom encoding needed.
+- **DDSketch** and **Histogram** are sparse-map-backed, so the minimal fragment is
+  simply a one-entry map — no custom encoding needed.
 
 A `SparseArrayDelta<Cell>` shared helper would need to unify three incompatible
 carriers (`LongArray`, `ByteArray`, `List<CellDelta>`) or force them all into a
