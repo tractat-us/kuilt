@@ -8,6 +8,7 @@ import com.dylibso.chicory.wasm.Parser
 import com.dylibso.chicory.wasm.UnlinkableException
 import com.dylibso.chicory.wasm.WasmModule
 import com.dylibso.chicory.wasm.types.MemoryLimits
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -235,6 +236,10 @@ public class ChicoryWasmRuntime(
         invokeMutex.withLock {
             try {
                 timedRunner.run(config.executionTimeout, Callable { runAbi(memory, allocFn, runFn, args) })
+            } catch (e: CancellationException) {
+                // Structured-concurrency cancellation must propagate, never be swallowed into a
+                // WasmExecutionException (parity with BrowserWasmRuntime's guard).
+                throw e
             } catch (e: TimeoutException) {
                 throw WasmExecutionException("WASM execution exceeded ${config.executionTimeout}", e)
             } catch (e: ChicoryException) {
