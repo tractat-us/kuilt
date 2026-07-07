@@ -783,15 +783,44 @@ public class WarpNode(
     }
 
     private fun claimOwnedWithIntent(taskIds: Collection<TaskId>, strategy: ClaimStrategy.RingWithIntent, kind: CoordinationKind) {
-        // Owned, not-yet-claimed, not-already-in-flight tasks under this peer's current ring view.
+        // Owned (or previously claimed — see [isBindingClaimant]), not-yet-claimed,
+        // not-already-in-flight tasks under this peer's current ring view.
         // The inFlight check is a cheap early exit: announceAndResolve re-checks under the lock,
         // but filtering here avoids redundant lock acquisitions on every queue/ring emission.
         val owned = lock.withLock {
             taskIds.filter { taskId ->
-                taskId !in claimed && taskId !in inFlight && effectiveOwner(taskId) == selfId
+                taskId !in claimed && taskId !in inFlight &&
+                    (effectiveOwner(taskId) == selfId || isBindingClaimant(taskId))
             }
         }
         owned.forEach { taskId -> announceAndResolve(taskId, strategy, kind) }
+    }
+
+    /**
+     * Whether this peer has announced an intent claim on [taskId] that it must follow
+     * through on.
+     *
+     * Claims live in a grow-only [GSet]: once announced they cannot be retracted, and every
+     * peer resolves the same [winner] — the lowest live claimant. A claim announced under a
+     * transient ring view (the startup window where the seeded self-only ring says "mine"
+     * before the first roster emission is processed) therefore keeps this peer in every
+     * other peer's winner computation until the task's intent entry is tombstoned. If the
+     * claimant simply dropped such a task once its ring converged (the pre-#931 behaviour),
+     * the true ring owner would stand down to a winner that never executes — a permanent
+     * standoff in which nobody runs the task. So a past claim is **binding**: the claimant
+     * stays eligible in [claimOwnedWithIntent] and re-resolves on every queue/ring change,
+     * executing iff it is the winner; losers still stand down deterministically.
+     *
+     * A task pinned to another peer is never followed through — the pin outranks both the
+     * ring and the intent register (a foreign claim on a pinned task cannot arise from
+     * [claimOwnedWithIntent], which honours the pin, but stays excluded defensively).
+     *
+     * Caller holds [lock].
+     */
+    private fun isBindingClaimant(taskId: TaskId): Boolean {
+        val pinned = queueQuilter.state.value[taskId]?.value?.pinnedOwner
+        if (pinned != null && pinned != selfId) return false
+        return selfId in (intentQuilter.state.value[taskId]?.elements ?: emptySet())
     }
 
     /**
@@ -824,6 +853,7 @@ public class WarpNode(
         }
 
         scope.launch {
+            var stoodDown = false
             try {
                 if (mustSettle) delay(strategy.settleWindow) // suspend OUTSIDE the lock
                 val execute = lock.withLock {
@@ -835,6 +865,7 @@ public class WarpNode(
                         false // stand down — stay eligible to re-home later
                     }
                 }
+                stoodDown = !execute
                 if (execute) {
                     runCatchingCancellable { doExecute(taskId, kind) }
                         .onFailure { e ->
@@ -843,7 +874,22 @@ public class WarpNode(
                         }
                 }
             } finally {
-                lock.withLock { inFlight.remove(taskId) }
+                val followThrough = lock.withLock {
+                    inFlight.remove(taskId)
+                    // Re-evaluation is normally driven by queue emissions and ring rebuilds,
+                    // but a trigger that fired *while this coroutine was still in flight*
+                    // skipped the task (the inFlight guard). If that trigger was the last one
+                    // — e.g. the first roster emission landed between the stand-down decision
+                    // and this cleanup — the task would deadlock. Recheck once: relaunch only
+                    // when this peer stood down yet is NOW the winner, so the relaunched
+                    // resolution executes (or re-decides against fresher state). Executor
+                    // failures are excluded — their retry stays on the next natural trigger,
+                    // never a tight relaunch loop.
+                    stoodDown && taskId !in claimed &&
+                        (effectiveOwner(taskId) == selfId || isBindingClaimant(taskId)) &&
+                        winner(taskId) == selfId
+                }
+                if (followThrough) claimOwned(listOf(taskId), kind)
             }
         }
     }
