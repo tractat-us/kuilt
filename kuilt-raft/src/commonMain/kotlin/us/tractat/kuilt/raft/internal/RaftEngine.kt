@@ -359,13 +359,54 @@ internal class RaftEngine(
                     if (!closing) flushWaitingForLeader()
                 }
             } finally {
-                // Complete any in-flight proposals and config changes so their callers don't hang.
+                // #1257 bug 2: cancel the leader's timer loops. becomeLeader launches heartbeatJob /
+                // quorumCheckJob as `while (true)` coroutines; Close only stops the actor loop, so without
+                // this they leak past close() (their re-arming delay keeps them alive forever). electionJob /
+                // leaderLeaseJob are already cancelled on becomeLeader/stepDown, but cancel them here too so
+                // close() is a complete leader-timer teardown regardless of the role we exit in.
+                electionJob?.cancel()
+                heartbeatJob?.cancel()
+                quorumCheckJob?.cancel()
+                leaderLeaseJob?.cancel()
+                // Complete any in-flight (already-registered) proposals, config changes, reads, and
+                // transfers so their callers don't hang.
                 val cause = LeadershipLostException("node scope cancelled")
                 failPending(cause)
                 failPendingConfigChange(cause)
                 readIndexTracker.failAll(cause)
                 transfer.fail(LeadershipTransferException("node scope cancelled"))
                 forwarder.failAll(cause)
+                // #1257 bug 1: drain commands still BUFFERED in `cmd` — enqueued behind Close, or pending
+                // when the scope was cancelled — and fail each command-carrying deferred. Without this a
+                // Propose/RequestReadIndex/ChangeMembership/TransferLeadership/CommitCut parked in that
+                // window would leave its CompletableDeferred uncompleted, hanging the caller's await()
+                // forever (the same deferred-parks class as #1235). Close the channel first so no late send
+                // can race in behind the drain; completeExceptionally on an already-resolved deferred (e.g.
+                // a caller that cancelled) is a harmless no-op, so this is exactly-once by construction.
+                cmd.close()
+                val closed = NotLeaderException("node is closed")
+                while (true) {
+                    val buffered = cmd.tryReceive().getOrNull() ?: break
+                    when (buffered) {
+                        is EngineCommand.Propose            -> buffered.response.completeExceptionally(closed)
+                        is EngineCommand.ChangeMembership   -> buffered.response.completeExceptionally(closed)
+                        is EngineCommand.RequestReadIndex   -> buffered.deferred.completeExceptionally(closed)
+                        is EngineCommand.CommitCut          -> buffered.response.completeExceptionally(closed)
+                        is EngineCommand.TransferLeadership -> buffered.response.completeExceptionally(closed)
+                        // No caller deferred to fail — enumerated (no `else`) so a future deferred-carrying
+                        // EngineCommand variant forces a compile error here rather than silently hanging its
+                        // caller on close, exactly like the exhaustive actor-dispatch `when` above.
+                        is EngineCommand.IncomingMessage,
+                        is EngineCommand.ElectionTimeout,
+                        is EngineCommand.HeartbeatTick,
+                        is EngineCommand.LeaseExpired,
+                        is EngineCommand.Compact,
+                        is EngineCommand.Close,
+                        is EngineCommand.QuorumCheck,
+                        is EngineCommand.CancelTransfer,
+                        is EngineCommand.TransferTimeout -> Unit
+                    }
+                }
             }
         }
     }
