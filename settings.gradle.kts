@@ -117,3 +117,7 @@ include(":kuilt-warp-planning")
 include(":kuilt-warp-ml")
 include(":kuilt-warp-otel")
 include(":examples")
+
+// Patchwork demo app modules (unpublished; see docs/superpowers/specs/2026-07-07-demo-app-design.md).
+include(":demo-shared")
+project(":demo-shared").projectDir = file("demo/shared")
