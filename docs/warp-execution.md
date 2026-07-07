@@ -33,8 +33,9 @@ That implies one honest constraint, stated up front: **a homogeneous binary with
 symbolic dispatch.** Every peer runs the same build; the grid distributes
 *decisions about where data is processed*, not the processing code. The
 `shuttle { … }` block is therefore sugar for "reference a registered operation" —
-a compiler plugin (KSP) could auto-register the ops it sees so it still *reads*
-like an ordinary lambda.
+and with `@WarpOp` [auto-registration](warp-op-autoregistration.md) it *reads*
+like an ordinary lambda: annotate a top-level `shuttle { … }` val and the build
+generates its registry entry.
 
 ## Shipping real code: WASM kernels
 

@@ -107,5 +107,6 @@ fun moduleDescription(module: String): String = when (module) {
     "kuilt-test" -> "Shared test utilities and fakes for kuilt, built on kuilt-core."
     "kuilt-session-test" -> "Session test support (FakeRoomFactory, …) for kuilt."
     "kuilt-raft-test" -> "Raft test harness (FakeRaftNode, …) for kuilt."
+    "kuilt-warp-ksp" -> "KSP symbol processor for warp: generates OpRegistrar wiring for @WarpOp-annotated ops."
     else -> "kuilt — peer-symmetric, multiplatform networking. Module $module."
 }
