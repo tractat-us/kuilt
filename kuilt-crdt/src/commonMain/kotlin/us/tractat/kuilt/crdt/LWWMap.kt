@@ -4,8 +4,9 @@ import kotlinx.serialization.Serializable
 
 /**
  * A map from [K] to last-writer-wins values [V]: per-key [LWWRegister]s
- * composed under union-merge of keys. Each [set] writes one key with a
- * `(timestamp, replicaId)` tag; merge picks the per-key max tag.
+ * composed under union-merge of keys. Each [set] (or [remove] — a tombstone
+ * write) tags one key with `(timestamp, replicaId)`; merge picks the per-key
+ * max tag.
  *
  * Suited to settings, ready-toggles, and similar small key→latest-value state
  * where surfacing concurrent edits (a la [MVRegister]) is unwanted.
@@ -45,6 +46,26 @@ public class LWWMap<K, V> private constructor(
         val current = cells[key] ?: LWWRegister.empty()
         val next = current.set(replica, timestamp, value)
         return LWWMap(cells + (key to next))
+    }
+
+    /**
+     * Remove [key] tagged with ([timestamp], [replica]) — a last-writer-wins
+     * *tombstone* ([LWWRegister.unset]) that competes under merge exactly like a
+     * [set]: a remove at a later tag beats an earlier set, and a set at a later
+     * tag revives the key, with the same deterministic `(timestamp, replicaId)`
+     * tie-break. Removed keys disappear from [get] and [entries].
+     *
+     * Removing a key that was never set locally still records the tombstone, so
+     * a concurrent earlier-tagged set arriving later loses.
+     *
+     * The tombstone cell is retained in state (like every set cell) — this map
+     * has no per-key garbage collection.
+     *
+     * The tag-uniqueness precondition on [set] applies equally here.
+     */
+    public fun remove(replica: ReplicaId, timestamp: Long, key: K): LWWMap<K, V> {
+        val current = cells[key] ?: LWWRegister.empty()
+        return LWWMap(cells + (key to current.unset(replica, timestamp)))
     }
 
     /** The join: per-key max-tag of the underlying registers. */
