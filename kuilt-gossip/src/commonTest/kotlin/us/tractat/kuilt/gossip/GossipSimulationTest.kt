@@ -2,10 +2,12 @@ package us.tractat.kuilt.gossip
 
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.runTest
+import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
+import kotlin.time.Duration.Companion.seconds
 
 /**
  * Multi-node tests over the [GossipSimulation] virtual-time harness (Phase 3, #658):
@@ -73,6 +75,44 @@ class GossipSimulationTest {
                     )
                 },
             )
+        }
+
+    @Test
+    fun asymmetricEdgesSurviveIdlePeriodsPastTheHeartbeatTimeout() =
+        runTest(timeout = 20.seconds) {
+            // N=20 ⇒ k=5 « N−1: the k-out active views are directed and mostly
+            // asymmetric (#1265). The overlay must hold its k-regular shape through
+            // an *idle* stretch many heartbeat timeouts long (harness timeout: 2 s) —
+            // without reverse-edge liveness every asymmetric edge is EdgeDown'd,
+            // blacklisted, and the overlay collapses to mutual-only edges.
+            val sim = GossipSimulation(n = 20, scope = this, nodeScope = backgroundScope, scheduler = testScheduler, seedBase = 1)
+            sim.settle()
+
+            val k = sim.activeViewSize
+            val views = sim.nodeIds.associateWith { sim.seam(it).activePeers.value }
+            val asymmetricEdges =
+                views.entries.sumOf { (a, active) -> active.count { b -> a !in views.getValue(b) } }
+            assertTrue(asymmetricEdges > 0, "sanity: the initial overlay must contain asymmetric edges")
+
+            // Idle — no application traffic — for 30 s of virtual time, in bounded steps.
+            repeat(30) {
+                testScheduler.advanceTimeBy(1_000)
+                testScheduler.runCurrent()
+            }
+
+            val shortfall = sim.nodeIds.filter { sim.seam(it).activePeers.value.size < k }
+            assertEquals(
+                emptyList<PeerId>(),
+                shortfall,
+                "every node must keep a full k-view through idle heartbeat windows\n" +
+                    sim.dump("overlay collapsed"),
+            )
+
+            // And the overlay still disseminates: a post-idle broadcast reaches everyone.
+            val origin = sim.nodeIds.first()
+            val payload = byteArrayOf(6, 5)
+            sim.broadcastFrom(origin, payload)
+            sim.awaitTrue("post-idle broadcast reaches every peer") { sim.allReceived(payload, origin) }
         }
 
     @Test

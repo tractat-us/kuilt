@@ -95,10 +95,13 @@ public class HeartbeatPartitionDetector(
 
     private suspend fun collectIncoming() {
         link.incoming.collect { frame ->
-            when {
-                isPongFrame(frame) -> observedPeer(peerId)
-                isPingFrame(frame) -> replyWithPong()
-            }
+            // Any inbound frame is proof of liveness — [link] is the per-peer view, so
+            // every frame it carries is from the monitored peer. This matches the
+            // [HeartbeatConfig.timeout] contract: "without any inbound frame (ping or
+            // application)". Pings additionally get a pong reply so the peer's own
+            // detector sees us as live.
+            observedPeer(peerId)
+            if (isPingFrame(frame)) replyWithPong()
         }
         // Flow completed — the link was closed.
         emitIfOpen(PartitionEvent.PeerUnresponsive(peerId, clock(), PartitionEvent.Reason.TransportClosed))

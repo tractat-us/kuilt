@@ -16,6 +16,8 @@ import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
 
@@ -44,6 +46,7 @@ class GossipDisseminationTest {
         peers: Set<PeerId>,
         seed: Int,
         initialTtl: Int = 16,
+        reorderGrace: Duration = GossipSeam.DEFAULT_REORDER_GRACE,
     ): Pair<FakeSeam, GossipSeam> {
         val self = PeerId("self")
         val base = FakeSeam(selfId = self, initialPeers = peers + self)
@@ -54,6 +57,7 @@ class GossipDisseminationTest {
                 clock = { Instant.fromEpochMilliseconds(testScheduler.currentTime) },
                 config = config,
                 initialTtl = initialTtl,
+                reorderGrace = reorderGrace,
             )
         return base to seam
     }
@@ -81,7 +85,7 @@ class GossipDisseminationTest {
             val sender = seam.activePeers.value.first()
             val origin = PeerId("origin-x")
             val payload = byteArrayOf(4, 2)
-            base.deliver(sender, GossipFrame.origin(origin, seq = 7, ttl = 5, payload).encode())
+            base.deliver(sender, GossipFrame.origin(origin, seq = 1, ttl = 5, payload).encode())
             runCurrent()
 
             val reflood = base.relaySends()
@@ -165,6 +169,108 @@ class GossipDisseminationTest {
             assertAll(
                 { assertEquals(1, received.size, "a ttl=1 frame is still delivered to the app") },
                 { assertTrue(base.relaySends().isEmpty(), "but is not re-flooded — the hop budget is spent") },
+            )
+        }
+
+    @Test
+    fun deliversSameOriginRelayedFramesInSendOrder() =
+        runTest {
+            val (base, seam) = gossipSeam(members(12), seed = 8)
+            seam.start(backgroundScope)
+            settle()
+
+            val received = mutableListOf<Swatch>()
+            backgroundScope.launch { seam.incoming.toList(received) }
+            runCurrent()
+
+            // Two relay paths race: the origin's seq 2 arrives first (fast relay),
+            // seq 1 second (slow relay). Seam.incoming promises frames "in send
+            // order", and GossipSeam re-stamps sender = origin — so the collector
+            // must observe the origin's frames in the origin's send order.
+            val fastRelay = seam.activePeers.value.first()
+            val slowRelay = seam.activePeers.value.last()
+            val origin = PeerId("origin-x")
+            base.deliver(fastRelay, GossipFrame.origin(origin, seq = 2, ttl = 5, byteArrayOf(2)).encode())
+            base.deliver(slowRelay, GossipFrame.origin(origin, seq = 1, ttl = 5, byteArrayOf(1)).encode())
+            runCurrent()
+
+            assertAll(
+                { assertEquals(2, received.size, "both frames are delivered") },
+                {
+                    assertEquals(
+                        listOf(1L, 2L),
+                        received.map { it.sequence },
+                        "same-origin broadcasts surface in the origin's send order",
+                    )
+                },
+                {
+                    assertEquals(
+                        listOf<Byte>(1, 2),
+                        received.map { it.toByteArray().single() },
+                        "payloads surface in the origin's send order",
+                    )
+                },
+            )
+        }
+
+    @Test
+    fun heldOutOfOrderFrameIsStillRelayedImmediately() =
+        runTest {
+            val (base, seam) = gossipSeam(members(12), seed = 9)
+            seam.start(backgroundScope)
+            settle()
+
+            val received = mutableListOf<Swatch>()
+            backgroundScope.launch { seam.incoming.toList(received) }
+            runCurrent()
+
+            // seq 2 arrives ahead of seq 1: local delivery must wait for seq 1,
+            // but the relay must not — holding the flood would add a full gap-fill
+            // latency per hop and break the O(k) dissemination path.
+            val sender = seam.activePeers.value.first()
+            val origin = PeerId("origin-x")
+            base.deliver(sender, GossipFrame.origin(origin, seq = 2, ttl = 5, byteArrayOf(2)).encode())
+            runCurrent()
+
+            assertAll(
+                { assertEquals(0, received.size, "delivery of the out-of-order frame is held for the gap") },
+                {
+                    assertEquals(
+                        seam.activePeers.value - sender,
+                        base.relaySends().map { it.first }.toSet(),
+                        "the held frame is still re-flooded immediately",
+                    )
+                },
+            )
+        }
+
+    @Test
+    fun releasesFramesHeldPastTheReorderGrace() =
+        runTest {
+            // Short grace so the sweep fits well inside the detectors' 2 s timeout.
+            val (base, seam) = gossipSeam(members(12), seed = 10, reorderGrace = 400.milliseconds)
+            seam.start(backgroundScope)
+            settle()
+
+            val received = mutableListOf<Swatch>()
+            backgroundScope.launch { seam.incoming.toList(received) }
+            runCurrent()
+
+            // A late joiner's first sighting of an origin lands mid-stream (seq 7): with
+            // no way to tell a drop from a pre-join seq, the frame is held one grace —
+            // then the gap is abandoned and the frame released rather than waiting on
+            // seqs 1..6 that will never arrive.
+            val sender = seam.activePeers.value.first()
+            base.deliver(sender, GossipFrame.origin(PeerId("origin-x"), seq = 7, ttl = 5, byteArrayOf(7)).encode())
+            runCurrent()
+            assertEquals(0, received.size, "the mid-stream first sighting is held for its grace")
+
+            advanceTimeBy(1_000)
+            runCurrent()
+
+            assertAll(
+                { assertEquals(1, received.size, "the held frame is released once its gap's grace expires") },
+                { assertEquals(7L, received.single().sequence, "released with the origin's sequence") },
             )
         }
 

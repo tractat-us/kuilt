@@ -245,6 +245,15 @@ failure detector; Erdős–Rényi connectivity):
   `:kuilt-liveness`, composed per-neighbour. SWIM-style indirect probing / phi-
   accrual are deliberately *not* adopted now — revisit only for lossy/high-jitter
   WAN topologies.
+- **Reverse-edge liveness (#1265).** The k-out views are independent per-peer
+  samples, so edges are *directed*: a peer may watch a neighbour that does not
+  watch it back. Detectors answer pings only for their own active neighbours, so
+  an asymmetric edge's pings would go unanswered and the watcher would tear the
+  edge down within one timeout — collapsing the overlay to mutual-only edges.
+  `GossipSeam` therefore answers any inbound ping from a peer *outside* its own
+  active view with a pong directly. Stateless (nothing to reconcile on roster or
+  view churn) and view-preserving: it makes existing directed edges observable
+  from the watcher's side without adding edges or detectors.
 
 Phase 2's first slice (the pure `PartialView` selection + `recommendedActiveViewSize`,
 with a union-connectivity property test) lands separately; the `GossipView`
@@ -294,6 +303,16 @@ contiguous high-water mark plus a small bounded reorder window, so memory is
 O(origins), not O(total broadcasts). A persistent gap (a flood drop that
 anti-entropy recovers, never re-broadcast) is capped by forcing the frontier past
 the gap; anything abandoned that way is backstopped by anti-entropy.
+
+Per-origin send order (#1272, shipped): the reorder window *holds* frames that
+arrive above a gap and releases them contiguously, so the origin-restamped relay
+path honours `Seam.incoming`'s send-order contract even when racing relay paths
+reorder same-origin frames. The hold is bounded in space and time: window
+overflow (above) and a **reorder grace** — a blocking gap older than the grace
+(default 2 s, ≫ multi-hop relay latency, ≪ an anti-entropy round) is abandoned
+and the held run released in order, which also covers a late joiner whose first
+sighting of an origin lands mid-stream. Relay is never held — only local
+delivery — so the O(N·k) flood cost and per-hop latency are unchanged.
 
 ## Phase 4 as shipped: GossipSeam through the TCK + the O(k) broadcast measurement
 

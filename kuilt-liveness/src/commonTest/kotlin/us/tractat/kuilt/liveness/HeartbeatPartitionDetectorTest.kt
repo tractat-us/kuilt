@@ -95,6 +95,62 @@ class HeartbeatPartitionDetectorTest {
             assertEquals(emptyList(), events)
         }
 
+    @Test
+    fun `application frames without pongs keep the peer healthy`() =
+        runTest {
+            val mesh = buildMesh(backgroundScope)
+            var nowMs = 0L
+            val clock = { Instant.fromEpochMilliseconds(nowMs) }
+            val detector = HeartbeatPartitionDetector(mesh.hostLink, mesh.joinerId, config, clock)
+
+            val events = mutableListOf<PartitionEvent>()
+            val collectJob = backgroundScope.async { detector.events.toList(events) }
+
+            detector.start(backgroundScope)
+
+            // The joiner streams application data but never pongs (it runs no detector,
+            // so the host's pings go unanswered). Any inbound frame is proof of liveness
+            // per HeartbeatConfig.timeout's contract, so no event may fire even though
+            // total elapsed time is several timeout windows.
+            repeat(8) {
+                mesh.joinerLink.sendTo(mesh.hostId, byteArrayOf(42))
+                nowMs += config.interval.inWholeMilliseconds
+                advanceTimeBy(config.interval.inWholeMilliseconds)
+            }
+
+            detector.stop()
+            collectJob.cancel()
+
+            assertEquals(emptyList(), events)
+        }
+
+    @Test
+    fun `inbound pings without pongs keep the peer healthy`() =
+        runTest {
+            val mesh = buildMesh(backgroundScope)
+            var nowMs = 0L
+            val clock = { Instant.fromEpochMilliseconds(nowMs) }
+            val detector = HeartbeatPartitionDetector(mesh.hostLink, mesh.joinerId, config, clock)
+
+            val events = mutableListOf<PartitionEvent>()
+            val collectJob = backgroundScope.async { detector.events.toList(events) }
+
+            detector.start(backgroundScope)
+
+            // The joiner pings the host (it is watching us) but our own pings to it are
+            // never answered. An inbound ping is definitive proof of liveness.
+            repeat(8) {
+                mesh.joinerLink.sendTo(mesh.hostId, HeartbeatPartitionDetector.pingPayload())
+                nowMs += config.interval.inWholeMilliseconds
+                advanceTimeBy(config.interval.inWholeMilliseconds)
+            }
+
+            detector.stop()
+            collectJob.cancel()
+
+            assertEquals(emptyList(), events)
+        }
+
     // ── Timeout path ──────────────────────────────────────────────────────────
 
     @Test
