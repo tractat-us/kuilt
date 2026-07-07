@@ -53,6 +53,29 @@ All three entry points return a `GameSession` — its `node` is the local `RaftN
 lobby presence (channel tag 2, `gameHost`/`gameJoin` only) and the application-envelope
 `NamedMux` (channel tag 3) internally via `MuxSeam`. Callers must not pre-mux.
 
+## Where consensus lives — `ConsensusPlacement`
+
+Every bootstrap entry point takes an optional `placement` parameter deciding **where the
+game's authority lives** — without changing any of the code that consumes the session:
+
+- **`ConsensusPlacement.SessionOwned`** (the default) — consensus lives among the players'
+  own devices. This is the behaviour described above, unchanged.
+- **`ConsensusPlacement.serverCore(core)`** — a fixed core of server nodes holds every voter
+  seat (all of them vote in every game); players ride as learners, admitted by the core
+  leader, proposing via learner→leader forwarding. Bootstrap **via `gameNode`** on every
+  peer — the appoint-the-host paths reject this seating (their admission machinery promotes
+  peers to voters, which contradicts a fixed core).
+- **`ConsensusPlacement.preBuilt(node)`** — the session drives a node you already built.
+  This is the testing seam: bootstrap the full game stack against a `FakeRaftNode` pinned
+  to `Leader` under pure virtual time, with no real Raft engine anywhere.
+
+```kotlin
+// Server-core: every peer bootstraps identically; the placement decides who votes.
+val placement = ConsensusPlacement.serverCore(coreIds)
+val session = backgroundScope.gameNode(seam, coreIds, placement = placement)
+val game = TurnSequencer(session.node, Move.serializer())   // identical consuming code
+```
+
 ## Application channels — `GameSession.appChannel`
 
 Ride extra named application traffic (chat, cursors, voice signalling, …) over the **same

@@ -28,6 +28,7 @@ import us.tractat.kuilt.raft.NodeId
 import us.tractat.kuilt.raft.RaftConfig
 import us.tractat.kuilt.raft.RaftRole
 import us.tractat.kuilt.raft.test.FakeRaftNode
+import kotlin.random.Random
 import kotlin.test.assertEquals
 import kotlin.time.Clock
 import kotlin.time.Duration.Companion.seconds
@@ -157,6 +158,47 @@ internal fun sampleGameNode() = runTest(StandardTestDispatcher(), timeout = 5.se
 
     session1.close()
     session2.close()
+}
+
+// ── ConsensusPlacement: server-core ───────────────────────────────────────────
+
+/**
+ * [ConsensusPlacement.serverCore] over [gameNode]: the all-servers-vote authority placement.
+ *
+ * Three "server" peers form the voter core — all of them vote in this game — and a player
+ * rides as a learner, admitted into the replicated config by the core leader. Every peer,
+ * server and player alike, bootstraps through the same [gameNode] call; only the injected
+ * placement decides where quorum lives. The consuming layer ([TurnSequencer],
+ * [GameSession.appChannel]) is identical to the phone-host placement.
+ */
+@Suppress("unused")
+internal fun sampleServerCorePlacement() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    val loom = InMemoryLoom()
+    val server1 = loom.host(Pattern("hosted-game"))
+    val server2 = loom.join(InMemoryTag("server-2"))
+    val server3 = loom.join(InMemoryTag("server-3"))
+    val playerSeam = loom.join(InMemoryTag("player"))
+
+    val core = setOf(
+        NodeId(server1.selfId.value),
+        NodeId(server2.selfId.value),
+        NodeId(server3.selfId.value),
+    )
+    val placement = ConsensusPlacement.serverCore(core)
+
+    // Seeded per-node RNG breaks election-timeout symmetry deterministically under virtual time.
+    fun config(seed: Long) = RaftConfig(expectVirtualTime = true, random = Random(seed))
+
+    backgroundScope.gameNode(server1, core, raftConfig = config(1), placement = placement)
+    backgroundScope.gameNode(server2, core, raftConfig = config(2), placement = placement)
+    backgroundScope.gameNode(server3, core, raftConfig = config(3), placement = placement)
+    val player = backgroundScope.gameNode(playerSeam, core, raftConfig = config(4), placement = placement)
+
+    // The core elects among the servers; the player is admitted as a learner and proposes via
+    // learner→leader forwarding — the same TurnSequencer code as every other placement.
+    val game = TurnSequencer(player.node, Int.serializer())
+    val move = game.propose(1)
+    assertEquals(1, move.action)
 }
 
 // ── SpeculativeSequencer ──────────────────────────────────────────────────────
