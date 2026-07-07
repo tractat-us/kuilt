@@ -43,6 +43,11 @@ import java.util.concurrent.TimeoutException
  *   Chicory itself enforces at `memory.grow` time. (The previous clamp was not just
  *   redundant — it *widened* a module's declared max up to the cap, silently granting more
  *   memory than the kernel declared.)
+ * - *Load-phase execution bound* — instantiation itself is guest execution: a module's
+ *   `(start)` function runs inside `Instance.builder(...).build()`. The build therefore runs on
+ *   the same timed guest executor as every invocation, bounded by
+ *   [WasmSandboxConfig.executionTimeout]; a CPU-bomb `(start)` is interrupted and surfaces as a
+ *   terminal [WasmLoadException] naming the exceeded budget, never a hung `load()`.
  * - *Total load-failure containment* — **every** [ChicoryException] is converted to a
  *   [WasmLoadException]: build-time validation / trapping-`(start)` failures, a module that
  *   exports no memory, and a missing `warp_alloc`/`warp_run` ABI export (Chicory's
@@ -210,13 +215,41 @@ public class ChicoryWasmRuntime(
         }
     }
 
-    private fun buildInstance(module: WasmModule): Instance =
+    /**
+     * Instantiates the module **on the timed guest executor** — instantiation is guest
+     * execution: a module's `(start)` function runs inside `build()`, so building on the
+     * caller thread would let a CPU-bomb `(start)` hang `load()` outside any budget (the
+     * load-phase sibling of the invoke CPU-bomb defense, #1290/#1298). A `(start)` exceeding
+     * [WasmSandboxConfig.executionTimeout] interrupts the worker (the interpreter terminates
+     * the runaway at the next backward branch / call entry) and `load` fails terminally with a
+     * [WasmLoadException] naming the exceeded budget.
+     *
+     * The budget here includes any queue wait behind a concurrent invocation on the shared
+     * worker — `load` is a plain blocking call, not serialized by the (suspending) invoke
+     * mutex. Guest calls are short by design, so the skew is bounded; the failure mode is a
+     * spurious terminal rejection, never a hang.
+     */
+    private fun buildInstance(module: WasmModule): Instance {
+        var built: Instance? = null
         try {
             // No withMachineFactory(...): the default InterpreterMachine is required so the
             // execution-time interrupt checks fire (see class KDoc — interpreter-only).
             // No withMemoryLimits(...): the declared limits were validated above and the
             // engine enforces them natively.
-            Instance.builder(module).build()
+            timedRunner.run(
+                config.executionTimeout,
+                Callable {
+                    built = Instance.builder(module).build()
+                    NO_RESULT
+                },
+            )
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: TimeoutException) {
+            throw WasmLoadException(
+                "module instantiation exceeded ${config.executionTimeout} ((start)-section execution budget)",
+                e,
+            )
         } catch (e: UnlinkableException) {
             throw WasmLoadException("module capability violation (imports not allowed): ${e.message}", e)
         } catch (e: ChicoryException) {
@@ -225,6 +258,8 @@ public class ChicoryWasmRuntime(
             // raw ChicoryException that escapes the executor's WasmException handling.
             throw WasmLoadException("module failed to instantiate: ${e.message}", e)
         }
+        return checkNotNull(built) { "timed runner returned without building an instance" }
+    }
 
     /**
      * Runs one ABI round-trip under the execution-time bound.
@@ -266,6 +301,11 @@ public class ChicoryWasmRuntime(
                 throw WasmExecutionException("WASM kernel failed: ${e.message}", e)
             }
         }
+    }
+
+    private companion object {
+        /** Sentinel for a timed task run for its side effect (instantiation), not for bytes. */
+        val NO_RESULT: ByteArray = ByteArray(0)
     }
 
     /** The ABI marshalling, executed entirely on [guestExecutor] so all guest access is bounded. */

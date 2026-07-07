@@ -5,8 +5,11 @@ import java.util.concurrent.TimeoutException
 import kotlin.time.Duration
 
 /**
- * Runs a WASM ABI [task] callable under a wall-clock [timeout], returning the guest's
- * [ByteArray] response.
+ * Runs a guest [task] callable under a wall-clock [timeout], returning the guest's
+ * [ByteArray] response. Covers **every** guest execution: each ABI round trip AND module
+ * instantiation at load (which runs a module's `(start)` function — see
+ * [ChicoryWasmRuntime]'s load-phase execution bound; instantiation tasks return a sentinel
+ * empty array).
  *
  * Returns the task's result on success; throws [TimeoutException] if the deadline is exceeded;
  * throws any exception raised by [task] directly (callers see the original exception, not an

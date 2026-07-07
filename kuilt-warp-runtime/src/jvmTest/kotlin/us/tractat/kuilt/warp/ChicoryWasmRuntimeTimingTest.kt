@@ -47,16 +47,37 @@ class ChicoryWasmRuntimeTimingTest {
     private val reverseWasm: ByteArray = WasmKernelFixtures.REVERSE
 
     /**
-     * Negative control: a fake runner that always throws [TimeoutException] surfaces every
-     * invocation as [WasmExecutionException] — proving the `catch(e: TimeoutException)` path
-     * in [ChicoryWasmRuntime.invoke] works correctly with the injected seam.
+     * Negative control: a fake runner that throws [TimeoutException] for every invocation
+     * surfaces each as [WasmExecutionException] — proving the `catch(e: TimeoutException)` path
+     * in [ChicoryWasmRuntime.invoke] works correctly with the injected seam. Call #1 is load's
+     * instantiation (also routed through the timed seam — see
+     * [loadTimeoutSurfacesAsWasmLoadException]) and executes normally.
      */
     @Test
     fun genuineTimeoutSurfacesAsWasmExecutionException() = runTest {
-        val alwaysTimeout = TimedGuestRunner { _, _ -> throw TimeoutException("always timeout") }
-        ChicoryWasmRuntime(timedRunner = alwaysTimeout).use { rt ->
+        val calls = AtomicInteger()
+        val invokeTimeout = TimedGuestRunner { _, task ->
+            if (calls.incrementAndGet() == 1) task.call() else throw TimeoutException("invoke timeout")
+        }
+        ChicoryWasmRuntime(timedRunner = invokeTimeout).use { rt ->
             val op = rt.load(reverseWasm)
             assertFailsWith<WasmExecutionException> { op.invoke(ByteArray(0)) }
+        }
+    }
+
+    /**
+     * The load-phase execution bound (#1290/#1298): module instantiation runs a module's
+     * `(start)` function, so it goes through the same [TimedGuestRunner] seam as invocations;
+     * a [TimeoutException] during the build surfaces as a terminal [WasmLoadException] naming
+     * the exceeded budget — never a hung `load()`. (The real-wall-clock proof against the
+     * canonical `(start)` CPU-bomb bytes lives in the conformance suite.)
+     */
+    @Test
+    fun loadTimeoutSurfacesAsWasmLoadException() {
+        val alwaysTimeout = TimedGuestRunner { _, _ -> throw TimeoutException("start-section bomb") }
+        ChicoryWasmRuntime(timedRunner = alwaysTimeout).use { rt ->
+            val ex = assertFailsWith<WasmLoadException> { rt.load(reverseWasm) }
+            assertTrue("exceeded" in (ex.message ?: ""), "names the exceeded budget: ${ex.message}")
         }
     }
 
@@ -68,7 +89,11 @@ class ChicoryWasmRuntimeTimingTest {
      */
     @Test
     fun cancellationPropagatesUnwrappedFromInvoke() = runTest {
-        val cancelling = TimedGuestRunner { _, _ -> throw CancellationException("caller cancelled") }
+        val calls = AtomicInteger()
+        val cancelling = TimedGuestRunner { _, task ->
+            // Call #1 is load's instantiation — let it through; cancel the invocation.
+            if (calls.incrementAndGet() == 1) task.call() else throw CancellationException("caller cancelled")
+        }
         ChicoryWasmRuntime(timedRunner = cancelling).use { rt ->
             val op = rt.load(reverseWasm)
             val thrown = assertFailsWith<CancellationException> { op.invoke(ByteArray(0)) }
@@ -92,9 +117,10 @@ class ChicoryWasmRuntimeTimingTest {
         // though invokeMutex ensures they are sequential (only one at a time).
         val callCount = AtomicInteger()
         val fakeRunner = TimedGuestRunner { _, task ->
-            // Call #1: simulate the "slow first op" hitting its budget.
-            // Call #2+: execute normally — proving fresh budget, not queue-consumed remainder.
-            if (callCount.incrementAndGet() == 1) throw TimeoutException("first op hit timeout budget")
+            // Call #1: load's instantiation — executes normally.
+            // Call #2: simulate the "slow first op" hitting its budget.
+            // Call #3+: execute normally — proving fresh budget, not queue-consumed remainder.
+            if (callCount.incrementAndGet() == 2) throw TimeoutException("first op hit timeout budget")
             else task.call()
         }
 
@@ -112,7 +138,7 @@ class ChicoryWasmRuntimeTimingTest {
                 val results = listOf(a.await(), b.await())
 
                 assertAll(
-                    { assertEquals(2, callCount.get(), "timedRunner.run() called exactly twice — both ops ran") },
+                    { assertEquals(3, callCount.get(), "timedRunner.run() called for the load + both ops") },
                     { assertEquals(1, results.count { it.isFailure }, "exactly one op hit the timeout") },
                     { assertEquals(1, results.count { it.isSuccess }, "second op got its full budget and succeeded") },
                     {

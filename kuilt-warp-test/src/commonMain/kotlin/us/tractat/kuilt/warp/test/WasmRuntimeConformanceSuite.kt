@@ -172,11 +172,11 @@ public abstract class WasmRuntimeConformanceSuite {
      * before any ABI call — so the per-invocation budget alone cannot bound it; an impl that
      * instantiates outside its execution budget hangs at `load` (a remotely-triggerable DoS:
      * kernels arrive from untrusted peers via lazy fetch). The contract is phase-agnostic —
-     * an impl may run `(start)` eagerly under a bounded `load` (JVM: a load-time
-     * [WasmLoadException]) or defer instantiation to the first bounded invocation (native,
-     * browser: a run-time [WasmExecutionException]) — so the vector drives load + first
-     * invoke together and accepts either [us.tractat.kuilt.warp.WasmException] arm, as long
-     * as it terminates near the budget and names it.
+     * an impl may run `(start)` under a bounded `load` (JVM, native: a load-time
+     * [WasmLoadException]) or defer instantiation to the first bounded invocation (browser:
+     * a run-time [WasmExecutionException]) — so the vector drives load + first invoke
+     * together and accepts either [WasmException] arm, as long as it terminates near the
+     * budget and names it.
      */
     @Test
     public fun startSectionCpuBombIsBoundedNotHung(): TestResult = runTest(timeout = 10.seconds) {
