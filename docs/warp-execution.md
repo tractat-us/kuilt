@@ -80,11 +80,16 @@ guest-managed memory — the host never reaches into the guest uninvited.
   compute only; a kernel cannot call back into the runtime.
 - **Memory ceiling.** A kernel whose declared maximum memory exceeds the configured
   page limit is rejected at load time — before a single byte of guest code runs.
-- **Execution-time budget.** The interpreter checks `Thread.isInterrupted()` at
-  every function-call entry and every backward branch — the two points an unbounded
-  loop must pass through. A CPU-bomb is interrupted cleanly, not merely timed out at
-  the wall clock. This is why the sandbox uses the interpreter: an AOT-emitted path
-  bypasses those checks.
+- **Execution-time budget.** A runaway kernel is terminated at the configured
+  timeout on every target — the mechanism differs, the rule doesn't. On the JVM the
+  interpreter checks `Thread.isInterrupted()` at every function-call entry and every
+  backward branch — the two points an unbounded loop must pass through — so a
+  CPU-bomb is interrupted cleanly, not merely timed out at the wall clock (this is
+  why the sandbox uses the interpreter: an AOT-emitted path bypasses those checks).
+  On native, the vendored wasm3 interpreter polls a cooperative wall-clock deadline
+  at the same two points. In the browser, where the single JS thread cannot pre-empt
+  a synchronous runaway, the guest runs in a Web Worker the host `terminate()`s at
+  the deadline.
 
 ## Lazy bobbins: gossiping the code
 
