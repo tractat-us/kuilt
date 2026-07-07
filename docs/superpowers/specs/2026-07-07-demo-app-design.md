@@ -59,34 +59,33 @@ instruments the networking story.
 just merge" narrative. If appetite appears later, a "vote on the quilt's border
 pattern" mini-feature could exercise Raft — parked.
 
-## Platform: staged, browser-headlined
+## Platform: browser-headlined (RESOLVED)
 
-Three candidate targets, and the answer is a *sequence*, not a choice:
+The **wasmJs browser page is the headline platform** — open a URL, get a quilt,
+N tabs = N peers. Iain confirmed this as the target. Why it's the best
+showcase-per-ceremony:
 
-1. **JVM CLI (the MVP).** A terminal peer that renders the quilt as an ANSI
-   grid, plus a small relay (`KtorRoomHost`) and a tap harness. Least ceremony
-   by far: `./gradlew :demo-relay:run` + two terminals = a working multi-peer
-   demo with zero new toolchain, on the modules' home turf. This alone
-   satisfies #1196's literal ask (runnable app over a real fabric + pull
-   observability off a running peer).
-2. **wasmJs browser page (the showcase — recommended headline).** Open a URL,
-   get a quilt. N tabs = N peers. Best showcase-per-ceremony:
-   - Instantly legible to a non-engineer — a link, not an install.
-   - Exercises the least-demoed fabric (`:kuilt-webrtc` is wasmJs-only) plus
-     the browser `KtorClientLoom`, and proves the wasm WAL/offline-first story.
-   - No new toolchain: every kuilt module already builds wasmJs; the page is
-     Kotlin/JS DOM, no Compose needed.
-   - The browser can't host a server, but the tap already handles that:
-     `installLogTapJoining` lets the page *join* a session the laptop harness
-     hosts — pulling logs out of a browser tab is a genuinely novel demo.
-3. **Full KMP mobile app (the all-singing endgame — decision needed).** Compose
-   Multiplatform on iOS/Android/desktop: `:kuilt-multipeer` iPhone↔Mac with no
-   infrastructure, `:kuilt-nearby` on Android, and the real "pull logs off a
-   tester's phone" story from #1196's genesis. This adds heavy toolchain
-   (Compose, an app iOS project) that doesn't belong in a library repo — the
-   recommendation is a **separate showcase repo** consuming the *published*
-   `us.tractat.kuilt:*` artifacts via the BOM, which doubles as a live test of
-   the consumer story and the Maven Central pipeline.
+- Instantly legible to a non-engineer — a link, not an install.
+- Exercises the least-demoed fabric (`:kuilt-webrtc` is wasmJs-only) plus the
+  browser `KtorClientLoom`, and proves the wasm WAL/offline-first story.
+- No new toolchain: every kuilt module already builds wasmJs; the page is
+  Kotlin/JS DOM, no Compose needed.
+- The browser can't host a server, but the tap already handles that:
+  `installLogTapJoining` lets the page *join* a session the laptop harness hosts
+  — pulling logs out of a browser tab is a genuinely novel demo.
+
+The **JVM CLI stays as an intermediate**, not a headline: a terminal peer plus a
+small relay (`KtorRoomHost`) is the least-ceremony way to stand up a real
+WebSocket fabric and prove convergence before the browser page exists. The CLI
+and browser peers interoperate on one quilt.
+
+**Mobile is parked as the separate-showcase endgame.** A Compose Multiplatform
+app (Android headline for portability; iOS `:kuilt-multipeer`, Android
+`:kuilt-nearby`) is the "pull logs off a real phone" story from #1196's genesis —
+but it carries heavy toolchain that doesn't belong in a library repo. If built,
+it lives in a **separate showcase repo** consuming the *published*
+`us.tractat.kuilt:*` artifacts via the BOM (which doubles as a live test of the
+consumer story and the Maven Central pipeline). Not part of this MVP.
 
 ## Where the code lives
 
@@ -99,47 +98,47 @@ New **unpublished** Gradle modules under a `demo/` directory (the existing
 | `:demo-relay` | JVM `application` | `KtorRoomHost` relay + mDNS advertise + log capture installed. |
 | `:demo-cli` | JVM `application` | Terminal peer: ANSI quilt render, stitch/chat commands, `--fabric=ws|tcp|mdns` flag. |
 | `:demo-tap` | JVM `application` | The reach-in harness: live log tail + metric snapshot from any running peer. |
-| `:demo-web` | wasmJs browser | The DOM page: quilt grid, chat, presence, telemetry panel, offline toggle, gossip toggle. |
+| `:demo-web` | wasmJs browser | The DOM page: quilt grid, chat, presence, **offline/tunnel toggle** (the headline), telemetry panel. |
 
 These apply plain KMP/application plugins, **not** `kuilt.kmp-library` (no
 `explicitApi`, no publishing, no full target set). CI cost is bounded: demo
 modules compile in the normal `build` graph but add no publications.
 
-## Slices (each a small, independently mergeable PR)
+## Slices (RESOLVED — MVP only, each a small PR)
+
+**The headline is convergence-under-partition** (the visual CRDT story); the
+observability *pull* (the tap) is the **second act / follow-up**, not the opener.
+The demo script and screenshots lead with a quilt filling in from several tabs,
+then a tab going offline in a "tunnel," stitching, and its patches merging back
+on reconnect. Only after that does the doc pull logs off a peer.
+
+**MVP slices (build these):**
 
 1. **This design doc** (the current PR).
 2. **`:demo-shared`** — `PatchworkSession` over `InMemoryLoom`, fully unit-tested.
    Pure library composition; readable as documentation in its own right.
-3. **`:demo-relay` + `:demo-cli` (MVP lands here)** — relay + two terminal peers
-   converge over real WebSockets; `installLogCapture` on from the start.
-4. **`:demo-tap`** — pull logs + metrics off a running CLI peer, live tail.
-   *The #1196 genesis story, demonstrated.*
-5. **`:demo-web`** — browser page joining the same relay session; quilt + chat +
-   presence in the DOM. CLI and browser peers interoperate on one quilt.
-6. **Partition + telemetry panel** — tunnel-mode toggle in the web page (stitch
-   offline, visible merge on reconnect) and a live metrics sidebar fed by the
-   peer's own `WarpTelemetry`.
-7. **Gossip toggle** — `GossipSeam` mode with an active-neighbours/roster panel;
-   the frames-sent metric makes the O(N)→O(k) drop visible.
-8. **OTLP drain** — `docker-compose` with an OTel collector; a drain command in
-   the tap harness (`:kuilt-otel-otlp`), closing the loop to real dashboards.
-9. **(decision-gated)** the separate-repo Compose Multiplatform mobile app:
-   Multipeer/Nearby fabrics, TestFlight-able, phone-tap-over-WiFi.
+3. **`:demo-relay` + `:demo-cli`** — relay + two terminal peers converge over
+   real WebSockets; `installLogCapture` on from the start. (CLI is the
+   intermediate that stands up a real fabric; not the headline surface.)
+4. **`:demo-web` — THE HEADLINE.** Browser page joining the relay session: quilt
+   + chat + presence in the DOM, CLI and browser peers on one quilt, and the
+   **offline/tunnel toggle** that makes convergence-under-partition visible (go
+   offline, stitch, reconnect, watch patches merge). This is the demo.
+5. **`:demo-tap` (second act)** — pull logs + metrics off a running peer, live
+   tail, plus a small telemetry panel fed by the peer's own `WarpTelemetry`.
+   *The #1196 genesis story, as the follow-up to the convergence headline.*
 
-MVP = slices 2–4 (one laptop, three terminals, the full capture→pull loop).
-All-singing = through 8, with 9 as the endgame.
+**MVP = slices 2–5.** That is the smallest build that delivers the
+browser-headlined convergence demo (through 4) plus the observability-pull
+follow-up (5). Stop here and reassess before doing more.
 
-## Open decisions (for Iain)
+## Parked / future (NOT part of the MVP)
 
-1. **Headline platform + mobile home.** Agree browser-as-headline with CLI MVP
-   first? And does slice 9 (Compose mobile app) live in a separate
-   `tractat-us/patchwork`-style repo consuming published artifacts (recommended),
-   or in-repo?
-2. **Where to stop by default.** Ship slices 2–4 and reassess, or green-light
-   through 8 now as dispatchable work?
-3. **Capability headline.** Lead the README/demo script with the
-   pull-observability-off-a-device story (the issue's genesis), or with the
-   visual CRDT-convergence-under-partition story? (The slices support either;
-   this shapes the demo script and screenshots.)
-4. **Gossip in or out of the core scope** — slice 7 is the most speculative
-   (needs N≳10 tabs to be convincing); happy to park it.
+- **Gossip toggle** (`GossipSeam` O(N)→O(k)) — **parked.** Not worth the 10+-tab
+  setup needed to make the scaling drop convincing.
+- **OTLP-collector drain** (`docker-compose` + `:kuilt-otel-otlp` to real
+  dashboards) — **future.** The on-device buffer and the tap pull tell the
+  observability story without standing up a collector.
+- **Compose Multiplatform mobile app** (Multipeer/Nearby, phone-tap-over-WiFi) —
+  **future endgame**, in a separate showcase repo consuming published artifacts
+  (see Platform, above). Optional, chiefly for the portability story.
