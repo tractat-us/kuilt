@@ -3,7 +3,7 @@
 package us.tractat.kuilt.warp
 
 import kotlinx.coroutines.test.TestScope
-import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
@@ -35,7 +35,7 @@ class VariantManifestTest {
      */
     @Test
     fun compiledVariantGossipsWithProvenanceAndIsFetchable() =
-        runTest(UnconfinedTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
             val loom = InMemoryLoom()
             val seamA = loom.host(Pattern("variant-gossip"))
             val seamB = loom.join(InMemoryTag("b"))

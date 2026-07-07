@@ -19,7 +19,7 @@ package us.tractat.kuilt.warp
 
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.test.TestCoroutineScheduler
-import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withContext
 import us.tractat.kuilt.core.InMemoryLoom
@@ -56,7 +56,7 @@ class SettleUntilRealIoTest {
 
     @Test
     fun settleUntilWaitsForASlowRealIoCompletion() =
-        runTest(UnconfinedTestDispatcher(), timeout = 30.seconds) {
+        runTest(StandardTestDispatcher(), timeout = 30.seconds) {
             val realDelayMs = 300L
             val loom = InMemoryLoom()
             val seamA = loom.host(Pattern("settle-realio"))

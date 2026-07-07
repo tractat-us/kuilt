@@ -27,7 +27,7 @@ import kotlinx.atomicfu.atomic
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.TestCoroutineScheduler
 import kotlinx.coroutines.test.TestScope
-import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.Pattern
@@ -92,7 +92,7 @@ class WarpNodeCoordinatedWindowsTest {
      * intent-map entry forever. Coordinated tasks must bypass the intent election entirely.
      */
     @Test
-    fun coordinatedTaskLeavesNoIntentEntry() = runTest(UnconfinedTestDispatcher(), timeout = 5.seconds) {
+    fun coordinatedTaskLeavesNoIntentEntry() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
         val seam = InMemoryLoom().host(Pattern("coord-intent-leak"))
         val fakeRaft = FakeRaftNode(initialRole = RaftRole.Leader)
         val executions = atomic(0)
@@ -130,7 +130,7 @@ class WarpNodeCoordinatedWindowsTest {
      */
     @Test
     fun deposedLeaderDoesNotExecuteCommittedCoordinatedTask() =
-        runTest(UnconfinedTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
             val seam = InMemoryLoom().host(Pattern("coord-deposed-leader"))
             val fakeRaft = FakeRaftNode(initialRole = RaftRole.Leader)
             fakeRaft.readIndexBehavior = { throw LeadershipLostException("deposed: no quorum at this term") }
@@ -163,7 +163,7 @@ class WarpNodeCoordinatedWindowsTest {
      */
     @Test
     fun commitObservedWithoutLeadershipIsRedrivenOnAcquisition() =
-        runTest(UnconfinedTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
             val seam = InMemoryLoom().host(Pattern("coord-redrive"))
             val fakeRaft = FakeRaftNode(initialRole = RaftRole.Follower)
             // Simulate Raft §8 forwarding: a remote leader commits the proposal and the entry

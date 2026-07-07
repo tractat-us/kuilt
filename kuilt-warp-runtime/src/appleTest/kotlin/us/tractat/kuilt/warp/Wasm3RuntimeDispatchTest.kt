@@ -9,7 +9,7 @@
  * The kernel: `square(i32) → i32`, `n * n`. Args and result are 4-byte
  * little-endian i32. Mirrors [ChicoryRuntimeDispatchTest] on Apple targets.
  *
- * Coroutine discipline mirrors [SymbolicDispatchTest]: [UnconfinedTestDispatcher]
+ * Coroutine discipline mirrors [SymbolicDispatchTest]: [StandardTestDispatcher]
  * with bounded [advanceTimeBy] steps — never [advanceUntilIdle] (anti-entropy
  * timers re-arm forever).
  *
@@ -22,7 +22,7 @@ package us.tractat.kuilt.warp
 
 import kotlinx.coroutines.test.TestCoroutineScheduler
 import kotlinx.coroutines.test.TestScope
-import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
@@ -65,7 +65,7 @@ class Wasm3RuntimeDispatchTest {
      */
     @Test
     fun wasmSquareKernelRunsViaWasm3AndResultMergesOnBothBoards() =
-        runTest(UnconfinedTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
             val loom = InMemoryLoom()
             val seamA = loom.host(Pattern("c3-wasm3"))
             val seamB = loom.join(InMemoryTag("b"))

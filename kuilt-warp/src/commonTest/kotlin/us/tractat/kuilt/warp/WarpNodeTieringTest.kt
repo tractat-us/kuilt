@@ -5,7 +5,7 @@ package us.tractat.kuilt.warp
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.TestCoroutineScheduler
 import kotlinx.coroutines.test.TestScope
-import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.Pattern
@@ -46,7 +46,7 @@ class WarpNodeTieringTest {
      */
     @Test
     fun nodeTiersUpFromInterpretedToCompiledWhenVariantAppears() =
-        runTest(UnconfinedTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
             val loom = InMemoryLoom()
             val seam = loom.host(Pattern("tiering-solo"))
             val op = OpId("square")

@@ -5,7 +5,7 @@ package us.tractat.kuilt.warp
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.TestCoroutineScheduler
 import kotlinx.coroutines.test.TestScope
-import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
@@ -47,7 +47,7 @@ class TieredCompilationGoNoGoTest {
 
     @Test
     fun weakPeerTiersUpViaGossipedVariant() =
-        runTest(UnconfinedTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
             val loom = InMemoryLoom()
             val seamC = loom.host(Pattern("tiered-gng"))   // compiler node
             val seamW = loom.join(InMemoryTag("w"))         // weak node (owns the tasks)

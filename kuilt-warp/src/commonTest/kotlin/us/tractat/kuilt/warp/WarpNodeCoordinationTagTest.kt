@@ -21,7 +21,7 @@ import kotlinx.atomicfu.locks.reentrantLock
 import kotlinx.atomicfu.locks.withLock
 import kotlinx.coroutines.test.TestCoroutineScheduler
 import kotlinx.coroutines.test.TestScope
-import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
@@ -65,7 +65,7 @@ class WarpNodeCoordinationTagTest {
      * registry (the free path). The coordination-free path is unchanged — same results, same routing.
      */
     @Test
-    fun freeTaskRoutesToFreeExecutor() = runTest(UnconfinedTestDispatcher(), timeout = 5.seconds) {
+    fun freeTaskRoutesToFreeExecutor() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
         val loom = InMemoryLoom()
         val seamA = loom.host(Pattern("coord-tag-free"))
         val seamB = loom.join(InMemoryTag("b"))
@@ -116,7 +116,7 @@ class WarpNodeCoordinationTagTest {
      * coordinated executor, not the free registry.
      */
     @Test
-    fun coordinatedTaskRoutesToCoordinatedExecutor() = runTest(UnconfinedTestDispatcher(), timeout = 5.seconds) {
+    fun coordinatedTaskRoutesToCoordinatedExecutor() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
         val loom = InMemoryLoom()
         val seamA = loom.host(Pattern("coord-tag-coord"))
         val seamB = loom.join(InMemoryTag("b"))
@@ -168,7 +168,7 @@ class WarpNodeCoordinationTagTest {
      * to their respective paths without interference.
      */
     @Test
-    fun bothRoutingsCoexistOnSameNode() = runTest(UnconfinedTestDispatcher(), timeout = 5.seconds) {
+    fun bothRoutingsCoexistOnSameNode() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
         val loom = InMemoryLoom()
         val seamA = loom.host(Pattern("coord-tag-both"))
         val seamB = loom.join(InMemoryTag("b"))

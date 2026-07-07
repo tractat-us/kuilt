@@ -12,7 +12,7 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.TestCoroutineScheduler
 import kotlinx.coroutines.test.TestScope
-import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
@@ -65,7 +65,7 @@ class WarpIntentRegisterTest {
 
     /** RingWithIntent still executes every task exactly once and converges results. */
     @Test
-    fun ringWithIntentExecutesEveryTaskOnce() = runTest(UnconfinedTestDispatcher(), timeout = 5.seconds) {
+    fun ringWithIntentExecutesEveryTaskOnce() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
         val loom = InMemoryLoom()
         val seamA = loom.host(Pattern("intent-once"))
         val seamB = loom.join(InMemoryTag("b"))
@@ -102,7 +102,7 @@ class WarpIntentRegisterTest {
      */
     @Test
     fun ringWithIntent_executorFailure_unclainsAndNodeRemainsAlive() = runTest(
-        UnconfinedTestDispatcher(),
+        StandardTestDispatcher(),
         timeout = 5.seconds,
     ) {
         val loom = InMemoryLoom()
@@ -163,7 +163,7 @@ class WarpIntentRegisterTest {
      */
     @Test
     fun staleSelfRingClaim_winnerFollowsThrough_taskStillExecutes() = runTest(
-        UnconfinedTestDispatcher(),
+        StandardTestDispatcher(),
         timeout = 5.seconds,
     ) {
         val loom = InMemoryLoom()
@@ -231,7 +231,7 @@ class WarpIntentRegisterTest {
 
     /** A completed task's intent entry is tombstoned (register tracks only pending work). */
     @Test
-    fun completedTaskClearsItsIntentEntry() = runTest(UnconfinedTestDispatcher(), timeout = 5.seconds) {
+    fun completedTaskClearsItsIntentEntry() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
         val loom = InMemoryLoom()
         val seamA = loom.host(Pattern("intent-gc"))
         val clock = schedulerClock(testScheduler)

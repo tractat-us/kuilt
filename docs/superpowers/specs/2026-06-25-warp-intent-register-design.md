@@ -123,7 +123,10 @@ no wait (the common path stays zero-latency), so `RingWithIntent` is safe as the
 coordination cost relocates to membership-change events (CALM), not per-task. This is what
 makes the default *smart* rather than merely *a default*.
 
-## 5. Liveness backstop (never lose a task) — two layers
+## 5. Liveness backstop (never lose a task)
+
+> Reconciled with the top-of-file UPDATE banner: the **lease layer was dropped from scope**.
+> Only the liveness-drop layer below shipped; `claimLease`/`DEFAULT_CLAIM_LEASE` were removed.
 
 - **Liveness-drop (fast path, no new code):** the winner rule intersects `claimants` with
   `effectiveRoster` (`rosterPeers − partitionedPeers`). So when the existing
@@ -131,14 +134,14 @@ makes the default *smart* rather than merely *a default*.
   the surviving peers re-resolve the winner to the next-lowest live claimant, and the
   re-evaluation fires from `rebuildRingAndClaim` — this falls out of §2's rule, no separate
   path.
-- **Lease (catch-all for slow-but-alive winner):** a won claim is valid for `claimLease`.
-  If `task` is still pending `claimLease` after a peer lost the tiebreak, that peer
-  re-evaluates and proceeds if it is now the lowest *live* claimant past its lease window.
-  Worst case: one duplicate after the lease, absorbed by the `Results` ORMap. The lease is
-  measured against the injected `clock`, recorded when intent is first observed for the task.
 
-Together these cover dead winners (fast) and stuck-but-alive winners (lease), satisfying the
-hard invariant: the worst outcome is a single duplicate, never a stuck task.
+This covers the **dead-winner** case: a partitioned or departed winner leaves the effective
+roster and the successor executes, satisfying the hard invariant for that case — the worst
+outcome is a single duplicate, never a stuck task. The **slow-but-alive winner** (a hung
+executor on an otherwise-live, sole-owner node on a converged ring) was the case the dropped
+lease would have covered; it is explicitly **out of scope** (see the banner) and left to a
+future visibility-timeout pattern. A *binding* announced claim (the #931 follow-through) plus
+liveness-driven failover are what actually ship.
 
 ## 6. Thread-safety & exception discipline
 
@@ -156,11 +159,13 @@ Bounded `advanceTimeBy` + `runCurrent`; never `advanceUntilIdle()`; seeded RNG.
 - **Steady-state no-tax:** stable ring, `RingWithIntent`; each task executes without
   advancing past `settleWindow` (proves the adaptive skip — no latency regression).
 - **Window conflict:** two peers transiently both own a task (disjoint roster views);
-  exactly one executes after settle, the other stands down — dup avoided.
+  exactly one executes after settle, the other stands down — dup avoided. _(Shipped as the
+  `StandardTestDispatcher` contested-settle test `WarpContestedSettleTest`, #875.)_
 - **Won-but-died:** winner announces then is partitioned before executing; the successor
   executes (liveness-drop).
-- **Won-but-stuck:** winner announces, its executor never completes but it stays "alive";
-  the successor proceeds after `claimLease` (lease backstop).
+- **Won-but-stuck:** ~~winner announces, its executor never completes but it stays "alive";
+  the successor proceeds after `claimLease` (lease backstop).~~ Dropped with the lease (§5) —
+  out of scope.
 - **`Ring` strategy regression:** behavior identical to today.
 - **Intent GC:** completing a task removes its `intent[task]` entry.
 

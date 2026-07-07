@@ -8,16 +8,21 @@
  * boards. This is the first point a peer executes a kernel it did not compile or hold.
  *
  * Coordination-free path (no Raft). Coroutine discipline mirrors [ChicoryRuntimeDispatchTest]:
- * [UnconfinedTestDispatcher] with bounded [advanceTimeBy] — never [advanceUntilIdle] (anti-entropy
- * timers re-arm forever). The wasm guest runs on real wall-clock time inside the runtime; the
- * `runTest` timeout sits well above it.
+ * [StandardTestDispatcher] (FIFO at each virtual instant) with bounded [advanceTimeBy] — never
+ * [advanceUntilIdle] (anti-entropy timers re-arm forever). These tests previously ran on
+ * `UnconfinedTestDispatcher`, whose eager-inline continuation ordering made the two-node
+ * fetch→load→run→record→converge round-trip load-dependent and flaked under CPU load (#966):
+ * `runTimeTrapKernelRecordsTerminalErrorOnBothBoards` intermittently read a null board. FIFO
+ * ordering removes that non-determinism. The wasm guest still runs on real wall-clock time inside
+ * the runtime, so [settleUntil] bridges the real-IO completion into virtual time; the `runTest`
+ * timeout sits well above it.
  */
 @file:OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 
 package us.tractat.kuilt.warp
 
+import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestCoroutineScheduler
-import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
@@ -66,7 +71,7 @@ class LazyFetchAndRunTest {
 
     @Test
     fun fetchingNodeFetchesLoadsAndRunsAKernelItNeverHad() =
-        runTest(UnconfinedTestDispatcher(), timeout = 30.seconds) {
+        runTest(StandardTestDispatcher(), timeout = 30.seconds) {
             val loom = InMemoryLoom()
             val seamA = loom.host(Pattern("c5b-lazyfetch"))
             val seamB = loom.join(InMemoryTag("b"))
@@ -136,7 +141,7 @@ class LazyFetchAndRunTest {
      */
     @Test
     fun loadTimeBrokenKernelRecordsTerminalErrorOnBothBoards() =
-        runTest(UnconfinedTestDispatcher(), timeout = 30.seconds) {
+        runTest(StandardTestDispatcher(), timeout = 30.seconds) {
             val loom = InMemoryLoom()
             val seamA = loom.host(Pattern("c5b-terminal-load"))
             val seamB = loom.join(InMemoryTag("b"))
@@ -225,7 +230,7 @@ class LazyFetchAndRunTest {
      */
     @Test
     fun runTimeTrapKernelRecordsTerminalErrorOnBothBoards() =
-        runTest(UnconfinedTestDispatcher(), timeout = 30.seconds) {
+        runTest(StandardTestDispatcher(), timeout = 30.seconds) {
             val loom = InMemoryLoom()
             val seamA = loom.host(Pattern("c5b-terminal-run"))
             val seamB = loom.join(InMemoryTag("b"))
@@ -315,7 +320,7 @@ class LazyFetchAndRunTest {
      */
     @Test
     fun symbolicOnlyNodeStandsByWhenLazyFetchAbsent() =
-        runTest(UnconfinedTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
             val loom = InMemoryLoom()
             val seamA = loom.host(Pattern("c5b-symbolic-only"))
             val seamB = loom.join(InMemoryTag("b"))
