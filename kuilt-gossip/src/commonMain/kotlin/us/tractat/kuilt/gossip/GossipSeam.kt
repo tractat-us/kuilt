@@ -4,10 +4,14 @@ import io.github.oshai.kotlinlogging.KotlinLogging
 import kotlinx.atomicfu.locks.reentrantLock
 import kotlinx.atomicfu.locks.withLock
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.merge
+import kotlinx.coroutines.flow.takeWhile
 import kotlinx.coroutines.launch
 import us.tractat.kuilt.core.CloseReason
 import us.tractat.kuilt.core.DeliveryPolicy
@@ -21,6 +25,7 @@ import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.liveness.HeartbeatPartitionDetector
 import kotlin.random.Random
 import kotlin.time.Duration
+import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
 
 private val logger = KotlinLogging.logger("us.tractat.kuilt.gossip.GossipSeam")
@@ -41,8 +46,9 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.gossip.GossipSeam")
  * **Relayed dissemination (Phase 3).** [broadcast] wraps the payload in a
  * [GossipFrame] (origin id + per-origin sequence + a hop-budget TTL) and
  * eager-floods it to the active neighbours. On receive, [incoming] decodes the
- * frame, delivers the payload to the application **once** — keyed by the
- * `(origin, seq)` pair in a bounded [GossipDedup] — and, while the TTL permits,
+ * frame, delivers the payload to the application **once and in per-origin send
+ * order** — keyed by the `(origin, seq)` pair in a bounded [GossipDedup], which
+ * holds reordered frames for contiguous release — and, while the TTL permits,
  * decrements the budget and re-floods to *this* node's active neighbours minus
  * the peer the frame arrived from. So a broadcast reaches the whole overlay
  * device-to-device along ~k-regular edges, dedup terminates the flood (a node
@@ -77,18 +83,29 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.gossip.GossipSeam")
  * @param initialTtl hop budget stamped on a locally-originated broadcast. Dedup is
  *   what terminates the flood; this is only a generous hard cap, comfortably above
  *   the overlay diameter at the tens–low-hundreds target scale.
+ * @param reorderGrace how long a relayed frame held for an earlier same-origin gap
+ *   waits before the gap is abandoned and the held run released in order (see
+ *   [GossipDedup]). Multi-path relay reordering resolves within a few hops'
+ *   latency, so a gap older than this is a genuine flood drop (anti-entropy
+ *   backstops it) or a pre-join seq (a late joiner first sights an origin
+ *   mid-stream) — either way the held frames must not wait forever.
  */
 public class GossipSeam(
     private val base: Seam,
     random: Random,
-    clock: () -> Instant,
+    private val clock: () -> Instant,
     config: HeartbeatConfig = HeartbeatConfig(),
     spareCount: Int = GossipView.DEFAULT_SPARE_COUNT,
     jitter: ClosedRange<Duration> = GossipView.DEFAULT_JITTER,
     private val initialTtl: Int = DEFAULT_TTL,
     activeViewPolicy: ActiveViewPolicy = ActiveViewPolicy.RandomKRegular,
     policy: DeliveryPolicy = DeliveryPolicy.Reliable,
+    private val reorderGrace: Duration = DEFAULT_REORDER_GRACE,
 ) : Seam {
+    init {
+        require(reorderGrace > Duration.ZERO) { "reorderGrace must be positive (was $reorderGrace)" }
+    }
+
     // Broadcast bus for raw inbound frames; per-neighbour detectors subscribe here
     // so they never contend for the single-consumer base.incoming channel.
     private val rawIncoming = MutableSharedFlow<Swatch>(extraBufferCapacity = RAW_BUFFER)
@@ -107,10 +124,11 @@ public class GossipSeam(
     private val seqLock = reentrantLock()
     private var seqCounter = 0L
 
-    // Dedup of relay frames already delivered + re-flooded — terminates the flood (a
-    // node relays each message at most once). Bounded to O(origins) via a per-origin
-    // contiguous high-water mark plus a small reorder window (#675). Mutated only inside
-    // the single base.incoming collector (ADR-034 single-collection), so it needs no lock.
+    // Dedup + per-origin reorder buffer for relay frames — terminates the flood (a node
+    // relays each message at most once) and releases same-origin frames to the app in
+    // send order (#1272). Bounded to O(origins) steady-state via a per-origin contiguous
+    // high-water mark plus a small reorder window (#675). Mutated only inside the single
+    // inbound event loop (ADR-034 single-collection), so it needs no lock.
     private val dedup = GossipDedup()
 
     private val view =
@@ -143,18 +161,54 @@ public class GossipSeam(
     /** Application frames only — heartbeat ping/pong frames are filtered out. */
     override val incoming: Flow<Swatch> = spool.incoming
 
+    private sealed interface InboundEvent {
+        /** A frame from the single `base.incoming` collection. */
+        class Frame(val swatch: Swatch) : InboundEvent
+
+        /** Periodic tick releasing reorder-held frames whose gap outlived [reorderGrace]. */
+        data object Sweep : InboundEvent
+
+        /** Sentinel: `base.incoming` completed (the base seam tore). */
+        data object BaseCompleted : InboundEvent
+    }
+
     /**
-     * Starts the inbound loop (sole collector of `base.incoming`) and the
-     * [GossipView]. Idempotent only if called once per scope; call exactly once.
+     * Starts the inbound event loop and the [GossipView]. Idempotent only if
+     * called once per scope; call exactly once.
+     *
+     * The loop is the sole collector of `base.incoming` (ADR-034), merged with a
+     * periodic reorder-grace sweep tick so **all** dedup/reorder mutation and all
+     * [spool] delivery happen on one coroutine — no second mutator, no lock, and
+     * released frames can never interleave out of order. When the base seam tears
+     * its `incoming` completes, the loop ends (cancelling the sweep ticker), and
+     * [spool] is closed so this seam's own [incoming] completes too — propagating
+     * Torn to our consumers.
      */
     public fun start(scope: CoroutineScope) {
         view.start(scope)
         scope.launch {
-            // Sole collector of base.incoming (ADR-034). When the base seam tears its
-            // incoming completes, the collect returns, and we close [_incoming] so this
-            // seam's own [incoming] completes too — propagating Torn to our consumers.
+            val frames =
+                flow {
+                    base.incoming.collect { swatch -> emit(InboundEvent.Frame(swatch)) }
+                    emit(InboundEvent.BaseCompleted)
+                }
+            val sweeps =
+                flow {
+                    while (true) {
+                        delay(reorderGrace / 2)
+                        emit(InboundEvent.Sweep)
+                    }
+                }
             try {
-                base.incoming.collect { swatch -> dispatchInbound(swatch) }
+                merge(frames, sweeps)
+                    .takeWhile { it !is InboundEvent.BaseCompleted }
+                    .collect { event ->
+                        when (event) {
+                            is InboundEvent.Frame -> dispatchInbound(event.swatch)
+                            is InboundEvent.Sweep -> deliver(dedup.releaseExpired(nowMs(), reorderGrace.inWholeMilliseconds))
+                            is InboundEvent.BaseCompleted -> Unit
+                        }
+                    }
             } finally {
                 spool.close()
             }
@@ -162,10 +216,10 @@ public class GossipSeam(
     }
 
     /**
-     * Routes one inbound frame: fan it to the per-neighbour detectors, drop
-     * heartbeats, pass non-gossip frames straight through, and dedup + relay
-     * gossip frames. Runs only on the single `base.incoming` collector, so the
-     * [seen] set is accessed without a lock.
+     * Routes one inbound frame: fan it to the per-neighbour detectors, answer + drop
+     * heartbeats, pass non-gossip frames straight through, and dedup/reorder + relay
+     * gossip frames. Runs only on the single inbound event loop, so [dedup] is
+     * accessed without a lock.
      */
     private suspend fun dispatchInbound(swatch: Swatch) {
         rawIncoming.emit(swatch)
@@ -182,14 +236,28 @@ public class GossipSeam(
         }
         // Our own broadcast looped back along the overlay — we already have it.
         if (frame.origin == selfId) return
-        // Already delivered + relayed this broadcast; dedup terminates the flood.
-        if (!dedup.markSeenIfNew(frame.origin, frame.seq)) return
+        // Already seen this broadcast; dedup terminates the flood. A fresh frame may
+        // still be *held* for delivery (an earlier same-origin frame is outstanding):
+        // Seam.incoming promises per-sender send order and we re-stamp sender = origin,
+        // so same-origin frames are released contiguously (#1272). Relay is never held —
+        // gap-fill latency must not compound per hop.
+        val admission = dedup.admit(frame, nowMs())
+        if (!admission.isNew) return
 
-        spool.deliver(Swatch(payload = frame.payload, sender = frame.origin, sequence = frame.seq))
+        deliver(admission.deliverable)
         // Re-flood to our own active neighbours minus the peer it arrived from,
         // until the hop budget runs out.
         if (frame.ttl > 1) flood(frame.decremented(), except = swatch.sender)
     }
+
+    /** Surfaces released relay frames to the app, re-stamped with the origin as sender. */
+    private suspend fun deliver(released: List<GossipFrame>) {
+        for (frame in released) {
+            spool.deliver(Swatch(payload = frame.payload, sender = frame.origin, sequence = frame.seq))
+        }
+    }
+
+    private fun nowMs(): Long = clock().toEpochMilliseconds()
 
     /**
      * Answers an inbound heartbeat ping from a peer this node does not itself watch
@@ -271,13 +339,19 @@ public class GossipSeam(
         return true
     }
 
-    private companion object {
-        const val RAW_BUFFER = 256
+    public companion object {
+        private const val RAW_BUFFER = 256
 
         // Generous default hop budget. Dedup terminates the flood; this only caps
         // pathological loops. Comfortably above the diameter of a k-regular overlay
         // at tens–low-hundreds peers (k ≈ 4–7 ⇒ diameter ≲ 4).
-        const val DEFAULT_TTL = 16
+        private const val DEFAULT_TTL = 16
+
+        /**
+         * Default reorder-grace: generous against multi-path relay latency (≤ diameter
+         * hops), small against the anti-entropy round that backstops abandoned gaps.
+         */
+        public val DEFAULT_REORDER_GRACE: Duration = 2.seconds
 
         // ASCII prefixes ⇒ a UTF-8 byte-prefix match is equivalent to the old decoded-String startsWith.
         private val PING_PREFIX_BYTES = HeartbeatPartitionDetector.PING_PREFIX.encodeToByteArray()

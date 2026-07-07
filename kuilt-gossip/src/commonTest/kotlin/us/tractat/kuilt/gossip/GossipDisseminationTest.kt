@@ -16,6 +16,8 @@ import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
 
@@ -44,6 +46,7 @@ class GossipDisseminationTest {
         peers: Set<PeerId>,
         seed: Int,
         initialTtl: Int = 16,
+        reorderGrace: Duration = GossipSeam.DEFAULT_REORDER_GRACE,
     ): Pair<FakeSeam, GossipSeam> {
         val self = PeerId("self")
         val base = FakeSeam(selfId = self, initialPeers = peers + self)
@@ -54,6 +57,7 @@ class GossipDisseminationTest {
                 clock = { Instant.fromEpochMilliseconds(testScheduler.currentTime) },
                 config = config,
                 initialTtl = initialTtl,
+                reorderGrace = reorderGrace,
             )
         return base to seam
     }
@@ -81,7 +85,7 @@ class GossipDisseminationTest {
             val sender = seam.activePeers.value.first()
             val origin = PeerId("origin-x")
             val payload = byteArrayOf(4, 2)
-            base.deliver(sender, GossipFrame.origin(origin, seq = 7, ttl = 5, payload).encode())
+            base.deliver(sender, GossipFrame.origin(origin, seq = 1, ttl = 5, payload).encode())
             runCurrent()
 
             val reflood = base.relaySends()
@@ -237,6 +241,36 @@ class GossipDisseminationTest {
                         "the held frame is still re-flooded immediately",
                     )
                 },
+            )
+        }
+
+    @Test
+    fun releasesFramesHeldPastTheReorderGrace() =
+        runTest {
+            // Short grace so the sweep fits well inside the detectors' 2 s timeout.
+            val (base, seam) = gossipSeam(members(12), seed = 10, reorderGrace = 400.milliseconds)
+            seam.start(backgroundScope)
+            settle()
+
+            val received = mutableListOf<Swatch>()
+            backgroundScope.launch { seam.incoming.toList(received) }
+            runCurrent()
+
+            // A late joiner's first sighting of an origin lands mid-stream (seq 7): with
+            // no way to tell a drop from a pre-join seq, the frame is held one grace —
+            // then the gap is abandoned and the frame released rather than waiting on
+            // seqs 1..6 that will never arrive.
+            val sender = seam.activePeers.value.first()
+            base.deliver(sender, GossipFrame.origin(PeerId("origin-x"), seq = 7, ttl = 5, byteArrayOf(7)).encode())
+            runCurrent()
+            assertEquals(0, received.size, "the mid-stream first sighting is held for its grace")
+
+            advanceTimeBy(1_000)
+            runCurrent()
+
+            assertAll(
+                { assertEquals(1, received.size, "the held frame is released once its gap's grace expires") },
+                { assertEquals(7L, received.single().sequence, "released with the origin's sequence") },
             )
         }
 
