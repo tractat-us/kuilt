@@ -640,6 +640,43 @@ internal class RaftEngine(
         // can advance commitIndex over any prior-term entries inherited from a previous leader.
         // appendNoOp arms readIndexTracker's no-op gate (onNoOpAppended) so readIndex() knows when to gate.
         appendNoOp()
+        // §4.1: complete a transition this leader inherited already-committed (see below). Runs after the
+        // no-op is appended so a single-voter leader that commits the no-op inline in appendNoOp has already
+        // advanced commitIndex — and after it so the Simple(C_new) lands at lastLogIndex+1 above the no-op.
+        finalizeInheritedCommittedJoint()
+    }
+
+    /**
+     * §4.1 orphaned-Joint completion on election. The normal Joint→Simple(C_new) auto-append fires ONLY
+     * from [advanceCommit]'s commit-window scan (via [onConfigCommitted]). A newly-elected leader can
+     * inherit a Joint whose entry is ALREADY committed — commit was seeded DIRECTLY, bypassing any commit
+     * window: an InstallSnapshot cut at/after the Joint ([finalizeInstalledSnapshot]) or restart recovery
+     * from such a snapshot (`init`). No future commit window then contains the Joint entry, so
+     * `Simple(C_new)` is never appended and the cluster stays in Joint forever — every [onChangeMembership]
+     * rejected by the settled-Simple guard, the dual quorum persisting indefinitely.
+     *
+     * When we become leader holding a committed Joint, append `Simple(C_new)` here — exactly what
+     * [onConfigCommitted]'s Joint branch would have done — reusing [appendConfigEntry] so the behaviour
+     * matches the normal path (the trailing `Simple(C_new)` commits, [onConfigCommitted]'s Simple branch
+     * then wakes any pending change and runs the removed-leader step-down).
+     *
+     * Two guards keep this from stepping on the normal path:
+     *  - `membershipState is Joint` ⇒ no `Simple(C_new)` follows the Joint in the log yet (membership always
+     *    reflects the last config entry). This is the same double-append guard [onConfigCommitted] uses; a
+     *    leader that inherited the Joint's trailing Simple already resolves to Simple and is skipped.
+     *  - The Joint must already be committed (`currentCommitIndex >= jointIndex`). A Joint still in flight
+     *    (its entry above `commitIndex`) is finished by the commit-window path when the no-op carries it to
+     *    commit — pre-empting that here would double-append.
+     */
+    private suspend fun finalizeInheritedCommittedJoint() {
+        val joint = state.membershipState as? MembershipState.Joint ?: return
+        // The Joint entry's index: its position in the live log, or — when it was compacted into the
+        // snapshot (no config entry survives in the log) — the snapshotIndex, which is committed by
+        // definition. Since membershipState is Joint, the last config entry (when present) IS the Joint.
+        val jointIndex = state.log.lastOrNull { it.config != null }?.index ?: state.snapshotIndex
+        if (state.currentCommitIndex < jointIndex) return // still in flight — the commit-window path finishes it
+        debug { "becomeLeader: inherited a committed Joint (index=$jointIndex) — appending Simple(C_new=${joint.new})" }
+        appendConfigEntry(ConfigPayload(old = null, new = joint.new))
     }
 
     private suspend fun appendNoOp() {
