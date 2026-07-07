@@ -11,6 +11,7 @@ import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
+import kotlin.time.Duration.Companion.milliseconds
 
 class InstallSnapshotTest {
 
@@ -149,6 +150,81 @@ class InstallSnapshotTest {
             { assertTrue(afterHeartbeat.isNotEmpty(), "a heartbeat re-diverted during the transfer (sent=$sentOffsets)") },
             { assertTrue(afterHeartbeat.none { it == 0L }, "heartbeat must NOT restart the transfer from offset 0 (sent=$sentOffsets)") },
             { assertTrue(afterHeartbeat.all { it >= ackedOffset }, "transfer resumes from the acked offset, not the prefix (sent=$sentOffsets)") },
+        )
+    }
+
+    /**
+     * Completion under heartbeat interleaving (#1226): a **live** follower receives a multi-chunk
+     * snapshot whose transfer spans several heartbeat intervals, and the transfer COMPLETES — the
+     * follower installs the snapshot, then catches up the log tail via normal AppendEntries,
+     * converging with the leader.
+     *
+     * The completion tests above run at RTT≈0, where the whole chunk/ack exchange finishes within a
+     * single virtual instant — no heartbeat ever fires mid-transfer. The #1222 test above interleaves
+     * a heartbeat but keeps the follower crashed, so it proves *non-reset*, not *completion*. Here
+     * the leader↔follower link carries 1 ms one-way latency, so each one-chunk-in-flight ack cycle
+     * costs a full heartbeat interval (2 ms): [onHeartbeat]'s InstallSnapshot divert fires repeatedly
+     * DURING the transfer (the #1222 trigger) while the live follower's acks advance it. A regression
+     * that *stalls* a heartbeat-spanning transfer fails the awaitCommit; a transfer that somehow
+     * completed in one round fails the span/chunk-count assertions.
+     */
+    @Test
+    fun multiHeartbeatSpanningChunkedTransfer_completesAndFollowerConverges() = raftRunTest {
+        val hbMs = FAST_RAFT_CONFIG.heartbeatInterval.inWholeMilliseconds
+        // maxPayloadBytes budgets HEADER_BUDGET (256 B) for the CBOR envelope → 40 state bytes/chunk.
+        val sim = raftSim(this, backgroundScope, n = 3, maxPayloadBytes = 296)
+        val leader = awaitLeader(sim)
+        val leaderId = sim.nodes.entries.first { it.value === leader }.key
+        val behind = sim.nodeIds.first { it != leaderId }
+
+        sim.crash(behind)                             // fall behind the coming compaction boundary
+        repeat(10) { leader.propose(ByteArray(30) { it.toByte() }) }  // fat commands → a multi-chunk snapshot
+        val finalCommit = leader.commitIndex.value
+        val through = sim.compactionFloorCandidate(leaderId)
+        leader.snapshots.value = Snapshot(through, sim.stateBytes(leaderId, through))
+        leader.compactionFloor.first { it == through }
+
+        // RTT > 0 on the leader↔behind link — the transfer can no longer complete at one instant.
+        sim.network.setLinkLatency(leaderId, behind, 1.milliseconds)
+        sim.network.setLinkLatency(behind, leaderId, 1.milliseconds)
+        sim.restart(behind)
+
+        // (virtual ms, offset) of every chunk the leader sends to `behind` post-restart — the
+        // observable proving the transfer was genuinely chunked AND spanned >1 heartbeat interval.
+        val chunkSends = mutableListOf<Pair<Long, Long>>()
+        backgroundScope.launch {
+            leader.trace.collect { event ->
+                if (event is RaftTraceEvent.InstallSnapshot && event.to == behind) {
+                    chunkSends += testScheduler.currentTime to event.offset
+                }
+            }
+        }
+        val installs = sim.collectInstalls(behind)
+        sim.settle()                                  // subscribe both collectors before time advances
+
+        sim.awaitCommit(finalCommit, on = setOf(behind))  // reachable only via install + tail replication
+        sim.settle()                                  // drain same-instant committed emissions
+
+        assertTrue(chunkSends.isNotEmpty(), "leader must send snapshot chunks after the rejoin")
+        val offsets = chunkSends.map { it.second }.distinct()
+        val spanMs = chunkSends.last().first - chunkSends.first().first
+        assertAll(
+            { assertTrue(installs.isNotEmpty(), "live follower must complete the install (sends=$chunkSends)") },
+            { assertEquals(through, installs.last().snapshot.throughIndex) },
+            { assertTrue(through < finalCommit, "a log tail must remain beyond the snapshot (through=$through, commit=$finalCommit)") },
+            { assertTrue(offsets.size > 1, "transfer must be genuinely chunked (offsets=$offsets)") },
+            {
+                assertTrue(
+                    spanMs >= 2 * hbMs,
+                    "transfer must span >1 heartbeat interval (span=${spanMs}ms, hb=${hbMs}ms, sends=$chunkSends)",
+                )
+            },
+            {
+                assertContentEquals(
+                    sim.appliedState(leaderId), sim.appliedState(behind),
+                    "follower's state machine must converge with the leader's",
+                )
+            },
         )
     }
 }
