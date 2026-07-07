@@ -3,6 +3,7 @@ package us.tractat.kuilt.session
 import io.github.oshai.kotlinlogging.KotlinLogging
 import kotlinx.atomicfu.locks.reentrantLock
 import kotlinx.atomicfu.locks.withLock
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -1316,17 +1317,39 @@ internal class SeamRoom(
      *
      * **Not valid** on the host side — returns [ResumeResult.WindowClosed] immediately.
      *
-     * State mutation (installing the deferred) is under [lock]; the suspend broadcast is outside.
-     * A [CancellationException] from the broadcast propagates — it is not swallowed.
+     * **Concurrent calls coalesce (#1280).** A room has one reconnect credential and one host,
+     * so all concurrent resume attempts target the same outcome: when a resume is already in
+     * flight, this call **joins** it — awaiting the same reply — instead of sending a second
+     * [AdmitMessage.Resume]. Joining (rather than re-sending) matters twice over: a second
+     * Resume would consume nothing on the host (the token is single-use per window), and its
+     * [AdmitMessage.Reject] could race the first attempt's ResumeAck into falsely resolving
+     * the shared reply as [ResumeResult.WindowClosed]. It also keeps the internal auto-reconnect
+     * ([runHostReconnect]) and an app-level retry from stealing each other's reply slot — the
+     * pre-fix failure mode where the orphaned internal attempt timed out into [markHostLost]
+     * *after* a successful resume. Callers that want a retry after a non-Success result simply
+     * call again: sequential calls are fresh attempts.
+     *
+     * State mutation (installing/joining the deferred) is under [lock]; the suspend broadcast is
+     * outside. A genuine [kotlinx.coroutines.CancellationException] from the broadcast propagates,
+     * but first resolves the shared deferred as [ResumeResult.WindowClosed] so joined callers are
+     * never orphaned. [leave] resolves any still-pending attempt the same way, so no caller's
+     * `await` outlives the room.
      */
     override suspend fun resume(token: ResumeToken): ResumeResult {
         if (_role.value != SessionRole.Joiner) return ResumeResult.WindowClosed
 
-        // Install the deferred under lock; check terminal flags first.
-        val deferred = lock.withLock {
+        // Install (or join) the deferred under lock; check terminal flags first.
+        val (deferred, ownsFlight) = lock.withLock {
             if (hostLost || closed) return ResumeResult.WindowClosed
-            CompletableDeferred<ResumeResult>().also { pendingResume = it }
+            val inFlight = pendingResume
+            if (inFlight != null) {
+                inFlight to false
+            } else {
+                CompletableDeferred<ResumeResult>().also { pendingResume = it } to true
+            }
         }
+        // A resume is already in flight — join it rather than orphaning its reply slot.
+        if (!ownsFlight) return deferred.await()
 
         val resumeMsg = AdmitMessage.encode(
             AdmitMessage.Resume(
@@ -1335,15 +1358,33 @@ internal class SeamRoom(
                 issuedAt = token.issuedAt,
             ),
         )
-        // Suspend send outside the lock. A genuine CancellationException propagates (correct).
-        // A non-cancellation send failure becomes WindowClosed.
-        val sendResult = runCatchingCancellable { seam.broadcast(resumeMsg) }
+        // Suspend send outside the lock. A genuine CancellationException propagates (correct),
+        // but must still resolve the shared deferred — a joined caller would otherwise hang.
+        // A non-cancellation send failure becomes WindowClosed for every caller of this flight.
+        val sendResult = try {
+            runCatchingCancellable { seam.broadcast(resumeMsg) }
+        } catch (e: CancellationException) {
+            abandonFlight(deferred)
+            throw e
+        }
         if (sendResult.isFailure) {
-            lock.withLock { pendingResume = null }
-            return ResumeResult.WindowClosed
+            abandonFlight(deferred)
+            // A reply may have raced the failure and resolved the flight first — honor it.
+            return deferred.await()
         }
 
         return deferred.await()
+    }
+
+    /**
+     * Resolve a failed resume flight as [ResumeResult.WindowClosed]: clear the slot (only if
+     * this flight still owns it — a raced reply may already have taken it) and complete the
+     * deferred so every joined caller resolves. Completion runs outside [lock]; it is a no-op
+     * when a raced [handleResumeAck]/Reject already completed the deferred.
+     */
+    private fun abandonFlight(deferred: CompletableDeferred<ResumeResult>) {
+        lock.withLock { if (pendingResume === deferred) pendingResume = null }
+        deferred.complete(ResumeResult.WindowClosed)
     }
 
     override suspend fun leave(reason: LeaveReason) {
@@ -1358,6 +1399,14 @@ internal class SeamRoom(
             )
         }
         val (announce, jobsToCancel, detectorJobsToCancel) = plan
+        // Resolve any in-flight resume as WindowClosed — the room is terminal, so its reply can
+        // never arrive; without this, every caller awaiting the flight (#1280) hangs forever.
+        // Taken under a second lock: `closed` is already set, so no new flight can install.
+        lock.withLock {
+            val d = pendingResume
+            pendingResume = null
+            d
+        }?.complete(ResumeResult.WindowClosed)
         // Announce a graceful leave on the still-live seam before tearing it down, so the
         // host evicts with Normal rather than treating the close as a transport drop.
         if (announce) {
