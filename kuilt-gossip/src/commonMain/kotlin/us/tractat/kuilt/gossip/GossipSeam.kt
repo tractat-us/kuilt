@@ -7,6 +7,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.flow
@@ -16,6 +17,8 @@ import kotlinx.coroutines.launch
 import us.tractat.kuilt.core.CloseReason
 import us.tractat.kuilt.core.DeliveryPolicy
 import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.core.Principal
+import us.tractat.kuilt.core.PrincipalRoster
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.Spool
@@ -101,7 +104,7 @@ public class GossipSeam(
     activeViewPolicy: ActiveViewPolicy = ActiveViewPolicy.RandomKRegular,
     policy: DeliveryPolicy = DeliveryPolicy.Reliable,
     private val reorderGrace: Duration = DEFAULT_REORDER_GRACE,
-) : Seam {
+) : Seam, PrincipalRoster {
     init {
         require(reorderGrace > Duration.ZERO) { "reorderGrace must be positive (was $reorderGrace)" }
     }
@@ -155,6 +158,13 @@ public class GossipSeam(
 
     /** Full-membership view (includes [selfId]); the anti-entropy sampling pool. */
     override val peers: StateFlow<Set<PeerId>> get() = base.peers
+
+    /**
+     * Host-verified principals of the base seam's linked peers, delegated to [base] when it is a
+     * [PrincipalRoster] (a hub mesh with attested links); a constant empty map otherwise.
+     */
+    override val attestedPrincipals: StateFlow<Map<PeerId, Principal>>
+        get() = (base as? PrincipalRoster)?.attestedPrincipals ?: EMPTY_ROSTER
 
     override val state: StateFlow<SeamState> get() = base.state
 
@@ -341,6 +351,11 @@ public class GossipSeam(
 
     public companion object {
         private const val RAW_BUFFER = 256
+
+        // Constant roster for a base seam with no attestation concept — one shared instance,
+        // never mutated.
+        private val EMPTY_ROSTER: StateFlow<Map<PeerId, Principal>> =
+            MutableStateFlow<Map<PeerId, Principal>>(emptyMap())
 
         // Generous default hop budget. Dedup terminates the flood; this only caps
         // pathological loops. Comfortably above the diameter of a k-regular overlay

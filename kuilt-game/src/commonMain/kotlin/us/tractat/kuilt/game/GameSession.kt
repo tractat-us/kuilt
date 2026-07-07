@@ -1,7 +1,12 @@
 package us.tractat.kuilt.game
 
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import us.tractat.kuilt.core.CloseReason
 import us.tractat.kuilt.core.NamedMux
+import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.core.Principal
+import us.tractat.kuilt.core.PrincipalRoster
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.raft.RaftNode
 
@@ -49,6 +54,24 @@ public class GameSession internal constructor(
     public fun appChannel(name: String): Seam = appMux.channel(name)
 
     /**
+     * Host-verified principals of currently-linked peers, keyed by the [PeerId] each was verified
+     * against at admission — the hosted-path analogue of the relay path's `Member.principal`.
+     *
+     * Populated when this session rides a [PrincipalRoster] seam (a `gameHosted` hub whose
+     * connection source attaches principals — e.g. a `KtorConnectionSource` with a
+     * `principalExtractor`); a constant empty map on seams with no attestation concept (a
+     * `gameJoin` spoke, `gameNode`, in-memory fabrics without attached principals).
+     */
+    public val attestedPrincipals: StateFlow<Map<PeerId, Principal>>
+        get() = (seam as? PrincipalRoster)?.attestedPrincipals ?: EMPTY_ROSTER
+
+    /**
+     * The host-verified [Principal] of [peer], or `null` if that peer is not currently linked
+     * with an attestation. A convenience snapshot of [attestedPrincipals].
+     */
+    public fun principalFor(peer: PeerId): Principal? = attestedPrincipals.value[peer]
+
+    /**
      * Signals a voluntary departure from the game session.
      *
      * Publishes a vacate marker on the presence channel so the host immediately evicts this
@@ -85,5 +108,11 @@ public class GameSession internal constructor(
     public suspend fun close(reason: CloseReason = CloseReason.Normal) {
         node.close()
         seam.close(reason)
+    }
+
+    private companion object {
+        // Constant roster for a seam with no attestation concept — one shared instance, never mutated.
+        private val EMPTY_ROSTER: StateFlow<Map<PeerId, Principal>> =
+            MutableStateFlow<Map<PeerId, Principal>>(emptyMap())
     }
 }
