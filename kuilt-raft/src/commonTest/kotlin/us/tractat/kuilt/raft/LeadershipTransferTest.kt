@@ -304,12 +304,12 @@ internal class LeadershipTransferTest {
      * before, and the target's resulting `RequestVote` must carry the full log. Without the fix the
      * leader emits `TimeoutNow` in the transfer-init step, before the tail ACK is even in flight.
      *
-     * NOTE: at ≥4 voters the target does **not** actually win here — the *other* followers still reject
-     * its `RequestVote` under leader-stickiness because a TimeoutNow-triggered election carries no
-     * disruption-bypass flag (a separate bug, #1230). This test therefore asserts the withhold-until-
-     * caught-up property of #1229 only; end-to-end "target becomes leader" with an uncommitted tail is
-     * shown at n=3 in [transferLeadership_uncommittedTail_n3_targetBecomesLeader], where a single peer
-     * vote plus the leader's own suffices.
+     * NOTE: this test asserts only the withhold-until-caught-up property of #1229 (the TimeoutNow
+     * ordering and that the target campaigns on the full log). End-to-end "target becomes leader" with
+     * an uncommitted tail is shown at n=3 in [transferLeadership_uncommittedTail_n3_targetBecomesLeader];
+     * that the target wins its *first* election at n≥4 (the other voters granting its disrupt-flagged
+     * RequestVote, §4.2.3 / #1230) is shown in
+     * [transferLeadership_n4_targetWinsFirstElection_bypassingOtherVotersStickiness].
      */
     @Test
     fun transferLeadership_uncommittedTail_withholdsTimeoutNowUntilCaughtUp() = raftRunTest(timeout = 10.seconds) {
@@ -376,9 +376,10 @@ internal class LeadershipTransferTest {
     /**
      * End-to-end companion to [transferLeadership_uncommittedTail_withholdsTimeoutNowUntilCaughtUp]:
      * with an uncommitted tail at transfer time, once the target catches up to lastLogIndex the transfer
-     * completes for real — the target actually becomes leader. Uses n=3 because at ≥4 voters the target
-     * cannot win a TimeoutNow-triggered election under the current code (leader-stickiness on the other
-     * followers, #1230); at n=3 the target's own vote plus the transferring leader's is a quorum.
+     * completes for real — the target actually becomes leader. Uses n=3 to keep the focus on the
+     * uncommitted-tail catch-up path; the n≥4 case (where the target needs the *other* voters to grant
+     * its disrupt-flagged RequestVote, §4.2.3 / #1230) is covered by
+     * [transferLeadership_n4_targetWinsFirstElection_bypassingOtherVotersStickiness].
      *
      * The uncommitted tail is still created atomically with the transfer (propose then transfer, ahead of
      * any ACK), so the fix's withhold-until-caught-up path is exercised — not the trivial commit-first
@@ -424,6 +425,85 @@ internal class LeadershipTransferTest {
                         "(index $firstTailAckFromTarget)",
                 )
             },
+        )
+        sim.checkInvariants()
+    }
+
+    // ── §4.2.3 disrupt-permission: a transfer target wins its FIRST election at n≥4 (issue #1230) ──
+
+    /**
+     * Dissertation §4.2.3: a leadership-transfer target's `RequestVote` must be processed by the OTHER
+     * servers even when they believe a current leader exists — it carries "permission to disrupt the
+     * leader (it told me to!)". At n≥4 the transferring leader alone is not a quorum, so the target's
+     * election only succeeds if the *other* lease-holding voters grant its (disrupt-flagged) vote despite
+     * their leader-lease being live.
+     *
+     * 4 voters (quorum 3): transfer leader→target, target caught up, TimeoutNow received, target
+     * campaigns at term+1. The two OTHER voters still hear the old leader (leases live) — without the
+     * disrupt flag they deny the target with `LeaderAlive`, giving it only 2 votes (self + old leader),
+     * its first election fails, and leadership moves only later once their leases expire. With the flag
+     * they grant, the target reaches quorum and wins on this first election.
+     *
+     * This is invisible at n≤3, where target + old-leader alone is already a quorum — the reason every
+     * other transfer test (n=2/n=3) passed while this bug was live.
+     *
+     * The discriminator is the two lease-holders granting the target **at the transfer election's term**
+     * (the target's first RequestVote after transfer). Without the fix they grant only at a *later* term,
+     * after their leases expire — so keying the assertion to the transfer term (not a bare "granted
+     * eventually") is what isolates the bug. Note the old leader steps down for the target's RequestVote
+     * regardless of the fix (it authorised the transfer), so `transferLeadership` returning is NOT proof
+     * the target won — the assertions read the wire, not the call's completion.
+     */
+    @Test
+    fun transferLeadership_n4_targetWinsFirstElection_bypassingOtherVotersStickiness() = raftRunTest(timeout = 10.seconds) {
+        val sim = raftSim(this, backgroundScope, n = 4)
+        val leader = awaitLeader(sim)
+        val leaderId = sim.nodeIds.first { sim.nodes[it] === leader }
+        val targetId = sim.nodeIds.first { it != leaderId }
+        // The two OTHER voters: they keep hearing the old leader, so their leader-lease is live and they
+        // would deny a normal higher-term candidate under §4.2.3 stickiness.
+        val leaseHolders = sim.nodeIds.filter { it != leaderId && it != targetId }
+
+        // Commit-first: every voter (incl. the target) caught up, so the leader sends TimeoutNow at once.
+        repeat(3) { sim.proposeOnLeader("cmd$it".encodeToByteArray()) }
+        sim.awaitCommit(3L)
+        sim.settle()
+
+        sim.network.recording = true
+        val mark = sim.network.sent.size
+
+        // Launch async: the transfer deferred completes when the OLD leader steps down for the target's
+        // RequestVote, which happens even without the fix — so its return is not proof the target won.
+        backgroundScope.launch { runCatchingCancellable { leader.transferLeadership(targetId) } }
+
+        // The target actually becomes leader on this first, TimeoutNow-triggered election.
+        sim.awaitRole(targetId, RaftRole.Leader)
+        sim.awaitRole(leaderId, RaftRole.Follower)
+
+        val log = sim.network.sent.drop(mark)
+        // The target's first campaign after the transfer is the disrupt-flagged one at term+1.
+        val transferVote = log.first { it.from == targetId && it.message is RaftMessage.RequestVote }
+            .message as RaftMessage.RequestVote
+        val voteTerm = transferVote.term
+
+        assertAll(
+            *leaseHolders.map { id ->
+                {
+                    // A grant adopts the term (response.term == voteTerm); a LeaderAlive deny does NOT
+                    // (it keeps the old term, voteGranted = false). Keying on voteTerm isolates the
+                    // transfer election from any later term the target might reach without the fix.
+                    val grantedAtTransferTerm = log.any {
+                        it.from == id && it.to == targetId &&
+                            (it.message as? RaftMessage.RequestVoteResponse)
+                                ?.let { r -> r.term == voteTerm && r.voteGranted } == true
+                    }
+                    assertTrue(
+                        grantedAtTransferTerm,
+                        "lease-holder ${id.value} must grant the transfer target's disrupt-flagged RequestVote " +
+                            "at term $voteTerm despite believing the old leader is alive (§4.2.3)",
+                    )
+                }
+            }.toTypedArray()
         )
         sim.checkInvariants()
     }
