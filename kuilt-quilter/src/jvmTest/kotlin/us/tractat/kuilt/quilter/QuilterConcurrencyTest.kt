@@ -29,6 +29,7 @@ import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.crdt.GSet
+import us.tractat.kuilt.crdt.PNCounter
 import us.tractat.kuilt.crdt.ReplicaId
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -242,6 +243,57 @@ class QuilterConcurrencyTest {
                 }
                 assertEquals(expected, repA.state.value.elements, "A did not converge to the full union")
                 assertEquals(expected, repB.state.value.elements, "B did not converge to the full union")
+            } finally {
+                scope.cancel()
+            }
+        }
+    }
+
+    /**
+     * [Quilter.mutate] is the documented atomic read-modify-write entry point — concurrent
+     * same-replica increments must all survive (#1270).
+     *
+     * Uses a **non-idempotent** CRDT deliberately: a [PNCounter] delta carries the
+     * replica's absolute new slot value, and join is elementwise max, so two `mutate`
+     * calls that both read slot `n` and both write `n + 1` max-join into a single
+     * increment — a silently lost (and globally broadcast) update. The GSet used by the
+     * other tests here is idempotent under max-join, which is exactly why it masked this
+     * class of bug. Before the fix, `mutate` ran the transform on `state.value` *outside*
+     * the lock, making the lost update easy to hit under real OS-thread parallelism.
+     */
+    @Test
+    fun concurrentMutateIncrementsAreNotLost() = runTest(timeout = 120.seconds) {
+        withContext(Dispatchers.Default) {
+            val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
+            try {
+                val loom = InMemoryLoom()
+                val seam = loom.host(Pattern("mutate-atomicity"))
+                val rep = Quilter(
+                    replica = ReplicaId(seam.selfId.value),
+                    seam = seam,
+                    initial = PNCounter.ZERO,
+                    messageSerializer = QuiltMessage.serializer(PNCounter.serializer()),
+                    scope = scope,
+                )
+
+                val workers = 8
+                val perWorker = 2000
+                coroutineScope {
+                    repeat(workers) {
+                        launch {
+                            repeat(perWorker) {
+                                rep.mutate { it.increment(rep.replica) }
+                            }
+                        }
+                    }
+                }
+
+                assertEquals(
+                    (workers * perWorker).toLong(),
+                    rep.state.value.value,
+                    "same-replica increments were max-joined away — mutate must run its " +
+                        "transform inside the lock to be the atomic RMW its KDoc promises",
+                )
             } finally {
                 scope.cancel()
             }

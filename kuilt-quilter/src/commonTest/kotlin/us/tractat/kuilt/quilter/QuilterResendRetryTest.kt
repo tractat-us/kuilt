@@ -197,4 +197,68 @@ class QuilterResendRetryTest {
             "State must remain stable after retry interval — no spurious Resend",
         )
     }
+
+    /**
+     * A *partial* drain must not cancel the retry timer while the gap is still open (#1268).
+     *
+     * Scenario:
+     * 1. A mints seq=1, 2, 3; seq=1 and seq=2 are DROPPED, seq=3 arrives.
+     * 2. B buffers seq=3, emits Resend(1..2), arms the retry timer.
+     * 3. A retransmits seq=1 and seq=2; the seq=2 retransmission is DROPPED again,
+     *    seq=1 arrives.
+     * 4. B applies seq=1; the drain stops at the still-missing seq=2 (seq=3 stays buffered).
+     *
+     * Before the fix, step 4 unconditionally cancelled the retry timer, so with no further
+     * inbound traffic (the low-traffic case the [QuilterConfig.resendRetryInterval] KDoc
+     * names) the gap 2..2 stayed open forever. The timer must survive a partial drain and
+     * re-fire for the remaining range.
+     */
+    @Test
+    fun retryStaysArmedAfterPartialDrain() = runTest(
+        UnconfinedTestDispatcher(),
+        timeout = 5.seconds,
+    ) {
+        val loom = InMemoryLoom()
+        val rawSeamA = loom.host(Pattern("partial-drain"))
+        val rawSeamB = loom.join(InMemoryTag("b"))
+
+        // A's delta broadcasts, in order: #1 seq=1 (drop), #2 seq=2 (drop), #3 seq=3
+        // (deliver), #4 seq=1 retransmit (deliver), #5 seq=2 retransmit (drop again).
+        var broadcastIdx = 0
+        val droppedBroadcasts = setOf(1, 2, 5)
+        val droppingSeamA = object : Seam by rawSeamA {
+            override suspend fun broadcast(payload: ByteArray) {
+                broadcastIdx++
+                if (broadcastIdx !in droppedBroadcasts) rawSeamA.broadcast(payload)
+            }
+        }
+
+        val retryInterval = 200.milliseconds
+        val config = QuilterConfig(resendRetryInterval = retryInterval, expectVirtualTime = true)
+
+        val repA = replicatorFor(droppingSeamA, GSet.empty<String>(), gsetSer, backgroundScope, config)
+        val repB = replicatorFor(rawSeamB, GSet.empty<String>(), gsetSer, backgroundScope, config)
+
+        repA.apply(Patch(GSet.of("one")))    // seq=1 DROPPED
+        repA.apply(Patch(GSet.of("two")))    // seq=2 DROPPED
+        repA.apply(Patch(GSet.of("three")))  // seq=3 delivered → Resend(1..2), retransmits
+        testScheduler.advanceUntilIdle()
+
+        // Partial drain happened: B applied seq=1 only; gap 2..2 open, seq=3 buffered.
+        assertEquals(
+            setOf("one"),
+            repB.state.value.elements,
+            "B should have applied only seq=1 — seq=2 was dropped twice, seq=3 is buffered",
+        )
+
+        // No further inbound traffic. Only the retry timer can heal the remaining gap.
+        testScheduler.advanceTimeBy(retryInterval.inWholeMilliseconds + 1L)
+        testScheduler.advanceUntilIdle()
+
+        assertEquals(
+            setOf("one", "two", "three"),
+            repB.state.value.elements,
+            "retry Resend must re-fire after a partial drain — the 2..2 gap was still open",
+        )
+    }
 }
