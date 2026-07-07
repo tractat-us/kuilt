@@ -50,6 +50,9 @@ import kotlin.time.Instant
  *   with a principal-extracting [source] (a `KtorConnectionSource` `principalExtractor`) so the
  *   policy sees verified identities; admitted principals are observable via
  *   [GameSession.attestedPrincipals].
+ * @param placement How this session obtains its consensus node — forwarded to [gameHost]. The
+ *   default [ConsensusPlacement.SessionOwned] is today's behaviour; must seat
+ *   [AuthoritySeating.SessionPeers] (see [gameHost]).
  */
 public suspend fun CoroutineScope.gameHosted(
     selfId: PeerId,
@@ -63,6 +66,7 @@ public suspend fun CoroutineScope.gameHosted(
     clock: () -> Instant,
     identity: ClientIdentity = ClientIdentity.Auto,
     admission: LinkAdmission = LinkAdmission.AcceptAll,
+    placement: ConsensusPlacement = ConsensusPlacement.SessionOwned,
 ): GameSession {
     val dispatcher = requireNotNull(coroutineContext[ContinuationInterceptor]) {
         "weave/handshake: no dispatcher (ContinuationInterceptor) in coroutine context"
@@ -77,5 +81,6 @@ public suspend fun CoroutineScope.gameHosted(
         livenessConfig = livenessConfig,
         clock = clock,
         identity = identity,
+        placement = placement,
     )
 }

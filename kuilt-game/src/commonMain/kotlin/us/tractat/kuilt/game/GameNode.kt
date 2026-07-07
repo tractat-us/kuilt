@@ -35,7 +35,6 @@ import us.tractat.kuilt.raft.RaftRole
 import us.tractat.kuilt.raft.RaftStorage
 import us.tractat.kuilt.raft.SeamRaftTransport
 import us.tractat.kuilt.raft.changeMembershipWithRetry
-import us.tractat.kuilt.raft.raftNode
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
@@ -216,8 +215,16 @@ public enum class ReturnPolicy { FullMembership, Quorum }
  *   a per-incarnation auto id (at-least-once forwarding, no cross-crash dedup). A **durable** peer
  *   passes [ClientIdentity.Durable] with a stable id it persists itself and replays the same
  *   `requestId` on [TurnSequencer.propose] after a restart. See [us.tractat.kuilt.raft.ClientSessionTable].
+ * @param placement Where this session's consensus authority lives. The default
+ *   [ConsensusPlacement.SessionOwned] seats [voterIds] directly — today's roster-given behaviour.
+ *   [ConsensusPlacement.serverCore] seats a fixed voter core instead (all core nodes vote; a
+ *   non-core caller rides as a learner, admitted by the core leader — the `voterIds` roster is
+ *   superseded by the core). [ConsensusPlacement.preBuilt] hands the session a caller-constructed
+ *   node (e.g. a test double) — `storage`/`raftConfig` are then unused for node construction.
  *
- * @throws IllegalArgumentException if this peer's [NodeId] is not in [voterIds].
+ * @throws IllegalArgumentException if this peer's [NodeId] is not in [voterIds] (under
+ *   [AuthoritySeating.SessionPeers] placements only — a [AuthoritySeating.CoreVoters] caller may
+ *   legitimately be a non-voting player).
  *
  * @sample us.tractat.kuilt.game.sampleGameNode
  */
@@ -227,12 +234,28 @@ public fun CoroutineScope.gameNode(
     storage: RaftStorage = InMemoryRaftStorage(),
     raftConfig: RaftConfig = RaftConfig(),
     identity: ClientIdentity = ClientIdentity.Auto,
+    placement: ConsensusPlacement = ConsensusPlacement.SessionOwned,
 ): GameSession {
-    require(NodeId(seam.selfId.value) in voterIds) {
-        "this peer (${seam.selfId.value}) must be in voterIds $voterIds"
+    val self = NodeId(seam.selfId.value)
+    if (placement.seating is AuthoritySeating.SessionPeers) {
+        require(self in voterIds) {
+            "this peer (${seam.selfId.value}) must be in voterIds $voterIds"
+        }
     }
     val mux = MuxSeam(seam, this)
-    val node = raftNode(ClusterConfig.ofVoters(voterIds), SeamRaftTransport(mux.channel(RAFT_CHANNEL)), storage, raftConfig, identity)
+    val binding = ConsensusBinding(
+        self = self,
+        transport = SeamRaftTransport(mux.channel(RAFT_CHANNEL)),
+        sessionMembership = ClusterConfig.ofVoters(voterIds),
+        storage = storage,
+        raftConfig = raftConfig,
+        identity = identity,
+    )
+    val node = placement.node(this, binding)
+    val seating = placement.seating
+    if (seating is AuthoritySeating.CoreVoters && self in seating.core) {
+        launchCoreLearnerAdmission(node, seam, seating.core)
+    }
     val appMux = NamedMux(mux.channel(APP_ENVELOPE_CHANNEL), this)
     return GameSession(node, seam, appMux)
 }
@@ -314,7 +337,15 @@ public fun CoroutineScope.gameNode(
  *   a per-incarnation auto id (at-least-once forwarding, no cross-crash dedup). A **durable** host
  *   passes [ClientIdentity.Durable] with a stable id it persists itself and replays the same
  *   `requestId` on [TurnSequencer.propose] after a restart. See [us.tractat.kuilt.raft.ClientSessionTable].
- * @throws IllegalArgumentException if [peerCount] < 1 or [maxSpectators] < 0.
+ * @param placement How this session obtains its consensus node. The default
+ *   [ConsensusPlacement.SessionOwned] constructs the singleton-then-grown host node — today's
+ *   behaviour. [ConsensusPlacement.preBuilt] hands the bootstrap a caller-constructed node (e.g. a
+ *   test double pinned to Leader) that the presence/admission machinery then drives unchanged.
+ *   Must seat [AuthoritySeating.SessionPeers]: the appoint-the-host path promotes session peers to
+ *   voters, which contradicts a fixed external core — bootstrap a server-core session via
+ *   [gameNode] with [ConsensusPlacement.serverCore].
+ * @throws IllegalArgumentException if [peerCount] < 1, [maxSpectators] < 0, or [placement] does
+ *   not seat [AuthoritySeating.SessionPeers].
  * @throws DuplicateHostException if another peer on the same session already declared host.
  *
  * @sample us.tractat.kuilt.game.sampleGameHostJoin
@@ -331,9 +362,11 @@ public suspend fun CoroutineScope.gameHost(
     clock: () -> Instant,
     hostDeclarationTimeout: Duration = DEFAULT_HOST_DECLARATION_TIMEOUT,
     identity: ClientIdentity = ClientIdentity.Auto,
+    placement: ConsensusPlacement = ConsensusPlacement.SessionOwned,
 ): GameSession {
     require(peerCount >= 1) { "peerCount must be >= 1" }
     require(maxSpectators >= 0) { "maxSpectators must be >= 0" }
+    requireSessionPeerSeating(placement, entryPoint = "gameHost")
 
     val mux = MuxSeam(seam, this)
     val raftSeam = mux.channel(RAFT_CHANNEL)
@@ -343,7 +376,17 @@ public suspend fun CoroutineScope.gameHost(
     val presence = checkNotDuplicateHost(presenceSeam, this, raftConfig.expectVirtualTime, hostDeclarationTimeout)
 
     val self = NodeId(seam.selfId.value)
-    val node = raftNode(ClusterConfig.ofVoters(setOf(self)), SeamRaftTransport(raftSeam), storage, raftConfig, identity)
+    val node = placement.node(
+        this,
+        ConsensusBinding(
+            self = self,
+            transport = SeamRaftTransport(raftSeam),
+            sessionMembership = ClusterConfig.ofVoters(setOf(self)),
+            storage = storage,
+            raftConfig = raftConfig,
+            identity = identity,
+        ),
+    )
     node.awaitLeadership()
 
     val voters = mutableSetOf(self)
@@ -403,6 +446,12 @@ public suspend fun CoroutineScope.gameHost(
  *   mints a per-incarnation auto id (at-least-once forwarding, no cross-crash dedup). A **durable**
  *   joiner passes [ClientIdentity.Durable] with a stable id it persists itself and replays the same
  *   `requestId` on [TurnSequencer.propose] after a restart. See [us.tractat.kuilt.raft.ClientSessionTable].
+ * @param placement How this session obtains its consensus node. The default
+ *   [ConsensusPlacement.SessionOwned] constructs the learner-awaiting-promotion node — today's
+ *   behaviour. [ConsensusPlacement.preBuilt] hands the bootstrap a caller-constructed node (e.g. a
+ *   test double) that the admission wait then observes unchanged. Must seat
+ *   [AuthoritySeating.SessionPeers] — see [gameHost].
+ * @throws IllegalArgumentException if [placement] does not seat [AuthoritySeating.SessionPeers].
  * @throws RosterFullException if the host has already filled all seats and this peer is not in
  *   the final voter set.
  * @throws JoinTimeoutException if neither admission nor a roster-full signal arrives within
@@ -416,7 +465,9 @@ public suspend fun CoroutineScope.gameJoin(
     raftConfig: RaftConfig = RaftConfig(),
     joinAdmissionTimeout: Duration = DEFAULT_JOIN_ADMISSION_TIMEOUT,
     identity: ClientIdentity = ClientIdentity.Auto,
+    placement: ConsensusPlacement = ConsensusPlacement.SessionOwned,
 ): GameSession {
+    requireSessionPeerSeating(placement, entryPoint = "gameJoin")
     val mux = MuxSeam(seam, this)
     val raftSeam = mux.channel(RAFT_CHANNEL)
     val presenceSeam = mux.channel(PRESENCE_CHANNEL)
@@ -430,12 +481,16 @@ public suspend fun CoroutineScope.gameJoin(
 
     // Start as a learner with no known voters. The host's changeMembership will commit a
     // config that promotes us to voter; recomputeMembership then transitions role to Follower.
-    val node = raftNode(
-        ClusterConfig(voters = emptySet(), learners = setOf(self)),
-        SeamRaftTransport(raftSeam),
-        storage,
-        raftConfig,
-        identity,
+    val node = placement.node(
+        this,
+        ConsensusBinding(
+            self = self,
+            transport = SeamRaftTransport(raftSeam),
+            sessionMembership = ClusterConfig(voters = emptySet(), learners = setOf(self)),
+            storage = storage,
+            raftConfig = raftConfig,
+            identity = identity,
+        ),
     )
 
     awaitAdmissionOrThrow(node, presence, self, joinAdmissionTimeout)
@@ -475,6 +530,10 @@ public suspend fun CoroutineScope.gameJoin(
  * @param identity How this spectator obtains its Raft §8 dedup id. [ClientIdentity.Auto] (default)
  *   mints a per-incarnation auto id. A spectator never proposes, so this is rarely needed; accepted
  *   for symmetry with the other bootstrap paths. See [us.tractat.kuilt.raft.ClientSessionTable].
+ * @param placement How this session obtains its consensus node. The default
+ *   [ConsensusPlacement.SessionOwned] constructs the permanent-learner node — today's behaviour.
+ *   Must seat [AuthoritySeating.SessionPeers] — see [gameHost].
+ * @throws IllegalArgumentException if [placement] does not seat [AuthoritySeating.SessionPeers].
  * @throws SpectatorsClosedException if the host has spectators disabled or the cap is full.
  * @throws SpectateTimeoutException if neither admission nor a spectators-closed signal arrives
  *   within [spectateAdmissionTimeout].
@@ -485,7 +544,9 @@ public suspend fun CoroutineScope.gameSpectate(
     raftConfig: RaftConfig = RaftConfig(),
     spectateAdmissionTimeout: Duration = DEFAULT_SPECTATE_ADMISSION_TIMEOUT,
     identity: ClientIdentity = ClientIdentity.Auto,
+    placement: ConsensusPlacement = ConsensusPlacement.SessionOwned,
 ): GameSession {
+    requireSessionPeerSeating(placement, entryPoint = "gameSpectate")
     val mux = MuxSeam(seam, this)
     val raftSeam = mux.channel(RAFT_CHANNEL)
     val presenceSeam = mux.channel(PRESENCE_CHANNEL)
@@ -499,16 +560,36 @@ public suspend fun CoroutineScope.gameSpectate(
 
     // Start as a learner with no known voters. The host will commit a config that includes
     // this peer in the learners set; the spectator never leaves Learner role.
-    val node = raftNode(
-        ClusterConfig(voters = emptySet(), learners = setOf(self)),
-        SeamRaftTransport(raftSeam),
-        storage,
-        raftConfig,
-        identity,
+    val node = placement.node(
+        this,
+        ConsensusBinding(
+            self = self,
+            transport = SeamRaftTransport(raftSeam),
+            sessionMembership = ClusterConfig(voters = emptySet(), learners = setOf(self)),
+            storage = storage,
+            raftConfig = raftConfig,
+            identity = identity,
+        ),
     )
 
     awaitSpectatorAdmissionOrThrow(node, presence, spectateAdmissionTimeout)
     return GameSession(node, seam, appMux)
+}
+
+/**
+ * Guards the appoint-the-host bootstrap paths against a [AuthoritySeating.CoreVoters] placement.
+ *
+ * [gameHost]'s admission machinery promotes session peers into voter seats (learner→voter), and
+ * [gameJoin]'s admission signal is that promotion — both contradict a fixed external voter core,
+ * where session peers must stay learners forever. The server-core topology bootstraps via
+ * [gameNode] today; a hosted-path equivalent is a later slice of the unified-overlay plan.
+ */
+private fun requireSessionPeerSeating(placement: ConsensusPlacement, entryPoint: String) {
+    require(placement.seating is AuthoritySeating.SessionPeers) {
+        "$entryPoint promotes session peers to voter seats and supports only " +
+            "AuthoritySeating.SessionPeers placements — bootstrap a server-core session via " +
+            "gameNode with ConsensusPlacement.serverCore(...)"
+    }
 }
 
 /**
