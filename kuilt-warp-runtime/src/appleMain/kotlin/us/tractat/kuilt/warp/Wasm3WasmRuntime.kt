@@ -291,10 +291,9 @@ public class Wasm3WasmRuntime(
      * budget, and is cleared even on a trap so the next invocation on this thread starts disarmed.
      *
      * The `warp_alloc` return and the packed `warp_run` result are fully guest-controlled `i32`/`i64`
-     * words. They are kept as **unsigned** [Long] offsets (`0..0xFFFF_FFFF`) and bounds-validated in
-     * [memoryBaseFor] before any indexing — never narrowed to a signed [Int], which would let a value
-     * with bit 31 set wrap negative, slip past the bounds check, and index host memory (a sandbox
-     * escape) or hit `ByteArray(negative)` (a raw exception escaping [WasmException]).
+     * words, decoded exclusively through the common safe decoder ([unpackWarpResult] +
+     * [requireInBounds], via [memoryBaseFor]) — never a hand-rolled unpack, whose signed narrowing
+     * is exactly the sandbox-escape class the common decoder exists to prevent (see [GuestRegion]).
      */
     private fun runAbi(runtime: IM3Runtime, allocFn: IM3Function, runFn: IM3Function, args: ByteArray): ByteArray {
         warp_set_execution_deadline_ns(config.executionTimeout.inWholeNanoseconds.toULong())
@@ -302,9 +301,8 @@ public class Wasm3WasmRuntime(
             val argPtr = callAlloc(allocFn, args.size)
             writeMemory(runtime, argPtr, args)
             val packed = callRun(runFn, argPtr, args.size.toLong())
-            val resPtr = (packed ushr 32) and 0xFFFF_FFFFL
-            val resLen = packed and 0xFFFF_FFFFL
-            return readMemory(runtime, resPtr, resLen)
+            val result = unpackWarpResult(packed)
+            return readMemory(runtime, result.ptr, result.len)
         } finally {
             warp_clear_execution_deadline()
         }
@@ -357,18 +355,13 @@ public class Wasm3WasmRuntime(
     /**
      * Returns the current linear-memory base pointer for a `[ptr, ptr+len)` window, re-fetched on
      * every access because `warp_alloc` may have grown (reallocated) memory and invalidated an
-     * earlier pointer. Validates the guest-controlled window in [Long] space — `ptr`/`len` are
-     * non-negative, the result fits a [ByteArray], and `ptr + len` is within the live memory size —
-     * so a malicious pointer/length traps as a [WasmExecutionException] (a guest runtime fault),
-     * never an OOB host-memory access or a raw non-[WasmException].
+     * earlier pointer. The guest-controlled window is validated by the common [requireInBounds]
+     * against the live memory size, so a malicious pointer/length traps as a
+     * [WasmExecutionException] (a guest runtime fault), never an OOB host-memory access or a raw
+     * non-[WasmException].
      */
     private fun memoryBaseFor(runtime: IM3Runtime, ptr: Long, len: Long): CPointer<UByteVar> {
-        val size = m3_GetMemorySize(runtime).toLong()
-        if (ptr < 0L || len < 0L || len > Int.MAX_VALUE.toLong() || ptr + len > size) {
-            throw WasmExecutionException(
-                "WASM memory access out of bounds: window [$ptr, ${ptr + len}) outside [0, $size)",
-            )
-        }
+        requireInBounds(ptr, len, m3_GetMemorySize(runtime).toLong())
         return checkNotNull(m3_GetMemory(runtime, null, 0u)) {
             "wasm3: m3_GetMemory returned null after load"
         }

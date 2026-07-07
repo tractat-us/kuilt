@@ -291,6 +291,10 @@ public class ChicoryWasmRuntime(
                 // Structured-concurrency cancellation must propagate, never be swallowed into a
                 // WasmExecutionException (parity with BrowserWasmRuntime's guard).
                 throw e
+            } catch (e: WasmException) {
+                // Already terminal — the common decoder's bounds rejection ([requireInBounds])
+                // arrives as a WasmExecutionException; rethrow rather than double-wrap.
+                throw e
             } catch (e: TimeoutException) {
                 throw WasmExecutionException("WASM execution exceeded ${config.executionTimeout}", e)
             } catch (e: ChicoryException) {
@@ -308,18 +312,34 @@ public class ChicoryWasmRuntime(
         val NO_RESULT: ByteArray = ByteArray(0)
     }
 
-    /** The ABI marshalling, executed entirely on [guestExecutor] so all guest access is bounded. */
+    /**
+     * The ABI marshalling, executed entirely on [guestExecutor] so all guest access is bounded.
+     *
+     * The `warp_alloc` return and the packed `warp_run` result are fully guest-controlled
+     * `i32`/`i64` words, decoded exclusively through the common safe decoder ([requireInBounds] /
+     * [decodeWarpResult]) as **unsigned** [Long]s — never a hand-rolled unpack, whose signed
+     * [Int] narrowing is exactly the sandbox-escape class the common decoder exists to prevent
+     * (see [GuestRegion]). Only after validation are the words narrowed for Chicory's
+     * [Int]-addressed [Memory] API, which then re-checks natively.
+     */
     private fun runAbi(
         memory: Memory,
         allocFn: ExportFunction,
         runFn: ExportFunction,
         args: ByteArray,
     ): ByteArray {
-        val argPtr = allocFn.apply(args.size.toLong())[0].toInt()
-        memory.write(argPtr, args)
-        val packed = runFn.apply(argPtr.toLong(), args.size.toLong())[0]
-        val resPtr = (packed ushr 32).toInt()
-        val resLen = (packed and 0xFFFF_FFFFL).toInt()
-        return memory.readBytes(resPtr, resLen)
+        val argPtr = allocFn.apply(args.size.toLong())[0] and 0xFFFF_FFFFL
+        requireInBounds(argPtr, args.size.toLong(), memorySizeOf(memory))
+        memory.write(argPtr.toInt(), args)
+        val packed = runFn.apply(argPtr, args.size.toLong())[0]
+        return decodeWarpResult(packed, memorySizeOf(memory)) { ptr, len ->
+            memory.readBytes(ptr.toInt(), len.toInt())
+        }
     }
+
+    /**
+     * The *current* linear-memory size in bytes — fetched after each guest call, which may have
+     * grown memory (up to its validated declared max).
+     */
+    private fun memorySizeOf(memory: Memory): Long = memory.pages().toLong() * Memory.PAGE_SIZE
 }

@@ -254,6 +254,17 @@ private external fun wasmHasWarpAbi(module: JsAny): Boolean
 /**
  * Spawns the guest Worker for one op and posts the module bytes for instantiation.
  * Returns the executor handle `{worker, pending, nextId, dead}`.
+ *
+ * **The warp-ABI result decode is the worker-side JS mirror of the common safe decoder**
+ * ([unpackWarpResult] + [requireInBounds] — see `WarpAbiResult.kt` in `:kuilt-warp`). It cannot
+ * call the Kotlin helper: the decode must run inside the Worker realm (reading the result out of
+ * the guest's live `memory.buffer` before anything can detach or mutate it), where no Kotlin
+ * runtime exists. The mirror preserves the same two properties: `BigInt.asUintN(32, …)` keeps the
+ * guest-controlled ptr/len words **unsigned** (never sign-wrapped), and the `Uint8Array(buffer,
+ * resPtr, resLen)` view construction bounds-rejects any window past `buffer.byteLength` (a
+ * `RangeError` → error outcome → [WasmExecutionException], the same terminal class). The TCK's
+ * high-bit ptr/len/alloc vectors pin this equivalence on every target — change one side only in
+ * lockstep with the other.
  */
 @JsFun(
     """(bytes) => {
