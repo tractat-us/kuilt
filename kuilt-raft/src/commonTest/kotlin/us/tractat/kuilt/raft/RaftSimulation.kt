@@ -49,7 +49,7 @@ class RaftSimulation(
     maxPayloadBytes: Int? = null,
     private val nodeFactory: (NodeId, RaftTransport, RaftStorage, CoroutineScope) -> RaftNode,
 ) {
-    val network = InMemoryRaftNetwork(maxPayloadBytes)
+    val network = InMemoryRaftNetwork(maxPayloadBytes, deliveryScope = nodeScope)
     val storages: Map<NodeId, InMemoryRaftStorage> = nodeIds.associateWith { InMemoryRaftStorage() }
     private val scopes: MutableMap<NodeId, CoroutineScope> = mutableMapOf()
     val nodes: MutableMap<NodeId, RaftNode> = mutableMapOf()

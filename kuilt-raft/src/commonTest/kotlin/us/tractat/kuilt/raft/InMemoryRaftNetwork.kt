@@ -2,15 +2,19 @@
 
 package us.tractat.kuilt.raft
 
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
 import kotlinx.serialization.cbor.Cbor
 import us.tractat.kuilt.raft.internal.RaftMessage
+import kotlin.time.Duration
 
 class InMemoryRaftNetwork(
     /**
@@ -19,10 +23,17 @@ class InMemoryRaftNetwork(
      * InstallSnapshot to span many chunks so the chunking path is exercised in tests.
      */
     private val maxPayloadBytes: Int? = null,
+    /**
+     * Scope hosting delayed deliveries for links given a [setLinkLatency] — pass the test's
+     * `backgroundScope` (via [RaftSimulation]'s `nodeScope`) so in-flight messages are dropped at
+     * teardown. Required only when [setLinkLatency] is used; zero-latency links never touch it.
+     */
+    private val deliveryScope: CoroutineScope? = null,
 ) {
     private val channels = mutableMapOf<NodeId, Channel<RaftEnvelope>>()
     private val _peers = MutableStateFlow<Set<NodeId>>(emptySet())
     private val dropped = mutableSetOf<Pair<NodeId, NodeId>>()
+    private val latencies = mutableMapOf<Pair<NodeId, NodeId>, Duration>()
 
     /** One decoded, in-order record of a send attempted on the network — see [recording] / [sent]. */
     internal data class Sent(val from: NodeId, val to: NodeId, val message: RaftMessage)
@@ -51,7 +62,19 @@ class InMemoryRaftNetwork(
             override val maxPayloadBytes: Int? = limit
             override suspend fun sendTo(peer: NodeId, message: ByteArray) {
                 if (recording) sent += Sent(id, peer, Cbor.decodeFromByteArray(RaftMessage.serializer(), message))
-                if ((id to peer) !in dropped) channels[peer]?.send(RaftEnvelope(id, message))
+                if ((id to peer) in dropped) return
+                val latency = latencies[id to peer]
+                if (latency == null) {
+                    channels[peer]?.send(RaftEnvelope(id, message))
+                } else {
+                    // Delayed delivery off the sender's actor loop, so latency never stalls the
+                    // engine. Constant per-link latency + FIFO virtual-time scheduling preserves
+                    // per-link message order.
+                    checkNotNull(deliveryScope).launch {
+                        delay(latency)
+                        channels[peer]?.send(RaftEnvelope(id, message))
+                    }
+                }
             }
         }
     }
@@ -62,6 +85,18 @@ class InMemoryRaftNetwork(
 
     fun heal() { dropped.clear() }
     fun dropLink(from: NodeId, to: NodeId) { dropped += from to to }
+
+    /**
+     * Give the directed link `from → to` a one-way delivery [latency] (virtual time). Deliveries are
+     * launched on [deliveryScope] (required — fails fast here if absent) so the sender's actor loop
+     * never stalls; constant latency preserves per-link FIFO order under [kotlinx.coroutines.test.StandardTestDispatcher].
+     * An RTT > 0 makes a chunked InstallSnapshot's one-chunk-in-flight ack cycle consume virtual
+     * time, so a multi-chunk transfer genuinely spans heartbeat intervals (issue #1226).
+     */
+    fun setLinkLatency(from: NodeId, to: NodeId, latency: Duration) {
+        checkNotNull(deliveryScope) { "setLinkLatency requires a deliveryScope" }
+        latencies[from to to] = latency
+    }
 
     /** Inject [bytes] from [from] directly into [to]'s channel, bypassing all partition/drop rules. */
     suspend fun deliver(from: NodeId, to: NodeId, bytes: ByteArray) {
