@@ -129,6 +129,37 @@ plies already carry. They also don't compose by type today (`meshSeam()` takes
 `List<Connection>`, not `List<Seam>`), so "a mesh whose every link is itself multipath"
 would be a *new* abstraction at the topology layer, not a change to either.
 
+### Who gets in: principals and link admission on the hosted hub
+
+A mesh peer's wire identity is *self-asserted* — whatever `PeerId` it claims in its
+`MeshHello` preamble. On a trusted LAN that is enough; on the open internet the host
+usually *knows more* (a login token, a session cookie, a client certificate) and needs
+a way to hold the door with it. The hosted-hub accept path carries that knowledge in
+three steps, each defaulting to today's open behaviour:
+
+- **Extraction** — the transport accept is the only moment auth material is in hand, so
+  that's where a `Principal` (an opaque, host-verified identity) is derived:
+  `KtorConnectionSource(principalExtractor = …)` on the WebSocket front door, or
+  `Connection.withPrincipal(…)` on any hand-built source. The principal rides the
+  connection object itself — never an out-of-band `peer → principal` map that could
+  desync.
+- **Verification** — `meshSeam(admission = LinkAdmission { principal, remoteId -> … })`
+  enforces the policy inside `Mesh.addLink`, between the `MeshHello` handshake (the
+  first moment the claimed id is known) and link publication (the last moment before
+  the link can contend in duplicate-link dedup or receive frames). A rejected link is
+  closed and never reaches the dedup tiebreak, so a forged `MeshHello` can never
+  displace a live peer's link. `hostedOverlay(admission = …)` / `gameHosted(admission = …)`
+  thread the same policy from the top. A supplied policy is authoritative for *every*
+  link — unattested connections reach it with `principal = null` and it decides.
+- **Landing** — `Mesh` (and, by delegation, the hub's `GossipSeam` and the
+  `GameSession` facade) is a `PrincipalRoster`: `attestedPrincipals` exposes the
+  verified principal per admitted peer, maintained atomically with the link set.
+
+kuilt deliberately does not hardcode a `principal == peerId` binding — how an auth
+subject maps to a mesh peer id is the consumer's policy (one user may run several
+devices); the design and threat model live in
+[`docs/superpowers/specs/2026-07-07-hub-accept-attestation.md`](superpowers/specs/2026-07-07-hub-accept-attestation.md).
+
 ## The contract
 
 ```kotlin
