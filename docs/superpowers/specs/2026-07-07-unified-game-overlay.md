@@ -96,12 +96,13 @@ public interface TopologyPolicy {                     // working name; subsumes 
 traffic (`sendTo`) passes through untouched, exactly as it does today — one fabric,
 and the policy only ever governs *broadcast dissemination*, never unicast.
 
-**Open design question A (for Iain):** is `TwoTier` honestly an instance of the same
-policy interface, or is it a *composition* (a `GossipSeam` per tier, bridged at each
-server)? The single-interface version is prettier; the per-tier version may match the
-GC/anti-entropy semantics better, because a server's Quilter peers-set differs by tier.
-The interface above is my proposal; the alternative is `TwoTier` as a decorator that
-owns two policy instances.
+**Resolved (decision A):** there is **one** `TopologyPolicy` interface. `TwoTier` is a
+plain instance of it — but *internally* it delegates to `RandomKRegular`/`FullFanout` for
+its core and attachment behaviour (e.g. the voter core relays with `FullFanout`
+semantics among servers; a client's single-attachment view is the degenerate case). That
+composition is a **private implementation detail of the `TwoTier` instance**, never a
+public framework of nested policies. Slice 1 therefore targets the single interface
+above; `TwoTier`'s delegation lives behind it.
 
 ## Abstraction B — the session mux: mostly landed, one composition missing
 
@@ -158,6 +159,16 @@ client whose entry server dies reconnects to another and rejoins its game, becau
 state was never only on the client. This is the one capability the single-host star
 cannot give, and the entire reason federation exists.
 
+**Consensus placement (decision B):** implement **all-servers-vote-every-game first** —
+every game's Raft cluster has all M servers as voters, which maps directly onto
+`gameHosted`-per-room and is the simplest thing that survives a server death. `gameId`-shard
+(hash `gameId` → k of M servers) is deferred to a **later, pure scaling slice** — not built
+now, but the injectable consensus seam (slice 2) keeps the door open, so sharding drops in
+without reshaping the game code. And **phone-host stays first-class**: authority placement
+(the leader on a player's device vs the server core) is a **bootstrap-time choice** — the
+session-consuming code (`TurnSequencer`, app channels, Quilter) is identical either way, so
+the LAN/offline product and the hosted product share everything above the bootstrap.
+
 ## The honest seam: a policy can virtualize dissemination, not authority
 
 Everything above sells "topology is just a policy". Here is the one place that is
@@ -173,9 +184,10 @@ dissemination settings:
   therefore not a pure policy swap — the game's consensus **moves**. `gameHost` run
   by a phone and `gameHost` run by a server core produce clusters with different
   fault-tolerance and different trust. The bootstrap entry point (`gameHosted` vs the
-  federated equivalent) is where that choice surfaces, deliberately: the epic's "same
-  code on every topology" claim holds for the *session-consuming* code
-  (`TurnSequencer`, app channels, Quilter), not for who calls the host-side bootstrap.
+  federated equivalent) is where that choice surfaces, deliberately (decision B: both
+  placements stay first-class): the epic's "same code on every topology" claim holds
+  for the *session-consuming* code (`TurnSequencer`, app channels, Quilter), not for
+  who calls the host-side bootstrap.
 - **Unicast reachability, and the leak boundary.** ADR-005's tested invariant —
   `sendTo` is never relayed, only `broadcast` floods — is what keeps per-recipient
   secrets (fireworks' per-seat disclosure) safe on the transport guarantee alone.
@@ -220,32 +232,36 @@ and — after the first — deletes something.
 
 Slices 0–3 are near-term and each fireworks-adoptable; 4–6 are the federation arc.
 Slice 2 is trivially parallel to everything. Slice 5 is the only one with real design
-risk and should get its own planning sub-issue once decisions A–C below are resolved.
+risk and should get its own planning sub-issue; the framing decisions it depends on
+(A–C) are resolved below, so it is ready to plan.
 
-## The open decisions (what this doc wants from Iain)
+## Resolved decisions
 
-**A. Policy shape.** One `TopologyPolicy` interface covering isotropic *and* structural
-topologies (proposed above), or `TwoTier` as a per-tier composition of simpler
-policies? Decides slice 1's target and how much of `GossipView` survives.
+Iain resolved the three framing questions; recording them here so the slice plan is
+executable without re-litigation.
 
-**B. Consensus placement in federation.** Per-game Raft cluster among the servers
-(every game gets its own log, voters = all M servers — simplest, matches
-`gameHosted`-per-room directly), or per-game shard (hash `gameId` → k of M)? And is
-the *client-side host* (`gameHost` on a phone) still a supported topology once a
-server core exists, or does federated mode always move the leader server-side? #795
-leaned "all-servers-vote first, shard later" — I agree, but the phone-host question
-decides whether slice 6 can truly delete the single-host paths or must keep both
-authority placements first-class. My read: keep both — they serve different products
-(LAN/offline vs hosted) — and let the *bootstrap entry point* be the explicit switch.
+**A. One policy interface.** There is a single `TopologyPolicy` interface covering
+isotropic *and* structural topologies. `TwoTier` is a plain instance that **delegates
+internally** to `RandomKRegular`/`FullFanout` for its core/attachment behaviour — that
+composition is a private implementation detail of the instance, **not** a public
+framework of nested policies. Slice 1 targets the single interface; `GossipView` stops
+owning selection and consumes the policy.
 
-**C. Routed unicast surface.** Does cross-core routing stay **internal** to the Raft
-transport layer (only consensus envelopes cross the core; app-level `sendTo` remains
-hub-local — narrowest, preserves the leak boundary trivially), or does the federated
-overlay present a faithful N-peer `Seam` where any member can `sendTo` any member
-through the core? ADR-005 chose "honestly hub-centric" for the star; federation
-re-poses the question at larger scale. Narrow first is my recommendation — widen only
-when a consumer needs cross-server app unicast, and then under the single-addressee
-guard.
+**B. Both authority placements, all-servers-vote first.** Phone-host stays **first-class** —
+where consensus lives (a player's device or the server core) is a bootstrap-time choice,
+and the session-consuming code is identical either way. In federation, implement
+**all-servers-vote-every-game first** (voters = all M servers, maps onto
+`gameHosted`-per-room); `gameId`-shard is a **later pure-scaling slice**, kept open by the
+injectable consensus seam (slice 2) but not built now. Consequence: slice 6 does **not**
+delete the single-host authority path — it unifies the *plumbing*, keeping both bootstraps.
+
+**C. Routed unicast = Raft envelopes crossing the core, single-addressee only.**
+Cross-core routing stays **internal to the Raft transport layer**: only consensus
+envelopes (a learner's forwarded propose; the leader's AppendEntries/InstallSnapshot to a
+remote-attached learner) cross the core, strictly single-addressee, never fanned —
+inheriting ADR-005's leak boundary directly. App-level `sendTo` remains hub-local; a
+faithful N-peer cross-server app-unicast `Seam` is deferred until a consumer needs it, and
+would then land under the same single-addressee guard.
 
 ## References
 
