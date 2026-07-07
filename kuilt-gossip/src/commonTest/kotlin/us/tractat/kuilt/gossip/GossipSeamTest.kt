@@ -146,6 +146,30 @@ class GossipSeamTest {
         }
 
     @Test
+    fun answersPingFromNonActivePeerWithPong() =
+        runTest {
+            // N large enough that the k-floor of 4 leaves most peers outside the
+            // active view — the asymmetric-edge case of #1265.
+            val peers = members(30)
+            val (base, seam) = gossipSeam(peers, seed = 4)
+            seam.start(backgroundScope)
+            settle()
+
+            // A peer that watches us without us watching it back: its detector pings
+            // us, and no local detector matches its sender.
+            val watcher = (base.peers.value - seam.selfId - seam.activePeers.value).first()
+            base.deliver(watcher, HeartbeatPartitionDetector.PING_PREFIX.encodeToByteArray())
+            runCurrent()
+
+            val pongs =
+                base.directed.filter { (peer, bytes) ->
+                    peer == watcher && HeartbeatPartitionDetector.isHeartbeatFrame(bytes) &&
+                        bytes.decodeToString().startsWith(HeartbeatPartitionDetector.PONG_PREFIX)
+                }
+            assertEquals(1, pongs.size, "an inbound ping from an unwatched peer must be answered with a pong")
+        }
+
+    @Test
     fun filtersHeartbeatFramesFromIncoming() =
         runTest {
             val peers = members(6)
