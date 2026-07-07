@@ -19,6 +19,9 @@ import us.tractat.kuilt.core.CloseReason
 import us.tractat.kuilt.core.DeliveryPolicy
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.PeerNotConnected
+import us.tractat.kuilt.core.Principal
+import us.tractat.kuilt.core.PrincipalAttested
+import us.tractat.kuilt.core.PrincipalRoster
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.Spool
@@ -31,16 +34,27 @@ import kotlin.random.Random
  * A [Seam] over a fully-connected N-peer mesh of point-to-point [Connection]s, with support for
  * admitting links that arrive after construction.
  *
- * Obtain one from [meshSeam]. Beyond the [Seam] contract it adds [addLink] for dynamic peer-join.
+ * Obtain one from [meshSeam]. Beyond the [Seam] contract it adds [addLink] for dynamic peer-join,
+ * and it is a [PrincipalRoster]: host-verified principals attached to admitted connections (via
+ * [us.tractat.kuilt.core.withPrincipal]) are observable per peer, maintained atomically with the
+ * link set.
  */
-public interface Mesh : Seam {
+public interface Mesh : Seam, PrincipalRoster {
     /**
      * Admit a [Connection] to a peer that dialed in after construction.
      *
-     * Exchanges the mesh preamble to learn the remote [PeerId], dedups against existing links
-     * using the same canonical rule as construction (see [meshSeam]), updates [peers], and
-     * launches the link's read loop. Suspends until the preamble exchange completes.
+     * Exchanges the mesh preamble to learn the remote [PeerId], applies the mesh's
+     * [LinkAdmission] policy, dedups against existing links using the same canonical rule as
+     * construction (see [meshSeam]), updates [peers], and launches the link's read loop.
+     * Suspends until the preamble exchange completes.
      *
+     * The admission check runs **between** the handshake and link publication — the first
+     * moment the joiner's self-asserted [PeerId] is known, and the last moment before the
+     * link can contend in duplicate-link dedup or receive frames. A rejected connection is
+     * closed and [LinkRejectedException] is thrown; it never reaches the dedup tiebreak, so
+     * a forged link can never displace a live one.
+     *
+     * @throws LinkRejectedException if the mesh's [LinkAdmission] policy rejects the link.
      * @param conn A fresh, unread [Connection]. The mesh wraps it with [singleCollection] before reading,
      *   so the preamble read and the read loop share ONE collection of [Connection.incoming] — a cold,
      *   single-collection conn (a stream fabric's `framed()`) works as well as a hot channel-backed
@@ -107,8 +121,16 @@ private fun ByteArray.readInt(offset: Int): Int =
 /** Hex-encode [this] for use in the canonical link-nonce comparison string. */
 private fun ByteArray.toHex(): String = joinToString("") { (it.toInt() and 0xff).toString(16).padStart(2, '0') }
 
-/** A handshaked link: the remote peer, its conn, and the canonical link nonce both ends agree on. */
-private class Link(val remoteId: PeerId, val conn: Connection, val linkNonce: String)
+/**
+ * A handshaked link: the remote peer, its conn, the canonical link nonce both ends agree on, and
+ * the host-verified [Principal] that rode the original connection (`null` = unattested).
+ */
+private class Link(
+    val remoteId: PeerId,
+    val conn: Connection,
+    val linkNonce: String,
+    val principal: Principal?,
+)
 
 /**
  * Build a fully-connected N-peer mesh [Seam] from a set of raw point-to-point connections.
@@ -146,6 +168,12 @@ private class Link(val remoteId: PeerId, val conn: Connection, val linkNonce: St
  * @param policy Delivery policy for the seam's inbound [Spool]. Defaults to [DeliveryPolicy.Reliable]
  *   (bounded, backpressured). Pass [DeliveryPolicy.Lossy] for a lossy radio-style fabric or
  *   [DeliveryPolicy.Strict] in tests that assert no overflow.
+ * @param admission Per-link admission policy, applied after each link's handshake and before it is
+ *   published — both to construction-time connections and to every later [Mesh.addLink]. Defaults
+ *   to [LinkAdmission.AcceptAll] (byte-identical to today's open behaviour); once supplied, the
+ *   policy is authoritative for **every** link, including unattested ones. A construction-time
+ *   rejection closes the offending connection and fails construction with [LinkRejectedException]
+ *   (sibling handshakes are cancelled, matching the existing failed-handshake behaviour).
  */
 public suspend fun meshSeam(
     selfId: PeerId,
@@ -153,9 +181,12 @@ public suspend fun meshSeam(
     dispatcher: CoroutineContext,
     random: Random = Random.Default,
     policy: DeliveryPolicy = DeliveryPolicy.Reliable,
+    admission: LinkAdmission = LinkAdmission.AcceptAll,
 ): Mesh {
     val links = coroutineScope {
-        connections.map { conn -> async { handshakeLink(selfId, conn, dispatcher, random) } }.awaitAll()
+        connections.map { conn ->
+            async { handshakeLink(selfId, conn, dispatcher, random).also { admitOrThrow(admission, it) } }
+        }.awaitAll()
     }
 
     // Dedup duplicate links to the same peer, keeping the canonical survivor on every node.
@@ -171,7 +202,7 @@ public suspend fun meshSeam(
     }
     losers.forEach { runCatchingCancellable { it.conn.close() } }
 
-    return MeshSeam(selfId, winners, dispatcher, random, policy)
+    return MeshSeam(selfId, winners, dispatcher, random, policy, admission)
 }
 
 /**
@@ -183,11 +214,14 @@ public suspend fun meshSeam(
  * carries, so dedup/teardown closes and the read loop all operate on it.
  */
 private suspend fun handshakeLink(selfId: PeerId, conn: Connection, dispatcher: CoroutineContext, random: Random): Link {
+    // Read the attestation off the ORIGINAL connection before wrapping — the singleCollection
+    // wrapper is a plain Connection and would hide the PrincipalAttested marker.
+    val principal = (conn as? PrincipalAttested)?.principal
     val single = conn.singleCollection(dispatcher)
     val myNonce = random.nextBytes(NONCE_BYTES)
     single.send(MeshHello.encode(selfId, myNonce))
     val remote = MeshHello.decode(single.firstFrame())
-    return Link(remote.peerId, single, canonicalLinkNonce(myNonce, remote.nonce))
+    return Link(remote.peerId, single, canonicalLinkNonce(myNonce, remote.nonce), principal)
 }
 
 /** Order-independent link identity from the two endpoint nonces — identical on both ends. */
@@ -196,12 +230,26 @@ private fun canonicalLinkNonce(a: ByteArray, b: ByteArray): String {
     return "$lo:$hi"
 }
 
+/**
+ * THE CHECK (design 2026-07-07-hub-accept-attestation, P1 + P2): apply [admission] to a freshly
+ * handshaked [link], after the `MeshHello` (the first moment the self-asserted remote id is known)
+ * and before publication (the last moment before the link can contend in dedup or receive frames).
+ * On rejection the connection is closed and [LinkRejectedException] thrown — a forged link never
+ * reaches the dedup lottery, so it can never displace a live link.
+ */
+private suspend fun admitOrThrow(admission: LinkAdmission, link: Link) {
+    if (admission.admit(link.principal, link.remoteId)) return
+    runCatchingCancellable { link.conn.close() }
+    throw LinkRejectedException(link.remoteId, attested = link.principal != null)
+}
+
 private class MeshSeam(
     override val selfId: PeerId,
     initialLinks: Map<PeerId, Link>,
     private val dispatcher: CoroutineContext,
     private val random: Random,
     policy: DeliveryPolicy,
+    private val admission: LinkAdmission,
 ) : Mesh {
     private val scope = CoroutineScope(SupervisorJob() + dispatcher)
 
@@ -219,6 +267,12 @@ private class MeshSeam(
     private val _state = MutableStateFlow<SeamState>(SeamState.Woven)
     override val state: StateFlow<SeamState> = _state.asStateFlow()
 
+    // Host-verified principals of currently-linked peers (PrincipalRoster). Updated ONLY under
+    // `lock`, in the same critical sections that mutate `links`, so it can never desync from the
+    // live link set.
+    private val _attestedPrincipals = MutableStateFlow<Map<PeerId, Principal>>(emptyMap())
+    override val attestedPrincipals: StateFlow<Map<PeerId, Principal>> = _attestedPrincipals.asStateFlow()
+
     private val spool = Spool<Swatch>(policy)
     override val incoming: Flow<Swatch> = spool.incoming
 
@@ -234,6 +288,7 @@ private class MeshSeam(
         // Populate the link map before any readLoop can observe it. No coroutine has started yet.
         links.putAll(initialLinks)
         _peers.value = buildPeerSet()
+        _attestedPrincipals.value = buildRoster()
 
         // Launch a supervised reader for each initial link.
         initialLinks.values.forEach { link -> scope.launch { readLoop(link.remoteId, link.conn) } }
@@ -244,6 +299,9 @@ private class MeshSeam(
     override suspend fun addLink(conn: Connection) {
         check(!closed.value) { closedMessage }
         val link = handshakeLink(selfId, conn, dispatcher, random)
+        // THE CHECK: between the handshake (remote id now known) and admitOrReject (link not yet
+        // live). A rejected link is closed and thrown before it can contend in the dedup lottery.
+        admitOrThrow(admission, link)
         // Dedup against any existing link to the same peer using the canonical nonce, then publish.
         // Snapshot the loser under the lock, close it outside.
         val loser = admitOrReject(link)
@@ -260,10 +318,21 @@ private class MeshSeam(
         if (closed.value) return@withLock link.conn
         val existing = links[link.remoteId]
         when {
-            existing == null -> { links[link.remoteId] = link; _peers.value = buildPeerSet(); null }
-            link.linkNonce < existing.linkNonce -> { links[link.remoteId] = link; existing.conn }
+            existing == null -> { links[link.remoteId] = link; publishRosters(); null }
+            // Displacement keeps the peer set identical but may change the peer's attestation.
+            link.linkNonce < existing.linkNonce -> { links[link.remoteId] = link; publishRosters(); existing.conn }
             else -> link.conn
         }
+    }
+
+    /**
+     * Republish [peers] and [attestedPrincipals] from the live link map. MUST be called with
+     * [lock] held, in the same critical section as the link mutation, so the published rosters
+     * can never desync from [links].
+     */
+    private fun publishRosters() {
+        _peers.value = buildPeerSet()
+        _attestedPrincipals.value = buildRoster()
     }
 
     override suspend fun broadcast(payload: ByteArray) {
@@ -323,6 +392,7 @@ private class MeshSeam(
             // (matches LinkSeam). Published inside the lock so removePeer cannot overwrite this
             // with a stale partial set after the lock is released.
             _peers.value = setOf(selfId)
+            _attestedPrincipals.value = emptyMap()
             snapshot
         }
         _state.value = SeamState.Torn(reason)
@@ -345,7 +415,7 @@ private class MeshSeam(
             val live = links[remoteId] ?: return@withLock
             if (conn != null && live.conn !== conn) return@withLock
             links.remove(remoteId)
-            _peers.value = buildPeerSet()
+            publishRosters()
         }
     }
 
@@ -353,5 +423,11 @@ private class MeshSeam(
         buildSet {
             add(selfId)
             addAll(links.keys)
+        }
+
+    /** Attested principals of the live links. MUST be called with [lock] held (reads [links]). */
+    private fun buildRoster(): Map<PeerId, Principal> =
+        buildMap {
+            links.values.forEach { link -> link.principal?.let { put(link.remoteId, it) } }
         }
 }
