@@ -6,7 +6,7 @@
  * that lacks the bytes sends a [FetchMessage]-style request and awaits a response from
  * any neighbour that holds them. Re-hashing verifies integrity before caching.
  *
- * Coroutine discipline mirrors [SymbolicDispatchTest]: [UnconfinedTestDispatcher] with
+ * Coroutine discipline mirrors [SymbolicDispatchTest]: [StandardTestDispatcher] with
  * virtual time driven by bounded [advanceTimeBy] steps — never [advanceUntilIdle]
  * (Quilter anti-entropy timers re-arm forever under virtual time).
  */
@@ -16,7 +16,7 @@ package us.tractat.kuilt.warp
 
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
-import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
@@ -55,7 +55,7 @@ class BobbinExchangeTest {
      */
     @Test
     fun manifestConvergesAndFetchDeliversBytes() =
-        runTest(UnconfinedTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
             val loom = InMemoryLoom()
             val seamA = loom.host(Pattern("bobbin-exchange"))
             val seamB = loom.join(InMemoryTag("b"))
@@ -90,7 +90,7 @@ class BobbinExchangeTest {
      */
     @Test
     fun fetchReturnsCachedBytesImmediately() =
-        runTest(UnconfinedTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
             val loom = InMemoryLoom()
             val seam = loom.host(Pattern("bobbin-cache-hit"))
             val creel = Creel()
@@ -111,7 +111,7 @@ class BobbinExchangeTest {
      */
     @Test
     fun manifestReflectsAllPutHashes() =
-        runTest(UnconfinedTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
             val loom = InMemoryLoom()
             val seam = loom.host(Pattern("bobbin-manifest-local"))
             val creel = Creel()
@@ -135,7 +135,7 @@ class BobbinExchangeTest {
      */
     @Test
     fun putVariantPublishesMetaWithProvenance() =
-        runTest(UnconfinedTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
             val loom = InMemoryLoom()
             val seam = loom.host(Pattern("variant-meta-local"))
             val exchange = BobbinExchange(seam, Creel(), backgroundScope, BOBBIN_QUILTER_CONFIG)
@@ -189,7 +189,7 @@ class BobbinExchangeTest {
      */
     @Test
     fun lateHolderCompletesViaPeriodicReRequest() =
-        runTest(UnconfinedTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
             val loom = InMemoryLoom()
             val seamA = loom.host(Pattern("bobbin-late-holder"))
             val seamB = loom.join(InMemoryTag("b"))
@@ -231,7 +231,7 @@ class BobbinExchangeTest {
      */
     @Test
     fun cancelledFetchDoesNotOrphanInFlightEntry() =
-        runTest(UnconfinedTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
             val loom = InMemoryLoom()
             val seamA = loom.host(Pattern("bobbin-cancel-orphan"))
             val seamB = loom.join(InMemoryTag("b"))
@@ -278,7 +278,7 @@ class BobbinExchangeTest {
      */
     @Test
     fun cancellingOneConcurrentWaiterDoesNotOrphanTheOther() =
-        runTest(UnconfinedTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
             val loom = InMemoryLoom()
             val seamA = loom.host(Pattern("bobbin-multi-waiter-cancel"))
             val seamB = loom.join(InMemoryTag("b"))

@@ -3,7 +3,7 @@
  * decoupling who-runs from the consistent-hash ring (the foundation for data-local workloads
  * such as federated learning).
  *
- * Runs under [UnconfinedTestDispatcher] with bounded [advanceTimeBy] via [drainPinned] — never
+ * Runs under [StandardTestDispatcher] with bounded [advanceTimeBy] via [drainPinned] — never
  * [advanceUntilIdle], which would spin the Quilter's re-arming anti-entropy loop (see
  * [WarpNodeTest] for the full rationale). Clocks read virtual time from `testScheduler` so the
  * settle-window check stays on the same timeline as `delay()`.
@@ -21,7 +21,7 @@ import kotlinx.atomicfu.locks.withLock
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.TestCoroutineScheduler
 import kotlinx.coroutines.test.TestScope
-import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
@@ -80,7 +80,7 @@ class WarpNodePinnedExecutionTest {
      * result lands on the converged board.
      */
     @Test
-    fun pinnedTaskRunsOnItsOwnerNotTheRingOwner() = runTest(UnconfinedTestDispatcher(), timeout = 5.seconds) {
+    fun pinnedTaskRunsOnItsOwnerNotTheRingOwner() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
         val loom = InMemoryLoom()
         val seamA = loom.host(Pattern("pinned-owner-test"))
         val seamB = loom.join(InMemoryTag("b"))
@@ -125,7 +125,7 @@ class WarpNodePinnedExecutionTest {
      * proving the system is live and it is specifically the pin holding the pinned task back.
      */
     @Test
-    fun pinnedTaskDoesNotReHomeWhenOwnerAbsentThenRunsOnReturn() = runTest(UnconfinedTestDispatcher(), timeout = 5.seconds) {
+    fun pinnedTaskDoesNotReHomeWhenOwnerAbsentThenRunsOnReturn() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
         val loom = InMemoryLoom()
         val seamA = loom.host(Pattern("pinned-no-rehome-test"))
         val seamB = loom.join(InMemoryTag("b"))
@@ -176,7 +176,7 @@ class WarpNodePinnedExecutionTest {
      * with no pin still ring-assigns and executes exactly as before.
      */
     @Test
-    fun unpinnedTasksStillRingAssign() = runTest(UnconfinedTestDispatcher(), timeout = 5.seconds) {
+    fun unpinnedTasksStillRingAssign() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
         val loom = InMemoryLoom()
         val seamA = loom.host(Pattern("unpinned-regression-test"))
         val seamB = loom.join(InMemoryTag("b"))
@@ -210,7 +210,7 @@ class WarpNodePinnedExecutionTest {
      * regardless of which peer the hash ring would otherwise assign it to.
      */
     @Test
-    fun enqueueLocalPinsToSelf() = runTest(UnconfinedTestDispatcher(), timeout = 5.seconds) {
+    fun enqueueLocalPinsToSelf() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
         val loom = InMemoryLoom()
         val seamA = loom.host(Pattern("enqueue-local-test"))
         val seamB = loom.join(InMemoryTag("b"))

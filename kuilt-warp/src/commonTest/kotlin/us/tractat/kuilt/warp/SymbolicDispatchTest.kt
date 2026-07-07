@@ -7,7 +7,7 @@
  * every peer's board. The function never crosses the wire; only its name (and args) do.
  *
  * Mirrors the coroutine discipline of the module's [WarpNodeTest] 2-node execution test:
- * [UnconfinedTestDispatcher] with virtual time driven by bounded [advanceTimeBy] steps via
+ * [StandardTestDispatcher] with virtual time driven by bounded [advanceTimeBy] steps via
  * [settle] — never [advanceUntilIdle] (the Quilter anti-entropy timers re-arm forever).
  */
 @file:OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
@@ -19,7 +19,7 @@ import kotlinx.atomicfu.locks.withLock
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.TestCoroutineScheduler
 import kotlinx.coroutines.test.TestScope
-import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
@@ -66,7 +66,7 @@ class SymbolicDispatchTest {
      */
     @Test
     fun descriptorIsDispatchedByNameAndExecutedOnOwner() =
-        runTest(UnconfinedTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
             val loom = InMemoryLoom()
             val seamA = loom.host(Pattern("symbolic-dispatch"))
             val seamB = loom.join(InMemoryTag("b"))
@@ -119,7 +119,7 @@ class SymbolicDispatchTest {
      */
     @Test
     fun ownerWithoutTheOpStandsByEvenWhenEnqueuerHasIt() =
-        runTest(UnconfinedTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
             val loom = InMemoryLoom()
             val seamA = loom.host(Pattern("symbolic-standby"))
             val seamB = loom.join(InMemoryTag("b"))

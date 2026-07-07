@@ -1,11 +1,13 @@
 /**
  * Integration tests for [WarpNode].
  *
- * Runs under [UnconfinedTestDispatcher] with virtual time driven via bounded [advanceTimeBy]
- * steps rather than [advanceUntilIdle]. [advanceUntilIdle] is unsafe here because the Quilter's
- * anti-entropy loop (`while(true) { delay(interval); … }`) re-arms unconditionally — under
- * [UnconfinedTestDispatcher] each re-arm lands at the current virtual instant, so
- * [advanceUntilIdle] would spin it indefinitely. See [drain] for the bounded alternative.
+ * Runs under [StandardTestDispatcher] (FIFO at each virtual instant — deterministic ordering
+ * of anti-entropy timer fires vs Quilter delta round-trips, unlike the eager-inline
+ * `UnconfinedTestDispatcher` this suite migrated off in #960) with virtual time driven via
+ * bounded [advanceTimeBy] steps rather than [advanceUntilIdle]. [advanceUntilIdle] is unsafe
+ * here because the Quilter's anti-entropy loop (`while(true) { delay(interval); … }`) re-arms
+ * unconditionally, so the scheduler never quiesces and [advanceUntilIdle] would spin it
+ * indefinitely. See [drain] for the bounded alternative.
  *
  * **Clock injection:** each test derives its clock from `testScheduler.currentTime` so
  * that [WarpNode.lastRingChangeAt] and the settle-window check (`sinceChange < settleWindow`)
@@ -29,7 +31,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestCoroutineScheduler
 import kotlinx.coroutines.test.TestScope
-import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
@@ -96,7 +98,7 @@ class WarpNodeTest {
      * This proves the roster source is the injected flow, not a hardcoded seam binding.
      */
     @Test
-    fun injectedRosterFlowDrivesRingRebuild() = runTest(UnconfinedTestDispatcher(), timeout = 5.seconds) {
+    fun injectedRosterFlowDrivesRingRebuild() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
         val loom = InMemoryLoom()
         val seamA = loom.host(Pattern("roster-inject-test"))
         val seamB = loom.join(InMemoryTag("b"))
@@ -188,7 +190,7 @@ class WarpNodeTest {
      * each executes only the tasks it owns on the ring; results converge to all 10.
      */
     @Test
-    fun ownerExecutesItsAssignedTasks() = runTest(UnconfinedTestDispatcher(), timeout = 5.seconds) {
+    fun ownerExecutesItsAssignedTasks() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
         val loom = InMemoryLoom()
         val seamA = loom.host(Pattern("warp-test"))
         val seamB = loom.join(InMemoryTag("b"))
@@ -242,7 +244,7 @@ class WarpNodeTest {
      * clockwise on the ring — the surviving nodes cover the full ring.
      */
     @Test
-    fun survivorPicksUpTasksWhenOwnerIsPartitioned() = runTest(UnconfinedTestDispatcher(), timeout = 5.seconds) {
+    fun survivorPicksUpTasksWhenOwnerIsPartitioned() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
         val loom = InMemoryLoom()
         val seamA = loom.host(Pattern("failover-test"))
         val seamB = loom.join(InMemoryTag("b"))
@@ -291,7 +293,7 @@ class WarpNodeTest {
      * contain all completed tasks with the correct results.
      */
     @Test
-    fun resultsBoardConvergesAcrossAllPeers() = runTest(UnconfinedTestDispatcher(), timeout = 5.seconds) {
+    fun resultsBoardConvergesAcrossAllPeers() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
         val loom = InMemoryLoom()
         val seamA = loom.host(Pattern("results-test"))
         val seamB = loom.join(InMemoryTag("b"))
@@ -339,7 +341,7 @@ class WarpNodeTest {
      * the results board converges to exactly one entry per task.
      */
     @Test
-    fun duplicateExecutionAbsorbedByResultsBackstop() = runTest(UnconfinedTestDispatcher(), timeout = 5.seconds) {
+    fun duplicateExecutionAbsorbedByResultsBackstop() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
         val loom = InMemoryLoom()
         val seamA = loom.host(Pattern("dedup-test"))
         val seamB = loom.join(InMemoryTag("b"))
@@ -391,7 +393,7 @@ class WarpNodeTest {
      */
     @Test
     fun rawIncomingFanOutDeliversFramesToBothSubscriberAndCrdtChannels() =
-        runTest(UnconfinedTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
             val loom = InMemoryLoom()
             val seamA = loom.host(Pattern("raw-fanout-test"))
             val seamB = loom.join(InMemoryTag("b"))

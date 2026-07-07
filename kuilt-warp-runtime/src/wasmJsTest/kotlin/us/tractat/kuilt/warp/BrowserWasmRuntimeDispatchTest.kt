@@ -11,7 +11,7 @@
  * in the browser.
  *
  * Coroutine discipline mirrors [SymbolicDispatchTest] and [ChicoryRuntimeDispatchTest]:
- * [UnconfinedTestDispatcher] with bounded [advanceTimeBy] steps — never [advanceUntilIdle]
+ * [StandardTestDispatcher] with bounded [advanceTimeBy] steps — never [advanceUntilIdle]
  * (anti-entropy timers re-arm forever).
  */
 @file:OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
@@ -20,7 +20,7 @@ package us.tractat.kuilt.warp
 
 import kotlinx.coroutines.test.TestCoroutineScheduler
 import kotlinx.coroutines.test.TestScope
-import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
@@ -65,7 +65,7 @@ class BrowserWasmRuntimeDispatchTest {
      */
     @Test
     fun wasmSquareKernelRunsViaBrowserWebAssemblyAndResultMergesOnBothBoards() =
-        runTest(UnconfinedTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
             val loom = InMemoryLoom()
             val seamA = loom.host(Pattern("c3-browser"))
             val seamB = loom.join(InMemoryTag("b"))

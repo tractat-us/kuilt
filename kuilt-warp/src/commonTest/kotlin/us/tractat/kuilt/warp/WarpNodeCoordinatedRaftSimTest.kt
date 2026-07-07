@@ -26,7 +26,7 @@ import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.TestCoroutineScheduler
 import kotlinx.coroutines.test.TestScope
-import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
@@ -80,7 +80,7 @@ class WarpNodeCoordinatedRaftSimTest {
      */
     @Test
     fun coordinatedTaskProposesToRaftBeforeExecuting() =
-        runTest(UnconfinedTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
             val loom = InMemoryLoom()
             val seam = loom.host(Pattern("raft-unit-test"))
             // Single-node ring: nodeA is the sole peer and therefore owns every task.
@@ -145,7 +145,7 @@ class WarpNodeCoordinatedRaftSimTest {
      */
     @Test
     fun coordinatedTaskWithoutRaftNodeFailsLoud() =
-        runTest(UnconfinedTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
             val loom = InMemoryLoom()
             val seam = loom.host(Pattern("raft-required-test"))
 

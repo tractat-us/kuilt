@@ -15,7 +15,7 @@
  * task is then resolved from the local registry and a result is recorded. Without the timeout the
  * task is wedged in `claimed`, never re-evaluated, and no result ever appears.
  *
- * Coroutine discipline mirrors [SymbolicDispatchTest]: [UnconfinedTestDispatcher] with bounded
+ * Coroutine discipline mirrors [SymbolicDispatchTest]: [StandardTestDispatcher] with bounded
  * [advanceTimeBy] via [settle] — never [advanceUntilIdle] (anti-entropy timers re-arm forever).
  */
 @file:OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
@@ -25,7 +25,7 @@ package us.tractat.kuilt.warp
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.TestCoroutineScheduler
 import kotlinx.coroutines.test.TestScope
-import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.Pattern
@@ -69,7 +69,7 @@ class BoundedLazyFetchTest {
 
     @Test
     fun unservedFetchTimesOutStandsByAndIsReEvaluated() =
-        runTest(UnconfinedTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
             val loom = InMemoryLoom()
             val seamA = loom.host(Pattern("c5b-bounded-fetch"))
 
