@@ -103,7 +103,12 @@ class ReplicationTest {
      * its term-2 no-op at 6, with `nextIndex[laggard]` initialised past the laggard's end. With the
      * fix the reject reports `conflictTerm=null, conflictIndex=lastLogIndex+1`, the leader backs
      * `nextIndex` straight to the laggard's end, and replication converges within the bounded await.
-     * Without the fix the bounded `awaitCommit` times out with a state dump (the livelock).
+     *
+     * Failure signature without the fix: the leader re-sends AppendEntries immediately on every
+     * rejection (no delay), so the reject/resend loop spins at a *single* virtual instant and freezes
+     * virtual time. `awaitCommit`'s virtual `withTimeout` therefore never fires (no state dump); the
+     * red is `runTest`'s wall-clock `UncompletedCoroutinesError` — the frozen-virtual-time hot-loop
+     * signature (see the repo's diagnostic playbook), NOT an `awaitCommit` timeout dump.
      */
     @Test
     fun tooShortFollowerConvergesAfterLeaderChange_noFastBackupLivelock() = raftRunTest {
