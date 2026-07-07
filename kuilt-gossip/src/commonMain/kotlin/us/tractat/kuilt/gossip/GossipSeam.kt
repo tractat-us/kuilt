@@ -59,6 +59,12 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.gossip.GossipSeam")
  * are consumed by the detectors and never surface to the application. Collect
  * [incoming] exactly once; wrap with `shareIn` for fan-out.
  *
+ * **Reverse-edge liveness.** The active view is directed (an independent per-peer
+ * k-out sample), so a peer may watch this node without being watched back. An
+ * inbound ping from such a peer is answered with a pong directly (see
+ * [answerUnwatchedPing]) — otherwise the watcher's detector would starve and tear
+ * every asymmetric edge down, collapsing the overlay to mutual-only edges.
+ *
  * **Lifecycle.** Call [start] once with a scope you own; it launches the inbound
  * loop and the [GossipView]. All timing/scheduling runs on that scope, all
  * randomness on the injected seeded [random], time via the injected [clock].
@@ -163,7 +169,10 @@ public class GossipSeam(
      */
     private suspend fun dispatchInbound(swatch: Swatch) {
         rawIncoming.emit(swatch)
-        if (swatch.isHeartbeat()) return
+        if (swatch.isHeartbeat()) {
+            answerUnwatchedPing(swatch)
+            return
+        }
 
         val frame = GossipFrame.tryDecode(swatch)
         if (frame == null) {
@@ -180,6 +189,33 @@ public class GossipSeam(
         // Re-flood to our own active neighbours minus the peer it arrived from,
         // until the hop budget runs out.
         if (frame.ttl > 1) flood(frame.decremented(), except = swatch.sender)
+    }
+
+    /**
+     * Answers an inbound heartbeat ping from a peer this node does not itself watch
+     * — the reverse-edge-liveness half of the directed overlay.
+     *
+     * The active view is an independent per-peer k-out sample, so edges are
+     * **directed**: a peer may watch us without us watching it back. Its detector's
+     * pings would otherwise go unanswered (no local detector matches that sender),
+     * so the watcher would tear the edge down after its timeout and blacklist us —
+     * collapsing the overlay to mutual-only edges. Answering here is stateless, so
+     * it needs no reconciliation on roster or view churn, and it leaves the k-out
+     * view and detector set untouched — k-regularity is preserved; the pong merely
+     * makes an existing directed edge observable from the watcher's side.
+     *
+     * Pings from an **active** neighbour are answered by that neighbour's own
+     * detector (ping → pong inside [HeartbeatPartitionDetector]), so this covers
+     * only the asymmetric case. The active-view check races benignly with view
+     * churn: a double pong is harmless, and a missed pong is retried by the
+     * watcher's next ping one interval later.
+     */
+    private suspend fun answerUnwatchedPing(swatch: Swatch) {
+        if (!swatch.startsWithBytes(PING_PREFIX_BYTES)) return
+        val watcher = swatch.sender ?: return
+        if (watcher in view.active.value) return
+        runCatchingCancellable { base.sendTo(watcher, PONG_PAYLOAD) }
+            .onFailure { logger.debug { "gossip pong: dropping reply to $watcher — ${it.message}" } }
     }
 
     /**
@@ -246,5 +282,8 @@ public class GossipSeam(
         // ASCII prefixes ⇒ a UTF-8 byte-prefix match is equivalent to the old decoded-String startsWith.
         private val PING_PREFIX_BYTES = HeartbeatPartitionDetector.PING_PREFIX.encodeToByteArray()
         private val PONG_PREFIX_BYTES = HeartbeatPartitionDetector.PONG_PREFIX.encodeToByteArray()
+
+        // A bare pong frame, as HeartbeatPartitionDetector sends (prefix-matched by receivers).
+        private val PONG_PAYLOAD = HeartbeatPartitionDetector.PONG_PREFIX.encodeToByteArray()
     }
 }
