@@ -17,7 +17,7 @@ import kotlin.time.Instant
 
 /**
  * Host a turn-based game over a [ConnectionSource]: compose a star hub from accepted connections
- * ([hostedOverlay], [us.tractat.kuilt.gossip.ActiveViewPolicy.FullFanout]) and run [gameHost] on
+ * ([hostedOverlay], [us.tractat.kuilt.gossip.FullFanout]) and run [gameHost] on
  * it. Clients connect as usual — they call [gameJoin] over a `KtorClientLoom` seam, unchanged.
  *
  * This is thin sugar over `hostedOverlay + gameHost`; advanced callers who need to interpose on

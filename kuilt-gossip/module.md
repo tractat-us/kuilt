@@ -15,7 +15,10 @@ neighbours only has to be *usually* connected, not perfectly so.
 Under the hood this is a roster-derived **k-regular partial view**: each peer
 draws a seeded random *k-out* sample of the room roster (`k ≈ ln N`, so the union
 of everyone's choices is connected with high probability), heals it on membership
-change with per-peer jitter, and promotes a spare when a neighbour fails. It wraps
+change with per-peer jitter, and promotes a spare when a neighbour fails. Who
+fills the view is a pluggable `TopologyPolicy`: the default `RandomKRegular`
+partial mesh, or `FullFanout` when one hub should re-flood every broadcast to all
+spokes (the hosted star). It wraps
 the result as a `GossipSeam : Seam` exposing two views — the active neighbours
 (deltas + GC) and full membership (anti-entropy sampling). See
 `docs/gossip-mesh-design.md`.
