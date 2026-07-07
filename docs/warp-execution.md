@@ -79,7 +79,8 @@ guest-managed memory — the host never reaches into the guest uninvited.
 - **No imports.** A kernel that declares any host import fails at load time. Pure
   compute only; a kernel cannot call back into the runtime.
 - **Memory ceiling.** A kernel whose declared maximum memory exceeds the configured
-  page limit is rejected at load time — before a single byte of guest code runs.
+  page limit — or that declares no maximum at all (unbounded growth) — is rejected
+  at load time, before a single byte of guest code runs.
 - **Execution-time budget.** A runaway kernel is terminated at the configured
   timeout on every target — the mechanism differs, the rule doesn't. On the JVM the
   interpreter checks `Thread.isInterrupted()` at every function-call entry and every
