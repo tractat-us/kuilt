@@ -7,6 +7,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import us.tractat.kuilt.core.PeerId
@@ -67,6 +68,9 @@ fun main(args: Array<String>) {
             if (output.isNotEmpty()) println(output)
         }
 
+        // Let in-flight broadcasts drain before tearing the socket — quitting the
+        // instant after a stitch must not race the frame out of existence.
+        if (session.connected.value) delay(500)
         session.disconnect()
     }
     httpClient.close()

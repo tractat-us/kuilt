@@ -10,6 +10,7 @@ import us.tractat.kuilt.gossip.GossipSeam
 import us.tractat.kuilt.websocket.KtorMeshClientLoom
 import kotlin.random.Random
 import kotlin.time.Clock
+import kotlin.time.Duration
 import kotlin.time.Instant
 import kotlin.uuid.ExperimentalUuidApi
 import kotlin.uuid.Uuid
@@ -47,7 +48,12 @@ class RelaySpokeLoom(
             httpClient = httpClient,
             selfPeerId = PeerId("$peerName-${Uuid.random()}"),
         ).weave(rendezvous)
-        return GossipSeam(base = spoke, random = random, clock = clock)
+        // Zero recompute jitter, mirroring hostedOverlay's hub: a spoke's active
+        // view is deterministic (the hub, full stop), so the anti-lockstep jitter
+        // buys nothing and only opens a window right after connecting where
+        // broadcast has no flood targets — a stitch in that window would wait for
+        // anti-entropy instead of appearing live.
+        return GossipSeam(base = spoke, random = random, clock = clock, jitter = Duration.ZERO..Duration.ZERO)
             .also { it.start(scope) }
     }
 }
