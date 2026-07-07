@@ -1,33 +1,20 @@
 package us.tractat.kuilt.session
 
 import us.tractat.kuilt.core.Seam
-import kotlin.jvm.JvmInline
 
 /**
- * An opaque, caller-verified identity for the peer on a connection — e.g. an
- * authenticated device id or user id the host established out of band (token, TLS
- * client cert, signed header) **before** admitting the peer.
- *
- * Distinct from [MemberIdentity], which is *self-asserted* by the joiner in its
- * `Hello`. A [Principal] is what the host vouches for; kuilt treats the wrapped
- * [value] as opaque and never parses or transmits it on the wire.
+ * Moved to `kuilt-core` (`us.tractat.kuilt.core.Principal`) so fabric-level admission
+ * (`LinkAdmission` on the hosted-hub path) can consume it without depending on
+ * `kuilt-session`. This alias keeps existing `kuilt-session` consumers source-compatible.
  */
-@JvmInline
-public value class Principal(public val value: String)
+public typealias Principal = us.tractat.kuilt.core.Principal
 
 /**
- * A [Seam] whose connection carries a host-verified [Principal]. A fabric that can
- * authenticate a connection (e.g. a Ktor server reading `call.principal()`) attaches
- * one via [withPrincipal]; [SeamRoom] reads it at admit time and carries it onto the
- * admitted [Member].
- *
- * This replaces out-of-band `peer → principal` maps: the principal rides the
- * connection object itself, so it cannot desync from the peer it describes.
+ * Moved to `kuilt-core` (`us.tractat.kuilt.core.PrincipalAttested`). This alias keeps
+ * existing `kuilt-session` consumers source-compatible. [SeamRoom] reads the attested
+ * principal at admit time and carries it onto the admitted [Member].
  */
-public interface PrincipalAttested {
-    /** The verified principal for this connection, or `null` if unauthenticated. */
-    public val principal: Principal?
-}
+public typealias PrincipalAttested = us.tractat.kuilt.core.PrincipalAttested
 
 /**
  * Returns a [Seam] that reports [principal] via [PrincipalAttested]. When [principal]

@@ -13,9 +13,9 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.first
 import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.core.Principal
 import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.Seam
-import us.tractat.kuilt.session.Principal
 import us.tractat.kuilt.session.withPrincipal
 import kotlin.uuid.ExperimentalUuidApi
 import kotlin.uuid.Uuid
