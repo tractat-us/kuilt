@@ -11,6 +11,10 @@ kotlin {
         }
         commonTest.dependencies {
             implementation(project(":kuilt-test"))
+            // The shared WasmRuntime TCK: each target's tests bind their impl to it
+            // (ChicoryWasmRuntimeConformanceTest / Wasm3WasmRuntimeConformanceTest /
+            // BrowserWasmRuntimeConformanceTest).
+            implementation(project(":kuilt-warp-test"))
             implementation(libs.kotlinx.coroutines.test)
         }
         jvmMain.dependencies {
