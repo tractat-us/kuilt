@@ -610,14 +610,21 @@ jobs:
   # (the #131 hazard), so ci-required must always RUN to a definite state.
   #
   # Draft handling lives in the STEP (see the draft short-circuit at the top of
-  # "Check gate results"): a draft run parks ci-required GREEN and exits 0,
-  # rather than the older FAIL-by-design behaviour. This is safe because of the
-  # concurrency-group split above (#1132): GitHub blocks merging drafts outright,
-  # and the ready_for_review transition starts a fresh, uncancellable build whose
-  # ci-required check supersedes the draft green on the same sha — so auto-merge
-  # always waits for the real post-ready build. (Parking green rather than red
-  # also stops a same-sha synchronize/ready race from wedging the gate at a stale
-  # FAILURE that no later event supersedes — the concrete #1132 bug.)
+  # "Check gate results"): a draft run FAILS the gate explicitly — draft runs
+  # are not a merge signal. Nothing was verified (detect and every heavy job
+  # carry draft guards), and parking the draft GREEN instead (the #1132
+  # ergonomic change) reopened the #131 auto-merge race: ci-required is
+  # needs:-gated behind the full build, so the post-ready run's ci-required
+  # check run does not EXIST until the build finishes (~10-15 min). For that
+  # whole window the draft green is the ONLY ci-required check run on the sha,
+  # branch protection is satisfied, and `gh pr ready && gh pr merge --auto`
+  # lands the PR before the real build ran (#1275, seen on PR #1264).
+  #
+  # The draft RED cannot wedge the gate (the concrete #1132 bug) because the
+  # concurrency-group split above keeps the ready_for_review run uncancellable:
+  # it always completes, and its real ci-required result supersedes the fast
+  # draft FAILURE on the same sha. The split is the load-bearing #1132 fix and
+  # stays; only the green park is reverted.
   #
   # detect/build-jvm/build-native/detekt/dokka still carry their own draft/docs-only
   # /dokka-inputs guards (cheap jobs don't burn a runner on every draft push). Only
@@ -634,7 +641,8 @@ jobs:
   #     (d) dokka-inputs=false → dokka was skipped (or success).
   #
   # Any other combination fails. In particular:
-  #   - detect=skipped (draft PR) → fails → merge blocked until post-ready run.
+  #   - draft PR → fails explicitly (draft runs are not a merge signal) →
+  #     merge blocked until the post-ready run posts a real success.
   #   - a heavy job skipped on a non-docs change → fails → closes the docs→code
   #     race too.
   #   - dokka skipped/failed on a Dokka-input change → fails → closes the
@@ -646,17 +654,21 @@ jobs:
     steps:
       - name: Check gate results
         run: |
-          # Draft short-circuit — park draft ci-required GREEN instead of red (#1132).
-          # SAFE ONLY because of the concurrency-group split above: GitHub blocks
-          # merging drafts outright, and when the PR is readied the ready_for_review
-          # run (now uncancellable by a racing synchronize) starts a fresh in-progress
-          # ci-required check for the sha, so auto-merge waits for the real build and
-          # its real result supersedes this draft green. Must sit ABOVE all gate logic
-          # and trigger ONLY on draft==true — the non-draft path below is unchanged and
-          # still requires real green builds.
+          # Draft short-circuit — a draft run is NOT a merge signal: fail (#131, #1275).
+          # Draft runs skip detect and every heavy job, so nothing has been verified.
+          # Parking GREEN here (the #1132 ergonomic change) reopened the #131 hole:
+          # this job is needs:-gated behind the full build, so the post-ready run's
+          # ci-required check run does not exist until the build finishes (~10-15 min)
+          # — for that whole window the draft green was the only ci-required on the
+          # sha and auto-merge could land the PR before the real build ran (PR #1264).
+          # The #1132 wedge stays fixed by the concurrency-group split above: the
+          # ready_for_review run is uncancellable, always completes, and its real
+          # result supersedes this draft FAILURE on the same sha. Must sit ABOVE all
+          # gate logic and trigger ONLY on draft==true — the non-draft path below is
+          # unchanged and still requires real green builds.
           if [ "${{ github.event.pull_request.draft }}" = "true" ]; then
-            echo "Draft PR — ci-required parked green. A real build runs on ready_for_review and supersedes this (see #1132)."
-            exit 0
+            echo "::error::Draft run — not a merge gate. The ready_for_review build produces the real ci-required (see #131, #1275)."
+            exit 1
           fi
 
           DETECT="${{ needs.detect.result }}"
