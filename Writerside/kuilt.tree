@@ -40,6 +40,7 @@
             <toc-element topic="crdt-resettablecounter.md"/>
             <toc-element topic="crdt-hyperloglog.md"/>
             <toc-element topic="crdt-countminsketch.md"/>
+            <toc-element topic="crdt-histogram.md"/>
             <toc-element topic="crdt-ddsketch.md"/>
         </toc-element>
         <toc-element toc-title="Sets">
@@ -51,6 +52,7 @@
         <toc-element toc-title="Registers">
             <toc-element topic="crdt-lwwregister.md"/>
             <toc-element topic="crdt-mvregister.md"/>
+            <toc-element topic="crdt-gauge.md"/>
         </toc-element>
         <toc-element toc-title="Maps">
             <toc-element topic="crdt-lwwmap.md"/>

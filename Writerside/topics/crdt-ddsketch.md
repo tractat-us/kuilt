@@ -109,9 +109,9 @@ metrics.
 
 ## When to prefer something else
 
-- **You know the bucket boundaries you want** (fixed SLA thresholds, say) — a
-  plain map of `GCounter`s per explicit bucket is simpler and maps to OTel's
-  explicit-bucket `Histogram`.
+- **You know the bucket boundaries you want** (fixed SLA thresholds, say) —
+  [`Histogram`](crdt-histogram.md) counts against explicit buckets exactly and
+  maps to OTel's explicit-bucket `Histogram`.
 - **You need exact counts, not a distribution** — use
   [`GCounter`](crdt-gcounter.md) / [`PNCounter`](crdt-pncounter.md).
 - **You need distinct-counting or frequency, not quantiles** — those are
