@@ -98,13 +98,45 @@ class CardStateTest {
 
     @Test
     fun allExceptHolderHaveStripped() {
-        // holder cannot see their own card — quorum is everyone except the holder
+        // holder cannot see their own card — quorum is everyone except the holder.
+        // A 2-of-3 quorum is a partial multi-member quorum (issue #1281): after the
+        // holder strips, the card stays REVEALING until every member's reveal track
+        // completes, and only then is REVEALED.
         val holderBlind = emptyCard(quorum = setOf(alice, bob))  // carol NOT in quorum (carol is the holder)
         val state = holderBlind.copy(
             encryptedBy = GSet.of(alice, bob, carol),
-            strippedBy = GSet.of(carol),  // only carol needs to strip
+            strippedBy = GSet.of(carol),  // only carol needs to strip the main chain
         )
-        assertEquals(CardPhase.REVEALED, state.phase())
+        val tracksComplete = state.copy(
+            quorumTracks = mapOf(
+                alice to QuorumTrack(byteArrayOf(1), GSet.of(bob)),
+                bob to QuorumTrack(byteArrayOf(2), GSet.of(alice)),
+            ),
+        )
+        assertAll(
+            { assertEquals(CardPhase.REVEALING, state.phase()) },
+            { assertEquals(CardPhase.REVEALED, tracksComplete.phase()) },
+        )
+    }
+
+    @Test
+    fun partialQuorumStaysRevealingUntilEveryMemberTrackCompletes() {
+        val partial = emptyCard(quorum = setOf(alice, bob)).copy(
+            encryptedBy = GSet.of(alice, bob, carol),
+            strippedBy = GSet.of(carol),
+        )
+        val oneTrackDone = partial.copy(
+            quorumTracks = mapOf(bob to QuorumTrack(byteArrayOf(9), GSet.of(alice))),
+        )
+        val bothTracksDone = oneTrackDone.copy(
+            quorumTracks = oneTrackDone.quorumTracks +
+                (alice to QuorumTrack(byteArrayOf(8), GSet.of(bob))),
+        )
+        assertAll(
+            { assertEquals(CardPhase.REVEALING, partial.phase()) },
+            { assertEquals(CardPhase.REVEALING, oneTrackDone.phase()) },
+            { assertEquals(CardPhase.REVEALED, bothTracksDone.phase()) },
+        )
     }
 
     @Test
@@ -243,6 +275,64 @@ class CardStateTest {
         )
         val op = stripOp(alice, byteArrayOf(1))
         assertTrue(state.canApply(op))
+    }
+
+    /** A QuorumStrip on a quorum-revealed partial-quorum card ({alice, bob} of three). */
+    private fun quorumRevealedPartial() = emptyCard(quorum = setOf(alice, bob)).copy(
+        encryptedBy = GSet.of(alice, bob, carol),
+        strippedBy = GSet.of(carol),
+    )
+
+    private fun quorumStripOp(
+        player: PlayerId,
+        forMember: PlayerId,
+        baseTrackStrippedBy: Set<PlayerId> = emptySet(),
+    ) = CardOp.QuorumStrip(player, forMember, byteArrayOf(7), StripProof(ByteArray(0)), baseTrackStrippedBy)
+
+    @Test
+    fun quorumStripAcceptedFromMemberForOtherMember() {
+        assertTrue(quorumRevealedPartial().canApply(quorumStripOp(alice, forMember = bob)))
+    }
+
+    @Test
+    fun quorumStripRejectedFromNonMember() {
+        // carol is outside the quorum — she has no layer left and must not touch tracks
+        assertFalse(quorumRevealedPartial().canApply(quorumStripOp(carol, forMember = bob)))
+    }
+
+    @Test
+    fun quorumStripRejectedForOwnTrack() {
+        // a member's own layer never comes off publicly — it keeps the card private to them
+        assertFalse(quorumRevealedPartial().canApply(quorumStripOp(alice, forMember = alice)))
+    }
+
+    @Test
+    fun quorumStripRejectedOnNonPartialQuorums() {
+        val singleReader = emptyCard(quorum = quorumAlice).copy(encryptedBy = GSet.of(alice, bob, carol))
+        val community = emptyCard(quorum = allPlayers).copy(encryptedBy = GSet.of(alice, bob, carol))
+        assertAll(
+            { assertFalse(singleReader.canApply(quorumStripOp(alice, forMember = bob))) },
+            { assertFalse(community.canApply(quorumStripOp(alice, forMember = bob))) },
+        )
+    }
+
+    @Test
+    fun quorumStripRejectedIfPlayerAlreadyStrippedTrack() {
+        val state = quorumRevealedPartial().copy(
+            quorumTracks = mapOf(bob to QuorumTrack(byteArrayOf(9), GSet.of(alice))),
+        )
+        assertFalse(state.canApply(quorumStripOp(alice, forMember = bob)))
+    }
+
+    @Test
+    fun applyQuorumStripUpdatesOnlyTheTargetTrack() {
+        val next = quorumRevealedPartial().applyOp(quorumStripOp(alice, forMember = bob))
+        assertAll(
+            { assertTrue(next != null) },
+            { assertEquals(setOf(alice), next!!.quorumTracks[bob]?.strippedBy?.elements) },
+            { assertEquals(listOf<Byte>(7), next!!.quorumTracks[bob]?.ciphertext?.toList()) },
+            { assertEquals(setOf(carol), next!!.strippedBy.elements) },
+        )
     }
 
     @Test
