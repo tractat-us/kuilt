@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Patchwork — a kuilt demo</title>
+    <style>
+        :root {
+            --bg: #1c1a24;
+            --panel: #262331;
+            --text: #efeaf5;
+            --muted: #9a93ab;
+            --thread: #3a3648;
+        }
+        * { box-sizing: border-box; }
+        body {
+            margin: 0;
+            min-height: 100vh;
+            background: var(--bg);
+            color: var(--text);
+            font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 1.5rem 1rem 3rem;
+        }
+        header { text-align: center; max-width: 42rem; }
+        h1 { margin: 0; font-size: 2rem; letter-spacing: 0.06em; }
+        .sub { margin: 0.4rem 0 1rem; color: var(--muted); }
+        #status {
+            padding: 0.4rem 1rem;
+            border-radius: 999px;
+            font-size: 0.9rem;
+            margin-bottom: 1rem;
+            background: var(--panel);
+            border: 1px solid var(--thread);
+        }
+        #status.connecting { color: var(--muted); }
+        #status.online  { color: #7fe3a1; border-color: #2f5c40; }
+        #status.tunnel  { color: #f2c14e; border-color: #6b5722; }
+        #status.error   { color: #ff8a7a; border-color: #6b2f28; }
+        #toolbar {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            flex-wrap: wrap;
+            justify-content: center;
+            margin-bottom: 1rem;
+        }
+        #palette { display: flex; gap: 0.4rem; }
+        .swatch {
+            width: 1.8rem;
+            height: 1.8rem;
+            border-radius: 50%;
+            border: 2px solid var(--thread);
+            cursor: pointer;
+            padding: 0;
+        }
+        .swatch.selected { border-color: var(--text); transform: scale(1.15); }
+        #tunnel {
+            background: var(--panel);
+            color: var(--text);
+            border: 1px solid var(--thread);
+            border-radius: 0.5rem;
+            padding: 0.45rem 1rem;
+            font-size: 0.95rem;
+            cursor: pointer;
+        }
+        #tunnel:hover { border-color: var(--muted); }
+        #tally { color: var(--muted); font-size: 0.9rem; min-width: 6rem; }
+        #quilt {
+            display: grid;
+            gap: 4px;
+            width: min(92vw, 44rem);
+            padding: 10px;
+            background:
+                repeating-linear-gradient(45deg, var(--thread) 0 2px, transparent 2px 12px),
+                var(--panel);
+            border-radius: 0.75rem;
+        }
+        .cell {
+            aspect-ratio: 1;
+            border-radius: 3px;
+            background: var(--bg);
+            border: 1px dashed var(--thread);
+            cursor: pointer;
+        }
+        .cell:hover { border-color: var(--muted); }
+        .cell.stitched { border-style: solid; border-color: rgba(0, 0, 0, 0.35); }
+        .cell.flash { animation: stitch-in 0.5s ease-out; }
+        @keyframes stitch-in {
+            0%   { transform: scale(0.4); filter: brightness(2); }
+            100% { transform: scale(1);   filter: brightness(1); }
+        }
+        footer { margin-top: 1.2rem; color: var(--muted); font-size: 0.85rem; max-width: 40rem; text-align: center; }
+    </style>
+</head>
+<body>
+<header>
+    <h1>Patchwork</h1>
+    <p class="sub">
+        Everyone stitches one shared quilt. Open this page in more tabs — each tab is
+        another stitcher. Enter the tunnel, keep stitching, reconnect: your patches merge in.
+    </p>
+</header>
+<div id="status" class="connecting">loading…</div>
+<div id="toolbar">
+    <div id="palette"></div>
+    <button id="tunnel">Enter the tunnel</button>
+    <span id="tally"></span>
+</div>
+<div id="quilt"></div>
+<footer>
+    Patches ride kuilt <code>Swatch</code>es over a <code>Seam</code> woven by a WebSocket
+    <code>Loom</code>; the board is a last-writer-wins CRDT replicated by a <code>Quilter</code>.
+</footer>
+<script type="application/javascript" src="patchwork.js"></script>
+</body>
+</html>

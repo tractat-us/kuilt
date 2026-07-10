@@ -37,6 +37,7 @@ val deliberatelyUnpublished = setOf(
     ":demo-shared", // Patchwork demo app core (plain KMP jvm+wasmJs, never published)
     ":demo-relay", // Patchwork demo relay process (plain kotlinJvm application, never published)
     ":demo-cli", // Patchwork demo terminal peer (plain kotlinJvm application, never published)
+    ":demo-web", // Patchwork demo browser page (plain KMP wasmJs executable, never published)
 )
 
 val publishedSiblings = rootProject.subprojects

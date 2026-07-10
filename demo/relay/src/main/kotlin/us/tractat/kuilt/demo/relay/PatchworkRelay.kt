@@ -34,7 +34,7 @@ import kotlin.uuid.Uuid
  *   that relays every spoke's broadcast to every other spoke (with dedup), so
  *   a stitch a peer broadcasts arrives at all peers within a round trip.
  *   Spokes join with [us.tractat.kuilt.websocket.KtorMeshClientLoom] wrapped in
- *   a `GossipSeam` (the demo CLI's `RelaySpokeLoom`).
+ *   a `GossipSeam` (`:demo-shared`'s `RelaySpokeLoom`).
  * - **Quilt peer:** the relay itself runs a [Quilter] on the hub seam. That
  *   makes it the always-on replica of the shared board: a late joiner (or a
  *   peer returning from tunnel mode) receives the full quilt from the relay
