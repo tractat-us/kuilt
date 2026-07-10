@@ -233,6 +233,60 @@ public abstract class SeamConformanceSuite {
             }
         }
 
+    // ── (9b) state STAYS Torn after close, even under post-close churn ────────
+    //
+    // `closeDrivesStateTornNormal` proves the state is Torn the instant close() returns — a single
+    // observation. It does NOT prove the terminal state *stays* Torn: a seam whose internal pump
+    // writes the state flow (a composite's rollup, a tiered union's combine) can overwrite the
+    // terminal Torn with a stale non-terminal value, wedging every `state.first { it is Torn }`
+    // waiter forever (the lost-terminal-transition class this suite exists to keep dead). This test
+    // closes the host, then drives whatever churn the fabric supports AFTER close — joiner still
+    // active, frames in flight toward the torn host, then the joiner closing — and re-asserts the
+    // state is unchanged.
+    //
+    // **Honest limit:** under this suite's single-threaded virtual-time harness this is a
+    // deterministic ordering check, necessary but not sufficient — it cannot reproduce the genuine
+    // multi-threaded race. The stress-grade coverage lives in the `-Pconcurrency.stress.tests`
+    // real-threaded probes (`:kuilt-core`'s `*ConcurrencyTest`). This obligation's value is the
+    // *contract*: it protects out-of-tree fabrics that subclass this suite and cannot use the
+    // in-tree `SeamStateGate`, converting "the next seam ships the bug silently" into a red test.
+    //
+    // `open` so a fabric that cannot yet honour it can override with `@Ignore` + a tracking issue,
+    // matching `incomingCompletesWhenSeamCloses`.
+
+    @Test
+    public open fun stateStaysTornAfterClose(): TestResult =
+        runTest {
+            connectedPair { host, joiner ->
+                host.close()
+                val torn = host.state.value
+                assertIs<SeamState.Torn>(torn, "state must be Torn immediately after close()")
+
+                // Post-close churn: the conditions under which a multi-writer seam could clobber Torn.
+                repeat(5) { i -> tolerateTornChurn { joiner.broadcast(byteArrayOf(i.toByte())) } }
+                tolerateTornChurn { joiner.close() }
+
+                val after = host.state.value
+                assertIs<SeamState.Torn>(after, "state must STAY Torn after post-close churn")
+                assertEquals(torn.reason, after.reason, "the terminal Torn reason must not change under churn")
+            }
+        }
+
+    /**
+     * Run best-effort post-close [op], swallowing the closed-seam / dropped-peer signals a torn
+     * fabric legitimately raises (a role-split fabric may already have torn the joiner when the host
+     * closed). Cancellation is always rethrown — never swallow a structured-concurrency cancel.
+     */
+    private suspend inline fun tolerateTornChurn(op: () -> Unit) {
+        try {
+            op()
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            // closed seam / absent peer / torn transport — expected under post-close churn.
+        }
+    }
+
     // ── (10) sendTo an absent peer throws PeerNotConnected ───────────────────
 
     @Test

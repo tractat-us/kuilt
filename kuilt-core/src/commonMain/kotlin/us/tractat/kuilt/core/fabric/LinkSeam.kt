@@ -1,6 +1,5 @@
 package us.tractat.kuilt.core.fabric
 
-import kotlinx.atomicfu.atomic
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
@@ -19,6 +18,7 @@ import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.PeerNotConnected
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
+import us.tractat.kuilt.core.SeamStateGate
 import us.tractat.kuilt.core.Spool
 import us.tractat.kuilt.core.Swatch
 import us.tractat.kuilt.core.runCatchingCancellable
@@ -32,11 +32,12 @@ import kotlin.coroutines.CoroutineContext
  *
  * **Thread-safety.** This type is correct under a *multi-threaded* dispatcher — the
  * injected [dispatcher] is only the scope for the read/write loops (scheduling); it is
- * **not** a mutual-exclusion mechanism. Teardown is gated by an atomic single-shot flag
- * ([LinkSeam.closed]) so `close` and `readLoop`'s `finally` tear down exactly once
- * regardless of which thread arrives first. `broadcast`/`sendTo` read that flag and, since
- * the suspending `outbox.send()` is an inherent check-then-send TOCTOU against a concurrent
- * teardown that closes the channel, convert a `ClosedSendChannelException` into the same
+ * **not** a mutual-exclusion mechanism. Teardown is latched by a [SeamStateGate]: `close`
+ * and `readLoop`'s `finally` both call `tear()`, which is single-shot, so teardown runs
+ * exactly once regardless of which thread arrives first and no late write can move the
+ * state off `Torn`. `readLoop`/`broadcast`/`sendTo` read `state.value`; because the
+ * suspending `outbox.send()` is an inherent check-then-send TOCTOU against a concurrent
+ * teardown that closes the channel, they convert a `ClosedSendChannelException` into the same
  * clean closed-seam [IllegalStateException] the pre-check produces — a closed seam never
  * leaks a raw channel exception.
  *
@@ -80,8 +81,8 @@ internal class LinkSeam(
     private val _peers = MutableStateFlow(setOf(selfId, remoteId))
     override val peers: StateFlow<Set<PeerId>> = _peers.asStateFlow()
 
-    private val _state = MutableStateFlow<SeamState>(SeamState.Woven)
-    override val state: StateFlow<SeamState> = _state.asStateFlow()
+    private val stateGate = SeamStateGate(SeamState.Woven)
+    override val state: StateFlow<SeamState> = stateGate.state
 
     private val inbox = Spool<Swatch>(policy)
     override val incoming: Flow<Swatch> = inbox.incoming
@@ -94,11 +95,6 @@ internal class LinkSeam(
         onBufferOverflow = BufferOverflow.SUSPEND,
     )
 
-    // Atomic single-shot teardown gate. `close()` and `readLoop`'s `finally` race to flip it
-    // false→true; whoever wins runs teardown, the loser is a no-op — so teardown happens exactly
-    // once regardless of thread. `broadcast`/`sendTo` read `closed.value`.
-    private val closed = atomic(false)
-
     // Confined to readLoop's single collector; not shared across threads.
     private var seq = 0L
 
@@ -110,12 +106,12 @@ internal class LinkSeam(
     private val closedMessage get() = "Seam for $selfId is closed"
 
     override suspend fun broadcast(payload: ByteArray) {
-        check(!closed.value) { closedMessage }
+        check(state.value !is SeamState.Torn) { closedMessage }
         enqueue(payload)
     }
 
     override suspend fun sendTo(peer: PeerId, payload: ByteArray) {
-        check(!closed.value) { closedMessage }
+        check(state.value !is SeamState.Torn) { closedMessage }
         if (peer !in _peers.value) throw PeerNotConnected(peer)
         enqueue(payload)
     }
@@ -134,13 +130,24 @@ internal class LinkSeam(
     }
 
     private suspend fun writeLoop() {
-        for (frame in outbox) conn.send(frame)
+        for (frame in outbox) {
+            // A frame can be enqueued moments before the wire tears (a broadcast racing a remote
+            // drop). `conn.send` then throws (e.g. "Sink is closed"); left uncaught it escapes into
+            // this seam's scope and leaks across into a later coroutine. Treat a send failure as a
+            // remote drop — tear down (single-shot) and stop — exactly as `readLoop` handles a conn
+            // error. Cancellation is rethrown by runCatchingCancellable, never swallowed.
+            val sent = runCatchingCancellable { conn.send(frame) }
+            if (sent.isFailure) {
+                tearDown(CloseReason.RemoteRequested)
+                return
+            }
+        }
     }
 
     private suspend fun readLoop() {
         try {
             conn.incoming.collect { bytes ->
-                if (!closed.value) {
+                if (state.value !is SeamState.Torn) {
                     // deliver suspends under SUSPEND-overflow policy — this is intentional: the
                     // readLoop pauses until the consumer drains, propagating backpressure from the
                     // inbox spool back to the wire. No lock is held here, so suspension is safe.
@@ -156,11 +163,13 @@ internal class LinkSeam(
         }
     }
 
-    // Single-shot: only the coroutine that wins the CAS publishes Torn and closes the channels.
+    // Collapse the roster BEFORE publishing Torn (peers-before-state: a consumer observing Torn must
+    // already see the collapsed roster). The `_peers.update` is idempotent (always setOf(selfId)), so
+    // running it on a losing caller is harmless; `stateGate.tear` is the single-shot latch that gates
+    // the one-time channel closes.
     private fun tearDown(reason: CloseReason) {
-        if (!closed.compareAndSet(expect = false, update = true)) return
         _peers.update { setOf(selfId) }
-        _state.value = SeamState.Torn(reason)
+        if (!stateGate.tear(reason)) return
         outbox.close()
         inbox.close()
     }
