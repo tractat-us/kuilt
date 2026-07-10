@@ -848,6 +848,11 @@ public class WarpNode(
      * and if it is partitioned or absent from the effective roster, no node claims, so the
      * task stays pending and runs only when the owner returns (it never re-homes).
      *
+     * Note: this consults the free-path queue map ([queueQuilter]) unconditionally, so it
+     * assumes the free and coordinated [TaskId] spaces are **disjoint**. Reusing one [TaskId]
+     * on both paths would let a stray free-path pin gate who *proposes* the coordinated task —
+     * and an absent pinned owner would strand it. Keep the id spaces separate.
+     *
      * Caller holds [lock].
      */
     private fun effectiveOwner(taskId: TaskId): PeerId? =
