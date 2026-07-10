@@ -15,11 +15,26 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNotEquals
+import kotlin.time.Duration.Companion.minutes
+
+// These tests run REAL 2048-bit SRA modular exponentiation. On Apple/K/N (and wasmJs)
+// there is no native BigInteger, so each modPow runs on the pure-Kotlin ionspin path —
+// ~40× slower than the JVM's `java.math` intrinsic (see kuilt-deal-test/build.gradle.kts
+// for the sibling karma/mocha timeout bump that covers the same crypto on wasmJs). A
+// single scenario chains several sequential modPows; `partialQuorum_membersDecrypt_
+// nonMemberCannot` — a 3-player shuffle plus per-member reveal-track strips — does the
+// most (~8), and on a contended CI runner intermittently exceeded runTest's default 60s
+// real-wall-clock timeout, surfacing as `UncompletedCoroutinesError: the test body did
+// not run to completion` (issue #1324). The work is correct and terminating (the JVM
+// runs the identical logic in milliseconds); it is purely slow. Give the crypto-bearing
+// tests generous real-time headroom so runner contention can't clip a completing body,
+// while still bounding a genuine hang.
+private val SLOW_KN_CRYPTO_TIMEOUT = 5.minutes
 
 class DealSessionTest {
 
     @Test
-    fun twoPlayerPokerDeal_aliceSeesHerCard_bobCannotRead() = runTest {
+    fun twoPlayerPokerDeal_aliceSeesHerCard_bobCannotRead() = runTest(timeout = SLOW_KN_CRYPTO_TIMEOUT) {
         val alice = PeerId("alice")
         val bob = PeerId("bob")
         val scheme = SraScheme()
@@ -51,7 +66,7 @@ class DealSessionTest {
     }
 
     @Test
-    fun twoPlayerDeal_holderCannotSeeOwnCard() = runTest {
+    fun twoPlayerDeal_holderCannotSeeOwnCard() = runTest(timeout = SLOW_KN_CRYPTO_TIMEOUT) {
         val alice = PeerId("alice")
         val bob = PeerId("bob")
         val scheme = SraScheme()
@@ -82,7 +97,7 @@ class DealSessionTest {
     }
 
     @Test
-    fun communityCard_quorumOfAllPlayers_everyPlayerCanDecrypt() = runTest {
+    fun communityCard_quorumOfAllPlayers_everyPlayerCanDecrypt() = runTest(timeout = SLOW_KN_CRYPTO_TIMEOUT) {
         val alice = PeerId("alice")
         val bob = PeerId("bob")
         val scheme = SraScheme()
@@ -129,7 +144,7 @@ class DealSessionTest {
     }
 
     @Test
-    fun partialQuorum_membersDecrypt_nonMemberCannot() = runTest {
+    fun partialQuorum_membersDecrypt_nonMemberCannot() = runTest(timeout = SLOW_KN_CRYPTO_TIMEOUT) {
         // A card visible to exactly 2 of 3 players (issue #1281): after carol (the
         // non-member) strips, the quorum members cooperatively strip per-member
         // reveal tracks so each member ends up holding a copy carrying only their
