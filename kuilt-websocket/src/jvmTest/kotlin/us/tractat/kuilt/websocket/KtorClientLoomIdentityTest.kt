@@ -2,8 +2,6 @@ package us.tractat.kuilt.websocket
 
 import io.ktor.client.plugins.websocket.WebSockets
 import io.ktor.server.testing.testApplication
-import kotlinx.coroutines.async
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withTimeout
 import us.tractat.kuilt.core.CloseReason
 import us.tractat.kuilt.core.PeerId
@@ -90,19 +88,4 @@ class KtorClientLoomIdentityTest {
 
             assertNotEquals(loomA.selfPeerId, loomB.selfPeerId, "distinct loom instances should have distinct default ids")
         }
-
-    // ── Helper ───────────────────────────────────────────────────────────────
-
-    private suspend fun connectPair(
-        serverLoom: KtorServerLoom,
-        advertisement: WebSocketAdvertisement,
-        clientLoom: KtorClientLoom,
-        timeoutMs: Long = 5_000,
-    ) = withTimeout(timeoutMs) {
-        coroutineScope {
-            val serverLinkDeferred = async { serverLoom.nextLink() }
-            val clientLink = clientLoom.join(advertisement)
-            serverLinkDeferred.await() to clientLink
-        }
-    }
 }
