@@ -1,4 +1,3 @@
-// kuilt-websocket/src/jvmTest/kotlin/us/tractat/kuilt/websocket/KtorClientLoomTestSupport.kt
 package us.tractat.kuilt.websocket
 
 import kotlinx.coroutines.async

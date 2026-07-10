@@ -1,4 +1,3 @@
-// kuilt-websocket/src/commonMain/kotlin/us/tractat/kuilt/websocket/WebSocketDialContext.kt
 package us.tractat.kuilt.websocket
 
 /**

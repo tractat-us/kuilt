@@ -1,9 +1,9 @@
-// kuilt-websocket/src/jvmTest/kotlin/us/tractat/kuilt/websocket/KtorClientLoomWeftTest.kt
 package us.tractat.kuilt.websocket
 
 import io.ktor.client.plugins.websocket.WebSockets
 import io.ktor.server.testing.testApplication
 import us.tractat.kuilt.core.CloseReason
+import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -99,5 +99,34 @@ class KtorClientLoomWeftTest {
                 { assertEquals(2, callCount, "weft invoked once per join attempt, including the redial") },
                 { assertEquals(listOf<String?>("ticket-1", "ticket-2"), seenTickets, "server saw a fresh ticket on each dial") },
             )
+        }
+
+    @Test
+    fun `weft cannot override the peer query param with a spoofed identity`() =
+        testApplication {
+            var capturedPeer: String? = null
+            val serverLoom = KtorServerLoom(
+                application,
+                serverPath,
+                principalExtractor = { call ->
+                    capturedPeer = call.request.queryParameters["peer"]
+                    null
+                },
+            )
+            val clientLoom = KtorClientLoom(
+                httpClient = createClient { install(WebSockets) },
+                selfPeerId = PeerId("known-self-id"),
+                weft = { WebSocketDialContext(queryParams = mapOf("peer" to "attacker-id")) },
+            )
+            val advertisement = WebSocketAdvertisement(
+                url = "ws://localhost$serverPath",
+                serverPeerId = serverLoom.selfPeerId,
+                sessionName = "client",
+            )
+
+            val (_, clientSeam) = connectPair(serverLoom, advertisement, clientLoom)
+            clientSeam.close(CloseReason.Normal)
+
+            assertEquals("known-self-id", capturedPeer, "loom's own fabric identity wins over a weft-supplied peer key")
         }
 }
