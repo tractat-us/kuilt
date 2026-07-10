@@ -117,9 +117,11 @@ class TieredSeamTest {
 
         f.tiered.broadcast(payload)
 
+        val gotLocal = onLocal.await().toByteArray()
+        val gotPeer = onPeer.await().toByteArray()
         assertAll(
-            { assertTrue(onLocal.await().toByteArray().contentEquals(payload), "broadcast reaches the local tier") },
-            { assertTrue(onPeer.await().toByteArray().contentEquals(payload), "broadcast reaches the peer tier") },
+            { assertTrue(gotLocal.contentEquals(payload), "broadcast reaches the local tier") },
+            { assertTrue(gotPeer.contentEquals(payload), "broadcast reaches the peer tier") },
         )
     }
 
@@ -134,8 +136,9 @@ class TieredSeamTest {
 
         f.tiered.sendTo(f.localMember.selfId, byteArrayOf(1))
 
+        val gotLocal = onLocal.await().toByteArray()
         assertAll(
-            { assertTrue(onLocal.await().toByteArray().contentEquals(byteArrayOf(1)), "the local member receives the unicast") },
+            { assertTrue(gotLocal.contentEquals(byteArrayOf(1)), "the local member receives the unicast") },
             { assertTrue(peerInbox.tryReceive().isFailure, "the peer tier must NOT receive a unicast addressed to a local member") },
         )
         peerInbox.cancel()
@@ -150,8 +153,9 @@ class TieredSeamTest {
 
         f.tiered.sendTo(f.peerMember.selfId, byteArrayOf(2))
 
+        val gotPeer = onPeer.await().toByteArray()
         assertAll(
-            { assertTrue(onPeer.await().toByteArray().contentEquals(byteArrayOf(2)), "the peer member receives the unicast") },
+            { assertTrue(gotPeer.contentEquals(byteArrayOf(2)), "the peer member receives the unicast") },
             { assertTrue(localInbox.tryReceive().isFailure, "the local tier must NOT receive a unicast addressed to a peer member") },
         )
         localInbox.cancel()
