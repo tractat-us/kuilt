@@ -123,13 +123,13 @@ public suspend fun CoroutineScope.gameNodeRoomFederated(
     val localRoom = rooms.host(Pattern(gameId))
     val federatedSeam = tieredSeam(localRoom, perGameCore, this)
     val corePeers = core.mapTo(mutableSetOf()) { PeerId(it.value) }
-    val overlay = policyOverlay(federatedSeam, TwoTier(core = corePeers, attachment = attachment), random, clock)
     return gameNode(
-        seam = overlay,
+        seam = federatedSeam,
         voterIds = core,
         storage = storage,
         raftConfig = raftConfig,
         identity = identity,
         placement = ConsensusPlacement.serverCore(core),
+        overlay = { policyOverlay(it, TwoTier(core = corePeers, attachment = attachment), random, clock) },
     )
 }

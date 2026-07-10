@@ -89,9 +89,8 @@ public suspend fun CoroutineScope.gameHostedRoom(
     identity: ClientIdentity = ClientIdentity.Auto,
     placement: ConsensusPlacement = ConsensusPlacement.SessionOwned,
 ): GameSession {
-    val overlay = starOverlay(rooms.host(Pattern(gameId)), random, clock)
     return gameHost(
-        seam = overlay,
+        seam = rooms.host(Pattern(gameId)),
         peerCount = peerCount,
         returnAt = returnAt,
         storage = storage,
@@ -100,6 +99,7 @@ public suspend fun CoroutineScope.gameHostedRoom(
         clock = clock,
         identity = identity,
         placement = placement,
+        overlay = { starOverlay(it, random, clock) },
     )
 }
 
@@ -130,14 +130,14 @@ public suspend fun CoroutineScope.gameJoinRoom(
     identity: ClientIdentity = ClientIdentity.Auto,
     placement: ConsensusPlacement = ConsensusPlacement.SessionOwned,
 ): GameSession {
-    val overlay = starOverlay(rooms.join(RoomChannelTag(gameId)), random, clock)
     return gameJoin(
-        seam = overlay,
+        seam = rooms.join(RoomChannelTag(gameId)),
         storage = storage,
         raftConfig = raftConfig,
         joinAdmissionTimeout = joinAdmissionTimeout,
         identity = identity,
         placement = placement,
+        overlay = { starOverlay(it, random, clock) },
     )
 }
 
@@ -179,13 +179,13 @@ public suspend fun CoroutineScope.gameNodeRoom(
     identity: ClientIdentity = ClientIdentity.Auto,
     placement: ConsensusPlacement = ConsensusPlacement.SessionOwned,
 ): GameSession {
-    val overlay = starOverlay(rooms.host(Pattern(gameId)), random, clock)
     return gameNode(
-        seam = overlay,
+        seam = rooms.host(Pattern(gameId)),
         voterIds = voterIds,
         storage = storage,
         raftConfig = raftConfig,
         identity = identity,
         placement = placement,
+        overlay = { starOverlay(it, random, clock) },
     )
 }

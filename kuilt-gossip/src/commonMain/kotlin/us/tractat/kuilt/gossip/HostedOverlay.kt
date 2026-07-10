@@ -125,9 +125,37 @@ public suspend fun CoroutineScope.hostedOverlay(
     random: Random = Random.Default,
     clock: () -> Instant = { Clock.System.now() },
     admission: LinkAdmission = LinkAdmission.AcceptAll,
+): Seam = starOverlay(hostedMesh(selfId, source, dispatcher, admission), random, clock)
+
+/**
+ * Compose the **raw** accept-pumped hub mesh from a [ConnectionSource]: an initially-empty
+ * [meshSeam] plus the accept-pump that [addLink][us.tractat.kuilt.core.fabric.Mesh.addLink]s each
+ * accepted [us.tractat.kuilt.core.fabric.Connection] as clients connect. This is [hostedOverlay]
+ * **without** the star-relay flood — the seam whose `sendTo` reaches each spoke directly and whose
+ * `broadcast` is *not* re-flooded.
+ *
+ * This is the seam a commit-safe game bootstrap wants as its **base**: pass it to
+ * `gameHost(seam = hostedMesh(...), overlay = { starOverlay(it, …) })` so consensus (Raft +
+ * heartbeat) is muxed **below** the flood while only the broadcast plane rides the star relay
+ * (#1370). Do **not** re-introduce `gameHost(seam = hostedOverlay(...))` — that puts the whole mux,
+ * Raft included, *above* the flood, so the overlay's origin-restamping can launder a forged
+ * consensus frame.
+ *
+ * The returned mesh is a [us.tractat.kuilt.core.PrincipalRoster]: principals attached to accepted
+ * connections are observable per admitted peer (see [hostedOverlay]). The pump coroutine lives on
+ * the receiver scope and is torn down with it; a failed admit is best-effort (the bad connection is
+ * dropped and the pump keeps accepting).
+ *
+ * @param admission Per-link admission policy, enforced at the hub mesh between each spoke's
+ *   `MeshHello` handshake and its publication. Defaults to [LinkAdmission.AcceptAll].
+ */
+public suspend fun CoroutineScope.hostedMesh(
+    selfId: PeerId,
+    source: ConnectionSource,
+    dispatcher: CoroutineContext,
+    admission: LinkAdmission = LinkAdmission.AcceptAll,
 ): Seam {
     val hubMesh = meshSeam(selfId = selfId, connections = emptyList(), dispatcher = dispatcher, admission = admission)
-    val hub = starOverlay(hubMesh, random, clock)
     launch {
         while (isActive) {
             val conn = source.accept()
@@ -137,9 +165,9 @@ public suspend fun CoroutineScope.hostedOverlay(
                     // preamble) or an admission-rejected link (LinkRejectedException) surfaces here.
                     // Log the one dropped spoke at debug and keep accepting — the hub and every
                     // admitted link stay intact.
-                    logger.debug { "hostedOverlay: dropping rejected/torn spoke — ${it.message}" }
+                    logger.debug { "hostedMesh: dropping rejected/torn spoke — ${it.message}" }
                 }
         }
     }
-    return hub
+    return hubMesh
 }
