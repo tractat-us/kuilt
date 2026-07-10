@@ -8,6 +8,12 @@ kotlin {
         commonMain.dependencies {
             api(project(":kuilt-core"))
             api(project(":kuilt-raft"))
+            // The approved :kuilt-game → :kuilt-cluster direction (#1349): game grows a federated
+            // bootstrap (gameNodeRoomFederated) that documents/consumes cluster's game-agnostic
+            // two-tier substrate (AttachmentDirectory / OverlayServer). Cluster never depends on
+            // game, so no cycle. PR 2 moves launchCoreLearnerAdmission down into cluster over this
+            // edge.
+            implementation(project(":kuilt-cluster"))
             implementation(project(":kuilt-gossip"))
             implementation(project(":kuilt-liveness"))
             implementation(project(":kuilt-quilter"))
