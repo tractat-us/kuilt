@@ -11,7 +11,9 @@ industry-standard Binaryen `wasm-opt` tool and returns a smaller, still-runnable
 module with the warp `warp_alloc`/`warp_run` calling convention preserved. The
 `wasm-opt` binary is downloaded from Binaryen's official release (version-pinned
 and checksum-verified) at build time and bundled as a resource — no binaries in
-git, no toolchain to install.
+git, no toolchain to install. The published artifact currently bundles the
+binary for the **build host's** OS/architecture only; packaging `wasm-opt` for
+every target OS is tracked separately in #1335.
 
 Only a peer that *wants to be* a compiler node depends on this module; the
 Binaryen weight falls on those operators alone. It is a JVM/server module —
