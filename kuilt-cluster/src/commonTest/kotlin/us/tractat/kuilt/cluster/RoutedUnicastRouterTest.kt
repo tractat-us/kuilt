@@ -212,7 +212,7 @@ class RoutedUnicastRouterTest {
  * discipline structurally: exactly which peers it addressed, and that it never
  * broadcast. Test-only double; access is serial under `runTest`.
  */
-private class RecordingSeam(private val inner: Seam) : Seam {
+internal class RecordingSeam(private val inner: Seam) : Seam {
     val sentTo: MutableList<PeerId> = mutableListOf()
     var broadcastCount: Int = 0
         private set
