@@ -33,6 +33,11 @@ import kotlin.time.Duration.Companion.minutes
  *    only, so the rest of the suite still produces XML;
  *  - the body updates a [StageTracker] label before each unbounded await, so on timeout the failure
  *    names the exact stage and iteration it was stuck on;
+ *  - the body may register a lazy **observed-state snapshot** with each stage (see [StageTracker.at]);
+ *    on timeout the harness evaluates the latest snapshot and prints it alongside the thread dump, so
+ *    a failure of a *known class* names its own cause from the single CI artifact. A seam probe reports
+ *    e.g. `state=Woven … (close() was called)`, which reads unambiguously as a lost terminal transition
+ *    (#1135) rather than as slow-but-recovering convergence — no re-reproduction needed to tell them apart;
  *  - a full JVM thread dump is attached to the failure so the stuck pump/await is diagnosable from
  *    the single CI artifact, with no local re-reproduction needed.
  *
@@ -50,22 +55,44 @@ internal fun runConcurrencyStress(
     } catch (e: TimeoutCancellationException) {
         throw AssertionError(
             "concurrency stress HUNG at stage='${stage.current}' after $cap " +
-                "(a seam failed to converge — see #1135). Full thread dump:\n${threadDump()}",
+                "(a seam failed to converge — see #1135).\nObserved SUT state: ${stage.diagnosticSnapshot()}\n" +
+                "Full thread dump:\n${threadDump()}",
             e,
         )
     }
 }
 
-/** A mutable, thread-visible label naming the currently-awaited convergence point. */
+/**
+ * A mutable, thread-visible label naming the currently-awaited convergence point, plus an optional
+ * lazy **observed-state snapshot** of the system under test.
+ *
+ * The harness stays generic — it knows nothing of seam internals — so the *probe* supplies the
+ * snapshot: a `() -> String` evaluated only if the run times out. This lets a hang name its own cause
+ * (e.g. a seam probe reporting `state=Woven … (close() was called)` — a lost terminal transition,
+ * #1135) from the single CI artifact, without re-reproducing to distinguish a clobber from slow
+ * convergence.
+ */
 internal class StageTracker {
     @Volatile
     var current: String = "start"
         private set
 
-    /** Record the stage we are about to (unboundedly) wait on. */
-    fun at(label: String) {
+    @Volatile
+    private var snapshot: () -> String = { "(no snapshot registered for this stage)" }
+
+    /**
+     * Record the stage we are about to (unboundedly) wait on, and (optionally) how to snapshot the
+     * system-under-test's observed state if this stage hangs. [snapshot] is evaluated **only** on
+     * timeout, on the harness thread; keep it cheap and side-effect-free (read a few `StateFlow`s).
+     */
+    fun at(label: String, snapshot: () -> String = { "(no snapshot registered for this stage)" }) {
         current = label
+        this.snapshot = snapshot
     }
+
+    /** Evaluate the latest registered snapshot, tolerating a throwing supplier. Called on timeout only. */
+    fun diagnosticSnapshot(): String =
+        runCatching { snapshot() }.getOrElse { "<snapshot supplier threw: ${it::class.simpleName}: ${it.message}>" }
 }
 
 private fun threadDump(): String = buildString {
