@@ -7,7 +7,6 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -302,10 +301,31 @@ internal class CompositeSeam(
             }
         }
 
+    /**
+     * Publish the terminal [SeamState.Torn] and tear down every ply.
+     *
+     * **Why this joins the internal scope before publishing `Torn`.** This seam *derives* its
+     * aggregate [state] from a live collector — the `init` block's
+     * `_plies.onEach { _state.value = rollup(...) }.launchIn(scope)`. A bare `scope.cancel()` is
+     * **asynchronous and non-joining**: a rollup collector already resumed for an in-flight `_plies`
+     * emission completes its non-suspending `_state.value = rollup(...)` write *after* the cancel. On
+     * a multi-threaded dispatcher that write races this method and can land **after** our terminal
+     * `Torn`, leaving `_state` permanently non-terminal (`Woven`/`Weaving`) — `close()` is single-shot
+     * and the scope is now dead, so nothing ever corrects it, and every `state.first { it is Torn }`
+     * waiter hangs forever (the #1135 stall). Note a blanket "sticky Torn in `rollup`" is the WRONG
+     * fix: a `Torn` produced by `rollup` (all plies torn — revivable if a ply re-attaches) is
+     * semantically distinct from this terminal, single-shot `close()` `Torn`, and stickiness would
+     * wedge a legitimately-revivable composite. The correct fix is ordering: [cancelAndJoin] the
+     * internal scope so every in-flight rollup write has completed BEFORE we publish `Torn` — after
+     * the join no collector can run again, so the terminal write is final. The scope's [Job] is a
+     * standalone [SupervisorJob] (not a child of the caller), so joining it cannot self-deadlock.
+     */
     override suspend fun close(reason: CloseReason) {
         // Single-shot: only the first caller publishes Torn and tears down.
         if (!closed.compareAndSet(expect = false, update = true)) return
-        scope.cancel()
+        // Join the internal pumps (esp. the rollup collector) BEFORE publishing Torn — see the KDoc:
+        // a bare async cancel lets an in-flight rollup write clobber the terminal Torn (#1135).
+        scope.coroutineContext[Job]?.cancelAndJoin()
         // Snapshot the plies to close under the lock; perform the suspending closes outside it.
         val toClose = lock.withLock {
             val snapshot = live.values.toList()
