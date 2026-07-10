@@ -92,7 +92,11 @@ internal class TieredSeam(
     }
 
     // Child of the injected scope so close() cancels the pumps without tearing the caller's scope.
-    private val scope = CoroutineScope(SupervisorJob(parentScope.coroutineContext[Job]) + parentScope.coroutineContext)
+    // The SupervisorJob must go on the RIGHT of `plus`: on a Job-key collision the right operand
+    // wins, so this scope's Job is our SupervisorJob (a child of the parent Job — parent
+    // cancellation still propagates down) and `scope.cancel()` cancels only our pumps. If the
+    // SupervisorJob were on the left it would be dropped and scope.cancel() would tear the caller.
+    private val scope = CoroutineScope(parentScope.coroutineContext + SupervisorJob(parentScope.coroutineContext[Job]))
 
     // Single-shot teardown latch: only the first close() publishes Torn and tears down.
     private val closed = atomic(false)

@@ -17,14 +17,20 @@
 
 package us.tractat.kuilt.core
 
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.produceIn
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.seconds
 
@@ -35,6 +41,8 @@ class TieredSeamTest {
         val tiered: Seam,
         val localMember: Seam,
         val peerMember: Seam,
+        val selfLocal: Seam,
+        val selfPeer: Seam,
     )
 
     /**
@@ -59,7 +67,7 @@ class TieredSeamTest {
         val peerMember = loomPeer.join(InMemoryTag("peer-member"))
 
         val tiered = tieredSeam(local = selfLocal, peer = selfPeer, scope = scope)
-        return Fixture(tiered, localMember, peerMember)
+        return Fixture(tiered, localMember, peerMember, selfLocal, selfPeer)
     }
 
     // ── 1 · peers is the union, and updates when either tier's roster changes ──
@@ -218,5 +226,63 @@ class TieredSeamTest {
         kotlin.test.assertFailsWith<IllegalArgumentException>("both tiers must be views of the SAME node") {
             tieredSeam(local = selfLocal, peer = selfPeer, scope = backgroundScope)
         }
+    }
+
+    // ── 5 · close() lifecycle ─────────────────────────────────────────────────
+
+    @Test
+    fun closeTearsDownBothTiers() = runTest(UnconfinedTestDispatcher(), timeout = 5.seconds) {
+        val f = buildFixture(backgroundScope)
+
+        f.tiered.close(CloseReason.Normal)
+
+        assertAll(
+            { assertTrue(f.tiered.state.value is SeamState.Torn, "tiered state is Torn after close") },
+            { assertTrue(f.tiered.peers.value.isEmpty(), "tiered peers empties after close") },
+            { assertTrue(f.selfLocal.state.value is SeamState.Torn, "the local tier is closed") },
+            { assertTrue(f.selfPeer.state.value is SeamState.Torn, "the peer tier is closed") },
+        )
+    }
+
+    /**
+     * Regression for the `close()` scope bug: the internal child scope must NOT be the caller's
+     * scope, so `close()` cancels only the seam's own pumps — never the scope the caller passed
+     * in. Fails on the old code (SupervisorJob dropped by `plus`, so `scope.cancel()` tore the
+     * parent); passes on the fix (SupervisorJob wins the Job key).
+     */
+    @Test
+    fun closeDoesNotCancelTheCallerScope() = runTest(UnconfinedTestDispatcher(), timeout = 5.seconds) {
+        // A scope we own (not backgroundScope, which the harness cancels at teardown anyway).
+        val callerScope = CoroutineScope(UnconfinedTestDispatcher(testScheduler))
+        val loomLocal = InMemoryLoom()
+        val selfLocal = loomLocal.host(Pattern("tiered-close-scope-local"))
+        val loomPeer = InMemoryLoom()
+        val selfPeer = loomPeer.host(Pattern("tiered-close-scope-peer"))
+
+        // A long-lived sibling in the SAME scope; it must survive the tiered seam's close().
+        val stillRunning = CompletableDeferred<Unit>()
+        val sibling = callerScope.launch { stillRunning.await() }
+
+        val tiered = tieredSeam(local = selfLocal, peer = selfPeer, scope = callerScope)
+        tiered.close(CloseReason.Normal)
+
+        assertAll(
+            { assertTrue(callerScope.isActive, "the caller's scope must stay active after close()") },
+            { assertTrue(sibling.isActive, "a sibling coroutine in the caller's scope must survive close()") },
+        )
+        callerScope.cancel() // clean up the sibling + the seam's pumps' parent
+    }
+
+    @Test
+    fun closeIsIdempotent() = runTest(UnconfinedTestDispatcher(), timeout = 5.seconds) {
+        val f = buildFixture(backgroundScope)
+
+        f.tiered.close(CloseReason.Normal)
+        f.tiered.close(CloseReason.Normal) // second close must be a no-op — no throw, no double-close.
+
+        assertAll(
+            { assertTrue(f.tiered.state.value is SeamState.Torn, "state stays Torn after a second close") },
+            { assertFalse(f.tiered.peers.value.isNotEmpty(), "peers stays empty after a second close") },
+        )
     }
 }
