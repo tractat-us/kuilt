@@ -24,6 +24,7 @@ import us.tractat.kuilt.core.PlyId
 import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
+import us.tractat.kuilt.core.SeamStateGate
 import us.tractat.kuilt.core.Spool
 import us.tractat.kuilt.core.Swatch
 import us.tractat.kuilt.core.runCatchingCancellable
@@ -59,10 +60,12 @@ import kotlin.coroutines.CoroutineContext
  * mechanism. The mutable state shared between caller threads (`broadcast`/`sendTo`) and
  * those pumps — the live-ply map, the learned `(plyId, transportId) → compositeId`
  * mapping, and the per-origin [PlyInboundGate] (itself documented single-collection) — is
- * guarded by a single [reentrantLock]. The outbound sequence is an atomic counter and
- * teardown is gated by an atomic single-shot flag. Suspending ply calls
- * (`Seam.broadcast`/`sendTo`/`close`, `cancelAndJoin`) are NEVER invoked while the lock is
- * held: callers snapshot the target plies under the lock, release, then send/close outside it.
+ * guarded by a single [reentrantLock]. The outbound sequence is an atomic counter and the terminal
+ * lifecycle runs through a [SeamStateGate]: the rollup pump publishes the derived aggregate via
+ * `update()` and [close] latches `Torn` via `tear()` (single-shot, subsuming the old `closed` atomic),
+ * so no in-flight rollup write can clobber the terminal state and teardown ordering is irrelevant to
+ * state correctness. Suspending ply calls (`Seam.broadcast`/`sendTo`/`close`) are NEVER invoked while
+ * the lock is held: callers snapshot the target plies under the lock, release, then send/close outside it.
  *
  * **Inbound backpressure.** Application payloads are delivered through a [Spool] whose
  * capacity and overflow behaviour are governed by [policy] (default [DeliveryPolicy.Reliable]).
@@ -96,14 +99,15 @@ internal class CompositeSeam(
     // under the lock, act after releasing).
     private val lock = reentrantLock()
 
-    // Atomic single-shot teardown gate so `close()` runs the seam-wide teardown exactly once.
-    private val closed = atomic(false)
-
     // Minted once from the initial set; never recomputed, so it survives ply churn.
     override val selfId: PeerId = mintCompositeId(initial)
 
-    private val _state = MutableStateFlow<SeamState>(SeamState.Weaving)
-    override val state: StateFlow<SeamState> = _state.asStateFlow()
+    // Terminal-latching state holder. The rollup pump feeds derived aggregates through update()
+    // (revivable — an all-plies-torn rollup can revert to Woven when a ply re-attaches); close()
+    // latches Torn via tear() (single-shot). The latch keys on the close DECISION, never the Torn
+    // value, so the two-kinds-of-Torn nuance is handled by construction.
+    private val stateGate = SeamStateGate(SeamState.Weaving)
+    override val state: StateFlow<SeamState> = stateGate.state
 
     private val _plies = MutableStateFlow<Map<PlyId, SeamState>>(emptyMap())
     override val plies: StateFlow<Map<PlyId, SeamState>> = _plies.asStateFlow()
@@ -124,9 +128,10 @@ internal class CompositeSeam(
     private class PlyHandle(val seam: Seam, val job: Job)
 
     init {
-        // Aggregate state is derived from the per-ply map. Empty => Weaving.
+        // Aggregate state is derived from the per-ply map. Empty => Weaving. A derived write via
+        // update(): no-ops once close() has latched Torn, so a late rollup can never clobber it.
         _plies
-            .onEach { _state.value = rollup(it.values.toList()) }
+            .onEach { stateGate.update(rollup(it.values.toList())) }
             .launchIn(scope)
 
         // Seed the initial plies (already woven by CompositeLoom).
@@ -304,35 +309,27 @@ internal class CompositeSeam(
     /**
      * Publish the terminal [SeamState.Torn] and tear down every ply.
      *
-     * **Why this joins the internal scope before publishing `Torn`.** This seam *derives* its
-     * aggregate [state] from a live collector — the `init` block's
-     * `_plies.onEach { _state.value = rollup(...) }.launchIn(scope)`. A bare `scope.cancel()` is
-     * **asynchronous and non-joining**: a rollup collector already resumed for an in-flight `_plies`
-     * emission completes its non-suspending `_state.value = rollup(...)` write *after* the cancel. On
-     * a multi-threaded dispatcher that write races this method and can land **after** our terminal
-     * `Torn`, leaving `_state` permanently non-terminal (`Woven`/`Weaving`) — `close()` is single-shot
-     * and the scope is now dead, so nothing ever corrects it, and every `state.first { it is Torn }`
-     * waiter hangs forever (the #1135 stall). Note a blanket "sticky Torn in `rollup`" is the WRONG
-     * fix: a `Torn` produced by `rollup` (all plies torn — revivable if a ply re-attaches) is
-     * semantically distinct from this terminal, single-shot `close()` `Torn`, and stickiness would
-     * wedge a legitimately-revivable composite. The correct fix is ordering: [cancelAndJoin] the
-     * internal scope so every in-flight rollup write has completed BEFORE we publish `Torn` — after
-     * the join no collector can run again, so the terminal write is final. The scope's [Job] is a
-     * standalone [SupervisorJob] (not a child of the caller), so joining it cannot self-deadlock.
+     * **Correct by construction, not by ordering.** This seam *derives* its aggregate [state] from a
+     * live collector — the `init` block's `_plies.onEach { stateGate.update(rollup(...)) }`. The
+     * [SeamStateGate] makes teardown ordering irrelevant to state correctness: `tear()` latches `Torn`
+     * atomically, and any rollup collector still in flight (or resumed after the cancel below)
+     * publishes through `update()`, which is a **no-op once latched**. So the #1135 lost-terminal-Torn
+     * race — an in-flight rollup write clobbering the terminal `Torn` — is unrepresentable regardless
+     * of whether the scope is cancelled before or after, joined or not. The tactical `cancelAndJoin`
+     * the earlier point-fix needed is therefore gone: the scope is cancelled (non-joining) purely to
+     * release the pump coroutines. `tear()` also subsumes the old single-shot `closed` atomic.
      */
     override suspend fun close(reason: CloseReason) {
-        // Single-shot: only the first caller publishes Torn and tears down.
-        if (!closed.compareAndSet(expect = false, update = true)) return
-        // Join the internal pumps (esp. the rollup collector) BEFORE publishing Torn — see the KDoc:
-        // a bare async cancel lets an in-flight rollup write clobber the terminal Torn (#1135).
-        scope.coroutineContext[Job]?.cancelAndJoin()
+        // Single-shot: tear() latches Torn and returns false for a loser, so teardown runs once.
+        if (!stateGate.tear(reason)) return
         // Snapshot the plies to close under the lock; perform the suspending closes outside it.
         val toClose = lock.withLock {
             val snapshot = live.values.toList()
             live.clear()
             snapshot
         }
-        _state.value = SeamState.Torn(reason)
+        // The gate guarantees state correctness; cancel is a plain resource release (non-joining).
+        scope.coroutineContext[Job]?.cancel()
         spool.close()
         toClose.forEach { it.seam.close(reason) }
     }

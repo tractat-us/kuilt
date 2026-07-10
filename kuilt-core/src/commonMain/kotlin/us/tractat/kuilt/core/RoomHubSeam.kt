@@ -57,6 +57,11 @@ internal fun interface OutboundSender {
  *
  * All mutable state ([registered] and the [attestedPrincipals] roster) is guarded by a reentrant
  * lock. Suspend calls (authorizer, sends, spool delivery) are always performed **outside** the lock.
+ * The terminal lifecycle runs through a [SeamStateGate]: [close] latches `Torn` single-shot (no more
+ * non-CAS `if (_state is Torn) return`), and the roster-resurrection hazard — an in-flight [deliver]
+ * re-registering a peer after `close()` cleared the roster — is closed by folding the torn-check
+ * into the **same** critical section that mutates [registered]/[_peers]/[principals], so a
+ * post-tear [deliver] can never republish membership.
  *
  * @param channelName the room name, matching the [NamedMux] channel tag clients use.
  * @param selfId this server peer's own [PeerId].
@@ -88,8 +93,8 @@ public class RoomHubSeam(
     private val _peers = MutableStateFlow<Set<PeerId>>(emptySet())
     override val peers: StateFlow<Set<PeerId>> = _peers.asStateFlow()
 
-    private val _state = MutableStateFlow<SeamState>(SeamState.Woven)
-    override val state: StateFlow<SeamState> = _state.asStateFlow()
+    private val stateGate = SeamStateGate(SeamState.Woven)
+    override val state: StateFlow<SeamState> = stateGate.state
 
     /**
      * Merged inbound stream: frames from all registered connections, pushed here by the loom.
@@ -121,16 +126,23 @@ public class RoomHubSeam(
         sender: OutboundSender,
         principal: Principal?,
     ) {
-        if (_state.value is SeamState.Torn) return
+        if (state.value is SeamState.Torn) return
         val alreadyRegistered = lock.withLock { registered[connPeerId] === sender }
         if (!alreadyRegistered) {
             if (!authorizer.authorize(connPeerId, channelName)) return
-            lock.withLock {
+            val admitted = lock.withLock {
+                // Re-check the terminal latch INSIDE the registration critical section: a close()
+                // may have latched Torn and cleared the roster while we were suspended in the
+                // authorizer above. Registering here would resurrect membership after Torn (#1364).
+                // Folding the check into the same lock that clears the roster makes it unrepresentable.
+                if (state.value is SeamState.Torn) return@withLock false
                 registered[connPeerId] = sender
                 _peers.update { it + connPeerId }
                 if (principal == null) principals.remove(connPeerId) else principals[connPeerId] = principal
                 _attestedPrincipals.value = principals.toMap()
+                true
             }
+            if (!admitted) return
         }
         inboundSpool.deliver(frame)
     }
@@ -170,8 +182,11 @@ public class RoomHubSeam(
     }
 
     override suspend fun close(reason: CloseReason) {
-        if (_state.value is SeamState.Torn) return
-        _state.value = SeamState.Torn(reason)
+        // Single-shot: tear() latches Torn and returns false for a loser, so a second (or concurrent)
+        // close() never re-runs teardown — the old non-CAS `if (_state is Torn) return` let two
+        // concurrent closes both run it. Latch BEFORE clearing the roster so a deliver() that acquires
+        // the lock after the clear sees Torn and cannot re-register (see deliver()).
+        if (!stateGate.tear(reason)) return
         lock.withLock {
             registered.clear()
             principals.clear()
@@ -182,6 +197,6 @@ public class RoomHubSeam(
     }
 
     private fun checkOpen() {
-        check(_state.value !is SeamState.Torn) { "RoomHubSeam for '$channelName' is closed" }
+        check(state.value !is SeamState.Torn) { "RoomHubSeam for '$channelName' is closed" }
     }
 }

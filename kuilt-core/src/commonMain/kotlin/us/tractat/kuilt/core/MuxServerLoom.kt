@@ -97,6 +97,10 @@ public class MuxServerLoom(
     /** Hosted rooms: channelName → RoomHubSeam. Created on the first [host] call per name. */
     private val rooms = mutableMapOf<String, RoomHubSeam>()
 
+    // TODO(#1366): this SupervisorJob is PARENTLESS (not a child of the injected scope's Job), so
+    //  cancelling the caller's scope does not stop the accept loop or the per-connection pumps — and
+    //  MuxServerLoom has no close() at all. Out of scope for the SeamStateGate terminal-latch work
+    //  (that changes seam state teardown, not loom lifecycle); tracked as a residual in #1366.
     private val pumpScope = CoroutineScope(scope.coroutineContext + SupervisorJob())
 
     /**

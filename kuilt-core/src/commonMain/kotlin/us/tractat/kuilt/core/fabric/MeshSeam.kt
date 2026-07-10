@@ -24,6 +24,7 @@ import us.tractat.kuilt.core.PrincipalAttested
 import us.tractat.kuilt.core.PrincipalRoster
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
+import us.tractat.kuilt.core.SeamStateGate
 import us.tractat.kuilt.core.Spool
 import us.tractat.kuilt.core.Swatch
 import us.tractat.kuilt.core.runCatchingCancellable
@@ -276,8 +277,8 @@ private class MeshSeam(
     private val _peers = MutableStateFlow(setOf(selfId))
     override val peers: StateFlow<Set<PeerId>> = _peers.asStateFlow()
 
-    private val _state = MutableStateFlow<SeamState>(SeamState.Woven)
-    override val state: StateFlow<SeamState> = _state.asStateFlow()
+    private val stateGate = SeamStateGate(SeamState.Woven)
+    override val state: StateFlow<SeamState> = stateGate.state
 
     // Host-verified principals of currently-linked peers (PrincipalRoster). Updated ONLY under
     // `lock`, in the same critical sections that mutate `links`, so it can never desync from the
@@ -287,11 +288,6 @@ private class MeshSeam(
 
     private val spool = Spool<Swatch>(policy)
     override val incoming: Flow<Swatch> = spool.incoming
-
-    // Atomic single-shot teardown gate. `close()` and each `readLoop`'s `finally` race to flip it
-    // false→true; whoever wins runs the seam-wide teardown, the loser is a no-op — so the seam
-    // tears down exactly once regardless of which thread arrives first.
-    private val closed = atomic(false)
 
     // Incremented from MULTIPLE per-link readLoops concurrently — must be atomic.
     private val seq = atomic(0L)
@@ -309,7 +305,7 @@ private class MeshSeam(
     private val closedMessage get() = "MeshSeam for $selfId is closed"
 
     override suspend fun addLink(conn: Connection) {
-        check(!closed.value) { closedMessage }
+        check(state.value !is SeamState.Torn) { closedMessage }
         val link = handshakeLink(selfId, conn, dispatcher, random)
         // THE CHECK: between the handshake (remote id now known) and admitOrReject (link not yet
         // live). A rejected link is closed here and never published — it cannot contend in the
@@ -332,7 +328,7 @@ private class MeshSeam(
      * first link to that peer. Suspending closes happen in the caller, outside the lock.
      */
     private fun admitOrReject(link: Link): Connection? = lock.withLock {
-        if (closed.value) return@withLock link.conn
+        if (state.value is SeamState.Torn) return@withLock link.conn
         val existing = links[link.remoteId]
         when {
             existing == null -> { links[link.remoteId] = link; publishRosters(); null }
@@ -353,7 +349,7 @@ private class MeshSeam(
     }
 
     override suspend fun broadcast(payload: ByteArray) {
-        check(!closed.value) { closedMessage }
+        check(state.value !is SeamState.Torn) { closedMessage }
         // Snapshot the live links under the lock, then send OUTSIDE it.
         val targets = lock.withLock { links.values.map { it.remoteId to it.conn } }
         targets.forEach { (remoteId, conn) ->
@@ -363,7 +359,7 @@ private class MeshSeam(
     }
 
     override suspend fun sendTo(peer: PeerId, payload: ByteArray) {
-        check(!closed.value) { closedMessage }
+        check(state.value !is SeamState.Torn) { closedMessage }
         val conn = lock.withLock { links[peer]?.conn } ?: throw PeerNotConnected(peer)
         runCatchingCancellable { conn.send(payload) }
             .onFailure { removePeer(peer) }
@@ -378,7 +374,7 @@ private class MeshSeam(
     private suspend fun readLoop(remoteId: PeerId, conn: Connection) {
         try {
             conn.incoming.collect { bytes ->
-                if (!closed.value) {
+                if (state.value !is SeamState.Torn) {
                     // Sequence number is assigned atomically outside the lock. `deliver` SUSPENDS
                     // for backpressure (SUSPEND policy) — never called while holding `lock`.
                     spool.deliver(Swatch(payload = bytes, sender = remoteId, sequence = seq.incrementAndGet()))
@@ -394,25 +390,28 @@ private class MeshSeam(
     }
 
     /**
-     * Single-shot seam teardown. Only the first caller (CAS winner) publishes [SeamState.Torn],
-     * clears the links, closes the inbox and cancels the scope; it returns the connections to close.
-     * Every later caller returns `null`. The suspending `conn.close()` happens OUTSIDE the lock,
-     * in the caller. `scope.cancel()` cancels every `readLoop`, whose `finally` calls back into
-     * [removePeer] — a no-op once `links` is cleared.
+     * Single-shot seam teardown. The first caller collapses the rosters and latches [SeamState.Torn]
+     * in ONE critical section under [lock], returning the connections to close; every later caller
+     * sees the latch already set and returns `null`. Doing the roster-collapse and the `tear()` in the
+     * same lock keeps "peers before state" atomic — a consumer that observes `Torn` already sees the
+     * collapsed roster — and means a post-tear [removePeer]/[admitOrReject] (which take the same lock)
+     * see `Torn` and cannot republish a stale roster. The suspending `conn.close()` happens OUTSIDE the
+     * lock, in the caller. `scope.cancel()` cancels every `readLoop`, whose `finally` calls back into
+     * [removePeer] — a no-op once `links` is cleared. The gate ([stateGate]) subsumes the old `closed`
+     * atomic; `tear()` is safe to call from `readLoop`'s `finally` (a plain latched write, no join).
      */
     private fun tearDown(reason: CloseReason): List<Connection>? {
-        if (!closed.compareAndSet(expect = false, update = true)) return null
         val conns = lock.withLock {
+            // Single-shot INSIDE the lock: a loser sees Torn already latched and bails.
+            if (state.value is SeamState.Torn) return null
             val snapshot = links.values.map { it.conn }
             links.clear()
-            // peers before state: a consumer observing Torn must already see the collapsed roster
-            // (matches LinkSeam). Published inside the lock so removePeer cannot overwrite this
-            // with a stale partial set after the lock is released.
             _peers.value = setOf(selfId)
             _attestedPrincipals.value = emptyMap()
+            // Latch Torn LAST in this section so the collapsed roster is published before Torn.
+            stateGate.tear(reason)
             snapshot
         }
-        _state.value = SeamState.Torn(reason)
         spool.close()
         scope.cancel()
         return conns

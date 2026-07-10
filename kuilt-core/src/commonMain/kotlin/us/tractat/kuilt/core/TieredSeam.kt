@@ -1,6 +1,8 @@
 package us.tractat.kuilt.core
 
 import kotlinx.atomicfu.atomic
+import kotlinx.atomicfu.locks.reentrantLock
+import kotlinx.atomicfu.locks.withLock
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
@@ -56,12 +58,13 @@ import kotlinx.coroutines.flow.onEach
  * ## Thread safety
  *
  * Correct under a **multi-threaded** dispatcher, by real primitives — never single-thread
- * confinement. [peers] and [state] are backed by [MutableStateFlow]s written from a *single*
- * `combine` collector coroutine each (so their updates are already serialized); [incoming] flows
- * through a bounded [Spool]. The only cross-coroutine race — [close] versus those pumps — is
- * closed by a single-shot atomic flag plus cancelling the internal [scope] before publishing the
- * terminal `Torn`/empty values. There is no lock because there is no unguarded shared mutable
- * state: every field is either a thread-safe flow primitive or the atomic close latch.
+ * confinement. [state] runs through a [SeamStateGate]: the `combine` state pump publishes via
+ * `update()` (a no-op once torn) and [close] latches `Torn` via `tear()`, so no in-flight pump write
+ * can overwrite the terminal state and `tear()`'s single-shot return subsumes the old close latch.
+ * [peers] is written from a single `combine` collector, but that write races [close]'s roster
+ * collapse, so both are guarded by a small [reentrantLock] with the torn-check folded into the same
+ * critical section — a post-close peers emission cannot resurrect the roster. [incoming] flows
+ * through a bounded [Spool].
  *
  * @param scope **required** parent scope for the union/incoming pumps — no real-dispatcher
  *   default (a default would silently decouple the pumps from a test's virtual clock). The
@@ -98,19 +101,21 @@ internal class TieredSeam(
     // SupervisorJob were on the left it would be dropped and scope.cancel() would tear the caller.
     private val scope = CoroutineScope(parentScope.coroutineContext + SupervisorJob(parentScope.coroutineContext[Job]))
 
-    // Single-shot teardown latch: only the first close() publishes Torn and tears down.
-    private val closed = atomic(false)
-
     override val selfId: PeerId = localTier.selfId
 
-    // Union roster. Written only by the single combine-collector below (serialized), plus the
-    // terminal empty published by close() after the pump is cancelled.
+    // Guards the _peers write (combine collector) against close()'s roster collapse, with the
+    // torn-check folded into the same critical section so a post-close emission cannot resurrect it.
+    private val peersLock = reentrantLock()
+
+    // Union roster. Written by the single combine-collector below and by close()'s collapse, both
+    // under peersLock.
     private val _peers = MutableStateFlow(localTier.peers.value + peerTier.peers.value)
     override val peers: StateFlow<Set<PeerId>> = _peers.asStateFlow()
 
-    // Composed lifecycle. Same single-writer discipline as _peers.
-    private val _state = MutableStateFlow(rollup(localTier.state.value, peerTier.state.value))
-    override val state: StateFlow<SeamState> = _state.asStateFlow()
+    // Composed lifecycle, terminal-latched: the state pump feeds update() (revivable), close() latches
+    // Torn via tear() (single-shot). No in-flight rollup can clobber the terminal state.
+    private val stateGate = SeamStateGate(rollup(localTier.state.value, peerTier.state.value))
+    override val state: StateFlow<SeamState> = stateGate.state
 
     // Merged inbound. This seam is the SOLE collector of both tiers' incoming; the merged stream
     // is itself single-collection (Spool). Closed when both tiers' incoming complete (below).
@@ -121,14 +126,15 @@ internal class TieredSeam(
     private val liveIncoming = atomic(2)
 
     init {
-        // Union roster pump: one collector, so _peers writes are serialized.
+        // Union roster pump: one collector. The write + torn-check are one critical section under
+        // peersLock, so a close() that latched Torn (and collapsed the roster) is never overwritten.
         combine(localTier.peers, peerTier.peers) { a, b -> a + b }
-            .onEach { if (!closed.value) _peers.value = it }
+            .onEach { union -> peersLock.withLock { if (state.value !is SeamState.Torn) _peers.value = union } }
             .launchIn(scope)
 
-        // Composed lifecycle pump.
+        // Composed lifecycle pump: a derived write. update() no-ops once close() has latched Torn.
         combine(localTier.state, peerTier.state) { l, p -> rollup(l, p) }
-            .onEach { if (!closed.value) _state.value = it }
+            .onEach { stateGate.update(it) }
             .launchIn(scope)
 
         // Sole collection of each tier's incoming, teed into the one merged spool. When a tier's
@@ -149,7 +155,7 @@ internal class TieredSeam(
     }
 
     override suspend fun broadcast(payload: ByteArray) {
-        check(_state.value !is SeamState.Torn) { "TieredSeam is Torn" }
+        check(state.value !is SeamState.Torn) { "TieredSeam is Torn" }
         // Tee to BOTH tiers, independently. Best-effort per side: the point of bonding two tiers
         // is that one failing must not stop the other from carrying the broadcast. kuilt-core is
         // logger-free by contract, so a failed side is swallowed here (surfaced by the enclosing
@@ -159,7 +165,7 @@ internal class TieredSeam(
     }
 
     override suspend fun sendTo(peer: PeerId, payload: ByteArray) {
-        check(_state.value !is SeamState.Torn) { "TieredSeam is Torn" }
+        check(state.value !is SeamState.Torn) { "TieredSeam is Torn" }
         // Route to the owning tier — NEVER fan to both (that would breach the single-addressee
         // leak boundary, ADR-005). Local is checked first, so a shared/overlapping id resolves
         // there. An id owned by neither tier is dropped (silent — kuilt-core is logger-free).
@@ -171,16 +177,17 @@ internal class TieredSeam(
     }
 
     override suspend fun close(reason: CloseReason) {
-        // Single-shot: only the first caller tears down.
-        if (!closed.compareAndSet(expect = false, update = true)) return
-        // Stop the pumps first, then publish the terminal values so a lingering pump emission
-        // cannot overwrite them (the pumps also guard on `closed`).
-        scope.cancel()
-        _state.value = SeamState.Torn(reason)
-        _peers.value = emptySet()
+        // Single-shot via the gate: tear() latches Torn and returns false for a loser. Latch BEFORE
+        // collapsing the roster so a peers-pump emission that acquires peersLock after the collapse
+        // sees Torn and no-ops (peers-before-state + no resurrection). Correctness no longer depends
+        // on cancelling the pumps first — the gate makes a late update() a harmless no-op — so the
+        // scope is cancelled last, purely to release the pump coroutines.
+        if (!stateGate.tear(reason)) return
+        peersLock.withLock { _peers.value = emptySet() }
         spool.close()
         localTier.close(reason)
         peerTier.close(reason)
+        scope.cancel()
     }
 
     private companion object {
