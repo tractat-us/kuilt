@@ -162,11 +162,15 @@ public class MuxServerLoom(
      * tears, the connection is deregistered from every room it joined.
      */
     private suspend fun readLoop(connPeerId: PeerId, record: ConnRecord) {
+        // The host-verified principal for this connection, read from the per-connection mesh that
+        // admitted the link during `admit()` (before this read loop runs) — so it is already
+        // populated. Null when the connection carried no attestation.
+        val principal = (record.rawSeam as? PrincipalRoster)?.attestedPrincipals?.value?.get(connPeerId)
         try {
             record.rawSeam.incoming.collect { frame ->
                 val name = NamedFrame.decodeName(frame) ?: return@collect
                 val room = lock.withLock { rooms[name] } ?: return@collect
-                room.deliver(connPeerId, NamedFrame.strip(frame), record.senderFor(name))
+                room.deliver(connPeerId, NamedFrame.strip(frame), record.senderFor(name), principal)
             }
         } finally {
             teardownConnection(connPeerId, record)
