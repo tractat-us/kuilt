@@ -100,14 +100,30 @@ avoids the header/subprotocol path everywhere, not just here.
 
 ### Why this needs no changes to `:kuilt-session` or `:kuilt-cluster`
 
-The joiner auto-resume path (`JoinerResumeMachine`, from #1045) already builds
-`reweave = { loom.join(tag) }` and calls it fresh on every retry within the reconnect window;
-`ClusterClient`'s failover loop already calls `factory.join(reconnect.currentEndpoint())` fresh
-on every tear. Both hold a reference to the *same, long-lived* `Loom` instance across every
-retry. Because `weft` lives on that `Loom`'s constructor — not on the `Tag`, not threaded through
-`join(tag)` — it is already in scope for every `weave()` call those existing loops make. No
-public API in `:kuilt-session`/`:kuilt-cluster` changes; a consumer solves the whole problem by
-constructing `KtorClientLoom(client, weft = { mintTicket() })` once.
+Verified by reading the current redial call sites, not just inferred:
+
+- `SeamRoom.kt:134` (`SeamRoomFactory.join`) captures `reweave = { loom.join(tag) }`, closing over
+  the same long-lived `Loom` instance; `JoinerResumeMachine.kt:305` (`runReconnect`) calls
+  `reweaveFn()` fresh inside its retry loop on every attempt within the reconnect window.
+- `ClusterClient.kt:256–288`'s failover loop holds one `SeamRoomFactory(loom = loom, …)` and calls
+  `factory.join(reconnect.currentEndpoint())` fresh on every tear.
+- `MuxClientLoom.kt:83`'s resumable-heal path calls `base.weave(baseRendezvous)` fresh too.
+
+All three hold a reference to the *same* `Loom` instance across every retry. Because `weft` lives
+on that `Loom`'s constructor — not on the `Tag`, not threaded through `join(tag)` — it is already
+in scope for every `weave()` call each of these makes. No public API in
+`:kuilt-session`/`:kuilt-cluster` changes; a consumer solves the whole problem by constructing
+`KtorClientLoom(client, weft = { mintTicket() })` once.
+
+**Caveat, not fixed by this change:** `JoinerResumeMachine.kt:311–321` has a separate,
+pre-existing "non-conforming loom" branch — a *bare* `KtorClientLoom` sitting directly under
+`SeamRoom.join()`'s auto-resume (no `MuxClientLoom`/`ClusterClient` wrapping it) does not cleanly
+re-weave into the same room on reconnect; the room goes terminal instead. `weft` is still invoked
+whenever `weave()` runs, so this doesn't affect `weft`'s correctness, but "survives kuilt's
+transparent reconnect" as stated in the Gap section above is precisely true for the `MuxClientLoom`
+and `ClusterClient` consumers (the actual fireworks device-auth and cluster-failover paths), not
+for a bare `KtorClientLoom` under plain `SeamRoom` auto-resume — that's a separate, existing
+limitation, out of scope here.
 
 ### Approaches considered and rejected
 
@@ -123,13 +139,22 @@ constructing `KtorClientLoom(client, weft = { mintTicket() })` once.
 
 ## Testing
 
-- `KtorClientLoom`: a mocked-engine test asserting `weft`'s `WebSocketDialContext.queryParams`/
-  `headers` land on the outgoing request.
-- A redial test (the issue's explicit "done when" bar): reusing the existing joiner-resume test
-  harness, assert `weft` is invoked more than once across a tear + reconnect cycle.
-- `WebSocketSignalingChannel`: equivalent query-string assertion on the wasmJs test target.
-  Redial coverage here depends on whether an existing reconnect harness already exercises the
-  WebRTC signaling path — confirm during planning rather than assume.
+- `KtorClientLoom`: a `testApplication` test (real Ktor client + server) asserting `weft`'s
+  `WebSocketDialContext.queryParams`/`headers` land on the outgoing request, percent-encoded.
+- A redial test (the issue's explicit "done when" bar), scoped at the `KtorClientLoom` unit level:
+  call `clientLoom.join(advertisement)` twice and assert `weft` is invoked once per call with a
+  fresh value each time. This is the same code path the redial loops above execute — `reweave` is
+  literally `{ loom.join(tag) }` — but it does not stand up the full `SeamRoom`/`JoinerResumeMachine`
+  integration harness. That's a deliberate scope call, not an oversight: building a real
+  tear-and-reconnect harness for `KtorClientLoom` specifically would be materially heavier than
+  this feature warrants, and the "why this needs no changes" section above already establishes,
+  by reading the actual call sites, that `weave()` (and therefore `weft`) is invoked fresh on every
+  redial attempt. If that composition-level guarantee ever needs its own regression test (e.g. if
+  `JoinerResumeMachine` starts caching a seam or URL), it belongs as a follow-up in
+  `:kuilt-session`, not bundled into this change.
+- `WebSocketSignalingChannel`: a pure unit test on the extracted URL-building function (no browser
+  needed) asserting the same percent-encoding property. No redial-composition test here either,
+  for the same reason as above.
 
 ## Scope & non-goals
 
@@ -143,6 +168,13 @@ constructing `KtorClientLoom(client, weft = { mintTicket() })` once.
 - **Out of scope, deliberately:** WS subprotocol-based credentials. The referenced device-auth
   design explicitly avoids the `Sec-WebSocket-Protocol` echo requirement by using ticket-in-query
   instead; adding subprotocol support would be unused complexity.
+- **Out of scope, noted for later:** `KtorMeshClientLoom` (`:kuilt-websocket`, the hub/mesh
+  topology) has its own near-identical, separately-maintained `appendPeerQuery` private function.
+  It is not touched here — #1330 names `KtorClientLoom` specifically — but once this change
+  lands, `KtorClientLoom`'s query-value encoding and `KtorMeshClientLoom`'s will have quietly
+  diverged (one percent-encodes, the other doesn't). Not a correctness problem for either today
+  (neither currently carries arbitrary values through the mesh path), but worth a small follow-up
+  if `KtorMeshClientLoom` ever grows its own `weft`.
 - **No `:kuilt-core` behavior change** — `Weft<C>` is a typealias, zero runtime surface.
   `explicitApi()`: new public typealias in `:kuilt-core`, new public `WebSocketDialContext` data
   class and constructor parameter in `:kuilt-websocket`, new constructor parameter in

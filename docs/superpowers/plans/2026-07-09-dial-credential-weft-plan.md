@@ -146,9 +146,17 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 
 /**
- * Verifies #1330's per-dial hook: [KtorClientLoom.weft] is invoked fresh on every
- * [KtorClientLoom.join], its [WebSocketDialContext.queryParams] and [WebSocketDialContext.headers]
- * reach the server, and a redial calls it again rather than replaying a cached value.
+ * Verifies #1330's per-dial hook at the [KtorClientLoom] unit level: `weft` is invoked fresh on
+ * every [KtorClientLoom.join] call, its [WebSocketDialContext.queryParams] and
+ * [WebSocketDialContext.headers] reach the server, and two sequential joins each get their own
+ * fresh value rather than a cached one.
+ *
+ * This does not stand up the `SeamRoom`/`JoinerResumeMachine` reconnect harness — that composition
+ * is verified by reading the actual call sites instead (`SeamRoom.kt:134`'s
+ * `reweave = { loom.join(tag) }`, invoked fresh by `JoinerResumeMachine.runReconnect` on every
+ * retry; see the design doc's "why this needs no changes" section). Calling `join()` twice here
+ * exercises the same `weave()` path those retries call — it's a deliberate unit-scope boundary,
+ * not a claim that this test alone proves the full reconnect composition.
  */
 class KtorClientLoomWeftTest {
 
@@ -367,8 +375,12 @@ public class KtorClientLoom(
                     "KtorClientLoom only joins WebSocketAdvertisement, got ${advertisement::class}"
                 }
                 val dialContext = weft()
-                val queryParams = linkedMapOf(PEER_QUERY_PARAM to selfPeerId.value)
+                // PEER_QUERY_PARAM is set last so it always wins if dialContext.queryParams
+                // happens to contain a "peer" key — the fabric identity contract (#544) is not
+                // something a credential weft should be able to silently override.
+                val queryParams = linkedMapOf<String, String>()
                 queryParams.putAll(dialContext.queryParams)
+                queryParams[PEER_QUERY_PARAM] = selfPeerId.value
                 val urlWithPeer = appendQueryParams(advertisement.url, queryParams)
                 val wsSession =
                     httpClient.webSocketSession(urlWithPeer) {
@@ -484,6 +496,14 @@ Expected: FAIL — compile error, `buildSignalingUrl` is unresolved.
 
 - [ ] **Step 3: Extract `buildSignalingUrl` and wire `weft` into `open()`**
 
+This is a full-file replacement below — before applying it, diff it mentally against the file's
+*current* contents (`git show HEAD:kuilt-webrtc/src/wasmJsMain/kotlin/us/tractat/kuilt/webrtc/WebSocketSignalingChannel.kt`)
+rather than pasting it blindly. The listing below is only the four changes described in this
+task (the `weft` param, the `buildSignalingUrl` extraction, the `jsEncodeURIComponent` binding,
+and the `Weft` import) — everything else must match the current file verbatim, in particular the
+`runCatchingCancellable` call in `wsSetOnMessage` (not bare `runCatching` — this repo's exception
+discipline requires it).
+
 Edit `kuilt-webrtc/src/wasmJsMain/kotlin/us/tractat/kuilt/webrtc/WebSocketSignalingChannel.kt`:
 
 ```kotlin
@@ -497,6 +517,7 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.receiveAsFlow
 import us.tractat.kuilt.core.Weft
+import us.tractat.kuilt.core.runCatchingCancellable
 import kotlin.JsFun
 import kotlin.js.JsAny
 
@@ -543,7 +564,7 @@ public class WebSocketSignalingChannel(
             incoming.close()
         }
         wsSetOnMessage(ws) { text ->
-            runCatching { SignalingMessageCodec.decode(text) }
+            runCatchingCancellable { SignalingMessageCodec.decode(text) }
                 .onSuccess { msg ->
                     log.debug { "signaling ws.onmessage room=$room type=${msg::class.simpleName}" }
                     incoming.trySend(msg)
@@ -720,15 +741,15 @@ fixes, just via a different platform primitive.
 ## Ask
 
 When a consumer needs per-dial credentials on Multipeer or Nearby, follow #1330's
-`Weft<C>`-on-constructor pattern (see \`docs/superpowers/specs/2026-07-09-dial-credential-weft-design.md\`):
-a \`weft: Weft<C>\` constructor parameter on \`MultipeerPeerLinkFactory\`/\`NearbyLoom\`, with a
-fabric-specific payload type analogous to \`WebSocketDialContext\`, invoked fresh inside each
+`Weft<C>`-on-constructor pattern (see `docs/superpowers/specs/2026-07-09-dial-credential-weft-design.md`):
+a `weft: Weft<C>` constructor parameter on `MultipeerPeerLinkFactory`/`NearbyLoom`, with a
+fabric-specific payload type analogous to `WebSocketDialContext`, invoked fresh inside each
 fabric's join path.
 
 ## Done when
 
-A consumer can supply a per-dial \`Weft\`-computed value to \`MultipeerPeerLinkFactory\` and/or
-\`NearbyLoom\`, invoked fresh on first dial and every reconnect — built when an actual consumer
+A consumer can supply a per-dial `Weft`-computed value to `MultipeerPeerLinkFactory` and/or
+`NearbyLoom`, invoked fresh on first dial and every reconnect — built when an actual consumer
 needs it, not speculatively.
 EOF
 )"
