@@ -23,6 +23,7 @@ import us.tractat.kuilt.core.CloseReason
 import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.core.PrincipalRoster
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.Swatch
@@ -809,7 +810,10 @@ internal class SeamRoom(
             id = joinerPeerId,
             identity = identity,
             liveness = Liveness.Connected,
-            principal = (seam as? PrincipalAttested)?.principal,
+            // Prefer the map-keyed roster (hub path: RoomHubSeam / Mesh keys a principal per peer),
+            // falling back to the single-value marker (2-peer relay path: Seam.withPrincipal).
+            principal = (seam as? PrincipalRoster)?.attestedPrincipals?.value?.get(joinerPeerId)
+                ?: (seam as? PrincipalAttested)?.principal,
         )
 
         // Snapshot current members and mutate roster under lock; no I/O inside.

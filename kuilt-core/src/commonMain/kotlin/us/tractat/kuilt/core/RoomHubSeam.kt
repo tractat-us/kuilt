@@ -55,8 +55,8 @@ internal fun interface OutboundSender {
  *
  * ## Thread safety
  *
- * All mutable state ([registered]) is guarded by a reentrant lock. Suspend calls (authorizer,
- * sends, spool delivery) are always performed **outside** the lock.
+ * All mutable state ([registered] and the [attestedPrincipals] roster) is guarded by a reentrant
+ * lock. Suspend calls (authorizer, sends, spool delivery) are always performed **outside** the lock.
  *
  * @param channelName the room name, matching the [NamedMux] channel tag clients use.
  * @param selfId this server peer's own [PeerId].
@@ -67,12 +67,23 @@ public class RoomHubSeam(
     internal val channelName: String,
     override val selfId: PeerId,
     private val authorizer: RoomAuthorizer,
-) : Seam {
+) : Seam, PrincipalRoster {
 
     private val lock = reentrantLock()
 
     /** Registered (authorized) connections: peerId → outbound sender for that connection. */
     private val registered = mutableMapOf<PeerId, OutboundSender>()
+
+    /**
+     * Host-verified principals of currently-registered peers ([PrincipalRoster]). Maintained under
+     * [lock] in the SAME critical sections that mutate [registered]/[_peers], so it can never
+     * desync from the live membership. A peer admitted with no attestation (null principal) is
+     * absent from the map.
+     */
+    private val principals = mutableMapOf<PeerId, Principal>()
+
+    private val _attestedPrincipals = MutableStateFlow<Map<PeerId, Principal>>(emptyMap())
+    override val attestedPrincipals: StateFlow<Map<PeerId, Principal>> = _attestedPrincipals.asStateFlow()
 
     private val _peers = MutableStateFlow<Set<PeerId>>(emptySet())
     override val peers: StateFlow<Set<PeerId>> = _peers.asStateFlow()
@@ -97,9 +108,19 @@ public class RoomHubSeam(
      * the frame is forwarded to [incoming]. [sender] is the outbound handle stored for this
      * connection so the room can fan broadcasts back to it.
      *
+     * [principal] is the host-verified identity for this connection (the mesh admitted the link
+     * before the room ever sees a frame). It is recorded in [attestedPrincipals] at registration;
+     * a `null` principal leaves the peer unattested (absent from the roster). A reconnect (same
+     * [connPeerId], fresh [sender]) re-registers and refreshes the entry.
+     *
      * Suspends only outside the lock (authorizer + spool delivery). Thread-safe.
      */
-    internal suspend fun deliver(connPeerId: PeerId, frame: Swatch, sender: OutboundSender) {
+    internal suspend fun deliver(
+        connPeerId: PeerId,
+        frame: Swatch,
+        sender: OutboundSender,
+        principal: Principal?,
+    ) {
         if (_state.value is SeamState.Torn) return
         val alreadyRegistered = lock.withLock { registered[connPeerId] === sender }
         if (!alreadyRegistered) {
@@ -107,6 +128,8 @@ public class RoomHubSeam(
             lock.withLock {
                 registered[connPeerId] = sender
                 _peers.update { it + connPeerId }
+                if (principal == null) principals.remove(connPeerId) else principals[connPeerId] = principal
+                _attestedPrincipals.value = principals.toMap()
             }
         }
         inboundSpool.deliver(frame)
@@ -124,6 +147,7 @@ public class RoomHubSeam(
             if (registered[connPeerId] === sender) {
                 registered.remove(connPeerId)
                 _peers.update { it - connPeerId }
+                if (principals.remove(connPeerId) != null) _attestedPrincipals.value = principals.toMap()
             }
         }
     }
@@ -150,7 +174,9 @@ public class RoomHubSeam(
         _state.value = SeamState.Torn(reason)
         lock.withLock {
             registered.clear()
+            principals.clear()
             _peers.value = emptySet()
+            _attestedPrincipals.value = emptyMap()
         }
         inboundSpool.close()
     }

@@ -7,10 +7,12 @@ import us.tractat.kuilt.core.MuxServerLoom
 import us.tractat.kuilt.core.NamedMux
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.core.Principal
 import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.RoomAuthorizer
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.fabric.meshSeam
+import us.tractat.kuilt.core.withPrincipal
 import kotlin.coroutines.CoroutineContext
 import kotlin.random.Random
 
@@ -87,10 +89,14 @@ public class InMemoryRoomFabric(
      * @param peerId this client's identity.
      * @param random seeded [Random] for this client's mesh-seam nonce generation — pass a distinct
      *   seed per client so nonces differ deterministically.
+     * @param principal optional host-verified [Principal] to attest onto this connection's
+     *   server-end (as a real fabric's accept handler would via `Connection.withPrincipal`). The
+     *   server reads it back at admit time, keyed by this client's [peerId]. Defaults to `null`
+     *   (an unattested connection).
      */
-    public suspend fun clientSeam(peerId: PeerId, random: Random): Seam {
+    public suspend fun clientSeam(peerId: PeerId, random: Random, principal: Principal? = null): Seam {
         val (serverConn, clientConn) = connectionPair()
-        source.offer(serverConn)
+        source.offer(serverConn.withPrincipal(principal))
         return meshSeam(selfId = peerId, connections = listOf(clientConn), dispatcher = dispatcher, random = random)
     }
 
@@ -104,10 +110,12 @@ public class InMemoryRoomFabric(
      * @param peerId this client's identity.
      * @param random seeded [Random] for this client's mesh-seam nonce generation — pass a distinct
      *   seed per client.
+     * @param principal optional host-verified [Principal] attested onto this client's server-end
+     *   connection (see [clientSeam]). Defaults to `null`.
      */
-    public fun clientLoom(peerId: PeerId, random: Random): Loom {
+    public fun clientLoom(peerId: PeerId, random: Random, principal: Principal? = null): Loom {
         val base = object : Loom {
-            override suspend fun weave(rendezvous: Rendezvous): Seam = clientSeam(peerId, random)
+            override suspend fun weave(rendezvous: Rendezvous): Seam = clientSeam(peerId, random, principal)
         }
         return MuxClientLoom(
             base = base,
