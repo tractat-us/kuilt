@@ -272,6 +272,13 @@ val crossed = result.awaitThreshold { it.value >= 5L }
 deltas asynchronously. The scope is required — production wires a service scope; tests wire
 `backgroundScope` to share the virtual clock.
 
+## A faster copy of the job
+
+Spreading work is one half of warp; making each job cheaper to run is the other. A capable
+device can optimize a job's program once and share the leaner copy back, so every other
+device runs the fast version without paying for it — that's the
+**[compiler node](warp-compiler.md)**, the second real, measured piece that ships today.
+
 ## The dream
 
 The scheduler above is the real, measured first step. The design docs below explore

@@ -99,7 +99,9 @@
     </toc-element>
 
     <toc-element toc-title="Playground">
-        <toc-element topic="warp.md"/>
+        <toc-element topic="warp.md">
+            <toc-element topic="warp-compiler.md"/>
+        </toc-element>
     </toc-element>
 
 </instance-profile>
