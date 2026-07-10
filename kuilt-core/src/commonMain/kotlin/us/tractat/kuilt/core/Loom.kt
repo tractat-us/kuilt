@@ -8,6 +8,14 @@ package us.tractat.kuilt.core
  * The single abstract method is [weave]; [host] and [join] are default
  * wrappers. ADR-002.
  *
+ * ## Per-dial data
+ *
+ * A fabric implementation that needs a value recomputed on every dial — most commonly a
+ * credential that must be refreshed on reconnect — accepts a [Weft] on its own constructor and
+ * invokes it inside [weave]. See [Weft]'s KDoc for the full idiom; see
+ * `KtorClientLoom`/`WebSocketSignalingChannel` in `:kuilt-websocket`/`:kuilt-webrtc` for the
+ * first concrete uses.
+ *
  * ## Usage
  *
  * Host a session, let a second peer join, and exchange a frame:
