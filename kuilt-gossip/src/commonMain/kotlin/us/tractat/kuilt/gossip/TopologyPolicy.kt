@@ -64,6 +64,58 @@ public object FullFanout : TopologyPolicy {
 }
 
 /**
+ * The federated two-tier shape: a small **[core]** of servers fully meshed among
+ * themselves, each fronting a periphery of clients that attach to exactly one of
+ * them. Unlike [FullFanout]/[RandomKRegular], this policy is **anisotropic** — the
+ * view a node gets depends on *where it sits*, not just how many peers there are:
+ *
+ * - A **server** (`self ∈ core`) floods the **other servers plus its own local
+ *   clients** — `(core - self) ∪ { client : attachment(client) == self }` — so a
+ *   broadcast crosses the core once and each server fans it out to its own periphery.
+ *   No server ever floods another server's clients.
+ * - A **client** (`self ∉ core`) floods **only the one server it attaches to**
+ *   (`attachment(self)`); that server is its sole relay into the rest of the graph.
+ *
+ * The union of every node's active view covers the whole roster, so a broadcast
+ * originating anywhere reaches everyone — via at most one core hop.
+ *
+ * [attachment] maps a client to the server it attaches to, or `null` when the client
+ * is unattached/unknown. A `null` (or off-roster) server yields an **empty** view:
+ * the client can't flood until it (re)attaches — the failover seam is handled by the
+ * bootstrap layer, not here. Every result is intersected with [roster] so only *live*
+ * peers are targeted, and never contains [self].
+ *
+ * All selection is **deterministic** — [TwoTier] owns no randomness; it is a pure
+ * function of `(self, roster, core, attachment)`. One instance per node.
+ */
+public class TwoTier(
+    private val core: Set<PeerId>,
+    private val attachment: (PeerId) -> PeerId?,
+) : TopologyPolicy {
+    override fun activeView(
+        self: PeerId,
+        roster: Set<PeerId>,
+    ): Set<PeerId> =
+        if (self in core) {
+            val otherServers = (core - self) intersect roster
+            val localClients = roster.filter { it !in core && attachment(it) == self }
+            otherServers + localClients
+        } else {
+            setOfNotNull(attachment(self)) intersect roster
+        }
+
+    override fun antiEntropyPool(
+        self: PeerId,
+        roster: Set<PeerId>,
+    ): Set<PeerId> =
+        if (self in core) {
+            (core - self) intersect roster
+        } else {
+            setOfNotNull(attachment(self)) intersect roster
+        }
+}
+
+/**
  * The k-regular partial mesh: a seeded random **k-out** sample of the roster
  * (`k = recommendedActiveViewSize(N)`, via [partialView]), re-drawn on roster
  * churn. The union of every peer's independent draw is connected with high
