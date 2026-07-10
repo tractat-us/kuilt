@@ -40,6 +40,7 @@ import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.Spool
 import us.tractat.kuilt.core.Swatch
+import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.websocket.KtorClientLoom
 import us.tractat.kuilt.websocket.KtorServerLoom
 import us.tractat.kuilt.websocket.WebSocketAdvertisement
@@ -617,8 +618,7 @@ class WarpNodeWebSocketTest {
         }
 
         override suspend fun broadcast(payload: ByteArray) {
-            // TODO(#1125): convert to runCatchingCancellable — bare runCatching swallows CancellationException. Deferred: this module has active worktree work.
-            arms.forEach { arm -> runCatching { arm.broadcast(payload) } }
+            arms.forEach { arm -> runCatchingCancellable { arm.broadcast(payload) } }
         }
 
         override suspend fun sendTo(peer: PeerId, payload: ByteArray) {
@@ -629,8 +629,7 @@ class WarpNodeWebSocketTest {
         override suspend fun close(reason: CloseReason) {
             _state.value = SeamState.Torn(reason)
             spool.close()
-            // TODO(#1125): convert to runCatchingCancellable — bare runCatching swallows CancellationException. Deferred: this module has active worktree work.
-            arms.forEach { arm -> runCatching { arm.close(reason) } }
+            arms.forEach { arm -> runCatchingCancellable { arm.close(reason) } }
         }
     }
 }

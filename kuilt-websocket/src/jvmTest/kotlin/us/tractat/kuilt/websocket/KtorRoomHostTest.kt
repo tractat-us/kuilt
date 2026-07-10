@@ -16,6 +16,7 @@ import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.Seam
+import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.session.Principal
 import us.tractat.kuilt.session.PrincipalAttested
 import us.tractat.kuilt.session.Room
@@ -100,8 +101,7 @@ class KtorRoomHostTest {
                 // Yield twice so the launched coroutine reaches `withLock`.
                 yield()
                 yield()
-                // TODO(#1125): convert to runCatchingCancellable — bare runCatching swallows CancellationException. Deferred: this module has active worktree work.
-                val ex = runCatching { host.start { } }.exceptionOrNull()
+                val ex = runCatchingCancellable { host.start { } }.exceptionOrNull()
                 assertNotNull(ex, "second start() must throw")
                 assertTrue(
                     ex is IllegalStateException,
@@ -146,8 +146,7 @@ class KtorRoomHostTest {
                 pattern = serverPattern,
                 loom = FailingLoom(error),
             )
-            // TODO(#1125): convert to runCatchingCancellable — bare runCatching swallows CancellationException. Deferred: this module has active worktree work.
-            val result = runCatching {
+            val result = runCatchingCancellable {
                 coroutineScope {
                     host.start { awaitCancellation() }
                 }
