@@ -23,10 +23,23 @@ import kotlin.time.Instant
  * Where [gameNodeRoom] with [ConsensusPlacement.serverCore] runs a game on a **single** server
  * (every player connects to that one server, which is the whole voter core), this entry point runs
  * the same game across a **fully-meshed core of servers**: each server holds the players nearest it,
- * all servers vote in the game's Raft cluster, and a player's traffic reaches the rest of the game
- * across the inter-server mesh. It is called **once per game on each core server** — never by a
- * player. Players still join with the star path ([gameNodeRoom] with
+ * all servers vote in the game's Raft cluster, and a *broadcast* crosses the core once and fans to
+ * each server's local players (the [TwoTier] dissemination shape). It is called **once per game on
+ * each core server** — never by a player. Players still join with the star path ([gameNodeRoom] with
  * `ConsensusPlacement.serverCore(core)`), which is left untouched.
+ *
+ * ## Current limitation — cross-server learner delivery (completed in slice-6 PR 2)
+ *
+ * Raft replicates the committed log to each learner by **unicast** (`sendTo`), which passes through
+ * the gossip overlay unwrapped, and [tieredSeam]'s `sendTo` routes only to a peer in one of its two
+ * tiers (this server's local room, or the other servers). So a leader delivers `AppendEntries` to
+ * players **local to itself** and to the other servers — but **not** to a player behind a *different*
+ * server (a follower). Today this entry point therefore proves **server-core consensus and failover**,
+ * and delivers committed state to players local to the current leader; delivering it to players spread
+ * across servers needs the cross-core routed-unicast relay ([us.tractat.kuilt.cluster.OverlayServer]'s
+ * single-addressee `route`, `spoke→server→core→server→spoke`) wired into the learner-replication path.
+ * That is slice-6 PR 2's "re-express `ServerCluster`'s generic-learner duty" — until it lands, do not
+ * rely on this entry point for a game whose players span more than the leader's server.
  *
  * ## The one-line difference from [gameNodeRoom]
  *
