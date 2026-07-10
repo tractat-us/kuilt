@@ -171,6 +171,29 @@ val resolveWasmOpt = tasks.register<ResolveWasmOpt>("resolveWasmOpt") {
     outputDir.set(layout.buildDirectory.dir("generated/binaryen-resources"))
 }
 
+// ── D4-4 local-only wall-clock benchmark ─────────────────────────────────────
+//
+// A JavaExec task that runs BloatedKernelBenchmark.main (a `main()` in jvmTest,
+// NOT a @Test — so `./gradlew build` compiles it but never executes it; only this
+// task does). It measures the real interpreter wall-clock of the raw bloated kernel
+// vs the wasm-opt -O2/-O3/-Oz variants and records the D4 go/no-go numbers. Kept out
+// of CI deliberately (benchmarks flake on shared runners — see the D4 design's
+// "Testing posture — Local-only"). Run by hand:
+//   ./gradlew :kuilt-warp-compiler:benchmark
+//   ./gradlew :kuilt-warp-compiler:benchmark -Piters=5000000
+tasks.register<JavaExec>("benchmark") {
+    group = "verification"
+    description = "Local-only wall-clock benchmark: raw vs wasm-opt-optimized bloated kernel through Chicory. Records the D4 go/no-go numbers (not a CI job)."
+    val testCompilation = kotlin.jvm().compilations.getByName("test")
+    dependsOn(testCompilation.compileTaskProvider)
+    classpath(
+        testCompilation.output.allOutputs,
+        testCompilation.runtimeDependencyFiles,
+    )
+    mainClass.set("us.tractat.kuilt.warp.BloatedKernelBenchmarkKt")
+    (project.findProperty("iters") as String?)?.let { args(it) }
+}
+
 kotlin {
     sourceSets {
         commonMain.dependencies {

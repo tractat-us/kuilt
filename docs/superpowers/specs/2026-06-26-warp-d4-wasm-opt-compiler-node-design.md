@@ -91,6 +91,33 @@ A `wasm-opt`-optimized variant runs **measurably faster** than interpreting the 
 runtime (recorded local wall-clock numbers), AND the deterministic CI tests prove the optimizer produces a
 valid, smaller, ABI-preserving, distinct-hash variant that a weak peer tiers up to with correct results.
 
+### Recorded numbers — **GO** (D4-4)
+
+The deliberately-bloated benchmark kernel (`kuilt-warp-compiler/wat/bloated-kernel.wat`) run raw vs. the real
+bundled `wasm-opt` variants through `ChicoryWasmRuntime` (the JVM interpreter). Methodology: 8 warmup runs
+then **median of 21** measured runs; every variant computed the **identical** accumulator (correctness
+asserted). Invoke with `./gradlew :kuilt-warp-compiler:benchmark` (local-only — never a CI job).
+
+**Hardware/JDK:** Apple Silicon (`Mac OS X` / `aarch64`), Temurin JDK 21.0.5. Chicory pure-JVM interpreter.
+
+At the default **2,000,000** loop iterations (steady state):
+
+| variant | bytes | median | vs. raw | smaller |
+|---------|------:|-------:|--------:|--------:|
+| raw (unoptimized) | 263 | 1031.51 ms | — | — |
+| `wasm-opt -O2` | 170 | 192.84 ms | **5.35×** | 35% |
+| `wasm-opt -O3` | 174 | 206.06 ms | **5.01×** | 34% |
+| `wasm-opt -Oz` | 174 | 190.43 ms | **5.42×** | 34% |
+
+**Best: `-Oz` — 5.42× faster (82% wall-clock reduction), 263 → 174 bytes.** `-O3` alone is 5.01× (206 ms).
+The win is stable and well above noise — a lighter 200,000-iteration run reproduces the direction at 3.5×.
+
+**GO bar (≥30–50% faster on the JVM interpreter): clearly MET** (~80% wall-clock reduction, ~5×). The
+optimizer strips the kernel's redundant per-iteration instructions (identity ops, redundant local shuffles,
+dead computation, a hoistable loop-invariant), so the interpreter executes far fewer instructions per pass
+for the same result — the all-target lever the spec predicted (it speeds every *interpreter* tier). The
+deterministic CI test (`BinaryenWasmOptimizerTest`) pins the *cause*; these numbers confirm the *effect*.
+
 ## Honest scope
 
 - This proves **real speedup via wasm→wasm optimization** — the all-target lever (it speeds every
