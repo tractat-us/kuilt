@@ -3,6 +3,7 @@ package us.tractat.kuilt.warp
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.test.runTest
+import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.test.assertAll
 import us.tractat.kuilt.warp.test.WasmKernelFixtures
 import kotlin.test.Test
@@ -48,8 +49,7 @@ class ChicoryWasmRuntimeTest {
             val loop = rt.load(WasmKernelFixtures.CPU_BOMB)
             val reverse = rt.load(WasmKernelFixtures.REVERSE)
             coroutineScope {
-                // TODO(#1125): convert to runCatchingCancellable — bare runCatching swallows CancellationException. Deferred: this module has active worktree work.
-                val runaway = async { runCatching { loop.invoke(ByteArray(0)) } }
+                val runaway = async { runCatchingCancellable { loop.invoke(ByteArray(0)) } }
                 val innocent = async { reverse.invoke(byteArrayOf(1, 2, 3, 4)) }
                 val innocentBytes = innocent.await()
                 val runawayOutcome = runaway.await()

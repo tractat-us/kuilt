@@ -16,6 +16,7 @@ import us.tractat.kuilt.cluster.clusterClient
 import us.tractat.kuilt.cluster.serverCluster
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Pattern
+import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.raft.ClientSessionTable
 import us.tractat.kuilt.raft.ClusterConfig
 import us.tractat.kuilt.raft.Committed
@@ -183,7 +184,7 @@ class ClusterClientMultiClientHardeningE2ETest {
                 // transferLeadership suspends until the new leader wins or times out.
                 // Run it in a separate coroutine so the test can proceed to phase 3.
                 val transferJob = serverScope.launch {
-                    runCatching { leader.transferLeadership(transferTarget) }
+                    runCatchingCancellable { leader.transferLeadership(transferTarget) }
                     // Ignore LeadershipTransferException — if the transfer completes before
                     // the relay kill arrives, that's fine; if it doesn't, the test still passes
                     // because the relay kill itself forces a leadership re-election.

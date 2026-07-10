@@ -4,6 +4,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.test.runTest
+import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.test.assertAll
 import us.tractat.kuilt.warp.test.WasmKernelFixtures
 import java.util.concurrent.TimeoutException
@@ -131,10 +132,8 @@ class ChicoryWasmRuntimeTimingTest {
                 // Both submitted concurrently; invokeMutex serializes them inside the runtime.
                 // The fake throws for call #1, executes normally for call #2.
                 // We don't control which async wins the lock, so assertions are symmetric.
-                // TODO(#1125): convert to runCatchingCancellable — bare runCatching swallows CancellationException. Deferred: this module has active worktree work.
-                val a = async { runCatching { op.invoke(byteArrayOf(1, 2, 3, 4)) } }
-                // TODO(#1125): convert to runCatchingCancellable — bare runCatching swallows CancellationException. Deferred: this module has active worktree work.
-                val b = async { runCatching { op.invoke(byteArrayOf(1, 2, 3, 4)) } }
+                val a = async { runCatchingCancellable { op.invoke(byteArrayOf(1, 2, 3, 4)) } }
+                val b = async { runCatchingCancellable { op.invoke(byteArrayOf(1, 2, 3, 4)) } }
                 val results = listOf(a.await(), b.await())
 
                 assertAll(
