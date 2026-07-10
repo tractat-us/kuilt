@@ -4,7 +4,8 @@ import kotlinx.coroutines.CoroutineScope
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.fabric.ConnectionSource
 import us.tractat.kuilt.core.fabric.LinkAdmission
-import us.tractat.kuilt.gossip.hostedOverlay
+import us.tractat.kuilt.gossip.hostedMesh
+import us.tractat.kuilt.gossip.starOverlay
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.raft.ClientIdentity
 import us.tractat.kuilt.raft.InMemoryRaftStorage
@@ -16,13 +17,21 @@ import kotlin.random.Random
 import kotlin.time.Instant
 
 /**
- * Host a turn-based game over a [ConnectionSource]: compose a star hub from accepted connections
- * ([hostedOverlay], [us.tractat.kuilt.gossip.FullFanout]) and run [gameHost] on
- * it. Clients connect as usual — they call [gameJoin] over a `KtorClientLoom` seam, unchanged.
+ * Host a turn-based game over a [ConnectionSource]: accept-pump a raw hub mesh
+ * ([us.tractat.kuilt.gossip.hostedMesh]) and run [gameHost] on it with a star-relay
+ * ([us.tractat.kuilt.gossip.starOverlay], [us.tractat.kuilt.gossip.FullFanout]) `overlay`. Clients
+ * connect as usual — they call [gameJoin] over a `KtorClientLoom` seam, unchanged.
  *
- * This is thin sugar over `hostedOverlay + gameHost`; advanced callers who need to interpose on
- * the hub seam (logging, principal extraction, metering) call [hostedOverlay] directly and pass
- * the resulting [us.tractat.kuilt.core.Seam] to [gameHost].
+ * This is thin sugar over `hostedMesh + gameHost(overlay = { starOverlay(…) })`. Advanced callers
+ * who need to interpose on the hub seam (logging, principal extraction, metering) call
+ * [us.tractat.kuilt.gossip.hostedMesh] directly and pass the resulting [us.tractat.kuilt.core.Seam]
+ * as `gameHost(seam = mesh, overlay = { starOverlay(it, …) })`.
+ *
+ * **Migration trap (#1370).** Do **not** interpose via the older
+ * `gameHost(seam = hostedOverlay(...))` shape — that wraps the whole session mux, Raft included,
+ * *above* the gossip flood, so the overlay's origin-restamping can launder a forged consensus
+ * frame. The commit-safe shape passes the **raw** [us.tractat.kuilt.gossip.hostedMesh] as `seam` and
+ * the flood as `overlay`, keeping Raft and heartbeat below it.
  *
  * @param selfId Identity the hub uses on the overlay mesh.
  * @param source The front door: one [us.tractat.kuilt.core.fabric.Connection] per accepted peer.
@@ -71,9 +80,8 @@ public suspend fun CoroutineScope.gameHosted(
     val dispatcher = requireNotNull(coroutineContext[ContinuationInterceptor]) {
         "weave/handshake: no dispatcher (ContinuationInterceptor) in coroutine context"
     }
-    val overlay = hostedOverlay(selfId, source, dispatcher, random, clock, admission)
     return gameHost(
-        seam = overlay,
+        seam = hostedMesh(selfId, source, dispatcher, admission),
         peerCount = peerCount,
         returnAt = returnAt,
         storage = storage,
@@ -82,5 +90,6 @@ public suspend fun CoroutineScope.gameHosted(
         clock = clock,
         identity = identity,
         placement = placement,
+        overlay = { starOverlay(it, random, clock) },
     )
 }

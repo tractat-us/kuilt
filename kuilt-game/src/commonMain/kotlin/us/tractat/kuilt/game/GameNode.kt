@@ -43,6 +43,27 @@ import kotlin.time.Instant
 private const val RAFT_CHANNEL: Byte = 1
 
 /**
+ * MuxSeam channel tag carrying the single flooded broadcast plane when an `overlay` is supplied.
+ *
+ * **Commit-safety layering (#1370).** When a bootstrap path rides a gossip flood (a
+ * [us.tractat.kuilt.gossip.GossipSeam] star/mesh overlay), the flood is confined to *this one*
+ * channel of the raw-seam mux. Raft ([RAFT_CHANNEL]) and heartbeat ([HEARTBEAT_CHANNEL]) sit as
+ * sibling channels **below** the flood, so unicast consensus traffic — which never touches the
+ * flood (`SeamRaftTransport`/`HeartbeatPartitionDetector` send only via `sendTo`, and
+ * `GossipSeam.sendTo` is a bare pass-through) — cannot be laundered by the overlay's
+ * origin-restamping (`GossipSeam.dispatchInbound` sets `sender = frame.origin`). A crafted
+ * `GossipFrame(origin = <a voter>, payload = [RAFT_CHANNEL]…)` re-floods only inside this channel's
+ * sub-mux, which has no Raft channel, so it is discarded before it can reach the engine with a
+ * forged `from`. Presence and the application-envelope [NamedMux] ride *above* the flood (they need
+ * room-wide broadcast); Raft and heartbeat ride *below* it.
+ *
+ * `overlay == null` (LAN / roster-given / in-memory) is a first-class flat topology: there is no
+ * flood plane, so every channel — Raft, presence, app, heartbeat — sits directly on the one mux and
+ * the wire layout is byte-identical to the pre-#1370 arrangement.
+ */
+private const val BROADCAST_CHANNEL: Byte = 0
+
+/**
  * MuxSeam channel tag for the lobby presence traffic in [gameHost].
  *
  * [gameJoin] does not subscribe to this channel — presence frames destined for a joiner's
@@ -225,6 +246,15 @@ public enum class ReturnPolicy { FullMembership, Quorum }
  * @throws IllegalArgumentException if this peer's [NodeId] is not in [voterIds] (under
  *   [AuthoritySeating.SessionPeers] placements only — a [AuthoritySeating.CoreVoters] caller may
  *   legitimately be a non-voting player).
+ * @param overlay Optional gossip-flood wrapper for the **broadcast plane only**. When `null` (the
+ *   default — LAN, roster-given, in-memory), the session is flat: Raft, presence, and the app
+ *   [NamedMux] all ride one mux directly over [seam], byte-identical to the pre-overlay layout. When
+ *   non-null (e.g. `{ starOverlay(it, random, clock) }` for a room star, `{ policyOverlay(it, …) }`
+ *   for a federated core), the flood is confined to the [BROADCAST_CHANNEL] sub-mux and Raft stays
+ *   **below** it — the commit-safety layering of #1370, which keeps a crafted `GossipFrame` from
+ *   laundering a forged consensus `from`. The lambda runs on the bootstrap [CoroutineScope] so a
+ *   started overlay (`starOverlay`/`policyOverlay` call `.start(this)`) is tied to the session's
+ *   lifetime.
  *
  * @sample us.tractat.kuilt.game.sampleGameNode
  */
@@ -235,6 +265,7 @@ public fun CoroutineScope.gameNode(
     raftConfig: RaftConfig = RaftConfig(),
     identity: ClientIdentity = ClientIdentity.Auto,
     placement: ConsensusPlacement = ConsensusPlacement.SessionOwned,
+    overlay: (CoroutineScope.(Seam) -> Seam)? = null,
 ): GameSession {
     val self = NodeId(seam.selfId.value)
     if (placement.seating is AuthoritySeating.SessionPeers) {
@@ -256,7 +287,7 @@ public fun CoroutineScope.gameNode(
     if (seating is AuthoritySeating.CoreVoters && self in seating.core) {
         launchCoreLearnerAdmission(node, seam, seating.core)
     }
-    val appMux = NamedMux(mux.channel(APP_ENVELOPE_CHANNEL), this)
+    val appMux = appMuxOver(mux, overlay)
     return GameSession(node, seam, appMux)
 }
 
@@ -344,6 +375,13 @@ public fun CoroutineScope.gameNode(
  *   Must seat [AuthoritySeating.SessionPeers]: the appoint-the-host path promotes session peers to
  *   voters, which contradicts a fixed external core — bootstrap a server-core session via
  *   [gameNode] with [ConsensusPlacement.serverCore].
+ * @param overlay Optional gossip-flood wrapper for the broadcast plane (presence + app). When
+ *   `null` (the default), presence, app, Raft, and heartbeat all ride one flat mux over [seam].
+ *   When non-null, only presence and the app [NamedMux] ride the flood ([BROADCAST_CHANNEL]); Raft
+ *   ([RAFT_CHANNEL]) and heartbeat ([HEARTBEAT_CHANNEL]) stay **below** it, so a crafted
+ *   `GossipFrame` cannot launder a forged consensus/liveness `from` (the commit-safety layering of
+ *   #1370). The lambda runs on the bootstrap [CoroutineScope]. See [gameNode] for the full
+ *   rationale.
  * @throws IllegalArgumentException if [peerCount] < 1, [maxSpectators] < 0, or [placement] does
  *   not seat [AuthoritySeating.SessionPeers].
  * @throws DuplicateHostException if another peer on the same session already declared host.
@@ -363,6 +401,7 @@ public suspend fun CoroutineScope.gameHost(
     hostDeclarationTimeout: Duration = DEFAULT_HOST_DECLARATION_TIMEOUT,
     identity: ClientIdentity = ClientIdentity.Auto,
     placement: ConsensusPlacement = ConsensusPlacement.SessionOwned,
+    overlay: (CoroutineScope.(Seam) -> Seam)? = null,
 ): GameSession {
     require(peerCount >= 1) { "peerCount must be >= 1" }
     require(maxSpectators >= 0) { "maxSpectators must be >= 0" }
@@ -370,8 +409,7 @@ public suspend fun CoroutineScope.gameHost(
 
     val mux = MuxSeam(seam, this)
     val raftSeam = mux.channel(RAFT_CHANNEL)
-    val presenceSeam = mux.channel(PRESENCE_CHANNEL)
-    val appMux = NamedMux(mux.channel(APP_ENVELOPE_CHANNEL), this)
+    val (presenceSeam, appMux) = broadcastPlane(mux, overlay)
 
     val presence = checkNotDuplicateHost(presenceSeam, this, raftConfig.expectVirtualTime, hostDeclarationTimeout)
 
@@ -451,6 +489,9 @@ public suspend fun CoroutineScope.gameHost(
  *   behaviour. [ConsensusPlacement.preBuilt] hands the bootstrap a caller-constructed node (e.g. a
  *   test double) that the admission wait then observes unchanged. Must seat
  *   [AuthoritySeating.SessionPeers] — see [gameHost].
+ * @param overlay Optional gossip-flood wrapper for the broadcast plane (presence + app); `null`
+ *   (default) gives a flat mux. When non-null it must match the host's overlay so both sides speak
+ *   the same broadcast envelope; Raft/heartbeat stay below the flood (#1370). See [gameNode].
  * @throws IllegalArgumentException if [placement] does not seat [AuthoritySeating.SessionPeers].
  * @throws RosterFullException if the host has already filled all seats and this peer is not in
  *   the final voter set.
@@ -466,12 +507,12 @@ public suspend fun CoroutineScope.gameJoin(
     joinAdmissionTimeout: Duration = DEFAULT_JOIN_ADMISSION_TIMEOUT,
     identity: ClientIdentity = ClientIdentity.Auto,
     placement: ConsensusPlacement = ConsensusPlacement.SessionOwned,
+    overlay: (CoroutineScope.(Seam) -> Seam)? = null,
 ): GameSession {
     requireSessionPeerSeating(placement, entryPoint = "gameJoin")
     val mux = MuxSeam(seam, this)
     val raftSeam = mux.channel(RAFT_CHANNEL)
-    val presenceSeam = mux.channel(PRESENCE_CHANNEL)
-    val appMux = NamedMux(mux.channel(APP_ENVELOPE_CHANNEL), this)
+    val (presenceSeam, appMux) = broadcastPlane(mux, overlay)
 
     val self = NodeId(seam.selfId.value)
 
@@ -533,6 +574,9 @@ public suspend fun CoroutineScope.gameJoin(
  * @param placement How this session obtains its consensus node. The default
  *   [ConsensusPlacement.SessionOwned] constructs the permanent-learner node — today's behaviour.
  *   Must seat [AuthoritySeating.SessionPeers] — see [gameHost].
+ * @param overlay Optional gossip-flood wrapper for the broadcast plane (presence + app); `null`
+ *   (default) gives a flat mux. When non-null it must match the host's overlay; Raft/heartbeat stay
+ *   below the flood (#1370). See [gameNode].
  * @throws IllegalArgumentException if [placement] does not seat [AuthoritySeating.SessionPeers].
  * @throws SpectatorsClosedException if the host has spectators disabled or the cap is full.
  * @throws SpectateTimeoutException if neither admission nor a spectators-closed signal arrives
@@ -545,12 +589,12 @@ public suspend fun CoroutineScope.gameSpectate(
     spectateAdmissionTimeout: Duration = DEFAULT_SPECTATE_ADMISSION_TIMEOUT,
     identity: ClientIdentity = ClientIdentity.Auto,
     placement: ConsensusPlacement = ConsensusPlacement.SessionOwned,
+    overlay: (CoroutineScope.(Seam) -> Seam)? = null,
 ): GameSession {
     requireSessionPeerSeating(placement, entryPoint = "gameSpectate")
     val mux = MuxSeam(seam, this)
     val raftSeam = mux.channel(RAFT_CHANNEL)
-    val presenceSeam = mux.channel(PRESENCE_CHANNEL)
-    val appMux = NamedMux(mux.channel(APP_ENVELOPE_CHANNEL), this)
+    val (presenceSeam, appMux) = broadcastPlane(mux, overlay)
 
     val self = NodeId(seam.selfId.value)
 
@@ -574,6 +618,44 @@ public suspend fun CoroutineScope.gameSpectate(
 
     awaitSpectatorAdmissionOrThrow(node, presence, spectateAdmissionTimeout)
     return GameSession(node, seam, appMux)
+}
+
+/**
+ * Builds the application-envelope [NamedMux] for [gameNode], placing it above the [overlay] flood
+ * when one is supplied and directly on [mux] otherwise.
+ *
+ * `overlay == null` (LAN / roster-given / in-memory): the app envelope rides [APP_ENVELOPE_CHANNEL]
+ * of the raw-seam [mux] directly — flat, byte-identical to the pre-#1370 layout.
+ *
+ * `overlay != null`: the flood is confined to [BROADCAST_CHANNEL]. The overlay wraps that one
+ * channel, a second mux ([bmux]) rides the overlay, and the app envelope lives on the *sub-mux's*
+ * [APP_ENVELOPE_CHANNEL] — so application broadcasts flood room-wide while Raft ([RAFT_CHANNEL], a
+ * sibling channel of [mux]) stays below the flood and cannot be laundered by origin-restamping.
+ */
+private fun CoroutineScope.appMuxOver(mux: MuxSeam, overlay: (CoroutineScope.(Seam) -> Seam)?): NamedMux =
+    if (overlay == null) {
+        NamedMux(mux.channel(APP_ENVELOPE_CHANNEL), this)
+    } else {
+        val bmux = MuxSeam(overlay(mux.channel(BROADCAST_CHANNEL)), this)
+        NamedMux(bmux.channel(APP_ENVELOPE_CHANNEL), this)
+    }
+
+/**
+ * Builds the broadcast plane — the presence [Seam] and the application-envelope [NamedMux] — for the
+ * appoint-the-host paths ([gameHost] / [gameJoin] / [gameSpectate]), placing **both** above the
+ * [overlay] flood when one is supplied and directly on [mux] otherwise.
+ *
+ * Presence must ride the flood (its [Quilter] broadcasts deltas room-wide), so it sits on the same
+ * plane as the app envelope: the raw [mux] when `overlay == null`, or a sub-mux over the overlay
+ * when non-null. Raft ([RAFT_CHANNEL]) and heartbeat ([HEARTBEAT_CHANNEL]) are sibling channels of
+ * the *outer* [mux] and therefore stay below the flood — the commit-safety layering of #1370.
+ */
+private fun CoroutineScope.broadcastPlane(
+    mux: MuxSeam,
+    overlay: (CoroutineScope.(Seam) -> Seam)?,
+): Pair<Seam, NamedMux> {
+    val plane = if (overlay == null) mux else MuxSeam(overlay(mux.channel(BROADCAST_CHANNEL)), this)
+    return plane.channel(PRESENCE_CHANNEL) to NamedMux(plane.channel(APP_ENVELOPE_CHANNEL), this)
 }
 
 /**
