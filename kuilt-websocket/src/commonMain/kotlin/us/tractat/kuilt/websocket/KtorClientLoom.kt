@@ -2,12 +2,15 @@ package us.tractat.kuilt.websocket
 
 import io.ktor.client.HttpClient
 import io.ktor.client.plugins.websocket.webSocketSession
+import io.ktor.client.request.header
+import io.ktor.http.encodeURLParameter
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.Seam
+import us.tractat.kuilt.core.Weft
 import kotlin.uuid.ExperimentalUuidApi
 import kotlin.uuid.Uuid
 
@@ -36,6 +39,12 @@ import kotlin.uuid.Uuid
  * identity per loom instance (mirroring the old per-join behaviour for callers
  * that do not need stable identity). See [#544](https://github.com/tractat-us/kuilt/issues/544).
  *
+ * **Per-dial credentials:** [weft] is invoked fresh inside every [weave] call — the first dial
+ * and every subsequent redial — so a caller can mint a single-use credential (e.g. a short-lived
+ * WS ticket) that survives kuilt's transparent reconnect instead of being baked once into a
+ * static [WebSocketAdvertisement.url]. See
+ * [#1330](https://github.com/tractat-us/kuilt/issues/1330).
+ *
  * **HttpClient lifecycle:** the [httpClient] is not closed by this loom.
  * Callers are responsible for closing it when all connections are done.
  *
@@ -45,12 +54,15 @@ import kotlin.uuid.Uuid
  * @param selfPeerId The fabric identity this loom presents on every join. Defaults to a
  *   random UUID minted once at construction; supply a deterministic value for stable
  *   cluster-client identity across reconnects.
+ * @param weft Supplies a [WebSocketDialContext] fresh on every dial. Defaults to an empty
+ *   context (no extra query params/headers).
  */
 @OptIn(ExperimentalUuidApi::class)
 public class KtorClientLoom(
     private val httpClient: HttpClient,
     private val dispatcher: CoroutineDispatcher = Dispatchers.Default,
     public val selfPeerId: PeerId = PeerId(Uuid.random().toString()),
+    private val weft: Weft<WebSocketDialContext> = { WebSocketDialContext() },
 ) : Loom {
     /**
      * Establishes a [Seam]:
@@ -72,8 +84,18 @@ public class KtorClientLoom(
                 require(advertisement is WebSocketAdvertisement) {
                     "KtorClientLoom only joins WebSocketAdvertisement, got ${advertisement::class}"
                 }
-                val urlWithPeer = appendPeerQuery(advertisement.url, selfPeerId)
-                val wsSession = httpClient.webSocketSession(urlWithPeer)
+                val dialContext = weft()
+                // PEER_QUERY_PARAM is set last so it always wins if dialContext.queryParams
+                // happens to contain a "peer" key — the fabric identity contract (#544) is not
+                // something a credential weft should be able to silently override.
+                val queryParams = linkedMapOf<String, String>()
+                queryParams.putAll(dialContext.queryParams)
+                queryParams[PEER_QUERY_PARAM] = selfPeerId.value
+                val urlWithPeer = appendQueryParams(advertisement.url, queryParams)
+                val wsSession =
+                    httpClient.webSocketSession(urlWithPeer) {
+                        dialContext.headers.forEach { (key, value) -> header(key, value) }
+                    }
                 WebSocketSeam(
                     selfId = selfPeerId,
                     remoteId = advertisement.serverPeerId,
@@ -83,12 +105,16 @@ public class KtorClientLoom(
             }
         }
 
-    private fun appendPeerQuery(
+    private fun appendQueryParams(
         url: String,
-        peerId: PeerId,
+        params: Map<String, String>,
     ): String {
-        val separator = if ('?' in url) '&' else '?'
-        return "$url${separator}${PEER_QUERY_PARAM}=${peerId.value}"
+        if (params.isEmpty()) return url
+        val separator = if ('?' in url) "&" else "?"
+        val encoded =
+            params.entries.joinToString("&") { (key, value) ->
+                "${key.encodeURLParameter()}=${value.encodeURLParameter()}"
+            }
+        return "$url$separator$encoded"
     }
-
 }

@@ -164,6 +164,28 @@ internal fun sampleMuxClientLoom() = runTest(UnconfinedTestDispatcher()) {
     check(client.join(InMemoryTag("lobby")) === lobby)
 }
 
+// ── Weft ────────────────────────────────────────────────────────────────────────
+
+/**
+ * Recompute a per-dial value fresh on every attempt with a [Weft].
+ *
+ * A [Weft] is just `suspend () -> C` — a fabric [Loom] implementation invokes it inside its own
+ * `weave()`, so the value is minted anew on the first dial and on every reconnect, never cached.
+ * The motivating case is a single-use credential that must survive kuilt's transparent reconnect:
+ * a ticket baked into a fixed URL is already spent by the first redial, but a `Weft` mints a fresh
+ * one each time. This core-level sample shows only the idiom — a `Weft<String>` that returns a new
+ * value on every call; the WebSocket/WebRTC fabrics consume one to decorate each dial.
+ */
+@Suppress("unused")
+internal fun sampleWeft() = runTest {
+    var minted = 0
+    val ticket: Weft<String> = { "ticket-${minted++}" }
+
+    // Each dial (here, each invocation) computes a fresh value — nothing is cached.
+    assertEquals("ticket-0", ticket())
+    assertEquals("ticket-1", ticket())
+}
+
 // ── Doc-alias samples (camelCase mirrors of backtick-named InMemoryLoomTest fns) ──
 
 /**
