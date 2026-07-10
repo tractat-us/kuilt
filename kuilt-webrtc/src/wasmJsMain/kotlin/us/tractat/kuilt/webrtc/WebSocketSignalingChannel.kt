@@ -7,6 +7,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.receiveAsFlow
+import us.tractat.kuilt.core.Weft
 import us.tractat.kuilt.core.runCatchingCancellable
 import kotlin.JsFun
 import kotlin.js.JsAny
@@ -19,12 +20,18 @@ private val log = KotlinLogging.logger("us.tractat.kuilt.webrtc.WebSocketSignali
  * Each [open] call dials `${baseUrl}/signaling/${room}` (with `wss://` if
  * the page is `https`, else `ws://`). The first impl of the server-side
  * route is `WS /signaling/{room}` in `:server`.
+ *
+ * **Per-dial credentials:** [weft] is invoked fresh inside every [open] call, so a caller can
+ * mint a single-use credential (e.g. a short-lived ticket) as a query param rather than baking
+ * one into a static [baseUrl]. Query params only — the browser `WebSocket` constructor cannot
+ * set custom request headers. See [#1330](https://github.com/tractat-us/kuilt/issues/1330).
  */
 public class WebSocketSignalingChannel(
     private val baseUrl: String,
+    private val weft: Weft<Map<String, String>> = { emptyMap() },
 ) : SignalingChannel {
     override suspend fun open(room: String): SignalingSession {
-        val url = "$baseUrl/signaling/$room"
+        val url = buildSignalingUrl(baseUrl, room, weft())
         log.debug { "signaling open → $url" }
         val ws = createWebSocket(url)
         val openDeferred = CompletableDeferred<Unit>()
@@ -85,6 +92,21 @@ public class WebSocketSignalingChannel(
     }
 }
 
+/** Pure URL-building for [WebSocketSignalingChannel.open] — no browser API needed, directly testable. */
+internal fun buildSignalingUrl(
+    baseUrl: String,
+    room: String,
+    queryParams: Map<String, String>,
+): String {
+    val base = "$baseUrl/signaling/$room"
+    if (queryParams.isEmpty()) return base
+    val encoded =
+        queryParams.entries.joinToString("&") { (key, value) ->
+            "${jsEncodeURIComponent(key)}=${jsEncodeURIComponent(value)}"
+        }
+    return "$base?$encoded"
+}
+
 private class BrowserWebSocketSession(
     private val ws: JsAny,
     val inboundChannel: Channel<SignalingMessage>,
@@ -141,3 +163,6 @@ private external fun wsSend(
 
 @JsFun("(ws) => ws.close()")
 private external fun wsClose(ws: JsAny)
+
+@JsFun("(s) => encodeURIComponent(s)")
+private external fun jsEncodeURIComponent(s: String): String
