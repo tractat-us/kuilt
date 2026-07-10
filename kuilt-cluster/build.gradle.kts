@@ -23,6 +23,9 @@ kotlin {
             dependencies {
                 api(project(":kuilt-websocket"))
                 implementation(libs.kotlin.logging)
+                // Dial peer voters to form the inter-server WebSocket mesh (voterMeshOverWebSockets).
+                implementation(libs.ktor.client.core)
+                implementation(libs.ktor.client.websockets)
             }
         }
         jvmMain.get().dependsOn(jvmAndAndroidMain)
