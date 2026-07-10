@@ -20,6 +20,12 @@ dependencies {
     implementation(project(":kuilt-quilter"))
     implementation(project(":kuilt-gossip"))
     implementation(project(":kuilt-websocket"))
+    // Observability — capture the relay's own logs and metrics, and offer them for
+    // reach-in extraction by the :demo-tap harness (slice 4 of the demo-app design).
+    implementation(project(":kuilt-otel"))
+    implementation(project(":kuilt-otel-logging"))
+    implementation(project(":kuilt-otel-tap"))
+    implementation(libs.kotlin.logging) // the relay's own "patchwork.relay" application logger
     implementation(libs.kotlinx.coroutines.core)
     implementation(libs.ktor.serverCore)
     implementation(libs.ktor.serverNetty)
