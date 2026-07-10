@@ -9,6 +9,13 @@ kotlin {
             api(project(":kuilt-core"))
             api(project(":kuilt-raft"))
             api(project(":kuilt-session"))
+            // The attachment directory: a replicated LWWMap (crdt) driven by a
+            // Quilter (quilter) over the inter-server seam, feeding a TwoTier
+            // topology policy (gossip). These types appear in AttachmentDirectory's
+            // public surface, so they are api, not implementation.
+            api(project(":kuilt-crdt"))
+            api(project(":kuilt-quilter"))
+            api(project(":kuilt-gossip"))
             implementation(libs.kotlinx.atomicfu)
             implementation(libs.kotlinx.coroutines.core)
             implementation(libs.kotlinx.serialization.cbor)
