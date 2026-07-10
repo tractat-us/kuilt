@@ -7,6 +7,7 @@ import kotlinx.atomicfu.locks.reentrantLock
 import kotlinx.atomicfu.locks.withLock
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
@@ -207,6 +208,23 @@ public class WarpNode(
     private val target: Target? = null,
 ) {
     private val replica = ReplicaId(selfId.value)
+
+    /**
+     * Owned child scope for **all** of this node's background coroutines — the seam fan-out,
+     * the roster / queue / coordination collectors, the per-peer detectors, and every
+     * claim/execute launch. Its [SupervisorJob] is a structural child of the injected [scope]
+     * (so one failing coroutine neither tears down its siblings nor propagates to the caller's
+     * scope), and [close] cancels it so a closed node goes fully inert.
+     *
+     * Launching into the injected [scope] directly (the pre-fix behaviour) let these collectors
+     * outlive [close]: a roster emission arriving after the node's Quilters were closed drove a
+     * claim into an already-closed Quilter, whose fail-fast [Quilter.apply] threw
+     * `IllegalStateException` from a scope with no exception handler. That uncaught coroutine
+     * exception was buffered by the coroutines-test exception collector and surfaced as an
+     * `UncaughtExceptionsBeforeTest` against whichever `runTest` ran next (issue #1334).
+     */
+    private val ownJob = SupervisorJob(scope.coroutineContext[Job])
+    private val ownScope = CoroutineScope(scope.coroutineContext + ownJob)
 
     /**
      * Broadcast bus for every raw inbound [Swatch] received on [seam].
@@ -458,7 +476,7 @@ public class WarpNode(
         // Single collector of seam.incoming — fans every frame to rawIncoming.
         // All downstream consumers (MuxSeam channels, per-peer detectors)
         // subscribe to rawIncoming; nobody else collects seam.incoming.
-        scope.launch {
+        ownScope.launch {
             seam.incoming.collect { swatch ->
                 rawIncoming.emit(swatch)
             }
@@ -467,30 +485,30 @@ public class WarpNode(
         // Rebuild the ring whenever the roster changes, then re-evaluate ownership.
         rosterFlow
             .onEach { peers -> onPeersChanged(peers) }
-            .launchIn(scope)
+            .launchIn(ownScope)
 
         // Claim newly-owned free tasks whenever the pending map changes.
         queueQuilter.state
             .onEach { pendingMap -> claimOwned(pendingMap.keys, CoordinationKind.Free) }
-            .launchIn(scope)
+            .launchIn(ownScope)
 
         // Claim newly-owned coordinated tasks whenever the coordinated pending set changes.
         coordQueueQuilter.state
             .onEach { pendingSet -> claimOwned(pendingSet.elements, CoordinationKind.Coordinated) }
-            .launchIn(scope)
+            .launchIn(ownScope)
 
         // Drive coordinated execution from the committed Raft log. Only the quorum-fenced
         // Raft leader executes; [coordinatedApplied] and the replicated queue/results gates
         // prevent double-execution if two entries for the same task both committed.
         raftNode?.committed
             ?.onEach { committed -> onCoordinatedCommit(committed) }
-            ?.launchIn(scope)
+            ?.launchIn(ownScope)
 
         // Re-drive coordinated tasks stranded by a commit that fired while no node held
         // leadership (#879 window b) whenever this node acquires leadership.
         raftNode?.role
             ?.onEach { role -> if (role is RaftRole.Leader) redriveStrandedCoordinated() }
-            ?.launchIn(scope)
+            ?.launchIn(ownScope)
     }
 
     // ---------------------------------------------------------------------------
@@ -678,6 +696,12 @@ public class WarpNode(
      * Close this node's Quilter connections and stop all detectors. Idempotent.
      */
     public fun close() {
+        // Stop this node's own background coroutines FIRST, before closing the Quilters: cancelling
+        // [ownJob] tears down the seam fan-out, the roster/queue/coordination collectors, the
+        // per-peer detectors, and any in-flight claim/execute launches together. Ordering the
+        // cancel ahead of the Quilter closes means no collector can drive a claim into a
+        // Quilter that is about to be — or has just been — closed (issue #1334).
+        ownJob.cancel()
         val jobs = lock.withLock {
             val snapshot = detectorJobs.values.toList()
             detectorJobs.clear()
@@ -695,6 +719,11 @@ public class WarpNode(
     // ---------------------------------------------------------------------------
 
     private fun onPeersChanged(newRoster: Set<PeerId>) {
+        // A closed node is inert: swallow the trailing roster emission that structured
+        // cancellation of [ownJob] has not yet delivered, so it cannot drive a claim into a
+        // closed Quilter (issue #1334). [ownJob] cancellation stops the collector; this guard
+        // closes the synchronous window between [close] and that cancellation taking effect.
+        if (!ownJob.isActive) return
         val (added, removed) = lock.withLock {
             val prev = rosterPeers
             rosterPeers = newRoster
@@ -746,7 +775,7 @@ public class WarpNode(
         // The umbrella launch body is `this` CoroutineScope.
         // `detector.start(this)` makes the ping loop and incoming-collection loop children
         // of this coroutine so they are cancelled when this Job is cancelled.
-        val umbrellaJob = scope.launch {
+        val umbrellaJob = ownScope.launch {
             detector.start(this)
             detector.events.collect { event -> handlePartitionEvent(event) }
         }
@@ -904,7 +933,7 @@ public class WarpNode(
             sinceChange < strategy.settleWindow || competing
         }
 
-        scope.launch {
+        ownScope.launch {
             var stoodDown = false
             try {
                 if (mustSettle) delay(strategy.settleWindow) // suspend OUTSIDE the lock
@@ -959,7 +988,7 @@ public class WarpNode(
     }
 
     private fun executeAsync(taskId: TaskId, kind: CoordinationKind) {
-        scope.launch {
+        ownScope.launch {
             runCatchingCancellable { doExecute(taskId, kind) }
                 .onFailure { e ->
                     logger.warn(e) { "WarpNode($selfId): executor failed for $taskId — unclaiming" }
@@ -1183,7 +1212,7 @@ public class WarpNode(
         }
         if (!worthFencing) return
 
-        scope.launch {
+        ownScope.launch {
             val fence = runCatchingCancellable { raft.readIndex() }
             if (fence.isFailure) {
                 logger.debug {
@@ -1232,7 +1261,7 @@ public class WarpNode(
      */
     private fun redriveStrandedCoordinated() {
         val raft = raftNode ?: return
-        scope.launch {
+        ownScope.launch {
             val fence = runCatchingCancellable { raft.readIndex() }
             if (fence.isFailure) return@launch
             val stranded = lock.withLock {
