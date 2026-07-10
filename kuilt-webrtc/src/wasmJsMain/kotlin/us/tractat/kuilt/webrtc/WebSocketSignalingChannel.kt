@@ -104,7 +104,8 @@ internal fun buildSignalingUrl(
         queryParams.entries.joinToString("&") { (key, value) ->
             "${jsEncodeURIComponent(key)}=${jsEncodeURIComponent(value)}"
         }
-    return "$base?$encoded"
+    val separator = if ('?' in base) "&" else "?"
+    return "$base$separator$encoded"
 }
 
 private class BrowserWebSocketSession(

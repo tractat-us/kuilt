@@ -23,4 +23,12 @@ class WebSocketSignalingChannelUrlTest {
             buildSignalingUrl("https://example.com", "room-1", mapOf("ticket" to "abc 123&x")),
         )
     }
+
+    @Test
+    fun appendsWithAmpersandWhenBaseAlreadyHasQuery() {
+        assertEquals(
+            "https://example.com?env=prod/signaling/room-1&ticket=abc",
+            buildSignalingUrl("https://example.com?env=prod", "room-1", mapOf("ticket" to "abc")),
+        )
+    }
 }
