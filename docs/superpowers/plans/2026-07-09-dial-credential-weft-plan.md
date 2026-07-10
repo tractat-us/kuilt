@@ -114,6 +114,8 @@ git commit -m "feat(core): Weft<C> — the per-dial-fresh-value idiom"
 **Files:**
 - Create: `kuilt-websocket/src/commonMain/kotlin/us/tractat/kuilt/websocket/WebSocketDialContext.kt`
 - Modify: `kuilt-websocket/src/commonMain/kotlin/us/tractat/kuilt/websocket/KtorClientLoom.kt`
+- Create: `kuilt-websocket/src/jvmTest/kotlin/us/tractat/kuilt/websocket/KtorClientLoomTestSupport.kt`
+- Modify: `kuilt-websocket/src/jvmTest/kotlin/us/tractat/kuilt/websocket/KtorClientLoomIdentityTest.kt`
 - Test: Create `kuilt-websocket/src/jvmTest/kotlin/us/tractat/kuilt/websocket/KtorClientLoomWeftTest.kt`
 
 **Interfaces:**
@@ -121,14 +123,94 @@ git commit -m "feat(core): Weft<C> — the per-dial-fresh-value idiom"
 - Produces: `WebSocketDialContext(queryParams: Map<String, String> = emptyMap(), headers: Map<String, String> = emptyMap())`;
   `KtorClientLoom`'s new `weft: Weft<WebSocketDialContext>` constructor parameter (defaulted, so
   every existing call site — `KtorClientLoom(httpClient)`, `KtorClientLoom(httpClient, selfPeerId = ...)`
-  — keeps compiling unchanged).
+  — keeps compiling unchanged); a shared `internal suspend fun connectPair(...)` test helper used
+  by both `KtorClientLoomIdentityTest` and `KtorClientLoomWeftTest` (extracted in Step 1 below,
+  rather than duplicated — the two test classes shared a near-identical private helper in an
+  earlier draft of this plan; extract first to keep the test suite DRY).
 
-- [ ] **Step 1: Write the failing test**
+- [ ] **Step 1: Extract the shared `connectPair` test helper**
+
+`KtorClientLoomIdentityTest.kt` already has a private `connectPair` helper. Rather than duplicate
+it in the new `KtorClientLoomWeftTest.kt`, extract it to a shared file first.
+
+Create `kuilt-websocket/src/jvmTest/kotlin/us/tractat/kuilt/websocket/KtorClientLoomTestSupport.kt`:
+
+```kotlin
+// kuilt-websocket/src/jvmTest/kotlin/us/tractat/kuilt/websocket/KtorClientLoomTestSupport.kt
+package us.tractat.kuilt.websocket
+
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.withTimeout
+import us.tractat.kuilt.core.Seam
+
+/**
+ * Joins [clientLoom] to [serverLoom] via [advertisement] and returns both sides' [Seam]s once
+ * connected. Shared by [KtorClientLoomIdentityTest] and [KtorClientLoomWeftTest].
+ */
+internal suspend fun connectPair(
+    serverLoom: KtorServerLoom,
+    advertisement: WebSocketAdvertisement,
+    clientLoom: KtorClientLoom,
+    timeoutMs: Long = 5_000,
+): Pair<Seam, Seam> =
+    withTimeout(timeoutMs) {
+        coroutineScope {
+            val serverLinkDeferred = async { serverLoom.nextLink() }
+            val clientLink = clientLoom.join(advertisement)
+            serverLinkDeferred.await() to clientLink
+        }
+    }
+```
+
+Then edit `kuilt-websocket/src/jvmTest/kotlin/us/tractat/kuilt/websocket/KtorClientLoomIdentityTest.kt`
+to remove its now-duplicated private helper and the imports it alone needed:
+
+Remove these three lines from the import block:
+```kotlin
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.withTimeout
+```
+
+Remove the private helper at the bottom of the class (the `// ── Helper ─────` comment and the
+`connectPair` function below it) — its call sites (`connectPair(serverLoom, advertisement, clientLoom)`)
+stay textually identical and now resolve to the new package-level function in
+`KtorClientLoomTestSupport.kt` instead:
+
+```kotlin
+    // ── Helper ───────────────────────────────────────────────────────────────
+
+    private suspend fun connectPair(
+        serverLoom: KtorServerLoom,
+        advertisement: WebSocketAdvertisement,
+        clientLoom: KtorClientLoom,
+        timeoutMs: Long = 5_000,
+    ) = withTimeout(timeoutMs) {
+        coroutineScope {
+            val serverLinkDeferred = async { serverLoom.nextLink() }
+            val clientLink = clientLoom.join(advertisement)
+            serverLinkDeferred.await() to clientLink
+        }
+    }
+}
+```
+→ becomes just the closing brace:
+```kotlin
+}
+```
+
+Run: `./gradlew :kuilt-websocket:jvmTest --tests "*KtorClientLoomIdentityTest"`
+Expected: PASS (all 3 existing tests) — confirms the extraction is behavior-preserving before any
+new code is added.
+
+- [ ] **Step 2: Write the failing test**
 
 This test exercises both the query-param and header path in one call, using a value containing
 `&`/space to prove percent-encoding actually happens (a naive string-concat would corrupt the
-query string on `&`). It reuses `KtorClientLoomIdentityTest`'s `testApplication` +
-`KtorServerLoom` + `principalExtractor`-as-capture-hook pattern.
+query string on `&`). It reuses the `connectPair` helper extracted in Step 1 and
+`KtorClientLoomIdentityTest`'s `testApplication` + `KtorServerLoom` + `principalExtractor`-as-
+capture-hook pattern.
 
 ```kotlin
 // kuilt-websocket/src/jvmTest/kotlin/us/tractat/kuilt/websocket/KtorClientLoomWeftTest.kt
@@ -136,11 +218,7 @@ package us.tractat.kuilt.websocket
 
 import io.ktor.client.plugins.websocket.WebSockets
 import io.ktor.server.testing.testApplication
-import kotlinx.coroutines.async
-import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.withTimeout
 import us.tractat.kuilt.core.CloseReason
-import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -237,30 +315,16 @@ class KtorClientLoomWeftTest {
                 { assertEquals(listOf("ticket-1", "ticket-2"), seenTickets, "server saw a fresh ticket on each dial") },
             )
         }
-
-    // ── Helper (mirrors KtorClientLoomIdentityTest's connectPair) ──────────────
-    private suspend fun connectPair(
-        serverLoom: KtorServerLoom,
-        advertisement: WebSocketAdvertisement,
-        clientLoom: KtorClientLoom,
-        timeoutMs: Long = 5_000,
-    ): Pair<Seam, Seam> = withTimeout(timeoutMs) {
-        coroutineScope {
-            val serverLinkDeferred = async { serverLoom.nextLink() }
-            val clientLink = clientLoom.join(advertisement)
-            serverLinkDeferred.await() to clientLink
-        }
-    }
 }
 ```
 
-- [ ] **Step 2: Run it to confirm it fails**
+- [ ] **Step 3: Run it to confirm it fails**
 
 Run: `./gradlew :kuilt-websocket:jvmTest --tests "*KtorClientLoomWeftTest"`
 Expected: FAIL — compile error, `WebSocketDialContext` is unresolved and `KtorClientLoom` has no
 `weft` parameter.
 
-- [ ] **Step 3: Create `WebSocketDialContext`**
+- [ ] **Step 4: Create `WebSocketDialContext`**
 
 ```kotlin
 // kuilt-websocket/src/commonMain/kotlin/us/tractat/kuilt/websocket/WebSocketDialContext.kt
@@ -282,7 +346,7 @@ public data class WebSocketDialContext(
 )
 ```
 
-- [ ] **Step 4: Wire `weft` into `KtorClientLoom`**
+- [ ] **Step 5: Wire `weft` into `KtorClientLoom`**
 
 Replace the full contents of
 `kuilt-websocket/src/commonMain/kotlin/us/tractat/kuilt/websocket/KtorClientLoom.kt` with:
@@ -415,21 +479,21 @@ to merge the `?peer=` param with `weft`'s query params in one pass, and it now p
 (the old version didn't need to — a UUID `peerId` has no special characters — but an arbitrary
 credential value does).
 
-- [ ] **Step 5: Run the test to confirm it passes**
+- [ ] **Step 6: Run the test to confirm it passes**
 
 Run: `./gradlew :kuilt-websocket:jvmTest --tests "*KtorClientLoomWeftTest"`
 Expected: PASS (2 tests)
 
-- [ ] **Step 6: Run the full existing `:kuilt-websocket` test suite to confirm no regression**
+- [ ] **Step 7: Run the full existing `:kuilt-websocket` test suite to confirm no regression**
 
 Run: `./gradlew :kuilt-websocket:jvmTest`
 Expected: PASS (all tests, including `KtorClientLoomIdentityTest`, `WebSocketConformanceTest`,
 `KtorConnectionSourceAttestationTest`)
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
-git add kuilt-websocket/src/commonMain/kotlin/us/tractat/kuilt/websocket/WebSocketDialContext.kt kuilt-websocket/src/commonMain/kotlin/us/tractat/kuilt/websocket/KtorClientLoom.kt kuilt-websocket/src/jvmTest/kotlin/us/tractat/kuilt/websocket/KtorClientLoomWeftTest.kt
+git add kuilt-websocket/src/commonMain/kotlin/us/tractat/kuilt/websocket/WebSocketDialContext.kt kuilt-websocket/src/commonMain/kotlin/us/tractat/kuilt/websocket/KtorClientLoom.kt kuilt-websocket/src/jvmTest/kotlin/us/tractat/kuilt/websocket/KtorClientLoomTestSupport.kt kuilt-websocket/src/jvmTest/kotlin/us/tractat/kuilt/websocket/KtorClientLoomIdentityTest.kt kuilt-websocket/src/jvmTest/kotlin/us/tractat/kuilt/websocket/KtorClientLoomWeftTest.kt
 git commit -m "feat(websocket): per-dial WebSocketDialContext via Weft on KtorClientLoom"
 ```
 
