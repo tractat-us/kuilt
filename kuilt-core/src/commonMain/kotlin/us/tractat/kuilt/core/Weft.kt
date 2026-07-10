@@ -12,5 +12,7 @@ package us.tractat.kuilt.core
  * [#1330](https://github.com/tractat-us/kuilt/issues/1330)) is the first consumer, but any
  * per-dial value a fabric implementation needs recomputed rather than fixed at construction
  * fits the same shape.
+ *
+ * @sample us.tractat.kuilt.core.sampleWeft
  */
 public typealias Weft<C> = suspend () -> C

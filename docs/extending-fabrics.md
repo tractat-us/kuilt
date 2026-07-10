@@ -118,6 +118,12 @@ class MyRpcLoom(private val selfId: PeerId, private val dispatcher: CoroutineCon
 
 The `dispatcher` is **required** (not optional). See [Dispatcher](#dispatcher-is-a-required-parameter).
 
+If your fabric needs a value computed fresh on *every* dial — a credential that
+must be refreshed on reconnect, a per-attempt trace id — take a `Weft<C>`
+(`suspend () -> C`) on your `Loom`'s constructor and invoke it inside `weave()`,
+so it recomputes on the first dial and every redial rather than being fixed at
+construction. `KtorClientLoom`'s `weft` is the reference consumer.
+
 ---
 
 ## Track B — stream RPC fabric (TCP headline)

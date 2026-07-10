@@ -167,6 +167,38 @@ val seam = client.join(
 The client and server arrive at the same membership view with no in-band
 handshake because the advertisement carries the server's `PeerId`.
 
+### Per-dial credentials
+
+Suppose your server wants a fresh, single-use auth ticket on every connection.
+You could bake one into the `url` above — but kuilt reconnects transparently
+behind your back when a link drops, and it re-dials the *same* advertisement, so
+that one-shot ticket is already spent by the first reconnect. What you want is a
+way to mint a *new* ticket for each dial. That's a **weft**: a small function
+kuilt calls right before every connection attempt, including every reconnect.
+
+Pass it as the `weft` argument. On each dial, kuilt runs your function and folds
+the result into the outgoing WebSocket request:
+
+```kotlin
+val client = KtorClientLoom(
+    httpClient,
+    weft = { WebSocketDialContext(queryParams = mapOf("ticket" to mintTicket())) },
+)
+```
+
+`WebSocketDialContext` carries two maps: `queryParams`, appended to the dial URL
+(percent-encoded), and `headers`, set on the upgrade request. Nothing is cached
+— `mintTicket()` runs afresh for every connection, so a single-use credential
+survives kuilt's reconnects. The value is generic: the same hook can carry a
+trace id or a client-version header just as well as a ticket.
+
+The WebRTC signaling channel (`kuilt-webrtc`) takes the same idea, but its weft
+yields a plain `Map<String, String>` of query params only —
+`WebSocketSignalingChannel(baseUrl, weft = { mapOf("ticket" to mintTicket()) })`.
+Query params, not headers, because the browser's `WebSocket` constructor can't
+set custom request headers at all — the URL is the only channel available, so
+ticket-in-query is the honest ceiling there.
+
 ## mDNS discovery (`kuilt-mdns`, JVM/Android)
 
 mDNS is *rendezvous over the LAN*; the actual session still runs over WebSocket.
