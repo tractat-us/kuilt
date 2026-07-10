@@ -19,8 +19,54 @@ import kotlin.time.Instant
 private val logger = KotlinLogging.logger("us.tractat.kuilt.gossip.HostedOverlay")
 
 /**
+ * Wrap [base] in a gossip-relay layer under an explicit [topology] policy, with **zero recompute
+ * jitter**, started on the receiver scope. The generalization of [starOverlay] (which is just
+ * `policyOverlay(base, FullFanout, …)`): the same started-[GossipSeam] relay interior, but the
+ * dissemination *shape* is whatever [TopologyPolicy] the caller passes — [FullFanout] (the hub
+ * star), [RandomKRegular] (the k-regular partial mesh), or [TwoTier] (a federated server core +
+ * client periphery). Broadcasts flood along the policy's active view; [Seam.sendTo]
+ * [us.tractat.kuilt.core.Seam.sendTo] passes through unwrapped — the tested unicast invariant
+ * that keeps per-recipient traffic off the flood path is independent of the shape.
+ *
+ * Zero jitter is deliberate, not tuning, and it carries across every shape passed here — the two
+ * shipped structural/full policies ([FullFanout], [TwoTier]) are **deterministic** functions of
+ * the roster (and, for [TwoTier], the core + attachment), so the anti-lockstep jitter buys them
+ * nothing and only opens a window where a freshly admitted peer is missing from the flood targets
+ * — a broadcast in that window would skip the peer and leave a per-origin seq gap it then
+ * reorder-holds behind (#1309). The view recomputes synchronously with each roster change instead.
+ * (A caller wanting jittered recompute for an isotropic random mesh constructs [GossipSeam]
+ * directly; this overlay is the deterministic-shape composition path.)
+ *
+ * @param base the local endpoint this node relays over — a hub's fanout seam, a spoke's link to
+ *   the hub, or a server/client's link into a two-tier graph.
+ * @param topology the dissemination shape — who this node eager-floods broadcasts to. **Required**:
+ *   the overlay's whole job is to name a shape, so there is no default (unlike [GossipSeam], whose
+ *   default is a random mesh).
+ * @param random RNG for overlay bookkeeping (and for a policy that owns selection randomness, e.g.
+ *   [RandomKRegular]); tests inject a seeded instance.
+ * @param clock Clock for the overlay's per-neighbour liveness detectors. **Required** — no
+ *   wall-clock default, so a virtual-time caller can never silently fall through to the system
+ *   clock. Production callers pass `{ kotlin.time.Clock.System.now() }`.
+ */
+public fun CoroutineScope.policyOverlay(
+    base: Seam,
+    topology: TopologyPolicy,
+    random: Random = Random.Default,
+    clock: () -> Instant,
+): Seam = GossipSeam(
+    base = base,
+    random = random,
+    clock = clock,
+    topology = topology,
+    jitter = Duration.ZERO..Duration.ZERO,
+).also { it.start(this) }
+
+/**
  * Wrap [base] in the star-relay policy layer: a [GossipSeam] with [FullFanout] and **zero
- * recompute jitter**, started on the receiver scope.
+ * recompute jitter**, started on the receiver scope. A thin alias for
+ * [policyOverlay]`(base, FullFanout, …)` — the star is the full-fanout special case; the general
+ * form ([policyOverlay]) drives any [TopologyPolicy] with the same started-seam interior and the
+ * same zero-jitter determinism.
  *
  * This is the relay interior every hub-star composition shares — [hostedOverlay] applies it to
  * an accept-pumped mesh, and a per-room game composition applies it to each
@@ -45,13 +91,7 @@ public fun CoroutineScope.starOverlay(
     base: Seam,
     random: Random = Random.Default,
     clock: () -> Instant,
-): Seam = GossipSeam(
-    base = base,
-    random = random,
-    clock = clock,
-    topology = FullFanout,
-    jitter = Duration.ZERO..Duration.ZERO,
-).also { it.start(this) }
+): Seam = policyOverlay(base, FullFanout, random, clock)
 
 /**
  * Compose a started hub [Seam] from a [ConnectionSource]: an initially-empty [meshSeam] wrapped in
