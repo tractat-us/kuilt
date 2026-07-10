@@ -19,6 +19,9 @@ kotlin {
             implementation(libs.kotlinx.atomicfu)
             implementation(libs.kotlinx.coroutines.core)
             implementation(libs.kotlinx.serialization.cbor)
+            // RoutedUnicastRouter logs best-effort cross-core drops at debug (KMP-safe;
+            // same kotlin-logging used across other commonMain modules e.g. :kuilt-gossip).
+            implementation(libs.kotlin.logging)
         }
 
         // jvmAndAndroidMain: ServerCluster uses KtorRoomHost which is JVM/Android-only.
