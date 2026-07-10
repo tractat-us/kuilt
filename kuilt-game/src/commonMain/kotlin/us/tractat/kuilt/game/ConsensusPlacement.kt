@@ -6,6 +6,8 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import us.tractat.kuilt.cluster.playerRelayTransport
+import us.tractat.kuilt.cluster.serverRelayTransport
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.raft.ClientIdentity
@@ -77,6 +79,20 @@ public class ConsensusBinding(
     public val raftConfig: RaftConfig,
     /** Raft §8 dedup identity supplied by the bootstrap caller. */
     public val identity: ClientIdentity,
+    /**
+     * The dedicated **relay** channel — the `RAFT_RELAY` mux tag carved over the *same* session
+     * seam as [transport], so its `selfId`/peer ids are byte-for-byte the ids [transport]'s
+     * [NodeId]s derive from (the first Task-1-review contract: a node's relay-channel `PeerId`
+     * string must equal its Raft `NodeId` string).
+     *
+     * Only the federated placement ([ConsensusPlacement.federatedCore]) reads this — it wraps
+     * [transport] in a routing decorator that carries cross-server Raft frames over this channel.
+     * Every other placement ([ConsensusPlacement.SessionOwned] / [ConsensusPlacement.serverCore] /
+     * [ConsensusPlacement.preBuilt]) ignores it entirely; provisioning the channel is inert (a mux
+     * view that never sends or receives a frame produces no wire traffic), so the off-federation
+     * bootstrap is byte-identical.
+     */
+    public val relayChannel: Seam,
 )
 
 /**
@@ -159,20 +175,59 @@ public interface ConsensusPlacement {
         public fun serverCore(core: Set<NodeId>): ConsensusPlacement = object : ConsensusPlacement {
             override val seating: AuthoritySeating = AuthoritySeating.CoreVoters(core)
 
-            override fun node(scope: CoroutineScope, binding: ConsensusBinding): RaftNode {
-                val membership = if (binding.self in core) {
-                    ClusterConfig(voters = core)
-                } else {
-                    ClusterConfig(voters = core, learners = setOf(binding.self))
-                }
-                return scope.raftNode(
-                    membership,
+            override fun node(scope: CoroutineScope, binding: ConsensusBinding): RaftNode =
+                scope.raftNode(
+                    coreMembership(binding.self, core),
                     binding.transport,
                     binding.storage,
                     binding.raftConfig,
                     binding.identity,
                 )
-            }
+        }
+
+        /**
+         * The **federated** server-core placement: like [serverCore] — a fixed [core] holds every
+         * voter seat and session peers ride as learners — but each node's Raft transport is wrapped
+         * in a cross-server routing decorator so a leader on one server can reach a player behind a
+         * *different* server. This is the placement [gameNodeRoomFederated] uses, and the one a
+         * federated player passes to [gameNodeRoom].
+         *
+         * A federated game runs one Raft cluster whose members are spread over several servers: the
+         * servers form a fully-meshed core, each player connects to whichever server is nearest, and
+         * the committed log must reach *every* player regardless of which server leads. Plain
+         * [serverCore] can only deliver to nodes a server is directly wired to — a player behind
+         * another server never receives `AppendEntries`. This placement fixes that by wrapping
+         * [ConsensusBinding.transport] in a routing decorator (a `RoutedRaftTransport`) that relays
+         * over [ConsensusBinding.relayChannel] along the bounded path
+         * `player → server → core → server → player`, preserving the true Raft origin end-to-end.
+         *
+         * A peer whose id is in [core] is wrapped as a **server** relay endpoint (it may take one
+         * core hop, choosing it from [attachment]); any other peer is wrapped as a **player** relay
+         * endpoint (it always forwards to its single server and never routes for anyone else). The
+         * player branch never consults [attachment] — a federated player therefore passes
+         * `attachment = { null }` (it owns no directory), and only the servers pass a live lookup.
+         *
+         * @param core The [NodeId]s of the server core — every one of them votes in this game.
+         *   Must be non-empty.
+         * @param attachment The live `(player) -> the server it is behind` lookup a **server** uses
+         *   to pick its one core hop for a remote player. **Required** — a defaulted lookup would
+         *   silently disable cross-server delivery (optional ≠ tuning). A player (never in [core])
+         *   never reads it; pass `{ null }`.
+         */
+        public fun federatedCore(
+            core: Set<NodeId>,
+            attachment: (NodeId) -> NodeId?,
+        ): ConsensusPlacement = object : ConsensusPlacement {
+            override val seating: AuthoritySeating = AuthoritySeating.CoreVoters(core)
+
+            override fun node(scope: CoroutineScope, binding: ConsensusBinding): RaftNode =
+                scope.raftNode(
+                    coreMembership(binding.self, core),
+                    binding.federatedTransport(core, scope, attachment),
+                    binding.storage,
+                    binding.raftConfig,
+                    binding.identity,
+                )
         }
 
         /**
@@ -194,6 +249,36 @@ public interface ConsensusPlacement {
         }
     }
 }
+
+/**
+ * The initial membership a fixed-core placement seats: a [core] member starts as a voter over the
+ * whole core; any other peer starts as a self-declared learner under that core, to be admitted into
+ * the replicated config by the core leader's admission loop. Shared by [ConsensusPlacement.serverCore]
+ * and [ConsensusPlacement.federatedCore] — the seating rule is identical; only the transport differs.
+ */
+private fun coreMembership(self: NodeId, core: Set<NodeId>): ClusterConfig =
+    if (self in core) ClusterConfig(voters = core) else ClusterConfig(voters = core, learners = setOf(self))
+
+/**
+ * Wrap this binding's [ConsensusBinding.transport] in the cross-server routing decorator the
+ * [ConsensusPlacement.federatedCore] placement uses: a **server** endpoint (this node's id is in
+ * [core]) may take one core hop via [attachment]; a **player** endpoint (any other id) always
+ * forwards to its single server. The relay rides [ConsensusBinding.relayChannel]; the decorator's
+ * relay coroutine is parented by [scope].
+ *
+ * Internal so both [ConsensusPlacement.federatedCore] and its wiring test drive the identical
+ * transport-selection logic.
+ */
+internal fun ConsensusBinding.federatedTransport(
+    core: Set<NodeId>,
+    scope: CoroutineScope,
+    attachment: (NodeId) -> NodeId?,
+): RaftTransport =
+    if (self in core) {
+        serverRelayTransport(transport, relayChannel, core, scope, attachment)
+    } else {
+        playerRelayTransport(transport, relayChannel, core, scope)
+    }
 
 /**
  * Backoff between core-admission attempts after a failed membership change, so a

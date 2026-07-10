@@ -94,6 +94,18 @@ private const val APP_ENVELOPE_CHANNEL: Byte = 3
 internal const val HEARTBEAT_CHANNEL: Byte = 4
 
 /**
+ * MuxSeam channel tag reserved for the cross-server **Raft relay** ([ConsensusPlacement.federatedCore]).
+ *
+ * Carved over the *same* session mux as the Raft channel (tag 1), so the relay channel's `selfId`
+ * and peer ids are byte-identical to the ids the Raft [NodeId]s derive from — the first Task-1-review
+ * contract (a node's relay-channel `PeerId` string == its Raft `NodeId` string). Every bootstrap path
+ * provisions this channel into [ConsensusBinding.relayChannel]; only the federated placement wraps its
+ * transport to send/receive on it. For every other placement the channel is inert (a mux view nobody
+ * writes to produces no wire traffic), so provisioning it leaves the off-federation wire byte-identical.
+ */
+internal const val RAFT_RELAY_CHANNEL: Byte = 5
+
+/**
  * A thin [Seam] adapter that presents only frames from [targetPeerId] via [rawShared].
  *
  * Analogous to `PerPeerSeam` in [kuilt-session][us.tractat.kuilt.session.SeamRoom]: because
@@ -281,6 +293,7 @@ public fun CoroutineScope.gameNode(
         storage = storage,
         raftConfig = raftConfig,
         identity = identity,
+        relayChannel = mux.channel(RAFT_RELAY_CHANNEL),
     )
     val node = placement.node(this, binding)
     val seating = placement.seating
@@ -423,6 +436,7 @@ public suspend fun CoroutineScope.gameHost(
             storage = storage,
             raftConfig = raftConfig,
             identity = identity,
+            relayChannel = mux.channel(RAFT_RELAY_CHANNEL),
         ),
     )
     node.awaitLeadership()
@@ -531,6 +545,7 @@ public suspend fun CoroutineScope.gameJoin(
             storage = storage,
             raftConfig = raftConfig,
             identity = identity,
+            relayChannel = mux.channel(RAFT_RELAY_CHANNEL),
         ),
     )
 
@@ -613,6 +628,7 @@ public suspend fun CoroutineScope.gameSpectate(
             storage = storage,
             raftConfig = raftConfig,
             identity = identity,
+            relayChannel = mux.channel(RAFT_RELAY_CHANNEL),
         ),
     )
 
