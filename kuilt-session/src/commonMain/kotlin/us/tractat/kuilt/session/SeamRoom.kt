@@ -1183,6 +1183,14 @@ internal class SeamRoom(
      * Restarting it would orphan the prior detector's coroutines (a leak).
      */
     private fun addToRoster(member: Member) {
+        // Terminal-latch check, folded into the SAME lock critical section that mutates the roster.
+        // Both callers ([admitPeer], [handleWelcome]) hold [lock] across this, and [leave] flips
+        // `closed` under the same lock — so a `closed == true` here is authoritative. Without this,
+        // an in-flight admit (host: `scope.launch { admitPeer }`, which [leave] does NOT cancel —
+        // it is not the inbound-collect job) can re-register a peer AFTER the room went terminal,
+        // resurrecting `_roster`/`_rosterPeers` and leaking a fresh detector (#1368; the
+        // RoomHubSeam.deliver resurrection, #1364, one module over).
+        if (closed) return
         val isReadmit = admittedById.containsKey(member.id)
         admittedById[member.id] = member
         _roster.update { current -> current.filterNot { it.id == member.id }.toSet() + member }
