@@ -13,7 +13,6 @@ import kotlinx.cinterop.usePinned
 import kotlinx.cinterop.value
 import platform.Foundation.NSDate
 import platform.Foundation.timeIntervalSince1970
-import platform.Network.NW_CONNECTION_DEFAULT_MESSAGE_CONTEXT
 import platform.Network.NW_PARAMETERS_DEFAULT_CONFIGURATION
 import platform.Network.nw_advertise_descriptor_create_bonjour_service
 import platform.Network.nw_connection_create
@@ -22,6 +21,7 @@ import platform.Network.nw_connection_send
 import platform.Network.nw_connection_set_queue
 import platform.Network.nw_connection_set_state_changed_handler
 import platform.Network.nw_connection_start
+import platform.Network.nw_content_context_create
 import platform.Network.nw_connection_state_cancelled
 import platform.Network.nw_connection_state_failed
 import platform.Network.nw_connection_state_ready
@@ -158,10 +158,13 @@ public class SpikeNw {
     }
 
     private fun send(connection: nw_connection_t, bytes: ByteArray) {
+        // Explicit content context rather than the NW_CONNECTION_DEFAULT_MESSAGE_CONTEXT
+        // constant, which mis-bridges under K/N ("Converting Obj-C blocks … to kotlin.Any").
+        val context = nw_content_context_create("spike")
         nw_connection_send(
             connection,
             toDispatchData(bytes),
-            NW_CONNECTION_DEFAULT_MESSAGE_CONTEXT,
+            context,
             true,
         ) { _ -> }
     }

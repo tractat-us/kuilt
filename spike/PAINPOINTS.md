@@ -47,3 +47,23 @@ Seeds the "implementing a new transport" skill. Newest entries at the bottom.
   buffer needn't outlive the call (`DISPATCH_DATA_DESTRUCTOR_DEFAULT` is `NULL`, so `null` works).
 - `sec_protocol_options_t` lives in **platform.Security**, not platform.Network — import accordingly.
 - Two cosmetic "Redundant '?'" warnings on the dispatch_data typealias; harmless.
+
+## First on-device run (Wi-Fi ON baseline) — CONNECTS, then a send-path crash
+- ✅✅ **P2P connects over AWDL + TLS-PSK.** Both sides reached `READY`
+  (host: "inbound connection"→READY; join: "dialing"→READY). Discovery + TLS-PSK
+  handshake over Bonjour/`includePeerToPeer` works on 17 Pro (iOS 26) ↔ XS (iOS 18).
+- ✗ **Join crashed one line after READY** in the send path:
+  `NSGenericException: 'Converting Obj-C blocks with non-reference-typed return value
+  to kotlin.Any is not supported (v)'`. Only the joiner sends first, so only it crashed.
+  Hypothesis: the `NW_CONNECTION_DEFAULT_MESSAGE_CONTEXT` constant mis-bridges; fix =
+  create an explicit `nw_content_context_create(...)`. (This is a genuine K/N + NW
+  cinterop sharp edge — exactly what the spike is for; note it for the skill.)
+
+## FIX + full Wi-Fi-ON data path proven
+- ✅ Fix: replace `NW_CONNECTION_DEFAULT_MESSAGE_CONTEXT` with
+  `nw_content_context_create("spike")`. The constant mis-bridges under K/N; a
+  created context works. **Skill note: avoid the NW_CONNECTION_*_CONTEXT constants
+  from Kotlin/Native — create the context explicitly.**
+- ✅✅✅ **Full round-trip proven Wi-Fi-ON**: continuous ping/echo, RTT ~6–9 ms,
+  17 Pro (iOS 26) ↔ XS (iOS 18), TLS-PSK over AWDL P2P. Matches MC's healthy
+  Wi-Fi-on baseline. Next: the Wi-Fi-OFF gate (where MC drops to ~1/12).
