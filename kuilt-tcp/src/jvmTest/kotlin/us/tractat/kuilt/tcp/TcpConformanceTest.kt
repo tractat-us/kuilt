@@ -7,6 +7,8 @@ import io.ktor.network.sockets.ServerSocket
 import io.ktor.network.sockets.aSocket
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
+import us.tractat.kuilt.conformance.CapabilityGaps
+import us.tractat.kuilt.conformance.SeamCapabilities
 import us.tractat.kuilt.conformance.SeamConformanceSuite
 import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.PeerId
@@ -55,4 +57,15 @@ class TcpConformanceTest : SeamConformanceSuite() {
     }
 
     override fun joinTag(): Tag = TcpAddress(host = "127.0.0.1", port = port)
+
+    /**
+     * meshDelivery vacuously true — strictly 2-peer direct socket (Task 1.8 / #1408
+     * meshEvidence: 2-peer vacuity). Raw bytes, no wire encryption.
+     */
+    override fun capabilities(): SeamCapabilities =
+        SeamCapabilities.FULL.copy(securesTransport = false)
+
+    override fun capabilityGaps(): Map<String, String> = mapOf(
+        "securesTransport" to CapabilityGaps.SECURES_TRANSPORT,
+    )
 }

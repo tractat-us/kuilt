@@ -1,5 +1,6 @@
 package us.tractat.kuilt.multipeer
 
+import us.tractat.kuilt.conformance.SeamCapabilities
 import us.tractat.kuilt.conformance.SeamConformanceSuite
 import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.Tag
@@ -65,4 +66,13 @@ class MultipeerConformanceTest : SeamConformanceSuite() {
         sessionName = HOST_DISPLAY_NAME,
         serviceType = FAKE_SERVICE_TYPE,
     )
+
+    /**
+     * All capabilities honoured — MultipeerConnectivity requires encryption
+     * (MCEncryptionRequired) and is an N≤8 peer mesh. meshEvidence (Task 1.8 / #1408):
+     * MC mesh; a MeshConformanceSuite subclass is deprioritised (module slated for
+     * retirement by kuilt-nw, #1403).
+     */
+    override fun capabilities(): SeamCapabilities = SeamCapabilities.FULL
+    override fun capabilityGaps(): Map<String, String> = emptyMap()
 }

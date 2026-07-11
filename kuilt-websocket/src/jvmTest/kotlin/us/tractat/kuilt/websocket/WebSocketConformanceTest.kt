@@ -7,6 +7,8 @@ import io.ktor.server.engine.embeddedServer
 import io.ktor.server.netty.Netty
 import io.ktor.server.netty.NettyApplicationEngine
 import kotlinx.coroutines.runBlocking
+import us.tractat.kuilt.conformance.CapabilityGaps
+import us.tractat.kuilt.conformance.SeamCapabilities
 import us.tractat.kuilt.conformance.SeamConformanceSuite
 import us.tractat.kuilt.core.CloseReason
 import us.tractat.kuilt.core.Loom
@@ -75,5 +77,14 @@ class WebSocketConformanceTest : SeamConformanceSuite() {
         url = "ws://localhost:$port$serverPath",
         serverPeerId = serverLoom.selfPeerId,
         sessionName = "conformance-client",
+    )
+
+    // plaintext ws://; relay/hub topology — frames traverse the server.
+    override fun capabilities(): SeamCapabilities =
+        SeamCapabilities.FULL.copy(securesTransport = false, meshDelivery = false)
+
+    override fun capabilityGaps(): Map<String, String> = mapOf(
+        "securesTransport" to CapabilityGaps.SECURES_TRANSPORT,
+        "meshDelivery" to CapabilityGaps.MESH_DELIVERY,
     )
 }

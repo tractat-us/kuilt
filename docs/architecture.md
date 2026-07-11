@@ -279,6 +279,39 @@ To implement a new fabric — message-based or stream-based — see
 with copy-pasteable Track A (message RPC) and Track B (stream RPC / TCP) paths,
 the cold-`Connection` pump gotcha, and a `SeamConformanceSuite` subclass template.
 
+## Capability gaps by design
+
+Not every fabric can promise everything. A fabric declares what it can and
+can't do (its `SeamCapabilities`), and two of those gaps are permanent
+properties of *how the fabric works*, not bugs waiting on a fix — they are
+recorded here so a reader hits the explanation once, rather than re-deriving
+it every time a new fabric declares the same honest limitation.
+
+### securesTransport — fabrics without wire encryption
+
+Some fabrics send frames in the clear, on purpose. An in-memory/loopback
+fabric never leaves the process, so there is no wire to secure; a plain
+`ws://` WebSocket, an mDNS-discovered connection, or raw TCP is designed to be
+wrapped in transport encryption by whoever deploys it — the same way a plain
+HTTP server expects TLS termination in front of it in production, not baked
+into the server itself. kuilt keeps that choice at the deployment layer
+(e.g. `wss://`) instead of forcing every fabric to carry its own crypto, so a
+fabric that is honestly unencrypted declares `securesTransport = false`
+rather than claiming a guarantee it doesn't provide.
+
+### meshDelivery — relay and multi-hop fabrics
+
+Some fabrics move a frame through other peers before it reaches its
+destination, instead of sending it directly. The websocket and mdns fabrics
+are hub-mediated: every message passes through a relay server, even between
+two peers sitting side by side. The gossip overlay deliberately goes further
+and floods a message across several hops (see
+[`docs/gossip-mesh-design.md`](gossip-mesh-design.md)), trading direct
+delivery for the ability to scale a large room without every peer dialing
+every other peer. Declaring `meshDelivery = false` (or `true` vacuously, on a
+strictly 2-peer fabric with no third peer to relay through) records honestly
+that the frame did not travel peer-to-peer.
+
 ## Consensus and leader election
 
 `:kuilt-raft` implements a Raft consensus layer over the `Seam` transport. To

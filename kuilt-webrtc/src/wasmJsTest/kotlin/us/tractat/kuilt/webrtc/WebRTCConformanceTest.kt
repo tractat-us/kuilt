@@ -1,5 +1,6 @@
 package us.tractat.kuilt.webrtc
 
+import us.tractat.kuilt.conformance.SeamCapabilities
 import us.tractat.kuilt.conformance.SeamConformanceSuite
 import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.Tag
@@ -46,4 +47,21 @@ class WebRTCConformanceTest : SeamConformanceSuite() {
         override val sessionName = "host"
         override val peerKey = room
     }
+
+    /**
+     * RTCDataChannel is DTLS-encrypted; meshDelivery is vacuously true (a strictly
+     * 2-peer PeerLink, no third peer to relay to — Task 1.8 / #1408 meshEvidence:
+     * 2-peer vacuity).
+     *
+     * `supportsSendTo = false` (#1409): the seam roster reports the construction-time
+     * placeholder `remoteId`, not the peer's resolved `PeerId`, so `sendTo(actualPeerId)`
+     * throws `PeerNotConnected`. Broadcast is unaffected. Flip to `true` once the resolved
+     * remote id is reconciled into the roster.
+     */
+    override fun capabilities(): SeamCapabilities =
+        SeamCapabilities.FULL.copy(supportsSendTo = false)
+
+    override fun capabilityGaps(): Map<String, String> = mapOf(
+        "supportsSendTo" to "https://github.com/tractat-us/kuilt/issues/1409",
+    )
 }

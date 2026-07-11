@@ -112,12 +112,27 @@ internal class DeliveringFakeMultipeerNativeLib(
         firePeerConnectedIfReady()
     }
 
+    /**
+     * Routes a directed send from [session] to the other session's data callback —
+     * the directed-delivery counterpart to [mc_session_broadcast]. In this 2-peer fake
+     * the [peerHandle] target is always the single remote peer, so routing mirrors the
+     * broadcast path (synchronous, ordered, attributed to the sending peer). Without this
+     * the conformance suite's `sendToDeliversToNamedPeer` obligation (gated on
+     * `supportsSendTo`) never receives its frame.
+     */
     override fun mc_session_send_to(
         session: Pointer?,
         peerHandle: String,
         data: ByteArray,
         len: Int,
-    ): Int = len
+    ): Int {
+        val mem = Memory(len.toLong()).also { it.write(0, data, 0, len) }
+        when (session) {
+            HOST_SESSION -> joinerDataCallback?.invoke(hostPeerId, mem, len)
+            JOINER_SESSION -> hostDataCallback?.invoke(joinerPeerId, mem, len)
+        }
+        return len
+    }
 
     // ── peer-state handshake ──────────────────────────────────────────────────
 

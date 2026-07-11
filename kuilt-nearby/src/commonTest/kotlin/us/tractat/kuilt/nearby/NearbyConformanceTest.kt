@@ -1,5 +1,6 @@
 package us.tractat.kuilt.nearby
 
+import us.tractat.kuilt.conformance.SeamCapabilities
 import us.tractat.kuilt.conformance.SeamConformanceSuite
 import us.tractat.kuilt.core.Loom
 
@@ -15,4 +16,12 @@ import us.tractat.kuilt.core.Loom
 class NearbyConformanceTest : SeamConformanceSuite() {
     override fun newLoomPair(): Pair<Loom, Loom> =
         NearbyLoom(FakeNearbyApi(FakeNearbyRadio())).let { it to it }
+
+    /**
+     * All capabilities honoured — Nearby Connections encrypts every connection
+     * unconditionally; meshDelivery vacuously true (NearbyLoom currently weaves one
+     * 2-peer link per session — Task 1.8 / #1408 meshEvidence: 2-peer vacuity).
+     */
+    override fun capabilities(): SeamCapabilities = SeamCapabilities.FULL
+    override fun capabilityGaps(): Map<String, String> = emptyMap()
 }
