@@ -1,12 +1,15 @@
 package us.tractat.kuilt.webrtc
 
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.webrtc.internal.WebRTCPeerLink
 import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.core.SeamState
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 class WebRTCPeerLinkTest {
@@ -53,6 +56,33 @@ class WebRTCPeerLinkTest {
             val remoteId = PeerId("remote")
             val link = WebRTCPeerLink(selfId = selfId, remoteId = remoteId, facade = host)
             assertEquals(setOf(selfId, remoteId), link.peers.value)
+        }
+
+    @Test
+    fun broadcastAfterRemoteCloseThrows() =
+        runTest {
+            val (hostFac, joinerFac) = PairedFacadeFactory.pair()
+            val host = hostFac.create(IceConfig.NoServers, hostInitiated = true)
+            val joiner = joinerFac.create(IceConfig.NoServers, hostInitiated = false)
+
+            val link =
+                WebRTCPeerLink(
+                    selfId = PeerId("self"),
+                    remoteId = PeerId("remote"),
+                    facade = host,
+                    dispatcher = UnconfinedTestDispatcher(testScheduler),
+                )
+
+            // Remote closes its data channel — drives the host link to Torn.
+            joiner.close()
+            link.state.first { it is SeamState.Torn }
+
+            assertFailsWith<IllegalStateException> {
+                link.broadcast("late".encodeToByteArray())
+            }
+            assertFailsWith<IllegalStateException> {
+                link.sendTo(PeerId("remote"), "late".encodeToByteArray())
+            }
         }
 
     @Test
