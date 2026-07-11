@@ -212,7 +212,7 @@ class FederatedGamePerRoomE2ETest {
     // The topology-3 failover test above stands up three core servers with EMPTY rooms — it proves
     // server-core consensus + failover, but never puts a real player behind a server. These guard
     // tests fill those rooms with REAL players joined through the production federated-player call
-    // site — `gameNodeRoom(playerLoom, gameId, voterIds = core, placement = federatedCore(core){null})`
+    // site — `gameNodeRoom(playerLoom, gameId, voterIds = core, placement = federatedPlayer(core))`
     // — and prove the committed Raft log crosses the core to a player behind ANY server.
     //
     // Directory note (the H5 "admit is a caller obligation" gap): nothing in `gameNodeRoomFederated`
@@ -685,8 +685,8 @@ class FederatedGamePerRoomE2ETest {
 
     /**
      * Join a real federated player behind [fabric]'s server via the production federated-player call
-     * site: `gameNodeRoom(playerLoom, gameId, voterIds = core, placement = federatedCore(core){null})`.
-     * The player role always forwards Raft to its one server; it owns no directory (`{ null }`).
+     * site: `gameNodeRoom(playerLoom, gameId, voterIds = core, placement = federatedPlayer(core))`.
+     * The player role always forwards Raft to its one server; it owns no directory.
      *
      * When [tap] is supplied, the player's session seam is wrapped so every inbound [Swatch] is
      * recorded (single-collection preserved — the tap runs inline in the one collection), for G4's
@@ -709,7 +709,7 @@ class FederatedGamePerRoomE2ETest {
         return gameNodeRoom(
             rooms = loom, gameId = gameId, voterIds = core,
             raftConfig = fedRaftConfig(seed), random = Random(seed), clock = inertClock,
-            placement = ConsensusPlacement.federatedCore(core) { null },
+            placement = ConsensusPlacement.federatedPlayer(core),
         )
     }
 
@@ -801,6 +801,10 @@ private class TappingSeam(
     override suspend fun close(reason: us.tractat.kuilt.core.CloseReason) = delegate.close(reason)
 }
 
+/** The below-overlay relay (tag 5) and roster (tag 6) mux tags — the kuilt-game consts are module-internal. */
+private const val RELAY_CHANNEL_TAG: Byte = 5
+private const val ROSTER_CHANNEL_TAG: Byte = 6
+
 /**
  * A [ConsensusPlacement] that becomes the sole collector of the bootstrap-built **relay** (tag 5) and
  * **roster** (tag 6) channels and returns a [FakeRaftNode] that ignores the transport — the G5 spy.
@@ -812,8 +816,8 @@ private class RelayRosterChannelSpy : ConsensusPlacement {
     val rosterReceived = mutableListOf<Swatch>()
     override val seating: AuthoritySeating = AuthoritySeating.SessionPeers
     override fun node(scope: CoroutineScope, binding: ConsensusBinding): RaftNode {
-        scope.launch { binding.relayChannel.incoming.collect { relayReceived += it } }
-        scope.launch { binding.rosterChannel.incoming.collect { rosterReceived += it } }
+        scope.launch { binding.channel(RELAY_CHANNEL_TAG).incoming.collect { relayReceived += it } }
+        scope.launch { binding.channel(ROSTER_CHANNEL_TAG).incoming.collect { rosterReceived += it } }
         return FakeRaftNode(binding.self, initialRole = RaftRole.Leader)
     }
 }

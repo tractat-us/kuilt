@@ -140,17 +140,25 @@ class FederatedPlacementWiringTest {
             selfId = PeerId(self.value),
             initialPeers = relayPeers.mapTo(mutableSetOf()) { PeerId(it.value) },
         ),
-    ): ConsensusBinding = ConsensusBinding(
-        self = self,
-        transport = transport,
-        sessionMembership = ClusterConfig.ofVoters(setOf(self)),
-        storage = InMemoryRaftStorage(),
-        raftConfig = RaftConfig(expectVirtualTime = true),
-        identity = ClientIdentity.Auto,
-        relayChannel = relayChannel,
-        // Inert here — these wiring tests exercise transport selection, not roster admission.
-        rosterChannel = FakeSeam(selfId = PeerId(self.value)),
-    )
+    ): ConsensusBinding {
+        // Inert roster channel — these wiring tests exercise transport selection, not roster admission.
+        val rosterChannel = FakeSeam(selfId = PeerId(self.value))
+        return ConsensusBinding(
+            self = self,
+            transport = transport,
+            sessionMembership = ClusterConfig.ofVoters(setOf(self)),
+            storage = InMemoryRaftStorage(),
+            raftConfig = RaftConfig(expectVirtualTime = true),
+            identity = ClientIdentity.Auto,
+            channels = { tag ->
+                when (tag) {
+                    RAFT_RELAY_CHANNEL -> relayChannel
+                    CORE_ROSTER_CHANNEL -> rosterChannel
+                    else -> error("unexpected channel tag $tag")
+                }
+            },
+        )
+    }
 }
 
 /**

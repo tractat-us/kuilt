@@ -73,33 +73,39 @@ public class ConsensusBinding(
     /** Raft §8 dedup identity supplied by the bootstrap caller. */
     public val identity: ClientIdentity,
     /**
-     * The dedicated **relay** channel — the `RAFT_RELAY` mux tag carved over the *same* session
-     * seam as [transport], so its `selfId`/peer ids are byte-for-byte the ids [transport]'s
-     * [NodeId]s derive from (the first Task-1-review contract: a node's relay-channel `PeerId`
-     * string must equal its Raft `NodeId` string).
-     *
-     * Only the federated placement ([ConsensusPlacement.federatedCore]) reads this — it wraps
-     * [transport] in a routing decorator that carries cross-server Raft frames over this channel.
-     * Every other placement ([ConsensusPlacement.SessionOwned] / [ConsensusPlacement.serverCore] /
-     * [ConsensusPlacement.preBuilt]) ignores it entirely; provisioning the channel is inert (a mux
-     * view that never sends or receives a frame produces no wire traffic), so the off-federation
-     * bootstrap is byte-identical.
+     * The session's mux-channel factory (`mux::channel`) — every mux tag it hands back is carved
+     * over the *same* session seam as [transport], so a channel view's `selfId`/peer ids are
+     * byte-for-byte the ids [transport]'s [NodeId]s derive from. See [channel].
      */
-    public val relayChannel: Seam,
+    private val channels: (Byte) -> Seam,
+) {
     /**
-     * The dedicated **roster-exchange** channel — the `CORE_ROSTER_CHANNEL` mux tag carved over the
-     * *same* session seam as [transport] and [relayChannel], so a roster frame's `sender` is the
-     * byte-identical peer id its Raft [NodeId] derives from (the first-hop authenticity check
-     * `NodeId(sender.value) ∈ core` depends on this equality, exactly as the relay's spoof check does).
+     * A [Seam] view of a dedicated mux **channel** carved over the *same* session seam as
+     * [transport] — the factory the federated placement uses to obtain the two side channels its
+     * routing needs. Passing the whole factory (rather than pre-provisioning named seams) keeps
+     * the binding one field and lets a placement provision only the channels it actually reads.
      *
-     * Only the federated placement ([ConsensusPlacement.federatedCore]) reads this — each core server
-     * unicasts its local roster to the other core members over this channel so the leader admits
-     * learners from the union of all servers' rosters, not just its own. Every other placement ignores
-     * it entirely; provisioning the channel is inert (a mux view that never sends or receives a frame
-     * produces no wire traffic), so the off-federation bootstrap is byte-identical.
+     * Because every channel is carved over the same session mux as [transport], a channel view's
+     * `selfId`/peer ids are byte-identical to the ids the Raft [NodeId]s derive from — the two
+     * Task-1-review identity contracts (a node's channel `PeerId` string equals its Raft `NodeId`
+     * string; a roster/relay frame's `sender` is the byte-identical peer id its `NodeId` derives
+     * from) hold structurally for whatever tag a placement requests.
+     *
+     * Only the federated placement ([ConsensusPlacement.federatedCore]) requests channels:
+     *
+     * - `channel(RAFT_RELAY_CHANNEL)` — the cross-server Raft **relay** channel its routing
+     *   decorator carries frames over.
+     * - `channel(CORE_ROSTER_CHANNEL)` — the cross-server learner-**roster** exchange each core
+     *   server unicasts its local roster over, so the leader admits from the union of all servers'
+     *   rosters, not just its own.
+     *
+     * Every other placement ([ConsensusPlacement.SessionOwned] / [ConsensusPlacement.serverCore] /
+     * [ConsensusPlacement.preBuilt]) never calls [channel], so those channels are never provisioned
+     * and no wire traffic is produced — the off-federation bootstrap is byte-identical, exactly as
+     * eagerly provisioning-but-never-touching a mux view was.
      */
-    public val rosterChannel: Seam,
-)
+    public fun channel(tag: Byte): Seam = channels(tag)
+}
 
 /**
  * Where a game session's consensus authority lives — an injectable, bootstrap-time choice.
@@ -154,7 +160,7 @@ public interface ConsensusPlacement {
      * @param scope the bootstrap caller's scope; the admission loop lives for its lifetime.
      * @param node the just-constructed consensus node whose membership the loop drives.
      * @param binding the fully-wired bootstrap binding — a fixed-core admission loop reads
-     *   [ConsensusBinding.self] (the self-gate) and [ConsensusBinding.rosterChannel] (federated only).
+     *   [ConsensusBinding.self] (the self-gate) and `binding.channel(CORE_ROSTER_CHANNEL)` (federated only).
      * @param seam the raw session seam whose `peers` roster the loop admits from.
      */
     public fun launchAdmission(
@@ -241,7 +247,7 @@ public interface ConsensusPlacement {
          * [serverCore] can only deliver to nodes a server is directly wired to — a player behind
          * another server never receives `AppendEntries`. This placement fixes that by wrapping
          * [ConsensusBinding.transport] in a routing decorator (a `RoutedRaftTransport`) that relays
-         * over [ConsensusBinding.relayChannel] along the bounded path
+         * over `binding.channel(RAFT_RELAY_CHANNEL)` along the bounded path
          * `player → server → core → server → player`, preserving the true Raft origin end-to-end.
          *
          * A peer whose id is in [core] is wrapped as a **server** relay endpoint (it may take one
@@ -280,12 +286,30 @@ public interface ConsensusPlacement {
             ) {
                 // Only a core member admits. This SUBSUMES the local-only serverCore scan: the leader
                 // admits from the union of every core server's local roster (exchanged over
-                // binding.rosterChannel), so a player behind a non-leader server is admitted too.
+                // binding.channel(CORE_ROSTER_CHANNEL)), so a player behind a non-leader server is admitted too.
                 if (binding.self in core) {
-                    scope.launchFederatedCoreAdmission(node, seam, binding.rosterChannel, core)
+                    scope.launchFederatedCoreAdmission(node, seam, binding.channel(CORE_ROSTER_CHANNEL), core)
                 }
             }
         }
+
+        /**
+         * The **player** role of the [federatedCore] placement — the seating a federated player
+         * passes to [gameNodeRoom].
+         *
+         * A federated player is never one of the [core] voters and owns no attachment directory: it
+         * rides as a learner behind its one server and always forwards to that server, so the
+         * `(player) -> server` [attachment] lookup a **server** uses to pick a core hop is never
+         * consulted on a player. This is exactly `federatedCore(core) { null }` — a named constructor
+         * so a player never has to spell (or accidentally omit) the always-`null` lookup, and the
+         * `{ null }` footgun stays off the player-facing surface. A **server** still bootstraps with
+         * [federatedCore], which requires the live lookup.
+         *
+         * @param core The [NodeId]s of the server core — every one of them votes in this game. The
+         *   player is never in it. Must be non-empty.
+         */
+        public fun federatedPlayer(core: Set<NodeId>): ConsensusPlacement =
+            federatedCore(core) { null }
 
         /**
          * Hand the session a node the caller already constructed.
@@ -320,7 +344,7 @@ private fun coreMembership(self: NodeId, core: Set<NodeId>): ClusterConfig =
  * Wrap this binding's [ConsensusBinding.transport] in the cross-server routing decorator the
  * [ConsensusPlacement.federatedCore] placement uses: a **server** endpoint (this node's id is in
  * [core]) may take one core hop via [attachment]; a **player** endpoint (any other id) always
- * forwards to its single server. The relay rides [ConsensusBinding.relayChannel]; the decorator's
+ * forwards to its single server. The relay rides `channel(RAFT_RELAY_CHANNEL)`; the decorator's
  * relay coroutine is parented by [scope].
  *
  * Internal so both [ConsensusPlacement.federatedCore] and its wiring test drive the identical
@@ -332,7 +356,7 @@ internal fun ConsensusBinding.federatedTransport(
     attachment: (NodeId) -> NodeId?,
 ): RaftTransport =
     if (self in core) {
-        serverRelayTransport(transport, relayChannel, core, scope, attachment)
+        serverRelayTransport(transport, channel(RAFT_RELAY_CHANNEL), core, scope, attachment)
     } else {
-        playerRelayTransport(transport, relayChannel, { core }, scope)
+        playerRelayTransport(transport, channel(RAFT_RELAY_CHANNEL), { core }, scope)
     }
