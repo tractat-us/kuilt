@@ -25,8 +25,10 @@ import kotlin.time.Instant
  * the same game across a **fully-meshed core of servers**: each server holds the players nearest it,
  * all servers vote in the game's Raft cluster, and a *broadcast* crosses the core once and fans to
  * each server's local players (the [TwoTier] dissemination shape). It is called **once per game on
- * each core server** — never by a player. Players still join with the star path ([gameNodeRoom] with
- * `ConsensusPlacement.serverCore(core)`), which is left untouched.
+ * each core server** — never by a player. A federated player joins with [gameNodeRoom] and
+ * `ConsensusPlacement.federatedCore(core) { null }` (its player role — see below); it must **not**
+ * use [ConsensusPlacement.serverCore], which has no relay wrapper and would never receive a
+ * cross-server leader's log.
  *
  * ## Cross-server learner delivery — wired via the routed transport
  *
@@ -41,7 +43,19 @@ import kotlin.time.Instant
  * far player's reply still credits `matchIndex`, votes and read-index acks correctly). A federated
  * player joins with [gameNodeRoom] and `ConsensusPlacement.federatedCore(core) { null }` — the same
  * relay decorator, in its player role (always forwards to its one server). This entry point therefore
- * now proves **server-core consensus, failover, *and* delivery to players spread across the core**.
+ * supports **server-core consensus, failover, *and* delivery to players spread across the core**.
+ *
+ * ### Caller obligation — populate the attachment directory (H5)
+ *
+ * The relay's final server → player hop resolves the destination through [attachment], so a joined
+ * player must be **attached** in the directory ([us.tractat.kuilt.cluster.AttachmentDirectory.attach],
+ * whose sole caller is [us.tractat.kuilt.cluster.OverlayServer.admit] in a server's accept path).
+ * No code in this module attaches players — it is the caller's duty, discharged where connections are
+ * admitted (the `ServerCluster` relay-dialect cutover; see #1360 PR 2b). Until a player is attached,
+ * cross-server *membership* still converges (the `CORE_ROSTER_CHANNEL` roster union admits it), but
+ * the leader's `AppendEntries` **cannot be routed to it** — it is admitted yet never delivered. A
+ * federation orchestrator populates the directory by observing each server's room roster and
+ * attaching every local player (the guard tests do exactly this to exercise the mechanism).
  *
  * ## The one-line difference from [gameNodeRoom]
  *
@@ -59,13 +73,14 @@ import kotlin.time.Instant
  * val overlay       = policyOverlay(federatedSeam, TwoTier(core, attachment), random, clock)
  * ```
  *
- * Everything below the overlay is identical: the same [gameNode] bootstrap over `overlay` with
- * [ConsensusPlacement.serverCore], so consensus physically lives on the server core and each core
- * server's leader admits *its own* local players as learners (the admission loop's domain is the
- * federated seam's roster — this server's room plus the other servers — and core members are
- * filtered out, so it admits exactly the local players). The dissemination *shape* becomes
- * [TwoTier]: a server floods the other servers plus its own local clients; a broadcast crosses the
- * core once and each server fans it to its own periphery.
+ * Below the overlay, the game bootstraps with [ConsensusPlacement.federatedCore] (not
+ * [ConsensusPlacement.serverCore]): consensus physically lives on the server core, and the leader
+ * admits players as learners from the **union of every core server's local roster** — each server
+ * publishes its local players to the others over the `CORE_ROSTER_CHANNEL`, so a player behind *any*
+ * server is admitted, not just the leader's own (that cross-server admission is what makes a
+ * federated player reachable at all — a leader can only replicate to a member of the committed
+ * config). The dissemination *shape* becomes [TwoTier]: a server floods the other servers plus its
+ * own local clients; a broadcast crosses the core once and each server fans it to its own periphery.
  *
  * ## What the caller provisions — the per-game core channel and the attachment lookup
  *
