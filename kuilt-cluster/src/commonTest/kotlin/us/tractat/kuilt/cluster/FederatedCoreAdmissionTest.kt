@@ -1,6 +1,6 @@
 @file:OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 
-package us.tractat.kuilt.game
+package us.tractat.kuilt.cluster
 
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -33,6 +33,13 @@ import kotlin.test.assertEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.seconds
+
+/**
+ * The roster-exchange mux tag the federated admission loop carves over the session seam. A local
+ * constant here (the production tag lives in the game bootstrap's mux); its value is arbitrary as
+ * long as both seats in a test use the same one.
+ */
+private const val CORE_ROSTER_CHANNEL: Byte = 6
 
 /**
  * Cross-server learner admission ([launchFederatedCoreAdmission]) — the Task-2.5 mechanism that lets a
@@ -258,8 +265,8 @@ class FederatedCoreAdmissionTest {
     // ── Helpers ──────────────────────────────────────────────────────────────
 
     /**
-     * Carve the [CORE_ROSTER_CHANNEL] over [seat] exactly as [gameNode] does over the session seam.
-     * The mux rides `backgroundScope` so its long-lived collector cancels cleanly at teardown.
+     * Carve the [CORE_ROSTER_CHANNEL] over [seat] exactly as the game bootstrap does over the session
+     * seam. The mux rides `backgroundScope` so its long-lived collector cancels cleanly at teardown.
      */
     private fun TestScope.rosterChannelOver(seat: Seam): Seam =
         MuxSeam(seat, backgroundScope).channel(CORE_ROSTER_CHANNEL)
