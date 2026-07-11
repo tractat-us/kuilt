@@ -482,17 +482,21 @@ serverScope.launch {
 ```
 
 **NodeId ↔ PeerId alignment.** Each voter's `NodeId` must equal
-`NodeId(serverPeerId.value)`. The relay stamps the server's `PeerId` as the
-sender on every frame; the client's `SeamRaftTransport` maps that sender to a
-`NodeId` for Raft message routing. Mismatched IDs cause silently dropped
-AppendEntries.
+`NodeId(serverPeerId.value)`. The server carries the true voter as the
+`RaftRelay.origin` on every relayed frame (never re-stamped with the relaying
+server's fabric sender); the client's player relay transport maps that `origin`
+back to a `NodeId` for Raft routing and credit. Mismatched IDs cause silently
+dropped AppendEntries.
 
 ### Client side
 
 Clients use `clusterClientWithNode()` with a caller-managed `RaftNode` over a
-`SeamRaftTransport`. The convenience extension `CoroutineScope.clusterClient()`
-(relay-room with automatic reconnect) is declared but requires a stable client
-identity on the loom (see #544) before it is production-ready.
+**player relay transport** (`playerRelayTransport`) — the client speaks the same
+`RaftRelay` dialect as the server both ways, so a plain `SeamRaftTransport` no
+longer interoperates. The convenience extension `CoroutineScope.clusterClient()`
+(relay-room with automatic reconnect, which wires this transport for you over a
+swappable `ManagedSeam`) is declared but requires a stable client identity on the
+loom (see #544) before it is production-ready.
 
 ```kotlin
 // Join the server relay room.
@@ -518,9 +522,20 @@ val learnerConfig = ClusterConfig(
 // Wait for the admit handshake before starting the RaftNode.
 withTimeout(5.seconds) { clientRoom.roster.first { it.isNotEmpty() } }
 
+// The client speaks the relay dialect: a player relay transport over a no-peer
+// inner wraps every Raft send as a RaftRelay(dest = leader) addressed to its single
+// relay server, and accepts a down-frame only when its RaftRelay.origin is a current
+// voter (read live per frame). This matches the server-side RaftRelayHub. The
+// `noPeerInnerTransport` here is a small transport with no direct peers, so every
+// send is forced through the relay channel (`clientSeam`).
 val clientNode = clientScope.raftNode(
     clusterConfig = learnerConfig,
-    transport = SeamRaftTransport(clientSeam),
+    transport = playerRelayTransport(
+        inner = noPeerInnerTransport(clientNodeId),
+        relayChannel = clientSeam,
+        voters = { setOf(NodeId("server-1")) },
+        scope = clientScope,
+    ),
     storage = InMemoryRaftStorage(),
     raftConfig = RaftConfig(/* … */),
 )
