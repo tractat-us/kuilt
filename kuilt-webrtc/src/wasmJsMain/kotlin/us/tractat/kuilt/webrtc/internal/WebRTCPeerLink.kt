@@ -83,11 +83,16 @@ internal class WebRTCPeerLink(
         }
     }
 
+    private val closedMessage get() = "WebRTC seam for $selfId is Torn"
+
     /**
      * Best-effort: silently drops the frame (with a warning) when no remote peer is connected.
      * Use [sendTo] for addressed delivery that throws [PeerNotConnected] on a missing peer.
+     *
+     * Throws [IllegalStateException] on a [SeamState.Torn] seam, matching every other fabric.
      */
     override suspend fun broadcast(payload: ByteArray) {
+        check(_state.value !is SeamState.Torn) { closedMessage }
         if (_peers.value.none { it != selfId }) {
             log.warn { "webrtc.send dropped — no connected peers selfId=${selfId.value} bytes=${payload.size}" }
             return
@@ -99,6 +104,7 @@ internal class WebRTCPeerLink(
         peer: PeerId,
         payload: ByteArray,
     ) {
+        check(_state.value !is SeamState.Torn) { closedMessage }
         if (peer !in _peers.value) throw PeerNotConnected(peer)
         facade.sendBytes(payload)
     }

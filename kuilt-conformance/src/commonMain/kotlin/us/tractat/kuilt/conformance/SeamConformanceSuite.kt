@@ -329,4 +329,60 @@ public abstract class SeamConformanceSuite {
                 assertIs<SeamState.Torn>(host.state.value, "host state must be Torn after close()")
             }
         }
+
+    // ── (12) send on a Torn seam throws IllegalStateException ────────────────
+    //
+    // Contract from Seam KDoc: once the seam is Torn, `broadcast`/`sendTo` reject the frame with
+    // an `IllegalStateException` rather than silently dropping it — a torn transport cannot deliver,
+    // and swallowing the send hides the failure from the caller. Every core fabric enforces this
+    // with `check(state !is Torn)` (LinkSeam, MeshSeam, CompositeSeam, TieredSeam, InMemoryLoom,
+    // RoomHubSeam). This assertion exists so no fabric can silently regress to a warn-drop.
+    //
+    // `open` so a fabric that does not yet honour the throw contract can override with `@Ignore`
+    // (visible as skipped in its report) plus a tracking issue — matching
+    // `incomingCompletesWhenSeamCloses`. Known non-conformers today: the Multipeer JVM bridge and
+    // the Gossip overlay's `broadcast` (see the PR that introduced this assertion).
+
+    @Test
+    public open fun sendOnTornSeamThrows(): TestResult =
+        runTest {
+            connectedPair { host, joiner ->
+                host.close()
+                assertIs<SeamState.Torn>(host.state.value, "host must be Torn after close()")
+
+                assertFailsWith<IllegalStateException>("broadcast on a Torn seam must throw") {
+                    host.broadcast(byteArrayOf(1))
+                }
+                assertFailsWith<IllegalStateException>("sendTo on a Torn seam must throw") {
+                    host.sendTo(joiner.selfId, byteArrayOf(2))
+                }
+            }
+        }
+
+    // ── (13) send while Weaving is best-effort — never throws ────────────────
+    //
+    // Contract (issue #1367 sub-decision 1): a send while [SeamState.Weaving] is best-effort — it
+    // must NOT throw; delivery is simply not guaranteed until [SeamState.Woven]. Only [SeamState.Torn]
+    // sends throw. This pins the reconciled contract so no fabric revives the old "Weaving send is an
+    // error" behaviour.
+    //
+    // [newLoomPair]'s harnesses are all instant-[SeamState.Woven] (see the class KDoc's "Weaving timing
+    // invariant"), so a genuinely-Weaving seam is only available from [DelayedWovenLoom] — the reference
+    // Weaving harness in this module. The assertion is therefore driven through it rather than the fabric
+    // under test, mirroring how [DelayedWovenLoomTest] already owns the Weaving-delivery invariant.
+
+    @Test
+    public fun sendWhileWeavingDoesNotThrow(): TestResult =
+        runTest {
+            val loom = DelayedWovenLoom()
+            val host = loom.host(Pattern("host")) as DelayedWovenSeam
+            val joiner = loom.join(InMemoryTag("joiner")) as DelayedWovenSeam
+
+            assertIs<SeamState.Weaving>(host.state.value, "host must be Weaving before markWoven()")
+            assertIs<SeamState.Weaving>(joiner.state.value, "joiner must be Weaving before markWoven()")
+
+            // Best-effort: neither send may throw while the seam is still Weaving.
+            host.broadcast(byteArrayOf(1))
+            host.sendTo(joiner.selfId, byteArrayOf(2))
+        }
 }
