@@ -129,7 +129,7 @@ public actual class MultipeerPeerLinkFactory actual constructor(
             val link = MCSessionLink(localPeerId, session)
             session.delegate = link.delegate
 
-            val acceptAll = AcceptAllAdvertiserDelegate(session)
+            val acceptAll = AcceptAllAdvertiserDelegate(link)
             val advertiser =
                 MCNearbyServiceAdvertiser(
                     peer = localPeerId,
@@ -263,8 +263,8 @@ public actual class MultipeerPeerLinkFactory actual constructor(
         private const val LOST_PEER_BUFFER: Int = 16
     }
 
-    private class AcceptAllAdvertiserDelegate(
-        private val session: MCSession,
+    internal class AcceptAllAdvertiserDelegate(
+        private val link: MCSessionLink,
     ) : NSObject(),
         MCNearbyServiceAdvertiserDelegateProtocol {
         override fun advertiser(
@@ -274,7 +274,7 @@ public actual class MultipeerPeerLinkFactory actual constructor(
             invitationHandler: (Boolean, MCSession?) -> Unit,
         ) {
             log.info { "mc.invite fromPeer=${didReceiveInvitationFromPeer.displayName} decision=accepted" }
-            invitationHandler(true, session)
+            invitationHandler(true, link.session)
         }
     }
 
