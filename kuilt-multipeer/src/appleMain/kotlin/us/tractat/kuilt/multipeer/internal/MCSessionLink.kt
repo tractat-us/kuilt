@@ -13,6 +13,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.flow.updateAndGet
 import kotlinx.coroutines.launch
 import platform.Foundation.NSData
 import platform.Foundation.NSError
@@ -92,6 +93,20 @@ internal class MCSessionLink(
     override val incoming: Flow<Swatch> = spool.incoming
 
     val delegate: MCSessionDelegateProtocol = SessionDelegate()
+
+    /**
+     * Invoked once when the session reaches a terminal peer-level
+     * `MCSessionStateNotConnected` with no remote peers left — i.e. the whole
+     * peer connection is gone (a drop, a failed connect, or an invite timeout).
+     * The owning `MultipeerPeerLinkFactory` uses this to free its single-session
+     * slot so it becomes reusable without an explicit [close]. Set by the owner
+     * right after construction; safe to leave null.
+     *
+     * Only the per-peer `session:peer:didChangeState:` delegate reaches here, so
+     * transient channel-level `ForceDisconnect`/ICE churn during a *successful*
+     * connect never triggers it.
+     */
+    internal var onTerminated: (() -> Unit)? = null
 
     // Written by close() before disconnect(); read by the MC delegate callback.
     // No @Volatile here — K/N's memory model (since 1.7.20) makes plain var
@@ -183,7 +198,13 @@ internal class MCSessionLink(
                     if (!closing) {
                         log.warn { "mc.session.error localPeer=${selfId.value} peer=${peer.displayName}" }
                     }
-                    _peers.update { it - peerId }
+                    val remaining = _peers.updateAndGet { it - peerId }
+                    // Terminal peer-level drop. When the last remote peer is
+                    // gone the whole session is dead — notify the owner so it can
+                    // free its single-session slot (idempotent with close()).
+                    if (remaining == setOf(selfId)) {
+                        onTerminated?.invoke()
+                    }
                 }
                 else -> Unit // Connecting — wait for terminal state
             }
