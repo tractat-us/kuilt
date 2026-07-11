@@ -313,6 +313,14 @@ error, `LinkSeam`'s internal read loop catches the exception and calls
 `incoming` channel. You do not implement `Torn` yourself — just map transport
 close/error to a completed `incoming` flow.
 
+This is the single-transport picture: one `Connection` dying has nowhere to go
+but `Torn`. A multipath rollup (`CompositeSeam`, `TieredSeam`) built out of
+several such fabrics is different — losing every underlying ply at once is
+*recoverable* degradation, not death, so the rollup reports `Weaving` (see
+[Multipath](architecture.md#multipath-one-peer-several-transports)) and only
+transitions to `Torn` on its own close decision or on a ply reporting its own
+terminal, self-driven death.
+
 ### 5. Dispatcher is a required parameter
 
 `identified()` and `handshaking()` both take a `dispatcher: CoroutineContext`.

@@ -40,9 +40,9 @@ import us.tractat.kuilt.core.Seam
  *
  * A peer that never sends a reveal (or never sends a commit) will cause [roll] to
  * stall until the coroutine is cancelled. Applications should apply an outer timeout.
- * Similarly, a seam that becomes [us.tractat.kuilt.core.FabricState.Torn] during
- * either phase will never deliver the missing message; callers should observe seam
- * state and cancel accordingly.
+ * Similarly, a seam that reaches the terminal [us.tractat.kuilt.core.SeamState.Torn]
+ * during either phase will never deliver the missing message; callers should observe
+ * seam state and cancel accordingly.
  *
  * ## Usage
  *

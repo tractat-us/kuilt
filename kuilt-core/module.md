@@ -11,7 +11,11 @@ existing one. Both return a `Seam`.
 a two-peer connection is the degenerate `peers.size == 2` case. Key properties:
 
 - `peers: StateFlow<Set<PeerId>>` — the live peer set, including self.
-- `state: StateFlow<SeamState>` — `Weaving`, `Woven`, or `Torn`.
+- `state: StateFlow<SeamState>` — `Weaving`, `Woven`, or `Torn`. `Torn` is
+  terminal — reached only by closing the seam or a fabric's own transport dying
+  outright — and a seam never leaves it. A degraded-but-recoverable seam (e.g. a
+  multipath bond with every ply currently down) reports `Weaving`, not `Torn`,
+  and can return to `Woven` once a path is restored.
 - `incoming: Flow<Swatch>` — **collect once per Seam**. Fan out with `shareIn`.
 - `broadcast(ByteArray)` / `sendTo(PeerId, ByteArray)` — send frames.
 - `close(CloseReason)` — disconnect; idempotent.
