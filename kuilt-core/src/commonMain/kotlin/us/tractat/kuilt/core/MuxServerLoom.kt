@@ -3,7 +3,7 @@ package us.tractat.kuilt.core
 import kotlinx.atomicfu.locks.reentrantLock
 import kotlinx.atomicfu.locks.withLock
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -62,12 +62,25 @@ import kotlin.random.Random
  *
  * [join] throws [UnsupportedOperationException] — this is a server-only [Loom].
  *
+ * ## Lifecycle
+ *
+ * A [ScopedCloseable]: the accept loop and every per-connection read/watch pump run in an owned
+ * child scope whose job is a **child** of [scope]'s job. Cancelling [scope] therefore stops every
+ * pump, and [close] tears the loom down explicitly — it halts the accept loop, cancels all
+ * per-connection pumps, and (via each read loop's teardown) deregisters the connection from the
+ * rooms it joined. [close] is **idempotent**. It does **not** tear the hosted [RoomHubSeam]s or the
+ * per-connection mesh seams: those have independent lifecycles owned by their consumers and by the
+ * [source]/connection provider respectively.
+ *
  * ## Thread safety
  *
- * [connRecords] and [rooms] are guarded by [lock]. Suspend calls are always outside the lock.
+ * [connRecords], [rooms], and [launchedJobs] are guarded by [lock]. Suspend calls are always
+ * outside the lock.
  *
  * @param source accept source for incoming client connections.
- * @param scope scope for the accept pump, per-connection read loops, and tracking coroutines.
+ * @param scope parent scope for the loom. The owned pump scope (accept loop + per-connection read
+ *   loops + tracking coroutines) is a child of it, so cancelling [scope] — or calling [close] —
+ *   stops every pump.
  * @param selfId this server's own [PeerId].
  * @param authorizer required authorization policy for per-room membership. Invoked on the
  *   first inbound frame per (connection, room) pair; a `false` return structurally excludes
@@ -87,7 +100,7 @@ public class MuxServerLoom(
         "MuxServerLoom scope must have a ContinuationInterceptor (dispatcher)"
     },
     private val random: Random = Random.Default,
-) : Loom {
+) : Loom, ScopedCloseable(scope) {
 
     private val lock = reentrantLock()
 
@@ -97,11 +110,12 @@ public class MuxServerLoom(
     /** Hosted rooms: channelName → RoomHubSeam. Created on the first [host] call per name. */
     private val rooms = mutableMapOf<String, RoomHubSeam>()
 
-    // TODO(#1366): this SupervisorJob is PARENTLESS (not a child of the injected scope's Job), so
-    //  cancelling the caller's scope does not stop the accept loop or the per-connection pumps — and
-    //  MuxServerLoom has no close() at all. Out of scope for the SeamStateGate terminal-latch work
-    //  (that changes seam state teardown, not loom lifecycle); tracked as a residual in #1366.
-    private val pumpScope = CoroutineScope(scope.coroutineContext + SupervisorJob())
+    /**
+     * Every coroutine launched into the owned [scope]: the accept loop plus the per-connection
+     * read/watch pumps. Tracked only so lifecycle tests can observe pumps stop on [close] /
+     * parent-scope cancellation; guarded by [lock].
+     */
+    private val launchedJobs = mutableListOf<Job>()
 
     /**
      * One live connection: the handshaked [rawSeam] plus a cache of per-room [OutboundSender]s
@@ -130,8 +144,21 @@ public class MuxServerLoom(
     }
 
     init {
-        pumpScope.launch { acceptLoop() }
+        startAcceptLoop()
     }
+
+    /**
+     * Launch the accept loop into the owned [scope]. Kept in a member function (not the `init`
+     * block) so the bare `scope` reference resolves to the inherited owned pump scope — inside an
+     * `init` block the constructor parameter `scope` (the *parent*) would shadow it.
+     */
+    private fun startAcceptLoop() {
+        val job = scope.launch { acceptLoop() }
+        lock.withLock { launchedJobs += job }
+    }
+
+    /** Snapshot of every pump this loom has launched into its owned scope — for lifecycle tests. */
+    internal val backgroundJobsForTest: List<Job> get() = lock.withLock { launchedJobs.toList() }
 
     private suspend fun acceptLoop() {
         while (coroutineContext.isActive) {
@@ -156,8 +183,12 @@ public class MuxServerLoom(
         val record = ConnRecord(rawSeam)
         lock.withLock { connRecords[connPeerId] = record }
 
-        pumpScope.launch { readLoop(connPeerId, record) }
-        pumpScope.launch { watchDrop(connPeerId, record) }
+        val readJob = scope.launch { readLoop(connPeerId, record) }
+        val watchJob = scope.launch { watchDrop(connPeerId, record) }
+        lock.withLock {
+            launchedJobs += readJob
+            launchedJobs += watchJob
+        }
     }
 
     /**
