@@ -50,10 +50,14 @@ import kotlinx.coroutines.flow.onEach
  *   since it is checked first.)
  * - **[selfId]** — both tiers are the same node, so `local.selfId` must equal `peer.selfId`;
  *   construction throws [IllegalArgumentException] otherwise.
- * - **[state]** is the composed lifecycle: **Woven** while *either* tier is Woven, **Torn** only
- *   once *both* tiers are Torn (a broadcast still reaches whichever tier survives), **Weaving**
- *   otherwise — the same "any-live ⇒ live" rollup [us.tractat.kuilt.core.composite.CompositeSeam]
- *   uses. [close] closes both tiers.
+ * - **[state]** is the composed lifecycle: **Woven** while *either* tier is Woven (the surviving tier
+ *   carries), **Weaving** while forming, and **Torn** — **terminal, latched** — once *both* tiers are
+ *   Torn or [close] is called. Both-tiers-torn is genuinely terminal here (not a revivable rollup)
+ *   because this union's [incoming] is a **one-shot merge** that completes permanently when both tiers'
+ *   `incoming` complete — so reporting a recoverable `Weaving` would contradict a terminally-completed
+ *   `incoming`. This **differs from** [us.tractat.kuilt.core.composite.CompositeSeam], whose persistent
+ *   spool survives ply churn, so *its* all-plies-torn rollup is recoverable `Weaving` (#1367). [close]
+ *   closes both tiers.
  *
  * ## Thread safety
  *
@@ -112,8 +116,10 @@ internal class TieredSeam(
     private val _peers = MutableStateFlow(localTier.peers.value + peerTier.peers.value)
     override val peers: StateFlow<Set<PeerId>> = _peers.asStateFlow()
 
-    // Composed lifecycle, terminal-latched: the state pump feeds update() (revivable), close() latches
-    // Torn via tear() (single-shot). No in-flight rollup can clobber the terminal state.
+    // Composed lifecycle, terminal-latched. The state pump feeds recoverable rollups (Woven/Weaving)
+    // through update(); a both-tiers-torn rollup and close() both latch the terminal Torn via tear()
+    // (single-shot). No in-flight rollup can clobber the terminal state, and a latched Torn never
+    // reverts even if a tier's state later flaps.
     private val stateGate = SeamStateGate(rollup(localTier.state.value, peerTier.state.value))
     override val state: StateFlow<SeamState> = stateGate.state
 
@@ -132,14 +138,21 @@ internal class TieredSeam(
             .onEach { union -> peersLock.withLock { if (state.value !is SeamState.Torn) _peers.value = union } }
             .launchIn(scope)
 
-        // Composed lifecycle pump: a derived write. update() no-ops once close() has latched Torn.
+        // Composed lifecycle pump. A recoverable rollup (Woven/Weaving) is a derived write via
+        // update() — a no-op once close() has latched Torn. A both-tiers-torn rollup is TERMINAL for a
+        // tiered union (its one-shot merged `incoming` completes and never re-subscribes), so it is
+        // latched via tear() — self-driven death of both tiers publishes a terminal Torn, not a
+        // revivable one. The normal close() path tears first and wins the single-shot latch; this pump
+        // then no-ops. Either way the latch means a later tier flap can never move state off Torn.
         combine(localTier.state, peerTier.state) { l, p -> rollup(l, p) }
-            .onEach { stateGate.update(it) }
+            .onEach { s -> if (s is SeamState.Torn) stateGate.tear(s.reason) else stateGate.update(s) }
             .launchIn(scope)
 
         // Sole collection of each tier's incoming, teed into the one merged spool. When a tier's
         // incoming completes (that tier torn), decrement; the merged incoming completes only once
-        // BOTH have — matching "Torn ⇔ both tiers Torn".
+        // BOTH tiers' incoming have — matching "terminal Torn ⇔ both tiers torn". This one-shot merge
+        // (no re-subscribe) is exactly why both-tiers-torn is a terminal, latched Torn, not a
+        // recoverable Weaving — see the state pump and rollup above (#1367).
         localTier.incoming
             .onEach { spool.deliver(it) }
             .onCompletion { closeSpoolIfBothDone() }
@@ -191,7 +204,13 @@ internal class TieredSeam(
     }
 
     private companion object {
-        /** Any-live ⇒ live; Torn only when both tiers are Torn (first tier's reason); else Weaving. */
+        // Any-live ⇒ Woven; both tiers torn ⇒ TERMINAL Torn (carrying the local tier's reason);
+        // otherwise Weaving. Unlike [us.tractat.kuilt.core.composite.CompositeSeam] — whose persistent
+        // [Spool] survives ply churn so its all-plies-torn rollup is recoverable [SeamState.Weaving]
+        // (#1367) — a tiered union's [incoming] is a ONE-SHOT merge: it completes permanently when both
+        // tiers' `incoming` complete, with no re-subscribe. So both-tiers-torn is genuinely terminal
+        // and the state pump latches it via `tear()` (a recoverable Weaving would contradict a
+        // terminally-completed `incoming` and hang a `state.first { it is Torn }` waiter).
         fun rollup(local: SeamState, peer: SeamState): SeamState =
             when {
                 local is SeamState.Woven || peer is SeamState.Woven -> SeamState.Woven

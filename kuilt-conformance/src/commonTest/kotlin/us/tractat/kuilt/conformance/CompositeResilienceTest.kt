@@ -6,6 +6,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.flow.toList
@@ -18,6 +19,7 @@ import us.tractat.kuilt.test.FlapSchedule
 import us.tractat.kuilt.test.FlakyLifecycleLoom
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
+import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PlyId
 import us.tractat.kuilt.core.Seam
@@ -204,12 +206,18 @@ class CompositeResilienceTest {
         }
     }
 
-    // ── Assertion 4: last-ply-torn drives aggregate to Torn ───────────────────
+    // ── Assertion 4: all-plies-torn is recoverable Weaving, never terminal Torn ─
 
     /**
-     * A ply that escalates to [SeamState.Torn] is dropped from the rollup.
-     * The aggregate goes [SeamState.Torn] only when the **last** surviving ply
-     * also tears — the survivor carries the session until then.
+     * A ply that escalates to [SeamState.Torn] is dropped from the rollup. When the
+     * **last** surviving ply also tears the aggregate goes [SeamState.Weaving], **not**
+     * a derived terminal [SeamState.Torn] (#1367): an all-plies-down composite is degraded
+     * but recoverable — a later ply re-attach brings it back to [SeamState.Woven]. `Torn`
+     * is reserved for the close decision / self-driven transport death and is unconditionally
+     * terminal.
+     *
+     * A [broadcast] during the fully-degraded window is best-effort — a zero-target no-op
+     * that must **not** throw (all senders are already `runCatchingCancellable`).
      *
      * **Production bug found:** [CompositeSeam.broadcast] iterated ALL constituent
      * seams unconditionally — including torn ones. When ply A was torn and host
@@ -218,8 +226,17 @@ class CompositeResilienceTest {
      * `sendTo`. This test documents the correct expected behaviour.
      */
     @Test
-    fun aggregateGoesToTornOnlyWhenLastPlyTears() = runTest {
-        val (plyALoom, plyBLoom, loom, plyScope) = twoFlakyPlies()
+    fun allPliesTornGoesToWeavingAndRecoversToWovenOnReattach() = runTest {
+        // Dynamic desired set so a fresh ply can be attached after the originals tear.
+        val dispatcher = UnconfinedTestDispatcher(testScheduler)
+        val plyScope = CoroutineScope(dispatcher + SupervisorJob())
+        val plyALoomScoped = FlakyLifecycleLoom(InMemoryLoom(), plyScope)
+        val plyBLoomScoped = FlakyLifecycleLoom(InMemoryLoom(), plyScope)
+        val plyCLoomScoped = FlakyLifecycleLoom(InMemoryLoom(), plyScope)
+        val desired = MutableStateFlow<List<Pair<PlyId, Loom>>>(
+            listOf(PlyId("a") to plyALoomScoped, PlyId("b") to plyBLoomScoped),
+        )
+        val loom = CompositeLoom(desired, dispatcher)
         var host: Seam? = null
         var joiner: Seam? = null
         try {
@@ -228,29 +245,39 @@ class CompositeResilienceTest {
 
             assertEquals(2, host.peers.value.size, "host must see 2 composite peers after setup")
 
-            val hostPlyA = plyALoom.links[0]
-            val hostPlyB = plyBLoom.links[0]
+            val hostPlyA = plyALoomScoped.links[0]
+            val hostPlyB = plyBLoomScoped.links[0]
 
             // Tear ply A — aggregate must still be Woven (ply B survives).
             hostPlyA.tear()
-
-            // Rollup: ply A=Torn, ply B=Woven → aggregate stays Woven.
             assertIs<SeamState.Woven>(host.state.value, "aggregate must stay Woven after first ply tears")
 
             // Host can still communicate via ply B. The composite must not call
             // broadcast on the already-torn ply A seam.
             val received = async { joiner.incoming.take(1).toList() }
             host.broadcast(byteArrayOf(77))
-
             val frames = received.await()
             assertNotNull(frames, "expected a frame via surviving ply B but got none")
             assertTrue(frames.isNotEmpty(), "host must still deliver via surviving ply B")
 
-            // Now tear the last surviving ply — aggregate must go Torn.
+            // Now tear the last surviving ply — aggregate must go WEAVING (recoverable), not Torn.
             hostPlyB.tear()
+            assertIs<SeamState.Weaving>(
+                host.state.value,
+                "all-plies-torn is recoverable Weaving, never a derived terminal Torn (#1367)",
+            )
 
-            val finalState = host.state.first { it is SeamState.Torn }
-            assertIs<SeamState.Torn>(finalState, "aggregate must be Torn when last ply tears")
+            // A broadcast during the fully-degraded window is a best-effort no-op — must NOT throw.
+            host.broadcast(byteArrayOf(88))
+
+            // Re-attach a fresh, healthy ply — the aggregate recovers to Woven.
+            desired.value = listOf(
+                PlyId("a") to plyALoomScoped,
+                PlyId("b") to plyBLoomScoped,
+                PlyId("c") to plyCLoomScoped,
+            )
+            host.state.first { it is SeamState.Woven }
+            assertIs<SeamState.Woven>(host.state.value, "aggregate recovers to Woven when a fresh ply attaches")
         } finally {
             host?.close(CloseReason.Normal)
             joiner?.close(CloseReason.Normal)

@@ -27,6 +27,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
+import us.tractat.kuilt.test.FakeSeam
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -227,6 +228,59 @@ class TieredSeamTest {
             tieredSeam(local = selfLocal, peer = selfPeer, scope = backgroundScope)
         }
     }
+
+    // ── 4b · both tiers torn is TERMINAL, latched Torn — never a revivable rollup (#1367) ──
+
+    /**
+     * When BOTH tiers reach [SeamState.Torn] — driven directly on the underlying tiers, NOT via
+     * [tieredSeam]'s own `close()` — the composed lifecycle is **terminal** [SeamState.Torn], and it
+     * **latches**: a tier subsequently flapping back to [SeamState.Woven] must NOT revive the union.
+     *
+     * Unlike [us.tractat.kuilt.core.composite.CompositeSeam] (whose persistent spool survives ply
+     * churn, so its all-plies-torn rollup is recoverable `Weaving`), a tiered union's [incoming] is a
+     * one-shot merge that completes permanently when both tiers' `incoming` complete — so both-tiers-
+     * torn is genuinely terminal, and the merged `incoming` must complete consistently with the
+     * terminal `state` (#1367). A revivable `Weaving` here would contradict a terminally-completed
+     * `incoming` and hang a `state.first { it is Torn }` waiter — the exact bug class this closes.
+     */
+    @Test
+    fun bothTiersTornIsTerminalLatchedTornAndIncomingCompletes() =
+        runTest(UnconfinedTestDispatcher(), timeout = 5.seconds) {
+            // Two FakeSeams sharing one selfId (both tiers are views of the SAME node) whose state and
+            // incoming we drive directly, so we can tear both then flap one back to Woven.
+            val node = PeerId("node")
+            val local = FakeSeam(selfId = node, initialState = SeamState.Woven)
+            val peer = FakeSeam(selfId = node, initialState = SeamState.Woven)
+            val tiered = tieredSeam(local = local, peer = peer, scope = backgroundScope)
+
+            // Track merged-incoming completion — it must complete when both tiers' incoming complete.
+            var incomingCompleted = false
+            backgroundScope.launch {
+                tiered.incoming.collect { }
+                incomingCompleted = true
+            }
+
+            assertTrue(tiered.state.value is SeamState.Woven, "both tiers Woven ⇒ union Woven")
+
+            // Tear ONE tier — the surviving tier still carries, so state stays Woven.
+            local.close(CloseReason.Unreachable)
+            assertTrue(tiered.state.value is SeamState.Woven, "one tier torn ⇒ union stays Woven (survivor carries)")
+
+            // Tear the SECOND tier — both torn ⇒ terminal Torn, and the merged incoming completes.
+            peer.close(CloseReason.Unreachable)
+
+            assertAll(
+                { assertTrue(tiered.state.value is SeamState.Torn, "both tiers torn ⇒ terminal Torn (#1367)") },
+                { assertTrue(incomingCompleted, "merged incoming must complete when both tiers' incoming complete") },
+            )
+
+            // Flap a tier back to Woven — the latched terminal Torn must NOT revive.
+            local.weave()
+            assertTrue(
+                tiered.state.value is SeamState.Torn,
+                "a latched terminal Torn must NOT revert when a tier flaps back to Woven (no revive)",
+            )
+        }
 
     // ── 5 · close() lifecycle ─────────────────────────────────────────────────
 

@@ -1,11 +1,15 @@
 package us.tractat.kuilt.session
 
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.filterIsInstance
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
@@ -17,6 +21,9 @@ import us.tractat.kuilt.test.FlakyLifecycleLoom
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
+import us.tractat.kuilt.core.PlyId
+import us.tractat.kuilt.core.SeamState
+import us.tractat.kuilt.core.composite.CompositeLoom
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import kotlin.test.Test
 import kotlin.test.assertFalse
@@ -224,5 +231,71 @@ class RoomLifecycleFlapTest {
 
         assertIs<MembershipEvent.HostLost>(hostLostEvent)
         assertFalse(events.any { it is MembershipEvent.Left }, "spurious Left event in events: $events")
+    }
+
+    /**
+     * Payoff regression for #1367: a [SeamRoom] over a multipath composite must NOT evict its
+     * members when the composite transiently loses **every** ply. Under the old rollup the
+     * all-plies-torn composite published a derived terminal [SeamState.Torn], which tripped the
+     * host's Torn-watcher and permanently tore a recoverable room. Now the composite reports
+     * [SeamState.Weaving] on all-plies-torn, so the Torn-watcher correctly does not fire and the
+     * roster survives the degrade.
+     */
+    @Test
+    fun `host over a composite does not evict when the composite transiently goes all-plies-torn`() = runTest {
+        val dispatcher = UnconfinedTestDispatcher(testScheduler)
+        val plyScope = CoroutineScope(dispatcher + SupervisorJob())
+        val plyALoom = FlakyLifecycleLoom(InMemoryLoom(), plyScope)
+        val plyBLoom = FlakyLifecycleLoom(InMemoryLoom(), plyScope)
+        val compositeLoom = CompositeLoom(
+            listOf(PlyId("a") to plyALoom, PlyId("b") to plyBLoom),
+            dispatcher,
+        )
+        // Build the rooms directly so we can hold the composite host seam and assert its rollup state.
+        val hostSeam = compositeLoom.host(Pattern("host"))
+        val joinerSeam = compositeLoom.join(InMemoryTag("joiner"))
+        val hostRoom = SeamRoom(
+            seam = hostSeam,
+            role = SessionRole.Host,
+            memberName = "host",
+            scope = backgroundScope,
+            clock = clock,
+            heartbeatConfig = fastConfig,
+        ).also { it.start() }
+        SeamRoom(
+            seam = joinerSeam,
+            role = SessionRole.Joiner,
+            memberName = "joiner",
+            scope = backgroundScope,
+            clock = clock,
+            heartbeatConfig = fastConfig,
+        ).also { it.start() }
+        hostRoom.roster.first { it.isNotEmpty() }
+
+        val leftEvents = mutableListOf<MembershipEvent.Left>()
+        val collectJob = backgroundScope.launch {
+            hostRoom.events.filterIsInstance<MembershipEvent.Left>().collect { leftEvents.add(it) }
+        }
+
+        // Both host-side plies tear → the composite rolls up to Weaving (#1367), not a derived Torn.
+        plyALoom.links[0].tear()
+        plyBLoom.links[0].tear()
+
+        // Advance well under the heartbeat timeout (200ms) so the silence-based eviction path cannot
+        // fire — this only flushes any immediate room reaction to the transport degrade.
+        advanceTimeBy(50L)
+        collectJob.cancel()
+
+        assertIs<SeamState.Weaving>(
+            hostSeam.state.value,
+            "the composite must report Weaving (not a derived terminal Torn) when all plies tear (#1367)",
+        )
+        assertTrue(
+            leftEvents.isEmpty(),
+            "host must NOT evict on a transient all-plies-torn — composite reports Weaving (#1367): $leftEvents",
+        )
+        assertTrue(hostRoom.roster.value.isNotEmpty(), "the roster must survive a transient all-plies-torn degrade")
+
+        plyScope.cancel()
     }
 }
