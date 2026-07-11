@@ -67,3 +67,18 @@ Seeds the "implementing a new transport" skill. Newest entries at the bottom.
 - ✅✅✅ **Full round-trip proven Wi-Fi-ON**: continuous ping/echo, RTT ~6–9 ms,
   17 Pro (iOS 26) ↔ XS (iOS 18), TLS-PSK over AWDL P2P. Matches MC's healthy
   Wi-Fi-on baseline. Next: the Wi-Fi-OFF gate (where MC drops to ~1/12).
+
+## Validating harness — install → validated Wi-Fi-on passing test
+- Harness (`spike/harness.sh`) validates EACH stage against ground truth: a per-launch
+  **run-id** (proves THIS launch started, not a stale log) → advertising/browsing → READY → RTT.
+  No "launch and pray"; every stage fails loudly. Caught a stale-app deploy immediately.
+- **Reliability: ~7/8 connect + data round-trip, Wi-Fi-on** (17 Pro join ↔ XS host). RTT 13–110 ms —
+  variable + higher than the ~7 ms pure-LAN run, suggesting a P2P/AWDL path even Wi-Fi-on.
+- **1/8 intermittent "READY but no data"** — rare (unrepro in 5 retries); boundary instrumentation
+  (send-done / recv-fired) is in place to catch the failing hop next time. Hypothesis: a startup /
+  multipath race (host occasionally sees two inbound connections for one join).
+- **Observability constraint learned:** devicectl rides Wi-Fi for network-attached devices; the XS is
+  network-attached (dark when Wi-Fi off), the **17 Pro is USB (observable Wi-Fi-off)**. So the AWDL
+  gate runs with the 17 Pro as the Wi-Fi-off JOIN (USB-observed) and the XS as the Wi-Fi-on HOST.
+- **K/N app gotchas:** `devicectl launch --console` kills the app when the console detaches (use it
+  only while attached); detached launches can be backgrounded/suspended by iOS.

@@ -12,6 +12,10 @@ import kotlinx.cinterop.readBytes
 import kotlinx.cinterop.usePinned
 import kotlinx.cinterop.value
 import platform.Foundation.NSDate
+import platform.Foundation.NSHomeDirectory
+import platform.Foundation.NSString
+import platform.Foundation.NSUTF8StringEncoding
+import platform.Foundation.writeToFile
 import platform.Foundation.timeIntervalSince1970
 import platform.Network.NW_PARAMETERS_DEFAULT_CONFIGURATION
 import platform.Network.nw_advertise_descriptor_create_bonjour_service
@@ -21,13 +25,18 @@ import platform.Network.nw_connection_send
 import platform.Network.nw_connection_set_queue
 import platform.Network.nw_connection_set_state_changed_handler
 import platform.Network.nw_connection_start
+import platform.Network.nw_browse_descriptor_create_bonjour_service
+import platform.Network.nw_browse_result_copy_endpoint
+import platform.Network.nw_browser_create
+import platform.Network.nw_browser_set_browse_results_changed_handler
+import platform.Network.nw_browser_set_queue
+import platform.Network.nw_browser_start
 import platform.Network.nw_content_context_create
 import platform.Network.nw_connection_state_cancelled
 import platform.Network.nw_connection_state_failed
 import platform.Network.nw_connection_state_ready
 import platform.Network.nw_connection_state_waiting
 import platform.Network.nw_connection_t
-import platform.Network.nw_endpoint_create_bonjour_service
 import platform.Network.nw_listener_create
 import platform.Network.nw_listener_set_advertise_descriptor
 import platform.Network.nw_listener_set_new_connection_handler
@@ -67,8 +76,30 @@ public class SpikeNw {
         onLog = cb
     }
 
+    /**
+     * Single entry point the harness drives. Stamps a run-id FIRST so the harness
+     * can prove THIS launch actually started (vs. reading a stale on-device log).
+     */
+    public fun start(role: String, runId: String) {
+        log("START run=$runId role=$role")
+        when (role) {
+            "host" -> startHost()
+            "join" -> startJoin()
+            else -> log("START: unknown role '$role'")
+        }
+    }
+
+    private val lines = mutableListOf<String>()
+    private val logPath = NSHomeDirectory() + "/Documents/nw.log"
+
     private fun log(msg: String) {
-        println("[nw] $msg") // to stdout so `devicectl --console` streams it back
+        val stamped = "${NSDate().timeIntervalSince1970} $msg"
+        println("[nw] $stamped") // stdout for `devicectl --console` when reachable
+        lines.add(stamped)
+        // Persist to the app container so the Wi-Fi-OFF window (when devicectl can't
+        // reach the phone) is recoverable via `devicectl device copy from` afterward.
+        (lines.joinToString("\n") as NSString)
+            .writeToFile(logPath, atomically = true, encoding = NSUTF8StringEncoding, error = null)
         onLog?.invoke(msg)
     }
 
@@ -103,10 +134,34 @@ public class SpikeNw {
     }
 
     // ── Join ─────────────────────────────────────────────────────────────────
+    // MUST browse (not synthesize a Bonjour name): only an active NWBrowser
+    // brings up AWDL. Connect to the browser-provided endpoint so the connection
+    // rides the AWDL interface the browser discovered.
     public fun startJoin() {
-        val endpoint = nw_endpoint_create_bonjour_service(HOST_NAME, SERVICE_TYPE, "local")
-        val connection = nw_connection_create(endpoint, secureParams())
-        log("join: dialing $HOST_NAME.$SERVICE_TYPE over P2P")
+        val descriptor = nw_browse_descriptor_create_bonjour_service(SERVICE_TYPE, null)
+        val browser = nw_browser_create(descriptor, secureParams())
+        nw_browser_set_queue(browser, queue)
+        nw_browser_set_browse_results_changed_handler(browser) { _, newResult, _ ->
+            if (newResult != null) {
+                joinEndpoint = nw_browse_result_copy_endpoint(newResult) // may update to the AWDL endpoint when Wi-Fi drops
+                dialJoin()
+            }
+        }
+        nw_browser_start(browser)
+        log("join: browsing $SERVICE_TYPE over P2P (activates AWDL)")
+    }
+
+    private var joinEndpoint: platform.Network.nw_endpoint_t? = null
+    private var liveConn: nw_connection_t? = null
+    private var joinAttempt = 0
+
+    private fun dialJoin() {
+        if (liveConn != null) return // already connected/connecting
+        val ep = joinEndpoint ?: return
+        joinAttempt += 1
+        log("join: attempt $joinAttempt — dialing discovered endpoint")
+        val connection = nw_connection_create(ep, secureParams())
+        liveConn = connection
         connection?.let { retainAndStart(it, isHost = false) }
     }
 
@@ -122,10 +177,15 @@ public class SpikeNw {
                     if (!isHost) sendPing(connection)
                 }
                 nw_connection_state_waiting -> log("${role(isHost)}: waiting")
-                nw_connection_state_failed -> log("${role(isHost)}: FAILED")
+                nw_connection_state_failed -> {
+                    log("${role(isHost)}: FAILED")
+                    connections.remove(connection)
+                    if (!isHost) { liveConn = null; dialJoin() } // re-attempt over AWDL
+                }
                 nw_connection_state_cancelled -> {
                     log("${role(isHost)}: cancelled")
                     connections.remove(connection)
+                    if (!isHost) { liveConn = null; dialJoin() }
                 }
                 else -> Unit
             }
@@ -134,39 +194,41 @@ public class SpikeNw {
     }
 
     private fun receiveLoop(connection: nw_connection_t, isHost: Boolean) {
-        nw_connection_receive(connection, 1u, (64 * 1024).toUInt()) { content, _, _, _ ->
+        nw_connection_receive(connection, 1u, (64 * 1024).toUInt()) { content, _, isComplete, error ->
+            // BOUNDARY INSTRUMENTATION: prove whether the receive completion fires at all.
+            log("${role(isHost)}: recv-fired content=${content != null} err=${error != null} complete=$isComplete")
             if (content != null) {
                 val bytes = fromDispatchData(content)
                 val text = bytes.decodeToString()
                 if (isHost) {
                     log("host: recv '$text' → echoing")
-                    send(connection, bytes) // echo
+                    send(connection, bytes, isHost) // echo
                 } else {
                     val rttMs = ((NSDate().timeIntervalSince1970 - pingSentAt) * 1000).toInt()
                     log("join: recv '$text'  RTT=${rttMs}ms")
-                    // ping again after each echo to drive the soak
                     sendPing(connection)
                 }
             }
-            receiveLoop(connection, isHost) // re-arm
+            if (error == null) receiveLoop(connection, isHost) // re-arm only if not errored
         }
     }
 
     private fun sendPing(connection: nw_connection_t) {
         pingSentAt = NSDate().timeIntervalSince1970
-        send(connection, "ping".encodeToByteArray())
+        send(connection, "ping".encodeToByteArray(), isHost = false)
     }
 
-    private fun send(connection: nw_connection_t, bytes: ByteArray) {
-        // Explicit content context rather than the NW_CONNECTION_DEFAULT_MESSAGE_CONTEXT
-        // constant, which mis-bridges under K/N ("Converting Obj-C blocks … to kotlin.Any").
+    private fun send(connection: nw_connection_t, bytes: ByteArray, isHost: Boolean) {
         val context = nw_content_context_create("spike")
         nw_connection_send(
             connection,
             toDispatchData(bytes),
             context,
             true,
-        ) { _ -> }
+        ) { error ->
+            // BOUNDARY INSTRUMENTATION: did the send actually complete, and with an error?
+            log("${role(isHost)}: send-done bytes=${bytes.size} err=${error != null}")
+        }
     }
 
     private fun role(isHost: Boolean) = if (isHost) "host" else "join"

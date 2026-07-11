@@ -21,8 +21,7 @@ final class Model: ObservableObject {
         }
     }
 
-    func host() { nw.startHost() }
-    func join() { nw.startJoin() }
+    func start(role: String, runId: String) { nw.start(role: role, runId: runId) }
 }
 
 struct ContentView: View {
@@ -34,9 +33,9 @@ struct ContentView: View {
             Text("Network.framework P2P · TLS-PSK")
                 .font(.caption).foregroundStyle(.secondary)
             HStack(spacing: 16) {
-                Button("Host") { model.host() }
+                Button("Host") { model.start(role: "host", runId: "manual") }
                     .buttonStyle(.borderedProminent)
-                Button("Join") { model.join() }
+                Button("Join") { model.start(role: "join", runId: "manual") }
                     .buttonStyle(.borderedProminent)
             }
             Divider()
@@ -49,11 +48,12 @@ struct ContentView: View {
         }
         .padding()
         .onAppear {
-            // Auto-pick role from a launch argument so the whole test can be
-            // driven headlessly via `devicectl process launch … host|join`.
+            // Auto-pick role + run-id from launch arguments so the harness can drive
+            // headlessly AND validate that THIS launch actually started.
             let args = ProcessInfo.processInfo.arguments
-            if args.contains("host") { model.host() }
-            else if args.contains("join") { model.join() }
+            let runId = args.first { $0.hasPrefix("run=") }.map { String($0.dropFirst(4)) } ?? "none"
+            if args.contains("host") { model.start(role: "host", runId: runId) }
+            else if args.contains("join") { model.start(role: "join", runId: runId) }
         }
     }
 }
