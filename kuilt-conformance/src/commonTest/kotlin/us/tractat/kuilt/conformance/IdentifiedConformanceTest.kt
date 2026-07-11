@@ -6,4 +6,6 @@ import us.tractat.kuilt.test.fabric.identifiedLoomPair
 /** The `identified` 2-peer primitive satisfies the seam contract. */
 class IdentifiedConformanceTest : SeamConformanceSuite() {
     override fun newLoomPair(): Pair<Loom, Loom> = identifiedLoomPair()
+    override fun capabilities() = SeamCapabilities.FULL
+    override fun capabilityGaps() = emptyMap<String, String>()
 }

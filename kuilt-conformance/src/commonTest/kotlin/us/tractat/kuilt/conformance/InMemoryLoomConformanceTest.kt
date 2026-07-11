@@ -14,4 +14,6 @@ import us.tractat.kuilt.core.Loom
 class InMemoryLoomConformanceTest : SeamConformanceSuite() {
     private val loom = InMemoryLoom()
     override fun newLoomPair(): Pair<Loom, Loom> = loom to loom
+    override fun capabilities() = SeamCapabilities.FULL
+    override fun capabilityGaps() = emptyMap<String, String>()
 }

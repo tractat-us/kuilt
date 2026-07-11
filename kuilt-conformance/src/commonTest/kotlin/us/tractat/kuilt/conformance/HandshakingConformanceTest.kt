@@ -6,4 +6,6 @@ import us.tractat.kuilt.test.fabric.handshakingLoomPair
 /** The `handshaking` 2-peer seam satisfies the seam contract. */
 class HandshakingConformanceTest : SeamConformanceSuite() {
     override fun newLoomPair(): Pair<Loom, Loom> = handshakingLoomPair()
+    override fun capabilities() = SeamCapabilities.FULL
+    override fun capabilityGaps() = emptyMap<String, String>()
 }

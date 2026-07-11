@@ -34,6 +34,25 @@ public data class SeamCapabilities(
     /** Peer-to-peer delivery with no relay hop. */
     val meshDelivery: Boolean,
 ) {
+    /**
+     * The canonical names of the flags that are `false` on this value.
+     *
+     * The names are the property names, and they are also the keys a fabric's
+     * `capabilityGaps()` must supply an issue URL for — every `false` flag is a
+     * gap that must be declared, so the two are keyed identically. Task 1.8's
+     * rendered capability matrix consumes the same names.
+     */
+    public fun falseFlags(): Set<String> = buildSet {
+        if (!ordersDelivery) add("ordersDelivery")
+        if (!reportsPeerLoss) add("reportsPeerLoss")
+        if (!terminatesIncomingOnClose) add("terminatesIncomingOnClose")
+        if (!staysTornAfterClose) add("staysTornAfterClose")
+        if (!throwsOnSendToTorn) add("throwsOnSendToTorn")
+        if (!supportsSendTo) add("supportsSendTo")
+        if (!securesTransport) add("securesTransport")
+        if (!meshDelivery) add("meshDelivery")
+    }
+
     public companion object {
         /**
          * A fully-featured direct-mesh fabric — most fabrics start here and flip

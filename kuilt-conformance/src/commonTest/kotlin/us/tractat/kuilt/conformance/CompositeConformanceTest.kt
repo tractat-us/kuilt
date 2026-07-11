@@ -30,4 +30,7 @@ class CompositeConformanceTest : SeamConformanceSuite() {
         )
         return composite to composite
     }
+
+    override fun capabilities() = SeamCapabilities.FULL
+    override fun capabilityGaps() = emptyMap<String, String>()
 }
