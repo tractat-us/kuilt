@@ -7,6 +7,19 @@ import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.quilter.QuilterConfig
 
 /**
+ * The room-channel name an admitted client's **app-unicast spoke** rides on — the
+ * two-peer server↔client link a server hands to [OverlayServer.admit] as the local
+ * delivery seam for cross-core routed unicasts.
+ *
+ * It is a **distinct** channel from the Raft transport's `"raft"` channel so the
+ * two dialects never share framing: a client reading this channel by the same name
+ * sees exactly the overlay's per-recipient traffic, never Raft envelopes. A server
+ * calls `room.channel(OVERLAY_UNICAST_CHANNEL)` for each admitted connection and
+ * registers it as that client's local spoke via [OverlayServer.admit].
+ */
+public const val OVERLAY_UNICAST_CHANNEL: String = "overlay-unicast"
+
+/**
  * One server's view of the two-tier overlay — the piece that survives a client's
  * **failover** to a different server (slice 5D).
  *

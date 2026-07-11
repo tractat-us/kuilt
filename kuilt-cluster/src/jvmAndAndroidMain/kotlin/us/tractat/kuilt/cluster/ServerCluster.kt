@@ -20,7 +20,11 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
+import us.tractat.kuilt.core.CloseReason
+import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Seam
+import us.tractat.kuilt.core.SeamState
+import us.tractat.kuilt.core.Swatch
 import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.raft.ClusterConfig
 import us.tractat.kuilt.raft.Committed
@@ -88,6 +92,17 @@ public class ServerCluster internal constructor(
     private val host: RoomHost,
     private val voterConfig: ClusterConfig,
     private val router: LearnerRouter,
+    /**
+     * The two-tier overlay this cluster admits every connection into.
+     *
+     * Each accepted connection is published here via [OverlayServer.admit] (the client's
+     * attachment `client → self` plus its local unicast spoke) and retracted via
+     * [OverlayServer.evict] on disconnect — so the attachment directory is populated
+     * structurally, not by a hand-rolled roster publish. A federation hands
+     * `cluster.overlay::lookup` to its game bootstrap so the leader can pick the core
+     * hop for a far player.
+     */
+    public val overlay: OverlayServer,
     private val serverScope: CoroutineScope,
 ) {
     /** The live voter node map — delegates to [mesh]. */
@@ -156,6 +171,12 @@ public class ServerCluster internal constructor(
         val seamChannel = room.channel("raft")
         router.addLearner(learnerId, seamChannel, serverScope)
 
+        // Discharge the overlay obligation structurally: publish this connection's
+        // attachment (`client → self`) and register its app-unicast spoke — a channel
+        // DISTINCT from the "raft" leg above. Register-before-membership (same ordering
+        // the router follows) so a frame racing in across the core finds the spoke ready.
+        overlay.admit(admittedPeer.id, room.channel(OVERLAY_UNICAST_CHANNEL))
+
         val withLearner = ClusterConfig(
             voters = voterConfig.voters,
             learners = voterConfig.learners + learnerId,
@@ -167,15 +188,18 @@ public class ServerCluster internal constructor(
         } catch (e: Throwable) {
             log.warn(e) { "server-cluster: learner $learnerId admit failed — removing route" }
             router.removeLearner(learnerId)
+            overlay.evict(admittedPeer.id)
             return
         }
 
         // Hold the room open until the connection closes or scope cancels.
-        // The finally block removes the learner route when the WebSocket closes.
+        // The finally block removes the learner route and the overlay attachment
+        // when the WebSocket closes.
         try {
             awaitCancellation()
         } finally {
             router.removeLearner(learnerId)
+            overlay.evict(admittedPeer.id)
         }
     }
 
@@ -211,8 +235,53 @@ public fun CoroutineScope.serverCluster(
     storageFactory: (NodeId) -> RaftStorage = { InMemoryRaftStorage() },
 ): ServerCluster {
     require(voterIds.isNotEmpty()) { "voterIds must be non-empty" }
-    val clusterConfig = ClusterConfig(voters = voterIds.toSet())
     val serverScope = CoroutineScope(coroutineContext + Job(coroutineContext[Job]))
+    val serverPeerId = PeerId(voterIds.first().value)
+    // A single-server deployment replicates nothing, so the overlay rides two peerless
+    // placeholder seams: its Quilter has no peers to gossip to (it excludes `self` from
+    // its target set), attach/lookup are purely local, and the constant `{ 0 }` clock is
+    // fine because AttachmentDirectory.nextTimestamp is monotonic via max(now, last + 1).
+    val overlay = localOverlay(serverPeerId, serverScope)
+    return serverCluster(host, voterIds, raftConfig, overlay, serverScope, storageFactory)
+}
+
+/**
+ * Construct a [ServerCluster] whose two-tier [overlay] is supplied by the caller —
+ * for a **federated** deployment whose [OverlayServer] replicates its attachment
+ * directory over a real inter-server seam (e.g. `NamedMux(coreMesh).channel(...)`),
+ * so a client admitted here becomes visible to every peer server's routing.
+ *
+ * Unlike [CoroutineScope.serverCluster]'s default (a local, non-replicating overlay),
+ * the caller owns [overlay]'s lifecycle: it is **not** closed by [ServerCluster.close].
+ *
+ * @param host The [RoomHost] for accepting learner connections.
+ * @param voterIds Ordered list of voter [NodeId]s. Non-empty; odd count recommended.
+ * @param raftConfig Raft timing and virtual-time flags. **Required** — no default.
+ * @param overlay The federated [OverlayServer] every admitted connection is published into.
+ * @param storageFactory Per-voter [RaftStorage] factory. Defaults to [InMemoryRaftStorage].
+ */
+public fun CoroutineScope.serverCluster(
+    host: RoomHost,
+    voterIds: List<NodeId>,
+    raftConfig: RaftConfig,
+    overlay: OverlayServer,
+    storageFactory: (NodeId) -> RaftStorage = { InMemoryRaftStorage() },
+): ServerCluster {
+    require(voterIds.isNotEmpty()) { "voterIds must be non-empty" }
+    val serverScope = CoroutineScope(coroutineContext + Job(coroutineContext[Job]))
+    return serverCluster(host, voterIds, raftConfig, overlay, serverScope, storageFactory)
+}
+
+/** Shared builder: wires the voter mesh + relay accept loop and threads [overlay] through. */
+private fun serverCluster(
+    host: RoomHost,
+    voterIds: List<NodeId>,
+    raftConfig: RaftConfig,
+    overlay: OverlayServer,
+    serverScope: CoroutineScope,
+    storageFactory: (NodeId) -> RaftStorage,
+): ServerCluster {
+    val clusterConfig = ClusterConfig(voters = voterIds.toSet())
     val router = LearnerRouter()
     val voterNodes = buildVoterChannelMesh(voterIds, clusterConfig, raftConfig, storageFactory, serverScope, router)
     val mesh = VoterMesh(voterNodes = voterNodes, scope = serverScope)
@@ -221,8 +290,41 @@ public fun CoroutineScope.serverCluster(
         host = host,
         voterConfig = clusterConfig,
         router = router,
+        overlay = overlay,
         serverScope = serverScope,
     )
+}
+
+/**
+ * Build the local, non-replicating overlay the default [CoroutineScope.serverCluster]
+ * uses: a real [OverlayServer] over two peerless [Seam]s. [self] is both the directory
+ * value written for every admitted client and the core-seam identity (they match, so the
+ * `route()` local-vs-remote decision always resolves local here). Parented to [scope] so
+ * [ServerCluster.close] tears it down.
+ */
+private fun localOverlay(self: PeerId, scope: CoroutineScope): OverlayServer =
+    overlayServer(
+        self = self,
+        coreSeam = PeerlessSeam(self),
+        directorySeam = PeerlessSeam(PeerId("${self.value}#overlay-dir")),
+        scope = scope,
+        clock = { 0 },
+    )
+
+/**
+ * A [Seam] with no peers — the placeholder link the single-server local overlay rides.
+ * Its [incoming] never completes (so the directory's [us.tractat.kuilt.quilter.Quilter]
+ * replicator stays alive) and never emits; [broadcast]/[sendTo] are no-ops (the Quilter
+ * excludes `selfId` from its gossip targets, so it never actually sends). Immutable —
+ * trivially correct under any dispatcher.
+ */
+private class PeerlessSeam(override val selfId: PeerId) : Seam {
+    override val peers: StateFlow<Set<PeerId>> = MutableStateFlow(setOf(selfId))
+    override val state: StateFlow<SeamState> = MutableStateFlow(SeamState.Woven)
+    override val incoming: Flow<Swatch> = MutableSharedFlow()
+    override suspend fun broadcast(payload: ByteArray): Unit = Unit
+    override suspend fun sendTo(peer: PeerId, payload: ByteArray): Unit = Unit
+    override suspend fun close(reason: CloseReason): Unit = Unit
 }
 
 // ── Learner router ───────────────────────────────────────────────────────────
