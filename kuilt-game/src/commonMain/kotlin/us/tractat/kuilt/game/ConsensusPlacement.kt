@@ -414,20 +414,22 @@ internal fun CoroutineScope.launchCoreLearnerAdmission(
  * Launched on every core member (self-gated by the placement to `self ∈ [core]`); it runs three
  * coroutines on [scope]:
  *
- * - **Publish.** Whenever this server's [seam] roster changes, unicast (never broadcast) its local
- *   players (`seam.peers − core`) to each *other* connected core member over [rosterChannel]. Re-sent
- *   on every roster/peer change, so a newly-connected core member and a newly-arrived local player
- *   both propagate; the send is a single-addressee [Seam.sendTo], never a fan-out.
+ * - **Publish.** Unicast (never broadcast) this server's local players (`seam.peers − core`) to the
+ *   other connected core members over [rosterChannel]. Two structural triggers, both timer-free:
+ *   (a) whenever a **core member newly appears** in [seam.peers], send to *that* member — connection
+ *   precedes peer-visibility, so the arriving member's tag-6 collector is already subscribed by the
+ *   time it shows up here, and this send lands even at a simultaneous boot with the far player already
+ *   attached; and (b) whenever this server's **local roster changes** (a player joins/leaves), send
+ *   the new roster to *all* connected core members. Every send is a single-addressee [Seam.sendTo],
+ *   never a fan-out.
  * - **Receive & reactive re-publish.** Collect [rosterChannel], accepting a roster frame **only** if
  *   its `sender` is a core member (`NodeId(sender.value) ∈ core`) — the first-hop authenticity check,
  *   parallel to the relay's spoof validation, that stops a spoke player from injecting membership.
  *   Accepted rosters are kept per sender in a [MutableStateFlow]. Whenever a frame carries *new*
- *   information (a first-heard sender or a changed roster) this node re-publishes its own roster —
- *   the self-heal for [rosterChannel]'s best-effort (`replay = 0`) subscribe-race: the initial send
- *   from an earlier-started server can be dropped before a later-started server's mux is collecting,
- *   but the later server's own send always lands (the earlier server is already collecting), which
- *   triggers the earlier server to re-send, so the pair converges with no timer. (The last server to
- *   start reaches every already-ready peer, so an N-server core converges too.)
+ *   information (a first-heard sender or a changed roster) this node re-publishes its own roster — a
+ *   second self-heal for [rosterChannel]'s best-effort (`replay = 0`) subscribe-race, complementing
+ *   the appearance trigger above. The receive collector runs under a **retry-with-backoff** loop, so a
+ *   transient failure never permanently stops this node from learning rosters.
  * - **Admit.** Whenever this node is the leader, admit the first peer in
  *   `(seam.peers − core) ∪ union(remote rosters)` that is neither a core voter nor already a learner —
  *   **add-only, learners-only** (never removes, never touches the voter set). The role gate hands the
@@ -449,38 +451,60 @@ internal fun CoroutineScope.launchFederatedCoreAdmission(
     // but every core member maintains it so a leadership change hands over a fully-populated view.
     val remoteRosters = MutableStateFlow<Map<NodeId, Set<NodeId>>>(emptyMap())
 
-    // Unicast this server's current local roster (seam.peers − core) to each other connected core
-    // member. Single-addressee sends only — never a broadcast/fan-out.
-    suspend fun publishLocalRoster() {
-        val ids = seam.peers.value.map { NodeId(it.value) }
-        val payload = encodeRoster(ids.filterTo(mutableSetOf()) { it !in core })
-        for (member in ids) {
-            if (member in core && member != self) {
-                runCatchingCancellable { rosterChannel.sendTo(PeerId(member.value), payload) }
-            }
+    // Unicast this server's current local roster (seam.peers − core) to [targets]. Single-addressee
+    // sends only — never a broadcast/fan-out.
+    suspend fun publishLocalRosterTo(targets: Set<NodeId>) {
+        if (targets.isEmpty()) return
+        val payload = encodeRoster(seam.peers.value.mapTo(mutableSetOf()) { NodeId(it.value) }.apply { removeAll(core) })
+        for (member in targets) {
+            runCatchingCancellable { rosterChannel.sendTo(PeerId(member.value), payload) }
         }
     }
+
+    // Send our current roster to every connected core member (used by the reactive re-publish path).
+    suspend fun publishLocalRoster() =
+        publishLocalRosterTo(seam.peers.value.mapTo(mutableSetOf()) { NodeId(it.value) }.filterTo(mutableSetOf()) { it in core && it != self })
 
     // Receive: accept a roster frame only from a core sender (first-hop authenticity); on genuinely
-    // new information, re-publish our own roster to self-heal the best-effort subscribe-race.
+    // new information, re-publish our own roster to self-heal the best-effort subscribe-race. Wrapped
+    // in a retry-with-backoff loop so a transient throw does not permanently kill reception (M3).
     launch {
-        runCatchingCancellable {
-            rosterChannel.incoming.collect { swatch ->
-                val sender = swatch.sender?.let { NodeId(it.value) } ?: return@collect
-                if (sender !in core) return@collect // a spoke must not be able to inject membership
-                val roster = runCatchingCancellable { decodeRoster(swatch.toByteArray()) }.getOrNull()
-                    ?: return@collect
-                if (remoteRosters.value[sender] == roster) return@collect // nothing new — no churn
-                remoteRosters.update { it + (sender to roster) }
-                publishLocalRoster()
+        while (true) {
+            val outcome = runCatchingCancellable {
+                rosterChannel.incoming.collect { swatch ->
+                    val sender = swatch.sender?.let { NodeId(it.value) } ?: return@collect
+                    if (sender !in core) return@collect // a spoke must not be able to inject membership
+                    val roster = runCatchingCancellable { decodeRoster(swatch.toByteArray()) }.getOrNull()
+                        ?: return@collect
+                    if (remoteRosters.value[sender] == roster) return@collect // nothing new — no churn
+                    remoteRosters.update { it + (sender to roster) }
+                    publishLocalRoster()
+                }
             }
+            // Clean completion means the channel closed (the seam tore) — stop. A transient failure is
+            // retried after a backoff, mirroring the admit loop, so this node keeps learning rosters.
+            if (outcome.isSuccess) break
+            delay(CORE_ADMISSION_RETRY_BACKOFF)
         }
     }
 
-    // Publish proactively on every roster/peer change (a local player joins/leaves, a core member
-    // connects), and once at startup to seed the reactive exchange above.
+    // Publish: (a) to a newly-appeared core member (its collector is up by the time it is visible
+    // here), and (b) to all core members when our local roster changes.
     launch {
-        seam.peers.collect { publishLocalRoster() }
+        var knownCore = emptySet<NodeId>()
+        var lastLocal: Set<NodeId>? = null
+        seam.peers.collect { peers ->
+            val ids = peers.mapTo(mutableSetOf()) { NodeId(it.value) }
+            val coreNow = ids.filterTo(mutableSetOf()) { it in core && it != self }
+            val local = ids.filterTo(mutableSetOf()) { it !in core }
+            val appeared = coreNow - knownCore
+            val localChanged = local != lastLocal
+            // On a local-roster change every core member needs the update; otherwise only the
+            // newly-appeared members need our current roster.
+            publishLocalRosterTo(if (localChanged) coreNow else appeared)
+            knownCore = coreNow
+            lastLocal = local
+        }
     }
 
     // Admit: leader-only, from the union of local + all remote rosters. Add-only, learners-only.

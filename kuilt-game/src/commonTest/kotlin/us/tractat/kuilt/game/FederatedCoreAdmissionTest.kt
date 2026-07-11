@@ -91,9 +91,15 @@ class FederatedCoreAdmissionTest {
     }
 
     /**
-     * (2) sender ∉ core rejection — a spoke must not be able to inject membership. A well-formed roster
-     * frame from a **non-core** sender naming P-spoof is ignored, while a legitimate frame from a core
-     * member naming P-legit is admitted — so the pipeline provably works and only the spoof is filtered.
+     * (2) sender ∉ core rejection — a spoke must not be able to inject membership (H1, commit-safety).
+     *
+     * The test **isolates the `sender ∈ core` gate**: the spoof frame names a player the leader learns
+     * of *only* from a non-core sender (P-spoof is in no core member's real roster), so with the gate
+     * present it must never be admitted, and with the gate removed it *would* be admitted — the RED has
+     * teeth. Delivery is hardened so the reject path is genuinely exercised: the spoke sends **after**
+     * the pipeline is proven live (P-legit admitted ⇒ the leader's receive collector is up and its mux
+     * is collecting), and re-sends so the single frame cannot vanish into the subscribe gap and pass
+     * vacuously.
      */
     @Test
     fun aRosterFrameFromANonCoreSenderIsRejected() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
@@ -114,14 +120,17 @@ class FederatedCoreAdmissionTest {
         val s1Node = TestCoreNode(RaftRole.Leader, ClusterConfig(voters = core))
         val s2Node = TestCoreNode(RaftRole.Follower, ClusterConfig(voters = core))
 
+        val xRoster = rosterChannelOver(xSeat)
         backgroundScope.launchFederatedCoreAdmission(s1Node, s1Seam, rosterChannelOver(s1Seat), core)
         backgroundScope.launchFederatedCoreAdmission(s2Node, s2Seam, rosterChannelOver(s2Seat), core)
 
-        // The spoke forges a well-formed roster naming P-spoof and unicasts it to the leader.
-        rosterChannelOver(xSeat).sendTo(PeerId(s1.value), encodeRoster(setOf(pSpoof)))
-
-        // The legit player flows through and is admitted — proof the receive loop is alive and processing.
+        // Handshake: the legit player flows through first — proof the leader's receive loop is live and
+        // its mux is collecting, so the spoof frame that follows genuinely reaches the reject path.
         s1Node.membership.first { pLegit in it.learners }
+
+        // The spoke forges a well-formed roster naming P-spoof and unicasts it to the leader — several
+        // times, so it cannot be lost to a residual subscribe race and pass the test vacuously.
+        repeat(3) { xRoster.sendTo(PeerId(s1.value), encodeRoster(setOf(pSpoof))) }
 
         // The spoofed player is never admitted, even given a bounded window to appear.
         val spoofAdmitted = withTimeoutOrNull(2.seconds) { s1Node.membership.first { pSpoof in it.learners } }
@@ -209,6 +218,41 @@ class FederatedCoreAdmissionTest {
         s2Node.membership.first { pFar in it.learners }
 
         assertTrue(pFar in s2Node.membership.value.learners, "the new leader admits the far player behind S1")
+    }
+
+    /**
+     * (5) simultaneous boot with the far player pre-attached (M1) — both core servers boot in the same
+     * virtual instant, each with its local roster already populated and both core peers already visible
+     * to each other. The initial send from an earlier-started server can be dropped before a
+     * later-started server's mux is collecting, and no `seam.peers` change follows to re-fire; the
+     * far player must still end admitted. Convergence comes from the appearance-trigger publish and the
+     * reactive-on-newly-learned re-publish together — both timer-free. Launched in the stress order
+     * (the follower/publisher FIRST, the leader SECOND).
+     */
+    @Test
+    fun aSimultaneousBootWithThePlayerPreAttachedStillAdmitsIt() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        val loom = InMemoryLoom()
+        val s1Seat = loom.host(Pattern("fed-boot"))
+        val s2Seat = loom.join(InMemoryTag("fed-boot"))
+        val s1 = NodeId(s1Seat.selfId.value)
+        val s2 = NodeId(s2Seat.selfId.value)
+        val core = setOf(s1, s2)
+        val p2 = NodeId("p2") // the far player, behind the follower, attached at boot
+
+        // Everything pre-present at boot; both core peers already visible in each server's seam.peers.
+        val s1Seam = FakeSeam(selfId = s1Seat.selfId, initialPeers = setOf(s1Seat.selfId, s2Seat.selfId))
+        val s2Seam = FakeSeam(selfId = s2Seat.selfId, initialPeers = setOf(s2Seat.selfId, s1Seat.selfId, PeerId(p2.value)))
+
+        val s1Node = TestCoreNode(RaftRole.Leader, ClusterConfig(voters = core))
+        val s2Node = TestCoreNode(RaftRole.Follower, ClusterConfig(voters = core))
+
+        // Stress ordering: follower/publisher launched FIRST, leader SECOND (its initial send drops).
+        backgroundScope.launchFederatedCoreAdmission(s2Node, s2Seam, rosterChannelOver(s2Seat), core)
+        backgroundScope.launchFederatedCoreAdmission(s1Node, s1Seam, rosterChannelOver(s1Seat), core)
+
+        s1Node.membership.first { p2 in it.learners }
+
+        assertTrue(p2 in s1Node.membership.value.learners, "the far player is admitted despite a simultaneous boot")
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────
