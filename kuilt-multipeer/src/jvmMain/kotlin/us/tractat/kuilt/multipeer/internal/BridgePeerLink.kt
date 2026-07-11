@@ -88,6 +88,16 @@ internal class BridgePeerLink(
      * single-session slot so it becomes reusable without an explicit factory
      * close; the factory's identity guard makes repeat invocations no-ops.
      * Set by the owner right after construction; safe to leave null.
+     *
+     * **Consumer contract — you MUST still [close] a self-dropped seam.** On
+     * the peer-drop path this callback frees the factory slot but issues **no**
+     * `mc_session_close`: it runs inside the JNA peer-state callback, and
+     * re-entering the native bridge there would race the pump teardown. Unlike
+     * the apple side (where ARC reclaims the dropped `MCSession`), the JVM has
+     * no ARC — `mc_session_close` is the only thing that disposes the native
+     * handle. So a consumer that observes [SeamState.Torn] and drops the seam
+     * **without** calling [close] leaks the native session until the owning
+     * factory is closed. Always [close] a seam once it reaches [SeamState.Torn].
      */
     internal var onTerminated: (() -> Unit)? = null
 

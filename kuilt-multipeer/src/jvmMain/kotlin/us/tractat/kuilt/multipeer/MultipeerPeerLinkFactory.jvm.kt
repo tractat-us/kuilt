@@ -159,8 +159,15 @@ public actual class MultipeerPeerLinkFactory actual constructor(
      * Deliberately does **not** call `mc_session_close` here: on the drop path
      * this runs inside the native peer-state callback (re-entering the bridge
      * would race its own pump teardown), and on the close path the link is
-     * already issuing the one allowed `mc_session_close` itself. A dropped
-     * seam's native handle is released by the consumer's `Seam.close()`.
+     * already issuing the one allowed `mc_session_close` itself.
+     *
+     * **Consumer contract:** because this frees the slot but issues no native
+     * call on the drop path, a dropped seam's native handle is disposed **only**
+     * by the consumer's `Seam.close()`. Unlike apple (ARC reclaims the dropped
+     * `MCSession`), the JVM has no ARC — a consumer that observes
+     * `SeamState.Torn` and drops the seam without calling `close()` leaks the
+     * native session until `close()` (factory) runs. Always `close()` a
+     * self-dropped seam.
      */
     private fun onLinkTerminated(link: BridgePeerLink) {
         if (activeLink !== link) return

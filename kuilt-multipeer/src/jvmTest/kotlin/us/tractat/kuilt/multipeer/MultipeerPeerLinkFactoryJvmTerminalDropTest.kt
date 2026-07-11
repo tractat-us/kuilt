@@ -39,6 +39,9 @@ class MultipeerPeerLinkFactoryJvmTerminalDropTest {
             // Before the fix this throws "already has an active session".
             val second = factory.weave(Rendezvous.New(Pattern("room")))
             assertNotSame(first, second)
+            // Close the dropped first seam too — the slot frees on drop, but the
+            // native handle (and its drain coroutine) is disposed only by close().
+            first.close()
             second.close()
             factory.close()
         }
@@ -48,13 +51,42 @@ class MultipeerPeerLinkFactoryJvmTerminalDropTest {
         runTest {
             val lib = SessionTrackingFakeMultipeerNativeLib()
             val factory = factory(lib)
-            factory.weave(Rendezvous.New(Pattern("room")))
+            val first = factory.weave(Rendezvous.New(Pattern("room")))
             val session1 = lib.lastOpenedSession()
 
             // The peer never reaches connected — the drop still frees the slot.
             lib.firePeerState(session1, "guest", isConnected = 0)
 
             val second = factory.weave(Rendezvous.New(Pattern("room")))
+            first.close()
+            second.close()
+            factory.close()
+        }
+
+    @Test
+    fun terminalDropFreesTheSlotButLeavesNativeHandleForConsumerClose() =
+        runTest {
+            val lib = SessionTrackingFakeMultipeerNativeLib()
+            val factory = factory(lib)
+            val first = factory.weave(Rendezvous.New(Pattern("room")))
+            val session1 = lib.lastOpenedSession()
+
+            // Terminal peer drop: the slot frees so a reconnect is possible...
+            lib.firePeerState(session1, "guest", isConnected = 1)
+            lib.firePeerState(session1, "guest", isConnected = 0)
+
+            // ...but the native handle is NOT yet disposed — freeing the slot from
+            // inside the JNA callback must not re-enter mc_session_close.
+            val second = factory.weave(Rendezvous.New(Pattern("room")))
+            val nativeCloseCountRightAfterDrop = lib.closeCount(session1)
+
+            // The consumer disposes the leaked handle by close()ing the torn seam.
+            first.close(CloseReason.RemoteRequested)
+
+            assertAll(
+                { assertEquals(0, nativeCloseCountRightAfterDrop, "the drop path must not call mc_session_close") },
+                { assertEquals(1, lib.closeCount(session1), "consumer close() disposes the native handle exactly once") },
+            )
             second.close()
             factory.close()
         }
@@ -107,7 +139,7 @@ class MultipeerPeerLinkFactoryJvmTerminalDropTest {
         runTest {
             val lib = SessionTrackingFakeMultipeerNativeLib()
             val factory = factory(lib)
-            factory.weave(Rendezvous.New(Pattern("room")))
+            val first = factory.weave(Rendezvous.New(Pattern("room")))
             val session1 = lib.lastOpenedSession()
 
             lib.firePeerState(session1, "guest", isConnected = 1)
@@ -121,6 +153,7 @@ class MultipeerPeerLinkFactoryJvmTerminalDropTest {
             assertFailsWith<IllegalStateException> {
                 factory.weave(Rendezvous.New(Pattern("room")))
             }
+            first.close()
             second.close()
             factory.close()
         }
