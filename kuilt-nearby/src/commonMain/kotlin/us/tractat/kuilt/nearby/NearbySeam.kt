@@ -139,6 +139,13 @@ internal class NearbySeam(
                 reassemblers.remove(event.endpointId)?.reset()
                 sequences.remove(event.endpointId)
                 sharedPeers.update { it - peerId }
+                // Honour the Seam contract: `incoming` completes on a remote disconnect too.
+                // The session is genuinely over only when a peer that had CONNECTED (state Woven)
+                // just lost its LAST endpoint — not on a partial drop, and not while still Weaving
+                // (never-connected; that terminates via close()). Latch Torn exactly once.
+                if (endpointPeers.isEmpty() && _state.value is SeamState.Woven) {
+                    latchTorn(CloseReason.RemoteRequested)
+                }
             }
         }
     }
@@ -179,18 +186,31 @@ internal class NearbySeam(
     // ── close ─────────────────────────────────────────────────────────────────
 
     override suspend fun close(reason: CloseReason) {
-        if (!closed.compareAndSet(expect = false, update = true)) return
-        _state.value = SeamState.Torn(reason)
-        // Cancel the entire scope — this cleans up the receive/disconnect loops
-        // AND the background accept coroutine launched by NearbyLoom.open() into
-        // the same scope, preventing coroutine leaks between tests.
-        scope.coroutineContext[Job]?.cancel()
-        spool.close()
+        // Single-shot: if a self-driven Torn (last-peer disconnect) already fired, this no-ops.
+        if (!latchTorn(reason)) return
+        // Local close additionally tears the wire down and drops self from the shared roster —
+        // a remote-driven latch skips these (its endpoints are already gone; self stays until close).
         val endpoints = endpointPeersMutex.withLock { endpointPeers.keys.toList() }
         for (endpointId in endpoints) {
             api.disconnect(endpointId)
         }
         sharedPeers.update { it - selfId }
+    }
+
+    /**
+     * Terminal teardown, latched exactly once via [closed]. Publishes [SeamState.Torn], completes
+     * [incoming] by closing the [spool], and cancels the whole [scope] — which stops the
+     * receive/disconnect loops AND the background accept coroutine [NearbyLoom.openSession] launches
+     * into the same scope, preventing coroutine leaks. Returns `false` if teardown already ran.
+     *
+     * Called from both [close] (local) and [disconnectLoop] (last remote endpoint gone).
+     */
+    private fun latchTorn(reason: CloseReason): Boolean {
+        if (!closed.compareAndSet(expect = false, update = true)) return false
+        _state.value = SeamState.Torn(reason)
+        scope.coroutineContext[Job]?.cancel()
+        spool.close()
+        return true
     }
 
     private fun checkNotClosed() {
