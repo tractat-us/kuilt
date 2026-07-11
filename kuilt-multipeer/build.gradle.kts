@@ -14,6 +14,7 @@ kotlin {
             api(project(":kuilt-core"))  // public API returns Seam from weave() — expose the contract transitively
             implementation(project(":kuilt-session"))
             implementation(libs.kotlinx.coroutines.core)
+            implementation(libs.kotlinx.atomicfu)  // single-shot terminal-teardown latch in MCSessionLink
             implementation(libs.kotlin.logging)
         }
         // MANUAL appleMain → disables default-hierarchy auto-wiring → hand-wire ALL intermediates:

@@ -1,6 +1,7 @@
 package us.tractat.kuilt.multipeer.internal
 
 import io.github.oshai.kotlinlogging.KotlinLogging
+import kotlinx.atomicfu.atomic
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -109,9 +110,20 @@ internal class MCSessionLink(
     internal var onTerminated: (() -> Unit)? = null
 
     // Written by close() before disconnect(); read by the MC delegate callback.
+    // Means "we issued session.disconnect() — suppress the .notConnected warn".
+    // The self-driven drop path leaves it false (the drop IS unexpected, so it
+    // must still warn) and calls no disconnect (ARC reclaims the dropped session).
     // No @Volatile here — K/N's memory model (since 1.7.20) makes plain var
     // writes visible across threads; @Volatile is JVM-only.
     private var closing: Boolean = false
+
+    // SEPARATE single-shot latch for the seam's terminal state+resource teardown
+    // (state→Torn, bridge/spool close, scope cancel). Distinct from `closing`:
+    // the self-driven drop path tears the seam down (so `state` reaches Torn and
+    // `incoming` completes per the Seam contract) WITHOUT calling disconnect(),
+    // while close() does both. One CAS winner across both paths so a drop followed
+    // by a consumer close() never double-closes bridge/spool or re-cancels scope.
+    private val tornDown = atomic(false)
 
     init {
         // Single drain coroutine: forwards frames from the MC delegate bridge to the spool in
@@ -161,11 +173,29 @@ internal class MCSessionLink(
         // session:peer:didChangeState fires .notConnected for the clean
         // disconnect — suppressing the spurious mc.session.error warn.
         closing = true
+        // Terminal state+resource teardown (single-shot; a no-op if a self-driven
+        // drop already tore the seam down). close() is the only path that calls
+        // session.disconnect().
+        tearDown(reason)
+        session.disconnect()
+    }
+
+    /**
+     * Single-shot terminal teardown — latch [SeamState.Torn], close the MC-delegate
+     * [bridge] and the [spool] (completing [incoming] per the `Seam` contract),
+     * cancel [scope], then free the owner's single-session slot via [onTerminated].
+     * Shared by the self-driven drop path and [close]; the [tornDown] CAS makes it
+     * run once even if a drop and a consumer [close] interleave. Issues no
+     * `session.disconnect()` — ARC reclaims the dropped `MCSession`; only [close]
+     * disconnects.
+     */
+    private fun tearDown(reason: CloseReason) {
+        if (!tornDown.compareAndSet(false, true)) return
         _state.value = SeamState.Torn(reason)
         bridge.close()
         spool.close()
         scope.cancel()
-        session.disconnect()
+        onTerminated?.invoke()
     }
 
     private inner class SessionDelegate :
@@ -199,11 +229,14 @@ internal class MCSessionLink(
                         log.warn { "mc.session.error localPeer=${selfId.value} peer=${peer.displayName}" }
                     }
                     val remaining = _peers.updateAndGet { it - peerId }
-                    // Terminal peer-level drop. When the last remote peer is
-                    // gone the whole session is dead — notify the owner so it can
-                    // free its single-session slot (idempotent with close()).
+                    // Terminal peer-level drop. When the last remote peer is gone
+                    // the whole session is dead — tear the seam down (latch Torn,
+                    // complete `incoming`) so the Seam contract holds on a remote
+                    // disconnect, then free the owner's single-session slot
+                    // (idempotent with close()). No session.disconnect() here: ARC
+                    // reclaims the dropped MCSession; only close() disconnects.
                     if (remaining == setOf(selfId)) {
-                        onTerminated?.invoke()
+                        tearDown(CloseReason.RemoteRequested)
                     }
                 }
                 else -> Unit // Connecting — wait for terminal state
