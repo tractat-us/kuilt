@@ -204,8 +204,8 @@ public class RoutedRaftTransport(
 
         // First-hop origin validation, BEFORE any emit or forward. A spoke may
         // speak only for itself; a core sender is trusted to carry a validated
-        // origin.
-        if (!fromCore && relay.origin != sender) {
+        // origin. Shared with RaftRelayHub via [validFirstHop].
+        if (!validFirstHop(sender = sender, origin = relay.origin, core = core)) {
             log.debug { "raft-relay: $selfId rejected spoofed frame (origin=${relay.origin}, sender=$sender)" }
             return
         }
