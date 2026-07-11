@@ -324,14 +324,17 @@ The `major.minor` version line lives in `kuiltVersionLine` in `gradle.properties
 the full version is `<line>.<patch>`. Group is `us.tractat.kuilt`. Two axes move
 independently:
 
-- **Patch → internal.** Every push to `main` publishes a Tigris snapshot at
-  `${kuiltVersionLine}.<run_number>` — the patch is just the CI run number, so it
-  advances on its own with no PR. These are the continuous internal builds
-  consumers iterate against; nobody hand-edits the patch.
-- **Minor → external.** A Maven Central / external release **bumps the minor**
-  (`0.4.x` → `0.5.0`) — a deliberate one-line PR to `kuiltVersionLine` plus a
-  `v<x.y.z>` tag. The minor is the externally-meaningful number; the patch is
-  internal churn.
+- **Snapshots → internal, automatic.** Every push to `main` publishes a Tigris
+  snapshot at `${kuiltVersionLine}.0-dev.<run_number>` — the patch is `0` and the
+  `-dev.<run_number>` suffix (the CI run number) advances on its own with no PR
+  and sorts *below* real releases in semver/Maven order. These are the continuous
+  internal builds consumers iterate against; nobody hand-edits them.
+- **Releases → external, deliberate, PATCH by default.** A Maven Central release
+  is a `v<x.y.z>` tag on the target commit (the tag drives the version). **Default
+  to a PATCH bump** (`v0.7.0` → `v0.7.1`) — no `kuiltVersionLine` change needed. A
+  **minor** bump (`kuiltVersionLine` `0.7` → `0.8`, a one-line PR before the tag) is
+  reserved for a deliberate breaking-API release and is a human call, not a default.
+  Pre-1.0 low-ceremony: patch is the normal external cadence.
 
 So: don't pin a concrete `0.4.0`-style number in prose or examples (it dates the
 moment a snapshot publishes) — describe the line, and link consumers to the
@@ -341,7 +344,7 @@ moment a snapshot publishes) — describe the line, and link consumers to the
 There are **two publish channels**, by trigger:
 
 **Tigris snapshots — every push to `main`** (plus manual `workflow_dispatch`).
-Continuous `${kuiltVersionLine}.<run_number>` builds; no tag required. Flow:
+Continuous `${kuiltVersionLine}.0-dev.<run_number>` builds; no tag required. Flow:
 
 1. Gradle stages publications into `build/staged-maven-repo/` via the
    `TigrisStaging` Maven repo (file:// URL).
@@ -356,8 +359,9 @@ pattern sidesteps it entirely. Consumers reading from Tigris hit the same
 Gradle s3:// transport for GETs, but GETs don't set those headers so the read
 path works.
 
-**Maven Central releases — on a `v<x.y.z>` tag** (a minor bump; or a manual
-dispatch with `release_to_central=true`), **never** on a plain main push. The
+**Maven Central releases — on a `v<x.y.z>` tag** (a patch by default, or a minor
+bump on a deliberate breaking-API release; or a manual dispatch with
+`release_to_central=true`), **never** on a plain main push. The
 `maven-central` job derives the version from the tag (`v<x.y.z>` → `<x.y.z>`),
 publishes signed artifacts as a **PENDING** deployment to the Central Portal that
 a human then releases by hand at central.sonatype.com, and commits the README
