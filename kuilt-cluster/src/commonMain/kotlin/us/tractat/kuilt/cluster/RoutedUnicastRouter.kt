@@ -45,16 +45,16 @@ private val log = KotlinLogging.logger("us.tractat.kuilt.cluster.RoutedUnicastRo
  * cross-server: the core hop is a single-addressee `coreSeam.sendTo(theOneServer, …)`
  * — it **never** broadcasts to the core — and the last hop is delivered down the
  * player's own **two-peer** server↔player link (a [Seam.broadcast] on a two-peer
- * seam reaches exactly the one player, as `LearnerRouter.sendToLearner` already does
+ * seam reaches exactly the one player, as `RaftRelayHub.sendToLearner` already does
  * for a learner seam). It never iterates a set of recipients for one message. A
  * frame for one player therefore reaches exactly that player; no other player, and
  * no non-destination server, ever observes it. That is the leak-boundary invariant
  * this slice exists to protect (ADR-005 / the spec's "honest seam").
  *
- * ## The generalization of `LearnerRouter`
+ * ## The generalization of the per-learner relay
  *
- * The single-server precedent is `LearnerRouter`, which routes a learner's frames
- * to the *one* current leader and a voter's `sendToLearner` to *one* learner seam
+ * The single-server precedent is `RaftRelayHub`, which routes a learner's frames
+ * to the *named* voter (by `dest`) and a voter's `sendToLearner` to *one* learner seam
  * — lock-guarded, best-effort, and explicitly warned against ever "falling back to
  * fan-all." This router is the cross-core generalization of exactly that
  * single-addressee shape: instead of "route to the one leader / one local learner,"
@@ -169,7 +169,7 @@ public class RoutedUnicastRouter internal constructor(
      * Hand [payload] down the one local player [recipient]'s link, or drop if not
      * local. The link is the **two-peer** server↔player seam registered for
      * [recipient], so a [Seam.broadcast] on it reaches exactly that one player — the
-     * same single-addressee delivery `LearnerRouter.sendToLearner` uses on a learner
+     * same single-addressee delivery `RaftRelayHub.sendToLearner` uses on a learner
      * seam. [recipient] is thus a pure logical player id (the directory/envelope key),
      * decoupled from whatever id the transport assigns the link.
      */

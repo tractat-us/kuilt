@@ -76,7 +76,7 @@ class ServerClusterOverlayE2ETest {
                     raftConfig = raftCfg,
                 )
                 // Run the relay accept loop on its own job so tearing it down (a relay
-                // endpoint going away — the same trigger that fires LearnerRouter.removeLearner)
+                // endpoint going away — the same trigger that fires the hub's removeSpoke)
                 // exercises the eviction path while the cluster's overlay lives on.
                 val relayJob = serverScope.launch { cluster.start() }
 
@@ -112,7 +112,7 @@ class ServerClusterOverlayE2ETest {
                 // Wait until the learner is fully admitted (membership committed) so
                 // admitLearner has passed changeMembership and is parked in awaitCancellation —
                 // only there does a teardown run its evict finally (a cancel mid-changeMembership
-                // rethrows before it, exactly as it would skip LearnerRouter.removeLearner).
+                // rethrows before it, exactly as it would skip the hub's removeSpoke).
                 val learnerId = NodeId(clientId.value)
                 withTimeout(15.seconds) {
                     cluster.awaitLeader().membership.first { learnerId in it.learners }
@@ -121,7 +121,7 @@ class ServerClusterOverlayE2ETest {
 
                 // ── Relay teardown ⇒ evict retracts the attachment ──────────────
                 // admitLearner holds each admitted room via awaitCancellation until its
-                // relay scope tears (exactly as LearnerRouter.removeLearner is driven), and
+                // relay scope tears (exactly as the hub's removeSpoke is driven), and
                 // its finally runs overlay.evict. The cluster's overlay outlives the relay job.
                 relayJob.cancel()
                 clientScope.cancel()

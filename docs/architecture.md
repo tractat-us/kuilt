@@ -431,9 +431,10 @@ voter core meshes separately (in-process `Channel` transports under simulation,
 real WebSocket sockets in the M=3 E2E), and each client holds a strict **2-peer
 `Seam`** to exactly one server via `KtorRoomHost`. The client's Seam cannot
 address the leader, so the attached server **relays** the client's raft messages
-into the core — `LearnerRouter` routes each inbound learner frame to the current
-leader voter, and the client's `ManagedRaftTransport` always sends to its single
-relay peer. This lets a client keep committing through *any* relay endpoint
+into the core — the `RaftRelayHub` routes each inbound learner frame by its `dest`
+to exactly the addressed voter's inbound (true origin preserved), and the client's
+player relay transport (over a hot-swappable `ManagedSeam`) wraps every send as a
+`RaftRelay(dest = leader)` addressed to its single relay peer. This lets a client keep committing through *any* relay endpoint
 regardless of which voter leads (the precondition for failover without moving
 leadership). The *relay-room* shape — where a client is logically a peer on one
 shared cluster `Seam` — is the separate `examples/` demo (slice 1), not this
@@ -463,9 +464,9 @@ the room roster — no explicit client identification step is needed.
 ### `NodeId` ↔ `PeerId` alignment
 
 Each voter's `NodeId` must equal `NodeId(serverPeerId.value)` — that is, the
-server's `KtorRoomHost.serverPeerId` cast to a `NodeId`. The `LearnerRouter`
-stamps `Seam.broadcast`'s sender as `serverPeerId`; the client's
-`SeamRaftTransport` maps that sender to a `NodeId` for Raft message routing.
+server's `KtorRoomHost.serverPeerId` cast to a `NodeId`. The `RaftRelayHub`
+stamps `Seam.broadcast`'s sender as `serverPeerId` and carries the true voter as the
+`RaftRelay.origin`; the client's player relay transport maps the origin to a `NodeId`.
 Mismatched IDs cause silently dropped AppendEntries.
 
 ## What kuilt is *not* responsible for

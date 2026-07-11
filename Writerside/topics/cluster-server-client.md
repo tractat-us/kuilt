@@ -171,7 +171,7 @@ Use `clusterClientWithNode()` with a caller-managed `RaftNode` +
 | `ServerCluster` | jvmAndAndroidMain | Server facade: voter mesh + relay accept loop |
 | `ClusterClient` | commonMain | Client facade: propose + observe committed |
 | `VoterMesh` | commonMain | K_m complete-graph voter set |
-| `ManagedRaftTransport` | commonMain | `RaftTransport` with hot-swappable backing `Seam` |
+| `ManagedSeam` | commonMain | `Seam` with a hot-swappable backing `Seam` (survives reconnects) |
 | `ClusterEndpoints` | commonMain | Endpoint list + rotation policy |
 
 See `docs/architecture.md` for the topology design and safety rationale, and
