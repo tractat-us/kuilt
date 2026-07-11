@@ -1,7 +1,7 @@
 name: publish
 
 # Publishes kuilt to Tigris (Fly's S3-compatible object storage). Every push to
-# main publishes `${kuiltVersionLine}.<run_number>` from gradle.properties (so
+# main publishes `${kuiltVersionLine}.0-dev.<run_number>` from gradle.properties (so
 # bumping the major.minor on a breaking-API release is a one-line PR — see
 # #22 for the full cutover history). The upload itself is ~20 s via `aws s3 sync`.
 # Tags are NOT a trigger — they're for tagging; publishing is continuous from main.
@@ -30,7 +30,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Explicit version (defaults to ${kuiltVersionLine}.<run_number> from gradle.properties).'
+        description: 'Explicit version (defaults to ${kuiltVersionLine}.0-dev.<run_number> from gradle.properties).'
         required: false
       release_to_central:
         description: 'Stage a release to Maven Central (uploads as a PENDING deployment — you release it by hand in the Central Portal afterward).'
