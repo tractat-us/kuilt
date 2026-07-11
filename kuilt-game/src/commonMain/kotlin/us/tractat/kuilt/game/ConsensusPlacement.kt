@@ -347,7 +347,7 @@ internal fun ConsensusBinding.federatedTransport(
     if (self in core) {
         serverRelayTransport(transport, relayChannel, core, scope, attachment)
     } else {
-        playerRelayTransport(transport, relayChannel, core, scope)
+        playerRelayTransport(transport, relayChannel, { core }, scope)
     }
 
 /**

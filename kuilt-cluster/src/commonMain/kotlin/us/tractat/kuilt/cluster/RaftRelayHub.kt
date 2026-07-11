@@ -7,6 +7,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import us.tractat.kuilt.core.Seam
@@ -71,8 +73,10 @@ internal class RaftRelayHub(private val voters: Set<NodeId>) {
     /** Learner NodeId → the sole collector Job draining that spoke's raft channel. */
     private val spokeJobs: MutableMap<NodeId, Job> = mutableMapOf()
 
+    private val _learnersFlow: MutableStateFlow<Set<NodeId>> = MutableStateFlow(emptySet())
+
     /** The live learner-id set; voter transports report it in their `peers`. */
-    val learnersFlow: MutableStateFlow<Set<NodeId>> = MutableStateFlow(emptySet())
+    val learnersFlow: StateFlow<Set<NodeId>> = _learnersFlow.asStateFlow()
 
     /**
      * Register a voter's inbound [MutableSharedFlow] keyed by [voterId].
@@ -91,16 +95,29 @@ internal class RaftRelayHub(private val voters: Set<NodeId>) {
      * preserved as `from`. A `dest` that is not a voter is dropped; the hub is a
      * single process and never re-forwards.
      *
+     * ## Re-admit race (cross-relay failover)
+     *
+     * A learner re-admitted on a surviving relay while an old room is still tearing
+     * can race a stale `addSpoke`/`removeSpoke` for the same [learnerId]. So this
+     * cancels any **prior** collector job for [learnerId] under the lock before
+     * installing the new one (no orphaned collector, no double-delivery), and
+     * [removeSpoke] is seam-identity-guarded so a late `finally removeSpoke` from
+     * the old room cannot cancel this new spoke's collector.
+     *
      * @param learnerId the learner's [NodeId] (derived from the spoke's `selfId`).
      * @param seam the learner's two-peer spoke seam; the hub owns its `incoming`.
      * @param scope parents the collector coroutine. **Required.**
      */
     fun addSpoke(learnerId: NodeId, seam: Seam, scope: CoroutineScope) {
-        val inboundSnapshot = lock.withLock {
+        val (inboundSnapshot, priorJob) = lock.withLock {
+            val prior = spokeJobs.remove(learnerId)
             spokeSeams[learnerId] = seam
-            learnersFlow.update { it + learnerId }
-            inboundByVoter.toMap()
+            _learnersFlow.update { it + learnerId }
+            inboundByVoter.toMap() to prior
         }
+        // Cancel the prior collector OUTSIDE the lock — a re-admit for the same
+        // learner must not leave the old spoke's collector draining.
+        priorJob?.cancel()
         val job = scope.launch {
             runCatchingCancellable {
                 seam.incoming.collect { swatch ->
@@ -131,11 +148,17 @@ internal class RaftRelayHub(private val voters: Set<NodeId>) {
     /**
      * Deregister a learner: cancel its collector, drop its seam, withdraw it from
      * [learnersFlow]. Idempotent.
+     *
+     * **Seam-identity-guarded:** removes only if the currently-registered spoke IS
+     * [seam]. A late `finally removeSpoke` from an old room (during cross-relay
+     * failover) whose seam has already been superseded by a fresh [addSpoke] is a
+     * no-op — it must not cancel the new spoke's collector.
      */
-    fun removeSpoke(learnerId: NodeId) {
+    fun removeSpoke(learnerId: NodeId, seam: Seam) {
         val job = lock.withLock {
+            if (spokeSeams[learnerId] !== seam) return@withLock null
             spokeSeams.remove(learnerId)
-            learnersFlow.update { it - learnerId }
+            _learnersFlow.update { it - learnerId }
             spokeJobs.remove(learnerId)
         }
         job?.cancel()
@@ -151,7 +174,7 @@ internal class RaftRelayHub(private val voters: Set<NodeId>) {
      * is a single-addressee send, never a fan-out.
      *
      * R9 — payload budget: this broadcast is unbudgeted today (as the prior
-     * `LearnerRouter.sendToLearner` was). The spoke may be a framed WS fabric while
+     * single-server learner router was). The spoke may be a framed WS fabric while
      * the voter-channel transport reports `maxPayloadBytes = null`; the added
      * [RaftRelay] header (see [RELAY_HEADER_BUDGET]) is not reserved here. This is a
      * pre-existing exposure carried forward unchanged — not fixed in this task.

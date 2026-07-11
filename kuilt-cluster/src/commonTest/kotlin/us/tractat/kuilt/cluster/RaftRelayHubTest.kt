@@ -145,7 +145,7 @@ class RaftRelayHubTest {
             hub.addSpoke(learnerId, hubSide, backgroundScope)
             testScheduler.advanceUntilIdle()
 
-            hub.removeSpoke(learnerId)
+            hub.removeSpoke(learnerId, hubSide)
             testScheduler.advanceUntilIdle()
 
             learnerSide.broadcast(RaftRelay.encode(RaftRelay(learnerId, v1, "after-remove".encodeToByteArray())))
@@ -170,9 +170,74 @@ class RaftRelayHubTest {
             testScheduler.advanceUntilIdle()
             assertEquals(setOf(learnerId), hub.learnersFlow.value, "addSpoke publishes the learner id")
 
-            hub.removeSpoke(learnerId)
+            hub.removeSpoke(learnerId, hubSide)
             testScheduler.advanceUntilIdle()
             assertTrue(hub.learnersFlow.value.isEmpty(), "removeSpoke withdraws it")
+        }
+
+    // ── Re-admit race (cross-relay failover) ─────────────────────────────────
+
+    @Test
+    fun reAdmitCancelsThePriorCollectorForTheSameLearner() =
+        runTest(UnconfinedTestDispatcher(), timeout = 10.seconds) {
+            val v1 = NodeId("v1")
+            val hub = RaftRelayHub(voters = setOf(v1))
+            val at1 = registerVoter(hub, v1)
+
+            // Same learner id admitted twice (old room A still tearing, new room B). Each
+            // spoke speaks for its own fabric sender (origin == sender, per validFirstHop);
+            // the registration key is what the re-admit guard is keyed on.
+            val (hubA, learnerA) = spokePair()
+            val originA = NodeId(learnerA.selfId.value)
+            val (hubB, learnerB) = spokePair()
+            val originB = NodeId(learnerB.selfId.value)
+            val learnerId = originA
+
+            hub.addSpoke(learnerId, hubA, backgroundScope)
+            testScheduler.advanceUntilIdle()
+            hub.addSpoke(learnerId, hubB, backgroundScope)
+            testScheduler.advanceUntilIdle()
+
+            // A frame on the OLD spoke must no longer be delivered — its collector was cancelled.
+            learnerA.broadcast(RaftRelay.encode(RaftRelay(originA, v1, "stale".encodeToByteArray())))
+            testScheduler.advanceUntilIdle()
+            assertTrue(at1.isEmpty(), "the superseded spoke's collector must be cancelled — no double-delivery")
+
+            // The new spoke delivers exactly once.
+            learnerB.broadcast(RaftRelay.encode(RaftRelay(originB, v1, "fresh".encodeToByteArray())))
+            testScheduler.advanceUntilIdle()
+            assertEquals(1, at1.size, "the fresh spoke delivers")
+            assertContentEquals("fresh".encodeToByteArray(), at1.single().bytes)
+        }
+
+    @Test
+    fun staleRemoveSpokeFromOldRoomDoesNotCancelTheFreshSpoke() =
+        runTest(UnconfinedTestDispatcher(), timeout = 10.seconds) {
+            val v1 = NodeId("v1")
+            val hub = RaftRelayHub(voters = setOf(v1))
+            val at1 = registerVoter(hub, v1)
+
+            val (hubA, learnerA) = spokePair()
+            val learnerId = NodeId(learnerA.selfId.value)
+            hub.addSpoke(learnerId, hubA, backgroundScope)
+            testScheduler.advanceUntilIdle()
+
+            // Re-admit on a fresh spoke for the same learner id.
+            val (hubB, learnerB) = spokePair()
+            val originB = NodeId(learnerB.selfId.value)
+            hub.addSpoke(learnerId, hubB, backgroundScope)
+            testScheduler.advanceUntilIdle()
+
+            // The old room's late finally fires removeSpoke with the SUPERSEDED seam.
+            hub.removeSpoke(learnerId, hubA)
+            testScheduler.advanceUntilIdle()
+
+            // Seam-identity guard: the fresh spoke survives and still delivers.
+            assertEquals(setOf(learnerId), hub.learnersFlow.value, "the fresh learner stays registered")
+            learnerB.broadcast(RaftRelay.encode(RaftRelay(originB, v1, "survives".encodeToByteArray())))
+            testScheduler.advanceUntilIdle()
+            assertEquals(1, at1.size, "a stale identity-mismatched removeSpoke must not cancel the fresh collector")
+            assertContentEquals("survives".encodeToByteArray(), at1.single().bytes)
         }
 
     // ── Helpers ──────────────────────────────────────────────────────────────

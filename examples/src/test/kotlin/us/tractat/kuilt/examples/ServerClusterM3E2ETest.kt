@@ -13,6 +13,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
 import us.tractat.kuilt.cluster.ClusterClient
 import us.tractat.kuilt.cluster.clusterClientWithNode
+import us.tractat.kuilt.cluster.playerRelayTransport
 import us.tractat.kuilt.cluster.serverCluster
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Pattern
@@ -25,7 +26,6 @@ import us.tractat.kuilt.raft.NotLeaderException
 import us.tractat.kuilt.raft.RaftConfig
 import us.tractat.kuilt.raft.RaftNode
 import us.tractat.kuilt.raft.RaftRole
-import us.tractat.kuilt.raft.SeamRaftTransport
 import us.tractat.kuilt.raft.raftNode
 import us.tractat.kuilt.session.SeamRoomFactory
 import us.tractat.kuilt.websocket.KtorClientLoom
@@ -47,18 +47,20 @@ import kotlin.time.Duration.Companion.seconds
  *   via [us.tractat.kuilt.websocket.KtorRoomHost], and commits a proposal across all 3 voters.
  * - [ClusterClient.propose] returns successfully: the commit appears on the client's
  *   [ClusterClient.committed] and on every voter's committed stream.
- * - This is the production correctness proof for the `LearnerRouter` leader-routing fix (#545).
+ * - This is the production correctness proof for the exactly-one-voter delivery invariant
+ *   (#545), now upheld by the `RaftRelayHub` dest-routing.
  *
  * ## The bug this test caught (#545)
  *
- * Before the fix, `LearnerRouter.addLearner` fanned ALL learner-inbound swatches to every
+ * The original single-server router fanned ALL learner-inbound swatches to every
  * voter's `MutableSharedFlow`. When the learner forwarded a command, all 3 voters received
  * it — the 2 followers replied `NotLeader` immediately (via `seam.broadcast`, arriving at the
  * learner as `sender = serverPeerId`). That `NotLeader` reply raced and beat the leader's
  * `Committed` reply, causing [ClusterClient.propose] to throw [LeadershipLostException] at M≥2.
  *
- * The fix routes each learner envelope to the **current leader voter's inbound only**
- * (see `LearnerRouter.addLearner`). Followers never receive the Forward and so never reply.
+ * Today the `RaftRelayHub` routes each learner envelope by its `dest` to exactly the addressed
+ * voter's inbound — the client addresses the leader, so followers never receive the Forward
+ * and so never reply.
  *
  * ## NodeId ↔ serverPeerId alignment at M=3
  *
@@ -191,9 +193,17 @@ class ServerClusterM3E2ETest {
 
                 withTimeout(5.seconds) { clientRoom.roster.first { it.isNotEmpty() } }
 
+                // The client speaks the relay dialect: a player relay transport over a
+                // no-peer inner wraps every send as a RaftRelay(dest = leader) addressed to
+                // its single relay server, which the server-side RaftRelayHub dest-routes.
                 val clientNode = clientScope.raftNode(
                     clusterConfig = learnerConfig,
-                    transport = SeamRaftTransport(clientSeam),
+                    transport = playerRelayTransport(
+                        inner = noPeerInnerTransport(clientNodeId),
+                        relayChannel = clientSeam,
+                        voters = { setOf(alignedVoterId, voterId2, voterId3) },
+                        scope = clientScope,
+                    ),
                     storage = InMemoryRaftStorage(),
                     raftConfig = raftCfg,
                 )

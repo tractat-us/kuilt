@@ -111,7 +111,8 @@ class RoutedRaftTransportTest {
         val server = peers.getValue("server").selfId
         val inner = FakeInnerTransport(selfId = self, peers = setOf(self)) // leader not a direct peer
         val recording = RecordingSeam(pRelay)
-        val t = playerRelayTransport(inner, recording, core = setOf(NodeId(server.value)), scope = backgroundScope)
+        // The up-leg forwards regardless of the voter set (validation applies only to down-frames).
+        val t = playerRelayTransport(inner, recording, voters = { setOf(leader) }, scope = backgroundScope)
         val atServer = collectInto(peers.getValue("server"))
         testScheduler.advanceUntilIdle()
 
@@ -203,6 +204,80 @@ class RoutedRaftTransportTest {
         assertEquals(listOf(s2Seam.selfId), recording.sentTo, "one core hop to the destination's server")
         assertEquals(RaftRelay(pNode, premote, "prop".encodeToByteArray()), RaftRelay.decode(atS2.single().toByteArray()))
     }
+
+    // ── C: player trusts a down-frame only if its origin is a voter ──────────
+
+    @Test
+    fun c_playerAcceptsDownFrameWhoseOriginIsAVoterEvenIfTheRelayIsNotAVoter() =
+        runTest(UnconfinedTestDispatcher(), timeout = 10.seconds) {
+            // R2 pin: the relay server's id is NOT a voter (mirrors ConcurrentAdmissionE2ETest's
+            // non-voter relay id). A down-frame whose true origin IS a voter must still surface —
+            // the old sender-based rule would reject it (sender ∉ core) and the client would hang.
+            val (pRelay, peers) = relayLoomWith("player", "server")
+            val self = NodeId(pRelay.selfId.value)
+            val serverSeam = peers.getValue("server")
+            val voterA = NodeId("voter-a")
+            val inner = FakeInnerTransport(selfId = self, peers = setOf(self))
+            val t = playerRelayTransport(inner, pRelay, voters = { setOf(voterA) }, scope = backgroundScope)
+            val received = collectInto(t)
+            testScheduler.advanceUntilIdle()
+
+            serverSeam.sendTo(pRelay.selfId, RaftRelay.encode(RaftRelay(origin = voterA, dest = self, bytes = "append".encodeToByteArray())))
+            testScheduler.advanceUntilIdle()
+
+            assertEquals(listOf(voterA), received.map { it.from }, "a voter-origin down-frame surfaces even when the relay is not a voter")
+            assertContentEquals("append".encodeToByteArray(), received.single().bytes)
+        }
+
+    @Test
+    fun c_playerRejectsDownFrameWhoseOriginIsNotAVoter_strictlyTighter() =
+        runTest(UnconfinedTestDispatcher(), timeout = 10.seconds) {
+            // Fellow-spoke pin (proves C strictly tighter than the sender rule): the server relays
+            // down a frame whose origin is a STRANGER learner (∉ voters). Under the old sender-based
+            // rule (sender = server ∈ core) this would surface — a forged AppendEntries the victim's
+            // engine would truncate+append. Under C it must reach no engine.
+            val (pRelay, peers) = relayLoomWith("player", "server")
+            val self = NodeId(pRelay.selfId.value)
+            val serverSeam = peers.getValue("server")
+            val voterA = NodeId("voter-a")
+            val strangerLearner = NodeId("stranger-learner")
+            val inner = FakeInnerTransport(selfId = self, peers = setOf(self))
+            val t = playerRelayTransport(inner, pRelay, voters = { setOf(voterA) }, scope = backgroundScope)
+            val received = collectInto(t)
+            testScheduler.advanceUntilIdle()
+
+            serverSeam.sendTo(pRelay.selfId, RaftRelay.encode(RaftRelay(origin = strangerLearner, dest = self, bytes = "forged".encodeToByteArray())))
+            testScheduler.advanceUntilIdle()
+
+            assertTrue(received.isEmpty(), "a non-voter origin must reach no engine (log-corruption vector closed)")
+        }
+
+    @Test
+    fun c_playerReadsVotersPerFrame_membershipGrowthIsHonoured() =
+        runTest(UnconfinedTestDispatcher(), timeout = 10.seconds) {
+            // Live-growth: the voters provider is read PER FRAME, never captured at construction.
+            // A frame from v2 is dropped while voters = {v1}; after the set grows to {v1, v2}, the
+            // next v2 frame surfaces — proving the per-frame read.
+            val (pRelay, peers) = relayLoomWith("player", "server")
+            val self = NodeId(pRelay.selfId.value)
+            val serverSeam = peers.getValue("server")
+            val v1 = NodeId("v1")
+            val v2 = NodeId("v2")
+            var voters = setOf(v1)
+            val inner = FakeInnerTransport(selfId = self, peers = setOf(self))
+            val t = playerRelayTransport(inner, pRelay, voters = { voters }, scope = backgroundScope)
+            val received = collectInto(t)
+            testScheduler.advanceUntilIdle()
+
+            serverSeam.sendTo(pRelay.selfId, RaftRelay.encode(RaftRelay(origin = v2, dest = self, bytes = "early".encodeToByteArray())))
+            testScheduler.advanceUntilIdle()
+            assertTrue(received.isEmpty(), "v2 is not yet a voter — dropped")
+
+            voters = setOf(v1, v2)
+            serverSeam.sendTo(pRelay.selfId, RaftRelay.encode(RaftRelay(origin = v2, dest = self, bytes = "grown".encodeToByteArray())))
+            testScheduler.advanceUntilIdle()
+            assertEquals(listOf(v2), received.map { it.from }, "after growth the next v2 frame surfaces — per-frame read")
+        }
 
     // ── G5: origin-spoofing rejected (commit-safety) ─────────────────────────
 

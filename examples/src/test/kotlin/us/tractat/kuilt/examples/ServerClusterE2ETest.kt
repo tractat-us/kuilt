@@ -12,6 +12,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
 import us.tractat.kuilt.cluster.ClusterClient
 import us.tractat.kuilt.cluster.clusterClientWithNode
+import us.tractat.kuilt.cluster.playerRelayTransport
 import us.tractat.kuilt.cluster.serverCluster
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Pattern
@@ -20,7 +21,6 @@ import us.tractat.kuilt.raft.Committed
 import us.tractat.kuilt.raft.InMemoryRaftStorage
 import us.tractat.kuilt.raft.NodeId
 import us.tractat.kuilt.raft.RaftConfig
-import us.tractat.kuilt.raft.SeamRaftTransport
 import us.tractat.kuilt.raft.raftNode
 import us.tractat.kuilt.session.SeamRoomFactory
 import us.tractat.kuilt.websocket.KtorClientLoom
@@ -93,7 +93,7 @@ class ServerClusterE2ETest {
         testApplication {
             // The voter NodeId must match the KtorRoomHost's serverPeerId so that
             // the client's SeamRaftTransport (which sees swatch.sender = serverPeerId)
-            // routes AppendEntries from the correct NodeId. The LearnerRouter sends via
+            // routes AppendEntries from the correct NodeId. The RaftRelayHub sends via
             // seam.broadcast; the client's LinkSeam stamps sender = remoteId = serverPeerId.
             val voterId = NodeId(serverPeerId.value)
 
@@ -169,9 +169,17 @@ class ServerClusterE2ETest {
                 // Ensure the admit handshake is complete before starting the RaftNode.
                 withTimeout(5.seconds) { clientRoom.roster.first { it.isNotEmpty() } }
 
+                // The client speaks the relay dialect: a player relay transport over a
+                // no-peer inner wraps every send as a RaftRelay(dest = leader) addressed to
+                // its single relay server, matching the server-side RaftRelayHub.
                 val clientNode = clientScope.raftNode(
                     clusterConfig = learnerConfig,
-                    transport = SeamRaftTransport(clientSeam),
+                    transport = playerRelayTransport(
+                        inner = noPeerInnerTransport(clientNodeId),
+                        relayChannel = clientSeam,
+                        voters = { setOf(voterId) },
+                        scope = clientScope,
+                    ),
                     storage = InMemoryRaftStorage(),
                     raftConfig = raftCfg,
                 )

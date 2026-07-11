@@ -1,8 +1,6 @@
 package us.tractat.kuilt.cluster
 
 import io.github.oshai.kotlinlogging.KotlinLogging
-import kotlinx.atomicfu.locks.reentrantLock
-import kotlinx.atomicfu.locks.withLock
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -17,7 +15,6 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.stateIn
-import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
 import us.tractat.kuilt.core.CloseReason
@@ -33,7 +30,6 @@ import us.tractat.kuilt.raft.NodeId
 import us.tractat.kuilt.raft.RaftConfig
 import us.tractat.kuilt.raft.RaftEnvelope
 import us.tractat.kuilt.raft.RaftNode
-import us.tractat.kuilt.raft.RaftRole
 import us.tractat.kuilt.raft.RaftStorage
 import us.tractat.kuilt.raft.RaftTransport
 import us.tractat.kuilt.raft.changeMembershipWithRetry
@@ -67,15 +63,16 @@ private val log = KotlinLogging.logger("us.tractat.kuilt.cluster.ServerCluster")
  * 1. Waits for the room roster to show the admitted peer.
  * 2. Derives its [NodeId] from the peer identity — matching what the client's
  *    [SeamRaftTransport][us.tractat.kuilt.raft.SeamRaftTransport] reports as its `selfId`.
- * 3. Registers the room Seam in the [LearnerRouter]: relay coroutines bridge the Seam's
- *    incoming to each voter's inbound flow, and voter sends to the learner NodeId are
- *    routed back through the Seam.
+ * 3. Registers the room Seam as a spoke in the [RaftRelayHub]: the hub is the sole
+ *    collector of the spoke's raft channel, decodes each `RaftRelay`, and routes it **by
+ *    `dest`** to the addressed voter's inbound with the true origin preserved; voter sends
+ *    to the learner are wrapped (origin = the true voter) back down the spoke.
  * 4. Calls [RaftNode.changeMembership] on the leader to add the learner.
  * 5. Holds the room alive via `awaitCancellation` until the connection closes.
  *
- * The [LearnerRouter] is the key integration primitive for S3b-3: it makes the voter
+ * The [RaftRelayHub] is the key integration primitive for S3b-3: it makes the voter
  * channel transports aware of dynamically-connected learner Seams without rebuilding
- * the voter nodes.
+ * the voter nodes, and keeps the Raft `from` intact end-to-end in both directions.
  *
  * ## Lifecycle
  *
@@ -91,7 +88,7 @@ public class ServerCluster internal constructor(
     public val mesh: VoterMesh,
     private val host: RoomHost,
     private val voterConfig: ClusterConfig,
-    private val router: LearnerRouter,
+    private val hub: RaftRelayHub,
     /**
      * The two-tier overlay this cluster admits every connection into.
      *
@@ -127,7 +124,7 @@ public class ServerCluster internal constructor(
 
     /**
      * Run the relay accept loop for [relayHost], admitting each accepted connection as a
-     * learner into this cluster's **shared** voter mesh and [LearnerRouter].
+     * learner into this cluster's **shared** voter mesh and [RaftRelayHub].
      *
      * Multiple relay hosts can front one voter cluster: mount each by launching
      * `runRelay(host)` in its own coroutine. Because the accept loop's lifecycle is owned
@@ -145,9 +142,9 @@ public class ServerCluster internal constructor(
 
     /**
      * Admit one accepted [room] connection as a learner: wait for the roster, derive the
-     * learner [NodeId], register its Seam in the shared [LearnerRouter], add it to cluster
-     * membership via the leader, then hold the room open until the connection closes or the
-     * relay scope cancels. The `finally` deregisters the learner route on disconnect.
+     * learner [NodeId], register its Seam as a spoke in the shared [RaftRelayHub], add it to
+     * cluster membership via the leader, then hold the room open until the connection closes
+     * or the relay scope cancels. The `finally` deregisters the spoke on disconnect.
      */
     private suspend fun admitLearner(room: Room) {
         val admittedSet = try {
@@ -164,12 +161,12 @@ public class ServerCluster internal constructor(
         val learnerId = NodeId(admittedPeer.id.value)
         log.info { "server-cluster: admitting learner $learnerId" }
 
-        // Register the room Seam so voter transports can route Raft messages
+        // Register the room Seam as a spoke so voter transports can route Raft messages
         // to and from the learner over the WebSocket. Must happen before
         // changeMembership so the leader can start sending AppendEntries
         // as soon as the config change is applied.
         val seamChannel = room.channel("raft")
-        router.addLearner(learnerId, seamChannel, serverScope)
+        hub.addSpoke(learnerId, seamChannel, serverScope)
 
         // Discharge the overlay obligation structurally: publish this connection's
         // attachment (`client → self`) and register its app-unicast spoke — a channel
@@ -186,19 +183,20 @@ public class ServerCluster internal constructor(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Throwable) {
-            log.warn(e) { "server-cluster: learner $learnerId admit failed — removing route" }
-            router.removeLearner(learnerId)
+            log.warn(e) { "server-cluster: learner $learnerId admit failed — removing spoke" }
+            hub.removeSpoke(learnerId, seamChannel)
             overlay.evict(admittedPeer.id)
             return
         }
 
         // Hold the room open until the connection closes or scope cancels.
-        // The finally block removes the learner route and the overlay attachment
-        // when the WebSocket closes.
+        // The finally block removes the learner spoke and the overlay attachment
+        // when the WebSocket closes. The spoke removal is seam-identity-guarded so a
+        // late tear from a superseded room cannot cancel a re-admitted spoke.
         try {
             awaitCancellation()
         } finally {
-            router.removeLearner(learnerId)
+            hub.removeSpoke(learnerId, seamChannel)
             overlay.evict(admittedPeer.id)
         }
     }
@@ -282,14 +280,14 @@ private fun serverCluster(
     storageFactory: (NodeId) -> RaftStorage,
 ): ServerCluster {
     val clusterConfig = ClusterConfig(voters = voterIds.toSet())
-    val router = LearnerRouter()
-    val voterNodes = buildVoterChannelMesh(voterIds, clusterConfig, raftConfig, storageFactory, serverScope, router)
+    val hub = RaftRelayHub(voterIds.toSet())
+    val voterNodes = buildVoterChannelMesh(voterIds, clusterConfig, raftConfig, storageFactory, serverScope, hub)
     val mesh = VoterMesh(voterNodes = voterNodes, scope = serverScope)
     return ServerCluster(
         mesh = mesh,
         host = host,
         voterConfig = clusterConfig,
-        router = router,
+        hub = hub,
         overlay = overlay,
         serverScope = serverScope,
     )
@@ -327,145 +325,16 @@ private class PeerlessSeam(override val selfId: PeerId) : Seam {
     override suspend fun close(reason: CloseReason): Unit = Unit
 }
 
-// ── Learner router ───────────────────────────────────────────────────────────
-
-/**
- * Routes Raft messages between in-process voter nodes and learner clients connected
- * via WebSocket [Seam]s.
- *
- * Maintains two directions per learner:
- * - **Inbound (learner → voters):** flows from the learner's Seam are routed to the
- *   **current leader's** inbound [MutableSharedFlow] only. A learner never legitimately
- *   addresses a follower (all messages are Forward/AppendEntriesResponse/InstallSnapshotResponse
- *   directed at the leader). Fanning to all voters causes followers to reply `NotLeader`
- *   inline, racing the leader's committed reply — a deterministic M>1 bug.
- * - **Outbound (voter → learner):** [sendToLearner] routes a voter's `sendTo(learnerId, ...)`
- *   call to the learner's Seam via [Seam.broadcast].
- *
- * ## Thread safety
- *
- * All mutable state ([learnerSeams], [inboundByVoter], [learnerRelayJobs]) is guarded by
- * an atomicfu reentrant lock. Suspend calls are always issued *outside* the locked section.
- * [RaftNode.role] reads and [MutableSharedFlow.tryEmit] calls are non-suspending and can
- * run outside the lock after snapshot acquisition.
- *
- * [inboundByVoter] and [voterNodes] are populated by [registerVoterInbound] /
- * [bindVoterNodes] from [buildVoterChannelMesh] before any [addLearner] call —
- * no ordering race between registration and first use.
- */
-internal class LearnerRouter {
-
-    private val lock = reentrantLock()
-
-    /** Learner NodeId → its WebSocket Seam. */
-    private val learnerSeams: MutableMap<NodeId, Seam> = mutableMapOf()
-
-    /** Voter NodeId → that voter's inbound SharedFlow — populated once at mesh construction. */
-    private val inboundByVoter: MutableMap<NodeId, MutableSharedFlow<RaftEnvelope>> = mutableMapOf()
-
-    /** Voter NodeId → RaftNode — bound after node construction so we can read [RaftNode.role]. */
-    private var voterNodes: Map<NodeId, RaftNode> = emptyMap()
-
-    /** Learner NodeId → relay coroutine Job (seam.incoming → leader voter inbound). */
-    private val learnerRelayJobs: MutableMap<NodeId, Job> = mutableMapOf()
-
-    /** Peers StateFlow — tracks connected learner NodeIds; used in voter transport peers. */
-    val learnersFlow: MutableStateFlow<Set<NodeId>> = MutableStateFlow(emptySet())
-
-    /**
-     * Register a voter's inbound [MutableSharedFlow] keyed by [voterId].
-     *
-     * Called once per voter during mesh construction, before any [addLearner] call.
-     */
-    fun registerVoterInbound(voterId: NodeId, flow: MutableSharedFlow<RaftEnvelope>) {
-        lock.withLock { inboundByVoter[voterId] = flow }
-    }
-
-    /**
-     * Bind the voter node map so the relay can read [RaftNode.role] to find the current leader.
-     *
-     * Called once after all voter nodes are constructed, before [addLearner].
-     */
-    fun bindVoterNodes(nodes: Map<NodeId, RaftNode>) {
-        lock.withLock { voterNodes = nodes }
-    }
-
-    /**
-     * Register a learner's Seam and start a relay coroutine.
-     *
-     * Each inbound envelope from the learner is delivered to the **current leader voter's**
-     * inbound [MutableSharedFlow] only. If no leader is currently known, the envelope is
-     * dropped — the learner's propose will retry after receiving [LeadershipLostException],
-     * which is acceptable. Falling back to fan-all would reintroduce the M>1 bug.
-     *
-     * Learner NodeId is added to [learnersFlow] so voter transports report it in their `peers`.
-     *
-     * @param learnerId The learner's [NodeId] (derived from the Seam's `selfId`).
-     * @param seam The learner's room Seam — a two-peer WebSocket Seam.
-     * @param scope Scope for the relay coroutine. Bound to the server scope.
-     */
-    fun addLearner(learnerId: NodeId, seam: Seam, scope: CoroutineScope) {
-        val (inboundSnapshot, nodesSnapshot) = lock.withLock {
-            learnerSeams[learnerId] = seam
-            learnersFlow.update { it + learnerId }
-            inboundByVoter.toMap() to voterNodes
-        }
-        val relayJob = scope.launch {
-            runCatchingCancellable {
-                seam.incoming.collect { swatch ->
-                    val sender = swatch.sender ?: return@collect
-                    val envelope = RaftEnvelope(NodeId(sender.value), swatch.toByteArray())
-                    val leaderId = nodesSnapshot.entries
-                        .firstOrNull { it.value.role.value is RaftRole.Leader }
-                        ?.key
-                    if (leaderId != null) {
-                        inboundSnapshot[leaderId]?.tryEmit(envelope)
-                    } else {
-                        log.debug { "server-cluster: no leader — dropping learner envelope from ${envelope.from}" }
-                    }
-                }
-            }
-        }
-        lock.withLock { learnerRelayJobs[learnerId] = relayJob }
-    }
-
-    /**
-     * Deregister a learner and cancel its relay coroutine.
-     *
-     * Called from the `finally` block of the [ServerCluster.start] `onRoom` lambda
-     * when the WebSocket closes or the scope is cancelled.
-     */
-    fun removeLearner(learnerId: NodeId) {
-        val job = lock.withLock {
-            learnerSeams.remove(learnerId)
-            learnersFlow.update { it - learnerId }
-            learnerRelayJobs.remove(learnerId)
-        }
-        job?.cancel()
-    }
-
-    /**
-     * Route a voter's `sendTo(learnerId, message)` to the learner's Seam.
-     *
-     * Returns silently if the learner is not registered (e.g. tore before the send arrived).
-     */
-    suspend fun sendToLearner(learnerId: NodeId, message: ByteArray) {
-        val seam = lock.withLock { learnerSeams[learnerId] } ?: return
-        runCatchingCancellable { seam.broadcast(message) }
-            .onFailure { log.debug { "server-cluster: drop to learner $learnerId on tear" } }
-    }
-}
-
 // ── In-process voter channel transport ──────────────────────────────────────
 
 /**
  * Wire [voterIds] into a K_M complete-graph mesh using [Channel]-backed [RaftTransport]s,
- * extended with learner routing via [LearnerRouter].
+ * extended with learner routing via [RaftRelayHub].
  *
  * Each voter gets:
- * - An inbound [MutableSharedFlow] that fans in from both voter channels and learner Seams.
+ * - An inbound [MutableSharedFlow] that fans in from both voter channels and learner spokes.
  * - An inbound [Channel] for voter-to-voter messages.
- * - Access to the [LearnerRouter] for voter-to-learner sends.
+ * - Access to the [RaftRelayHub] for voter-to-learner sends (dest-routed, origin-preserving).
  *
  * This mirrors [us.tractat.kuilt.raft.test.MultiNodeRaftNetwork] for production in-process
  * deployments; tests use [us.tractat.kuilt.raft.test.MultiNodeRaftNetwork] directly
@@ -477,15 +346,15 @@ private fun buildVoterChannelMesh(
     raftConfig: RaftConfig,
     storageFactory: (NodeId) -> RaftStorage,
     scope: CoroutineScope,
-    router: LearnerRouter,
+    hub: RaftRelayHub,
 ): Map<NodeId, RaftNode> {
     val voterChannels = voterIds.associateWith { Channel<RaftEnvelope>(Channel.UNLIMITED) }
     val voterPeersFlow = MutableStateFlow(voterIds.toSet())
 
-    val voterNodes = voterIds.associateWith { id ->
-        // Fan-in SharedFlow: receives from both the voter channel relay and learner Seam relays.
+    return voterIds.associateWith { id ->
+        // Fan-in SharedFlow: receives from both the voter channel relay and learner spoke relays.
         val inbound = MutableSharedFlow<RaftEnvelope>(extraBufferCapacity = Int.MAX_VALUE)
-        router.registerVoterInbound(id, inbound)
+        hub.registerVoterInbound(id, inbound)
 
         // Relay the voter's own inbound channel into the SharedFlow.
         val childScope = CoroutineScope(scope.coroutineContext + Job(scope.coroutineContext[Job]))
@@ -493,13 +362,10 @@ private fun buildVoterChannelMesh(
             voterChannels.getValue(id).receiveAsFlow().collect { inbound.emit(it) }
         }
 
-        val transport = voterChannelTransport(id, voterChannels, voterPeersFlow, inbound, router, childScope)
+        val transport = voterChannelTransport(id, voterChannels, voterPeersFlow, inbound, hub, childScope)
         val storage = storageFactory(id)
         childScope.raftNode(clusterConfig, transport, storage, raftConfig)
     }
-    // Bind voter nodes so the router can read roles to route learner messages to the leader.
-    router.bindVoterNodes(voterNodes)
-    return voterNodes
 }
 
 private fun voterChannelTransport(
@@ -507,7 +373,7 @@ private fun voterChannelTransport(
     voterChannels: Map<NodeId, Channel<RaftEnvelope>>,
     voterPeersState: MutableStateFlow<Set<NodeId>>,
     inbound: MutableSharedFlow<RaftEnvelope>,
-    router: LearnerRouter,
+    hub: RaftRelayHub,
     peersScope: CoroutineScope,
 ): RaftTransport = object : RaftTransport {
 
@@ -515,12 +381,12 @@ private fun voterChannelTransport(
 
     /** Combined voter + learner peer set, excluding this voter's own id. */
     override val peers: StateFlow<Set<NodeId>> =
-        combine(voterPeersState, router.learnersFlow) { voters, learners ->
+        combine(voterPeersState, hub.learnersFlow) { voters, learners ->
             voters - id + learners
         }.stateIn(
             scope = peersScope,
             started = SharingStarted.Eagerly,
-            initialValue = voterPeersState.value - id + router.learnersFlow.value,
+            initialValue = voterPeersState.value - id + hub.learnersFlow.value,
         )
 
     override val incoming: Flow<RaftEnvelope> = inbound
@@ -532,7 +398,9 @@ private fun voterChannelTransport(
         if (voterChannel != null) {
             voterChannel.send(RaftEnvelope(id, message))
         } else {
-            router.sendToLearner(peer, message)
+            // A learner dest: wrap as RaftRelay(origin = this voter) so the client credits
+            // the true voter, and route down that learner's spoke by dest.
+            hub.sendToLearner(fromVoter = id, learnerId = peer, bytes = message)
         }
     }
 }
