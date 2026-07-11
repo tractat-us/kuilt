@@ -160,6 +160,36 @@ subject maps to a mesh peer id is the consumer's policy (one user may run severa
 devices); the design and threat model live in
 [`docs/superpowers/specs/2026-07-07-hub-accept-attestation.md`](superpowers/specs/2026-07-07-hub-accept-attestation.md).
 
+### Principals on the mux hub: the same guarantee, one seam per room
+
+A server can also host many rooms over a *single* shared connection instead of
+giving each room its own link — one socket carrying several game tables at once.
+A joiner's verified identity has one extra hop to make in that shape: from the
+shared connection into the one room it actually joins. kuilt closes that hop so
+a mux-hosted room gives the same verified-identity guarantee as a directly
+hosted one — a consumer reading a member's principal doesn't need to know or
+care which hub topology is underneath.
+
+- **Two interfaces, two jobs.** `PrincipalRoster` is the canonical
+  **seam-level** carrier — `attestedPrincipals: StateFlow<Map<PeerId,
+  Principal>>`, a map because a seam can hold many peers at once. `RoomHubSeam`
+  (the per-room seam behind the mux hub) implements it exactly as `Mesh` does
+  (above), maintaining the map in the same critical sections as its membership
+  so it can never desync. `PrincipalAttested` is the **connection-level**
+  marker — a single, optional `Principal`, because exactly one connection has
+  exactly one remote peer. It survives as the primitive every fabric attaches
+  a verified identity through (`Connection.withPrincipal`) and as the
+  **degenerate 2-peer view**: the relay `Seam` returned by `Seam.withPrincipal`
+  exposes one principal because it only ever has one remote peer to describe.
+- **Roster-first is the read rule.** A consumer checking whether a peer is
+  attested should read `(seam as? PrincipalRoster)?.attestedPrincipals` first
+  and fall back to `(seam as? PrincipalAttested)?.principal` only when no
+  roster exists. `SeamRoom` follows exactly this rule when it populates
+  `Member.principal`, and `GameSession.attestedPrincipals` reads the roster
+  directly — so a `gameHosted` session riding a mux-hosted room reports the
+  same populated map a directly hosted `Mesh` does, with no session- or
+  game-layer code aware of which topology sits underneath.
+
 ## The contract
 
 ```kotlin
