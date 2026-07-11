@@ -2,12 +2,18 @@ package us.tractat.kuilt.game
 
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.serialization.ExperimentalSerializationApi
+import kotlinx.serialization.builtins.SetSerializer
+import kotlinx.serialization.cbor.Cbor
 import us.tractat.kuilt.cluster.playerRelayTransport
 import us.tractat.kuilt.cluster.serverRelayTransport
+import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.raft.ClientIdentity
@@ -93,6 +99,19 @@ public class ConsensusBinding(
      * bootstrap is byte-identical.
      */
     public val relayChannel: Seam,
+    /**
+     * The dedicated **roster-exchange** channel — the `CORE_ROSTER_CHANNEL` mux tag carved over the
+     * *same* session seam as [transport] and [relayChannel], so a roster frame's `sender` is the
+     * byte-identical peer id its Raft [NodeId] derives from (the first-hop authenticity check
+     * `NodeId(sender.value) ∈ core` depends on this equality, exactly as the relay's spoof check does).
+     *
+     * Only the federated placement ([ConsensusPlacement.federatedCore]) reads this — each core server
+     * unicasts its local roster to the other core members over this channel so the leader admits
+     * learners from the union of all servers' rosters, not just its own. Every other placement ignores
+     * it entirely; provisioning the channel is inert (a mux view that never sends or receives a frame
+     * produces no wire traffic), so the off-federation bootstrap is byte-identical.
+     */
+    public val rosterChannel: Seam,
 )
 
 /**
@@ -130,6 +149,33 @@ public interface ConsensusPlacement {
      * caller retains lifecycle ownership.
      */
     public fun node(scope: CoroutineScope, binding: ConsensusBinding): RaftNode
+
+    /**
+     * Launch this placement's learner-admission policy on [scope], if it has one.
+     *
+     * Called unconditionally by every constructing bootstrap ([gameNode]) once [node] is built, so a
+     * placement can own *how it grows its learner set* without the bootstrap having to distinguish
+     * placements that share a [seating] — [serverCore] and [federatedCore] both seat
+     * [AuthoritySeating.CoreVoters], so `seating` alone cannot tell them apart, yet they need different
+     * admission loops (local-only vs cross-server roster exchange).
+     *
+     * The default is a **no-op**: [SessionOwned] and [preBuilt] grow their membership through the
+     * appoint-the-host / roster-given machinery in the bootstrap itself, not here. A fixed-core
+     * placement overrides this to launch its admission loop (self-gated on `binding.self ∈ core`, so
+     * only a core member admits).
+     *
+     * @param scope the bootstrap caller's scope; the admission loop lives for its lifetime.
+     * @param node the just-constructed consensus node whose membership the loop drives.
+     * @param binding the fully-wired bootstrap binding — a fixed-core admission loop reads
+     *   [ConsensusBinding.self] (the self-gate) and [ConsensusBinding.rosterChannel] (federated only).
+     * @param seam the raw session seam whose `peers` roster the loop admits from.
+     */
+    public fun launchAdmission(
+        scope: CoroutineScope,
+        node: RaftNode,
+        binding: ConsensusBinding,
+        seam: Seam,
+    ) {}
 
     public companion object {
         /**
@@ -183,6 +229,16 @@ public interface ConsensusPlacement {
                     binding.raftConfig,
                     binding.identity,
                 )
+
+            override fun launchAdmission(
+                scope: CoroutineScope,
+                node: RaftNode,
+                binding: ConsensusBinding,
+                seam: Seam,
+            ) {
+                // Only a core member admits; a player under this placement rides as a learner.
+                if (binding.self in core) scope.launchCoreLearnerAdmission(node, seam, core)
+            }
         }
 
         /**
@@ -228,6 +284,20 @@ public interface ConsensusPlacement {
                     binding.raftConfig,
                     binding.identity,
                 )
+
+            override fun launchAdmission(
+                scope: CoroutineScope,
+                node: RaftNode,
+                binding: ConsensusBinding,
+                seam: Seam,
+            ) {
+                // Only a core member admits. This SUBSUMES the local-only serverCore scan: the leader
+                // admits from the union of every core server's local roster (exchanged over
+                // binding.rosterChannel), so a player behind a non-leader server is admitted too.
+                if (binding.self in core) {
+                    scope.launchFederatedCoreAdmission(node, seam, binding.rosterChannel, core)
+                }
+            }
         }
 
         /**
@@ -328,3 +398,128 @@ internal fun CoroutineScope.launchCoreLearnerAdmission(
         }
     }
 }
+
+/**
+ * Cross-server learner admission for the [ConsensusPlacement.federatedCore] placement — the federated
+ * generalisation of [launchCoreLearnerAdmission].
+ *
+ * A federated game runs one Raft cluster whose players are spread over several core servers, each
+ * connected to the players nearest it. A leader's [seam] roster is only its *own* local players plus
+ * the other servers, so [launchCoreLearnerAdmission] alone would never admit a player behind a
+ * *different* server — that player is never added to the config, so the leader never replicates to it
+ * and its `matchIndex` can never advance. This loop closes that gap by having every core server share
+ * its local roster with every other core member, so the leader admits from the **union** of all
+ * servers' rosters.
+ *
+ * Launched on every core member (self-gated by the placement to `self ∈ [core]`); it runs three
+ * coroutines on [scope]:
+ *
+ * - **Publish.** Whenever this server's [seam] roster changes, unicast (never broadcast) its local
+ *   players (`seam.peers − core`) to each *other* connected core member over [rosterChannel]. Re-sent
+ *   on every roster/peer change, so a newly-connected core member and a newly-arrived local player
+ *   both propagate; the send is a single-addressee [Seam.sendTo], never a fan-out.
+ * - **Receive & reactive re-publish.** Collect [rosterChannel], accepting a roster frame **only** if
+ *   its `sender` is a core member (`NodeId(sender.value) ∈ core`) — the first-hop authenticity check,
+ *   parallel to the relay's spoof validation, that stops a spoke player from injecting membership.
+ *   Accepted rosters are kept per sender in a [MutableStateFlow]. Whenever a frame carries *new*
+ *   information (a first-heard sender or a changed roster) this node re-publishes its own roster —
+ *   the self-heal for [rosterChannel]'s best-effort (`replay = 0`) subscribe-race: the initial send
+ *   from an earlier-started server can be dropped before a later-started server's mux is collecting,
+ *   but the later server's own send always lands (the earlier server is already collecting), which
+ *   triggers the earlier server to re-send, so the pair converges with no timer. (The last server to
+ *   start reaches every already-ready peer, so an N-server core converges too.)
+ * - **Admit.** Whenever this node is the leader, admit the first peer in
+ *   `(seam.peers − core) ∪ union(remote rosters)` that is neither a core voter nor already a learner —
+ *   **add-only, learners-only** (never removes, never touches the voter set). The role gate hands the
+ *   loop between core nodes on a leadership change automatically; because rosters flow to *every* core
+ *   member continuously, a new leader already holds every server's roster and is never blind to a far
+ *   player (H2).
+ *
+ * A failed membership change is tolerated and re-attempted after [CORE_ADMISSION_RETRY_BACKOFF],
+ * exactly as in [launchCoreLearnerAdmission].
+ */
+internal fun CoroutineScope.launchFederatedCoreAdmission(
+    node: RaftNode,
+    seam: Seam,
+    rosterChannel: Seam,
+    core: Set<NodeId>,
+) {
+    val self = NodeId(seam.selfId.value)
+    // sender NodeId → the local roster that core server last published. Only the leader acts on it,
+    // but every core member maintains it so a leadership change hands over a fully-populated view.
+    val remoteRosters = MutableStateFlow<Map<NodeId, Set<NodeId>>>(emptyMap())
+
+    // Unicast this server's current local roster (seam.peers − core) to each other connected core
+    // member. Single-addressee sends only — never a broadcast/fan-out.
+    suspend fun publishLocalRoster() {
+        val ids = seam.peers.value.map { NodeId(it.value) }
+        val payload = encodeRoster(ids.filterTo(mutableSetOf()) { it !in core })
+        for (member in ids) {
+            if (member in core && member != self) {
+                runCatchingCancellable { rosterChannel.sendTo(PeerId(member.value), payload) }
+            }
+        }
+    }
+
+    // Receive: accept a roster frame only from a core sender (first-hop authenticity); on genuinely
+    // new information, re-publish our own roster to self-heal the best-effort subscribe-race.
+    launch {
+        runCatchingCancellable {
+            rosterChannel.incoming.collect { swatch ->
+                val sender = swatch.sender?.let { NodeId(it.value) } ?: return@collect
+                if (sender !in core) return@collect // a spoke must not be able to inject membership
+                val roster = runCatchingCancellable { decodeRoster(swatch.toByteArray()) }.getOrNull()
+                    ?: return@collect
+                if (remoteRosters.value[sender] == roster) return@collect // nothing new — no churn
+                remoteRosters.update { it + (sender to roster) }
+                publishLocalRoster()
+            }
+        }
+    }
+
+    // Publish proactively on every roster/peer change (a local player joins/leaves, a core member
+    // connects), and once at startup to seed the reactive exchange above.
+    launch {
+        seam.peers.collect { publishLocalRoster() }
+    }
+
+    // Admit: leader-only, from the union of local + all remote rosters. Add-only, learners-only.
+    launch {
+        while (true) {
+            val next = combine(
+                seam.peers,
+                node.role,
+                node.membership,
+                remoteRosters,
+            ) { peers, role, membership, rosters ->
+                if (role !is RaftRole.Leader) return@combine null
+                val candidates = peers.map { NodeId(it.value) } + rosters.values.flatten()
+                candidates.firstOrNull { it !in core && it !in membership.learners }
+            }.filterNotNull().first()
+
+            val current = node.membership.value
+            runCatchingCancellable {
+                node.changeMembershipWithRetry(
+                    ClusterConfig(voters = current.voters, learners = current.learners + next),
+                )
+            }.onFailure { delay(CORE_ADMISSION_RETRY_BACKOFF) }
+        }
+    }
+}
+
+/** CBOR codec for a core server's published local roster — a set of player [NodeId]s. */
+@OptIn(ExperimentalSerializationApi::class)
+private val rosterCbor = Cbor { ignoreUnknownKeys = true }
+
+@OptIn(ExperimentalSerializationApi::class)
+private val rosterSerializer = SetSerializer(NodeId.serializer())
+
+/** Encode [roster] as the CBOR payload carried on the [CORE_ROSTER_CHANNEL]. */
+@OptIn(ExperimentalSerializationApi::class)
+internal fun encodeRoster(roster: Set<NodeId>): ByteArray =
+    rosterCbor.encodeToByteArray(rosterSerializer, roster)
+
+/** Decode a [CORE_ROSTER_CHANNEL] payload back into a roster; may throw on malformed [bytes]. */
+@OptIn(ExperimentalSerializationApi::class)
+internal fun decodeRoster(bytes: ByteArray): Set<NodeId> =
+    rosterCbor.decodeFromByteArray(rosterSerializer, bytes)

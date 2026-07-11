@@ -148,6 +148,8 @@ class FederatedPlacementWiringTest {
         raftConfig = RaftConfig(expectVirtualTime = true),
         identity = ClientIdentity.Auto,
         relayChannel = relayChannel,
+        // Inert here — these wiring tests exercise transport selection, not roster admission.
+        rosterChannel = FakeSeam(selfId = PeerId(self.value)),
     )
 }
 

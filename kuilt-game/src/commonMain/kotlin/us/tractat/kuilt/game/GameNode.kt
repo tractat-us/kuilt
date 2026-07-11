@@ -106,6 +106,28 @@ internal const val HEARTBEAT_CHANNEL: Byte = 4
 internal const val RAFT_RELAY_CHANNEL: Byte = 5
 
 /**
+ * MuxSeam channel tag reserved for **cross-server learner-roster exchange**
+ * ([ConsensusPlacement.federatedCore]).
+ *
+ * In a federation the game's players are spread over several core servers, and the committed Raft
+ * log must reach *every* player — but the leader only sees the players local to its own server, so
+ * it never admits (and never replicates to) a player behind a *different* server. This channel closes
+ * that gap: each core server unicasts its own local roster (`seam.peers − core`) to every *other* core
+ * member over this tag, so the current leader can admit learners from the **union** of all servers'
+ * local rosters rather than just its own.
+ *
+ * Carved over the *same* session mux as the Raft channel (tag 1) and the relay channel (tag 5), so a
+ * roster frame's `sender` is the byte-identical peer id its Raft [NodeId] derives from — which is what
+ * lets a receiver run the first-hop authenticity check (`NodeId(sender.value) ∈ core`) that keeps a
+ * spoke player from injecting membership. It rides **below** the gossip overlay for the same reason
+ * the Raft and relay channels do (#1370): it carries authority-bearing membership data that the
+ * overlay's origin-restamping must never touch. Every bootstrap path provisions this channel into
+ * [ConsensusBinding.rosterChannel]; only the federated placement's admission loop reads or writes it,
+ * so for every other placement the channel is inert and the off-federation wire stays byte-identical.
+ */
+internal const val CORE_ROSTER_CHANNEL: Byte = 6
+
+/**
  * A thin [Seam] adapter that presents only frames from [targetPeerId] via [rawShared].
  *
  * Analogous to `PerPeerSeam` in [kuilt-session][us.tractat.kuilt.session.SeamRoom]: because
@@ -294,12 +316,15 @@ public fun CoroutineScope.gameNode(
         raftConfig = raftConfig,
         identity = identity,
         relayChannel = mux.channel(RAFT_RELAY_CHANNEL),
+        rosterChannel = mux.channel(CORE_ROSTER_CHANNEL),
     )
     val node = placement.node(this, binding)
-    val seating = placement.seating
-    if (seating is AuthoritySeating.CoreVoters && self in seating.core) {
-        launchCoreLearnerAdmission(node, seam, seating.core)
-    }
+    // The placement owns its own learner-admission policy (a fixed-core placement launches a loop
+    // here; SessionOwned/preBuilt do nothing) — see ConsensusPlacement.launchAdmission. This replaces
+    // the earlier inline `serverCore`-only scan so the federated placement can substitute its own
+    // cross-server roster-exchange admission without gameNode having to distinguish the two
+    // (both seat AuthoritySeating.CoreVoters, so `seating` alone cannot).
+    placement.launchAdmission(this, node, binding, seam)
     val appMux = appMuxOver(mux, overlay)
     return GameSession(node, seam, appMux)
 }
@@ -437,6 +462,7 @@ public suspend fun CoroutineScope.gameHost(
             raftConfig = raftConfig,
             identity = identity,
             relayChannel = mux.channel(RAFT_RELAY_CHANNEL),
+            rosterChannel = mux.channel(CORE_ROSTER_CHANNEL),
         ),
     )
     node.awaitLeadership()
@@ -546,6 +572,7 @@ public suspend fun CoroutineScope.gameJoin(
             raftConfig = raftConfig,
             identity = identity,
             relayChannel = mux.channel(RAFT_RELAY_CHANNEL),
+            rosterChannel = mux.channel(CORE_ROSTER_CHANNEL),
         ),
     )
 
@@ -629,6 +656,7 @@ public suspend fun CoroutineScope.gameSpectate(
             raftConfig = raftConfig,
             identity = identity,
             relayChannel = mux.channel(RAFT_RELAY_CHANNEL),
+            rosterChannel = mux.channel(CORE_ROSTER_CHANNEL),
         ),
     )
 
