@@ -14,6 +14,11 @@ import us.tractat.kuilt.core.Loom
 class InMemoryLoomConformanceTest : SeamConformanceSuite() {
     private val loom = InMemoryLoom()
     override fun newLoomPair(): Pair<Loom, Loom> = loom to loom
-    override fun capabilities() = SeamCapabilities.FULL
-    override fun capabilityGaps() = emptyMap<String, String>()
+
+    /**
+     * `meshDelivery = true` here is genuine, not vacuous: [InMemoryLoom] is an
+     * N-peer shared mesh (mesh evidence tracked in #1408, Task 1.8).
+     */
+    override fun capabilities() = SeamCapabilities.FULL.copy(securesTransport = false)
+    override fun capabilityGaps() = mapOf("securesTransport" to CapabilityGaps.SECURES_TRANSPORT)
 }

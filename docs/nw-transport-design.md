@@ -268,12 +268,15 @@ the executable checks that this is right.
 ## Capability TCK — make support explicit (foundation, lands first)
 
 Today `SeamConformanceSuite` lives in `:kuilt-conformance` and every fabric
-subclasses it, but capabilities are **implicit**: a fabric that cannot honour an
-invariant overrides one of the suite's `open fun` escape hatches with `@Ignore` + a
-tracking issue. There are **three** such hatches today — `incomingCompletesWhenSeamCloses`
-(WebRTC, #335), `stateStaysTornAfterClose`, and `sendOnTornSeamThrows` (Multipeer JVM
-bridge, Gossip; the last added by #1390). That hides real capability differences in
-scattered overrides.
+subclasses it. Historically capabilities were **implicit**: a fabric that could not
+honour an invariant overrode one of the suite's `open fun` escape hatches with
+`@Ignore` + a tracking issue. There were **three** such hatches —
+`incomingCompletesWhenSeamCloses` (WebRTC, #335), `stateStaysTornAfterClose`, and
+`sendOnTornSeamThrows` (Multipeer JVM bridge, Gossip; the last added by #1390) — and
+both #335 and #1390 have since been **fixed**, so none is an open gap today. That
+scattered-override shape is what motivates the declaration below: rather than a
+record of current gaps, `SeamCapabilities` is the forward-looking mechanism a
+*future* fabric with a real gap reaches for, instead of inventing a bespoke `@Ignore`.
 
 Refactor: a transport **declares** its capabilities; the suite asserts each supported
 one, and each *unsupported* one is surfaced in a rendered matrix — **not** via a fake

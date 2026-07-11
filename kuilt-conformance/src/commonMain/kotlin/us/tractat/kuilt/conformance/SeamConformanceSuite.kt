@@ -413,7 +413,8 @@ public abstract class SeamConformanceSuite {
     // whether via local close() or remote disconnect. Consumers (e.g. Quilter)
     // rely on this to self-close via onCompletion without requiring an explicit caller.
     //
-    // Gated on `terminatesIncomingOnClose`; WebRTC does not honour it yet — see #335.
+    // Gated on `terminatesIncomingOnClose` for a future fabric that can't honour it; WebRTC was
+    // the historical non-conformer (#335), since fixed — every fabric in-tree passes this today.
 
     @Test
     public fun incomingCompletesWhenSeamCloses(): TestResult =
@@ -444,8 +445,9 @@ public abstract class SeamConformanceSuite {
     // with `check(state !is Torn)` (LinkSeam, MeshSeam, CompositeSeam, TieredSeam, InMemoryLoom,
     // RoomHubSeam). This assertion exists so no fabric can silently regress to a warn-drop.
     //
-    // Gated on `throwsOnSendToTorn`; known non-conformers today: the Multipeer JVM bridge and the
-    // Gossip overlay's `broadcast`.
+    // Gated on `throwsOnSendToTorn` for a future fabric that can't honour it; the Multipeer JVM
+    // bridge and the Gossip overlay's `broadcast` were the historical non-conformers (#1390),
+    // since fixed — every fabric in-tree passes this today.
 
     @Test
     public fun sendOnTornSeamThrows(): TestResult =

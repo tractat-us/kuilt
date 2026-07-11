@@ -31,6 +31,10 @@ class CompositeConformanceTest : SeamConformanceSuite() {
         return composite to composite
     }
 
-    override fun capabilities() = SeamCapabilities.FULL
-    override fun capabilityGaps() = emptyMap<String, String>()
+    /**
+     * `meshDelivery = true` here is genuine, not vacuous: [CompositeLoom] bonds
+     * plies into an N-peer mesh (mesh evidence tracked in #1408, Task 1.8).
+     */
+    override fun capabilities() = SeamCapabilities.FULL.copy(securesTransport = false)
+    override fun capabilityGaps() = mapOf("securesTransport" to CapabilityGaps.SECURES_TRANSPORT)
 }
