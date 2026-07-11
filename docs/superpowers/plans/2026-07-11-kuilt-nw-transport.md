@@ -4,7 +4,7 @@
 
 **Goal:** Add `kuilt-nw`, a Network.framework peer-to-peer fabric that implements kuilt's `Loom`/`Seam` contract, to route around the iOS 26 MultipeerConnectivity AWDL-teardown regression, and retire `kuilt-multipeer`.
 
-**Architecture:** Follow the `kuilt-nearby` shape — a thin `NwApi` interface in `commonMain`, all Loom/Seam/handshake/framing logic in `commonMain`, one real cinterop binding in `appleMain`, a macOS-dylib/JNA binding in `jvmMain`, and a `FakeNwApi` that runs the whole capability TCK on the JVM. Star topology (host = `NWListener`, joiners = `NWConnection`) with host-relay so the multi-peer seam contract holds. Length-prefix framing reuses `:kuilt-stream`.
+**Architecture:** Follow the `kuilt-nearby` shape — a thin `NwApi` interface in `commonMain`, all Loom/Seam/handshake/framing logic in `commonMain`, one real cinterop binding in `appleMain`, a macOS-dylib/JNA binding in `jvmMain`, and a role-split `FakeNwApi` that runs the whole capability TCK on the JVM. **Full-mesh** topology (every peer advertises + browses + dials every other; MC-parity semantics — `Swatch.sender` = the arriving connection, no relay, no SPOF; connection-dedup tie-break the one new mechanism). Length-prefix framing reuses `:kuilt-stream`.
 
 **Tech Stack:** Kotlin Multiplatform (iosArm64, iosSimulatorArm64, macosArm64, jvm), Kotlin/Native cinterop against `platform.Network`, kotlinx-coroutines, kotlinx-atomicfu, JNA (jvm bridge), Xcode/SwiftUI (Phase 0 harness only).
 
@@ -32,9 +32,9 @@ kuilt-nw/
   module.md                                # Dokka module doc (+ appleMain wiring gotcha)
   src/commonMain/kotlin/us/tractat/kuilt/nw/
     NwApi.kt                               # interface: advertise/browse/listen, connection lifecycle, send/recv as Flows; event types
-    NwLoom.kt                              # Loom impl; weave() → NwSeam; owns discovery + host/joiner roles; visiblePeers
-    NwSeam.kt                              # Seam impl; star hub/spoke; connection registry; broadcast fan-out + relay; teardown
-    NwConnectMachine.kt                    # per-connection handshake (subscribe-before-trigger, identity exchange)
+    NwLoom.kt                              # Loom impl; weave() → NwSeam; advertise+browse; mints UUID PeerId; visiblePeers
+    NwSeam.kt                              # Seam impl; full mesh; per-peer connection registry; direct broadcast/sendTo; dedup; teardown
+    NwConnectMachine.kt                    # per-connection handshake (subscribe-before-trigger, identity exchange, dedup tie-break)
     NwFraming.kt                           # length-prefix framing over the byte stream, reusing :kuilt-stream frame format
     NwRoomHost.kt                          # lobby host surface (Phase 5)
   src/commonMain/kotlin/.../internal/      # internal helpers
@@ -46,7 +46,7 @@ kuilt-nw/
     NwNativeLib.kt
   src/macosMain/kotlin/us/tractat/kuilt/nw/bridge/   # dylib entry points (Phase 4)
   src/commonTest/kotlin/us/tractat/kuilt/nw/
-    FakeNwApi.kt                           # in-memory NwApi; single host + N joiners
+    FakeNwApi.kt                           # in-memory NwApi; role-split — N DISTINCT looms on one FakeNwRadio (#1404)
     FakeNwRadio.kt
     NwConformanceTest.kt                   # subclasses SeamConformanceSuite; declares SeamCapabilities
     NwConnectMachineTest.kt
@@ -73,7 +73,7 @@ settings.gradle.kts                        # MODIFY: include(":kuilt-nw")
 
 > **Nature:** this phase is a **build-to-learn spike**, not strict red-green TDD. Its "test" is a two-iPhone hardware measurement, and its purpose is to *discover* the exact `platform.Network` cinterop incantations and prove NW P2P beats MC Wi-Fi-off. Keep a running **pain-points log** (`spike/PAINPOINTS.md`) from the first task — it seeds the "implementing a new transport" skill. The K/N binding produced here is **keeper code** that seeds `RealNwApi`; the SwiftUI harness is throwaway.
 
-**Gate:** materially higher Wi-Fi-off connect rate than MC on the two-iPhone harness ⇒ proceed to Phase 1. Not materially better ⇒ **STOP and re-plan** (the 808917 cellular-off-Wi-Fi resolver regression may dominate; a relay/infra-Wi-Fi fallback may be the real answer). Do not start Phase 3+ before this gate passes. (Phases 1–2 are spike-independent and may proceed in parallel — see note under Phase 2.)
+**Gate (predeclared, see Task 0.5):** Wi-Fi-off ≥ 8/12 connects AND a ~10-min mid-session soak with no teardown, on the iOS 26 ↔ iOS 18 pairing ⇒ proceed. Not met ⇒ **STOP and re-plan** (the 808917 cellular-off-Wi-Fi resolver regression may dominate; a relay/infra-Wi-Fi fallback may be the real answer). Do not start Phase 3+ before this gate passes. (Phase 1 is spike-independent and lands independently; Phase 2's *merge* is sequenced after the gate — see Phase 2.)
 
 ### Task 0.1: Spike skeleton + deploy path
 
@@ -82,9 +82,10 @@ settings.gradle.kts                        # MODIFY: include(":kuilt-nw")
 - [ ] **Step 1:** Scaffold a K/N `iosArm64` (+ `iosSimulatorArm64`) framework target that produces an embeddable framework, and a minimal SwiftUI app project that links it. Confirm an empty `@CName`/exported Kotlin function is callable from Swift and the app launches on a physical device.
 - [ ] **Step 2:** Add two buttons (Host / Join), a connection-state `Text`, and a "Ping" button wired to placeholder Kotlin calls (return dummy state). Deploy to one device; confirm the round-trip of UI→Kotlin→UI.
 - [ ] **Step 3:** Add `NSLocalNetworkUsageDescription` + a `NSBonjourServices` entry (`_kuiltnwspike._tcp`) to Info.plist. Deploy; confirm the one-time Local Network prompt appears.
-- [ ] **Step 4:** Commit. Log every setup friction in `PAINPOINTS.md` (signing, framework embedding, plist, prompt).
+- [ ] **Step 4:** **Keep `spike/` out of the root Gradle graph and out of `detect`'s docs-only classification** — an Xcode-linked K/N app must not break `./gradlew build` on a runner without signing. Either exclude it from `settings.gradle.kts` or gate its inclusion behind a property; confirm a clean `./gradlew build` from repo root is unaffected.
+- [ ] **Step 5:** Commit. Log every setup friction in `PAINPOINTS.md` (signing, framework embedding, plist, prompt).
 
-**Acceptance:** app deploys to a physical iPhone, buttons call into Kotlin, Local Network prompt shows.
+**Acceptance:** app deploys to a physical iPhone, buttons call into Kotlin, Local Network prompt shows, root `./gradlew build` unaffected.
 
 ### Task 0.2: Host side — `NWListener` + Bonjour + `includePeerToPeer`
 
@@ -118,14 +119,17 @@ settings.gradle.kts                        # MODIFY: include(":kuilt-nw")
 
 **Acceptance:** encrypted framed ping round-trips between two devices Wi-Fi-on.
 
-### Task 0.5: The gate — Wi-Fi-off measurement
+### Task 0.5: The gate — Wi-Fi-off connect AND mid-session survival
 
-- [ ] **Step 1:** Turn **Wi-Fi off** on both phones (Bluetooth on), keep them close, and run N (≥12) connect attempts, recording connect rate and time-to-connect. Compare against the MC baseline table in `docs/nw-transport-design.md`.
-- [ ] **Step 2:** Repeat with a cellular-capable phone off Wi-Fi to probe the 808917 resolver regression specifically.
-- [ ] **Step 3:** Verify simulator P2P support empirically (does the browse/connect path work between two simulators, or is it physical-only?).
-- [ ] **Step 4:** Write the results into `docs/nw-transport-design.md` (a "Phase 0 results" section) and `spike/PAINPOINTS.md`. **Decide the gate.**
+> **Predeclare the bars before running** (no post-hoc goalposts). The MC failure is a *mid-session* AWDL teardown, so connect rate alone is insufficient — a soak is required.
 
-**Acceptance / GATE:** connect rate materially exceeds MC's ~1/12 Wi-Fi-off. If yes → Phase 1. If no → stop, write up findings, re-plan with Iain.
+- [ ] **Step 1 (connect):** Wi-Fi **off** on both phones (Bluetooth on), close together, on the iOS 26 ↔ iOS 18 pairing. Run ≥12 connect attempts; record connect rate + time-to-connect. **Bar: ≥ 8/12 connects, median time-to-connect under a stated bound** (against the 1/12 baseline, 6/12 isn't statistically separable).
+- [ ] **Step 2 (survive):** On ≥3 successful connections, hold a **~10-minute session** with periodic pings, Wi-Fi off. **Bar: no mid-session teardown.** A `Connecting→NotConnected` mid-session is a gate FAILURE even if connect rate passed.
+- [ ] **Step 3 (cellular probe):** Repeat with a cellular-capable phone off Wi-Fi to specifically exercise the 808917 resolver regression.
+- [ ] **Step 4:** Verify simulator P2P support empirically (does browse/connect work between two simulators, or is it physical-only?).
+- [ ] **Step 5:** Write results into `docs/nw-transport-design.md` (a "Phase 0 results" section) and `spike/PAINPOINTS.md`. **Decide the gate against the predeclared bars.**
+
+**Acceptance / GATE:** connect bar AND soak bar both met on the iOS 26 ↔ iOS 18 pairing. If yes → Phase 1. If no → stop, write up findings, re-plan with Iain (the 808917 risk may dominate; a relay/infra-Wi-Fi fallback may be the real answer).
 
 ---
 
@@ -139,18 +143,22 @@ settings.gradle.kts                        # MODIFY: include(":kuilt-nw")
 - Create: `kuilt-conformance/src/commonMain/kotlin/us/tractat/kuilt/conformance/SeamCapabilities.kt`
 - Test: `kuilt-conformance/src/commonTest/.../SeamCapabilitiesTest.kt`
 
+> Implements #1404. Flags cover **all three** current `@Ignore` escape hatches so every fabric can migrate without inventing flags mid-flight.
+
 **Interfaces — Produces:**
 ```kotlin
 public data class SeamCapabilities(
     val ordersDelivery: Boolean,            // FIFO to a single collector
     val reportsPeerLoss: Boolean,           // peer-drop reflected in peers/state
-    val terminatesIncomingOnClose: Boolean, // incoming completes when Torn
-    val supportsSendTo: Boolean,            // directed send throws PeerNotConnected on absent peer
-    val securesTransport: Boolean,          // encrypted on the wire
-    val meshDelivery: Boolean,              // peer↔peer with no relay hop
+    val terminatesIncomingOnClose: Boolean, // incoming completes when Torn   (hatch 1, WebRTC #335)
+    val staysTornAfterClose: Boolean,       // Torn terminal under churn       (hatch 2)
+    val throwsOnSendToTorn: Boolean,        // send on a Torn seam throws      (hatch 3, #1390)
+    val supportsSendTo: Boolean,            // directed send DELIVERS; absent peer → PeerNotConnected
+    val securesTransport: Boolean,          // encrypted on the wire (honest — see TLS-PSK threat model)
+    val meshDelivery: Boolean,              // peer↔peer delivery with no relay hop
 ) {
     public companion object {
-        // Everything a fully-featured mesh relay fabric supports — the default most fabrics start from.
+        // A fully-featured direct-mesh fabric — most fabrics start here and flip individual flags off.
         public val FULL: SeamCapabilities
     }
 }
@@ -160,40 +168,42 @@ public data class SeamCapabilities(
 - [ ] **Step 2:** Run it; expect FAIL (unresolved).
 - [ ] **Step 3:** Implement the data class + `FULL`.
 - [ ] **Step 4:** Run; expect PASS.
-- [ ] **Step 5:** Commit: `feat(conformance): SeamCapabilities declaration`.
+- [ ] **Step 5:** Commit: `feat(conformance): SeamCapabilities declaration (#1404)`.
 
 ### Task 1.2: Gate the suite on `capabilities()`
 
 **Files:**
 - Modify: `kuilt-conformance/src/commonMain/kotlin/us/tractat/kuilt/conformance/SeamConformanceSuite.kt`
 
-**Interfaces — Produces:** `public abstract fun capabilities(): SeamCapabilities` on the suite. Each existing obligation becomes: if the relevant flag is `true`, assert as today; else record a "documented gap" (a skipped-with-reason marker) instead of running. The `open fun` + `@Ignore` overrides (`incomingCompletesWhenSeamCloses`, `stateStaysTornAfterClose`) are replaced by capability gates.
+**Interfaces — Produces:** `public abstract fun capabilities(): SeamCapabilities` on the suite, plus `public abstract fun capabilityGaps(): Map<String, String>` (capability name → issue URL) for every `false` flag.
 
-- [ ] **Step 1:** Add the abstract `capabilities()`; map each obligation to a flag (e.g. `incomingCompletesWhenSeamCloses` ↔ `terminatesIncomingOnClose`; `sendToAbsentPeerThrowsPeerNotConnected` ↔ `supportsSendTo`). Add a new obligation `meshDeliveryReachesPeersWithoutRelay` gated on `meshDelivery` (assert-or-document).
-- [ ] **Step 2:** Provide a default `capabilities() = SeamCapabilities.FULL` on the suite? **No** — make it abstract so every fabric declares intentionally. Update the in-tree `InMemoryLoomConformanceTest` + `DelayedWovenLoomTest` to declare `FULL`.
-- [ ] **Step 3:** Run `:kuilt-conformance:build`; expect PASS (in-tree suites declare FULL, behavior unchanged).
-- [ ] **Step 4:** Commit: `refactor(conformance): gate obligations on declared SeamCapabilities`.
+> **Critical (from review):** common `kotlin-test` has **no** skip/assume API — an obligation that early-returns reports **PASS**, which is *worse* than a JVM-visible `@Ignore`. So gaps are NOT expressed by skipping a test. Instead: (a) each obligation for a supported capability runs and asserts as today; (b) a supported obligation MUST NOT be gated behind an unrelated flag; (c) the visibility artifact is the rendered matrix (Task 1.8) — a `false` capability with **no** issue URL in `capabilityGaps()` **fails a suite meta-test**. The gap is loud, not silent.
+
+- [ ] **Step 1:** Add abstract `capabilities()` + `capabilityGaps()`. Map each capability-specific obligation to its flag: `incomingCompletesWhenSeamCloses`↔`terminatesIncomingOnClose`, `stateStaysTornAfterClose`↔`staysTornAfterClose`, `sendOnTornSeamThrows`↔`throwsOnSendToTorn`. Add TWO new obligations: `sendToDeliversToNamedPeer` (gated on `supportsSendTo`) and `threePeerMeshRosterAndSenderConverge` (gated on `meshDelivery`; the positive multi-peer test the suite lacks).
+- [ ] **Step 2:** **Pin the ungated core** — obligations 1–9b (host yields usable seam, `broadcastFromHostDeliversToJoinedPeer`, order-preserved, peers≥2, close-idempotent, availability, Woven states) are ungated; add a suite meta-test asserting no capability flag can skip them.
+- [ ] **Step 3:** Make `capabilities()` abstract (no `FULL` default — every fabric declares intentionally). Add a meta-test: every `false` in `capabilities()` has a key in `capabilityGaps()`. Update in-tree `InMemoryLoomConformanceTest` + `DelayedWovenLoomTest` to declare `FULL` (empty gaps).
+- [ ] **Step 4:** Run `:kuilt-conformance:build`; expect PASS (in-tree suites declare FULL). Commit: `refactor(conformance): declare capabilities + gaps; add positive/3-peer obligations (#1404)`.
 
 ### Task 1.3–1.7: Migrate each existing fabric to declare capabilities
 
-One task per fabric conformance test (`InMemory`, `websocket`, `mdns`, `webrtc`, `multipeer`, `nearby`, `tcp`, gossip/quilter seams as applicable). Each: replace `@Ignore` overrides with a `capabilities()` declaration reflecting reality (e.g. WebRTC `terminatesIncomingOnClose = false` per #335; a 2-peer role-split fabric keeps `meshDelivery = true` since its degenerate case has no relay). Run that module's `:build`; commit per fabric.
+One task per fabric conformance test (`InMemory`, `websocket`, `mdns`, `webrtc`, `multipeer`, `nearby`, `tcp`, gossip/quilter seams as applicable). Each: replace `@Ignore` overrides with a `capabilities()` + `capabilityGaps()` declaration reflecting reality (e.g. WebRTC `terminatesIncomingOnClose = false` #335; multipeer-JVM-bridge / gossip `throwsOnSendToTorn = false` #1390; a relay/hub fabric like websocket with 3+ peers is `meshDelivery = false` — frames traverse the server; a strictly 2-peer fabric may declare `meshDelivery = true` since it has no third peer to relay to). Every `false` cell needs an issue URL. Run that module's `:build`; commit per fabric.
 
 - [ ] Per fabric: **Step 1** declare `capabilities()`, delete the corresponding `@Ignore`/override; **Step 2** run `:<module>:build --rerun-tasks`; **Step 3** commit `refactor(<fabric>): declare SeamCapabilities`.
 
 ### Task 1.8: Capability matrix renderer
 
-**Files:** Create `kuilt-conformance/.../CapabilityMatrix.kt` + a test that renders a known set of `(fabricName, SeamCapabilities)` to a stable markdown table.
+**Files:** Create `kuilt-conformance/.../CapabilityMatrix.kt` + a test. This is the **visibility artifact** (Task 1.2) — buildable in `commonMain`, so gaps are loud on every platform.
 
-- [ ] **Step 1:** Test: given two fabrics with differing flags, `renderMatrix(...)` produces the expected markdown table (columns = capabilities, ✓ / – cells).
+- [ ] **Step 1:** Test: given fabrics with differing flags + gap issue-links, `renderMatrix(...)` produces a stable markdown table (rows = fabrics, columns = capabilities, ✓ for true, an issue-linked `–` for a declared gap). A `false` flag whose fabric entry lacks a gap URL is a render error.
 - [ ] **Step 2:** Run; expect FAIL.
-- [ ] **Step 3:** Implement `public fun renderMatrix(entries: List<Pair<String, SeamCapabilities>>): String`.
-- [ ] **Step 4:** Run; expect PASS. Commit `feat(conformance): capability matrix renderer`.
+- [ ] **Step 3:** Implement `public fun renderMatrix(entries: List<MatrixEntry>): String` where `MatrixEntry(fabric, SeamCapabilities, gaps: Map<String,String>)`.
+- [ ] **Step 4:** Run; expect PASS. Commit `feat(conformance): capability matrix renderer (#1404)` — the artifact the new-transport skill points at.
 
 ---
 
 ## Phase 2 — Transport core (commonMain; spike-independent for logic)
 
-> **Spike-independence:** the logic above `NwApi` and the `FakeNwApi` need no real Network.framework. This phase can start once Phase 1 lands, in parallel with the Phase 0 gate — but do NOT merge it to a place that implies the transport works until Phase 3 proves the real binding. Gate its *merge* on Phase 0 passing.
+> **Spike-independence & merge sequencing:** the logic above `NwApi` and the `FakeNwApi` need no real Network.framework, so the *code* can be written any time after Phase 1. But its **merge is sequenced after the Phase 0 gate passes** — NOT run in parallel behind a prose "don't-merge" hold, which is culturally fragile against this repo's auto-merge posture and invites the duplicate-fix collision seen before. Simplest: don't open Phase 2 PRs until the gate is green (it's days). Phase 1 (the TCK foundation) is independent and lands regardless of the gate.
 
 ### Task 2.1: Module skeleton
 
@@ -245,42 +255,47 @@ public interface NwApi {
 - [ ] **Step 3:** Implement `NwFramer` (mirror `:kuilt-stream`'s `framed()` prefix logic; prefer reusing its constants/exception).
 - [ ] **Step 4:** Run; expect PASS. Commit `feat(nw): length-prefix framing over the byte stream`.
 
-### Task 2.4: `NwConnectMachine` — per-connection handshake
+### Task 2.4: `NwConnectMachine` — per-connection handshake + dedup
 
-**Files:** Create `NwConnectMachine.kt` + `NwConnectMachineTest.kt`. Mirror `nearby/ConnectStateMachine` discipline: subscribe-before-trigger (UNDISPATCHED collectors), stable-identity exchange as the first frame (endpoint id is not a stable `PeerId`).
+**Files:** Create `NwConnectMachine.kt` + `NwConnectMachineTest.kt`. Mirror `nearby/ConnectStateMachine` discipline: subscribe-before-trigger (UNDISPATCHED collectors), stable-identity exchange as the first framed message (endpoint id is not a stable `PeerId`).
 
-**Interfaces — Produces:** `internal class NwConnectMachine(selfId, api, framer, ...)` with `suspend fun run(scope, connectionId, trigger): NwLink` returning `NwLink(connectionId, remotePeerId)`. Resolves only once the connection is open AND the remote's identity frame has arrived.
+**PeerId (fixes #1405):** `PeerId` is a **collision-resistant random** minted once per `NwLoom` (NOT Nearby's per-loom counter, which collides across devices), or caller-injected for reconnect continuity. The `NwLoom` owns identity; the machine just exchanges it.
 
-- [ ] **Step 1:** Tests against `FakeNwApi` (Task 2.6, but the machine test can use a tiny local fake): identity exchange completes and yields the remote `PeerId`; a connection-closed before identity fails with a typed exception; subscribe-before-trigger holds (no lost first frame under `StandardTestDispatcher`).
-- [ ] **Step 2–4:** implement; run; commit `feat(nw): per-connection identity handshake`.
+**Interfaces — Produces:** `internal class NwConnectMachine(selfId, api, framer, ...)` with `suspend fun run(scope, connectionId, trigger): NwLink` returning `NwLink(connectionId, remotePeerId)`. Resolves only once the connection is open AND the remote's identity frame has arrived. Exposes the resolved `remotePeerId` so `NwSeam` can run the **dedup tie-break** (lower-`PeerId` dialer wins) when two connections resolve to the same remote.
 
-### Task 2.5: `NwSeam` — star hub/spoke, connection registry, teardown
+- [ ] **Step 1:** Tests against a tiny local fake: identity exchange completes and yields the remote `PeerId`; a connection-closed before identity fails with a typed exception; subscribe-before-trigger holds (no lost first frame under `StandardTestDispatcher`); two `NwLoom` instances mint **distinct** `PeerId`s (cross-loom uniqueness — the assertion #1405 lacked).
+- [ ] **Step 2–4:** implement; run; commit `feat(nw): per-connection identity handshake + UUID PeerId`.
 
-**Files:** Create `NwSeam.kt`. The load-bearing correctness file.
+### Task 2.5: `NwSeam` — full-mesh seam, connection registry, teardown
+
+**Files:** Create `NwSeam.kt`. The load-bearing correctness file. **Mesh, not star** — every peer holds one direct connection to every other peer, so there is NO relay and NO origin-stamping envelope: `Swatch.sender` is simply the `PeerId` of the connection a frame arrived on (MC-parity, like `MCSessionLink`).
 
 **Interfaces — Produces:** `internal class NwSeam(selfId, api, scope, policy, ...) : Seam`. Owns:
-- `peers: StateFlow<Set<PeerId>>` (always includes `selfId`), `state: StateFlow<SeamState>` (Weaving→Woven on first peer; Torn on close), `incoming: Flow<Swatch>` (via `Spool`).
-- A **connection registry**: `PeerId → NwConnectionId`, guarded by an atomicfu `reentrantLock` (suspend calls kept outside the lock). Broadcast fans out `send` across all registry connections; a joiner's frame to the host is relayed by the host to the other spokes (host-relay). `sendTo` targets one; absent peer → `PeerNotConnected`.
-- **Deterministic teardown**: on `connectionClosed`, remove the peer + drop the registry entry; on `close(reason)`, set `Torn` (terminal — never clobbered), disconnect all connections, close the spool/scope. All best-effort sends/teardown use `runCatchingCancellable`.
+- `peers: StateFlow<Set<PeerId>>` (always includes `selfId`; = `selfId` + every directly-connected peer, converging as connections open/close), `state: StateFlow<SeamState>` (Weaving→Woven on first peer; Torn on close), `incoming: Flow<Swatch>` (via `Spool`, fed through a bounded staging channel + single drain so a slow local consumer never wedges the receive path).
+- A **connection registry**: `PeerId → NwConnectionId`, guarded by an atomicfu `reentrantLock` (suspend calls AND all `api.*` calls kept **outside** the locked section — handlers fire on the GCD queue and can re-enter). `broadcast` fans `send` across ALL registry connections **directly** (no relay). `sendTo(peer)` sends on that peer's **direct** connection; genuinely-absent peer → `PeerNotConnected`.
+- **Connection dedup:** when a `connectionOpened` resolves its remote `PeerId` and a registry entry already exists for that `PeerId` (double-dial), keep the connection whose dialer has the **lower `PeerId`** (both sides compute the same winner) and `disconnect` the loser; the loser's teardown must not evict the winner (guard on connectionId identity).
+- **Deterministic teardown:** on `connectionClosed`, remove the peer + drop the registry entry; on `close(reason)`, set a `closing` flag, then `Torn` (terminal — never clobbered by a later writer), disconnect all connections, close the spool/scope. A `closing`-driven local close reports `CloseReason.Normal`, not `RemoteRequested`. All best-effort sends/teardown use `runCatchingCancellable`.
 
-- [ ] **Step 1:** Unit tests (with `FakeNwApi`): broadcast reaches all spokes; host relays joiner→joiner; `sendTo` absent peer throws `PeerNotConnected`; close drives `Torn` and `incoming` completes; registry empties on teardown; `Torn` stays `Torn` under post-close churn.
-- [ ] **Step 2–4:** implement; run; commit `feat(nw): NwSeam star hub with connection registry + teardown`.
+- [ ] **Step 1:** Unit tests (with the **role-split** `FakeNwApi`, Task 2.6): in a 3-peer mesh, a broadcast from peer A reaches B and C with `sender == A` (NOT a relay hub); `sendTo(C)` from A delivers directly; `sendTo` a genuinely-absent peer throws `PeerNotConnected`; a simulated double-dial collapses to one connection with the deterministic winner; `peers` on every node converges to all three; close drives `Torn`, `incoming` completes, registry empties; `Torn` stays `Torn` under post-close churn.
+- [ ] **Step 2–4:** implement; run; commit `feat(nw): full-mesh NwSeam with connection registry + dedup + teardown`.
 
 ### Task 2.6: `FakeNwApi` / `FakeNwRadio`
 
-**Files:** Create `FakeNwApi.kt` + `FakeNwRadio.kt` in `commonTest`. Model on `FakeNearbyApi`/`FakeNearbyRadio` but supporting **one host + N joiners** (not just a pair). Emit-directly on the caller's coroutine (no private scope) so all work runs under `runTest`'s virtual clock. Deterministic connection-id convention per (host, joiner).
+**Files:** Create `FakeNwApi.kt` + `FakeNwRadio.kt` in `commonTest`. **Role-split (fixes #1404):** the fake radio routes between **N *distinct* `NwLoom`/`NwApi` instances** — one per simulated device — NOT the same-loom-twice `(loom, loom)` pattern. This makes the in-process shared-StateFlow crutch structurally impossible, so cross-device roster/identity/dedup bugs are visible on the JVM. Emit-directly on the caller's coroutine (no private scope) so all work runs under `runTest`'s virtual clock.
 
-- [ ] Steps: implement the fake (advertise/browse auto-match, connection open on both sides, byte routing between connection endpoints, close routing); a smoke test drives a 1-host/2-joiner topology to connected. Commit `test(nw): in-memory NwApi fake supporting N joiners`.
+- [ ] **Step 1:** Implement the shared `FakeNwRadio` that N `FakeNwApi`s register with; it matches advertisers↔browsers, opens connections on both endpoints, routes bytes between connection endpoints, and routes closes. Each `FakeNwApi` is a distinct device.
+- [ ] **Step 2:** A smoke test stands up **3 distinct `NwLoom(FakeNwApi(...))`** on one radio, connects them into a mesh, and asserts every node's `peers` converges to all three. Commit `test(nw): role-split in-memory NwApi fake (N distinct looms)`.
 
 ### Task 2.7: `NwLoom` + conformance
 
 **Files:** Create `NwLoom.kt`, `NwConformanceTest.kt`.
 
-**Interfaces — Produces:** `public class NwLoom(api: NwApi, serviceType: String, ...) : Loom` with `weave(Rendezvous)` → host via `Rendezvous.New`, join via `Rendezvous.Existing`; shared peer set across seams; scope derived from `currentCoroutineContext()` (like `NearbyLoom`). `visiblePeers: StateFlow<Set<NwEndpoint>>` for the lobby (Phase 5 consumes it).
+**Interfaces — Produces:** `public class NwLoom(api: NwApi, serviceType: String, selfId: PeerId = <fresh UUID-grade>, ...) : Loom` with `weave(Rendezvous)` → `Rendezvous.New` defines the session (service name from the pattern) + advertise+browse; `Rendezvous.Existing` joins the same service + advertise+browse (every peer does both — mesh). Mints the loom's `PeerId`. `visiblePeers: StateFlow<Set<NwEndpoint>>` for the lobby (Phase 5 consumes it).
 
-- [ ] **Step 1:** `NwConformanceTest : SeamConformanceSuite()` with `capabilities() = SeamCapabilities.FULL.copy(meshDelivery = false)` (star + relay preserves broadcast reach but is not mesh) and `newLoomPair()` returning one `NwLoom(FakeNwApi(...))` twice. The suite runs on JVM.
-- [ ] **Step 2:** Run `./gradlew :kuilt-nw:jvmTest`; iterate until every capability-gated obligation passes and `meshDelivery` is a documented gap.
-- [ ] **Step 3:** Run full `:kuilt-nw:build --rerun-tasks`. Commit `feat(nw): NwLoom + JVM fake-backed capability conformance`.
+- [ ] **Step 1:** `NwConformanceTest : SeamConformanceSuite()` with `capabilities()` declaring `meshDelivery = true` (earned — direct connections, no relay), `supportsSendTo = true`, and the honest `securesTransport` from the TLS-PSK decision. `newLoomPair()` returns **two distinct** `NwLoom` instances wired through one role-split `FakeNwRadio` (NOT the same loom twice). The suite runs on JVM.
+- [ ] **Step 2:** Run `./gradlew :kuilt-nw:jvmTest`; iterate until every obligation passes, including the new positive `sendToDeliversToNamedPeer` and the 3-peer mesh obligation from #1404.
+- [ ] **Step 3:** Add the **weaving-window harness** (a `DelayedWovenLoom` equivalent) proving frames sent during kuilt-nw's multi-second real `Weaving` window are not dropped — the suite's KDoc requires async radio fabrics to do this.
+- [ ] **Step 4:** Run full `:kuilt-nw:build --rerun-tasks`. Commit `feat(nw): NwLoom + role-split JVM capability conformance + weaving harness`.
 
 ---
 
@@ -288,13 +303,15 @@ public interface NwApi {
 
 > **Re-plan gate:** expand this phase into bite-sized tasks **after** the Phase 0 spike, using the exact cinterop signatures + `PAINPOINTS.md` it produced. The spike's `SpikeHost`/`SpikeJoin`/`SpikePing` bindings are lifted and refactored to implement `NwApi`.
 
-**Deliverable:** `RealNwApi` in `appleMain` implementing `NwApi` against `platform.Network` — `NWListener`+Bonjour+`includePeerToPeer` (host), `NWBrowser`+`NWConnection` (join), TLS-PSK, byte send/receive on a `dispatch_queue_t`, callback→`Flow` via `callbackFlow`. `NwConnectionBridge` owns the **strong-ref connection registry** (retain on open, `nw_connection_cancel` then drop on close — cancel-first-then-release).
+**Deliverable:** `RealNwApi` in `appleMain` implementing `NwApi` against `platform.Network` — every peer runs `NWListener`+Bonjour+`includePeerToPeer` (advertise) AND `NWBrowser` (discover) AND dials `NWConnection`s (mesh), TLS-PSK, byte send/receive on a `dispatch_queue_t`, callback→`Flow` via `callbackFlow`. `NwConnectionBridge` owns the **strong-ref connection registry** (retain on open, `nw_connection_cancel` then drop on close — cancel-first-then-release).
 
 **Test obligations (must exist before merge):**
-- `NwLoopbackConformanceTest : SeamConformanceSuite()` — the **real** `RealNwApi` over `127.0.0.1` (`requiredLocalEndpoint`, no `includePeerToPeer`, exempt from Local Network Privacy), running the full capability TCK on the CI macOS runner (`appleTest`/`macosArm64Test`).
+- `NwLoopbackConformanceTest : SeamConformanceSuite()` — the **real** `RealNwApi` over `127.0.0.1` (`requiredLocalEndpoint`, no `includePeerToPeer`, exempt from Local Network Privacy), **TLS-PSK enabled** so the `sec_protocol_options` C-API path is CI-covered, running the full capability TCK on the CI macOS runner (`appleTest`/`macosArm64Test`).
 - `NwConnectionLeakTest` — a real-threaded probe (gated like `-Pconcurrency.stress.tests`) that opens/closes many connections on a multi-threaded dispatcher and asserts the registry drains to empty (the reference-management stress check).
 
-**Checklist items to encode (from research):** `includePeerToPeer` in all three places; IPv6 available (no IPv4-only); strong-ref every `NWConnection`; `Torn` terminal; `runCatchingCancellable` throughout; Info.plist keys documented in `module.md`.
+**Honest loopback coverage (document in `module.md`):** loopback covers send/receive/framing/cancel plumbing, the registry + teardown, and the cinterop of the connection surface. It does **NOT** cover `NWBrowser`/Bonjour discovery (**zero** automated coverage below hardware — only Phase 0 + tier 3 prove it), `includePeerToPeer`, AWDL, TLS over a real P2P path, the Local-Network-Privacy denial path, or IPv6-required behavior.
+
+**Checklist items to encode (from research + review):** `includePeerToPeer` in all three places; IPv6 available (no IPv4-only); **strong-ref every `NWConnection`, cancel-first-then-drop**; **no `nw_*` call under the registry lock** (handlers re-enter on the GCD queue → self-deadlock); a **`closing` flag** so a local cancel reports `CloseReason.Normal` not `RemoteRequested` (precedent: `MCSessionLink`); `Torn` terminal; `runCatchingCancellable` throughout; the TLS-PSK **threat-model decision** (join-code-derived vs. advertised-tag-derived — sets the honest `securesTransport` value) resolved here if not in Phase 2; Info.plist keys documented in `module.md`.
 
 ---
 
@@ -319,7 +336,7 @@ public interface NwApi {
 ## Phase 6 — Hardware validation + deprecate MC (DETAIL AFTER PHASE 3)
 
 **Deliverable:**
-- `-Pnw.realnet.tests`-gated two-device connect-rate test (reuse the Phase 0 harness + `NwCrossProcessProbe`), recording connect rate + time-to-connect vs. the MC baseline. This is the acceptance gate from the issue.
+- `-Pnw.realnet.tests`-gated two-device test (reuse the Phase 0 harness + `NwCrossProcessProbe`), recording connect rate + time-to-connect **and a mid-session soak** vs. the MC baseline (same connect + survive bars as the Phase 0 gate). This is the acceptance gate from the issue.
 - Mark `kuilt-multipeer` public API `@Deprecated("… migrate to kuilt-nw …", ReplaceWith(...))`. File the consumer-migration notice (breaking-change warning) at this point.
 
 ---
