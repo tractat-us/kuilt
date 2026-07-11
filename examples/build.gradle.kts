@@ -12,6 +12,7 @@ dependencies {
     testImplementation(project(":kuilt-core"))
     testImplementation(project(":kuilt-session"))
     testImplementation(project(":kuilt-cluster"))
+    testImplementation(project(":kuilt-gossip"))
     testImplementation(project(":kuilt-websocket"))
     testImplementation(project(":kuilt-test"))
     testImplementation(libs.kotlinx.coroutines.test)
