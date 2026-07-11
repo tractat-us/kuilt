@@ -3,6 +3,8 @@ package us.tractat.kuilt.gossip
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.TestScope
+import us.tractat.kuilt.conformance.CapabilityGaps
+import us.tractat.kuilt.conformance.SeamCapabilities
 import us.tractat.kuilt.conformance.SeamConformanceSuite
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.Loom
@@ -41,6 +43,16 @@ class GossipSeamConformanceTest : SeamConformanceSuite() {
 
     override fun newLoomPair(testScope: TestScope): Pair<Loom, Loom> =
         GossipLoom(InMemoryLoom(), testScope).let { it to it }
+
+    // overlay adds no crypto, inherits its base; dissemination is deliberate
+    // multi-hop flood — not direct p2p.
+    override fun capabilities(): SeamCapabilities =
+        SeamCapabilities.FULL.copy(securesTransport = false, meshDelivery = false)
+
+    override fun capabilityGaps(): Map<String, String> = mapOf(
+        "securesTransport" to CapabilityGaps.SECURES_TRANSPORT,
+        "meshDelivery" to CapabilityGaps.MESH_DELIVERY,
+    )
 }
 
 /**
