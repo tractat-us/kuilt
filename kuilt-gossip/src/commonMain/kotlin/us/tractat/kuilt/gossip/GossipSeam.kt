@@ -332,8 +332,15 @@ public class GossipSeam(
      *
      * The payload is wrapped in a fresh origin-stamped [GossipFrame] so receivers
      * can dedup and relay it across the overlay (see the class KDoc).
+     *
+     * A `Torn` overlay throws [IllegalStateException] (`state` delegates to [base]),
+     * honouring the shared [Seam] send contract — a torn transport cannot deliver, so
+     * swallowing the send would hide the failure. This is distinct from the empty-view
+     * no-op below: an empty active view is a *live* seam with nobody to flood to yet
+     * (recoverable), whereas `Torn` is terminal death (#1390).
      */
     override suspend fun broadcast(payload: ByteArray) {
+        check(state.value !is SeamState.Torn) { "broadcast on a Torn seam" }
         if (view.active.value.isEmpty()) return
         flood(GossipFrame.origin(selfId, nextSeq(), initialTtl, payload), except = null)
     }
