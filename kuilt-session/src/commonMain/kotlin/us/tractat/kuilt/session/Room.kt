@@ -4,6 +4,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.core.Principal
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.Tag
 import us.tractat.kuilt.session.partition.ResumeResult
@@ -62,6 +63,23 @@ public interface Room {
      * Hot; backed by a shared flow. Late collectors miss historical frames.
      */
     public val incoming: Flow<RoomFrame>
+
+    /**
+     * Host-verified principals of currently-linked peers, keyed by the [PeerId] each was verified
+     * against at admission — the roster analogue of the per-member [Member.principal].
+     *
+     * [Member.principal] stays the *primary* per-member surface (it co-locates the self-asserted
+     * `deviceId` and the verified principal on one object, where a mismatch check is a single field
+     * comparison while walking [roster]). This accessor is the uniform cross-facade view — the same
+     * map [us.tractat.kuilt.core.PrincipalRoster] exposes and that `GameSession.attestedPrincipals`
+     * mirrors — for consumers that want the roster directly.
+     *
+     * Populated when this room rides a [us.tractat.kuilt.core.PrincipalRoster] seam (a mux-hub
+     * `RoomHubSeam` whose connections carry attested principals); a constant empty map on seams with
+     * no attestation concept (a 2-peer relay seam — where [Member.principal] is the surface — or an
+     * in-memory fabric without attached principals). Roster-first, mirroring `GameSession`.
+     */
+    public val attestedPrincipals: StateFlow<Map<PeerId, Principal>>
 
     /** Broadcast [bytes] to all other admitted members. */
     public suspend fun broadcast(bytes: ByteArray)
