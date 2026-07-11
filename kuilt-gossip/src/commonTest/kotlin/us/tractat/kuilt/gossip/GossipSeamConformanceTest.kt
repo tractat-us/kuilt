@@ -2,7 +2,6 @@ package us.tractat.kuilt.gossip
 
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.test.TestResult
 import kotlinx.coroutines.test.TestScope
 import us.tractat.kuilt.conformance.SeamConformanceSuite
 import us.tractat.kuilt.core.InMemoryLoom
@@ -10,8 +9,6 @@ import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.Seam
 import kotlin.random.Random
-import kotlin.test.Ignore
-import kotlin.test.Test
 import kotlin.time.Duration.Companion.ZERO
 import kotlin.time.Instant
 
@@ -44,16 +41,6 @@ class GossipSeamConformanceTest : SeamConformanceSuite() {
 
     override fun newLoomPair(testScope: TestScope): Pair<Loom, Loom> =
         GossipLoom(InMemoryLoom(), testScope).let { it to it }
-
-    /**
-     * #1390 — [GossipSeam.broadcast] floods via `runCatchingCancellable { base.sendTo(...) }`, which
-     * **swallows** the base seam's `Torn` `IllegalStateException` (and no-ops on an empty active view),
-     * so a broadcast on a Torn overlay never throws. The overlay's broadcast-on-Torn semantics need
-     * deciding before it can honour the throw contract, so this is ignored until #1390 lands.
-     */
-    @Ignore
-    @Test
-    override fun sendOnTornSeamThrows(): TestResult = super.sendOnTornSeamThrows()
 }
 
 /**
