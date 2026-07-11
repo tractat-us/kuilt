@@ -72,6 +72,12 @@ import kotlin.test.assertTrue
  *  - [sendOnTornSeamThrows] ↔ [SeamCapabilities.throwsOnSendToTorn]
  *  - [sendToDeliversToNamedPeer] ↔ [SeamCapabilities.supportsSendTo]
  *
+ * This suite is deliberately fixed at **two** Looms (ADR-001) and has no positive
+ * N-peer/mesh obligation; roster convergence, sender-attributed broadcast, directed
+ * routing, peer-leave, and dial dedup across three or more peers are covered by the
+ * sibling `MeshConformanceSuite`, which every [SeamCapabilities.meshDelivery] fabric
+ * supporting ≥3 peers must also subclass.
+ *
  * ## Weaving timing invariant
  *
  * The invariant "a frame sent while [SeamState.Weaving] is not silently dropped"
@@ -498,10 +504,10 @@ public abstract class SeamConformanceSuite {
     @Test
     public fun everyFalseCapabilityDeclaresAGap() {
         val gaps = capabilityGaps()
-        val undeclared = capabilities().falseFlags().filter { it !in gaps }
+        val undeclared = capabilities().falseFlags().filter { gaps[it].isNullOrBlank() }
         assertTrue(
             undeclared.isEmpty(),
-            "every false capability must declare a gap URL in capabilityGaps(); undeclared: $undeclared",
+            "every false capability must declare a non-blank gap URL in capabilityGaps(); undeclared: $undeclared",
         )
     }
 }

@@ -31,7 +31,18 @@ public data class SeamCapabilities(
     val supportsSendTo: Boolean,
     /** Encrypted on the wire (honest — see the fabric's own TLS-PSK threat model). */
     val securesTransport: Boolean,
-    /** Peer-to-peer delivery with no relay hop. */
+    /**
+     * Peer-to-peer delivery with no relay hop.
+     *
+     * A fabric declaring `meshDelivery = true` that supports three or more peers MUST
+     * also subclass `MeshConformanceSuite` (which exercises N-peer roster convergence,
+     * broadcast sender-attribution, directed routing, peer-leave, and dial dedup) —
+     * `SeamConformanceSuite` is fixed at two Looms by ADR-001 and cannot host a third
+     * peer. A strictly 2-peer fabric may declare `meshDelivery = true` vacuously (no
+     * third peer to relay to) and records that vacuity in its capability-matrix entry.
+     * This obligation is enforced by the capability matrix (`meshEvidence`, see
+     * `CapabilityMatrix`), not by a runtime meta-test.
+     */
     val meshDelivery: Boolean,
 ) {
     /**

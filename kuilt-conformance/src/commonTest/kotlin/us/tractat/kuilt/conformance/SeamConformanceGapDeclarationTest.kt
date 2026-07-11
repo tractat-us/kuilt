@@ -62,4 +62,17 @@ class SeamConformanceGapDeclarationTest {
             h.everyFalseCapabilityDeclaresAGap()
         }
     }
+
+    @Test
+    fun falseFlagWithBlankGapUrlFailsTheGuard() {
+        // The key is present, but the URL is blank — a key with no real tracking URL must
+        // still trip the guard; a blank string is not a declared gap.
+        val h = harness(
+            caps = SeamCapabilities.FULL.copy(meshDelivery = false),
+            gaps = mapOf("meshDelivery" to ""),
+        )
+        assertFailsWith<AssertionError>("a blank gap URL must fail the guard") {
+            h.everyFalseCapabilityDeclaresAGap()
+        }
+    }
 }

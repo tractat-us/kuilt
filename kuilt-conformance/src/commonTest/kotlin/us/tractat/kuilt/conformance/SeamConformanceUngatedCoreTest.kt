@@ -34,6 +34,11 @@ import kotlin.test.assertEquals
  * a second live host on one instance throws), composed inside ONE `runTest` so the whole check is
  * a single awaited [TestResult] (correct on wasmJs/JS where a bare per-obligation `runTest` returns
  * an un-awaited Promise).
+ *
+ * This meta-test drives the `internal` obligation body-helpers (`run*`) directly, NOT the inherited
+ * `@Test`-annotated wrappers — a future edit that inlines a capability gate into a `@Test` wrapper
+ * while leaving its body helper clean would slip past this guarantee undetected, so gating logic
+ * must stay in the shared body helpers, never in the wrapper.
  */
 class SeamConformanceUngatedCoreTest {
 
