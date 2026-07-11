@@ -18,6 +18,7 @@ import platform.MultipeerConnectivity.MCNearbyServiceBrowserDelegateProtocol
 import platform.MultipeerConnectivity.MCPeerID
 import platform.MultipeerConnectivity.MCSession
 import platform.darwin.NSObject
+import us.tractat.kuilt.core.ActiveSeamSlot
 import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.Seam
@@ -90,7 +91,14 @@ public actual class MultipeerPeerLinkFactory actual constructor(
     private var advertiserDelegate: MCNearbyServiceAdvertiserDelegateProtocol? = null
     private var browser: MCNearbyServiceBrowser? = null
     private var browserDelegate: MCNearbyServiceBrowserDelegateProtocol? = null
-    private var activeLink: MCSessionLink? = null
+
+    /**
+     * Torn-aware single-active guard. A weave while a live session occupies the
+     * slot throws; a self-dropped (Torn) session frees the slot on the next weave
+     * with no side-channel — [MCSessionLink] latches Torn on both the drop and
+     * close paths, and the slot reads that terminal state directly.
+     */
+    private val slot = ActiveSeamSlot("MultipeerPeerLinkFactory already has an active session")
 
     public actual override suspend fun weave(rendezvous: Rendezvous): Seam =
         when (rendezvous) {
@@ -104,74 +112,76 @@ public actual class MultipeerPeerLinkFactory actual constructor(
             }
         }
 
-    private fun openSession(): Seam {
-        check(activeLink == null) { "MultipeerPeerLinkFactory already has an active session" }
-        val session =
-            MCSession(
-                peer = localPeerId,
-                securityIdentity = null,
-                encryptionPreference = MCEncryptionRequired,
-            )
-        log.info { "mc.session.create localPeer=$displayName serviceType=$serviceType path=host" }
-        val link = MCSessionLink(localPeerId, session)
-        session.delegate = link.delegate
-        link.onTerminated = { onLinkTerminated(link) }
-
-        val acceptAll = AcceptAllAdvertiserDelegate(session)
-        val advertiser =
-            MCNearbyServiceAdvertiser(
-                peer = localPeerId,
-                discoveryInfo = null,
-                serviceType = serviceType,
-            ).also { it.delegate = acceptAll }
-        advertiser.startAdvertisingPeer()
-        log.info { "mc.advertise.start localPeer=$displayName serviceType=$serviceType" }
-
-        this.advertiser = advertiser
-        this.advertiserDelegate = acceptAll
-        activeLink = link
-        return link
-    }
-
-    private fun joinSession(advertisement: MultipeerAdvertisement): Seam {
-        check(activeLink == null) { "MultipeerPeerLinkFactory already has an active session" }
-        val activeBrowser =
-            browser
-                ?: error(
-                    "MultipeerPeerLinkFactory.join requires an active browsing session. " +
-                        "Start MultipeerServiceBrowser.discoveries() and keep the flow " +
-                        "collected across the join — invitePeer must be sent on the same " +
-                        "MCNearbyServiceBrowser instance that discovered the peer.",
+    private fun openSession(): Seam =
+        slot.occupy {
+            // A prior host session may have torn (self-drop) without an explicit close;
+            // its advertiser is still running. Stop it before starting a fresh one —
+            // the drop path no longer eagerly stops it (the slot self-heals on this
+            // claim instead), so a reuse-after-drop must not leak the stale advertiser.
+            stopAdvertising()
+            val session =
+                MCSession(
+                    peer = localPeerId,
+                    securityIdentity = null,
+                    encryptionPreference = MCEncryptionRequired,
                 )
-        val target =
-            knownPeers[advertisement.handle]
-                ?: error(
-                    "Unknown peer handle ${advertisement.handle}. " +
-                        "Has the corresponding MultipeerServiceBrowser been started?",
+            log.info { "mc.session.create localPeer=$displayName serviceType=$serviceType path=host" }
+            val link = MCSessionLink(localPeerId, session)
+            session.delegate = link.delegate
+
+            val acceptAll = AcceptAllAdvertiserDelegate(session)
+            val advertiser =
+                MCNearbyServiceAdvertiser(
+                    peer = localPeerId,
+                    discoveryInfo = null,
+                    serviceType = serviceType,
+                ).also { it.delegate = acceptAll }
+            advertiser.startAdvertisingPeer()
+            log.info { "mc.advertise.start localPeer=$displayName serviceType=$serviceType" }
+
+            this.advertiser = advertiser
+            this.advertiserDelegate = acceptAll
+            link
+        }
+
+    private fun joinSession(advertisement: MultipeerAdvertisement): Seam =
+        slot.occupy {
+            val activeBrowser =
+                browser
+                    ?: error(
+                        "MultipeerPeerLinkFactory.join requires an active browsing session. " +
+                            "Start MultipeerServiceBrowser.discoveries() and keep the flow " +
+                            "collected across the join — invitePeer must be sent on the same " +
+                            "MCNearbyServiceBrowser instance that discovered the peer.",
+                    )
+            val target =
+                knownPeers[advertisement.handle]
+                    ?: error(
+                        "Unknown peer handle ${advertisement.handle}. " +
+                            "Has the corresponding MultipeerServiceBrowser been started?",
+                    )
+
+            val session =
+                MCSession(
+                    peer = localPeerId,
+                    securityIdentity = null,
+                    encryptionPreference = MCEncryptionRequired,
                 )
+            log.info { "mc.session.create localPeer=$displayName serviceType=$serviceType path=join" }
+            val link = MCSessionLink(localPeerId, session)
+            session.delegate = link.delegate
 
-        val session =
-            MCSession(
-                peer = localPeerId,
-                securityIdentity = null,
-                encryptionPreference = MCEncryptionRequired,
+            log.info {
+                "mc.invite.send localPeer=$displayName targetPeer=${target.displayName} timeout=${INVITE_TIMEOUT_SECONDS}s"
+            }
+            activeBrowser.invitePeer(
+                peerID = target,
+                toSession = session,
+                withContext = null,
+                timeout = INVITE_TIMEOUT_SECONDS,
             )
-        log.info { "mc.session.create localPeer=$displayName serviceType=$serviceType path=join" }
-        val link = MCSessionLink(localPeerId, session)
-        session.delegate = link.delegate
-        link.onTerminated = { onLinkTerminated(link) }
-
-        log.info { "mc.invite.send localPeer=$displayName targetPeer=${target.displayName} timeout=${INVITE_TIMEOUT_SECONDS}s" }
-        activeBrowser.invitePeer(
-            peerID = target,
-            toSession = session,
-            withContext = null,
-            timeout = INVITE_TIMEOUT_SECONDS,
-        )
-
-        activeLink = link
-        return link
-    }
+            link
+        }
 
     /**
      * Starts the shared `MCNearbyServiceBrowser` and routes `foundPeer` /
@@ -223,36 +233,29 @@ public actual class MultipeerPeerLinkFactory actual constructor(
     }
 
     /**
-     * Fired by [MCSessionLink] when its `MCSession` reaches a terminal
-     * peer-level `NotConnected` (the whole peer connection is gone) — a self
-     * disconnect that no explicit [close] preceded. Frees the single-session
-     * slot so the factory is reusable without a force-quit. Guarded on link
-     * identity so a stale callback from an already-replaced session is a no-op,
-     * and idempotent with [close] (which nulls `activeLink` first).
+     * Stops host advertising and disconnects the active session. Shared by [close]
+     * and [openSession] (stale-advertiser reap). Idempotent. [grabAndRelease][ActiveSeamSlot.grabAndRelease]
+     * nulls the slot **before** `disconnect()` so any re-entrant terminal callback
+     * from the disconnect finds an empty slot. Leaves browsing untouched — that is
+     * owned by the discoveries flow, not a session.
      */
-    private fun onLinkTerminated(link: MCSessionLink) {
-        if (activeLink !== link) return
-        log.info { "mc.session.terminated localPeer=$displayName serviceType=$serviceType — freeing session slot" }
-        releaseActiveSession()
+    private fun releaseActiveSession() {
+        stopAdvertising()
+        (slot.grabAndRelease() as MCSessionLink?)?.session?.disconnect()
     }
 
     /**
-     * Stops host advertising and disconnects the active session, clearing
-     * `activeLink`. Shared by [close] and [onLinkTerminated]; idempotent. Nulls
-     * `activeLink` before `disconnect()` so any re-entrant terminal callback
-     * from the disconnect short-circuits on the identity guard. Leaves browsing
-     * untouched — that is owned by the discoveries flow, not a session.
+     * Stops the host advertiser and clears its delegate, if any. Idempotent.
+     * Split out of [releaseActiveSession] so [openSession] can reap a stale
+     * advertiser left running by a prior torn session before starting a new one.
      */
-    private fun releaseActiveSession() {
+    private fun stopAdvertising() {
         advertiser?.let {
             log.info { "mc.advertise.stop localPeer=$displayName serviceType=$serviceType" }
             it.stopAdvertisingPeer()
         }
         advertiser = null
         advertiserDelegate = null
-        val link = activeLink
-        activeLink = null
-        link?.session?.disconnect()
     }
 
     private companion object {

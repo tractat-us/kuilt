@@ -5,12 +5,14 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import us.tractat.kuilt.core.ActiveSeamSlot
 import us.tractat.kuilt.core.CloseReason
 import us.tractat.kuilt.core.FabricAvailability
 import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.Seam
+import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.multipeer.internal.BridgePeerLink
 
@@ -102,8 +104,13 @@ public actual class MultipeerPeerLinkFactory actual constructor(
         mutableVisiblePeers.value = emptySet()
     }
 
-    @Volatile
-    private var activeLink: BridgePeerLink? = null
+    /**
+     * Torn-aware single-active guard. A weave while a live session occupies the
+     * slot throws; a self-dropped (Torn) session frees the slot on the next weave
+     * with no side-channel — [BridgePeerLink] latches Torn on both the drop and
+     * close paths, and the slot reads that terminal state directly.
+     */
+    private val slot = ActiveSeamSlot("MultipeerPeerLinkFactory already has an active session")
 
     public override fun availability(): FabricAvailability =
         if (nativeLib != null) {
@@ -135,43 +142,17 @@ public actual class MultipeerPeerLinkFactory actual constructor(
     private fun startSession(open: MultipeerNativeLib.(runtime: Pointer) -> Pointer?): BridgePeerLink {
         val lib = nativeLib ?: throwUnsupportedPlatform()
         val runtime = runtimeHandle ?: error("mc_runtime_create returned null on a macOS host — likely a stale dylib")
-        check(activeLink == null) { "MultipeerPeerLinkFactory already has an active session" }
-        val session = lib.open(runtime) ?: error("mc_runtime session open failed for runtime $runtime")
-        val link =
+        // The slot's guard + install are one atomic operation; a Torn (self-dropped)
+        // occupant frees the slot on this claim. If the native open fails the slot is
+        // left untouched. No onTerminated wiring — the seam's latched Torn is the signal.
+        return slot.occupy {
+            val session = lib.open(runtime) ?: error("mc_runtime session open failed for runtime $runtime")
             BridgePeerLink(
                 nativeLib = lib,
                 sessionHandle = session,
                 selfId = PeerId(displayName),
             )
-        link.onTerminated = { onLinkTerminated(link) }
-        activeLink = link
-        return link
-    }
-
-    /**
-     * Fired by [BridgePeerLink] when its session is terminally gone — either
-     * the last remote peer dropped (a self disconnect no explicit close
-     * preceded) or the seam was explicitly closed. Frees the single-session
-     * slot so the factory is reusable. Guarded on link identity so a stale
-     * callback from an already-replaced session is a no-op, and idempotent
-     * with [close] (which nulls `activeLink` first).
-     *
-     * Deliberately does **not** call `mc_session_close` here: on the drop path
-     * this runs inside the native peer-state callback (re-entering the bridge
-     * would race its own pump teardown), and on the close path the link is
-     * already issuing the one allowed `mc_session_close` itself.
-     *
-     * **Consumer contract:** because this frees the slot but issues no native
-     * call on the drop path, a dropped seam's native handle is disposed **only**
-     * by the consumer's `Seam.close()`. Unlike apple (ARC reclaims the dropped
-     * `MCSession`), the JVM has no ARC — a consumer that observes
-     * `SeamState.Torn` and drops the seam without calling `close()` leaks the
-     * native session until `close()` (factory) runs. Always `close()` a
-     * self-dropped seam.
-     */
-    private fun onLinkTerminated(link: BridgePeerLink) {
-        if (activeLink !== link) return
-        activeLink = null
+        }
     }
 
     private fun throwUnsupportedPlatform(): Nothing =
@@ -180,15 +161,22 @@ public actual class MultipeerPeerLinkFactory actual constructor(
                 "fall back to mDNS for cross-platform LAN play on Linux/Windows.",
         )
 
+    /**
+     * Tears down the active session (if any) and the runtime handle. Idempotent.
+     *
+     * **Consumer contract:** the self-drop path frees the slot (on the next weave)
+     * but issues no `mc_session_close` — and unlike apple, the JVM has no ARC to
+     * reclaim the dropped native session. A consumer that observes [SeamState.Torn]
+     * and drops the seam without calling `Seam.close()` leaks the native handle
+     * until this factory `close()` runs. Always `close()` a self-dropped seam.
+     */
     public actual fun close() {
         val lib = nativeLib ?: return
         val runtime = runtimeHandle ?: return
-        // Null the slot before teardown (identity guard makes the link's own
-        // onTerminated callback a no-op), then delegate the native close to the
-        // link's CAS-latched closeNow — exactly one mc_session_close per handle
-        // even if the consumer's Seam.close() races this.
-        val link = activeLink
-        activeLink = null
+        // grabAndRelease nulls the slot before teardown, then delegate the native
+        // close to the link's CAS-latched closeNow — exactly one mc_session_close
+        // per handle even if the consumer's Seam.close() races this.
+        val link = slot.grabAndRelease() as BridgePeerLink?
         link?.let { runCatchingCancellable { it.closeNow(CloseReason.Normal) } }
         runCatchingCancellable { lib.mc_runtime_close(runtime) }
     }

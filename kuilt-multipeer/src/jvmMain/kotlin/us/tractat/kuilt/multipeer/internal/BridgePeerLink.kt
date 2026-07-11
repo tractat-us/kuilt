@@ -81,26 +81,6 @@ internal class BridgePeerLink(
     private val spool = Spool<Swatch>(policy)
     override val incoming: Flow<Swatch> = spool.incoming
 
-    /**
-     * Invoked once when the last remote peer terminally drops (the whole
-     * session is gone — a drop, or a join that never connected) and again on
-     * [close]. The owning `MultipeerPeerLinkFactory` uses this to free its
-     * single-session slot so it becomes reusable without an explicit factory
-     * close; the factory's identity guard makes repeat invocations no-ops.
-     * Set by the owner right after construction; safe to leave null.
-     *
-     * **Consumer contract — you MUST still [close] a self-dropped seam.** On
-     * the peer-drop path this callback frees the factory slot but issues **no**
-     * `mc_session_close`: it runs inside the JNA peer-state callback, and
-     * re-entering the native bridge there would race the pump teardown. Unlike
-     * the apple side (where ARC reclaims the dropped `MCSession`), the JVM has
-     * no ARC — `mc_session_close` is the only thing that disposes the native
-     * handle. So a consumer that observes [SeamState.Torn] and drops the seam
-     * **without** calling [close] leaks the native session until the owning
-     * factory is closed. Always [close] a seam once it reaches [SeamState.Torn].
-     */
-    internal var onTerminated: (() -> Unit)? = null
-
     // CAS-latched by closeNow() before mc_session_close; read by the JNA
     // callbacks and the send paths. AtomicBoolean (not @Volatile) so a
     // concurrent seam.close() / factory.close() pair can never both pass the
@@ -151,12 +131,12 @@ internal class BridgePeerLink(
                 val remaining = _peers.updateAndGet { it - peer }
                 // Terminal peer-level drop. When the last remote peer is gone the
                 // whole session is dead — tear the seam down (latch Torn, complete
-                // `incoming`) so the Seam contract holds on a remote disconnect, then
-                // notify the owner so it can free its single-session slot (idempotent
-                // with close() via the owner's identity guard). No mc_session_close
-                // here: it runs inside the JNA callback and the native handle is
-                // disposed only by the consumer's explicit close(). Mirrors the apple
-                // MCSessionLink behaviour.
+                // `incoming`) so the Seam contract holds on a remote disconnect. The
+                // latched Torn is the sole signal the owning factory's ActiveSeamSlot
+                // reads to free its single-session slot on the next weave — no
+                // side-channel callback. No mc_session_close here: it runs inside the
+                // JNA callback and the native handle is disposed only by the consumer's
+                // explicit close(). Mirrors the apple MCSessionLink behaviour.
                 if (remaining == setOf(selfId)) {
                     tearDown(CloseReason.RemoteRequested)
                 }
@@ -223,10 +203,11 @@ internal class BridgePeerLink(
     /**
      * Single-shot terminal teardown — latch [SeamState.Torn], close the JNA
      * [bridge] and the [spool] (completing [incoming] per the `Seam` contract),
-     * cancel [scope], then free the owner's single-session slot via [onTerminated].
-     * Shared by the self-driven drop path and [closeNow]; the [tornDown] CAS makes
-     * it run once even if a drop and a consumer [close] interleave. Issues no
-     * native call — the native handle is disposed only by [closeNow].
+     * cancel [scope]. Shared by the self-driven drop path and [closeNow]; the
+     * [tornDown] CAS makes it run once even if a drop and a consumer [close]
+     * interleave. Issues no native call — the native handle is disposed only by
+     * [closeNow]. The latched `Torn` is what the owning factory's `ActiveSeamSlot`
+     * reads to free its single-session slot on the next weave.
      */
     private fun tearDown(reason: CloseReason) {
         if (!tornDown.compareAndSet(false, true)) return
@@ -234,8 +215,5 @@ internal class BridgePeerLink(
         bridge.close()
         spool.close()
         scope.cancel()
-        // Free the owner's single-session slot; the owner's identity guard makes
-        // this a no-op when the slot already moved on.
-        onTerminated?.invoke()
     }
 }
