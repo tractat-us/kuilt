@@ -152,6 +152,46 @@ class MuxServerLoomLifecycleTest {
     }
 
     /**
+     * [MuxServerLoom.connectedPeers] tracks a peer from the moment its link is admitted until the
+     * link tears — independent of any room membership. Admitting a client makes it appear; closing
+     * its transport makes it disappear.
+     */
+    @Test
+    fun connectedPeersTracksLinkLifecycle() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        val dispatcher = coroutineContext[ContinuationInterceptor]!!
+        val source = InMemoryConnectionSource()
+        val loom = backgroundScope.newLoom(source, dispatcher)
+        val room = loom.host(Pattern("t"))
+        val peer = PeerId("c1")
+        assertTrue(loom.connectedPeers.value.isEmpty(), "no peers connected initially")
+
+        val seam = backgroundScope.admitClient(loom, source, dispatcher, room, peer, "t", seed = 1L)
+        loom.connectedPeers.first { peer in it }
+        assertTrue(peer in loom.connectedPeers.value, "an admitted peer appears in connectedPeers")
+
+        seam.close()
+        loom.connectedPeers.first { peer !in it }
+        assertFalse(peer in loom.connectedPeers.value, "a torn link removes the peer from connectedPeers")
+    }
+
+    /** [MuxServerLoom.close] clears [MuxServerLoom.connectedPeers] as every connection's pump tears down. */
+    @Test
+    fun connectedPeersEmptiesOnClose() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        val dispatcher = coroutineContext[ContinuationInterceptor]!!
+        val source = InMemoryConnectionSource()
+        val loom = backgroundScope.newLoom(source, dispatcher)
+        val room = loom.host(Pattern("t"))
+        val peer = PeerId("c1")
+        val seam = backgroundScope.admitClient(loom, source, dispatcher, room, peer, "t", seed = 1L)
+        loom.connectedPeers.first { peer in it }
+
+        loom.close()
+        loom.connectedPeers.first { it.isEmpty() }
+        assertFalse(peer in loom.connectedPeers.value, "close() clears connectedPeers")
+        seam.close()
+    }
+
+    /**
      * On [MuxServerLoom.close] each connection's read loop tears down, deregistering it from the
      * rooms it joined — so the room's membership no longer lists the peer.
      */

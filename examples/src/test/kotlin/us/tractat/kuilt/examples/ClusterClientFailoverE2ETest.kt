@@ -39,7 +39,7 @@ import kotlin.time.Duration.Companion.seconds
  *
  * Two relay endpoints ([KtorRoomHost] A and B, distinct `serverPeerId`s and paths) front
  * **one shared M=3 voter mesh** + one [us.tractat.kuilt.cluster.ServerCluster] /
- * `LearnerRouter`. A production [clusterClient] with a pinned `selfPeerId`:
+ * `RaftRelayHub`. A production [clusterClient] with a pinned `selfPeerId`:
  *
  * 1. Connects to relay A → proposes → commits.
  * 2. Relay A is killed (its accept-loop scope is cancelled — its rooms tear; the **voter
@@ -54,9 +54,10 @@ import kotlin.time.Duration.Companion.seconds
  * Leadership is **not** moved on failover: it stays on whichever voter the election picked
  * (a still-alive voter — only relay A's *host* died, not a voter). The client re-admitted on
  * relay B forwards proposals to the leader through relay B, even though relay B's
- * `serverPeerId` need not align with the leader voter. That works because
- * [us.tractat.kuilt.cluster.ManagedRaftTransport] addresses its single relay peer and the
- * shared `LearnerRouter` routes on to the current leader. Without that fix the post-failover
+ * `serverPeerId` need not align with the leader voter. That works because the client's
+ * player relay transport (over its swappable `ManagedSeam`) wraps every send as
+ * `RaftRelay(dest = leader)` addressed to its single relay peer, and the shared
+ * `RaftRelayHub` dest-routes it on to the named voter. Without that the post-failover
  * propose would address an absent peer and hang.
  *
  * ## Real-socket discipline

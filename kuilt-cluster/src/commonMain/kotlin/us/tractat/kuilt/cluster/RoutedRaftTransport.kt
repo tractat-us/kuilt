@@ -1,6 +1,7 @@
 package us.tractat.kuilt.cluster
 
 import io.github.oshai.kotlinlogging.KotlinLogging
+import kotlinx.atomicfu.atomic
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.Flow
@@ -69,7 +70,10 @@ internal const val RELAY_HEADER_BUDGET: Int = 256
  * ## First-hop origin validation (commit-safety)
  *
  * Because `origin` now travels inside a forgeable frame, it is validated before a
- * relayed message is ever handed to the engine or forwarded on:
+ * relayed message is ever handed to the engine or forwarded on. The two roles
+ * validate differently:
+ *
+ * **A server** applies the sender-based first-hop rule ([validFirstHop]):
  *
  * - A frame from **a spoke** (the fabric-sender is not a core member) is accepted
  *   only if its `origin` equals that sender — a player may speak only for itself,
@@ -80,6 +84,47 @@ internal const val RELAY_HEADER_BUDGET: Int = 256
  * - A frame that arrived from the core and is **not** for a locally reachable
  *   node is dropped, never re-forwarded onto the core — the loop guard that keeps
  *   the hop bound at one core crossing.
+ *
+ * **A player** cannot trust the sender: its one peer (the relay server) need not
+ * be a voter, and a co-player behind the same server could wrap a forged
+ * `AppendEntries` as `RaftRelay(origin = self, dest = victim, …)` that the server
+ * forwards down. So a player instead trusts a down-frame only when its **true
+ * `origin` is a known voter** — read live via [voters] on every frame so a
+ * committed membership growth is honoured. This is strictly tighter than the
+ * sender rule and closes that log-corruption vector: the victim's engine does no
+ * `from` validation and would otherwise truncate-and-append the forged log.
+ *
+ * ## The residual spoke→voter gap (a documented decision, not an oversight)
+ *
+ * This relay is deliberately *reachability-complete*: the bounded
+ * `spoke → core → core → spoke` path lets **any admitted learner address every
+ * cluster member** with honest-origin frames. That reach is the point — it is how
+ * a far player's `AppendEntries` response reaches a leader on another server. But
+ * reach cuts both ways, and one direction is only *partially* hardened here:
+ *
+ * - **Origin *spoofing* is blocked** in every direction. A spoke cannot claim to
+ *   be another node: the first-hop rule ([validFirstHop]) rejects a spoke frame
+ *   whose `origin` isn't the sender, and the player-side `origin ∈ voters()` gate
+ *   rejects a fellow-spoke's forged down-frame. So no node is ever *impersonated*.
+ * - **A voter accepting an *honest-origin* RPC it should never process is not.**
+ *   A malicious-but-admitted learner can send a voter a `RaftRelay` carrying its
+ *   own honest `origin` but an `AppendEntries` / `InstallSnapshot` body — RPC types
+ *   only a *leader* should originate. The voter's `validFirstHop` passes (origin ==
+ *   sender), the frame reaches the engine, and **the engine does no `from`
+ *   validation on the RPC type**: an accepted `AppendEntries` from a non-leader
+ *   truncates-and-appends the voter's log, and an `InstallSnapshot` overwrites its
+ *   state — this is **log corruption**, not merely the term-inflation that a
+ *   spoof-only view would suggest (votes and `matchIndex` are keyed on a validated
+ *   `from`, but the *log itself* is not). The star topology this replaced happened
+ *   to confine such a frame to one server; identity-preserving cluster-wide reach
+ *   removes that accidental containment.
+ *
+ * Closing it needs a **voter-inbound RPC-type gate** (a voter accepts
+ * `AppendEntries`/`InstallSnapshot` only from the node it currently believes is
+ * leader), which lives at the `RaftRelayHub` fan-in, not in this send-side
+ * decorator — tracked as follow-up **#1383**. It is called out here so the reach
+ * this class grants is understood as a **deliberate, bounded decision** with a
+ * known residual, not an accident.
  *
  * ## One class, two roles
  *
@@ -106,8 +151,9 @@ internal const val RELAY_HEADER_BUDGET: Int = 256
  * @param relayChannel the seam relay envelopes are sent and received on. For a
  *   server it reaches the local players and the other core servers; for a player
  *   it reaches its one server. The transport owns its `incoming`.
- * @param core the node ids of the fully-meshed server core — the trust boundary
- *   for first-hop validation.
+ * @param core the node ids of the fully-meshed server core — the sender-based
+ *   trust boundary for a **server**'s first-hop validation. Unused by a player
+ *   (which validates by origin against [voters]); pass the empty set.
  * @param isServer whether this endpoint is a core server (may take one core hop)
  *   or a player (always forwards to its one server).
  * @param scope the [CoroutineScope] whose [Job] parents the relay coroutine.
@@ -117,6 +163,10 @@ internal const val RELAY_HEADER_BUDGET: Int = 256
  *   lookup used to pick the core hop for a remote player; ignored by a player
  *   (which always forwards to its one server). Pass
  *   [AttachmentDirectory.lookup]-style function on a server.
+ * @param voters for a **player**, the live provider of the current voter node ids
+ *   — a down-frame is accepted only when its `origin` is one of these, read
+ *   **per frame** so a committed membership growth is picked up (never captured at
+ *   construction). Unused by a server; pass `{ emptySet() }`.
  * @param headerBudget the [RaftRelay] envelope allowance subtracted from
  *   [inner]'s frame limit; defaults to [RELAY_HEADER_BUDGET].
  */
@@ -127,6 +177,7 @@ public class RoutedRaftTransport(
     private val isServer: Boolean,
     scope: CoroutineScope,
     private val attachment: (NodeId) -> NodeId?,
+    private val voters: () -> Set<NodeId>,
     private val headerBudget: Int = RELAY_HEADER_BUDGET,
 ) : RaftTransport {
 
@@ -153,6 +204,13 @@ public class RoutedRaftTransport(
     /** Self-destined relayed frames, fed by [relayJob] and merged into [incoming]. */
     private val relayed: MutableSharedFlow<RaftEnvelope> =
         MutableSharedFlow(extraBufferCapacity = Int.MAX_VALUE)
+
+    /**
+     * One-shot latch so a mis-wired multi-peer relay channel is warned at most once
+     * (a per-frame warn would flood). Atomic so the warn fires exactly once even
+     * under a multi-threaded dispatcher.
+     */
+    private val misWiredRelayWarned = atomic(false)
 
     /**
      * The sole collector of [relayChannel]. Validates each relay frame, hands
@@ -193,31 +251,67 @@ public class RoutedRaftTransport(
         if (isServer) {
             if (peer in core) peer else attachment(peer)
         } else {
-            relayChannel.peers.value.map { NodeId(it.value) }.singleOrNull { it != selfId }
+            playerServerHop()
         }
+
+    /**
+     * A player's single upstream server: the sole non-self peer of [relayChannel].
+     * Returns `null` (dropping the send) in two *distinct* situations:
+     *
+     * - **No server peer yet** — the relay channel is empty because the connection
+     *   has not (re)established. A transient reconnect gap; Raft retries, so this is
+     *   only a debug line.
+     * - **More than one non-self peer** — a player's relay channel must be
+     *   point-to-point, so multiple candidates mean the channel is **mis-wired** (a
+     *   multi-peer relay handed to a player role). That is a configuration defect, not
+     *   a transient gap, so it is **warned once** (naming the offending peers) rather
+     *   than dropped in silence — every relayed send drops until it is fixed.
+     */
+    private fun playerServerHop(): NodeId? {
+        val servers = relayChannel.peers.value.map { NodeId(it.value) }.filter { it != selfId }
+        return when (servers.size) {
+            1 -> servers.single()
+            0 -> {
+                log.debug { "raft-relay: $selfId player relay channel has no server peer yet (reconnect gap) — dropping" }
+                null
+            }
+            else -> {
+                if (misWiredRelayWarned.compareAndSet(expect = false, update = true)) {
+                    log.warn {
+                        "raft-relay: $selfId player relay channel is mis-wired — a player's relay channel must be " +
+                            "point-to-point, but it has ${servers.size} server peers: $servers. Dropping every relayed " +
+                            "send until it is fixed."
+                    }
+                }
+                null
+            }
+        }
+    }
 
     private suspend fun handleRelayFrame(swatch: Swatch) {
         val senderPeer = swatch.sender ?: return
         val relay = runCatchingCancellable { RaftRelay.decode(swatch.toByteArray()) }.getOrNull() ?: return
         val sender = NodeId(senderPeer.value)
-        val fromCore = sender in core
+        if (isServer) handleServerFrame(sender, relay) else handlePlayerFrame(relay)
+    }
 
+    /**
+     * A **server**'s relay handling: sender-based first-hop validation, then
+     * deliver-local / one-core-hop / loop-guard-drop by [RaftRelay.dest].
+     */
+    private suspend fun handleServerFrame(sender: NodeId, relay: RaftRelay) {
         // First-hop origin validation, BEFORE any emit or forward. A spoke may
         // speak only for itself; a core sender is trusted to carry a validated
-        // origin.
-        if (!fromCore && relay.origin != sender) {
+        // origin. Shared with RaftRelayHub via [validFirstHop].
+        if (!validFirstHop(sender = sender, origin = relay.origin, core = core)) {
             log.debug { "raft-relay: $selfId rejected spoofed frame (origin=${relay.origin}, sender=$sender)" }
             return
         }
-
+        val fromCore = sender in core
         when {
             relay.dest == selfId ->
                 // For us: hand to the engine with the true origin preserved.
                 relayed.emit(RaftEnvelope(relay.origin, relay.bytes))
-
-            !isServer ->
-                // A player never routes for anyone else.
-                Unit
 
             relay.dest in inner.peers.value ->
                 // Destination is directly reachable here: one hop down to it.
@@ -237,6 +331,22 @@ public class RoutedRaftTransport(
                 // Arrived from the core for a non-local destination: drop, never
                 // re-forward onto the core (loop guard; Raft retries).
                 log.debug { "raft-relay: $selfId dropping core frame for non-local dest ${relay.dest} (loop guard)" }
+        }
+    }
+
+    /**
+     * A **player**'s relay handling: trust a down-frame only when its true
+     * [RaftRelay.origin] is a current voter (read live per frame via [voters]),
+     * then hand it to the engine with the origin preserved. A player never routes
+     * for anyone else, so any frame not addressed to itself is dropped.
+     */
+    private suspend fun handlePlayerFrame(relay: RaftRelay) {
+        if (relay.origin !in voters()) {
+            log.debug { "raft-relay: $selfId rejected down-frame from non-voter origin ${relay.origin}" }
+            return
+        }
+        if (relay.dest == selfId) {
+            relayed.emit(RaftEnvelope(relay.origin, relay.bytes))
         }
     }
 
@@ -278,6 +388,7 @@ public fun serverRelayTransport(
         isServer = true,
         scope = scope,
         attachment = attachment,
+        voters = { emptySet() },
     )
 
 /**
@@ -286,23 +397,38 @@ public fun serverRelayTransport(
  * it a learner's reply, handed raw to a follower server, is dropped or answered
  * `NotLeader`, wedging the commit path.
  *
+ * A player trusts a down-frame only when its true `origin` is one of the current
+ * [voters] — read live per frame, never captured — so the relay server need not be
+ * a voter (closing the admission-hang where a non-voter relay id would be
+ * rejected) and a co-player cannot forge an `AppendEntries` the server forwards
+ * down (closing a log-corruption vector).
+ *
+ * ## One unsupported edge (unreachable today)
+ *
+ * A brand-new **voter** that wins an election *before* this client commits the
+ * config entry adding it would have its frames rejected ([voters] would not yet
+ * list it). This requires dynamic *voter* changes, which nothing does today —
+ * `admitLearner` only ever grows *learners*, never voters. It is documented as
+ * unsupported and deliberately not engineered around.
+ *
  * @param inner the player's direct transport (its one peer is its server).
  * @param relayChannel the seam to its server; the transport owns its `incoming`.
- * @param core the core's node ids — so a frame relayed down from its server (a
- *   core member) is trusted at first-hop validation.
+ * @param voters the live provider of the current voter node ids — the origin trust
+ *   set, read **per frame** so a committed membership growth is honoured.
  * @param scope parents the relay coroutine. **Required.**
  */
 public fun playerRelayTransport(
     inner: RaftTransport,
     relayChannel: Seam,
-    core: Set<NodeId>,
+    voters: () -> Set<NodeId>,
     scope: CoroutineScope,
 ): RoutedRaftTransport =
     RoutedRaftTransport(
         inner = inner,
         relayChannel = relayChannel,
-        core = core,
+        core = emptySet(),
         isServer = false,
         scope = scope,
         attachment = { null },
+        voters = voters,
     )

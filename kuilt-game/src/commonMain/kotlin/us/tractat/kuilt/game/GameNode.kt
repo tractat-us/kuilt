@@ -99,9 +99,9 @@ internal const val HEARTBEAT_CHANNEL: Byte = 4
  * Carved over the *same* session mux as the Raft channel (tag 1), so the relay channel's `selfId`
  * and peer ids are byte-identical to the ids the Raft [NodeId]s derive from — the first Task-1-review
  * contract (a node's relay-channel `PeerId` string == its Raft `NodeId` string). Every bootstrap path
- * provisions this channel into [ConsensusBinding.relayChannel]; only the federated placement wraps its
- * transport to send/receive on it. For every other placement the channel is inert (a mux view nobody
- * writes to produces no wire traffic), so provisioning it leaves the off-federation wire byte-identical.
+ * exposes this channel via [ConsensusBinding.channel]; only the federated placement requests it (to
+ * wrap its transport to send/receive on it). For every other placement the channel is never
+ * provisioned, so it produces no wire traffic and the off-federation wire stays byte-identical.
  */
 internal const val RAFT_RELAY_CHANNEL: Byte = 5
 
@@ -121,9 +121,10 @@ internal const val RAFT_RELAY_CHANNEL: Byte = 5
  * lets a receiver run the first-hop authenticity check (`NodeId(sender.value) ∈ core`) that keeps a
  * spoke player from injecting membership. It rides **below** the gossip overlay for the same reason
  * the Raft and relay channels do (#1370): it carries authority-bearing membership data that the
- * overlay's origin-restamping must never touch. Every bootstrap path provisions this channel into
- * [ConsensusBinding.rosterChannel]; only the federated placement's admission loop reads or writes it,
- * so for every other placement the channel is inert and the off-federation wire stays byte-identical.
+ * overlay's origin-restamping must never touch. Every bootstrap path exposes this channel via
+ * [ConsensusBinding.channel]; only the federated placement's admission loop requests it (to read and
+ * write it), so for every other placement the channel is never provisioned and the off-federation
+ * wire stays byte-identical.
  */
 internal const val CORE_ROSTER_CHANNEL: Byte = 6
 
@@ -315,8 +316,7 @@ public fun CoroutineScope.gameNode(
         storage = storage,
         raftConfig = raftConfig,
         identity = identity,
-        relayChannel = mux.channel(RAFT_RELAY_CHANNEL),
-        rosterChannel = mux.channel(CORE_ROSTER_CHANNEL),
+        channels = mux::channel,
     )
     val node = placement.node(this, binding)
     // The placement owns its own learner-admission policy (a fixed-core placement launches a loop
@@ -461,8 +461,7 @@ public suspend fun CoroutineScope.gameHost(
             storage = storage,
             raftConfig = raftConfig,
             identity = identity,
-            relayChannel = mux.channel(RAFT_RELAY_CHANNEL),
-            rosterChannel = mux.channel(CORE_ROSTER_CHANNEL),
+            channels = mux::channel,
         ),
     )
     node.awaitLeadership()
@@ -571,8 +570,7 @@ public suspend fun CoroutineScope.gameJoin(
             storage = storage,
             raftConfig = raftConfig,
             identity = identity,
-            relayChannel = mux.channel(RAFT_RELAY_CHANNEL),
-            rosterChannel = mux.channel(CORE_ROSTER_CHANNEL),
+            channels = mux::channel,
         ),
     )
 
@@ -655,8 +653,7 @@ public suspend fun CoroutineScope.gameSpectate(
             storage = storage,
             raftConfig = raftConfig,
             identity = identity,
-            relayChannel = mux.channel(RAFT_RELAY_CHANNEL),
-            rosterChannel = mux.channel(CORE_ROSTER_CHANNEL),
+            channels = mux::channel,
         ),
     )
 

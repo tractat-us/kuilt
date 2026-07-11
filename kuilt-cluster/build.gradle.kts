@@ -47,7 +47,9 @@ kotlin {
             implementation(libs.kotlinx.coroutines.test)
         }
         jvmTest.dependencies {
-            runtimeOnly(libs.logback)
+            // implementation (not runtimeOnly) so RoutedRaftTransportMisWiredRelayTest can attach a
+            // logback ListAppender at compile time to assert the one-time mis-wired-relay WARN.
+            implementation(libs.logback)
         }
         androidUnitTest.dependencies {
             runtimeOnly(libs.logback)

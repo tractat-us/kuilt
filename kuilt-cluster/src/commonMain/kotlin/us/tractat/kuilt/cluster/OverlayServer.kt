@@ -7,6 +7,19 @@ import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.quilter.QuilterConfig
 
 /**
+ * The room-channel name an admitted client's **app-unicast spoke** rides on — the
+ * two-peer server↔client link a server hands to [OverlayServer.admit] as the local
+ * delivery seam for cross-core routed unicasts.
+ *
+ * It is a **distinct** channel from the Raft transport's `"raft"` channel so the
+ * two dialects never share framing: a client reading this channel by the same name
+ * sees exactly the overlay's per-recipient traffic, never Raft envelopes. A server
+ * calls `room.channel(OVERLAY_UNICAST_CHANNEL)` for each admitted connection and
+ * registers it as that client's local spoke via [OverlayServer.admit].
+ */
+public const val OVERLAY_UNICAST_CHANNEL: String = "overlay-unicast"
+
+/**
  * One server's view of the two-tier overlay — the piece that survives a client's
  * **failover** to a different server (slice 5D).
  *
@@ -101,6 +114,40 @@ public class OverlayServer internal constructor(
     public fun evict(client: PeerId) {
         directory.detach(client)
         router.removeLocalSpoke(client)
+    }
+
+    /**
+     * Publish `client → self` into the replicated attachment **directory only**, without
+     * registering a per-connection unicast spoke — the deliberate exception to [admit]'s
+     * attach-and-register invariant.
+     *
+     * This is the **game-path** publish: on the room-hub topology a player's frames are delivered
+     * by the hosting [us.tractat.kuilt.core.RoomHubSeam]'s own membership (the leader relays down
+     * the room's federated seam), so there is **no separate app-unicast spoke** for this connection
+     * to register in the [RoutedUnicastRouter] — the router's register-without-attach hazard does
+     * not apply because nothing routes single-addressee unicasts to this client. Only the directory
+     * half is meaningful: it tells the rest of the core "this player's packets flow through me", the
+     * fact the leader's `RoutedRaftTransport` reads to pick its relay hop.
+     *
+     * Pairs with [detachDirectoryOnly] for teardown; a failover re-[attachDirectoryOnly] on a
+     * surviving server supersedes the stale entry under last-writer-wins, exactly as [admit] does.
+     *
+     * This is a documented seam, not the steady state: follow-up **#1384** tracks converging the two
+     * `AttachmentDirectory` publish paths (this connection-layer game-path publisher and [admit]'s
+     * spoke-coupled one) onto a single mechanism, at which point this directory-only method folds
+     * back into [admit]. Consumed by `attachConnections`.
+     */
+    public fun attachDirectoryOnly(client: PeerId) {
+        directory.attach(client)
+    }
+
+    /**
+     * Retract [client]'s attachment from the replicated directory only — the [detach] counterpart of
+     * [attachDirectoryOnly], with no unicast spoke to remove (there was none). A last-writer-wins
+     * tombstone, so peers stop routing here once it converges. See [attachDirectoryOnly] and **#1384**.
+     */
+    public fun detachDirectoryOnly(client: PeerId) {
+        directory.detach(client)
     }
 
     /**

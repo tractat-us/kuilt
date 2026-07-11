@@ -50,24 +50,31 @@ lifetimes are tied to the injected `CoroutineScope`.
 Used directly in tests (wired via `MultiNodeRaftSim` from `:kuilt-raft-test`)
 and as the voter layer inside `ServerCluster`.
 
-### `ManagedRaftTransport` (commonMain)
+### `ManagedSeam` (commonMain)
 
-A `RaftTransport` whose backing `Seam` can be replaced on transport tear without
-recreating the `RaftNode`. The `RaftNode` keeps its identity and in-flight state
-across reconnects; only the underlying `Seam` is swapped. This is the primitive
-that makes `CoroutineScope.clusterClient()` possible.
+A `Seam` whose *backing* `Seam` can be hot-swapped on transport tear without
+recreating the `RaftNode`. The client builds its `RoutedRaftTransport` and
+`RaftNode` once over a `ManagedSeam`; on reconnect only the backing seam is
+`swap`ped, so the node keeps its identity, log, and its single collector of
+`incoming` across failovers. This is the primitive that makes
+`CoroutineScope.clusterClient()`'s cross-server reconnect possible.
 
-Thread-safe: the current `SeamRaftTransport` pointer is guarded by an atomicfu
-reentrant lock; `incoming` is a hot `MutableSharedFlow` relayed from each seam;
-the lock is never held across a suspend call.
+Thread-safe: the current backing-seam pointer is guarded by an atomicfu reentrant
+lock (never held across a suspend); `incoming` is a hot `MutableSharedFlow` stable
+across swaps, and each `swap` cancels the previous per-swap relay coroutine before
+starting the next, so at most one collector of any backing seam is ever live
+(single-collection preserved). Correct under a multi-threaded dispatcher.
 
 ### `ServerCluster` (jvmAndAndroidMain)
 
 Server-side cluster facade: an M-voter `VoterMesh` plus a relay accept loop
 that admits learner clients via `KtorRoomHost`. Each admitted WebSocket
 connection is a two-peer Room; the server derives the learner's `NodeId` from
-the room roster, routes Raft messages through `LearnerRouter`, and issues a
-`changeMembership` to add the learner.
+the room roster, registers the connection's spoke with the `RaftRelayHub`, and
+issues a `changeMembership` to add the learner. The hub routes each learner-inbound
+frame **by its `RaftRelay.dest`** to exactly that voter's inbound and preserves the
+true sender as `RaftRelay.origin` — no leader-sniffing, no sender-restamping in
+either direction.
 
 ```kotlin
 val cluster = serverScope.serverCluster(
@@ -117,9 +124,10 @@ duplicates.
 ## NodeId ↔ PeerId alignment constraint
 
 Each voter's `NodeId` must equal `NodeId(serverPeerId.value)` — the server's
-`KtorRoomHost.serverPeerId` cast to a `NodeId`. The `LearnerRouter` stamps
-`Seam.broadcast`'s sender as `serverPeerId`; the client's `SeamRaftTransport`
-maps that sender to a `NodeId` for Raft message routing. Mismatched IDs cause
-silently dropped AppendEntries.
+`KtorRoomHost.serverPeerId` cast to a `NodeId`. The `RaftRelayHub` carries the
+true voter as the `RaftRelay.origin` (never re-stamping it with the relaying
+server's fabric sender), and the client's player relay transport
+(`playerRelayTransport`) maps that `origin` back to a `NodeId` for Raft routing
+and credit. Mismatched IDs cause silently dropped AppendEntries.
 
 See `docs/architecture.md#server-cluster-topology` and `docs/usage.md#server-cluster-topology-kuilt-cluster-jvmandroid`.

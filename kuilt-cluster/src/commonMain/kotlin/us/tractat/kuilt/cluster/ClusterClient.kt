@@ -9,12 +9,16 @@
  */
 package us.tractat.kuilt.cluster
 
+import io.github.oshai.kotlinlogging.KotlinLogging
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import us.tractat.kuilt.core.Loom
+import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.Tag
 import us.tractat.kuilt.raft.ClientId
@@ -25,14 +29,18 @@ import us.tractat.kuilt.raft.InMemoryRaftStorage
 import us.tractat.kuilt.raft.LogEntry
 import us.tractat.kuilt.raft.NodeId
 import us.tractat.kuilt.raft.RaftConfig
+import us.tractat.kuilt.raft.RaftEnvelope
 import us.tractat.kuilt.raft.RaftNode
 import us.tractat.kuilt.raft.RaftRole
+import us.tractat.kuilt.raft.RaftTransport
 import us.tractat.kuilt.raft.raftNode
 import us.tractat.kuilt.session.SeamRoomFactory
 import us.tractat.kuilt.session.partition.EndpointSelector
 import us.tractat.kuilt.session.partition.RoundRobinEndpointSelector
 import us.tractat.kuilt.session.partition.ServerClusterReconnect
 import kotlin.time.Instant
+
+private val log = KotlinLogging.logger("us.tractat.kuilt.cluster.ClusterClient")
 
 /**
  * A Raft learner-client that proposes commands through the cluster leader and
@@ -153,12 +161,12 @@ public data class ClusterEndpoints(
  *
  * Manages the full connect → use → reconnect lifecycle:
  * 1. Connects to the initial endpoint via [loom].
- * 2. Backs a [ManagedRaftTransport] with the resulting [us.tractat.kuilt.core.Seam].
- * 3. Constructs a single [RaftNode] over that transport — it lives for the [ClusterClient]
- *    lifetime, across reconnects.
+ * 2. Backs a [ManagedSeam] with the resulting [us.tractat.kuilt.core.Seam].
+ * 3. Constructs a single [RaftNode] over a [playerRelayTransport] on that seam — it lives
+ *    for the [ClusterClient] lifetime, across reconnects.
  * 4. On transport tear: advances [ServerClusterReconnect] to the next endpoint,
  *    re-joins via [loom], and swaps the backing [us.tractat.kuilt.core.Seam] in the
- *    [ManagedRaftTransport] — the [RaftNode] is **not** recreated.
+ *    [ManagedSeam] — the [RaftNode] is **not** recreated.
  *
  * ## Cross-server resume
  *
@@ -170,7 +178,7 @@ public data class ClusterEndpoints(
  * ## Dispatcher injection
  *
  * The [CoroutineScope] receiver IS the dispatcher injection point. All background work
- * (reconnect loop, relay coroutines inside [ManagedRaftTransport]) runs on the caller's
+ * (reconnect loop, relay coroutines inside [ManagedSeam]) runs on the caller's
  * dispatcher. No real-clock defaults are introduced.
  *
  * @param loom The [Loom] fabric for connecting to server endpoints.
@@ -211,17 +219,31 @@ public fun CoroutineScope.clusterClient(
 }
 
 /**
- * Internal wiring: creates the [ManagedRaftTransport], the [RaftNode], and the reconnect loop.
+ * Internal wiring: creates the [ManagedSeam], the relay [RaftTransport], the [RaftNode],
+ * and the reconnect loop.
  *
  * Separated from the public extension so tests can inject a pre-configured [ServerClusterReconnect].
  *
+ * ## The relay dialect (identity-preserving, dest-routed)
+ *
+ * The client's Raft transport is a [playerRelayTransport] over a swappable [ManagedSeam]:
+ * every send is wrapped as `RaftRelay(origin = clientId, dest = <leader NodeId>)` and
+ * addressed to the single relay server; every inbound relay frame surfaces as
+ * `RaftEnvelope(from = relay.origin)` — the **true voter**, never the relay id. The inner
+ * transport is a [NoPeerRaftTransport] so every Raft send is forced through the relay.
+ *
+ * A down-frame is trusted only when its `origin` is a **current voter**, read live from
+ * [RaftNode.membership] per frame (see [playerRelayTransport]) — so the relay server need
+ * not be a voter and a co-player cannot forge an `AppendEntries` the server forwards down.
+ *
  * ## Startup sequence
  *
- * [ManagedRaftTransport] starts with no backing [us.tractat.kuilt.core.Seam] — [peers] is
- * empty and [us.tractat.kuilt.raft.RaftTransport.sendTo] drops frames silently until
- * [ManagedRaftTransport.swapSeam] is first called. The [RaftNode] is constructed immediately
- * (non-suspend), then the reconnect loop (launched in [scope]) performs the first
- * `SeamRoomFactory.join()` and installs the resulting `room.channel("raft")` seam.
+ * [ManagedSeam] starts with no backing seam — [broadcast]/[sendTo] drop until the first
+ * [ManagedSeam.swap]. The [RaftNode] is constructed immediately (non-suspend); the
+ * `voters` provider reads its live membership (falling back to the configured voters until
+ * the node reference is assigned, which happens before any frame flows). The reconnect
+ * loop (launched in [scope]) performs the first `SeamRoomFactory.join()` and swaps in the
+ * resulting `room.channel("raft")` seam.
  *
  * ## Room-level join
  *
@@ -229,7 +251,8 @@ public fun CoroutineScope.clusterClient(
  * expected by [us.tractat.kuilt.websocket.KtorRoomHost] / [us.tractat.kuilt.cluster.ServerCluster].
  * The Raft transport rides on [Room.channel] `"raft"`, which provides admit-gated message
  * delivery. On transport tear [SeamState.Torn] propagates from the underlying seam through
- * to the channel seam, triggering the reconnect loop.
+ * to the channel seam, triggering the reconnect loop, which swaps the [ManagedSeam] — the
+ * [RoutedRaftTransport] and [RaftNode] live untouched across failover.
  *
  * Cross-server resume is always [us.tractat.kuilt.session.partition.ResumeResult.WindowClosed]
  * per #532 so fresh-join (no resume attempt) is used on every reconnect.
@@ -244,7 +267,19 @@ internal fun buildClusterClient(
     identity: ClientIdentity,
     clock: () -> Instant,
 ): ClusterClient {
-    val transport = ManagedRaftTransport(scope = scope, selfId = clientNodeId)
+    val managedSeam = ManagedSeam(scope = scope, selfId = PeerId(clientNodeId.value))
+
+    // Late-bound so `voters` reads the node's LIVE committed voters per frame. The
+    // transport is constructed before the node, but no frame flows until the reconnect
+    // loop's first swap — by then raftNodeRef is assigned. The clusterConfig fallback
+    // covers only the pre-first-frame window and holds the same voter set anyway.
+    var raftNodeRef: RaftNode? = null
+    val transport = playerRelayTransport(
+        inner = NoPeerRaftTransport(clientNodeId),
+        relayChannel = managedSeam,
+        voters = { raftNodeRef?.membership?.value?.voters ?: clusterConfig.voters },
+        scope = scope,
+    )
     val raftNode = scope.raftNode(
         clusterConfig = clusterConfig,
         transport = transport,
@@ -252,12 +287,13 @@ internal fun buildClusterClient(
         raftConfig = raftConfig,
         identity = identity,
     )
+    raftNodeRef = raftNode
 
-    // Reconnect loop: join (Room) → install channel → await tear → rotate → re-join → swap → repeat.
+    // Reconnect loop: join (Room) → swap channel → await tear → rotate → re-join → swap → repeat.
     scope.launch {
         val factory = SeamRoomFactory(loom = loom, scope = scope, clock = clock)
         var currentSeam = roomChannel(factory, reconnect)
-        transport.swapSeam(currentSeam)
+        managedSeam.swap(currentSeam)
 
         while (true) {
             // Wait for the current channel seam to tear (propagated from the underlying WS seam).
@@ -268,12 +304,29 @@ internal fun buildClusterClient(
             reconnect.onTransportTear()
 
             val newSeam = roomChannel(factory, reconnect)
-            transport.swapSeam(newSeam)
+            managedSeam.swap(newSeam)
             currentSeam = newSeam
         }
     }
 
     return ClusterClient(raftNode)
+}
+
+/**
+ * A [RaftTransport] with no peers of its own: [RoutedRaftTransport] wraps it so every
+ * Raft send (addressed to a node that is never a direct peer) is relayed, and every
+ * inbound frame arrives via the relay rather than this empty [incoming].
+ *
+ * Safe because nothing in kuilt-raft's engine internals reads `transport.peers`; only the
+ * [RoutedRaftTransport] decorator does, and it reads an empty inner-peer set as
+ * "relay everything."
+ */
+private class NoPeerRaftTransport(override val selfId: NodeId) : RaftTransport {
+    override val peers: StateFlow<Set<NodeId>> = MutableStateFlow(emptySet())
+    override val incoming: Flow<RaftEnvelope> = emptyFlow()
+    override suspend fun sendTo(peer: NodeId, message: ByteArray) {
+        log.debug { "cluster-client: no-peer inner drop to $peer (all sends go via the relay)" }
+    }
 }
 
 /**

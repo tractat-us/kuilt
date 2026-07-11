@@ -34,7 +34,7 @@ import kotlin.time.Duration.Companion.seconds
  * calls are launched concurrently before either has proposed anything. Without the fix,
  * the second `admitLearner` throws [us.tractat.kuilt.raft.MembershipChangeInProgressException]
  * (Raft serializes membership changes), which is swallowed silently: that learner is
- * registered in the LearnerRouter but never added to cluster membership, so its proposals
+ * registered as a spoke in the RaftRelayHub but never added to cluster membership, so its proposals
  * never commit (the leader never sends it AppendEntries). With the fix, `admitLearner`
  * retries the `changeMembership` call until the in-flight change commits, and both
  * clients can propose successfully.

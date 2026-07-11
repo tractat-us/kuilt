@@ -3,8 +3,11 @@
 package us.tractat.kuilt.cluster
 
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.filterIsInstance
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestResult
@@ -12,27 +15,34 @@ import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.CloseReason
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
+import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.raft.ClientId
 import us.tractat.kuilt.raft.ClientSessionTable
 import us.tractat.kuilt.raft.Committed
 import us.tractat.kuilt.raft.DedupKey
 import us.tractat.kuilt.raft.LogEntry
 import us.tractat.kuilt.raft.NodeId
+import us.tractat.kuilt.raft.RaftEnvelope
 import us.tractat.kuilt.raft.RaftRole
+import us.tractat.kuilt.raft.RaftTransport
 import us.tractat.kuilt.raft.test.FakeRaftNode
 import us.tractat.kuilt.session.partition.RoundRobinEndpointSelector
 import us.tractat.kuilt.session.partition.ServerClusterReconnect
 import kotlin.test.Test
+import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.seconds
 
 /**
- * Tier-(b) failover tests for [ClusterClient] and [ManagedRaftTransport].
+ * Tier-(b) failover tests for [ClusterClient] and its swappable relay [ManagedSeam].
  *
- * Tests the Seam-swap reconnect path introduced in S3b:
- * - [ManagedRaftTransport.swapSeam] keeps the same [us.tractat.kuilt.raft.RaftNode] identity.
+ * Tests the Seam-swap reconnect path introduced in S3b and re-expressed by the
+ * relay-dialect cutover (#1360):
+ * - [ManagedSeam.swap] keeps the same [us.tractat.kuilt.raft.RaftNode] identity.
+ * - The player relay transport over the [ManagedSeam] wraps every send as a
+ *   `RaftRelay(dest = leader)` addressed to the single relay peer.
  * - Endpoint rotation follows [ServerClusterReconnect]'s round-robin policy.
  * - [us.tractat.kuilt.session.partition.ResumeResult.WindowClosed] is treated as a
  *   fresh-join signal, not an error (proven by #532).
@@ -43,74 +53,73 @@ import kotlin.time.Duration.Companion.seconds
  */
 class ClusterClientFailoverTest {
 
-    // ── Same RaftNode across Seam swap ─────────────────────────────────────────
+    // ── Same node identity across Seam swap ────────────────────────────────────
 
     @Test
-    fun `ManagedRaftTransport swapSeam mutates the transport in place — same selfId throughout`(): TestResult =
+    fun `ManagedSeam swap keeps the same selfId across backing-seam replacement`(): TestResult =
         runTest(StandardTestDispatcher(), timeout = 5.seconds) {
-            // ManagedRaftTransport is the object the RaftNode holds. Swapping the Seam
-            // must NOT produce a new ManagedRaftTransport instance — the same object is
-            // mutated in place. The RaftNode receives a single transport reference and
-            // must observe the same selfId before and after swapSeam calls.
-            val stableId = NodeId("client")
-            val transport = ManagedRaftTransport(scope = backgroundScope, selfId = stableId)
+            // ManagedSeam is the swappable relay channel the player transport (and thus the
+            // RaftNode) holds. Swapping the backing Seam must NOT change its identity — the
+            // transport observes the same selfId and the same peers StateFlow reference.
+            val stableId = PeerId("client")
+            val managed = ManagedSeam(scope = backgroundScope, selfId = stableId)
 
             val loom = InMemoryLoom()
             val seamA = loom.join(InMemoryTag("server-a"))
             val seamB = loom.join(InMemoryTag("server-b"))
 
-            transport.swapSeam(seamA)
-            val idAfterFirst = transport.selfId
+            managed.swap(seamA)
+            val idAfterFirst = managed.selfId
 
-            transport.swapSeam(seamB)
-            val idAfterSecond = transport.selfId
+            managed.swap(seamB)
+            val idAfterSecond = managed.selfId
 
-            // The RaftNode sees the same transport identity: selfId is stable across swaps.
             assertEquals(stableId, idAfterFirst, "selfId must be stable after first swap")
             assertEquals(stableId, idAfterSecond, "selfId must be stable after second swap")
-            // Both reads are on the same object (peers flow reference is stable too).
-            assertTrue(transport.peers === transport.peers, "peers StateFlow reference is stable — same transport")
+            assertTrue(managed.peers === managed.peers, "peers StateFlow reference is stable — same seam")
         }
 
-    // ── Single-relay-peer addressing (#544) ───────────────────────────────────
+    // ── Single-relay-peer addressing, dest-routed (#544 / #1360) ──────────────
 
     @Test
-    fun `sendTo addresses the single relay peer regardless of the computed leader NodeId`(): TestResult =
+    fun `player sendTo over ManagedSeam wraps RaftRelay dest leader and addresses the single relay peer`(): TestResult =
         runTest(StandardTestDispatcher(), timeout = 5.seconds) {
             // A learner's room seam is strictly 2-peer: { learner, relay }. The Raft engine
-            // forwards a proposal to the *real* leader NodeId (read from the AppendEntries body),
-            // which is generally NOT the relay's PeerId — so a naive seam.sendTo(leaderId) hits an
-            // absent peer and drops. ManagedRaftTransport must redirect every send to its single
-            // relay peer; the relay's LearnerRouter routes on to the current leader voter. This is
-            // the precondition for cross-relay failover without moving Raft leadership (#544).
+            // forwards a proposal addressed to the *real* leader NodeId, which is generally NOT
+            // the relay's PeerId. The player relay transport wraps every send as
+            // RaftRelay(origin = client, dest = leader) and addresses the single relay peer;
+            // the server-side hub then dest-routes it. This is the precondition for cross-relay
+            // failover without moving Raft leadership (#544) and preserves the true dest (#1360).
             val loom = InMemoryLoom()
             val relaySeam = loom.join(InMemoryTag("relay"))
-            val learnerSeam = loom.join(InMemoryTag("relay"))
+            val clientSeam = loom.join(InMemoryTag("relay"))
+            val clientId = NodeId(clientSeam.selfId.value)
 
-            // selfId mirrors the learner's pinned fabric identity (clientNodeId == seam.selfId).
-            val transport = ManagedRaftTransport(
+            val managed = ManagedSeam(scope = backgroundScope, selfId = PeerId(clientId.value))
+            val leader = NodeId("distant-leader-voter")
+            val transport = playerRelayTransport(
+                inner = NoPeerInner(clientId),
+                relayChannel = managed,
+                voters = { setOf(leader) },
                 scope = backgroundScope,
-                selfId = NodeId(learnerSeam.selfId.value),
             )
-            transport.swapSeam(learnerSeam)
+            managed.swap(clientSeam)
             testScheduler.runCurrent()
 
             val received = mutableListOf<ByteArray>()
             val collectJob = launch { relaySeam.incoming.collect { received.add(it.toByteArray()) } }
             testScheduler.runCurrent()
 
-            // Address a voter that is NOT a peer on the learner's seam — models the real leader
-            // being a voter not aligned with this relay's serverPeerId.
             val payload = "forward-to-leader".encodeToByteArray()
-            transport.sendTo(NodeId("distant-leader-voter"), payload)
+            transport.sendTo(leader, payload)
             testScheduler.runCurrent()
             collectJob.cancel()
 
-            assertEquals(1, received.size, "the relay peer must receive the forwarded frame")
-            assertTrue(
-                received.single().contentEquals(payload),
-                "the relay receives the original payload",
-            )
+            assertEquals(1, received.size, "the relay peer must receive exactly one wrapped frame")
+            val relay = RaftRelay.decode(received.single())
+            assertEquals(leader, relay.dest, "the wrap carries dest = the leader NodeId")
+            assertEquals(clientId, relay.origin, "origin = the true client")
+            assertContentEquals(payload, relay.bytes, "the original payload rides inside the envelope")
         }
 
     // ── Endpoint rotation order ────────────────────────────────────────────────
@@ -139,17 +148,17 @@ class ClusterClientFailoverTest {
         }
 
     @Test
-    fun `reconnect loop swaps seam and peers after InMemoryLoom seam tear`(): TestResult =
+    fun `ManagedSeam swap reflects the new backing seam peers after an InMemoryLoom seam tear`(): TestResult =
         runTest(StandardTestDispatcher(), timeout = 5.seconds) {
             val loom = InMemoryLoom()
             val seamA = loom.join(InMemoryTag("server-a"))
             val seamB = loom.join(InMemoryTag("server-b"))
 
-            val transport = ManagedRaftTransport(scope = backgroundScope, selfId = NodeId("client"))
-            transport.swapSeam(seamA)
+            val managed = ManagedSeam(scope = backgroundScope, selfId = PeerId("client"))
+            managed.swap(seamA)
             testScheduler.runCurrent()
 
-            val peersAfterA = transport.peers.value.toList()
+            val peersAfterA = managed.peers.value.toList()
             assertTrue(peersAfterA.isNotEmpty(), "peers non-empty after installing seam-A")
 
             // Tear seam-A (simulates entry-server death).
@@ -157,10 +166,10 @@ class ClusterClientFailoverTest {
             testScheduler.runCurrent()
 
             // Install seam-B (simulates reconnect loop completing its join).
-            transport.swapSeam(seamB)
+            managed.swap(seamB)
             testScheduler.runCurrent()
 
-            val peersAfterB = transport.peers.value.toList()
+            val peersAfterB = managed.peers.value.toList()
             assertTrue(peersAfterB.isNotEmpty(), "peers non-empty after installing seam-B")
         }
 
@@ -175,16 +184,9 @@ class ClusterClientFailoverTest {
             // This test verifies the ClusterClient contract: no exception is thrown,
             // and the client continues functioning after a WindowClosed response.
 
-            // Represent the failover: client connects to server-A, gets a token,
-            // server-A tears, client connects to server-B — WindowClosed returned.
-            // The client must treat this as "proceed with fresh join" — not propagate
-            // as an error to callers. Here we verify this at the ClusterClient API layer.
-
             val fakeNode = FakeRaftNode(initialRole = RaftRole.Leader)
             val client = clusterClientWithNode(fakeNode)
 
-            // Simulate a proposal succeeding AFTER a simulated WindowClosed failover
-            // (the ClusterClient wrapper should not care about WindowClosed at its layer).
             val command = "post-failover-cmd".encodeToByteArray()
             val entry = client.propose(command)
 
@@ -201,7 +203,7 @@ class ClusterClientFailoverTest {
         runTest(StandardTestDispatcher(), timeout = 5.seconds) {
             // Simulate exactly-once semantics across a transport failover:
             //   1. Client proposes with requestId=99 — committed on first server.
-            //   2. Entry server tears — client reconnects via ManagedRaftTransport.swapSeam.
+            //   2. Entry server tears — client reconnects via ManagedSeam.swap.
             //   3. Client retries with same requestId=99 on the new server.
             //   4. State-machine apply loop uses ClientSessionTable to filter the duplicate.
 
@@ -209,7 +211,6 @@ class ClusterClientFailoverTest {
             val requestId = 99L
             val command = "action:dedup-across-failover".encodeToByteArray()
 
-            // Server-1 committed the entry.
             val firstCommit = LogEntry(
                 index = 1L,
                 term = 1L,
@@ -217,7 +218,6 @@ class ClusterClientFailoverTest {
                 dedupKey = DedupKey(clientId, requestId),
             )
 
-            // After failover, server-2 may also commit (before it learns of the first).
             val retryCommit = LogEntry(
                 index = 2L,
                 term = 2L,
@@ -231,23 +231,20 @@ class ClusterClientFailoverTest {
         }
 
     @Test
-    fun `propose survives Seam swap on ManagedRaftTransport when using FakeRaftNode`(): TestResult =
+    fun `propose survives ManagedSeam swap when using FakeRaftNode`(): TestResult =
         runTest(StandardTestDispatcher(), timeout = 5.seconds) {
-            // Model: a ClusterClient backed by a FakeRaftNode. Separately, the
-            // ManagedRaftTransport swaps Seams (simulating the reconnect loop).
-            // The FakeRaftNode is the RaftNode identity — it does NOT change.
+            // Model: a ClusterClient backed by a FakeRaftNode. Separately, the ManagedSeam
+            // swaps backing Seams (simulating the reconnect loop). The FakeRaftNode is the
+            // RaftNode identity — it does NOT change.
 
             val fakeNode = FakeRaftNode(initialRole = RaftRole.Leader)
             val client = clusterClientWithNode(fakeNode)
 
             val loom = InMemoryLoom()
-            val transport = ManagedRaftTransport(
-                scope = backgroundScope,
-                selfId = NodeId("client"),
-            )
+            val managed = ManagedSeam(scope = backgroundScope, selfId = PeerId("client"))
 
             // Install seam-A.
-            transport.swapSeam(loom.join(InMemoryTag("server-a")))
+            managed.swap(loom.join(InMemoryTag("server-a")))
             testScheduler.runCurrent()
 
             // Propose before the swap.
@@ -255,7 +252,7 @@ class ClusterClientFailoverTest {
             assertTrue(before.command.contentEquals("before-swap".encodeToByteArray()))
 
             // Swap to seam-B (simulates failover reconnect).
-            transport.swapSeam(loom.join(InMemoryTag("server-b")))
+            managed.swap(loom.join(InMemoryTag("server-b")))
             testScheduler.runCurrent()
 
             // The FakeRaftNode identity is unchanged — proposals still work.
@@ -274,4 +271,11 @@ class ClusterClientFailoverTest {
 
             assertTrue(entries.size >= 2, "both proposals appear on the same committed stream")
         }
+
+    /** A no-peer inner transport: forces every send through the relay channel. */
+    private class NoPeerInner(override val selfId: NodeId) : RaftTransport {
+        override val peers: StateFlow<Set<NodeId>> = MutableStateFlow(emptySet())
+        override val incoming: Flow<RaftEnvelope> = emptyFlow()
+        override suspend fun sendTo(peer: NodeId, message: ByteArray) = Unit
+    }
 }

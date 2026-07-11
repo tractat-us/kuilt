@@ -26,7 +26,7 @@ import kotlin.time.Instant
  * all servers vote in the game's Raft cluster, and a *broadcast* crosses the core once and fans to
  * each server's local players (the [TwoTier] dissemination shape). It is called **once per game on
  * each core server** — never by a player. A federated player joins with [gameNodeRoom] and
- * `ConsensusPlacement.federatedCore(core) { null }` (its player role — see below); it must **not**
+ * [ConsensusPlacement.federatedPlayer] (its player role — see below); it must **not**
  * use [ConsensusPlacement.serverCore], which has no relay wrapper and would never receive a
  * cross-server leader's log.
  *
@@ -41,7 +41,7 @@ import kotlin.time.Instant
  * can reach directly is relayed one hop closer over a dedicated `RAFT_RELAY` channel along the bounded
  * path `player → server → core → server → player`, preserving the true Raft origin end-to-end (so a
  * far player's reply still credits `matchIndex`, votes and read-index acks correctly). A federated
- * player joins with [gameNodeRoom] and `ConsensusPlacement.federatedCore(core) { null }` — the same
+ * player joins with [gameNodeRoom] and [ConsensusPlacement.federatedPlayer] — the same
  * relay decorator, in its player role (always forwards to its one server). This entry point therefore
  * supports **server-core consensus, failover, *and* delivery to players spread across the core**.
  *

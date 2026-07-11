@@ -23,8 +23,10 @@ import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.cbor.Cbor
-import us.tractat.kuilt.cluster.AttachmentDirectory
+import us.tractat.kuilt.cluster.OverlayServer
+import us.tractat.kuilt.cluster.attachConnections
 import us.tractat.kuilt.cluster.attachmentDirectory
+import us.tractat.kuilt.cluster.overlayServer
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Loom
@@ -212,17 +214,16 @@ class FederatedGamePerRoomE2ETest {
     // The topology-3 failover test above stands up three core servers with EMPTY rooms — it proves
     // server-core consensus + failover, but never puts a real player behind a server. These guard
     // tests fill those rooms with REAL players joined through the production federated-player call
-    // site — `gameNodeRoom(playerLoom, gameId, voterIds = core, placement = federatedCore(core){null})`
+    // site — `gameNodeRoom(playerLoom, gameId, voterIds = core, placement = federatedPlayer(core))`
     // — and prove the committed Raft log crosses the core to a player behind ANY server.
     //
-    // Directory note (the H5 "admit is a caller obligation" gap): nothing in `gameNodeRoomFederated`
-    // or `AttachmentDirectory` observes a server's room roster to publish `player → self`; the only
-    // caller of `AttachmentDirectory.attach` in the tree is `OverlayServer.admit`, which no game-layer
-    // code invokes. So the routing directory does NOT auto-learn a joined player. Per the brief, we
-    // wire the legitimate caller-side publish the way a federation orchestrator would —
-    // [publishRoomRosterToDirectory] observes each server's local room roster (a safe `peers`
-    // StateFlow read; `MuxServerLoom.host` is idempotent so this is the same room `tieredSeam` owns)
-    // and calls `directory.attach` — rather than hand-poking a fixed entry. See the task report.
+    // Directory note (the H5 "admit is a caller obligation" gap, now closed at the connection layer):
+    // `gameNodeRoomFederated` does not itself publish `player → self` into the routing directory. The
+    // production publisher lives one layer down — `attachConnections` collects the server loom's
+    // `MuxServerLoom.connectedPeers` and calls `OverlayServer.attachDirectoryOnly` for each accepted
+    // player link, which the leader's `RoutedRaftTransport` reads to pick its core hop. `hostGame`
+    // wires exactly that shipped helper (see #1384 for converging it with `admit`'s spoke path), so
+    // these guard tests exercise the real connection-layer wiring, not a hand-rolled roster poke.
 
     /**
      * **G1 — identity → reply path.** Three-server federation, player P2 behind a *follower*, leader
@@ -467,6 +468,62 @@ class FederatedGamePerRoomE2ETest {
             )
         }
 
+    /**
+     * **F8 — cross-server failover with a real player.** Three-server federation, player P2 behind a
+     * *survivor* server S_b, a leader elected on another server. A baseline turn commits, then the
+     * **leader server's whole scope is killed** (mirroring the topology-3 failover's kill mechanics).
+     * A NEW leader emerges among the two survivors and still commits a turn **proposed by AND
+     * delivered to P2** — the routing handoff across the failover.
+     *
+     * This pins the three things a player's routing depends on surviving a server loss:
+     * - the attachment **directory** survives on the survivors (Quilter-replicated), still naming S_b
+     *   as P2's hop, so the new leader's `RoutedRaftTransport` relays down to P2 correctly;
+     * - **admission** survives via the continuous roster flow (`launchFederatedCoreAdmission`) — P2
+     *   stays a learner in the survivors' membership across the leadership change; and
+     * - the **relay** re-routes through S_b's still-live attachment, so P2's forwarded proposal
+     *   reaches the new leader and the committed entry comes back down to P2.
+     */
+    @Test
+    fun f8_playerBehindSurvivorServer_commitsAfterLeaderServerKilled() =
+        runTest(StandardTestDispatcher(), timeout = 30.seconds) {
+            val dispatcher = testDispatcher()
+            val ids = listOf(NodeId("s1"), NodeId("s2"), NodeId("s3"))
+            val fed = backgroundScope.federation(ids, dispatcher, increasingMillisClock())
+            val servers = hostGame(fed, gameId)
+
+            // Elect a leader; place P2 behind a server that will SURVIVE the kill (not the leader).
+            val leaderId = awaitLeaderId(ids, servers)
+            val sBid = ids.first { it != leaderId }
+            val p2Id = PeerId("player-two")
+            val p2 = backgroundScope.joinFederatedPlayer(fed.fabric(sBid), gameId, ids.toSet(), p2Id, seed = 71L)
+            servers.getValue(leaderId).node.membership.first { NodeId(p2Id.value) in it.learners }
+
+            // Baseline: P2's proposal commits under the ORIGINAL leader (routing works pre-failover).
+            TurnSequencer(p2.node, Int.serializer()).propose(11)
+            awaitCommittedInt(p2.node, 11)
+
+            // Kill the LEADER server's whole scope. P2's entry server S_b survives, so the directory
+            // still names S_b as P2's attachment and the survivors keep P2 in their membership.
+            fed.members.getValue(leaderId).scope.cancel()
+            val survivors = ids.filter { it != leaderId }
+
+            // A NEW leader emerges among the survivors. First it commits an action DELIVERED to P2 —
+            // the down-path routing handoff: the surviving directory still names S_b as P2's hop, so the
+            // new leader's RoutedRaftTransport relays the entry down to P2 through S_b's live attachment.
+            // This also lets P2's engine LEARN the new leader (from the relayed AppendEntries) — a
+            // federated player forwards its proposals to the leader it last heard from, so it must
+            // observe the new leader before it can forward there (the stale-leader re-forward of R1).
+            val newLeader = awaitLeaderId(survivors, servers)
+            TurnSequencer(servers.getValue(newLeader).node, Int.serializer()).propose(22)
+            awaitCommittedInt(p2.node, 22)
+
+            // Now the up-path handoff: a turn PROPOSED BY P2 re-routes through S_b to the new leader and
+            // commits on P2 and on both survivors — the relay re-routed across the failover.
+            TurnSequencer(p2.node, Int.serializer()).propose(33)
+            assertEquals(33, committedInts(p2.node).first { it == 33 }, "P2 commits its post-failover proposal")
+            survivors.forEach { awaitCommittedInt(servers.getValue(it).node, 33) }
+        }
+
     // ── The ONE piece of "game code" shared by all three topologies ──────────────
 
     /**
@@ -565,7 +622,7 @@ class FederatedGamePerRoomE2ETest {
         random: Random,
     ) {
         private val source = InMemoryConnectionSource()
-        val loom: Loom = MuxServerLoom(
+        val loom: MuxServerLoom = MuxServerLoom(
             source = source, scope = scope, selfId = serverId,
             authorizer = RoomAuthorizer.AllowAll, dispatcher = dispatcher, random = random,
         )
@@ -601,7 +658,7 @@ class FederatedGamePerRoomE2ETest {
         val id: NodeId,
         val scope: CoroutineScope,
         val coreMux: NamedMux,
-        val directory: AttachmentDirectory,
+        val overlay: OverlayServer,
         val fabric: ServerRoomFabric,
     )
 
@@ -627,12 +684,19 @@ class FederatedGamePerRoomE2ETest {
         val members = ids.mapIndexed { i, id ->
             val scope = CoroutineScope(coroutineContext + Job(coroutineContext[Job]))
             val coreMux = NamedMux(coreSeams.getValue(id), scope)
-            val directory = attachmentDirectory(
-                self = PeerId(id.value), interServerSeam = coreMux.channel(DIRECTORY_CHANNEL), scope = scope,
-                clock = clock, config = QuilterConfig(expectVirtualTime = true),
+            // Full OverlayServer: the directory (read by the federated transport via ::lookup) plus a
+            // routing spoke over a DISTINCT channel — the game path never uses the router (delivery is
+            // the room hub's membership), but `attachConnections` drives the directory half through it.
+            val overlay = overlayServer(
+                self = PeerId(id.value),
+                coreSeam = coreMux.channel(ROUTING_CHANNEL),
+                directorySeam = coreMux.channel(DIRECTORY_CHANNEL),
+                scope = scope,
+                clock = clock,
+                directoryConfig = QuilterConfig(expectVirtualTime = true),
             )
             val fabric = ServerRoomFabric(PeerId(id.value), scope, dispatcher, Random(100L + i))
-            id to ServerInfra(id, scope, coreMux, directory, fabric)
+            id to ServerInfra(id, scope, coreMux, overlay, fabric)
         }.toMap()
         return Federation(members)
     }
@@ -643,50 +707,28 @@ class FederatedGamePerRoomE2ETest {
      * Returns the per-server [GameSession]s. Two calls with different [gameId]s ride the same core
      * isolated only by channel + room (the property G3 pins).
      */
-    private suspend fun CoroutineScope.hostGame(fed: Federation, gameId: String): Map<NodeId, GameSession> =
-        fed.members.values.mapIndexed { i, infra ->
+    private suspend fun CoroutineScope.hostGame(fed: Federation, gameId: String): Map<NodeId, GameSession> {
+        val core = fed.ids.map { PeerId(it.value) }.toSet()
+        return fed.members.values.mapIndexed { i, infra ->
             val perGameCore = infra.coreMux.channel(gameId)
             val session = infra.scope.gameNodeRoomFederated(
                 rooms = infra.fabric.loom, gameId = gameId, core = fed.ids.toSet(),
-                perGameCore = perGameCore, attachment = infra.directory::lookup,
+                perGameCore = perGameCore, attachment = infra.overlay::lookup,
                 raftConfig = fedRaftConfig(i + 1L), random = Random(200L + i), clock = inertClock,
             )
-            infra.scope.publishRoomRosterToDirectory(infra.fabric.loom, gameId, PeerId(infra.id.value), infra.directory)
+            // Production connection-layer publisher: each player whose link this server accepts is
+            // attached into the routing directory, which the leader's RoutedRaftTransport reads to pick
+            // its core hop. This is the shipped `attachConnections` — the hand-rolled per-game roster
+            // publisher it replaces is gone; the G1 guard now protects the production wiring.
+            infra.scope.attachConnections(infra.fabric.loom.connectedPeers, infra.overlay, core)
             infra.id to session
         }.toMap()
-
-    /**
-     * The caller-side directory publish the two-tier federation needs and no shipped game-layer code
-     * performs (the H5 gap). Observes [server]'s local room roster — `MuxServerLoom.host(gameId)` is
-     * idempotent, so this reads the same [us.tractat.kuilt.core.RoomHubSeam] `tieredSeam` owns, and it
-     * only touches the `peers` StateFlow (never the single-collection `incoming`) — and writes
-     * `player → self` into the routing [AttachmentDirectory], which the [RoutedRaftTransport][
-     * us.tractat.kuilt.cluster.RoutedRaftTransport] on the leader reads to pick its core hop.
-     */
-    private fun CoroutineScope.publishRoomRosterToDirectory(
-        rooms: Loom,
-        gameId: String,
-        server: PeerId,
-        directory: AttachmentDirectory,
-    ) {
-        launch {
-            val room = rooms.host(Pattern(gameId))
-            val attached = mutableSetOf<PeerId>()
-            room.peers.collect { peers ->
-                for (peer in peers) {
-                    if (peer != server && peer !in attached) {
-                        directory.attach(peer)
-                        attached += peer
-                    }
-                }
-            }
-        }
     }
 
     /**
      * Join a real federated player behind [fabric]'s server via the production federated-player call
-     * site: `gameNodeRoom(playerLoom, gameId, voterIds = core, placement = federatedCore(core){null})`.
-     * The player role always forwards Raft to its one server; it owns no directory (`{ null }`).
+     * site: `gameNodeRoom(playerLoom, gameId, voterIds = core, placement = federatedPlayer(core))`.
+     * The player role always forwards Raft to its one server; it owns no directory.
      *
      * When [tap] is supplied, the player's session seam is wrapped so every inbound [Swatch] is
      * recorded (single-collection preserved — the tap runs inline in the one collection), for G4's
@@ -709,7 +751,7 @@ class FederatedGamePerRoomE2ETest {
         return gameNodeRoom(
             rooms = loom, gameId = gameId, voterIds = core,
             raftConfig = fedRaftConfig(seed), random = Random(seed), clock = inertClock,
-            placement = ConsensusPlacement.federatedCore(core) { null },
+            placement = ConsensusPlacement.federatedPlayer(core),
         )
     }
 
@@ -735,6 +777,7 @@ class FederatedGamePerRoomE2ETest {
         const val FORGED_MARKER: Byte = 0xB2.toByte()
 
         const val DIRECTORY_CHANNEL = "__attachment_directory__"
+        const val ROUTING_CHANNEL = "__overlay_routing__"
 
         val inertClock: () -> Instant = { Instant.fromEpochMilliseconds(0) }
 
@@ -801,6 +844,10 @@ private class TappingSeam(
     override suspend fun close(reason: us.tractat.kuilt.core.CloseReason) = delegate.close(reason)
 }
 
+/** The below-overlay relay (tag 5) and roster (tag 6) mux tags — the kuilt-game consts are module-internal. */
+private const val RELAY_CHANNEL_TAG: Byte = 5
+private const val ROSTER_CHANNEL_TAG: Byte = 6
+
 /**
  * A [ConsensusPlacement] that becomes the sole collector of the bootstrap-built **relay** (tag 5) and
  * **roster** (tag 6) channels and returns a [FakeRaftNode] that ignores the transport — the G5 spy.
@@ -812,8 +859,8 @@ private class RelayRosterChannelSpy : ConsensusPlacement {
     val rosterReceived = mutableListOf<Swatch>()
     override val seating: AuthoritySeating = AuthoritySeating.SessionPeers
     override fun node(scope: CoroutineScope, binding: ConsensusBinding): RaftNode {
-        scope.launch { binding.relayChannel.incoming.collect { relayReceived += it } }
-        scope.launch { binding.rosterChannel.incoming.collect { rosterReceived += it } }
+        scope.launch { binding.channel(RELAY_CHANNEL_TAG).incoming.collect { relayReceived += it } }
+        scope.launch { binding.channel(ROSTER_CHANNEL_TAG).incoming.collect { rosterReceived += it } }
         return FakeRaftNode(binding.self, initialRole = RaftRole.Leader)
     }
 }
