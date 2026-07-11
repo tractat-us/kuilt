@@ -131,3 +131,10 @@ include(":demo-web")
 project(":demo-web").projectDir = file("demo/web")
 include(":demo-tap")
 project(":demo-tap").projectDir = file("demo/tap")
+
+// Phase-0 connectivity spike for kuilt-nw (#1403) — opt-in only, kept out of the
+// default build graph so a signing-less CI runner never builds it.
+// Enable with `-PincludeSpike`.
+if (providers.gradleProperty("includeSpike").isPresent) {
+    include(":spike")
+}
