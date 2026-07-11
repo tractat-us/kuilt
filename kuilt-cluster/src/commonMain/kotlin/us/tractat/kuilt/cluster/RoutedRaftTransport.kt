@@ -1,6 +1,7 @@
 package us.tractat.kuilt.cluster
 
 import io.github.oshai.kotlinlogging.KotlinLogging
+import kotlinx.atomicfu.atomic
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.Flow
@@ -93,6 +94,38 @@ internal const val RELAY_HEADER_BUDGET: Int = 256
  * sender rule and closes that log-corruption vector: the victim's engine does no
  * `from` validation and would otherwise truncate-and-append the forged log.
  *
+ * ## The residual spoke→voter gap (a documented decision, not an oversight)
+ *
+ * This relay is deliberately *reachability-complete*: the bounded
+ * `spoke → core → core → spoke` path lets **any admitted learner address every
+ * cluster member** with honest-origin frames. That reach is the point — it is how
+ * a far player's `AppendEntries` response reaches a leader on another server. But
+ * reach cuts both ways, and one direction is only *partially* hardened here:
+ *
+ * - **Origin *spoofing* is blocked** in every direction. A spoke cannot claim to
+ *   be another node: the first-hop rule ([validFirstHop]) rejects a spoke frame
+ *   whose `origin` isn't the sender, and the player-side `origin ∈ voters()` gate
+ *   rejects a fellow-spoke's forged down-frame. So no node is ever *impersonated*.
+ * - **A voter accepting an *honest-origin* RPC it should never process is not.**
+ *   A malicious-but-admitted learner can send a voter a `RaftRelay` carrying its
+ *   own honest `origin` but an `AppendEntries` / `InstallSnapshot` body — RPC types
+ *   only a *leader* should originate. The voter's `validFirstHop` passes (origin ==
+ *   sender), the frame reaches the engine, and **the engine does no `from`
+ *   validation on the RPC type**: an accepted `AppendEntries` from a non-leader
+ *   truncates-and-appends the voter's log, and an `InstallSnapshot` overwrites its
+ *   state — this is **log corruption**, not merely the term-inflation that a
+ *   spoof-only view would suggest (votes and `matchIndex` are keyed on a validated
+ *   `from`, but the *log itself* is not). The star topology this replaced happened
+ *   to confine such a frame to one server; identity-preserving cluster-wide reach
+ *   removes that accidental containment.
+ *
+ * Closing it needs a **voter-inbound RPC-type gate** (a voter accepts
+ * `AppendEntries`/`InstallSnapshot` only from the node it currently believes is
+ * leader), which lives at the `RaftRelayHub` fan-in, not in this send-side
+ * decorator — tracked as follow-up **#1383**. It is called out here so the reach
+ * this class grants is understood as a **deliberate, bounded decision** with a
+ * known residual, not an accident.
+ *
  * ## One class, two roles
  *
  * A [isServer] server may take one core hop when it holds a frame for a player
@@ -173,6 +206,13 @@ public class RoutedRaftTransport(
         MutableSharedFlow(extraBufferCapacity = Int.MAX_VALUE)
 
     /**
+     * One-shot latch so a mis-wired multi-peer relay channel is warned at most once
+     * (a per-frame warn would flood). Atomic so the warn fires exactly once even
+     * under a multi-threaded dispatcher.
+     */
+    private val misWiredRelayWarned = atomic(false)
+
+    /**
      * The sole collector of [relayChannel]. Validates each relay frame, hands
      * self-destined ones to the engine (via [relayed]) and forwards the rest one
      * hop onward. Launched in [scope]; cancelled by [close] or scope teardown.
@@ -211,8 +251,42 @@ public class RoutedRaftTransport(
         if (isServer) {
             if (peer in core) peer else attachment(peer)
         } else {
-            relayChannel.peers.value.map { NodeId(it.value) }.singleOrNull { it != selfId }
+            playerServerHop()
         }
+
+    /**
+     * A player's single upstream server: the sole non-self peer of [relayChannel].
+     * Returns `null` (dropping the send) in two *distinct* situations:
+     *
+     * - **No server peer yet** — the relay channel is empty because the connection
+     *   has not (re)established. A transient reconnect gap; Raft retries, so this is
+     *   only a debug line.
+     * - **More than one non-self peer** — a player's relay channel must be
+     *   point-to-point, so multiple candidates mean the channel is **mis-wired** (a
+     *   multi-peer relay handed to a player role). That is a configuration defect, not
+     *   a transient gap, so it is **warned once** (naming the offending peers) rather
+     *   than dropped in silence — every relayed send drops until it is fixed.
+     */
+    private fun playerServerHop(): NodeId? {
+        val servers = relayChannel.peers.value.map { NodeId(it.value) }.filter { it != selfId }
+        return when (servers.size) {
+            1 -> servers.single()
+            0 -> {
+                log.debug { "raft-relay: $selfId player relay channel has no server peer yet (reconnect gap) — dropping" }
+                null
+            }
+            else -> {
+                if (misWiredRelayWarned.compareAndSet(expect = false, update = true)) {
+                    log.warn {
+                        "raft-relay: $selfId player relay channel is mis-wired — a player's relay channel must be " +
+                            "point-to-point, but it has ${servers.size} server peers: $servers. Dropping every relayed " +
+                            "send until it is fixed."
+                    }
+                }
+                null
+            }
+        }
+    }
 
     private suspend fun handleRelayFrame(swatch: Swatch) {
         val senderPeer = swatch.sender ?: return
