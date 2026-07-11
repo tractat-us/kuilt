@@ -95,20 +95,6 @@ internal class MCSessionLink(
 
     val delegate: MCSessionDelegateProtocol = SessionDelegate()
 
-    /**
-     * Invoked once when the session reaches a terminal peer-level
-     * `MCSessionStateNotConnected` with no remote peers left — i.e. the whole
-     * peer connection is gone (a drop, a failed connect, or an invite timeout).
-     * The owning `MultipeerPeerLinkFactory` uses this to free its single-session
-     * slot so it becomes reusable without an explicit [close]. Set by the owner
-     * right after construction; safe to leave null.
-     *
-     * Only the per-peer `session:peer:didChangeState:` delegate reaches here, so
-     * transient channel-level `ForceDisconnect`/ICE churn during a *successful*
-     * connect never triggers it.
-     */
-    internal var onTerminated: (() -> Unit)? = null
-
     // Written by close() before disconnect(); read by the MC delegate callback.
     // Means "we issued session.disconnect() — suppress the .notConnected warn".
     // The self-driven drop path leaves it false (the drop IS unexpected, so it
@@ -183,11 +169,11 @@ internal class MCSessionLink(
     /**
      * Single-shot terminal teardown — latch [SeamState.Torn], close the MC-delegate
      * [bridge] and the [spool] (completing [incoming] per the `Seam` contract),
-     * cancel [scope], then free the owner's single-session slot via [onTerminated].
-     * Shared by the self-driven drop path and [close]; the [tornDown] CAS makes it
-     * run once even if a drop and a consumer [close] interleave. Issues no
+     * cancel [scope]. Shared by the self-driven drop path and [close]; the [tornDown]
+     * CAS makes it run once even if a drop and a consumer [close] interleave. Issues no
      * `session.disconnect()` — ARC reclaims the dropped `MCSession`; only [close]
-     * disconnects.
+     * disconnects. The latched `Torn` is what the owning factory's `ActiveSeamSlot`
+     * reads to free its single-session slot on the next weave.
      */
     private fun tearDown(reason: CloseReason) {
         if (!tornDown.compareAndSet(false, true)) return
@@ -195,7 +181,6 @@ internal class MCSessionLink(
         bridge.close()
         spool.close()
         scope.cancel()
-        onTerminated?.invoke()
     }
 
     private inner class SessionDelegate :
@@ -232,9 +217,11 @@ internal class MCSessionLink(
                     // Terminal peer-level drop. When the last remote peer is gone
                     // the whole session is dead — tear the seam down (latch Torn,
                     // complete `incoming`) so the Seam contract holds on a remote
-                    // disconnect, then free the owner's single-session slot
-                    // (idempotent with close()). No session.disconnect() here: ARC
-                    // reclaims the dropped MCSession; only close() disconnects.
+                    // disconnect. The latched Torn is the sole signal the owning
+                    // factory's ActiveSeamSlot reads to free its single-session slot
+                    // on the next weave — no side-channel callback. No
+                    // session.disconnect() here: ARC reclaims the dropped MCSession;
+                    // only close() disconnects.
                     if (remaining == setOf(selfId)) {
                         tearDown(CloseReason.RemoteRequested)
                     }

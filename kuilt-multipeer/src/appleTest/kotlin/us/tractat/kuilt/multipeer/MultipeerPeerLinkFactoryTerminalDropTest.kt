@@ -69,49 +69,48 @@ class MultipeerPeerLinkFactoryTerminalDropTest {
         }
 
     @Test
-    fun terminalDropInvokesOnTerminatedOnlyWhenLastPeerGone() =
+    fun terminalDropLatchesTornOnlyWhenLastPeerGone() =
         runTest {
             val self = MCPeerID(displayName = "self")
             val session = newSession(self)
             val link = MCSessionLink(self, session)
-            var terminated = 0
-            link.onTerminated = { terminated++ }
 
             val a = MCPeerID(displayName = "a")
             val b = MCPeerID(displayName = "b")
 
-            // Mid-establishment churn must never free the slot.
+            // The seam's latched Torn is what the factory's ActiveSeamSlot reads to
+            // free its slot — so assert on link.state rather than a side-channel.
+
+            // Mid-establishment churn must never tear the seam.
             link.delegate.session(session, a, MCSessionState.MCSessionStateConnecting)
-            assertFalse(terminated > 0, "Connecting must not fire onTerminated")
+            assertFalse(link.state.value is SeamState.Torn, "Connecting must not latch Torn")
 
             link.delegate.session(session, a, MCSessionState.MCSessionStateConnected)
             link.delegate.session(session, b, MCSessionState.MCSessionStateConnected)
 
-            // First of two peers drops — session still has a live peer, no free.
+            // First of two peers drops — session still has a live peer, not terminal.
             link.delegate.session(session, a, MCSessionState.MCSessionStateNotConnected)
-            assertFalse(terminated > 0, "a partial drop must not fire onTerminated")
+            assertFalse(link.state.value is SeamState.Torn, "a partial drop must not latch Torn")
 
-            // Last peer drops — whole session is dead, free the slot.
+            // Last peer drops — whole session is dead, seam latches Torn (slot frees).
             link.delegate.session(session, b, MCSessionState.MCSessionStateNotConnected)
-            assertTrue(terminated == 1, "the last peer dropping must fire onTerminated exactly once")
+            assertTrue(link.state.value is SeamState.Torn, "the last peer dropping must latch Torn")
 
             link.close()
         }
 
     @Test
-    fun failedInviteThatNeverConnectsFreesTheSlot() =
+    fun failedInviteThatNeverConnectsLatchesTorn() =
         runTest {
             val self = MCPeerID(displayName = "self")
             val session = newSession(self)
             val link = MCSessionLink(self, session)
-            var terminated = 0
-            link.onTerminated = { terminated++ }
 
             val target = MCPeerID(displayName = "target")
             // Invite times out: Connecting then NotConnected, never Connected.
             link.delegate.session(session, target, MCSessionState.MCSessionStateConnecting)
             link.delegate.session(session, target, MCSessionState.MCSessionStateNotConnected)
-            assertTrue(terminated == 1, "a never-connected invite failure must free the slot")
+            assertTrue(link.state.value is SeamState.Torn, "a never-connected invite failure must latch Torn (frees the slot)")
 
             link.close()
         }
