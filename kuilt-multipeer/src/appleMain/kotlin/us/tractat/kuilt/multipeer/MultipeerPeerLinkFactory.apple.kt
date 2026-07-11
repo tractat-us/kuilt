@@ -22,6 +22,7 @@ import us.tractat.kuilt.core.ActiveSeamSlot
 import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.Seam
+import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.multipeer.internal.MCSessionLink
 
 private val log = KotlinLogging.logger("us.tractat.kuilt.multipeer.MultipeerPeerLinkFactory")
@@ -273,6 +274,18 @@ public actual class MultipeerPeerLinkFactory actual constructor(
             withContext: NSData?,
             invitationHandler: (Boolean, MCSession?) -> Unit,
         ) {
+            // Refuse into a torn host session. A self-dropped host (its last peer
+            // gone) latches Torn but keeps advertising until the next weave/close
+            // reaps the advertiser; an invite arriving in that window would be
+            // admitted into a dead MCSession → a stillborn link on both ends
+            // (kuilt#1400). The guard is local and side-channel-free: read the
+            // host link's latched terminal state directly, so a torn host never
+            // admits a joiner regardless of the advertiser lifecycle.
+            if (link.state.value is SeamState.Torn) {
+                log.info { "mc.invite fromPeer=${didReceiveInvitationFromPeer.displayName} decision=refused reason=host-torn" }
+                invitationHandler(false, null)
+                return
+            }
             log.info { "mc.invite fromPeer=${didReceiveInvitationFromPeer.displayName} decision=accepted" }
             invitationHandler(true, link.session)
         }
