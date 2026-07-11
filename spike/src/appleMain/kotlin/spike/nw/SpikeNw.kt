@@ -3,9 +3,18 @@
 package spike.nw
 
 import kotlinx.cinterop.ExperimentalForeignApi
+import kotlinx.cinterop.addressOf
+import kotlinx.cinterop.convert
+import kotlinx.cinterop.usePinned
 import platform.Network.NW_PARAMETERS_DEFAULT_CONFIGURATION
 import platform.Network.NW_PARAMETERS_DISABLE_PROTOCOL
 import platform.Network.nw_advertise_descriptor_create_bonjour_service
+import platform.Network.nw_parameters_t
+import platform.Network.nw_protocol_options_t
+import platform.Network.nw_tls_copy_sec_protocol_options
+import platform.Security.sec_protocol_options_add_pre_shared_key
+import platform.darwin.dispatch_data_create
+import platform.darwin.dispatch_data_t
 import platform.Network.nw_browse_descriptor_create_bonjour_service
 import platform.Network.nw_browser_create
 import platform.Network.nw_browser_set_browse_results_changed_handler
@@ -69,4 +78,32 @@ public class SpikeNw {
         nw_browser_set_browse_results_changed_handler(browser) { _, _, _ -> }
         nw_browser_start(browser)
     }
+
+    /**
+     * TLS-PSK parameters. Proves the fiddliest C-API path: the `configure_tls`
+     * block copies the sec-protocol options off the TLS options and installs a
+     * pre-shared key. PSK + identity become `dispatch_data_t` (null destructor →
+     * dispatch copies the bytes, so the pinned buffer needn't outlive the call).
+     */
+    public fun secureParams(psk: ByteArray, pskIdentity: ByteArray): nw_parameters_t? {
+        val params = nw_parameters_create_secure_tcp(
+            configure_tls = { options: nw_protocol_options_t? ->
+                val sec = nw_tls_copy_sec_protocol_options(options)
+                sec_protocol_options_add_pre_shared_key(
+                    sec,
+                    toDispatchData(psk),
+                    toDispatchData(pskIdentity),
+                )
+            },
+            configure_tcp = NW_PARAMETERS_DEFAULT_CONFIGURATION,
+        )
+        // includePeerToPeer place 3 of 3: the (secure) connection/listener params.
+        nw_parameters_set_include_peer_to_peer(params, true)
+        return params
+    }
+
+    private fun toDispatchData(bytes: ByteArray): dispatch_data_t =
+        bytes.usePinned { pinned ->
+            dispatch_data_create(pinned.addressOf(0), bytes.size.convert(), null, null)
+        }
 }

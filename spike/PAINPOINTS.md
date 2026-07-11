@@ -38,3 +38,12 @@ Seeds the "implementing a new transport" skill. Newest entries at the bottom.
   (their manual `jvmAndAndroidMain` wiring), unrelated to the spike.
 - TODO next iteration: TLS-PSK via `sec_protocol_options_add_pre_shared_key` (the
   C-API path research flagged as the fiddliest), then the framed ping round-trip.
+
+## TLS-PSK (the fiddly path) — also compiles
+- ✅ `platform.Security.sec_protocol_options_add_pre_shared_key` + `platform.Network.nw_tls_copy_sec_protocol_options`
+  + `platform.darwin.dispatch_data_create` all resolve. The `configure_tls` block
+  (a Kotlin lambda taking `nw_protocol_options_t?`) copies sec options and installs the PSK.
+- **`dispatch_data_create` with a null destructor copies the bytes** — so a `usePinned`
+  buffer needn't outlive the call (`DISPATCH_DATA_DESTRUCTOR_DEFAULT` is `NULL`, so `null` works).
+- `sec_protocol_options_t` lives in **platform.Security**, not platform.Network — import accordingly.
+- Two cosmetic "Redundant '?'" warnings on the dispatch_data typealias; harmless.
