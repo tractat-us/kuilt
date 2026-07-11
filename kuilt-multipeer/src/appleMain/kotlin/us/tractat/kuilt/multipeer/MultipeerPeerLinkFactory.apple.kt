@@ -115,6 +115,7 @@ public actual class MultipeerPeerLinkFactory actual constructor(
         log.info { "mc.session.create localPeer=$displayName serviceType=$serviceType path=host" }
         val link = MCSessionLink(localPeerId, session)
         session.delegate = link.delegate
+        link.onTerminated = { onLinkTerminated(link) }
 
         val acceptAll = AcceptAllAdvertiserDelegate(session)
         val advertiser =
@@ -158,6 +159,7 @@ public actual class MultipeerPeerLinkFactory actual constructor(
         log.info { "mc.session.create localPeer=$displayName serviceType=$serviceType path=join" }
         val link = MCSessionLink(localPeerId, session)
         session.delegate = link.delegate
+        link.onTerminated = { onLinkTerminated(link) }
 
         log.info { "mc.invite.send localPeer=$displayName targetPeer=${target.displayName} timeout=${INVITE_TIMEOUT_SECONDS}s" }
         activeBrowser.invitePeer(
@@ -216,15 +218,41 @@ public actual class MultipeerPeerLinkFactory actual constructor(
      * Idempotent.
      */
     public actual fun close() {
+        releaseActiveSession()
+        stopBrowsing()
+    }
+
+    /**
+     * Fired by [MCSessionLink] when its `MCSession` reaches a terminal
+     * peer-level `NotConnected` (the whole peer connection is gone) — a self
+     * disconnect that no explicit [close] preceded. Frees the single-session
+     * slot so the factory is reusable without a force-quit. Guarded on link
+     * identity so a stale callback from an already-replaced session is a no-op,
+     * and idempotent with [close] (which nulls `activeLink` first).
+     */
+    private fun onLinkTerminated(link: MCSessionLink) {
+        if (activeLink !== link) return
+        log.info { "mc.session.terminated localPeer=$displayName serviceType=$serviceType — freeing session slot" }
+        releaseActiveSession()
+    }
+
+    /**
+     * Stops host advertising and disconnects the active session, clearing
+     * `activeLink`. Shared by [close] and [onLinkTerminated]; idempotent. Nulls
+     * `activeLink` before `disconnect()` so any re-entrant terminal callback
+     * from the disconnect short-circuits on the identity guard. Leaves browsing
+     * untouched — that is owned by the discoveries flow, not a session.
+     */
+    private fun releaseActiveSession() {
         advertiser?.let {
             log.info { "mc.advertise.stop localPeer=$displayName serviceType=$serviceType" }
             it.stopAdvertisingPeer()
         }
         advertiser = null
         advertiserDelegate = null
-        stopBrowsing()
-        activeLink?.session?.disconnect()
+        val link = activeLink
         activeLink = null
+        link?.session?.disconnect()
     }
 
     private companion object {

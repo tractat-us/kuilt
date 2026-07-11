@@ -26,6 +26,13 @@ kotlin {
         commonTest.dependencies {
             implementation(libs.kotlinx.coroutines.test)
         }
+        // Mirror the manual appleMain wiring for the test compilations so the
+        // apple-only unit tests (MCSessionLink / MultipeerPeerLinkFactory) share
+        // one appleTest source set.
+        val appleTest by creating { dependsOn(commonTest.get()) }
+        val iosArm64Test by getting { dependsOn(appleTest) }
+        val iosSimulatorArm64Test by getting { dependsOn(appleTest) }
+        val macosArm64Test by getting { dependsOn(appleTest) }
         jvmTest.dependencies {
             implementation(project(":kuilt-conformance"))
             implementation(libs.kotlin.testJunit)
