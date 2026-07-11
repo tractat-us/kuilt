@@ -86,8 +86,11 @@ unchanged. What it does underneath:
   drops the duplicate copy that arrives over the second path and restores
   per-origin order.
 - **Failover with no membership event.** Tear one ply and the aggregate stays
-  `Woven` while a survivor carries the peer; only the *last* ply tearing drives the
-  aggregate `Torn`, and a recovered ply re-announces to restore routing.
+  `Woven` while a survivor carries the peer. If every ply goes down, the
+  aggregate degrades to `Weaving` — recoverable, not terminal — and a ply
+  coming back re-announces to restore routing. `Torn` is reserved for the
+  close *decision*; a transient all-plies-down moment never tears the
+  session on its own.
 
 Why this matters for the layers above: because the bonding lives **below** the
 `Seam`, the consensus and CRDT layers never see it. Hand the composite `Seam` to

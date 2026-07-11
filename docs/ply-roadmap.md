@@ -50,8 +50,9 @@ reshaped `CompositeSeam` into a reconcile-based core, so items 2 and 3 now build
 on a composite whose ply set is already mutable.
 
 Shipped as #98 (reconcile engine) → #99 (declarative `StateFlow` constructor) →
-#100 (dynamic conformance). Zero-ply state is recoverable `Weaving` (only
-`close()` is terminal `Torn`); detaching a ply never flaps a peer reachable on
+#100 (dynamic conformance). Zero plies and all-plies-torn both roll up to the
+recoverable `Weaving`, never a derived `Torn` — the close *decision* is the only
+path to the terminal `Torn`; detaching a ply never flaps a peer reachable on
 another. The static list constructor is preserved as the degenerate
 single-emission case.
 

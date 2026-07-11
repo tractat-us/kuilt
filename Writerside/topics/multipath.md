@@ -60,8 +60,11 @@ lifecycle explicitly.)
 ## Failover is not a membership event
 
 Tear one ply and a peer still reachable on another stays present — the aggregate
-stays `Woven` and `peers` does not flap. Only the *last* surviving ply tearing
-drives the session `Torn`.
+stays `Woven` and `peers` does not flap. Lose every ply at once and the
+aggregate degrades to `Weaving` — recoverable, not the terminal `Torn` — so a
+ply reattaching (or an existing one reconnecting) can restore `Woven` with no
+membership event. `Torn` is reserved for closing the session; a transient
+all-plies-down moment on its own never tears it.
 
 ```kotlin
 ```
