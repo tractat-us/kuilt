@@ -185,9 +185,12 @@ care which hub topology is underneath.
   attested should read `(seam as? PrincipalRoster)?.attestedPrincipals` first
   and fall back to `(seam as? PrincipalAttested)?.principal` only when no
   roster exists. `SeamRoom` follows exactly this rule when it populates
-  `Member.principal`, and `GameSession.attestedPrincipals` reads the roster
-  directly — so a `gameHosted` session riding a mux-hosted room reports the
-  same populated map a directly hosted `Mesh` does, with no session- or
+  `Member.principal`, and exposes the same roster directly as
+  `Room.attestedPrincipals` (empty when the underlying seam isn't a
+  `PrincipalRoster` — `Member.principal` stays the primary per-member
+  surface); `GameSession.attestedPrincipals` reads the roster the same way —
+  so a `gameHosted` session riding a mux-hosted room reports the same
+  populated map a directly hosted `Mesh` does, with no session- or
   game-layer code aware of which topology sits underneath.
 
 ## The contract
