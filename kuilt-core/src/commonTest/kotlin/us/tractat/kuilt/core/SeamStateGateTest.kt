@@ -58,14 +58,16 @@ class SeamStateGateTest {
     }
 
     @Test
-    fun aDerivedTornViaUpdateIsNotLatchedAndCanRevertToWoven() {
-        // The critical two-kinds-of-Torn nuance: a Torn published via update() (a rollup's
-        // all-plies-torn aggregate) is REVIVABLE — only tear() latches. This is what keeps a
-        // multipath seam able to recover a ply after a transient all-torn rollup.
+    fun updateNeverLatchesOnlyTearDoes() {
+        // The gate latches on the close DECISION, not the Torn VALUE: only tear() latches; update()
+        // never does, whatever value it carries. Production rollups only ever publish recoverable
+        // Woven/Weaving through update() (all-plies-torn is Weaving, #1367), so a derived Torn no
+        // longer occurs — but the gate's invariant is value-independent, pinned here directly: even
+        // a Torn passed to update() does not latch and can be superseded.
         val gate = SeamStateGate(SeamState.Woven)
         gate.update(SeamState.Torn(CloseReason.RemoteRequested))
         assertIs<SeamState.Torn>(gate.state.value)
         gate.update(SeamState.Woven)
-        assertIs<SeamState.Woven>(gate.state.value, "a derived (update) Torn must NOT latch — it can revert")
+        assertIs<SeamState.Woven>(gate.state.value, "update() must NOT latch on any value — only tear() latches")
     }
 }

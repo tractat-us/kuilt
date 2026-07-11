@@ -18,11 +18,17 @@ import us.tractat.kuilt.core.internal.MappedStateFlow
  * [SeamState.Woven] essentially immediately.
  *
  * **Send semantics:**
- * - [broadcast] while [SeamState.Weaving] or [SeamState.Woven] with no
- *   other peers: defined no-op, never silent.
+ * - [broadcast] while [SeamState.Weaving] (the fabric is forming, or a recoverable multipath
+ *   rollup has no live ply right now — e.g. a composite whose every ply is currently torn), or
+ *   [SeamState.Woven] with no other peers: **best-effort** — never throws; delivery is simply not
+ *   guaranteed until [SeamState.Woven]. A fully-degraded but recoverable composite [broadcast] is
+ *   therefore a best-effort zero-target no-op, not an error. (A tiered union whose *both* tiers are
+ *   torn is instead terminal [SeamState.Torn] — its one-shot merged `incoming` cannot recover — so a
+ *   send there throws, per the `Torn` rule below.)
  * - [sendTo] when the addressed peer is absent from [peers]: throws
  *   [PeerNotConnected].
- * - Either call when [SeamState.Torn]: throws [IllegalStateException].
+ * - Either call when [SeamState.Torn]: throws [IllegalStateException]. `Torn` is the *only*
+ *   send-state that throws (it is unconditionally terminal — see [SeamState]).
  *
  * ## Collecting incoming frames
  *

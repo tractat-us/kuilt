@@ -102,10 +102,10 @@ internal class CompositeSeam(
     // Minted once from the initial set; never recomputed, so it survives ply churn.
     override val selfId: PeerId = mintCompositeId(initial)
 
-    // Terminal-latching state holder. The rollup pump feeds derived aggregates through update()
-    // (revivable — an all-plies-torn rollup can revert to Woven when a ply re-attaches); close()
-    // latches Torn via tear() (single-shot). The latch keys on the close DECISION, never the Torn
-    // value, so the two-kinds-of-Torn nuance is handled by construction.
+    // Terminal-latching state holder. The rollup pump feeds derived aggregates through update():
+    // a fully-degraded composite (empty OR every ply torn) publishes recoverable Weaving and reverts
+    // to Woven when a ply re-attaches (#1367). close() latches the unconditionally-terminal Torn via
+    // tear() (single-shot) — the only producer of Torn here, so no derived/revivable Torn exists.
     private val stateGate = SeamStateGate(SeamState.Weaving)
     override val state: StateFlow<SeamState> = stateGate.state
 
@@ -128,8 +128,9 @@ internal class CompositeSeam(
     private class PlyHandle(val seam: Seam, val job: Job)
 
     init {
-        // Aggregate state is derived from the per-ply map. Empty => Weaving. A derived write via
-        // update(): no-ops once close() has latched Torn, so a late rollup can never clobber it.
+        // Aggregate state is derived from the per-ply map: any ply Woven => Woven, else Weaving
+        // (empty or all-torn are both recoverable Weaving, #1367). A derived write via update():
+        // no-ops once close() has latched the terminal Torn, so a late rollup can never clobber it.
         _plies
             .onEach { stateGate.update(rollup(it.values.toList())) }
             .launchIn(scope)
@@ -217,11 +218,13 @@ internal class CompositeSeam(
         recomputePeers()
     }
 
+    // Any-live ⇒ Woven; otherwise Weaving. A fully-degraded composite — empty OR every ply currently
+    // torn — is recoverable [SeamState.Weaving], NEVER a derived terminal [SeamState.Torn] (#1367): a
+    // later ply re-attach brings the aggregate back to Woven. `Torn` is reserved for the close
+    // decision (`tear()`) and self-driven transport death, and is unconditionally terminal.
     private fun rollup(states: List<SeamState>): SeamState =
         when {
-            states.isEmpty() -> SeamState.Weaving
             states.any { it is SeamState.Woven } -> SeamState.Woven
-            states.all { it is SeamState.Torn } -> states.filterIsInstance<SeamState.Torn>().first()
             else -> SeamState.Weaving
         }
 

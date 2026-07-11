@@ -25,13 +25,15 @@ import kotlinx.coroutines.flow.asStateFlow
  * [reentrantLock]: once [tear] has latched, no later [update] can move the state off `Torn`, so
  * teardown ordering (cancel before/after publishing, join or not) becomes irrelevant to correctness.
  *
- * ## Two kinds of `Torn` — the latch keys on the DECISION, not the value
+ * ## One kind of `Torn` — the latch keys on the DECISION, and `Torn` is terminal
  *
- * A seam may *derive* `Torn` (e.g. a composite whose every ply is currently torn) through [update];
- * that `Torn` is **revivable** — a later attach can bring the aggregate back to `Woven`. Only [tear]
- * — the local close *decision* — latches. So [update] is free to publish and later leave `Torn`; it
- * is a plain derived write. This is why the gate latches on [tear], never on the `Torn` *value*: a
- * "once any `Torn`, freeze" rule would wedge a legitimately-revivable multipath seam.
+ * `Torn` is **unconditionally terminal** (see [SeamState]): its only producer is [tear] — the local
+ * close *decision* — plus self-driven transport death. Derived rollups never publish `Torn`; a
+ * fully-degraded multipath seam (all plies/tiers currently down) publishes recoverable [SeamState.Weaving]
+ * through [update], not a revivable `Torn` (#1367). The gate still latches on the *decision*, not the
+ * value: [tear] latches, and thereafter every [update] no-ops. This is what guards the close-vs-pump
+ * write race — a late derived `Woven`/`Weaving` [update] (an in-flight rollup resuming after the
+ * pump-cancel) must not clobber a [tear]-latched `Torn`.
  *
  * ## Thread-safety
  *
@@ -62,9 +64,10 @@ internal class SeamStateGate(initial: SeamState) {
     val state: StateFlow<SeamState> = _state.asStateFlow()
 
     /**
-     * The normal / derived write path — a pump publishing an aggregate (e.g. a rollup). A no-op once
-     * [tear] has latched, so an in-flight derived write can never overwrite the terminal `Torn`.
-     * A derived [SeamState.Torn] passed here is **not** latched and may later be superseded.
+     * The normal / derived write path — a pump publishing an aggregate (e.g. a rollup of
+     * [SeamState.Woven]/[SeamState.Weaving]). A no-op once [tear] has latched, so an in-flight derived
+     * write can never overwrite the terminal `Torn`. Derived rollups publish only recoverable states
+     * ([SeamState.Woven]/[SeamState.Weaving]); the terminal `Torn` comes solely from [tear].
      */
     fun update(next: SeamState) {
         lock.withLock {
