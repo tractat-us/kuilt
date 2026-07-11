@@ -1,5 +1,6 @@
 package us.tractat.kuilt.webrtc
 
+import us.tractat.kuilt.conformance.SeamCapabilities
 import us.tractat.kuilt.conformance.SeamConformanceSuite
 import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.Tag
@@ -46,4 +47,12 @@ class WebRTCConformanceTest : SeamConformanceSuite() {
         override val sessionName = "host"
         override val peerKey = room
     }
+
+    /**
+     * All capabilities honoured — RTCDataChannel is DTLS-encrypted; meshDelivery is
+     * vacuously true (a strictly 2-peer PeerLink, no third peer to relay to — Task 1.8
+     * / #1408 meshEvidence: 2-peer vacuity).
+     */
+    override fun capabilities(): SeamCapabilities = SeamCapabilities.FULL
+    override fun capabilityGaps(): Map<String, String> = emptyMap()
 }
