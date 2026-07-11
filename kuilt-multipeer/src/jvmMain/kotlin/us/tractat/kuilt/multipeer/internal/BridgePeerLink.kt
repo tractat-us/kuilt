@@ -157,6 +157,11 @@ internal class BridgePeerLink(
     }
 
     override suspend fun broadcast(payload: ByteArray) {
+        // A Torn seam rejects sends per the shared Seam contract — set by an explicit
+        // close() or a self-driven last-peer drop (tearDown). Checked before the
+        // `closing` gate so a send racing an in-progress close() (closing latched, Torn
+        // not yet set) still no-ops rather than throwing, protecting the native handle.
+        check(_state.value !is SeamState.Torn) { "broadcast on a Torn seam" }
         if (closing.get()) return
         if (_peers.value.none { it != selfId }) {
             log.warn { "mc.session.send dropped — no connected peers localPeer=${selfId.value} bytes=${payload.size}" }
@@ -169,6 +174,7 @@ internal class BridgePeerLink(
         peer: PeerId,
         payload: ByteArray,
     ) {
+        check(_state.value !is SeamState.Torn) { "sendTo on a Torn seam" }
         if (closing.get()) return
         if (peer !in _peers.value) throw PeerNotConnected(peer)
         val sent = nativeLib.mc_session_send_to(sessionHandle, peer.value, payload, payload.size)
