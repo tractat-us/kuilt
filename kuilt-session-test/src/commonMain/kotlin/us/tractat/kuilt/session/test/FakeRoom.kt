@@ -11,6 +11,7 @@ import kotlinx.coroutines.flow.update
 import us.tractat.kuilt.core.CloseReason
 import us.tractat.kuilt.core.DeliveryPolicy
 import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.core.Principal
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.Spool
@@ -72,6 +73,14 @@ public class FakeRoom(
 
     private val _roster = MutableStateFlow(initialRoster)
     override val roster: StateFlow<Set<Member>> = _roster.asStateFlow()
+
+    private val _attestedPrincipals = MutableStateFlow<Map<PeerId, Principal>>(emptyMap())
+    override val attestedPrincipals: StateFlow<Map<PeerId, Principal>> = _attestedPrincipals.asStateFlow()
+
+    /** Test hook: set the attested-principals roster this fake room reports. */
+    public fun setAttestedPrincipals(principals: Map<PeerId, Principal>) {
+        _attestedPrincipals.value = principals
+    }
 
     /**
      * Admitted roster as peer ids including self. Kept in sync with [_roster] by

@@ -23,6 +23,7 @@ import us.tractat.kuilt.core.CloseReason
 import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.core.Principal
 import us.tractat.kuilt.core.PrincipalRoster
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
@@ -227,6 +228,10 @@ private const val MEMBERSHIP_EVENT_REPLAY = 64
  *
  * [start] must be called by [SeamRoomFactory] after construction to launch these loops.
  */
+// Shared constant roster for a room whose seam carries no attestation concept — never mutated.
+private val EMPTY_ATTESTED_ROSTER: StateFlow<Map<PeerId, Principal>> =
+    MutableStateFlow<Map<PeerId, Principal>>(emptyMap())
+
 internal class SeamRoom(
     private val seam: Seam,
     role: SessionRole,
@@ -326,6 +331,14 @@ internal class SeamRoom(
     private val admittedById = mutableMapOf<PeerId, Member>()
     private val _roster = MutableStateFlow<Set<Member>>(emptySet())
     override val roster: StateFlow<Set<Member>> = _roster.asStateFlow()
+
+    /**
+     * Roster-first read (mirroring `GameSession.attestedPrincipals`): when the underlying [seam]
+     * carries a [PrincipalRoster] (the mux-hub `RoomHubSeam`), expose its live map; otherwise a
+     * constant empty roster (the 2-peer relay path surfaces principals via [Member.principal]).
+     */
+    override val attestedPrincipals: StateFlow<Map<PeerId, Principal>>
+        get() = (seam as? PrincipalRoster)?.attestedPrincipals ?: EMPTY_ATTESTED_ROSTER
 
     /**
      * Admitted roster as a [StateFlow] of [PeerId]s, including self.
