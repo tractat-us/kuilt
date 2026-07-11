@@ -4,6 +4,9 @@ import kotlinx.atomicfu.locks.reentrantLock
 import kotlinx.atomicfu.locks.withLock
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -107,6 +110,26 @@ public class MuxServerLoom(
     /** Live connections: peerId → record. Replaced on reconnect; removed when the link tears. */
     private val connRecords = mutableMapOf<PeerId, ConnRecord>()
 
+    private val _connectedPeers = MutableStateFlow<Set<PeerId>>(emptySet())
+
+    /**
+     * The set of remote [PeerId]s with a live connection to this server — every peer whose link has
+     * been accepted and handshaked and whose read pump has not yet torn down. A peer appears the
+     * moment its connection is admitted and disappears when its link tears (or on [close]).
+     *
+     * Generic loom-level connection observability, independent of any room membership: a peer is in
+     * this set as soon as it connects, before it has announced itself into any room. Kept in step
+     * with [connRecords] under [lock] — a reconnect (same [PeerId] over a fresh transport) does not
+     * perturb the set, and a superseded record's later teardown does not spuriously remove a resumed
+     * peer (teardown removes only when the current record still matches).
+     *
+     * A single [MutableStateFlow] read is safe to observe from any collector; per the single-emission
+     * contract a downstream that needs to react to appear/disappear collects it once. `:kuilt-cluster`
+     * consumes this via `attachConnections` to publish each connected player into the overlay's
+     * attachment directory — this loom itself depends on nothing in that layer.
+     */
+    public val connectedPeers: StateFlow<Set<PeerId>> = _connectedPeers.asStateFlow()
+
     /** Hosted rooms: channelName → RoomHubSeam. Created on the first [host] call per name. */
     private val rooms = mutableMapOf<String, RoomHubSeam>()
 
@@ -181,7 +204,10 @@ public class MuxServerLoom(
         )
         val connPeerId = rawSeam.peers.first { peers -> peers.any { it != selfId } }.first { it != selfId }
         val record = ConnRecord(rawSeam)
-        lock.withLock { connRecords[connPeerId] = record }
+        lock.withLock {
+            connRecords[connPeerId] = record
+            _connectedPeers.value = connRecords.keys.toSet()
+        }
 
         val readJob = scope.launch { readLoop(connPeerId, record) }
         val watchJob = scope.launch { watchDrop(connPeerId, record) }
@@ -233,7 +259,10 @@ public class MuxServerLoom(
             snapshot[channelName]?.deregister(connPeerId, sender)
         }
         lock.withLock {
-            if (connRecords[connPeerId] === record) connRecords.remove(connPeerId)
+            if (connRecords[connPeerId] === record) {
+                connRecords.remove(connPeerId)
+                _connectedPeers.value = connRecords.keys.toSet()
+            }
         }
     }
 
