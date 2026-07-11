@@ -1,6 +1,7 @@
 package us.tractat.kuilt.multipeer
 
 import kotlinx.cinterop.ExperimentalForeignApi
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import platform.MultipeerConnectivity.MCEncryptionRequired
 import platform.MultipeerConnectivity.MCPeerID
@@ -8,6 +9,7 @@ import platform.MultipeerConnectivity.MCSession
 import platform.MultipeerConnectivity.MCSessionState
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.Rendezvous
+import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.multipeer.internal.MCSessionLink
 import kotlin.test.Test
 import kotlin.test.assertFalse
@@ -41,6 +43,29 @@ class MultipeerPeerLinkFactoryTerminalDropTest {
             val second = factory.weave(Rendezvous.New(Pattern("room"))) as MCSessionLink
             assertNotSame(first, second)
             factory.close()
+        }
+
+    @Test
+    fun terminalDropLatchesTornAndCompletesIncoming() =
+        runTest {
+            val self = MCPeerID(displayName = "self")
+            val session = newSession(self)
+            val link = MCSessionLink(self, session)
+
+            // The Seam contract: `incoming` completes once the seam reaches Torn,
+            // whether via local close OR a remote disconnect. Collect it — the
+            // collector must terminate when the terminal drop tears the seam.
+            val collector = launch { link.incoming.collect { } }
+
+            val guest = MCPeerID(displayName = "guest")
+            link.delegate.session(session, guest, MCSessionState.MCSessionStateConnected)
+            link.delegate.session(session, guest, MCSessionState.MCSessionStateNotConnected)
+
+            // Completes because the terminal drop closed the spool.
+            collector.join()
+
+            assertTrue(link.state.value is SeamState.Torn, "terminal drop must latch Torn")
+            link.close()
         }
 
     @Test

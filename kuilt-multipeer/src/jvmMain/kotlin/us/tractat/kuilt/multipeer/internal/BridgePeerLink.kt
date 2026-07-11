@@ -106,7 +106,19 @@ internal class BridgePeerLink(
     // concurrent seam.close() / factory.close() pair can never both pass the
     // latch and double-call mc_session_close — a use-after-free per the
     // native bridge contract ("passing the same non-null pointer twice").
+    // Set ONLY by closeNow(): it means "native close issued / suppress the
+    // .notConnected warn". The self-driven drop path leaves it false (the drop
+    // IS unexpected, so it must still warn) and disposes no native handle.
     private val closing = AtomicBoolean(false)
+
+    // SEPARATE single-shot latch for the seam's terminal state+resource teardown
+    // (state→Torn, bridge/spool close, scope cancel). Distinct from `closing`:
+    // the self-driven drop path tears the seam down (so `state` reaches Torn and
+    // `incoming` completes per the Seam contract) WITHOUT issuing mc_session_close,
+    // while an explicit close() does both. One CAS winner across both paths so a
+    // drop followed by a consumer close() never double-closes bridge/spool or
+    // re-cancels the scope.
+    private val tornDown = AtomicBoolean(false)
 
     // Strong refs so JNA trampolines aren't GC'd before the K/N side
     // finishes pumping. Held for this link's whole lifetime — they outlive
@@ -138,11 +150,15 @@ internal class BridgePeerLink(
                 }
                 val remaining = _peers.updateAndGet { it - peer }
                 // Terminal peer-level drop. When the last remote peer is gone the
-                // whole session is dead — notify the owner so it can free its
-                // single-session slot (idempotent with close() via the owner's
-                // identity guard). Mirrors the apple MCSessionLink behaviour.
+                // whole session is dead — tear the seam down (latch Torn, complete
+                // `incoming`) so the Seam contract holds on a remote disconnect, then
+                // notify the owner so it can free its single-session slot (idempotent
+                // with close() via the owner's identity guard). No mc_session_close
+                // here: it runs inside the JNA callback and the native handle is
+                // disposed only by the consumer's explicit close(). Mirrors the apple
+                // MCSessionLink behaviour.
                 if (remaining == setOf(selfId)) {
-                    onTerminated?.invoke()
+                    tearDown(CloseReason.RemoteRequested)
                 }
             }
         }
@@ -196,14 +212,30 @@ internal class BridgePeerLink(
         // when MC fires .notConnected for the clean disconnect — suppressing the
         // spurious mc.session.error warn.
         if (!closing.compareAndSet(false, true)) return
+        // Terminal state+resource teardown (single-shot; a no-op if a self-driven
+        // drop already tore the seam down). This is the ONLY path that disposes the
+        // native handle: mc_session_close runs exactly once per handle because
+        // `closing` gates it above.
+        tearDown(reason)
+        nativeLib.mc_session_close(sessionHandle)
+    }
+
+    /**
+     * Single-shot terminal teardown — latch [SeamState.Torn], close the JNA
+     * [bridge] and the [spool] (completing [incoming] per the `Seam` contract),
+     * cancel [scope], then free the owner's single-session slot via [onTerminated].
+     * Shared by the self-driven drop path and [closeNow]; the [tornDown] CAS makes
+     * it run once even if a drop and a consumer [close] interleave. Issues no
+     * native call — the native handle is disposed only by [closeNow].
+     */
+    private fun tearDown(reason: CloseReason) {
+        if (!tornDown.compareAndSet(false, true)) return
         _state.value = SeamState.Torn(reason)
         bridge.close()
         spool.close()
         scope.cancel()
-        // Free the owner's single-session slot before native teardown (mirrors
-        // the apple fix: null the slot, then disconnect). The owner's identity
-        // guard makes this a no-op when the slot already moved on.
+        // Free the owner's single-session slot; the owner's identity guard makes
+        // this a no-op when the slot already moved on.
         onTerminated?.invoke()
-        nativeLib.mc_session_close(sessionHandle)
     }
 }
