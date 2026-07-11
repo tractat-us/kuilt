@@ -1,15 +1,18 @@
 package us.tractat.kuilt.multipeer
 
 import com.sun.jna.Pointer
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.CloseReason
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.Rendezvous
+import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNotSame
+import kotlin.test.assertTrue
 
 /**
  * JVM-side counterpart of the apple `MultipeerPeerLinkFactoryTerminalDropTest`:
@@ -43,6 +46,34 @@ class MultipeerPeerLinkFactoryJvmTerminalDropTest {
             // native handle (and its drain coroutine) is disposed only by close().
             first.close()
             second.close()
+            factory.close()
+        }
+
+    @Test
+    fun terminalDropLatchesTornAndCompletesIncoming() =
+        runTest {
+            val lib = SessionTrackingFakeMultipeerNativeLib()
+            val factory = factory(lib)
+            val first = factory.weave(Rendezvous.New(Pattern("room")))
+            val session1 = lib.lastOpenedSession()
+
+            // The Seam contract: `incoming` completes once the seam reaches Torn,
+            // whether via local close OR a remote disconnect. Collect it — the
+            // collector must terminate when the terminal drop tears the seam.
+            val collector = launch { first.incoming.collect { } }
+
+            // Successful connect, then the remote peer terminally drops.
+            lib.firePeerState(session1, "guest", isConnected = 1)
+            lib.firePeerState(session1, "guest", isConnected = 0)
+
+            // Completes because the terminal drop closed the spool.
+            collector.join()
+
+            assertAll(
+                { assertTrue(first.state.value is SeamState.Torn, "terminal drop must latch Torn") },
+                { assertEquals(0, lib.closeCount(session1), "the drop path must not call mc_session_close") },
+            )
+            first.close()
             factory.close()
         }
 
