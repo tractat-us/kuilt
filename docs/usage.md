@@ -490,56 +490,46 @@ dropped AppendEntries.
 
 ### Client side
 
-Clients use `clusterClientWithNode()` with a caller-managed `RaftNode` over a
-**player relay transport** (`playerRelayTransport`) — the client speaks the same
-`RaftRelay` dialect as the server both ways, so a plain `SeamRaftTransport` no
-longer interoperates. The convenience extension `CoroutineScope.clusterClient()`
-(relay-room with automatic reconnect, which wires this transport for you over a
-swappable `ManagedSeam`) is declared but requires a stable client identity on the
-loom (see #544) before it is production-ready.
+The `CoroutineScope.clusterClient()` extension is the whole client: it joins the
+server relay room, wires the **player relay transport** (the client speaks the
+same `RaftRelay` dialect as the server both ways, so a plain `SeamRaftTransport`
+no longer interoperates — every Raft send is wrapped as a `RaftRelay(dest =
+leader)` addressed to the single relay server, and a down-frame is accepted only
+when its `RaftRelay.origin` is a current voter, read live per frame), runs an
+automatic reconnect loop over a swappable `ManagedSeam`, and returns a
+`ClusterClient`. The one alignment rule: construct the client's loom with its
+`selfPeerId` pinned to the client `NodeId`, so the wire identity the server
+admits equals the `NodeId` Raft routes and credits on.
 
 ```kotlin
-// Join the server relay room.
 val clientScope = CoroutineScope(coroutineContext + Job())
-val clientRoom = SeamRoomFactory.systemClock(loom = clientLoom, scope = clientScope)
-    .join(
-        WebSocketAdvertisement(
-            url = "ws://your-server-host/ws/cluster",
-            serverPeerId = PeerId("server-1"),
-            displayName = "my-client",
+val clientNodeId = NodeId("my-client")
+
+// Pin the loom's selfPeerId to the client NodeId: wire identity == Raft identity.
+val clientLoom = KtorClientLoom(
+    httpClient = createClient { install(WebSockets) },
+    selfPeerId = PeerId(clientNodeId.value),
+)
+
+val client: ClusterClient = clientScope.clusterClient(
+    loom = clientLoom,
+    clusterEndpoints = ClusterEndpoints(
+        listOf(
+            WebSocketAdvertisement(
+                url = "ws://your-server-host/ws/cluster",
+                serverPeerId = PeerId("server-1"),
+                sessionName = "my-client",
+            ),
         ),
-    )
-val clientSeam = clientRoom.channel("raft")
-
-// Derive the client's NodeId from the Seam selfId assigned at join time.
-// The ServerCluster admission loop derives the same NodeId from the room roster.
-val clientNodeId = NodeId(clientSeam.selfId.value)
-val learnerConfig = ClusterConfig(
-    voters = setOf(NodeId("server-1")),
-    learners = setOf(clientNodeId),
-)
-
-// Wait for the admit handshake before starting the RaftNode.
-withTimeout(5.seconds) { clientRoom.roster.first { it.isNotEmpty() } }
-
-// The client speaks the relay dialect: a player relay transport over a no-peer
-// inner wraps every Raft send as a RaftRelay(dest = leader) addressed to its single
-// relay server, and accepts a down-frame only when its RaftRelay.origin is a current
-// voter (read live per frame). This matches the server-side RaftRelayHub. The
-// `noPeerInnerTransport` here is a small transport with no direct peers, so every
-// send is forced through the relay channel (`clientSeam`).
-val clientNode = clientScope.raftNode(
-    clusterConfig = learnerConfig,
-    transport = playerRelayTransport(
-        inner = noPeerInnerTransport(clientNodeId),
-        relayChannel = clientSeam,
-        voters = { setOf(NodeId("server-1")) },
-        scope = clientScope,
     ),
-    storage = InMemoryRaftStorage(),
+    clientNodeId = clientNodeId,
+    clusterConfig = ClusterConfig(
+        voters = setOf(NodeId("server-1")),
+        learners = setOf(clientNodeId),
+    ),
     raftConfig = RaftConfig(/* … */),
+    clock = { Clock.System.now() },
 )
-val client: ClusterClient = clusterClientWithNode(clientNode)
 
 // Observe committed entries.
 clientScope.launch {
