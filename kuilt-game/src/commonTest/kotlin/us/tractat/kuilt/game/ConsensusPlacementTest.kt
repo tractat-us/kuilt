@@ -133,6 +133,55 @@ class ConsensusPlacementTest {
     }
 
     /**
+     * The **federated** server-core placement composes end to end through the real [gameNode]
+     * bootstrap: over an all-direct in-memory mesh the routing decorator is inert (every addressee
+     * is a direct peer, so no relay frame is ever produced), and the game behaves exactly like the
+     * plain [ConsensusPlacement.serverCore] — the core votes, the player rides as a learner and
+     * receives the committed log through the identical consuming layer. This proves the bootstrap
+     * picks up the decorator and that wrapping is a byte-inert drop-in off a real federation.
+     */
+    @Test
+    fun federatedCoreIsADropInForServerCore_overAnAllDirectMesh() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        val loom = InMemoryLoom()
+        val seams = seats(loom, 4)
+        val serverSeams = seams.take(3)
+        val playerSeam = seams[3]
+        val core = serverSeams.map { NodeId(it.selfId.value) }.toSet()
+        val playerId = NodeId(playerSeam.selfId.value)
+        // A player owns no attachment directory — it never routes for anyone, so { null } is honest.
+        val placement = ConsensusPlacement.federatedCore(core, attachment = { null })
+
+        val serverNodes = serverSeams.mapIndexed { i, seam ->
+            backgroundScope.gameNode(
+                seam, voterIds = core, raftConfig = fastRaftConfig(seed = (i + 1).toLong()), placement = placement,
+            ).node
+        }
+        val player = backgroundScope.gameNode(
+            playerSeam, voterIds = core, raftConfig = fastRaftConfig(seed = 4L), placement = placement,
+        )
+
+        val leader = awaitAnyLeader(serverNodes)
+        leader.membership.first { playerId in it.learners }
+
+        val move = TurnSequencer(player.node, Int.serializer()).propose(21)
+        val replayed = player.node.committedFrom(1)
+            .mapNotNull { committed ->
+                if (committed !is Committed.Entry) return@mapNotNull null
+                val logEntry = committed.entry
+                if (logEntry.isNoOp || logEntry.config != null) return@mapNotNull null
+                Cbor.decodeFromByteArray(Int.serializer(), logEntry.command)
+            }
+            .first()
+
+        assertAll(
+            { assertEquals(21, move.action) },
+            { assertEquals(21, replayed, "the player receives the committed log through the routed transport") },
+            { assertIs<RaftRole.Learner>(player.node.role.value, "the player never takes a voter seat") },
+            { assertEquals(core, leader.membership.value.voters, "every server votes in the game") },
+        )
+    }
+
+    /**
      * Behaviour-preservation canary for the default placement: the roster-given path still
      * fail-fasts when this peer is not in the voter roster ([ConsensusPlacement.SessionOwned]
      * keeps today's precondition).

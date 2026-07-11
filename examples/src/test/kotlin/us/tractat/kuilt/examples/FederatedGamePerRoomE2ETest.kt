@@ -11,37 +11,52 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.mapNotNull
+import kotlinx.coroutines.flow.onEach
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.cbor.Cbor
+import us.tractat.kuilt.cluster.AttachmentDirectory
 import us.tractat.kuilt.cluster.attachmentDirectory
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Loom
+import us.tractat.kuilt.core.MuxClientLoom
 import us.tractat.kuilt.core.MuxServerLoom
 import us.tractat.kuilt.core.NamedMux
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.RoomAuthorizer
 import us.tractat.kuilt.core.Seam
+import us.tractat.kuilt.core.Swatch
 import us.tractat.kuilt.core.fabric.Connection
 import us.tractat.kuilt.core.fabric.meshSeam
+import us.tractat.kuilt.game.AuthoritySeating
+import us.tractat.kuilt.game.ConsensusBinding
 import us.tractat.kuilt.game.ConsensusPlacement
 import us.tractat.kuilt.game.GameSession
 import us.tractat.kuilt.game.TurnSequencer
 import us.tractat.kuilt.game.gameNode
 import us.tractat.kuilt.game.gameNodeRoom
 import us.tractat.kuilt.game.gameNodeRoomFederated
+import us.tractat.kuilt.gossip.starOverlay
 import us.tractat.kuilt.quilter.QuilterConfig
 import us.tractat.kuilt.raft.Committed
 import us.tractat.kuilt.raft.NodeId
 import us.tractat.kuilt.raft.RaftConfig
 import us.tractat.kuilt.raft.RaftNode
 import us.tractat.kuilt.raft.RaftRole
+import us.tractat.kuilt.raft.RaftTraceEvent
+import us.tractat.kuilt.raft.test.FakeRaftNode
+import us.tractat.kuilt.test.FakeSeam
 import us.tractat.kuilt.test.fabric.InMemoryConnectionSource
 import us.tractat.kuilt.test.fabric.InMemoryRoomFabric
 import us.tractat.kuilt.test.fabric.connectionPair
@@ -51,6 +66,8 @@ import kotlin.coroutines.coroutineContext
 import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
@@ -190,6 +207,266 @@ class FederatedGamePerRoomE2ETest {
             )
         }
 
+    // ══ Guard tests G1–G5: cross-server delivery over a REAL federation (#794 slice 6 PR 2a) ══════
+    //
+    // The topology-3 failover test above stands up three core servers with EMPTY rooms — it proves
+    // server-core consensus + failover, but never puts a real player behind a server. These guard
+    // tests fill those rooms with REAL players joined through the production federated-player call
+    // site — `gameNodeRoom(playerLoom, gameId, voterIds = core, placement = federatedCore(core){null})`
+    // — and prove the committed Raft log crosses the core to a player behind ANY server.
+    //
+    // Directory note (the H5 "admit is a caller obligation" gap): nothing in `gameNodeRoomFederated`
+    // or `AttachmentDirectory` observes a server's room roster to publish `player → self`; the only
+    // caller of `AttachmentDirectory.attach` in the tree is `OverlayServer.admit`, which no game-layer
+    // code invokes. So the routing directory does NOT auto-learn a joined player. Per the brief, we
+    // wire the legitimate caller-side publish the way a federation orchestrator would —
+    // [publishRoomRosterToDirectory] observes each server's local room roster (a safe `peers`
+    // StateFlow read; `MuxServerLoom.host` is idempotent so this is the same room `tieredSeam` owns)
+    // and calls `directory.attach` — rather than hand-poking a fixed entry. See the task report.
+
+    /**
+     * **G1 — identity → reply path.** Three-server federation, player P2 behind a *follower*, leader
+     * elsewhere. A turn P2 proposes commits on ALL three servers AND on P2, AND the leader credits
+     * P2's true origin on the reply path.
+     *
+     * `matchIndex` is not on the public [RaftNode] surface, so the reply-path credit is proved via the
+     * leader's own [RaftNode.trace]: once the leader has processed P2's origin-preserved
+     * AppendEntriesResponse, `matchIndex[P2]` (hence `nextIndex[P2]`) advances, so the leader's
+     * subsequent `AppendEntries(to = P2)` carries `prevLogIndex ≥` the action's committed index. A relay
+     * that lost the origin would credit the *relaying server* instead, leaving `nextIndex[P2]` pinned
+     * and `prevLogIndex` below the entry forever.
+     */
+    @Test
+    fun g1_playerBehindFollower_commitsEverywhereAndCreditsTrueOrigin() =
+        runTest(StandardTestDispatcher(), timeout = 30.seconds) {
+            val dispatcher = testDispatcher()
+            val ids = listOf(NodeId("s1"), NodeId("s2"), NodeId("s3"))
+            val fed = backgroundScope.federation(ids, dispatcher, increasingMillisClock())
+            val servers = hostGame(fed, gameId)
+
+            // Elect a leader, THEN attach the player behind a server that is NOT the leader — so its
+            // AppendEntries can only reach P2 across the core relay.
+            val leaderId = awaitLeaderId(ids, servers)
+            val followerId = ids.first { it != leaderId }
+            val p2Id = PeerId("player-two")
+            val p2 = backgroundScope.joinFederatedPlayer(fed.fabric(followerId), gameId, ids.toSet(), p2Id, seed = 42L)
+
+            // P2 is admitted as a learner (cross-server roster exchange) before it can play.
+            servers.getValue(leaderId).node.membership.first { NodeId(p2Id.value) in it.learners }
+
+            val idx = TurnSequencer(p2.node, Int.serializer()).propose(1).index
+            assertEquals(1, committedInts(p2.node).first { it == 1 }, "P2 commits its own proposed action")
+            ids.forEach { awaitCommittedInt(servers.getValue(it).node, 1) }
+
+            // Reply-path credit: the leader replicates PAST the entry to P2 — only possible if P2's
+            // origin-preserved response advanced matchIndex[P2]/nextIndex[P2] on the leader.
+            servers.getValue(leaderId).node.trace.first {
+                it is RaftTraceEvent.AppendEntries && it.to == NodeId(p2Id.value) && it.prevLogIndex >= idx
+            }
+        }
+
+    /**
+     * **G2 — a relayed frame reaches P2's engine.** P2 behind a follower commits an entry it did NOT
+     * propose: the *leader* proposes and the only path the committed entry can reach P2 is the
+     * cross-server relay (P2 receives no AppendEntries from a server it is not local to without it).
+     */
+    @Test
+    fun g2_relayDeliversLeaderProposedEntryToPlayerBehindFollower() =
+        runTest(StandardTestDispatcher(), timeout = 30.seconds) {
+            val dispatcher = testDispatcher()
+            val ids = listOf(NodeId("s1"), NodeId("s2"), NodeId("s3"))
+            val fed = backgroundScope.federation(ids, dispatcher, increasingMillisClock())
+            val servers = hostGame(fed, gameId)
+
+            val leaderId = awaitLeaderId(ids, servers)
+            val followerId = ids.first { it != leaderId }
+            val p2Id = PeerId("player-two")
+            val p2 = backgroundScope.joinFederatedPlayer(fed.fabric(followerId), gameId, ids.toSet(), p2Id, seed = 42L)
+            servers.getValue(leaderId).node.membership.first { NodeId(p2Id.value) in it.learners }
+
+            // The LEADER proposes; P2 (behind a different server) can only receive it via the relay.
+            TurnSequencer(servers.getValue(leaderId).node, Int.serializer()).propose(7)
+            awaitCommittedInt(p2.node, 7)
+        }
+
+    /**
+     * **G3 — game isolation.** Two federated games (A and B) ride the same three servers over
+     * per-game channels; a player joins each. A commit in game A never surfaces in game B's engine —
+     * the per-room / per-game-channel mux is structurally isolated, so a relay frame in one game
+     * cannot cross into the other.
+     */
+    @Test
+    fun g3_twoFederatedGamesAreIsolated() = runTest(StandardTestDispatcher(), timeout = 30.seconds) {
+        val dispatcher = testDispatcher()
+        val ids = listOf(NodeId("s1"), NodeId("s2"), NodeId("s3"))
+        val gameA = "game-A"
+        val gameB = "game-B"
+
+        // ONE shared core; both games ride it, isolated only by per-game channel + room.
+        val fed = backgroundScope.federation(ids, dispatcher, increasingMillisClock())
+        val serversA = hostGame(fed, gameA)
+        val serversB = hostGame(fed, gameB)
+
+        val leaderA = awaitLeaderId(ids, serversA)
+        val leaderB = awaitLeaderId(ids, serversB)
+
+        val pAId = PeerId("player-A")
+        val pBId = PeerId("player-B")
+        val pA = backgroundScope.joinFederatedPlayer(fed.fabric(ids.first { it != leaderA }), gameA, ids.toSet(), pAId, seed = 51L)
+        val pB = backgroundScope.joinFederatedPlayer(fed.fabric(ids.first { it != leaderB }), gameB, ids.toSet(), pBId, seed = 52L)
+        serversA.getValue(leaderA).node.membership.first { NodeId(pAId.value) in it.learners }
+        serversB.getValue(leaderB).node.membership.first { NodeId(pBId.value) in it.learners }
+
+        // Commit distinct actions in each game, then a per-game BARRIER action: by the time a game
+        // commits its barrier, any cross-game leak of the other game's earlier action would already
+        // sit in its log (Raft commits in index order).
+        TurnSequencer(pA.node, Int.serializer()).propose(111)
+        TurnSequencer(pB.node, Int.serializer()).propose(222)
+        awaitCommittedInt(pA.node, 111)
+        awaitCommittedInt(pB.node, 222)
+        TurnSequencer(pA.node, Int.serializer()).propose(999)
+        TurnSequencer(pB.node, Int.serializer()).propose(888)
+
+        // Isolation: each game's committed application log through its barrier holds ONLY its own two
+        // actions — never a frame from the sibling game riding the same core.
+        assertEquals(
+            listOf(111, 999), collectCommittedIntsUntil(pA.node, 999),
+            "game A committed only its own actions — a game-B frame leaked across the shared core",
+        )
+        assertEquals(
+            listOf(222, 888), collectCommittedIntsUntil(pB.node, 888),
+            "game B committed only its own actions — a game-A frame leaked across the shared core",
+        )
+    }
+
+    /**
+     * **G4 — leak boundary (negative).** P2 behind S_b and P3 behind S_c, same game. Every relay hop
+     * is a single-addressee `sendTo`, never a broadcast, so a frame addressed to P2 travels only
+     * `leader → S_b → P2` and never touches P3's link. P3 tails every frame delivered to its own
+     * session seam; not one of them is part of P2's addressed relay chain.
+     *
+     * The relay envelope ([us.tractat.kuilt.cluster.RaftRelay]) is `internal`, so we discriminate by a
+     * byte-substring of P2's id (`player-two`) — a P3-destined AppendEntries carries the leader id and
+     * `player-three`, never `player-two`; a leaked P2 frame would. Positive control: P3 DOES receive
+     * relay frames (its own) and commits the entry, so the tap is proven live.
+     */
+    @Test
+    fun g4_frameAddressedToOnePlayerNeverLeaksToAnother() =
+        runTest(StandardTestDispatcher(), timeout = 30.seconds) {
+            val dispatcher = testDispatcher()
+            val ids = listOf(NodeId("s1"), NodeId("s2"), NodeId("s3"))
+            val fed = backgroundScope.federation(ids, dispatcher, increasingMillisClock())
+            val servers = hostGame(fed, gameId)
+
+            val leaderId = awaitLeaderId(ids, servers)
+            val followers = ids.filter { it != leaderId }
+            val p2Id = PeerId("player-two")
+            val p3Id = PeerId("player-three")
+            backgroundScope.joinFederatedPlayer(fed.fabric(followers[0]), gameId, ids.toSet(), p2Id, seed = 61L)
+
+            // P3 joins through a tapping loom so we observe every frame delivered to its session seam.
+            val p3Tap = mutableListOf<Swatch>()
+            val p3 = backgroundScope.joinFederatedPlayer(
+                fed.fabric(followers[1]), gameId, ids.toSet(), p3Id, seed = 62L, tap = p3Tap,
+            )
+            servers.getValue(leaderId).node.membership.first {
+                NodeId(p2Id.value) in it.learners && NodeId(p3Id.value) in it.learners
+            }
+
+            // The leader proposes; both learners commit via their own relay chains.
+            TurnSequencer(servers.getValue(leaderId).node, Int.serializer()).propose(9)
+            awaitCommittedInt(p3.node, 9)
+
+            // Positive control: P3's tap is live — it received relay frames (tag 5) addressed to itself.
+            val p3Marker = p3Id.value.encodeToByteArray()
+            assertTrue(
+                p3Tap.any { it.payloadSize > 0 && it.byteAt(0) == RAFT_RELAY_TAG && it.toByteArray().containsSub(p3Marker) },
+                "positive control: P3's session must receive relay frames addressed to itself (tap is live)",
+            )
+            // Leak boundary: no relay frame delivered to P3 is part of P2's addressed chain.
+            val p2Marker = p2Id.value.encodeToByteArray()
+            assertFalse(
+                p3Tap.any { it.payloadSize > 0 && it.byteAt(0) == RAFT_RELAY_TAG && it.toByteArray().containsSub(p2Marker) },
+                "leak: a relay frame referencing ${p2Id.value} reached P3's session",
+            )
+        }
+
+    /**
+     * **G5 — broadcast-laundering rejection (the H1 class, for the relay/roster tags).** A forged
+     * `GossipFrame`-wrapped payload injected on the flood/broadcast plane (tag 0, the overlay) can
+     * never surface on the below-overlay Raft-relay (tag 5) or core-roster (tag 6) channels — so it
+     * reaches no engine and admits/commits nothing. This mirrors the shape of
+     * `CommitSafetyLaunderingE2ETest` (which pins the Raft channel, tag 1) for the two federated-only
+     * tags introduced by this PR.
+     *
+     * The bootstrap is the real [gameNode] wiring over a star overlay; a spy [ConsensusPlacement]
+     * becomes the sole collector of the bootstrap-built relay and roster channels (the federated
+     * placement would collect them, so it is replaced by the spy — the [FakeRaftNode] ignores the
+     * transport). Positive control: a payload delivered DIRECTLY on tag 5 / tag 6 IS observed on the
+     * channel; the same payload wrapped in a tag-0 flood is NOT — proving the below-overlay seating,
+     * not the spy, is what rejects it.
+     */
+    @Test
+    fun g5_forgedFloodFrameNeverLaundersOntoRelayOrRosterChannels() =
+        runTest(StandardTestDispatcher(), timeout = 10.seconds) {
+            val raw = FakeSeam(
+                selfId = PeerId("s1"),
+                initialPeers = setOf(PeerId("s1"), PeerId("s2"), PeerId("attacker")),
+            )
+            val spy = RelayRosterChannelSpy()
+
+            backgroundScope.gameNode(
+                seam = raw,
+                voterIds = setOf(NodeId("s1")),
+                raftConfig = fedRaftConfig(1L),
+                placement = spy,
+                overlay = { starOverlay(it, Random(7), inertClock) },
+            )
+            runCurrent()
+            advanceTimeBy(10)
+            runCurrent()
+
+            // Positive control: a direct frame on each below-overlay channel reaches the spy — proving
+            // the spy taps the real channels (so an EMPTY forged-marker result is meaningful).
+            raw.deliver(PeerId("s2"), byteArrayOf(RAFT_RELAY_TAG, DIRECT_MARKER))
+            raw.deliver(PeerId("s2"), byteArrayOf(CORE_ROSTER_TAG, DIRECT_MARKER))
+            runCurrent()
+
+            // Attack: the SAME payloads, wrapped in a GossipFrame on the flood plane (tag 0), spoofing a
+            // core origin. The overlay re-stamps sender = origin, but only INSIDE the flood sub-mux —
+            // which has no relay/roster channel, so the payload is discarded before either channel.
+            raw.deliver(
+                PeerId("attacker"),
+                byteArrayOf(BROADCAST_TAG) +
+                    gossipFrameBytes("s2", seq = 1, ttl = 5, byteArrayOf(RAFT_RELAY_TAG, FORGED_MARKER)),
+            )
+            raw.deliver(
+                PeerId("attacker"),
+                byteArrayOf(BROADCAST_TAG) +
+                    gossipFrameBytes("s2", seq = 2, ttl = 5, byteArrayOf(CORE_ROSTER_TAG, FORGED_MARKER)),
+            )
+            runCurrent()
+            advanceTimeBy(10)
+            runCurrent()
+
+            assertTrue(
+                spy.relayReceived.any { it.marker() == DIRECT_MARKER },
+                "positive control: a direct tag-5 frame reaches the relay channel",
+            )
+            assertTrue(
+                spy.rosterReceived.any { it.marker() == DIRECT_MARKER },
+                "positive control: a direct tag-6 frame reaches the roster channel",
+            )
+            assertFalse(
+                spy.relayReceived.any { it.marker() == FORGED_MARKER },
+                "a forged tag-0 flood must NEVER launder onto the Raft-relay channel (#1370)",
+            )
+            assertFalse(
+                spy.rosterReceived.any { it.marker() == FORGED_MARKER },
+                "a forged tag-0 flood must NEVER launder onto the core-roster channel (#1370)",
+            )
+        }
+
     // ── The ONE piece of "game code" shared by all three topologies ──────────────
 
     /**
@@ -273,7 +550,190 @@ class FederatedGamePerRoomE2ETest {
         authorizer = RoomAuthorizer.AllowAll, dispatcher = dispatcher, random = random,
     )
 
+    // ── Guard-test federation wiring (real players behind real servers) ──────────
+
+    /**
+     * A per-server in-memory room fabric with a *custom* server [PeerId] (unlike [InMemoryRoomFabric],
+     * which fixes it to `"server"`). A federated core server's room-loom `selfId` must equal its Raft
+     * [NodeId] / inter-server-mesh id, so each server needs its own. Exposes [clientLoom] to attach a
+     * real player over one fresh in-memory connection into *this* server's accept source.
+     */
+    private inner class ServerRoomFabric(
+        val serverId: PeerId,
+        private val scope: CoroutineScope,
+        private val dispatcher: CoroutineContext,
+        random: Random,
+    ) {
+        private val source = InMemoryConnectionSource()
+        val loom: Loom = MuxServerLoom(
+            source = source, scope = scope, selfId = serverId,
+            authorizer = RoomAuthorizer.AllowAll, dispatcher = dispatcher, random = random,
+        )
+
+        /** A client [Loom] wired to THIS server over one fresh in-memory connection. */
+        fun clientLoom(peerId: PeerId, random: Random): Loom {
+            val base = object : Loom {
+                override suspend fun weave(rendezvous: Rendezvous): Seam {
+                    val (serverConn, clientConn) = connectionPair()
+                    source.offer(serverConn)
+                    return meshSeam(
+                        selfId = peerId, connections = listOf(clientConn),
+                        dispatcher = dispatcher, random = random,
+                    )
+                }
+            }
+            return MuxClientLoom(
+                base = base,
+                baseRendezvous = Rendezvous.New(Pattern(peerId.value)),
+                scope = scope,
+                nameOf = { rv ->
+                    when (rv) {
+                        is Rendezvous.New -> rv.pattern.sessionName
+                        is Rendezvous.Existing -> rv.tag.sessionName
+                    }
+                },
+            )
+        }
+    }
+
+    /** One core server's *game-agnostic* infrastructure, shared by every game hosted on this server. */
+    private class ServerInfra(
+        val id: NodeId,
+        val scope: CoroutineScope,
+        val coreMux: NamedMux,
+        val directory: AttachmentDirectory,
+        val fabric: ServerRoomFabric,
+    )
+
+    /** A stood-up N-server federated core: shared inter-server mesh, directory and room fabrics. */
+    private class Federation(val members: Map<NodeId, ServerInfra>) {
+        val ids: List<NodeId> get() = members.keys.toList()
+        fun fabric(id: NodeId): ServerRoomFabric = members.getValue(id).fabric
+    }
+
+    /**
+     * Stand up the shared, game-agnostic federation infrastructure — the failover test's inter-server
+     * mesh + directory wiring, but with room fabrics that carry REAL client connections
+     * ([ServerRoomFabric]) and one child scope per server so games can be hosted onto it. Host a game
+     * on it with [hostGame]; a game is isolated from another by its per-game channel + room, over this
+     * one shared core.
+     */
+    private suspend fun CoroutineScope.federation(
+        ids: List<NodeId>,
+        dispatcher: CoroutineContext,
+        clock: () -> Long,
+    ): Federation {
+        val coreSeams = interServerMesh(ids, dispatcher, this)
+        val members = ids.mapIndexed { i, id ->
+            val scope = CoroutineScope(coroutineContext + Job(coroutineContext[Job]))
+            val coreMux = NamedMux(coreSeams.getValue(id), scope)
+            val directory = attachmentDirectory(
+                self = PeerId(id.value), interServerSeam = coreMux.channel(DIRECTORY_CHANNEL), scope = scope,
+                clock = clock, config = QuilterConfig(expectVirtualTime = true),
+            )
+            val fabric = ServerRoomFabric(PeerId(id.value), scope, dispatcher, Random(100L + i))
+            id to ServerInfra(id, scope, coreMux, directory, fabric)
+        }.toMap()
+        return Federation(members)
+    }
+
+    /**
+     * Host one [gameId] on every server of [fed] via [gameNodeRoomFederated], carving a fresh per-game
+     * channel off each server's shared core mux and launching each server's directory-publish loop.
+     * Returns the per-server [GameSession]s. Two calls with different [gameId]s ride the same core
+     * isolated only by channel + room (the property G3 pins).
+     */
+    private suspend fun CoroutineScope.hostGame(fed: Federation, gameId: String): Map<NodeId, GameSession> =
+        fed.members.values.mapIndexed { i, infra ->
+            val perGameCore = infra.coreMux.channel(gameId)
+            val session = infra.scope.gameNodeRoomFederated(
+                rooms = infra.fabric.loom, gameId = gameId, core = fed.ids.toSet(),
+                perGameCore = perGameCore, attachment = infra.directory::lookup,
+                raftConfig = fedRaftConfig(i + 1L), random = Random(200L + i), clock = inertClock,
+            )
+            infra.scope.publishRoomRosterToDirectory(infra.fabric.loom, gameId, PeerId(infra.id.value), infra.directory)
+            infra.id to session
+        }.toMap()
+
+    /**
+     * The caller-side directory publish the two-tier federation needs and no shipped game-layer code
+     * performs (the H5 gap). Observes [server]'s local room roster — `MuxServerLoom.host(gameId)` is
+     * idempotent, so this reads the same [us.tractat.kuilt.core.RoomHubSeam] `tieredSeam` owns, and it
+     * only touches the `peers` StateFlow (never the single-collection `incoming`) — and writes
+     * `player → self` into the routing [AttachmentDirectory], which the [RoutedRaftTransport][
+     * us.tractat.kuilt.cluster.RoutedRaftTransport] on the leader reads to pick its core hop.
+     */
+    private fun CoroutineScope.publishRoomRosterToDirectory(
+        rooms: Loom,
+        gameId: String,
+        server: PeerId,
+        directory: AttachmentDirectory,
+    ) {
+        launch {
+            val room = rooms.host(Pattern(gameId))
+            val attached = mutableSetOf<PeerId>()
+            room.peers.collect { peers ->
+                for (peer in peers) {
+                    if (peer != server && peer !in attached) {
+                        directory.attach(peer)
+                        attached += peer
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Join a real federated player behind [fabric]'s server via the production federated-player call
+     * site: `gameNodeRoom(playerLoom, gameId, voterIds = core, placement = federatedCore(core){null})`.
+     * The player role always forwards Raft to its one server; it owns no directory (`{ null }`).
+     *
+     * When [tap] is supplied, the player's session seam is wrapped so every inbound [Swatch] is
+     * recorded (single-collection preserved — the tap runs inline in the one collection), for G4's
+     * leak-boundary inspection.
+     */
+    private suspend fun CoroutineScope.joinFederatedPlayer(
+        fabric: ServerRoomFabric,
+        gameId: String,
+        core: Set<NodeId>,
+        playerId: PeerId,
+        seed: Long,
+        tap: MutableList<Swatch>? = null,
+    ): GameSession {
+        val loom = if (tap == null) fabric.clientLoom(playerId, Random(seed)) else {
+            val inner = fabric.clientLoom(playerId, Random(seed))
+            object : Loom {
+                override suspend fun weave(rendezvous: Rendezvous): Seam = TappingSeam(inner.weave(rendezvous), tap)
+            }
+        }
+        return gameNodeRoom(
+            rooms = loom, gameId = gameId, voterIds = core,
+            raftConfig = fedRaftConfig(seed), random = Random(seed), clock = inertClock,
+            placement = ConsensusPlacement.federatedCore(core) { null },
+        )
+    }
+
+    /**
+     * Collect [node]'s committed application ints from index 1 until (and including) [target] appears,
+     * returning the full prefix seen. Bounded — terminates at [target]; a leak of another game's action
+     * committed before [target] would appear in the returned list.
+     */
+    private suspend fun collectCommittedIntsUntil(node: RaftNode, target: Int): List<Int> {
+        val out = mutableListOf<Int>()
+        committedInts(node).first { out += it; it == target }
+        return out
+    }
+
     private companion object {
+        /** Below-overlay mux tags (see `GameNode.kt`): the flood plane, the relay, and the roster. */
+        const val BROADCAST_TAG: Byte = 0
+        const val RAFT_RELAY_TAG: Byte = 5
+        const val CORE_ROSTER_TAG: Byte = 6
+
+        /** Distinct payload markers so a direct delivery and a laundered flood are told apart in G5. */
+        const val DIRECT_MARKER: Byte = 0xA1.toByte()
+        const val FORGED_MARKER: Byte = 0xB2.toByte()
+
         const val DIRECTORY_CHANNEL = "__attachment_directory__"
 
         val inertClock: () -> Instant = { Instant.fromEpochMilliseconds(0) }
@@ -292,9 +752,81 @@ class FederatedGamePerRoomE2ETest {
             expectVirtualTime = true,
             random = Random(seed),
         )
+
+        /**
+         * Hand-encodes a `us.tractat.kuilt.gossip.GossipSeam` relay frame (the type is `internal` to
+         * kuilt-gossip). Wire format:
+         * `[MAGIC 'gsp1'][VERSION 1][ttl][originLen: 2 BE][origin UTF-8][seq: 8 BE][payload]`.
+         * Mirrors `CommitSafetyLaunderingE2ETest.gossipFrameBytes`.
+         */
+        fun gossipFrameBytes(origin: String, seq: Long, ttl: Int, payload: ByteArray): ByteArray {
+            val originBytes = origin.encodeToByteArray()
+            val out = ByteArray(8 + originBytes.size + 8 + payload.size)
+            var i = 0
+            byteArrayOf(0x67, 0x73, 0x70, 0x31).copyInto(out, i); i += 4 // MAGIC 'gsp1'
+            out[i++] = 1 // VERSION
+            out[i++] = ttl.toByte()
+            out[i++] = (originBytes.size ushr 8).toByte()
+            out[i++] = originBytes.size.toByte()
+            originBytes.copyInto(out, i); i += originBytes.size
+            for (shift in 56 downTo 0 step 8) out[i++] = (seq ushr shift).toByte()
+            payload.copyInto(out, i)
+            return out
+        }
     }
 }
 
 /** The test dispatcher backing this [runTest] body — the FIFO [StandardTestDispatcher]. */
 private suspend fun testDispatcher(): CoroutineContext =
     requireNotNull(coroutineContext[ContinuationInterceptor]) { "no test dispatcher in context" }
+
+/**
+ * A transparent [Seam] decorator that records every inbound [Swatch] into [tap] as it flows through
+ * the single collection — the observation surface G4 uses to inspect what reaches a player's session
+ * without breaking the single-collection contract (the tap runs inline in the one collection the game
+ * bootstrap performs).
+ */
+private class TappingSeam(
+    private val delegate: Seam,
+    private val tap: MutableList<Swatch>,
+) : Seam {
+    override val selfId: PeerId get() = delegate.selfId
+    override val peers get() = delegate.peers
+    override val state get() = delegate.state
+    // `onEach` is a transparent intermediate operator — it does NOT start a second collection; the
+    // tap runs inline in whatever single collection the game bootstrap performs.
+    override val incoming: Flow<Swatch> = delegate.incoming.onEach { tap += it }
+    override suspend fun broadcast(payload: ByteArray) = delegate.broadcast(payload)
+    override suspend fun sendTo(peer: PeerId, payload: ByteArray) = delegate.sendTo(peer, payload)
+    override suspend fun close(reason: us.tractat.kuilt.core.CloseReason) = delegate.close(reason)
+}
+
+/**
+ * A [ConsensusPlacement] that becomes the sole collector of the bootstrap-built **relay** (tag 5) and
+ * **roster** (tag 6) channels and returns a [FakeRaftNode] that ignores the transport — the G5 spy.
+ * Whatever surfaces on those two below-overlay channels is recorded; a forged flood frame that the
+ * #1370 layering rejects never does.
+ */
+private class RelayRosterChannelSpy : ConsensusPlacement {
+    val relayReceived = mutableListOf<Swatch>()
+    val rosterReceived = mutableListOf<Swatch>()
+    override val seating: AuthoritySeating = AuthoritySeating.SessionPeers
+    override fun node(scope: CoroutineScope, binding: ConsensusBinding): RaftNode {
+        scope.launch { binding.relayChannel.incoming.collect { relayReceived += it } }
+        scope.launch { binding.rosterChannel.incoming.collect { rosterReceived += it } }
+        return FakeRaftNode(binding.self, initialRole = RaftRole.Leader)
+    }
+}
+
+/** The first payload byte of a below-overlay channel frame (the mux strips the leading tag). */
+private fun Swatch.marker(): Byte = if (payloadSize >= 1) byteAt(0) else 0
+
+/** Whether [sub] appears as a contiguous byte-subsequence of this array. */
+private fun ByteArray.containsSub(sub: ByteArray): Boolean {
+    if (sub.isEmpty() || sub.size > size) return false
+    outer@ for (start in 0..size - sub.size) {
+        for (j in sub.indices) if (this[start + j] != sub[j]) continue@outer
+        return true
+    }
+    return false
+}
