@@ -82,3 +82,18 @@ Seeds the "implementing a new transport" skill. Newest entries at the bottom.
   gate runs with the 17 Pro as the Wi-Fi-off JOIN (USB-observed) and the XS as the Wi-Fi-on HOST.
 - **K/N app gotchas:** `devicectl launch --console` kills the app when the console detaches (use it
   only while attached); detached launches can be backgrounded/suspended by iOS.
+
+## ★ PHASE-0 GATE RESULT — AWDL, Wi-Fi-OFF: 10/10 ★
+- **10/10 connect + data round-trip over AWDL** with the JOIN (17 Pro) Wi-Fi **OFF**
+  (no LAN → only path to the XS host is AWDL). RTT typically 20–33 ms; 2 first-connect
+  outliers (357 ms, 488 ms).
+- **MC baseline in the same scenario: ~1/12.** Network.framework P2P **decisively routes
+  around the iOS 26 MC AWDL-teardown regression** — it both connects AND carries data
+  over AWDL where MC's data path stalls.
+- Connect bar (≥8/12): **met 10/10**. The actual MC failure mode (data-path stall after
+  a nominal connect) did **not** occur in any of the 10 runs.
+- Caveat (honest): this run had the XS host on Wi-Fi (coexistence) while the join was
+  AWDL-only; the join side genuinely traverses AWDL. A both-phones-off run (XS
+  unobservable) and a ~10-min mid-session soak remain as follow-ups, but the core
+  premise is proven.
+- **VERDICT: proceed.** The Network.framework transport is the right call.
