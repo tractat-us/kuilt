@@ -7,6 +7,8 @@ import io.ktor.server.engine.embeddedServer
 import io.ktor.server.netty.Netty
 import io.ktor.server.netty.NettyApplicationEngine
 import kotlinx.coroutines.runBlocking
+import us.tractat.kuilt.conformance.CapabilityGaps
+import us.tractat.kuilt.conformance.SeamCapabilities
 import us.tractat.kuilt.conformance.SeamConformanceSuite
 import us.tractat.kuilt.core.CloseReason
 import us.tractat.kuilt.core.Loom
@@ -135,6 +137,16 @@ class MDNSConformanceTest : SeamConformanceSuite() {
             sessionName = "host",
             wsPath = hostWsPath,
         )
+
+    // identical byte path to websocket — plaintext ws:// to a host-peer hub;
+    // joiner↔joiner frames traverse the host.
+    override fun capabilities(): SeamCapabilities =
+        SeamCapabilities.FULL.copy(securesTransport = false, meshDelivery = false)
+
+    override fun capabilityGaps(): Map<String, String> = mapOf(
+        "securesTransport" to CapabilityGaps.SECURES_TRANSPORT,
+        "meshDelivery" to CapabilityGaps.MESH_DELIVERY,
+    )
 
     // ── Private helpers ──────────────────────────────────────────────────────
 
