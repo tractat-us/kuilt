@@ -8,7 +8,7 @@
 plugins { alias(libs.plugins.kotlinMultiplatform) }
 
 kotlin {
-    val fwName = "SpikeNw"
+    val fwName = "SpikeKit"
     listOf(iosArm64(), iosSimulatorArm64()).forEach { target ->
         target.binaries.framework {
             baseName = fwName

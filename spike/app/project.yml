@@ -1,0 +1,41 @@
+name: SpikeNw
+options:
+  bundleIdPrefix: us.tractat.spike
+  deploymentTarget:
+    iOS: "16.0"
+settings:
+  base:
+    DEVELOPMENT_TEAM: F4S2NUR9VL
+    CODE_SIGN_STYLE: Automatic
+    MARKETING_VERSION: "0.1"
+    CURRENT_PROJECT_VERSION: "1"
+targets:
+  SpikeNw:
+    type: application
+    platform: iOS
+    sources:
+      - path: Sources
+    info:
+      path: Info.plist
+      properties:
+        CFBundleDisplayName: nw-spike
+        UILaunchScreen: {}
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+        NSLocalNetworkUsageDescription: >-
+          nw-spike tests peer-to-peer connectivity between two phones over
+          Apple's Network framework.
+        NSBonjourServices:
+          - _spikenw._tcp
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: us.tractat.spike.nw
+        FRAMEWORK_SEARCH_PATHS:
+          - $(PROJECT_DIR)/../build/bin/iosArm64/debugFramework
+        OTHER_LDFLAGS:
+          - -framework
+          - SpikeKit
+    dependencies:
+      - framework: ../build/bin/iosArm64/debugFramework/SpikeKit.framework
+        embed: false
+        codeSign: false
