@@ -12,7 +12,9 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.flow.updateAndGet
 import kotlinx.coroutines.launch
+import java.util.concurrent.atomic.AtomicBoolean
 import us.tractat.kuilt.core.CloseReason
 import us.tractat.kuilt.core.DeliveryPolicy
 import us.tractat.kuilt.core.PeerId
@@ -79,8 +81,22 @@ internal class BridgePeerLink(
     private val spool = Spool<Swatch>(policy)
     override val incoming: Flow<Swatch> = spool.incoming
 
-    @Volatile
-    private var closing: Boolean = false
+    /**
+     * Invoked once when the last remote peer terminally drops (the whole
+     * session is gone — a drop, or a join that never connected) and again on
+     * [close]. The owning `MultipeerPeerLinkFactory` uses this to free its
+     * single-session slot so it becomes reusable without an explicit factory
+     * close; the factory's identity guard makes repeat invocations no-ops.
+     * Set by the owner right after construction; safe to leave null.
+     */
+    internal var onTerminated: (() -> Unit)? = null
+
+    // CAS-latched by closeNow() before mc_session_close; read by the JNA
+    // callbacks and the send paths. AtomicBoolean (not @Volatile) so a
+    // concurrent seam.close() / factory.close() pair can never both pass the
+    // latch and double-call mc_session_close — a use-after-free per the
+    // native bridge contract ("passing the same non-null pointer twice").
+    private val closing = AtomicBoolean(false)
 
     // Strong refs so JNA trampolines aren't GC'd before the K/N side
     // finishes pumping. Held for this link's whole lifetime — they outlive
@@ -107,10 +123,17 @@ internal class BridgePeerLink(
                 // closest session-level error surface (unexpected drops fire here).
                 // Suppress the warn when closing — that .notConnected is from our
                 // own mc_session_close, not an unexpected drop.
-                if (!closing) {
+                if (!closing.get()) {
                     log.warn { "mc.session.error selfId=${selfId.value} peer=$peerId" }
                 }
-                _peers.update { it - peer }
+                val remaining = _peers.updateAndGet { it - peer }
+                // Terminal peer-level drop. When the last remote peer is gone the
+                // whole session is dead — notify the owner so it can free its
+                // single-session slot (idempotent with close() via the owner's
+                // identity guard). Mirrors the apple MCSessionLink behaviour.
+                if (remaining == setOf(selfId)) {
+                    onTerminated?.invoke()
+                }
             }
         }
 
@@ -128,7 +151,7 @@ internal class BridgePeerLink(
     }
 
     override suspend fun broadcast(payload: ByteArray) {
-        if (closing) return
+        if (closing.get()) return
         if (_peers.value.none { it != selfId }) {
             log.warn { "mc.session.send dropped — no connected peers localPeer=${selfId.value} bytes=${payload.size}" }
             return
@@ -140,7 +163,7 @@ internal class BridgePeerLink(
         peer: PeerId,
         payload: ByteArray,
     ) {
-        if (closing) return
+        if (closing.get()) return
         if (peer !in _peers.value) throw PeerNotConnected(peer)
         val sent = nativeLib.mc_session_send_to(sessionHandle, peer.value, payload, payload.size)
         if (sent < 0) {
@@ -149,15 +172,28 @@ internal class BridgePeerLink(
     }
 
     override suspend fun close(reason: CloseReason) {
-        if (closing) return
+        closeNow(reason)
+    }
+
+    /**
+     * Non-suspending body of [close] so the owning factory (whose `close()` is
+     * not suspend) can share it. CAS-idempotent: exactly one caller wins the
+     * latch, so `mc_session_close` runs exactly once per handle regardless of
+     * how `Seam.close()` / factory close interleave.
+     */
+    internal fun closeNow(reason: CloseReason) {
         // Set closing before mc_session_close so the peer-state callback sees it
         // when MC fires .notConnected for the clean disconnect — suppressing the
         // spurious mc.session.error warn.
-        closing = true
+        if (!closing.compareAndSet(false, true)) return
         _state.value = SeamState.Torn(reason)
         bridge.close()
         spool.close()
         scope.cancel()
+        // Free the owner's single-session slot before native teardown (mirrors
+        // the apple fix: null the slot, then disconnect). The owner's identity
+        // guard makes this a no-op when the slot already moved on.
+        onTerminated?.invoke()
         nativeLib.mc_session_close(sessionHandle)
     }
 }

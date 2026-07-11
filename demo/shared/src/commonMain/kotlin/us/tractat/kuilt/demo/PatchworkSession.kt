@@ -7,12 +7,15 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
+import kotlinx.coroutines.launch
 import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.Seam
+import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.Tag
 import us.tractat.kuilt.crdt.LWWMap
 import us.tractat.kuilt.crdt.Patch
@@ -37,7 +40,10 @@ import us.tractat.kuilt.quilter.QuilterConfig
  *
  * Lifecycle: [host] or [join] (or [connect] with an explicit [Rendezvous]) goes
  * online; [disconnect] goes offline but keeps the local board (tunnel mode);
- * connecting again merges it back. Cancelling [scope] tears everything down.
+ * connecting again merges it back. A transport that tears on its own (relay
+ * crash, socket drop — the seam latches [SeamState.Torn]) is treated exactly
+ * like [disconnect]: the session goes offline, keeps the board, and can
+ * reconnect. Cancelling [scope] tears everything down.
  *
  * @param loom the fabric to weave sessions from ([us.tractat.kuilt.core.InMemoryLoom]
  *   in tests; WebSocket/TCP/WebRTC looms in the real demo).
@@ -61,10 +67,10 @@ class PatchworkSession(
     private val quilterConfig: QuilterConfig = QuilterConfig(),
 ) {
     /**
-     * Guards [board], [quilter], [seam], [mirrorJob], [connecting], and
-     * [lastTimestamp]. Sessions must be correct under a multi-threaded
-     * dispatcher; suspending calls ([Loom.weave], [Seam.close]) stay outside
-     * the locked sections.
+     * Guards [board], [quilter], [seam], [mirrorJob], [watcherJob],
+     * [connecting], and [lastTimestamp]. Sessions must be correct under a
+     * multi-threaded dispatcher; suspending calls ([Loom.weave], [Seam.close])
+     * stay outside the locked sections.
      */
     private val lock = reentrantLock()
 
@@ -73,6 +79,7 @@ class PatchworkSession(
     private var quilter: Quilter<LWWMap<Cell, Colour>>? = null
     private var seam: Seam? = null
     private var mirrorJob: Job? = null
+    private var watcherJob: Job? = null
     private var connecting = false
     private var lastTimestamp = 0L
 
@@ -132,7 +139,40 @@ class PatchworkSession(
                 _quilt.value = merged.entries
             }
             .launchIn(scope)
+        // Watch for the transport tearing on its own (relay crash, socket
+        // drop): free the slot so the session goes offline and a fresh
+        // connect works without an explicit disconnect().
+        watcherJob = scope.launch {
+            newSeam.state.first { it is SeamState.Torn }
+            releaseAfterTear(newSeam)
+        }
         _connected.value = true
+    }
+
+    /**
+     * Frees the single-seam slot after [torn] latched [SeamState.Torn] on its
+     * own — the self-driven counterpart of [disconnect]. Identity-guarded so a
+     * stale watcher from an already-replaced connection is a no-op, and
+     * idempotent with [disconnect] (which clears [seam] first). The local
+     * board survives, exactly like tunnel mode.
+     */
+    private suspend fun releaseAfterTear(torn: Seam) {
+        val parted = lock.withLock {
+            if (seam !== torn) return
+            val liveQuilter = quilter
+            board = liveQuilter?.state?.value ?: board
+            quilter = null
+            seam = null
+            val job = mirrorJob
+            mirrorJob = null
+            // Not cancelled — this runs *inside* the watcher; it completes naturally.
+            watcherJob = null
+            liveQuilter to job
+        }
+        parted.second?.cancel()
+        parted.first?.close()
+        _connected.value = false
+        torn.close() // release any lingering transport resources; suspends — outside the lock
     }
 
     /**
@@ -170,11 +210,12 @@ class PatchworkSession(
             board = liveQuilter.state.value
             quilter = null
             seam = null
-            val job = mirrorJob
+            val jobs = listOf(mirrorJob, watcherJob)
             mirrorJob = null
-            Triple(liveQuilter, liveSeam, job)
+            watcherJob = null
+            Triple(liveQuilter, liveSeam, jobs)
         }
-        parted.third?.cancel()
+        parted.third.forEach { it?.cancel() }
         parted.first.close()
         parted.second.close() // suspends — outside the lock
         _connected.value = false
