@@ -21,10 +21,21 @@ import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.runCatchingCancellable
+import kotlin.random.Random
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
 
 private val log = KotlinLogging.logger("us.tractat.kuilt.nw.NwLoom")
+
+/**
+ * Thrown by [NwLoom.weave] when no peer is reached within the weave timeout — the fabric never wove.
+ *
+ * A plain [Exception], deliberately **not** a [kotlin.coroutines.cancellation.CancellationException]:
+ * the earlier code rethrew the raw [TimeoutCancellationException], so a caller wrapping [NwLoom.weave]
+ * in `runCatchingCancellable` saw it as its OWN structured cancellation and rethrew — an unreachable
+ * fabric masqueraded as caller cancellation. This distinct type lets callers catch a fabric failure.
+ */
+public class NwUnreachableException(message: String) : Exception(message)
 
 /**
  * Full-mesh [Loom] over an [NwApi] — Apple Network.framework's peer-to-peer fabric.
@@ -46,7 +57,9 @@ private val log = KotlinLogging.logger("us.tractat.kuilt.nw.NwLoom")
  * ## Await-first-peer
  * [weave] does not return until the seam has resolved its first remote peer (mirrors the role-split
  * conformance contract: `host()`/`join()` both return *connected* seams). If no peer resolves within
- * [DEFAULT_WEAVE_TIMEOUT] the seam is closed [CloseReason.Unreachable] and the timeout rethrows.
+ * [weaveTimeout] the seam is closed [CloseReason.Unreachable] and [weave] throws
+ * [NwUnreachableException] — a plain exception, NOT a `CancellationException`, so a caller wrapping
+ * `weave` in `runCatchingCancellable` sees a fabric failure rather than its own cancellation.
  *
  * ## Scope
  * Background collectors (the seam's three loops + this loom's discovery/dial loop) run on
@@ -57,12 +70,18 @@ private val log = KotlinLogging.logger("us.tractat.kuilt.nw.NwLoom")
  * @param serviceType the Bonjour service type both advertised and browsed; peers with the same type meet.
  * @param selfId      this peer's stable identity; defaults to a fresh random UUID ([freshPeerId], #1405).
  * @param policy      inbound delivery policy for each woven [Seam] (default [DeliveryPolicy.Reliable]).
+ * @param random      source of the seam's per-connection dedup nonces; production defaults to
+ *   [Random.Default], tests inject a seeded [Random] for a deterministic dedup tiebreak.
+ * @param weaveTimeout how long [weave] waits for the first peer before throwing
+ *   [NwUnreachableException] (default [DEFAULT_WEAVE_TIMEOUT]); injectable for tests.
  */
 public class NwLoom(
     private val api: NwApi,
     private val serviceType: String,
     public val selfId: PeerId = freshPeerId(),
     private val policy: DeliveryPolicy = DeliveryPolicy.Reliable,
+    private val random: Random = Random.Default,
+    private val weaveTimeout: Duration = DEFAULT_WEAVE_TIMEOUT,
 ) : Loom {
 
     private val _visiblePeers = MutableStateFlow<Set<NwEndpoint>>(emptySet())
@@ -80,7 +99,7 @@ public class NwLoom(
         // Derive from the caller so background work runs on the test dispatcher; independent Job
         // so seam close() cancels only this session's coroutines.
         val seamScope = CoroutineScope(currentCoroutineContext() + SupervisorJob())
-        val seam = NwSeam(selfId, api, seamScope, policy)
+        val seam = NwSeam(selfId, api, seamScope, random, policy)
 
         val serviceName = when (rendezvous) {
             is Rendezvous.New -> rendezvous.pattern.sessionName
@@ -108,14 +127,18 @@ public class NwLoom(
             .onFailure { log.debug { "nw.browse failed serviceType=$serviceType selfId=${selfId.value}" } }
 
         // Await the first resolved remote so the returned seam is already connected. On timeout the
-        // fabric never wove — close Unreachable and rethrow (mirror the Loom contract for a dead dial).
+        // fabric never wove — close Unreachable and throw NwUnreachableException (NOT the raw
+        // TimeoutCancellationException, which a runCatchingCancellable caller would mistake for its
+        // own cancellation and rethrow).
         try {
-            withTimeout(DEFAULT_WEAVE_TIMEOUT) {
+            withTimeout(weaveTimeout) {
                 seam.peers.first { it.size > 1 }
             }
-        } catch (e: TimeoutCancellationException) {
+        } catch (_: TimeoutCancellationException) {
             seam.close(CloseReason.Unreachable)
-            throw e
+            throw NwUnreachableException(
+                "nw weave timed out: no peer reached for serviceType=$serviceType within $weaveTimeout",
+            )
         }
         return seam
     }

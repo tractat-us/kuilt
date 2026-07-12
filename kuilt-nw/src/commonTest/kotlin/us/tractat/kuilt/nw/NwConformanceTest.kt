@@ -1,11 +1,11 @@
 package us.tractat.kuilt.nw
 
-import us.tractat.kuilt.conformance.CapabilityGaps
 import us.tractat.kuilt.conformance.SeamCapabilities
 import us.tractat.kuilt.conformance.SeamConformanceSuite
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.Tag
+import kotlin.random.Random
 
 /**
  * Verifies that [NwLoom] satisfies every invariant in [SeamConformanceSuite] on the JVM, backed
@@ -20,10 +20,12 @@ import us.tractat.kuilt.core.Tag
  *
  * ## Capabilities & the securesTransport gap
  * The JVM harness runs over the in-memory [FakeNwApi], which carries NO wire encryption — so
- * `securesTransport = false`, declared against the shared by-design [CapabilityGaps.SECURES_TRANSPORT]
- * anchor (real TLS-PSK is Phase 3, to be proven by a future `appleTest` loopback conformance). Every
- * other flag is honoured: real direct-mesh delivery (`meshDelivery = true`, earned by
- * [NwMeshConformanceTest]) and real directed send (`supportsSendTo = true`).
+ * `securesTransport = false`. This is a **temporal** gap, not a by-design one: kuilt-nw is
+ * unencrypted only *by phase*. Real TLS-PSK lands in Phase 3 (tracked by
+ * `https://github.com/tractat-us/kuilt/issues/1412`), to be proven by a future `appleTest` loopback
+ * conformance — so the gap points at that tracking issue rather than the permanently-unencrypted
+ * by-design anchor. Every other flag is honoured: real direct-mesh delivery (`meshDelivery = true`,
+ * earned by [NwMeshConformanceTest]) and real directed send (`supportsSendTo = true`).
  */
 class NwConformanceTest : SeamConformanceSuite() {
 
@@ -33,8 +35,16 @@ class NwConformanceTest : SeamConformanceSuite() {
 
     override fun newLoomPair(): Pair<Loom, Loom> {
         val radio = FakeNwRadio()
-        val host = NwLoom(FakeNwApi(radio, deviceId = "host", serviceName = "host"), serviceType = SERVICE_TYPE)
-        val joiner = NwLoom(FakeNwApi(radio, deviceId = "join", serviceName = "join"), serviceType = SERVICE_TYPE)
+        val host = NwLoom(
+            FakeNwApi(radio, deviceId = "host", serviceName = "host"),
+            serviceType = SERVICE_TYPE,
+            random = Random(0),
+        )
+        val joiner = NwLoom(
+            FakeNwApi(radio, deviceId = "join", serviceName = "join"),
+            serviceType = SERVICE_TYPE,
+            random = Random(1),
+        )
         return host to joiner
     }
 
@@ -44,5 +54,5 @@ class NwConformanceTest : SeamConformanceSuite() {
     override fun capabilities(): SeamCapabilities = SeamCapabilities.FULL.copy(securesTransport = false)
 
     override fun capabilityGaps(): Map<String, String> =
-        mapOf("securesTransport" to CapabilityGaps.SECURES_TRANSPORT)
+        mapOf("securesTransport" to "https://github.com/tractat-us/kuilt/issues/1412")
 }

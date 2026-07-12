@@ -49,8 +49,8 @@ class NwWeavingWindowTest {
         val radio = FakeNwRadio()
         val apiA = FakeNwApi(radio, deviceId = "dev-0", serviceName = "svc-0")
         val apiB = FakeNwApi(radio, deviceId = "dev-1", serviceName = "svc-1")
-        val seamA = NwSeam(us.tractat.kuilt.core.PeerId("peer-0"), apiA, seamScope())
-        val seamB = NwSeam(us.tractat.kuilt.core.PeerId("peer-1"), apiB, seamScope())
+        val seamA = NwSeam(us.tractat.kuilt.core.PeerId("peer-0"), apiA, seamScope(), kotlin.random.Random(0))
+        val seamB = NwSeam(us.tractat.kuilt.core.PeerId("peer-1"), apiB, seamScope(), kotlin.random.Random(1))
 
         val receivedB = mutableListOf<Swatch>()
         backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) { seamB.incoming.collect { receivedB += it } }

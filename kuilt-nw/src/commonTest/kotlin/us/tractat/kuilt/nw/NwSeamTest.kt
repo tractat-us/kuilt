@@ -14,6 +14,7 @@ import us.tractat.kuilt.core.PeerNotConnected
 import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.Swatch
 import us.tractat.kuilt.test.assertAll
+import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -66,8 +67,9 @@ class NwSeamTest {
         val radio = FakeNwRadio()
         val devices = (0 until n).map { i ->
             val api = FakeNwApi(radio, deviceId = "dev-$i", serviceName = "svc-$i")
-            // Each seam gets its OWN scope so one seam's teardown doesn't cancel the others.
-            Device(PeerId("peer-$i"), api, NwSeam(PeerId("peer-$i"), api, seamScope(), policy))
+            // Each seam gets its OWN scope so one seam's teardown doesn't cancel the others. A
+            // per-node SEEDED Random gives distinct nonces so the canonical-nonce dedup is deterministic.
+            Device(PeerId("peer-$i"), api, NwSeam(PeerId("peer-$i"), api, seamScope(), Random(i.toLong()), policy))
         }
         // Single-collection: collect each seam's incoming exactly once — into backgroundScope
         // (NOT the seam's own scope), so the collector can only terminate because spool.close()
@@ -188,8 +190,8 @@ class NwSeamTest {
         val radio = FakeNwRadio()
         val apiA = FakeNwApi(radio, deviceId = "dev-0", serviceName = "svc-0")
         val apiB = FakeNwApi(radio, deviceId = "dev-1", serviceName = "svc-1")
-        val seamA = NwSeam(PeerId("peer-0"), apiA, seamScope())
-        val seamB = NwSeam(PeerId("peer-1"), apiB, seamScope())
+        val seamA = NwSeam(PeerId("peer-0"), apiA, seamScope(), Random(0))
+        val seamB = NwSeam(PeerId("peer-1"), apiB, seamScope(), Random(1))
         var completed = false
         // Collector lives in backgroundScope (a scope seamA does NOT cancel); it sets `completed`
         // only AFTER collect returns NORMALLY, so the flag distinguishes completion from cancellation.
@@ -218,8 +220,8 @@ class NwSeamTest {
         val radio = FakeNwRadio()
         val apiA = FakeNwApi(radio, deviceId = "dev-0", serviceName = "svc-0")
         val apiB = FakeNwApi(radio, deviceId = "dev-1", serviceName = "svc-1")
-        val seamA = NwSeam(PeerId("peer-0"), apiA, seamScope())
-        val seamB = NwSeam(PeerId("peer-1"), apiB, seamScope())
+        val seamA = NwSeam(PeerId("peer-0"), apiA, seamScope(), Random(0))
+        val seamB = NwSeam(PeerId("peer-1"), apiB, seamScope(), Random(1))
         var completed = false
         val collectJob = backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
             seamA.incoming.collect { }

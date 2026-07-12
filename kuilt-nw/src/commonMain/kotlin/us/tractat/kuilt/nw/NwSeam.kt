@@ -22,6 +22,7 @@ import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.Spool
 import us.tractat.kuilt.core.Swatch
 import us.tractat.kuilt.core.runCatchingCancellable
+import kotlin.random.Random
 
 private val log = KotlinLogging.logger("us.tractat.kuilt.nw.NwSeam")
 
@@ -39,29 +40,27 @@ private val log = KotlinLogging.logger("us.tractat.kuilt.nw.NwSeam")
  * subscribe **before** `NwLoom` triggers advertise/browse/dial (subscribe-before-trigger,
  * since [NwApi]'s flows are hot with no replay):
  *
- *  1. **connectionOpened** — records each connection's direction (`outbound = endpoint != null`,
- *     i.e. we dialled it) and sends our identity frame.
+ *  1. **connectionOpened** — sends our identity frame ([NwHello]: this peer's [PeerId] plus this
+ *     connection's per-connection dedup nonce).
  *  2. **bytesReceived** — the demux + inline handshake: the first decoded frame on an unresolved
- *     connection is the remote's [PeerId]; every later frame is data, delivered to [incoming]
- *     stamped with that sender.
+ *     connection is the remote's [NwHello] (id + nonce); every later frame is data, delivered to
+ *     [incoming] stamped with that sender.
  *  3. **connectionClosed** — evicts the peer (conn-identity guarded so a deduped loser's close
  *     can't evict the survivor) and tears the seam when the last remote drops.
  *
- * ## Duplicate-dial dedup (lower-id dialer wins)
- * A full mesh double-dials each pair, producing two connections to the same peer. When a
- * connection's identity resolves to `remoteId` and another connection to `remoteId` already
- * exists, the survivor is the one **dialled by the lower-id peer**: a connection survives iff
- * `(outbound && selfId < remoteId) || (!outbound && remoteId < selfId)`. Both ends see the same
- * `{selfId, remoteId}` pair with inverted directions, so both compute the same survivor with no
- * coordination; the loser is disconnected and its later close is a no-op (conn-identity guard).
- *
- * ## Ordering invariant
- * `connectionOpened(connId)` is observed before any `bytesReceived(connId)` — a connection must
- * exist to carry bytes (true in the real fabric and [FakeNwRadio]). The [ConnState] is
- * get-or-created in BOTH loops so an interleave can't lose it, but direction is authoritative
- * only once `connectionOpened` has set it. Should identity ever resolve before direction is
- * known (invariant violated), dedup keeps the already-registered connection and disconnects the
- * newcomer rather than trusting a defaulted direction.
+ * ## Duplicate-dial dedup (canonical-nonce rule, direction-free)
+ * A full mesh double-dials each pair, producing two connections to the same peer. Each [ConnState]
+ * mints a random [nonce][ConnState.nonce] **once, when it is created** (in the `getOrPut` factory —
+ * so the nonce is available no matter which of the two loops observes the connection first). Each
+ * end sends its nonce in its [NwHello]. When a connection to `remoteId` resolves and another to the
+ * same `remoteId` already exists, the survivor is the one with the **smaller canonical link nonce**
+ * — `canonicalLinkNonce(myNonce, remoteNonce)`, an order-independent function of the two nonces
+ * (sort their hex, join `"lo:hi"`). Because both ends see the same two nonces, both compute the same
+ * canonical value and pick the same survivor with **no coordination and no dependence on dial
+ * direction or collector ordering**; the loser is disconnected and its later close is a no-op
+ * (conn-identity guard). This is a port of `:kuilt-core`'s `MeshSeam` rule — the old direction-based
+ * rule could wedge a pair to zero under a multi-threaded dispatcher (direction was written by one
+ * collector and read by another with no happens-before); the nonce rule cannot.
  *
  * ## Thread-safety
  * The [registry] and [conns] maps are shared across the three collectors (each `collect` is
@@ -70,30 +69,39 @@ private val log = KotlinLogging.logger("us.tractat.kuilt.nw.NwSeam")
  * runs under the lock** — targets are snapshotted under the lock, then sent/disconnected/delivered
  * outside it. Correct under a multi-threaded dispatcher; no single-thread-confinement crutch.
  *
- * @param selfId this peer's stable identity, sent as the first framed message on each connection.
+ * @param selfId this peer's stable identity, sent (with a per-connection nonce) as the first framed
+ *   message on each connection.
  * @param api    the transport moving raw bytes over open connections.
  * @param scope  coroutine scope hosting the three collectors; cancelled on teardown.
+ * @param random source of per-connection dedup nonces; production defaults to [Random.Default], tests
+ *   inject a seeded [Random] so the dedup tiebreak is deterministic.
  * @param policy delivery policy for the inbound [Spool] (default [DeliveryPolicy.Reliable]).
  */
 internal class NwSeam(
     override val selfId: PeerId,
     private val api: NwApi,
     private val scope: CoroutineScope,
+    private val random: Random = Random.Default,
     private val policy: DeliveryPolicy = DeliveryPolicy.Reliable,
 ) : Seam {
 
-    /** Per-connection mutable state. All fields read/written only under [lock]; [framer] is driven only by the single bytes loop. */
-    private class ConnState {
+    /**
+     * Per-connection mutable state. All fields read/written only under [lock]; [framer] is driven
+     * only by the single bytes loop. [nonce] is minted once at creation and never mutated — it is
+     * this connection's contribution to the canonical dedup nonce.
+     */
+    private class ConnState(val nonce: ByteArray) {
         val framer: NwFramer = NwFramer()
         var resolvedPeerId: PeerId? = null
-        var outbound: Boolean = false
-        var directionKnown: Boolean = false
     }
+
+    /** The live connection carrying a resolved peer, plus the canonical nonce both ends agreed on. */
+    private data class Winner(val connId: NwConnectionId, val canonicalNonce: String)
 
     private val lock = reentrantLock()
 
-    /** Resolved remote identity → the live connection carrying it. */
-    private val registry = mutableMapOf<PeerId, NwConnectionId>()
+    /** Resolved remote identity → the live connection carrying it (+ its canonical link nonce). */
+    private val registry = mutableMapOf<PeerId, Winner>()
 
     /** Every connection this seam has seen → its [ConnState]. */
     private val conns = mutableMapOf<NwConnectionId, ConnState>()
@@ -128,14 +136,10 @@ internal class NwSeam(
         api.connectionOpened.collect { event ->
             if (closed.value) return@collect
             val connId = event.connectionId
-            lock.withLock {
-                val cs = conns.getOrPut(connId) { ConnState() }
-                // outbound ⇔ we dialled it (a dialled connection carries the dialled endpoint).
-                cs.outbound = event.endpoint != null
-                cs.directionKnown = true
-            }
-            // Send our identity frame OUTSIDE the lock (best-effort).
-            runCatchingCancellable { api.send(connId, encodeFrame(selfId.value.encodeToByteArray())) }
+            // Get-or-create the ConnState (minting its nonce once) and snapshot the nonce under the
+            // lock; send the identity frame OUTSIDE the lock (best-effort).
+            val nonce = lock.withLock { conns.getOrPut(connId) { ConnState(random.nextBytes(NONCE_BYTES)) }.nonce }
+            runCatchingCancellable { api.send(connId, encodeFrame(NwHello.encode(selfId, nonce))) }
                 .onFailure { log.debug { "nw.identity send failed connId=${connId.value} selfId=${selfId.value}" } }
         }
     }
@@ -146,8 +150,8 @@ internal class NwSeam(
         api.bytesReceived.collect { event ->
             if (closed.value) return@collect
             val connId = event.connectionId
-            // Snapshot (get-or-create) the ConnState under the lock; decode OUTSIDE it.
-            val cs = lock.withLock { conns.getOrPut(connId) { ConnState() } }
+            // Snapshot (get-or-create, minting its nonce once) the ConnState under the lock; decode OUTSIDE it.
+            val cs = lock.withLock { conns.getOrPut(connId) { ConnState(random.nextBytes(NONCE_BYTES)) } }
             // The framer is single-reader (only this loop touches it), so decoding outside the lock is safe.
             for (frame in cs.framer.decode(event.bytes)) {
                 processFrame(connId, cs, frame)
@@ -175,8 +179,12 @@ internal class NwSeam(
     private suspend fun processFrame(connId: NwConnectionId, cs: ConnState, frame: ByteArray) {
         val outcome = lock.withLock {
             val resolved = cs.resolvedPeerId
-            if (resolved != null) FrameOutcome.Data(resolved)
-            else FrameOutcome.Resolved(resolveIdentity(connId, cs, PeerId(frame.decodeToString())))
+            if (resolved != null) {
+                FrameOutcome.Data(resolved)
+            } else {
+                val hello = NwHello.decode(frame)
+                FrameOutcome.Resolved(resolveIdentity(connId, cs, hello.peerId, hello.nonce))
+            }
         }
         when (outcome) {
             // Data frame — deliver OUTSIDE the lock (Spool.deliver suspends for backpressure).
@@ -193,33 +201,35 @@ internal class NwSeam(
     /**
      * Resolve [connId]'s identity to [remoteId] under [lock]. Returns the connId to disconnect (a
      * dedup loser) or `null`. Adds the peer + flips Weaving→Woven when this is the first connection
-     * to [remoteId]; on a duplicate, keeps the canonical survivor (lower-id dialer) — the peer set
-     * is unchanged either way.
+     * to [remoteId]; on a duplicate, keeps the canonical survivor (the smaller [canonicalLinkNonce]
+     * of the two connections' nonces) — the peer set is unchanged either way. Direction-free: both
+     * ends see the same two nonces and pick the same survivor with no coordination.
      */
-    private fun resolveIdentity(connId: NwConnectionId, cs: ConnState, remoteId: PeerId): NwConnectionId? {
+    private fun resolveIdentity(
+        connId: NwConnectionId,
+        cs: ConnState,
+        remoteId: PeerId,
+        remoteNonce: ByteArray,
+    ): NwConnectionId? {
         cs.resolvedPeerId = remoteId
+        val canonical = canonicalLinkNonce(cs.nonce, remoteNonce)
         val existing = registry[remoteId]
-        if (existing == null || existing == connId) {
-            registry[remoteId] = connId
+        if (existing == null) {
+            registry[remoteId] = Winner(connId, canonical)
             addRemotePeer(remoteId)
             return null
         }
-        // Duplicate link to remoteId. Keep the canonical survivor; disconnect the loser. If this
-        // connection's direction isn't known yet (invariant violated), keep the incumbent.
-        val thisSurvives = cs.directionKnown && survives(cs.outbound, remoteId)
-        return if (thisSurvives) {
-            registry[remoteId] = connId // new winner; peer stays present
-            conns.remove(existing) // drop the displaced incumbent's state
-            existing // disconnect the displaced incumbent
+        if (existing.connId == connId) return null // idempotent; same connection re-resolving
+        // Duplicate link to remoteId. Keep the SMALLER canonical nonce; disconnect the loser.
+        return if (canonical < existing.canonicalNonce) {
+            registry[remoteId] = Winner(connId, canonical) // new winner; peer stays present
+            conns.remove(existing.connId) // drop the displaced incumbent's state
+            existing.connId // disconnect the displaced incumbent
         } else {
             conns.remove(connId) // drop this loser's state
             connId // this connection loses; disconnect it, incumbent stays
         }
     }
-
-    /** A connection survives dedup iff it was dialled by the lower-id peer. Called under [lock]. */
-    private fun survives(outbound: Boolean, remoteId: PeerId): Boolean =
-        (outbound && selfId.value < remoteId.value) || (!outbound && remoteId.value < selfId.value)
 
     /** Add [remoteId] to the peer set and flip Weaving→Woven. Called under [lock]. */
     private fun addRemotePeer(remoteId: PeerId) {
@@ -237,7 +247,7 @@ internal class NwSeam(
                 val peer = cs.resolvedPeerId ?: return@withLock false
                 // Conn-identity guard: only evict the peer if the LIVE connection is this one — a
                 // stale/deduped-loser close must not evict the surviving connection to the same peer.
-                if (registry[peer] != event.connectionId) return@withLock false
+                if (registry[peer]?.connId != event.connectionId) return@withLock false
                 registry.remove(peer)
                 _peers.update { it - peer }
                 // Last remote gone after having woven ⇒ the session is over (mirror the mesh rule).
@@ -251,7 +261,7 @@ internal class NwSeam(
 
     override suspend fun broadcast(payload: ByteArray) {
         check(_state.value !is SeamState.Torn) { closedMessage }
-        val targets = lock.withLock { registry.values.toList() }
+        val targets = lock.withLock { registry.values.map { it.connId } }
         val frame = encodeFrame(payload)
         for (connId in targets) {
             runCatchingCancellable { api.send(connId, frame) }
@@ -261,7 +271,7 @@ internal class NwSeam(
 
     override suspend fun sendTo(peer: PeerId, payload: ByteArray) {
         check(_state.value !is SeamState.Torn) { closedMessage }
-        val connId = lock.withLock { registry[peer] } ?: throw PeerNotConnected(peer)
+        val connId = lock.withLock { registry[peer]?.connId } ?: throw PeerNotConnected(peer)
         runCatchingCancellable { api.send(connId, encodeFrame(payload)) }
             .onFailure { removeByConn(connId) }
     }
@@ -277,7 +287,7 @@ internal class NwSeam(
         val tearNow = lock.withLock {
             val cs = conns.remove(connId) ?: return@withLock false
             val peer = cs.resolvedPeerId ?: return@withLock false
-            if (registry[peer] != connId) return@withLock false
+            if (registry[peer]?.connId != connId) return@withLock false
             registry.remove(peer)
             _peers.update { it - peer }
             // Last remote gone after having woven ⇒ the session is over (mirror the close rule).
@@ -292,7 +302,7 @@ internal class NwSeam(
         // Single-shot: if a self-driven Torn (last-peer drop) already fired, this no-ops.
         if (!latchTorn(reason)) return
         val targets = lock.withLock {
-            val snapshot = registry.values.toList()
+            val snapshot = registry.values.map { it.connId }
             registry.clear()
             conns.clear()
             _peers.value = setOf(selfId)

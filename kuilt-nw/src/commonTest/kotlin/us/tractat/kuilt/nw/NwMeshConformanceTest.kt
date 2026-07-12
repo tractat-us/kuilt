@@ -8,6 +8,7 @@ import us.tractat.kuilt.conformance.MeshConformanceSuite
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.Seam
+import kotlin.random.Random
 
 /**
  * Verifies that a full mesh of [NwLoom]s satisfies every invariant in [MeshConformanceSuite] —
@@ -32,7 +33,11 @@ class NwMeshConformanceTest : MeshConformanceSuite() {
     override suspend fun newMeshOfSize(n: Int): List<Seam> = coroutineScope {
         val radio = FakeNwRadio()
         val looms = (0 until n).map { i ->
-            NwLoom(FakeNwApi(radio, deviceId = "dev-$i", serviceName = "dev-$i"), serviceType = SERVICE_TYPE)
+            NwLoom(
+                FakeNwApi(radio, deviceId = "dev-$i", serviceName = "dev-$i"),
+                serviceType = SERVICE_TYPE,
+                random = Random(i.toLong()),
+            )
         }
         // Weave concurrently so the peers can discover and dial each other while each awaits its
         // first connection (a sequential weave would deadlock: the first peer has no one to connect to yet).
