@@ -10,6 +10,51 @@ a direct point-to-point link and the redundant double-dial is deduplicated into
 one connection. It replaces Multipeer Connectivity, whose AWDL teardown
 regressed on iOS 26.
 
+## Starting a session
+
+One device hosts, the others join. Everyone shares a short **code** ahead of
+time — through a QR image, a spoken word, a chat message, anything outside this
+fabric. That code is the session's password.
+
+```kotlin
+// Host device:
+val seam = nwHost(Pattern(sessionName = "kitchen-game", roomKey = code), "_kuilt._tcp")
+
+// Joining device (given the same code out of band):
+val seam = nwJoin(NwTag("kitchen-game", peerKey = myId, roomKey = code), "_kuilt._tcp")
+```
+
+Both calls return a `Seam` that is already connected to the other peers, ready
+to exchange frames.
+
+## Security — the code encrypts the link
+
+The code you share is never sent over the air. It is run through HKDF to derive
+a TLS pre-shared key, and every link is a TLS 1.3 PSK connection. So the code is
+a **bearer secret**: anyone who has it can join and read the session's traffic,
+and anyone who doesn't cannot connect at all. It is therefore *required* —
+`nwHost`/`nwJoin` throw if `roomKey` is null rather than quietly opening an
+unencrypted session — and it doubles as the session boundary: two groups using
+the same Bonjour service type but different codes derive different keys, so their
+meshes can never merge.
+
+`SeamCapabilities.securesTransport` is `true` for this fabric, proven on CI by a
+loopback TLS-PSK conformance run. Use a **high-entropy** code (≥128-bit random,
+carried via QR/link) where you can: a short human-typed code is guessable offline
+from a single captured handshake — a proper fix (a PAKE) is future work.
+
+## Consuming apps must declare (iOS/macOS)
+
+Network.framework's local-network and Bonjour access is gated by Info.plist keys
+the host app supplies:
+
+- `NSLocalNetworkUsageDescription` — a human-readable reason string (shown in the
+  iOS Local Network permission prompt).
+- `NSBonjourServices` — an array listing every service type you advertise/browse,
+  e.g. `<string>_kuilt._tcp</string>`.
+
+Without these the OS silently blocks discovery.
+
 ---
 
 **Source-set wiring note (maintainers).** This module hand-wires the
@@ -17,3 +62,14 @@ regressed on iOS 26.
 mirroring `:kuilt-multipeer` — required up front so the first real Apple-only
 source added later doesn't trip the Dokka "no source module for appleMain"
 gotcha that hits modules relying on the default hierarchy template's auto-wiring.
+
+**What CI proves — and what it doesn't (maintainers).** `NwLoopbackConformanceTest`
+runs the full `SeamConformanceSuite` against the real `RealNwApi` over a
+`127.0.0.1` link with **TLS-PSK enabled**, on the macOS runner. That covers the
+whole connection surface: the `sec_protocol_options` PSK handshake, send/receive,
+framing, cancel/close plumbing, and the strong-ref registry (whose drain-to-empty
+is separately asserted by `NwConnectionDrainTest`). It deliberately does **not**
+cover — and nothing below real hardware does — `NWBrowser`/Bonjour discovery,
+`includePeerToPeer`, AWDL routing, TLS over a real peer-to-peer path, the
+Local-Network-Privacy denial path, or IPv6-required behaviour. Those are proven
+only by the Phase-0 on-device spike and the hardware-validation pass.
