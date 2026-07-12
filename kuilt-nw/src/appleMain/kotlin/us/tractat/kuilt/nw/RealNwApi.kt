@@ -94,7 +94,7 @@ private val log = KotlinLogging.logger("us.tractat.kuilt.nw.RealNwApi")
  * out of the map under the lock, releases the lock, and only then touches Network.framework.
  *
  * ## Close reasons via the `closing` flag
- * When *we* initiate a teardown ([disconnect]/[stopListening]) we set the entry's
+ * When *we* initiate a connection teardown ([disconnect]) we set the entry's
  * [ConnectionEntry.closing] flag before cancelling. The subsequent `cancelled` state then maps
  * to a graceful close (`NwConnectionClosed.reason == null`); a `failed` state, or a `cancelled`
  * we did not initiate, carries a non-null reason. (Precedent: `MCSessionLink` in `:kuilt-multipeer`.)
@@ -154,7 +154,10 @@ internal class RealNwApi(
             // Inbound accept: no dialled endpoint.
             connection?.let { retainAndStart(it, endpoint = null) }
         }
-        lock.withLock { listener = newListener }
+        // Swap in the new handle and cancel any superseded one OUTSIDE the lock (no nw_* under it):
+        // a re-start would otherwise leave the previous listener advertising over Bonjour forever.
+        val superseded = lock.withLock { listener.also { listener = newListener } }
+        superseded?.let { nw_listener_cancel(it) }
         nw_listener_start(newListener)
         log.debug { "nw.listen advertising name=$serviceName type=$serviceType (P2P, TLS-PSK)" }
     }
@@ -173,7 +176,10 @@ internal class RealNwApi(
         nw_browser_set_browse_results_changed_handler(newBrowser) { _, newResult, _ ->
             if (newResult != null) onBrowseResult(newResult)
         }
-        lock.withLock { browser = newBrowser }
+        // Swap in the new handle and cancel any superseded one OUTSIDE the lock (no nw_* under it):
+        // a re-start would otherwise leave the previous browser holding AWDL up forever.
+        val superseded = lock.withLock { browser.also { browser = newBrowser } }
+        superseded?.let { nw_browser_cancel(it) }
         nw_browser_start(newBrowser)
         log.debug { "nw.browse type=$serviceType over P2P (activates AWDL)" }
     }
