@@ -17,6 +17,7 @@ import kotlinx.cinterop.readBytes
 import kotlinx.cinterop.toKString
 import kotlinx.cinterop.usePinned
 import kotlinx.cinterop.value
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
@@ -50,13 +51,14 @@ import platform.Network.nw_endpoint_get_bonjour_service_name
 import platform.Network.nw_endpoint_t
 import platform.Network.nw_listener_cancel
 import platform.Network.nw_listener_create
-import platform.Network.nw_listener_create_with_port
+import platform.Network.nw_listener_get_port
 import platform.Network.nw_listener_set_advertise_descriptor
 import platform.Network.nw_listener_set_new_connection_handler
 import platform.Network.nw_listener_set_queue
 import platform.Network.nw_listener_set_state_changed_handler
 import platform.Network.nw_listener_start
 import platform.Network.nw_listener_state_failed
+import platform.Network.nw_listener_state_ready
 import platform.Network.nw_listener_t
 import platform.Network.nw_parameters_create_secure_tcp
 import platform.Network.nw_parameters_set_include_peer_to_peer
@@ -74,18 +76,32 @@ import us.tractat.kuilt.core.FabricAvailability
 private val log = KotlinLogging.logger("us.tractat.kuilt.nw.RealNwApi")
 
 /**
+ * In-process port rendezvous shared by a loopback host/joiner [RealNwApi] pair.
+ *
+ * The host binds an **ephemeral** listener (OS-assigned port) and, once that listener reaches
+ * `ready`, publishes its REAL bound port into [hostPort]. The joiner `await`s [hostPort] before
+ * synthesizing the `127.0.0.1:port` endpoint it dials. Because the listener owns its port
+ * continuously — there is no pre-allocated number and no probe socket that is closed and rebound —
+ * there is no TOCTOU window: the joiner always dials a port that is genuinely bound.
+ */
+internal class NwLoopbackRendezvous {
+    /** Completed with the host listener's real bound port (host byte order) once it is `ready`. */
+    val hostPort: CompletableDeferred<Int> = CompletableDeferred()
+}
+
+/**
  * Direct-loopback configuration for [RealNwApi] — the CI conformance path that bypasses Bonjour.
  *
- * A [RealNwApi] built with a non-null config binds a `127.0.0.1:`[listenPort] listener (no Bonjour
- * advertise) and, if [dialPort] is non-null, synthesizes a single host endpoint at
- * [dialHost]`:`[dialPort] to dial. A host-only side sets [dialPort] to `null` (it listens but never
- * dials); a joiner sets [dialHost]/[dialPort] to the host's address. This yields exactly one
- * host↔joiner link over TLS-PSK on the loopback interface, driven by `NwLoopbackConformanceTest`.
+ * Both sides bind an ephemeral `127.0.0.1` listener with no Bonjour advertise and share one
+ * [rendezvous]. The HOST ([dial]` == false`) publishes its real bound port into the rendezvous on
+ * listener `ready` and never dials. The JOINER ([dial]` == true`) `await`s the rendezvous, then
+ * synthesizes and dials the host endpoint — the SAME [connect] path as a Bonjour-discovered peer.
+ * This yields exactly one host↔joiner link over TLS-PSK on the loopback interface, driven by
+ * `NwLoopbackConformanceTest`.
  */
 internal class NwLoopbackConfig(
-    val listenPort: Int,
-    val dialHost: String?,
-    val dialPort: Int?,
+    val dial: Boolean,
+    val rendezvous: NwLoopbackRendezvous,
 )
 
 /**
@@ -97,10 +113,11 @@ internal class NwLoopbackConfig(
  *
  * ## Two modes — peer-to-peer (default) and direct loopback
  * The default mode is P2P (Bonjour advertise + browse + `includePeerToPeer` over AWDL). A
- * second **loopback** mode ([NwLoopbackConfig], non-null [loopback]) binds a direct
- * `127.0.0.1:port` listener and dials a fixed host/port instead of discovering over Bonjour —
- * the CI-runnable path that lets `NwLoopbackConformanceTest` prove the TLS-PSK link on the
- * macOS runner (closes the `securesTransport` gap for this fabric). Only [secureParams],
+ * second **loopback** mode ([NwLoopbackConfig], non-null [loopback]) binds a direct **ephemeral**
+ * `127.0.0.1` listener and dials the host's REAL bound port (discovered via an in-process
+ * [NwLoopbackRendezvous]) instead of discovering over Bonjour — the CI-runnable path that lets
+ * `NwLoopbackConformanceTest` prove the TLS-PSK link on the macOS runner (closes the
+ * `securesTransport` gap for this fabric). Only [secureParams],
  * [startListening], and [startBrowsing] branch on the mode; the connection lifecycle
  * ([connect]/[retainAndStart]/[onState]/…) is shared verbatim — loopback just stores a host
  * endpoint in [endpointsById] and emits the matching [NwEndpoint], so [connect] dials it
@@ -168,12 +185,10 @@ internal class RealNwApi(
     // ── host role ────────────────────────────────────────────────────────────
 
     override suspend fun startListening(serviceName: String, serviceType: String) {
-        // Loopback: bind a fixed 127.0.0.1 port with NO Bonjour advertise. P2P: Bonjour-advertised.
-        val newListener = if (loopback != null) {
-            nw_listener_create_with_port(loopback.listenPort.toString(), secureParams())
-        } else {
-            nw_listener_create(secureParams())
-        }
+        // Both modes bind an OS-assigned ephemeral port (nw_listener_create; no fixed port). Loopback
+        // omits the Bonjour advertise and, once ready, publishes its REAL bound port to the rendezvous
+        // so the joiner dials a port that is genuinely bound — no pre-allocated number, no TOCTOU.
+        val newListener = nw_listener_create(secureParams())
         nw_listener_set_queue(newListener, queue)
         if (loopback == null) {
             nw_listener_set_advertise_descriptor(
@@ -181,12 +196,22 @@ internal class RealNwApi(
                 nw_advertise_descriptor_create_bonjour_service(serviceName, serviceType, null),
             )
         }
-        // Surface a listener that never comes up (e.g. a port-bind failure) LOUDLY. Otherwise the
-        // only symptom is a downstream weave timeout — an opaque, slow flake on the required loopback
-        // CI gate, whose bind depends on a specific port being free (a rare TOCTOU with freePort()).
         nw_listener_set_state_changed_handler(newListener) { state, _ ->
-            if (state == nw_listener_state_failed) {
-                log.error { "nw.listen FAILED (bind/port unavailable?) loopback=${loopback != null} port=${loopback?.listenPort}" }
+            when (state) {
+                nw_listener_state_ready ->
+                    // Host loopback side only: publish the OS-assigned bound port (nw_listener_get_port
+                    // returns host byte order — no hand swap) so the joiner's await unblocks. The
+                    // joiner's own (unused) listener does NOT publish.
+                    if (loopback != null && !loopback.dial) {
+                        val port = nw_listener_get_port(newListener).toInt()
+                        loopback.rendezvous.hostPort.complete(port)
+                        log.debug { "nw.listen loopback host ready on 127.0.0.1:$port (TLS-PSK)" }
+                    }
+                // Surface a listener that never comes up (e.g. a bind failure) LOUDLY — otherwise the
+                // only symptom is a downstream weave timeout, an opaque flake on the required CI gate.
+                nw_listener_state_failed ->
+                    log.error { "nw.listen FAILED (bind unavailable?) loopback=${loopback != null}" }
+                else -> Unit
             }
         }
         nw_listener_set_new_connection_handler(newListener) { connection ->
@@ -199,7 +224,7 @@ internal class RealNwApi(
         superseded?.let { nw_listener_cancel(it) }
         nw_listener_start(newListener)
         if (loopback != null) {
-            log.debug { "nw.listen loopback 127.0.0.1:${loopback.listenPort} (no Bonjour, TLS-PSK)" }
+            log.debug { "nw.listen loopback ephemeral 127.0.0.1 (no Bonjour, TLS-PSK)" }
         } else {
             log.debug { "nw.listen advertising name=$serviceName type=$serviceType (P2P, TLS-PSK)" }
         }
@@ -214,19 +239,21 @@ internal class RealNwApi(
 
     override suspend fun startBrowsing(serviceType: String) {
         if (loopback != null) {
-            // No nw_browser: synthesize the single peer endpoint directly. A host-only side
-            // (dialPort == null) discovers nothing; a joiner emits the fixed host endpoint so
-            // NwLoom auto-dials it through the SAME connect() path as a Bonjour-discovered peer.
-            val dialPort = loopback.dialPort
-            if (dialPort != null) {
-                // Create the endpoint OUTSIDE the lock (no nw_* under it), then store + emit.
-                val ep = nw_endpoint_create_host(loopback.dialHost!!, dialPort.toString())
+            // No nw_browser: synthesize the single peer endpoint directly. A host side (dial == false)
+            // discovers nothing; a joiner awaits the host's real bound port from the rendezvous, then
+            // emits the endpoint so NwLoom auto-dials it through the SAME connect() path as a Bonjour
+            // peer. The await is a suspend call — it MUST run OUTSIDE `lock` (no nw_* under the lock).
+            if (loopback.dial) {
+                val port = loopback.rendezvous.hostPort.await()
+                val ep = nw_endpoint_create_host(LOOPBACK_HOST, port.toString())
                 if (ep != null) {
                     lock.withLock { endpointsById[LOOPBACK_PEER_ID] = ep }
                     _endpointFound.tryEmit(NwEndpoint(id = LOOPBACK_PEER_ID, serviceName = LOOPBACK_PEER_ID))
                 }
+                log.debug { "nw.browse loopback dial 127.0.0.1:$port" }
+            } else {
+                log.debug { "nw.browse loopback host (no dial)" }
             }
-            log.debug { "nw.browse loopback dialHost=${loopback.dialHost} dialPort=${loopback.dialPort}" }
             return
         }
         val descriptor = nw_browse_descriptor_create_bonjour_service(serviceType, null)
@@ -393,6 +420,8 @@ internal class RealNwApi(
     private companion object {
         /** Stable discovery id for the single synthesized loopback peer (loopback mode has no Bonjour name). */
         private const val LOOPBACK_PEER_ID = "loopback-peer"
+        /** The loopback interface the joiner dials the host's ephemeral port on. */
+        private const val LOOPBACK_HOST = "127.0.0.1"
         private const val EVENT_BUFFER = 16
         private const val BYTES_BUFFER = 64
         private const val RECEIVE_MIN_LENGTH: UInt = 1u

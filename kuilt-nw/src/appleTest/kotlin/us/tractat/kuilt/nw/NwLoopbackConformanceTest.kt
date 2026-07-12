@@ -1,29 +1,10 @@
 @file:Suppress("ForbiddenImport", "ForbiddenMethodCall") // real-network loopback conformance harness — a real Network.framework socket needs a real IO dispatcher; there is no virtual-time option here
-@file:OptIn(ExperimentalForeignApi::class)
 
 package us.tractat.kuilt.nw
 
-import kotlinx.cinterop.ExperimentalForeignApi
-import kotlinx.cinterop.alloc
-import kotlinx.cinterop.convert
-import kotlinx.cinterop.memScoped
-import kotlinx.cinterop.ptr
-import kotlinx.cinterop.reinterpret
-import kotlinx.cinterop.sizeOf
-import kotlinx.cinterop.value
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
-import platform.posix.AF_INET
-import platform.posix.INADDR_ANY
-import platform.posix.SOCK_STREAM
-import platform.posix.bind
-import platform.posix.close
-import platform.posix.getsockname
-import platform.posix.sockaddr
-import platform.posix.sockaddr_in
-import platform.posix.socket
-import platform.posix.socklen_tVar
 import us.tractat.kuilt.conformance.SeamCapabilities
 import us.tractat.kuilt.conformance.SeamConformanceSuite
 import us.tractat.kuilt.core.FabricAvailability
@@ -32,10 +13,8 @@ import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.Tag
-import kotlin.coroutines.CoroutineContext
 import kotlin.random.Random
 import kotlin.test.AfterTest
-import kotlin.test.BeforeTest
 
 /**
  * Verifies that [NwLoom] over the **real** Apple Network.framework binding ([RealNwApi]) satisfies
@@ -48,16 +27,18 @@ import kotlin.test.BeforeTest
  * crypto).
  *
  * ## Loopback mode (no Bonjour, no AWDL)
- * Both looms run over [RealNwApi] built with a [NwLoopbackConfig]: it binds a direct
- * `127.0.0.1:port` listener with no Bonjour advertise and dials a fixed host/port, so the run needs
- * no multicast, no network permissions, and no second device. `includePeerToPeer(false)` keeps it
- * off AWDL; the TLS-PSK params are otherwise byte-identical to the P2P surface.
+ * Both looms run over [RealNwApi] built with a [NwLoopbackConfig]: each binds a direct **ephemeral**
+ * `127.0.0.1` listener with no Bonjour advertise, so the run needs no multicast, no network
+ * permissions, and no second device. `includePeerToPeer(false)` keeps it off AWDL; the TLS-PSK
+ * params are otherwise byte-identical to the P2P surface.
  *
- * ## Asymmetric host/joiner (minimises the connect race)
- * Mirrors [us.tractat.kuilt.tcp]'s `TcpConformanceTest`: the HOST listens on a known free port and
- * never dials ([NwLoopbackConfig.dialPort] = null — its browse emits nothing); the JOINER listens on
- * a throwaway port and dials the host. Each side still runs the full `NwLoom.weave` (advertise +
- * browse + auto-dial), so exactly one host↔joiner link forms with no double-dial.
+ * ## Asymmetric host/joiner over an in-process rendezvous (no port race)
+ * There is no pre-allocated port and no probe socket, so there is no TOCTOU window that could lose
+ * the port (the old flake). The HOST binds an OS-assigned ephemeral listener and never dials; on
+ * `ready` it publishes its REAL bound port into a shared [NwLoopbackRendezvous]. The JOINER awaits
+ * that port, then dials `127.0.0.1:port` — a port that is always genuinely bound. Each side still
+ * runs the full `NwLoom.weave` (advertise + browse + auto-dial), so exactly one host↔joiner link
+ * forms with no double-dial.
  *
  * ## Real dispatcher (not virtual time)
  * [NwLoom.weave] derives its seam scope from `currentCoroutineContext()`, so under the suite's
@@ -74,22 +55,13 @@ class NwLoopbackConformanceTest : SeamConformanceSuite() {
         const val ROOM_KEY = "loopback-secret"
     }
 
-    private var hostPort: Int = 0
-    private var joinerPort: Int = 0
-
     /** The real APIs built for the current test, torn down (listeners/browsers cancelled) in [tearDown]. */
     private val apis = mutableListOf<RealNwApi>()
 
-    @BeforeTest
-    fun setUp() {
-        hostPort = freePort()
-        joinerPort = freePort()
-    }
-
     @AfterTest
     fun tearDown() = runBlocking {
-        // Cancel the loopback listeners/browsers so the next test's fresh ports bind cleanly and no
-        // NW resources leak across the run. Seams are closed by the tests themselves.
+        // Cancel the loopback listeners/browsers so no NW resources leak across the run. Seams are
+        // closed by the tests themselves.
         apis.forEach { api ->
             api.stopListening()
             api.stopBrowsing()
@@ -99,8 +71,10 @@ class NwLoopbackConformanceTest : SeamConformanceSuite() {
 
     override fun newLoomPair(): Pair<Loom, Loom> {
         val psk = NwPsk.derive(ROOM_KEY, SERVICE_TYPE)
-        val hostApi = RealNwApi(psk, NwLoopbackConfig(listenPort = hostPort, dialHost = null, dialPort = null))
-        val joinerApi = RealNwApi(psk, NwLoopbackConfig(listenPort = joinerPort, dialHost = "127.0.0.1", dialPort = hostPort))
+        // One shared rendezvous per pair: the host publishes its real bound port, the joiner awaits it.
+        val rendezvous = NwLoopbackRendezvous()
+        val hostApi = RealNwApi(psk, NwLoopbackConfig(dial = false, rendezvous = rendezvous))
+        val joinerApi = RealNwApi(psk, NwLoopbackConfig(dial = true, rendezvous = rendezvous))
         apis += hostApi
         apis += joinerApi
         val host = NwLoom(hostApi, serviceType = SERVICE_TYPE, random = Random(0))
@@ -126,39 +100,5 @@ class NwLoopbackConformanceTest : SeamConformanceSuite() {
             withContext(Dispatchers.Default) { delegate.weave(rendezvous) }
 
         override fun availability(): FabricAvailability = delegate.availability()
-    }
-}
-
-/**
- * Grab a free ephemeral TCP port: bind a throwaway socket to `0.0.0.0:0`, read the OS-assigned port
- * via `getsockname`, then close it. The number is reused for the NWListener (bound on loopback) — a
- * small TOCTOU window, negligible with fresh ephemeral ports per test.
- *
- * `ntohs`/`htons`/`inet_addr` are C macros with no linkable K/N symbol, so the port (stored in
- * `sin_port` in network byte order) is byte-swapped to host order by hand — arm64 is little-endian.
- */
-@OptIn(ExperimentalForeignApi::class)
-private fun freePort(): Int = memScoped {
-    val fd = socket(AF_INET, SOCK_STREAM, 0)
-    check(fd >= 0) { "socket() failed grabbing a free port" }
-    try {
-        val addr = alloc<sockaddr_in>()
-        addr.sin_len = sizeOf<sockaddr_in>().convert()
-        addr.sin_family = AF_INET.convert()
-        addr.sin_port = 0u // ephemeral — the OS assigns a free port
-        addr.sin_addr.s_addr = INADDR_ANY.convert() // only the assigned port number matters here
-        check(bind(fd, addr.ptr.reinterpret<sockaddr>(), sizeOf<sockaddr_in>().convert()) == 0) {
-            "bind(0.0.0.0:0) failed grabbing a free port"
-        }
-        val len = alloc<socklen_tVar>()
-        len.value = sizeOf<sockaddr_in>().convert()
-        check(getsockname(fd, addr.ptr.reinterpret<sockaddr>(), len.ptr) == 0) {
-            "getsockname() failed grabbing a free port"
-        }
-        // sin_port is network byte order (big-endian); swap to a host-order int (arm64 is little-endian).
-        val netPort = addr.sin_port.toInt() and 0xFFFF
-        ((netPort and 0xFF) shl 8) or ((netPort shr 8) and 0xFF)
-    } finally {
-        close(fd)
     }
 }
