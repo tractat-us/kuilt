@@ -182,6 +182,15 @@ internal class RealNwApi(
 
     override fun availability(): FabricAvailability = FabricAvailability.Available
 
+    /**
+     * Test-only window into the strong-ref connection registry: how many `nw_connection_t` handles
+     * this binding is currently holding alive. Reads only [connections] (the sole leak surface — the
+     * single ref-drop site is [closeConnection]); the listener/browser handles are separate. Used by
+     * `NwConnectionDrainTest` to prove the registry drains to empty on seam close (no leaked
+     * connection). Not part of the fabric contract — do not build behaviour on it.
+     */
+    internal fun liveConnectionCount(): Int = lock.withLock { connections.size }
+
     // ── host role ────────────────────────────────────────────────────────────
 
     override suspend fun startListening(serviceName: String, serviceType: String) {
