@@ -217,7 +217,8 @@ internal class RealNwApi(
                         log.debug { "nw.listen loopback host ready on 127.0.0.1:$port (TLS-PSK)" }
                     }
                 // Surface a listener that never comes up (e.g. a bind failure) LOUDLY — otherwise the
-                // only symptom is a downstream weave timeout, an opaque flake on the required CI gate.
+                // only symptom is a downstream weave timeout, an opaque flake in the loopback
+                // conformance run (the Apple nightly lane, not the per-PR ci-required check).
                 nw_listener_state_failed ->
                     log.error { "nw.listen FAILED (bind unavailable?) loopback=${loopback != null}" }
                 else -> Unit

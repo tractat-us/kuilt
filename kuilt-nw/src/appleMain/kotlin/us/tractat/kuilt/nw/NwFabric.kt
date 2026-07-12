@@ -15,7 +15,7 @@ import us.tractat.kuilt.core.Tag
  * shared through a channel outside this fabric (a QR code, a spoken word, a chat message).
  *
  * Under the hood the `roomKey` is not sent over the air: it is fed through HKDF to derive the
- * TLS pre-shared key ([NwPsk.derive]) that secures every link. Two consequences follow:
+ * TLS pre-shared key (via HKDF-SHA256) that secures every link. Two consequences follow:
  * - **The `roomKey` is a bearer secret, not a label.** It is therefore **required** on this
  *   fabric (a `null` [Pattern.roomKey] throws immediately, before any network is touched) —
  *   an "open", unencrypted session is not silently allowed.
@@ -49,7 +49,7 @@ public suspend fun nwHost(pattern: Pattern, serviceType: String): Seam {
  * used — the session's shared password, delivered through a channel outside this fabric.
  *
  * Under the hood the `roomKey` is not sent over the air: it is fed through HKDF to derive the
- * TLS pre-shared key ([NwPsk.derive]) that secures the link. Two consequences follow:
+ * TLS pre-shared key (via HKDF-SHA256) that secures the link. Two consequences follow:
  * - **The `roomKey` is a bearer secret, not a label.** It is therefore **required** on this
  *   fabric (a `null` [Tag.roomKey] throws immediately, before any network is touched) — you
  *   cannot join an "open", unencrypted session because there is no such thing here.

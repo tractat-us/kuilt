@@ -30,7 +30,7 @@ to exchange frames.
 ## Security — the code encrypts the link
 
 The code you share is never sent over the air. It is run through HKDF to derive
-a TLS pre-shared key, and every link is a TLS 1.3 PSK connection. So the code is
+a TLS pre-shared key, and every link is a TLS PSK connection. So the code is
 a **bearer secret**: anyone who has it can join and read the session's traffic,
 and anyone who doesn't cannot connect at all. It is therefore *required* —
 `nwHost`/`nwJoin` throw if `roomKey` is null rather than quietly opening an
@@ -38,10 +38,12 @@ unencrypted session — and it doubles as the session boundary: two groups using
 the same Bonjour service type but different codes derive different keys, so their
 meshes can never merge.
 
-`SeamCapabilities.securesTransport` is `true` for this fabric, proven on CI by a
-loopback TLS-PSK conformance run. Use a **high-entropy** code (≥128-bit random,
-carried via QR/link) where you can: a short human-typed code is guessable offline
-from a single captured handshake — a proper fix (a PAKE) is future work.
+`SeamCapabilities.securesTransport` is `true` for this fabric, proven by the
+Apple nightly lane's loopback TLS-PSK conformance run (a scheduled macOS build —
+out of band, **not** the per-PR `ci-required` check, which is Linux-only and
+cannot execute the Apple test binaries). Use a **high-entropy** code (≥128-bit
+random, carried via QR/link) where you can: a short human-typed code is guessable
+offline from a single captured handshake — a proper fix (a PAKE) is future work.
 
 ## Consuming apps must declare (iOS/macOS)
 
@@ -65,7 +67,10 @@ gotcha that hits modules relying on the default hierarchy template's auto-wiring
 
 **What CI proves — and what it doesn't (maintainers).** `NwLoopbackConformanceTest`
 runs the full `SeamConformanceSuite` against the real `RealNwApi` over a
-`127.0.0.1` link with **TLS-PSK enabled**, on the macOS runner. That covers the
+`127.0.0.1` link with **TLS-PSK enabled**. It runs on the **scheduled Apple
+nightly lane** (`apple-nightly.yml`, a macOS runner) — *not* the per-PR
+`ci-required` check, which is Linux-only and skips the Apple test executions. So
+a regression here surfaces out of band, not as a blocked PR. That run covers the
 whole connection surface: the `sec_protocol_options` PSK handshake, send/receive,
 framing, cancel/close plumbing, and the strong-ref registry (whose drain-to-empty
 is separately asserted by `NwConnectionDrainTest`). It deliberately does **not**

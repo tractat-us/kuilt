@@ -16,10 +16,15 @@ import org.kotlincrypto.macs.hmac.sha2.HmacSHA256
  *
  * Both fields carry value semantics over their byte contents (mirroring
  * [NwBytesReceived]) so two derivations of the same inputs compare equal.
+ *
+ * `internal`: nothing outside this module consumes PSK material — the public entry
+ * points ([nwHost]/[nwJoin]) take a `roomKey: String`, and the only type that holds
+ * an [NwPskMaterial] ([RealNwApi]) is itself `internal`. Keeping it off the public
+ * surface also keeps mutable key bytes unreachable to consumers.
  */
-public class NwPskMaterial(
-    public val psk: ByteArray,
-    public val identity: ByteArray,
+internal class NwPskMaterial(
+    val psk: ByteArray,
+    val identity: ByteArray,
 ) {
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
@@ -63,8 +68,12 @@ public class NwPskMaterial(
  *
  * KMP-uniform: HMAC-SHA256 comes from KotlinCrypto, so the derivation computes
  * byte-identically on JVM, Android, iOS, macOS, and wasmJs.
+ *
+ * `internal`: the derivation is a module-internal detail of [nwHost]/[nwJoin]; no
+ * public consumer can build a secured `NwApi` from an [NwPskMaterial] today, so it
+ * stays off the pre-1.0 public surface until one exists.
  */
-public object NwPsk {
+internal object NwPsk {
     private const val SALT_PREFIX = "kuilt-nw|"
     private val PSK_INFO = "tls-psk|v1".encodeToByteArray()
     private val IDENTITY_INFO = "psk-id|v1".encodeToByteArray()
@@ -78,7 +87,7 @@ public object NwPsk {
      * `psk = HMAC-SHA256(PRK, "tls-psk|v1" || 0x01)` and
      * `identity = HMAC-SHA256(PRK, "psk-id|v1" || 0x01)` — 32 bytes each.
      */
-    public fun derive(roomKey: String, serviceType: String): NwPskMaterial {
+    fun derive(roomKey: String, serviceType: String): NwPskMaterial {
         val salt = (SALT_PREFIX + serviceType).encodeToByteArray()
         val prk = HmacSHA256(salt).doFinal(roomKey.encodeToByteArray())
         val psk = HmacSHA256(prk).doFinal(PSK_INFO + COUNTER_BYTE)
