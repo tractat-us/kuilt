@@ -46,6 +46,13 @@ internal class FakeNwApi(
         radio.register(this)
     }
 
+    /**
+     * Test hook: when `true`, [send] throws instead of delivering, exercising `NwSeam`'s
+     * send-failure eviction path (`removeByConn`). Toggle it AFTER the mesh has formed so the
+     * identity handshake still succeeds.
+     */
+    var failSend: Boolean = false
+
     override fun availability(): FabricAvailability = FabricAvailability.Available
 
     override suspend fun startListening(serviceName: String, serviceType: String) {
@@ -73,6 +80,7 @@ internal class FakeNwApi(
     }
 
     override suspend fun send(connectionId: NwConnectionId, bytes: ByteArray) {
+        if (failSend) throw RuntimeException("simulated send failure on device '$deviceId'")
         radio.send(deviceId, connectionId, bytes)
     }
 

@@ -155,19 +155,38 @@ internal class NwSeam(
         }
     }
 
-    /** Handle ONE decoded frame: the first on an unresolved connection is identity; the rest are data. */
+    /** Outcome of classifying one frame under [lock]; the suspend action runs OUTSIDE the lock. */
+    private sealed interface FrameOutcome {
+        /** Already-resolved connection: [frame] is data attributed to [sender]. */
+        data class Data(val sender: PeerId) : FrameOutcome
+
+        /** Just-resolved identity: [loser] (if any) is the dedup loser to disconnect. */
+        data class Resolved(val loser: NwConnectionId?) : FrameOutcome
+    }
+
+    /**
+     * Handle ONE decoded frame: the first on an unresolved connection is identity; the rest are data.
+     *
+     * The `resolvedPeerId == null` check and the [resolveIdentity] mutation happen in the SAME
+     * critical section, so [connectionClosedLoop] cannot interleave between them and re-register a
+     * peer on an already-closed connection (the identity-resolution race). The suspend actions
+     * ([Spool.deliver], [NwApi.disconnect]) run OUTSIDE the lock.
+     */
     private suspend fun processFrame(connId: NwConnectionId, cs: ConnState, frame: ByteArray) {
-        val alreadyResolved = lock.withLock { cs.resolvedPeerId }
-        if (alreadyResolved == null) {
-            val remoteId = PeerId(frame.decodeToString())
-            val loser = lock.withLock { resolveIdentity(connId, cs, remoteId) }
-            loser?.let { loserId ->
+        val outcome = lock.withLock {
+            val resolved = cs.resolvedPeerId
+            if (resolved != null) FrameOutcome.Data(resolved)
+            else FrameOutcome.Resolved(resolveIdentity(connId, cs, PeerId(frame.decodeToString())))
+        }
+        when (outcome) {
+            // Data frame — deliver OUTSIDE the lock (Spool.deliver suspends for backpressure).
+            is FrameOutcome.Data ->
+                spool.deliver(Swatch(payload = frame, sender = outcome.sender, sequence = seq.incrementAndGet()))
+            // Dedup loser (if any) — disconnect OUTSIDE the lock (best-effort).
+            is FrameOutcome.Resolved -> outcome.loser?.let { loserId ->
                 runCatchingCancellable { api.disconnect(loserId) }
                     .onFailure { log.debug { "nw.dedup disconnect failed connId=${loserId.value}" } }
             }
-        } else {
-            // Data frame — deliver OUTSIDE the lock (Spool.deliver suspends for backpressure).
-            spool.deliver(Swatch(payload = frame, sender = alreadyResolved, sequence = seq.incrementAndGet()))
         }
     }
 
@@ -247,15 +266,24 @@ internal class NwSeam(
             .onFailure { removeByConn(connId) }
     }
 
-    /** Drop a connection after a send failure, evicting its peer only if it is still the live link. */
+    /**
+     * Drop a connection after a send failure, evicting its peer only if it is still the live link.
+     * Mirrors [connectionClosedLoop]'s tear rule: if this was the last remote and the seam had woven,
+     * tear to [CloseReason.RemoteRequested] — otherwise a send-failure eviction leaves the seam stuck
+     * `Woven` with `peers == {selfId}` and [incoming] never completing, unlike a clean close.
+     * The tear decision is computed under [lock]; [latchTorn] (non-suspend) runs after releasing it.
+     */
     private fun removeByConn(connId: NwConnectionId) {
-        lock.withLock {
-            val cs = conns.remove(connId) ?: return@withLock
-            val peer = cs.resolvedPeerId ?: return@withLock
-            if (registry[peer] != connId) return@withLock
+        val tearNow = lock.withLock {
+            val cs = conns.remove(connId) ?: return@withLock false
+            val peer = cs.resolvedPeerId ?: return@withLock false
+            if (registry[peer] != connId) return@withLock false
             registry.remove(peer)
             _peers.update { it - peer }
+            // Last remote gone after having woven ⇒ the session is over (mirror the close rule).
+            registry.isEmpty() && _state.value is SeamState.Woven
         }
+        if (tearNow) latchTorn(CloseReason.RemoteRequested)
     }
 
     // ── close ─────────────────────────────────────────────────────────────────

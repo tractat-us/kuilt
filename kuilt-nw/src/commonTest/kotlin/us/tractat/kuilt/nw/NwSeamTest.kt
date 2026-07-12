@@ -1,6 +1,8 @@
 package us.tractat.kuilt.nw
 
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
@@ -41,6 +43,16 @@ class NwSeamTest {
             }
             return cond()
         }
+
+        /**
+         * A dedicated child scope per seam: still a child of [TestScope.backgroundScope] (so it is
+         * cancelled at test teardown) but with its OWN [Job], so one seam's teardown — which cancels
+         * the scope it was given via `latchTorn` — does NOT cancel the other seams' loops or the
+         * assertion collectors. Passing the shared `backgroundScope` masked teardown: the first
+         * `close()` cancelled every seam and every `incoming` collector at once.
+         */
+        fun TestScope.seamScope(): CoroutineScope =
+            CoroutineScope(backgroundScope.coroutineContext + Job(backgroundScope.coroutineContext[Job]))
     }
 
     /** Endpoint the radio maps back to device `dev-<i>` (see FakeNwRadio's `ep-<deviceId>`). */
@@ -54,9 +66,12 @@ class NwSeamTest {
         val radio = FakeNwRadio()
         val devices = (0 until n).map { i ->
             val api = FakeNwApi(radio, deviceId = "dev-$i", serviceName = "svc-$i")
-            Device(PeerId("peer-$i"), api, NwSeam(PeerId("peer-$i"), api, backgroundScope, policy))
+            // Each seam gets its OWN scope so one seam's teardown doesn't cancel the others.
+            Device(PeerId("peer-$i"), api, NwSeam(PeerId("peer-$i"), api, seamScope(), policy))
         }
-        // Single-collection: collect each seam's incoming exactly once.
+        // Single-collection: collect each seam's incoming exactly once — into backgroundScope
+        // (NOT the seam's own scope), so the collector can only terminate because spool.close()
+        // completed incoming, never because the seam cancelled its scope.
         for (d in devices) {
             backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
                 d.seam.incoming.collect { d.received += it }
@@ -167,19 +182,20 @@ class NwSeamTest {
 
     @Test
     fun incomingCompletesOnClose() = runTest(StandardTestDispatcher()) {
-        // Dedicated single-collector on A that flips a flag on normal completion.
+        // Per-seam scopes: closing seamA cancels only ITS scope, not the collector below. So the
+        // collector can only terminate because spool.close() completed incoming — proving the
+        // completion contract, not that a shared scope was cancelled out from under it.
         val radio = FakeNwRadio()
         val apiA = FakeNwApi(radio, deviceId = "dev-0", serviceName = "svc-0")
         val apiB = FakeNwApi(radio, deviceId = "dev-1", serviceName = "svc-1")
-        val seamA = NwSeam(PeerId("peer-0"), apiA, backgroundScope)
-        val seamB = NwSeam(PeerId("peer-1"), apiB, backgroundScope)
+        val seamA = NwSeam(PeerId("peer-0"), apiA, seamScope())
+        val seamB = NwSeam(PeerId("peer-1"), apiB, seamScope())
         var completed = false
-        backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
-            try {
-                seamA.incoming.collect { }
-            } finally {
-                completed = true
-            }
+        // Collector lives in backgroundScope (a scope seamA does NOT cancel); it sets `completed`
+        // only AFTER collect returns NORMALLY, so the flag distinguishes completion from cancellation.
+        val collectJob = backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
+            seamA.incoming.collect { }
+            completed = true
         }
         backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) { seamB.incoming.collect { } }
         testScheduler.runCurrent()
@@ -188,7 +204,44 @@ class NwSeamTest {
 
         seamA.close()
         pumpUntil { completed }
-        assertTrue(completed, "A.incoming completed when the seam tore")
+        assertAll(
+            { assertTrue(completed, "A.incoming completed (collect returned) when the seam tore") },
+            { assertTrue(collectJob.isCompleted && !collectJob.isCancelled, "completed NORMALLY, not by cancellation") },
+        )
+    }
+
+    @Test
+    fun sendFailureOnLastPeerTearsSeamAndCompletesIncoming() = runTest(StandardTestDispatcher()) {
+        // Fix 2 coverage: a send failure that evicts the LAST remote must tear the seam to
+        // Torn(RemoteRequested) and complete incoming — mirroring a clean connectionClosed — not
+        // leave it stuck Woven with peers == {selfId}.
+        val radio = FakeNwRadio()
+        val apiA = FakeNwApi(radio, deviceId = "dev-0", serviceName = "svc-0")
+        val apiB = FakeNwApi(radio, deviceId = "dev-1", serviceName = "svc-1")
+        val seamA = NwSeam(PeerId("peer-0"), apiA, seamScope())
+        val seamB = NwSeam(PeerId("peer-1"), apiB, seamScope())
+        var completed = false
+        val collectJob = backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
+            seamA.incoming.collect { }
+            completed = true
+        }
+        backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) { seamB.incoming.collect { } }
+        testScheduler.runCurrent()
+        apiA.connect(NwEndpoint(id = "ep-dev-1", serviceName = "svc-1"))
+        pumpUntil { seamA.peers.value.size == 2 }
+
+        // Make A's next send fail → the single remote is evicted via the send-failure path.
+        apiA.failSend = true
+        seamA.broadcast("boom".encodeToByteArray())
+        pumpUntil { seamA.state.value is SeamState.Torn }
+
+        pumpUntil { completed }
+        assertAll(
+            { assertEquals(SeamState.Torn(CloseReason.RemoteRequested), seamA.state.value, "A tears to Torn(RemoteRequested)") },
+            { assertEquals(setOf(seamA.selfId), seamA.peers.value, "A's peers collapse to {A}") },
+            { assertTrue(completed, "A.incoming completes after send-failure teardown") },
+            { assertTrue(collectJob.isCompleted && !collectJob.isCancelled, "completed NORMALLY, not by cancellation") },
+        )
     }
 
     @Test
