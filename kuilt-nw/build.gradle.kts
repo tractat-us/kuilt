@@ -22,6 +22,7 @@ kotlin {
         jvmMain.dependencies { implementation(libs.jna) }
         commonTest.dependencies {
             implementation(project(":kuilt-test"))
+            implementation(project(":kuilt-conformance"))
             implementation(libs.kotlinx.coroutines.test)
         }
         // Mirror the manual appleMain wiring for the test compilations so any
@@ -31,7 +32,6 @@ kotlin {
         val iosSimulatorArm64Test by getting { dependsOn(appleTest) }
         val macosArm64Test by getting { dependsOn(appleTest) }
         jvmTest.dependencies {
-            implementation(project(":kuilt-conformance"))
             implementation(libs.kotlin.testJunit)
             implementation(libs.kotlinx.coroutines.test)
             implementation(libs.logback)
