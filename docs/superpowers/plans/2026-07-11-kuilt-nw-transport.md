@@ -34,7 +34,14 @@ kuilt-nw/
     NwApi.kt                               # interface: advertise/browse/listen, connection lifecycle, send/recv as Flows; event types
     NwLoom.kt                              # Loom impl; weave() → NwSeam; advertise+browse; mints UUID PeerId; visiblePeers
     NwSeam.kt                              # Seam impl; full mesh; per-peer connection registry; direct broadcast/sendTo; dedup; teardown
-    NwConnectMachine.kt                    # per-connection handshake (subscribe-before-trigger, identity exchange, dedup tie-break)
+    # NwConnectMachine.kt — SUPERSEDED in implementation (not shipped). NwApi.bytesReceived is a
+    #   single multiplexed flow (one callbackFlow in the real fabric), so per-connection handshake
+    #   machines fight the single-collection design. Identity exchange was inlined into NwSeam's one
+    #   demux loop ("Architecture B"), which also closed an identity-resolution race. Dedup uses
+    #   MeshSeam's direction-free canonical-nonce rule (NwHello.kt), NOT the originally-planned
+    #   "lower-PeerId dialer" rule — whole-branch review found the latter could wedge a pair to zero
+    #   under a multi-threaded dispatcher. freshPeerId() survives in NwPeerId.kt.
+    NwHello.kt                             # identity-frame codec (PeerId + per-connection dedup nonce) + canonicalLinkNonce
     NwFraming.kt                           # length-prefix framing over the byte stream, reusing :kuilt-stream frame format
     NwRoomHost.kt                          # lobby host surface (Phase 5)
   src/commonMain/kotlin/.../internal/      # internal helpers
