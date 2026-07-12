@@ -21,6 +21,7 @@ kotlin {
         val macosArm64Main by getting { dependsOn(macosMain) }
         jvmMain.dependencies { implementation(libs.jna) }
         commonTest.dependencies {
+            implementation(project(":kuilt-test"))
             implementation(libs.kotlinx.coroutines.test)
         }
         // Mirror the manual appleMain wiring for the test compilations so any
