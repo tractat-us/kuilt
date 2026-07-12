@@ -36,8 +36,12 @@ Two options; the choice also determines whether the #1414 session-scoping fix fo
   as a bearer credential; serviceType stays public for discovery). Honest `securesTransport = true`,
   and the same secret can scope membership (folds in #1414).
 
-**Recommendation: (B).** Resolved with Iain + Fable (design authority) — see the decision record
-appended at the bottom of this file once made.
+**DECISION (Iain + Fable, 2026-07-11): (B), implemented as `roomKey`-as-bearer-secret.** No kuilt-core
+contract change — the slot already exists: `Pattern.roomKey` (host) / `Tag.roomKey` (joiner) are already
+an out-of-band admission capability that kuilt never transmits between devices. Deriving the PSK from
+`roomKey` upgrades the existing honor-system "targets must agree" admission into a cryptographic check,
+and closes #1414 at the TLS layer for free (different `roomKey` ⇒ different PSK ⇒ cross-session
+double-dial fails the handshake ⇒ meshes cannot merge). Concrete mechanics folded into Task 3.3 below.
 
 ## Tasks (bite-sized; one general-purpose worker each, `isolation: "worktree"`, accumulating on `nw-phase3`)
 
@@ -67,13 +71,29 @@ The connection-lifecycle unit, isolated from discovery so the memory management 
 - `availability()` — `FabricAvailability.Available` on Apple targets.
 - Everything on one serial `dispatch_queue_create`; callback→Flow via the bridge's flows.
 
-### 3.3 — TLS-PSK params + derivation (appleMain, maybe a commonMain derivation contract) — GATED on the decision
-- `secureParams()` = `nw_parameters_create_secure_tcp` with the `configure_tls` block installing the PSK
-  via `nw_tls_copy_sec_protocol_options` + `sec_protocol_options_add_pre_shared_key` (lifted; PSK path
-  proven in the spike). `nw_parameters_set_include_peer_to_peer(params, true)`.
-- Derive the PSK per the resolved decision (B ⇒ from the `Tag`/join secret, salted with serviceType;
-  do NOT feed raw secret bytes straight in — KDF hygiene). If (B) unifies #1414, wire the secret through
-  `NwLoom.weave`/`host`/`join` here.
+### 3.3 — TLS-PSK from `roomKey` + `NwTag` + #1414 fix (appleMain + commonMain) — DECIDED (B)
+- `secureParams(psk, pskId)` = `nw_parameters_create_secure_tcp` with the `configure_tls` block installing
+  the PSK via `nw_tls_copy_sec_protocol_options` + `sec_protocol_options_add_pre_shared_key` (lifted; PSK
+  path proven in the spike). `nw_parameters_set_include_peer_to_peer(params, true)`.
+- **Derive, never use raw bytes.** `PSK = HKDF-SHA256(ikm = roomKey, salt = "kuilt-nw|" + serviceType,
+  info = "tls-psk|v1")`, 32 bytes; derive the **PSK identity separately** (`info = "psk-id|v1"`) — the PSK
+  identity travels in cleartext in the ClientHello, so it must NOT be `roomKey`. Do NOT bind `sessionName`
+  into the KDF (host/joiner advertise different service names). The HKDF itself is `commonMain` (pure,
+  testable on JVM); only the `sec_protocol_options` wiring is appleMain. Reuse an existing kuilt HKDF/hash
+  if one exists (check `:kuilt-deal`/`:kuilt-crdt`); else a small SHA-256 HKDF in the module.
+- **Wire `roomKey` through `NwLoom`.** `weave` reads `pattern.roomKey` (`Rendezvous.New`) / `tag.roomKey`
+  (`Rendezvous.Existing`) and derives the PSK before `startListening`/`startBrowsing`. **Require it —
+  fail fast:** `NwLoom` throws if `roomKey == null` on the real (securing) path rather than silently
+  running unencrypted-but-flagged-secure ("Optional ≠ tuning"). Add `NwTag(sessionName, peerKey, roomKey)`
+  mirroring the existing fabric Tag exemplars (`MultipeerAdvertisement`), plus an `NwTag.forSecret(...)`
+  convenience for the host to build the invite Tag.
+- **#1414 folds in here:** different `roomKey` ⇒ different PSK ⇒ two sessions on one serviceType can no
+  longer merge (handshake fails). Upgrade `roomKey`'s "not a secret" KDoc *on the kuilt-nw surface*:
+  on this fabric `roomKey` is a bearer secret — anyone holding it can join and decrypt. (Optional polish,
+  not required: advertise a one-way `H(secret)` session-id in the service name so browse skips doomed dials.)
+- **Entropy caveat for `module.md`:** a group PSK from a short human-typed code is offline-guessable from
+  one captured TLS 1.3 handshake — recommend ≥128-bit random secrets carried via QR/link; a PAKE is the
+  real fix and is out of scope for Phase 3.
 
 ### 3.4 — flip `securesTransport = true` + close #1412
 - Real capability path reports `securesTransport = true`; drop the `#1412` entry from
@@ -116,7 +136,8 @@ The connection-lifecycle unit, isolated from discovery so the memory management 
   + auto-merge squash.
 
 ## Adjacent follow-ups
-- **#1414** (session scoping serviceType-only) — folds into 3.3 IFF the decision is (B) Tag-as-secret.
+- **#1414** (session scoping serviceType-only) — **folds into 3.3** (decision B): different `roomKey` ⇒
+  different PSK ⇒ meshes can't merge. `Closes #1414` on the 3.3 PR.
 - **#1415** (NwSeam receive-path head-of-line blocking) — a `commonMain` `NwSeam` fix, separate track;
   not required for Phase 3. Document-and-accept for now or a small standalone PR.
 - **#1416** (detektAll skips commonMain) — repo-wide `build-logic` infra fix, own trivial PR.
