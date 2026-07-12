@@ -1,5 +1,6 @@
 package us.tractat.kuilt.nw
 
+import us.tractat.kuilt.conformance.CapabilityGaps
 import us.tractat.kuilt.conformance.SeamCapabilities
 import us.tractat.kuilt.conformance.SeamConformanceSuite
 import us.tractat.kuilt.core.InMemoryTag
@@ -19,13 +20,15 @@ import kotlin.random.Random
  * of a link — cross-device roster/identity/dedup bugs surface on the JVM exactly as across two phones.
  *
  * ## Capabilities & the securesTransport gap
- * The JVM harness runs over the in-memory [FakeNwApi], which carries NO wire encryption — so
- * `securesTransport = false`. This is a **temporal** gap, not a by-design one: kuilt-nw is
- * unencrypted only *by phase*. Real TLS-PSK lands in Phase 3 (tracked by
- * `https://github.com/tractat-us/kuilt/issues/1412`), to be proven by a future `appleTest` loopback
- * conformance — so the gap points at that tracking issue rather than the permanently-unencrypted
- * by-design anchor. Every other flag is honoured: real direct-mesh delivery (`meshDelivery = true`,
- * earned by [NwMeshConformanceTest]) and real directed send (`supportsSendTo = true`).
+ * This JVM harness runs over the in-memory [FakeNwApi], which carries NO wire encryption — so it
+ * declares `securesTransport = false`. This is **not** a gap in the fabric: the real Apple transport
+ * ([RealNwApi]) IS encrypted, proven over a real `127.0.0.1` TLS-PSK link by
+ * `NwLoopbackConformanceTest` (`appleTest`, macOS runner), which declares
+ * `securesTransport = true`. The flag is `false` here only because the *fake* is a plaintext
+ * in-memory double — the by-design in-memory case of [CapabilityGaps.SECURES_TRANSPORT], not the
+ * temporal Phase-3 gap it once was. Every other flag is honoured: real direct-mesh delivery
+ * (`meshDelivery = true`, earned by [NwMeshConformanceTest]) and real directed send
+ * (`supportsSendTo = true`).
  */
 class NwConformanceTest : SeamConformanceSuite() {
 
@@ -53,6 +56,8 @@ class NwConformanceTest : SeamConformanceSuite() {
 
     override fun capabilities(): SeamCapabilities = SeamCapabilities.FULL.copy(securesTransport = false)
 
+    // The fake is a plaintext in-memory double (by-design); the real transport's encryption is
+    // proven by NwLoopbackConformanceTest. Points at the by-design in-memory anchor, not #1412.
     override fun capabilityGaps(): Map<String, String> =
-        mapOf("securesTransport" to "https://github.com/tractat-us/kuilt/issues/1412")
+        mapOf("securesTransport" to CapabilityGaps.SECURES_TRANSPORT)
 }

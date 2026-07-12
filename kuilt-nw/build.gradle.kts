@@ -12,6 +12,7 @@ kotlin {
             implementation(libs.kotlinx.coroutines.core)
             implementation(libs.kotlinx.atomicfu)
             implementation(libs.kotlin.logging)
+            implementation(libs.kotlincrypto.macs.hmac.sha2)  // HKDF-SHA256 for TLS-PSK derivation (NwPsk)
         }
         // MANUAL appleMain → disables default-hierarchy auto-wiring → hand-wire ALL intermediates:
         val appleMain by creating { dependsOn(commonMain.get()) }

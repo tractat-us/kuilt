@@ -44,7 +44,16 @@ public interface NwApi {
 
     // ── data ─────────────────────────────────────────────────────────────────
 
-    /** Send raw [bytes] over [connectionId]. Framing is the caller's responsibility. */
+    /**
+     * Send raw [bytes] over [connectionId]. Framing is the caller's responsibility.
+     *
+     * **Best-effort.** An implementation MAY throw synchronously to signal an immediately-known
+     * failure (e.g. an unknown/closed [connectionId]) — `NwSeam` treats a throw as a cue to evict
+     * that connection. But a real datagram transport reports most send failures asynchronously
+     * (the link breaks after the call returns), surfacing them via [connectionClosed] rather than
+     * by throwing here. Callers must therefore rely on [connectionClosed] as the authoritative
+     * teardown signal and treat a non-throwing `send` as "handed off", not "delivered".
+     */
     public suspend fun send(connectionId: NwConnectionId, bytes: ByteArray)
 
     // ── event flows ──────────────────────────────────────────────────────────
