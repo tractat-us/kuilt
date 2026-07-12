@@ -1,0 +1,159 @@
+package us.tractat.kuilt.nw
+
+import com.sun.jna.Callback
+import com.sun.jna.Library
+import com.sun.jna.Native
+import com.sun.jna.Pointer
+import us.tractat.kuilt.core.FabricAvailability
+import us.tractat.kuilt.core.runCatchingCancellable
+
+/**
+ * JNA façade over `libkuilt.dylib` — the macOS-only Kotlin/Native shared library
+ * that exposes Apple's Network.framework (`RealNwApi`) to the JVM.
+ *
+ * The dylib is built from the `macosArm64` target of this same module (see
+ * `binaries.sharedLib` in `build.gradle.kts`) and bundled inside the JVM jar at
+ * `darwin-aarch64/libkuilt.dylib`. JNA picks the right architecture automatically
+ * when [Native.load] runs from inside a Mac JVM.
+ *
+ * **Loading is platform-gated**: [load] returns `null` on non-macOS hosts
+ * (Linux/Windows) so the JVM target compiles and runs portably; the fabric
+ * reports [FabricAvailability.Unavailable] there ([jvmAvailability]) and
+ * [nwHost]/[nwJoin] fail fast with an actionable "macOS-only" error.
+ *
+ * ## JNA C-string / callback lifetime contract (read before adding methods)
+ * - A `const char*` delivered to a JNA callback survives ONLY for the duration of
+ *   the call. Copy strings out immediately (JNA maps them to Java `String`s, so
+ *   they are already copied); never retain the byte pointer.
+ * - Byte-buffer callbacks pass a raw [Pointer]; copy via
+ *   `pointer.getByteArray(0, len)` inside the callback, before it returns.
+ * - The JVM caller MUST hold a strong reference to every registered [Callback]
+ *   object for the whole runtime lifetime, otherwise JNA may release the
+ *   trampoline and the K/N side will SIGSEGV when it next fires the callback.
+ *   [BridgeNwApi] holds them as fields for exactly this reason.
+ */
+internal interface NwNativeLib : Library {
+    @Suppress("ktlint:standard:function-naming")
+    fun kuilt_protocol_version(): Int
+
+    /**
+     * Builds a runtime wrapping `RealNwApi(NwPskMaterial(psk, identity))` and
+     * returns its opaque handle, or `null` on invalid arguments. Pair every
+     * successful create with exactly one [nw_runtime_destroy].
+     */
+    @Suppress("ktlint:standard:function-naming")
+    fun nw_runtime_create(psk: ByteArray, pskLen: Int, identity: ByteArray, identityLen: Int): Pointer?
+
+    /**
+     * Gracefully tears the runtime down and releases the handle. Idempotent only
+     * across `null`; passing the same non-null pointer twice is a use-after-free.
+     */
+    @Suppress("ktlint:standard:function-naming")
+    fun nw_runtime_destroy(handle: Pointer?)
+
+    /** `(endpointId: char*, serviceName: char*) -> void`. Strong-ref + copy-out contract as above. */
+    fun interface EndpointFoundCallback : Callback {
+        @Suppress("ktlint:standard:function-naming")
+        fun invoke(endpointId: String, serviceName: String)
+    }
+
+    /**
+     * `(connectionId: char*, endpointId: char*, serviceName: char*) -> void`.
+     * `endpointId`/`serviceName` are empty for an inbound (host-role) connection.
+     */
+    fun interface ConnectionOpenedCallback : Callback {
+        @Suppress("ktlint:standard:function-naming")
+        fun invoke(connectionId: String, endpointId: String, serviceName: String)
+    }
+
+    /**
+     * `(connectionId: char*, data: char*, len: int) -> void`. The [data] pointer
+     * is valid only for the duration of the call; copy out via
+     * `data.getByteArray(0, len)` immediately.
+     */
+    fun interface BytesReceivedCallback : Callback {
+        @Suppress("ktlint:standard:function-naming")
+        fun invoke(connectionId: String, data: Pointer, len: Int)
+    }
+
+    /** `(connectionId: char*, reason: char*) -> void`. Empty [reason] ⇒ graceful/`null`. */
+    fun interface ConnectionClosedCallback : Callback {
+        @Suppress("ktlint:standard:function-naming")
+        fun invoke(connectionId: String, reason: String)
+    }
+
+    @Suppress("ktlint:standard:function-naming")
+    fun nw_set_endpoint_found_callback(handle: Pointer?, cb: EndpointFoundCallback)
+
+    @Suppress("ktlint:standard:function-naming")
+    fun nw_set_connection_opened_callback(handle: Pointer?, cb: ConnectionOpenedCallback)
+
+    @Suppress("ktlint:standard:function-naming")
+    fun nw_set_bytes_received_callback(handle: Pointer?, cb: BytesReceivedCallback)
+
+    @Suppress("ktlint:standard:function-naming")
+    fun nw_set_connection_closed_callback(handle: Pointer?, cb: ConnectionClosedCallback)
+
+    /** All ops return `0` on success, `<0` on error. */
+    @Suppress("ktlint:standard:function-naming")
+    fun nw_start_listening(handle: Pointer?, serviceName: String, serviceType: String): Int
+
+    @Suppress("ktlint:standard:function-naming")
+    fun nw_stop_listening(handle: Pointer?): Int
+
+    @Suppress("ktlint:standard:function-naming")
+    fun nw_start_browsing(handle: Pointer?, serviceType: String): Int
+
+    @Suppress("ktlint:standard:function-naming")
+    fun nw_stop_browsing(handle: Pointer?): Int
+
+    @Suppress("ktlint:standard:function-naming")
+    fun nw_connect(handle: Pointer?, endpointId: String): Int
+
+    @Suppress("ktlint:standard:function-naming")
+    fun nw_disconnect(handle: Pointer?, connectionId: String): Int
+
+    @Suppress("ktlint:standard:function-naming")
+    fun nw_send(handle: Pointer?, connectionId: String, data: ByteArray, len: Int): Int
+
+    companion object {
+        const val LIBRARY_NAME: String = "kuilt"
+
+        /**
+         * Bridge ABI version this Kotlin code expects. Must match the
+         * `PROTOCOL_VERSION` compiled into `Bridge.kt` on the macOS K/N side. A
+         * mismatch means a stale or wrong-arch dylib is on the classpath.
+         */
+        const val EXPECTED_PROTOCOL_VERSION: Int = 1
+
+        /** The reason attached to [FabricAvailability.Unavailable] off macOS-arm64. */
+        const val UNAVAILABLE_REASON: String =
+            "kuilt-nw's JVM bridge is macOS-only (Apple Network.framework over a native dylib); " +
+                "it loads only on a macOS-arm64 host. Use mDNS/WebSocket for cross-platform LAN " +
+                "on Linux/Windows."
+
+        /**
+         * Loads the dylib if available, else returns `null`. Idempotent — JNA
+         * caches `Native.load` per (name, interface) pair. Returns `null` on
+         * Linux/Windows (never even attempts the load).
+         */
+        fun load(): NwNativeLib? {
+            if (!isMacOs) return null
+            return runCatchingCancellable { Native.load(LIBRARY_NAME, NwNativeLib::class.java) }.getOrNull()
+        }
+
+        /**
+         * Pure availability mapping: [FabricAvailability.Available] iff the dylib
+         * is [loaded], else [FabricAvailability.Unavailable]. Split out from
+         * [jvmAvailability] so both branches are testable without a real dylib.
+         */
+        fun availabilityFor(loaded: Boolean): FabricAvailability =
+            if (loaded) FabricAvailability.Available else FabricAvailability.Unavailable(UNAVAILABLE_REASON)
+
+        /** Fabric availability on this JVM: [FabricAvailability.Available] only on macOS-arm64 with the dylib present. */
+        fun jvmAvailability(): FabricAvailability = availabilityFor(load() != null)
+
+        private val isMacOs: Boolean
+            get() = System.getProperty("os.name").orEmpty().lowercase().contains("mac")
+    }
+}

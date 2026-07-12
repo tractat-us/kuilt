@@ -1,0 +1,209 @@
+/*
+ * cdecl exports for the JVM ↔ macOS Network.framework bridge.
+ *
+ * The handle returned by `nw_runtime_create` is an opaque pointer the JVM stores
+ * and passes back to every subsequent call. Internally it is a
+ * `StableRef<NwBridgeRuntime>`; the ref roots the runtime so K/N's GC won't
+ * reclaim it while the JVM still holds the pointer.
+ *
+ * Conventions:
+ *  - C strings are UTF-8, NUL-terminated (`CPointer<ByteVar>` / `toKString`).
+ *  - Byte buffers are `(CPointer<ByteVar>, Int len)`; the K/N side copies the
+ *    bytes out with `memcpy` before the pointer goes stale.
+ *  - Suspend `RealNwApi` ops are driven via `runBlocking` on the JNA calling
+ *    thread and return an `Int` result code: `0` on success, `<0` on error.
+ *  - Callback registration takes a cdecl function pointer (a JNA `Callback`);
+ *    the JVM holds the strong reference that keeps the trampoline alive.
+ *
+ * Threading: JNA callback trampolines auto-attach the firing thread to the JVM,
+ * so invoking the callbacks from K/N's `Dispatchers.Default` collectors is safe.
+ */
+package us.tractat.kuilt.nw.bridge
+
+import kotlinx.cinterop.ByteVar
+import kotlinx.cinterop.COpaquePointer
+import kotlinx.cinterop.CPointer
+import kotlinx.cinterop.ExperimentalForeignApi
+import kotlinx.cinterop.StableRef
+import kotlinx.cinterop.addressOf
+import kotlinx.cinterop.asStableRef
+import kotlinx.cinterop.readBytes
+import kotlinx.cinterop.toKString
+import kotlinx.cinterop.usePinned
+import kotlinx.coroutines.runBlocking
+import platform.posix.memcpy
+import us.tractat.kuilt.core.runCatchingCancellable
+import kotlin.experimental.ExperimentalNativeApi
+import kotlin.native.CName
+
+// ── lifecycle ────────────────────────────────────────────────────────────────
+
+/**
+ * Builds an [NwBridgeRuntime] wrapping a `RealNwApi(NwPskMaterial(psk, identity))`
+ * and returns its opaque handle. The [psk]/[identity] buffers carry their own
+ * lengths; both are copied into K/N-owned byte arrays here. Returns `null` on bad
+ * args (null pointers or negative lengths). Pair every successful create with
+ * exactly one [nw_runtime_destroy] — double-destroy is a use-after-free.
+ */
+@OptIn(ExperimentalForeignApi::class, ExperimentalNativeApi::class)
+@CName("nw_runtime_create")
+@Suppress("ktlint:standard:function-naming")
+public fun nw_runtime_create(
+    psk: CPointer<ByteVar>?,
+    pskLen: Int,
+    identity: CPointer<ByteVar>?,
+    identityLen: Int,
+): COpaquePointer? {
+    if (psk == null || identity == null || pskLen < 0 || identityLen < 0) return null
+    val pskBytes = if (pskLen == 0) ByteArray(0) else psk.readBytes(pskLen)
+    val identityBytes = if (identityLen == 0) ByteArray(0) else identity.readBytes(identityLen)
+    val runtime = NwBridgeRuntime(psk = pskBytes, identity = identityBytes)
+    return StableRef.create(runtime).asCPointer()
+}
+
+/**
+ * Gracefully tears the runtime down (stop listening/browsing, disconnect all) and
+ * disposes the StableRef. Safe to call once per handle; double-destroy is a
+ * use-after-free and the caller's responsibility to avoid.
+ */
+@OptIn(ExperimentalForeignApi::class, ExperimentalNativeApi::class)
+@CName("nw_runtime_destroy")
+@Suppress("ktlint:standard:function-naming")
+public fun nw_runtime_destroy(handle: COpaquePointer?) {
+    val ref = handle?.asStableRef<NwBridgeRuntime>() ?: return
+    runCatchingCancellable { ref.get().destroy() }
+    ref.dispose()
+}
+
+// ── callback registration ────────────────────────────────────────────────────
+
+@OptIn(ExperimentalForeignApi::class, ExperimentalNativeApi::class)
+@CName("nw_set_endpoint_found_callback")
+@Suppress("ktlint:standard:function-naming")
+public fun nw_set_endpoint_found_callback(handle: COpaquePointer?, cb: CPointer<EndpointFoundCb>?) {
+    if (handle == null || cb == null) return
+    handle.asStableRef<NwBridgeRuntime>().get().setEndpointFoundCallback(cb)
+}
+
+@OptIn(ExperimentalForeignApi::class, ExperimentalNativeApi::class)
+@CName("nw_set_connection_opened_callback")
+@Suppress("ktlint:standard:function-naming")
+public fun nw_set_connection_opened_callback(handle: COpaquePointer?, cb: CPointer<ConnectionOpenedCb>?) {
+    if (handle == null || cb == null) return
+    handle.asStableRef<NwBridgeRuntime>().get().setConnectionOpenedCallback(cb)
+}
+
+@OptIn(ExperimentalForeignApi::class, ExperimentalNativeApi::class)
+@CName("nw_set_bytes_received_callback")
+@Suppress("ktlint:standard:function-naming")
+public fun nw_set_bytes_received_callback(handle: COpaquePointer?, cb: CPointer<BytesReceivedCb>?) {
+    if (handle == null || cb == null) return
+    handle.asStableRef<NwBridgeRuntime>().get().setBytesReceivedCallback(cb)
+}
+
+@OptIn(ExperimentalForeignApi::class, ExperimentalNativeApi::class)
+@CName("nw_set_connection_closed_callback")
+@Suppress("ktlint:standard:function-naming")
+public fun nw_set_connection_closed_callback(handle: COpaquePointer?, cb: CPointer<ConnectionClosedCb>?) {
+    if (handle == null || cb == null) return
+    handle.asStableRef<NwBridgeRuntime>().get().setConnectionClosedCallback(cb)
+}
+
+// ── ops (0 ok, <0 error) ─────────────────────────────────────────────────────
+
+@OptIn(ExperimentalForeignApi::class, ExperimentalNativeApi::class)
+@CName("nw_start_listening")
+@Suppress("ktlint:standard:function-naming")
+public fun nw_start_listening(
+    handle: COpaquePointer?,
+    serviceName: CPointer<ByteVar>?,
+    serviceType: CPointer<ByteVar>?,
+): Int {
+    if (handle == null || serviceName == null || serviceType == null) return -1
+    val runtime = handle.asStableRef<NwBridgeRuntime>().get()
+    return runCatchingCancellable {
+        runBlocking { runtime.startListening(serviceName.toKString(), serviceType.toKString()) }
+        0
+    }.getOrDefault(-1)
+}
+
+@OptIn(ExperimentalForeignApi::class, ExperimentalNativeApi::class)
+@CName("nw_stop_listening")
+@Suppress("ktlint:standard:function-naming")
+public fun nw_stop_listening(handle: COpaquePointer?): Int {
+    if (handle == null) return -1
+    val runtime = handle.asStableRef<NwBridgeRuntime>().get()
+    return runCatchingCancellable {
+        runBlocking { runtime.stopListening() }
+        0
+    }.getOrDefault(-1)
+}
+
+@OptIn(ExperimentalForeignApi::class, ExperimentalNativeApi::class)
+@CName("nw_start_browsing")
+@Suppress("ktlint:standard:function-naming")
+public fun nw_start_browsing(handle: COpaquePointer?, serviceType: CPointer<ByteVar>?): Int {
+    if (handle == null || serviceType == null) return -1
+    val runtime = handle.asStableRef<NwBridgeRuntime>().get()
+    return runCatchingCancellable {
+        runBlocking { runtime.startBrowsing(serviceType.toKString()) }
+        0
+    }.getOrDefault(-1)
+}
+
+@OptIn(ExperimentalForeignApi::class, ExperimentalNativeApi::class)
+@CName("nw_stop_browsing")
+@Suppress("ktlint:standard:function-naming")
+public fun nw_stop_browsing(handle: COpaquePointer?): Int {
+    if (handle == null) return -1
+    val runtime = handle.asStableRef<NwBridgeRuntime>().get()
+    return runCatchingCancellable {
+        runBlocking { runtime.stopBrowsing() }
+        0
+    }.getOrDefault(-1)
+}
+
+@OptIn(ExperimentalForeignApi::class, ExperimentalNativeApi::class)
+@CName("nw_connect")
+@Suppress("ktlint:standard:function-naming")
+public fun nw_connect(handle: COpaquePointer?, endpointId: CPointer<ByteVar>?): Int {
+    if (handle == null || endpointId == null) return -1
+    val runtime = handle.asStableRef<NwBridgeRuntime>().get()
+    return runCatchingCancellable {
+        runBlocking { runtime.connect(endpointId.toKString()) }
+        0
+    }.getOrDefault(-1)
+}
+
+@OptIn(ExperimentalForeignApi::class, ExperimentalNativeApi::class)
+@CName("nw_disconnect")
+@Suppress("ktlint:standard:function-naming")
+public fun nw_disconnect(handle: COpaquePointer?, connectionId: CPointer<ByteVar>?): Int {
+    if (handle == null || connectionId == null) return -1
+    val runtime = handle.asStableRef<NwBridgeRuntime>().get()
+    return runCatchingCancellable {
+        runBlocking { runtime.disconnect(connectionId.toKString()) }
+        0
+    }.getOrDefault(-1)
+}
+
+@OptIn(ExperimentalForeignApi::class, ExperimentalNativeApi::class)
+@CName("nw_send")
+@Suppress("ktlint:standard:function-naming")
+public fun nw_send(
+    handle: COpaquePointer?,
+    connectionId: CPointer<ByteVar>?,
+    data: CPointer<ByteVar>?,
+    len: Int,
+): Int {
+    if (handle == null || connectionId == null || data == null || len < 0) return -1
+    val runtime = handle.asStableRef<NwBridgeRuntime>().get()
+    val bytes = ByteArray(len)
+    if (len > 0) {
+        bytes.usePinned { pinned -> memcpy(pinned.addressOf(0), data, len.toULong()) }
+    }
+    return runCatchingCancellable {
+        runBlocking { runtime.send(connectionId.toKString(), bytes) }
+        0
+    }.getOrDefault(-1)
+}
