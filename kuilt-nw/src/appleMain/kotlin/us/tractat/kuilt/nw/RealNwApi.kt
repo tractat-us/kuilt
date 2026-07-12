@@ -45,10 +45,12 @@ import platform.Network.nw_connection_state_t
 import platform.Network.nw_connection_state_waiting
 import platform.Network.nw_connection_t
 import platform.Network.nw_content_context_create
+import platform.Network.nw_endpoint_create_host
 import platform.Network.nw_endpoint_get_bonjour_service_name
 import platform.Network.nw_endpoint_t
 import platform.Network.nw_listener_cancel
 import platform.Network.nw_listener_create
+import platform.Network.nw_listener_create_with_port
 import platform.Network.nw_listener_set_advertise_descriptor
 import platform.Network.nw_listener_set_new_connection_handler
 import platform.Network.nw_listener_set_queue
@@ -71,18 +73,39 @@ import us.tractat.kuilt.core.FabricAvailability
 private val log = KotlinLogging.logger("us.tractat.kuilt.nw.RealNwApi")
 
 /**
+ * Direct-loopback configuration for [RealNwApi] — the CI conformance path that bypasses Bonjour.
+ *
+ * A [RealNwApi] built with a non-null config binds a `127.0.0.1:`[listenPort] listener (no Bonjour
+ * advertise) and, if [dialPort] is non-null, synthesizes a single host endpoint at
+ * [dialHost]`:`[dialPort] to dial. A host-only side sets [dialPort] to `null` (it listens but never
+ * dials); a joiner sets [dialHost]/[dialPort] to the host's address. This yields exactly one
+ * host↔joiner link over TLS-PSK on the loopback interface, driven by `NwLoopbackConformanceTest`.
+ */
+internal class NwLoopbackConfig(
+    val listenPort: Int,
+    val dialHost: String?,
+    val dialPort: Int?,
+)
+
+/**
  * The real Apple Network.framework binding behind [NwApi] — the appleMain (iOS/macOS)
  * counterpart of the JVM `FakeNwApi`. Advertises + browses over Bonjour and dials
  * discovered peers over `includePeerToPeer` (AWDL), securing every link with the
  * out-of-band-derived TLS-PSK ([NwPskMaterial]). Raw byte movement only — framing,
  * handshake, and mesh dedup live in `NwSeam`/`NwLoom` above.
  *
- * ## Peer-to-peer mode only (for now)
- * This implementation is P2P (Bonjour advertise + browse + `includePeerToPeer`). The
- * direct-loopback / `127.0.0.1` conformance mode is a separate follow-up; [secureParams],
- * [startListening], and [connect] are deliberately factored so a loopback variant can be
- * added (a direct host/port endpoint alongside the Bonjour descriptor) without reworking
- * the connection lifecycle below.
+ * ## Two modes — peer-to-peer (default) and direct loopback
+ * The default mode is P2P (Bonjour advertise + browse + `includePeerToPeer` over AWDL). A
+ * second **loopback** mode ([NwLoopbackConfig], non-null [loopback]) binds a direct
+ * `127.0.0.1:port` listener and dials a fixed host/port instead of discovering over Bonjour —
+ * the CI-runnable path that lets `NwLoopbackConformanceTest` prove the TLS-PSK link on the
+ * macOS runner (closes the `securesTransport` gap for this fabric). Only [secureParams],
+ * [startListening], and [startBrowsing] branch on the mode; the connection lifecycle
+ * ([connect]/[retainAndStart]/[onState]/…) is shared verbatim — loopback just stores a host
+ * endpoint in [endpointsById] and emits the matching [NwEndpoint], so [connect] dials it
+ * through the identical path. The TLS-PSK block in [secureParams] is byte-for-byte identical in
+ * both modes — securing the loopback link is the whole point of the CI proof. Loopback sets
+ * `includePeerToPeer(false)` (it is exempt from Local Network Privacy and must not raise AWDL).
  *
  * ## The connection registry — the load-bearing part
  * Network.framework cancels any `nw_connection_t` whose last reference drops, so every live
@@ -108,6 +131,7 @@ private val log = KotlinLogging.logger("us.tractat.kuilt.nw.RealNwApi")
  */
 internal class RealNwApi(
     private val pskMaterial: NwPskMaterial,
+    private val loopback: NwLoopbackConfig? = null,
 ) : NwApi {
 
     private val queue = dispatch_queue_create("us.tractat.kuilt.nw", null)
@@ -143,12 +167,19 @@ internal class RealNwApi(
     // ── host role ────────────────────────────────────────────────────────────
 
     override suspend fun startListening(serviceName: String, serviceType: String) {
-        val newListener = nw_listener_create(secureParams())
+        // Loopback: bind a fixed 127.0.0.1 port with NO Bonjour advertise. P2P: Bonjour-advertised.
+        val newListener = if (loopback != null) {
+            nw_listener_create_with_port(loopback.listenPort.toString(), secureParams())
+        } else {
+            nw_listener_create(secureParams())
+        }
         nw_listener_set_queue(newListener, queue)
-        nw_listener_set_advertise_descriptor(
-            newListener,
-            nw_advertise_descriptor_create_bonjour_service(serviceName, serviceType, null),
-        )
+        if (loopback == null) {
+            nw_listener_set_advertise_descriptor(
+                newListener,
+                nw_advertise_descriptor_create_bonjour_service(serviceName, serviceType, null),
+            )
+        }
         nw_listener_set_state_changed_handler(newListener) { _, _ -> }
         nw_listener_set_new_connection_handler(newListener) { connection ->
             // Inbound accept: no dialled endpoint.
@@ -159,7 +190,11 @@ internal class RealNwApi(
         val superseded = lock.withLock { listener.also { listener = newListener } }
         superseded?.let { nw_listener_cancel(it) }
         nw_listener_start(newListener)
-        log.debug { "nw.listen advertising name=$serviceName type=$serviceType (P2P, TLS-PSK)" }
+        if (loopback != null) {
+            log.debug { "nw.listen loopback 127.0.0.1:${loopback.listenPort} (no Bonjour, TLS-PSK)" }
+        } else {
+            log.debug { "nw.listen advertising name=$serviceName type=$serviceType (P2P, TLS-PSK)" }
+        }
     }
 
     override suspend fun stopListening() {
@@ -170,6 +205,22 @@ internal class RealNwApi(
     // ── join role ────────────────────────────────────────────────────────────
 
     override suspend fun startBrowsing(serviceType: String) {
+        if (loopback != null) {
+            // No nw_browser: synthesize the single peer endpoint directly. A host-only side
+            // (dialPort == null) discovers nothing; a joiner emits the fixed host endpoint so
+            // NwLoom auto-dials it through the SAME connect() path as a Bonjour-discovered peer.
+            val dialPort = loopback.dialPort
+            if (dialPort != null) {
+                // Create the endpoint OUTSIDE the lock (no nw_* under it), then store + emit.
+                val ep = nw_endpoint_create_host(loopback.dialHost!!, dialPort.toString())
+                if (ep != null) {
+                    lock.withLock { endpointsById[LOOPBACK_PEER_ID] = ep }
+                    _endpointFound.tryEmit(NwEndpoint(id = LOOPBACK_PEER_ID, serviceName = LOOPBACK_PEER_ID))
+                }
+            }
+            log.debug { "nw.browse loopback dialHost=${loopback.dialHost} dialPort=${loopback.dialPort}" }
+            return
+        }
         val descriptor = nw_browse_descriptor_create_bonjour_service(serviceType, null)
         val newBrowser = nw_browser_create(descriptor, secureParams())
         nw_browser_set_queue(newBrowser, queue)
@@ -292,7 +343,13 @@ internal class RealNwApi(
 
     // ── params ─────────────────────────────────────────────────────────────────
 
-    /** Secure-TCP params with the TLS-PSK installed and `includePeerToPeer` on (all three surfaces). */
+    /**
+     * Secure-TCP params with the TLS-PSK installed. `includePeerToPeer` is on for the P2P mode (the
+     * AWDL discovery surface) and off for loopback (a direct `127.0.0.1` link is exempt from Local
+     * Network Privacy and must not raise AWDL). The `configure_tls` PSK block is IDENTICAL in both
+     * modes — CI-covering the `sec_protocol_options_add_pre_shared_key` path is the point of the
+     * loopback conformance run.
+     */
     private fun secureParams(): nw_parameters_t? {
         val params = nw_parameters_create_secure_tcp(
             configure_tls = { options: nw_protocol_options_t? ->
@@ -305,7 +362,7 @@ internal class RealNwApi(
             },
             configure_tcp = NW_PARAMETERS_DEFAULT_CONFIGURATION,
         )
-        nw_parameters_set_include_peer_to_peer(params, true)
+        nw_parameters_set_include_peer_to_peer(params, loopback == null)
         return params
     }
 
@@ -326,6 +383,8 @@ internal class RealNwApi(
     }
 
     private companion object {
+        /** Stable discovery id for the single synthesized loopback peer (loopback mode has no Bonjour name). */
+        private const val LOOPBACK_PEER_ID = "loopback-peer"
         private const val EVENT_BUFFER = 16
         private const val BYTES_BUFFER = 64
         private const val RECEIVE_MIN_LENGTH: UInt = 1u
