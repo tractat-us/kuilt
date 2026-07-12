@@ -20,4 +20,13 @@ public data class NwTag(
     override val sessionName: String,
     override val peerKey: String,
     override val roomKey: String,
-) : Tag
+) : Tag {
+    /**
+     * Redacts [roomKey] — the auto-generated `data class` `toString()` would otherwise print the
+     * bearer secret into any log line, exception message, or debugger frame that stringifies a tag
+     * (tags are naturally logged during discovery/admission), contradicting the "never log it"
+     * contract above. `equals`/`hashCode`/`copy` keep the full secret.
+     */
+    override fun toString(): String =
+        "NwTag(sessionName=$sessionName, peerKey=$peerKey, roomKey=<redacted>)"
+}
