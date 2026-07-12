@@ -56,6 +56,7 @@ import platform.Network.nw_listener_set_new_connection_handler
 import platform.Network.nw_listener_set_queue
 import platform.Network.nw_listener_set_state_changed_handler
 import platform.Network.nw_listener_start
+import platform.Network.nw_listener_state_failed
 import platform.Network.nw_listener_t
 import platform.Network.nw_parameters_create_secure_tcp
 import platform.Network.nw_parameters_set_include_peer_to_peer
@@ -180,7 +181,14 @@ internal class RealNwApi(
                 nw_advertise_descriptor_create_bonjour_service(serviceName, serviceType, null),
             )
         }
-        nw_listener_set_state_changed_handler(newListener) { _, _ -> }
+        // Surface a listener that never comes up (e.g. a port-bind failure) LOUDLY. Otherwise the
+        // only symptom is a downstream weave timeout — an opaque, slow flake on the required loopback
+        // CI gate, whose bind depends on a specific port being free (a rare TOCTOU with freePort()).
+        nw_listener_set_state_changed_handler(newListener) { state, _ ->
+            if (state == nw_listener_state_failed) {
+                log.error { "nw.listen FAILED (bind/port unavailable?) loopback=${loopback != null} port=${loopback?.listenPort}" }
+            }
+        }
         nw_listener_set_new_connection_handler(newListener) { connection ->
             // Inbound accept: no dialled endpoint.
             connection?.let { retainAndStart(it, endpoint = null) }
