@@ -69,6 +69,19 @@ class BridgeNwApiTest {
     }
 
     @Test
+    fun closeIsIdempotentAndDisposesRuntimeExactlyOnce() = runTest {
+        val fake = FakeNwNativeLib()
+        val api = BridgeNwApi(fake, FakeNwNativeLib.HOST, StandardTestDispatcher(testScheduler))
+
+        api.close()
+        api.close()
+
+        // Two close()s (and, on a real host, a later Cleaner run) must dispose the native handle at
+        // most once — a second nw_runtime_destroy on the same pointer is a use-after-free.
+        assertEquals(1, fake.destroyCount)
+    }
+
+    @Test
     fun browseAndConnectOpenBothEnds() = runTest {
         val dispatcher = StandardTestDispatcher(testScheduler)
         val fake = FakeNwNativeLib()
@@ -146,8 +159,9 @@ class BridgeNwApiTest {
         joiner.bytesReceived.onEach { received += it.bytes.single().toInt() }.launchIn(backgroundScope)
         testScheduler.runCurrent()
 
-        // Churn the heap: the held callback fields must keep the JNA trampolines alive so delivery
-        // still fires afterwards (strong-ref lifetime).
+        // NB: with FakeNwNativeLib there are no JNA trampolines (the fake stores the Kotlin Callback
+        // objects directly), so this asserts delivery-through survives a GC, not SIGSEGV-safety of a
+        // real trampoline — that can only be proven by the gated real-dylib loopback test (Task 4.2).
         @Suppress("ExplicitGarbageCollectionCall")
         System.gc()
 

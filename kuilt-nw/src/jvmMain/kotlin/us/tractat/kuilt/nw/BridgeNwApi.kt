@@ -13,6 +13,8 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import us.tractat.kuilt.core.FabricAvailability
+import java.lang.ref.Cleaner
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.coroutines.CoroutineContext
 
 /**
@@ -37,6 +39,20 @@ import kotlin.coroutines.CoroutineContext
  * The four [com.sun.jna.Callback] objects are held as fields so JNA's trampolines
  * survive this object's lifetime; releasing them early would SIGSEGV the K/N side.
  *
+ * ## Native-runtime lifecycle (GC parity with appleMain)
+ * `nw_runtime_create` roots the native runtime in a K/N `StableRef`, which — unlike
+ * a plain K/N object — is **never** GC-eligible until `nw_runtime_destroy` runs. So,
+ * unlike appleMain (where dropping `RealNwApi` lets K/N GC cancel the `NWListener`/
+ * `NWBrowser`), a JVM bridge whose consumer simply discards the `Seam` would keep the
+ * native advertiser/browser running forever. To restore GC parity a [Cleaner] runs
+ * [NativeRuntimeDisposer] — `nw_runtime_destroy` — when this object becomes
+ * unreachable. **The disposer captures only `nativeLib`/`handle`/[disposed] — never
+ * `this` or [scope]** (rooting `scope` via the Cleaner would transitively root the
+ * drain coroutines and hence `this`, defeating collection). [disposed] gates the
+ * destroy through a CAS so the explicit [close] and the Cleaner can never
+ * double-dispose the handle (a use-after-free per the bridge ABI). Proactively
+ * stopping advertising on `Seam.close()` (both platforms) is tracked separately.
+ *
  * ## availability()
  * Delegates to [NwNativeLib.jvmAvailability]: [FabricAvailability.Available] only
  * on a macOS-arm64 host with the dylib loaded, else [FabricAvailability.Unavailable].
@@ -54,6 +70,16 @@ public class BridgeNwApi internal constructor(
 ) : NwApi {
 
     private val scope = CoroutineScope(SupervisorJob() + dispatcher)
+
+    // Shared exactly-once gate for nw_runtime_destroy. Referenced by BOTH close() and the
+    // Cleaner disposer so the handle is disposed at most once (double dispose = UAF per the ABI).
+    private val disposed = AtomicBoolean(false)
+
+    // GC-parity finalizer: fires nw_runtime_destroy when this bridge is unreachable, so a discarded
+    // Seam doesn't leave the native advertiser/browser running (see class KDoc). The disposer holds
+    // NO reference to `this`/`scope`, so registering it does not pin this object.
+    private val cleanable: Cleaner.Cleanable =
+        CLEANER.register(this, NativeRuntimeDisposer(nativeLib, handle, disposed))
 
     private val _endpointFound = MutableSharedFlow<NwEndpoint>(extraBufferCapacity = EVENT_BUFFER)
     private val _connectionOpened = MutableSharedFlow<NwConnectionOpened>(extraBufferCapacity = EVENT_BUFFER)
@@ -149,18 +175,41 @@ public class BridgeNwApi internal constructor(
     }
 
     /**
-     * Releases the native runtime (stop/disconnect-all + dispose) and cancels the drain scope.
-     * `NwApi` has no `close` in its contract, so — like `RealNwApi`, which relies on K/N GC —
-     * `NwLoom` never calls this; it exists for explicit teardown (and the gated real-dylib
-     * loopback test). Call it to release the native handle deterministically.
+     * Releases the native runtime deterministically and cancels the drain [scope].
+     *
+     * `NwApi` has no `close` in its contract, so `NwLoom` never calls this — the [Cleaner]
+     * registered at construction is what guarantees the native runtime is eventually released even
+     * when the consumer only discards the `Seam` (GC parity with appleMain). Calling `close()`
+     * simply makes that release *deterministic*. Idempotent, and safe to interleave with the
+     * Cleaner: [cleanable]`.clean()` runs the disposer at most once, and the disposer's [disposed]
+     * CAS backs that up, so `nw_runtime_destroy` is issued exactly once regardless of ordering.
      */
     public fun close() {
         scope.cancel()
-        nativeLib.nw_runtime_destroy(handle)
+        cleanable.clean()
+    }
+
+    /**
+     * The Cleaner-registered teardown action. A top-level `private` class (NOT a lambda over
+     * `BridgeNwApi`) so it provably captures only what it is given — `nativeLib`, `handle`, and the
+     * shared [disposed] gate — and therefore never roots the enclosing bridge. The [AtomicBoolean]
+     * CAS makes `nw_runtime_destroy` run at most once across the explicit-close and phantom paths.
+     */
+    private class NativeRuntimeDisposer(
+        private val nativeLib: NwNativeLib,
+        private val handle: Pointer,
+        private val disposed: AtomicBoolean,
+    ) : Runnable {
+        override fun run() {
+            if (disposed.compareAndSet(false, true)) nativeLib.nw_runtime_destroy(handle)
+        }
     }
 
     private companion object {
         private const val EVENT_BUFFER = 16
         private const val BYTES_BUFFER = 64
+
+        // One shared Cleaner (its own daemon thread) for all bridge instances.
+        private val CLEANER: Cleaner = Cleaner.create()
     }
 }

@@ -72,6 +72,12 @@ public suspend fun nwJoin(tag: Tag, serviceType: String): Seam {
  */
 private fun createRuntime(psk: NwPskMaterial): Pair<NwNativeLib, Pointer> {
     val lib = NwNativeLib.load() ?: error(NwNativeLib.UNAVAILABLE_REASON)
+    // Fail fast on an ABI mismatch (a stale/wrong-arch libkuilt.dylib on the classpath) before we
+    // pass any pointers across the cdecl boundary — a version skew there is otherwise a silent UAF.
+    val abi = lib.kuilt_protocol_version()
+    check(abi == NwNativeLib.EXPECTED_PROTOCOL_VERSION) {
+        "stale or mismatched libkuilt.dylib: bridge ABI $abi != expected ${NwNativeLib.EXPECTED_PROTOCOL_VERSION}"
+    }
     val handle = lib.nw_runtime_create(psk.psk, psk.psk.size, psk.identity, psk.identity.size)
         ?: error("nw_runtime_create returned null on a macOS host — likely a stale or wrong-arch dylib")
     return lib to handle

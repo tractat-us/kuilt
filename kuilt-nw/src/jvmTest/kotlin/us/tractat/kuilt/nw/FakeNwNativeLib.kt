@@ -30,6 +30,10 @@ internal class FakeNwNativeLib(
     private val sendFailsFor: String? = null,
 ) : NwNativeLib {
 
+    /** How many times [nw_runtime_destroy] was invoked — for the close()-idempotency test. */
+    var destroyCount: Int = 0
+        private set
+
     companion object {
         val HOST: Pointer = Pointer(0x10L)
         val JOINER: Pointer = Pointer(0x11L)
@@ -56,7 +60,9 @@ internal class FakeNwNativeLib(
     override fun nw_runtime_create(psk: ByteArray, pskLen: Int, identity: ByteArray, identityLen: Int): Pointer =
         RUNTIME
 
-    override fun nw_runtime_destroy(handle: Pointer?) = Unit
+    override fun nw_runtime_destroy(handle: Pointer?) {
+        destroyCount++
+    }
 
     override fun nw_set_endpoint_found_callback(handle: Pointer?, cb: NwNativeLib.EndpointFoundCallback) {
         if (handle != null) endpointFoundCbs[handle] = cb
