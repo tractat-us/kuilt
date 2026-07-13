@@ -57,6 +57,18 @@ the host app supplies:
 
 Without these the OS silently blocks discovery.
 
+## Running it from a macOS desktop JVM
+
+The fabric is not iOS/macOS-native-only: a **macOS-arm64 JVM** can host and join too, via the same
+`nwHost`/`nwJoin` calls. On the JVM they bridge over JNA to a bundled `libkuilt.dylib` (the module's
+own `macosArm64` shared library) that drives the real Network.framework binding. The key derivation
+(HKDF) runs JVM-side; only the derived key bytes cross into the native library.
+
+This is **macOS-arm64 only**. On any other JVM (Linux, Windows, Intel Macs) the dylib does not load,
+`availability()` reports `Unavailable`, and `nwHost`/`nwJoin` fail fast with an actionable message —
+use the mDNS/WebSocket fabrics for cross-platform LAN there. Probe `NwNativeLib.jvmAvailability()`
+first if you need to branch gracefully.
+
 ---
 
 **Source-set wiring note (maintainers).** This module hand-wires the
@@ -78,3 +90,20 @@ cover — and nothing below real hardware does — `NWBrowser`/Bonjour discovery
 `includePeerToPeer`, AWDL routing, TLS over a real peer-to-peer path, the
 Local-Network-Privacy denial path, or IPv6-required behaviour. Those are proven
 only by the Phase-0 on-device spike and the hardware-validation pass.
+
+**The JVM bridge — coverage layers (maintainers).** The macOS-desktop JVM path
+(`BridgeNwApi` over JNA → `libkuilt.dylib` → `RealNwApi`) is proven in three
+layers, none of which alone is enough: (1) `BridgeNwApiTest` runs on **every**
+runner including Linux `ci-required`, over an in-JVM `FakeNwNativeLib` — it covers
+the JVM-side wiring (callback → staging-channel → `SharedFlow` FIFO, result-code
+mapping, availability gating, exactly-once teardown) but touches no dylib.
+(2) `NwNativeLibTest` gates on `assumeTrue(isMacOs())`, so on a macOS runner it
+loads the **real** dylib and exercises the cdecl surface end-to-end — protocol
+version, the `StableRef` runtime create/destroy lifecycle, callback registration,
+local browse start/stop, and `BridgeNwApi.close()` disposing the real native
+handle — while no-opping on Linux. (3) The K/N `NwLoopbackConformanceTest` proves
+`RealNwApi` itself over real `127.0.0.1` TLS-PSK. What **no** automated test yet
+covers is a full two-`BridgeNwApi` TLS-PSK handshake *through* the JNA boundary
+(the bridge builds the P2P/Bonjour `RealNwApi`, not the loopback-configured one, so
+a JVM↔JVM loopback would need extra loopback ABI) — that seam is left to the
+manual cross-process probe and the hardware pass.
