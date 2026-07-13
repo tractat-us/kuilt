@@ -143,6 +143,20 @@ public abstract class SeamConformanceSuite {
     public open fun joinTag(): Tag = InMemoryTag("joiner")
 
     /**
+     * Inject a **mid-session transport death** under [host] (and, if the harness can, [joiner]) —
+     * the way a real fabric dies when the underlying connection drops rather than being closed by the
+     * application. Return `true` if the harness performed the injection; `false` (the default) means
+     * "this harness cannot inject death", and [incomingCompletesOnInjectedMidSessionDeath]
+     * early-returns without asserting.
+     *
+     * This is a **harness** capability, not a fabric [SeamCapabilities] flag — only a harness with a
+     * handle on the transport under the seam (e.g. an in-memory mesh over a `connectionPair`) can drop
+     * it out from under a live session. Overriding harnesses drop the underlying connection(s) so
+     * [host] observes a remote disconnect (not a local `close()`), then return `true`.
+     */
+    public open suspend fun injectMidSessionDeath(host: Seam, joiner: Seam): Boolean = false
+
+    /**
      * Drive [newLoomPair] to a connected host/joiner pair and hand both live [Seam]s to
      * [block]. Hosts and joins **concurrently** — a role-split server Loom's host() suspends
      * until a joiner connects, so the two must run at once; in-process (loom, loom) fabrics
@@ -491,6 +505,36 @@ public abstract class SeamConformanceSuite {
             // Best-effort: neither send may throw while the seam is still Weaving.
             host.broadcast(byteArrayOf(1))
             host.sendTo(joiner.selfId, byteArrayOf(2))
+        }
+
+    // ── (13b) incoming completes when a mid-session transport death is injected ──
+    //
+    // Contract from Seam.incoming KDoc: `incoming` completes once the seam reaches Torn — "whether via
+    // local close OR a remote disconnect." The `incomingCompletesWhenSeamCloses` obligation covers the
+    // local-close half; this covers the remote-disconnect half — the transport dies under a live
+    // session, with no local close() call. A conforming fabric must latch Torn AND complete `incoming`
+    // atomically (never state-terminal-but-incoming-open).
+    //
+    // Gated on a HARNESS hook, not a SeamCapabilities flag: only a harness with a handle on the
+    // transport under the seam can inject death. The default `injectMidSessionDeath` returns false, so
+    // every fabric whose harness cannot inject death early-returns (a silent skip); only a harness that
+    // overrides the hook to actually kill the transport runs the assertion.
+
+    @Test
+    public fun incomingCompletesOnInjectedMidSessionDeath(): TestResult =
+        runTest {
+            connectedPair { host, joiner ->
+                val injected = injectMidSessionDeath(host, joiner)
+                if (!injected) return@connectedPair // harness cannot inject death — nothing to assert.
+
+                // The seam must reach Torn on the injected remote disconnect (bounded, no unbounded advance).
+                assertIs<SeamState.Torn>(
+                    withTimeout(5.seconds) { host.state.first { it is SeamState.Torn } },
+                    "host must latch Torn on injected mid-session transport death",
+                )
+                // And `incoming` must complete — a late collector on the drained spool terminates.
+                withTimeout(5.seconds) { host.incoming.toList() }
+            }
         }
 
     // ─────────────────────────────────────────────────────────────────────────

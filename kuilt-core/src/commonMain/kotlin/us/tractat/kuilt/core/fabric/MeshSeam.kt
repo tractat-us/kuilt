@@ -192,6 +192,76 @@ public suspend fun meshSeam(
     random: Random = Random.Default,
     policy: DeliveryPolicy = DeliveryPolicy.Reliable,
     admission: LinkAdmission = LinkAdmission.AcceptAll,
+): Mesh = buildMesh(selfId, connections, dispatcher, random, policy, admission, latchTornWhenDrained = false)
+
+/**
+ * Build a symmetric **peer-mesh** [Seam] — the contract-conforming N-peer fabric.
+ *
+ * Identical to [meshSeam]/[hubMesh] except for the drain contract: when a peer-mesh that was
+ * non-empty loses its **last** link, it latches [SeamState.Torn] and completes [Seam.incoming]
+ * atomically (the "`incoming` completes once the seam reaches `Torn`, whether via local close or a
+ * remote disconnect" invariant on [Seam.incoming]). Use this for a genuine peer-to-peer session
+ * whose life ends when every peer has gone.
+ *
+ * Because "was non-empty, now empty" cannot distinguish a drained peer-mesh from a hub that simply
+ * lost its one joiner, the role is explicit at construction — it is not inferred. A hub uses
+ * [hubMesh] instead.
+ *
+ * **[connections] must be non-empty.** A peer-mesh with no peers is contradictory (there is nothing
+ * that could later drain); use [hubMesh] for the start-empty-and-grow hub pattern. Passing an empty
+ * list throws [IllegalArgumentException].
+ *
+ * All other parameters behave exactly as documented on [meshSeam].
+ */
+public suspend fun peerMesh(
+    selfId: PeerId,
+    connections: List<Connection>,
+    dispatcher: CoroutineContext,
+    random: Random = Random.Default,
+    policy: DeliveryPolicy = DeliveryPolicy.Reliable,
+    admission: LinkAdmission = LinkAdmission.AcceptAll,
+): Mesh {
+    require(connections.isNotEmpty()) {
+        "peerMesh requires at least one connection; a peer-mesh with no peers is contradictory — " +
+            "use hubMesh(...) for the start-empty-and-grow hub pattern."
+    }
+    return buildMesh(selfId, connections, dispatcher, random, policy, admission, latchTornWhenDrained = true)
+}
+
+/**
+ * Build a **hub-mesh** [Seam] — the start-empty-and-grow topology (a host admitting joiners).
+ *
+ * A hub legitimately sits at an **empty** link set: it is constructed with `connections = emptyList()`
+ * and grows via [Mesh.addLink] as joiners dial in, and it may drain back to empty between joiners
+ * without its session ending. A hub therefore **never** self-torns on drain — it terminates only via
+ * [Seam.close]. This is exactly today's [meshSeam] behaviour, named explicitly.
+ *
+ * Contrast [peerMesh], which latches [SeamState.Torn] when its last link drops. All parameters
+ * behave exactly as documented on [meshSeam].
+ */
+public suspend fun hubMesh(
+    selfId: PeerId,
+    connections: List<Connection>,
+    dispatcher: CoroutineContext,
+    random: Random = Random.Default,
+    policy: DeliveryPolicy = DeliveryPolicy.Reliable,
+    admission: LinkAdmission = LinkAdmission.AcceptAll,
+): Mesh = buildMesh(selfId, connections, dispatcher, random, policy, admission, latchTornWhenDrained = false)
+
+/**
+ * Shared construction for the mesh factories: handshake every [connections] entry, apply
+ * [admission], dedup duplicate links, and build the [MeshSeam]. [latchTornWhenDrained] carries the
+ * role (peer-mesh `true`, hub `false`) into the seam — the ONLY behavioural difference between the
+ * public factories.
+ */
+private suspend fun buildMesh(
+    selfId: PeerId,
+    connections: List<Connection>,
+    dispatcher: CoroutineContext,
+    random: Random,
+    policy: DeliveryPolicy,
+    admission: LinkAdmission,
+    latchTornWhenDrained: Boolean,
 ): Mesh {
     val handshaked = coroutineScope {
         connections.map { conn -> async { handshakeLink(selfId, conn, dispatcher, random) } }.awaitAll()
@@ -214,7 +284,7 @@ public suspend fun meshSeam(
     }
     losers.forEach { runCatchingCancellable { it.conn.close() } }
 
-    return MeshSeam(selfId, winners, dispatcher, random, policy, admission)
+    return MeshSeam(selfId, winners, dispatcher, random, policy, admission, latchTornWhenDrained)
 }
 
 /**
@@ -263,6 +333,9 @@ private class MeshSeam(
     private val random: Random,
     policy: DeliveryPolicy,
     private val admission: LinkAdmission,
+    // Role signal (peerMesh true, hubMesh false). When true, draining to an empty link set latches
+    // Torn; when false, the seam sits at an empty link set (the hub pattern) until close().
+    private val latchTornWhenDrained: Boolean,
 ) : Mesh {
     private val scope = CoroutineScope(SupervisorJob() + dispatcher)
 
@@ -426,13 +499,23 @@ private class MeshSeam(
     private fun removePeer(remoteId: PeerId, conn: Connection? = null) {
         // buildPeerSet and _peers.value assignment are inside the same lock acquisition as the
         // remove so that tearDown's peers-collapse (also inside the lock) cannot be overwritten
-        // by a stale buildPeerSet result computed before tearDown cleared links.
-        lock.withLock {
-            val live = links[remoteId] ?: return@withLock
-            if (conn != null && live.conn !== conn) return@withLock
+        // by a stale buildPeerSet result computed before tearDown cleared links. The drain check
+        // reads `links` in the SAME critical section as the removal so the "last link gone"
+        // decision cannot race a concurrent removal/admission.
+        val drained = lock.withLock {
+            val live = links[remoteId] ?: return@withLock false
+            if (conn != null && live.conn !== conn) return@withLock false
             links.remove(remoteId)
             publishRosters()
+            latchTornWhenDrained && links.isEmpty()
         }
+        // Drain-latch (peer-mesh only): the last link dropped after the mesh was non-empty. Funnel
+        // through the same single-shot teardown as close() so the Torn latch, the inbound spool
+        // close, and the read-scope cancel happen together — never a state-terminal-but-incoming-open
+        // mismatch. tearDown is single-shot (a concurrent removePeer that also sees the empty set is a
+        // no-op) and safe from readLoop's finally; the link map is already empty, so there are no
+        // conns left to close outside the lock.
+        if (drained) tearDown(CloseReason.RemoteRequested)
     }
 
     private fun buildPeerSet(): Set<PeerId> =
