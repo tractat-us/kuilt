@@ -1,5 +1,13 @@
 plugins { id("kuilt.kmp-library") }
 
+// Forward -Pnw.realnet.tests to test JVMs as a system property (mirrors :kuilt-mdns's
+// mdns.multicast.tests / :kuilt-multipeer's multipeer.realnet.tests). Reserved for opt-in
+// two-device hardware tests (Phase 6); the macOS-gated dylib smoke tests run without it.
+tasks.withType<Test>().configureEach {
+    val flag = providers.gradleProperty("nw.realnet.tests").orNull
+    if (flag != null) systemProperty("nw.realnet.tests", flag)
+}
+
 kotlin {
     val macosLibName = "kuilt"
     macosArm64 { binaries.sharedLib { baseName = macosLibName } }
