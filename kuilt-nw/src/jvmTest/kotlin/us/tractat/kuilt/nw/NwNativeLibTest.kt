@@ -20,10 +20,11 @@ import kotlin.test.assertNotNull
  * remaining seam: the real cdecl surface links, the `StableRef` runtime lifecycle is sound over JNA,
  * and [BridgeNwApi]'s teardown disposes the real native handle.
  *
- * What is deliberately **not** here: a full two-`BridgeNwApi` TLS-PSK handshake over `127.0.0.1`. The
- * bridge's `nw_runtime_create` builds the P2P/Bonjour `RealNwApi`, not the loopback-configured one, so
- * a JVM↔JVM loopback would need extra loopback ABI. That end-to-end handshake through the bridge is
- * covered by the manual macOS↔iPhone probe and the Phase-6 hardware pass (tracked separately).
+ * The full two-`BridgeNwApi` TLS-PSK handshake over `127.0.0.1` lives in the sibling
+ * [NwBridgeLoopbackConformanceTest], which drives the whole `SeamConformanceSuite` through the
+ * loopback ABI (`nw_runtime_create_loopback` + `nw_loopback_rendezvous_*`) added for exactly that
+ * proof. These smoke tests stay focused on the local-only cdecl surface and the `StableRef`
+ * lifecycle; the real-hardware macOS↔iPhone P2P pass remains a separate manual/Phase-6 lane.
  */
 class NwNativeLibTest {
 

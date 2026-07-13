@@ -41,6 +41,7 @@ import kotlinx.coroutines.runBlocking
 import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.nw.NwConnectionId
 import us.tractat.kuilt.nw.NwEndpoint
+import us.tractat.kuilt.nw.NwLoopbackConfig
 import us.tractat.kuilt.nw.NwPskMaterial
 import us.tractat.kuilt.nw.RealNwApi
 
@@ -76,9 +77,20 @@ internal typealias BytesReceivedCb = CFunction<(CPointer<ByteVar>?, CPointer<Byt
 internal typealias ConnectionClosedCb = CFunction<(CPointer<ByteVar>?, CPointer<ByteVar>?) -> Unit>
 
 @OptIn(ExperimentalForeignApi::class)
-internal class NwBridgeRuntime(psk: ByteArray, identity: ByteArray) {
+internal class NwBridgeRuntime private constructor(private val api: RealNwApi) {
 
-    private val api = RealNwApi(NwPskMaterial(psk = psk, identity = identity))
+    /** P2P/Bonjour runtime — the default `nw_runtime_create` path. */
+    constructor(psk: ByteArray, identity: ByteArray) : this(RealNwApi(NwPskMaterial(psk = psk, identity = identity)))
+
+    /**
+     * Direct-loopback runtime — the `nw_runtime_create_loopback` path. Binds an ephemeral
+     * `127.0.0.1` listener and (as joiner) dials the host's real bound port over the shared
+     * [loopback] rendezvous instead of discovering over Bonjour. This is the JVM↔JVM
+     * `SeamConformanceSuite` path that proves the TLS-PSK link end-to-end through the real dylib.
+     */
+    constructor(psk: ByteArray, identity: ByteArray, loopback: NwLoopbackConfig)
+        : this(RealNwApi(NwPskMaterial(psk = psk, identity = identity), loopback))
+
     private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
 
     // Snapshot of the connections currently open, maintained by the connectionOpened/closed
