@@ -128,9 +128,11 @@ JVM availability is macOS-arm64-only.
   `NwBridgeRuntime` + `NwNativeLib` (JNA) + `BridgeNwApi` + `NwFabric.jvm.kt` + `FakeNwNativeLib` +
   `BridgeNwApiTest`. Compiles green on `:kuilt-nw:build` (JVM+native) + `detektAll`. **Load-bearing
   cinterop → independent opus review after this task.**
-- **Task 4.2** — real-dylib proof + probe + docs: gated JVM loopback test loading the real dylib,
-  `NwCrossProcessProbe`, `module.md` honesty section, build `-P` forwarding. Run
-  `:kuilt-nw:macosArm64Test` + the gated JVM loopback locally on the Mac.
+- **Task 4.2** — real-dylib proof + docs: `NwNativeLibTest` (macOS-gated smoke over the real dylib —
+  load/ABI/StableRef create-destroy/cdecl-surface/`close()`), `module.md` honesty section, build
+  `-P` forwarding. **Landed.** The `NwCrossProcessProbe` and the full two-`BridgeNwApi` loopback (which
+  needs extra loopback ABI the bridge doesn't expose) were **split to #1425** as a Phase-6 dependency —
+  both are manual/hardware tools untestable in CI, so they don't gate Phase 4.
 
 Then: whole-branch review (opus + Fable capability sign-off — the JVM bridge is a capability-surface
 change: `availability()` semantics), open PR **ready** + auto-merge squash, `closes #<phase4 issue>`.
