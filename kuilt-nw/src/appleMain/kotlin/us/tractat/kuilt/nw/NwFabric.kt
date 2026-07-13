@@ -1,8 +1,51 @@
 package us.tractat.kuilt.nw
 
+import us.tractat.kuilt.core.DeliveryPolicy
 import us.tractat.kuilt.core.Pattern
+import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.Tag
+import kotlin.time.Duration
+
+/**
+ * Build an Apple [NwLoom] over Network.framework, deriving the link's TLS pre-shared key from an
+ * out-of-band [roomKey] — the public way to construct the peer-to-peer fabric as a reusable [Loom]
+ * (rather than a one-shot [Seam] via [nwHost]/[nwJoin]).
+ *
+ * This is the drop-in replacement for the Multipeer peer-link factory: hand the returned loom to
+ * [NwRoomHost] to host a session, or to a `join` path to enter one, and read its
+ * [NwLoom.visiblePeers] to drive a lobby view. The Multipeer→nw migration is then mechanical —
+ * `MultipeerPeerLinkFactory(displayName, serviceType)` becomes `appleNwLoom(serviceType, roomKey)`,
+ * and `MultipeerRoomHost` becomes [NwRoomHost] (#1427).
+ *
+ * The [roomKey] is a **bearer secret, not a label**: it is fed through HKDF-SHA256 to derive the
+ * TLS-PSK that secures every link (it never leaves the device in cleartext), so only a peer holding
+ * the same `roomKey` under the same [serviceType] can complete the handshake. Two co-located
+ * sessions with different `roomKey`s therefore never merge even on the same [serviceType] — the
+ * advertised Bonjour name is only a human-readable label; the `roomKey` is what gates who connects.
+ * The PSK derivation ([NwPsk]) and the secured `NwApi` (`RealNwApi`) stay `internal`; this factory
+ * is the one public seam that turns a `roomKey` string into a wired loom.
+ *
+ * @param serviceType the Bonjour service type both advertised and browsed (e.g. `"_kuilt._tcp"`).
+ * @param roomKey     the out-of-band shared secret the TLS-PSK is derived from.
+ * @param selfId      this peer's stable identity; defaults to a fresh random UUID per loom (#1405).
+ * @param policy      inbound delivery policy for each woven [Seam] (default [DeliveryPolicy.Reliable]).
+ * @param weaveTimeout how long [NwLoom.weave] waits for the first peer before failing
+ *   (default [NwLoom.DEFAULT_WEAVE_TIMEOUT]).
+ */
+public fun appleNwLoom(
+    serviceType: String,
+    roomKey: String,
+    selfId: PeerId = freshPeerId(),
+    policy: DeliveryPolicy = DeliveryPolicy.Reliable,
+    weaveTimeout: Duration = NwLoom.DEFAULT_WEAVE_TIMEOUT,
+): NwLoom = NwLoom(
+    api = RealNwApi(NwPsk.derive(roomKey, serviceType)),
+    serviceType = serviceType,
+    selfId = selfId,
+    policy = policy,
+    weaveTimeout = weaveTimeout,
+)
 
 /**
  * Start hosting a peer-to-peer session over Apple's local radios, encrypted with a code you
@@ -36,7 +79,7 @@ public suspend fun nwHost(pattern: Pattern, serviceType: String): Seam {
             "unencrypted session is not allowed. Set Pattern.roomKey to the code you share " +
             "out of band with joiners."
     }
-    return NwLoom(RealNwApi(NwPsk.derive(secret, serviceType)), serviceType).host(pattern)
+    return appleNwLoom(serviceType, secret).host(pattern)
 }
 
 /**
@@ -70,5 +113,5 @@ public suspend fun nwJoin(tag: Tag, serviceType: String): Seam {
             "join an open, unencrypted session. Set Tag.roomKey to the code the host shared " +
             "with you out of band."
     }
-    return NwLoom(RealNwApi(NwPsk.derive(secret, serviceType)), serviceType).join(tag)
+    return appleNwLoom(serviceType, secret).join(tag)
 }
