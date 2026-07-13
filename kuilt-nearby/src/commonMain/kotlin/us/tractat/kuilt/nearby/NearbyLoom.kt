@@ -10,7 +10,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
-import kotlinx.atomicfu.atomic
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import us.tractat.kuilt.core.FabricAvailability
@@ -21,6 +20,8 @@ import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.Tag
+import kotlin.uuid.ExperimentalUuidApi
+import kotlin.uuid.Uuid
 
 /**
  * [Loom] implementation backed by Google Nearby Connections.
@@ -61,10 +62,6 @@ public class NearbyLoom(
 
     // Guards loom-level state: hostLinkDeferred.
     private val loomMutex = Mutex()
-
-    // Per-instance counter — uniqueness within this loom suffices. Atomic: freshPeerId()
-    // is called unguarded from both openSession and joinSession.
-    private val peerCounter = atomic(0)
 
     // Stored after open(); used to notify join() when the host side completes.
     private var hostLinkDeferred: CompletableDeferred<ConnectedLink>? = null
@@ -223,7 +220,16 @@ public class NearbyLoom(
         }
     }
 
-    private fun freshPeerId(): PeerId = PeerId("nearby-peer-${peerCounter.incrementAndGet()}")
+    /**
+     * Mint a fresh, globally-unique self-identity for one weave.
+     *
+     * Uses a random UUID (v4) so two devices never collide without coordination.
+     * The previous per-loom monotonic counter restarted at the same value on every
+     * device, minting the same `nearby-peer-1` sequence and colliding the instant two
+     * devices met (#1432, mirroring the #1405 fix in `:kuilt-nw`).
+     */
+    @OptIn(ExperimentalUuidApi::class)
+    private fun freshPeerId(): PeerId = PeerId(Uuid.random().toString())
 
     public companion object {
         /** Default Nearby Connections service ID. */
