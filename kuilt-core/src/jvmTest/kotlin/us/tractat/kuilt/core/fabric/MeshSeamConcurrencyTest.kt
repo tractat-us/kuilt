@@ -10,15 +10,18 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.ClosedSendChannelException
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.receiveAsFlow
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.runConcurrencyStress
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
+import kotlin.test.assertTrue
 
 /**
  * Thread-safety probe for [MeshSeam] (#410).
@@ -64,6 +67,32 @@ class MeshSeamConcurrencyTest {
         override suspend fun send(frame: ByteArray) { /* discard */ }
         override suspend fun close() { frames.close() }
         fun eof() { frames.close() }
+    }
+
+    /**
+     * A [HelloConnection] variant that records whether [close] was ever invoked, and whether an
+     * `addLink` admitted it. Used by [peerMeshDrainClosesLinkAdmittedInTeardownWindow] to detect a
+     * half-open leak: an admitted connection the seam tore down but never closed.
+     */
+    private class TrackingHelloConnection(val remoteId: PeerId) : Connection {
+        private val frames = Channel<ByteArray>(Channel.UNLIMITED)
+        private val closed = AtomicBoolean(false)
+        private val admitted = AtomicBoolean(false)
+
+        init {
+            frames.trySend(MeshHello.encode(remoteId, byteArrayOf(0)))
+        }
+
+        override val incoming: Flow<ByteArray> = frames.receiveAsFlow()
+        override suspend fun send(frame: ByteArray) { /* discard */ }
+        override suspend fun close() {
+            closed.set(true)
+            frames.close()
+        }
+
+        fun markAdmitted() { admitted.set(true) }
+        val wasAdmitted: Boolean get() = admitted.get()
+        val isClosed: Boolean get() = closed.get()
     }
 
     /**
@@ -157,6 +186,92 @@ class MeshSeamConcurrencyTest {
             assertEquals(setOf(self), seam.peers.value, "peers corrupted by concurrent addLink/close")
         }
     }
+
+    /**
+     * A1 (#1386) — a `peerMesh` link admitted in the drain **teardown window** must not leak.
+     *
+     * When a peer-mesh's last link drops, `removePeer` computes `drained` under the lock, releases it,
+     * then calls `tearDown` which re-acquires the lock, snapshots `links`, clears it, and returns the
+     * conns to close. In the window between the release and the re-acquire, a concurrent `addLink` can
+     * pass its `state !is Torn` check and install a fresh link — which `tearDown` then snapshots and
+     * returns. If the drain path drops that return on the floor (the pre-fix bug, unlike `close()`
+     * which closes it), the seam ends Torn with the just-admitted connection never closed: a half-open
+     * leak.
+     *
+     * This probe races an `addLink` burst against the last-link drop on a real multi-threaded
+     * dispatcher, then closes the seam and asserts EVERY admitted late connection ends closed. A conn
+     * leaked by the drain path is no longer in `links` (tearDown cleared it), so the final `close()`
+     * cannot reach it — it stays open and this test fails. With the fix (drain path closes tearDown's
+     * returned conns under `NonCancellable`), every admitted conn ends closed.
+     */
+    @Test
+    fun peerMeshDrainClosesLinkAdmittedInTeardownWindow() = runConcurrencyStress { stage ->
+        val iterations = 400
+        val lateJoiners = 4
+        repeat(iterations) { iter ->
+            val dispatcher = Dispatchers.Default
+            val initialConn = HelloConnection(PeerId("peer-init"))
+            val seam = peerMesh(self, listOf(initialConn), dispatcher)
+            val lateConns = (0 until lateJoiners).map { TrackingHelloConnection(PeerId("late-$it")) }
+
+            stage.at("iter=$iter drain-vs-addLink race") { "iter=$iter state=${seam.state.value} peers=${seam.peers.value}" }
+            coroutineScope {
+                val ready = CompletableDeferred<Unit>()
+                // Drop the initial (last construction) link — races the addLinks. When it empties the
+                // link map it drains the peer-mesh; a concurrent addLink can slip into the teardown window.
+                val dropper = async(Dispatchers.Default) {
+                    ready.await()
+                    initialConn.eof()
+                }
+                val joiners = lateConns.map { conn ->
+                    async(Dispatchers.Default) {
+                        ready.await()
+                        if (runCatchingAddLink { seam.addLink(conn) }) conn.markAdmitted()
+                    }
+                }
+                ready.complete(Unit)
+                awaitAll(dropper, *joiners.toTypedArray())
+            }
+
+            // Definitive terminator: close() is idempotent and closes every LIVE link. A conn leaked by
+            // the drain path is NO LONGER in links, so close() cannot reach it — it stays open and the
+            // assertion below catches the leak.
+            stage.at("iter=$iter final close") { "iter=$iter state=${seam.state.value}" }
+            seam.close()
+            stage.at("iter=$iter awaitTorn") { "iter=$iter state=${seam.state.value}" }
+            awaitTorn(seam)
+
+            // Teardown latches Torn BEFORE it closes the snapshot conns (the closes run asynchronously
+            // to `awaitTorn`), so wait — bounded — for the closes to propagate. A conn that is still
+            // open after this bound is the half-open leak.
+            stage.at("iter=$iter awaitClosed") {
+                "iter=$iter state=${seam.state.value} admitted=${lateConns.count { it.wasAdmitted }} closed=${lateConns.count { it.isClosed }}"
+            }
+            val deadline = System.nanoTime() + 5_000_000_000L
+            while (lateConns.any { it.wasAdmitted && !it.isClosed } && System.nanoTime() < deadline) {
+                delay(5)
+            }
+
+            val leaked = lateConns.filter { it.wasAdmitted && !it.isClosed }
+            assertTrue(
+                leaked.isEmpty(),
+                "iter=$iter: ${leaked.size} admitted late link(s) leaked — seam Torn but connection(s) never closed. " +
+                    "state=${seam.state.value} peers=${seam.peers.value} " +
+                    "admitted=${lateConns.count { it.wasAdmitted }} leakedIds=${leaked.map { it.remoteId }}",
+            )
+        }
+    }
+
+    /** Run [add]; fail loudly on a CME, accept the clean closed-seam signal. Returns true iff admitted. */
+    private suspend fun runCatchingAddLink(add: suspend () -> Unit): Boolean =
+        try {
+            add()
+            true
+        } catch (e: ConcurrentModificationException) {
+            throw AssertionError("addLink leaked a ConcurrentModificationException; the links map is not thread-safe", e)
+        } catch (e: IllegalStateException) {
+            false // clean closed-seam signal once torn — the link was not admitted.
+        }
 
     /** Run [admit]; fail loudly on a race exception, accept the clean closed-seam signal. */
     private suspend fun runCatchingAdmit(admit: suspend () -> Unit) {

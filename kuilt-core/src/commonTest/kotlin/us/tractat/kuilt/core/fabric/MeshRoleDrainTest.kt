@@ -99,6 +99,29 @@ class MeshRoleDrainTest {
         }
     }
 
+    /**
+     * A [peerMesh] whose [LinkAdmission] policy rejects EVERY connection is born with zero links.
+     * The drain latch only fires from `removePeer`, and there is nothing to remove — so the seam must
+     * be born [SeamState.Torn], not sit `Woven` forever with an empty roster (the #1386 violation).
+     * Rejection never fails construction, so this is a quiet born-`Torn`, not a throw.
+     */
+    @Test
+    fun peerMeshBornTornWhenAdmissionRejectsAll() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val self = PeerId("peer-0")
+        val remote = PeerId("peer-1")
+        val rejectAll = LinkAdmission { _, _ -> false }
+
+        val (mine, theirs) = connectionPair()
+        val meshDeferred = async { peerMesh(self, listOf(mine), dispatcher, Random(0), admission = rejectAll) }
+        val handshake = async { handshakeRemote(theirs, remote) }
+        val mesh = meshDeferred.await()
+        handshake.await()
+
+        assertIs<SeamState.Torn>(mesh.state.value, "a peer-mesh with all connections rejected must be born Torn, not Woven")
+        assertEquals(setOf(self), mesh.peers.value)
+    }
+
     /** Drive the far end of a [connectionPair] through the mesh handshake for [remoteId]. */
     private suspend fun handshakeRemote(theirs: Connection, remoteId: PeerId) {
         theirs.incoming.first() // consume the mesh's Hello preamble

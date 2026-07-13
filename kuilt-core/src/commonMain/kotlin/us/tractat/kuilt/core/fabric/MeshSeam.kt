@@ -5,11 +5,13 @@ import kotlinx.atomicfu.locks.reentrantLock
 import kotlinx.atomicfu.locks.withLock
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -199,9 +201,10 @@ public suspend fun meshSeam(
  *
  * Identical to [meshSeam]/[hubMesh] except for the drain contract: when a peer-mesh that was
  * non-empty loses its **last** link, it latches [SeamState.Torn] and completes [Seam.incoming]
- * atomically (the "`incoming` completes once the seam reaches `Torn`, whether via local close or a
- * remote disconnect" invariant on [Seam.incoming]). Use this for a genuine peer-to-peer session
- * whose life ends when every peer has gone.
+ * together — single-shot and ordered (`Torn` is latched inside the teardown lock; the inbound
+ * spool then closes) — honouring the "`incoming` completes once the seam reaches `Torn`, whether
+ * via local close or a remote disconnect" invariant on [Seam.incoming]. Use this for a genuine
+ * peer-to-peer session whose life ends when every peer has gone.
  *
  * Because "was non-empty, now empty" cannot distinguish a drained peer-mesh from a hub that simply
  * lost its one joiner, the role is explicit at construction — it is not inferred. A hub uses
@@ -373,6 +376,15 @@ private class MeshSeam(
 
         // Launch a supervised reader for each initial link.
         initialLinks.values.forEach { link -> scope.launch { readLoop(link.remoteId, link.conn) } }
+
+        // Born-empty peer-mesh (the admission policy rejected EVERY construction connection, so
+        // `winners` is empty even though `peerMesh` required a non-empty connection list). The drain
+        // latch only fires from `removePeer`, and there is nothing to remove — so without this the
+        // seam would sit `Woven` forever with `peers == {selfId}`, the exact contract violation the
+        // peer-mesh role exists to prevent. Latch `Torn` at birth. Consistent with "rejection never
+        // fails construction": this is a quiet born-`Torn`, not a thrown constructor. (Hubs never
+        // latch, so an empty hub stays `Woven` awaiting joiners.)
+        if (latchTornWhenDrained && links.isEmpty()) tearDown(CloseReason.Unreachable)
     }
 
     private val closedMessage get() = "MeshSeam for $selfId is closed"
@@ -496,7 +508,7 @@ private class MeshSeam(
      * When [conn] is given, only remove the peer if the live link is THAT conn — so a stale
      * readLoop for a deduped/replaced link can't evict the surviving link to the same peer.
      */
-    private fun removePeer(remoteId: PeerId, conn: Connection? = null) {
+    private suspend fun removePeer(remoteId: PeerId, conn: Connection? = null) {
         // buildPeerSet and _peers.value assignment are inside the same lock acquisition as the
         // remove so that tearDown's peers-collapse (also inside the lock) cannot be overwritten
         // by a stale buildPeerSet result computed before tearDown cleared links. The drain check
@@ -509,13 +521,26 @@ private class MeshSeam(
             publishRosters()
             latchTornWhenDrained && links.isEmpty()
         }
+        if (!drained) return
+
         // Drain-latch (peer-mesh only): the last link dropped after the mesh was non-empty. Funnel
-        // through the same single-shot teardown as close() so the Torn latch, the inbound spool
-        // close, and the read-scope cancel happen together — never a state-terminal-but-incoming-open
-        // mismatch. tearDown is single-shot (a concurrent removePeer that also sees the empty set is a
-        // no-op) and safe from readLoop's finally; the link map is already empty, so there are no
-        // conns left to close outside the lock.
-        if (drained) tearDown(CloseReason.RemoteRequested)
+        // through the same single-shot teardown as close() — latch Torn, close the inbound spool, and
+        // cancel the read scope, single-shot and ordered (Torn is latched inside the lock; the spool
+        // close/scope cancel follow, matching close()). A concurrent removePeer that also observes the
+        // empty set is a no-op (tearDown returns null the second time).
+        //
+        // We MUST close the returned conns, exactly as close() does. Usually the map is already empty
+        // here (this removal emptied it), so there is nothing to close — but an addLink that admitted a
+        // fresh link in the window between this lock release and tearDown re-acquiring the lock leaves
+        // that just-installed conn in tearDown's snapshot; dropping it on the floor would leak a
+        // half-open connection (seam Torn, scope cancelled, conn never closed).
+        val toClose = tearDown(CloseReason.RemoteRequested).orEmpty()
+        // NonCancellable: the drain path can run inside readLoop's `finally`, and tearDown's
+        // scope.cancel() cancels exactly that readLoop's coroutine — without NonCancellable the closes
+        // below would be skipped by the in-flight cancellation, reintroducing the leak.
+        withContext(NonCancellable) {
+            toClose.forEach { runCatchingCancellable { it.close() } }
+        }
     }
 
     private fun buildPeerSet(): Set<PeerId> =
