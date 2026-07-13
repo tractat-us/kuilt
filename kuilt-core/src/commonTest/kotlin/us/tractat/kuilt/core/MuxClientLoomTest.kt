@@ -15,14 +15,17 @@ package us.tractat.kuilt.core
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.produceIn
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withTimeout
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
+import kotlin.time.Duration.Companion.seconds
 
 class MuxClientLoomTest {
 
@@ -187,5 +190,36 @@ class MuxClientLoomTest {
             { assertTrue(onA.toByteArray().contentEquals(byteArrayOf(7)), "channel \"a\" flows over the new base") },
             { assertTrue(onB.toByteArray().contentEquals(byteArrayOf(9)), "channel \"b\" flows over the new base") },
         )
+    }
+
+    /**
+     * A long-lived collector that captured `handle.state` **before** a heal must follow the
+     * generation swap and observe the post-heal `Woven` — not stay pinned at the pre-heal
+     * generation's terminal `Torn` (#1387). `state` is a hot [StateFlow]; a naive delegating
+     * getter re-reads `current()` only at property access, so a captured flow never switches.
+     */
+    @Test
+    fun longLivedStateCollectorFollowsHeal() = runTest(UnconfinedTestDispatcher()) {
+        val mesh = InMemoryLoom()
+        val client = muxClientLoom(CountingLoom(mesh), backgroundScope)
+
+        val chan = client.join(InMemoryTag("a"))
+
+        // Capture the state flow ONCE and start a long-lived collector BEFORE the heal.
+        val capturedState = chan.state
+        val observed = mutableListOf<SeamState>()
+        backgroundScope.launch { capturedState.collect { observed.add(it) } }
+        assertTrue(observed.last() is SeamState.Woven, "collector sees the pre-heal Woven")
+
+        // Drive a same-instance heal: tear the base, then re-weave the same name.
+        client.closeBase()
+        assertTrue(observed.last() is SeamState.Torn, "collector sees this generation tear")
+        client.join(InMemoryTag("a"))
+
+        // The captured, long-lived collector must follow the swap to the fresh base's Woven.
+        // Buggy code leaves `capturedState` pinned at the pre-heal generation's terminal Torn,
+        // so this `first { Woven }` never completes and the timeout fails the test.
+        withTimeout(1.seconds) { capturedState.first { it is SeamState.Woven } }
+        assertTrue(observed.last() is SeamState.Woven, "long-lived collector follows the heal to the post-heal Woven")
     }
 }

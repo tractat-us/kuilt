@@ -2,9 +2,16 @@ package us.tractat.kuilt.core
 
 import kotlinx.atomicfu.atomic
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.ExperimentalForInheritanceCoroutinesApi
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.FlowCollector
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.emitAll
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -91,25 +98,54 @@ public class MuxClientLoom(
      * A name-keyed [Seam] handle whose underlying channel is swapped out on every base re-weave.
      * Presents a [selfId] frozen at first resolution so the peer identity is stable across
      * resumes; delegates everything else to the current channel.
+     *
+     * The hot [state]/[peers] flows are [FollowingStateFlow]s: `.value` reads the current
+     * generation live, and a **captured** flow's `collect` follows the swap — on heal the old
+     * generation's collection is cancelled and the new generation's flow switched in, emitting its
+     * fresh [SeamState.Woven]. A naive `get() = current().state` re-reads the delegate only at
+     * property access, leaving a long-lived collector pinned at the pre-heal generation's terminal
+     * [SeamState.Torn] (#1387). Following per-collector (no shared relay) means a `.first()` /
+     * `filterIsInstance<Torn>().first()` consumer that terminates at/before the first heal behaves
+     * exactly as before — only a collector that outlives a heal sees the difference.
      */
     private inner class ResumableChannel(private val name: String) : Seam {
-        private val delegate = atomic<Seam?>(null)
+        /** The current generation's channel, published so [state]/[peers] follow every re-point. */
+        private val delegate = MutableStateFlow<Seam?>(null)
         private val frozenSelfId = atomic<PeerId?>(null)
 
         fun repointTo(channel: Seam) {
-            delegate.value = channel
             frozenSelfId.compareAndSet(null, channel.selfId)
+            delegate.value = channel
         }
 
         private fun current(): Seam =
             delegate.value ?: error("MuxClientLoom channel \"$name\" used before it was woven")
 
         override val selfId: PeerId get() = frozenSelfId.value ?: current().selfId
-        override val peers: StateFlow<Set<PeerId>> get() = current().peers
-        override val state: StateFlow<SeamState> get() = current().state
+
+        override val peers: StateFlow<Set<PeerId>> = FollowingStateFlow { it.peers }
+        override val state: StateFlow<SeamState> = FollowingStateFlow { it.state }
 
         /** Reads the current channel at collection time so a resumed handle picks up the new base. */
         override val incoming: Flow<Swatch> = flow { emitAll(current().incoming) }
+
+        /**
+         * A scope-free [StateFlow] view over the current generation's `select`ed flow that follows
+         * generation swaps. `.value` reads the live current generation; `collect` re-collects the
+         * newest generation via [flatMapLatest] over [delegate], so a captured flow keeps up with a
+         * heal instead of pinning to the torn pre-heal generation.
+         */
+        @OptIn(ExperimentalCoroutinesApi::class, ExperimentalForInheritanceCoroutinesApi::class)
+        private inner class FollowingStateFlow<T>(
+            private val select: (Seam) -> StateFlow<T>,
+        ) : StateFlow<T> {
+            override val value: T get() = select(current()).value
+            override val replayCache: List<T> get() = listOf(value)
+            override suspend fun collect(collector: FlowCollector<T>): Nothing {
+                delegate.filterNotNull().flatMapLatest { select(it) }.collect { collector.emit(it) }
+                awaitCancellation()
+            }
+        }
 
         override suspend fun broadcast(payload: ByteArray): Unit = current().broadcast(payload)
 
