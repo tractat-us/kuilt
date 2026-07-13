@@ -13,16 +13,23 @@
 package us.tractat.kuilt.core
 
 import kotlinx.coroutines.async
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.produceIn
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withTimeout
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
+import kotlin.time.Duration.Companion.seconds
 
 class MuxClientLoomTest {
 
@@ -187,5 +194,99 @@ class MuxClientLoomTest {
             { assertTrue(onA.toByteArray().contentEquals(byteArrayOf(7)), "channel \"a\" flows over the new base") },
             { assertTrue(onB.toByteArray().contentEquals(byteArrayOf(9)), "channel \"b\" flows over the new base") },
         )
+    }
+
+    /**
+     * A long-lived collector that captured `handle.state` **before** a heal must follow the
+     * generation swap and observe the post-heal `Woven` — not stay pinned at the pre-heal
+     * generation's terminal `Torn` (#1387). `state` is a hot [StateFlow]; a naive delegating
+     * getter re-reads `current()` only at property access, so a captured flow never switches.
+     */
+    @Test
+    fun longLivedStateCollectorFollowsHeal() = runTest(UnconfinedTestDispatcher()) {
+        val mesh = InMemoryLoom()
+        val client = muxClientLoom(CountingLoom(mesh), backgroundScope)
+
+        val chan = client.join(InMemoryTag("a"))
+
+        // Capture the state flow ONCE and start a long-lived collector BEFORE the heal.
+        val capturedState = chan.state
+        val observed = mutableListOf<SeamState>()
+        backgroundScope.launch { capturedState.collect { observed.add(it) } }
+        assertTrue(observed.last() is SeamState.Woven, "collector sees the pre-heal Woven")
+
+        // Drive a same-instance heal: tear the base, then re-weave the same name.
+        client.closeBase()
+        assertTrue(observed.last() is SeamState.Torn, "collector sees this generation tear")
+        client.join(InMemoryTag("a"))
+
+        // The captured, long-lived collector must follow the swap to the fresh base's Woven.
+        // Buggy code leaves `capturedState` pinned at the pre-heal generation's terminal Torn,
+        // so this `first { Woven }` never completes and the timeout fails the test.
+        withTimeout(1.seconds) { capturedState.first { it is SeamState.Woven } }
+        assertTrue(observed.last() is SeamState.Woven, "long-lived collector follows the heal to the post-heal Woven")
+    }
+
+    /**
+     * A long-lived collector of `handle.peers` captured before a heal must (a) **follow** the
+     * generation swap — observing the post-heal generation's live peer updates — and (b) honour the
+     * [StateFlow] contract that a collector never receives two consecutive equal values, even across
+     * the swap (#1387, review B2/B5). A scripted base is used because the swap point is where the
+     * pre-heal generation's collapsed peer set and the post-heal generation's initial peer set are
+     * deliberately equal — the exact case a naive `flatMapLatest` (no `distinctUntilChanged`) would
+     * deliver twice.
+     */
+    @Test
+    fun longLivedPeersCollectorFollowsHealWithoutConsecutiveDuplicates() = runTest(UnconfinedTestDispatcher()) {
+        val shared = PeerId("shared")
+        val extra = PeerId("extra")
+        val gen1 = ScriptedSeam(PeerId("gen-1")).apply { peersFlow.value = setOf(shared) }
+        val gen2 = ScriptedSeam(PeerId("gen-2")).apply { peersFlow.value = setOf(shared) }
+        val client = MuxClientLoom(
+            base = ScriptedLoom(listOf(gen1, gen2)),
+            baseRendezvous = Rendezvous.New(Pattern("base")),
+            scope = backgroundScope,
+            nameOf = { "a" },
+        )
+
+        val chan = client.join(InMemoryTag("a"))
+        val capturedPeers = chan.peers
+        val observed = mutableListOf<Set<PeerId>>()
+        backgroundScope.launch { capturedPeers.collect { observed.add(it) } }
+        assertEquals(setOf(shared), observed.last(), "collector sees the pre-heal peer set")
+
+        // Heal onto gen2, whose initial peer set equals gen1's — the duplicate-emission trap.
+        client.closeBase()
+        client.join(InMemoryTag("a"))
+
+        // A live update on the POST-heal generation proves the captured collector followed the swap.
+        gen2.peersFlow.value = setOf(shared, extra)
+        withTimeout(1.seconds) { capturedPeers.first { it == setOf(shared, extra) } }
+
+        assertAll(
+            { assertEquals(setOf(shared, extra), observed.last(), "long-lived peers collector follows the heal") },
+            {
+                val consecutiveDup = observed.zipWithNext().firstOrNull { (a, b) -> a == b }
+                assertTrue(consecutiveDup == null, "StateFlow contract: no consecutive duplicate across the swap, saw $observed")
+            },
+        )
+    }
+
+    /** A base [Loom] that hands out a scripted sequence of [ScriptedSeam]s, one per [weave]. */
+    private class ScriptedLoom(private val seams: List<Seam>) : Loom {
+        private var next = 0
+        override suspend fun weave(rendezvous: Rendezvous): Seam = seams[next++]
+    }
+
+    /** A [Seam] with directly drivable [state]/[peers] flows and a never-completing [incoming]. */
+    private class ScriptedSeam(override val selfId: PeerId) : Seam {
+        val peersFlow: MutableStateFlow<Set<PeerId>> = MutableStateFlow(setOf(selfId))
+        val stateFlow: MutableStateFlow<SeamState> = MutableStateFlow(SeamState.Woven)
+        override val peers: StateFlow<Set<PeerId>> get() = peersFlow
+        override val state: StateFlow<SeamState> get() = stateFlow
+        override val incoming: Flow<Swatch> = MutableSharedFlow()
+        override suspend fun broadcast(payload: ByteArray) {}
+        override suspend fun sendTo(peer: PeerId, payload: ByteArray) {}
+        override suspend fun close(reason: CloseReason) { stateFlow.value = SeamState.Torn(reason) }
     }
 }
