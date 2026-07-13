@@ -48,6 +48,7 @@ internal class FakeNwNativeLib(
         const val HOST_CONN: String = "conn-host"
 
         private val RUNTIME: Pointer = Pointer(0x01L)
+        private val RENDEZVOUS: Pointer = Pointer(0x02L)
     }
 
     private val endpointFoundCbs = mutableMapOf<Pointer, NwNativeLib.EndpointFoundCallback>()
@@ -63,6 +64,21 @@ internal class FakeNwNativeLib(
     override fun nw_runtime_destroy(handle: Pointer?) {
         destroyCount++
     }
+
+    // The loopback ABI is exercised only by the real-dylib NwBridgeLoopbackConformanceTest; this
+    // P2P-routing fake models the Bonjour path, so the loopback entry points are inert stubs here.
+    override fun nw_loopback_rendezvous_create(): Pointer = RENDEZVOUS
+
+    override fun nw_loopback_rendezvous_destroy(handle: Pointer?) {}
+
+    override fun nw_runtime_create_loopback(
+        psk: ByteArray,
+        pskLen: Int,
+        identity: ByteArray,
+        identityLen: Int,
+        rendezvous: Pointer?,
+        dial: Int,
+    ): Pointer = if (dial == 0) HOST else JOINER
 
     override fun nw_set_endpoint_found_callback(handle: Pointer?, cb: NwNativeLib.EndpointFoundCallback) {
         if (handle != null) endpointFoundCbs[handle] = cb

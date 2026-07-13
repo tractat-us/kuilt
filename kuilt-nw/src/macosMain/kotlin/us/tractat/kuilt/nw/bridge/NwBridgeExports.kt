@@ -33,6 +33,8 @@ import kotlinx.cinterop.usePinned
 import kotlinx.coroutines.runBlocking
 import platform.posix.memcpy
 import us.tractat.kuilt.core.runCatchingCancellable
+import us.tractat.kuilt.nw.NwLoopbackConfig
+import us.tractat.kuilt.nw.NwLoopbackRendezvous
 import kotlin.experimental.ExperimentalNativeApi
 import kotlin.native.CName
 
@@ -73,6 +75,65 @@ public fun nw_runtime_destroy(handle: COpaquePointer?) {
     val ref = handle?.asStableRef<NwBridgeRuntime>() ?: return
     runCatchingCancellable { ref.get().destroy() }
     ref.dispose()
+}
+
+// ── loopback conformance (JVM↔JVM SeamConformanceSuite over the real dylib) ───
+
+/**
+ * Creates an in-process [NwLoopbackRendezvous] and returns its opaque handle. The rendezvous is
+ * shared by exactly one host/joiner runtime pair built with [nw_runtime_create_loopback]: the host
+ * publishes its OS-assigned bound port into it, the joiner awaits that port before dialling
+ * `127.0.0.1:port`. Pair every successful create with exactly one [nw_loopback_rendezvous_destroy].
+ * This is the CI-runnable direct-loopback path that lets a JVM↔JVM `SeamConformanceSuite` prove the
+ * TLS-PSK link end-to-end through `libkuilt.dylib`, closing the last automated gap below hardware.
+ */
+@OptIn(ExperimentalForeignApi::class, ExperimentalNativeApi::class)
+@CName("nw_loopback_rendezvous_create")
+@Suppress("ktlint:standard:function-naming")
+public fun nw_loopback_rendezvous_create(): COpaquePointer? =
+    StableRef.create(NwLoopbackRendezvous()).asCPointer()
+
+/**
+ * Disposes a [NwLoopbackRendezvous] StableRef. The rendezvous holds only a `CompletableDeferred`, so
+ * there is no runtime teardown — just drop the ref. Destroy the host/joiner runtimes (via
+ * [nw_runtime_destroy]) BEFORE the rendezvous. Safe to call once per handle; double-destroy is a
+ * use-after-free and the caller's responsibility to avoid.
+ */
+@OptIn(ExperimentalForeignApi::class, ExperimentalNativeApi::class)
+@CName("nw_loopback_rendezvous_destroy")
+@Suppress("ktlint:standard:function-naming")
+public fun nw_loopback_rendezvous_destroy(handle: COpaquePointer?) {
+    handle?.asStableRef<NwLoopbackRendezvous>()?.dispose()
+}
+
+/**
+ * Builds a direct-loopback [NwBridgeRuntime] — `RealNwApi(NwPskMaterial(psk, identity), loopback)` —
+ * over the shared [rendezvous] and returns its opaque handle. Mirrors [nw_runtime_create]'s
+ * null/negative-length guards; additionally returns `null` when [rendezvous] is null. [dial] selects
+ * the role: `0` = HOST (publishes its bound port, never dials), non-zero = JOINER (awaits the port,
+ * then dials). Pair every successful create with exactly one [nw_runtime_destroy].
+ */
+@OptIn(ExperimentalForeignApi::class, ExperimentalNativeApi::class)
+@CName("nw_runtime_create_loopback")
+@Suppress("ktlint:standard:function-naming")
+public fun nw_runtime_create_loopback(
+    psk: CPointer<ByteVar>?,
+    pskLen: Int,
+    identity: CPointer<ByteVar>?,
+    identityLen: Int,
+    rendezvous: COpaquePointer?,
+    dial: Int,
+): COpaquePointer? {
+    if (psk == null || identity == null || pskLen < 0 || identityLen < 0 || rendezvous == null) return null
+    val pskBytes = if (pskLen == 0) ByteArray(0) else psk.readBytes(pskLen)
+    val identityBytes = if (identityLen == 0) ByteArray(0) else identity.readBytes(identityLen)
+    val rv = rendezvous.asStableRef<NwLoopbackRendezvous>().get()
+    val runtime = NwBridgeRuntime(
+        psk = pskBytes,
+        identity = identityBytes,
+        loopback = NwLoopbackConfig(dial = dial != 0, rendezvous = rv),
+    )
+    return StableRef.create(runtime).asCPointer()
 }
 
 // ── callback registration ────────────────────────────────────────────────────

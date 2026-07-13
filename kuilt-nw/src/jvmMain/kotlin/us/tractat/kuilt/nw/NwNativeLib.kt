@@ -51,6 +51,41 @@ internal interface NwNativeLib : Library {
     @Suppress("ktlint:standard:function-naming")
     fun nw_runtime_destroy(handle: Pointer?)
 
+    /**
+     * Creates an in-process loopback rendezvous, returning its opaque handle. Shared by exactly one
+     * host/joiner runtime pair built with [nw_runtime_create_loopback]: the host publishes its bound
+     * port into it, the joiner awaits that port before dialling `127.0.0.1:port`. Pair every
+     * successful create with exactly one [nw_loopback_rendezvous_destroy].
+     */
+    @Suppress("ktlint:standard:function-naming")
+    fun nw_loopback_rendezvous_create(): Pointer?
+
+    /**
+     * Disposes a loopback rendezvous handle. Destroy the host/joiner runtimes (via
+     * [nw_runtime_destroy]) BEFORE the rendezvous. Idempotent only across `null`; passing the same
+     * non-null pointer twice is a use-after-free.
+     */
+    @Suppress("ktlint:standard:function-naming")
+    fun nw_loopback_rendezvous_destroy(handle: Pointer?)
+
+    /**
+     * Builds a direct-loopback runtime wrapping `RealNwApi(NwPskMaterial(psk, identity), loopback)`
+     * over the shared [rendezvous], returning its opaque handle or `null` on invalid arguments
+     * (including a null [rendezvous]). [dial] selects the role: `0` = HOST (publishes its bound
+     * port, never dials), non-zero = JOINER (awaits the port, then dials). This is the CI path a
+     * JVM↔JVM `SeamConformanceSuite` uses to prove the TLS-PSK link through the real dylib. Pair
+     * every successful create with exactly one [nw_runtime_destroy].
+     */
+    @Suppress("ktlint:standard:function-naming")
+    fun nw_runtime_create_loopback(
+        psk: ByteArray,
+        pskLen: Int,
+        identity: ByteArray,
+        identityLen: Int,
+        rendezvous: Pointer?,
+        dial: Int,
+    ): Pointer?
+
     /** `(endpointId: char*, serviceName: char*) -> void`. Strong-ref + copy-out contract as above. */
     fun interface EndpointFoundCallback : Callback {
         @Suppress("ktlint:standard:function-naming")
