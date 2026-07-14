@@ -137,6 +137,39 @@ public class SeamRoomFactory(
         ).also { room -> room.start() }
     }
 
+    /**
+     * Adopt an **already-woven** [seam] into a [Room] with an explicit [role] — no re-weave.
+     *
+     * Unlike [host]/[join] (which each weave a fresh seam), [adopt] takes ownership of a seam the
+     * caller wove, so the calling layer can weave the mesh once and decide role afterward (the
+     * host-election lobby, #1439). The returned [Room] owns the seam's lifetime from here:
+     * [Room.leave] closes it — correct, because the seam is handed over exactly once.
+     *
+     * [role] is fixed for the room's lifetime. [roomKey] is the admit-gate key
+     * ([us.tractat.kuilt.core.Pattern.roomKey]); [memberName] is this peer's own roster label
+     * (null → peer-id-derived). Resume-after-tear is not wired (no `reweave`): a joiner whose host
+     * link tears goes terminal ([MembershipEvent.HostLost]).
+     */
+    public suspend fun adopt(
+        seam: Seam,
+        role: SessionRole,
+        memberName: String? = null,
+        roomKey: String? = null,
+    ): Room {
+        val roomId = if (role == SessionRole.Host) RoomId(seam.selfId.value + "-room") else null
+        return SeamRoom(
+            seam = seam,
+            role = role,
+            memberName = memberName,
+            scope = scope,
+            clock = clock,
+            heartbeatConfig = heartbeatConfig,
+            admitTimeout = admitTimeout,
+            roomId = roomId,
+            roomKey = roomKey,
+        ).also { room -> room.start() }
+    }
+
     public companion object {
         /**
          * Production convenience constructor that wires [kotlin.time.Clock.System.now()]
