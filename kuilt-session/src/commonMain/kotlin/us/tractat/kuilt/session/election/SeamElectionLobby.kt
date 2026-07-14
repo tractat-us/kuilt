@@ -2,7 +2,9 @@ package us.tractat.kuilt.session.election
 
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -83,15 +85,10 @@ internal class SeamElectionLobby(
             val roster = peers.value
             val members = roster - selfId
             val myEpoch = ++epoch
-            runCatchingCancellable {
-                seam.broadcast(
-                    LobbyMessage.encode(
-                        LobbyMessage.Freeze(selfId.value, roster.map { it.value }.toSet(), myEpoch),
-                    ),
-                )
-            }
 
-            val committed = withTimeoutOrNull(freezeTimeout) { awaitUnanimousAck(members, myEpoch) } ?: false
+            // awaitUnanimousAck subscribes to lobbyMessages BEFORE it broadcasts the Freeze, so a
+            // FreezeAck landing in the replay-0 gap between broadcast and subscribe is never lost.
+            val committed = withTimeoutOrNull(freezeTimeout) { awaitUnanimousAck(roster, members, myEpoch) } ?: false
             if (committed) {
                 runCatchingCancellable {
                     seam.broadcast(LobbyMessage.encode(LobbyMessage.Commit(selfId.value, myEpoch)))
@@ -104,16 +101,22 @@ internal class SeamElectionLobby(
     }
 
     /**
-     * Await a [LobbyMessage.FreezeAck] from every peer in [members] for [ackEpoch]. Returns true on
-     * unanimous ack; false (abort) if the peer set changes or this peer stops being the elected host.
+     * Broadcast the [LobbyMessage.Freeze] for [ackEpoch] and await a [LobbyMessage.FreezeAck] from
+     * every peer in [members]. Returns true on unanimous ack; false (abort) if the peer set drifts
+     * from [roster] (the set the Freeze advertised) or this peer stops being the elected host.
+     *
+     * **Subscribe-before-broadcast.** The ack/abort collectors are launched [CoroutineStart.UNDISPATCHED]
+     * so each runs up to its `collect` subscription *before* control returns to broadcast the Freeze —
+     * closing the window where an ack emitted on the replay-0 [lobbyMessages] would be dropped. The
+     * membership baseline is [roster] (captured with [members] at Freeze time), not a later
+     * `peers.value` re-read, so a peer that leaves between capture and here is detected rather than
+     * silently awaited forever.
      */
-    private suspend fun awaitUnanimousAck(members: Set<PeerId>, ackEpoch: Long): Boolean {
-        if (members.isEmpty()) return true
-        val snapshot = peers.value
-        return coroutineScope {
+    private suspend fun awaitUnanimousAck(roster: Set<PeerId>, members: Set<PeerId>, ackEpoch: Long): Boolean =
+        coroutineScope {
             val outcome = CompletableDeferred<Boolean>()
             val needed = members.toMutableSet()
-            val ackJob = launch {
+            val ackJob = launch(start = CoroutineStart.UNDISPATCHED) {
                 lobbyMessages.collect { (sender, msg) ->
                     if (msg is LobbyMessage.FreezeAck && msg.hostId == selfId.value && msg.epoch == ackEpoch) {
                         needed.remove(sender)
@@ -121,17 +124,26 @@ internal class SeamElectionLobby(
                     }
                 }
             }
-            val membershipJob = launch {
-                peers.collect { if (it != snapshot) outcome.complete(false) }
+            val membershipJob = launch(start = CoroutineStart.UNDISPATCHED) {
+                peers.collect { if (it != roster) outcome.complete(false) }
             }
-            val hostJob = launch {
+            val hostJob = launch(start = CoroutineStart.UNDISPATCHED) {
                 host.collect { if (it != selfId) outcome.complete(false) }
             }
+            // Subscriptions are now live (UNDISPATCHED ran each collector to its first suspend) — only
+            // now broadcast the Freeze, so no FreezeAck can land in the replay-0 gap before we listen.
+            runCatchingCancellable {
+                seam.broadcast(
+                    LobbyMessage.encode(
+                        LobbyMessage.Freeze(selfId.value, roster.map { it.value }.toSet(), ackEpoch),
+                    ),
+                )
+            }
+            if (needed.isEmpty()) outcome.complete(true) // no members → immediate commit
             val result = outcome.await()
             ackJob.cancel(); membershipJob.cancel(); hostJob.cancel()
             result
         }
-    }
 
     override suspend fun awaitRoom(memberName: String?): Room {
         while (true) {
@@ -147,15 +159,24 @@ internal class SeamElectionLobby(
                 }
                 .second as LobbyMessage.Freeze
 
-            runCatchingCancellable {
-                seam.broadcast(LobbyMessage.encode(LobbyMessage.FreezeAck(freeze.hostId, freeze.epoch)))
-            }
-
-            val resolution = withTimeoutOrNull(commitTimeout) {
-                lobbyMessages.first { (_, msg) ->
-                    (msg is LobbyMessage.Commit && msg.hostId == freeze.hostId && msg.epoch == freeze.epoch) ||
-                        (msg is LobbyMessage.Reopen && msg.epoch == freeze.epoch)
-                }.second
+            // Subscribe-before-broadcast: establish the Commit/Reopen subscription (UNDISPATCHED, so it
+            // reaches `collect` before we return) BEFORE broadcasting the ack. Otherwise a Commit emitted
+            // on the replay-0 lobbyMessages between the ack and the subscribe is lost — and since the host
+            // adopts (and stops broadcasting) right after Commit, the member would wait out commitTimeout
+            // and then loop for a fresh Freeze that never comes, wedging it out of the session forever.
+            val resolution = coroutineScope {
+                val resolved = async(start = CoroutineStart.UNDISPATCHED) {
+                    withTimeoutOrNull(commitTimeout) {
+                        lobbyMessages.first { (_, msg) ->
+                            (msg is LobbyMessage.Commit && msg.hostId == freeze.hostId && msg.epoch == freeze.epoch) ||
+                                (msg is LobbyMessage.Reopen && msg.epoch == freeze.epoch)
+                        }.second
+                    }
+                }
+                runCatchingCancellable {
+                    seam.broadcast(LobbyMessage.encode(LobbyMessage.FreezeAck(freeze.hostId, freeze.epoch)))
+                }
+                resolved.await()
             }
             if (resolution is LobbyMessage.Commit) {
                 return adoptRoom(SessionRole.Joiner, memberName)

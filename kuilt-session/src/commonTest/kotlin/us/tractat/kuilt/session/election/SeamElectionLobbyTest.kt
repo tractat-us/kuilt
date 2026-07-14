@@ -93,6 +93,41 @@ class SeamElectionLobbyTest {
         }
 
     @Test
+    fun `three-peer freeze round admits both members with correct roles`() =
+        runTest {
+            val loom = InMemoryLoom()
+            val s1 = loom.weave(Rendezvous.New(Pattern("g")))
+            val s2 = loom.weave(Rendezvous.Existing(InMemoryTag("g")))
+            val s3 = loom.weave(Rendezvous.Existing(InMemoryTag("g")))
+            val lobbies = listOf(s1, s2, s3).map { lobby(it, loom, backgroundScope) }
+
+            // All three see the full 3-peer roster and elect the same lowest-id host.
+            val electedHost = lobbies[0].host.first { lobbies[0].peers.value.size == 3 }
+            lobbies.forEach { it.host.first { _ -> it.peers.value.size == 3 } }
+
+            val hostLobby = lobbies.first { it.selfId == electedHost }
+            val memberLobbies = lobbies.filter { it.selfId != electedHost }
+
+            // Both members await concurrently; the host runs the freeze round. The Commit must reach
+            // BOTH members (the multi-member path the single-member test cannot exercise).
+            val memberRooms = memberLobbies.map { async { it.awaitRoom(memberName = it.selfId.value) } }
+            val hostRoom = hostLobby.start(memberName = "Host")
+            val rooms = memberRooms.map { it.await() }
+
+            // Host admits both members; each member sees host + the other member.
+            hostRoom.roster.first { it.size == 2 }
+            rooms.forEach { it.roster.first { r -> r.size == 2 } }
+
+            assertAll(
+                { assertEquals(SessionRole.Host, hostRoom.role.value) },
+                { assertEquals(SessionRole.Joiner, rooms[0].role.value) },
+                { assertEquals(SessionRole.Joiner, rooms[1].role.value) },
+            )
+            rooms.forEach { it.leave() }
+            hostRoom.leave()
+        }
+
+    @Test
     fun `start from a non-host peer throws`() =
         runTest {
             val loom = InMemoryLoom()
