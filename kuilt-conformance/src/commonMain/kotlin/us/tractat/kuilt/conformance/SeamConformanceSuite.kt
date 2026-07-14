@@ -20,6 +20,7 @@ import us.tractat.kuilt.core.PeerNotConnected
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.Tag
+import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -71,6 +72,13 @@ import kotlin.test.assertTrue
  *  - [stateStaysTornAfterClose] ↔ [SeamCapabilities.staysTornAfterClose]
  *  - [sendOnTornSeamThrows] ↔ [SeamCapabilities.throwsOnSendToTorn]
  *  - [sendToDeliversToNamedPeer] ↔ [SeamCapabilities.supportsSendTo]
+ *
+ * There is a **third** gating mechanism alongside *core (ungated)* and *capability-gated*:
+ * **harness-hook-gated**. [incomingCompletesOnInjectedMidSessionDeath] runs only when a harness
+ * overrides [injectMidSessionDeath] to actually drop the transport — a capability of the *harness*,
+ * not the *fabric*. Its silent-skip is made accountable exactly as a capability gap is: an
+ * un-overridden harness must declare a tracking URL via [midSessionDeathGap], enforced by
+ * [midSessionDeathObligationIsTrackedWhenUnproven].
  *
  * This suite is deliberately fixed at **two** Looms (ADR-001) and has no positive
  * N-peer/mesh obligation; roster convergence, sender-attributed broadcast, directed
@@ -143,18 +151,35 @@ public abstract class SeamConformanceSuite {
     public open fun joinTag(): Tag = InMemoryTag("joiner")
 
     /**
-     * Inject a **mid-session transport death** under [host] (and, if the harness can, [joiner]) —
-     * the way a real fabric dies when the underlying connection drops rather than being closed by the
-     * application. Return `true` if the harness performed the injection; `false` (the default) means
-     * "this harness cannot inject death", and [incomingCompletesOnInjectedMidSessionDeath]
-     * early-returns without asserting.
+     * Inject a **mid-session transport death** under **both** [host] and [joiner] — the way a real
+     * fabric dies when the underlying connection drops rather than being closed by the application.
+     * Return `true` if the harness performed the injection; `false` (the default) means "this harness
+     * cannot inject death", and [incomingCompletesOnInjectedMidSessionDeath] early-returns without
+     * asserting.
      *
      * This is a **harness** capability, not a fabric [SeamCapabilities] flag — only a harness with a
      * handle on the transport under the seam (e.g. an in-memory mesh over a `connectionPair`) can drop
-     * it out from under a live session. Overriding harnesses drop the underlying connection(s) so
-     * [host] observes a remote disconnect (not a local `close()`), then return `true`.
+     * it out from under a live session. An overriding harness drops the underlying connection(s) so
+     * **each** side observes a remote disconnect (not a local `close()`), then returns `true`. Because
+     * the seam is peer-symmetric, a 2-peer transport death is symmetric: both ends latch
+     * [SeamState.Torn] and both `incoming` flows complete — which is what
+     * [incomingCompletesOnInjectedMidSessionDeath] asserts. A harness that overrides this to `true`
+     * MUST also override [midSessionDeathGap] to return `null` (the obligation is now proven).
      */
     public open suspend fun injectMidSessionDeath(host: Seam, joiner: Seam): Boolean = false
+
+    /**
+     * Tracking URL for **why this harness does not prove the mid-session-death obligation** — the
+     * accountability analog of [capabilityGaps] for the [injectMidSessionDeath] hook.
+     *
+     * The base default is a **non-null** umbrella URL ([CapabilityGaps.MID_SESSION_DEATH]): an
+     * un-overridden harness (one that leaves [injectMidSessionDeath] at its default `false`) is
+     * *tracked by default*, never silently green. A harness that overrides [injectMidSessionDeath]
+     * to actually drop the transport **proves** the obligation and MUST override this to return
+     * `null`/blank (no gap). [midSessionDeathObligationIsTrackedWhenUnproven] enforces the pairing:
+     * hook-returns-`false` ⇒ this must be non-blank.
+     */
+    public open fun midSessionDeathGap(): String? = CapabilityGaps.MID_SESSION_DEATH
 
     /**
      * Drive [newLoomPair] to a connected host/joiner pair and hand both live [Seam]s to
@@ -527,13 +552,19 @@ public abstract class SeamConformanceSuite {
                 val injected = injectMidSessionDeath(host, joiner)
                 if (!injected) return@connectedPair // harness cannot inject death — nothing to assert.
 
-                // The seam must reach Torn on the injected remote disconnect (bounded, no unbounded advance).
-                assertIs<SeamState.Torn>(
-                    withTimeout(5.seconds) { host.state.first { it is SeamState.Torn } },
-                    "host must latch Torn on injected mid-session transport death",
-                )
-                // And `incoming` must complete — a late collector on the drained spool terminates.
+                // Both symmetric ends must reach Torn on the injected transport death (bounded — no
+                // unbounded advance) AND both `incoming` flows must complete (a late collector on the
+                // drained spool terminates). The suspend collection happens first; the terminal-state
+                // checks are batched through assertAll so both failures surface at once.
+                val hostTorn = withTimeout(5.seconds) { host.state.first { it is SeamState.Torn } }
                 withTimeout(5.seconds) { host.incoming.toList() }
+                val joinerTorn = withTimeout(5.seconds) { joiner.state.first { it is SeamState.Torn } }
+                withTimeout(5.seconds) { joiner.incoming.toList() }
+
+                assertAll(
+                    { assertIs<SeamState.Torn>(hostTorn, "host must latch Torn on injected mid-session transport death") },
+                    { assertIs<SeamState.Torn>(joinerTorn, "joiner must latch Torn on injected mid-session transport death") },
+                )
             }
         }
 
@@ -556,4 +587,28 @@ public abstract class SeamConformanceSuite {
             "every false capability must declare a non-blank gap URL in capabilityGaps(); undeclared: $undeclared",
         )
     }
+
+    // ── (16) an un-proven mesh-death obligation must be tracked, not silently skipped ──
+    //
+    // The harness-hook analog of [everyFalseCapabilityDeclaresAGap]. [injectMidSessionDeath]'s own
+    // return value is the "is it proven?" proxy: a harness that cannot inject death (hook returns
+    // `false`) MUST declare a non-blank [midSessionDeathGap], so the silent early-return of
+    // [incomingCompletesOnInjectedMidSessionDeath] is tracked rather than invisibly green. A harness
+    // that proves the obligation (hook returns `true`) may leave the gap `null`. The base default
+    // gap is non-null, so an un-overridden harness passes this by being tracked by the umbrella issue.
+
+    @Test
+    public fun midSessionDeathObligationIsTrackedWhenUnproven(): TestResult =
+        runTest {
+            connectedPair { host, joiner ->
+                val proven = injectMidSessionDeath(host, joiner)
+                if (!proven) {
+                    assertFalse(
+                        midSessionDeathGap().isNullOrBlank(),
+                        "an un-proven mesh-death obligation must be tracked: override midSessionDeathGap() " +
+                            "with a tracking URL, or override injectMidSessionDeath to prove it",
+                    )
+                }
+            }
+        }
 }
