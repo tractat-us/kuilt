@@ -187,6 +187,17 @@ private class Link(
  *   concurrent sibling handshakes. A rejected link is never published, so it can never contend in
  *   dedup, join [Seam.peers], or land in the [attestedPrincipals] roster.
  */
+@Deprecated(
+    message = "meshSeam is ambiguous — it carries hub semantics (never self-torns on drain) under a " +
+        "name that reads like a generic mesh. Choose by role: a peer/spoke session whose life ends " +
+        "when its last/only peer leaves wants peerMesh (latches Torn on drain, honouring the " +
+        "incoming-completes-on-Torn contract); a start-empty-and-grow host that legitimately sits " +
+        "empty between joiners wants hubMesh (the byte-identical successor to this behaviour). " +
+        "Pre-1.0: no reason to carry three names for two behaviours. The mechanical replacement is " +
+        "hubMesh (behaviour-preserving); switch to peerMesh where the site is a genuine spoke.",
+    replaceWith = ReplaceWith("hubMesh(selfId, connections, dispatcher, random, policy, admission)"),
+    level = DeprecationLevel.WARNING,
+)
 public suspend fun meshSeam(
     selfId: PeerId,
     connections: List<Connection>,

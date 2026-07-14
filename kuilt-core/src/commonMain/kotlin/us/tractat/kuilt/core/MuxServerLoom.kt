@@ -12,7 +12,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import us.tractat.kuilt.core.fabric.Connection
 import us.tractat.kuilt.core.fabric.ConnectionSource
-import us.tractat.kuilt.core.fabric.meshSeam
+import us.tractat.kuilt.core.fabric.hubMesh
 import kotlin.coroutines.ContinuationInterceptor
 import kotlin.coroutines.CoroutineContext
 import kotlin.coroutines.coroutineContext
@@ -196,7 +196,7 @@ public class MuxServerLoom(
      * demuxed by channel name and pushed into the matching live [RoomHubSeam].
      */
     private suspend fun admit(conn: Connection) {
-        val rawSeam = meshSeam(
+        val rawSeam = hubMesh(
             selfId = selfId,
             connections = listOf(conn),
             dispatcher = dispatcher,

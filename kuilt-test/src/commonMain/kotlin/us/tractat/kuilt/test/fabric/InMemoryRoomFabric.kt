@@ -11,7 +11,7 @@ import us.tractat.kuilt.core.Principal
 import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.RoomAuthorizer
 import us.tractat.kuilt.core.Seam
-import us.tractat.kuilt.core.fabric.meshSeam
+import us.tractat.kuilt.core.fabric.peerMesh
 import us.tractat.kuilt.core.withPrincipal
 import kotlin.coroutines.CoroutineContext
 import kotlin.random.Random
@@ -97,7 +97,7 @@ public class InMemoryRoomFabric(
     public suspend fun clientSeam(peerId: PeerId, random: Random, principal: Principal? = null): Seam {
         val (serverConn, clientConn) = connectionPair()
         source.offer(serverConn.withPrincipal(principal))
-        return meshSeam(selfId = peerId, connections = listOf(clientConn), dispatcher = dispatcher, random = random)
+        return peerMesh(selfId = peerId, connections = listOf(clientConn), dispatcher = dispatcher, random = random)
     }
 
     /**

@@ -7,7 +7,7 @@ import kotlinx.coroutines.currentCoroutineContext
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.fabric.Connection
-import us.tractat.kuilt.core.fabric.meshSeam
+import us.tractat.kuilt.core.fabric.hubMesh
 import kotlin.coroutines.ContinuationInterceptor
 
 /**
@@ -37,7 +37,7 @@ public suspend fun inMemoryMeshOfSize(n: Int): List<Seam> = coroutineScope {
     // Launch all meshSeam calls concurrently — Hello exchanges must interleave.
     (0 until n).map { i ->
         async {
-            meshSeam(
+            hubMesh(
                 selfId = peerIds[i],
                 connections = connsByPeer[i],
                 dispatcher = requireNotNull(currentCoroutineContext()[ContinuationInterceptor]) {

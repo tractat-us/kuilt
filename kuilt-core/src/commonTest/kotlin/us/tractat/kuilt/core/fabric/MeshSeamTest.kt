@@ -55,7 +55,7 @@ class MeshSeamTest {
 
         // peer-0 constructs its mesh: failingConnection first so badId is visited first in broadcast.
         val senderMeshDeferred = async {
-            meshSeam(selfId, listOf(failingConnection, goodMine), dispatcher)
+            hubMesh(selfId, listOf(failingConnection, goodMine), dispatcher)
         }
 
         // Simulate peer-2 handshake (the failing conn — sends hello once, which succeeds).
@@ -121,8 +121,8 @@ class MeshSeamTest {
 
         // Each node feeds BOTH conns to its mesh. Seeded RNGs make the nonce draw deterministic
         // but the two sides draw DIFFERENT nonces (different seeds) — as on the wire.
-        val meshADeferred = async { meshSeam(a, listOf(aX, aY), dispatcher, Random(1)) }
-        val meshBDeferred = async { meshSeam(b, listOf(bX, bY), dispatcher, Random(2)) }
+        val meshADeferred = async { hubMesh(a, listOf(aX, aY), dispatcher, Random(1)) }
+        val meshBDeferred = async { hubMesh(b, listOf(bX, bY), dispatcher, Random(2)) }
 
         val meshA = meshADeferred.await()
         val meshB = meshBDeferred.await()
@@ -165,7 +165,7 @@ class MeshSeamTest {
         val joiner = PeerId("peer-2")
 
         val (mine1, theirs1) = connectionPair()
-        val mesh = async { meshSeam(self, listOf(mine1), dispatcher, Random(0)) }
+        val mesh = async { hubMesh(self, listOf(mine1), dispatcher, Random(0)) }
         val peer1Handshake = async { handshakeRemote(theirs1, existing) }
 
         val seam = mesh.await()

@@ -17,7 +17,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withTimeout
-import us.tractat.kuilt.core.fabric.meshSeam
+import us.tractat.kuilt.core.fabric.hubMesh
 import us.tractat.kuilt.test.assertAll
 import us.tractat.kuilt.test.fabric.InMemoryConnectionSource
 import us.tractat.kuilt.test.fabric.connectionPair
@@ -57,7 +57,7 @@ class RoomHubSeamMembershipTest {
         // First connection: join table-7.
         val (server1, client1) = connectionPair()
         source.offer(server1)
-        val seam1 = meshSeam(peer, listOf(client1), dispatcher, Random(1L))
+        val seam1 = hubMesh(peer, listOf(client1), dispatcher, Random(1L))
         val mux1 = NamedMux(seam1, backgroundScope)
         mux1.channel("table-7").broadcast(byteArrayOf())
         serverRoom7.peers.first { it.contains(peer) }
@@ -70,7 +70,7 @@ class RoomHubSeamMembershipTest {
         // Reconnect over a fresh connection with the SAME PeerId; re-emit the tag.
         val (server2, client2) = connectionPair()
         source.offer(server2)
-        val seam2 = meshSeam(peer, listOf(client2), dispatcher, Random(2L))
+        val seam2 = hubMesh(peer, listOf(client2), dispatcher, Random(2L))
         val mux2 = NamedMux(seam2, backgroundScope)
         mux2.channel("table-7").broadcast(byteArrayOf())
 

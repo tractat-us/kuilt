@@ -48,7 +48,7 @@ class MeshAdmissionTest {
         val dispatcher = StandardTestDispatcher(testScheduler)
         val hub = PeerId("hub")
         val good = PeerId("good")
-        val mesh = meshSeam(hub, emptyList(), dispatcher, Random(0), admission = LinkAdmission.RequireAttested)
+        val mesh = hubMesh(hub, emptyList(), dispatcher, Random(0), admission = LinkAdmission.RequireAttested)
 
         // A legitimate attested joiner is admitted and stays admitted.
         val (goodHubEnd, goodFarEnd) = connectionPair()
@@ -86,7 +86,7 @@ class MeshAdmissionTest {
         val dispatcher = StandardTestDispatcher(testScheduler)
         val hub = PeerId("hub")
         val joiner = PeerId("joiner")
-        val mesh = meshSeam(hub, emptyList(), dispatcher, Random(0), admission = LinkAdmission.RequireAttested)
+        val mesh = hubMesh(hub, emptyList(), dispatcher, Random(0), admission = LinkAdmission.RequireAttested)
 
         val (hubEnd, farEnd) = connectionPair()
         val far = launch { handshakeRemote(farEnd, joiner, nonce = byteArrayOf(1)) }
@@ -112,7 +112,7 @@ class MeshAdmissionTest {
         val dispatcher = StandardTestDispatcher(testScheduler)
         val hub = PeerId("hub")
         val victim = PeerId("victim")
-        val mesh = meshSeam(hub, emptyList(), dispatcher, Random(0), admission = binding)
+        val mesh = hubMesh(hub, emptyList(), dispatcher, Random(0), admission = binding)
 
         // The victim's legitimate, attested link.
         val (victimHubEnd, victimFarEnd) = connectionPair()
@@ -159,7 +159,7 @@ class MeshAdmissionTest {
         val dispatcher = StandardTestDispatcher(testScheduler)
         val hub = PeerId("hub")
         val victim = PeerId("victim")
-        val mesh = meshSeam(hub, emptyList(), dispatcher, Random(0))
+        val mesh = hubMesh(hub, emptyList(), dispatcher, Random(0))
 
         val (victimHubEnd, victimFarEnd) = connectionPair()
         val victimHandshake = launch { handshakeRemote(victimFarEnd, victim, nonce = byteArrayOf(-1)) }
@@ -199,7 +199,7 @@ class MeshAdmissionTest {
         val badHandshake = launch { handshakeRemote(badTheirs, PeerId("joiner"), nonce = byteArrayOf(2)) }
 
         // Mixed batch: the good link is attested, the bad one is not. Construction must not throw.
-        val mesh = meshSeam(
+        val mesh = hubMesh(
             hub,
             listOf(goodMine.withPrincipal(Principal("user-good")), badMine),
             dispatcher,
@@ -230,7 +230,7 @@ class MeshAdmissionTest {
         // Construction-time attested link.
         val (aliceHubEnd, aliceFarEnd) = connectionPair()
         val aliceHandshake = launch { handshakeRemote(aliceFarEnd, alice, nonce = byteArrayOf(1)) }
-        val mesh = meshSeam(
+        val mesh = hubMesh(
             hub,
             listOf(aliceHubEnd.withPrincipal(Principal("user-alice"))),
             dispatcher,
@@ -265,7 +265,7 @@ class MeshAdmissionTest {
         val alice = PeerId("alice")
         val (aliceHubEnd, aliceFarEnd) = connectionPair()
         val aliceHandshake = launch { handshakeRemote(aliceFarEnd, alice, nonce = byteArrayOf(1)) }
-        val mesh = meshSeam(hub, emptyList(), dispatcher, Random(0))
+        val mesh = hubMesh(hub, emptyList(), dispatcher, Random(0))
         val add = launch { mesh.addLink(aliceHubEnd.withPrincipal(Principal("user-alice"))) }
         aliceHandshake.join()
         add.join()

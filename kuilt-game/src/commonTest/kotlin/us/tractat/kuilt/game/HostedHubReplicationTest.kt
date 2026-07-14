@@ -16,7 +16,7 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.builtins.serializer
 import us.tractat.kuilt.core.CloseReason
 import us.tractat.kuilt.core.PeerId
-import us.tractat.kuilt.core.fabric.meshSeam
+import us.tractat.kuilt.core.fabric.hubMesh
 import us.tractat.kuilt.crdt.Patch
 import us.tractat.kuilt.crdt.Rga
 import us.tractat.kuilt.gossip.GossipSeam
@@ -220,7 +220,7 @@ class HostedHubReplicationTest {
             // Admit the link on both ends concurrently — the mesh preambles must cross in parallel.
             val clientMesh = coroutineScope {
                 async { star.source.offer(hubEnd) }
-                async { meshSeam(reconId, listOf(clientEnd), dispatcher, Random(900L + i)) }.await()
+                async { hubMesh(reconId, listOf(clientEnd), dispatcher, Random(900L + i)) }.await()
             }
             val reconGossip = GossipSeam(
                 base = clientMesh,

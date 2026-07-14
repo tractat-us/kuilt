@@ -9,7 +9,7 @@ import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.Seam
-import us.tractat.kuilt.core.fabric.meshSeam
+import us.tractat.kuilt.core.fabric.peerMesh
 import kotlin.random.Random
 import kotlin.uuid.ExperimentalUuidApi
 import kotlin.uuid.Uuid
@@ -48,7 +48,7 @@ import kotlin.uuid.Uuid
  * for closing it when all connections are done.
  *
  * @param dispatcher Scheduler for the mesh spoke's per-link read loop; passed **directly** to
- *   [meshSeam] (which guards its own state with primitives — the dispatcher is scheduling-only,
+ *   [peerMesh] (which guards its own state with primitives — the dispatcher is scheduling-only,
  *   never a serialization crutch). Production default is [Dispatchers.Default]; tests inject a
  *   dispatcher derived from the test scheduler.
  * @param selfPeerId The fabric identity this loom presents on every join. Defaults to a random
@@ -61,7 +61,8 @@ import kotlin.uuid.Uuid
  *
  * @see KtorClientLoom the 2-peer relay client (pairs with [KtorServerLoom]/[KtorRoomHost]).
  * @see us.tractat.kuilt.core.MuxServerLoom the hub this spoke joins.
- * @see meshSeam the composition this loom produces.
+ * @see peerMesh the composition this loom produces — a peer-mesh spoke that latches Torn when the
+ *   hub drops its single link (honouring the incoming-completes-on-Torn contract).
  */
 @OptIn(ExperimentalUuidApi::class)
 public class KtorMeshClientLoom(
@@ -94,7 +95,7 @@ public class KtorMeshClientLoom(
                 }
                 val urlWithPeer = appendPeerQuery(advertisement.url, selfPeerId)
                 val wsSession = httpClient.webSocketSession(urlWithPeer)
-                meshSeam(
+                peerMesh(
                     selfId = selfPeerId,
                     connections = listOf(WebSocketConnection(wsSession)),
                     dispatcher = dispatcher,

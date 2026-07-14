@@ -9,7 +9,7 @@ import kotlinx.coroutines.launch
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.fabric.ConnectionSource
 import us.tractat.kuilt.core.fabric.Mesh
-import us.tractat.kuilt.core.fabric.meshSeam
+import us.tractat.kuilt.core.fabric.hubMesh
 import us.tractat.kuilt.raft.InMemoryRaftStorage
 import us.tractat.kuilt.raft.NodeId
 import us.tractat.kuilt.raft.RaftConfig
@@ -88,7 +88,7 @@ public suspend fun CoroutineScope.voterMeshOverWebSockets(
 
     // Every voter's mesh starts empty; links are added from both ends via addLink (see kdoc).
     val meshes: Map<NodeId, Mesh> = ordered.associate { voter ->
-        voter.nodeId to meshSeam(
+        voter.nodeId to hubMesh(
             selfId = PeerId(voter.nodeId.value),
             connections = emptyList(),
             dispatcher = dispatcher,

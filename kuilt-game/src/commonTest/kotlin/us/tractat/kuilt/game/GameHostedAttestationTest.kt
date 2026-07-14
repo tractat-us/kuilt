@@ -13,7 +13,7 @@ import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Principal
 import us.tractat.kuilt.core.fabric.LinkAdmission
-import us.tractat.kuilt.core.fabric.meshSeam
+import us.tractat.kuilt.core.fabric.hubMesh
 import us.tractat.kuilt.core.withPrincipal
 import us.tractat.kuilt.gossip.GossipSeam
 import us.tractat.kuilt.test.assertAll
@@ -70,7 +70,7 @@ class GameHostedAttestationTest {
             // before the link is published; its connection is closed and the hub keeps serving.
             val (spoofHubEnd, spoofClientEnd) = connectionPair()
             val spoofMesh = backgroundScope.async {
-                meshSeam(PeerId("client-1"), listOf(spoofClientEnd), dispatcher, Random(20L))
+                hubMesh(PeerId("client-1"), listOf(spoofClientEnd), dispatcher, Random(20L))
             }
             source.offer(spoofHubEnd.withPrincipal(Principal("user-mallory")))
             advanceTimeBy(500)
@@ -123,7 +123,7 @@ class GameHostedAttestationTest {
         val (hubEnd, clientEnd) = connectionPair()
         val join = backgroundScope.async {
             val gossip = GossipSeam(
-                base = meshSeam(PeerId(id), listOf(clientEnd), dispatcher, Random(seedBase)),
+                base = hubMesh(PeerId(id), listOf(clientEnd), dispatcher, Random(seedBase)),
                 random = Random(seedBase + 1),
                 clock = clock,
             ).also { it.start(backgroundScope) }

@@ -7,7 +7,7 @@ import kotlinx.coroutines.currentCoroutineContext
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.fabric.Connection
-import us.tractat.kuilt.core.fabric.meshSeam
+import us.tractat.kuilt.core.fabric.hubMesh
 import us.tractat.kuilt.test.fabric.connectionPair
 import kotlin.coroutines.ContinuationInterceptor
 
@@ -67,7 +67,7 @@ public suspend fun buildInMemoryMesh(
     // Launch all meshSeam calls concurrently — Hello preambles must interleave.
     val rawSeams: List<Seam> = (0 until n).map { i ->
         async {
-            meshSeam(
+            hubMesh(
                 selfId = peerIds[i],
                 connections = connsByPeer[i],
                 dispatcher = dispatcher,

@@ -10,7 +10,7 @@ import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.PeerId
-import us.tractat.kuilt.core.fabric.meshSeam
+import us.tractat.kuilt.core.fabric.hubMesh
 import us.tractat.kuilt.gossip.GossipSeam
 import kotlin.coroutines.ContinuationInterceptor
 import kotlin.coroutines.coroutineContext
@@ -117,7 +117,7 @@ class StarHarnessTest {
             star.source.offer(hubEnd)
             val joining = backgroundScope.async {
                 GossipSeam(
-                    base = meshSeam(PeerId("late-spoke"), listOf(clientEnd), dispatcher),
+                    base = hubMesh(PeerId("late-spoke"), listOf(clientEnd), dispatcher),
                     random = Random(99),
                     clock = { Instant.fromEpochMilliseconds(0) },
                 ).also { it.start(backgroundScope) }
