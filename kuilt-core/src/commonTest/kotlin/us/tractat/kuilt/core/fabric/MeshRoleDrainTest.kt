@@ -14,7 +14,6 @@ import us.tractat.kuilt.test.fabric.connectionPair
 import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.time.Duration.Companion.seconds
 
@@ -90,13 +89,54 @@ class MeshRoleDrainTest {
         assertEquals(setOf(self), mesh.peers.value)
     }
 
-    /** A [peerMesh] with no connections is contradictory — a peer-mesh with no peers. */
+    /**
+     * A [peerMesh] MAY start with no connections (the deliberate start-empty → grow-via-[Mesh.addLink]
+     * pattern, e.g. a voter mesh). It is born [SeamState.Woven] — construction requested nothing, so
+     * nothing was rejected — and only latches Torn once it has grown non-empty and then drained.
+     */
     @Test
-    fun peerMeshRejectsEmptyConnections() = runTest {
+    fun peerMeshStartsEmptyAndWoven() = runTest {
         val dispatcher = StandardTestDispatcher(testScheduler)
-        assertFailsWith<IllegalArgumentException>("peerMesh with no connections must be rejected") {
-            peerMesh(PeerId("solo"), emptyList(), dispatcher, Random(0))
-        }
+        val self = PeerId("solo")
+        val mesh = peerMesh(self, emptyList(), dispatcher, Random(0))
+        assertIs<SeamState.Woven>(mesh.state.value, "an empty peer-mesh is Woven, awaiting its first addLink")
+        assertEquals(setOf(self), mesh.peers.value)
+    }
+
+    /**
+     * The #1438 raison d'être: a start-empty [peerMesh] grows via [Mesh.addLink] to include the joined
+     * peer (Woven), then latches [SeamState.Torn] and completes `incoming` when that grown-in link drops
+     * — the start-empty → grow → drain lifecycle. Proves the drain latch keys on "was non-empty, now
+     * empty" at runtime, not on the construction connection list.
+     */
+    @Test
+    fun peerMeshGrowsViaAddLinkThenLatchesTornOnDrain() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val self = PeerId("peer-0")
+        val remote = PeerId("peer-1")
+
+        val mesh = peerMesh(self, emptyList(), dispatcher, Random(0))
+        assertIs<SeamState.Woven>(mesh.state.value, "empty peer-mesh starts Woven")
+
+        // Grow via addLink: the mesh handshakes on `mine`; the far end responds on `theirs`.
+        val (mine, theirs) = connectionPair()
+        val added = async { mesh.addLink(mine) }
+        val handshake = async { handshakeRemote(theirs, remote) }
+        added.await()
+        handshake.await()
+
+        assertEquals(setOf(self, remote), mesh.peers.value, "after addLink: self + grown-in peer")
+        assertIs<SeamState.Woven>(mesh.state.value, "still Woven with the grown-in link live")
+
+        // Collect incoming — it must complete once the mesh tears down on drain.
+        val collected = async { mesh.incoming.toList() }
+
+        // Drop the only (grown-in) link: the mesh drained to empty AFTER having been non-empty.
+        theirs.close()
+
+        val torn = withTimeout(5.seconds) { mesh.state.first { it is SeamState.Torn } }
+        assertIs<SeamState.Torn>(torn, "grown-then-drained peer-mesh must latch Torn")
+        withTimeout(5.seconds) { collected.await() }
     }
 
     /**
