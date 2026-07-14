@@ -12,6 +12,7 @@ import us.tractat.kuilt.conformance.SeamCapabilities
 import us.tractat.kuilt.conformance.SeamConformanceSuite
 import us.tractat.kuilt.core.CloseReason
 import us.tractat.kuilt.core.Loom
+import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.Tag
 import java.net.ServerSocket
 import kotlin.test.AfterTest
@@ -78,6 +79,20 @@ class WebSocketConformanceTest : SeamConformanceSuite() {
         serverPeerId = serverLoom.selfPeerId,
         sessionName = "conformance-client",
     )
+
+    /**
+     * Inject a mid-session transport death by abruptly stopping the Netty server under the live
+     * session — the underlying WebSocket connection drops for both the server seam (host) and the
+     * client seam (joiner), without either calling `close()`. Per-test server (fresh in [setUp]),
+     * so this only affects this test; [tearDown]'s stop is idempotent.
+     */
+    override suspend fun injectMidSessionDeath(host: Seam, joiner: Seam): Boolean {
+        server.stop(gracePeriodMillis = 0, timeoutMillis = 500)
+        return true
+    }
+
+    /** Proven: this harness drops the transport by stopping the server, so no gap. */
+    override fun midSessionDeathGap(): String? = null
 
     // plaintext ws://; relay/hub topology — frames traverse the server.
     override fun capabilities(): SeamCapabilities =
