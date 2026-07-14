@@ -40,7 +40,7 @@ import us.tractat.kuilt.core.RoomAuthorizer
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.Swatch
 import us.tractat.kuilt.core.fabric.Connection
-import us.tractat.kuilt.core.fabric.meshSeam
+import us.tractat.kuilt.core.fabric.hubMesh
 import us.tractat.kuilt.game.AuthoritySeating
 import us.tractat.kuilt.game.ConsensusBinding
 import us.tractat.kuilt.game.ConsensusPlacement
@@ -587,7 +587,7 @@ class FederatedGamePerRoomE2ETest {
         return scope.run {
             ids.mapIndexed { i, id ->
                 async {
-                    id to (meshSeam(
+                    id to (hubMesh(
                         selfId = PeerId(id.value), connections = connsFor(i),
                         dispatcher = dispatcher, random = Random(500L + i),
                     ) as Seam)
@@ -633,7 +633,7 @@ class FederatedGamePerRoomE2ETest {
                 override suspend fun weave(rendezvous: Rendezvous): Seam {
                     val (serverConn, clientConn) = connectionPair()
                     source.offer(serverConn)
-                    return meshSeam(
+                    return hubMesh(
                         selfId = peerId, connections = listOf(clientConn),
                         dispatcher = dispatcher, random = random,
                     )

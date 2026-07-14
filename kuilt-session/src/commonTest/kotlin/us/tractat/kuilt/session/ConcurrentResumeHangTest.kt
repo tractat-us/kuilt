@@ -21,7 +21,7 @@ import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.RoomAuthorizer
 import us.tractat.kuilt.core.Seam
-import us.tractat.kuilt.core.fabric.meshSeam
+import us.tractat.kuilt.core.fabric.hubMesh
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.session.partition.ResumeResult
 import us.tractat.kuilt.session.partition.RoomId
@@ -161,7 +161,7 @@ class ConcurrentResumeHangTest {
                 override suspend fun weave(rendezvous: Rendezvous): Seam {
                     val (serverConn, clientConn) = connectionPair()
                     source.offer(serverConn)
-                    return meshSeam(clientId, listOf(clientConn), dispatcher, Random((seed++).toLong()))
+                    return hubMesh(clientId, listOf(clientConn), dispatcher, Random((seed++).toLong()))
                 }
             }
             val nameOf: (Rendezvous) -> String = { rv ->

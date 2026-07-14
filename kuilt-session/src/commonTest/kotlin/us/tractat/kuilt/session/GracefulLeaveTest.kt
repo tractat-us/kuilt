@@ -12,7 +12,7 @@ import us.tractat.kuilt.core.NamedMux
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.RoomAuthorizer
-import us.tractat.kuilt.core.fabric.meshSeam
+import us.tractat.kuilt.core.fabric.hubMesh
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.session.partition.RoomId
 import us.tractat.kuilt.test.fabric.InMemoryConnectionSource
@@ -61,7 +61,7 @@ class GracefulLeaveTest {
 
             val (serverConn, clientConn) = connectionPair()
             source.offer(serverConn)
-            val clientMesh = meshSeam(PeerId("client"), listOf(clientConn), dispatcher, Random(1L))
+            val clientMesh = hubMesh(PeerId("client"), listOf(clientConn), dispatcher, Random(1L))
             val clientMux = NamedMux(clientMesh, backgroundScope)
             val joinerRoom = SeamRoom(
                 seam = clientMux.channel("table-7"),

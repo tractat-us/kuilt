@@ -8,7 +8,7 @@ import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.PeerId
-import us.tractat.kuilt.core.fabric.meshSeam
+import us.tractat.kuilt.core.fabric.hubMesh
 import us.tractat.kuilt.gossip.GossipSeam
 import us.tractat.kuilt.gossip.hostedOverlay
 import us.tractat.kuilt.test.fabric.InMemoryConnectionSource
@@ -43,7 +43,7 @@ class GameHostedLeakTest {
         }
         val hub = backgroundScope.hostedOverlay(PeerId("hub"), source, dispatcher, Random(0L), clock)
         val clients = clientEnds.map { (id, conn) ->
-            id to GossipSeam(meshSeam(id, listOf(conn), dispatcher), Random(id.value.hashCode().toLong()), clock)
+            id to GossipSeam(hubMesh(id, listOf(conn), dispatcher), Random(id.value.hashCode().toLong()), clock)
                 .also { it.start(backgroundScope) }
         }
         hub.peers.first { clients.all { (id, _) -> id in it } }   // converged

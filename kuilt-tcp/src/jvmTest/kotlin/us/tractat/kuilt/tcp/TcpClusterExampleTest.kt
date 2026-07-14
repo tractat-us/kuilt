@@ -13,7 +13,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.fabric.Connection
-import us.tractat.kuilt.core.fabric.meshSeam
+import us.tractat.kuilt.core.fabric.hubMesh
 import java.net.ServerSocket as JvmServerSocket
 import kotlin.test.AfterTest
 import kotlin.test.Test
@@ -54,8 +54,8 @@ class TcpClusterExampleTest {
 
                 // Hub A weaves a mesh to B; B weaves its own single-link mesh to A. Run concurrently
                 // so the MeshHello preambles cross in parallel (serial would deadlock).
-                val hubDeferred = async { meshSeam(a, listOf(aToB), Dispatchers.IO) }
-                val bMeshDeferred = async { meshSeam(b, listOf(bToA), Dispatchers.IO) }
+                val hubDeferred = async { hubMesh(a, listOf(aToB), Dispatchers.IO) }
+                val bMeshDeferred = async { hubMesh(b, listOf(bToA), Dispatchers.IO) }
                 val hub = hubDeferred.await()
                 val bMesh = bMeshDeferred.await()
 
@@ -63,7 +63,7 @@ class TcpClusterExampleTest {
 
                 // Late joiner C dials in: A admits it via addLink while C weaves its own mesh to A.
                 val joinDeferred = async { hub.addLink(aToC) }
-                val cMeshDeferred = async { meshSeam(c, listOf(cToA), Dispatchers.IO) }
+                val cMeshDeferred = async { hubMesh(c, listOf(cToA), Dispatchers.IO) }
                 joinDeferred.await()
                 val cMesh = cMeshDeferred.await()
 

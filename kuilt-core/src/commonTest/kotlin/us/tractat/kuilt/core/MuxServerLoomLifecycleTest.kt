@@ -28,7 +28,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
-import us.tractat.kuilt.core.fabric.meshSeam
+import us.tractat.kuilt.core.fabric.hubMesh
 import us.tractat.kuilt.test.assertAll
 import us.tractat.kuilt.test.fabric.InMemoryConnectionSource
 import us.tractat.kuilt.test.fabric.connectionPair
@@ -71,7 +71,7 @@ class MuxServerLoomLifecycleTest {
     ): Seam {
         val (serverConn, clientConn) = connectionPair()
         source.offer(serverConn)
-        val seam = meshSeam(peer, listOf(clientConn), dispatcher, Random(seed))
+        val seam = hubMesh(peer, listOf(clientConn), dispatcher, Random(seed))
         NamedMux(seam, this).channel(roomName).broadcast(byteArrayOf())
         room.peers.first { peer in it }
         return seam

@@ -38,7 +38,7 @@ class MeshSeamColdConnectionTest {
         val remote = PeerId("B")
         val conn = ColdConnection(remoteId = remote, payload = byteArrayOf(7))
 
-        val mesh = async { meshSeam(PeerId("A"), listOf(conn), dispatcher, Random(0)) }.await()
+        val mesh = async { hubMesh(PeerId("A"), listOf(conn), dispatcher, Random(0)) }.await()
 
         // The read loop and the preamble read shared ONE collection of incoming: the
         // post-preamble payload frame surfaces (a double-collect would throw "collected twice").
@@ -57,7 +57,7 @@ class MeshSeamColdConnectionTest {
         val joinConnection = ColdConnection(remoteId = joiner, payload = byteArrayOf(9))
 
         // Start with an empty mesh (no initial links), then admit the cold conn late.
-        val mesh = async { meshSeam(PeerId("A"), emptyList(), dispatcher, Random(0)) }.await()
+        val mesh = async { hubMesh(PeerId("A"), emptyList(), dispatcher, Random(0)) }.await()
         async { mesh.addLink(joinConnection) }.await()
 
         val frame = mesh.incoming.first()

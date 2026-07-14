@@ -8,7 +8,7 @@ import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Principal
 import us.tractat.kuilt.core.PrincipalRoster
 import us.tractat.kuilt.core.fabric.Mesh
-import us.tractat.kuilt.core.fabric.meshSeam
+import us.tractat.kuilt.core.fabric.hubMesh
 import us.tractat.kuilt.core.withPrincipal
 import us.tractat.kuilt.test.fabric.connectionPair
 import kotlin.coroutines.CoroutineContext
@@ -33,7 +33,7 @@ class MeshPrincipalAttestationTest : PrincipalAttestationConformanceSuite() {
     ): AttestationHarness = MeshHarness(
         scope,
         dispatcher,
-        hub = meshSeam(PeerId("hub"), emptyList(), dispatcher, random),
+        hub = hubMesh(PeerId("hub"), emptyList(), dispatcher, random),
     )
 
     private class MeshHarness(
@@ -53,7 +53,7 @@ class MeshPrincipalAttestationTest : PrincipalAttestationConformanceSuite() {
             val (hubEnd, farEnd) = connectionPair()
             // The far end is a real mesh so its MeshHello crosses the hub's — run it concurrently.
             val far: Deferred<Mesh> = scope.async {
-                meshSeam(peer, listOf(farEnd), dispatcher, Random((seed++).toLong()))
+                hubMesh(peer, listOf(farEnd), dispatcher, Random((seed++).toLong()))
             }
             hub.addLink(hubEnd.withPrincipal(principal))
             farByPeer[peer] = far.await()

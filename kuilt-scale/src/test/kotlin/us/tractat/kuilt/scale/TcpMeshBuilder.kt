@@ -21,7 +21,7 @@ import kotlinx.io.buffered
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.fabric.Connection
-import us.tractat.kuilt.core.fabric.meshSeam
+import us.tractat.kuilt.core.fabric.hubMesh
 import us.tractat.kuilt.stream.framed
 import java.net.ServerSocket as JvmServerSocket
 
@@ -57,7 +57,7 @@ internal suspend fun buildTcpMesh(
     val rawSeams: List<Seam> = (0 until n).map { i ->
         async {
             @Suppress("ForbiddenMethodCall") // real dispatcher for TCP IO
-            meshSeam(
+            hubMesh(
                 selfId = peerIds[i],
                 connections = connsByPeer[i],
                 dispatcher = Dispatchers.IO,

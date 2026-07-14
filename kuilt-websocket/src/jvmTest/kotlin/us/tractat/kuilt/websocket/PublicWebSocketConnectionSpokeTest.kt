@@ -12,7 +12,7 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withTimeout
 import us.tractat.kuilt.core.PeerId
-import us.tractat.kuilt.core.fabric.meshSeam
+import us.tractat.kuilt.core.fabric.hubMesh
 
 /**
  * Proves that the public [WebSocketConnection] constructor lets a downstream build an in-process
@@ -36,12 +36,12 @@ class PublicWebSocketConnectionSpokeTest {
 
             coroutineScope {
                 val hubMeshDeferred = async {
-                    meshSeam(hubId, emptyList(), dispatcher).also { hub ->
+                    hubMesh(hubId, emptyList(), dispatcher).also { hub ->
                         hub.addLink(source.accept())
                     }
                 }
                 client.webSocket("/hub") {
-                    val clientSeam = meshSeam(clientId, listOf(WebSocketConnection(this)), dispatcher)
+                    val clientSeam = hubMesh(clientId, listOf(WebSocketConnection(this)), dispatcher)
                     val hub = hubMeshDeferred.await()
 
                     withTimeout(5_000) {

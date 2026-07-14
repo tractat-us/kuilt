@@ -15,7 +15,7 @@ import kotlinx.coroutines.withTimeout
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Principal
 import us.tractat.kuilt.core.Rendezvous
-import us.tractat.kuilt.core.fabric.meshSeam
+import us.tractat.kuilt.core.fabric.hubMesh
 import kotlin.coroutines.ContinuationInterceptor
 import kotlin.random.Random
 import kotlin.test.Test
@@ -39,7 +39,7 @@ class KtorConnectionSourceAttestationTest {
 
             val hubId = PeerId("hub")
             val clientId = PeerId("client")
-            val hub = meshSeam(hubId, emptyList(), dispatcher, Random(1L))
+            val hub = hubMesh(hubId, emptyList(), dispatcher, Random(1L))
 
             // Accept-pump for exactly one spoke, standing in for hostedOverlay's loop.
             val pumpScope = CoroutineScope(currentCoroutineContext() + Job())

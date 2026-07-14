@@ -51,7 +51,7 @@ class MeshSeamPolicyTest {
         val (mine, theirs) = connectionPair()
 
         // peer-0 builds its mesh; handshake runs concurrently.
-        val selfMeshDeferred = async { meshSeam(self, listOf(mine), dispatcher, Random(0), policy) }
+        val selfMeshDeferred = async { hubMesh(self, listOf(mine), dispatcher, Random(0), policy) }
         val handshakeDeferred = async {
             theirs.send(MeshHello.encode(sender, byteArrayOf(42)))
             MeshHello.decode(theirs.incoming.first())

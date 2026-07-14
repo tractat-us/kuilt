@@ -120,7 +120,7 @@ class MeshSeamConcurrencyTest {
             // Real multi-threaded scheduling: NOT limitedParallelism(1).
             val dispatcher = Dispatchers.Default
             val conns = (0 until peerCount).map { HelloConnection(PeerId("peer-$it")) }
-            val seam = meshSeam(self, conns, dispatcher)
+            val seam = hubMesh(self, conns, dispatcher)
 
             stage.at("iter=$iter broadcast-race hammer")
             coroutineScope {
@@ -163,7 +163,7 @@ class MeshSeamConcurrencyTest {
     fun addLinkIsRaceFreeAgainstConcurrentClose() = runConcurrencyStress { stage ->
         val iterations = 200
         repeat(iterations) { iter ->
-            val seam = meshSeam(self, emptyList(), Dispatchers.Default)
+            val seam = hubMesh(self, emptyList(), Dispatchers.Default)
             stage.at("iter=$iter addLink hammer")
             coroutineScope {
                 val ready = CompletableDeferred<Unit>()

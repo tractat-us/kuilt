@@ -14,7 +14,7 @@ import us.tractat.kuilt.core.NamedMux
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.RoomAuthorizer
-import us.tractat.kuilt.core.fabric.meshSeam
+import us.tractat.kuilt.core.fabric.hubMesh
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.session.partition.RoomId
 import us.tractat.kuilt.test.fabric.InMemoryConnectionSource
@@ -64,7 +64,7 @@ class TransportCloseWindowTest {
 
             val (serverConn, clientConn) = connectionPair()
             source.offer(serverConn)
-            val clientMesh = meshSeam(PeerId("client"), listOf(clientConn), dispatcher, Random(1L))
+            val clientMesh = hubMesh(PeerId("client"), listOf(clientConn), dispatcher, Random(1L))
             val clientMux = NamedMux(clientMesh, backgroundScope)
             SeamRoom(
                 seam = clientMux.channel("table-7"),
@@ -116,7 +116,7 @@ class TransportCloseWindowTest {
 
             val (serverConn, clientConn) = connectionPair()
             source.offer(serverConn)
-            val clientMesh = meshSeam(PeerId("client"), listOf(clientConn), dispatcher, Random(1L))
+            val clientMesh = hubMesh(PeerId("client"), listOf(clientConn), dispatcher, Random(1L))
             val clientMux = NamedMux(clientMesh, backgroundScope)
             SeamRoom(
                 seam = clientMux.channel("table-7"),
@@ -172,7 +172,7 @@ class TransportCloseWindowTest {
             val client = PeerId("client")
             val (serverConn1, clientConn1) = connectionPair()
             source.offer(serverConn1)
-            val clientMesh1 = meshSeam(client, listOf(clientConn1), dispatcher, Random(1L))
+            val clientMesh1 = hubMesh(client, listOf(clientConn1), dispatcher, Random(1L))
             val clientMux1 = NamedMux(clientMesh1, backgroundScope)
             val joinerRoom1 = SeamRoom(
                 seam = clientMux1.channel("table-7"),
@@ -194,7 +194,7 @@ class TransportCloseWindowTest {
 
             val (serverConn2, clientConn2) = connectionPair()
             source.offer(serverConn2)
-            val clientMesh2 = meshSeam(client, listOf(clientConn2), dispatcher, Random(2L))
+            val clientMesh2 = hubMesh(client, listOf(clientConn2), dispatcher, Random(2L))
             val clientMux2 = NamedMux(clientMesh2, backgroundScope)
             val joinerRoom2 = SeamRoom(
                 seam = clientMux2.channel("table-7"),
@@ -245,7 +245,7 @@ class TransportCloseWindowTest {
             val client = PeerId("client")
             val (serverConn1, clientConn1) = connectionPair()
             source.offer(serverConn1)
-            val clientMesh1 = meshSeam(client, listOf(clientConn1), dispatcher, Random(1L))
+            val clientMesh1 = hubMesh(client, listOf(clientConn1), dispatcher, Random(1L))
             val clientMux1 = NamedMux(clientMesh1, backgroundScope)
             val joinerRoom1 = SeamRoom(
                 seam = clientMux1.channel("table-7"),
@@ -271,7 +271,7 @@ class TransportCloseWindowTest {
 
             val (serverConn2, clientConn2) = connectionPair()
             source.offer(serverConn2)
-            val clientMesh2 = meshSeam(client, listOf(clientConn2), dispatcher, Random(2L))
+            val clientMesh2 = hubMesh(client, listOf(clientConn2), dispatcher, Random(2L))
             val clientMux2 = NamedMux(clientMesh2, backgroundScope)
             val joinerRoom2 = SeamRoom(
                 seam = clientMux2.channel("table-7"),
@@ -327,7 +327,7 @@ class TransportCloseWindowTest {
 
             val (serverConn, clientConn) = connectionPair()
             source.offer(serverConn)
-            val clientMesh = meshSeam(PeerId("client"), listOf(clientConn), dispatcher, Random(1L))
+            val clientMesh = hubMesh(PeerId("client"), listOf(clientConn), dispatcher, Random(1L))
             val clientMux = NamedMux(clientMesh, backgroundScope)
             SeamRoom(
                 seam = clientMux.channel("table-7"),
