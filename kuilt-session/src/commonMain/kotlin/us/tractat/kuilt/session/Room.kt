@@ -28,8 +28,12 @@ public interface Room {
     /**
      * The role this peer plays in the room.
      *
-     * Starts as [SessionRole.Host] or [SessionRole.Joiner] based on which
-     * [RoomFactory] method was called. May change in 1C (host-election).
+     * Fixed for the room's lifetime. Set to [SessionRole.Host] or [SessionRole.Joiner] by the
+     * [RoomFactory] method that created the room ([RoomFactory.host] / [RoomFactory.join]), or by the
+     * role the room was adopted with. When the role must be *resolved from the connected roster* rather
+     * than chosen up front, use the host-election lobby
+     * ([us.tractat.kuilt.session.election.ElectionLobby]) — it elects the host before any room exists,
+     * then adopts with a now-fixed role.
      */
     public val role: StateFlow<SessionRole>
 
