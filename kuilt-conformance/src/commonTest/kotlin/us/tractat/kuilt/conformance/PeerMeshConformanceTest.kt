@@ -40,12 +40,15 @@ class PeerMeshConformanceTest : SeamConformanceSuite() {
 
     override suspend fun injectMidSessionDeath(host: Seam, joiner: Seam): Boolean {
         // Drop BOTH ends so each side observes its peer's disconnect (a remote death, not a local
-        // close()). Closing the joiner's end completes the host's read loop → the host's last link
-        // drops → peerMesh drains to empty → latches Torn + closes the inbound spool.
+        // close()). Closing a peer's end completes the other's read loop → its last link drops →
+        // peerMesh drains to empty → latches Torn + closes the inbound spool. Symmetric: both ends die.
         joinerConn?.close()
         hostConn?.close()
         return true
     }
+
+    /** Proven: this harness overrides [injectMidSessionDeath] to drop the transport, so no gap. */
+    override fun midSessionDeathGap(): String? = null
 
     /** Weaves a [peerMesh] over one [Connection] — a 2-peer peer-mesh (self + the remote it dials). */
     private class PeerMeshLoom(private val self: PeerId, private val conn: Connection) : Loom {
