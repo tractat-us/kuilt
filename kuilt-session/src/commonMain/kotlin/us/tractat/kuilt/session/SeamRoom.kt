@@ -25,12 +25,16 @@ import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Principal
 import us.tractat.kuilt.core.PrincipalRoster
+import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.Swatch
 import us.tractat.kuilt.core.Tag
 import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.session.admit.AdmitMessage
+import us.tractat.kuilt.session.election.ElectionLobby
+import us.tractat.kuilt.session.election.LobbyMessage
+import us.tractat.kuilt.session.election.SeamElectionLobby
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.liveness.HeartbeatPartitionDetector
 import us.tractat.kuilt.liveness.PartitionEvent
@@ -135,6 +139,63 @@ public class SeamRoomFactory(
             // it is a no-op with respect to auto-resume (see the `reweave` KDoc contract).
             reweave = { loom.join(tag) },
         ).also { room -> room.start() }
+    }
+
+    /**
+     * Adopt an **already-woven** [seam] into a [Room] with an explicit [role] — no re-weave.
+     *
+     * Unlike [host]/[join] (which each weave a fresh seam), [adopt] takes ownership of a seam the
+     * caller wove, so the calling layer can weave the mesh once and decide role afterward (the
+     * host-election lobby, #1439). The returned [Room] owns the seam's lifetime from here:
+     * [Room.leave] closes it — correct, because the seam is handed over exactly once.
+     *
+     * [role] is fixed for the room's lifetime. [roomKey] is the admit-gate key
+     * ([us.tractat.kuilt.core.Pattern.roomKey]); [memberName] is this peer's own roster label
+     * (null → peer-id-derived). Resume-after-tear is not wired (no `reweave`): a joiner whose host
+     * link tears goes terminal ([MembershipEvent.HostLost]).
+     */
+    public suspend fun adopt(
+        seam: Seam,
+        role: SessionRole,
+        memberName: String? = null,
+        roomKey: String? = null,
+    ): Room {
+        val roomId = if (role == SessionRole.Host) RoomId(seam.selfId.value + "-room") else null
+        return SeamRoom(
+            seam = seam,
+            role = role,
+            memberName = memberName,
+            scope = scope,
+            clock = clock,
+            heartbeatConfig = heartbeatConfig,
+            admitTimeout = admitTimeout,
+            roomId = roomId,
+            roomKey = roomKey,
+        ).also { room -> room.start() }
+    }
+
+    /**
+     * Symmetric lobby entry both peers call identically: weave the mesh via
+     * [us.tractat.kuilt.core.Rendezvous.New] (a constant session name), then return an
+     * [ElectionLobby] over the woven seam. Every peer elects the same host (`min(peers)`);
+     * on Start the elected host runs the freeze round and each peer adopts a [Room] once (#1439).
+     *
+     * The seam's lifetime belongs to the lobby until a [Room] adopts it (or [ElectionLobby.leave]).
+     *
+     * **Weave timeout:** this delegates to the [Loom]'s own `weave`. On a real radio fabric (e.g.
+     * `NwLoom`) `weave` blocks until the first peer resolves and may time out if no peer appears —
+     * configure the fabric's weave timeout generously for a "wait for players" lobby. The lobby's
+     * live membership always reads from [ElectionLobby.peers] (the woven seam), never a discovery roster.
+     */
+    public suspend fun electLobby(pattern: Pattern): ElectionLobby {
+        val seam = loom.weave(Rendezvous.New(pattern))
+        return SeamElectionLobby(
+            seam = seam,
+            factory = this,
+            scope = scope,
+            clock = clock,
+            roomKey = pattern.roomKey,
+        )
     }
 
     public companion object {
@@ -726,6 +787,13 @@ internal class SeamRoom(
                 // Channel frames are routed to [RoomChannelSeam] subscribers via rawIncoming.
                 // Admit gating is applied per-subscriber in [RoomChannelSeam.incoming].
                 // No additional routing needed here.
+            }
+            LobbyMessage.isLobbyFrame(bytes) -> {
+                // A freeze-round tail frame that crossed the adopt boundary (#1439): on a mesh with no
+                // total delivery order, a peer's broadcast FreezeAck (or a late Reopen) can arrive after
+                // this peer received Commit and adopted. Drop it — without this it would fall through to
+                // [routeApplicationFrame] and surface as a bogus application [RoomFrame]. The lobby's own
+                // collector was cancel-and-joined before adopt, so nothing else consumes it.
             }
             isAdmittedPeer(sender) -> routeApplicationFrame(sender, bytes)
             else -> { /* drop: application frame from unadmitted peer */ }
