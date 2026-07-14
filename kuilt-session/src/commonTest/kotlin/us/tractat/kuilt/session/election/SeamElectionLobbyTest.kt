@@ -1,6 +1,7 @@
 package us.tractat.kuilt.session.election
 
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.InMemoryLoom
@@ -9,9 +10,11 @@ import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.session.SeamRoomFactory
+import us.tractat.kuilt.session.SessionRole
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 
 class SeamElectionLobbyTest {
     private fun factory(loom: InMemoryLoom, scope: CoroutineScope) =
@@ -55,5 +58,64 @@ class SeamElectionLobbyTest {
             val settled = l1.host.first { l1.peers.value.size == 2 }
             assertEquals(electHost(setOf(s1.selfId, s2.selfId)), settled)
             l1.leave(); l2.leave()
+        }
+
+    @Test
+    fun `host start and member awaitRoom form a session with correct roles`() =
+        runTest {
+            val loom = InMemoryLoom()
+            val s1 = loom.weave(Rendezvous.New(Pattern("g")))
+            val s2 = loom.weave(Rendezvous.Existing(InMemoryTag("g")))
+            val l1 = lobby(s1, loom, backgroundScope)
+            val l2 = lobby(s2, loom, backgroundScope)
+
+            // Wait until both see the full 2-peer roster and agree on the host.
+            val electedHost = l1.host.first { l1.peers.value.size == 2 }
+            l2.host.first { l2.peers.value.size == 2 }
+
+            // The elected host calls start(); the other calls awaitRoom(). Determine which is which.
+            val hostLobby = if (l1.selfId == electedHost) l1 else l2
+            val memberLobby = if (l1.selfId == electedHost) l2 else l1
+
+            val memberRoomDeferred = async { memberLobby.awaitRoom(memberName = "Member") }
+            val hostRoom = hostLobby.start(memberName = "Host")
+            val memberRoom = memberRoomDeferred.await()
+
+            // Both rooms complete their admit handshake: one member each.
+            hostRoom.roster.first { it.size == 1 }
+            memberRoom.roster.first { it.size == 1 }
+
+            assertAll(
+                { assertEquals(SessionRole.Host, hostRoom.role.value) },
+                { assertEquals(SessionRole.Joiner, memberRoom.role.value) },
+            )
+            memberRoom.leave(); hostRoom.leave()
+        }
+
+    @Test
+    fun `start from a non-host peer throws`() =
+        runTest {
+            val loom = InMemoryLoom()
+            val s1 = loom.weave(Rendezvous.New(Pattern("g")))
+            val s2 = loom.weave(Rendezvous.Existing(InMemoryTag("g")))
+            val l1 = lobby(s1, loom, backgroundScope)
+            val l2 = lobby(s2, loom, backgroundScope)
+
+            val electedHost = l1.host.first { l1.peers.value.size == 2 }
+            l2.host.first { l2.peers.value.size == 2 }
+            val nonHost = if (l1.selfId == electedHost) l2 else l1
+            assertFailsWith<NotElectedHostException> { nonHost.start() }
+            l1.leave(); l2.leave()
+        }
+
+    @Test
+    fun `lone host starts immediately with an empty roster`() =
+        runTest {
+            val loom = InMemoryLoom()
+            val s1 = loom.weave(Rendezvous.New(Pattern("g")))
+            val l1 = lobby(s1, loom, backgroundScope)
+            val room = l1.start(memberName = "Solo") // no members → immediate commit
+            assertEquals(SessionRole.Host, room.role.value)
+            room.leave()
         }
 }
