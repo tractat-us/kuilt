@@ -33,6 +33,7 @@ import us.tractat.kuilt.core.Tag
 import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.session.admit.AdmitMessage
 import us.tractat.kuilt.session.election.ElectionLobby
+import us.tractat.kuilt.session.election.LobbyMessage
 import us.tractat.kuilt.session.election.SeamElectionLobby
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.liveness.HeartbeatPartitionDetector
@@ -786,6 +787,13 @@ internal class SeamRoom(
                 // Channel frames are routed to [RoomChannelSeam] subscribers via rawIncoming.
                 // Admit gating is applied per-subscriber in [RoomChannelSeam.incoming].
                 // No additional routing needed here.
+            }
+            LobbyMessage.isLobbyFrame(bytes) -> {
+                // A freeze-round tail frame that crossed the adopt boundary (#1439): on a mesh with no
+                // total delivery order, a peer's broadcast FreezeAck (or a late Reopen) can arrive after
+                // this peer received Commit and adopted. Drop it — without this it would fall through to
+                // [routeApplicationFrame] and surface as a bogus application [RoomFrame]. The lobby's own
+                // collector was cancel-and-joined before adopt, so nothing else consumes it.
             }
             isAdmittedPeer(sender) -> routeApplicationFrame(sender, bytes)
             else -> { /* drop: application frame from unadmitted peer */ }
