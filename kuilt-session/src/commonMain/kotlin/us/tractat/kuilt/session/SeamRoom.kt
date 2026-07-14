@@ -25,12 +25,15 @@ import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Principal
 import us.tractat.kuilt.core.PrincipalRoster
+import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.Swatch
 import us.tractat.kuilt.core.Tag
 import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.session.admit.AdmitMessage
+import us.tractat.kuilt.session.election.ElectionLobby
+import us.tractat.kuilt.session.election.SeamElectionLobby
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.liveness.HeartbeatPartitionDetector
 import us.tractat.kuilt.liveness.PartitionEvent
@@ -168,6 +171,30 @@ public class SeamRoomFactory(
             roomId = roomId,
             roomKey = roomKey,
         ).also { room -> room.start() }
+    }
+
+    /**
+     * Symmetric lobby entry both peers call identically: weave the mesh via
+     * [us.tractat.kuilt.core.Rendezvous.New] (a constant session name), then return an
+     * [ElectionLobby] over the woven seam. Every peer elects the same host (`min(peers)`);
+     * on Start the elected host runs the freeze round and each peer adopts a [Room] once (#1439).
+     *
+     * The seam's lifetime belongs to the lobby until a [Room] adopts it (or [ElectionLobby.leave]).
+     *
+     * **Weave timeout:** this delegates to the [Loom]'s own `weave`. On a real radio fabric (e.g.
+     * `NwLoom`) `weave` blocks until the first peer resolves and may time out if no peer appears —
+     * configure the fabric's weave timeout generously for a "wait for players" lobby. The lobby's
+     * live membership always reads from [ElectionLobby.peers] (the woven seam), never a discovery roster.
+     */
+    public suspend fun electLobby(pattern: Pattern): ElectionLobby {
+        val seam = loom.weave(Rendezvous.New(pattern))
+        return SeamElectionLobby(
+            seam = seam,
+            factory = this,
+            scope = scope,
+            clock = clock,
+            roomKey = pattern.roomKey,
+        )
     }
 
     public companion object {
