@@ -221,9 +221,24 @@ public suspend fun meshSeam(
  * lost its one joiner, the role is explicit at construction — it is not inferred. A hub uses
  * [hubMesh] instead.
  *
- * **[connections] must be non-empty.** A peer-mesh with no peers is contradictory (there is nothing
- * that could later drain); use [hubMesh] for the start-empty-and-grow hub pattern. Passing an empty
- * list throws [IllegalArgumentException].
+ * **A peer-mesh MAY start empty and grow.** Pass an empty [connections] list for the deliberate
+ * start-empty → grow-via-[Mesh.addLink] → drain lifecycle (e.g. a voter mesh both ends of which
+ * dial each other in via `addLink`): the seam is born [SeamState.Woven], and only latches
+ * [SeamState.Torn] once it has been **non-empty and then drained back to empty**. The drain latch
+ * keys on that runtime "was non-empty, now empty" transition (via [Mesh.addLink] then link loss) —
+ * never on the construction list.
+ *
+ * **Reject-all at construction is dead on arrival.** A construction that *requests* connections but
+ * has them **all** rejected by [admission] is born [SeamState.Torn] (the "A2" rule) — it asked for
+ * peers, got none, and has nothing that could ever drain, so it must not sit `Woven` forever with an
+ * empty roster. This is a quiet born-`Torn`, consistent with "rejection never fails construction" —
+ * not a thrown constructor.
+ *
+ * This makes for one honest asymmetry: `peerMesh(listOf(rejectedConn))` is born-`Torn`, but a
+ * `peerMesh(emptyList())` whose *first* [Mesh.addLink] is later rejected stays `Woven`. Construction
+ * is a closed roster claim (you named the peers you expect); `addLink` is open-ended (a hub-style
+ * accept-pump feeding an initially empty roster). Requesting peers and being denied all of them is
+ * failure; requesting none and then having a speculative joiner declined is not.
  *
  * All other parameters behave exactly as documented on [meshSeam].
  */
@@ -234,13 +249,7 @@ public suspend fun peerMesh(
     random: Random = Random.Default,
     policy: DeliveryPolicy = DeliveryPolicy.Reliable,
     admission: LinkAdmission = LinkAdmission.AcceptAll,
-): Mesh {
-    require(connections.isNotEmpty()) {
-        "peerMesh requires at least one connection; a peer-mesh with no peers is contradictory — " +
-            "use hubMesh(...) for the start-empty-and-grow hub pattern."
-    }
-    return buildMesh(selfId, connections, dispatcher, random, policy, admission, latchTornWhenDrained = true)
-}
+): Mesh = buildMesh(selfId, connections, dispatcher, random, policy, admission, latchTornWhenDrained = true)
 
 /**
  * Build a **hub-mesh** [Seam] — the start-empty-and-grow topology (a host admitting joiners).
@@ -298,7 +307,13 @@ private suspend fun buildMesh(
     }
     losers.forEach { runCatchingCancellable { it.conn.close() } }
 
-    return MeshSeam(selfId, winners, dispatcher, random, policy, admission, latchTornWhenDrained)
+    // A2 (born-dead): a peer-mesh that REQUESTED connections but had them ALL rejected/deduped away
+    // asked for peers and got none — it has nothing that could ever drain, so it must latch Torn at
+    // birth rather than sit Woven forever with an empty roster. A start-empty peer-mesh
+    // (`connections` empty) requested nothing, so it is NOT born-dead: it stays Woven and grows via
+    // addLink. Hubs never latch, so bornDead is always false for them (latchTornWhenDrained = false).
+    val bornDead = latchTornWhenDrained && connections.isNotEmpty() && winners.isEmpty()
+    return MeshSeam(selfId, winners, dispatcher, random, policy, admission, latchTornWhenDrained, bornDead)
 }
 
 /**
@@ -350,6 +365,9 @@ private class MeshSeam(
     // Role signal (peerMesh true, hubMesh false). When true, draining to an empty link set latches
     // Torn; when false, the seam sits at an empty link set (the hub pattern) until close().
     private val latchTornWhenDrained: Boolean,
+    // A2: this peer-mesh REQUESTED construction connections but had them all rejected/deduped away —
+    // dead on arrival, latch Torn at birth (see init). A start-empty peer-mesh is NOT bornDead.
+    bornDead: Boolean,
 ) : Mesh {
     private val scope = CoroutineScope(SupervisorJob() + dispatcher)
 
@@ -388,14 +406,17 @@ private class MeshSeam(
         // Launch a supervised reader for each initial link.
         initialLinks.values.forEach { link -> scope.launch { readLoop(link.remoteId, link.conn) } }
 
-        // Born-empty peer-mesh (the admission policy rejected EVERY construction connection, so
-        // `winners` is empty even though `peerMesh` required a non-empty connection list). The drain
-        // latch only fires from `removePeer`, and there is nothing to remove — so without this the
-        // seam would sit `Woven` forever with `peers == {selfId}`, the exact contract violation the
-        // peer-mesh role exists to prevent. Latch `Torn` at birth. Consistent with "rejection never
-        // fails construction": this is a quiet born-`Torn`, not a thrown constructor. (Hubs never
-        // latch, so an empty hub stays `Woven` awaiting joiners.)
-        if (latchTornWhenDrained && links.isEmpty()) tearDown(CloseReason.Unreachable)
+        // A2 born-dead: a peer-mesh that REQUESTED construction connections but had them all rejected
+        // by admission (or deduped away) is born with zero links. The drain latch only fires from
+        // `removePeer`, and there is nothing to remove — so without this the seam would sit `Woven`
+        // forever with `peers == {selfId}`, the exact contract violation the peer-mesh role exists to
+        // prevent. Latch `Torn` at birth. Consistent with "rejection never fails construction": a
+        // quiet born-`Torn`, not a thrown constructor. Keyed on "connections were requested but all
+        // rejected" (`bornDead`), NOT on `links.isEmpty()` — a peer-mesh that requested NOTHING
+        // (`peerMesh(emptyList())`) is the deliberate start-empty case and stays `Woven`, growing via
+        // `addLink`; its later drain-to-empty latches `Torn` through `removePeer` as usual. (Hubs
+        // never latch, so an empty hub stays `Woven` awaiting joiners.)
+        if (bornDead) tearDown(CloseReason.Unreachable)
     }
 
     private val closedMessage get() = "MeshSeam for $selfId is closed"
