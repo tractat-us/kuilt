@@ -9,7 +9,7 @@ import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Principal
 import us.tractat.kuilt.core.PrincipalRoster
 import us.tractat.kuilt.core.fabric.LinkAdmission
-import us.tractat.kuilt.core.fabric.meshSeam
+import us.tractat.kuilt.core.fabric.peerMesh
 import us.tractat.kuilt.core.withPrincipal
 import us.tractat.kuilt.test.fabric.InMemoryConnectionSource
 import us.tractat.kuilt.test.fabric.connectionPair
@@ -37,7 +37,7 @@ class HostedOverlayTest {
         // A client connects after the hub is already running.
         val (hubEnd, clientEnd) = connectionPair()
         val clientBuild = backgroundScope.async {
-            GossipSeam(meshSeam(PeerId("client-0"), listOf(clientEnd), dispatcher), Random(1L), clock)
+            GossipSeam(peerMesh(PeerId("client-0"), listOf(clientEnd), dispatcher), Random(1L), clock)
                 .also { it.start(backgroundScope) }
         }
         source.offer(hubEnd)            // pump accepts → addLink on the running hub
@@ -75,7 +75,7 @@ class HostedOverlayTest {
         // Now offer a healthy spoke — the pump must still be alive to accept it.
         val (goodHubEnd, goodClientEnd) = connectionPair()
         val goodClientBuild = backgroundScope.async {
-            GossipSeam(meshSeam(PeerId("client-good"), listOf(goodClientEnd), dispatcher), Random(2L), clock)
+            GossipSeam(peerMesh(PeerId("client-good"), listOf(goodClientEnd), dispatcher), Random(2L), clock)
                 .also { it.start(backgroundScope) }
         }
         source.offer(goodHubEnd)
@@ -106,7 +106,7 @@ class HostedOverlayTest {
         // pump logs one drop and keeps accepting.
         val (badHubEnd, badClientEnd) = connectionPair()
         val badClientBuild = backgroundScope.async {
-            meshSeam(PeerId("client-bad"), listOf(badClientEnd), dispatcher, Random(1L))
+            peerMesh(PeerId("client-bad"), listOf(badClientEnd), dispatcher, Random(1L))
         }
         source.offer(badHubEnd)
         badClientBuild.await()
@@ -116,7 +116,7 @@ class HostedOverlayTest {
         // An attested spoke joins, and its principal is observable on the hub's roster.
         val (goodHubEnd, goodClientEnd) = connectionPair()
         val goodClientBuild = backgroundScope.async {
-            GossipSeam(meshSeam(PeerId("client-good"), listOf(goodClientEnd), dispatcher, Random(2L)), Random(3L), clock)
+            GossipSeam(peerMesh(PeerId("client-good"), listOf(goodClientEnd), dispatcher, Random(2L)), Random(3L), clock)
                 .also { it.start(backgroundScope) }
         }
         source.offer(goodHubEnd.withPrincipal(Principal("user-good")))

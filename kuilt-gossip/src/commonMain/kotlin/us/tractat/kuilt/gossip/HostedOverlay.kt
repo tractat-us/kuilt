@@ -8,7 +8,7 @@ import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.fabric.ConnectionSource
 import us.tractat.kuilt.core.fabric.LinkAdmission
-import us.tractat.kuilt.core.fabric.meshSeam
+import us.tractat.kuilt.core.fabric.hubMesh
 import us.tractat.kuilt.core.runCatchingCancellable
 import kotlin.coroutines.CoroutineContext
 import kotlin.random.Random
@@ -94,7 +94,7 @@ public fun CoroutineScope.starOverlay(
 ): Seam = policyOverlay(base, FullFanout, random, clock)
 
 /**
- * Compose a started hub [Seam] from a [ConnectionSource]: an initially-empty [meshSeam] wrapped in
+ * Compose a started hub [Seam] from a [ConnectionSource]: an initially-empty [hubMesh] wrapped in
  * a [GossipSeam] with [FullFanout] (the hub floods every broadcast to all spokes),
  * plus an accept-pump that [addLink][us.tractat.kuilt.core.fabric.Mesh.addLink]s each accepted
  * [us.tractat.kuilt.core.fabric.Connection] so clients join the running hub as they connect. The
@@ -129,7 +129,7 @@ public suspend fun CoroutineScope.hostedOverlay(
 
 /**
  * Compose the **raw** accept-pumped hub mesh from a [ConnectionSource]: an initially-empty
- * [meshSeam] plus the accept-pump that [addLink][us.tractat.kuilt.core.fabric.Mesh.addLink]s each
+ * [hubMesh] plus the accept-pump that [addLink][us.tractat.kuilt.core.fabric.Mesh.addLink]s each
  * accepted [us.tractat.kuilt.core.fabric.Connection] as clients connect. This is [hostedOverlay]
  * **without** the star-relay flood — the seam whose `sendTo` reaches each spoke directly and whose
  * `broadcast` is *not* re-flooded.
@@ -155,7 +155,7 @@ public suspend fun CoroutineScope.hostedMesh(
     dispatcher: CoroutineContext,
     admission: LinkAdmission = LinkAdmission.AcceptAll,
 ): Seam {
-    val hubMesh = meshSeam(selfId = selfId, connections = emptyList(), dispatcher = dispatcher, admission = admission)
+    val hubMesh = hubMesh(selfId = selfId, connections = emptyList(), dispatcher = dispatcher, admission = admission)
     launch {
         while (isActive) {
             val conn = source.accept()

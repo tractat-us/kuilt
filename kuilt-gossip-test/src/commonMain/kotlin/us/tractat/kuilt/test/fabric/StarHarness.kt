@@ -7,7 +7,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Seam
-import us.tractat.kuilt.core.fabric.meshSeam
+import us.tractat.kuilt.core.fabric.peerMesh
 import us.tractat.kuilt.gossip.FullFanout
 import us.tractat.kuilt.gossip.GossipSeam
 import us.tractat.kuilt.gossip.hostedOverlay
@@ -65,7 +65,7 @@ public suspend fun CoroutineScope.inMemoryStarOf(
     val clients = coroutineScope {
         clientConnections.map { (id, conn) ->
             async {
-                GossipSeam(meshSeam(id, listOf(conn), dispatcher), Random(random.nextLong()), clock)
+                GossipSeam(peerMesh(id, listOf(conn), dispatcher), Random(random.nextLong()), clock)
                     .also { it.start(this@inMemoryStarOf) }
             }
         }.awaitAll()
