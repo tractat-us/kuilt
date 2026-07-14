@@ -439,12 +439,15 @@ class WarpNodeWebSocketTest {
                 )
 
                 val allTaskIds = tasks.toSet()
+                // Built once (60 tasks — cheap) so a failure is self-explaining from a single CI
+                // artifact: actual-vs-budget delta + per-task duplication map + per-node counts.
+                val dupDiagnostic = dupRateDiagnostic(execLog, dupRate, dupPct)
                 assertAll(
                     {
                         assertTrue(
                             dupRate <= MAX_STRONG_RING_DUP_RATE,
-                            "strong-ring dup-rate $dupPct% exceeds tight budget " +
-                                "${(MAX_STRONG_RING_DUP_RATE * 100).toInt()}% — ring disagreement is bleeding through",
+                            "strong-ring dup-rate exceeds tight budget — ring disagreement is bleeding through\n" +
+                                dupDiagnostic,
                         )
                     },
                     {
@@ -506,6 +509,42 @@ class WarpNodeWebSocketTest {
         }
     }
 
+    /**
+     * Self-diagnosing failure detail for the strong-ring dup-rate assertion.
+     *
+     * There is deliberately **no seed** to dump: the roster, ring, and task set are all
+     * deterministic — the only nondeterminism is real-socket timing. So we dump what actually
+     * discriminates load-noise from a regression:
+     *  1. actual-vs-budget with the explicit `pp` delta (noise-over-budget vs way-over at a glance),
+     *  2. the per-task duplication map (**one** duplicated task = benign failover race; **many** =
+     *     systematic ring disagreement),
+     *  3. per-node execution counts (even ~20/20/20 = healthy; lopsided = broken ring),
+     *  4. the aggregate line.
+     */
+    private fun dupRateDiagnostic(execLog: ExecutionLog, dupRate: Double, dupPct: String): String {
+        val budgetPct = "%.1f".format(MAX_STRONG_RING_DUP_RATE * 100)
+        val overByPp = "%.1f".format((dupRate - MAX_STRONG_RING_DUP_RATE) * 100)
+        val perNode = execLog.perNodeExecutionCounts().entries
+            .sortedBy { it.key.value }
+            .joinToString { "${it.key.value}=${it.value}" }
+        val dupTasks = execLog.duplicatedTasks()
+        val dupLines = dupTasks.entries
+            .sortedBy { it.key.value }
+            .joinToString("\n") { (task, nodes) ->
+                "  ${task.value} -> {${nodes.map { it.value }.sorted().joinToString()}}"
+            }
+        return buildString {
+            appendLine("dup-rate $dupPct% exceeds budget $budgetPct% (over by ${overByPp}pp)")
+            appendLine(
+                "aggregate: ${execLog.dupCount()} dup tasks / " +
+                    "${execLog.totalExecutions()} executions / $TASK_COUNT tasks",
+            )
+            appendLine("per-node executions: $perNode")
+            append("duplicated tasks (${dupTasks.size}):")
+            if (dupLines.isNotEmpty()) append("\n$dupLines")
+        }
+    }
+
     private companion object {
         val RELAY_ID = PeerId("relay")
         val CLIENT_A_ID = PeerId("client-a")
@@ -514,7 +553,10 @@ class WarpNodeWebSocketTest {
         const val TASK_COUNT = 60
         const val FAILOVER_TASK_COUNT = 20
         const val MAX_DUP_RATE = 0.35              // ≤ 35%: spike OPT@3-peers ≈ 9-17%; hub-spoke adds ring-disagreement
-        const val MAX_STRONG_RING_DUP_RATE = 0.05 // ≤ 5%: agreed roster → near-zero dups; margin for failover-window races
+        // ≤ 5%: agreed roster → near-zero dups; margin for failover-window races. Deliberately NOT
+        // widened for the one observed under-full-CI-load flake — see the dupRateDiagnostic() map: a
+        // single over-budget task is failover noise, a lopsided/many-task map is a real regression.
+        const val MAX_STRONG_RING_DUP_RATE = 0.05
         const val CONVERGENCE_TIMEOUT_MS = 30_000L
         const val POLL_INTERVAL_MS = 100L
 
@@ -550,6 +592,28 @@ class WarpNodeWebSocketTest {
 
         fun dupCount(): Int = lock.withLock { log.values.count { it.size > 1 } }
         fun totalExecutions(): Int = lock.withLock { log.values.sumOf { it.size } }
+
+        /**
+         * Every [TaskId] executed by more than one node → the set of nodes that ran it.
+         * The key regression signal: **one** entry is a benign failover-window race;
+         * **many** entries mean systematic ring disagreement is bleeding through.
+         * Copied under the lock so the returned map is a stable snapshot.
+         */
+        fun duplicatedTasks(): Map<TaskId, Set<PeerId>> = lock.withLock {
+            log.filterValues { it.size > 1 }.mapValues { (_, nodes) -> nodes.toSet() }
+        }
+
+        /**
+         * How many tasks each node executed. An even split (with a couple of overlaps)
+         * is healthy; a lopsided split signals a broken ring. Snapshot under the lock.
+         */
+        fun perNodeExecutionCounts(): Map<PeerId, Int> = lock.withLock {
+            val counts = mutableMapOf<PeerId, Int>()
+            for (nodes in log.values) {
+                for (node in nodes) counts[node] = (counts[node] ?: 0) + 1
+            }
+            counts
+        }
 
         /**
          * Dup-rate = redundant executions / total executions.
