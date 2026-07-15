@@ -2,18 +2,17 @@ package us.tractat.kuilt.gossip
 
 import io.github.oshai.kotlinlogging.KotlinLogging
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.isActive
-import kotlinx.coroutines.launch
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.fabric.ConnectionSource
 import us.tractat.kuilt.core.fabric.LinkAdmission
+import us.tractat.kuilt.core.fabric.acceptPump
 import us.tractat.kuilt.core.fabric.hubMesh
-import us.tractat.kuilt.core.runCatchingCancellable
 import kotlin.coroutines.CoroutineContext
 import kotlin.random.Random
 import kotlin.time.Clock
 import kotlin.time.Duration
+import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
 
 private val logger = KotlinLogging.logger("us.tractat.kuilt.gossip.HostedOverlay")
@@ -125,7 +124,8 @@ public suspend fun CoroutineScope.hostedOverlay(
     random: Random = Random.Default,
     clock: () -> Instant = { Clock.System.now() },
     admission: LinkAdmission = LinkAdmission.AcceptAll,
-): Seam = starOverlay(hostedMesh(selfId, source, dispatcher, admission), random, clock)
+    handshakeTimeout: Duration = 10.seconds,
+): Seam = starOverlay(hostedMesh(selfId, source, dispatcher, admission, handshakeTimeout), random, clock)
 
 /**
  * Compose the **raw** accept-pumped hub mesh from a [ConnectionSource]: an initially-empty
@@ -148,26 +148,30 @@ public suspend fun CoroutineScope.hostedOverlay(
  *
  * @param admission Per-link admission policy, enforced at the hub mesh between each spoke's
  *   `MeshHello` handshake and its publication. Defaults to [LinkAdmission.AcceptAll].
+ * @param handshakeTimeout Ceiling on a single spoke's `MeshHello` handshake+publication; a spoke that
+ *   connects but never completes its preamble is abandoned and closed after this, so it can never wedge
+ *   the accept pump. Each accepted spoke is admitted concurrently, so a slow handshake never starves
+ *   later spokes either. Defaults to 10s.
  */
 public suspend fun CoroutineScope.hostedMesh(
     selfId: PeerId,
     source: ConnectionSource,
     dispatcher: CoroutineContext,
     admission: LinkAdmission = LinkAdmission.AcceptAll,
+    handshakeTimeout: Duration = 10.seconds,
 ): Seam {
     val hubMesh = hubMesh(selfId = selfId, connections = emptyList(), dispatcher = dispatcher, admission = admission)
-    launch {
-        while (isActive) {
-            val conn = source.accept()
-            runCatchingCancellable { hubMesh.addLink(conn) }
-                .onFailure {
-                    // Reject-and-continue: a torn/garbled spoke (client dropped during the MeshHello
-                    // preamble) or an admission-rejected link (LinkRejectedException) surfaces here.
-                    // Log the one dropped spoke at debug and keep accepting — the hub and every
-                    // admitted link stay intact.
-                    logger.debug { "hostedMesh: dropping rejected/torn spoke — ${it.message}" }
-                }
-        }
-    }
+    acceptPump(
+        source = source,
+        handshakeTimeout = handshakeTimeout,
+        onFailure = {
+            // Reject-and-continue: a torn/garbled spoke (client dropped during the MeshHello preamble),
+            // an admission-rejected link (LinkRejectedException), or a spoke that never completed its
+            // handshake (HandshakeTimeoutException) surfaces here. Log the one dropped spoke at debug
+            // and keep accepting — the hub and every admitted link stay intact.
+            logger.debug { "hostedMesh: dropping rejected/torn/slow spoke — ${it.message}" }
+        },
+        handle = { conn -> hubMesh.addLink(conn) },
+    )
     return hubMesh
 }

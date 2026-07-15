@@ -8,15 +8,16 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import us.tractat.kuilt.core.fabric.Connection
 import us.tractat.kuilt.core.fabric.ConnectionSource
+import us.tractat.kuilt.core.fabric.acceptPump
 import us.tractat.kuilt.core.fabric.hubMesh
 import kotlin.coroutines.ContinuationInterceptor
 import kotlin.coroutines.CoroutineContext
-import kotlin.coroutines.coroutineContext
 import kotlin.random.Random
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.seconds
 
 /**
  * A server-side [Loom] that provides **structural per-room isolation** over a shared
@@ -93,6 +94,11 @@ import kotlin.random.Random
  * @param dispatcher coroutine context for mesh-seam link loops. Defaults to the interceptor
  *   from [scope] so virtual-time tests share the test dispatcher automatically.
  * @param random seeded [Random] for mesh-seam nonce generation.
+ * @param handshakeTimeout ceiling on a single accepted connection's handshake+admit; a connection
+ *   that connects but never completes its `MeshHello` handshake is abandoned and closed after this,
+ *   so it can never wedge the accept loop. Each accepted connection is admitted concurrently in its
+ *   own child coroutine (all shared state is lock-guarded), so a slow handshake never starves later
+ *   connections either.
  */
 public class MuxServerLoom(
     private val source: ConnectionSource,
@@ -103,6 +109,7 @@ public class MuxServerLoom(
         "MuxServerLoom scope must have a ContinuationInterceptor (dispatcher)"
     },
     private val random: Random = Random.Default,
+    private val handshakeTimeout: Duration = 10.seconds,
 ) : Loom, ScopedCloseable(scope) {
 
     private val lock = reentrantLock()
@@ -176,20 +183,17 @@ public class MuxServerLoom(
      * `init` block the constructor parameter `scope` (the *parent*) would shadow it.
      */
     private fun startAcceptLoop() {
-        val job = scope.launch { acceptLoop() }
+        val job = scope.acceptPump(
+            source = source,
+            handshakeTimeout = handshakeTimeout,
+            onFailure = { /* best-effort: torn/garbled/slow spoke — drop and keep accepting */ },
+            handle = { conn -> admit(conn) },
+        )
         lock.withLock { launchedJobs += job }
     }
 
     /** Snapshot of every pump this loom has launched into its owned scope — for lifecycle tests. */
     internal val backgroundJobsForTest: List<Job> get() = lock.withLock { launchedJobs.toList() }
-
-    private suspend fun acceptLoop() {
-        while (coroutineContext.isActive) {
-            val conn = source.accept()
-            runCatchingCancellable { admit(conn) }
-                .onFailure { /* best-effort: torn/garbled spoke — drop and keep accepting */ }
-        }
-    }
 
     /**
      * Handshake one accepted connection, then read it exactly once: each inbound frame is
