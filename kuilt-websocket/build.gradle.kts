@@ -85,6 +85,9 @@ kotlin {
             implementation(libs.ktor.serverWebsockets)
             implementation(libs.ktor.serverNetty)
             implementation(libs.ktor.client.websockets)
+            // CIO client engine — the half-open ping test needs an engine that honours the Ktor
+            // client `pingInterval` (the OkHttp engine ignores it in favour of its own knob).
+            implementation(libs.ktor.client.cio)
         }
     }
 }

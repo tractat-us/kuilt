@@ -17,6 +17,8 @@ import us.tractat.kuilt.core.Principal
 import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.session.withPrincipal
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.seconds
 import kotlin.uuid.ExperimentalUuidApi
 import kotlin.uuid.Uuid
 
@@ -50,6 +52,7 @@ public class KtorServerLoom(
     private val path: String,
     public val selfPeerId: PeerId = PeerId("server-${Uuid.random()}"),
     private val dispatcher: CoroutineDispatcher = Dispatchers.IO,
+    private val pingPeriod: Duration = DEFAULT_PING_PERIOD,
     private val principalExtractor: (ApplicationCall) -> Principal? = { null },
 ) : Loom {
     private val connectionChannel = Channel<Seam>(capacity = Channel.UNLIMITED)
@@ -105,4 +108,12 @@ public class KtorServerLoom(
         }
     }
 
+    public companion object {
+        /**
+         * Default WebSocket ping period. A missed pong within one further ping period tears the
+         * session down, so a half-open link is detected in ~2×[DEFAULT_PING_PERIOD] — bounded and
+         * symmetric, versus the multi-minute TCP-RTO window a read-only side would otherwise wait.
+         */
+        public val DEFAULT_PING_PERIOD: Duration = 15.seconds
+    }
 }
