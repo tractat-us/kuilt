@@ -471,7 +471,7 @@ private class MeshSeam(
         val targets = lock.withLock { links.values.map { it.remoteId to it.conn } }
         targets.forEach { (remoteId, conn) ->
             runCatchingCancellable { conn.send(payload) }
-                .onFailure { removePeer(remoteId) }
+                .onFailure { removePeer(remoteId, conn) }
         }
     }
 
@@ -479,7 +479,7 @@ private class MeshSeam(
         check(state.value !is SeamState.Torn) { closedMessage }
         val conn = lock.withLock { links[peer]?.conn } ?: throw PeerNotConnected(peer)
         runCatchingCancellable { conn.send(payload) }
-            .onFailure { removePeer(peer) }
+            .onFailure { removePeer(peer, conn) }
     }
 
     override suspend fun close(reason: CloseReason) {
