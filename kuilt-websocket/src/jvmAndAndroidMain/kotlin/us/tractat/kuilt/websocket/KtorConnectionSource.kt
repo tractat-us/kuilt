@@ -2,16 +2,15 @@ package us.tractat.kuilt.websocket
 
 import io.ktor.server.application.Application
 import io.ktor.server.application.ApplicationCall
-import io.ktor.server.application.install
-import io.ktor.server.application.pluginOrNull
 import io.ktor.server.routing.routing
-import io.ktor.server.websocket.WebSockets
 import io.ktor.server.websocket.webSocket
 import kotlinx.coroutines.channels.Channel
 import us.tractat.kuilt.core.Principal
 import us.tractat.kuilt.core.fabric.Connection
 import us.tractat.kuilt.core.fabric.ConnectionSource
 import us.tractat.kuilt.core.withPrincipal
+import us.tractat.kuilt.websocket.KtorServerLoom.Companion.DEFAULT_PING_PERIOD
+import kotlin.time.Duration
 
 /**
  * Server-side [ConnectionSource] backed by Ktor WebSockets — the Connection-aggregation (hub)
@@ -28,6 +27,13 @@ import us.tractat.kuilt.core.withPrincipal
  * handshake, so admit against this hub never completes. ([KtorClientLoom] pairs with the relay
  * topology — [KtorServerLoom]/[KtorRoomHost] — instead.)
  *
+ * @param pingPeriod WebSocket ping period for every accepted spoke. A ping unanswered past the pong
+ *   timeout (which tracks this value) tears the session down, so a **half-open** hub spoke — silently
+ *   dead TCP, no FIN/RST — is reaped in ~2×[pingPeriod] rather than the multi-minute TCP-RTO window.
+ *   Defaults to [us.tractat.kuilt.websocket.KtorServerLoom.DEFAULT_PING_PERIOD]. Same pre-installed-plugin
+ *   trap as [KtorServerLoom]: if the host [Application] already installed `WebSockets` without a ping
+ *   period, this value silently does not apply — a warning is logged. The spoke client must also enable
+ *   pings for its own half-open detection.
  * @param principalExtractor Derives a host-verified [Principal] from the accepting
  *   [ApplicationCall] (e.g. `call.principal<MyAuth>()?.let { Principal(it.id) }`). Runs in the
  *   WebSocket accept handler — the only point on the hosted path with access to the call object,
@@ -43,12 +49,13 @@ import us.tractat.kuilt.core.withPrincipal
 public class KtorConnectionSource(
     application: Application,
     path: String,
+    pingPeriod: Duration = DEFAULT_PING_PERIOD,
     private val principalExtractor: (ApplicationCall) -> Principal? = { null },
 ) : ConnectionSource {
     private val connections = Channel<Connection>(capacity = Channel.UNLIMITED)
 
     init {
-        if (application.pluginOrNull(WebSockets) == null) application.install(WebSockets)
+        installWebSocketsWithPing(application, pingPeriod)
         application.routing {
             webSocket(path) {
                 connections.send(WebSocketConnection(this).withPrincipal(principalExtractor(call)))

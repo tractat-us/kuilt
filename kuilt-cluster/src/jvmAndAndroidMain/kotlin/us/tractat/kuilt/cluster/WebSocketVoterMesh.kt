@@ -61,7 +61,15 @@ public class WebSocketVoter(
  * stops them. The [httpClient] is **not** closed here — the caller owns it.
  *
  * @param voters The M voter endpoints. At least 2; an odd count is recommended for clean quorum.
- * @param httpClient Client used to dial peer voters. Must have the WebSockets plugin installed.
+ * @param httpClient Client used to dial peer voters. **Must** install the WebSockets plugin with a
+ *   ping interval — `install(WebSockets) { pingInterval = … }` — so this voter detects a **half-open**
+ *   link to a peer it dialed (silently dead TCP, no FIN/RST): without a client ping the dialing side's
+ *   read loop blocks forever and the dead peer lingers for the multi-minute TCP-RTO window, so no
+ *   redial is ever triggered. The server accept side is already ping-configured (see
+ *   [us.tractat.kuilt.websocket.KtorConnectionSource]); the client half is the caller's responsibility
+ *   here. **Engine constraint:** use the **CIO** engine, which honours the Ktor client `pingInterval`.
+ *   The **OkHttp** engine ignores it — it has its own `WebSocketExtensionsConfig`/`pingInterval` knob —
+ *   so an OkHttp-backed client silently gets no half-open detection unless OkHttp's own ping is set.
  * @param dispatcher Scheduler for each mesh's per-link read loops (scheduling only — the mesh
  *   guards its own state with primitives). Production passes `Dispatchers.Default`; tests pass a
  *   dispatcher derived from the test scheduler.
