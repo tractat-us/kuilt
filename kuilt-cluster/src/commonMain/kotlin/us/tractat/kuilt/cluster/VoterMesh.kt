@@ -6,6 +6,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.raft.Committed
 import us.tractat.kuilt.raft.NodeId
 import us.tractat.kuilt.raft.RaftNode
@@ -36,6 +37,13 @@ public class VoterMesh internal constructor(
     /** Live voter nodes — keys are [NodeId]s. */
     public val voterNodes: Map<NodeId, RaftNode>,
     internal val scope: CoroutineScope,
+    /**
+     * The per-voter inter-server [Seam]s this mesh runs over, when it was built over real seams
+     * ([voterMeshOverSeams]); `null` for the pre-wired test path ([voterMeshFromNodes]). Internal —
+     * exposed so reconnection tests can observe each voter's `seam.peers` directly (the roster is not
+     * otherwise visible through the [RaftNode] surface).
+     */
+    internal val voterSeams: Map<NodeId, Seam>? = null,
 ) {
     /**
      * The committed log stream from the first voter — convenience for single-consumer scenarios.

@@ -49,10 +49,35 @@ public fun CoroutineScope.voterMeshOverSeams(
     voterSeams: Map<NodeId, Seam>,
     raftConfig: RaftConfig,
     storageFactory: (NodeId) -> RaftStorage = { InMemoryRaftStorage() },
+): VoterMesh = voterMeshOverSeams(
+    voterSeams = voterSeams,
+    raftConfig = raftConfig,
+    // Preserve today's behaviour for the public entry point: derive the mesh scope from the receiver.
+    meshScope = CoroutineScope(coroutineContext + Job(coroutineContext[Job])),
+    storageFactory = storageFactory,
+)
+
+/**
+ * Caller-supplies-the-scope overload of [voterMeshOverSeams].
+ *
+ * `voterMeshOverWebSockets` must run its persistent accept-pumps and per-voter redial supervisors on
+ * the **same** lifecycle scope the voter nodes live on — and it must build that scope **before**
+ * formation (the pumps run from t0, before this function is called). So it constructs [meshScope]
+ * itself, launches its pumps/supervisors on it, and hands it in here; [VoterMesh.close] then cancels
+ * the whole tree (pumps + supervisors + nodes) in one shot. The public [CoroutineScope.voterMeshOverSeams]
+ * delegates here, constructing [meshScope] from its receiver exactly as before.
+ *
+ * Every voter node runs in a child scope of [meshScope]; ownership of [meshScope]'s lifecycle passes
+ * to the returned [VoterMesh]. Parameters otherwise match the public overload.
+ */
+internal fun voterMeshOverSeams(
+    voterSeams: Map<NodeId, Seam>,
+    raftConfig: RaftConfig,
+    meshScope: CoroutineScope,
+    storageFactory: (NodeId) -> RaftStorage = { InMemoryRaftStorage() },
 ): VoterMesh {
     require(voterSeams.isNotEmpty()) { "voterSeams must be non-empty" }
     val clusterConfig = ClusterConfig(voters = voterSeams.keys.toSet())
-    val meshScope = CoroutineScope(coroutineContext + Job(coroutineContext[Job]))
 
     val voterNodes = voterSeams.mapValues { (id, seam) ->
         val transport = SeamRaftTransport(seam)
@@ -64,5 +89,5 @@ public fun CoroutineScope.voterMeshOverSeams(
         val childScope = CoroutineScope(meshScope.coroutineContext + Job(meshScope.coroutineContext[Job]))
         childScope.raftNode(clusterConfig, transport, storageFactory(id), raftConfig)
     }
-    return VoterMesh(voterNodes = voterNodes, scope = meshScope)
+    return VoterMesh(voterNodes = voterNodes, scope = meshScope, voterSeams = voterSeams)
 }
