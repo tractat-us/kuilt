@@ -30,7 +30,7 @@ class FakeNwRadioTest {
     }
 
     @Test
-    fun twoDevicesDiscoverEachOther() = runTest(StandardTestDispatcher()) {
+    fun twoDevicesEachDiscoverBothPeersIncludingThemselves() = runTest(StandardTestDispatcher()) {
         val radio = FakeNwRadio()
         val a = FakeNwApi(radio, deviceId = "A", serviceName = "svc-A")
         val b = FakeNwApi(radio, deviceId = "B", serviceName = "svc-B")
@@ -47,10 +47,34 @@ class FakeNwRadioTest {
         b.startBrowsing(TYPE)
         testScheduler.runCurrent()
 
+        fun ids(found: List<NwEndpoint>) = found.map { it.id }.toSet()
+
+        // Real Bonjour returns a device's own advertisement to its own browser, so each device
+        // that both advertises AND browses TYPE sees BOTH peers — its own endpoint included (#1485).
         assertAll(
-            { assertEquals(listOf(NwEndpoint(id = "ep-B", serviceName = "svc-B")), foundByA) },
-            { assertEquals(listOf(NwEndpoint(id = "ep-A", serviceName = "svc-A")), foundByB) },
+            { assertEquals(setOf("ep-A", "ep-B"), ids(foundByA)) },
+            { assertEquals(setOf("ep-A", "ep-B"), ids(foundByB)) },
+            { assertEquals(2, foundByA.size) },
+            { assertEquals(2, foundByB.size) },
         )
+    }
+
+    @Test
+    fun deviceBrowsingATypeItAlsoAdvertisesDiscoversItself() = runTest(StandardTestDispatcher()) {
+        val radio = FakeNwRadio()
+        val a = FakeNwApi(radio, deviceId = "A", serviceName = "svc-A")
+
+        val foundByA = mutableListOf<NwEndpoint>()
+        backgroundScope.collectInto(a.endpointFound, foundByA)
+        testScheduler.runCurrent()
+
+        // Sole device advertises then browses the same type — real mDNS returns its own
+        // advertisement, which is what drives the self-dial the NwSeam guard must drop (#1485/#1466).
+        a.startListening("svc-A", TYPE)
+        a.startBrowsing(TYPE)
+        testScheduler.runCurrent()
+
+        assertEquals(listOf(NwEndpoint(id = "ep-A", serviceName = "svc-A")), foundByA)
     }
 
     @Test
@@ -132,7 +156,7 @@ class FakeNwRadioTest {
     }
 
     @Test
-    fun threeDevicesEachDiscoverTheOtherTwo() = runTest(StandardTestDispatcher()) {
+    fun threeDevicesEachDiscoverAllPeersIncludingThemselves() = runTest(StandardTestDispatcher()) {
         val radio = FakeNwRadio()
         val a = FakeNwApi(radio, deviceId = "A", serviceName = "svc-A")
         val b = FakeNwApi(radio, deviceId = "B", serviceName = "svc-B")
@@ -154,13 +178,14 @@ class FakeNwRadioTest {
         fun ids(found: List<NwEndpoint>) = found.map { it.id }.toSet()
 
         assertAll(
-            { assertEquals(setOf("ep-B", "ep-C"), ids(foundByA)) },
-            { assertEquals(setOf("ep-A", "ep-C"), ids(foundByB)) },
-            { assertEquals(setOf("ep-A", "ep-B"), ids(foundByC)) },
-            // No self-discovery.
-            { assertEquals(2, foundByA.size) },
-            { assertEquals(2, foundByB.size) },
-            { assertEquals(2, foundByC.size) },
+            // Real mDNS returns a device's own advertisement to its own browser, so each device
+            // that both advertises AND browses TYPE sees ALL three — itself included (#1485).
+            { assertEquals(setOf("ep-A", "ep-B", "ep-C"), ids(foundByA)) },
+            { assertEquals(setOf("ep-A", "ep-B", "ep-C"), ids(foundByB)) },
+            { assertEquals(setOf("ep-A", "ep-B", "ep-C"), ids(foundByC)) },
+            { assertEquals(3, foundByA.size) },
+            { assertEquals(3, foundByB.size) },
+            { assertEquals(3, foundByC.size) },
         )
     }
 }
