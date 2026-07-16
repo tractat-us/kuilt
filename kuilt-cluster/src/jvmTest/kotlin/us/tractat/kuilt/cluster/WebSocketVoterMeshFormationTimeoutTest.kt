@@ -79,7 +79,7 @@ class WebSocketVoterMeshFormationTimeoutTest {
 
     @Test
     fun formationTimeoutCancelsPumpsAndClosesPartialSeams() = runMeshTest {
-        val dispatcher = coroutineContext[ContinuationInterceptor] as CoroutineDispatcher
+        val dispatcher = requireNotNull(coroutineContext[ContinuationInterceptor] as? CoroutineDispatcher)
         val port = ServerSocket(0).use { it.localPort }
 
         // A real route at /higher so the lower voter's dial upgrades cleanly (no connect throw).
