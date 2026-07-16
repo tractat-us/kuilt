@@ -18,4 +18,16 @@ public object CapabilityGaps {
      */
     public const val MID_SESSION_DEATH: String =
         "https://github.com/tractat-us/kuilt/issues/1442"
+
+    /**
+     * A conformance harness that cannot inject a **membership drain** — a peer leaving
+     * `Seam.peers` while the survivor's `state` stays [us.tractat.kuilt.core.SeamState.Woven]
+     * (no transport tear), the distinct event #1466 relied on (see
+     * [SeamConformanceSuite.membershipDrainGap]). Not a *fabric* gap — a *harness* gap: a
+     * strictly-2-peer mesh must latch [us.tractat.kuilt.core.SeamState.Torn] when its only
+     * link drops, so it cannot model a drain-without-tear at all; only an N-peer harness
+     * (e.g. the shared-roster `InMemoryLoom`) can drop one peer and leave the survivor Woven.
+     */
+    public const val MEMBERSHIP_DRAIN: String =
+        "https://github.com/tractat-us/kuilt/issues/1474"
 }

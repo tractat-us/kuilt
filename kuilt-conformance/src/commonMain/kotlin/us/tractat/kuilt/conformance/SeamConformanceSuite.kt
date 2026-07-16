@@ -182,6 +182,35 @@ public abstract class SeamConformanceSuite {
     public open fun midSessionDeathGap(): String? = CapabilityGaps.MID_SESSION_DEATH
 
     /**
+     * Inject a **mid-session membership drain**: drop [joiner] from [host]'s peer set mid-session
+     * **without** tearing [host]'s seam — `host.peers` shrinks while `host.state` stays
+     * [SeamState.Woven]. Return `true` if the harness performed the injection; `false` (the default)
+     * means "this harness cannot inject a drain", and [peersDrainWithoutTearOnInjectedMembershipDrain]
+     * early-returns without asserting.
+     *
+     * This is the **distinct event** from [injectMidSessionDeath] (#1466): a transport *tear* latches
+     * [SeamState.Torn] under **both** ends; a membership *drain* leaves the survivor [SeamState.Woven]
+     * and only shrinks its roster. A strictly-2-peer mesh cannot honour this — losing its only link
+     * IS a tear — so only an **N-peer** harness whose shared roster survives one peer leaving (e.g. the
+     * reference `InMemoryLoom`, where a leaver's `close()` removes it from the shared `peers` while the
+     * other seam stays Woven) can prove it. An overriding harness drops [joiner] from the roster,
+     * leaving [host] Woven, then returns `true`, and MUST also override [membershipDrainGap] to `null`.
+     */
+    public open suspend fun injectMembershipDrain(host: Seam, joiner: Seam): Boolean = false
+
+    /**
+     * Tracking URL for **why this harness does not prove the membership-drain obligation** — the
+     * accountability analog of [midSessionDeathGap] for the [injectMembershipDrain] hook.
+     *
+     * The base default is a non-null umbrella URL ([CapabilityGaps.MEMBERSHIP_DRAIN]): an un-overridden
+     * harness (one that leaves [injectMembershipDrain] at its default `false`) is tracked by default,
+     * never silently green. A harness that overrides [injectMembershipDrain] to actually drain a peer
+     * **proves** the obligation and MUST override this to return `null`/blank.
+     * [membershipDrainObligationIsTrackedWhenUnproven] enforces the pairing.
+     */
+    public open fun membershipDrainGap(): String? = CapabilityGaps.MEMBERSHIP_DRAIN
+
+    /**
      * Drive [newLoomPair] to a connected host/joiner pair and hand both live [Seam]s to
      * [block]. Hosts and joins **concurrently** — a role-split server Loom's host() suspends
      * until a joiner connects, so the two must run at once; in-process (loom, loom) fabrics
@@ -568,6 +597,45 @@ public abstract class SeamConformanceSuite {
             }
         }
 
+    // ── (13c) a membership drain shrinks peers WITHOUT tearing the survivor ───
+    //
+    // The distinct event from a transport tear (#1466): a peer leaves `Seam.peers` while the
+    // survivor's `state` stays Woven — no `close()`, no Torn latch. `incomingCompletesOnInjectedMid
+    // SessionDeath` covers the TEAR (both ends latch Torn, both `incoming` complete); this covers
+    // the DRAIN (survivor stays Woven, roster shrinks). #1466 shipped green precisely because the
+    // harness could only inject a tear, so a consumer that only woke on a tear suspended forever on
+    // a drain — invisible to every suite obligation. This makes the drain a first-class injectable
+    // event so a survivor-side obligation can assert on it.
+    //
+    // Gated on a HARNESS hook, not a SeamCapabilities flag: only an N-peer harness whose shared
+    // roster survives one peer leaving (e.g. InMemoryLoom) can inject a drain-without-tear; a
+    // strictly-2-peer mesh must tear when its only link drops. The default `injectMembershipDrain`
+    // returns false, so such harnesses early-return (a silent skip tracked by `membershipDrainGap`).
+
+    @Test
+    public fun peersDrainWithoutTearOnInjectedMembershipDrain(): TestResult =
+        runTest {
+            connectedPair { host, joiner ->
+                val drainedPeer = joiner.selfId
+                val injected = injectMembershipDrain(host, joiner)
+                if (!injected) return@connectedPair // harness cannot inject a drain — nothing to assert.
+
+                // Bounded: the survivor observes the drained peer leave its roster (no unbounded advance).
+                val peersAfter = withTimeout(5.seconds) { host.peers.first { drainedPeer !in it } }
+
+                // The defining invariant of a DRAIN (vs a tear): the survivor's state stays Woven.
+                assertAll(
+                    { assertFalse(drainedPeer in peersAfter, "drained peer must leave the survivor's peers") },
+                    {
+                        assertIs<SeamState.Woven>(
+                            host.state.value,
+                            "a membership drain must NOT tear the survivor — state stays Woven (distinct from a transport tear)",
+                        )
+                    },
+                )
+            }
+        }
+
     // ─────────────────────────────────────────────────────────────────────────
     //  Meta-test — every declared gap is trackable.
     // ─────────────────────────────────────────────────────────────────────────
@@ -607,6 +675,29 @@ public abstract class SeamConformanceSuite {
                         midSessionDeathGap().isNullOrBlank(),
                         "an un-proven mesh-death obligation must be tracked: override midSessionDeathGap() " +
                             "with a tracking URL, or override injectMidSessionDeath to prove it",
+                    )
+                }
+            }
+        }
+
+    // ── (17) an un-proven membership-drain obligation must be tracked, not silently skipped ──
+    //
+    // The harness-hook analog of [midSessionDeathObligationIsTrackedWhenUnproven] for the
+    // [injectMembershipDrain] hook. A harness that cannot inject a drain (hook returns `false`) MUST
+    // declare a non-blank [membershipDrainGap], so the silent early-return of
+    // [peersDrainWithoutTearOnInjectedMembershipDrain] is tracked rather than invisibly green. A
+    // harness that proves the obligation (hook returns `true`) may leave the gap `null`.
+
+    @Test
+    public fun membershipDrainObligationIsTrackedWhenUnproven(): TestResult =
+        runTest {
+            connectedPair { host, joiner ->
+                val proven = injectMembershipDrain(host, joiner)
+                if (!proven) {
+                    assertFalse(
+                        membershipDrainGap().isNullOrBlank(),
+                        "an un-proven membership-drain obligation must be tracked: override membershipDrainGap() " +
+                            "with a tracking URL, or override injectMembershipDrain to prove it",
                     )
                 }
             }

@@ -28,12 +28,11 @@ import kotlin.time.Duration.Companion.seconds
  *
  * 1. Launch [establish] in a caught driver coroutine so a thrown exception is captured, not
  *    propagated to (and cancelling) the test scope.
- * 2. [runCurrent] — let [establish] subscribe to `incoming` / broadcast its first handshake frame.
- * 3. [reachMidHandshake] (optional) — drive to a specific mid-2PC point (deliver a `Freeze`, etc.),
- *    then [runCurrent] again. Defaults to a no-op, matching a consumer that suspends immediately.
- * 4. Drain membership: [FakeSeam.removePeer] drops [drainedPeer] from `peers` — the seam stays
+ * 2. [runCurrent] — let [establish] subscribe to `incoming` / broadcast its first handshake frame
+ *    and suspend at the mid-handshake point (awaiting a `Freeze`, a `FreezeAck`, etc.).
+ * 3. Drain membership: [FakeSeam.removePeer] drops [drainedPeer] from `peers` — the seam stays
  *    **Woven** (no tear). This is the collapse.
- * 5. Assert [establish] resolves by **throwing** [E] within [timeout]. A [TimeoutCancellationException]
+ * 4. Assert [establish] resolves by **throwing** [E] within [timeout]. A [TimeoutCancellationException]
  *    here means [establish] suspended past the bound — the very hang this invariant forbids — and is
  *    reported as a loud [AssertionError], never a silent timeout.
  *
@@ -53,7 +52,6 @@ public suspend inline fun <reified E : Throwable> TestScope.assertAbortsOnMidHan
     seam: FakeSeam,
     drainedPeer: PeerId,
     timeout: Duration = 5.seconds,
-    crossinline reachMidHandshake: suspend () -> Unit = {},
     crossinline establish: suspend () -> Unit,
 ) {
     val outcome = CompletableDeferred<Unit>()
@@ -68,8 +66,7 @@ public suspend inline fun <reified E : Throwable> TestScope.assertAbortsOnMidHan
         }
     }
 
-    runCurrent()          // establish() subscribes / broadcasts its first handshake frame
-    reachMidHandshake()   // optional: drive to a specific mid-2PC point
+    // Let establish() subscribe / broadcast its first handshake frame and suspend mid-2PC.
     runCurrent()
 
     // The collapse: peer leaves the roster while the seam stays Woven (NO tear). #1466.

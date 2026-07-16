@@ -20,6 +20,7 @@ import us.tractat.kuilt.session.Room
 import us.tractat.kuilt.session.SeamRoomFactory
 import us.tractat.kuilt.session.SessionRole
 import us.tractat.kuilt.test.FakeSeam
+import us.tractat.kuilt.test.assertAbortsOnMidHandshakeCollapse
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -221,66 +222,43 @@ class SeamElectionLobbyTest {
             driver.cancel()
         }
 
+    // The hardware failure (#1466): membership drains but the seam stays Woven — peers drops to
+    // {self} and host.value recomputes to self, yet state never latches Torn. This is DISTINCT from
+    // a transport tear (which latches Torn under both ends). FakeSeam.removePeer models the drain
+    // exactly (drops _peers, leaves state Woven; NO tear). Both cases are expressed through the
+    // reusable `assertAbortsOnMidHandshakeCollapse` invariant (kuilt-test): launch the establishment
+    // await, drain the co-elector mid-handshake, and assert it throws LobbyTornException within a
+    // bound — never suspends forever. That is the net #1466 shipped past.
+
     @Test
-    fun `member awaitRoom throws LobbyTornException when the host leaves without a seam tear`() =
-        runTest {
-            // The hardware failure (#1466): membership drains but the seam stays Woven — peers drops
-            // to {self} and host.value recomputes to self, yet state never latches Torn. FakeSeam.
-            // removePeer models exactly this (drops _peers, leaves state Woven); NO tear() call.
+    fun `member awaitRoom aborts on a mid-handshake membership drain (no seam tear)`() =
+        runTest(timeout = 5.seconds) {
             val self = PeerId("peer-z")
             val hostId = PeerId("peer-a")
             val seam = FakeSeam(selfId = self, initialPeers = setOf(self, hostId))
             val l = lobby(seam, InMemoryLoom(), backgroundScope)
-            assertEquals(hostId, l.host.first()) // self is a member
+            assertEquals(hostId, l.host.first()) // self is a member, so awaitRoom is the right call
 
-            val room = CompletableDeferred<Room>()
-            val driver = launch {
-                try {
-                    room.complete(l.awaitRoom(memberName = "Member"))
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: Throwable) {
-                    room.completeExceptionally(e)
-                }
+            assertAbortsOnMidHandshakeCollapse<LobbyTornException>(seam, drainedPeer = hostId) {
+                l.awaitRoom(memberName = "Member")
             }
-            runCurrent() // awaitRoom subscribes and suspends awaiting the host's Freeze
-
-            // Host leaves the peer set; seam stays Woven (no tear). host.value → self.
-            seam.removePeer(hostId)
-
-            assertFailsWith<LobbyTornException> { withTimeout(5.seconds) { room.await() } }
-            driver.cancel()
         }
 
     @Test
-    fun `host start throws LobbyTornException when the only member leaves without a seam tear`() =
-        runTest {
-            // Host-side membership drain: the member vanishes but the seam stays Woven. The host must
-            // surface a retryable signal, not silently commit a solo room (the #1468 host bug, which a
-            // transport-tear test masks because nw publishes peers→{self} before any Torn latch — here
-            // there is no Torn at all).
+    fun `host start aborts on a mid-handshake membership drain (no seam tear)`() =
+        runTest(timeout = 5.seconds) {
+            // The host must surface a retryable signal, not silently commit a solo room (the #1468
+            // host bug, which a transport-tear test masks because nw publishes peers→{self} before
+            // any Torn latch — here there is no Torn at all).
             val self = PeerId("peer-a")
             val memberId = PeerId("peer-z")
             val seam = FakeSeam(selfId = self, initialPeers = setOf(self, memberId))
             val l = lobby(seam, InMemoryLoom(), backgroundScope)
-            assertEquals(self, l.host.first()) // self is the elected host
+            assertEquals(self, l.host.first()) // self is the elected host, so start is the right call
 
-            val room = CompletableDeferred<Room>()
-            val driver = launch {
-                try {
-                    room.complete(l.start(memberName = "Host"))
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: Throwable) {
-                    room.completeExceptionally(e)
-                }
+            assertAbortsOnMidHandshakeCollapse<LobbyTornException>(seam, drainedPeer = memberId) {
+                l.start(memberName = "Host")
             }
-            runCurrent() // start broadcasts the Freeze and awaits the member's FreezeAck
-
-            seam.removePeer(memberId) // member leaves; seam stays Woven (no tear)
-
-            assertFailsWith<LobbyTornException> { withTimeout(5.seconds) { room.await() } }
-            driver.cancel()
         }
 
     @Test
