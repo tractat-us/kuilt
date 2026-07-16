@@ -247,6 +247,35 @@ class NwSeamTest {
     }
 
     @Test
+    fun remotePeerDepartureCollapsesPeersAndLatchesTorn() = runTest(StandardTestDispatcher()) {
+        // #1466 investigation (#1472): the exact "peers 2→1" collapse path. A 2-node mesh forms
+        // (A.peers == {A,B}, Woven). B departs — its close() disconnects B's connections, so the
+        // radio delivers connectionClosed to A's surviving link. A must remove B (peers → {A}) AND,
+        // because that was the last remote after having woven, LATCH Torn in the SAME step. Proves
+        // NwSeam cannot leave peers == {self} while Woven-and-alive: a genuine 2→1 always tears.
+        val radio = FakeNwRadio()
+        val apiA = FakeNwApi(radio, deviceId = "dev-0", serviceName = "svc-0")
+        val apiB = FakeNwApi(radio, deviceId = "dev-1", serviceName = "svc-1")
+        val seamA = NwSeam(PeerId("peer-0"), apiA, seamScope(), Random(0))
+        val seamB = NwSeam(PeerId("peer-1"), apiB, seamScope(), Random(1))
+        backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) { seamA.incoming.collect { } }
+        backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) { seamB.incoming.collect { } }
+        testScheduler.runCurrent()
+        apiA.connect(NwEndpoint(id = "ep-dev-1", serviceName = "svc-1"))
+        apiB.connect(NwEndpoint(id = "ep-dev-0", serviceName = "svc-0"))
+        assertTrue(pumpUntil { seamA.peers.value.size == 2 }, "A wove to 2 peers")
+
+        // B departs: closing B disconnects B's links; the radio delivers connectionClosed to A.
+        seamB.close()
+        assertTrue(pumpUntil { seamA.state.value is SeamState.Torn }, "A tore on the remote departure")
+
+        assertAll(
+            { assertEquals(setOf(seamA.selfId), seamA.peers.value, "A's peers collapse to {A} — never stuck at {A}+alive") },
+            { assertEquals(SeamState.Torn(CloseReason.RemoteRequested), seamA.state.value, "A latches Torn(RemoteRequested)") },
+        )
+    }
+
+    @Test
     fun tornStaysTornAndSendsThrowAfterClose() = runTest(StandardTestDispatcher()) {
         val (a, b, _) = buildMesh(3)
         a.seam.close()
