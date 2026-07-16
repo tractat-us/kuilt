@@ -107,13 +107,13 @@ class WebSocketVoterMeshReconnectionTest {
         proposeAndAwaitAllCommit(mesh, "before-heal".encodeToByteArray())
 
         // Half-open the a↔b link: forwarding stops, both sockets stay ESTABLISHED (no FIN/RST).
-        proxy!!.sever()
+        requireNotNull(proxy).sever()
         // Ping/pong reaps the dead link on BOTH ends within the window.
         withTimeout(window) { seamA.peers.first { PeerId(b.value) !in it } }
         withTimeout(window) { seamB.peers.first { PeerId(a.value) !in it } }
 
         // The "network" recovers; the supervisor's redial must reconnect the edge on both ends.
-        proxy!!.restore()
+        requireNotNull(proxy).restore()
         withTimeout(window) { seamA.peers.first { PeerId(b.value) in it } }
         withTimeout(window) { seamB.peers.first { PeerId(a.value) in it } }
 
@@ -137,11 +137,11 @@ class WebSocketVoterMeshReconnectionTest {
 
         proposeAndAwaitAllCommit(mesh, "m2-before".encodeToByteArray())
 
-        proxy!!.sever()
+        requireNotNull(proxy).sever()
         withTimeout(window) { seamA.peers.first { PeerId(b.value) !in it } }
         withTimeout(window) { seamB.peers.first { PeerId(a.value) !in it } }
 
-        proxy!!.restore()
+        requireNotNull(proxy).restore()
         withTimeout(window) { seamA.peers.first { PeerId(b.value) in it } }
         withTimeout(window) { seamB.peers.first { PeerId(a.value) in it } }
 
@@ -166,9 +166,9 @@ class WebSocketVoterMeshReconnectionTest {
         // Drop the edge, then RESTORE the path — so the only thing that could bring the peer back is a
         // live supervisor. It must NOT return: close() cancelled the supervisor. (The seams are still
         // alive — close() deliberately doesn't close them — so half-open detection still fires.)
-        proxy!!.sever()
+        requireNotNull(proxy).sever()
         withTimeout(window) { seamA.peers.first { PeerId(b.value) !in it } }
-        proxy!!.restore()
+        requireNotNull(proxy).restore()
 
         // Give a live supervisor ample time (many backoff cycles) to redial; assert it never does.
         delay(3.seconds)
