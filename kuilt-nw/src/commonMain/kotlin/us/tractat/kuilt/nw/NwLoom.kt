@@ -114,6 +114,17 @@ public class NwLoom(
         val dialed = mutableSetOf<String>()
         seamScope.launch(start = CoroutineStart.UNDISPATCHED) {
             api.endpointFound.collect { endpoint ->
+                // Drop this loom's OWN endpoint. A device that advertises AND browses the same type is
+                // delivered its own advertisement by real Bonjour/mDNS (and by FakeNwRadio, #1485). For
+                // Rendezvous.Existing this loom advertised serviceName = selfId.value, and selfIds are
+                // distinct UUIDs, so only self carries it — a cheap endpoint-level self-identity. Skip it
+                // entirely: neither surface it in the lobby roster (a self-ghost in "wait for a friend")
+                // nor dial it. (For Rendezvous.New the serviceName is the shared session name, so self is
+                // indistinguishable here and the NwSeam self-connection guard remains the backstop.)
+                if (endpoint.serviceName == selfId.value) {
+                    log.debug { "nw.loom.self-skip endpoint=${endpoint.id} self=${selfId.value}" }
+                    return@collect
+                }
                 _visiblePeers.update { it + endpoint }
                 val firstSight = dialed.add(endpoint.id)
                 log.debug { "nw.loom.discovered endpoint=${endpoint.id} self=${selfId.value} visible=${_visiblePeers.value.map { it.id }}${if (firstSight) " → dialing" else " (already dialed)"}" }
