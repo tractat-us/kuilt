@@ -14,7 +14,6 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
-import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
@@ -77,28 +76,11 @@ internal class SeamElectionLobby(
         seam.incoming.collect { swatch ->
             val sender = swatch.sender ?: return@collect
             val msg = LobbyMessage.decode(swatch.toByteArray()) ?: return@collect
-            logger.info { "lobby.rx self=${selfId.value} from=${sender.value} msg=$msg" }
             _lobbyMessages.emit(sender to msg)
         }
     }
 
-    // Diagnostic (#1466): log the underlying transport's state, roster, and elected host together on
-    // every change, from the lobby's own view. This is the co-timestamped line needed to tell a
-    // transport tear (state→Torn) from a membership drain (peers shrinks, state stays Woven) from a
-    // present-but-unreachable peer (peers unchanged, state Woven) on hardware — the three cases that
-    // #1468 / #1471 / liveness handle respectively. Note [seam] here is exactly the seam the election
-    // elects over, and [peers] is `seam.peers` verbatim (which always contains selfId by contract).
-    private val diagnosticJob: Job = scope.launch {
-        combine(seam.state, seam.peers, host) { s, p, h -> Triple(s, p, h) }
-            .collect { (s, p, h) ->
-                logger.info {
-                    "lobby.diag self=${selfId.value} state=$s peers=${p.map { it.value }} host=${h.value}"
-                }
-            }
-    }
-
     override suspend fun start(memberName: String?): Room {
-        logger.info { "lobby.start.enter self=${selfId.value} host=${host.value} peers=${peers.value.map { it.value }} state=${seam.state.value}" }
         // Host collapse (the transport-tear watcher in guardElection handles a fabric that latches Torn;
         // startElection itself handles the membership-drain case where the seam stays Woven).
         return try {
@@ -106,9 +88,8 @@ internal class SeamElectionLobby(
             // (finding #1) so a collapse signal cannot cancel adoptRoom mid-commit and wedge the lobby.
             guardElection(collapseSignals = emptyList()) { runHostElection() }
             adoptAfterCommit(SessionRole.Host, memberName)
-                .also { logger.info { "lobby.start.adopted self=${selfId.value}" } }
         } catch (e: Throwable) {
-            logger.info { "lobby.start.exit self=${selfId.value} threw=${e::class.simpleName}: ${e.message}" }
+            logger.debug { "lobby.start.exit self=${selfId.value} threw=${e::class.simpleName}: ${e.message}" }
             throw e
         }
     }
@@ -140,14 +121,12 @@ internal class SeamElectionLobby(
             val committed = withTimeoutOrNull(freezeTimeout) { awaitUnanimousAck(roster, members, myEpoch) } ?: false
             logger.info { "lobby.freeze-round self=${selfId.value} epoch=$myEpoch members=${members.map { it.value }} committed=$committed" }
             if (committed) {
-                logger.info { "lobby.tx.Commit self=${selfId.value} epoch=$myEpoch → committed (adopt outside race)" }
                 runCatchingCancellable {
                     seam.broadcast(LobbyMessage.encode(LobbyMessage.Commit(selfId.value, myEpoch)))
                 }
                 return
             }
             // Aborted (membership changed, lost host, or timed out): reopen and retry.
-            logger.info { "lobby.tx.Reopen self=${selfId.value} epoch=$myEpoch (freeze aborted; retrying)" }
             runCatchingCancellable { seam.broadcast(LobbyMessage.encode(LobbyMessage.Reopen(myEpoch))) }
         }
     }
@@ -184,7 +163,6 @@ internal class SeamElectionLobby(
             }
             // Subscriptions are now live (UNDISPATCHED ran each collector to its first suspend) — only
             // now broadcast the Freeze, so no FreezeAck can land in the replay-0 gap before we listen.
-            logger.info { "lobby.tx.Freeze self=${selfId.value} epoch=$ackEpoch roster=${roster.map { it.value }} awaiting-acks-from=${needed.map { it.value }}" }
             runCatchingCancellable {
                 seam.broadcast(
                     LobbyMessage.encode(
@@ -199,7 +177,6 @@ internal class SeamElectionLobby(
         }
 
     override suspend fun awaitRoom(memberName: String?): Room {
-        logger.info { "lobby.awaitRoom.enter self=${selfId.value} host=${host.value} peers=${peers.value.map { it.value }} state=${seam.state.value}" }
         return try {
             guardElection(
                 // Membership-drain abort (#1466 member path, the hardware failure): the elected host left
@@ -218,9 +195,8 @@ internal class SeamElectionLobby(
             // Adoption OUTSIDE guardElection (finding #1): once the Commit is received the race is over,
             // so the became-host/tear collapse signals can no longer cancel adoptRoom mid-commit.
             adoptAfterCommit(SessionRole.Joiner, memberName)
-                .also { logger.info { "lobby.awaitRoom.adopted self=${selfId.value}" } }
         } catch (e: Throwable) {
-            logger.info { "lobby.awaitRoom.exit self=${selfId.value} threw=${e::class.simpleName}: ${e.message}" }
+            logger.debug { "lobby.awaitRoom.exit self=${selfId.value} threw=${e::class.simpleName}: ${e.message}" }
             throw e
         }
     }
@@ -255,7 +231,6 @@ internal class SeamElectionLobby(
                         }.second
                     }
                 }
-                logger.info { "lobby.tx.FreezeAck self=${selfId.value} to-host=${freeze.hostId} epoch=${freeze.epoch}" }
                 runCatchingCancellable {
                     seam.broadcast(LobbyMessage.encode(LobbyMessage.FreezeAck(freeze.hostId, freeze.epoch)))
                 }
@@ -341,7 +316,6 @@ internal class SeamElectionLobby(
         adoptMutex.withLock {
             if (adopted) return // seam ownership transferred to the Room; do not close it.
             collectorJob.cancel()
-            diagnosticJob.cancel()
             seam.close(CloseReason.Normal)
         }
     }
@@ -370,7 +344,6 @@ internal class SeamElectionLobby(
             check(!adopted) { "lobby already adopted a room" }
             adopted = true
             collectorJob.cancelAndJoin()
-            diagnosticJob.cancel()
             factory.adopt(seam, role, memberName = memberName, roomKey = roomKey)
         }
 }

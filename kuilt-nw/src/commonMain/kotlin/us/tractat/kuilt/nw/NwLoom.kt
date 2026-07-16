@@ -105,7 +105,7 @@ public class NwLoom(
             is Rendezvous.New -> rendezvous.pattern.sessionName
             is Rendezvous.Existing -> selfId.value
         }
-        log.info { "nw.loom.weave self=${selfId.value} serviceType=$serviceType serviceName=$serviceName rendezvous=${rendezvous::class.simpleName}" }
+        log.debug { "nw.loom.weave self=${selfId.value} serviceType=$serviceType serviceName=$serviceName rendezvous=${rendezvous::class.simpleName}" }
 
         // Subscribe to discovery BEFORE advertising/browsing (subscribe-before-trigger: the API's
         // flows are hot with no replay). UNDISPATCHED so the collector is live before the first emit.
@@ -116,10 +116,10 @@ public class NwLoom(
             api.endpointFound.collect { endpoint ->
                 _visiblePeers.update { it + endpoint }
                 val firstSight = dialed.add(endpoint.id)
-                log.info { "nw.loom.discovered endpoint=${endpoint.id} self=${selfId.value} visible=${_visiblePeers.value.map { it.id }}${if (firstSight) " → dialing" else " (already dialed)"}" }
+                log.debug { "nw.loom.discovered endpoint=${endpoint.id} self=${selfId.value} visible=${_visiblePeers.value.map { it.id }}${if (firstSight) " → dialing" else " (already dialed)"}" }
                 if (firstSight) {
                     runCatchingCancellable { api.connect(endpoint) }
-                        .onFailure { log.info { "nw.loom.dial-failed endpoint=${endpoint.id} self=${selfId.value}: ${it.message}" } }
+                        .onFailure { log.debug { "nw.loom.dial-failed endpoint=${endpoint.id} self=${selfId.value}: ${it.message}" } }
                 }
             }
         }
@@ -144,7 +144,7 @@ public class NwLoom(
                 "nw weave timed out: no peer reached for serviceType=$serviceType within $weaveTimeout",
             )
         }
-        log.info { "nw.loom.wove self=${selfId.value} peers=${seam.peers.value.map { it.value }} state=${seam.state.value}" }
+        log.debug { "nw.loom.wove self=${selfId.value} peers=${seam.peers.value.map { it.value }} state=${seam.state.value}" }
         return seam
     }
 
