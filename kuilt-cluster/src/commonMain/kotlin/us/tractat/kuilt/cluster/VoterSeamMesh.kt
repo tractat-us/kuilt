@@ -69,12 +69,18 @@ public fun CoroutineScope.voterMeshOverSeams(
  *
  * Every voter node runs in a child scope of [meshScope]; ownership of [meshScope]'s lifecycle passes
  * to the returned [VoterMesh]. Parameters otherwise match the public overload.
+ *
+ * @param ownsSeams Whether the returned [VoterMesh] owns the [voterSeams]' lifecycles — set `true`
+ *   only by the internally-seam-creating caller (`voterMeshOverWebSockets`, which builds a `hubMesh`
+ *   per voter) so [VoterMesh.close] gracefully closes them. The public overload leaves it `false`
+ *   (caller-owned seams).
  */
 internal fun voterMeshOverSeams(
     voterSeams: Map<NodeId, Seam>,
     raftConfig: RaftConfig,
     meshScope: CoroutineScope,
     storageFactory: (NodeId) -> RaftStorage = { InMemoryRaftStorage() },
+    ownsSeams: Boolean = false,
 ): VoterMesh {
     require(voterSeams.isNotEmpty()) { "voterSeams must be non-empty" }
     val clusterConfig = ClusterConfig(voters = voterSeams.keys.toSet())
@@ -89,5 +95,5 @@ internal fun voterMeshOverSeams(
         val childScope = CoroutineScope(meshScope.coroutineContext + Job(meshScope.coroutineContext[Job]))
         childScope.raftNode(clusterConfig, transport, storageFactory(id), raftConfig)
     }
-    return VoterMesh(voterNodes = voterNodes, scope = meshScope, voterSeams = voterSeams)
+    return VoterMesh(voterNodes = voterNodes, scope = meshScope, voterSeams = voterSeams, ownsSeams = ownsSeams)
 }
