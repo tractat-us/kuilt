@@ -48,6 +48,17 @@ public class MDNSServiceDiscoverer(
 ) : PeerDiscoverySource {
     override val kind: DiscoveryKind = DiscoveryKind.Mdns
 
+    /**
+     * Returns a [Flow] that emits an [MDNSAdvertisement] for each peer discovered
+     * on the local network.
+     *
+     * **Self-discovery obligation (#1489):** Bonjour delivers a device's **own**
+     * advertisement to its own browser, so this flow emits an [MDNSAdvertisement]
+     * whose [MDNSAdvertisement.serverPeerId] is the local peer. A consumer that
+     * both advertises and browses (a symmetric lobby) **must** filter out its own
+     * id — `filter { it.serverPeerId != selfPeerId }` — or it will list, and dial,
+     * itself. This raw source has no `selfPeerId` in scope so it cannot filter for you.
+     */
     override fun discoveries(): Flow<MDNSAdvertisement> =
         callbackFlow {
             val delegate = ServiceDelegate(onDiscovered = { trySend(it) })
