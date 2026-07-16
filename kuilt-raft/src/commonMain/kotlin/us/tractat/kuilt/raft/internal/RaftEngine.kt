@@ -141,7 +141,17 @@ internal class RaftEngine(
                 }
             }
             val result = CompletableDeferred<CommitCutResult>()
-            cmd.send(EngineCommand.CommitCut(fromIndex, result))
+            // The engine command channel is closed by actor teardown (the node's scope was cancelled, or
+            // a Close command was processed). A committedFrom collection that races that teardown must end
+            // cleanly rather than leak a raw ClosedSendChannelException to its collector (#1465): the leak
+            // was this `cmd.send` inside the coroutineScope block — NOT the tail's `buffer.send`, which
+            // can never send-after-close within its own coroutine. trySend never suspends on the UNLIMITED
+            // cmd channel; isClosed ⇒ the node is gone, so cancel the live-tail subscriber and finish the
+            // (empty) stream.
+            if (cmd.trySend(EngineCommand.CommitCut(fromIndex, result)).isClosed) {
+                tail.cancel()
+                return@coroutineScope
+            }
             val cut = result.await()
             cut.install?.let { emit(Committed.Install(it)) }
             cut.replay.forEach { emit(Committed.Entry(it)) }
