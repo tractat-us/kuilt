@@ -70,8 +70,12 @@ class WebSocketVoterMeshReconnectionTest {
     // Short so the test is snappy; production defaults to 15s (KtorServerLoom.DEFAULT_PING_PERIOD).
     private val pingPeriod = 500.milliseconds
 
-    // Generous slack over the ~pingPeriod+timeout detection bound plus a backoff redial, for cold CI.
-    private val window = 25.seconds
+    // Per-step wall-clock budget: covers a real-loopback election, a half-open ping-reap
+    // (~pingPeriod + pong timeout), or a backoff redial + a Raft commit across the healed edge. Sized
+    // for a COLD, coverage-instrumented, contended CI runner — locally the whole suite runs in ~13s, but
+    // `aDroppedEdgeHealsAndRaftCommitsAcrossIt`'s 3-voter election/commit over real sockets timed out at
+    // 25s once under CI load (a timing budget, not a logic fault — the operation completes, just slowly).
+    private val window = 60.seconds
 
     // Wider election windows than the M=1 tests: the voter mesh needs real loopback round-trips for
     // vote grants; a seeded RNG so timeouts differ and one voter actually wins.
