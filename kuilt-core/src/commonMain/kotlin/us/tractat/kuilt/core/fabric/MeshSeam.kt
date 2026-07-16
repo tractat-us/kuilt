@@ -292,7 +292,7 @@ private suspend fun buildMesh(
     // Reject-and-continue: drop (and close) the links the policy declines; keep the survivors. A
     // rejected link never reaches the dedup lottery below or publication, and a rejection neither
     // fails construction nor tears down the concurrent sibling handshakes above.
-    val links = handshaked.filter { admitLink(admission, it) }
+    val links = handshaked.filter { admitLink(selfId, admission, it) }
 
     // Dedup duplicate links to the same peer, keeping the canonical survivor on every node.
     val winners = mutableMapOf<PeerId, Link>()
@@ -348,8 +348,19 @@ private fun canonicalLinkNonce(a: ByteArray, b: ByteArray): String {
  * Returns `true` to admit; on rejection it closes the connection and returns `false` — the link is
  * simply dropped, never reaching the dedup lottery, so a forged link can never displace a live one.
  * Rejection is per-link and non-fatal: it never fails construction nor tears down sibling links.
+ *
+ * **Self-connection guard (#1488).** A link whose remote resolves to [selfId] is dropped here,
+ * ahead of [admission] — a peer that dials its own advertised endpoint (both ends share a
+ * `Rendezvous.New` service name) handshakes a `MeshHello` claiming [selfId]. Registering it would
+ * put [selfId] in `links`: the node then echoes its own broadcasts, and the self-link skews
+ * `peerMesh` drain accounting into a spurious `Torn`. It is closed and dropped before it can reach
+ * dedup, `links`, or drain accounting — modelled on `NwSeam`'s self-connection drop (#1466/#1484).
  */
-private suspend fun admitLink(admission: LinkAdmission, link: Link): Boolean {
+private suspend fun admitLink(selfId: PeerId, admission: LinkAdmission, link: Link): Boolean {
+    if (link.remoteId == selfId) {
+        runCatchingCancellable { link.conn.close() }
+        return false
+    }
     if (admission.admit(link.principal, link.remoteId)) return true
     runCatchingCancellable { link.conn.close() }
     return false
@@ -431,7 +442,13 @@ private class MeshSeam(
         // absorbs and debug-logs — so one rejected joiner never tears down the seam or other links.
         // (kuilt-core is logger-free by contract, so the signal is raised here and logged by the
         // pump, which owns a logger.)
-        if (!admitLink(admission, link)) throw LinkRejectedException(link.remoteId, attested = link.principal != null)
+        if (!admitLink(selfId, admission, link)) {
+            // A self-connection (remote resolved to selfId) is dropped silently, like NwSeam — it is
+            // not an admission decision, so it must not surface as a LinkRejectedException. A genuine
+            // policy rejection is the per-link signal the accept-pump absorbs.
+            if (link.remoteId == selfId) return
+            throw LinkRejectedException(link.remoteId, attested = link.principal != null)
+        }
         // Dedup against any existing link to the same peer using the canonical nonce, then publish.
         // Snapshot the loser under the lock, close it outside.
         val loser = admitOrReject(link)

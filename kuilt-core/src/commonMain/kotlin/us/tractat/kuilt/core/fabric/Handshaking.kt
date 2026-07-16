@@ -33,5 +33,9 @@ public suspend fun handshaking(
     conn.send(Hello.encode(selfId))
     val single = conn.singleCollection(dispatcher)
     val remoteId = Hello.decode(single.firstFrame())
+    // Self-connection guard (#1488): a peer that dials its own advertised endpoint handshakes a
+    // preamble claiming its own id. A 2-peer seam whose "remote" is itself would echo its own frames;
+    // refuse it fast rather than weave a degenerate self-seam. Mirrors the mesh/NwSeam self-drop.
+    require(remoteId != selfId) { "handshaking refused a self-connection: remote resolved to selfId=${selfId.value}" }
     return identified(single, selfId, remoteId, dispatcher)
 }
