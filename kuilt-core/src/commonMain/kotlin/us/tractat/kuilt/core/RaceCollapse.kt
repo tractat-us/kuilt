@@ -66,15 +66,10 @@ public suspend fun <T> Seam.raceCollapse(
         if (abortWhen(peers.value)) throw SeamCollapsedException(collapseReason())
 
         val outcome = CompletableDeferred<T>()
-        val work = launch(start = CoroutineStart.UNDISPATCHED) {
-            try {
-                outcome.complete(body())
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Throwable) {
-                outcome.completeExceptionally(e)
-            }
-        }
+        // Watchers launched BEFORE work: UNDISPATCHED, so both reach their `.first()` subscription before
+        // `body` runs its first synchronous op. A collapse racing that first op (e.g. body's first transport
+        // send hitting a just-torn seam) then surfaces as SeamCollapsedException rather than the body's own
+        // low-level exception a caller can't retry on.
         val tornWatcher = launch(start = CoroutineStart.UNDISPATCHED) {
             val torn = state.filterIsInstance<SeamState.Torn>().first()
             outcome.completeExceptionally(SeamCollapsedException(torn.reason))
@@ -82,6 +77,20 @@ public suspend fun <T> Seam.raceCollapse(
         val drainWatcher = launch(start = CoroutineStart.UNDISPATCHED) {
             peers.first { abortWhen(it) }
             outcome.completeExceptionally(SeamCollapsedException(collapseReason()))
+        }
+        val work = launch(start = CoroutineStart.UNDISPATCHED) {
+            try {
+                outcome.complete(body())
+            } catch (e: CancellationException) {
+                // A CE from `work.cancel()` in the finally leaves `outcome` already completed → no-op. But a
+                // CE that originates INSIDE `body` (e.g. a `withTimeout` firing) with nothing having cancelled
+                // work would otherwise leave `outcome` uncompleted, hanging `outcome.await()` forever — the
+                // exact indefinite suspension this primitive exists to prevent. Surface it, then rethrow.
+                outcome.completeExceptionally(e)
+                throw e
+            } catch (e: Throwable) {
+                outcome.completeExceptionally(e)
+            }
         }
         try {
             outcome.await()

@@ -102,7 +102,10 @@ internal class SeamElectionLobby(
         // Host collapse (the transport-tear watcher in guardElection handles a fabric that latches Torn;
         // startElection itself handles the membership-drain case where the seam stays Woven).
         return try {
-            guardElection(collapseSignals = emptyList()) { startElection(memberName) }
+            // The freeze round runs INSIDE guardElection (collapse-abortable); adoption runs OUTSIDE it
+            // (finding #1) so a collapse signal cannot cancel adoptRoom mid-commit and wedge the lobby.
+            guardElection(collapseSignals = emptyList()) { runHostElection() }
+            adoptAfterCommit(SessionRole.Host, memberName)
                 .also { logger.info { "lobby.start.adopted self=${selfId.value}" } }
         } catch (e: Throwable) {
             logger.info { "lobby.start.exit self=${selfId.value} threw=${e::class.simpleName}: ${e.message}" }
@@ -110,7 +113,8 @@ internal class SeamElectionLobby(
         }
     }
 
-    private suspend fun startElection(memberName: String?): Room {
+    /** Run the host freeze round until it commits (broadcasting `Commit`); adoption is the caller's job. */
+    private suspend fun runHostElection() {
         if (host.value != selfId) {
             throw NotElectedHostException("not the elected host: host=${host.value}, self=$selfId")
         }
@@ -136,11 +140,11 @@ internal class SeamElectionLobby(
             val committed = withTimeoutOrNull(freezeTimeout) { awaitUnanimousAck(roster, members, myEpoch) } ?: false
             logger.info { "lobby.freeze-round self=${selfId.value} epoch=$myEpoch members=${members.map { it.value }} committed=$committed" }
             if (committed) {
-                logger.info { "lobby.tx.Commit self=${selfId.value} epoch=$myEpoch → adopting Host" }
+                logger.info { "lobby.tx.Commit self=${selfId.value} epoch=$myEpoch → committed (adopt outside race)" }
                 runCatchingCancellable {
                     seam.broadcast(LobbyMessage.encode(LobbyMessage.Commit(selfId.value, myEpoch)))
                 }
-                return adoptRoom(SessionRole.Host, memberName)
+                return
             }
             // Aborted (membership changed, lost host, or timed out): reopen and retry.
             logger.info { "lobby.tx.Reopen self=${selfId.value} epoch=$myEpoch (freeze aborted; retrying)" }
@@ -209,15 +213,20 @@ internal class SeamElectionLobby(
                     LobbyTornException(collapseReason())
                 },
             ) {
-                awaitRoomElection(memberName)
-            }.also { logger.info { "lobby.awaitRoom.adopted self=${selfId.value}" } }
+                runMemberElection()
+            }
+            // Adoption OUTSIDE guardElection (finding #1): once the Commit is received the race is over,
+            // so the became-host/tear collapse signals can no longer cancel adoptRoom mid-commit.
+            adoptAfterCommit(SessionRole.Joiner, memberName)
+                .also { logger.info { "lobby.awaitRoom.adopted self=${selfId.value}" } }
         } catch (e: Throwable) {
             logger.info { "lobby.awaitRoom.exit self=${selfId.value} threw=${e::class.simpleName}: ${e.message}" }
             throw e
         }
     }
 
-    private suspend fun awaitRoomElection(memberName: String?): Room {
+    /** Await a Freeze from the elected host and ack it until a `Commit` arrives; adoption is the caller's job. */
+    private suspend fun runMemberElection() {
         while (true) {
             // Await a Freeze from THIS peer's currently-elected host that names us in the roster.
             // Ignore a Freeze whose host is ourselves (a member never joins itself) or a foreign host.
@@ -254,7 +263,7 @@ internal class SeamElectionLobby(
             }
             logger.info { "lobby.resolution self=${selfId.value} epoch=${freeze.epoch} → ${resolution?.let { it::class.simpleName } ?: "TIMEOUT (retry for fresh Freeze)"}" }
             if (resolution is LobbyMessage.Commit) {
-                return adoptRoom(SessionRole.Joiner, memberName)
+                return
             }
             // Reopen or timeout: discard and await a fresh Freeze.
         }
@@ -335,6 +344,20 @@ internal class SeamElectionLobby(
             diagnosticJob.cancel()
             seam.close(CloseReason.Normal)
         }
+    }
+
+    /**
+     * Adopt the committed seam as [role] — run OUTSIDE [guardElection] so no collapse watcher can cancel
+     * it mid-commit (finding #1: cancelling [adoptRoom] after it latched `adopted` but before/while
+     * [SeamRoomFactory.adopt] ran wedged the lobby — `adopted == true` with no Room, `leave()` a no-op, a
+     * live orphaned seam, and any retry hitting `check(!adopted)`). By the time this runs the 2PC has
+     * committed and the watchers are cancelled, so adoption is uninterrupted. A tear that latched *before*
+     * we adopt is surfaced as a clean retryable [LobbyTornException]; a tear *during* the fast, now
+     * uncancellable adopt is handled by the room's own `runTornWatcher` (a born-dead room), not a wedge.
+     */
+    private suspend fun adoptAfterCommit(role: SessionRole, memberName: String?): Room {
+        (seam.state.value as? SeamState.Torn)?.let { throw LobbyTornException(it.reason) }
+        return adoptRoom(role, memberName)
     }
 
     /**
