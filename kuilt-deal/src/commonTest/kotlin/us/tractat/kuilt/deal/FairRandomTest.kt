@@ -4,9 +4,12 @@ package us.tractat.kuilt.deal
 
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.async
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withTimeout
 import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.core.SeamCollapsedException
 import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.test.fakeSeamPair
 import kotlin.test.Test
@@ -16,6 +19,7 @@ import kotlin.test.assertFails
 import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertNotEquals
+import kotlin.time.Duration.Companion.seconds
 
 class FairRandomTest {
 
@@ -60,6 +64,27 @@ class FairRandomTest {
 
         // With 32-byte CSPRNG secrets the probability of collision is negligible.
         assertNotEquals(seed1, seed2, "Independent rolls should (almost certainly) differ")
+    }
+
+    // ── Mid-2PC collapse (membership drain, no tear) ──────────────────────────
+
+    @Test
+    fun roll_throwsWhenParticipantDrainsMidRound() = runTest {
+        // The membership-drain analogue of the lobby #1466 bug: alice is mid-round awaiting bob's
+        // commit; bob leaves the live peer set (removePeer — seam stays Woven, NO tear). Without
+        // raceCollapse, commits.receive() would hang forever. roll() must instead throw within a bound.
+        val scope = CoroutineScope(UnconfinedTestDispatcher(testScheduler))
+        val peers = setOf(alice, bob)
+        val (aliceSeam, _) = fakeSeamPair(alice, bob)
+
+        // Only alice rolls; bob never participates, so alice suspends awaiting bob's commit.
+        val aliceDef = scope.async { runCatchingCancellable { FairRandom(aliceSeam, peers).roll() } }
+        runCurrent() // let alice broadcast her commit and suspend on commits.receive()
+
+        aliceSeam.removePeer(bob) // membership drain: bob leaves, seam stays Woven (no tear)
+
+        val result = withTimeout(5.seconds) { aliceDef.await() }
+        assertIs<SeamCollapsedException>(result.exceptionOrNull())
     }
 
     // ── Commitment-scheme verification ────────────────────────────────────────
