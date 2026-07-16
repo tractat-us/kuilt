@@ -14,10 +14,15 @@ package us.tractat.kuilt.nw
  * ## Discovery
  * Each device may [markListening] (advertise + accept, under a `serviceName`/`serviceType`)
  * and/or [markBrowsing] (under a `serviceType`). When a device starts browsing type `T`,
- * every OTHER device already listening on `T` is delivered to it as an
+ * every device already listening on `T` is delivered to it as an
  * [NwEndpoint]; symmetrically, when a device starts listening on `T`, it is delivered to
- * every OTHER device already browsing `T`. The endpoint `id` encodes the LISTENING device's
+ * every device already browsing `T`. The endpoint `id` encodes the LISTENING device's
  * id (`"ep-<listenerDeviceId>"`) so [connect] can map an endpoint back to its device.
+ *
+ * A device that both advertises AND browses type `T` is delivered its OWN endpoint — real
+ * Bonjour/mDNS returns a device's own advertisement to its own browser, so the fake must too
+ * (fixes #1485). That self-endpoint is what drives the self-dial the `NwSeam` guard must drop;
+ * omitting it is why the #1466 self-connection bug went uncaught until hardware.
  *
  * ## Connect — a distinct [NwConnectionId] per side
  * When device A dials an endpoint, the radio resolves the endpoint to its listening device B,
@@ -79,9 +84,10 @@ internal class FakeNwRadio {
 
     suspend fun markListening(deviceId: String, serviceName: String, serviceType: String) {
         listening[deviceId] = Listening(serviceName, serviceType)
-        // Announce this new listener to every OTHER device already browsing the type.
+        // Announce this new listener to every device already browsing the type — INCLUDING
+        // itself if it also browses `serviceType` (real mDNS returns self; see class KDoc / #1485).
         for ((browserId, browseType) in browsing) {
-            if (browserId == deviceId || browseType != serviceType) continue
+            if (browseType != serviceType) continue
             devices.getValue(browserId).emitEndpointFound(
                 NwEndpoint(id = endpointIdFor(deviceId), serviceName = serviceName),
             )
@@ -94,9 +100,10 @@ internal class FakeNwRadio {
 
     suspend fun markBrowsing(deviceId: String, serviceType: String) {
         browsing[deviceId] = serviceType
-        // Deliver every OTHER device already listening on the type to this browser.
+        // Deliver every device already listening on the type to this browser — INCLUDING
+        // itself if it also advertises `serviceType` (real mDNS returns self; see class KDoc / #1485).
         for ((listenerId, l) in listening) {
-            if (listenerId == deviceId || l.serviceType != serviceType) continue
+            if (l.serviceType != serviceType) continue
             devices.getValue(deviceId).emitEndpointFound(
                 NwEndpoint(id = endpointIdFor(listenerId), serviceName = l.serviceName),
             )
