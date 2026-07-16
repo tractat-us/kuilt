@@ -45,6 +45,13 @@ kotlin {
             implementation(libs.kotlinx.coroutines.test)
             implementation(libs.logback)
         }
+        // kotlin-logging needs an SLF4J backend on the Android unit-test variant too — otherwise the
+        // first actual logger USE (now on the happy path, not just error paths) throws
+        // NoClassDefFoundError: org/slf4j/impl/StaticLoggerBinder via ExceptionInInitializerError and
+        // poisons every NwSeam test. Mirrors kuilt-session's runtimeOnly(logback) for both variants.
+        androidUnitTest.dependencies {
+            runtimeOnly(libs.logback)
+        }
     }
 }
 

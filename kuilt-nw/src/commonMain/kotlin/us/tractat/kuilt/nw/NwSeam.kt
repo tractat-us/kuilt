@@ -134,13 +134,17 @@ internal class NwSeam(
 
     private suspend fun connectionOpenedLoop() {
         api.connectionOpened.collect { event ->
-            if (closed.value) return@collect
+            if (closed.value) {
+                log.info { "nw.seam.opened.ignored connId=${event.connectionId.value} self=${selfId.value} (seam closed)" }
+                return@collect
+            }
             val connId = event.connectionId
             // Get-or-create the ConnState (minting its nonce once) and snapshot the nonce under the
             // lock; send the identity frame OUTSIDE the lock (best-effort).
             val nonce = lock.withLock { conns.getOrPut(connId) { ConnState(random.nextBytes(NONCE_BYTES)) }.nonce }
+            log.info { "nw.seam.opened connId=${connId.value} self=${selfId.value} → sending NwHello" }
             runCatchingCancellable { api.send(connId, encodeFrame(NwHello.encode(selfId, nonce))) }
-                .onFailure { log.debug { "nw.identity send failed connId=${connId.value} selfId=${selfId.value}" } }
+                .onFailure { log.info { "nw.seam.identity-send-failed connId=${connId.value} self=${selfId.value}: ${it.message}" } }
         }
     }
 
@@ -217,16 +221,28 @@ internal class NwSeam(
         if (existing == null) {
             registry[remoteId] = Winner(connId, canonical)
             addRemotePeer(remoteId)
+            log.info { "nw.seam.resolved.first connId=${connId.value} remote=${remoteId.value} self=${selfId.value} nonce=$canonical" }
             return null
         }
-        if (existing.connId == connId) return null // idempotent; same connection re-resolving
+        if (existing.connId == connId) {
+            log.info { "nw.seam.resolved.idempotent connId=${connId.value} remote=${remoteId.value}" }
+            return null // idempotent; same connection re-resolving
+        }
         // Duplicate link to remoteId. Keep the SMALLER canonical nonce; disconnect the loser.
         return if (canonical < existing.canonicalNonce) {
             registry[remoteId] = Winner(connId, canonical) // new winner; peer stays present
             conns.remove(existing.connId) // drop the displaced incumbent's state
+            log.info {
+                "nw.seam.dedup.replace remote=${remoteId.value} winner=${connId.value}(nonce=$canonical) " +
+                    "loser=${existing.connId.value}(nonce=${existing.canonicalNonce}) → disconnect loser"
+            }
             existing.connId // disconnect the displaced incumbent
         } else {
             conns.remove(connId) // drop this loser's state
+            log.info {
+                "nw.seam.dedup.keep remote=${remoteId.value} winner=${existing.connId.value}(nonce=${existing.canonicalNonce}) " +
+                    "loser=${connId.value}(nonce=$canonical) → disconnect loser"
+            }
             connId // this connection loses; disconnect it, incumbent stays
         }
     }
@@ -234,25 +250,40 @@ internal class NwSeam(
     /** Add [remoteId] to the peer set and flip Weaving→Woven. Called under [lock]. */
     private fun addRemotePeer(remoteId: PeerId) {
         _peers.update { it + remoteId }
-        if (_state.value is SeamState.Weaving) _state.value = SeamState.Woven
+        val wove = _state.value is SeamState.Weaving
+        if (wove) _state.value = SeamState.Woven
+        log.info { "nw.seam.peer-added remote=${remoteId.value} self=${selfId.value} peers=${_peers.value.map { it.value }} state=${_state.value}${if (wove) " (Weaving→Woven)" else ""}" }
     }
 
     // ── loop 3: connectionClosed ────────────────────────────────────────────────
 
     private suspend fun connectionClosedLoop() {
         api.connectionClosed.collect { event ->
-            if (closed.value) return@collect
+            if (closed.value) {
+                log.info { "nw.seam.closed.ignored connId=${event.connectionId.value} self=${selfId.value} (seam already torn)" }
+                return@collect
+            }
+            // Classify the close under the lock; log the verdict after releasing it.
+            var verdict = "no-op"
             val tearNow = lock.withLock {
-                val cs = conns.remove(event.connectionId) ?: return@withLock false
-                val peer = cs.resolvedPeerId ?: return@withLock false
+                val cs = conns.remove(event.connectionId)
+                if (cs == null) { verdict = "unknown-conn"; return@withLock false }
+                val peer = cs.resolvedPeerId
+                if (peer == null) { verdict = "unresolved-conn (no peer to evict)"; return@withLock false }
                 // Conn-identity guard: only evict the peer if the LIVE connection is this one — a
                 // stale/deduped-loser close must not evict the surviving connection to the same peer.
-                if (registry[peer]?.connId != event.connectionId) return@withLock false
+                if (registry[peer]?.connId != event.connectionId) {
+                    verdict = "stale/loser-close for peer=${peer.value} (live conn=${registry[peer]?.connId?.value}) — NOT evicting"
+                    return@withLock false
+                }
                 registry.remove(peer)
                 _peers.update { it - peer }
                 // Last remote gone after having woven ⇒ the session is over (mirror the mesh rule).
-                registry.isEmpty() && _state.value is SeamState.Woven
+                val tear = registry.isEmpty() && _state.value is SeamState.Woven
+                verdict = "evicted peer=${peer.value} → peers=${_peers.value.map { it.value }} tearNow=$tear"
+                tear
             }
+            log.info { "nw.seam.closed connId=${event.connectionId.value} self=${selfId.value}: $verdict" }
             if (tearNow) latchTorn(CloseReason.RemoteRequested)
         }
     }
@@ -262,10 +293,14 @@ internal class NwSeam(
     override suspend fun broadcast(payload: ByteArray) {
         check(_state.value !is SeamState.Torn) { closedMessage }
         val targets = lock.withLock { registry.values.map { it.connId } }
+        log.info { "nw.seam.broadcast self=${selfId.value} bytes=${payload.size} targets=${targets.map { it.value }}" }
         val frame = encodeFrame(payload)
         for (connId in targets) {
             runCatchingCancellable { api.send(connId, frame) }
-                .onFailure { removeByConn(connId) }
+                .onFailure {
+                    log.info { "nw.seam.broadcast.send-failed connId=${connId.value} self=${selfId.value}: ${it.message} → removeByConn" }
+                    removeByConn(connId)
+                }
         }
     }
 
@@ -273,7 +308,10 @@ internal class NwSeam(
         check(_state.value !is SeamState.Torn) { closedMessage }
         val connId = lock.withLock { registry[peer]?.connId } ?: throw PeerNotConnected(peer)
         runCatchingCancellable { api.send(connId, encodeFrame(payload)) }
-            .onFailure { removeByConn(connId) }
+            .onFailure {
+                log.info { "nw.seam.sendTo.send-failed peer=${peer.value} connId=${connId.value} self=${selfId.value}: ${it.message} → removeByConn" }
+                removeByConn(connId)
+            }
     }
 
     /**
@@ -284,21 +322,31 @@ internal class NwSeam(
      * The tear decision is computed under [lock]; [latchTorn] (non-suspend) runs after releasing it.
      */
     private fun removeByConn(connId: NwConnectionId) {
+        var verdict = "no-op"
         val tearNow = lock.withLock {
-            val cs = conns.remove(connId) ?: return@withLock false
-            val peer = cs.resolvedPeerId ?: return@withLock false
-            if (registry[peer]?.connId != connId) return@withLock false
+            val cs = conns.remove(connId)
+            if (cs == null) { verdict = "unknown-conn"; return@withLock false }
+            val peer = cs.resolvedPeerId
+            if (peer == null) { verdict = "unresolved-conn"; return@withLock false }
+            if (registry[peer]?.connId != connId) {
+                verdict = "stale/loser conn for peer=${peer.value} — NOT evicting"
+                return@withLock false
+            }
             registry.remove(peer)
             _peers.update { it - peer }
             // Last remote gone after having woven ⇒ the session is over (mirror the close rule).
-            registry.isEmpty() && _state.value is SeamState.Woven
+            val tear = registry.isEmpty() && _state.value is SeamState.Woven
+            verdict = "evicted peer=${peer.value} → peers=${_peers.value.map { it.value }} tearNow=$tear"
+            tear
         }
+        log.info { "nw.seam.removeByConn connId=${connId.value} self=${selfId.value}: $verdict" }
         if (tearNow) latchTorn(CloseReason.RemoteRequested)
     }
 
     // ── close ─────────────────────────────────────────────────────────────────
 
     override suspend fun close(reason: CloseReason) {
+        log.info { "nw.seam.close.requested self=${selfId.value} reason=$reason state=${_state.value}" }
         // Single-shot: if a self-driven Torn (last-peer drop) already fired, this no-ops.
         if (!latchTorn(reason)) return
         val targets = lock.withLock {
@@ -320,7 +368,11 @@ internal class NwSeam(
      * (last remote gone).
      */
     private fun latchTorn(reason: CloseReason): Boolean {
-        if (!closed.compareAndSet(expect = false, update = true)) return false
+        if (!closed.compareAndSet(expect = false, update = true)) {
+            log.info { "nw.seam.latchTorn.noop self=${selfId.value} (already torn) reason=$reason" }
+            return false
+        }
+        log.info { "nw.seam.TORN self=${selfId.value} reason=$reason peers-were=${_peers.value.map { it.value }}" }
         _state.value = SeamState.Torn(reason)
         spool.close()
         scope.coroutineContext[Job]?.cancel()
