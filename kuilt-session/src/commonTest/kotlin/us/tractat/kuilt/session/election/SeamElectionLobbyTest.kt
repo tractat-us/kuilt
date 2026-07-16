@@ -231,7 +231,7 @@ class SeamElectionLobbyTest {
     // bound — never suspends forever. That is the net #1466 shipped past.
 
     @Test
-    fun `member awaitRoom aborts on a mid-handshake membership drain (no seam tear)`() =
+    fun `member awaitRoom aborts on a mid-handshake membership drain without a seam tear`() =
         runTest(timeout = 5.seconds) {
             val self = PeerId("peer-z")
             val hostId = PeerId("peer-a")
@@ -245,7 +245,7 @@ class SeamElectionLobbyTest {
         }
 
     @Test
-    fun `host start aborts on a mid-handshake membership drain (no seam tear)`() =
+    fun `host start aborts on a mid-handshake membership drain without a seam tear`() =
         runTest(timeout = 5.seconds) {
             // The host must surface a retryable signal, not silently commit a solo room (the #1468
             // host bug, which a transport-tear test masks because nw publishes peers→{self} before
