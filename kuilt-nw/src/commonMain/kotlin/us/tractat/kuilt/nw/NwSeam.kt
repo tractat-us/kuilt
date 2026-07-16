@@ -215,6 +215,19 @@ internal class NwSeam(
         remoteId: PeerId,
         remoteNonce: ByteArray,
     ): NwConnectionId? {
+        // Self-connection guard (#1466). In the election mesh both peers advertise the SAME
+        // `Rendezvous.New` service name, so a peer's own advertisement appears in its browse results and
+        // `NwLoom` dials it — a connection whose remote resolves to `selfId`. It must NEVER be registered:
+        // registering self puts `selfId` in `registry`, and when that connection later fails,
+        // `connectionClosedLoop` evicts its peer — self — dropping this peer from its own roster
+        // (`peers → {theOtherPeer}`, `state` stays `Woven`, no `Torn`), which silently wedges every
+        // consumer keying on `peers`/`host`/`Torn`. Leave `resolvedPeerId` null, drop the ConnState, and
+        // return the connId so the caller disconnects the self-link (its later close is then a no-op).
+        if (remoteId == selfId) {
+            conns.remove(connId)
+            log.info { "nw.seam.self-connection connId=${connId.value} self=${selfId.value} → dropped (dialed own endpoint)" }
+            return connId
+        }
         cs.resolvedPeerId = remoteId
         val canonical = canonicalLinkNonce(cs.nonce, remoteNonce)
         val existing = registry[remoteId]
