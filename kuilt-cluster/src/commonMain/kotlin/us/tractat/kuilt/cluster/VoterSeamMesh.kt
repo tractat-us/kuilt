@@ -89,5 +89,5 @@ internal fun voterMeshOverSeams(
         val childScope = CoroutineScope(meshScope.coroutineContext + Job(meshScope.coroutineContext[Job]))
         childScope.raftNode(clusterConfig, transport, storageFactory(id), raftConfig)
     }
-    return VoterMesh(voterNodes = voterNodes, scope = meshScope)
+    return VoterMesh(voterNodes = voterNodes, scope = meshScope, voterSeams = voterSeams)
 }
