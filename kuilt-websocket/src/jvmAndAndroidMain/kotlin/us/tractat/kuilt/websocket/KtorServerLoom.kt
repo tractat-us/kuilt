@@ -2,10 +2,7 @@ package us.tractat.kuilt.websocket
 
 import io.ktor.server.application.Application
 import io.ktor.server.application.ApplicationCall
-import io.ktor.server.application.install
-import io.ktor.server.application.pluginOrNull
 import io.ktor.server.routing.routing
-import io.ktor.server.websocket.WebSockets
 import io.ktor.server.websocket.webSocket
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
@@ -17,6 +14,8 @@ import us.tractat.kuilt.core.Principal
 import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.session.withPrincipal
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.seconds
 import kotlin.uuid.ExperimentalUuidApi
 import kotlin.uuid.Uuid
 
@@ -38,6 +37,14 @@ import kotlin.uuid.Uuid
  * @param dispatcher Scheduler for each per-connection seam's read/write loops; the loom
  *   confines it to a single thread via `limitedParallelism(1)`. Production default is
  *   [Dispatchers.IO]; tests inject [kotlinx.coroutines.test.UnconfinedTestDispatcher].
+ * @param pingPeriod WebSocket ping period. A ping unanswered past the pong timeout (which tracks
+ *   this value) tears the session down, so a **half-open** link — silently dead TCP, no FIN/RST —
+ *   is detected in ~2×[pingPeriod] rather than the multi-minute TCP-RTO window, promptly and
+ *   symmetrically on both ends. Defaults to [DEFAULT_PING_PERIOD]. **The client must also enable
+ *   pings** (`install(WebSockets) { pingInterval = … }`) for its own half-open detection.
+ *   **Trap:** if the host [Application] pre-installed the `WebSockets` plugin without a ping period,
+ *   this value silently does not apply (Ktor installs the plugin once) — a loud warning is logged;
+ *   configure `pingPeriod` on your own install in that case.
  * @param principalExtractor Derives a host-verified [Principal] from the accepting
  *   [ApplicationCall] (e.g. `call.principal<MyAuth>()?.let { Principal(it.id) }`). Runs in
  *   the WebSocket accept handler, where auth has already run, and the result rides the
@@ -50,6 +57,7 @@ public class KtorServerLoom(
     private val path: String,
     public val selfPeerId: PeerId = PeerId("server-${Uuid.random()}"),
     private val dispatcher: CoroutineDispatcher = Dispatchers.IO,
+    private val pingPeriod: Duration = DEFAULT_PING_PERIOD,
     private val principalExtractor: (ApplicationCall) -> Principal? = { null },
 ) : Loom {
     private val connectionChannel = Channel<Seam>(capacity = Channel.UNLIMITED)
@@ -100,9 +108,15 @@ public class KtorServerLoom(
         }
 
     private fun installWebSocketsIfAbsent(application: Application) {
-        if (application.pluginOrNull(WebSockets) == null) {
-            application.install(WebSockets)
-        }
+        installWebSocketsWithPing(application, pingPeriod)
     }
 
+    public companion object {
+        /**
+         * Default WebSocket ping period. A missed pong within one further ping period tears the
+         * session down, so a half-open link is detected in ~2×[DEFAULT_PING_PERIOD] — bounded and
+         * symmetric, versus the multi-minute TCP-RTO window a read-only side would otherwise wait.
+         */
+        public val DEFAULT_PING_PERIOD: Duration = 15.seconds
+    }
 }
