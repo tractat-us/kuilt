@@ -13,7 +13,6 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
-import kotlinx.coroutines.flow.filterIsInstance
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
@@ -24,7 +23,9 @@ import kotlinx.coroutines.withTimeoutOrNull
 import us.tractat.kuilt.core.CloseReason
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Seam
+import us.tractat.kuilt.core.SeamCollapsedException
 import us.tractat.kuilt.core.SeamState
+import us.tractat.kuilt.core.raceCollapse
 import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.session.Room
 import us.tractat.kuilt.session.SeamRoomFactory
@@ -220,25 +221,26 @@ internal class SeamElectionLobby(
 
     /**
      * Run [body] (an election handshake) but abort it with [LobbyTornException] the instant the
-     * election becomes impossible to complete — either the underlying [seam] latches [SeamState.Torn]
-     * (transport gone) OR one of the [collapseSignals] fires (the co-elector(s) this peer is electing
-     * with left the peer set while the seam stayed `Woven`). Both are mid-2PC peer-set collapses
-     * (#1466); they surface differently at the seam layer:
+     * election becomes impossible to complete. Two mid-2PC peer-set collapses (#1466), surfacing
+     * differently at the seam layer, must both fire:
      *
-     * - **Transport tear** — a fabric that latches `Torn` on drain (e.g. a peerMesh losing its last
-     *   link). Caught by the always-present torn watcher.
-     * - **Membership drain** — the observed hardware failure: `Seam.peers` drops to `{self}` (and
-     *   [host] recomputes to `self`) but `state` never becomes `Torn`. A torn watcher alone never
-     *   fires; the caller-supplied [collapseSignals] key on [peers]/[host] instead.
+     * - **Transport tear** — the underlying [seam] latches [SeamState.Torn] (e.g. a peerMesh losing its
+     *   last link). Owned by [Seam.raceCollapse]'s always-present torn watcher (+ eager torn check).
+     * - **Membership drain** — the observed hardware failure: `Seam.peers` drops to `{self}` (and [host]
+     *   recomputes to `self`) but `state` never becomes `Torn`. A torn watcher alone never fires; the
+     *   role-specific [collapseSignals] key on [host] instead.
+     *
+     * The torn dimension is delegated to the core [Seam.raceCollapse] primitive; its [SeamCollapsedException]
+     * is re-thrown as the lobby's [LobbyTornException]. The membership dimension is **not** a bare
+     * peers-size predicate — a lone host legitimately runs solo (`start` from an empty roster commits
+     * immediately) — so `abortWhen` is disabled and the lobby composes its own [collapseSignals] on top
+     * (member: `host` became self; the host path handles drain inside [startElection]'s `everHadMembers`
+     * re-check). Each signal and [body] run as [CoroutineStart.UNDISPATCHED] siblings so a collapse already
+     * true at entry, or racing the body, is never missed.
      *
      * Without this, [awaitRoomElection]'s Freeze-wait and [startElection]'s ack-wait suspend forever:
      * [lobbyMessages] is a standalone flow that never completes when [Seam.incoming] does, so nothing
-     * else wakes the waiter. The retryable throw lets the caller re-run `electLobby` to rejoin / re-elect
-     * — the lobby's analogue of `SeamRoom.runTornWatcher`, generalised past transport tear.
-     *
-     * The watchers and the body run as [CoroutineStart.UNDISPATCHED] siblings — each reaches its first
-     * suspension point before control returns — so a collapse already true at entry (the eager torn
-     * check, plus each signal's own entry check) or racing the body is never missed.
+     * else wakes the waiter. The retryable throw lets the caller re-run `electLobby` to rejoin / re-elect.
      *
      * @param collapseSignals each suspends until its collapse condition holds, then returns the
      *   [LobbyTornException] to abort with. Role-specific (member: became-host; host: lost all members).
@@ -247,8 +249,20 @@ internal class SeamElectionLobby(
         collapseSignals: List<suspend () -> LobbyTornException>,
         body: suspend () -> T,
     ): T =
+        try {
+            seam.raceCollapse(abortWhen = { false }) {
+                if (collapseSignals.isEmpty()) body() else raceCollapseSignals(collapseSignals, body)
+            }
+        } catch (e: SeamCollapsedException) {
+            throw LobbyTornException(e.reason)
+        }
+
+    /** Race [body] against the lobby's role-specific [collapseSignals]; the first to resolve wins. */
+    private suspend fun <T> raceCollapseSignals(
+        collapseSignals: List<suspend () -> LobbyTornException>,
+        body: suspend () -> T,
+    ): T =
         coroutineScope {
-            (seam.state.value as? SeamState.Torn)?.let { throw LobbyTornException(it.reason) }
             val outcome = CompletableDeferred<T>()
             val work = launch(start = CoroutineStart.UNDISPATCHED) {
                 try {
@@ -259,22 +273,14 @@ internal class SeamElectionLobby(
                     outcome.completeExceptionally(e)
                 }
             }
-            val watchers = buildList {
-                add(
-                    launch(start = CoroutineStart.UNDISPATCHED) {
-                        val torn = seam.state.filterIsInstance<SeamState.Torn>().first()
-                        outcome.completeExceptionally(LobbyTornException(torn.reason))
-                    },
-                )
-                for (signal in collapseSignals) {
-                    add(launch(start = CoroutineStart.UNDISPATCHED) { outcome.completeExceptionally(signal()) })
-                }
+            val signalJobs = collapseSignals.map { signal ->
+                launch(start = CoroutineStart.UNDISPATCHED) { outcome.completeExceptionally(signal()) }
             }
             try {
                 outcome.await()
             } finally {
                 work.cancel()
-                watchers.forEach { it.cancel() }
+                signalJobs.forEach { it.cancel() }
             }
         }
 

@@ -13,6 +13,8 @@ import kotlinx.serialization.encodeToByteArray
 import org.kotlincrypto.hash.sha2.SHA256
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Seam
+import us.tractat.kuilt.core.SeamCollapsedException
+import us.tractat.kuilt.core.raceCollapse
 
 /**
  * Two-phase commit-reveal protocol for deriving a shared random [Long] seed.
@@ -38,11 +40,13 @@ import us.tractat.kuilt.core.Seam
  * forfeit semantics for abort at the game layer. Full abort-resistance requires
  * threshold signatures or a VRF — out of scope here.
  *
- * A peer that never sends a reveal (or never sends a commit) will cause [roll] to
- * stall until the coroutine is cancelled. Applications should apply an outer timeout.
- * Similarly, a seam that reaches the terminal [us.tractat.kuilt.core.SeamState.Torn]
- * during either phase will never deliver the missing message; callers should observe
- * seam state and cancel accordingly.
+ * If the seam collapses mid-round — a transport tear (the seam reaches the terminal
+ * [us.tractat.kuilt.core.SeamState.Torn]) OR a membership drain (a required participant
+ * leaves the live peer set while the seam stays `Woven`) — the missing commit/reveal
+ * never arrives. [roll] detects both via [us.tractat.kuilt.core.raceCollapse] and throws
+ * [SeamCollapsedException] rather than stalling, so no outer timeout is required. (A peer
+ * that stays connected but simply withholds its reveal is a distinct, application-level
+ * concern — see "Abort resistance" above — and still requires game-layer forfeit handling.)
  *
  * ## Usage
  *
@@ -77,8 +81,9 @@ public class FairRandom(
      * @throws CommitmentViolation if a peer's reveal does not match its commit.
      * @throws IllegalArgumentException if [seam]'s own identity is not in [peers],
      *   or if [peers] contains fewer than two participants.
-     * @throws CancellationException if the coroutine is cancelled (e.g. no-reveal
-     *   peer stalls the round — apply an outer timeout).
+     * @throws SeamCollapsedException if the seam tears or a required participant drains
+     *   from the live peer set mid-round (the missing commit/reveal will never arrive).
+     * @throws CancellationException if the coroutine is cancelled.
      */
     public suspend fun roll(): Long = coroutineScope {
         require(seam.selfId in peers) {
@@ -115,9 +120,17 @@ public class FairRandom(
         }
 
         try {
-            val allCommits = broadcastAndCollectCommits(myId, myCommit, commits)
-            val allReveals = broadcastAndCollectReveals(myId, secret, nonce, allCommits, reveals)
-            deriveSeed(allReveals)
+            // Both phases block on channel.receive() fed by seam.incoming. If the seam collapses
+            // mid-round — a transport tear OR a required participant draining from the live peer set
+            // without a tear — no further message ever arrives and the receive() would hang forever.
+            // raceCollapse turns either collapse into a bounded SeamCollapsedException throw. abortWhen
+            // fires when ANY required participant leaves the live set (not just size < 2), covering the
+            // N-peer case where the drop still leaves ≥ 2 live peers.
+            seam.raceCollapse(abortWhen = { live -> peers.any { it !in live } }) {
+                val allCommits = broadcastAndCollectCommits(myId, myCommit, commits)
+                val allReveals = broadcastAndCollectReveals(myId, secret, nonce, allCommits, reveals)
+                deriveSeed(allReveals)
+            }
         } finally {
             collectorJob.cancel()
             commits.close()
