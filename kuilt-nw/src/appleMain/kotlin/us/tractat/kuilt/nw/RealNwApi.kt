@@ -289,15 +289,15 @@ internal class RealNwApi(
     override suspend fun connect(endpoint: NwEndpoint) {
         val ep = lock.withLock { endpointsById[endpoint.id] }
         if (ep == null) {
-            log.info { "nw.api.connect.unknown-endpoint id=${endpoint.id}" }
+            log.debug { "nw.api.connect.unknown-endpoint id=${endpoint.id}" }
             return
         }
         val connection = nw_connection_create(ep, secureParams())
         if (connection == null) {
-            log.info { "nw.api.connect.create-failed endpoint id=${endpoint.id}" }
+            log.debug { "nw.api.connect.create-failed endpoint id=${endpoint.id}" }
             return
         }
-        log.info { "nw.api.connect.dial endpoint=${endpoint.id} (outbound)" }
+        log.debug { "nw.api.connect.dial endpoint=${endpoint.id} (outbound)" }
         retainAndStart(connection, endpoint = endpoint)
     }
 
@@ -310,7 +310,7 @@ internal class RealNwApi(
             entry.closing = true
             entry.connection
         }
-        log.info { "nw.api.disconnect id=${connectionId.value} (local graceful cancel)" }
+        log.debug { "nw.api.disconnect id=${connectionId.value} (local graceful cancel)" }
         nw_connection_cancel(connection)
     }
 
@@ -340,7 +340,7 @@ internal class RealNwApi(
     private fun retainAndStart(connection: nw_connection_t, endpoint: NwEndpoint?) {
         val id = NwConnectionId("nw-${connectionCounter.incrementAndGet()}")
         lock.withLock { connections[id] = ConnectionEntry(connection, endpoint) } // strong ref
-        log.info { "nw.api.retain-start id=${id.value} endpoint=${endpoint?.id ?: "<inbound>"} dir=${if (endpoint == null) "inbound" else "outbound"}" }
+        log.debug { "nw.api.retain-start id=${id.value} endpoint=${endpoint?.id ?: "<inbound>"} dir=${if (endpoint == null) "inbound" else "outbound"}" }
         nw_connection_set_queue(connection, queue)
         nw_connection_set_state_changed_handler(connection) { state, _ -> onState(id, connection, state) }
         nw_connection_start(connection)
@@ -350,17 +350,17 @@ internal class RealNwApi(
         when (state) {
             nw_connection_state_ready -> {
                 val endpoint = lock.withLock { connections[id]?.endpoint }
-                log.info { "nw.api.state id=${id.value} READY endpoint=${endpoint?.id ?: "<inbound>"} → emit connectionOpened + start receiveLoop" }
+                log.debug { "nw.api.state id=${id.value} READY endpoint=${endpoint?.id ?: "<inbound>"} → emit connectionOpened + start receiveLoop" }
                 _connectionOpened.tryEmit(NwConnectionOpened(id, endpoint))
                 receiveLoop(id, connection)
             }
-            // WAITING is the path-lost limbo (unsatisfied route) that fires NO close — logged loudly
-            // because it is the #1478 wedge candidate: the seam never learns the peer is unreachable.
-            nw_connection_state_waiting -> log.info { "nw.api.state id=${id.value} WAITING (path unsatisfied — no close will fire; seam keeps the peer)" }
-            nw_connection_state_preparing -> log.info { "nw.api.state id=${id.value} PREPARING" }
+            // WAITING is the path-lost limbo (unsatisfied route) that fires NO close — the #1478 wedge
+            // candidate: the seam never learns the peer is unreachable.
+            nw_connection_state_waiting -> log.debug { "nw.api.state id=${id.value} WAITING (path unsatisfied — no close will fire; seam keeps the peer)" }
+            nw_connection_state_preparing -> log.debug { "nw.api.state id=${id.value} PREPARING" }
             nw_connection_state_failed -> { log.info { "nw.api.state id=${id.value} FAILED → closeConnection(failed=true)" }; closeConnection(id, failed = true) }
-            nw_connection_state_cancelled -> { log.info { "nw.api.state id=${id.value} CANCELLED → closeConnection(failed=false)" }; closeConnection(id, failed = false) }
-            else -> log.info { "nw.api.state id=${id.value} other=$state" }
+            nw_connection_state_cancelled -> { log.debug { "nw.api.state id=${id.value} CANCELLED → closeConnection(failed=false)" }; closeConnection(id, failed = false) }
+            else -> log.debug { "nw.api.state id=${id.value} other=$state" }
         }
     }
 
@@ -372,7 +372,7 @@ internal class RealNwApi(
     private fun closeConnection(id: NwConnectionId, failed: Boolean) {
         val entry = lock.withLock { connections.remove(id) }
         if (entry == null) {
-            log.info { "nw.api.close id=${id.value} already-dropped (idempotent)" }
+            log.debug { "nw.api.close id=${id.value} already-dropped (idempotent)" }
             return // already dropped — idempotent
         }
         val reason = when {
