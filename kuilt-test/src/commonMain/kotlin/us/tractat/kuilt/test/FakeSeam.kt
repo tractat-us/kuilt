@@ -86,9 +86,7 @@ public class FakeSeam(
     }
 
     override suspend fun close(reason: CloseReason) {
-        if (_state.value is SeamState.Torn) return
-        _state.value = SeamState.Torn(reason)
-        spool.close()
+        tear(reason)
     }
 
     // ── Test-driver helpers ───────────────────────────────────────────────────
@@ -108,13 +106,27 @@ public class FakeSeam(
         _state.value = SeamState.Woven
     }
 
-    /** Transition state to [SeamState.Torn] with [reason]. */
+    /**
+     * Transition state to [SeamState.Torn] with [reason], completing [incoming] — matching every
+     * real seam (`NwSeam.latchTorn`, `MeshSeam.tearDown`, `InMemorySeam.close`), all of which close
+     * the spool on tear so a consumer that relies on `incoming` completing (or wrongly processes
+     * frames after Torn) can't pass against this fake but fail in production. Idempotent.
+     */
     public fun tear(reason: CloseReason = CloseReason.Normal) {
+        if (_state.value is SeamState.Torn) return
         _state.value = SeamState.Torn(reason)
+        spool.close()
     }
 
-    /** Push [swatch] directly into [incoming], applying the configured [DeliveryPolicy]. */
+    /**
+     * Push [swatch] directly into [incoming], applying the configured [DeliveryPolicy].
+     *
+     * Throws [IllegalStateException] once the seam is [SeamState.Torn] — a real seam completes
+     * `incoming` on tear and never delivers again, so this fake rejects post-tear delivery rather
+     * than silently masking a frame that could never arrive.
+     */
     public suspend fun deliver(swatch: Swatch) {
+        checkNotTorn()
         spool.deliver(swatch)
     }
 
