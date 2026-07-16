@@ -213,6 +213,36 @@ class NwSeamTest {
     }
 
     @Test
+    fun selfConnectionIsDroppedAndSelfNeverJoinsTheRoster() = runTest(StandardTestDispatcher()) {
+        // #1466 root cause. Real Bonjour returns a device's OWN advertisement to its own browser — and
+        // in the election mesh both peers advertise the SAME Rendezvous.New service name, so NwLoom
+        // discovers self and dials it. (FakeNwRadio omits self from discovery, which is exactly why this
+        // shipped uncaught — so we drive the self-dial explicitly here.) NwSeam MUST NOT register that
+        // self-connection: registering self puts selfId in the roster/registry, and when the self-link
+        // later fails, connectionClosedLoop evicts self — dropping this peer from its OWN roster with no
+        // Torn (peers → [otherPeer], state stays Woven), silently wedging every consumer keying on
+        // peers/host. The self-link must be dropped: self stays alone, no remote resolves.
+        val radio = FakeNwRadio()
+        val api = FakeNwApi(radio, deviceId = "dev-0", serviceName = "svc-0")
+        val self = PeerId("peer-self")
+        val seam = NwSeam(self, api, seamScope(), Random(0))
+        testScheduler.runCurrent()
+
+        api.connect(NwEndpoint(id = "ep-dev-0", serviceName = "svc-0")) // dev-0 dials its OWN endpoint
+        repeat(50) { testScheduler.runCurrent() } // let the self-hello exchange settle
+
+        assertAll(
+            { assertEquals(setOf(self), seam.peers.value, "self must never join its own roster as a remote") },
+            {
+                assertTrue(
+                    seam.state.value is SeamState.Weaving,
+                    "no real remote resolved → still Weaving (pre-fix wrongly resolved self and went Woven)",
+                )
+            },
+        )
+    }
+
+    @Test
     fun sendFailureOnLastPeerTearsSeamAndCompletesIncoming() = runTest(StandardTestDispatcher()) {
         // Fix 2 coverage: a send failure that evicts the LAST remote must tear the seam to
         // Torn(RemoteRequested) and complete incoming — mirroring a clean connectionClosed — not
