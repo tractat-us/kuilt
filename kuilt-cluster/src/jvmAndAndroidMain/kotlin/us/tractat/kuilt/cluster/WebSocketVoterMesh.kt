@@ -117,6 +117,13 @@ public class WebSocketVoter(
  * @param handshakeTimeout Ceiling on a single accepted link's handshake (see [acceptPump]). A conn
  *   that connects but never completes its `MeshHello` exchange is abandoned after this, so it cannot
  *   wedge the persistent accept-pump. Defaults to [DEFAULT_HANDSHAKE_TIMEOUT].
+ * @param dialTimeout Ceiling on a single **redial** negotiation (see [superviseVoterReconnection]). A
+ *   redial is fired the instant a peer drops, which routinely coincides with the peer still being
+ *   unreachable in a byte-dropping way (a half-open corpse, a black-holing firewall); the WebSocket
+ *   negotiation of such a dial has no bound of its own (the client ping only reaps an *established*
+ *   session), so an unbounded dial would hang forever and wedge the single-flight redial loop — the
+ *   dropped edge would never heal. This bounds every redial so a hung negotiation is abandoned and the
+ *   backoff loop retries once the path recovers. Defaults to [DEFAULT_DIAL_TIMEOUT].
  * @param formationTimeout Hard bound on initial mesh formation — the initial dials plus awaiting the
  *   full K_M roster on every voter. A stalled handshake or a crashed voter fails formation fast rather
  *   than hanging — and on that failure this function tears down everything it started (cancels the
@@ -132,6 +139,7 @@ public suspend fun CoroutineScope.voterMeshOverWebSockets(
     storageFactory: (NodeId) -> RaftStorage = { InMemoryRaftStorage() },
     random: Random = Random.Default,
     handshakeTimeout: Duration = DEFAULT_HANDSHAKE_TIMEOUT,
+    dialTimeout: Duration = DEFAULT_DIAL_TIMEOUT,
     formationTimeout: Duration = DEFAULT_FORMATION_TIMEOUT,
 ): VoterMesh {
     require(voters.size >= 2) { "voterMeshOverWebSockets needs at least 2 voters, got ${voters.size}" }
@@ -209,6 +217,7 @@ public suspend fun CoroutineScope.voterMeshOverWebSockets(
                     cap = RECONNECT_BACKOFF_CAP,
                     random = backoffRandom.getValue(voter.nodeId),
                 ),
+                dialTimeout = dialTimeout,
             )
         }
 
@@ -242,6 +251,9 @@ public suspend fun CoroutineScope.voterMeshOverWebSockets(
 
 /** Default handshake ceiling for the persistent accept-pump (see [voterMeshOverWebSockets]). */
 private val DEFAULT_HANDSHAKE_TIMEOUT: Duration = 10.seconds
+
+/** Default ceiling on a single redial's WebSocket negotiation (see [voterMeshOverWebSockets]). */
+private val DEFAULT_DIAL_TIMEOUT: Duration = 10.seconds
 
 /** Default hard bound on initial mesh formation (see [voterMeshOverWebSockets]). */
 private val DEFAULT_FORMATION_TIMEOUT: Duration = 30.seconds
