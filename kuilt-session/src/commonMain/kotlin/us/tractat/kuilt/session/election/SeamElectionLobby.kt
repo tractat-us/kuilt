@@ -1,5 +1,6 @@
 package us.tractat.kuilt.session.election
 
+import io.github.oshai.kotlinlogging.KotlinLogging
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -13,6 +14,7 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
@@ -33,6 +35,8 @@ import us.tractat.kuilt.session.SessionRole
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
+
+private val logger = KotlinLogging.logger("us.tractat.kuilt.session.election.SeamElectionLobby")
 
 /**
  * [Seam]-backed [ElectionLobby]. Owns the woven mesh [seam] until a [Room] adopts it.
@@ -75,6 +79,21 @@ internal class SeamElectionLobby(
             val msg = LobbyMessage.decode(swatch.toByteArray()) ?: return@collect
             _lobbyMessages.emit(sender to msg)
         }
+    }
+
+    // Diagnostic (#1466): log the underlying transport's state, roster, and elected host together on
+    // every change, from the lobby's own view. This is the co-timestamped line needed to tell a
+    // transport tear (state→Torn) from a membership drain (peers shrinks, state stays Woven) from a
+    // present-but-unreachable peer (peers unchanged, state Woven) on hardware — the three cases that
+    // #1468 / #1471 / liveness handle respectively. Note [seam] here is exactly the seam the election
+    // elects over, and [peers] is `seam.peers` verbatim (which always contains selfId by contract).
+    private val diagnosticJob: Job = scope.launch {
+        combine(seam.state, seam.peers, host) { s, p, h -> Triple(s, p, h) }
+            .collect { (s, p, h) ->
+                logger.info {
+                    "lobby.diag self=${selfId.value} state=$s peers=${p.map { it.value }} host=${h.value}"
+                }
+            }
     }
 
     override suspend fun start(memberName: String?): Room =
@@ -291,6 +310,7 @@ internal class SeamElectionLobby(
         adoptMutex.withLock {
             if (adopted) return // seam ownership transferred to the Room; do not close it.
             collectorJob.cancel()
+            diagnosticJob.cancel()
             seam.close(CloseReason.Normal)
         }
     }
@@ -305,6 +325,7 @@ internal class SeamElectionLobby(
             check(!adopted) { "lobby already adopted a room" }
             adopted = true
             collectorJob.cancelAndJoin()
+            diagnosticJob.cancel()
             factory.adopt(seam, role, memberName = memberName, roomKey = roomKey)
         }
 }
