@@ -18,6 +18,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.raft.Committed
 import us.tractat.kuilt.raft.NodeId
 import us.tractat.kuilt.raft.RaftConfig
@@ -153,7 +154,7 @@ class WebSocketVoterMeshReconnectionTest {
     }
 
     @Test
-    fun closeStopsAllPumpsAndSupervisors() = runMeshTest {
+    fun closeClosesOwnedSeamsAndStopsRedial() = runMeshTest {
         val (a, b) = NodeId("voter-a") to NodeId("voter-b")
         val mesh = formMesh(
             voterA = a to "/voter-a",
@@ -164,17 +165,24 @@ class WebSocketVoterMeshReconnectionTest {
         val seamA = requireNotNull(mesh.voterSeams).getValue(a)
         withTimeout(window) { seamA.peers.first { PeerId(b.value) in it } }
 
-        // Close the mesh: this must cancel the redial supervisors (and accept-pumps) on the mesh scope.
+        // Close the mesh. Because voterMeshOverWebSockets OWNS its per-voter hubMesh seams, close() must
+        // BOTH cancel the mesh scope (redial supervisors + accept-pumps + nodes) AND gracefully close each
+        // owned seam. Without the seam close the inter-server WebSocket session would linger ESTABLISHED,
+        // still answering pings, and peer-b would hold voter-a in its roster as a zombie forever.
         mesh.close()
 
-        // Drop the edge, then RESTORE the path — so the only thing that could bring the peer back is a
-        // live supervisor. It must NOT return: close() cancelled the supervisor. (The seams are still
-        // alive — close() deliberately doesn't close them — so half-open detection still fires.)
-        requireNotNull(proxy).sever()
-        withTimeout(window) { seamA.peers.first { PeerId(b.value) !in it } }
-        requireNotNull(proxy).restore()
+        // (a) close() CLOSED the owned seam. A hubMesh latches SeamState.Torn on close (tearDown), so
+        // reaching Torn is the observable that the seam is no longer serving — its live WebSocket session
+        // has been torn down. On the pre-fix behaviour close() only cancelled the mesh scope and left the
+        // seam Woven with its session alive; this assertion is exactly what the fix makes pass.
+        withTimeout(window) { seamA.state.first { it is SeamState.Torn } }
 
-        // Give a live supervisor ample time (many backoff cycles) to redial; assert it never does.
+        // (b) the redial supervisor is DEAD. Drop the edge then RESTORE the path — the only thing that
+        // could re-add the peer is a live supervisor, and close() cancelled it (and the seam is now
+        // closed besides), so PeerId(b) must never re-enter seamA's roster. delay past many backoff
+        // cycles to give any surviving supervisor ample opportunity, then assert it never redialed.
+        requireNotNull(proxy).sever()
+        requireNotNull(proxy).restore()
         delay(3.seconds)
         assertFalse(
             PeerId(b.value) in seamA.peers.value,
@@ -194,9 +202,11 @@ class WebSocketVoterMeshReconnectionTest {
             body()
         } finally {
             voterMesh?.let { mesh ->
-                mesh.close()
-                // close() cancels the mesh scope but NOT the seams; their live WebSocket sessions must
-                // be closed explicitly or runBlocking parks on the leaked CIO session coroutines.
+                // close() now cancels the mesh scope AND gracefully closes the owned seams (their live
+                // WebSocket sessions), so this is the primary teardown. The explicit per-seam close below
+                // is a defensive, idempotent backstop (Seam.close is idempotent) — belt-and-braces against
+                // runBlocking parking on a leaked CIO session if any seam slipped close().
+                withTimeout(window) { mesh.close() }
                 runCatching { withTimeout(window) { mesh.voterSeams?.values?.forEach { it.close() } } }
             }
             hostScope?.cancel()
