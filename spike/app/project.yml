@@ -25,8 +25,15 @@ targets:
         NSLocalNetworkUsageDescription: >-
           nw-spike tests peer-to-peer connectivity between two phones over
           Apple's Network framework.
+        # Every Bonjour service type the app browses/advertises MUST be declared here or iOS
+        # silently blocks discovery. The connectivity suite (#1467) uses one per scenario.
         NSBonjourServices:
           - _spikenw._tcp
+          - _ksuite2._tcp
+          - _ksuite3._tcp
+          - _ksuite4a._tcp
+          - _ksuite4b._tcp
+          - _ksuite5._tcp
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: us.tractat.spike.nw

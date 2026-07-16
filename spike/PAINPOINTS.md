@@ -97,3 +97,24 @@ Seeds the "implementing a new transport" skill. Newest entries at the bottom.
   unobservable) and a ~10-min mid-session soak remain as follow-ups, but the core
   premise is proven.
 - **VERDICT: proceed.** The Network.framework transport is the right call.
+
+## Connectivity suite (#1467) — driving the REAL fabric, not just raw NW
+- The spike is now a five-scenario **connectivity suite** (`spike/src/appleMain/kotlin/spike/suite/`)
+  that runs on-device with no Mac: scenarios 2–5 drive the shipping `kuilt-nw` + `kuilt-session` API
+  (`appleNwLoom(...).weave`, `SeamRoomFactory.electLobby`, `ElectionLobby.start`/`awaitRoom`), scenario 1
+  keeps raw `SpikeNw` as the transport control. See `CONNECTIVITY-SUITE.md`.
+- **Adding the `:kuilt-nw` + `:kuilt-session` project deps to the spike compiled first try.** The spike
+  keeps its default-hierarchy `appleMain` (no manual source-set wiring); it just consumes the two
+  modules' per-target klibs. `:kuilt-core` arrives transitively (kuilt-nw exposes it as `api`).
+- **★ NSBonjourServices gates EVERY service type ★** — iOS silently blocks browse/advertise for any
+  Bonjour service type NOT listed in the app's `Info.plist` `NSBonjourServices`. The suite uses one
+  type per scenario (`_ksuite2._tcp` … `_ksuite5._tcp`); all were added to `app/Info.plist` AND
+  `app/project.yml`. A missing entry doesn't error — discovery just never fires, so the scenario times
+  out looking like a fabric bug. First suspect when a real-device weave hangs on a new service type.
+- **`nw_path_monitor` is the entitlement-free environment probe.** `nw_path_get_status` +
+  `nw_path_uses_interface_type(wifi/cellular/wired/loopback)` + `nw_path_is_expensive/constrained` all
+  resolve from the auto-generated `platform.Network` klib and need no entitlement — unlike SSID
+  (`CNCopyCurrentNetworkInfo` needs a Location entitlement), which the suite deliberately omits.
+- Coroutine entry from Swift is non-suspending: `ConnectivitySuite.start(role, onLog, onScenario,
+  onComplete)` launches on a `Dispatchers.Default` scope and marshals callbacks; Swift hops them to
+  the main thread. A real dispatcher is correct here (production app entry, not a test).
