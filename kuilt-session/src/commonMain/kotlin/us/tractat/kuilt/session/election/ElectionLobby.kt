@@ -2,6 +2,7 @@ package us.tractat.kuilt.session.election
 
 import kotlinx.coroutines.flow.StateFlow
 import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.session.Room
 
 /**
@@ -51,6 +52,15 @@ public interface ElectionLobby {
 
     /** The elected host — `electHost(peers)` — reactive. Every peer computes the same value. */
     public val host: StateFlow<PeerId>
+
+    /**
+     * The underlying seam's own lifecycle — `Weaving` / `Woven` / `Torn` — exposed so a consumer can
+     * distinguish the two ways liveness can collapse mid-election (#1466): a **transport tear**
+     * ([SeamState.Torn]) versus a **membership drain** ([peers] shrinking while [state] stays
+     * [SeamState.Woven]). Sourced from [us.tractat.kuilt.core.Seam.state] — same value the lobby's own
+     * collapse detection races against.
+     */
+    public val state: StateFlow<SeamState>
 
     /**
      * **HOST-ONLY.** Close the lobby and begin the session: run the freeze/ack round, then adopt the

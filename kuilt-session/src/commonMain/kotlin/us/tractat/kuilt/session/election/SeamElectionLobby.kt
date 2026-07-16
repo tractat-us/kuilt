@@ -65,6 +65,8 @@ internal class SeamElectionLobby(
             .map { electHost(it) }
             .stateIn(scope, SharingStarted.Eagerly, electHost(seam.peers.value))
 
+    override val state: StateFlow<SeamState> = seam.state
+
     private val _lobbyMessages = MutableSharedFlow<Pair<PeerId, LobbyMessage>>(extraBufferCapacity = 64)
     private val lobbyMessages: SharedFlow<Pair<PeerId, LobbyMessage>> = _lobbyMessages.asSharedFlow()
 
