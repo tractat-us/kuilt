@@ -18,6 +18,16 @@ public fun electHost(peers: Set<PeerId>): PeerId =
 public class NotElectedHostException(message: String) : Exception(message)
 
 /**
+ * Thrown by [ElectionLobby.start] / [ElectionLobby.awaitRoom] when the lobby's underlying seam tears
+ * mid-election — the co-elector(s) needed to complete the freeze/ack round are permanently gone (e.g.
+ * a 2-peer mesh whose only link dropped). **Retryable, not fatal:** the caller may re-run
+ * `electLobby(...)` to rejoin and re-elect. It exists so a mid-2PC peer-set collapse surfaces a
+ * terminal signal the caller can act on, rather than suspending [awaitRoom]/[start] forever.
+ */
+public class LobbyTornException(public val reason: us.tractat.kuilt.core.CloseReason) :
+    Exception("lobby seam tore mid-election: $reason")
+
+/**
  * A pre-session lobby over a symmetric mesh. **Not a [Room]** — during the lobby there is no admit
  * handshake, no admitted roster, no heartbeat: just the live connected peers and a reactive elected
  * host. A [Room] is created exactly once, at [start]/[awaitRoom], by adopting the woven seam with a
@@ -43,6 +53,8 @@ public interface ElectionLobby {
      * returns the admitted [Room] once every member has acknowledged.
      *
      * @throws NotElectedHostException if this peer is not currently [host].
+     * @throws LobbyTornException if the underlying seam tears mid-election (co-electors permanently
+     *   gone). Terminal and retryable — never suspends indefinitely on a mid-2PC collapse.
      */
     public suspend fun start(memberName: String? = null): Room
 
@@ -50,6 +62,10 @@ public interface ElectionLobby {
      * Await the session as a member: suspend until the elected host freezes the lobby, acknowledge it,
      * and adopt the seam as [us.tractat.kuilt.session.SessionRole.Joiner]. (The host obtains its [Room]
      * from [start] instead.) Returns once the session is committed.
+     *
+     * @throws LobbyTornException if the underlying seam tears mid-election (the elected host or the
+     *   co-electors are permanently gone). Terminal and retryable — [awaitRoom] resolves or throws
+     *   within a bound, it never suspends forever on a mid-2PC peer-set collapse.
      */
     public suspend fun awaitRoom(memberName: String? = null): Room
 

@@ -1,20 +1,30 @@
 package us.tractat.kuilt.session.election
 
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withTimeout
+import us.tractat.kuilt.core.CloseReason
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
+import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.Seam
+import us.tractat.kuilt.session.Room
 import us.tractat.kuilt.session.SeamRoomFactory
 import us.tractat.kuilt.session.SessionRole
+import us.tractat.kuilt.test.FakeSeam
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.time.Duration.Companion.seconds
 
 class SeamElectionLobbyTest {
     private fun factory(loom: InMemoryLoom, scope: CoroutineScope) =
@@ -141,6 +151,74 @@ class SeamElectionLobbyTest {
             val nonHost = if (l1.selfId == electedHost) l2 else l1
             assertFailsWith<NotElectedHostException> { nonHost.start() }
             l1.leave(); l2.leave()
+        }
+
+    @Test
+    fun `member awaitRoom throws LobbyTornException when the seam tears mid-2PC`() =
+        runTest {
+            // self is the member (higher id); "peer-a" is the elected host (lower id).
+            val self = PeerId("peer-b")
+            val hostId = PeerId("peer-a")
+            val seam = FakeSeam(selfId = self, initialPeers = setOf(self, hostId))
+            val l = lobby(seam, InMemoryLoom(), backgroundScope)
+            assertEquals(hostId, l.host.first()) // self is a member, so awaitRoom is the right call
+
+            // Capture awaitRoom's outcome via a caught launch so a thrown exception is delivered
+            // through [room] rather than propagating to (and cancelling) the test scope.
+            val room = CompletableDeferred<Room>()
+            val driver = launch {
+                try {
+                    room.complete(l.awaitRoom(memberName = "Member"))
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Throwable) {
+                    room.completeExceptionally(e)
+                }
+            }
+            runCurrent() // let awaitRoom subscribe to lobbyMessages before we deliver the Freeze
+
+            // Drive to mid-2PC: deliver the host's Freeze; the member acks and awaits the Commit.
+            seam.deliver(hostId, LobbyMessage.encode(LobbyMessage.Freeze(hostId.value, setOf(hostId.value, self.value), 1L)))
+            runCurrent()
+
+            // The co-elector vanishes mid-handshake: a 2-peer peerMesh latches Torn when its last link
+            // drops. awaitRoom must surface that terminally, not suspend past the commit timeout forever.
+            seam.removePeer(hostId)
+            seam.tear(CloseReason.Unreachable)
+
+            assertFailsWith<LobbyTornException> { withTimeout(5.seconds) { room.await() } }
+            driver.cancel()
+        }
+
+    @Test
+    fun `host start throws LobbyTornException when the seam tears mid-2PC`() =
+        runTest {
+            // self is the elected host (lower id); "peer-z" is the awaited member (higher id).
+            val self = PeerId("peer-a")
+            val memberId = PeerId("peer-z")
+            val seam = FakeSeam(selfId = self, initialPeers = setOf(self, memberId))
+            val l = lobby(seam, InMemoryLoom(), backgroundScope)
+            assertEquals(self, l.host.first()) // self is the elected host, so start is the right call
+
+            val room = CompletableDeferred<Room>()
+            val driver = launch {
+                try {
+                    room.complete(l.start(memberName = "Host"))
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Throwable) {
+                    room.completeExceptionally(e)
+                }
+            }
+            runCurrent() // let start broadcast the Freeze and await the member's FreezeAck
+
+            // The only member vanishes mid-freeze-round: the seam tears rather than the host silently
+            // committing a solo room (matchmaking has no game with one peer).
+            seam.removePeer(memberId)
+            seam.tear(CloseReason.Unreachable)
+
+            assertFailsWith<LobbyTornException> { withTimeout(5.seconds) { room.await() } }
+            driver.cancel()
         }
 
     @Test
