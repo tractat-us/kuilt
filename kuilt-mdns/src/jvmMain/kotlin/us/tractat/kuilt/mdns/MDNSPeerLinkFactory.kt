@@ -83,6 +83,16 @@ public class MDNSPeerLinkFactory(
                 require(advertisement is MDNSAdvertisement) {
                     "MDNSPeerLinkFactory only joins MDNSAdvertisement, got ${advertisement::class}"
                 }
+                // Self-discovery guard (#1489). JmDNS returns a device's OWN advertisement to its
+                // own browser, so a symmetric advertise+browse peer can be handed its own record to
+                // join — dialing itself (the #1466 recipe, one transport up). Refuse it: joining self
+                // yields a self-connection whose remote resolves to selfPeerId. Consumers should
+                // self-filter the discovery flow (see MDNSServiceDiscoverer.discoveries); this is the
+                // fail-fast backstop where both ids are in scope.
+                require(advertisement.serverPeerId != selfPeerId) {
+                    "MDNSPeerLinkFactory refuses to dial itself: advertisement.serverPeerId == " +
+                        "selfPeerId (${selfPeerId.value}). Filter self from the discovery flow before joining."
+                }
                 val wsAdvertisement =
                     WebSocketAdvertisement(
                         url = advertisement.wsUrl,

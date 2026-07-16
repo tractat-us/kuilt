@@ -43,6 +43,15 @@ public class MDNSServiceDiscoverer(
      *
      * Only services that carry valid [MDNSAdvertisement.TXT_KEY_PEER_ID] TXT
      * entries are emitted; malformed records are silently dropped.
+     *
+     * **Self-discovery obligation (#1489):** JmDNS delivers a device's **own**
+     * advertisement to its own browser, so this flow emits an [MDNSAdvertisement]
+     * whose [MDNSAdvertisement.serverPeerId] is the local peer. A consumer that
+     * both advertises and browses (a symmetric lobby) **must** filter out its own
+     * id — `filter { it.serverPeerId != selfPeerId }` — or it will list, and dial,
+     * itself. This raw source has no `selfPeerId` in scope so it cannot filter for
+     * you; the composed host entry points [MDNSPeerLinkFactory] and
+     * [MDNSMultiAcceptHost], which know both ids, already apply this guard.
      */
     override fun discoveries(): Flow<MDNSAdvertisement> =
         callbackFlow {

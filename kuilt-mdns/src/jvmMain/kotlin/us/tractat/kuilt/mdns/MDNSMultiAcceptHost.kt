@@ -6,9 +6,11 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.withContext
+import us.tractat.kuilt.core.CloseReason
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Seam
+import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.websocket.KtorServerLoom
 import java.util.UUID
 import javax.jmdns.JmDNS
@@ -136,8 +138,25 @@ public class MDNSMultiAcceptHost(
      * Suspends until the next joiner connects and returns its accepted [Seam].
      * Call repeatedly — one [Seam] per joiner. The mDNS service is **not**
      * re-registered on each accept.
+     *
+     * **Self-discovery guard (#1489):** JmDNS / NWBrowser return a device's own
+     * advertisement to its own browser, so a symmetric advertise+browse peer can
+     * dial its own host (the #1466 recipe, one transport up). Such a self-connection
+     * resolves the accepted seam's only remote to [selfPeerId], collapsing its
+     * `peers` to `{selfPeerId}`. This method silently drops (closes) any such
+     * self-connection and keeps waiting for a genuine joiner — self is never surfaced.
      */
-    public suspend fun nextSeam(): Seam = server.nextLink()
+    public suspend fun nextSeam(): Seam {
+        while (true) {
+            val seam = server.nextLink()
+            if ((seam.peers.value - seam.selfId).isEmpty()) {
+                // Remote resolved to self (or presented no distinct identity): a self-dial. Drop it.
+                runCatchingCancellable { seam.close(CloseReason.Normal) }
+                continue
+            }
+            return seam
+        }
+    }
 
     /**
      * A cold stream of accepted seams — repeatedly calls [nextSeam], emitting one
