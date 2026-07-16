@@ -76,14 +76,18 @@ internal class SeamElectionLobby(
         }
     }
 
-    override suspend fun start(memberName: String?): Room = failOnTear {
-        startElection(memberName)
-    }
+    override suspend fun start(memberName: String?): Room =
+        // Host collapse (the transport-tear watcher in guardElection handles a fabric that latches Torn;
+        // startElection itself handles the membership-drain case where the seam stays Woven).
+        guardElection(collapseSignals = emptyList()) {
+            startElection(memberName)
+        }
 
     private suspend fun startElection(memberName: String?): Room {
         if (host.value != selfId) {
             throw NotElectedHostException("not the elected host: host=${host.value}, self=$selfId")
         }
+        var everHadMembers = false
         while (true) {
             // Re-check role each attempt: a lower-id peer may have appeared between retries.
             if (host.value != selfId) {
@@ -91,6 +95,13 @@ internal class SeamElectionLobby(
             }
             val roster = peers.value
             val members = roster - selfId
+            // Membership-drain abort (#1466 host path): if we were electing with members and the roster
+            // has since collapsed to just us, surface a retryable signal instead of silently committing a
+            // solo room. A host that started alone (never had members) still commits immediately below.
+            if (members.isEmpty() && everHadMembers) {
+                throw LobbyTornException(collapseReason())
+            }
+            if (members.isNotEmpty()) everHadMembers = true
             val myEpoch = ++epoch
 
             // awaitUnanimousAck subscribes to lobbyMessages BEFORE it broadcasts the Freeze, so a
@@ -152,9 +163,20 @@ internal class SeamElectionLobby(
             result
         }
 
-    override suspend fun awaitRoom(memberName: String?): Room = failOnTear {
-        awaitRoomElection(memberName)
-    }
+    override suspend fun awaitRoom(memberName: String?): Room =
+        guardElection(
+            // Membership-drain abort (#1466 member path, the hardware failure): the elected host left
+            // the peer set, so [host] recomputed to self — this member can never receive a Freeze from a
+            // host that is now itself. Mirror of startElection's role re-check, but as a racing watcher
+            // because awaitRoomElection is suspended in `lobbyMessages.first { … }` and never re-evaluates
+            // `host` without an emission. Fires even when the seam stays Woven (no Torn).
+            collapseSignals = listOf {
+                host.first { it == selfId }
+                LobbyTornException(collapseReason())
+            },
+        ) {
+            awaitRoomElection(memberName)
+        }
 
     private suspend fun awaitRoomElection(memberName: String?): Room {
         while (true) {
@@ -198,19 +220,33 @@ internal class SeamElectionLobby(
 
     /**
      * Run [body] (an election handshake) but abort it with [LobbyTornException] the instant the
-     * underlying [seam] latches [SeamState.Torn] — the co-elector(s) are permanently gone and no
-     * Freeze / FreezeAck / Commit can ever complete. Without this, [awaitRoomElection]'s Freeze-wait
-     * and [startElection]'s ack-wait suspend forever on a mid-2PC peer-set collapse (#1466): a 2-peer
-     * mesh latches `Torn` when its last link drops, but [lobbyMessages] is a standalone flow that
-     * never completes when [Seam.incoming] does, so nothing else wakes the waiter. This is the lobby's
-     * analogue of `SeamRoom.runTornWatcher`, surfacing a terminal, retryable signal the caller can
-     * act on (re-run `electLobby` to rejoin / re-elect) instead of a silent stall.
+     * election becomes impossible to complete — either the underlying [seam] latches [SeamState.Torn]
+     * (transport gone) OR one of the [collapseSignals] fires (the co-elector(s) this peer is electing
+     * with left the peer set while the seam stayed `Woven`). Both are mid-2PC peer-set collapses
+     * (#1466); they surface differently at the seam layer:
      *
-     * The torn watcher and the body run as [CoroutineStart.UNDISPATCHED] siblings — each reaches its
-     * first suspension point before control returns — so a tear already latched at entry (checked
-     * eagerly first) or racing the body is never missed.
+     * - **Transport tear** — a fabric that latches `Torn` on drain (e.g. a peerMesh losing its last
+     *   link). Caught by the always-present torn watcher.
+     * - **Membership drain** — the observed hardware failure: `Seam.peers` drops to `{self}` (and
+     *   [host] recomputes to `self`) but `state` never becomes `Torn`. A torn watcher alone never
+     *   fires; the caller-supplied [collapseSignals] key on [peers]/[host] instead.
+     *
+     * Without this, [awaitRoomElection]'s Freeze-wait and [startElection]'s ack-wait suspend forever:
+     * [lobbyMessages] is a standalone flow that never completes when [Seam.incoming] does, so nothing
+     * else wakes the waiter. The retryable throw lets the caller re-run `electLobby` to rejoin / re-elect
+     * — the lobby's analogue of `SeamRoom.runTornWatcher`, generalised past transport tear.
+     *
+     * The watchers and the body run as [CoroutineStart.UNDISPATCHED] siblings — each reaches its first
+     * suspension point before control returns — so a collapse already true at entry (the eager torn
+     * check, plus each signal's own entry check) or racing the body is never missed.
+     *
+     * @param collapseSignals each suspends until its collapse condition holds, then returns the
+     *   [LobbyTornException] to abort with. Role-specific (member: became-host; host: lost all members).
      */
-    private suspend fun <T> failOnTear(body: suspend () -> T): T =
+    private suspend fun <T> guardElection(
+        collapseSignals: List<suspend () -> LobbyTornException>,
+        body: suspend () -> T,
+    ): T =
         coroutineScope {
             (seam.state.value as? SeamState.Torn)?.let { throw LobbyTornException(it.reason) }
             val outcome = CompletableDeferred<T>()
@@ -223,17 +259,27 @@ internal class SeamElectionLobby(
                     outcome.completeExceptionally(e)
                 }
             }
-            val tearWatcher = launch(start = CoroutineStart.UNDISPATCHED) {
-                val torn = seam.state.filterIsInstance<SeamState.Torn>().first()
-                outcome.completeExceptionally(LobbyTornException(torn.reason))
+            val watchers = buildList {
+                add(
+                    launch(start = CoroutineStart.UNDISPATCHED) {
+                        val torn = seam.state.filterIsInstance<SeamState.Torn>().first()
+                        outcome.completeExceptionally(LobbyTornException(torn.reason))
+                    },
+                )
+                for (signal in collapseSignals) {
+                    add(launch(start = CoroutineStart.UNDISPATCHED) { outcome.completeExceptionally(signal()) })
+                }
             }
             try {
                 outcome.await()
             } finally {
                 work.cancel()
-                tearWatcher.cancel()
+                watchers.forEach { it.cancel() }
             }
         }
+
+    /** [CloseReason] to report for a membership-drain collapse: the seam's own if torn, else [CloseReason.Unreachable]. */
+    private fun collapseReason(): CloseReason = (seam.state.value as? SeamState.Torn)?.reason ?: CloseReason.Unreachable
 
     override suspend fun leave() {
         adoptMutex.withLock {

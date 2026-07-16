@@ -18,14 +18,19 @@ public fun electHost(peers: Set<PeerId>): PeerId =
 public class NotElectedHostException(message: String) : Exception(message)
 
 /**
- * Thrown by [ElectionLobby.start] / [ElectionLobby.awaitRoom] when the lobby's underlying seam tears
- * mid-election — the co-elector(s) needed to complete the freeze/ack round are permanently gone (e.g.
- * a 2-peer mesh whose only link dropped). **Retryable, not fatal:** the caller may re-run
- * `electLobby(...)` to rejoin and re-elect. It exists so a mid-2PC peer-set collapse surfaces a
- * terminal signal the caller can act on, rather than suspending [awaitRoom]/[start] forever.
+ * Thrown by [ElectionLobby.start] / [ElectionLobby.awaitRoom] on a mid-2PC **peer-set collapse** — the
+ * co-elector(s) needed to complete the freeze/ack round are gone. This covers both ways a fabric
+ * signals it: a **transport tear** (the underlying seam latches [us.tractat.kuilt.core.SeamState.Torn],
+ * e.g. a 2-peer mesh whose only link dropped) and a **membership drain** (`Seam.peers` collapses to
+ * `{self}` while `state` stays `Woven` — the elected host simply left the roster). **Retryable, not
+ * fatal:** the caller may re-run `electLobby(...)` to rejoin and re-elect. It exists so the collapse
+ * surfaces a terminal signal the caller can act on, rather than suspending [awaitRoom]/[start] forever.
+ *
+ * [reason] is the seam's own [us.tractat.kuilt.core.CloseReason] when it tore, or
+ * [us.tractat.kuilt.core.CloseReason.Unreachable] for a membership drain with no tear.
  */
 public class LobbyTornException(public val reason: us.tractat.kuilt.core.CloseReason) :
-    Exception("lobby seam tore mid-election: $reason")
+    Exception("lobby election collapsed mid-2PC: $reason")
 
 /**
  * A pre-session lobby over a symmetric mesh. **Not a [Room]** — during the lobby there is no admit
