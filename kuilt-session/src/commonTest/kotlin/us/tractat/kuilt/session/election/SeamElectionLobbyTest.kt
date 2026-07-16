@@ -16,6 +16,7 @@ import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.Seam
+import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.session.Room
 import us.tractat.kuilt.session.SeamRoomFactory
 import us.tractat.kuilt.session.SessionRole
@@ -259,6 +260,17 @@ class SeamElectionLobbyTest {
             assertAbortsOnMidHandshakeCollapse<LobbyTornException>(seam, drainedPeer = memberId) {
                 l.start(memberName = "Host")
             }
+        }
+
+    @Test
+    fun `state reflects the underlying seam's lifecycle`() =
+        runTest {
+            val seam = FakeSeam(selfId = PeerId("peer-a"))
+            val l = lobby(seam, InMemoryLoom(), backgroundScope)
+            assertEquals(SeamState.Woven, l.state.value)
+
+            seam.tear(CloseReason.Unreachable)
+            assertEquals(SeamState.Torn(CloseReason.Unreachable), l.state.value)
         }
 
     @Test
