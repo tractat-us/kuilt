@@ -50,6 +50,12 @@ kotlin {
             // implementation (not runtimeOnly) so RoutedRaftTransportMisWiredRelayTest can attach a
             // logback ListAppender at compile time to assert the one-time mis-wired-relay WARN.
             implementation(libs.logback)
+            // Real-socket voter-mesh reconnection test: a Netty embedded server per voter + a CIO
+            // client dialing across a severable loopback proxy (half-open injection). CIO honours the
+            // Ktor client pingInterval (OkHttp does not), so half-open detection actually fires.
+            implementation(libs.ktor.serverNetty)
+            implementation(libs.ktor.serverWebsockets)
+            implementation(libs.ktor.client.cio)
         }
         androidUnitTest.dependencies {
             runtimeOnly(libs.logback)
