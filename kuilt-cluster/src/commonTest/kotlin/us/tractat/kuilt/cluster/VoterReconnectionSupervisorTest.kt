@@ -26,6 +26,7 @@ import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
+import kotlin.time.Duration.Companion.hours
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 
@@ -54,6 +55,7 @@ class VoterReconnectionSupervisorTest {
             dialTargets = setOf(p),
             dial = { peer -> FakeConnection(peer) },
             backoff = backoff(),
+            dialTimeout = 10.seconds,
         )
         runCurrent()
         // While the peer is present the loop sits idle — no dial.
@@ -85,6 +87,7 @@ class VoterReconnectionSupervisorTest {
             dialTargets = setOf(p),
             dial = { peer -> FakeConnection(peer) },
             backoff = backoff(),
+            dialTimeout = 10.seconds,
         )
         runCurrent()
 
@@ -106,6 +109,48 @@ class VoterReconnectionSupervisorTest {
     }
 
     @Test
+    fun aHungDialIsBoundedAndDoesNotWedgeTheRedialLoop() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        // Regression for #1463: a redial fired the instant a peer drops routinely lands on a peer still
+        // unreachable in a byte-dropping way (a half-open corpse, a black-holing firewall), so the
+        // WebSocket negotiation never completes. The redial loop is single-flight — it suspends INSIDE
+        // dial(peer), before addLink, before delay(backoff) — so an unbounded hung dial wedges the whole
+        // loop and the dropped edge never heals. dialTimeout must bound each negotiation so the loop
+        // abandons a hung dial and retries. Here the FIRST dial hangs past dialTimeout; a later one
+        // succeeds — proving the bound un-wedges the loop.
+        val mesh = FakeMesh(self, initialPeers = setOf(p))
+        val dialAttempts = atomic(0)
+        val timeouts = atomic(0)
+        val dialTimeout = 1.seconds
+        val job = superviseVoterReconnection(
+            mesh = mesh,
+            dialTargets = setOf(p),
+            dial = { peer ->
+                // First redial hangs far past dialTimeout (a black-holed negotiation); later redials
+                // connect instantly (the "network" recovered).
+                if (dialAttempts.incrementAndGet() == 1) kotlinx.coroutines.delay(1.hours)
+                FakeConnection(peer)
+            },
+            backoff = backoff(),
+            dialTimeout = dialTimeout,
+            onDialFailure = { _, t -> if (t is DialTimeoutException) timeouts.incrementAndGet() },
+        )
+        runCurrent()
+
+        mesh.drop(p)
+        // Advance past the first dial's timeout + a backoff + the second (instant) dial.
+        advanceTimeBy(3.seconds)
+        runCurrent()
+
+        assertAll(
+            { assertTrue(dialAttempts.value >= 2, "the loop must retry after the hung dial, attempts=${dialAttempts.value}") },
+            { assertTrue(timeouts.value >= 1, "the hung dial must surface a DialTimeoutException, was ${timeouts.value}") },
+            { assertTrue(p in mesh.peers.value, "a bounded loop heals the edge; a wedged one never does") },
+        )
+
+        job.cancel()
+    }
+
+    @Test
     fun neverDialsAPeerNotInDialTargets() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
         // Dial target is p (present the whole test); we drop a DIFFERENT peer q the supervisor ignores.
         val mesh = FakeMesh(self, initialPeers = setOf(p, q))
@@ -114,6 +159,7 @@ class VoterReconnectionSupervisorTest {
             dialTargets = setOf(p),
             dial = { peer -> FakeConnection(peer) },
             backoff = backoff(),
+            dialTimeout = 10.seconds,
         )
         runCurrent()
 
