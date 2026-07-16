@@ -88,8 +88,12 @@ public class WebSocketVoter(
  * ## Lifecycle
  *
  * Pumps, supervisors, and voter nodes all run on the mesh lifecycle scope (a child of the receiver);
- * [VoterMesh.close] cancels it and stops them all. The [httpClient] is **not** closed here — the
- * caller owns it.
+ * [VoterMesh.close] cancels it and stops them all — and then, because this path **owns** the per-voter
+ * `hubMesh` seams (`ownsSeams = true`), it gracefully closes each seam too. The seams run on their own
+ * `SupervisorJob` scopes, so cancelling the mesh scope alone would NOT close them: without the graceful
+ * close the inter-server WebSocket sessions would stay ESTABLISHED and still answer pings, and peers
+ * would hold this voter in-roster as a **zombie** indefinitely. The [httpClient] is still **not** closed
+ * here — the caller owns it.
  *
  * @param voters The M voter endpoints. At least 2; an odd count is recommended for clean quorum.
  * @param httpClient Client used to dial peer voters. **Must** install the WebSockets plugin with a
@@ -209,11 +213,15 @@ public suspend fun CoroutineScope.voterMeshOverWebSockets(
         }
 
         // (d) Hand meshScope to voterMeshOverSeams so close() cancels pumps + supervisors + nodes together.
+        // ownsSeams = true: the hubMesh seams were created HERE, so VoterMesh.close must gracefully close
+        // them (their SupervisorJob scopes are not under meshScope) — otherwise cancelling meshScope leaves
+        // the inter-server WebSocket sessions ESTABLISHED and peers hold this voter as a zombie forever.
         return voterMeshOverSeams(
             voterSeams = meshes,
             raftConfig = raftConfig,
             meshScope = meshScope,
             storageFactory = storageFactory,
+            ownsSeams = true,
         )
     } catch (e: Throwable) {
         // Formation failed (e.g. formationTimeout fired on a stalled/crashed voter) — the caller never

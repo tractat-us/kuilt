@@ -1,12 +1,15 @@
 package us.tractat.kuilt.cluster
 
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import us.tractat.kuilt.core.Seam
+import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.raft.Committed
 import us.tractat.kuilt.raft.NodeId
 import us.tractat.kuilt.raft.RaftNode
@@ -44,6 +47,14 @@ public class VoterMesh internal constructor(
      * otherwise visible through the [RaftNode] surface).
      */
     internal val voterSeams: Map<NodeId, Seam>? = null,
+    /**
+     * Whether this mesh **owns** the lifecycle of [voterSeams] — `true` only when the seams were
+     * created internally by the mesh (the [voterMeshOverWebSockets] path builds a `hubMesh` per
+     * voter). When `true`, [close] gracefully closes each owned seam; when `false` (the default —
+     * [voterMeshFromNodes] has no seams, and the public [voterMeshOverSeams] takes caller-owned
+     * seams) [close] leaves the seams alone.
+     */
+    internal val ownsSeams: Boolean = false,
 ) {
     /**
      * The committed log stream from the first voter — convenience for single-consumer scenarios.
@@ -77,9 +88,32 @@ public class VoterMesh internal constructor(
         }.first()
     }
 
-    /** Cancel the owning scope — stops all voter coroutines. */
-    public fun close() {
+    /**
+     * Cancel the owning scope — stops all voter coroutines — then, when this mesh [ownsSeams],
+     * gracefully close each internally-owned [Seam].
+     *
+     * The order is deliberate: cancel [scope] **first** so the voter [RaftNode]s stop driving the
+     * seams, **then** close the seams. Closing the seams sends the fabric's close frames (e.g. a
+     * WebSocket close), so peers drop this voter from their roster cleanly instead of holding a
+     * **zombie** — an in-process `close()` that left the inter-server sessions ESTABLISHED and still
+     * answering pings, so peers kept the dead voter in-roster indefinitely. The per-seam close is
+     * best-effort ([runCatchingCancellable] per seam) and runs under [NonCancellable] so a cancelled
+     * caller context still completes the cleanup (mirrors the formation-failure teardown in
+     * `voterMeshOverWebSockets`).
+     *
+     * When [ownsSeams] is `false` (the test path, or caller-owned seams via the public
+     * `voterMeshOverSeams`) this only cancels [scope] — the caller owns the seams' lifecycles.
+     *
+     * `suspend` because [Seam.close] is a suspend function: graceful shutdown must await the close
+     * frames rather than fire-and-forget.
+     */
+    public suspend fun close() {
         scope.cancel()
+        if (ownsSeams && voterSeams != null) {
+            withContext(NonCancellable) {
+                voterSeams.values.forEach { runCatchingCancellable { it.close() } }
+            }
+        }
     }
 }
 

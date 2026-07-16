@@ -204,8 +204,13 @@ public class ServerCluster internal constructor(
     /** Suspend until a voter is elected leader. Delegates to [VoterMesh.awaitLeader]. */
     public suspend fun awaitLeader(): RaftNode = mesh.awaitLeader()
 
-    /** Cancel the server scope — stops all voter nodes and the relay accept loop. */
-    public fun close() {
+    /**
+     * Cancel the server scope — stops all voter nodes and the relay accept loop — by delegating to
+     * [VoterMesh.close]. `suspend` because [VoterMesh.close] is now suspend (it may gracefully close
+     * internally-owned inter-server seams). This cluster's mesh is built over in-process channels with
+     * no owned seams, so here `close()` just cancels the scope, but the suspend signature is uniform.
+     */
+    public suspend fun close() {
         mesh.close()
     }
 }
