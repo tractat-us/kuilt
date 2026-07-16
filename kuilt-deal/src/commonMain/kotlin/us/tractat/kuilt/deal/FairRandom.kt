@@ -132,9 +132,12 @@ public class FairRandom(
                 deriveSeed(allReveals)
             }
         } finally {
+            // Cancel the collector; the enclosing coroutineScope joins it on exit. Do NOT close() the
+            // channels: they are UNLIMITED (no suspended senders to release), and closing them races the
+            // still-cancelling collector's send() — on a multi-threaded dispatcher a straggler frame
+            // arriving during teardown throws ClosedSendChannelException, failing roll() AFTER the seed was
+            // derived (the #1465 class). The receivers have already returned, so the channels need no close.
             collectorJob.cancel()
-            commits.close()
-            reveals.close()
         }
     }
 

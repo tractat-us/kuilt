@@ -2,6 +2,7 @@
 
 package us.tractat.kuilt.core
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.channels.Channel
@@ -34,6 +35,20 @@ class RaceCollapseTest {
             val seam = FakeSeam(selfId = self, initialPeers = setOf(self, other))
             assertFailsWith<IllegalStateException> {
                 seam.raceCollapse { error("boom") }
+            }
+        }
+
+    /** A CancellationException from a still-healthy body (e.g. a `withTimeout` inside it) must surface,
+     *  not strand the outcome deferred and hang the primitive forever. The outer `withTimeout` guard
+     *  makes the pre-fix hang fail as a distinguishable [BodyCancel] miss rather than blocking the test. */
+    private class BodyCancel : CancellationException("cancelled from inside body")
+
+    @Test
+    fun `a CancellationException from inside a healthy body surfaces instead of hanging`() =
+        runTest {
+            val seam = FakeSeam(selfId = self, initialPeers = setOf(self, other))
+            assertFailsWith<BodyCancel> {
+                withTimeout(5.seconds) { seam.raceCollapse { throw BodyCancel() } }
             }
         }
 
