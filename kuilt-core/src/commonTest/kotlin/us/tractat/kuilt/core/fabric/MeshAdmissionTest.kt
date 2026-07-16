@@ -218,6 +218,79 @@ class MeshAdmissionTest {
         )
     }
 
+    // ── Self-connection guard (#1488) — a peer dialing its own endpoint ───────
+
+    /**
+     * A self-dial — a connection whose remote resolves to the mesh's own [PeerId] — is dropped at
+     * the admission choke point: it never joins `peers`/`links` (which would echo the node's own
+     * broadcasts), never lands in the roster, and never surfaces as a [LinkRejectedException] (it is
+     * not a policy decision). The seam stays [SeamState.Woven] and keeps serving legitimate peers.
+     */
+    @Test
+    fun addLinkDropsAConnectionResolvingToSelf() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val hub = PeerId("hub")
+        val good = PeerId("good")
+        val mesh = hubMesh(hub, emptyList(), dispatcher, Random(0))
+
+        // A legitimate peer first, so we can prove the self-dial leaves it undisturbed.
+        val (goodHubEnd, goodFarEnd) = connectionPair()
+        val goodHandshake = launch { handshakeRemote(goodFarEnd, good, nonce = byteArrayOf(2)) }
+        mesh.addLink(goodHubEnd)
+        goodHandshake.join()
+        assertEquals(setOf(hub, good), mesh.peers.value)
+
+        // The self-dial: the far end claims the hub's OWN id. addLink returns without throwing.
+        val (selfHubEnd, selfFarEnd) = connectionPair()
+        val selfHandshake = launch { handshakeRemote(selfFarEnd, hub, nonce = byteArrayOf(1)) }
+        mesh.addLink(selfHubEnd)
+        selfHandshake.join()
+        val selfRemainingFrames = selfFarEnd.incoming.toList()
+
+        // The good link still works after the self-dial.
+        val payload = byteArrayOf(4, 2)
+        val received = async { goodFarEnd.incoming.first() }
+        mesh.sendTo(good, payload)
+        val goodGotFrame = received.await()
+
+        assertAll(
+            { assertEquals(setOf(hub, good), mesh.peers.value, "self must not join the roster") },
+            { assertFalse(hub in mesh.attestedPrincipals.value, "self must not land in the roster") },
+            { assertTrue(selfRemainingFrames.isEmpty(), "the self-connection must be closed") },
+            { assertContentEquals(payload, goodGotFrame, "the seam keeps serving after a self-dial") },
+            { assertEquals(SeamState.Woven, mesh.state.value, "a self-dial must not tear the seam") },
+        )
+    }
+
+    /**
+     * A peer-mesh self-dial must not skew the drain latch. Were the self-link admitted, losing it
+     * would read as a "was non-empty, now empty" transition and spuriously latch [SeamState.Torn].
+     * Dropped at admission, the self-dial never enters the link set: closing it drains nothing and
+     * the still-empty peer-mesh stays [SeamState.Woven], free to grow via a real [Mesh.addLink].
+     */
+    @Test
+    fun peerMeshSelfDialDoesNotSpuriouslyTearViaDrain() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val self = PeerId("self")
+        val mesh = peerMesh(self, emptyList(), dispatcher, Random(0))
+
+        val (selfHubEnd, selfFarEnd) = connectionPair()
+        val selfHandshake = launch { handshakeRemote(selfFarEnd, self, nonce = byteArrayOf(1)) }
+        mesh.addLink(selfHubEnd)
+        selfHandshake.join()
+
+        // Close the self-dial's far end and let any read loop drain — the drain path is exactly what
+        // would latch Torn if the self-link had ever been registered. (MeshSeam has no re-arming
+        // timers, so advancing to idle terminates.)
+        selfFarEnd.close()
+        testScheduler.advanceUntilIdle()
+
+        assertAll(
+            { assertEquals(setOf(self), mesh.peers.value, "self-dial adds no peer") },
+            { assertEquals(SeamState.Woven, mesh.state.value, "self-dial must not drain-latch Torn") },
+        )
+    }
+
     // ── P3: the roster — atomic with the link set ────────────────────────────
 
     @Test
