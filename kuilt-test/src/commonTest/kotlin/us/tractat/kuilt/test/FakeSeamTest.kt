@@ -4,6 +4,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.CloseReason
 import us.tractat.kuilt.core.PeerId
@@ -11,6 +12,7 @@ import us.tractat.kuilt.core.PeerNotConnected
 import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.Swatch
 import kotlin.test.Test
+import kotlin.time.Duration.Companion.seconds
 import kotlin.test.assertContains
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -129,6 +131,50 @@ class FakeSeamTest {
         seam.close(CloseReason.RemoteRequested)
         assertEquals(SeamState.Torn(CloseReason.RemoteRequested), seam.state.value)
     }
+
+    // ── tear/close complete incoming (real-seam fidelity, #1492) ────────────────
+
+    @Test
+    fun `tear completes incoming like a real seam`() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        val seam = FakeSeam()
+        val collected = async { seam.incoming.toList() }
+        seam.tear()
+        // If incoming never completes (the old lenient behaviour) this hangs until timeout.
+        assertEquals(emptyList<Swatch>(), collected.await())
+    }
+
+    @Test
+    fun `close completes incoming like a real seam`() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        val seam = FakeSeam()
+        val collected = async { seam.incoming.toList() }
+        seam.close()
+        assertEquals(emptyList<Swatch>(), collected.await())
+    }
+
+    @Test
+    fun `deliver after tear throws IllegalStateException`() =
+        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+            val seam = FakeSeam()
+            seam.tear()
+            assertFailsWith<IllegalStateException> { seam.deliver(PeerId("bob"), byteArrayOf(1)) }
+        }
+
+    @Test
+    fun `deliver swatch after tear throws IllegalStateException`() =
+        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+            val seam = FakeSeam()
+            seam.tear()
+            val swatch = Swatch(payload = byteArrayOf(1), sender = PeerId("bob"), sequence = 1L)
+            assertFailsWith<IllegalStateException> { seam.deliver(swatch) }
+        }
+
+    @Test
+    fun `deliver after close throws IllegalStateException`() =
+        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+            val seam = FakeSeam()
+            seam.close()
+            assertFailsWith<IllegalStateException> { seam.deliver(PeerId("bob"), byteArrayOf(1)) }
+        }
 
     // ── deliver → incoming ────────────────────────────────────────────────────
 
