@@ -1,5 +1,6 @@
 package us.tractat.kuilt.session.election
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
@@ -12,6 +13,7 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.filterIsInstance
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
@@ -22,6 +24,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 import us.tractat.kuilt.core.CloseReason
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Seam
+import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.session.Room
 import us.tractat.kuilt.session.SeamRoomFactory
@@ -73,7 +76,11 @@ internal class SeamElectionLobby(
         }
     }
 
-    override suspend fun start(memberName: String?): Room {
+    override suspend fun start(memberName: String?): Room = failOnTear {
+        startElection(memberName)
+    }
+
+    private suspend fun startElection(memberName: String?): Room {
         if (host.value != selfId) {
             throw NotElectedHostException("not the elected host: host=${host.value}, self=$selfId")
         }
@@ -145,7 +152,11 @@ internal class SeamElectionLobby(
             result
         }
 
-    override suspend fun awaitRoom(memberName: String?): Room {
+    override suspend fun awaitRoom(memberName: String?): Room = failOnTear {
+        awaitRoomElection(memberName)
+    }
+
+    private suspend fun awaitRoomElection(memberName: String?): Room {
         while (true) {
             // Await a Freeze from THIS peer's currently-elected host that names us in the roster.
             // Ignore a Freeze whose host is ourselves (a member never joins itself) or a foreign host.
@@ -184,6 +195,45 @@ internal class SeamElectionLobby(
             // Reopen or timeout: discard and await a fresh Freeze.
         }
     }
+
+    /**
+     * Run [body] (an election handshake) but abort it with [LobbyTornException] the instant the
+     * underlying [seam] latches [SeamState.Torn] — the co-elector(s) are permanently gone and no
+     * Freeze / FreezeAck / Commit can ever complete. Without this, [awaitRoomElection]'s Freeze-wait
+     * and [startElection]'s ack-wait suspend forever on a mid-2PC peer-set collapse (#1466): a 2-peer
+     * mesh latches `Torn` when its last link drops, but [lobbyMessages] is a standalone flow that
+     * never completes when [Seam.incoming] does, so nothing else wakes the waiter. This is the lobby's
+     * analogue of `SeamRoom.runTornWatcher`, surfacing a terminal, retryable signal the caller can
+     * act on (re-run `electLobby` to rejoin / re-elect) instead of a silent stall.
+     *
+     * The torn watcher and the body run as [CoroutineStart.UNDISPATCHED] siblings — each reaches its
+     * first suspension point before control returns — so a tear already latched at entry (checked
+     * eagerly first) or racing the body is never missed.
+     */
+    private suspend fun <T> failOnTear(body: suspend () -> T): T =
+        coroutineScope {
+            (seam.state.value as? SeamState.Torn)?.let { throw LobbyTornException(it.reason) }
+            val outcome = CompletableDeferred<T>()
+            val work = launch(start = CoroutineStart.UNDISPATCHED) {
+                try {
+                    outcome.complete(body())
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Throwable) {
+                    outcome.completeExceptionally(e)
+                }
+            }
+            val tearWatcher = launch(start = CoroutineStart.UNDISPATCHED) {
+                val torn = seam.state.filterIsInstance<SeamState.Torn>().first()
+                outcome.completeExceptionally(LobbyTornException(torn.reason))
+            }
+            try {
+                outcome.await()
+            } finally {
+                work.cancel()
+                tearWatcher.cancel()
+            }
+        }
 
     override suspend fun leave() {
         adoptMutex.withLock {
