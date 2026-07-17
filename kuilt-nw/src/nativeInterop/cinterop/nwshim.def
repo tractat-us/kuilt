@@ -1,0 +1,73 @@
+package = us.tractat.kuilt.nw.cinterop
+language = Objective-C
+linkerOpts = -framework Network
+compilerOpts = -fobjc-arc
+---
+#import <Network/Network.h>
+#import <dispatch/dispatch.h>
+#include <stdint.h>
+#include <stdbool.h>
+#include <stddef.h>
+
+/*
+ * kuilt-nw C interop shim — fix for #1516.
+ *
+ * The nw_connection_receive completion is installed by a PURE C block here, NOT by a
+ * Kotlin lambda bridged to an Obj-C block. Under concurrent CPU load, Kotlin/Native's
+ * Obj-C-block trampoline (blockToKotlinImp -> Kotlin_Interop_refFromObjC) intermittently
+ * threw an uncaught NSException ("Converting Obj-C blocks with non-reference-typed return
+ * value to kotlin.Any is not supported (v)") when Network.framework invoked the completion
+ * on the serial GCD queue — most reliably the final ECANCELED receive on the connection-
+ * cancel (close) path — aborting the whole process (SIGABRT). Routing the completion
+ * through a C block keeps that trampoline off the receive hot path entirely.
+ *
+ * The C block unpacks the completion into PRIMITIVES only — a mapped byte buffer plus the
+ * error domain/code — and invokes a Kotlin staticCFunction via a plain C function pointer,
+ * so no Obj-C object ever crosses the Kotlin callback boundary. `ctx` is an opaque
+ * StableRef to the Kotlin-side receive context; the Kotlin callback disposes it (each
+ * nw_connection_receive fires its completion exactly once).
+ *
+ * `bytes` points into `mapped`, which ARC keeps alive until the block scope ends — i.e.
+ * strictly after `cb` returns — so the synchronous readBytes() copy on the Kotlin side is
+ * safe. `err_domain` is the raw nw_error_domain_t value (invalid=0/posix=1/dns=2/tls=3),
+ * which matches kuilt-nw's commonMain NW_ERROR_DOMAIN_* constants byte-for-byte.
+ */
+typedef void (*kuilt_nw_receive_cb)(
+    void *ctx,
+    const void *bytes,
+    int32_t len,
+    bool is_complete,
+    bool has_error,
+    int32_t err_domain,
+    int32_t err_code);
+
+static inline void kuilt_nw_connection_receive(
+    nw_connection_t connection,
+    uint32_t minimum,
+    uint32_t maximum,
+    void *ctx,
+    kuilt_nw_receive_cb cb) {
+    nw_connection_receive(connection, minimum, maximum,
+        ^(dispatch_data_t content, nw_content_context_t context, bool is_complete, nw_error_t error) {
+            const void *bytes = NULL;
+            size_t len = 0;
+            // objc_precise_lifetime is load-bearing: `bytes` aliases INTO `mapped`'s backing store, but
+            // ARC does not track that aliasing. Without this, ARC sees no use of `mapped` after
+            // create_map and may release it immediately — freeing the buffer BEFORE cb reads it, so the
+            // Kotlin readBytes() copies freed (garbage, once reused under load) memory. The attribute
+            // pins `mapped` alive to end of scope, i.e. strictly after cb returns.
+            __attribute__((objc_precise_lifetime)) dispatch_data_t mapped = NULL;
+            if (content != NULL && dispatch_data_get_size(content) > 0) {
+                mapped = dispatch_data_create_map(content, &bytes, &len);
+            }
+            bool has_error = (error != NULL);
+            int32_t err_domain = 0;
+            int32_t err_code = 0;
+            if (has_error) {
+                err_domain = (int32_t) nw_error_get_error_domain(error);
+                err_code = nw_error_get_error_code(error);
+            }
+            cb(ctx, bytes, (int32_t) len, is_complete, has_error, err_domain, err_code);
+            (void) mapped; // ARC releases the mapped region (and `bytes`) after cb returns
+        });
+}
