@@ -7,6 +7,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -16,6 +17,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -26,8 +28,13 @@ import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamCollapsedException
 import us.tractat.kuilt.core.SeamState
+import us.tractat.kuilt.core.Swatch
 import us.tractat.kuilt.core.raceCollapse
 import us.tractat.kuilt.core.runCatchingCancellable
+import us.tractat.kuilt.liveness.HeartbeatConfig
+import us.tractat.kuilt.liveness.HeartbeatPartitionDetector
+import us.tractat.kuilt.liveness.PartitionEvent
+import us.tractat.kuilt.session.PerPeerSeam
 import us.tractat.kuilt.session.Room
 import us.tractat.kuilt.session.SeamRoomFactory
 import us.tractat.kuilt.session.SessionRole
@@ -70,12 +77,20 @@ internal class SeamElectionLobby(
     private val _lobbyMessages = MutableSharedFlow<Pair<PeerId, LobbyMessage>>(extraBufferCapacity = 64)
     private val lobbyMessages: SharedFlow<Pair<PeerId, LobbyMessage>> = _lobbyMessages.asSharedFlow()
 
+    // Every inbound swatch is re-emitted here so per-co-elector [HeartbeatPartitionDetector]s (via
+    // [PerPeerSeam]) can observe ping/pong + application traffic without contending for the
+    // single-consumer [Seam.incoming] channel. Mirrors [SeamRoom]'s rawIncoming fan-out; the single
+    // collector below preserves single-collection (ADR-034). Heartbeat frames fall out of
+    // [_lobbyMessages] for free — [LobbyMessage.decode] returns null for them.
+    private val rawIncoming = MutableSharedFlow<Swatch>(extraBufferCapacity = 256)
+
     private val adoptMutex = Mutex()
     private var adopted = false
     private var epoch: Long = 0L
 
     private val collectorJob: Job = scope.launch {
         seam.incoming.collect { swatch ->
+            rawIncoming.emit(swatch)
             val sender = swatch.sender ?: return@collect
             val msg = LobbyMessage.decode(swatch.toByteArray()) ?: return@collect
             _lobbyMessages.emit(sender to msg)
@@ -88,7 +103,10 @@ internal class SeamElectionLobby(
         return try {
             // The freeze round runs INSIDE guardElection (collapse-abortable); adoption runs OUTSIDE it
             // (finding #1) so a collapse signal cannot cancel adoptRoom mid-commit and wedge the lobby.
-            guardElection(collapseSignals = emptyList()) { runHostElection() }
+            // Host monitors the current members (roster - self) for the silent-but-present collapse (#1480).
+            guardElection(collapseSignals = listOf(coElectorLostSignal(peers.value - selfId))) {
+                runHostElection()
+            }
             adoptAfterCommit(SessionRole.Host, memberName)
         } catch (e: Throwable) {
             logger.debug { "lobby.start.exit self=${selfId.value} threw=${e::class.simpleName}: ${e.message}" }
@@ -186,11 +204,17 @@ internal class SeamElectionLobby(
                 // host that is now itself. Mirror of startElection's role re-check, but as a racing watcher
                 // because awaitRoomElection is suspended in `lobbyMessages.first { … }` and never re-evaluates
                 // `host` without an emission. Fires even when the seam stays Woven (no Torn).
-                collapseSignals = listOf {
-                    host.first { it == selfId }
-                    logger.info { "lobby.awaitRoom.collapse-signal self=${selfId.value} host→self (elected host left) → LobbyTornException" }
-                    LobbyTornException(collapseReason())
-                },
+                collapseSignals = listOf(
+                    {
+                        host.first { it == selfId }
+                        logger.info { "lobby.awaitRoom.collapse-signal self=${selfId.value} host→self (elected host left) → LobbyTornException" }
+                        LobbyTornException(collapseReason())
+                    },
+                    // Silent-but-present collapse (#1480/#1478): the elected host stops answering
+                    // heartbeat pings while `seam.peers` still lists it and `state` stays Woven — the
+                    // host→self signal above never fires. The lobby heartbeat is the only detector.
+                    coElectorLostSignal(setOf(host.value)),
+                ),
             ) {
                 runMemberElection()
             }
@@ -311,6 +335,50 @@ internal class SeamElectionLobby(
             }
         }
 
+    /**
+     * A [guardElection] collapse-signal that catches the **present-but-silent** co-elector — the
+     * #1478 root condition (a path-lost `waiting` connection that never fires a close): `seam.peers`
+     * still lists the peer and `state` stays [SeamState.Woven], so no set-based abort (the Torn
+     * watcher, the `host → self` / membership-drain signals) can see it. The blind spot only silence
+     * detection covers.
+     *
+     * Runs one [HeartbeatPartitionDetector] per [monitored] peer over a [PerPeerSeam] fed from
+     * [rawIncoming] (the same mechanism [SeamRoom] uses post-adopt), and suspends until the first
+     * **[PartitionEvent.PeerLost]** — the terminal event *after* the reconnect window, NOT the earlier
+     * [PartitionEvent.PeerUnresponsive] (aborting on a transient blip would force a needless full 2PC
+     * re-elect). On loss it returns the existing [LobbyTornException]; no new abort path is invented.
+     *
+     * The detectors are owned by a child [Job] cancelled when the signal resolves or is cancelled by
+     * [raceCollapseSignals] (whichever collapse fires first wins). [selfId] is filtered out; an empty
+     * monitored set (a lone host) yields a signal that simply never fires.
+     */
+    private fun coElectorLostSignal(monitored: Set<PeerId>): suspend () -> LobbyTornException = {
+        val watched = monitored - selfId
+        coroutineScope {
+            if (watched.isEmpty()) {
+                awaitCancellation()
+            }
+            val detectorJob = Job(coroutineContext[Job])
+            val detectorScope = CoroutineScope(coroutineContext + detectorJob)
+            val detectors = watched.map { peer ->
+                HeartbeatPartitionDetector(
+                    link = PerPeerSeam(seam, peer, rawIncoming),
+                    peerId = peer,
+                    config = LOBBY_HEARTBEAT,
+                    clock = clock,
+                ).also { it.start(detectorScope) }
+            }
+            try {
+                detectors.map { it.events }.merge()
+                    .first { it is PartitionEvent.PeerLost }
+                logger.info { "lobby.heartbeat.collapse-signal self=${selfId.value} PeerLost among ${watched.map { it.value }} → LobbyTornException" }
+                LobbyTornException(collapseReason())
+            } finally {
+                detectorJob.cancel()
+            }
+        }
+    }
+
     /** [CloseReason] to report for a membership-drain collapse: the seam's own if torn, else [CloseReason.Unreachable]. */
     private fun collapseReason(): CloseReason = (seam.state.value as? SeamState.Torn)?.reason ?: CloseReason.Unreachable
 
@@ -348,4 +416,20 @@ internal class SeamElectionLobby(
             collectorJob.cancelAndJoin()
             factory.adopt(seam, role, memberName = memberName, roomKey = roomKey)
         }
+
+    private companion object {
+        /**
+         * Lobby-tuned heartbeat profile. The default [HeartbeatConfig] (5s/15s/60s) targets a
+         * long-lived [Room]; its 60s reconnect window outlives the entire lobby, so a dead co-elector
+         * would only surface long after the 10s freeze/commit timeouts. This aggressive profile
+         * surfaces [PartitionEvent.PeerLost] in ~5-6s (timeout + one reconnect window) — inside the
+         * freeze/commit timeouts, yet past a transient Wi-Fi-roam/tunnel blip so a brief hiccup does
+         * not force a full 2PC re-elect.
+         */
+        private val LOBBY_HEARTBEAT = HeartbeatConfig(
+            interval = 1.seconds,
+            timeout = 3.seconds,
+            reconnectWindow = 3.seconds,
+        )
+    }
 }
