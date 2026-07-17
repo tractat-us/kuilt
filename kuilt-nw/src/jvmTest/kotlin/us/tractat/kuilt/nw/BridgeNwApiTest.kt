@@ -9,6 +9,7 @@ import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
@@ -146,6 +147,52 @@ class BridgeNwApiTest {
             { assertEquals(listOf(NwConnectionClosed(NwConnectionId(FakeNwNativeLib.HOST_CONN), null)), hostClosed) },
             { assertEquals(listOf(NwConnectionClosed(NwConnectionId(FakeNwNativeLib.JOINER_CONN), null)), joinerClosed) },
         )
+    }
+
+    @Test
+    fun connectionViabilityTracksLatestAndPrunesOnClose() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val fake = FakeNwNativeLib()
+        val host = BridgeNwApi(fake, FakeNwNativeLib.HOST, dispatcher)
+        testScheduler.runCurrent() // let the viability drain subscribe
+
+        val id = NwConnectionId(FakeNwNativeLib.HOST_CONN)
+
+        fake.fireViability(FakeNwNativeLib.HOST, FakeNwNativeLib.HOST_CONN, viable = false)
+        testScheduler.runCurrent()
+        val afterLoss = host.connectionViability.value[id]
+
+        fake.fireViability(FakeNwNativeLib.HOST, FakeNwNativeLib.HOST_CONN, viable = true)
+        testScheduler.runCurrent()
+        val afterRecovery = host.connectionViability.value[id]
+
+        // A close prunes the entry (mirrors RealNwApi.clearViability): absent ⇒ closed.
+        host.disconnect(id)
+        testScheduler.runCurrent()
+
+        assertAll(
+            { assertEquals(false, afterLoss, "path-loss tracked as the latest value") },
+            { assertEquals(true, afterRecovery, "recovery replaces the loss (latest wins)") },
+            { assertEquals(null, host.connectionViability.value[id], "close prunes the viability entry") },
+            { assertFalse(id in host.connectionViability.value, "absent ⇒ closed") },
+        )
+    }
+
+    @Test
+    fun connectionViabilityRetainsLatestUnderRapidFlaps() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val fake = FakeNwNativeLib()
+        val host = BridgeNwApi(fake, FakeNwNativeLib.HOST, dispatcher)
+        testScheduler.runCurrent()
+
+        val id = NwConnectionId(FakeNwNativeLib.HOST_CONN)
+        // A rapid true→false before the drain runs: intermediate transitions may coalesce, but the LATEST
+        // (false) must survive — the drop-tolerance guarantee of #1509.
+        fake.fireViability(FakeNwNativeLib.HOST, FakeNwNativeLib.HOST_CONN, viable = true)
+        fake.fireViability(FakeNwNativeLib.HOST, FakeNwNativeLib.HOST_CONN, viable = false)
+        testScheduler.runCurrent()
+
+        assertEquals(false, host.connectionViability.value[id], "latest (false) retained after a rapid true→false")
     }
 
     @Test

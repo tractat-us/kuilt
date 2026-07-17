@@ -74,6 +74,7 @@ class NwNativeLibTest {
             lib.nw_set_connection_opened_callback(handle, NwNativeLib.ConnectionOpenedCallback { _, _, _ -> })
             lib.nw_set_bytes_received_callback(handle, NwNativeLib.BytesReceivedCallback { _, _, _ -> })
             lib.nw_set_connection_closed_callback(handle, NwNativeLib.ConnectionClosedCallback { _, _ -> })
+            lib.nw_set_connection_viability_callback(handle, NwNativeLib.ViabilityCallback { _, _ -> })
 
             assertEquals(0, lib.nw_start_browsing(handle, "_kuiltnwsmoke._tcp"), "nw_start_browsing")
             assertEquals(0, lib.nw_stop_browsing(handle), "nw_stop_browsing")
