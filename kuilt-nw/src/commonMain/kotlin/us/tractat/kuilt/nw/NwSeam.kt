@@ -51,14 +51,17 @@ private val log = KotlinLogging.logger("us.tractat.kuilt.nw.NwSeam")
  *     [incoming] stamped with that sender.
  *  3. **connectionClosed** — evicts the peer (conn-identity guarded so a deduped loser's close
  *     can't evict the survivor) and tears the seam when the last remote drops.
- *  4. **connectionViability** — the #1478 path-loss timer. A Network.framework connection that loses
- *     its route goes `ready → waiting` (NOT `failed`), firing NO [NwApi.connectionClosed], so a dead
- *     peer would otherwise linger in [peers] forever. On a `viable == false` signal this arms a
- *     per-connection grace timer ([wovenPathGrace]); if the path does not recover (`viable == true`)
- *     before it expires, the connection is evicted (last-remote ⇒ [SeamState.Torn]
- *     [CloseReason.Unreachable]). The timer lives HERE, not in [NwApi], because only the seam owns an
- *     injectable [scope] (the test dispatcher under `runTest`) — `RealNwApi` runs on a GCD queue with
- *     no injectable clock.
+ *  4. **connectionViability** — the #1478 path-loss timer, reconciled from drop-tolerant STATE (#1509).
+ *     A Network.framework connection that loses its route goes `ready → waiting` (NOT `failed`), firing NO
+ *     [NwApi.connectionClosed], so a dead peer would otherwise linger in [peers] forever.
+ *     [NwApi.connectionViability] exposes each connection's LATEST viability as state (not a lossy event
+ *     stream); [reconcileViability] arms a per-connection grace timer ([wovenPathGrace]) for a connection
+ *     whose latest value is `false` and cancels it when the latest is `true`. If the path does not recover
+ *     before the timer expires, the connection is evicted (last-remote ⇒ [SeamState.Torn]
+ *     [CloseReason.Unreachable]). Reconciling the latest value (rather than reacting to transitions) means
+ *     a dropped/coalesced signal can never strand an armed timer (a spurious tear) or miss a loss (a
+ *     zombie peer). The timer lives HERE, not in [NwApi], because only the seam owns an injectable [scope]
+ *     (the test dispatcher under `runTest`) — `RealNwApi` runs on a GCD queue with no injectable clock.
  *
  * ## Duplicate-dial dedup (canonical-nonce rule, direction-free)
  * A full mesh double-dials each pair, producing two connections to the same peer. Each [ConnState]
@@ -125,8 +128,9 @@ internal class NwSeam(
 
     /**
      * Connections currently under a path-loss grace timer (#1478): connId → the pending tear [Job].
-     * Armed on a `viable == false` signal, cancelled on `viable == true` recovery or on any close/
-     * eviction of the connection. Guarded by [lock] like [conns]/[registry].
+     * Armed by [reconcileViability] when a connection's latest viability is `false`, cancelled when it
+     * reconciles back to `true` (recovery) or on any close/eviction of the connection. Guarded by [lock]
+     * like [conns]/[registry].
      */
     private val graceJobs = mutableMapOf<NwConnectionId, Job>()
 
@@ -331,43 +335,65 @@ internal class NwSeam(
     // ── loop 4: connectionViability — the #1478 path-loss grace timer ────────────
 
     /**
-     * A path-lost (`ready → waiting`) connection fires NO [NwApi.connectionClosed] (#1478). On a
-     * `viable == false` signal, arm a per-connection grace timer; if the path recovers
-     * (`viable == true`) before it expires, cancel it — otherwise [onGraceExpired] evicts the peer.
-     * Only connections we still track are armed, and a connection is never double-armed.
+     * A path-lost (`ready → waiting`) connection fires NO [NwApi.connectionClosed] (#1478). The transport
+     * exposes viability as **drop-tolerant per-connection latest-value STATE** ([NwApi.connectionViability]),
+     * not a lossy event stream (#1509): each emission is a snapshot of every live connection's latest
+     * viability, so we [reconcileViability] rather than react to individual transitions. Because the LATEST
+     * value per connection is never lost (only intermediate transitions may coalesce), a dropped recovery
+     * can never strand an armed timer (spurious tear) and a dropped loss can never leave a zombie peer.
      */
     private suspend fun connectionViabilityLoop() {
-        api.connectionViability.collect { event ->
+        api.connectionViability.collect { state ->
             if (closed.value) return@collect
-            val connId = event.connectionId
-            if (event.viable) {
-                val recovered = lock.withLock { graceJobs.remove(connId) }
-                recovered?.cancel()
-                if (recovered != null) {
-                    log.info { "nw.seam.viability.recovered connId=${connId.value} self=${selfId.value} → grace cancelled" }
-                }
-            } else {
-                // Arm lazily under the lock (so we can store the Job atomically), start OUTSIDE it.
-                var skip: String? = null
-                val armed = lock.withLock {
+            reconcileViability(state)
+        }
+    }
+
+    /**
+     * Reconcile the transport's per-connection latest viability [state] against the armed grace timers
+     * ([graceJobs]) — the drop-tolerant #1509 replacement for reacting to viability *events*. On every
+     * emission we re-derive the armed set from the LATEST value per connection, so a coalesced/lost
+     * intermediate transition can never strand a timer or miss a loss. For each reported connection:
+     *  - latest `true` (path up / recovered) → cancel any armed grace timer (a no-op if none);
+     *  - latest `false` (path lost) on a still-tracked connection → arm a grace timer if not already armed.
+     * Idempotent: an already-armed loss or an already-clear recovery is a steady-state no-op. Arm/cancel
+     * decisions are taken under [lock] (so the [graceJobs] mutation is atomic); the [Job] `start`/`cancel`
+     * side effects run OUTSIDE the lock, matching the seam-wide "no non-trivial call under the lock" rule.
+     */
+    private fun reconcileViability(state: Map<NwConnectionId, Boolean>) {
+        val toCancel = mutableListOf<Pair<NwConnectionId, Job>>()
+        val armed = mutableListOf<Pair<NwConnectionId, Job>>()
+        val armSkipped = mutableListOf<NwConnectionId>()
+        lock.withLock {
+            for ((connId, viable) in state) {
+                if (viable) {
+                    graceJobs.remove(connId)?.let { toCancel += connId to it }
+                } else {
                     when {
-                        connId !in conns -> { skip = "not-in-conns"; null }
-                        connId in graceJobs -> { skip = "already-armed"; null }
-                        else -> scope.launch(start = CoroutineStart.LAZY) {
-                            delay(wovenPathGrace)
-                            onGraceExpired(connId)
-                        }.also { graceJobs[connId] = it }
+                        connId !in conns -> armSkipped += connId // conn closed/evicted or not yet tracked
+                        connId in graceJobs -> Unit // already armed — reconcile steady state, no-op
+                        else -> {
+                            val job = scope.launch(start = CoroutineStart.LAZY) {
+                                delay(wovenPathGrace)
+                                onGraceExpired(connId)
+                            }
+                            graceJobs[connId] = job
+                            armed += connId to job
+                        }
                     }
                 }
-                if (armed != null) {
-                    log.info { "nw.seam.viability.lost connId=${connId.value} self=${selfId.value} → grace armed ($wovenPathGrace)" }
-                    armed.start()
-                } else {
-                    // A cross-collector ordering skip (conn already closed/evicted, or a duplicate
-                    // viable=false) — logged so it's diagnosable next time rather than silently dropped.
-                    log.debug { "nw.seam.viability.arm-skipped connId=${connId.value} self=${selfId.value} reason=$skip" }
-                }
             }
+        }
+        for ((connId, job) in toCancel) {
+            job.cancel()
+            log.info { "nw.seam.viability.recovered connId=${connId.value} self=${selfId.value} → grace cancelled" }
+        }
+        for ((connId, job) in armed) {
+            log.info { "nw.seam.viability.lost connId=${connId.value} self=${selfId.value} → grace armed ($wovenPathGrace)" }
+            job.start()
+        }
+        for (connId in armSkipped) {
+            log.debug { "nw.seam.viability.arm-skipped connId=${connId.value} self=${selfId.value} reason=not-in-conns" }
         }
     }
 

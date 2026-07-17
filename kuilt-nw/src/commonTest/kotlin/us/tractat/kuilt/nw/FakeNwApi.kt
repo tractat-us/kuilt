@@ -2,7 +2,11 @@ package us.tractat.kuilt.nw
 
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import us.tractat.kuilt.core.FabricAvailability
 
 /**
@@ -37,16 +41,16 @@ internal class FakeNwApi(
     private val _bytesReceived = MutableSharedFlow<NwBytesReceived>(extraBufferCapacity = 64)
     private val _connectionClosed = MutableSharedFlow<NwConnectionClosed>(extraBufferCapacity = 16)
 
-    // Faithful to RealNwApi (#1509): viability is published off a GCD queue via a lossy `tryEmit` onto a
-    // small buffer, so a signal emitted while the buffer is full is silently DROPPED. A 1-slot buffer lets
-    // NwSeamTest reproduce that drop deterministically (a filler signal fills the slot, the next is lost).
-    private val _connectionViability = MutableSharedFlow<NwConnectionViability>(extraBufferCapacity = 1)
+    // Drop-tolerant per-connection latest-value STATE (#1509), matching RealNwApi's MutableStateFlow.
+    // Intermediate transitions may coalesce under backpressure, but the LATEST value per connection is
+    // never lost — so the seam can reconcile a recovery/loss that a lossy event stream would have dropped.
+    private val _connectionViability = MutableStateFlow<Map<NwConnectionId, Boolean>>(emptyMap())
 
     override val endpointFound: Flow<NwEndpoint> = _endpointFound.asSharedFlow()
     override val connectionOpened: Flow<NwConnectionOpened> = _connectionOpened.asSharedFlow()
     override val bytesReceived: Flow<NwBytesReceived> = _bytesReceived.asSharedFlow()
     override val connectionClosed: Flow<NwConnectionClosed> = _connectionClosed.asSharedFlow()
-    override val connectionViability: Flow<NwConnectionViability> = _connectionViability.asSharedFlow()
+    override val connectionViability: StateFlow<Map<NwConnectionId, Boolean>> = _connectionViability.asStateFlow()
 
     init {
         radio.register(this)
@@ -105,8 +109,8 @@ internal class FakeNwApi(
      * sees for the link (`conn-<deviceId>-<n>` — see [FakeNwRadio]).
      */
     internal fun emitConnectionViability(connectionId: NwConnectionId, viable: Boolean) {
-        // tryEmit (not suspend emit): faithful to RealNwApi, which publishes viability off a GCD queue
-        // and DROPS the signal when the buffer is full (#1509). The seam must not lose the LATEST value.
-        _connectionViability.tryEmit(NwConnectionViability(connectionId, viable))
+        // Set the per-connection LATEST viability state (#1509). `update` is an atomic CAS, so this is
+        // safe to call from any thread; the seam reconciles from the latest map value, never losing it.
+        _connectionViability.update { it + (connectionId to viable) }
     }
 }

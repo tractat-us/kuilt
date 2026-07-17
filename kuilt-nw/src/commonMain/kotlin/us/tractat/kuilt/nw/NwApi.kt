@@ -1,8 +1,18 @@
 package us.tractat.kuilt.nw
 
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import us.tractat.kuilt.core.FabricAvailability
+
+/**
+ * Shared empty default for [NwApi.connectionViability] — a single immutable, never-updated [StateFlow]
+ * so the default getter allocates nothing per call. A binding that has not yet wired the underlying
+ * `waiting`/`ready` viability transition inherits "every connection's path is unknown" (an empty map).
+ */
+private val EMPTY_CONNECTION_VIABILITY: StateFlow<Map<NwConnectionId, Boolean>> =
+    MutableStateFlow(emptyMap<NwConnectionId, Boolean>()).asStateFlow()
 
 /**
  * Abstracts the slice of Apple's Network.framework needed by `NwLoom`.
@@ -72,16 +82,24 @@ public interface NwApi {
     public val connectionClosed: Flow<NwConnectionClosed>
 
     /**
-     * Emits when an already-established connection's path viability changes — `viable=false` on a
-     * `ready → waiting` path loss, `viable=true` on the `waiting → ready` recovery (see
-     * [NwConnectionViability]). This is the transport-level signal `NwSeam` needs to tear a
-     * path-lost peer that Network.framework never `failed`-closes (#1478).
+     * The per-connection **latest** path-viability state: each live connection's [NwConnectionId] mapped
+     * to whether its path is currently up (`true` = `ready`; `false` = a `ready → waiting` path loss).
+     * A connection absent from the map has never established or has closed.
      *
-     * Defaults to a no-op [emptyFlow] so a binding that has not yet wired the underlying `waiting`
-     * transition (the JVM dylib bridge — see #1507) inherits "never reports a path loss" rather than
-     * being forced to implement it before the ABI lands. `RealNwApi` (appleMain) and the test fakes
-     * override it.
+     * Viability is **state, not an event stream** (#1509). Network.framework moves a connection that loses
+     * its route from `ready` to `waiting` (NOT `failed`), so no [NwConnectionClosed] ever fires — the peer
+     * is silently unreachable; `NwSeam` reconciles this map to arm a bounded grace timer on a path loss and
+     * tear the peer if the path does not recover in time (the transport-level fix for #1478). Modelling it
+     * as a **[StateFlow] of the latest value per connection** (rather than a lossy `tryEmit` event flow)
+     * makes it **drop-tolerant**: intermediate transitions may coalesce under backpressure, but the LATEST
+     * value per connection is never lost — so a recovery (`true`) can never be dropped and strand an armed
+     * grace timer (a spurious tear), and a loss (`false`) can never be dropped and leave a zombie peer.
+     *
+     * Defaults to a never-updated empty map so a binding that has not yet wired the underlying
+     * `waiting`/`ready` transition (the JVM dylib bridge — see #1507) inherits "every connection's path is
+     * unknown" rather than being forced to implement it before the ABI lands. `RealNwApi` (appleMain) and
+     * the test fakes override it.
      */
-    public val connectionViability: Flow<NwConnectionViability>
-        get() = emptyFlow()
+    public val connectionViability: StateFlow<Map<NwConnectionId, Boolean>>
+        get() = EMPTY_CONNECTION_VIABILITY
 }
