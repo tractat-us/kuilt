@@ -9,7 +9,11 @@ import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import us.tractat.kuilt.core.FabricAvailability
@@ -21,11 +25,11 @@ import kotlin.coroutines.CoroutineContext
  * JVM [NwApi] proxying through the macOS K/N Network.framework bridge
  * ([NwNativeLib] over `libkuilt.dylib`). The JVM analogue of the appleMain
  * `RealNwApi`: it forwards the seven suspend ops to the dylib and re-publishes
- * the four native callback streams as coroutine [Flow]s that `NwLoom`/`NwSeam`
- * collect exactly as they collect `RealNwApi`.
+ * the five native callback streams — four event [Flow]s plus the
+ * [connectionViability] state — exactly as `NwLoom`/`NwSeam` consume `RealNwApi`.
  *
  * ## JNA-callback → coroutine-flow bridge (the crown jewel)
- * The four native callbacks fire on JNA threads and must not suspend. Each one
+ * The five native callbacks fire on JNA threads and must not suspend. Each one
  * therefore does the minimum synchronous work — copy the payload out of the raw
  * pointer, wrap it in the event type — then deposits it into a bounded staging
  * [Channel] via [Channel.trySend] (never blocks). A single per-flow drain
@@ -35,8 +39,17 @@ import kotlin.coroutines.CoroutineContext
  * so a burst is lossy at the JNA boundary rather than blocking the native caller —
  * matching `RealNwApi`'s `tryEmit`-drops-when-full backpressure.
  *
+ * ## Viability is drop-tolerant STATE, not an event (#1507/#1509)
+ * [connectionViability] mirrors `RealNwApi`'s `MutableStateFlow<Map>`: the fifth native callback delivers a
+ * per-connection `(id, viable)` change, and a single drain applies it as a latest-wins delta so the map
+ * converges to each connection's LATEST path-viability even if intermediate transitions coalesce or drop at
+ * the JNA boundary. A close (from the `connectionClosed` stream) is routed through the *same* drain as a
+ * prune, so the two are serialized without a lock; a per-drain guard set makes the prune permanently win,
+ * so a late viability change can never resurrect a closed connection (the order the two JNA callbacks fire
+ * from their K/N threads does not matter). Result: "absent ⇒ closed", matching the appleMain contract.
+ *
  * ## Strong callback references
- * The four [com.sun.jna.Callback] objects are held as fields so JNA's trampolines
+ * The five [com.sun.jna.Callback] objects are held as fields so JNA's trampolines
  * survive this object's lifetime; releasing them early would SIGSEGV the K/N side.
  *
  * ## Native-runtime lifecycle (GC parity with appleMain)
@@ -86,13 +99,16 @@ public class BridgeNwApi internal constructor(
     private val _bytesReceived = MutableSharedFlow<NwBytesReceived>(extraBufferCapacity = BYTES_BUFFER)
     private val _connectionClosed = MutableSharedFlow<NwConnectionClosed>(extraBufferCapacity = EVENT_BUFFER)
 
+    // Per-connection LATEST viability as drop-tolerant STATE (#1509), the JVM analogue of RealNwApi's
+    // MutableStateFlow. Written only by the single viability drain (below) via atomic update{}, so no lock
+    // is needed even though the JNA callbacks fire on many threads.
+    private val _connectionViability = MutableStateFlow<Map<NwConnectionId, Boolean>>(emptyMap())
+
     override val endpointFound: Flow<NwEndpoint> = _endpointFound.asSharedFlow()
     override val connectionOpened: Flow<NwConnectionOpened> = _connectionOpened.asSharedFlow()
     override val bytesReceived: Flow<NwBytesReceived> = _bytesReceived.asSharedFlow()
     override val connectionClosed: Flow<NwConnectionClosed> = _connectionClosed.asSharedFlow()
-    // connectionViability (#1478) trails the no-op default from NwApi: the dylib bridge does not yet
-    // surface Network.framework's ready↔waiting path-viability transition. Wiring a fifth native
-    // callback through the ABI is a separate follow-up — see #1507.
+    override val connectionViability: StateFlow<Map<NwConnectionId, Boolean>> = _connectionViability.asStateFlow()
 
     // Bounded staging channels: the JNA callbacks deposit here non-suspendingly; per-flow drains
     // forward to the SharedFlows in FIFO order. DROP_OLDEST so the JNA thread never blocks.
@@ -100,6 +116,12 @@ public class BridgeNwApi internal constructor(
     private val connectionOpenedStaging = Channel<NwConnectionOpened>(EVENT_BUFFER, BufferOverflow.DROP_OLDEST)
     private val bytesReceivedStaging = Channel<NwBytesReceived>(BYTES_BUFFER, BufferOverflow.DROP_OLDEST)
     private val connectionClosedStaging = Channel<NwConnectionClosed>(EVENT_BUFFER, BufferOverflow.DROP_OLDEST)
+
+    // Viability deltas (set-latest) AND close-prunes share ONE staging channel drained by ONE coroutine,
+    // so every mutation of _connectionViability is serialized without a lock and resurrection is
+    // impossible: once a Prune is processed, that connection is remembered as closed and any later Set for
+    // it is ignored — regardless of the order the two JNA callbacks happen to fire from their K/N threads.
+    private val connectionViabilityStaging = Channel<ViabilityDelta>(EVENT_BUFFER, BufferOverflow.DROP_OLDEST)
 
     // Strong refs so JNA trampolines aren't GC'd while the K/N side may still fire them.
     private val endpointFoundCallback =
@@ -123,16 +145,27 @@ public class BridgeNwApi internal constructor(
 
     private val connectionClosedCallback =
         NwNativeLib.ConnectionClosedCallback { connectionId, reason ->
-            connectionClosedStaging.trySend(NwConnectionClosed(NwConnectionId(connectionId), reason.ifEmpty { null }))
+            val id = NwConnectionId(connectionId)
+            connectionClosedStaging.trySend(NwConnectionClosed(id, reason.ifEmpty { null }))
+            // A closed connection's viability entry must be dropped so "absent ⇒ closed" holds (mirrors
+            // RealNwApi.clearViability). Routing the prune through the SAME viability channel serializes it
+            // with the viability sets — the reconciliation that keeps a late Set from resurrecting the entry.
+            connectionViabilityStaging.trySend(ViabilityDelta.Prune(id))
+        }
+
+    private val viabilityCallback =
+        NwNativeLib.ViabilityCallback { connectionId, viable ->
+            connectionViabilityStaging.trySend(ViabilityDelta.Set(NwConnectionId(connectionId), viable != 0))
         }
 
     init {
-        // Register all four callbacks BEFORE any start op (subscribe-before-start): the K/N side
+        // Register all five callbacks BEFORE any start op (subscribe-before-start): the K/N side
         // subscribes its forwarding collectors here, so no hot no-replay event is missed.
         nativeLib.nw_set_endpoint_found_callback(handle, endpointFoundCallback)
         nativeLib.nw_set_connection_opened_callback(handle, connectionOpenedCallback)
         nativeLib.nw_set_bytes_received_callback(handle, bytesReceivedCallback)
         nativeLib.nw_set_connection_closed_callback(handle, connectionClosedCallback)
+        nativeLib.nw_set_connection_viability_callback(handle, viabilityCallback)
 
         // One drain per flow: forwards staged events to the SharedFlow in FIFO order. Running a
         // single coroutine (not one per event) preserves delivery ordering.
@@ -140,6 +173,31 @@ public class BridgeNwApi internal constructor(
         scope.launch { for (event in connectionOpenedStaging) _connectionOpened.emit(event) }
         scope.launch { for (event in bytesReceivedStaging) _bytesReceived.emit(event) }
         scope.launch { for (event in connectionClosedStaging) _connectionClosed.emit(event) }
+
+        // The single viability drain: applies each Set as a latest-wins delta and each Prune as a removal,
+        // in FIFO order, so _connectionViability converges to the per-connection LATEST value (#1509). Its
+        // private closedIds guard makes a Prune permanently win over any Set for that id, so a late
+        // viability Set can never resurrect a closed connection (no lock — this coroutine is the sole
+        // writer). Bounded to recent closures: the in-flight reorder window is at most the channel buffer.
+        scope.launch {
+            // Sole-writer drain, so these need no synchronization. closedIds gives O(1) membership; the
+            // FIFO deque bounds it to the CLOSED_ID_GUARD most-recent closures (evicting the eldest).
+            val closedIds = HashSet<NwConnectionId>()
+            val closedOrder = ArrayDeque<NwConnectionId>()
+            for (delta in connectionViabilityStaging) {
+                when (delta) {
+                    is ViabilityDelta.Set ->
+                        if (delta.id !in closedIds) _connectionViability.update { it + (delta.id to delta.viable) }
+                    is ViabilityDelta.Prune -> {
+                        if (closedIds.add(delta.id)) {
+                            closedOrder.addLast(delta.id)
+                            if (closedOrder.size > CLOSED_ID_GUARD) closedIds.remove(closedOrder.removeFirst())
+                        }
+                        _connectionViability.update { it - delta.id }
+                    }
+                }
+            }
+        }
     }
 
     override fun availability(): FabricAvailability = NwNativeLib.jvmAvailability()
@@ -208,9 +266,25 @@ public class BridgeNwApi internal constructor(
         }
     }
 
+    /**
+     * A single mutation of [_connectionViability], staged by a JNA callback and applied by the one
+     * viability drain. [Set] carries a connection's latest `ready`/`waiting` viability; [Prune] drops a
+     * connection whose close arrived on the `connectionClosed` stream. Draining both through one channel is
+     * what serializes them without a lock.
+     */
+    private sealed interface ViabilityDelta {
+        data class Set(val id: NwConnectionId, val viable: Boolean) : ViabilityDelta
+        data class Prune(val id: NwConnectionId) : ViabilityDelta
+    }
+
     private companion object {
         private const val EVENT_BUFFER = 16
         private const val BYTES_BUFFER = 64
+
+        // Cap on the drain's remembered-closed-ids guard. Only needs to exceed the reorder window (a late
+        // viability Set racing its own close), which is bounded by the staging channel buffer — so this is
+        // generous. Bounding it keeps a long-lived, high-churn session from leaking closed-connection ids.
+        private const val CLOSED_ID_GUARD = 256
 
         // One shared Cleaner (its own daemon thread) for all bridge instances.
         private val CLEANER: Cleaner = Cleaner.create()
