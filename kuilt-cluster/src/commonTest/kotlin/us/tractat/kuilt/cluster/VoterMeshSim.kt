@@ -275,15 +275,25 @@ private const val MESH_NONCE_SEED_MIX: Long = 0x5EED
  *
  * @param n voter count (default 3 — minimum for one-fault tolerance; use an odd count for clean quorum).
  * @param seed election/nonce RNG seed. @param timeout test timeout (default 5 s — keep it tight).
+ * @param fabricFactory Builds the [InMemoryVoterFabric] the mesh runs over, given the voter ids and the
+ *   node scope ([TestScope.backgroundScope]). Defaults to the non-severable [InMemoryVoterFabric]; a
+ *   reconnection test passes a [SeverableInMemoryVoterFabric] factory (it needs the scope to arm its
+ *   virtual reaper). The built fabric is reachable as [VoterMeshSim.fabric] for `sever`/`restore`.
  */
 internal fun voterMeshSimTest(
     n: Int = 3,
     seed: Long = VOTER_MESH_SIM_SEED,
     timeout: Duration = 5.seconds,
+    fabricFactory: (List<NodeId>, CoroutineScope) -> InMemoryVoterFabric = { ids, _ -> InMemoryVoterFabric(ids) },
     body: suspend TestScope.(VoterMeshSim) -> Unit,
 ): TestResult = runTest(StandardTestDispatcher(), timeout = timeout) {
     val voterIds = (1..n).map { NodeId("v$it") }
-    val sim = buildVoterMeshSim(voterIds = voterIds, nodeScope = backgroundScope, seed = seed)
+    val sim = buildVoterMeshSim(
+        voterIds = voterIds,
+        nodeScope = backgroundScope,
+        seed = seed,
+        fabric = fabricFactory(voterIds, backgroundScope),
+    )
     try {
         body(sim)
     } finally {
