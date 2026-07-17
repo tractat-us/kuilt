@@ -256,6 +256,11 @@ internal class NwSeam(
      * inserted** into [conns]. The creation flag drives the #1509 lost-wakeup guard: whenever a connId
      * first enters [conns], its owning loop re-reconciles the latest viability state so a `viable=false`
      * that arrived (and was arm-skipped) before the connection was tracked is not silently lost.
+     *
+     * NOTE (#1528, pre-existing, out of scope here): this re-creates a [ConnState] for a `connId` that
+     * was already evicted/closed if a late frame arrives on it — a bytes frame on a resurrected conn is
+     * then parsed as a fresh [NwHello], which can register a phantom peer. Fixing it needs a tombstone/
+     * restructure design decision, tracked on its own track (#1528) — do not conflate it with #1513.
      */
     private fun getOrCreateConn(connId: NwConnectionId): Pair<ConnState, Boolean> = lock.withLock {
         val existing = conns[connId]
@@ -642,6 +647,15 @@ internal class NwSeam(
      * if teardown already ran. Since #1513 its ONLY caller is [close] — an explicit consumer close or the
      * `NwLoom.weave` timeout (which routes through [close] as [CloseReason.Unreachable]). Peer loss no
      * longer tears (it re-forms to [SeamState.Weaving] via [evictPeerLocked]).
+     *
+     * The terminal `_state = Torn` write is taken UNDER [lock] so it serializes against the locked
+     * state-machine writers ([evictPeerLocked]'s `Woven → Weaving`, [addRemotePeer]'s `Weaving → Woven`).
+     * Without the lock, a writer could read `is Woven`/`is Weaving`, be preempted by this Torn write, then
+     * complete its read-then-write and **clobber terminal Torn back to Weaving/Woven** — un-tearing a seam
+     * whose [incoming] is already completed and scope cancelled (breaking `stateStaysTornAfterClose`). Under
+     * the lock, a writer that runs after this reads `Torn` (neither `Woven` nor `Weaving`) and makes no
+     * transition. Both writes are non-suspend, so this respects the no-suspend-under-lock rule; the [closed]
+     * CAS stays outside the lock as the single-latch gate. [scope] cancellation runs after releasing it.
      */
     private fun latchTorn(reason: CloseReason): Boolean {
         if (!closed.compareAndSet(expect = false, update = true)) {
@@ -649,8 +663,10 @@ internal class NwSeam(
             return false
         }
         log.info { "nw.seam.TORN self=${selfId.value} reason=$reason peers-were=${_peers.value.map { it.value }}" }
-        _state.value = SeamState.Torn(reason)
-        spool.close()
+        lock.withLock {
+            _state.value = SeamState.Torn(reason)
+            spool.close()
+        }
         scope.coroutineContext[Job]?.cancel()
         return true
     }

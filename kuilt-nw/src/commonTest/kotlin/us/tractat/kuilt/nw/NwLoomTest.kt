@@ -92,6 +92,44 @@ class NwLoomTest {
         )
     }
 
+    /**
+     * #1513 review Fix 1: cancelling `weave` WHILE it awaits the first peer must stop the redial loop.
+     * `weave` builds the seam on a parentless SupervisorJob scope, so the caller cancelling does NOT cancel
+     * that scope — only `weave` closing the seam does. Before the fix, cancelling the "wait for a friend"
+     * back-out (user leaves the lobby / a `withTimeout` wrapper fires) left the seam unreturned and
+     * uncloseable, and its `RedialCoordinator` kept dialling every discovered endpoint at the backoff
+     * ceiling forever. The catch-all cleanup closes the seam on ANY exit, cancelling the redial loops.
+     */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun cancellingWeaveMidWaitStopsTheRedialLoop() = runTest(StandardTestDispatcher()) {
+        val radio = FakeNwRadio()
+        val apiA = FakeNwApi(radio, deviceId = "dev-0", serviceName = "peer-A")
+        // A bare advertiser A can discover + dial but that never handshakes back — so A's redialer stays
+        // active (its endpoint never settles) and `weave` blocks awaiting the first peer.
+        val apiB = FakeNwApi(radio, deviceId = "dev-1", serviceName = "peer-B")
+        apiB.startListening("peer-B", TYPE)
+        val loomA = NwLoom(apiA, serviceType = TYPE, selfId = PeerId("peer-A"), random = Random(0), weaveTimeout = 100.seconds)
+
+        val weaveJob = launch(start = CoroutineStart.UNDISPATCHED) {
+            runCatchingCancellable { loomA.join(InMemoryTag(sessionName = "lobby", peerKey = "peer-A")) }
+        }
+        assertTrue(pumpUntil { apiA.connectCalls >= 1 }, "A discovered B and its redial loop dialed")
+        testScheduler.advanceTimeBy(2.seconds.inWholeMilliseconds) // let a couple of backoff redials happen
+        pumpUntil(maxPumps = 50) { false }
+        assertTrue(apiA.connectCalls >= 2, "the redial loop is actively re-dialing before cancel (was ${apiA.connectCalls})")
+
+        // Cancel the weave mid-wait; the catch-all must close the seam so the redial loop stops.
+        weaveJob.cancel()
+        assertTrue(pumpUntil { weaveJob.isCompleted }, "weave coroutine unwound")
+        val callsAtCancel = apiA.connectCalls
+
+        // Advance well past several backoff ceilings: a leaked redial loop would keep dialing here.
+        testScheduler.advanceTimeBy(30.seconds.inWholeMilliseconds)
+        pumpUntil(maxPumps = 200) { false }
+        assertEquals(callsAtCancel, apiA.connectCalls, "no further connects after cancel — the redial loop was cancelled with the seam")
+    }
+
     @OptIn(ExperimentalCoroutinesApi::class)
     @Test
     fun weaveWithNoPeerFailsWithNwUnreachableAndDoesNotCancelCaller() = runTest(StandardTestDispatcher()) {

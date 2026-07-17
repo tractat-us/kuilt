@@ -10,6 +10,7 @@ import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.test.TestResult
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
@@ -18,6 +19,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
+import kotlin.time.Duration.Companion.seconds
 
 /**
  * Reusable contract test suite for N-peer mesh [Seam] implementations.
@@ -134,7 +136,12 @@ public abstract class MeshConformanceSuite {
             // Tear every seam down so a fabric that treats peer loss as *recoverable* (e.g. NwSeam since
             // #1513) does not leave survivors' redial loops re-arming against the departed peer — an
             // unbounded re-arm would spin runTest's terminal advanceUntilIdle. close() is idempotent.
-            withContext(NonCancellable) { seams.forEach { runCatchingCancellable { it.close() } } }
+            // BOUNDED best-effort: NonCancellable shields cleanup from outer cancellation; withTimeoutOrNull
+            // bounds a close() that can wedge on a dead transport so one fabric can't hang the suite; a
+            // timeout/error is deliberately swallowed (real close bugs surface in the close-obligation tests).
+            withContext(NonCancellable) {
+                seams.forEach { seam -> withTimeoutOrNull(2.seconds) { runCatchingCancellable { seam.close() } } }
+            }
         }
     }
 

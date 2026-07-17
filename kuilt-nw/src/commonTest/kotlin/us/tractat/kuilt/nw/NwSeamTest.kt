@@ -186,6 +186,41 @@ class NwSeamTest {
     }
 
     @Test
+    fun closeConcurrentWithARemoteDepartureAlwaysEndsTornNeverReformsToWeaving() = runTest(StandardTestDispatcher()) {
+        // #1513 review Fix 2: latchTorn writes _state=Torn UNDER the seam lock, so a concurrent locked
+        // eviction (evictPeerLocked's Woven→Weaving reform) can never clobber terminal Torn back to Weaving.
+        // A single-thread test dispatcher can't reproduce the true multi-threaded window, but this asserts
+        // the observable invariant across the interleavings the scheduler produces: A's own close() issued
+        // together with B's departure (which drives A's eviction/reform path) must ALWAYS end Torn — never
+        // a re-formed Weaving with incoming already completed.
+        val radio = FakeNwRadio()
+        val apiA = FakeNwApi(radio, deviceId = "dev-0", serviceName = "svc-0")
+        val apiB = FakeNwApi(radio, deviceId = "dev-1", serviceName = "svc-1")
+        val seamA = NwSeam(PeerId("peer-0"), apiA, seamScope(), Random(0))
+        val seamB = NwSeam(PeerId("peer-1"), apiB, seamScope(), Random(1))
+        backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) { seamA.incoming.collect { } }
+        backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) { seamB.incoming.collect { } }
+        testScheduler.runCurrent()
+        apiA.connect(NwEndpoint(id = "ep-dev-1", serviceName = "svc-1"))
+        apiB.connect(NwEndpoint(id = "ep-dev-0", serviceName = "svc-0"))
+        assertTrue(pumpUntil { seamA.peers.value.size == 2 }, "A wove to 2 peers")
+
+        // Issue A's close and B's departure "together": B's close delivers connectionClosed to A (the
+        // eviction→reform path) while A tears itself. Whichever the scheduler runs first, A must end Torn —
+        // close-first: the eviction sees closed=true and is a no-op; evict-first: latchTorn's under-lock
+        // Torn write follows the Weaving write; a post-Torn writer reads Torn (not Woven) and makes no flip.
+        backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) { seamB.close() }
+        backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) { seamA.close() }
+        assertTrue(pumpUntil { seamA.state.value is SeamState.Torn }, "A latched Torn")
+        pumpUntil(maxPumps = 100) { false } // let any (wrong) reform-to-Weaving surface
+
+        assertAll(
+            { assertTrue(seamA.state.value is SeamState.Torn, "A stays Torn — a concurrent eviction never un-tears it to Weaving (was ${seamA.state.value})") },
+            { assertEquals(setOf(seamA.selfId), seamA.peers.value, "A's peers collapse to {A}") },
+        )
+    }
+
+    @Test
     fun incomingCompletesOnClose() = runTest(StandardTestDispatcher()) {
         // Per-seam scopes: closing seamA cancels only ITS scope, not the collector below. So the
         // collector can only terminate because spool.close() completed incoming — proving the

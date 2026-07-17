@@ -6,6 +6,7 @@ import kotlinx.atomicfu.locks.withLock
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.currentCoroutineContext
@@ -15,6 +16,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
 import us.tractat.kuilt.core.CloseReason
@@ -147,20 +149,31 @@ public class NwLoom(
         runCatchingCancellable { api.startBrowsing(serviceType) }
             .onFailure { log.debug { "nw.browse failed serviceType=$serviceType selfId=${selfId.value}" } }
 
-        // Await the first resolved remote so the returned seam is already connected. On timeout the
-        // fabric never wove — close Unreachable and throw NwUnreachableException (NOT the raw
-        // TimeoutCancellationException, which a runCatchingCancellable caller would mistake for its
-        // own cancellation and rethrow).
+        // Await the first resolved remote so the returned seam is already connected. On ANY exit before
+        // the seam is returned, the caller can never close() it — so we MUST close it here, or its scope
+        // (a parentless SupervisorJob, NOT cancelled by the caller) leaks the RedialCoordinator loops,
+        // which then dial every discovered endpoint at the backoff ceiling forever (#1513). Two exit paths:
+        //  - timeout: the fabric never wove → close Unreachable and throw NwUnreachableException (NOT the
+        //    raw TimeoutCancellationException, which a runCatchingCancellable caller would mistake for its
+        //    own cancellation and rethrow);
+        //  - ANY other throwable — crucially the CALLER cancelling while we await the first peer (the "wait
+        //    for a friend" back-out: a user leaving the lobby, a withTimeout wrapper, scope teardown) —
+        //    close the seam (under NonCancellable so the in-flight cancellation can't skip the close) and
+        //    rethrow unchanged.
         try {
             withTimeout(weaveTimeout) {
                 seam.peers.first { it.size > 1 }
             }
         } catch (_: TimeoutCancellationException) {
             log.info { "nw.loom.weave-timeout self=${selfId.value} serviceType=$serviceType after=$weaveTimeout → Unreachable" }
-            seam.close(CloseReason.Unreachable)
+            withContext(NonCancellable) { runCatchingCancellable { seam.close(CloseReason.Unreachable) } }
             throw NwUnreachableException(
                 "nw weave timed out: no peer reached for serviceType=$serviceType within $weaveTimeout",
             )
+        } catch (e: Throwable) {
+            log.info { "nw.loom.weave-aborted self=${selfId.value} serviceType=$serviceType reason=${e::class.simpleName} → closing seam so redial stops" }
+            withContext(NonCancellable) { runCatchingCancellable { seam.close(CloseReason.Unreachable) } }
+            throw e
         }
         log.debug { "nw.loom.wove self=${selfId.value} peers=${seam.peers.value.map { it.value }} state=${seam.state.value}" }
         return seam
@@ -182,10 +195,10 @@ public class NwLoom(
  * Keeps an outstanding dial for every discovered-but-not-currently-connected endpoint, with unbounded
  * exponential backoff, for as long as the seam is open (#1513). One redial coroutine per endpoint loops:
  * while the endpoint is NOT in [NwSeam.settledEndpoints] it dials and backs off (doubling up to
- * [NwLoom.MAX_REDIAL_BACKOFF], with jitter from [random]); once it settles the loop parks on the flow and
- * wakes only when the endpoint's peer drops (the seam re-forms to Weaving). A fresh `endpointFound`
- * sighting resets that endpoint's backoff. Every coroutine runs on the seam [scope], so [Seam.close]
- * cancels them all.
+ * [NwLoom.MAX_REDIAL_BACKOFF], with jitter from [jitterRandom]); once it settles the loop parks on the
+ * flow and wakes only when the endpoint's peer drops (the seam re-forms to Weaving). A genuinely-new
+ * `endpointFound` sighting starts a redialer at the initial backoff; a re-emit for an already-tracked
+ * endpoint does NOT reset it. Every coroutine runs on the seam [scope], so [Seam.close] cancels them all.
  *
  * ## Why key on [NwSeam.settledEndpoints], not on this loom's own connections
  * The full-mesh double-dial means the dedup loser's `connectionClosed` fires for an endpoint whose peer is
@@ -197,18 +210,28 @@ public class NwLoom(
  * ## Thread-safety
  * The [redialers] map and each entry's mutable `backoffMs`/`job` are read-modify-written only under
  * [lock] (atomicfu). No suspend call ([NwApi.connect], [delay], flow collection) runs under the lock:
- * each iteration snapshots what it needs under the lock and acts outside it. Correct under a
- * multi-threaded dispatcher; no single-thread-confinement crutch.
+ * each iteration snapshots what it needs under the lock and acts outside it. The backoff jitter draws
+ * from [jitterRandom] — a DEDICATED [Random] seeded once at construction from the injected `random` —
+ * NOT the seam's shared `random`: the seam uses its `random` for nonce generation on its own coroutines,
+ * and Kotlin's `XorWowRandom` is not thread-safe, so sharing it across the seam's loops and every redial
+ * coroutine would be a data race under a multi-threaded dispatcher. [jitterRandom] is touched only under
+ * [lock], so the redial coroutines don't race each other on it either. Correct under a multi-threaded
+ * dispatcher; no single-thread-confinement crutch.
  */
 private class RedialCoordinator(
     private val api: NwApi,
     private val seam: NwSeam,
     private val scope: CoroutineScope,
     private val selfId: PeerId,
-    private val random: Random,
+    random: Random,
     private val onDiscovered: (NwEndpoint) -> Unit,
 ) {
     private val lock = reentrantLock()
+
+    // Seeded once from the injected `random` (a single call at construction, before the seam's loops
+    // begin consuming `random`, so no race here), then used only for redial jitter under [lock] — never
+    // shared with the seam's nonce RNG. Deterministic under a seeded test `random`.
+    private val jitterRandom: Random = Random(random.nextLong())
 
     private class Redialer(val endpoint: NwEndpoint) {
         var backoffMs: Long = NwLoom.INITIAL_REDIAL_BACKOFF.inWholeMilliseconds
@@ -238,8 +261,15 @@ private class RedialCoordinator(
         }
         onDiscovered(endpoint)
         val armed = lock.withLock {
-            val r = redialers.getOrPut(endpoint.id) { Redialer(endpoint) }
-            r.backoffMs = NwLoom.INITIAL_REDIAL_BACKOFF.inWholeMilliseconds // reset backoff on (fresh) sighting
+            val existing = redialers[endpoint.id]
+            // Reset backoff ONLY on a genuinely-NEW endpoint (a new [Redialer] starts at the initial
+            // backoff by construction). A re-emit for an already-tracked endpoint must NOT reset it:
+            // RealNwApi re-emits `endpointFound` on every `nw_browser` results-changed callback (AWDL↔WiFi
+            // interface swaps, TXT-record churn, unrelated roster changes) — exactly during the flaky
+            // periods a redial targets — so resetting on a re-emit would peg a present-but-unreachable
+            // flapping peer at ~250ms forever instead of backing off to the ceiling. A reconnect (the peer
+            // was connected then dropped) resets the backoff in [redialLoop] on the settled→un-settled edge.
+            val r = existing ?: Redialer(endpoint).also { redialers[endpoint.id] = it }
             if (r.job?.isActive == true) {
                 false // already redialing this endpoint
             } else {
@@ -265,13 +295,16 @@ private class RedialCoordinator(
             }
             runCatchingCancellable { api.connect(endpoint) }
                 .onFailure { log.debug { "nw.loom.redial-failed endpoint=$endpointId self=${selfId.value}: ${it.message}" } }
-            val waitMs = lock.withLock {
+            // Snapshot the backoff, advance it (doubling to the ceiling), and draw the jitter — all under
+            // the lock so [jitterRandom] is never touched concurrently by another redial coroutine.
+            val delayMs = lock.withLock {
                 val r = redialers[endpointId] ?: return
-                r.backoffMs.also { r.backoffMs = (r.backoffMs * 2).coerceAtMost(NwLoom.MAX_REDIAL_BACKOFF.inWholeMilliseconds) }
+                val w = r.backoffMs
+                r.backoffMs = (r.backoffMs * 2).coerceAtMost(NwLoom.MAX_REDIAL_BACKOFF.inWholeMilliseconds)
+                w + jitterRandom.nextLong(0, (w / 4).coerceAtLeast(1))
             }
-            val jitterMs = random.nextLong(0, (waitMs / 4).coerceAtLeast(1))
             // Wait the backoff, but wake the instant the endpoint settles so we stop dialing promptly.
-            withTimeoutOrNull((waitMs + jitterMs).milliseconds) {
+            withTimeoutOrNull(delayMs.milliseconds) {
                 seam.settledEndpoints.first { endpointId in it }
             }
         }

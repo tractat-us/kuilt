@@ -300,11 +300,17 @@ public abstract class SeamConformanceSuite {
                 // seam's background work re-arming — its redial loop keeps dialling the departed peer. If
                 // that loop is not cancelled, runTest's terminal `advanceUntilIdle` spins on the re-arming
                 // timer forever (an OOM/hang). close() cancels the seam's scope and is idempotent, so this
-                // is safe for a seam a test already closed. NonCancellable so cleanup still runs if `block`
-                // failed; runCatchingCancellable so a close error never masks the block's failure.
+                // is safe for a seam a test already closed.
+                //
+                // BOUNDED best-effort cleanup: `withContext(NonCancellable)` shields it from the outer
+                // cancellation so it always runs (even if `block` failed); `withTimeoutOrNull(2s)` bounds a
+                // close() that can WEDGE on a dead transport (e.g. a WS close handshake) so one bad fabric
+                // can't hang every conformance test; `runCatchingCancellable` tolerates a close error. A
+                // timeout or error here is deliberately swallowed — teardown is best-effort, and any real
+                // close bug surfaces in the dedicated close-obligation tests, not here.
                 withContext(NonCancellable) {
-                    runCatchingCancellable { host.close() }
-                    runCatchingCancellable { joiner.close() }
+                    withTimeoutOrNull(2.seconds) { runCatchingCancellable { host.close() } }
+                    withTimeoutOrNull(2.seconds) { runCatchingCancellable { joiner.close() } }
                 }
             }
         }
