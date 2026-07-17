@@ -16,7 +16,6 @@ import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.Tag
 import kotlin.random.Random
 import kotlin.test.AfterTest
-import kotlin.test.BeforeTest
 
 /**
  * Verifies that [NwLoom] over the **JVM bridge** ([BridgeNwApi] → `libkuilt.dylib` → `RealNwApi`)
@@ -59,12 +58,6 @@ class NwBridgeLoopbackConformanceTest : SeamConformanceSuite() {
     private val bridges = mutableListOf<BridgeNwApi>()
     private val rendezvousHandles = mutableListOf<Pointer>()
 
-    // Serialise this real-dylib run against any concurrent sibling `:kuilt-nw:jvmTest` on the same
-    // host (e.g. two git worktrees building at once) so their native teardowns can't collide and
-    // SIGABRT — issue #1511. No-op off macOS / without the dylib, where nothing real runs.
-    @BeforeTest
-    fun acquireHostLock() = NwRealDylibHostLock.acquire()
-
     @AfterTest
     fun tearDown() {
         // Runtimes before the rendezvous. close() cancels the drain scope AND disposes the native
@@ -74,7 +67,6 @@ class NwBridgeLoopbackConformanceTest : SeamConformanceSuite() {
         rendezvousHandles.forEach { rv -> runCatching { lib?.nw_loopback_rendezvous_destroy(rv) } }
         bridges.clear()
         rendezvousHandles.clear()
-        NwRealDylibHostLock.release()
     }
 
     override fun newLoomPair(): Pair<Loom, Loom> {
