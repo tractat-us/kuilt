@@ -7,6 +7,8 @@ import kotlinx.atomicfu.locks.withLock
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -23,6 +25,8 @@ import us.tractat.kuilt.core.Spool
 import us.tractat.kuilt.core.Swatch
 import us.tractat.kuilt.core.runCatchingCancellable
 import kotlin.random.Random
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.seconds
 
 private val log = KotlinLogging.logger("us.tractat.kuilt.nw.NwSeam")
 
@@ -36,7 +40,7 @@ private val log = KotlinLogging.logger("us.tractat.kuilt.nw.NwSeam")
  * there is no per-connection machine/collector. The seam owns the connection lifecycle
  * from [NwApi.connectionOpened] onward; discovery + dialling belong to `NwLoom` (Task 2.7).
  *
- * Three collectors, all launched [CoroutineStart.UNDISPATCHED] at construction so they
+ * Four collectors, all launched [CoroutineStart.UNDISPATCHED] at construction so they
  * subscribe **before** `NwLoom` triggers advertise/browse/dial (subscribe-before-trigger,
  * since [NwApi]'s flows are hot with no replay):
  *
@@ -47,6 +51,14 @@ private val log = KotlinLogging.logger("us.tractat.kuilt.nw.NwSeam")
  *     [incoming] stamped with that sender.
  *  3. **connectionClosed** — evicts the peer (conn-identity guarded so a deduped loser's close
  *     can't evict the survivor) and tears the seam when the last remote drops.
+ *  4. **connectionViability** — the #1478 path-loss timer. A Network.framework connection that loses
+ *     its route goes `ready → waiting` (NOT `failed`), firing NO [NwApi.connectionClosed], so a dead
+ *     peer would otherwise linger in [peers] forever. On a `viable == false` signal this arms a
+ *     per-connection grace timer ([wovenPathGrace]); if the path does not recover (`viable == true`)
+ *     before it expires, the connection is evicted (last-remote ⇒ [SeamState.Torn]
+ *     [CloseReason.Unreachable]). The timer lives HERE, not in [NwApi], because only the seam owns an
+ *     injectable [scope] (the test dispatcher under `runTest`) — `RealNwApi` runs on a GCD queue with
+ *     no injectable clock.
  *
  * ## Duplicate-dial dedup (canonical-nonce rule, direction-free)
  * A full mesh double-dials each pair, producing two connections to the same peer. Each [ConnState]
@@ -76,6 +88,10 @@ private val log = KotlinLogging.logger("us.tractat.kuilt.nw.NwSeam")
  * @param random source of per-connection dedup nonces; production defaults to [Random.Default], tests
  *   inject a seeded [Random] so the dedup tiebreak is deterministic.
  * @param policy delivery policy for the inbound [Spool] (default [DeliveryPolicy.Reliable]).
+ * @param wovenPathGrace how long a path-lost (`ready → waiting`) connection is given to recover before
+ *   the seam tears it as [CloseReason.Unreachable] (#1478). Production default [DEFAULT_WOVEN_PATH_GRACE]
+ *   (10s); tests inject a small value. Injected via [scope]'s (test) dispatcher, so it advances under
+ *   virtual time.
  */
 internal class NwSeam(
     override val selfId: PeerId,
@@ -83,6 +99,7 @@ internal class NwSeam(
     private val scope: CoroutineScope,
     private val random: Random = Random.Default,
     private val policy: DeliveryPolicy = DeliveryPolicy.Reliable,
+    private val wovenPathGrace: Duration = DEFAULT_WOVEN_PATH_GRACE,
 ) : Seam {
 
     /**
@@ -105,6 +122,13 @@ internal class NwSeam(
 
     /** Every connection this seam has seen → its [ConnState]. */
     private val conns = mutableMapOf<NwConnectionId, ConnState>()
+
+    /**
+     * Connections currently under a path-loss grace timer (#1478): connId → the pending tear [Job].
+     * Armed on a `viable == false` signal, cancelled on `viable == true` recovery or on any close/
+     * eviction of the connection. Guarded by [lock] like [conns]/[registry].
+     */
+    private val graceJobs = mutableMapOf<NwConnectionId, Job>()
 
     private val _peers = MutableStateFlow(setOf(selfId))
     override val peers: StateFlow<Set<PeerId>> = _peers.asStateFlow()
@@ -129,6 +153,7 @@ internal class NwSeam(
     private val openedJob: Job = scope.launch(start = CoroutineStart.UNDISPATCHED) { connectionOpenedLoop() }
     private val bytesJob: Job = scope.launch(start = CoroutineStart.UNDISPATCHED) { bytesReceivedLoop() }
     private val closedJob: Job = scope.launch(start = CoroutineStart.UNDISPATCHED) { connectionClosedLoop() }
+    private val viabilityJob: Job = scope.launch(start = CoroutineStart.UNDISPATCHED) { connectionViabilityLoop() }
 
     // ── loop 1: connectionOpened ────────────────────────────────────────────────
 
@@ -277,7 +302,9 @@ internal class NwSeam(
             }
             // Classify the close under the lock; log the verdict after releasing it.
             var verdict = "no-op"
+            var graceJob: Job? = null
             val tearNow = lock.withLock {
+                graceJob = graceJobs.remove(event.connectionId) // any pending path-loss timer is moot now
                 val cs = conns.remove(event.connectionId)
                 if (cs == null) { verdict = "unknown-conn"; return@withLock false }
                 val peer = cs.resolvedPeerId
@@ -295,9 +322,88 @@ internal class NwSeam(
                 verdict = "evicted peer=${peer.value} → peers=${_peers.value.map { it.value }} tearNow=$tear"
                 tear
             }
+            graceJob?.cancel()
             log.info { "nw.seam.closed connId=${event.connectionId.value} self=${selfId.value}: $verdict" }
             if (tearNow) latchTorn(CloseReason.RemoteRequested)
         }
+    }
+
+    // ── loop 4: connectionViability — the #1478 path-loss grace timer ────────────
+
+    /**
+     * A path-lost (`ready → waiting`) connection fires NO [NwApi.connectionClosed] (#1478). On a
+     * `viable == false` signal, arm a per-connection grace timer; if the path recovers
+     * (`viable == true`) before it expires, cancel it — otherwise [onGraceExpired] evicts the peer.
+     * Only connections we still track are armed, and a connection is never double-armed.
+     */
+    private suspend fun connectionViabilityLoop() {
+        api.connectionViability.collect { event ->
+            if (closed.value) return@collect
+            val connId = event.connectionId
+            if (event.viable) {
+                val recovered = lock.withLock { graceJobs.remove(connId) }
+                recovered?.cancel()
+                if (recovered != null) {
+                    log.info { "nw.seam.viability.recovered connId=${connId.value} self=${selfId.value} → grace cancelled" }
+                }
+            } else {
+                // Arm lazily under the lock (so we can store the Job atomically), start OUTSIDE it.
+                var skip: String? = null
+                val armed = lock.withLock {
+                    when {
+                        connId !in conns -> { skip = "not-in-conns"; null }
+                        connId in graceJobs -> { skip = "already-armed"; null }
+                        else -> scope.launch(start = CoroutineStart.LAZY) {
+                            delay(wovenPathGrace)
+                            onGraceExpired(connId)
+                        }.also { graceJobs[connId] = it }
+                    }
+                }
+                if (armed != null) {
+                    log.info { "nw.seam.viability.lost connId=${connId.value} self=${selfId.value} → grace armed ($wovenPathGrace)" }
+                    armed.start()
+                } else {
+                    // A cross-collector ordering skip (conn already closed/evicted, or a duplicate
+                    // viable=false) — logged so it's diagnosable next time rather than silently dropped.
+                    log.debug { "nw.seam.viability.arm-skipped connId=${connId.value} self=${selfId.value} reason=$skip" }
+                }
+            }
+        }
+    }
+
+    /**
+     * The grace timer for [connId] expired without recovery: the peer is unreachable. Best-effort
+     * [NwApi.disconnect] the dead connection and drive the local eviction via [removeByConn] — reusing
+     * the send-failure eviction path (last-remote-and-Woven ⇒ [latchTorn]), tearing to
+     * [CloseReason.Unreachable] to distinguish a dead peer from a clean leave. Driving the tear locally
+     * is deliberate: the transport emits no close for a `waiting` connection, so we cannot wait for a
+     * looped-back [NwApi.connectionClosed]. [latchTorn] is CAS-idempotent, so a later close of the same
+     * connection is a harmless no-op.
+     *
+     * ## Deadline-race identity guard
+     * [delay] cannot be cancelled once it has resumed, and the only later suspension ([NwApi.disconnect])
+     * carries no cancellation point — so a `viable=true`/close/re-arm that lands in the same virtual
+     * instant as the expiry cannot stop this job from running. We therefore remove-and-proceed ONLY if
+     * we still own the timer (`graceJobs[connId] === this job`): a losing recovery already replaced/
+     * removed our entry, so we abort — tearing nothing and, crucially, NOT evicting a `connId` whose
+     * entry now belongs to a *second* path-loss's freshly-armed timer (which would silently give that
+     * loss ~0s grace). A genuinely-late recovery still tears via its own owning job.
+     */
+    private suspend fun onGraceExpired(connId: NwConnectionId) {
+        val thisJob = currentCoroutineContext()[Job]
+        val owned = lock.withLock {
+            if (graceJobs[connId] !== thisJob) return@withLock false
+            graceJobs.remove(connId)
+            true
+        }
+        if (!owned) {
+            log.debug { "nw.seam.grace.expired.stale connId=${connId.value} self=${selfId.value} → superseded by recovery/close/re-arm; no tear" }
+            return
+        }
+        log.info { "nw.seam.grace.expired connId=${connId.value} self=${selfId.value} → disconnect + evict (Unreachable)" }
+        runCatchingCancellable { api.disconnect(connId) }
+            .onFailure { log.debug { "nw.seam.grace.disconnect-failed connId=${connId.value}: ${it.message}" } }
+        removeByConn(connId, CloseReason.Unreachable)
     }
 
     // ── send ────────────────────────────────────────────────────────────────────
@@ -326,15 +432,20 @@ internal class NwSeam(
     }
 
     /**
-     * Drop a connection after a send failure, evicting its peer only if it is still the live link.
-     * Mirrors [connectionClosedLoop]'s tear rule: if this was the last remote and the seam had woven,
-     * tear to [CloseReason.RemoteRequested] — otherwise a send-failure eviction leaves the seam stuck
-     * `Woven` with `peers == {selfId}` and [incoming] never completing, unlike a clean close.
-     * The tear decision is computed under [lock]; [latchTorn] (non-suspend) runs after releasing it.
+     * Drop a connection after a send failure or a path-loss grace expiry, evicting its peer only if it
+     * is still the live link. Mirrors [connectionClosedLoop]'s tear rule: if this was the last remote
+     * and the seam had woven, tear with [reason] — otherwise a non-close eviction leaves the seam stuck
+     * `Woven` with `peers == {selfId}` and [incoming] never completing, unlike a clean close. [reason]
+     * is [CloseReason.RemoteRequested] for a send failure (the default) and [CloseReason.Unreachable]
+     * for a #1478 grace expiry (a dead peer, distinct from a clean leave). The tear decision is computed
+     * under [lock]; [latchTorn] (non-suspend) runs after releasing it. Any pending grace timer for
+     * [connId] is cancelled here too.
      */
-    private fun removeByConn(connId: NwConnectionId) {
+    private fun removeByConn(connId: NwConnectionId, reason: CloseReason = CloseReason.RemoteRequested) {
         var verdict = "no-op"
+        var graceJob: Job? = null
         val tearNow = lock.withLock {
+            graceJob = graceJobs.remove(connId)
             val cs = conns.remove(connId)
             if (cs == null) { verdict = "unknown-conn"; return@withLock false }
             val peer = cs.resolvedPeerId
@@ -347,11 +458,12 @@ internal class NwSeam(
             _peers.update { it - peer }
             // Last remote gone after having woven ⇒ the session is over (mirror the close rule).
             val tear = registry.isEmpty() && _state.value is SeamState.Woven
-            verdict = "evicted peer=${peer.value} → peers=${_peers.value.map { it.value }} tearNow=$tear"
+            verdict = "evicted peer=${peer.value} → peers=${_peers.value.map { it.value }} tearNow=$tear reason=$reason"
             tear
         }
+        graceJob?.cancel()
         log.info { "nw.seam.removeByConn connId=${connId.value} self=${selfId.value}: $verdict" }
-        if (tearNow) latchTorn(CloseReason.RemoteRequested)
+        if (tearNow) latchTorn(reason)
     }
 
     // ── close ─────────────────────────────────────────────────────────────────
@@ -364,6 +476,7 @@ internal class NwSeam(
             val snapshot = registry.values.map { it.connId }
             registry.clear()
             conns.clear()
+            graceJobs.clear() // scope cancellation (in latchTorn) stops the jobs; just drop the refs
             _peers.value = setOf(selfId)
             snapshot
         }
@@ -388,5 +501,10 @@ internal class NwSeam(
         spool.close()
         scope.coroutineContext[Job]?.cancel()
         return true
+    }
+
+    internal companion object {
+        /** Default grace given a path-lost (`ready → waiting`) connection to recover before the seam tears it (#1478). */
+        val DEFAULT_WOVEN_PATH_GRACE: Duration = 10.seconds
     }
 }

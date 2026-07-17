@@ -159,17 +159,27 @@ internal class RealNwApi(
     private val _connectionOpened = MutableSharedFlow<NwConnectionOpened>(extraBufferCapacity = EVENT_BUFFER)
     private val _bytesReceived = MutableSharedFlow<NwBytesReceived>(extraBufferCapacity = BYTES_BUFFER)
     private val _connectionClosed = MutableSharedFlow<NwConnectionClosed>(extraBufferCapacity = EVENT_BUFFER)
+    private val _connectionViability = MutableSharedFlow<NwConnectionViability>(extraBufferCapacity = EVENT_BUFFER)
 
     override val endpointFound: Flow<NwEndpoint> = _endpointFound.asSharedFlow()
     override val connectionOpened: Flow<NwConnectionOpened> = _connectionOpened.asSharedFlow()
     override val bytesReceived: Flow<NwBytesReceived> = _bytesReceived.asSharedFlow()
     override val connectionClosed: Flow<NwConnectionClosed> = _connectionClosed.asSharedFlow()
+    override val connectionViability: Flow<NwConnectionViability> = _connectionViability.asSharedFlow()
 
-    /** One live connection: its strong-ref'd handle, the dialled endpoint (null inbound), and the local-close flag. */
+    /**
+     * One live connection: its strong-ref'd handle, the dialled endpoint (null inbound), the
+     * local-close flag, and [wasReady] — set the first time the connection reaches `ready`.
+     * [wasReady] gates two things (#1478): (1) a `ready → waiting` transition emits a viability-lost
+     * signal only if the connection HAD been ready (excludes normal initial-dial `preparing → waiting`
+     * churn); (2) `connectionOpened` + the receive loop are started only on the FIRST `ready`, so a
+     * `waiting → ready` recovery does not double-arm a second receive loop / duplicate the handshake.
+     */
     private class ConnectionEntry(
         val connection: nw_connection_t,
         val endpoint: NwEndpoint?,
         var closing: Boolean = false,
+        var wasReady: Boolean = false,
     )
 
     // Guards [connections], [endpointsById], [listener], and [browser]. NO nw_* call runs under it.
@@ -191,6 +201,30 @@ internal class RealNwApi(
      * connection). Not part of the fabric contract — do not build behaviour on it.
      */
     internal fun liveConnectionCount(): Int = lock.withLock { connections.size }
+
+    /**
+     * Test-only: register an INERT connection entry ([endpoint], `wasReady=false`) and return its id.
+     * The `nw_connection` is created but **never started, never queued, and never receives** — it is a
+     * pure registry token, so nothing arms an async GCD callback that could outlive the test (an armed
+     * `receiveLoop` on a started connection leaks a completion that fires later and aborts the shared
+     * K/N test process). `NwConnectionViabilityTest` drives the observable `ready`/`waiting` emission
+     * logic via [driveReadyTransitionForTest]/[driveWaitingForTest] — neither touches the connection —
+     * to prove the #1478 viability mapping and the first-ready double-arm guard with no live socket.
+     * Not part of the fabric contract — do not build behaviour on it.
+     */
+    internal fun registerInertConnectionForTest(endpoint: NwEndpoint?): NwConnectionId {
+        val ep = nw_endpoint_create_host(LOOPBACK_HOST, "1")
+        val connection = nw_connection_create(ep, secureParams()) ?: error("test connection create failed")
+        val id = NwConnectionId("nw-test-${connectionCounter.incrementAndGet()}")
+        lock.withLock { connections[id] = ConnectionEntry(connection, endpoint) }
+        return id
+    }
+
+    /** Test-only: drive the observable half of a synthetic `ready` for [id]; returns whether it was the FIRST ready. */
+    internal fun driveReadyTransitionForTest(id: NwConnectionId): Boolean = emitReadyTransition(id)
+
+    /** Test-only: drive a synthetic `waiting` for [id] ([onWaiting]'s viability mapping — no `nw_*` call). */
+    internal fun driveWaitingForTest(id: NwConnectionId) = onWaiting(id)
 
     // ── host role ────────────────────────────────────────────────────────────
 
@@ -348,19 +382,72 @@ internal class RealNwApi(
 
     private fun onState(id: NwConnectionId, connection: nw_connection_t, state: nw_connection_state_t?) {
         when (state) {
-            nw_connection_state_ready -> {
-                val endpoint = lock.withLock { connections[id]?.endpoint }
-                log.debug { "nw.api.state id=${id.value} READY endpoint=${endpoint?.id ?: "<inbound>"} → emit connectionOpened + start receiveLoop" }
-                _connectionOpened.tryEmit(NwConnectionOpened(id, endpoint))
-                receiveLoop(id, connection)
-            }
-            // WAITING is the path-lost limbo (unsatisfied route) that fires NO close — the #1478 wedge
-            // candidate: the seam never learns the peer is unreachable.
-            nw_connection_state_waiting -> log.debug { "nw.api.state id=${id.value} WAITING (path unsatisfied — no close will fire; seam keeps the peer)" }
+            nw_connection_state_ready -> onReady(id, connection)
+            // WAITING is the path-lost limbo (unsatisfied route) that fires NO close — the #1478 wedge.
+            nw_connection_state_waiting -> onWaiting(id)
             nw_connection_state_preparing -> log.debug { "nw.api.state id=${id.value} PREPARING" }
             nw_connection_state_failed -> { log.info { "nw.api.state id=${id.value} FAILED → closeConnection(failed=true)" }; closeConnection(id, failed = true) }
             nw_connection_state_cancelled -> { log.debug { "nw.api.state id=${id.value} CANCELLED → closeConnection(failed=false)" }; closeConnection(id, failed = false) }
             else -> log.debug { "nw.api.state id=${id.value} other=$state" }
+        }
+    }
+
+    /**
+     * A `ready` transition. On the FIRST ready [emitReadyTransition] emits `connectionOpened` and
+     * returns `true`, so we start the receive loop (identical to pre-#1478 behavior). On a LATER
+     * ready — a `waiting → ready` recovery (#1478) — the connection is already open and receiving, so
+     * re-emitting `connectionOpened` / re-arming `receiveLoop` would double-arm (duplicate NwHello + a
+     * second concurrent receive loop); [emitReadyTransition] emits viability recovery and returns
+     * `false`, so `receiveLoop` is NOT re-armed. (NW may redeliver `ready`; this makes every ready
+     * after the first idempotent.)
+     */
+    private fun onReady(id: NwConnectionId, connection: nw_connection_t) {
+        if (emitReadyTransition(id)) receiveLoop(id, connection)
+    }
+
+    /**
+     * The observable half of a `ready` transition — pure registry bookkeeping + flow emission, with NO
+     * `nw_*` call (arming the receive loop is [onReady]'s job). Marks [ConnectionEntry.wasReady] and,
+     * on the FIRST ready, emits `connectionOpened` and returns `true` (caller must arm the receive
+     * loop); on a `waiting → ready` recovery emits `connectionViability(viable=true)` and returns
+     * `false`; if the entry is already gone, returns `false`. Split out so the ready/viability mapping
+     * and the first-ready double-arm guard are unit-testable without a live `nw_connection`.
+     */
+    private fun emitReadyTransition(id: NwConnectionId): Boolean {
+        val outcome = lock.withLock {
+            val entry = connections[id] ?: return@withLock null
+            val firstReady = !entry.wasReady
+            entry.wasReady = true
+            entry.endpoint to firstReady
+        }
+        if (outcome == null) {
+            log.debug { "nw.api.state id=${id.value} READY but entry already dropped (ignored)" }
+            return false
+        }
+        val (endpoint, firstReady) = outcome
+        return if (firstReady) {
+            log.debug { "nw.api.state id=${id.value} READY endpoint=${endpoint?.id ?: "<inbound>"} → emit connectionOpened + start receiveLoop" }
+            _connectionOpened.tryEmit(NwConnectionOpened(id, endpoint))
+            true
+        } else {
+            log.info { "nw.api.state id=${id.value} READY again (waiting→ready recovery) → emit viability(viable=true)" }
+            _connectionViability.tryEmit(NwConnectionViability(id, viable = true))
+            false
+        }
+    }
+
+    /**
+     * A `waiting` transition. On an ESTABLISHED connection (it HAD been ready) this is a path loss
+     * (#1478) that fires NO close — signal `viable=false` so `NwSeam` arms its grace tear. An
+     * initial-dial `preparing → waiting` (never been ready) is normal churn and is NOT reported.
+     */
+    private fun onWaiting(id: NwConnectionId) {
+        val wasReady = lock.withLock { connections[id]?.wasReady == true }
+        if (wasReady) {
+            log.info { "nw.api.state id=${id.value} WAITING after ready (path lost — no close will fire) → emit viability(viable=false)" }
+            _connectionViability.tryEmit(NwConnectionViability(id, viable = false))
+        } else {
+            log.debug { "nw.api.state id=${id.value} WAITING (initial dial, not yet ready — no viability signal)" }
         }
     }
 

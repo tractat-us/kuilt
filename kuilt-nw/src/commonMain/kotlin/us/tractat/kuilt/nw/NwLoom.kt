@@ -74,6 +74,9 @@ public class NwUnreachableException(message: String) : Exception(message)
  *   [Random.Default], tests inject a seeded [Random] for a deterministic dedup tiebreak.
  * @param weaveTimeout how long [weave] waits for the first peer before throwing
  *   [NwUnreachableException] (default [DEFAULT_WEAVE_TIMEOUT]); injectable for tests.
+ * @param wovenPathGrace how long a path-lost (`ready → waiting`) connection is given to recover before
+ *   the woven seam tears it as [CloseReason.Unreachable] (#1478); default [NwSeam.DEFAULT_WOVEN_PATH_GRACE]
+ *   (10s), injectable for tests.
  */
 public class NwLoom(
     private val api: NwApi,
@@ -82,6 +85,7 @@ public class NwLoom(
     private val policy: DeliveryPolicy = DeliveryPolicy.Reliable,
     private val random: Random = Random.Default,
     private val weaveTimeout: Duration = DEFAULT_WEAVE_TIMEOUT,
+    private val wovenPathGrace: Duration = NwSeam.DEFAULT_WOVEN_PATH_GRACE,
 ) : Loom {
 
     private val _visiblePeers = MutableStateFlow<Set<NwEndpoint>>(emptySet())
@@ -99,7 +103,7 @@ public class NwLoom(
         // Derive from the caller so background work runs on the test dispatcher; independent Job
         // so seam close() cancels only this session's coroutines.
         val seamScope = CoroutineScope(currentCoroutineContext() + SupervisorJob())
-        val seam = NwSeam(selfId, api, seamScope, random, policy)
+        val seam = NwSeam(selfId, api, seamScope, random, policy, wovenPathGrace)
 
         val serviceName = when (rendezvous) {
             is Rendezvous.New -> rendezvous.pattern.sessionName

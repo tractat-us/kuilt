@@ -36,11 +36,13 @@ internal class FakeNwApi(
     private val _connectionOpened = MutableSharedFlow<NwConnectionOpened>(extraBufferCapacity = 16)
     private val _bytesReceived = MutableSharedFlow<NwBytesReceived>(extraBufferCapacity = 64)
     private val _connectionClosed = MutableSharedFlow<NwConnectionClosed>(extraBufferCapacity = 16)
+    private val _connectionViability = MutableSharedFlow<NwConnectionViability>(extraBufferCapacity = 16)
 
     override val endpointFound: Flow<NwEndpoint> = _endpointFound.asSharedFlow()
     override val connectionOpened: Flow<NwConnectionOpened> = _connectionOpened.asSharedFlow()
     override val bytesReceived: Flow<NwBytesReceived> = _bytesReceived.asSharedFlow()
     override val connectionClosed: Flow<NwConnectionClosed> = _connectionClosed.asSharedFlow()
+    override val connectionViability: Flow<NwConnectionViability> = _connectionViability.asSharedFlow()
 
     init {
         radio.register(this)
@@ -90,4 +92,14 @@ internal class FakeNwApi(
     internal suspend fun emitConnectionOpened(event: NwConnectionOpened) = _connectionOpened.emit(event)
     internal suspend fun emitBytesReceived(event: NwBytesReceived) = _bytesReceived.emit(event)
     internal suspend fun emitConnectionClosed(event: NwConnectionClosed) = _connectionClosed.emit(event)
+
+    /**
+     * Test hook for #1478: drive a Network.framework `ready ⇄ waiting` viability transition on
+     * [connectionId] directly under virtual time (the real transition is a native `nw_connection`
+     * state change with no injectable clock). `viable=false` simulates a `ready→waiting` path loss;
+     * `viable=true` a `waiting→ready` recovery. The connId is the deterministic handle this device
+     * sees for the link (`conn-<deviceId>-<n>` — see [FakeNwRadio]).
+     */
+    internal suspend fun emitConnectionViability(connectionId: NwConnectionId, viable: Boolean) =
+        _connectionViability.emit(NwConnectionViability(connectionId, viable))
 }

@@ -1,6 +1,7 @@
 package us.tractat.kuilt.nw
 
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.emptyFlow
 import us.tractat.kuilt.core.FabricAvailability
 
 /**
@@ -69,4 +70,18 @@ public interface NwApi {
 
     /** Emits when a connection closes, locally or remotely initiated. */
     public val connectionClosed: Flow<NwConnectionClosed>
+
+    /**
+     * Emits when an already-established connection's path viability changes — `viable=false` on a
+     * `ready → waiting` path loss, `viable=true` on the `waiting → ready` recovery (see
+     * [NwConnectionViability]). This is the transport-level signal `NwSeam` needs to tear a
+     * path-lost peer that Network.framework never `failed`-closes (#1478).
+     *
+     * Defaults to a no-op [emptyFlow] so a binding that has not yet wired the underlying `waiting`
+     * transition (the JVM dylib bridge — see #1507) inherits "never reports a path loss" rather than
+     * being forced to implement it before the ABI lands. `RealNwApi` (appleMain) and the test fakes
+     * override it.
+     */
+    public val connectionViability: Flow<NwConnectionViability>
+        get() = emptyFlow()
 }

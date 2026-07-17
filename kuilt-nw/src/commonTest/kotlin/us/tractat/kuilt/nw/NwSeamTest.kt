@@ -1,3 +1,5 @@
+@file:OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class) // testScheduler.advanceTimeBy for the #1478 grace-timer tests
+
 package us.tractat.kuilt.nw
 
 import kotlinx.coroutines.CoroutineScope
@@ -19,6 +21,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
+import kotlin.time.Duration.Companion.seconds
 
 /**
  * TCK for [NwSeam]: N `NwSeam`s over ONE [FakeNwRadio], forming a full mesh by direct
@@ -302,6 +305,76 @@ class NwSeamTest {
         assertAll(
             { assertEquals(setOf(seamA.selfId), seamA.peers.value, "A's peers collapse to {A} — never stuck at {A}+alive") },
             { assertEquals(SeamState.Torn(CloseReason.RemoteRequested), seamA.state.value, "A latches Torn(RemoteRequested)") },
+        )
+    }
+
+    @Test
+    fun pathLossThatRecoversWithinGraceKeepsThePeerAndDoesNotTear() = runTest(StandardTestDispatcher()) {
+        // #1478: a Network.framework connection that loses its path goes ready→waiting (NOT failed),
+        // firing NO close. NwSeam arms a grace timer on viable=false; if the path recovers (viable=true)
+        // before the grace expires, the timer is cancelled and the peer STAYS — no tear.
+        val grace = 10.seconds
+        val radio = FakeNwRadio()
+        val apiA = FakeNwApi(radio, deviceId = "dev-0", serviceName = "svc-0")
+        val apiB = FakeNwApi(radio, deviceId = "dev-1", serviceName = "svc-1")
+        val seamA = NwSeam(PeerId("peer-0"), apiA, seamScope(), Random(0), wovenPathGrace = grace)
+        val seamB = NwSeam(PeerId("peer-1"), apiB, seamScope(), Random(1), wovenPathGrace = grace)
+        backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) { seamA.incoming.collect { } }
+        backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) { seamB.incoming.collect { } }
+        testScheduler.runCurrent()
+        apiA.connect(NwEndpoint(id = "ep-dev-1", serviceName = "svc-1")) // A dials → A's handle is conn-dev-0-0
+        assertTrue(pumpUntil { seamA.peers.value.size == 2 }, "A wove to 2 peers")
+
+        // Path lost on A's live link to B. Advance to JUST before the grace expiry, then recover.
+        apiA.emitConnectionViability(NwConnectionId("conn-dev-0-0"), viable = false)
+        testScheduler.runCurrent()
+        testScheduler.advanceTimeBy(grace.inWholeMilliseconds - 1)
+        testScheduler.runCurrent()
+        apiA.emitConnectionViability(NwConnectionId("conn-dev-0-0"), viable = true)
+        testScheduler.runCurrent()
+        // Advance well PAST the original expiry: proves the timer was cancelled, not merely deferred.
+        testScheduler.advanceTimeBy(grace.inWholeMilliseconds * 2)
+        testScheduler.runCurrent()
+
+        assertAll(
+            { assertEquals(setOf(seamA.selfId, PeerId("peer-1")), seamA.peers.value, "B stays in A's peers") },
+            { assertTrue(seamA.state.value is SeamState.Woven, "A stays Woven — the recovered path did not tear") },
+        )
+    }
+
+    @Test
+    fun pathLossThatExhaustsGraceTearsToUnreachableAndCompletesIncoming() = runTest(StandardTestDispatcher()) {
+        // #1478 core: a path loss that does NOT recover within the grace tears the seam. Because this
+        // was the last remote after having woven, peers collapse to {self}, state latches
+        // Torn(Unreachable) (distinct from a clean RemoteRequested leave), and incoming completes.
+        val grace = 10.seconds
+        val radio = FakeNwRadio()
+        val apiA = FakeNwApi(radio, deviceId = "dev-0", serviceName = "svc-0")
+        val apiB = FakeNwApi(radio, deviceId = "dev-1", serviceName = "svc-1")
+        val seamA = NwSeam(PeerId("peer-0"), apiA, seamScope(), Random(0), wovenPathGrace = grace)
+        val seamB = NwSeam(PeerId("peer-1"), apiB, seamScope(), Random(1), wovenPathGrace = grace)
+        var completed = false
+        val collectJob = backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
+            seamA.incoming.collect { }
+            completed = true
+        }
+        backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) { seamB.incoming.collect { } }
+        testScheduler.runCurrent()
+        apiA.connect(NwEndpoint(id = "ep-dev-1", serviceName = "svc-1"))
+        assertTrue(pumpUntil { seamA.peers.value.size == 2 }, "A wove to 2 peers")
+
+        // Path lost and never recovers: advance just past the grace so the timer fires.
+        apiA.emitConnectionViability(NwConnectionId("conn-dev-0-0"), viable = false)
+        testScheduler.runCurrent()
+        testScheduler.advanceTimeBy(grace.inWholeMilliseconds + 1)
+        assertTrue(pumpUntil { seamA.state.value is SeamState.Torn }, "grace exhausted → A tore")
+        pumpUntil { completed }
+
+        assertAll(
+            { assertEquals(setOf(seamA.selfId), seamA.peers.value, "A's peers collapse to {A}") },
+            { assertEquals(SeamState.Torn(CloseReason.Unreachable), seamA.state.value, "A latches Torn(Unreachable)") },
+            { assertTrue(completed, "A.incoming completes on the grace-expiry teardown") },
+            { assertTrue(collectJob.isCompleted && !collectJob.isCancelled, "completed NORMALLY, not by cancellation") },
         )
     }
 
