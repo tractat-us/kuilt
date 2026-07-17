@@ -1,6 +1,7 @@
 package us.tractat.kuilt.conformance
 
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
@@ -8,6 +9,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.time.Duration.Companion.milliseconds
@@ -24,6 +26,7 @@ import us.tractat.kuilt.core.PeerNotConnected
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.Tag
+import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -292,6 +295,17 @@ public abstract class SeamConformanceSuite {
                 block(host, joiner)
             } finally {
                 monitors.forEach { it.cancel() }
+                // Tear BOTH seams down at test end. A fabric that treats peer loss as *recoverable*
+                // (e.g. NwSeam since #1513 re-forms Woven→Weaving instead of tearing) leaves the survivor
+                // seam's background work re-arming — its redial loop keeps dialling the departed peer. If
+                // that loop is not cancelled, runTest's terminal `advanceUntilIdle` spins on the re-arming
+                // timer forever (an OOM/hang). close() cancels the seam's scope and is idempotent, so this
+                // is safe for a seam a test already closed. NonCancellable so cleanup still runs if `block`
+                // failed; runCatchingCancellable so a close error never masks the block's failure.
+                withContext(NonCancellable) {
+                    runCatchingCancellable { host.close() }
+                    runCatchingCancellable { joiner.close() }
+                }
             }
         }
     }

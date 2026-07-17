@@ -1,5 +1,6 @@
 package us.tractat.kuilt.conformance
 
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.filter
@@ -8,9 +9,11 @@ import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.test.TestResult
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withContext
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
+import us.tractat.kuilt.core.runCatchingCancellable
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
@@ -114,17 +117,24 @@ public abstract class MeshConformanceSuite {
     @Test
     public fun peerLeaveUpdatesSurvivorRosters(): TestResult = runTest {
         val seams = newMeshOfSize(3)
-        val leavingPeer = seams[0]
-        val survivors = seams.drop(1)
+        try {
+            val leavingPeer = seams[0]
+            val survivors = seams.drop(1)
 
-        leavingPeer.close()
+            leavingPeer.close()
 
-        // Every survivor must eventually see the peer count drop to 2.
-        survivors.forEach { survivor ->
-            survivor.peers
-                .filter { peers -> leavingPeer.selfId !in peers }
-                .first()
-            assertEquals(2, survivor.peers.value.size, "survivor must see 2 peers after one leaves; got ${survivor.peers.value}")
+            // Every survivor must eventually see the peer count drop to 2.
+            survivors.forEach { survivor ->
+                survivor.peers
+                    .filter { peers -> leavingPeer.selfId !in peers }
+                    .first()
+                assertEquals(2, survivor.peers.value.size, "survivor must see 2 peers after one leaves; got ${survivor.peers.value}")
+            }
+        } finally {
+            // Tear every seam down so a fabric that treats peer loss as *recoverable* (e.g. NwSeam since
+            // #1513) does not leave survivors' redial loops re-arming against the departed peer — an
+            // unbounded re-arm would spin runTest's terminal advanceUntilIdle. close() is idempotent.
+            withContext(NonCancellable) { seams.forEach { runCatchingCancellable { it.close() } } }
         }
     }
 
