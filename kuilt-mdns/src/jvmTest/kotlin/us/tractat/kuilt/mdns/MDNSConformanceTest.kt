@@ -19,6 +19,7 @@ import us.tractat.kuilt.core.Tag
 import java.net.ServerSocket
 import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
+import kotlin.test.assertFailsWith
 import io.ktor.client.plugins.websocket.WebSockets as ClientWebSockets
 
 /**
@@ -137,6 +138,39 @@ class MDNSConformanceTest : SeamConformanceSuite() {
             sessionName = "host",
             wsPath = hostWsPath,
         )
+
+    /**
+     * Prove the mDNS self-dial guard (#1489 / the #1466 class one transport up). JmDNS / NWBrowser
+     * deliver a device its OWN advertisement, so a symmetric advertise+browse peer can be handed
+     * its own record and dial itself.
+     *
+     * Unlike a multi-peer mesh fabric (e.g. `NwSeam`), mDNS's self-dial defense is **not** a
+     * seam-level drop: the transport is a per-connection **2-peer WebSocket relay**, so a
+     * self-connection can never reach a live host seam to be dropped there. The defense is a
+     * fail-fast `require(serverPeerId != selfPeerId)` at [MDNSPeerLinkFactory.weave] (the choke
+     * point where both ids are in scope; also exercised directly by [MDNSSelfDiscoveryFilterTest]).
+     *
+     * We prove it by driving [hostFactory] to dial its OWN advertisement and asserting the refusal.
+     * Because the guard throws before any connection forms, the live host seam is untouched — so the
+     * suite's no-self-echo / peers-unchanged / stays-Woven assertions in [selfDialIsRejected] hold as
+     * required.
+     */
+    override suspend fun injectSelfDial(host: Seam): Boolean {
+        val selfAdvertisement = MDNSAdvertisement(
+            host = "localhost",
+            port = port,
+            serverPeerId = hostFactory.selfPeerId,
+            sessionName = "host",
+            wsPath = hostWsPath,
+        )
+        assertFailsWith<IllegalArgumentException> {
+            hostFactory.weave(Rendezvous.Existing(selfAdvertisement))
+        }
+        return true
+    }
+
+    /** Proven: the factory refuses to dial its own advertisement, so no gap. */
+    override fun selfDialGap(): String? = null
 
     // identical byte path to websocket — plaintext ws:// to a host-peer hub;
     // joiner↔joiner frames traverse the host.

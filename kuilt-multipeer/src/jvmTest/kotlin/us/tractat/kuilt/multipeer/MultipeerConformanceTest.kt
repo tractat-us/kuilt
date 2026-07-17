@@ -3,6 +3,7 @@ package us.tractat.kuilt.multipeer
 import us.tractat.kuilt.conformance.SeamCapabilities
 import us.tractat.kuilt.conformance.SeamConformanceSuite
 import us.tractat.kuilt.core.Loom
+import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.Tag
 
 /**
@@ -36,11 +37,16 @@ class MultipeerConformanceTest : SeamConformanceSuite() {
         private const val FAKE_HOST_HANDLE = "fake-host-handle"
     }
 
+    // The delivering fake backing the current pair, captured so injectSelfDial can fire a
+    // self-peer event on the host session. Tests run one pair at a time, sequentially.
+    private var bus: DeliveringFakeMultipeerNativeLib? = null
+
     override fun newLoomPair(): Pair<Loom, Loom> {
         val bus = DeliveringFakeMultipeerNativeLib(
             hostPeerId = HOST_DISPLAY_NAME,
             joinerPeerId = JOINER_DISPLAY_NAME,
         )
+        this.bus = bus
         val hostFactory = MultipeerPeerLinkFactory(
             displayName = HOST_DISPLAY_NAME,
             serviceType = FAKE_SERVICE_TYPE,
@@ -66,6 +72,19 @@ class MultipeerConformanceTest : SeamConformanceSuite() {
         sessionName = HOST_DISPLAY_NAME,
         serviceType = FAKE_SERVICE_TYPE,
     )
+
+    /**
+     * Drive the host session to see a peer-state event for its OWN peerId — the #1466 self-dial.
+     * Real MultipeerConnectivity hands a device that both advertises and browses its own
+     * `MCPeerID`; [us.tractat.kuilt.multipeer.internal.BridgePeerLink]'s self-connection guard
+     * (`peer == selfId`) must drop it, proving [SeamConformanceSuite.selfDialIsRejected] on a
+     * live, already-woven seam.
+     */
+    override suspend fun injectSelfDial(host: Seam): Boolean =
+        bus?.injectHostSelfDial() ?: false
+
+    /** Proven: this harness fires a genuine self-peer event through the fake, so no gap. */
+    override fun selfDialGap(): String? = null
 
     /**
      * All capabilities honoured — MultipeerConnectivity requires encryption

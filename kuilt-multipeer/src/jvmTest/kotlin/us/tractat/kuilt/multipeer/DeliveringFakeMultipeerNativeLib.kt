@@ -134,6 +134,30 @@ internal class DeliveringFakeMultipeerNativeLib(
         return len
     }
 
+    /**
+     * Inject a **self-dial** (#1466 / #1490): fire a peer-state event for the HOST's OWN
+     * [hostPeerId] on the host session — exactly what MultipeerConnectivity does when a device
+     * that both advertises AND browses is handed its own `MCPeerID` (real MC returns a device's
+     * own peer to its own browser). [us.tractat.kuilt.multipeer.internal.BridgePeerLink]'s
+     * self-guard (`peer == selfId`) MUST drop it, so the host never registers itself as a remote
+     * nor evicts itself from its own roster.
+     *
+     * Fires a `connected` event THEN a `disconnected` event, modelling the self-link's
+     * form-then-drop lifecycle — the #1466 mechanism, in which a wrongly-registered self later
+     * drops and evicts `selfId` from the peer's own roster. An intact guard drops both; a removed
+     * guard would add-then-evict `selfId`, failing the conformance suite's "peers unchanged"
+     * assertion and its continuous `selfId ∈ peers` monitor.
+     *
+     * Returns `false` if the host peer-state callback isn't registered yet (no live host seam);
+     * `true` once the injection has been driven through the host session's callback.
+     */
+    fun injectHostSelfDial(): Boolean {
+        val cb = hostPeerStateCallback ?: return false
+        cb.invoke(hostPeerId, /* isConnected = */ 1)
+        cb.invoke(hostPeerId, /* isConnected = */ 0)
+        return true
+    }
+
     // ── peer-state handshake ──────────────────────────────────────────────────
 
     private fun firePeerConnectedIfReady() {
