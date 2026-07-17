@@ -5,6 +5,7 @@ import us.tractat.kuilt.conformance.SeamCapabilities
 import us.tractat.kuilt.conformance.SeamConformanceSuite
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Loom
+import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.Tag
 import kotlin.random.Random
 
@@ -34,22 +35,42 @@ class NwConformanceTest : SeamConformanceSuite() {
 
     private companion object {
         const val SERVICE_TYPE = "_kuilt._tcp"
+        const val HOST_DEVICE = "host"
     }
 
+    // The radio backing the current pair, captured so injectSelfDial can drive the host device to dial
+    // its own advertised endpoint. Tests run one pair at a time, sequentially.
+    private var radio: FakeNwRadio? = null
+
     override fun newLoomPair(): Pair<Loom, Loom> {
-        val radio = FakeNwRadio()
+        val r = FakeNwRadio()
+        radio = r
         val host = NwLoom(
-            FakeNwApi(radio, deviceId = "host", serviceName = "host"),
+            FakeNwApi(r, deviceId = HOST_DEVICE, serviceName = "host"),
             serviceType = SERVICE_TYPE,
             random = Random(0),
         )
         val joiner = NwLoom(
-            FakeNwApi(radio, deviceId = "join", serviceName = "join"),
+            FakeNwApi(r, deviceId = "join", serviceName = "join"),
             serviceType = SERVICE_TYPE,
             random = Random(1),
         )
         return host to joiner
     }
+
+    /**
+     * Drive the host device to dial its OWN advertised endpoint (the #1466 self-dial). The two
+     * resulting connections both resolve to the host's `selfId`, which [NwSeam]'s self-connection guard
+     * must drop — proving [SeamConformanceSuite.selfDialIsRejected] on a live, already-woven seam.
+     */
+    override suspend fun injectSelfDial(host: Seam): Boolean {
+        val r = radio ?: return false
+        r.injectSelfDial(HOST_DEVICE)
+        return true
+    }
+
+    /** Proven: this harness drives a genuine self-dial through the radio, so no gap. */
+    override fun selfDialGap(): String? = null
 
     /** Session name matches `Pattern("host")`; discovery is by [SERVICE_TYPE] so this only satisfies join()'s signature. */
     override fun joinTag(): Tag = InMemoryTag(sessionName = "host", peerKey = "nw-joiner")

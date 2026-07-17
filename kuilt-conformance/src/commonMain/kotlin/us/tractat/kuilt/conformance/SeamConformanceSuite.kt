@@ -3,10 +3,14 @@ package us.tractat.kuilt.conformance
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 import kotlinx.coroutines.test.TestResult
 import kotlinx.coroutines.test.TestScope
@@ -26,6 +30,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
@@ -78,7 +83,22 @@ import kotlin.test.assertTrue
  * overrides [injectMidSessionDeath] to actually drop the transport — a capability of the *harness*,
  * not the *fabric*. Its silent-skip is made accountable exactly as a capability gap is: an
  * un-overridden harness must declare a tracking URL via [midSessionDeathGap], enforced by
- * [midSessionDeathObligationIsTrackedWhenUnproven].
+ * [midSessionDeathObligationIsTrackedWhenUnproven]. The same shape governs [injectMembershipDrain]
+ * (a peer leaving without a tear) and [injectSelfDial] (a peer dialling its own advertisement, the
+ * #1466 class) — each opt-in, each tracked-by-default via its own `*Gap()` and `*IsTrackedWhenUnproven`
+ * meta-test rather than a required abstract every fabric would have to implement.
+ *
+ * ## Continuous contract monitor
+ *
+ * [connectedPair] launches a background collector that asserts `selfId ∈ peers` on a live (not
+ * [SeamState.Torn]) seam for the whole test — every obligation test is thereby also a monitor.
+ * [peersReportsSelfIdAndAtLeastTwoAfterJoin] only samples the invariant once at the end of a join; the
+ * monitor watches it across the whole test. **Honest limit:** `peers` is a [kotlinx.coroutines.flow.StateFlow],
+ * so the collector observes the *latest* value at each resumption, not every intermediate write — a
+ * **persistent** `selfId ∉ peers` on a live seam (the #1466 failure — a survivor's roster collapsing to
+ * {theOtherPeer} while it stays Woven) is reliably caught, but a purely transient sub-scheduling drop that
+ * is overwritten before the collector resumes may be missed. There is no stronger primitive against a
+ * StateFlow; the monitor raises the floor from "sampled once" to "sampled continuously".
  *
  * This suite is deliberately fixed at **two** Looms (ADR-001) and has no positive
  * N-peer/mesh obligation; roster convergence, sender-attributed broadcast, directed
@@ -211,6 +231,39 @@ public abstract class SeamConformanceSuite {
     public open fun membershipDrainGap(): String? = CapabilityGaps.MEMBERSHIP_DRAIN
 
     /**
+     * Inject a **self-dial**: make [host] resolve a connection whose remote identity is its OWN
+     * [Seam.selfId] — the #1466 class. A symmetric advertise+browse fabric is delivered its own
+     * advertisement (real Bonjour/mDNS/`NWBrowser` returns a device's own service to its own browser),
+     * dials it, and the resulting connection resolves to `selfId`. The seam's self-connection guard
+     * MUST drop it. Return `true` if the harness performed the injection; `false` (the default) means
+     * "this harness cannot inject a self-dial", and [selfDialIsRejected] early-returns without asserting.
+     *
+     * This is a **harness** capability, not a fabric [SeamCapabilities] flag — mirroring
+     * [injectMidSessionDeath]. Only a harness that can make a live seam see a connection to its own
+     * `selfId` (e.g. the `FakeNwRadio` self-endpoint delivery added for #1485) can prove it; a
+     * relay/2-peer harness with no self-discovery cannot self-dial at all and leaves this `false`.
+     * It is deliberately **opt-in** rather than a required abstract: a required hook would force every
+     * fabric subclass to implement a self-dial many structurally cannot perform. Accountability is
+     * preserved exactly as [injectMidSessionDeath]'s is — an un-overriding harness is *tracked*, never
+     * silently green, via [selfDialGap] and [selfDialObligationIsTrackedWhenUnproven].
+     *
+     * A harness that overrides this to `true` MUST also override [selfDialGap] to return `null`.
+     */
+    public open suspend fun injectSelfDial(host: Seam): Boolean = false
+
+    /**
+     * Tracking URL for **why this harness does not prove the self-dial obligation** — the
+     * accountability analog of [midSessionDeathGap] for the [injectSelfDial] hook.
+     *
+     * The base default is a non-null umbrella URL ([CapabilityGaps.SELF_DIAL]): an un-overridden
+     * harness (one that leaves [injectSelfDial] at its default `false`) is tracked by default, never
+     * silently green. A harness that overrides [injectSelfDial] to genuinely inject a self-dial
+     * **proves** the obligation and MUST override this to return `null`/blank.
+     * [selfDialObligationIsTrackedWhenUnproven] enforces the pairing.
+     */
+    public open fun selfDialGap(): String? = CapabilityGaps.SELF_DIAL
+
+    /**
      * Drive [newLoomPair] to a connected host/joiner pair and hand both live [Seam]s to
      * [block]. Hosts and joins **concurrently** — a role-split server Loom's host() suspends
      * until a joiner connects, so the two must run at once; in-process (loom, loom) fabrics
@@ -225,7 +278,42 @@ public abstract class SeamConformanceSuite {
             val joinerDeferred = async { joinerLoom.join(joinTag()) }
             val host = hostDeferred.await()
             val joiner = joinerDeferred.await()
-            block(host, joiner)
+            // Continuous contract monitor (#1490): a LIVE seam must include its own selfId in its roster
+            // for the whole test, not just the single snapshot `peersReportsSelfIdAndAtLeastTwoAfterJoin`
+            // checks. This is the #1466 upgrade — the self-connection bug shrank a survivor's roster to
+            // {theOtherPeer} while it stayed Woven. `peers` is a StateFlow, so the collector catches a
+            // *persistent* self-eviction on a live seam, not necessarily a transient sub-scheduling drop
+            // (see the class KDoc's "Continuous contract monitor" for the honest limit).
+            val monitors = listOf(
+                launch { monitorSelfAlwaysInPeers(host) },
+                launch { monitorSelfAlwaysInPeers(joiner) },
+            )
+            try {
+                block(host, joiner)
+            } finally {
+                monitors.forEach { it.cancel() }
+            }
+        }
+    }
+
+    /**
+     * Assert `selfId ∈ peers` on a live (non-[SeamState.Torn]) [seam] for the whole test. Because `peers`
+     * is a [kotlinx.coroutines.flow.StateFlow], this observes the latest value at each resumption, not
+     * every write — a *persistent* live-seam self-eviction is reliably caught; a transient drop overwritten
+     * before the collector resumes may be missed (see the class KDoc). Scoped to non-Torn: a Torn seam has
+     * left the session, and a fabric whose `peers` is a shared mesh-registry view (e.g. the reference
+     * `InMemoryLoom`) legitimately drops the departed member — `close()` there latches Torn *before*
+     * removing `selfId` from the shared roster, so the scope is exact, not a fudge.
+     */
+    private suspend fun monitorSelfAlwaysInPeers(seam: Seam) {
+        seam.peers.collect { peers ->
+            if (seam.state.value !is SeamState.Torn) {
+                assertTrue(
+                    seam.selfId in peers,
+                    "a live seam's peers must ALWAYS contain its own selfId (${seam.selfId.value}); " +
+                        "got ${peers.map { it.value }}",
+                )
+            }
         }
     }
 
@@ -636,6 +724,76 @@ public abstract class SeamConformanceSuite {
             }
         }
 
+    // ── (13d) a self-dial is REJECTED — self never joins the roster, never echoes ──
+    //
+    // The #1466 class as a first-class obligation: a symmetric advertise+browse fabric dials its own
+    // advertisement (real Bonjour/mDNS returns a device its own service), so a live seam sees a
+    // connection whose remote resolves to `selfId`. The self-connection guard MUST drop it — registering
+    // self is exactly what wedged #1466: `selfId` lands in the registry, and when that self-link later
+    // fails the close-loop evicts *self*, collapsing the survivor's roster to {theOtherPeer} while it
+    // stays Woven (no Torn) — invisible to every consumer keying on `peers`/`host`/`Torn`.
+    //
+    // A rejected self-dial is probed two complementary ways, because a broken guard can manifest in
+    // either of two shapes depending on the fabric:
+    //   (a) **roster self-eviction** — self is registered as a remote, then the self-link fails and its
+    //       close evicts *self* from `peers`, collapsing the survivor's roster to {theOtherPeer} while it
+    //       stays Woven. This is the literal #1466 signature. Caught by the `peers`-unchanged assertion
+    //       below (and independently by [connectedPair]'s continuous monitor).
+    //   (b) **live self-loopback** — self is registered AND its link stays live, so the host's own
+    //       broadcast is delivered back to it stamped `sender == selfId` (a healthy seam never loops a
+    //       peer's own broadcast to itself). Caught by the broadcast-echo assertion below.
+    // Both are asserted so the obligation has teeth regardless of which shape a given fabric produces. A
+    // *passive* "no self-frame arrives" check (no broadcast) would be near-vacuous — a self-link's only
+    // frames are the identity `NwHello`s, consumed as identity and never surfaced to `incoming` — so we
+    // broadcast to force a live self-loopback (shape b) to reveal itself. (For the reference `NwSeam`
+    // fake a self-dial's two connection ends share one radio link and tear each other, so a broken guard
+    // there surfaces as shape (a), the roster eviction; a fabric whose self-link is a durable loopback
+    // surfaces as shape (b).) State-stays-Woven backstops both (no re-flip, no tear).
+    //
+    // Gated on a HARNESS hook, not a SeamCapabilities flag: only a harness that can make a live seam see
+    // a connection to its own `selfId` (e.g. the `FakeNwRadio` self-endpoint path, #1485) can inject it.
+    // The default [injectSelfDial] returns false, so harnesses that cannot self-dial early-return (a
+    // silent skip tracked by [selfDialGap]). `incoming` is single-collection (ADR-034) and [connectedPair]
+    // does NOT collect `host.incoming`, so the collector below is its sole reader.
+
+    @Test
+    public fun selfDialIsRejected(): TestResult =
+        runTest {
+            connectedPair { host, _ ->
+                val peersBefore = host.peers.value
+                val injected = injectSelfDial(host)
+                if (!injected) return@connectedPair // harness cannot inject a self-dial — nothing to assert.
+
+                // Subscribe the sole `incoming` collector first, then let the injected self-dial fully
+                // resolve-or-drop, then broadcast the probe. A self-registered link echoes the broadcast
+                // back attributed to selfId (non-null ⇒ fail); a healthy seam never does (window elapses
+                // ⇒ null ⇒ pass).
+                val selfEcho = async {
+                    withTimeoutOrNull(2.seconds) { host.incoming.first { it.sender == host.selfId } }
+                }
+                delay(100.milliseconds) // let the injected self-dial resolve/drop and the collector subscribe
+                host.broadcast(byteArrayOf(0x5E.toByte(), 0x1F))
+                val echo = selfEcho.await()
+
+                assertAll(
+                    {
+                        assertNull(
+                            echo,
+                            "a rejected self-dial must not register a self-link: the host's own broadcast must " +
+                                "never loop back to it attributed to selfId",
+                        )
+                    },
+                    { assertEquals(peersBefore, host.peers.value, "a rejected self-dial must not change peers (self never registered as a remote)") },
+                    {
+                        assertIs<SeamState.Woven>(
+                            host.state.value,
+                            "a rejected self-dial must not re-flip Weaving→Woven nor tear the seam — state stays Woven",
+                        )
+                    },
+                )
+            }
+        }
+
     // ─────────────────────────────────────────────────────────────────────────
     //  Meta-test — every declared gap is trackable.
     // ─────────────────────────────────────────────────────────────────────────
@@ -698,6 +856,29 @@ public abstract class SeamConformanceSuite {
                         membershipDrainGap().isNullOrBlank(),
                         "an un-proven membership-drain obligation must be tracked: override membershipDrainGap() " +
                             "with a tracking URL, or override injectMembershipDrain to prove it",
+                    )
+                }
+            }
+        }
+
+    // ── (18) an un-proven self-dial obligation must be tracked, not silently skipped ──
+    //
+    // The harness-hook analog of [midSessionDeathObligationIsTrackedWhenUnproven] for the
+    // [injectSelfDial] hook. A harness that cannot inject a self-dial (hook returns `false`) MUST
+    // declare a non-blank [selfDialGap], so the silent early-return of [selfDialIsRejected] is tracked
+    // rather than invisibly green. A harness that proves the obligation (hook returns `true`) may leave
+    // the gap `null`.
+
+    @Test
+    public fun selfDialObligationIsTrackedWhenUnproven(): TestResult =
+        runTest {
+            connectedPair { host, _ ->
+                val proven = injectSelfDial(host)
+                if (!proven) {
+                    assertFalse(
+                        selfDialGap().isNullOrBlank(),
+                        "an un-proven self-dial obligation must be tracked: override selfDialGap() " +
+                            "with a tracking URL, or override injectSelfDial to prove it",
                     )
                 }
             }
