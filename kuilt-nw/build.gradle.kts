@@ -12,6 +12,14 @@ kotlin {
     val macosLibName = "kuilt"
     macosArm64 { binaries.sharedLib { baseName = macosLibName } }
 
+    // #1516: install the nw_connection_receive completion via a C block (nwshim.def) rather than a
+    // Kotlin-lambda-bridged Obj-C block — the latter intermittently aborted the process under load
+    // when Kotlin/Native's block trampoline ran on the serial GCD queue. RealNwApi lives in appleMain,
+    // so the cinterop is wired for every apple target. Def: src/nativeInterop/cinterop/nwshim.def.
+    listOf(iosArm64(), iosSimulatorArm64(), macosArm64()).forEach { target ->
+        target.compilations.getByName("main").cinterops.create("nwshim")
+    }
+
     sourceSets {
         commonMain.dependencies {
             api(project(":kuilt-core"))  // public API returns Seam from weave() — expose the contract transitively

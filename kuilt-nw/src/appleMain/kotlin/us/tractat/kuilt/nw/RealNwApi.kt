@@ -6,17 +6,16 @@ import io.github.oshai.kotlinlogging.KotlinLogging
 import kotlinx.atomicfu.atomic
 import kotlinx.atomicfu.locks.reentrantLock
 import kotlinx.atomicfu.locks.withLock
-import kotlinx.cinterop.COpaquePointerVar
+import kotlinx.cinterop.COpaquePointer
 import kotlinx.cinterop.ExperimentalForeignApi
+import kotlinx.cinterop.StableRef
 import kotlinx.cinterop.addressOf
-import kotlinx.cinterop.alloc
+import kotlinx.cinterop.asStableRef
 import kotlinx.cinterop.convert
-import kotlinx.cinterop.memScoped
-import kotlinx.cinterop.ptr
 import kotlinx.cinterop.readBytes
+import kotlinx.cinterop.staticCFunction
 import kotlinx.cinterop.toKString
 import kotlinx.cinterop.usePinned
-import kotlinx.cinterop.value
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -54,12 +53,6 @@ import platform.Network.nw_content_context_create
 import platform.Network.nw_endpoint_create_host
 import platform.Network.nw_endpoint_get_bonjour_service_name
 import platform.Network.nw_endpoint_t
-import platform.Network.nw_error_domain_dns
-import platform.Network.nw_error_domain_posix
-import platform.Network.nw_error_domain_tls
-import platform.Network.nw_error_get_error_code
-import platform.Network.nw_error_get_error_domain
-import platform.Network.nw_error_t
 import platform.Network.nw_listener_cancel
 import platform.Network.nw_listener_create
 import platform.Network.nw_listener_get_port
@@ -80,12 +73,11 @@ import platform.Security.sec_protocol_options_add_pre_shared_key
 import platform.darwin.DISPATCH_TIME_NOW
 import platform.darwin.dispatch_after
 import platform.darwin.dispatch_data_create
-import platform.darwin.dispatch_data_create_map
 import platform.darwin.dispatch_data_t
 import platform.darwin.dispatch_queue_create
 import platform.darwin.dispatch_time
-import platform.posix.size_tVar
 import us.tractat.kuilt.core.FabricAvailability
+import us.tractat.kuilt.nw.cinterop.kuilt_nw_connection_receive
 
 private val log = KotlinLogging.logger("us.tractat.kuilt.nw.RealNwApi")
 
@@ -582,30 +574,56 @@ internal class RealNwApi(
      * A healthy chunk resets the retry budget, so intermittent transients never accumulate to escalation.
      */
     private fun receiveLoop(id: NwConnectionId, connection: nw_connection_t) {
-        nw_connection_receive(connection, RECEIVE_MIN_LENGTH, RECEIVE_MAX_LENGTH) { content, _, _, error ->
-            if (content != null) _bytesReceived.tryEmit(NwBytesReceived(id, fromDispatchData(content)))
-            if (error == null) {
-                lock.withLock { connections[id]?.receiveRetries = 0 } // healthy ⇒ any transient blip cleared
-                receiveLoop(id, connection) // re-arm only while healthy
-            } else {
-                handleReceiveError(id, connection, error)
-            }
+        // #1516: arm the receive through the C shim (nwshim.def), NOT via a Kotlin lambda bridged to an
+        // Obj-C block. Under load, Kotlin/Native's block trampoline (blockToKotlinImp →
+        // Kotlin_Interop_refFromObjC) intermittently threw an uncaught NSException when NW invoked the
+        // completion on the serial GCD queue — most reliably the final ECANCELED receive on the close
+        // path — aborting the process. The shim installs a pure C block and calls back through a plain C
+        // function pointer ([receiveCompletion]), so that trampoline is never on the receive hot path.
+        //
+        // Each receive fires its completion exactly once, so a fresh StableRef per arming is disposed by
+        // the callback (no leak). The strong ref to [connection] in [connections] outlives this — the
+        // StableRef only carries the context needed to route the one completion.
+        val ctx = StableRef.create(ReceiveContext(this, id, connection))
+        kuilt_nw_connection_receive(
+            connection,
+            RECEIVE_MIN_LENGTH,
+            RECEIVE_MAX_LENGTH,
+            ctx.asCPointer(),
+            receiveCompletion,
+        )
+    }
+
+    /**
+     * Handle one receive completion, unpacked to primitives by the C shim (#1516). [bytes] points into a
+     * mapped dispatch_data region that ARC keeps alive until strictly after this returns, so the
+     * [readBytes] copy is safe. Mirrors the old in-lambda logic: emit any chunk, then re-arm on success
+     * (resetting the retry budget) or route the error through [handleReceiveError].
+     */
+    private fun onReceiveComplete(
+        id: NwConnectionId,
+        connection: nw_connection_t,
+        bytes: COpaquePointer?,
+        len: Int,
+        hasError: Boolean,
+        errDomain: Int,
+        errCode: Int,
+    ) {
+        if (bytes != null && len > 0) _bytesReceived.tryEmit(NwBytesReceived(id, bytes.readBytes(len)))
+        if (!hasError) {
+            lock.withLock { connections[id]?.receiveRetries = 0 } // healthy ⇒ any transient blip cleared
+            receiveLoop(id, connection) // re-arm only while healthy
+        } else {
+            handleReceiveError(id, connection, errDomain, errCode)
         }
     }
 
-    /** Classify a receive error and route it to escalate (Terminal) or bounded retry (Transient). #1479. */
-    private fun handleReceiveError(id: NwConnectionId, connection: nw_connection_t, error: nw_error_t) {
-        // Map the nw_error_domain_t to the commonMain classifier's Int domain by comparing against the
-        // cinterop constants (robust whether the anonymous enum bridges as a typealias or an enum). Only
-        // POSIX-vs-non-POSIX changes the verdict; every non-POSIX domain classifies Terminal.
-        val nwDomain = nw_error_get_error_domain(error)
-        val domain = when (nwDomain) {
-            nw_error_domain_posix -> NW_ERROR_DOMAIN_POSIX
-            nw_error_domain_dns -> NW_ERROR_DOMAIN_DNS
-            nw_error_domain_tls -> NW_ERROR_DOMAIN_TLS
-            else -> NW_ERROR_DOMAIN_INVALID
-        }
-        val code = nw_error_get_error_code(error)
+    /**
+     * Classify a receive error and route it to escalate (Terminal) or bounded retry (Transient). #1479.
+     * [domain] is the raw `nw_error_domain_t` value the shim read (invalid=0/posix=1/dns=2/tls=3), which
+     * is byte-for-byte the commonMain `NW_ERROR_DOMAIN_*` numbering — passed straight to [classifyReceiveError].
+     */
+    private fun handleReceiveError(id: NwConnectionId, connection: nw_connection_t, domain: Int, code: Int) {
         when (classifyReceiveError(domain, code)) {
             ReceiveErrorClass.ExpectedCancel ->
                 // Our own nw_connection_cancel failed the pending receive (ECANCELED). The `cancelled`
@@ -743,15 +761,34 @@ internal class RealNwApi(
             dispatch_data_create(pinned.addressOf(0), bytes.size.convert(), null, null)
         }
 
-    private fun fromDispatchData(data: dispatch_data_t): ByteArray = memScoped {
-        val ptr = alloc<COpaquePointerVar>()
-        val size = alloc<size_tVar>()
-        dispatch_data_create_map(data, ptr.ptr, size.ptr)
-        val len = size.value.toInt()
-        if (len == 0) ByteArray(0) else ptr.value!!.readBytes(len)
-    }
+    /**
+     * The context routed to the one-shot receive completion (#1516). Carried as a [StableRef] through
+     * the C shim's opaque `ctx` pointer so the pure-C completion block can call back into Kotlin without
+     * any Obj-C→Kotlin bridge. Holds a strong ref to [connection] for the completion's lifetime (the
+     * registry's ref is independent); the callback disposes the [StableRef] the moment it fires.
+     */
+    private class ReceiveContext(
+        val api: RealNwApi,
+        val id: NwConnectionId,
+        val connection: nw_connection_t,
+    )
 
     private companion object {
+        /**
+         * The C function pointer the shim invokes when a receive completes (#1516). Non-capturing (a
+         * [staticCFunction] requirement): everything it needs is recovered from the [StableRef] in `ctx`,
+         * which it disposes before dispatching to [onReceiveComplete]. `bytes` is valid only for the
+         * duration of this call (ARC frees the mapped region once the C block returns).
+         */
+        private val receiveCompletion =
+            staticCFunction<COpaquePointer?, COpaquePointer?, Int, Boolean, Boolean, Int, Int, Unit> {
+                ctx, bytes, len, _, hasError, errDomain, errCode ->
+                val ref = ctx!!.asStableRef<ReceiveContext>()
+                val rc = ref.get()
+                ref.dispose()
+                rc.api.onReceiveComplete(rc.id, rc.connection, bytes, len, hasError, errDomain, errCode)
+            }
+
         /** Stable discovery id for the single synthesized loopback peer (loopback mode has no Bonjour name). */
         private const val LOOPBACK_PEER_ID = "loopback-peer"
         /** The loopback interface the joiner dials the host's ephemeral port on. */
