@@ -246,10 +246,10 @@ class NwSeamTest {
     }
 
     @Test
-    fun sendFailureOnLastPeerTearsSeamAndCompletesIncoming() = runTest(StandardTestDispatcher()) {
-        // Fix 2 coverage: a send failure that evicts the LAST remote must tear the seam to
-        // Torn(RemoteRequested) and complete incoming — mirroring a clean connectionClosed — not
-        // leave it stuck Woven with peers == {selfId}.
+    fun sendFailureOnLastPeerReformsToWeavingNotTorn() = runTest(StandardTestDispatcher()) {
+        // #1513: a send failure that evicts the LAST remote re-forms the seam to Weaving (recoverable) —
+        // NOT Torn — and keeps incoming OPEN, so NwLoom can redial. (Pre-#1513 this tore to
+        // Torn(RemoteRequested) and completed incoming.)
         val radio = FakeNwRadio()
         val apiA = FakeNwApi(radio, deviceId = "dev-0", serviceName = "svc-0")
         val apiB = FakeNwApi(radio, deviceId = "dev-1", serviceName = "svc-1")
@@ -268,30 +268,33 @@ class NwSeamTest {
         // Make A's next send fail → the single remote is evicted via the send-failure path.
         apiA.failSend = true
         seamA.broadcast("boom".encodeToByteArray())
-        pumpUntil { seamA.state.value is SeamState.Torn }
+        assertTrue(pumpUntil { seamA.peers.value == setOf(seamA.selfId) }, "A evicted B via send failure")
+        pumpUntil(maxPumps = 50) { false } // give a wrong Torn/incoming-completion a chance to surface
 
-        pumpUntil { completed }
         assertAll(
-            { assertEquals(SeamState.Torn(CloseReason.RemoteRequested), seamA.state.value, "A tears to Torn(RemoteRequested)") },
+            { assertTrue(seamA.state.value is SeamState.Weaving, "A re-forms to Weaving, NOT Torn — was ${seamA.state.value}") },
             { assertEquals(setOf(seamA.selfId), seamA.peers.value, "A's peers collapse to {A}") },
-            { assertTrue(completed, "A.incoming completes after send-failure teardown") },
-            { assertTrue(collectJob.isCompleted && !collectJob.isCancelled, "completed NORMALLY, not by cancellation") },
+            { assertTrue(!completed && !collectJob.isCompleted, "A.incoming stays OPEN after a send-failure eviction") },
         )
     }
 
     @Test
-    fun remotePeerDepartureCollapsesPeersAndLatchesTorn() = runTest(StandardTestDispatcher()) {
-        // #1466 investigation (#1472): the exact "peers 2→1" collapse path. A 2-node mesh forms
-        // (A.peers == {A,B}, Woven). B departs — its close() disconnects B's connections, so the
-        // radio delivers connectionClosed to A's surviving link. A must remove B (peers → {A}) AND,
-        // because that was the last remote after having woven, LATCH Torn in the SAME step. Proves
-        // NwSeam cannot leave peers == {self} while Woven-and-alive: a genuine 2→1 always tears.
+    fun remotePeerDepartureCollapsesPeersAndReformsToWeavingNotTorn() = runTest(StandardTestDispatcher()) {
+        // #1513 policy: a peer loss is RECOVERABLE, not terminal. A 2-node mesh forms (A.peers == {A,B},
+        // Woven). B departs — its close() disconnects B's connections, so the radio delivers
+        // connectionClosed to A's surviving link. A must remove B (peers → {A}) and RE-FORM
+        // Woven→Weaving — NOT latch Torn — keeping incoming OPEN so NwLoom can redial and rejoin.
+        // (Pre-#1513 this latched Torn(RemoteRequested); reverting evictPeerLocked's reform makes this fail.)
         val radio = FakeNwRadio()
         val apiA = FakeNwApi(radio, deviceId = "dev-0", serviceName = "svc-0")
         val apiB = FakeNwApi(radio, deviceId = "dev-1", serviceName = "svc-1")
         val seamA = NwSeam(PeerId("peer-0"), apiA, seamScope(), Random(0))
         val seamB = NwSeam(PeerId("peer-1"), apiB, seamScope(), Random(1))
-        backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) { seamA.incoming.collect { } }
+        var aIncomingCompleted = false
+        val aCollect = backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
+            seamA.incoming.collect { }
+            aIncomingCompleted = true
+        }
         backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) { seamB.incoming.collect { } }
         testScheduler.runCurrent()
         apiA.connect(NwEndpoint(id = "ep-dev-1", serviceName = "svc-1"))
@@ -300,11 +303,14 @@ class NwSeamTest {
 
         // B departs: closing B disconnects B's links; the radio delivers connectionClosed to A.
         seamB.close()
-        assertTrue(pumpUntil { seamA.state.value is SeamState.Torn }, "A tore on the remote departure")
+        assertTrue(pumpUntil { seamA.peers.value == setOf(seamA.selfId) }, "A evicted B, peers collapse to {A}")
+        // Give any (wrongly) latched Torn / incoming completion a chance to surface — must NOT happen.
+        pumpUntil(maxPumps = 50) { false }
 
         assertAll(
-            { assertEquals(setOf(seamA.selfId), seamA.peers.value, "A's peers collapse to {A} — never stuck at {A}+alive") },
-            { assertEquals(SeamState.Torn(CloseReason.RemoteRequested), seamA.state.value, "A latches Torn(RemoteRequested)") },
+            { assertEquals(setOf(seamA.selfId), seamA.peers.value, "A's peers collapse to {A}") },
+            { assertTrue(seamA.state.value is SeamState.Weaving, "A re-forms to Weaving (recoverable), NOT Torn — was ${seamA.state.value}") },
+            { assertTrue(!aIncomingCompleted && !aCollect.isCompleted, "A.incoming stays OPEN — a reforming seam does not complete incoming") },
         )
     }
 
@@ -343,10 +349,10 @@ class NwSeamTest {
     }
 
     @Test
-    fun pathLossThatExhaustsGraceTearsToUnreachableAndCompletesIncoming() = runTest(StandardTestDispatcher()) {
-        // #1478 core: a path loss that does NOT recover within the grace tears the seam. Because this
-        // was the last remote after having woven, peers collapse to {self}, state latches
-        // Torn(Unreachable) (distinct from a clean RemoteRequested leave), and incoming completes.
+    fun pathLossThatExhaustsGraceReformsToWeavingNotTorn() = runTest(StandardTestDispatcher()) {
+        // #1478 + #1513: a path loss that does NOT recover within the grace evicts the peer, but that is
+        // now RECOVERABLE — the last-remote eviction re-forms Woven→Weaving (peers → {self}) and keeps
+        // incoming OPEN so NwLoom redials. (Pre-#1513 this latched Torn(Unreachable) and completed incoming.)
         val grace = 10.seconds
         val radio = FakeNwRadio()
         val apiA = FakeNwApi(radio, deviceId = "dev-0", serviceName = "svc-0")
@@ -367,14 +373,47 @@ class NwSeamTest {
         apiA.emitConnectionViability(NwConnectionId("conn-dev-0-0"), viable = false)
         testScheduler.runCurrent()
         testScheduler.advanceTimeBy(grace.inWholeMilliseconds + 1)
-        assertTrue(pumpUntil { seamA.state.value is SeamState.Torn }, "grace exhausted → A tore")
-        pumpUntil { completed }
+        assertTrue(pumpUntil { seamA.peers.value == setOf(seamA.selfId) }, "grace exhausted → A evicted B")
+        pumpUntil(maxPumps = 50) { false }
 
         assertAll(
             { assertEquals(setOf(seamA.selfId), seamA.peers.value, "A's peers collapse to {A}") },
-            { assertEquals(SeamState.Torn(CloseReason.Unreachable), seamA.state.value, "A latches Torn(Unreachable)") },
-            { assertTrue(completed, "A.incoming completes on the grace-expiry teardown") },
-            { assertTrue(collectJob.isCompleted && !collectJob.isCancelled, "completed NORMALLY, not by cancellation") },
+            { assertTrue(seamA.state.value is SeamState.Weaving, "A re-forms to Weaving, NOT Torn(Unreachable) — was ${seamA.state.value}") },
+            { assertTrue(!completed && !collectJob.isCompleted, "A.incoming stays OPEN after the grace-expiry eviction") },
+        )
+    }
+
+    @Test
+    fun reconnectAfterReformFlipsWeavingBackToWoven() = runTest(StandardTestDispatcher()) {
+        // #1513 test 2: after a peer loss re-forms the seam to Weaving, a fresh connection to the same
+        // peer must flip it back Woven (the existing addPeerLocked path). A 2-seam pair forms over a
+        // single dial (A's live link to B is deterministically conn-dev-0-0); a path-loss grace expiry
+        // evicts B and disconnects the link (so B re-forms too), then A re-dials and both re-weave.
+        val grace = 10.seconds
+        val radio = FakeNwRadio()
+        val apiA = FakeNwApi(radio, deviceId = "dev-0", serviceName = "svc-0")
+        val apiB = FakeNwApi(radio, deviceId = "dev-1", serviceName = "svc-1")
+        val seamA = NwSeam(PeerId("peer-0"), apiA, seamScope(), Random(0), wovenPathGrace = grace)
+        val seamB = NwSeam(PeerId("peer-1"), apiB, seamScope(), Random(1), wovenPathGrace = grace)
+        backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) { seamA.incoming.collect { } }
+        backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) { seamB.incoming.collect { } }
+        testScheduler.runCurrent()
+        apiA.connect(NwEndpoint(id = "ep-dev-1", serviceName = "svc-1")) // single dial → A's link is conn-dev-0-0
+        assertTrue(pumpUntil { seamA.peers.value.size == 2 && seamB.peers.value.size == 2 }, "wove to 2 peers")
+
+        // Drop A's live path; grace expiry evicts B AND api.disconnect tears the link → B re-forms too.
+        apiA.emitConnectionViability(NwConnectionId("conn-dev-0-0"), viable = false)
+        testScheduler.runCurrent()
+        testScheduler.advanceTimeBy(grace.inWholeMilliseconds + 1)
+        assertTrue(pumpUntil { seamA.state.value is SeamState.Weaving && seamB.state.value is SeamState.Weaving }, "both re-form to Weaving")
+
+        // Reconnect: a fresh dial to the same peer must flip Weaving → Woven and regain the remote.
+        apiA.connect(NwEndpoint(id = "ep-dev-1", serviceName = "svc-1"))
+        assertTrue(pumpUntil { seamA.peers.value.size == 2 }, "A re-wove after reconnect")
+
+        assertAll(
+            { assertTrue(seamA.state.value is SeamState.Woven, "A flips Weaving → Woven on reconnect — was ${seamA.state.value}") },
+            { assertEquals(setOf(seamA.selfId, PeerId("peer-1")), seamA.peers.value, "A regains B") },
         )
     }
 
@@ -407,13 +446,15 @@ class NwSeamTest {
         //    (still {conn-dev-0-0=false}, unchanged so the StateFlow never re-emits it) and arm the timer.
         apiA.connect(NwEndpoint(id = "ep-dev-1", serviceName = "svc-1"))
         assertTrue(pumpUntil { seamA.peers.value.size == 2 }, "A wove to 2 peers")
-        // 3) Advance past the grace: with the pending loss reconciled, the timer fires and tears the peer.
+        // 3) Advance past the grace: with the pending loss reconciled, the timer fires and evicts the peer.
         testScheduler.advanceTimeBy(grace.inWholeMilliseconds + 1)
-        assertTrue(pumpUntil { seamA.state.value is SeamState.Torn }, "grace armed on registration → A tore")
+        assertTrue(pumpUntil { seamA.peers.value == setOf(seamA.selfId) }, "grace armed on registration → A evicted B")
 
         assertAll(
             { assertEquals(setOf(seamA.selfId), seamA.peers.value, "A's peers collapse to {A} — the pre-registration loss was not lost") },
-            { assertEquals(SeamState.Torn(CloseReason.Unreachable), seamA.state.value, "A latches Torn(Unreachable) — no zombie Woven peer") },
+            // #1513: the eviction re-forms to Weaving (recoverable), not Torn — the anti-zombie point holds
+            // either way (no lingering Woven peer), the terminal state just became recoverable.
+            { assertTrue(seamA.state.value is SeamState.Weaving, "A re-forms to Weaving — no zombie Woven peer, and recoverable") },
         )
     }
 

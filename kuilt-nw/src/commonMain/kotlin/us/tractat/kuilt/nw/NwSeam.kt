@@ -50,15 +50,16 @@ private val log = KotlinLogging.logger("us.tractat.kuilt.nw.NwSeam")
  *     connection is the remote's [NwHello] (id + nonce); every later frame is data, delivered to
  *     [incoming] stamped with that sender.
  *  3. **connectionClosed** — evicts the peer (conn-identity guarded so a deduped loser's close
- *     can't evict the survivor) and tears the seam when the last remote drops.
+ *     can't evict the survivor) and, when the last remote drops, **re-forms to [SeamState.Weaving]
+ *     rather than latching [SeamState.Torn]** (#1513) — peer loss is recoverable, not terminal.
  *  4. **connectionViability** — the #1478 path-loss timer, reconciled from drop-tolerant STATE (#1509).
  *     A Network.framework connection that loses its route goes `ready → waiting` (NOT `failed`), firing NO
  *     [NwApi.connectionClosed], so a dead peer would otherwise linger in [peers] forever.
  *     [NwApi.connectionViability] exposes each connection's LATEST viability as state (not a lossy event
  *     stream); [reconcileViability] arms a per-connection grace timer ([wovenPathGrace]) for a connection
  *     whose latest value is `false` and cancels it when the latest is `true`. If the path does not recover
- *     before the timer expires, the connection is evicted (last-remote ⇒ [SeamState.Torn]
- *     [CloseReason.Unreachable]). Reconciling the latest value (rather than reacting to transitions) means
+ *     before the timer expires, the connection is evicted (last-remote ⇒ re-form to [SeamState.Weaving],
+ *     #1513 — NOT [SeamState.Torn]). Reconciling the latest value (rather than reacting to transitions) means
  *     a dropped/coalesced signal can never strand an armed timer (a spurious tear) or miss a loss (a
  *     zombie peer). The timer lives HERE, not in [NwApi], because only the seam owns an injectable [scope]
  *     (the test dispatcher under `runTest`) — `RealNwApi` runs on a GCD queue with no injectable clock.
@@ -84,6 +85,25 @@ private val log = KotlinLogging.logger("us.tractat.kuilt.nw.NwSeam")
  * runs under the lock** — targets are snapshotted under the lock, then sent/disconnected/delivered
  * outside it. Correct under a multi-threaded dispatcher; no single-thread-confinement crutch.
  *
+ * ## Peer loss is recoverable — re-form, don't tear (#1513)
+ * A dropped remote (a clean [NwApi.connectionClosed], a send-failure eviction, or a #1478 grace-timer
+ * expiry) is NOT terminal: when the last remote leaves, the seam transitions [SeamState.Woven] →
+ * [SeamState.Weaving] and resets [peers] to `{selfId}`, keeping [incoming] open and waiting for a peer
+ * to (re)connect (`NwLoom` redials — #1513). `SeamState` blesses `Woven → Weaving` as the recoverable
+ * "re-forming" transition; a later peer add flips it back to [SeamState.Woven] via [addRemotePeer].
+ * [SeamState.Torn] now latches on ONLY two paths — an explicit consumer [close] and the initial
+ * `NwLoom.weave` timeout (which routes through [close] as [CloseReason.Unreachable]); it is never a
+ * consequence of peer loss.
+ *
+ * ## [settledEndpoints] — the redial signal for `NwLoom`
+ * `NwLoom`'s redial loop must know which discovered endpoints still need dialling. The seam is the only
+ * layer that resolves a browse-time endpoint to a stable [PeerId] (via the [NwHello] handshake), so it
+ * publishes [settledEndpoints]: the set of endpoint ids that need no (further) dial — either the endpoint
+ * of a currently-connected peer, or an endpoint that resolved to `selfId` (a self-dial the guard drops).
+ * The mapping is learned from whichever connection to a peer carried a non-null [NwConnectionOpened.endpoint]
+ * (the outbound dial), so even when the surviving link is the *inbound* one, the peer's endpoint is still
+ * known — this is what stops the double-dial dedup loser's close from provoking an endless redial storm.
+ *
  * @param selfId this peer's stable identity, sent (with a per-connection nonce) as the first framed
  *   message on each connection.
  * @param api    the transport moving raw bytes over open connections.
@@ -92,9 +112,9 @@ private val log = KotlinLogging.logger("us.tractat.kuilt.nw.NwSeam")
  *   inject a seeded [Random] so the dedup tiebreak is deterministic.
  * @param policy delivery policy for the inbound [Spool] (default [DeliveryPolicy.Reliable]).
  * @param wovenPathGrace how long a path-lost (`ready → waiting`) connection is given to recover before
- *   the seam tears it as [CloseReason.Unreachable] (#1478). Production default [DEFAULT_WOVEN_PATH_GRACE]
- *   (10s); tests inject a small value. Injected via [scope]'s (test) dispatcher, so it advances under
- *   virtual time.
+ *   the seam evicts it — re-forming to [SeamState.Weaving] if it was the last remote (#1478/#1513).
+ *   Production default [DEFAULT_WOVEN_PATH_GRACE] (10s); tests inject a small value. Injected via
+ *   [scope]'s (test) dispatcher, so it advances under virtual time.
  */
 internal class NwSeam(
     override val selfId: PeerId,
@@ -113,6 +133,13 @@ internal class NwSeam(
     private class ConnState(val nonce: ByteArray) {
         val framer: NwFramer = NwFramer()
         var resolvedPeerId: PeerId? = null
+
+        /**
+         * The browse-time endpoint this connection was dialled to, from [NwConnectionOpened.endpoint];
+         * `null` for an inbound (accepted) connection. Used to learn a peer's [NwEndpoint.id] so
+         * [settledEndpoints] can tell `NwLoom` which endpoints still need (re)dialling (#1513).
+         */
+        var endpoint: NwEndpoint? = null
     }
 
     /** The live connection carrying a resolved peer, plus the canonical nonce both ends agreed on. */
@@ -134,10 +161,31 @@ internal class NwSeam(
      */
     private val graceJobs = mutableMapOf<NwConnectionId, Job>()
 
+    /**
+     * Sticky map of resolved remote [PeerId] → the [NwEndpoint.id] a connection to it was dialled on
+     * (learned from any connection to that peer that carried a non-null [NwConnectionOpened.endpoint],
+     * winner or dedup-loser). Guarded by [lock]. Feeds [settledEndpoints] (#1513).
+     */
+    private val peerEndpoint = mutableMapOf<PeerId, String>()
+
+    /** Endpoint ids that resolved to [selfId] (a self-dial the guard drops) — never redial these. Under [lock]. */
+    private val selfEndpointIds = mutableSetOf<String>()
+
+    private val _settledEndpoints = MutableStateFlow<Set<String>>(emptySet())
+
+    /**
+     * The set of discovered-endpoint ids that need no (further) dial: the endpoint of every currently
+     * connected peer, plus every endpoint that resolved to [selfId]. `NwLoom`'s redial loop dials the
+     * *complement* — a discovered endpoint absent from this set — with backoff (#1513). Recomputed under
+     * [lock] on every membership/identity change ([refreshSettledLocked]).
+     */
+    internal val settledEndpoints: StateFlow<Set<String>> = _settledEndpoints.asStateFlow()
+
     private val _peers = MutableStateFlow(setOf(selfId))
     override val peers: StateFlow<Set<PeerId>> = _peers.asStateFlow()
 
-    // Weaving until the first remote peer resolves, then Woven; latched Torn on teardown.
+    // Weaving until the first remote peer resolves, then Woven; re-forms Woven→Weaving on last-remote
+    // loss (recoverable, #1513); latches Torn ONLY on close()/weave-timeout, never on peer loss.
     private val _state = MutableStateFlow<SeamState>(SeamState.Weaving)
     override val state: StateFlow<SeamState> = _state.asStateFlow()
 
@@ -171,6 +219,9 @@ internal class NwSeam(
             // Get-or-create the ConnState (minting its nonce once) and snapshot the nonce under the
             // lock; send the identity frame OUTSIDE the lock (best-effort).
             val (cs, created) = getOrCreateConn(connId)
+            // Record the dialled endpoint (outbound only; null inbound) so the peer's endpoint id can feed
+            // [settledEndpoints] (#1513). Set under the lock like every other ConnState mutation.
+            if (event.endpoint != null) lock.withLock { cs.endpoint = event.endpoint }
             // #1509 lost-wakeup guard: a `viable=false` observed for this connId BEFORE it entered `conns`
             // was arm-skipped, and viability is latest-value STATE that will not re-emit an unchanged value.
             // Now that `conns` has caught up, re-reconcile the LATEST map so a pending path loss is armed
@@ -282,19 +333,27 @@ internal class NwSeam(
         // consumer keying on `peers`/`host`/`Torn`. Leave `resolvedPeerId` null, drop the ConnState, and
         // return the connId so the caller disconnects the self-link (its later close is then a no-op).
         if (remoteId == selfId) {
+            // Remember this endpoint resolved to self so NwLoom stops redialing it (#1513); the self-dial
+            // via Rendezvous.New is otherwise indistinguishable from a real peer at the loom's name check.
+            cs.endpoint?.let { selfEndpointIds += it.id; refreshSettledLocked() }
             conns.remove(connId)
             log.info { "nw.seam.self-connection connId=${connId.value} self=${selfId.value} → dropped (dialed own endpoint)" }
             return connId
         }
         cs.resolvedPeerId = remoteId
+        // Learn this peer's endpoint from ANY connection that carried one (winner OR dedup-loser), so the
+        // peer's endpoint is known even when the surviving link is inbound (endpoint == null) — #1513.
+        cs.endpoint?.let { peerEndpoint[remoteId] = it.id }
         val canonical = canonicalLinkNonce(cs.nonce, remoteNonce)
         val existing = registry[remoteId]
         if (existing == null) {
             registry[remoteId] = Winner(connId, canonical)
-            addRemotePeer(remoteId)
+            addRemotePeer(remoteId) // refreshes settledEndpoints
             log.debug { "nw.seam.resolved.first connId=${connId.value} remote=${remoteId.value} self=${selfId.value} nonce=$canonical" }
             return null
         }
+        // Peer already registered; we may have just learned its endpoint from this (possibly loser) link.
+        refreshSettledLocked()
         if (existing.connId == connId) {
             return null // idempotent; same connection re-resolving
         }
@@ -322,8 +381,43 @@ internal class NwSeam(
         _peers.update { it + remoteId }
         val wove = _state.value is SeamState.Weaving
         if (wove) _state.value = SeamState.Woven
+        refreshSettledLocked()
         log.debug { "nw.seam.peer-added remote=${remoteId.value} self=${selfId.value} peers=${_peers.value.map { it.value }} state=${_state.value}${if (wove) " (Weaving→Woven)" else ""}" }
     }
+
+    /**
+     * Recompute [settledEndpoints] from the current membership: the endpoint of every live registered
+     * peer (via the sticky [peerEndpoint] map) plus every self-resolved endpoint. Called under [lock]
+     * on every identity/membership change. Idempotent — writing an unchanged set to the [StateFlow]
+     * emits nothing.
+     */
+    private fun refreshSettledLocked() {
+        _settledEndpoints.value = buildSet {
+            addAll(selfEndpointIds)
+            for (peer in registry.keys) peerEndpoint[peer]?.let { add(it) }
+        }
+    }
+
+    /**
+     * Evict [peer] from the roster and, if it was the LAST remote after having woven, re-form
+     * [SeamState.Woven] → [SeamState.Weaving] (peers → `{selfId}`) rather than latching [SeamState.Torn]
+     * — peer loss is recoverable (#1513); `NwLoom` redials the endpoint. Called under [lock] from both
+     * [connectionClosedLoop] (a clean remote close) and [removeByConn] (send-failure / #1478 grace
+     * eviction), so the terminal-vs-recoverable decision is identical on every peer-loss path. [incoming]
+     * stays open; the seam only completes it on a true [close]/weave-timeout tear.
+     */
+    private fun evictPeerLocked(peer: PeerId) {
+        registry.remove(peer)
+        _peers.update { it - peer }
+        refreshSettledLocked()
+        if (registry.isEmpty() && _state.value is SeamState.Woven) {
+            _state.value = SeamState.Weaving
+        }
+    }
+
+    /** Log line for a completed [evictPeerLocked]; reads post-eviction [peers]/[state] under [lock]. */
+    private fun evictVerdict(peer: PeerId): String =
+        "evicted peer=${peer.value} → peers=${_peers.value.map { it.value }} state=${_state.value} (reform, not tear)"
 
     // ── loop 3: connectionClosed ────────────────────────────────────────────────
 
@@ -333,31 +427,27 @@ internal class NwSeam(
                 log.debug { "nw.seam.closed.ignored connId=${event.connectionId.value} self=${selfId.value} (seam already torn)" }
                 return@collect
             }
-            // Classify the close under the lock; log the verdict after releasing it.
+            // Classify the close under the lock; log the verdict after releasing it. A peer loss NEVER
+            // tears (#1513): [evictPeerLocked] re-forms Woven→Weaving when the last remote drops.
             var verdict = "no-op"
             var graceJob: Job? = null
-            val tearNow = lock.withLock {
+            lock.withLock {
                 graceJob = graceJobs.remove(event.connectionId) // any pending path-loss timer is moot now
                 val cs = conns.remove(event.connectionId)
-                if (cs == null) { verdict = "unknown-conn"; return@withLock false }
+                if (cs == null) { verdict = "unknown-conn"; return@withLock }
                 val peer = cs.resolvedPeerId
-                if (peer == null) { verdict = "unresolved-conn (no peer to evict)"; return@withLock false }
+                if (peer == null) { verdict = "unresolved-conn (no peer to evict)"; return@withLock }
                 // Conn-identity guard: only evict the peer if the LIVE connection is this one — a
                 // stale/deduped-loser close must not evict the surviving connection to the same peer.
                 if (registry[peer]?.connId != event.connectionId) {
                     verdict = "stale/loser-close for peer=${peer.value} (live conn=${registry[peer]?.connId?.value}) — NOT evicting"
-                    return@withLock false
+                    return@withLock
                 }
-                registry.remove(peer)
-                _peers.update { it - peer }
-                // Last remote gone after having woven ⇒ the session is over (mirror the mesh rule).
-                val tear = registry.isEmpty() && _state.value is SeamState.Woven
-                verdict = "evicted peer=${peer.value} → peers=${_peers.value.map { it.value }} tearNow=$tear"
-                tear
+                evictPeerLocked(peer)
+                verdict = evictVerdict(peer)
             }
             graceJob?.cancel()
             log.info { "nw.seam.closed connId=${event.connectionId.value} self=${selfId.value}: $verdict" }
-            if (tearNow) latchTorn(CloseReason.RemoteRequested)
         }
     }
 
@@ -441,11 +531,10 @@ internal class NwSeam(
     /**
      * The grace timer for [connId] expired without recovery: the peer is unreachable. Best-effort
      * [NwApi.disconnect] the dead connection and drive the local eviction via [removeByConn] — reusing
-     * the send-failure eviction path (last-remote-and-Woven ⇒ [latchTorn]), tearing to
-     * [CloseReason.Unreachable] to distinguish a dead peer from a clean leave. Driving the tear locally
-     * is deliberate: the transport emits no close for a `waiting` connection, so we cannot wait for a
-     * looped-back [NwApi.connectionClosed]. [latchTorn] is CAS-idempotent, so a later close of the same
-     * connection is a harmless no-op.
+     * the send-failure eviction path. Since #1513 a last-remote loss re-forms to [SeamState.Weaving]
+     * (recoverable), NOT [SeamState.Torn]: `NwLoom` redials the endpoint, so a path that comes back is
+     * rejoined. Driving the eviction locally is deliberate: the transport emits no close for a `waiting`
+     * connection, so we cannot wait for a looped-back [NwApi.connectionClosed].
      *
      * ## Deadline-race identity guard
      * [delay] cannot be cancelled once it has resumed, and the only later suspension ([NwApi.disconnect])
@@ -467,10 +556,10 @@ internal class NwSeam(
             log.debug { "nw.seam.grace.expired.stale connId=${connId.value} self=${selfId.value} → superseded by recovery/close/re-arm; no tear" }
             return
         }
-        log.info { "nw.seam.grace.expired connId=${connId.value} self=${selfId.value} → disconnect + evict (Unreachable)" }
+        log.info { "nw.seam.grace.expired connId=${connId.value} self=${selfId.value} → disconnect + evict (reform to Weaving)" }
         runCatchingCancellable { api.disconnect(connId) }
             .onFailure { log.debug { "nw.seam.grace.disconnect-failed connId=${connId.value}: ${it.message}" } }
-        removeByConn(connId, CloseReason.Unreachable)
+        removeByConn(connId)
     }
 
     // ── send ────────────────────────────────────────────────────────────────────
@@ -500,37 +589,29 @@ internal class NwSeam(
 
     /**
      * Drop a connection after a send failure or a path-loss grace expiry, evicting its peer only if it
-     * is still the live link. Mirrors [connectionClosedLoop]'s tear rule: if this was the last remote
-     * and the seam had woven, tear with [reason] — otherwise a non-close eviction leaves the seam stuck
-     * `Woven` with `peers == {selfId}` and [incoming] never completing, unlike a clean close. [reason]
-     * is [CloseReason.RemoteRequested] for a send failure (the default) and [CloseReason.Unreachable]
-     * for a #1478 grace expiry (a dead peer, distinct from a clean leave). The tear decision is computed
-     * under [lock]; [latchTorn] (non-suspend) runs after releasing it. Any pending grace timer for
-     * [connId] is cancelled here too.
+     * is still the live link. Shares [connectionClosedLoop]'s rule via [evictPeerLocked]: a last-remote
+     * loss re-forms Woven→Weaving (recoverable, #1513) rather than tearing — [incoming] stays open and
+     * `NwLoom` redials. The decision is computed under [lock]; any pending grace timer for [connId] is
+     * cancelled after releasing it.
      */
-    private fun removeByConn(connId: NwConnectionId, reason: CloseReason = CloseReason.RemoteRequested) {
+    private fun removeByConn(connId: NwConnectionId) {
         var verdict = "no-op"
         var graceJob: Job? = null
-        val tearNow = lock.withLock {
+        lock.withLock {
             graceJob = graceJobs.remove(connId)
             val cs = conns.remove(connId)
-            if (cs == null) { verdict = "unknown-conn"; return@withLock false }
+            if (cs == null) { verdict = "unknown-conn"; return@withLock }
             val peer = cs.resolvedPeerId
-            if (peer == null) { verdict = "unresolved-conn"; return@withLock false }
+            if (peer == null) { verdict = "unresolved-conn"; return@withLock }
             if (registry[peer]?.connId != connId) {
                 verdict = "stale/loser conn for peer=${peer.value} — NOT evicting"
-                return@withLock false
+                return@withLock
             }
-            registry.remove(peer)
-            _peers.update { it - peer }
-            // Last remote gone after having woven ⇒ the session is over (mirror the close rule).
-            val tear = registry.isEmpty() && _state.value is SeamState.Woven
-            verdict = "evicted peer=${peer.value} → peers=${_peers.value.map { it.value }} tearNow=$tear reason=$reason"
-            tear
+            evictPeerLocked(peer)
+            verdict = evictVerdict(peer)
         }
         graceJob?.cancel()
         log.info { "nw.seam.removeByConn connId=${connId.value} self=${selfId.value}: $verdict" }
-        if (tearNow) latchTorn(reason)
     }
 
     // ── close ─────────────────────────────────────────────────────────────────
@@ -544,6 +625,9 @@ internal class NwSeam(
             registry.clear()
             conns.clear()
             graceJobs.clear() // scope cancellation (in latchTorn) stops the jobs; just drop the refs
+            peerEndpoint.clear()
+            selfEndpointIds.clear()
+            _settledEndpoints.value = emptySet()
             _peers.value = setOf(selfId)
             snapshot
         }
@@ -554,9 +638,10 @@ internal class NwSeam(
 
     /**
      * Terminal teardown, latched exactly once via [closed]. Publishes [SeamState.Torn], completes
-     * [incoming] by closing the [spool], and cancels [scope] (stopping all three collectors).
-     * Returns `false` if teardown already ran. Called from [close] (local) and [connectionClosedLoop]
-     * (last remote gone).
+     * [incoming] by closing the [spool], and cancels [scope] (stopping all collectors). Returns `false`
+     * if teardown already ran. Since #1513 its ONLY caller is [close] — an explicit consumer close or the
+     * `NwLoom.weave` timeout (which routes through [close] as [CloseReason.Unreachable]). Peer loss no
+     * longer tears (it re-forms to [SeamState.Weaving] via [evictPeerLocked]).
      */
     private fun latchTorn(reason: CloseReason): Boolean {
         if (!closed.compareAndSet(expect = false, update = true)) {
