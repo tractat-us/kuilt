@@ -57,6 +57,11 @@ internal open class InMemoryVoterFabric(voters: List<NodeId>) {
      * Create the two ends of one directed link as `(dialerEnd, acceptorEnd)`. Base: a plain loopback
      * [connectionPair] — a live edge for the whole test. **Extension point:** override to interpose a
      * severable relay keyed by [edge], so a reconnection harness can drop and heal this exact edge.
+     *
+     * `suspend` so a severable override can model the faithful half-open dial: while an edge is
+     * severed a (re)dial must **suspend** (`awaitCancellation`) rather than return a dead conn — the
+     * negotiation never completes, so the caller's `withTimeoutOrNull(dialTimeout)` fires and retries.
+     * The base body is non-suspending; the modifier exists purely to unlock that override.
      */
-    protected open fun openLink(edge: VoterEdge): Pair<Connection, Connection> = connectionPair()
+    protected open suspend fun openLink(edge: VoterEdge): Pair<Connection, Connection> = connectionPair()
 }
