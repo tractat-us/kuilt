@@ -4,21 +4,8 @@ import io.ktor.client.HttpClient
 import io.ktor.client.plugins.websocket.webSocketSession
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.NonCancellable
-import kotlinx.coroutines.cancel
-import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeout
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.fabric.ConnectionSource
-import us.tractat.kuilt.core.fabric.Mesh
-import us.tractat.kuilt.core.fabric.acceptPump
-import us.tractat.kuilt.core.fabric.hubMesh
-import us.tractat.kuilt.core.runCatchingCancellable
-import us.tractat.kuilt.core.util.ExponentialBackoff
 import us.tractat.kuilt.raft.InMemoryRaftStorage
 import us.tractat.kuilt.raft.NodeId
 import us.tractat.kuilt.raft.RaftConfig
@@ -49,51 +36,13 @@ public class WebSocketVoter(
  * wire them into a [VoterMesh] — the real-network counterpart of `serverCluster`'s in-process
  * voter core.
  *
- * ## Mesh formation — canonical dial rule
- *
- * The M servers must form a K_M complete graph where **each pair connects exactly once** (a
- * double-dial would waste a socket and force the mesh's dedup lottery to arbitrate). The rule is
- * purely positional and needs no coordination: order the voters by [NodeId], and **the lower id
- * dials the higher**. So the voter ranked `i` (0-based) dials the `M-1-i` voters above it and
- * accepts exactly `i` inbound links from the voters below it. For every pair the lower id is the
- * sole dialer and the higher id the sole acceptor — one connection, deterministically.
- *
- * Each server's [Mesh] starts **empty** and grows by [Mesh.addLink]: the dialer adds the connection
- * it opened, the acceptor adds the one it accepted, and both ends run [Mesh.addLink] concurrently.
- * Building empty-then-`addLink` (rather than handing dialed connections to `meshSeam` at
- * construction) is what keeps formation deadlock-free — no server's mesh construction blocks on a
- * handshake that another server can only service once *its own* construction has returned.
- *
- * Once every link is up, the seams are handed to [voterMeshOverSeams], which wraps each in a
- * `SeamRaftTransport` and starts the voter [us.tractat.kuilt.raft.RaftNode]s.
- *
- * ## Reconnection — a dropped inter-server link heals
- *
- * Formation is not the end of the story: a voter-to-voter link can drop at any time (a peer
- * restarts, the network blips, a half-open TCP corpse is reaped by the WebSocket ping). Three pieces
- * keep the K_M mesh whole for the life of the [VoterMesh]:
- *
- * - **A persistent accept-pump per voter, running from t0.** Each voter's inbound route is drained
- *   forever by [acceptPump] (not just the `index` links formation expects), so a peer that re-dials
- *   after a drop is admitted exactly as an initial joiner was.
- * - **A per-voter redial supervisor.** [superviseVoterReconnection] watches each voter's `peers` and,
- *   whenever a peer this voter is the designated dialer for (the lower-id-dials-higher rule) goes
- *   absent, re-dials it under [ExponentialBackoff] full jitter until it returns — then falls idle.
- * - **A `hubMesh` per voter** (never terminal on drain), so losing a link removes only that peer and
- *   the seam keeps serving the rest while the supervisor re-dials.
- *
- * Both run on the mesh lifecycle scope built up front here (so they can start before formation) and
- * handed to [voterMeshOverSeams]; [VoterMesh.close] cancels pumps + supervisors + nodes together.
- *
- * ## Lifecycle
- *
- * Pumps, supervisors, and voter nodes all run on the mesh lifecycle scope (a child of the receiver);
- * [VoterMesh.close] cancels it and stops them all — and then, because this path **owns** the per-voter
- * `hubMesh` seams (`ownsSeams = true`), it gracefully closes each seam too. The seams run on their own
- * `SupervisorJob` scopes, so cancelling the mesh scope alone would NOT close them: without the graceful
- * close the inter-server WebSocket sessions would stay ESTABLISHED and still answer pings, and peers
- * would hold this voter in-roster as a **zombie** indefinitely. The [httpClient] is still **not** closed
- * here — the caller owns it.
+ * This is the thin **WebSocket** wrapper over the transport-agnostic [assembleVoterMesh]: it supplies
+ * each voter's WebSocket accept-source ([WebSocketVoter.source]) and a WebSocket dial (open a client
+ * session to the target peer's [WebSocketVoter.dialUrl], wrapped as a [WebSocketConnection]). All the
+ * mesh machinery — the K_M lower-id-dials-higher formation rule, the persistent accept-pumps, the
+ * per-voter redial supervisors, the formation-timeout teardown, and the hand-off to
+ * [voterMeshOverSeams] — lives in [assembleVoterMesh]. The [httpClient] is **not** closed here — the
+ * caller owns it.
  *
  * @param voters The M voter endpoints. At least 2; an odd count is recommended for clean quorum.
  * @param httpClient Client used to dial peer voters. **Must** install the WebSockets plugin with a
@@ -143,110 +92,27 @@ public suspend fun CoroutineScope.voterMeshOverWebSockets(
     formationTimeout: Duration = DEFAULT_FORMATION_TIMEOUT,
 ): VoterMesh {
     require(voters.size >= 2) { "voterMeshOverWebSockets needs at least 2 voters, got ${voters.size}" }
-    val ordered = voters.sortedBy { it.nodeId.value }
 
-    // Draw child Randoms per voter up front (single-threaded) so nothing is shared across the
-    // concurrent handshakes / redial loops below — a seeded Random is not thread-safe. The mesh
-    // nonce source and the backoff jitter source are DISTINCT instances per voter: they are driven
-    // concurrently (the mesh draws a nonce on every addLink — including redials — while the
-    // supervisor draws jitter between redials), so they must not share one non-thread-safe Random.
-    val voterRandom = ordered.associate { it.nodeId to Random(random.nextLong()) }
-    val backoffRandom = ordered.associate { it.nodeId to Random(random.nextLong()) }
+    // The two transport-specific inputs to the assembly: where each voter accepts inbound links, and a
+    // WebSocket dial keyed by the target peer's dial URL. Both dial call-sites (formation + redial)
+    // route through the single `dial` closure below.
+    val sourceByNode: Map<NodeId, ConnectionSource> = voters.associate { it.nodeId to it.source }
+    val dialUrlByPeer: Map<PeerId, String> = voters.associate { PeerId(it.nodeId.value) to it.dialUrl }
 
-    // Every voter's mesh starts empty; links are added from both ends via addLink (see kdoc).
-    val meshes: Map<NodeId, Mesh> = ordered.associate { voter ->
-        voter.nodeId to hubMesh(
-            selfId = PeerId(voter.nodeId.value),
-            connections = emptyList(),
-            dispatcher = dispatcher,
-            random = voterRandom.getValue(voter.nodeId),
-        )
-    }
-
-    // Build the mesh lifecycle scope UP FRONT — the persistent accept-pumps must run from t0 (before
-    // formation), and the supervisors and voter nodes join it later. VoterMesh.close cancels it, so
-    // pumps + supervisors + nodes all stop together. (It could not be VoterMesh.scope: that scope
-    // does not exist until voterMeshOverSeams returns, after formation.)
-    val meshScope = CoroutineScope(coroutineContext + Job(coroutineContext[Job]))
-    val fullPeerIdSet: Set<PeerId> = ordered.map { PeerId(it.nodeId.value) }.toSet()
-    val dialUrlByPeer: Map<PeerId, String> = ordered.associate { PeerId(it.nodeId.value) to it.dialUrl }
-
-    try {
-        // (a) Persistent accept-pump per voter, from t0. Drains each voter's inbound route forever, so a
-        // peer that re-dials after a drop is admitted just like an initial joiner — not merely the fixed
-        // `index` links formation expects.
-        ordered.forEach { voter ->
-            meshScope.acceptPump(
-                source = voter.source,
-                handshakeTimeout = handshakeTimeout,
-                onFailure = {},
-                handle = { conn -> meshes.getValue(voter.nodeId).addLink(conn) },
-            )
-        }
-
-        // (b) Initial dials + await the full K_M roster, under a formation timeout. coroutineScope joins
-        // every dial and roster-await before we build the nodes, so each voter's peer set is complete
-        // before its RaftNode starts (synchronous formation). containsAll (over ==) is robust to a stray
-        // non-voter conn on the route.
-        withTimeout(formationTimeout) {
-            coroutineScope {
-                ordered.forEachIndexed { index, voter ->
-                    val mesh = meshes.getValue(voter.nodeId)
-                    // Dial every higher-ranked voter once (lower id dials higher).
-                    launch {
-                        ordered.drop(index + 1).forEach { higher ->
-                            mesh.addLink(WebSocketConnection(httpClient.webSocketSession(higher.dialUrl)))
-                        }
-                    }
-                    launch { mesh.peers.first { it.containsAll(fullPeerIdSet) } }
-                }
-            }
-        }
-
-        // (c) Per-voter redial supervisor on meshScope. Started AFTER formation, when every dial target is
-        // already present, so the loops sit idle until a real drop. Each voter re-dials only the peers it
-        // is the designated dialer for (the higher-ranked ones), so no pair is ever double-dialed.
-        ordered.forEachIndexed { index, voter ->
-            val higher = ordered.drop(index + 1).map { PeerId(it.nodeId.value) }.toSet()
-            meshScope.superviseVoterReconnection(
-                mesh = meshes.getValue(voter.nodeId),
-                dialTargets = higher,
-                dial = { peer -> WebSocketConnection(httpClient.webSocketSession(dialUrlByPeer.getValue(peer))) },
-                backoff = ExponentialBackoff(
-                    base = RECONNECT_BACKOFF_BASE,
-                    cap = RECONNECT_BACKOFF_CAP,
-                    random = backoffRandom.getValue(voter.nodeId),
-                ),
-                dialTimeout = dialTimeout,
-            )
-        }
-
-        // (d) Hand meshScope to voterMeshOverSeams so close() cancels pumps + supervisors + nodes together.
-        // ownsSeams = true: the hubMesh seams were created HERE, so VoterMesh.close must gracefully close
-        // them (their SupervisorJob scopes are not under meshScope) — otherwise cancelling meshScope leaves
-        // the inter-server WebSocket sessions ESTABLISHED and peers hold this voter as a zombie forever.
-        return voterMeshOverSeams(
-            voterSeams = meshes,
-            raftConfig = raftConfig,
-            meshScope = meshScope,
-            storageFactory = storageFactory,
-            ownsSeams = true,
-        )
-    } catch (e: Throwable) {
-        // Formation failed (e.g. formationTimeout fired on a stalled/crashed voter) — the caller never
-        // received a VoterMesh, so it has NO handle to close the mesh scope. Tear down everything this
-        // function started before rethrowing, or the accept-pumps drain forever and the partially-formed
-        // seams (each on its own SupervisorJob scope, NOT a child of meshScope) linger with their live
-        // WebSocket sessions.
-        meshScope.cancel()                       // stop the persistent accept-pumps + any supervisors
-        // Close the internally-created hubMesh seams: their SupervisorJob scopes are not under meshScope,
-        // so cancelling meshScope does not close them. Uncancellable so a TimeoutCancellationException
-        // context does not skip the cleanup; best-effort per seam.
-        withContext(NonCancellable) {
-            meshes.values.forEach { runCatchingCancellable { it.close() } }
-        }
-        throw e
-    }
+    return assembleVoterMesh(
+        voters = voters.map { it.nodeId },
+        sourceOf = { node -> sourceByNode.getValue(node) },
+        dial = { _, peer -> WebSocketConnection(httpClient.webSocketSession(dialUrlByPeer.getValue(peer))) },
+        dispatcher = dispatcher,
+        raftConfig = raftConfig,
+        random = random,
+        handshakeTimeout = handshakeTimeout,
+        dialTimeout = dialTimeout,
+        formationTimeout = formationTimeout,
+        backoffBase = RECONNECT_BACKOFF_BASE,
+        backoffCap = RECONNECT_BACKOFF_CAP,
+        storageFactory = storageFactory,
+    )
 }
 
 /** Default handshake ceiling for the persistent accept-pump (see [voterMeshOverWebSockets]). */
