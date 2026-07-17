@@ -156,6 +156,45 @@ class FakeNwRadioTest {
     }
 
     @Test
+    fun disconnectPrunesViabilityOnBothSidesNoStaleKeys() = runTest(StandardTestDispatcher()) {
+        // #1509: viability is per-connection latest-value STATE; RealNwApi prunes an entry on close
+        // (clearViability) so "absent ⇒ never established or closed" holds. The fake must match — otherwise
+        // its viability map grows monotonically with stale keys and diverges from the real transport.
+        val radio = FakeNwRadio()
+        val a = FakeNwApi(radio, deviceId = "A", serviceName = "svc-A")
+        val b = FakeNwApi(radio, deviceId = "B", serviceName = "svc-B")
+
+        val openedByA = mutableListOf<NwConnectionOpened>()
+        val openedByB = mutableListOf<NwConnectionOpened>()
+        backgroundScope.collectInto(a.connectionOpened, openedByA)
+        backgroundScope.collectInto(b.connectionOpened, openedByB)
+        testScheduler.runCurrent()
+
+        b.startListening("svc-B", TYPE)
+        a.connect(NwEndpoint(id = "ep-B", serviceName = "svc-B"))
+        testScheduler.runCurrent()
+        val connIdA = openedByA.single().connectionId
+        val connIdB = openedByB.single().connectionId
+
+        // Both ends report a viability level, then A tears its side down.
+        a.emitConnectionViability(connIdA, viable = false)
+        b.emitConnectionViability(connIdB, viable = true)
+        testScheduler.runCurrent()
+        val aHadKey = connIdA in a.connectionViability.value
+        val bHadKey = connIdB in b.connectionViability.value
+
+        a.disconnect(connIdA)
+        testScheduler.runCurrent()
+
+        assertAll(
+            { assertEquals(true, aHadKey, "A tracked its handle's viability before close") },
+            { assertEquals(true, bHadKey, "B tracked its handle's viability before close") },
+            { assertEquals(false, connIdA in a.connectionViability.value, "A pruned its handle on local close") },
+            { assertEquals(false, connIdB in b.connectionViability.value, "B pruned its handle on the observed close") },
+        )
+    }
+
+    @Test
     fun threeDevicesEachDiscoverAllPeersIncludingThemselves() = runTest(StandardTestDispatcher()) {
         val radio = FakeNwRadio()
         val a = FakeNwApi(radio, deviceId = "A", serviceName = "svc-A")

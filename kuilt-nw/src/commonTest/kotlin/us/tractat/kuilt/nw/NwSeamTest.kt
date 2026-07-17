@@ -379,6 +379,85 @@ class NwSeamTest {
     }
 
     @Test
+    fun viabilityLossObservedBeforeConnIsTrackedIsReconciledOnRegistrationNoZombie() = runTest(StandardTestDispatcher()) {
+        // #1509 lost-wakeup race: viability is latest-value STATE that never re-emits an unchanged value.
+        // If a `viable=false` for a connection is observed BEFORE the seam has registered that conn in
+        // `conns` (the common startup window — a path drops right after `ready`, and the viability collector
+        // runs before the connectionOpened loop), the arm is skipped; nothing re-runs reconciliation when
+        // `conns` catches up, so the grace timer never arms and the dead peer lingers Woven forever (the
+        // #1478 zombie — no `connectionClosed` fires for a path-lost `waiting` conn). The fix re-reconciles
+        // the latest viability whenever a conn first enters `conns`.
+        val grace = 10.seconds
+        val radio = FakeNwRadio()
+        val apiA = FakeNwApi(radio, deviceId = "dev-0", serviceName = "svc-0")
+        val apiB = FakeNwApi(radio, deviceId = "dev-1", serviceName = "svc-1")
+        val seamA = NwSeam(PeerId("peer-0"), apiA, seamScope(), Random(0), wovenPathGrace = grace)
+        val seamB = NwSeam(PeerId("peer-1"), apiB, seamScope(), Random(1), wovenPathGrace = grace)
+        backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) { seamA.incoming.collect { } }
+        backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) { seamB.incoming.collect { } }
+        testScheduler.runCurrent()
+
+        val live = NwConnectionId("conn-dev-0-0") // A's first-dial handle, allocated below
+        // 1) Path loss lands BEFORE the connection is tracked: `conns` is still empty here, so the seam's
+        //    viability collector arm-skips it (connId not in conns) — the lost-wakeup window.
+        apiA.emitConnectionViability(live, viable = false)
+        testScheduler.runCurrent()
+        // 2) Now `conns` catches up: A dials B → connectionOpened(conn-dev-0-0) registers the conn and the
+        //    NwHello exchange weaves A→B. On registration the seam must re-reconcile the LATEST viability
+        //    (still {conn-dev-0-0=false}, unchanged so the StateFlow never re-emits it) and arm the timer.
+        apiA.connect(NwEndpoint(id = "ep-dev-1", serviceName = "svc-1"))
+        assertTrue(pumpUntil { seamA.peers.value.size == 2 }, "A wove to 2 peers")
+        // 3) Advance past the grace: with the pending loss reconciled, the timer fires and tears the peer.
+        testScheduler.advanceTimeBy(grace.inWholeMilliseconds + 1)
+        assertTrue(pumpUntil { seamA.state.value is SeamState.Torn }, "grace armed on registration → A tore")
+
+        assertAll(
+            { assertEquals(setOf(seamA.selfId), seamA.peers.value, "A's peers collapse to {A} — the pre-registration loss was not lost") },
+            { assertEquals(SeamState.Torn(CloseReason.Unreachable), seamA.state.value, "A latches Torn(Unreachable) — no zombie Woven peer") },
+        )
+    }
+
+    @Test
+    fun latestViabilityRecoveryIsNeverLostUnderBufferPressureNoSpuriousTear() = runTest(StandardTestDispatcher()) {
+        // #1509: viability is per-connection STATE, not a fire-and-forget event. Under buffer pressure the
+        // OLD tryEmit event stream could DROP a `viable=true` recovery, stranding NwSeam's armed grace timer
+        // → a spurious tear of a healthy, recovered peer ~grace later. Represented as drop-tolerant
+        // latest-value state, the LATEST value (true) is always observable, so the seam reconciles the
+        // recovery and never tears.
+        val grace = 10.seconds
+        val radio = FakeNwRadio()
+        val apiA = FakeNwApi(radio, deviceId = "dev-0", serviceName = "svc-0")
+        val apiB = FakeNwApi(radio, deviceId = "dev-1", serviceName = "svc-1")
+        val seamA = NwSeam(PeerId("peer-0"), apiA, seamScope(), Random(0), wovenPathGrace = grace)
+        val seamB = NwSeam(PeerId("peer-1"), apiB, seamScope(), Random(1), wovenPathGrace = grace)
+        backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) { seamA.incoming.collect { } }
+        backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) { seamB.incoming.collect { } }
+        testScheduler.runCurrent()
+        apiA.connect(NwEndpoint(id = "ep-dev-1", serviceName = "svc-1")) // A dials → A's handle is conn-dev-0-0
+        assertTrue(pumpUntil { seamA.peers.value.size == 2 }, "A wove to 2 peers")
+
+        val live = NwConnectionId("conn-dev-0-0")
+        // 1) Path lost on A's live link to B → the seam arms its grace timer.
+        apiA.emitConnectionViability(live, viable = false)
+        testScheduler.runCurrent()
+        // 2) Recovery under buffer pressure: a filler signal (a DIFFERENT connection) fills the 1-slot
+        //    buffer, then the recovery `viable=true` for the live link is emitted while the buffer is full.
+        //    Under the OLD event stream that recovery is DROPPED (tryEmit returns false) and the grace timer
+        //    strands; as drop-tolerant latest-value state the recovery is retained and reconciled.
+        apiA.emitConnectionViability(NwConnectionId("conn-filler"), viable = false) // fills the 1-slot buffer
+        apiA.emitConnectionViability(live, viable = true) // recovery — dropped by the old event design
+        testScheduler.runCurrent()
+        // 3) Advance well PAST the grace expiry: a stranded timer would fire and spuriously tear here.
+        testScheduler.advanceTimeBy(grace.inWholeMilliseconds * 2)
+        testScheduler.runCurrent()
+
+        assertAll(
+            { assertEquals(setOf(seamA.selfId, PeerId("peer-1")), seamA.peers.value, "B stays in A's peers — recovery reconciled") },
+            { assertTrue(seamA.state.value is SeamState.Woven, "A stays Woven — no spurious tear from a stranded grace timer") },
+        )
+    }
+
+    @Test
     fun tornStaysTornAndSendsThrowAfterClose() = runTest(StandardTestDispatcher()) {
         val (a, b, _) = buildMesh(3)
         a.seam.close()

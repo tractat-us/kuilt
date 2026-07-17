@@ -20,7 +20,11 @@ import kotlinx.cinterop.value
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import platform.Network.NW_PARAMETERS_DEFAULT_CONFIGURATION
 import platform.Network.nw_advertise_descriptor_create_bonjour_service
 import platform.Network.nw_browse_descriptor_create_bonjour_service
@@ -151,11 +155,20 @@ internal class NwLoopbackConfig(
  * we did not initiate, carries a non-null reason. (Precedent: `MCSessionLink` in `:kuilt-multipeer`.)
  *
  * ## Single-collection event flows
- * Each of the four flows is fed by exactly ONE callback source, so it is **single-collection** —
- * two collectors would each receive every event, duplicating delivery. The GCD handlers run off
- * the dispatch queue (not a coroutine), so they publish via [MutableSharedFlow.tryEmit] onto a
- * buffered, no-replay flow. A full buffer therefore DROPS the event under `tryEmit` (bounded
- * backpressure — the known head-of-line concern for this phase; not "fixed" here).
+ * The four *event* flows ([endpointFound]/[connectionOpened]/[bytesReceived]/[connectionClosed]) are
+ * each fed by exactly ONE callback source, so each is **single-collection** — two collectors would each
+ * receive every event, duplicating delivery. The GCD handlers run off the dispatch queue (not a
+ * coroutine), so they publish via [MutableSharedFlow.tryEmit] onto a buffered, no-replay flow. A full
+ * buffer therefore DROPS the event under `tryEmit` (bounded backpressure — the known head-of-line concern
+ * for these event streams).
+ *
+ * ## Viability is drop-tolerant STATE, not an event (#1509)
+ * [connectionViability] is deliberately NOT one of those lossy event flows: a connection's viability is a
+ * *level* (path up / path lost), inherently latest-wins state. It is a [MutableStateFlow] keyed by
+ * [NwConnectionId]; each `ready`/`waiting` transition atomically updates that connection's entry, and the
+ * seam reconciles the latest map value. Intermediate transitions may coalesce under backpressure, but the
+ * LATEST value per connection is never lost — so a dropped recovery can never strand the seam's grace
+ * timer (a spurious tear) and a dropped loss can never leave a zombie peer.
  */
 internal class RealNwApi(
     private val pskMaterial: NwPskMaterial,
@@ -168,13 +181,30 @@ internal class RealNwApi(
     private val _connectionOpened = MutableSharedFlow<NwConnectionOpened>(extraBufferCapacity = EVENT_BUFFER)
     private val _bytesReceived = MutableSharedFlow<NwBytesReceived>(extraBufferCapacity = BYTES_BUFFER)
     private val _connectionClosed = MutableSharedFlow<NwConnectionClosed>(extraBufferCapacity = EVENT_BUFFER)
-    private val _connectionViability = MutableSharedFlow<NwConnectionViability>(extraBufferCapacity = EVENT_BUFFER)
+
+    // Per-connection LATEST viability, as drop-tolerant STATE — NOT a lossy tryEmit event stream (#1509).
+    // Each `ready`/`waiting` transition atomically updates this connection's entry via [MutableStateFlow.update]
+    // (a CAS, safe from the GCD queue); the seam reconciles the latest map value. Because the latest value
+    // per connection is never lost (only intermediate transitions coalesce), a recovery (`true`) can never
+    // be dropped and strand the seam's grace timer, and a loss (`false`) can never be dropped and leave a
+    // zombie peer — the two asymmetric failure modes of the old `tryEmit` event flow.
+    private val _connectionViability = MutableStateFlow<Map<NwConnectionId, Boolean>>(emptyMap())
 
     override val endpointFound: Flow<NwEndpoint> = _endpointFound.asSharedFlow()
     override val connectionOpened: Flow<NwConnectionOpened> = _connectionOpened.asSharedFlow()
     override val bytesReceived: Flow<NwBytesReceived> = _bytesReceived.asSharedFlow()
     override val connectionClosed: Flow<NwConnectionClosed> = _connectionClosed.asSharedFlow()
-    override val connectionViability: Flow<NwConnectionViability> = _connectionViability.asSharedFlow()
+    override val connectionViability: StateFlow<Map<NwConnectionId, Boolean>> = _connectionViability.asStateFlow()
+
+    /** Publish [id]'s LATEST path viability (#1509): `true` = path up (`ready`), `false` = path lost (`waiting`). */
+    private fun setViability(id: NwConnectionId, viable: Boolean) {
+        _connectionViability.update { it + (id to viable) }
+    }
+
+    /** Drop [id]'s viability entry once the connection is gone (bounds the map to live connections). */
+    private fun clearViability(id: NwConnectionId) {
+        _connectionViability.update { it - id }
+    }
 
     /**
      * One live connection: its strong-ref'd handle, the dialled endpoint (null inbound), the
@@ -461,12 +491,13 @@ internal class RealNwApi(
     }
 
     /**
-     * The observable half of a `ready` transition — pure registry bookkeeping + flow emission, with NO
-     * `nw_*` call (arming the receive loop is [onReady]'s job). Marks [ConnectionEntry.wasReady] and,
-     * on the FIRST ready, emits `connectionOpened` and returns `true` (caller must arm the receive
-     * loop); on a `waiting → ready` recovery emits `connectionViability(viable=true)` and returns
-     * `false`; if the entry is already gone, returns `false`. Split out so the ready/viability mapping
-     * and the first-ready double-arm guard are unit-testable without a live `nw_connection`.
+     * The observable half of a `ready` transition — pure registry bookkeeping + state/flow update, with NO
+     * `nw_*` call (arming the receive loop is [onReady]'s job). Marks [ConnectionEntry.wasReady], sets this
+     * connection's [connectionViability] latest value to `true` (path up), and — on the FIRST ready —
+     * emits `connectionOpened` and returns `true` (caller must arm the receive loop); on a `waiting →
+     * ready` recovery returns `false`; if the entry is already gone, returns `false`. Split out so the
+     * ready/viability mapping and the first-ready double-arm guard are unit-testable without a live
+     * `nw_connection`.
      */
     private fun emitReadyTransition(id: NwConnectionId): Boolean {
         val outcome = lock.withLock {
@@ -481,13 +512,16 @@ internal class RealNwApi(
             return false
         }
         val (endpoint, firstReady) = outcome
+        // Ready ⇒ this connection's path is up. Publish the LATEST viability state either way (#1509) —
+        // idempotent for the seam (a `true` with no armed timer is a no-op), and it makes the viability
+        // map a faithful per-connection latest-state from the first `ready` onward.
+        setViability(id, viable = true)
         return if (firstReady) {
             log.debug { "nw.api.state id=${id.value} READY endpoint=${endpoint?.id ?: "<inbound>"} → emit connectionOpened + start receiveLoop" }
             _connectionOpened.tryEmit(NwConnectionOpened(id, endpoint))
             true
         } else {
-            log.info { "nw.api.state id=${id.value} READY again (waiting→ready recovery) → emit viability(viable=true)" }
-            _connectionViability.tryEmit(NwConnectionViability(id, viable = true))
+            log.info { "nw.api.state id=${id.value} READY again (waiting→ready recovery) → viability(viable=true)" }
             false
         }
     }
@@ -504,8 +538,8 @@ internal class RealNwApi(
             entry.wasReady
         }
         if (wasReady) {
-            log.info { "nw.api.state id=${id.value} WAITING after ready (path lost — no close will fire) → emit viability(viable=false)" }
-            _connectionViability.tryEmit(NwConnectionViability(id, viable = false))
+            log.info { "nw.api.state id=${id.value} WAITING after ready (path lost — no close will fire) → viability(viable=false)" }
+            setViability(id, viable = false)
         } else {
             log.debug { "nw.api.state id=${id.value} WAITING (initial dial, not yet ready — no viability signal)" }
         }
@@ -522,6 +556,10 @@ internal class RealNwApi(
             log.debug { "nw.api.close id=${id.value} already-dropped (idempotent)" }
             return // already dropped — idempotent
         }
+        // The connection is gone — drop its stale per-conn viability latest-value. NOTE: connectionClosed
+        // itself is still a lossy tryEmit below (a separate, unaddressed zombie — tracked in #1522); this
+        // clear only bounds the viability map, it does not depend on the close being delivered.
+        clearViability(id)
         val reason = when {
             entry.failedEscalation -> entry.failReason ?: "receive error (terminal)" // #1479 escalation
             failed -> "connection failed"
