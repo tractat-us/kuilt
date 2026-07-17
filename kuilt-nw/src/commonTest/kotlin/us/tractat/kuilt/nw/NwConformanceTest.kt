@@ -72,6 +72,14 @@ class NwConformanceTest : SeamConformanceSuite() {
     /** Proven: this harness drives a genuine self-dial through the radio, so no gap. */
     override fun selfDialGap(): String? = null
 
+    // Mid-session-death obligation (13b — injectMidSessionDeath / both-ends-Torn-on-death + incoming
+    // completes) is UNPROVABLE for this fabric BY DESIGN — do NOT "fix" it by re-introducing tear-on-death.
+    // Since #1513 NwSeam treats a transport death (a dropped remote) as *recoverable*: the last-remote loss
+    // re-forms Woven→Weaving and keeps `incoming` OPEN so NwLoom can redial, rather than latching Torn on
+    // both ends. So injectMidSessionDeath is deliberately left at its default `false` and midSessionDeathGap
+    // keeps its tracked-URL default — the obligation simply does not hold for a recoverable fabric. `Torn`
+    // here means ONLY an explicit close()/weave-timeout, never peer loss.
+
     /** Session name matches `Pattern("host")`; discovery is by [SERVICE_TYPE] so this only satisfies join()'s signature. */
     override fun joinTag(): Tag = InMemoryTag(sessionName = "host", peerKey = "nw-joiner")
 

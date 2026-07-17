@@ -81,7 +81,12 @@ internal class FakeNwApi(
         radio.markStopBrowsing(deviceId)
     }
 
+    /** Test hook: total outbound [connect] calls issued on this device — lets a test count redials (#1513). */
+    var connectCalls: Int = 0
+        private set
+
     override suspend fun connect(endpoint: NwEndpoint) {
+        connectCalls += 1
         radio.connect(deviceId, endpoint)
     }
 

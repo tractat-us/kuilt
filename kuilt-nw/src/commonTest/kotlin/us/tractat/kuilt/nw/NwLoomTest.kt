@@ -4,16 +4,19 @@ import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.Seam
+import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.test.assertAll
 import kotlin.random.Random
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.seconds
@@ -30,6 +33,101 @@ class NwLoomTest {
 
     private companion object {
         const val TYPE = "_kuilt._tcp"
+
+        /** Bounded pump: run current-virtual-time tasks until [cond] or the cap. Never hangs. */
+        fun TestScope.pumpUntil(maxPumps: Int = 500, cond: () -> Boolean): Boolean {
+            repeat(maxPumps) {
+                if (cond()) return true
+                testScheduler.runCurrent()
+            }
+            return cond()
+        }
+    }
+
+    /**
+     * #1513 Part B: after a peer drops, [NwLoom]'s redial loop dials the still-discoverable endpoint again
+     * and the seam re-weaves — end-to-end proof that redial reconnects. Two looms (both joiners; roles are
+     * symmetric) converge over one radio; a path-loss grace expiry evicts the peer AND tears the link (so
+     * BOTH seams re-form to Weaving), then each loom's redial dials the peer again and both return to Woven.
+     * Asserts a *second* connect was issued (the redial) and the seam recovered to Woven.
+     */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun redialReconnectsAfterAPeerDropReturningTheSeamToWoven() = runTest(StandardTestDispatcher()) {
+        val grace = 1.seconds
+        val radio = FakeNwRadio()
+        val apiA = FakeNwApi(radio, deviceId = "dev-0", serviceName = "peer-A")
+        val apiB = FakeNwApi(radio, deviceId = "dev-1", serviceName = "peer-B")
+        val loomA = NwLoom(apiA, serviceType = TYPE, selfId = PeerId("peer-A"), random = Random(0), weaveTimeout = 10.seconds, wovenPathGrace = grace)
+        val loomB = NwLoom(apiB, serviceType = TYPE, selfId = PeerId("peer-B"), random = Random(1), weaveTimeout = 10.seconds, wovenPathGrace = grace)
+
+        var seamA: Seam? = null
+        var seamB: Seam? = null
+        // Weave concurrently so the pair can discover + dial each other while each awaits its first peer.
+        launch(start = CoroutineStart.UNDISPATCHED) { seamA = loomA.join(InMemoryTag(sessionName = "lobby", peerKey = "peer-A")) }
+        launch(start = CoroutineStart.UNDISPATCHED) { seamB = loomB.join(InMemoryTag(sessionName = "lobby", peerKey = "peer-B")) }
+        assertTrue(
+            pumpUntil { seamA?.peers?.value?.size == 2 && seamB?.peers?.value?.size == 2 },
+            "both looms wove to 2 peers: A=${seamA?.peers?.value} B=${seamB?.peers?.value}",
+        )
+        val a = seamA!!
+        val connectsBefore = apiA.connectCalls
+
+        // Drop A's live link via a path-loss grace expiry. A's link to B is one of A's two handles
+        // (conn-dev-0-0 / conn-dev-0-1 — the other was the dedup loser, already gone); flag both so the
+        // live one arms. onGraceExpired evicts B (A re-forms Weaving) AND disconnects the link, so B
+        // observes the close and re-forms too — both then redial.
+        apiA.emitConnectionViability(NwConnectionId("conn-dev-0-0"), viable = false)
+        apiA.emitConnectionViability(NwConnectionId("conn-dev-0-1"), viable = false)
+        testScheduler.runCurrent()
+        // Advance past the grace so the timer fires: the peer is evicted (both seams re-form to Weaving)
+        // and each loom's redial loop dials the still-discoverable endpoint again, re-weaving to Woven.
+        testScheduler.advanceTimeBy(grace.inWholeMilliseconds + 1)
+        assertTrue(pumpUntil { a.state.value is SeamState.Woven && a.peers.value.size == 2 }, "A redialed and re-wove to 2 peers (state=${a.state.value}, peers=${a.peers.value})")
+
+        assertAll(
+            { assertTrue(a.state.value is SeamState.Woven, "A recovered to Woven via redial — was ${a.state.value}") },
+            { assertEquals(setOf(PeerId("peer-A"), PeerId("peer-B")), a.peers.value, "A regained B") },
+            { assertTrue(apiA.connectCalls > connectsBefore, "A issued a redial connect (was $connectsBefore, now ${apiA.connectCalls})") },
+        )
+    }
+
+    /**
+     * #1513 review Fix 1: cancelling `weave` WHILE it awaits the first peer must stop the redial loop.
+     * `weave` builds the seam on a parentless SupervisorJob scope, so the caller cancelling does NOT cancel
+     * that scope — only `weave` closing the seam does. Before the fix, cancelling the "wait for a friend"
+     * back-out (user leaves the lobby / a `withTimeout` wrapper fires) left the seam unreturned and
+     * uncloseable, and its `RedialCoordinator` kept dialling every discovered endpoint at the backoff
+     * ceiling forever. The catch-all cleanup closes the seam on ANY exit, cancelling the redial loops.
+     */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun cancellingWeaveMidWaitStopsTheRedialLoop() = runTest(StandardTestDispatcher()) {
+        val radio = FakeNwRadio()
+        val apiA = FakeNwApi(radio, deviceId = "dev-0", serviceName = "peer-A")
+        // A bare advertiser A can discover + dial but that never handshakes back — so A's redialer stays
+        // active (its endpoint never settles) and `weave` blocks awaiting the first peer.
+        val apiB = FakeNwApi(radio, deviceId = "dev-1", serviceName = "peer-B")
+        apiB.startListening("peer-B", TYPE)
+        val loomA = NwLoom(apiA, serviceType = TYPE, selfId = PeerId("peer-A"), random = Random(0), weaveTimeout = 100.seconds)
+
+        val weaveJob = launch(start = CoroutineStart.UNDISPATCHED) {
+            runCatchingCancellable { loomA.join(InMemoryTag(sessionName = "lobby", peerKey = "peer-A")) }
+        }
+        assertTrue(pumpUntil { apiA.connectCalls >= 1 }, "A discovered B and its redial loop dialed")
+        testScheduler.advanceTimeBy(2.seconds.inWholeMilliseconds) // let a couple of backoff redials happen
+        pumpUntil(maxPumps = 50) { false }
+        assertTrue(apiA.connectCalls >= 2, "the redial loop is actively re-dialing before cancel (was ${apiA.connectCalls})")
+
+        // Cancel the weave mid-wait; the catch-all must close the seam so the redial loop stops.
+        weaveJob.cancel()
+        assertTrue(pumpUntil { weaveJob.isCompleted }, "weave coroutine unwound")
+        val callsAtCancel = apiA.connectCalls
+
+        // Advance well past several backoff ceilings: a leaked redial loop would keep dialing here.
+        testScheduler.advanceTimeBy(30.seconds.inWholeMilliseconds)
+        pumpUntil(maxPumps = 200) { false }
+        assertEquals(callsAtCancel, apiA.connectCalls, "no further connects after cancel — the redial loop was cancelled with the seam")
     }
 
     @OptIn(ExperimentalCoroutinesApi::class)
