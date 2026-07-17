@@ -8,13 +8,15 @@
  * `COpaquePointer` — internally a `StableRef<NwBridgeRuntime>` — that roots the
  * runtime so K/N's GC won't reclaim it while the JVM still holds the pointer.
  *
- * The four `set*Callback` methods each launch ONE collector on [scope] that
+ * The five `set*Callback` methods each launch ONE collector on [scope] that
  * forwards a `RealNwApi` flow to the registered JVM cdecl callback. Exactly one
  * collector per flow preserves the single-collection contract of `RealNwApi`'s
- * `MutableSharedFlow`s (a second collector would duplicate delivery). Collectors
- * start `UNDISPATCHED` so they subscribe synchronously before the registering
- * `nw_set_*` call returns — the JVM registers all four callbacks before it issues
- * any start op, so no hot no-replay event is missed (subscribe-before-start).
+ * `MutableSharedFlow`s (a second collector would duplicate delivery); the fifth,
+ * `connectionViability`, observes a `StateFlow<Map>` and forwards per-connection
+ * changes (#1507/#1509). Collectors start `UNDISPATCHED` so they subscribe
+ * synchronously before the registering `nw_set_*` call returns — the JVM registers
+ * all five callbacks before it issues any start op, so no hot no-replay event is
+ * missed (subscribe-before-start).
  */
 package us.tractat.kuilt.nw.bridge
 
@@ -75,6 +77,16 @@ internal typealias BytesReceivedCb = CFunction<(CPointer<ByteVar>?, CPointer<Byt
  */
 @OptIn(ExperimentalForeignApi::class)
 internal typealias ConnectionClosedCb = CFunction<(CPointer<ByteVar>?, CPointer<ByteVar>?) -> Unit>
+
+/**
+ * `(connectionId: char*, viable: int) -> void` — the JNA-side `connectionViability` callback (#1507).
+ * `viable` is `1` when the connection's path is up (`ready`) and `0` when it is lost (`ready → waiting`).
+ * Fires once per **per-connection change** in [RealNwApi.connectionViability]; the JVM applies each as a
+ * latest-wins delta into its own drop-tolerant `StateFlow<Map>`. Entry *removals* (a closed connection)
+ * are NOT signalled here — the JVM prunes them from the observed `connectionClosed` stream instead.
+ */
+@OptIn(ExperimentalForeignApi::class)
+internal typealias ConnectionViabilityCb = CFunction<(CPointer<ByteVar>?, Int) -> Unit>
 
 @OptIn(ExperimentalForeignApi::class)
 internal class NwBridgeRuntime private constructor(private val api: RealNwApi) {
@@ -149,6 +161,30 @@ internal class NwBridgeRuntime private constructor(private val api: RealNwApi) {
                 lock.withLock { openConnections.remove(event.connectionId) }
                 val reason = event.reason ?: "" // empty ⇒ graceful/null on the JVM side
                 memScoped { cb.invoke(event.connectionId.value.cstr.ptr, reason.cstr.ptr) }
+            }
+        }
+    }
+
+    /**
+     * Forwards [RealNwApi.connectionViability] — a drop-tolerant `StateFlow<Map>` (#1509) — to the JVM as
+     * per-connection `(id, viable)` callbacks. The collector diffs each new map snapshot against the
+     * previous one and fires the callback only for connections whose latest value *changed* (a new key or a
+     * flipped `true`/`false`). Because it observes the STATE flow, intermediate transitions may coalesce
+     * under backpressure, but the LATEST value per connection is never lost — so a recovery (`true`) can
+     * never be dropped and a loss (`false`) can never be dropped. Removals (a connection cleared from the
+     * map on close) are deliberately NOT forwarded here: the JVM learns "closed" from the `connectionClosed`
+     * stream and prunes the corresponding viability entry itself.
+     */
+    fun setConnectionViabilityCallback(cb: CPointer<ConnectionViabilityCb>) {
+        scope.launch(start = CoroutineStart.UNDISPATCHED) {
+            var previous = emptyMap<NwConnectionId, Boolean>()
+            api.connectionViability.collect { current ->
+                for ((id, viable) in current) {
+                    if (previous[id] != viable) {
+                        memScoped { cb.invoke(id.value.cstr.ptr, if (viable) 1 else 0) }
+                    }
+                }
+                previous = current
             }
         }
     }

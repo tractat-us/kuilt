@@ -55,6 +55,7 @@ internal class FakeNwNativeLib(
     private val connectionOpenedCbs = mutableMapOf<Pointer, NwNativeLib.ConnectionOpenedCallback>()
     private val bytesReceivedCbs = mutableMapOf<Pointer, NwNativeLib.BytesReceivedCallback>()
     private val connectionClosedCbs = mutableMapOf<Pointer, NwNativeLib.ConnectionClosedCallback>()
+    private val viabilityCbs = mutableMapOf<Pointer, NwNativeLib.ViabilityCallback>()
 
     override fun kuilt_protocol_version(): Int = NwNativeLib.EXPECTED_PROTOCOL_VERSION
 
@@ -94,6 +95,20 @@ internal class FakeNwNativeLib(
 
     override fun nw_set_connection_closed_callback(handle: Pointer?, cb: NwNativeLib.ConnectionClosedCallback) {
         if (handle != null) connectionClosedCbs[handle] = cb
+    }
+
+    override fun nw_set_connection_viability_callback(handle: Pointer?, cb: NwNativeLib.ViabilityCallback) {
+        if (handle != null) viabilityCbs[handle] = cb
+    }
+
+    /**
+     * Test hook: drive a per-connection viability transition into [handle]'s bridge, exactly as the real
+     * dylib does when a connection moves `ready`↔`waiting`. There is no 2-peer op that naturally produces a
+     * path-loss, so viability is fired directly (unlike the other four callbacks, which the routing ops
+     * drive). [viable] `true` = path up, `false` = path lost.
+     */
+    fun fireViability(handle: Pointer, connectionId: String, viable: Boolean) {
+        viabilityCbs[handle]?.invoke(connectionId, if (viable) 1 else 0)
     }
 
     override fun nw_start_listening(handle: Pointer?, serviceName: String, serviceType: String): Int = 0

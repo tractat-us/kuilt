@@ -117,6 +117,17 @@ internal interface NwNativeLib : Library {
         fun invoke(connectionId: String, reason: String)
     }
 
+    /**
+     * `(connectionId: char*, viable: int) -> void` (#1507). [viable] is `1` when the connection's path is
+     * up (`ready`) and `0` when it is lost (`ready → waiting`). Fires once per per-connection change; the
+     * bridge applies each as a latest-wins delta into its drop-tolerant `connectionViability` state (#1509).
+     * Entry removals are not delivered here — the bridge prunes a closed connection off [ConnectionClosedCallback].
+     */
+    fun interface ViabilityCallback : Callback {
+        @Suppress("ktlint:standard:function-naming")
+        fun invoke(connectionId: String, viable: Int)
+    }
+
     @Suppress("ktlint:standard:function-naming")
     fun nw_set_endpoint_found_callback(handle: Pointer?, cb: EndpointFoundCallback)
 
@@ -128,6 +139,9 @@ internal interface NwNativeLib : Library {
 
     @Suppress("ktlint:standard:function-naming")
     fun nw_set_connection_closed_callback(handle: Pointer?, cb: ConnectionClosedCallback)
+
+    @Suppress("ktlint:standard:function-naming")
+    fun nw_set_connection_viability_callback(handle: Pointer?, cb: ViabilityCallback)
 
     /** All ops return `0` on success, `<0` on error. */
     @Suppress("ktlint:standard:function-naming")
