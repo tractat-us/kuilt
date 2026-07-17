@@ -64,7 +64,8 @@ class NwConformanceTest : SeamConformanceSuite() {
      * must drop — proving [SeamConformanceSuite.selfDialIsRejected] on a live, already-woven seam.
      */
     override suspend fun injectSelfDial(host: Seam): Boolean {
-        radio?.injectSelfDial(HOST_DEVICE) ?: return false
+        val r = radio ?: return false
+        r.injectSelfDial(HOST_DEVICE)
         return true
     }
 
