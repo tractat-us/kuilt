@@ -36,7 +36,11 @@ internal class FakeNwApi(
     private val _connectionOpened = MutableSharedFlow<NwConnectionOpened>(extraBufferCapacity = 16)
     private val _bytesReceived = MutableSharedFlow<NwBytesReceived>(extraBufferCapacity = 64)
     private val _connectionClosed = MutableSharedFlow<NwConnectionClosed>(extraBufferCapacity = 16)
-    private val _connectionViability = MutableSharedFlow<NwConnectionViability>(extraBufferCapacity = 16)
+
+    // Faithful to RealNwApi (#1509): viability is published off a GCD queue via a lossy `tryEmit` onto a
+    // small buffer, so a signal emitted while the buffer is full is silently DROPPED. A 1-slot buffer lets
+    // NwSeamTest reproduce that drop deterministically (a filler signal fills the slot, the next is lost).
+    private val _connectionViability = MutableSharedFlow<NwConnectionViability>(extraBufferCapacity = 1)
 
     override val endpointFound: Flow<NwEndpoint> = _endpointFound.asSharedFlow()
     override val connectionOpened: Flow<NwConnectionOpened> = _connectionOpened.asSharedFlow()
@@ -100,6 +104,9 @@ internal class FakeNwApi(
      * `viable=true` a `waiting→ready` recovery. The connId is the deterministic handle this device
      * sees for the link (`conn-<deviceId>-<n>` — see [FakeNwRadio]).
      */
-    internal suspend fun emitConnectionViability(connectionId: NwConnectionId, viable: Boolean) =
-        _connectionViability.emit(NwConnectionViability(connectionId, viable))
+    internal fun emitConnectionViability(connectionId: NwConnectionId, viable: Boolean) {
+        // tryEmit (not suspend emit): faithful to RealNwApi, which publishes viability off a GCD queue
+        // and DROPS the signal when the buffer is full (#1509). The seam must not lose the LATEST value.
+        _connectionViability.tryEmit(NwConnectionViability(connectionId, viable))
+    }
 }
