@@ -569,6 +569,11 @@ internal class RealNwApi(
         }
         val code = nw_error_get_error_code(error)
         when (classifyReceiveError(domain, code)) {
+            ReceiveErrorClass.ExpectedCancel ->
+                // Our own nw_connection_cancel failed the pending receive (ECANCELED). The `cancelled`
+                // state handler already drives the (graceful) close — ignore this, do NOT escalate
+                // (escalating would clobber `closing` and turn a reason=null close into a failed one).
+                log.debug { "nw.api.receive-cancel id=${id.value} code=$code (self-cancel; cancelled handler will close) → ignored" }
             ReceiveErrorClass.Terminal -> {
                 log.info { "nw.api.receive-terminal id=${id.value} domain=$domain code=$code → escalateClose (→ connectionClosed → NwSeam tear)" }
                 escalateClose(id, "receive:$code")
@@ -586,12 +591,13 @@ internal class RealNwApi(
      *  - otherwise consume one retry and re-arm after a short backoff.
      */
     private fun onTransientReceiveError(id: NwConnectionId, connection: nw_connection_t, domain: Int, code: Int) {
+        var retry = 0
         val action = lock.withLock {
             val entry = connections[id] ?: return@withLock TransientAction.Gone
             when {
                 !entry.viable -> { entry.receiveStoppedForRecovery = true; TransientAction.StopUntilRecovery }
                 entry.receiveRetries >= RECEIVE_RETRY_BUDGET -> TransientAction.Escalate
-                else -> { entry.receiveRetries += 1; TransientAction.Retry }
+                else -> { entry.receiveRetries += 1; retry = entry.receiveRetries; TransientAction.Retry }
             }
         }
         when (action) {
@@ -599,20 +605,34 @@ internal class RealNwApi(
                 log.debug { "nw.api.receive-transient id=${id.value} domain=$domain code=$code but entry already dropped (ignored)" }
             TransientAction.StopUntilRecovery ->
                 log.info { "nw.api.receive-transient id=${id.value} domain=$domain code=$code — path not ready → stop; #1478 grace timer governs, re-arm on recovery" }
+            // A dialled endpoint is not redialled for the seam's life (see #1513), so an escalate→evict
+            // here is permanent — hence the wide, ~${RECEIVE_RETRY_MAX_MS}ms transient window before we give up.
             TransientAction.Escalate -> {
-                log.info { "nw.api.receive-transient id=${id.value} domain=$domain code=$code — retry budget ($RECEIVE_RETRY_BUDGET) exhausted while ready → escalateClose" }
+                log.info { "nw.api.receive-transient id=${id.value} domain=$domain code=$code — retry budget ($RECEIVE_RETRY_BUDGET, ~${RECEIVE_RETRY_MAX_MS}ms) exhausted while ready → escalateClose" }
                 escalateClose(id, "receive:$code")
             }
             TransientAction.Retry -> {
-                log.debug { "nw.api.receive-transient id=${id.value} domain=$domain code=$code → re-arm after ${RECEIVE_RETRY_BACKOFF_MS}ms" }
-                rearmAfterBackoff(id, connection)
+                val backoffMs = backoffMsFor(retry)
+                log.debug { "nw.api.receive-transient id=${id.value} domain=$domain code=$code → retry $retry/$RECEIVE_RETRY_BUDGET re-arm after ${backoffMs}ms" }
+                rearmAfterBackoff(id, connection, backoffMs)
             }
         }
     }
 
-    /** Re-arm the receive loop after [RECEIVE_RETRY_BACKOFF_MS] on the shared [queue] (transient backoff). */
-    private fun rearmAfterBackoff(id: NwConnectionId, connection: nw_connection_t) {
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, RECEIVE_RETRY_BACKOFF_NANOS), queue) {
+    /**
+     * Exponential backoff for transient-receive retry [retry] (1-based): `BASE_MS * 2^(retry-1)`, capped
+     * at [RECEIVE_RETRY_CAP_MS]. Widening from a flat delay to exponential (#1479 review): with no
+     * per-seam redial (#1513) an escalate is permanent, so the budget must tolerate a real transient
+     * storm (~${RECEIVE_RETRY_MAX_MS}ms total while `ready`) rather than the old ~250ms.
+     */
+    private fun backoffMsFor(retry: Int): Int {
+        val shift = (retry - 1).coerceIn(0, RECEIVE_RETRY_MAX_SHIFT)
+        return (RECEIVE_RETRY_BASE_MS shl shift).coerceAtMost(RECEIVE_RETRY_CAP_MS)
+    }
+
+    /** Re-arm the receive loop after [backoffMs] on the shared [queue] (transient exponential backoff). */
+    private fun rearmAfterBackoff(id: NwConnectionId, connection: nw_connection_t, backoffMs: Int) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, backoffMs.toLong() * NANOS_PER_MS), queue) {
             receiveLoop(id, connection)
         }
     }
@@ -625,14 +645,19 @@ internal class RealNwApi(
      * SOLE ref-drop site" invariant (the receive loop never removes the entry itself) and funnels through
      * the SAME `connectionClosed → NwSeam` evict+tear path as every other close. Idempotent — a second
      * escalation on an already-escalating entry is a no-op.
+     *
+     * A connection ALREADY gracefully cancelling ([ConnectionEntry.closing] set by
+     * [disconnect]/[stopListening]) is NEVER escalated: the `ECANCELED` it raises is [ExpectedCancel] and
+     * already ignored upstream, but this guard is belt-and-suspenders — escalating would clobber `closing`
+     * and turn the contractual `reason = null` graceful close into a spurious `failed` one (#1479 review).
      */
     private fun escalateClose(id: NwConnectionId, reason: String) {
         val connection = lock.withLock {
             val entry = connections[id] ?: return
+            if (entry.closing) return // already gracefully cancelling — never escalate/clobber the reason
             if (entry.failedEscalation) return // already escalating — idempotent
             entry.failedEscalation = true
             entry.failReason = reason
-            entry.closing = false // non-graceful: this is a failure, not our own clean cancel
             entry.connection
         }
         log.info { "nw.api.escalate-close id=${id.value} reason=$reason → cancel (cancelled handler maps → closeConnection failed=true)" }
@@ -698,10 +723,18 @@ internal class RealNwApi(
         private const val RECEIVE_MIN_LENGTH: UInt = 1u
         private const val RECEIVE_MAX_LENGTH: UInt = 65_536u // 64 KiB
 
-        /** #1479 transient-receive-error retry budget (per healthy-receive window) before escalating to close. */
-        private const val RECEIVE_RETRY_BUDGET: Int = 5
-        /** Short backoff between transient receive-error retries. */
-        private const val RECEIVE_RETRY_BACKOFF_MS: Int = 50
-        private const val RECEIVE_RETRY_BACKOFF_NANOS: Long = RECEIVE_RETRY_BACKOFF_MS * 1_000_000L
+        private const val NANOS_PER_MS: Long = 1_000_000L
+
+        // #1479 transient-receive-error retry: EXPONENTIAL backoff (BASE·2^(n-1), capped) with a budget
+        // sized so a real transient storm gets ~seconds of tolerance before we escalate to a permanent
+        // close — deliberately wide because a dialled endpoint is not redialled for the seam's life
+        // (#1513), so a false escalate→evict is irreversible. Schedule (budget 8): 50,100,200,400,500,
+        // 500,500,500 ms ⇒ ~2.75s total while `ready`, vs the old flat 5×50ms ≈ 250ms.
+        private const val RECEIVE_RETRY_BUDGET: Int = 8
+        private const val RECEIVE_RETRY_BASE_MS: Int = 50
+        private const val RECEIVE_RETRY_CAP_MS: Int = 500
+        private const val RECEIVE_RETRY_MAX_SHIFT: Int = 16 // guards `shl` against overflow
+        /** Approx total transient tolerance while `ready` before escalating (for logs/docs only). */
+        private const val RECEIVE_RETRY_MAX_MS: Int = 2750
     }
 }

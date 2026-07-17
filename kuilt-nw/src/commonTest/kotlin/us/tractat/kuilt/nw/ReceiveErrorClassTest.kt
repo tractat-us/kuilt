@@ -1,5 +1,6 @@
 package us.tractat.kuilt.nw
 
+import us.tractat.kuilt.nw.ReceiveErrorClass.ExpectedCancel
 import us.tractat.kuilt.nw.ReceiveErrorClass.Terminal
 import us.tractat.kuilt.nw.ReceiveErrorClass.Transient
 import kotlin.test.Test
@@ -37,6 +38,14 @@ class ReceiveErrorClassTest {
             NW_ERROR_DOMAIN_POSIX to PosixErrno.EHOSTUNREACH,
             NW_ERROR_DOMAIN_POSIX to PosixErrno.ENETUNREACH,
         )
+    }
+
+    @Test
+    fun our_own_cancel_ECANCELED_is_not_terminal() {
+        // ECANCELED (89) is what a pending receive fails with when WE cancel the connection (dedup-loser
+        // disconnect / NwSeam.close / #1478 grace-expiry). It must NOT escalate — the `cancelled` state
+        // handler already drives the graceful close; escalating would corrupt the reason=null contract.
+        assertEquals(ExpectedCancel, classifyReceiveError(NW_ERROR_DOMAIN_POSIX, PosixErrno.ECANCELED))
     }
 
     @Test
