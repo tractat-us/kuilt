@@ -90,6 +90,9 @@ public class BridgeNwApi internal constructor(
     override val connectionOpened: Flow<NwConnectionOpened> = _connectionOpened.asSharedFlow()
     override val bytesReceived: Flow<NwBytesReceived> = _bytesReceived.asSharedFlow()
     override val connectionClosed: Flow<NwConnectionClosed> = _connectionClosed.asSharedFlow()
+    // connectionViability (#1478) trails the no-op default from NwApi: the dylib bridge does not yet
+    // surface Network.framework's ready↔waiting path-viability transition. Wiring a fifth native
+    // callback through the ABI is a separate follow-up — see #1507.
 
     // Bounded staging channels: the JNA callbacks deposit here non-suspendingly; per-flow drains
     // forward to the SharedFlows in FIFO order. DROP_OLDEST so the JNA thread never blocks.

@@ -70,3 +70,24 @@ public data class NwConnectionClosed(
     public val connectionId: NwConnectionId,
     public val reason: String? = null,
 )
+
+/**
+ * The path viability of an already-established connection [connectionId] changed.
+ *
+ * Network.framework moves a connection that loses its route from `ready` to
+ * `waiting` (NOT `failed`), so no [NwConnectionClosed] ever fires — the peer is
+ * silently unreachable. This event exposes that transition:
+ *
+ *  - [viable]` == false` — a `ready → waiting` transition on a connection that HAD been
+ *    ready (path lost). An initial-dial `preparing → waiting` is normal churn and is NOT
+ *    reported.
+ *  - [viable]` == true` — a `waiting → ready` recovery of a connection that had been ready.
+ *
+ * `NwSeam` uses this to arm a bounded grace timer on a path loss and tear the peer if the
+ * path does not recover in time — the transport-level fix for #1478 (a path-lost `waiting`
+ * connection that would otherwise keep a dead peer in the roster forever).
+ */
+public data class NwConnectionViability(
+    public val connectionId: NwConnectionId,
+    public val viable: Boolean,
+)
