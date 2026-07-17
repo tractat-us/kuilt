@@ -12,6 +12,16 @@ import us.tractat.kuilt.core.Loom
  * per test via [newLoomPair], so each test gets isolated, zero-state radio state.
  * The same instance plays both host and joiner — [FakeNearbyRadio] is explicitly
  * designed as a single fake that handles both roles for one [NearbyLoom].
+ *
+ * ## Why `injectSelfDial` stays at the default `false` (tracked by `CapabilityGaps.SELF_DIAL`)
+ * Unlike a genuine mesh fabric (`NwSeam`, Multipeer's `BridgePeerLink`), kuilt's [NearbyLoom]
+ * is **role-split**: `open()` only advertises and `join()` only discovers — a single seam never
+ * both advertises AND browses. And every weave mints a fresh random [us.tractat.kuilt.core.PeerId]
+ * ([NearbyLoom.freshPeerId]), so there is no stable per-device identity that a self-dial could
+ * echo back: `remote == selfId` (the #1466 condition) cannot arise in the current impl. There is
+ * therefore no live self-connection a harness could inject into a host seam and no seam-level guard
+ * to prove — so this harness is honestly *tracked* under #1502 rather than overriding the hook. (A
+ * future symmetric advertise+browse rework of [NearbyLoom] would revisit this.)
  */
 class NearbyConformanceTest : SeamConformanceSuite() {
     override fun newLoomPair(): Pair<Loom, Loom> =
