@@ -4,6 +4,8 @@ import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runTest
 import org.junit.Assume.assumeTrue
 import us.tractat.kuilt.core.FabricAvailability
+import kotlin.test.AfterTest
+import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
@@ -27,6 +29,15 @@ import kotlin.test.assertNotNull
  * lifecycle; the real-hardware macOS↔iPhone P2P pass remains a separate manual/Phase-6 lane.
  */
 class NwNativeLibTest {
+
+    // Serialise these real-dylib smoke tests against any concurrent sibling `:kuilt-nw:jvmTest` on
+    // the same host so their native create/destroy teardowns can't collide and SIGABRT (issue
+    // #1511). No-op off macOS / without the dylib, where these tests already no-op via assumeTrue.
+    @BeforeTest
+    fun acquireHostLock() = NwRealDylibHostLock.acquire()
+
+    @AfterTest
+    fun releaseHostLock() = NwRealDylibHostLock.release()
 
     @Test
     fun dylibLoadsAndReportsExpectedProtocolVersion() {
