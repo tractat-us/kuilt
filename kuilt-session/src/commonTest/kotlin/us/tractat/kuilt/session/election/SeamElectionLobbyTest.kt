@@ -26,7 +26,9 @@ import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.seconds
+import kotlin.time.Instant
 
 class SeamElectionLobbyTest {
     private fun factory(loom: InMemoryLoom, scope: CoroutineScope) =
@@ -260,6 +262,54 @@ class SeamElectionLobbyTest {
             assertAbortsOnMidHandshakeCollapse<LobbyTornException>(seam, drainedPeer = memberId) {
                 l.start(memberName = "Host")
             }
+        }
+
+    // The #1478/#1480 silent-dead-peer condition: a co-elector goes UNREACHABLE-BUT-PRESENT — it
+    // stops answering heartbeat pings, yet `seam.peers` never drops it and `seam.state` never latches
+    // Torn (a path-lost `waiting` nw connection that fires no close). Every set-based abort (the Torn
+    // watcher, the membership-drain signals) is structurally blind: the member waits for a Freeze
+    // forever. Only the lobby-layer heartbeat detector catches silence. Assert awaitRoom aborts with
+    // LobbyTornException INSIDE the freeze/commit window rather than hanging.
+    @Test
+    fun `member awaitRoom aborts via heartbeat when the elected host goes silent but stays present`() =
+        runTest(timeout = 5.seconds) {
+            val self = PeerId("peer-z")
+            val hostId = PeerId("peer-a")
+            val seam = FakeSeam(selfId = self, initialPeers = setOf(self, hostId))
+            // Virtual-time clock so the detector's silence accounting advances under runTest.
+            val clock = { Instant.fromEpochMilliseconds(testScheduler.currentTime) }
+            val l = SeamElectionLobby(
+                seam = seam,
+                factory = SeamRoomFactory(InMemoryLoom(), backgroundScope, clock = clock),
+                scope = backgroundScope,
+                clock = clock,
+                roomKey = null,
+            )
+            assertEquals(hostId, l.host.first()) // self is a member → awaitRoom is the right call
+
+            // Capture awaitRoom's outcome via a caught launch so the thrown exception is delivered
+            // through [room] rather than cancelling the test scope.
+            val room = CompletableDeferred<Room>()
+            val driver = launch {
+                try {
+                    room.complete(l.awaitRoom(memberName = "Member"))
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Throwable) {
+                    room.completeExceptionally(e)
+                }
+            }
+
+            // Never deliver a Freeze and never answer a heartbeat ping — the host is present-but-silent.
+            // peers stays {self, host}; state stays Woven. The detector accumulates silence and fires
+            // PeerLost, mapped onto the existing LobbyTornException abort.
+            assertFailsWith<LobbyTornException> { room.await() }
+            assertTrue(
+                testScheduler.currentTime in 3_000..9_999,
+                "heartbeat abort must land past a transient blip and inside the 10s freeze/commit " +
+                    "window, was ${testScheduler.currentTime}ms",
+            )
+            driver.cancel()
         }
 
     @Test
