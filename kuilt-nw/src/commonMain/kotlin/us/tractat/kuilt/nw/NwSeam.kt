@@ -170,9 +170,14 @@ internal class NwSeam(
             val connId = event.connectionId
             // Get-or-create the ConnState (minting its nonce once) and snapshot the nonce under the
             // lock; send the identity frame OUTSIDE the lock (best-effort).
-            val nonce = lock.withLock { conns.getOrPut(connId) { ConnState(random.nextBytes(NONCE_BYTES)) }.nonce }
+            val (cs, created) = getOrCreateConn(connId)
+            // #1509 lost-wakeup guard: a `viable=false` observed for this connId BEFORE it entered `conns`
+            // was arm-skipped, and viability is latest-value STATE that will not re-emit an unchanged value.
+            // Now that `conns` has caught up, re-reconcile the LATEST map so a pending path loss is armed
+            // (else the #1478 zombie returns: no `connectionClosed` ever fires for a path-lost connection).
+            if (created) reconcileViability(api.connectionViability.value)
             log.debug { "nw.seam.opened connId=${connId.value} self=${selfId.value} → sending NwHello" }
-            runCatchingCancellable { api.send(connId, encodeFrame(NwHello.encode(selfId, nonce))) }
+            runCatchingCancellable { api.send(connId, encodeFrame(NwHello.encode(selfId, cs.nonce))) }
                 .onFailure { log.debug { "nw.seam.identity-send-failed connId=${connId.value} self=${selfId.value}: ${it.message}" } }
         }
     }
@@ -184,11 +189,29 @@ internal class NwSeam(
             if (closed.value) return@collect
             val connId = event.connectionId
             // Snapshot (get-or-create, minting its nonce once) the ConnState under the lock; decode OUTSIDE it.
-            val cs = lock.withLock { conns.getOrPut(connId) { ConnState(random.nextBytes(NONCE_BYTES)) } }
+            val (cs, created) = getOrCreateConn(connId)
+            // Same #1509 lost-wakeup guard as connectionOpenedLoop: if bytes are the first thing that puts
+            // this connId into `conns`, re-reconcile the latest viability so a pending loss is not stranded.
+            if (created) reconcileViability(api.connectionViability.value)
             // The framer is single-reader (only this loop touches it), so decoding outside the lock is safe.
             for (frame in cs.framer.decode(event.bytes)) {
                 processFrame(connId, cs, frame)
             }
+        }
+    }
+
+    /**
+     * Get-or-create the [ConnState] for [connId] under [lock], returning it plus whether it was **newly
+     * inserted** into [conns]. The creation flag drives the #1509 lost-wakeup guard: whenever a connId
+     * first enters [conns], its owning loop re-reconciles the latest viability state so a `viable=false`
+     * that arrived (and was arm-skipped) before the connection was tracked is not silently lost.
+     */
+    private fun getOrCreateConn(connId: NwConnectionId): Pair<ConnState, Boolean> = lock.withLock {
+        val existing = conns[connId]
+        if (existing != null) {
+            existing to false
+        } else {
+            ConnState(random.nextBytes(NONCE_BYTES)).also { conns[connId] = it } to true
         }
     }
 
@@ -223,8 +246,14 @@ internal class NwSeam(
             // Data frame — deliver OUTSIDE the lock (Spool.deliver suspends for backpressure).
             is FrameOutcome.Data ->
                 spool.deliver(Swatch(payload = frame, sender = outcome.sender, sequence = seq.incrementAndGet()))
-            // Dedup loser (if any) — disconnect OUTSIDE the lock (best-effort).
+            // Dedup loser (if any) — disconnect OUTSIDE the lock (best-effort). The loser's ConnState was
+            // just removed from `conns` in resolveIdentity; cancel any grace timer armed for it too, for
+            // symmetry with connectionClosedLoop/removeByConn. Normally the loser's own connectionClosed
+            // would cancel it; doing it here means a dropped close can't leave a stray timer that later
+            // fires a no-op disconnect/eviction against a connId the seam no longer tracks.
             is FrameOutcome.Resolved -> outcome.loser?.let { loserId ->
+                val graceJob = lock.withLock { graceJobs.remove(loserId) }
+                graceJob?.cancel()
                 runCatchingCancellable { api.disconnect(loserId) }
                     .onFailure { log.debug { "nw.dedup disconnect failed connId=${loserId.value}" } }
             }
@@ -359,6 +388,18 @@ internal class NwSeam(
      * Idempotent: an already-armed loss or an already-clear recovery is a steady-state no-op. Arm/cancel
      * decisions are taken under [lock] (so the [graceJobs] mutation is atomic); the [Job] `start`/`cancel`
      * side effects run OUTSIDE the lock, matching the seam-wide "no non-trivial call under the lock" rule.
+     * Safe to call concurrently from the viability collector AND the [conns]-insertion sites (#1509
+     * lost-wakeup guard): the check-then-arm is one lock acquisition, and `start()` on a lazily-armed job
+     * a concurrent reconcile already cancelled is a harmless no-op.
+     *
+     * ## Accepted conflation trade-off
+     * Because this is conflated latest-value state, a `false → true → false` burst that all lands while the
+     * collector is starved (on the order of the grace duration) delivers only the final `false`: the
+     * intermediate `true` is conflated away, so the second loss does NOT restart the grace clock — it
+     * inherits the first timer's remaining time. This can only ever UNDER-grant grace to a path that is
+     * currently down (tearing a dead-then-recovered-then-dead-again peer slightly sooner); it can never
+     * strand a timer on, or tear, a path whose latest value is `true`. Inherent to conflated state and
+     * acceptable — noted here so it isn't rediscovered as a "bug".
      */
     private fun reconcileViability(state: Map<NwConnectionId, Boolean>) {
         val toCancel = mutableListOf<Pair<NwConnectionId, Job>>()

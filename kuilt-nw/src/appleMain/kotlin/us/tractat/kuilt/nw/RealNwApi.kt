@@ -556,7 +556,10 @@ internal class RealNwApi(
             log.debug { "nw.api.close id=${id.value} already-dropped (idempotent)" }
             return // already dropped — idempotent
         }
-        clearViability(id) // the connection is gone — drop its stale per-conn viability latest-value
+        // The connection is gone — drop its stale per-conn viability latest-value. NOTE: connectionClosed
+        // itself is still a lossy tryEmit below (a separate, unaddressed zombie — tracked in #1522); this
+        // clear only bounds the viability map, it does not depend on the close being delivered.
+        clearViability(id)
         val reason = when {
             entry.failedEscalation -> entry.failReason ?: "receive error (terminal)" // #1479 escalation
             failed -> "connection failed"

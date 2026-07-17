@@ -155,6 +155,11 @@ internal class FakeNwRadio {
         val other = links.remove(connectionId.value) ?: return
         // Drop the reverse mapping too so the link is fully torn down.
         links.remove(other.connectionId.value)
+        // Prune viability on BOTH sides, mirroring RealNwApi.clearViability (#1509): the local side closes
+        // its own handle (its cancel → cancelled → closeConnection prunes locally) and the remote side
+        // prunes the handle it observes closing — so neither device's viability map keeps a stale key.
+        devices[fromDeviceId]?.pruneConnectionViability(connectionId)
+        devices.getValue(other.deviceId).pruneConnectionViability(other.connectionId)
         // Only the REMOTE side observes the close.
         devices.getValue(other.deviceId)
             .emitConnectionClosed(NwConnectionClosed(other.connectionId, reason = null))

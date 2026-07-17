@@ -113,4 +113,13 @@ internal class FakeNwApi(
         // safe to call from any thread; the seam reconciles from the latest map value, never losing it.
         _connectionViability.update { it + (connectionId to viable) }
     }
+
+    /**
+     * Prune [connectionId]'s viability entry when the connection closes — mirrors `RealNwApi.clearViability`
+     * so the fake honours the "a connection absent from the map has never established or has closed" contract
+     * (#1509) instead of letting the map grow monotonically with stale keys. Driven by [FakeNwRadio.disconnect].
+     */
+    internal fun pruneConnectionViability(connectionId: NwConnectionId) {
+        _connectionViability.update { it - connectionId }
+    }
 }
