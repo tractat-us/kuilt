@@ -90,7 +90,10 @@ public class RoomHubSeam(
     private val _attestedPrincipals = MutableStateFlow<Map<PeerId, Principal>>(emptyMap())
     override val attestedPrincipals: StateFlow<Map<PeerId, Principal>> = _attestedPrincipals.asStateFlow()
 
-    private val _peers = MutableStateFlow<Set<PeerId>>(emptySet())
+    // The hub is a peer in its own room roster: [Seam.peers] must include [selfId] (contract in
+    // Seam.kt). Initial value is `{ selfId }`; admission adds spokes, deregister removes only the
+    // departing spoke, so selfId stays present on any live (non-Torn) roster. #1506.
+    private val _peers = MutableStateFlow<Set<PeerId>>(setOf(selfId))
     override val peers: StateFlow<Set<PeerId>> = _peers.asStateFlow()
 
     private val stateGate = SeamStateGate(SeamState.Woven)
