@@ -1402,8 +1402,11 @@ internal class SeamRoom(
  *
  * [broadcast] and [sendTo] delegate to [delegate] unchanged.
  * [close] is a no-op — the [PerPeerSeam] does not own the link lifecycle.
+ *
+ * `internal` (not `private`) so [us.tractat.kuilt.session.election.SeamElectionLobby] can reuse the
+ * one impl for its lobby-phase [HeartbeatPartitionDetector]s (#1480) rather than forking it.
  */
-private class PerPeerSeam(
+internal class PerPeerSeam(
     private val delegate: Seam,
     private val targetPeerId: PeerId,
     private val rawIncoming: MutableSharedFlow<Swatch>,
