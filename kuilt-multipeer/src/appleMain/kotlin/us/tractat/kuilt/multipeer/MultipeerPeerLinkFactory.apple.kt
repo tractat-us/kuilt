@@ -15,6 +15,7 @@ import platform.MultipeerConnectivity.MCNearbyServiceAdvertiser
 import platform.MultipeerConnectivity.MCNearbyServiceAdvertiserDelegateProtocol
 import platform.MultipeerConnectivity.MCNearbyServiceBrowser
 import platform.MultipeerConnectivity.MCNearbyServiceBrowserDelegateProtocol
+import platform.Foundation.NSUUID
 import platform.MultipeerConnectivity.MCPeerID
 import platform.MultipeerConnectivity.MCSession
 import platform.darwin.NSObject
@@ -24,6 +25,7 @@ import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.multipeer.internal.MCSessionLink
+import us.tractat.kuilt.multipeer.internal.MultipeerPeerId
 
 private val log = KotlinLogging.logger("us.tractat.kuilt.multipeer.MultipeerPeerLinkFactory")
 
@@ -61,7 +63,21 @@ public actual class MultipeerPeerLinkFactory actual constructor(
 ) : Loom {
     internal val displayName: String = displayName
     internal val serviceType: String = serviceType
-    internal val localPeerId: MCPeerID = MCPeerID(displayName = displayName)
+
+    /**
+     * Per-device nonce baked into the advertised `MCPeerID.displayName` so the
+     * wire [us.tractat.kuilt.core.PeerId] is collision-resistant. Two default-named
+     * "iPhone" devices would otherwise share one id and evict each other on a
+     * disconnect (#1494 / the #1466 class). The nonce travels WITH the identity —
+     * embedded in the name the local device advertises — which is the only way
+     * both ends of a link agree on the id (an observer cannot append a nonce to a
+     * name it merely received). See [MultipeerPeerId].
+     */
+    private val deviceNonce: String =
+        NSUUID().UUIDString().replace("-", "").lowercase().take(NONCE_HEX_LENGTH)
+
+    internal val localPeerId: MCPeerID =
+        MCPeerID(displayName = MultipeerPeerId.decorate(displayName, deviceNonce))
 
     /**
      * Stable handle → live `MCPeerID` for peers seen by the browser. The
@@ -262,6 +278,9 @@ public actual class MultipeerPeerLinkFactory actual constructor(
     private companion object {
         private const val INVITE_TIMEOUT_SECONDS: Double = 30.0
         private const val LOST_PEER_BUFFER: Int = 16
+
+        /** Hex characters of the per-device nonce appended to the display name. */
+        private const val NONCE_HEX_LENGTH: Int = 8
     }
 
     internal class AcceptAllAdvertiserDelegate(
@@ -301,13 +320,16 @@ public actual class MultipeerPeerLinkFactory actual constructor(
             foundPeer: MCPeerID,
             withDiscoveryInfo: Map<Any?, *>?,
         ) {
+            // The handle is the full decorated display name — it IS the wire
+            // identity and the key back to the live MCPeerID for join(). The
+            // human-facing sessionName strips the per-device nonce.
             val handle = foundPeer.displayName
             log.info { "mc.discover.peer handle=$handle localPeer=${factory.displayName}" }
             factory.knownPeers[handle] = foundPeer
             val ad =
                 MultipeerAdvertisement(
                     handle = handle,
-                    sessionName = handle,
+                    sessionName = MultipeerPeerId.humanName(handle),
                     serviceType = factory.serviceType,
                 )
             factory._visiblePeers.update { current -> current.filterNot { it.handle == handle }.toSet() + ad }

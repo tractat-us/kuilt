@@ -45,14 +45,20 @@ class MultipeerNativeLibTest {
         val handle = lib.mc_runtime_create("Test Mac", "kuilt-test")
         assertNotNull(handle, "mc_runtime_create returned null for valid args")
         try {
-            // Round-trip the display name through the cdecl ABI: should equal "Test Mac".
-            // We allocate a generous buffer (much larger than needed) and trust
-            // mc_runtime_display_name to NUL-terminate within it.
+            // Round-trip the WIRE self-name through the cdecl ABI. The runtime
+            // decorates the display name with a per-device nonce for collision
+            // resistance (#1494), so the round-trip is "Test Mac#<nonce>", and
+            // MultipeerPeerId.humanName recovers the original "Test Mac".
             val buf = ByteArray(64)
             val written = lib.mc_runtime_display_name(handle, buf, buf.size)
             assertTrue(written > 0, "mc_runtime_display_name returned $written; expected positive")
             val name = String(buf, 0, written, Charsets.UTF_8)
-            assertEquals("Test Mac", name, "Display name round-trip mismatch")
+            assertTrue(name.startsWith("Test Mac#"), "expected a nonce-decorated wire name, got '$name'")
+            assertEquals(
+                "Test Mac",
+                us.tractat.kuilt.multipeer.internal.MultipeerPeerId.humanName(name),
+                "human name must round-trip out of the decorated wire name",
+            )
         } finally {
             lib.mc_runtime_destroy(handle)
         }

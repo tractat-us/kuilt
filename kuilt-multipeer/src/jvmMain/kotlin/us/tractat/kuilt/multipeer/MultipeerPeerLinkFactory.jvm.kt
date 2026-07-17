@@ -150,9 +150,32 @@ public actual class MultipeerPeerLinkFactory actual constructor(
             BridgePeerLink(
                 nativeLib = lib,
                 sessionHandle = session,
-                selfId = PeerId(displayName),
+                selfId = resolveSelfId(lib, runtime),
             )
         }
+    }
+
+    /**
+     * The wire [PeerId] for this device. The native runtime decorates the
+     * advertised `MCPeerID.displayName` with a per-device nonce (collision
+     * resistance, #1494), so `selfId` MUST come from the native wire name to
+     * match what remote peers observe — not the raw constructor [displayName].
+     * A fake native lib writes nothing (`<= 0`); in that case fall back to the
+     * raw name so the fake-backed conformance path stays consistent.
+     */
+    private fun resolveSelfId(
+        lib: MultipeerNativeLib,
+        runtime: Pointer,
+    ): PeerId {
+        val buf = ByteArray(SELF_NAME_BUFFER_BYTES)
+        val written = lib.mc_runtime_display_name(runtime, buf, buf.size)
+        val name = if (written > 0) String(buf, 0, written, Charsets.UTF_8) else displayName
+        return PeerId(name)
+    }
+
+    private companion object {
+        /** MCPeerID.displayName caps at 63 UTF-8 bytes; +1 for the NUL terminator. */
+        private const val SELF_NAME_BUFFER_BYTES: Int = 64
     }
 
     private fun throwUnsupportedPlatform(): Nothing =
