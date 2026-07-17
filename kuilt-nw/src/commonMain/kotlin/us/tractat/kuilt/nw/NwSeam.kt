@@ -7,6 +7,7 @@ import kotlinx.atomicfu.locks.withLock
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -347,32 +348,58 @@ internal class NwSeam(
                 }
             } else {
                 // Arm lazily under the lock (so we can store the Job atomically), start OUTSIDE it.
+                var skip: String? = null
                 val armed = lock.withLock {
-                    if (connId !in conns || connId in graceJobs) return@withLock null
-                    scope.launch(start = CoroutineStart.LAZY) {
-                        delay(wovenPathGrace)
-                        onGraceExpired(connId)
-                    }.also { graceJobs[connId] = it }
+                    when {
+                        connId !in conns -> { skip = "not-in-conns"; null }
+                        connId in graceJobs -> { skip = "already-armed"; null }
+                        else -> scope.launch(start = CoroutineStart.LAZY) {
+                            delay(wovenPathGrace)
+                            onGraceExpired(connId)
+                        }.also { graceJobs[connId] = it }
+                    }
                 }
                 if (armed != null) {
                     log.info { "nw.seam.viability.lost connId=${connId.value} self=${selfId.value} → grace armed ($wovenPathGrace)" }
                     armed.start()
+                } else {
+                    // A cross-collector ordering skip (conn already closed/evicted, or a duplicate
+                    // viable=false) — logged so it's diagnosable next time rather than silently dropped.
+                    log.debug { "nw.seam.viability.arm-skipped connId=${connId.value} self=${selfId.value} reason=$skip" }
                 }
             }
         }
     }
 
     /**
-     * The grace timer for [connId] expired without recovery: the peer is unreachable. Consume our own
-     * [graceJobs] entry, then best-effort [NwApi.disconnect] the dead connection and drive the local
-     * eviction via [removeByConn] — reusing the send-failure eviction path (last-remote-and-Woven ⇒
-     * [latchTorn]), tearing to [CloseReason.Unreachable] to distinguish a dead peer from a clean leave.
-     * Driving the tear locally is deliberate: the transport emits no close for a `waiting` connection,
-     * so we cannot wait for a looped-back [NwApi.connectionClosed]. [latchTorn] is CAS-idempotent, so a
-     * later close of the same connection is a harmless no-op.
+     * The grace timer for [connId] expired without recovery: the peer is unreachable. Best-effort
+     * [NwApi.disconnect] the dead connection and drive the local eviction via [removeByConn] — reusing
+     * the send-failure eviction path (last-remote-and-Woven ⇒ [latchTorn]), tearing to
+     * [CloseReason.Unreachable] to distinguish a dead peer from a clean leave. Driving the tear locally
+     * is deliberate: the transport emits no close for a `waiting` connection, so we cannot wait for a
+     * looped-back [NwApi.connectionClosed]. [latchTorn] is CAS-idempotent, so a later close of the same
+     * connection is a harmless no-op.
+     *
+     * ## Deadline-race identity guard
+     * [delay] cannot be cancelled once it has resumed, and the only later suspension ([NwApi.disconnect])
+     * carries no cancellation point — so a `viable=true`/close/re-arm that lands in the same virtual
+     * instant as the expiry cannot stop this job from running. We therefore remove-and-proceed ONLY if
+     * we still own the timer (`graceJobs[connId] === this job`): a losing recovery already replaced/
+     * removed our entry, so we abort — tearing nothing and, crucially, NOT evicting a `connId` whose
+     * entry now belongs to a *second* path-loss's freshly-armed timer (which would silently give that
+     * loss ~0s grace). A genuinely-late recovery still tears via its own owning job.
      */
     private suspend fun onGraceExpired(connId: NwConnectionId) {
-        lock.withLock { graceJobs.remove(connId) }
+        val thisJob = currentCoroutineContext()[Job]
+        val owned = lock.withLock {
+            if (graceJobs[connId] !== thisJob) return@withLock false
+            graceJobs.remove(connId)
+            true
+        }
+        if (!owned) {
+            log.debug { "nw.seam.grace.expired.stale connId=${connId.value} self=${selfId.value} → superseded by recovery/close/re-arm; no tear" }
+            return
+        }
         log.info { "nw.seam.grace.expired connId=${connId.value} self=${selfId.value} → disconnect + evict (Unreachable)" }
         runCatchingCancellable { api.disconnect(connId) }
             .onFailure { log.debug { "nw.seam.grace.disconnect-failed connId=${connId.value}: ${it.message}" } }
