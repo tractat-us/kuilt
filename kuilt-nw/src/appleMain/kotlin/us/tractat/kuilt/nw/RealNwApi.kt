@@ -50,6 +50,12 @@ import platform.Network.nw_content_context_create
 import platform.Network.nw_endpoint_create_host
 import platform.Network.nw_endpoint_get_bonjour_service_name
 import platform.Network.nw_endpoint_t
+import platform.Network.nw_error_domain_dns
+import platform.Network.nw_error_domain_posix
+import platform.Network.nw_error_domain_tls
+import platform.Network.nw_error_get_error_code
+import platform.Network.nw_error_get_error_domain
+import platform.Network.nw_error_t
 import platform.Network.nw_listener_cancel
 import platform.Network.nw_listener_create
 import platform.Network.nw_listener_get_port
@@ -67,10 +73,13 @@ import platform.Network.nw_parameters_t
 import platform.Network.nw_protocol_options_t
 import platform.Network.nw_tls_copy_sec_protocol_options
 import platform.Security.sec_protocol_options_add_pre_shared_key
+import platform.darwin.DISPATCH_TIME_NOW
+import platform.darwin.dispatch_after
 import platform.darwin.dispatch_data_create
 import platform.darwin.dispatch_data_create_map
 import platform.darwin.dispatch_data_t
 import platform.darwin.dispatch_queue_create
+import platform.darwin.dispatch_time
 import platform.posix.size_tVar
 import us.tractat.kuilt.core.FabricAvailability
 
@@ -174,13 +183,33 @@ internal class RealNwApi(
      * signal only if the connection HAD been ready (excludes normal initial-dial `preparing → waiting`
      * churn); (2) `connectionOpened` + the receive loop are started only on the FIRST `ready`, so a
      * `waiting → ready` recovery does not double-arm a second receive loop / duplicate the handshake.
+     *
+     * The receive-error split (#1479) adds four more fields:
+     *  - [viable] — is the path CURRENTLY up (`ready`, not path-lost `waiting`)? Set `true` on every
+     *    `ready`, `false` on a `ready → waiting` loss. A transient receive error re-arms only while
+     *    [viable]; while not viable it stops and lets #1478's grace timer govern.
+     *  - [receiveRetries] — transient-retry budget consumed since the last healthy receive (reset to 0
+     *    on any successful chunk). Exhausting it WHILE viable escalates to a terminal close.
+     *  - [receiveStoppedForRecovery] — a transient error stopped the loop while the path was down; the
+     *    `waiting → ready` recovery re-arms the loop iff this is set (never double-arming a live loop).
+     *  - [failedEscalation]/[failReason] — set by [escalateClose] before it cancels, so the resulting
+     *    `cancelled` handler maps to `closeConnection(failed = true)` with [failReason] — preserving
+     *    "`onState` is the sole ref-drop site" while surfacing a non-graceful `receive:<code>` reason.
      */
     private class ConnectionEntry(
         val connection: nw_connection_t,
         val endpoint: NwEndpoint?,
         var closing: Boolean = false,
         var wasReady: Boolean = false,
+        var viable: Boolean = false,
+        var receiveRetries: Int = 0,
+        var receiveStoppedForRecovery: Boolean = false,
+        var failedEscalation: Boolean = false,
+        var failReason: String? = null,
     )
+
+    /** The action a transient receive error resolves to (decided under [lock], acted on outside it). */
+    private enum class TransientAction { Gone, StopUntilRecovery, Escalate, Retry }
 
     // Guards [connections], [endpointsById], [listener], and [browser]. NO nw_* call runs under it.
     private val lock = reentrantLock()
@@ -387,7 +416,13 @@ internal class RealNwApi(
             nw_connection_state_waiting -> onWaiting(id)
             nw_connection_state_preparing -> log.debug { "nw.api.state id=${id.value} PREPARING" }
             nw_connection_state_failed -> { log.info { "nw.api.state id=${id.value} FAILED → closeConnection(failed=true)" }; closeConnection(id, failed = true) }
-            nw_connection_state_cancelled -> { log.debug { "nw.api.state id=${id.value} CANCELLED → closeConnection(failed=false)" }; closeConnection(id, failed = false) }
+            nw_connection_state_cancelled -> {
+                // A cancel we escalated for a terminal receive error (#1479) maps to a FAILED close so
+                // the reason is non-graceful (receive:<code>); a plain local/remote cancel stays failed=false.
+                val escalated = lock.withLock { connections[id]?.failedEscalation == true }
+                log.debug { "nw.api.state id=${id.value} CANCELLED escalated=$escalated → closeConnection(failed=$escalated)" }
+                closeConnection(id, failed = escalated)
+            }
             else -> log.debug { "nw.api.state id=${id.value} other=$state" }
         }
     }
@@ -402,7 +437,27 @@ internal class RealNwApi(
      * after the first idempotent.)
      */
     private fun onReady(id: NwConnectionId, connection: nw_connection_t) {
-        if (emitReadyTransition(id)) receiveLoop(id, connection)
+        if (emitReadyTransition(id)) {
+            receiveLoop(id, connection) // FIRST ready: arm the loop
+        } else {
+            // A `waiting → ready` recovery (#1478). If a transient receive error had stopped the loop
+            // while the path was down (#1479), re-arm it now — but ONLY then, so a plain redelivered
+            // `ready` never double-arms a loop that is still running. Reset the retry budget on restart.
+            val restart = lock.withLock {
+                val entry = connections[id] ?: return@withLock false
+                if (entry.receiveStoppedForRecovery) {
+                    entry.receiveStoppedForRecovery = false
+                    entry.receiveRetries = 0
+                    true
+                } else {
+                    false
+                }
+            }
+            if (restart) {
+                log.info { "nw.api.receive-restart id=${id.value} (waiting→ready recovery) → re-arm receiveLoop" }
+                receiveLoop(id, connection)
+            }
+        }
     }
 
     /**
@@ -418,6 +473,7 @@ internal class RealNwApi(
             val entry = connections[id] ?: return@withLock null
             val firstReady = !entry.wasReady
             entry.wasReady = true
+            entry.viable = true // ready ⇒ path is currently up (gates the #1479 transient re-arm)
             entry.endpoint to firstReady
         }
         if (outcome == null) {
@@ -442,7 +498,11 @@ internal class RealNwApi(
      * initial-dial `preparing → waiting` (never been ready) is normal churn and is NOT reported.
      */
     private fun onWaiting(id: NwConnectionId) {
-        val wasReady = lock.withLock { connections[id]?.wasReady == true }
+        val wasReady = lock.withLock {
+            val entry = connections[id] ?: return@withLock false
+            entry.viable = false // path is down ⇒ a transient receive error must NOT re-arm (#1479)
+            entry.wasReady
+        }
         if (wasReady) {
             log.info { "nw.api.state id=${id.value} WAITING after ready (path lost — no close will fire) → emit viability(viable=false)" }
             _connectionViability.tryEmit(NwConnectionViability(id, viable = false))
@@ -463,6 +523,7 @@ internal class RealNwApi(
             return // already dropped — idempotent
         }
         val reason = when {
+            entry.failedEscalation -> entry.failReason ?: "receive error (terminal)" // #1479 escalation
             failed -> "connection failed"
             entry.closing -> null // our own graceful cancel
             else -> "connection cancelled remotely"
@@ -471,17 +532,111 @@ internal class RealNwApi(
         _connectionClosed.tryEmit(NwConnectionClosed(id, reason))
     }
 
+    /**
+     * The inbound receive loop, self-re-arming while healthy. A receive error is no longer a
+     * permanent give-up (#1479): it is classified ([classifyReceiveError]) into
+     *  - **Terminal** — the peer/link is gone; [escalateClose] cancels the connection so the resulting
+     *    `cancelled` funnels through `closeConnection → connectionClosed → NwSeam` (the SAME evict+tear
+     *    path as every other close — the receive loop never independently tears);
+     *  - **Transient** — a bounded [onTransientReceiveError] retry (short backoff, [RECEIVE_RETRY_BUDGET]),
+     *    unless the path has left `ready`, in which case the loop stops and #1478's grace timer governs
+     *    (a `waiting → ready` recovery re-arms it via [onReady]).
+     * A healthy chunk resets the retry budget, so intermittent transients never accumulate to escalation.
+     */
     private fun receiveLoop(id: NwConnectionId, connection: nw_connection_t) {
         nw_connection_receive(connection, RECEIVE_MIN_LENGTH, RECEIVE_MAX_LENGTH) { content, _, _, error ->
             if (content != null) _bytesReceived.tryEmit(NwBytesReceived(id, fromDispatchData(content)))
             if (error == null) {
+                lock.withLock { connections[id]?.receiveRetries = 0 } // healthy ⇒ any transient blip cleared
                 receiveLoop(id, connection) // re-arm only while healthy
             } else {
-                // #1479: the loop gives up here — inbound delivery STOPS with no close/tear. Loud so a
-                // silent-stop can be told apart from a genuine peer departure.
-                log.info { "nw.api.receive-stopped id=${id.value} (receive error — loop NOT re-armed; inbound delivery halts, no close emitted)" }
+                handleReceiveError(id, connection, error)
             }
         }
+    }
+
+    /** Classify a receive error and route it to escalate (Terminal) or bounded retry (Transient). #1479. */
+    private fun handleReceiveError(id: NwConnectionId, connection: nw_connection_t, error: nw_error_t) {
+        // Map the nw_error_domain_t to the commonMain classifier's Int domain by comparing against the
+        // cinterop constants (robust whether the anonymous enum bridges as a typealias or an enum). Only
+        // POSIX-vs-non-POSIX changes the verdict; every non-POSIX domain classifies Terminal.
+        val nwDomain = nw_error_get_error_domain(error)
+        val domain = when (nwDomain) {
+            nw_error_domain_posix -> NW_ERROR_DOMAIN_POSIX
+            nw_error_domain_dns -> NW_ERROR_DOMAIN_DNS
+            nw_error_domain_tls -> NW_ERROR_DOMAIN_TLS
+            else -> NW_ERROR_DOMAIN_INVALID
+        }
+        val code = nw_error_get_error_code(error)
+        when (classifyReceiveError(domain, code)) {
+            ReceiveErrorClass.Terminal -> {
+                log.info { "nw.api.receive-terminal id=${id.value} domain=$domain code=$code → escalateClose (→ connectionClosed → NwSeam tear)" }
+                escalateClose(id, "receive:$code")
+            }
+            ReceiveErrorClass.Transient -> onTransientReceiveError(id, connection, domain, code)
+        }
+    }
+
+    /**
+     * A transient receive error (#1479). Decide under [lock] (then act outside it):
+     *  - the entry is gone → nothing to do;
+     *  - the path is down (`!viable`, i.e. `ready → waiting`) → STOP and mark [receiveStoppedForRecovery];
+     *    #1478's grace timer governs and [onReady] re-arms on recovery;
+     *  - the retry budget is exhausted WHILE still `ready` → treat as Terminal ([escalateClose]);
+     *  - otherwise consume one retry and re-arm after a short backoff.
+     */
+    private fun onTransientReceiveError(id: NwConnectionId, connection: nw_connection_t, domain: Int, code: Int) {
+        val action = lock.withLock {
+            val entry = connections[id] ?: return@withLock TransientAction.Gone
+            when {
+                !entry.viable -> { entry.receiveStoppedForRecovery = true; TransientAction.StopUntilRecovery }
+                entry.receiveRetries >= RECEIVE_RETRY_BUDGET -> TransientAction.Escalate
+                else -> { entry.receiveRetries += 1; TransientAction.Retry }
+            }
+        }
+        when (action) {
+            TransientAction.Gone ->
+                log.debug { "nw.api.receive-transient id=${id.value} domain=$domain code=$code but entry already dropped (ignored)" }
+            TransientAction.StopUntilRecovery ->
+                log.info { "nw.api.receive-transient id=${id.value} domain=$domain code=$code — path not ready → stop; #1478 grace timer governs, re-arm on recovery" }
+            TransientAction.Escalate -> {
+                log.info { "nw.api.receive-transient id=${id.value} domain=$domain code=$code — retry budget ($RECEIVE_RETRY_BUDGET) exhausted while ready → escalateClose" }
+                escalateClose(id, "receive:$code")
+            }
+            TransientAction.Retry -> {
+                log.debug { "nw.api.receive-transient id=${id.value} domain=$domain code=$code → re-arm after ${RECEIVE_RETRY_BACKOFF_MS}ms" }
+                rearmAfterBackoff(id, connection)
+            }
+        }
+    }
+
+    /** Re-arm the receive loop after [RECEIVE_RETRY_BACKOFF_MS] on the shared [queue] (transient backoff). */
+    private fun rearmAfterBackoff(id: NwConnectionId, connection: nw_connection_t) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, RECEIVE_RETRY_BACKOFF_NANOS), queue) {
+            receiveLoop(id, connection)
+        }
+    }
+
+    /**
+     * Escalate a terminal receive error (or an exhausted transient budget) into a connection close
+     * (#1479). Sets [ConnectionEntry.failedEscalation] + a non-graceful [ConnectionEntry.failReason],
+     * then cancels — so the resulting `cancelled` handler ([onState]) maps to `closeConnection(failed =
+     * true)` and emits `connectionClosed(reason = "receive:<code>")`. This preserves the "`onState` is the
+     * SOLE ref-drop site" invariant (the receive loop never removes the entry itself) and funnels through
+     * the SAME `connectionClosed → NwSeam` evict+tear path as every other close. Idempotent — a second
+     * escalation on an already-escalating entry is a no-op.
+     */
+    private fun escalateClose(id: NwConnectionId, reason: String) {
+        val connection = lock.withLock {
+            val entry = connections[id] ?: return
+            if (entry.failedEscalation) return // already escalating — idempotent
+            entry.failedEscalation = true
+            entry.failReason = reason
+            entry.closing = false // non-graceful: this is a failure, not our own clean cancel
+            entry.connection
+        }
+        log.info { "nw.api.escalate-close id=${id.value} reason=$reason → cancel (cancelled handler maps → closeConnection failed=true)" }
+        nw_connection_cancel(connection)
     }
 
     private fun onBrowseResult(result: nw_browse_result_t) {
@@ -542,5 +697,11 @@ internal class RealNwApi(
         private const val BYTES_BUFFER = 64
         private const val RECEIVE_MIN_LENGTH: UInt = 1u
         private const val RECEIVE_MAX_LENGTH: UInt = 65_536u // 64 KiB
+
+        /** #1479 transient-receive-error retry budget (per healthy-receive window) before escalating to close. */
+        private const val RECEIVE_RETRY_BUDGET: Int = 5
+        /** Short backoff between transient receive-error retries. */
+        private const val RECEIVE_RETRY_BACKOFF_MS: Int = 50
+        private const val RECEIVE_RETRY_BACKOFF_NANOS: Long = RECEIVE_RETRY_BACKOFF_MS * 1_000_000L
     }
 }
