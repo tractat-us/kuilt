@@ -37,6 +37,14 @@ import kotlin.time.Duration
  * `withTimeout` — deliberately: `withTimeout` raises a `TimeoutCancellationException`, which
  * [runCatchingCancellable] (correctly) re-throws as cancellation, which would kill the redial coroutine
  * instead of retrying. `withTimeoutOrNull` turns the timeout into a plain `null` the loop can act on.
+ *
+ * The next step, `mesh.addLink`, has its own unbounded read — it blocks on the `MeshHello` first frame
+ * of the handshake — so a sever mid-`addLink` (after `dial` returns `101` but before the hello arrives)
+ * could wedge the single-flight loop just as a hung `dial` would. That read is not `dialTimeout`-bounded,
+ * but it is *not* a wedge: the established session is now ping-covered, so a mid-handshake half-open is
+ * reaped by the client ping within ~`pingInterval + pongTimeout`, which unblocks the `firstFrame` read
+ * and lets the loop retry. So the loop's liveness rests on **both** bounds — `dialTimeout` on the
+ * pre-`101` negotiation and the client ping on the post-`101` `addLink` read — not on `dialTimeout` alone.
  */
 internal fun CoroutineScope.superviseVoterReconnection(
     mesh: Mesh,
