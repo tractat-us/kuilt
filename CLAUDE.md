@@ -219,6 +219,14 @@ tests as the `MDNS_MULTICAST_TESTS` env var (see `kuilt-mdns/build.gradle.kts`).
   before swallowing. Best-effort fabric sends are the common case:
   `runCatchingCancellable { seam.broadcast(frame) }.onFailure { logger.debug { … } }`.
 
+- **Debugging bugs a local suite can't see** (hardware/network/contention-only) follows the
+  process rules in [`docs/debugging-process.md`](docs/debugging-process.md): don't `closes #N` a
+  hardware-reproduced bug until validated against the reproducer (a `FakeSeam`-injected test proves
+  the consumer's *reaction*, not the transport's *emission*); after one failed fix round, ship
+  **evidence capture** (log identities+`state`, not sizes) before a second hypothesis; and a
+  contract-impossible value is a **fork** — probe both the measurement bug and the contract-violation
+  bug. Distilled from the #1466 post-mortem.
+
 ## Documentation
 
 Two published surfaces, deployed to GitHub Pages by `.github/workflows/docs.yml` on every push to `main`:
