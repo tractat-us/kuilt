@@ -133,6 +133,18 @@ internal class FakeNwRadio {
             .emitConnectionOpened(NwConnectionOpened(connIdAccepter, endpoint = null))
     }
 
+    /**
+     * Inject a **self-dial** (#1466 / #1490): make [deviceId] dial its OWN advertised endpoint —
+     * exactly what a symmetric advertise+browse device does when the radio returns its own endpoint to
+     * its own browser (the self-endpoint delivery of #1485). Both resulting connections resolve to the
+     * same device's `selfId`, which the `NwSeam` self-connection guard must drop. Used by the
+     * conformance harness's `injectSelfDial` hook to prove the guard on a *live* seam.
+     */
+    suspend fun injectSelfDial(deviceId: String) {
+        require(deviceId in devices) { "no device '$deviceId' to self-dial" }
+        connect(deviceId, NwEndpoint(id = endpointIdFor(deviceId), serviceName = deviceId))
+    }
+
     suspend fun send(fromDeviceId: String, connectionId: NwConnectionId, bytes: ByteArray) {
         val other = links[connectionId.value] ?: return // link already gone; drop
         devices.getValue(other.deviceId)

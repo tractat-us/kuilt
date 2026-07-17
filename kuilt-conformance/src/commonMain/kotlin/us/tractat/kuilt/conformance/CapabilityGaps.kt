@@ -30,4 +30,15 @@ public object CapabilityGaps {
      */
     public const val MEMBERSHIP_DRAIN: String =
         "https://github.com/tractat-us/kuilt/issues/1474"
+
+    /**
+     * A conformance harness that cannot inject a **self-dial** — a peer resolving a connection to its
+     * OWN `selfId`, the #1466 class (symmetric advertise+browse fabrics are delivered their own
+     * advertisement and dial it; see [SeamConformanceSuite.selfDialGap]). Not a *fabric* gap — a
+     * *harness* gap: only a harness that can drive a live seam to see a connection to its own identity
+     * (e.g. the `FakeNwRadio` self-endpoint delivery) can prove the guard drops it; a relay/2-peer
+     * harness with no self-discovery cannot self-dial at all.
+     */
+    public const val SELF_DIAL: String =
+        "https://github.com/tractat-us/kuilt/issues/1502"
 }
