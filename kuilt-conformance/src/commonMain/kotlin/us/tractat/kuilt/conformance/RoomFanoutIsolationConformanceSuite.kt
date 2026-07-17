@@ -39,7 +39,7 @@ import kotlin.time.Duration.Companion.seconds
  * The gate this suite pins:
  *  - **(a) Zero-frames-on-non-member** — clients A, B on `table-7` and client C on `table-9`;
  *    a broadcast on `table-7` reaches A and B and **never** C ([broadcastOnRoomReachesOnlyRoomMembers]),
- *    and each room's [Seam.peers] reflects only its own members ([perRoomPeersReflectsOnlyRoomMembers]).
+ *    and each room's [Seam.peers] reflects only its own members plus the hub's own [Seam.selfId] ([perRoomPeersReflectsOnlyRoomMembers]).
  *  - **(b) Per-room teardown** — closing one room leaves a sibling room fully usable
  *    ([closingOneRoomDoesNotAffectSibling]).
  *  - **(c) Auth-reject exclusion** — a connection the [RoomAuthorizer] rejects is structurally
@@ -113,8 +113,10 @@ public abstract class RoomFanoutIsolationConformanceSuite {
             muxC.channel("table-9").broadcast(byteArrayOf())
 
             // Await registration on observable state: A and B into table-7, C into table-9.
-            serverRoom7.peers.first { it.size == 2 }
-            serverRoom9.peers.first { it.size == 1 }
+            // Wait on member containment, not set size — [Seam.peers] also carries the hub's own
+            // selfId (contract; #1506), so the roster is never just the remote spokes.
+            serverRoom7.peers.first { it.containsAll(setOf(PeerId("client-a"), PeerId("client-b"))) }
+            serverRoom9.peers.first { it.contains(PeerId("client-c")) }
 
             // C starts collecting on table-7 BEFORE the broadcast (so it can't merely miss frames).
             val cTable7Inbox = muxC.channel("table-7").incoming.produceIn(backgroundScope)
@@ -137,8 +139,9 @@ public abstract class RoomFanoutIsolationConformanceSuite {
         }
 
     /**
-     * [Seam.peers] on each room reflects only that room's registered members:
-     * `table-7` sees A and B; `table-9` sees only C.
+     * [Seam.peers] on each room reflects that room's registered members plus the hub's own
+     * [Seam.selfId] (the hub is a peer in its own roster; contract; #1506): `table-7` sees the hub,
+     * A and B; `table-9` sees the hub and only C. No spoke leaks across rooms.
      */
     @Test
     public fun perRoomPeersReflectsOnlyRoomMembers(): TestResult =
@@ -159,12 +162,24 @@ public abstract class RoomFanoutIsolationConformanceSuite {
             muxB.channel("table-7").broadcast(byteArrayOf())
             muxC.channel("table-9").broadcast(byteArrayOf())
 
-            val room7Peers = serverRoom7.peers.first { it.size >= 2 }
-            val room9Peers = serverRoom9.peers.first { it.isNotEmpty() }
+            val room7Peers = serverRoom7.peers.first { it.containsAll(setOf(PeerId("client-a"), PeerId("client-b"))) }
+            val room9Peers = serverRoom9.peers.first { it.contains(PeerId("client-c")) }
 
             assertAll(
-                { assertEquals(2, room7Peers.size, "table-7 must have exactly 2 peers; got $room7Peers") },
-                { assertEquals(1, room9Peers.size, "table-9 must have exactly 1 peer; got $room9Peers") },
+                {
+                    assertEquals(
+                        setOf(serverRoom7.selfId, PeerId("client-a"), PeerId("client-b")),
+                        room7Peers,
+                        "table-7 roster = hub selfId + its 2 members; got $room7Peers",
+                    )
+                },
+                {
+                    assertEquals(
+                        setOf(serverRoom9.selfId, PeerId("client-c")),
+                        room9Peers,
+                        "table-9 roster = hub selfId + its 1 member; got $room9Peers",
+                    )
+                },
             )
         }
 
@@ -187,8 +202,9 @@ public abstract class RoomFanoutIsolationConformanceSuite {
             val muxC = NamedMux(harness.connectClient(PeerId("client-c"), Random(3L)), backgroundScope)
             muxC.channel("table-9").broadcast(byteArrayOf())
 
-            // Await C's registration in table-9 deterministically.
-            serverRoom9.peers.first { it.size == 1 }
+            // Await C's registration in table-9 deterministically (wait on membership, not size —
+            // the roster also carries the hub's own selfId, #1506).
+            serverRoom9.peers.first { it.contains(PeerId("client-c")) }
 
             // Close table-7 — table-9 must remain usable.
             serverRoom7.close()
@@ -242,7 +258,7 @@ public abstract class RoomFanoutIsolationConformanceSuite {
             assertAll(
                 { assertTrue(okFrame.toByteArray().contentEquals(payload), "admitted client must receive the broadcast") },
                 { assertTrue(rejectedInbox.isEmpty, "rejected client must receive ZERO frames on table-7") },
-                { assertEquals(setOf(okPeer), serverRoom7.peers.value, "only the admitted peer is in table-7") },
+                { assertEquals(setOf(serverRoom7.selfId, okPeer), serverRoom7.peers.value, "only the hub selfId and the admitted peer are in table-7; the rejected peer never registers") },
             )
         }
 }

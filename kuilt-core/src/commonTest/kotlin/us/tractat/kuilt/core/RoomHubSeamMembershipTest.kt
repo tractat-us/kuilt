@@ -61,7 +61,11 @@ class RoomHubSeamMembershipTest {
         val mux1 = NamedMux(seam1, backgroundScope)
         mux1.channel("table-7").broadcast(byteArrayOf())
         serverRoom7.peers.first { it.contains(peer) }
-        assertEquals(setOf(peer), serverRoom7.peers.value, "peer registered on first connection")
+        assertEquals(
+            setOf(PeerId("server"), peer),
+            serverRoom7.peers.value,
+            "peer registered on first connection (roster includes the hub's own selfId, #1506)",
+        )
 
         // Drop the first connection.
         seam1.close()
@@ -84,7 +88,7 @@ class RoomHubSeamMembershipTest {
 
         assertAll(
             { assertTrue(frame.toByteArray().contentEquals(payload), "resumed connection must receive the broadcast") },
-            { assertEquals(setOf(peer), serverRoom7.peers.value, "membership re-associated by PeerId, not duplicated") },
+            { assertEquals(setOf(PeerId("server"), peer), serverRoom7.peers.value, "membership re-associated by PeerId, not duplicated (roster includes the hub's own selfId, #1506)") },
         )
     }
 }
