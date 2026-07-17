@@ -29,6 +29,7 @@ import java.util.concurrent.CopyOnWriteArrayList
 import kotlin.concurrent.thread
 import kotlin.coroutines.ContinuationInterceptor
 import kotlin.coroutines.coroutineContext
+import org.junit.Assume.assumeTrue
 import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
@@ -65,8 +66,33 @@ import io.ktor.client.plugins.websocket.WebSockets as ClientWebSockets
  * sessions) and the client/servers, then `cancelChildren()` — without it the leaked half-open CIO
  * sessions would park `runBlocking` forever after the assertions pass (the lesson
  * `WebSocketPingHalfOpenTest` documents).
+ *
+ * ## Not in ci-required — opt-in via `-P`
+ *
+ * These real-socket tests are a manual smoke, **not** part of the always-run gate: their coverage in
+ * ci-required is provided by the deterministic, virtual-time [VoterMeshReconnectionTest] over a
+ * severable in-memory fabric (no real sockets, no flake surface). To run the real-socket suite
+ * (e.g. to sanity-check the actual Ktor CIO ping/redial path):
+ *
+ * ```
+ * ./gradlew :kuilt-cluster:jvmTest -Pcluster.realsocket.reconnection.tests=true
+ * ```
+ *
+ * Absent the flag every `@Test` here self-skips (a JUnit assumption), so `./gradlew build` compiles
+ * the suite but does not run it.
  */
 class WebSocketVoterMeshReconnectionTest {
+
+    /**
+     * Self-skip unless `-Pcluster.realsocket.reconnection.tests=true` was forwarded to the test JVM
+     * (see the build script). Mirrors the mdns multicast opt-in — keeps the flaky real-socket suite
+     * out of ci-required while leaving it runnable on demand.
+     */
+    private fun assumeRealSocketReconnectionEnabled() =
+        assumeTrue(
+            "real-socket reconnection suite is opt-in: run with -Pcluster.realsocket.reconnection.tests=true",
+            System.getProperty("cluster.realsocket.reconnection.tests") == "true",
+        )
 
     // Short so the test is snappy; production defaults to 15s (KtorServerLoom.DEFAULT_PING_PERIOD).
     private val pingPeriod = 500.milliseconds
@@ -96,6 +122,7 @@ class WebSocketVoterMeshReconnectionTest {
 
     @Test
     fun aDroppedEdgeHealsAndRaftCommitsAcrossIt() = runMeshTest {
+        assumeRealSocketReconnectionEnabled()
         val (a, b, c) = Triple(NodeId("voter-a"), NodeId("voter-b"), NodeId("voter-c"))
         // Only voter-a dials voter-b (a < b, and c is higher than both), so voter-b's route is the one
         // edge frontable by a proxy: severing it drops precisely the a↔b link.
@@ -128,6 +155,7 @@ class WebSocketVoterMeshReconnectionTest {
 
     @Test
     fun m2ClusterSurvivesATransientBlip() = runMeshTest {
+        assumeRealSocketReconnectionEnabled()
         val (a, b) = NodeId("voter-a") to NodeId("voter-b")
         // The single a↔b edge is the whole cluster: dropped ⇒ no quorum, so a post-heal commit
         // directly proves the edge re-linked.
@@ -155,6 +183,7 @@ class WebSocketVoterMeshReconnectionTest {
 
     @Test
     fun closeClosesOwnedSeamsAndStopsRedial() = runMeshTest {
+        assumeRealSocketReconnectionEnabled()
         val (a, b) = NodeId("voter-a") to NodeId("voter-b")
         val mesh = formMesh(
             voterA = a to "/voter-a",

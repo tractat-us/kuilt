@@ -3,6 +3,15 @@ plugins {
     alias(libs.plugins.kotlinSerialization)
 }
 
+// Forward -Pcluster.realsocket.reconnection.tests=true to the JVM test process so that
+// WebSocketVoterMeshReconnectionTest can read it via System.getProperty() and self-skip otherwise.
+// The flaky real-socket reconnection suite is opt-in only — ci-required covers it with the
+// deterministic, virtual-time VoterMeshReconnectionTest. Mirrors the mdns multicast opt-in.
+tasks.withType<Test>().configureEach {
+    val flag = providers.gradleProperty("cluster.realsocket.reconnection.tests").orNull
+    if (flag != null) systemProperty("cluster.realsocket.reconnection.tests", flag)
+}
+
 kotlin {
     sourceSets {
         commonMain.dependencies {
