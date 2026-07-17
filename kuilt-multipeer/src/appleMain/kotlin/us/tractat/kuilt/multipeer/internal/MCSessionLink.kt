@@ -84,6 +84,11 @@ internal class MCSessionLink(
     // so a disconnect evicts only the device that holds the id (never the wrong
     // peer), and a distinct device colliding on one id is refused, not merged.
     // selfId is never registered — it is always folded into `_peers` below.
+    //
+    // The registry is internally lock-guarded (MC fires didChangeState with no
+    // cross-peer serialization guarantee) and is the source of truth for the
+    // peer set; each mutation republishes `registry.peers + selfId` to `_peers`,
+    // a StateFlow whose value write is itself atomic.
     private val registry = PeerIdentityRegistry<MCPeerID>()
 
     private val _peers: MutableStateFlow<Set<PeerId>> = MutableStateFlow(setOf(selfId))

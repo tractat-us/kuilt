@@ -1,5 +1,7 @@
 package us.tractat.kuilt.multipeer.internal
 
+import kotlinx.atomicfu.locks.reentrantLock
+import kotlinx.atomicfu.locks.withLock
 import us.tractat.kuilt.core.PeerId
 
 /**
@@ -23,14 +25,19 @@ import us.tractat.kuilt.core.PeerId
  * unlikely. The registry guarantees the failure mode is "a peer is refused and
  * logged", never "the wrong peer is evicted".
  *
- * Not thread-safe: callers (the MC delegate) already serialize state-change
- * callbacks on the framework's private queue.
+ * Thread-safe: `MCSession` fires `didChangeState` from the framework's private
+ * queue with **no cross-peer serialization guarantee**, so the [bound] map is
+ * guarded by an explicit [reentrantLock] (matching the `Quilter`/`SeamRoom`
+ * exemplars). Correctness is a local property of this type, not an assumption
+ * about caller threading. There are no suspend calls, so the whole body of each
+ * operation runs under the lock.
  */
 internal class PeerIdentityRegistry<T : Any> {
+    private val lock = reentrantLock()
     private val bound: MutableMap<PeerId, T> = mutableMapOf()
 
     /** Snapshot of the ids currently held by a live device. */
-    internal val peers: Set<PeerId> get() = bound.keys.toSet()
+    internal val peers: Set<PeerId> get() = lock.withLock { bound.keys.toSet() }
 
     internal enum class BindResult {
         /** [id] was free; [bind]'s device now owns it. */
@@ -51,17 +58,17 @@ internal class PeerIdentityRegistry<T : Any> {
     internal fun bind(
         id: PeerId,
         token: T,
-    ): BindResult {
-        val existing = bound[id]
-        return when (existing) {
-            null -> {
-                bound[id] = token
-                BindResult.BOUND
+    ): BindResult =
+        lock.withLock {
+            when (bound[id]) {
+                null -> {
+                    bound[id] = token
+                    BindResult.BOUND
+                }
+                token -> BindResult.ALREADY_BOUND
+                else -> BindResult.COLLISION
             }
-            token -> BindResult.ALREADY_BOUND
-            else -> BindResult.COLLISION
         }
-    }
 
     /**
      * Removes [id] only if [token] is the device currently holding it. Returns
@@ -73,10 +80,12 @@ internal class PeerIdentityRegistry<T : Any> {
         id: PeerId,
         token: T,
     ): Boolean =
-        if (bound[id] == token) {
-            bound.remove(id)
-            true
-        } else {
-            false
+        lock.withLock {
+            if (bound[id] == token) {
+                bound.remove(id)
+                true
+            } else {
+                false
+            }
         }
 }
