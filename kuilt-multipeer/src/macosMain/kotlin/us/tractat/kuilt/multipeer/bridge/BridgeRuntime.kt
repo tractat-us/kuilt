@@ -86,11 +86,13 @@ public fun mc_runtime_close(handle: COpaquePointer?) {
 }
 
 /**
- * Copies the runtime's display name (UTF-8) into [buf], NUL-terminated.
- * Returns the number of bytes written (excluding the trailing NUL), or
- * `-1` if the buffer is too small. Pass `bufLen = 0` to query the required
- * size — the function still returns `-1` but the (size + 1) is implied by
- * the underlying display name's length.
+ * Copies the runtime's **wire self-identity** (the decorated `MCPeerID.displayName`,
+ * UTF-8) into [buf], NUL-terminated. This is the collision-resistant name every
+ * peer observes for this device — the per-device nonce is embedded — so the JVM
+ * side derives a `selfId` consistent with what remotes see. Returns the number of
+ * bytes written (excluding the trailing NUL), or `-1` if the buffer is too small.
+ * Pass `bufLen = 0` to query the required size — the function still returns `-1`
+ * but the (size + 1) is implied by the underlying name's length.
  */
 @OptIn(ExperimentalForeignApi::class, ExperimentalNativeApi::class)
 @CName("mc_runtime_display_name")
@@ -102,7 +104,7 @@ public fun mc_runtime_display_name(
 ): Int {
     if (handle == null || buf == null) return -1
     val factory = handle.asStableRef<MultipeerPeerLinkFactory>().get()
-    val bytes = factory.displayName.encodeToByteArray()
+    val bytes = factory.localPeerId.displayName.encodeToByteArray()
     if (bytes.size + 1 > bufLen) return -1
     bytes.usePinned { pinned ->
         memcpy(buf, pinned.addressOf(0), bytes.size.toULong())

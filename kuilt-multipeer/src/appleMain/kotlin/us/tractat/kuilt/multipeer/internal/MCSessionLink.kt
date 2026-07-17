@@ -13,7 +13,6 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.flow.updateAndGet
 import kotlinx.coroutines.launch
 import platform.Foundation.NSData
@@ -54,11 +53,15 @@ private val log = KotlinLogging.logger("us.tractat.kuilt.multipeer.internal.MCSe
  * them to [spool] in FIFO order — preserving delivery ordering while keeping
  * the delegate callback non-blocking and bounded (no UNLIMITED).
  *
- * Two-way mapping from `MCPeerID` ↔ [PeerId]: we use the peer's
- * `displayName` as the wire identity. Apple does not expose a stable identity
- * across processes, so display name is the best handle we have. Two peers
- * with the same display name on the same network would collide; surfacing
- * that as a UX problem is left to the lobby.
+ * Two-way mapping from `MCPeerID` ↔ [PeerId]: the peer's `displayName` is the
+ * wire identity (Apple exposes no stable cross-process id). The advertised
+ * display name embeds a per-device nonce (see [MultipeerPeerId]), so two
+ * default-named "iPhone" devices no longer collapse to one [PeerId]. As
+ * defence-in-depth, peer membership is keyed by the underlying `MCPeerID`
+ * device identity through a [PeerIdentityRegistry]: a second distinct device
+ * that still (pathologically) hit one id is REFUSED rather than merged, and a
+ * disconnect only ever evicts the device that actually holds the id — so a drop
+ * can never evict the wrong peer (#1494 / the #1466 class).
  *
  * @param policy Governs the inbound [Spool]'s capacity and overflow behaviour.
  *   Defaults to [DeliveryPolicy.Reliable] (bounded, backpressured, lossless).
@@ -73,9 +76,20 @@ internal class MCSessionLink(
     policy: DeliveryPolicy = DeliveryPolicy.Reliable,
     dispatcher: CoroutineContext = Dispatchers.Default,
 ) : Seam {
-    override val selfId: PeerId = PeerId(localPeerId.displayName)
+    override val selfId: PeerId = MultipeerPeerId.peerId(localPeerId.displayName)
 
     private val scope = CoroutineScope(SupervisorJob() + dispatcher)
+
+    // Membership keyed by the MCPeerID device identity, not by the bare PeerId,
+    // so a disconnect evicts only the device that holds the id (never the wrong
+    // peer), and a distinct device colliding on one id is refused, not merged.
+    // selfId is never registered — it is always folded into `_peers` below.
+    //
+    // The registry is internally lock-guarded (MC fires didChangeState with no
+    // cross-peer serialization guarantee) and is the source of truth for the
+    // peer set; each mutation republishes `registry.peers + selfId` to `_peers`,
+    // a StateFlow whose value write is itself atomic.
+    private val registry = PeerIdentityRegistry<MCPeerID>()
 
     private val _peers: MutableStateFlow<Set<PeerId>> = MutableStateFlow(setOf(selfId))
     override val peers: StateFlow<Set<PeerId>> = _peers.asStateFlow()
@@ -191,7 +205,7 @@ internal class MCSessionLink(
             peer: MCPeerID,
             didChangeState: MCSessionState,
         ) {
-            val peerId = PeerId(peer.displayName)
+            val peerId = MultipeerPeerId.peerId(peer.displayName)
             val stateName =
                 when (didChangeState) {
                     MCSessionState.MCSessionStateConnected -> "[Connected]"
@@ -202,8 +216,21 @@ internal class MCSessionLink(
             log.info { "mc.session.stateChange localPeer=${selfId.value} peer=${peer.displayName} to=$stateName" }
             when (didChangeState) {
                 MCSessionState.MCSessionStateConnected -> {
-                    _peers.update { it + peerId }
-                    if (_state.value is SeamState.Weaving) _state.value = SeamState.Woven
+                    when (registry.bind(peerId, peer)) {
+                        PeerIdentityRegistry.BindResult.BOUND -> {
+                            _peers.value = registry.peers + selfId
+                            if (_state.value is SeamState.Weaving) _state.value = SeamState.Woven
+                        }
+                        PeerIdentityRegistry.BindResult.ALREADY_BOUND -> Unit // duplicate connect callback
+                        PeerIdentityRegistry.BindResult.COLLISION ->
+                            // A DIFFERENT device advertising an id already held. Refuse the
+                            // merge (the incumbent keeps the id) and surface it — with
+                            // per-device nonces this should be unreachable in practice.
+                            log.error {
+                                "mc.session.collision localPeer=${selfId.value} peer=${peer.displayName} " +
+                                    "id=${peerId.value} — refusing to merge two distinct devices onto one id"
+                            }
+                    }
                 }
                 MCSessionState.MCSessionStateNotConnected -> {
                     // MCSession has no dedicated error callback; .notConnected is the
@@ -213,7 +240,10 @@ internal class MCSessionLink(
                     if (!closing) {
                         log.warn { "mc.session.error localPeer=${selfId.value} peer=${peer.displayName}" }
                     }
-                    val remaining = _peers.updateAndGet { it - peerId }
+                    // Identity-scoped removal: only the device that actually holds the
+                    // id is evicted, so a colliding newcomer's drop leaves the incumbent.
+                    registry.unbind(peerId, peer)
+                    val remaining = _peers.updateAndGet { registry.peers + selfId }
                     // Terminal peer-level drop. When the last remote peer is gone
                     // the whole session is dead — tear the seam down (latch Torn,
                     // complete `incoming`) so the Seam contract holds on a remote
@@ -239,7 +269,7 @@ internal class MCSessionLink(
             val frame =
                 Swatch(
                     payload = didReceiveData.toByteArray(),
-                    sender = PeerId(fromPeer.displayName),
+                    sender = MultipeerPeerId.peerId(fromPeer.displayName),
                 )
             // Non-suspending deposit into the bridge channel. The drain coroutine
             // forwards to spool.deliver in FIFO order.
