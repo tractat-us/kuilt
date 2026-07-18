@@ -177,18 +177,31 @@ afterEvaluate {
         .flatMap { it.dependsOnClosure() }
         .filterNot { it.name == "commonMain" || it.name == "jvmMain" || it.name == "androidMain" }
         .toSet()
+    // Also fold commonMain into the type-resolved detektJvmMain. detekt's own
+    // detektMetadataCommonMain analyses commonMain WITHOUT type resolution, so this
+    // repo's rules — all four (UnsafeCallOnNullableType, …) require type resolution —
+    // never fire on commonMain-only code, and (until wired below) detektAll skipped
+    // that task entirely. detektJvmMain carries the jvm compile classpath and its
+    // dependsOn-closure already pulls in commonMain via jvmMain, so this analyses
+    // commonMain with exactly the rules applied to jvm code. (#1416)
+    val commonMainSourceSets = kmpExtension.sourceSets.matching { it.name == "commonMain" }
     (tasks.findByName("detektJvmMain") as? io.gitlab.arturbosch.detekt.Detekt)?.let { jvmDetekt ->
         jvmAndroidIntermediates.forEach { intermediate -> jvmDetekt.source(intermediate.kotlin.srcDirs) }
+        commonMainSourceSets.forEach { commonMain -> jvmDetekt.source(commonMain.kotlin.srcDirs) }
     }
 
-    val mainSourceSetTasks = listOf("detektMetadataCommonMain", "detektJvmMain")
-        .mapNotNull { tasks.findByName(it) }
-    val testSourceSetTasks = testSourceSetTaskNames
-        .mapNotNull { tasks.findByName(it) }
+    // Wire the dependency by a live, name-matched task collection rather than an
+    // eager findByName snapshot. The KMP detekt plugin registers the commonMain
+    // *metadata* task (detektMetadataCommonMain) in a LATER afterEvaluate than this
+    // block, so an eager findByName here misses it — leaving commonMain silently
+    // unlinted by detektAll while detektJvmMain (registered earlier) is found. A
+    // `tasks.matching { }` collection is resolved at task-graph time, after every
+    // detekt task exists, and is robust to new source sets/modules.
+    val detektAllTaskNames = setOf("detektMetadataCommonMain", "detektJvmMain") + testSourceSetTaskNames
     tasks.register("detektAll") {
         group = "verification"
         description = "Runs detekt on main sources (commonMain + jvmMain, incl. any jvmAndAndroidMain intermediate folded into the jvm task) and test sources (jvmTest, androidUnitTest) with type resolution. Not wired into check — CI runs it as a separate job to avoid OOM."
-        dependsOn(mainSourceSetTasks + testSourceSetTasks)
+        dependsOn(tasks.matching { it.name in detektAllTaskNames })
     }
     val detektBaselineLifecycle = tasks.findByName("detektBaseline") ?: return@afterEvaluate
     listOf("detektBaselineMetadataCommonMain", "detektBaselineJvmMain").forEach { name ->
