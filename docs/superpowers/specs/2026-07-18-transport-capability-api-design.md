@@ -46,7 +46,8 @@ sealed interface FabricAvailability {
 sealed interface TransportRole {
     data object Discovery   : TransportRole
     data object Data        : TransportRole
-    data object WifiInfra   : TransportRole
+    data object WifiLan     : TransportRole   // access-point / same-network (mDNS, WebSocket-LAN)
+    data object WifiDirect  : TransportRole   // peer-to-peer Wi-Fi, no AP (AWDL/Multipeer, Nearby)
     data object Bluetooth   : TransportRole
     data object WebRtc      : TransportRole
     data object ServerRelay : TransportRole
@@ -92,9 +93,9 @@ declare static roles:
 |---|---|---|
 | WebSocket (`KtorClientLoom`/`KtorServerLoom`) | `{ServerRelay, Data}` | `Available` |
 | NW (`NwLoom`) | `{Discovery, Data}` | delegate `api.availability()` (macOS-arm64 + dylib) |
-| Multipeer | `{Discovery, Data, WifiInfra, Bluetooth}` | native-lib gate |
-| Nearby | `{Bluetooth, WifiInfra, Data}` | Play-Services gate |
-| mDNS | `{Discovery}` | (whatever it reports today) |
+| Multipeer | `{Discovery, Data, WifiDirect, Bluetooth}` | native-lib gate |
+| Nearby | `{Bluetooth, WifiDirect, Data}` | Play-Services gate |
+| mDNS | `{Discovery, WifiLan}` | (whatever it reports today) |
 | WebRTC | `{WebRtc, Data}` | `Available` where present |
 | InMemory / test looms | `emptySet()` | `Available` |
 | CompositeLoom | union of live plies' roles | `Available` if any ply is (existing logic) |
