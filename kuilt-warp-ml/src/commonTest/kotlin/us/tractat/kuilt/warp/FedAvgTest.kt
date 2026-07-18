@@ -212,6 +212,26 @@ class FedAvgTest {
         }
     }
 
+    // ── Dimension-mismatch guard ──────────────────────────────────────────────────
+    //
+    // FedAvg's contract requires every peer's weight vector to share one dimension.
+    // A wrong-dimension contribution must fail loud at read time, not silently
+    // zero-pad the shorter vector and skew the merged mean toward zero.
+
+    @Test
+    fun `weights throws when peers contribute different dimensions`() {
+        val peerA = ReplicaId("a")
+        val peerB = ReplicaId("b")
+        // A is 1-dimensional, B is 2-dimensional — a contract violation.
+        val merged = FedAvg.ZERO
+            .piece(FedAvg.contribution(peerA, sampleCount = 1L, localWeights = listOf(10.0)))
+            .piece(FedAvg.contribution(peerB, sampleCount = 1L, localWeights = listOf(2.0, 4.0)))
+
+        assertFailsWith<IllegalStateException> {
+            merged.weights
+        }
+    }
+
     // ── Factory preconditions ─────────────────────────────────────────────────────
 
     @Test
