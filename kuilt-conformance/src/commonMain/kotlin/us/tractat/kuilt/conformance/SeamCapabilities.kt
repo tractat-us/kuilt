@@ -54,19 +54,38 @@ public data class SeamCapabilities(
      * `capabilityGaps()` must supply an issue URL for — every `false` flag is a
      * gap that must be declared, so the two are keyed identically. Task 1.8's
      * rendered capability matrix consumes the same names.
+     *
+     * Derived from [FLAGS] (the single source of truth) so it can never drift
+     * from the capability-matrix column list or the data class itself.
      */
-    public fun falseFlags(): Set<String> = buildSet {
-        if (!ordersDelivery) add("ordersDelivery")
-        if (!reportsPeerLoss) add("reportsPeerLoss")
-        if (!terminatesIncomingOnClose) add("terminatesIncomingOnClose")
-        if (!staysTornAfterClose) add("staysTornAfterClose")
-        if (!throwsOnSendToTorn) add("throwsOnSendToTorn")
-        if (!supportsSendTo) add("supportsSendTo")
-        if (!securesTransport) add("securesTransport")
-        if (!meshDelivery) add("meshDelivery")
-    }
+    public fun falseFlags(): Set<String> =
+        FLAGS.filterNot { (_, read) -> read(this) }.mapTo(mutableSetOf()) { it.first }
 
     public companion object {
+        /**
+         * The single source of truth for the capability flags: each declared
+         * boolean property paired with its accessor, in the fixed order the
+         * capability matrix renders and [falseFlags] enumerates.
+         *
+         * Everything that needs to iterate the flags derives from this one list
+         * — [falseFlags] filters it, and `CapabilityMatrix`'s render columns are
+         * exactly this list — so the two hand-maintained parallel lists that used
+         * to exist can no longer silently disagree. The remaining risk (this list
+         * omitting a newly-added data-class property) is caught loudly by the JVM
+         * reflection meta-test `SeamCapabilitiesReflectionTest`, which asserts
+         * these names equal the data class's declared boolean properties.
+         */
+        internal val FLAGS: List<Pair<String, (SeamCapabilities) -> Boolean>> = listOf(
+            "ordersDelivery" to SeamCapabilities::ordersDelivery,
+            "reportsPeerLoss" to SeamCapabilities::reportsPeerLoss,
+            "terminatesIncomingOnClose" to SeamCapabilities::terminatesIncomingOnClose,
+            "staysTornAfterClose" to SeamCapabilities::staysTornAfterClose,
+            "throwsOnSendToTorn" to SeamCapabilities::throwsOnSendToTorn,
+            "supportsSendTo" to SeamCapabilities::supportsSendTo,
+            "securesTransport" to SeamCapabilities::securesTransport,
+            "meshDelivery" to SeamCapabilities::meshDelivery,
+        )
+
         /**
          * A fully-featured direct-mesh fabric — most fabrics start here and flip
          * individual flags off to describe where they fall short of the contract.

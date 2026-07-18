@@ -26,21 +26,15 @@ public data class MatrixEntry(
 )
 
 /**
- * The eight capability columns, in the fixed order the matrix always renders.
+ * The capability columns, in the fixed order the matrix always renders.
  *
- * Held here (not derived from reflection, which KMP `commonMain` lacks) so the
- * column order is deterministic and matches [SeamCapabilities.falseFlags].
+ * Not a parallel list: it *is* [SeamCapabilities.FLAGS], the single source of
+ * truth, so the column set and order can never drift from
+ * [SeamCapabilities.falseFlags] or the data class. (KMP `commonMain` lacks the
+ * reflection to derive this at runtime; the hand-maintained `FLAGS` list is
+ * guarded against the data class by a JVM reflection meta-test instead.)
  */
-private val CAPABILITY_COLUMNS: List<Pair<String, (SeamCapabilities) -> Boolean>> = listOf(
-    "ordersDelivery" to SeamCapabilities::ordersDelivery,
-    "reportsPeerLoss" to SeamCapabilities::reportsPeerLoss,
-    "terminatesIncomingOnClose" to SeamCapabilities::terminatesIncomingOnClose,
-    "staysTornAfterClose" to SeamCapabilities::staysTornAfterClose,
-    "throwsOnSendToTorn" to SeamCapabilities::throwsOnSendToTorn,
-    "supportsSendTo" to SeamCapabilities::supportsSendTo,
-    "securesTransport" to SeamCapabilities::securesTransport,
-    "meshDelivery" to SeamCapabilities::meshDelivery,
-)
+private val CAPABILITY_COLUMNS: List<Pair<String, (SeamCapabilities) -> Boolean>> = SeamCapabilities.FLAGS
 
 /**
  * Render the fabric capability matrix as a stable markdown table — the visibility
