@@ -272,7 +272,19 @@ internal class NwSeam(
             // this connId into `conns`, re-reconcile the latest viability so a pending loss is not stranded.
             if (created) reconcileViability(api.connectionViability.value)
             // The framer is single-reader (only this loop touches it), so decoding outside the lock is safe.
-            for (frame in cs.framer.decode(event.bytes)) {
+            // #1528 finding 1: NwFramer.decode throws FrameTooLargeException on a bad 4-byte length prefix
+            // (negative or > maxFrameSize). Guard it so a corrupt/hostile chunk on ANY live conn routes through
+            // the SAME corrupt-inbound backstop instead of escaping the collector and killing the receive loop.
+            // A real structured-concurrency cancel is always re-thrown, never swallowed.
+            val frames = try {
+                cs.framer.decode(event.bytes)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                evictCorruptConn(connId, "framer decode failed: ${e.message}")
+                return@collect
+            }
+            for (frame in frames) {
                 processFrame(connId, cs, frame)
             }
         }
@@ -325,11 +337,20 @@ internal class NwSeam(
 
         /**
          * The first frame on an unresolved connection failed to decode as an [NwHello] (#1528 part B):
-         * the connection is disconnected+tombstoned OUTSIDE the lock rather than letting the decode throw
-         * escape [processFrame] and kill [bytesReceivedLoop]. This is the cheap backstop that bounds the
-         * worst symptom even if a tombstone is missed.
+         * routed through the shared [evictCorruptConn] backstop OUTSIDE the lock rather than letting the
+         * decode throw escape [processFrame] and kill [bytesReceivedLoop]. Bounds the worst symptom even if
+         * a tombstone is missed.
          */
         object DecodeFailed : FrameOutcome
+
+        /**
+         * The connection is no longer the live one when classified (#1528 finding 2): [getOrCreateConnForBytes]
+         * and [processFrame] are two lock acquisitions, so a removal path can tombstone/replace the connId
+         * between them. Resolving identity on a dead conn would register `registry[peer] = Winner(deadConnId)`
+         * — an unevictable zombie. Detected under the lock (`conns[connId] !== cs` or the connId is tombstoned)
+         * and the frame is simply DROPPED.
+         */
+        object Dropped : FrameOutcome
     }
 
     /**
@@ -343,25 +364,30 @@ internal class NwSeam(
     private suspend fun processFrame(connId: NwConnectionId, cs: ConnState, frame: ByteArray) {
         var decodeError: Throwable? = null
         val outcome = lock.withLock {
-            val resolved = cs.resolvedPeerId
-            if (resolved != null) {
-                FrameOutcome.Data(resolved)
-            } else {
-                // #1528 part B: a corrupt/undecodable first frame must NOT throw out of the collector and
-                // kill the receive loop. Narrowly wrap ONLY the decode (never resolveIdentity); a real
-                // structured-concurrency cancel is always re-thrown, never swallowed.
-                val hello = try {
-                    NwHello.decode(frame)
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: Exception) {
-                    decodeError = e
-                    null
-                }
-                if (hello == null) {
-                    FrameOutcome.DecodeFailed
-                } else {
-                    FrameOutcome.Resolved(resolveIdentity(connId, cs, hello.peerId, hello.nonce))
+            when {
+                // #1528 finding 2: getOrCreateConnForBytes and this classify are two lock acquisitions, so a
+                // removal path can tombstone/replace [connId] between them. Resolving identity on a dead conn
+                // would register registry[peer] = Winner(deadConnId) — an unevictable zombie. If this cs is no
+                // longer the live one (replaced) or its connId was tombstoned, DROP the frame.
+                conns[connId] !== cs || connId in tombstones -> FrameOutcome.Dropped
+                cs.resolvedPeerId != null -> FrameOutcome.Data(cs.resolvedPeerId!!)
+                else -> {
+                    // #1528 part B: a corrupt/undecodable first frame must NOT throw out of the collector and
+                    // kill the receive loop. Narrowly wrap ONLY the decode (never resolveIdentity); a real
+                    // structured-concurrency cancel is always re-thrown, never swallowed.
+                    val hello = try {
+                        NwHello.decode(frame)
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        decodeError = e
+                        null
+                    }
+                    if (hello == null) {
+                        FrameOutcome.DecodeFailed
+                    } else {
+                        FrameOutcome.Resolved(resolveIdentity(connId, cs, hello.peerId, hello.nonce))
+                    }
                 }
             }
         }
@@ -380,24 +406,29 @@ internal class NwSeam(
                 runCatchingCancellable { api.disconnect(loserId) }
                     .onFailure { log.debug { "nw.dedup disconnect failed connId=${loserId.value}" } }
             }
-            // Undecodable first frame (#1528 part B) — evict+tombstone the connection under the lock, then
-            // best-effort disconnect it OUTSIDE the lock. Bounds the worst symptom (a killed receive loop)
-            // even when the tombstone guard was missed.
-            is FrameOutcome.DecodeFailed -> {
-                val graceJob = lock.withLock {
-                    conns.remove(connId)
-                    tombstoneLocked(connId)
-                    graceJobs.remove(connId)
-                }
-                graceJob?.cancel()
-                log.warn {
-                    "nw.seam.hello-decode-failed connId=${connId.value} self=${selfId.value}: " +
-                        "${decodeError?.message} → disconnect conn (loop preserved)"
-                }
-                runCatchingCancellable { api.disconnect(connId) }
-                    .onFailure { log.debug { "nw.seam.hello-decode-failed.disconnect-failed connId=${connId.value}: ${it.message}" } }
-            }
+            // Undecodable first frame (#1528 part B) — routed through the shared corrupt-inbound backstop.
+            is FrameOutcome.DecodeFailed ->
+                evictCorruptConn(connId, "hello-decode failed: ${decodeError?.message}")
+            // Stale/dead conn at classify time (#1528 finding 2) — nothing to do; the frame is dropped.
+            is FrameOutcome.Dropped ->
+                log.debug { "nw.seam.classify.dropped-stale connId=${connId.value} self=${selfId.value} (conn removed/tombstoned before classify)" }
         }
+    }
+
+    /**
+     * Shared backstop for a corrupt inbound on [connId] that cannot be parsed (#1528): either [NwFramer.decode]
+     * threw on a bad length prefix (in [bytesReceivedLoop]) or [NwHello.decode] threw on an unresolved conn (in
+     * [processFrame]). Best-effort disconnect the connection OUTSIDE the lock, then drive the local eviction via
+     * [removeByConn] — which removes it from [conns], records a [tombstoneLocked], and evicts its peer if it was
+     * the live link (so a corrupt chunk on a *resolved* conn doesn't strand a zombie in [registry]). A single
+     * corrupt chunk can therefore never kill the receive loop. Suspends only OUTSIDE the lock, preserving the
+     * no-suspend-under-lock rule.
+     */
+    private suspend fun evictCorruptConn(connId: NwConnectionId, reason: String) {
+        log.warn { "nw.seam.corrupt-inbound connId=${connId.value} self=${selfId.value}: $reason → disconnect + evict (loop preserved)" }
+        runCatchingCancellable { api.disconnect(connId) }
+            .onFailure { log.debug { "nw.seam.corrupt-inbound.disconnect-failed connId=${connId.value}: ${it.message}" } }
+        removeByConn(connId)
     }
 
     /**
