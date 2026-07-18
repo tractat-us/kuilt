@@ -167,9 +167,10 @@ private fun mergeTracks(
         val left = a[member]
         val right = b[member]
         when {
-            left == null -> right!!
-            right == null -> left
-            else -> left.merge(right)
+            left != null && right != null -> left.merge(right)
+            // member came from a.keys ∪ b.keys and track values are non-null, so at
+            // least one side is present; error is unreachable but keeps this !!-free.
+            else -> left ?: right ?: error("member $member present in neither track map")
         }
     }
 }
