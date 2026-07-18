@@ -97,9 +97,17 @@ class MyFabricLoom : Loom {
         is Rendezvous.New -> TODO("host")
         is Rendezvous.Existing -> TODO("join")
     }
-    override fun availability(): FabricAvailability =
-        if (myCapabilityPresent()) FabricAvailability.Available
-        else FabricAvailability.Unavailable("my radio is off")
+
+    // Report what your fabric is and whether it can run right now. This one
+    // method is the source of truth — `availability()` is derived from it, so
+    // you never override `availability()` directly.
+    override fun capability(): TransportCapability =
+        TransportCapability(
+            roles = setOf(TransportRole.Data),   // what your transport does
+            availability =
+                if (myCapabilityPresent()) FabricAvailability.Available
+                else FabricAvailability.Unavailable("my radio is off"),
+        )
 }
 
 // In commonTest — this is your contract test. Green means you conform.
@@ -124,7 +132,7 @@ The suite tests:
 - `peers` tracks membership.
 - `incoming` is single-collection and ordered.
 - `close()` is idempotent.
-- `availability()` returns sensibly.
+- `capability()` (and the `availability()` it derives) returns sensibly.
 
 Keep real-network smoke tests in a separate test that is opt-in (e.g. `-Pmy.fabric.integration.tests=true`) so the conformance suite stays fast and deterministic.
 
