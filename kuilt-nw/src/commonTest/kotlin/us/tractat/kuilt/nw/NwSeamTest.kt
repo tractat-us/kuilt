@@ -913,10 +913,12 @@ class NwSeamTest {
         testScheduler.runCurrent()
         pumpUntil(maxPumps = 50) { false }
 
+        // B's live link carries NO positive closure marker (the map holds only the dedup-loser's defunct
+        // connId, if any). B is retained purely because a conn's ABSENCE from closedConnections is never
+        // inferred as closure — were absence read as closure, B would have been evicted here.
         assertAll(
             { assertEquals(setOf(seamA.selfId, PeerId("peer-1")), seamA.peers.value, "B stays — absence from closedConnections is never read as closure") },
-            { assertTrue(seamA.state.value is SeamState.Woven, "A stays Woven") },
-            { assertTrue(apiA.closedConnections.value.isEmpty(), "no positive closure marker exists for the live conn") },
+            { assertTrue(seamA.state.value is SeamState.Woven, "A stays Woven — no eviction from an absent marker") },
         )
     }
 
