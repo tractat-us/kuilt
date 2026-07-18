@@ -20,6 +20,7 @@ import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.seconds
 
@@ -731,6 +732,252 @@ class NwSeamTest {
         assertAll(
             { assertEquals(setOf(self), seamA.peers.value, "no zombie peer resolved on the tombstoned conn") },
             { assertTrue(seamA.state.value is SeamState.Weaving, "seam stayed Weaving — the dead conn never wove a peer") },
+        )
+    }
+
+    // ── #1522: closed connections as reconciled MONOTONE STATE ──────────────────────────────────
+
+    @Test
+    fun droppedCloseEventStillEvictsPeerViaClosedState() = runTest(StandardTestDispatcher()) {
+        // #1522 HEADLINE. The connectionClosed EVENT is a lossy tryEmit; a dropped `failed`/`cancelled`
+        // close used to strand a permanent zombie peer (its viability key already cleared, so no grace timer
+        // ever arms — nothing evicts it). Model closure as drop-tolerant MONOTONE STATE (closedConnections):
+        // even with A's close EVENT dropped, B's departure marks the STATE, and A's fifth collector reconciles
+        // it — evicting B, re-forming to Weaving, and dropping B's endpoint from settledEndpoints.
+        val radio = FakeNwRadio()
+        val apiA = FakeNwApi(radio, deviceId = "dev-0", serviceName = "svc-0")
+        val apiB = FakeNwApi(radio, deviceId = "dev-1", serviceName = "svc-1")
+        val seamA = NwSeam(PeerId("peer-0"), apiA, seamScope(), Random(0))
+        val seamB = NwSeam(PeerId("peer-1"), apiB, seamScope(), Random(1))
+        var aIncomingCompleted = false
+        val aCollect = backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
+            seamA.incoming.collect { }
+            aIncomingCompleted = true
+        }
+        backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) { seamB.incoming.collect { } }
+        testScheduler.runCurrent()
+        // Double-dial so A learns B's endpoint (settledEndpoints must contain it pre-departure).
+        apiA.connect(NwEndpoint(id = "ep-dev-1", serviceName = "svc-1"))
+        apiB.connect(NwEndpoint(id = "ep-dev-0", serviceName = "svc-0"))
+        assertTrue(pumpUntil { seamA.peers.value.size == 2 }, "A wove to 2 peers")
+        assertTrue("ep-dev-1" in seamA.settledEndpoints.value, "A's settledEndpoints holds B's endpoint pre-departure")
+
+        // DROP every close EVENT A would observe — the lossy-buffer scenario the fix must survive.
+        apiA.dropCloseEvents = true
+        // B departs: closing B disconnects B's link; the radio marks the close STATE on A (both sides) but the
+        // close EVENT to A is swallowed. Pre-fix A never evicts B (permanent zombie); post-fix the STATE evicts.
+        seamB.close()
+        assertTrue(
+            pumpUntil { seamA.peers.value == setOf(seamA.selfId) },
+            "A evicted B via the closedConnections STATE despite the dropped close EVENT (pre-fix: permanent zombie)",
+        )
+        pumpUntil(maxPumps = 50) { false } // let any wrong Torn / incoming completion surface
+
+        assertAll(
+            { assertEquals(setOf(seamA.selfId), seamA.peers.value, "A's peers collapse to {A}") },
+            { assertTrue(seamA.state.value is SeamState.Weaving, "A re-forms to Weaving (recoverable), NOT Torn — was ${seamA.state.value}") },
+            { assertFalse("ep-dev-1" in seamA.settledEndpoints.value, "B's endpoint left settledEndpoints so NwLoom redials it") },
+            { assertTrue(!aIncomingCompleted && !aCollect.isCompleted, "A.incoming stays OPEN — a reforming seam does not complete incoming") },
+        )
+    }
+
+    @Test
+    fun closedStateObservedBeforeConnTrackedIsReconciledOnRegistration() = runTest(StandardTestDispatcher()) {
+        // #1522 lost-wakeup analog (mirrors the #1509 viability lost-wakeup). closedConnections is latest-value
+        // STATE; if a close is marked BEFORE the seam tracks the conn, reconcileClosed's `it in conns` filter
+        // no-ops it, and the StateFlow won't re-emit an unchanged value. The registration-time re-reconcile
+        // (both the opened and bytes loops) catches it: the moment the conn enters `conns`, the pending closure
+        // tears + tombstones it, so a late NwHello on it never resolves a phantom peer.
+        val radio = FakeNwRadio()
+        val apiA = FakeNwApi(radio, deviceId = "dev-0", serviceName = "svc-0")
+        val self = PeerId("peer-0")
+        val seamA = NwSeam(self, apiA, seamScope(), Random(0))
+        backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) { seamA.incoming.collect { } }
+        testScheduler.runCurrent()
+
+        val conn = NwConnectionId("c-early-close")
+        // 1) Close STATE lands before the conn is tracked: `conns` empty, reconcile is a filtered no-op.
+        apiA.markConnectionClosed(conn, reason = "failed")
+        testScheduler.runCurrent()
+        // 2) Conn opens → the registration-time re-reconcile removes + tombstones it on the spot.
+        apiA.emitConnectionOpened(NwConnectionOpened(conn, endpoint = null))
+        testScheduler.runCurrent()
+        // 3) A late NwHello on that conn must be DROPPED (tombstoned) — no phantom peer resolves.
+        apiA.emitBytesReceived(NwBytesReceived(conn, encodeFrame(NwHello.encode(PeerId("peer-1"), ByteArray(NONCE_BYTES) { 1 }))))
+        testScheduler.runCurrent()
+        pumpUntil(maxPumps = 50) { false }
+
+        assertAll(
+            { assertEquals(setOf(self), seamA.peers.value, "the pre-registration closed conn never resolves a peer") },
+            { assertTrue(seamA.state.value is SeamState.Weaving, "seam stays Weaving — no zombie from the early close") },
+        )
+    }
+
+    @Test
+    fun eventAndStateBothFiringEvictsExactlyOnce() = runTest(StandardTestDispatcher()) {
+        // #1522 double-fire safety. In the normal case BOTH signals fire (close EVENT + close STATE). Whichever
+        // runs first removes + tombstones the conn; the second sees `cs == null` → unknown-conn no-op. Assert a
+        // single clean eviction (peers → {A}, one Woven→Weaving reform, incoming still open) — no double-tear,
+        // no Weaving flap, no spurious re-eviction.
+        val radio = FakeNwRadio()
+        val apiA = FakeNwApi(radio, deviceId = "dev-0", serviceName = "svc-0")
+        val apiB = FakeNwApi(radio, deviceId = "dev-1", serviceName = "svc-1")
+        val seamA = NwSeam(PeerId("peer-0"), apiA, seamScope(), Random(0))
+        val seamB = NwSeam(PeerId("peer-1"), apiB, seamScope(), Random(1))
+        var aIncomingCompleted = false
+        val aCollect = backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
+            seamA.incoming.collect { }
+            aIncomingCompleted = true
+        }
+        backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) { seamB.incoming.collect { } }
+        testScheduler.runCurrent()
+        apiA.connect(NwEndpoint(id = "ep-dev-1", serviceName = "svc-1"))
+        apiB.connect(NwEndpoint(id = "ep-dev-0", serviceName = "svc-0"))
+        assertTrue(pumpUntil { seamA.peers.value.size == 2 }, "A wove to 2 peers")
+
+        // Normal departure: both the close EVENT (dropCloseEvents == false) and the close STATE fire on A.
+        seamB.close()
+        assertTrue(pumpUntil { seamA.peers.value == setOf(seamA.selfId) }, "A evicted B")
+        pumpUntil(maxPumps = 50) { false } // let any double-tear / Weaving flap surface
+
+        assertAll(
+            { assertEquals(setOf(seamA.selfId), seamA.peers.value, "B stays evicted exactly once — no re-eviction flap") },
+            { assertTrue(seamA.state.value is SeamState.Weaving, "A re-formed to Weaving once, NOT Torn — was ${seamA.state.value}") },
+            { assertTrue(!aIncomingCompleted && !aCollect.isCompleted, "A.incoming stays OPEN — no spurious tear from the second signal") },
+        )
+    }
+
+    @Test
+    fun closedStateForDedupLoserDoesNotEvictSurvivor() = runTest(StandardTestDispatcher()) {
+        // #1522 identity guard (preserved through removeByConn). A stale/loser connection's closed-state must
+        // NOT evict the peer whose LIVE connection is a different connId. Construct it deterministically:
+        // peer-1 resolves on conn1; conn1 closes (peer evicted, conn1 tombstoned); peer-1 re-resolves on a
+        // fresh conn2 (the live link). A late closed-state for the defunct conn1 must be a no-op — conn2's
+        // peer-1 stays. (conn1 is not in `conns`, so reconcileClosed filters it; and even reaching removeByConn
+        // its conn-identity guard would refuse to evict the survivor.)
+        val radio = FakeNwRadio()
+        val apiA = FakeNwApi(radio, deviceId = "dev-0", serviceName = "svc-0")
+        val self = PeerId("peer-0")
+        val seamA = NwSeam(self, apiA, seamScope(), Random(0))
+        backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) { seamA.incoming.collect { } }
+        testScheduler.runCurrent()
+
+        val conn1 = NwConnectionId("c-1")
+        apiA.emitConnectionOpened(NwConnectionOpened(conn1, endpoint = null))
+        testScheduler.runCurrent()
+        apiA.emitBytesReceived(NwBytesReceived(conn1, encodeFrame(NwHello.encode(PeerId("peer-1"), ByteArray(NONCE_BYTES) { 1 }))))
+        assertTrue(pumpUntil { PeerId("peer-1") in seamA.peers.value }, "peer-1 resolved on conn1")
+
+        // conn1 closes (both signals) → peer-1 evicted, conn1 tombstoned.
+        apiA.markConnectionClosed(conn1, reason = null)
+        apiA.emitConnectionClosed(NwConnectionClosed(conn1, reason = null))
+        assertTrue(pumpUntil { PeerId("peer-1") !in seamA.peers.value }, "peer-1 evicted on conn1 close")
+
+        // peer-1 re-resolves on a fresh conn2 — the LIVE link now.
+        val conn2 = NwConnectionId("c-2")
+        apiA.emitConnectionOpened(NwConnectionOpened(conn2, endpoint = null))
+        testScheduler.runCurrent()
+        apiA.emitBytesReceived(NwBytesReceived(conn2, encodeFrame(NwHello.encode(PeerId("peer-1"), ByteArray(NONCE_BYTES) { 2 }))))
+        assertTrue(pumpUntil { PeerId("peer-1") in seamA.peers.value }, "peer-1 re-resolved on conn2")
+
+        // A STALE closed-state for the defunct conn1 must NOT evict peer-1 (whose live conn is conn2).
+        apiA.markConnectionClosed(conn1, reason = "late")
+        testScheduler.runCurrent()
+        pumpUntil(maxPumps = 50) { false }
+
+        assertAll(
+            { assertTrue(PeerId("peer-1") in seamA.peers.value, "survivor peer-1 stays — the stale conn1 closed-state did not evict it") },
+            { assertTrue(seamA.state.value is SeamState.Woven, "seam stays Woven on the live conn2") },
+        )
+    }
+
+    @Test
+    fun dialingConnAbsentFromBothMapsIsNeverEvicted() = runTest(StandardTestDispatcher()) {
+        // #1522 no-absence-inference invariant. The seam acts ONLY on a POSITIVE closure marker (a key's
+        // presence in closedConnections) — never on a key being ABSENT. A live conn absent from both
+        // closedConnections and connectionViability must never be evicted, even as time passes.
+        val radio = FakeNwRadio()
+        val apiA = FakeNwApi(radio, deviceId = "dev-0", serviceName = "svc-0")
+        val apiB = FakeNwApi(radio, deviceId = "dev-1", serviceName = "svc-1")
+        val seamA = NwSeam(PeerId("peer-0"), apiA, seamScope(), Random(0))
+        val seamB = NwSeam(PeerId("peer-1"), apiB, seamScope(), Random(1))
+        backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) { seamA.incoming.collect { } }
+        backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) { seamB.incoming.collect { } }
+        testScheduler.runCurrent()
+        apiA.connect(NwEndpoint(id = "ep-dev-1", serviceName = "svc-1"))
+        apiB.connect(NwEndpoint(id = "ep-dev-0", serviceName = "svc-0"))
+        assertTrue(pumpUntil { seamA.peers.value.size == 2 }, "A wove to 2 peers")
+
+        // Nobody closed; advance well past any conceivable grace window.
+        testScheduler.advanceTimeBy(60.seconds.inWholeMilliseconds)
+        testScheduler.runCurrent()
+        pumpUntil(maxPumps = 50) { false }
+
+        // B's live link carries NO positive closure marker (the map holds only the dedup-loser's defunct
+        // connId, if any). B is retained purely because a conn's ABSENCE from closedConnections is never
+        // inferred as closure — were absence read as closure, B would have been evicted here.
+        assertAll(
+            { assertEquals(setOf(seamA.selfId, PeerId("peer-1")), seamA.peers.value, "B stays — absence from closedConnections is never read as closure") },
+            { assertTrue(seamA.state.value is SeamState.Woven, "A stays Woven — no eviction from an absent marker") },
+        )
+    }
+
+    @Test
+    fun closedStateCancelsArmedGraceTimerAndTearsImmediately() = runTest(StandardTestDispatcher()) {
+        // #1522 × #1478. A path loss (viable=false) arms a grace timer. If a terminal closed-state then lands,
+        // the seam must tear IMMEDIATELY (closure is terminal — no grace) and cancel the armed timer, so no
+        // later spurious grace fire re-touches state.
+        val grace = 10.seconds
+        val radio = FakeNwRadio()
+        val apiA = FakeNwApi(radio, deviceId = "dev-0", serviceName = "svc-0")
+        val apiB = FakeNwApi(radio, deviceId = "dev-1", serviceName = "svc-1")
+        val seamA = NwSeam(PeerId("peer-0"), apiA, seamScope(), Random(0), wovenPathGrace = grace)
+        val seamB = NwSeam(PeerId("peer-1"), apiB, seamScope(), Random(1), wovenPathGrace = grace)
+        backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) { seamA.incoming.collect { } }
+        backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) { seamB.incoming.collect { } }
+        testScheduler.runCurrent()
+        apiA.connect(NwEndpoint(id = "ep-dev-1", serviceName = "svc-1")) // A's live link = conn-dev-0-0
+        assertTrue(pumpUntil { seamA.peers.value.size == 2 }, "A wove to 2 peers")
+
+        val live = NwConnectionId("conn-dev-0-0")
+        // Path lost → grace armed. Advance PARTWAY, not to expiry.
+        apiA.emitConnectionViability(live, viable = false)
+        testScheduler.runCurrent()
+        testScheduler.advanceTimeBy(grace.inWholeMilliseconds / 2)
+        testScheduler.runCurrent()
+        assertEquals(setOf(seamA.selfId, PeerId("peer-1")), seamA.peers.value, "B still present mid-grace")
+
+        // A terminal closed-state lands: tear IMMEDIATELY, cancelling the armed grace timer.
+        apiA.markConnectionClosed(live, reason = "failed")
+        assertTrue(pumpUntil { seamA.peers.value == setOf(seamA.selfId) }, "closed-state evicts B immediately, before grace would expire")
+        // Advance past where the (now-cancelled) grace timer would have fired: no spurious re-fire.
+        testScheduler.advanceTimeBy(grace.inWholeMilliseconds)
+        testScheduler.runCurrent()
+        pumpUntil(maxPumps = 50) { false }
+
+        assertAll(
+            { assertEquals(setOf(seamA.selfId), seamA.peers.value, "B stays evicted; the cancelled grace timer never re-fires") },
+            { assertTrue(seamA.state.value is SeamState.Weaving, "A re-formed to Weaving on the immediate tear") },
+        )
+    }
+
+    @Test
+    fun closedRetentionCapPrunesOldest() = runTest(StandardTestDispatcher()) {
+        // #1522 FIFO retention bound (FakeNwApi level, mirroring RealNwApi/BridgeNwApi). The monotone map
+        // retains only the newest CAP closures; the oldest is pruned so a long-lived churny fabric can't grow
+        // it without bound. (An in-flight close reconciles within milliseconds of its mark, so a modest cap is
+        // ample.)
+        val radio = FakeNwRadio()
+        val api = FakeNwApi(radio, deviceId = "dev-0", serviceName = "svc-0")
+        val cap = FakeNwApi.CLOSED_RETENTION_CAP
+        val oldest = NwConnectionId("closed-0")
+        api.markConnectionClosed(oldest, reason = null)
+        for (i in 1..cap) api.markConnectionClosed(NwConnectionId("closed-$i"), reason = null)
+
+        assertAll(
+            { assertEquals(cap, api.closedConnections.value.size, "map retains exactly CAP entries") },
+            { assertFalse(oldest in api.closedConnections.value, "the oldest entry was pruned past the cap") },
+            { assertTrue(NwConnectionId("closed-$cap") in api.closedConnections.value, "the newest entry is retained") },
         )
     }
 }
