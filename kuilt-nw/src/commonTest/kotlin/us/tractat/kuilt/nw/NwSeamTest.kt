@@ -550,4 +550,187 @@ class NwSeamTest {
         assertFailsWith<IllegalStateException> { a.seam.broadcast("x".encodeToByteArray()) }
         assertFailsWith<IllegalStateException> { a.seam.sendTo(b.peerId, "x".encodeToByteArray()) }
     }
+
+    @Test
+    fun bufferedFrameOnATombstonedConnDoesNotResurrectItOrRegisterAPhantomPeer() = runTest(StandardTestDispatcher()) {
+        // #1528 part A (tombstone). A connId that was removed from `conns` (here: a self-connection the
+        // guard drops) must NOT be resurrected by a late/buffered frame that arrives on it afterwards.
+        // Pre-fix, getOrCreateConn re-creates a fresh ConnState (resolvedPeerId=null), so the late DATA
+        // frame is misparsed as an NwHello and a PHANTOM peer is registered. Post-fix the connId is
+        // tombstoned and the frame is dropped. A genuinely-new conn is unaffected (#1509 non-regression),
+        // proven by the still-live peer-1 link below.
+        val radio = FakeNwRadio()
+        val apiA = FakeNwApi(radio, deviceId = "dev-0", serviceName = "svc-0")
+        val self = PeerId("peer-0")
+        val seamA = NwSeam(self, apiA, seamScope(), Random(0))
+        val received = mutableListOf<Swatch>()
+        backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) { seamA.incoming.collect { received += it } }
+        testScheduler.runCurrent()
+
+        // A genuinely-new inbound conn resolves to a REAL remote peer-1 — the #1509 path that MUST keep working.
+        val live = NwConnectionId("c-live")
+        apiA.emitConnectionOpened(NwConnectionOpened(live, endpoint = null))
+        testScheduler.runCurrent()
+        apiA.emitBytesReceived(
+            NwBytesReceived(live, encodeFrame(NwHello.encode(PeerId("peer-1"), ByteArray(NONCE_BYTES) { 1 }))),
+        )
+        assertTrue(pumpUntil { PeerId("peer-1") in seamA.peers.value }, "peer-1 resolved on the live conn")
+
+        // A self-connection: its remote resolves to selfId, so the guard removes it from `conns` (and, once
+        // fixed, tombstones it).
+        val selfConn = NwConnectionId("c-self")
+        apiA.emitConnectionOpened(NwConnectionOpened(selfConn, endpoint = null))
+        testScheduler.runCurrent()
+        apiA.emitBytesReceived(
+            NwBytesReceived(selfConn, encodeFrame(NwHello.encode(self, ByteArray(NONCE_BYTES) { 2 }))),
+        )
+        testScheduler.runCurrent()
+        assertEquals(setOf(self, PeerId("peer-1")), seamA.peers.value, "self never joins the roster (pre-condition)")
+
+        // Late, buffered DATA frame arrives on the just-removed self-conn — pre-fix this resurrects it and is
+        // misparsed as an NwHello for a phantom peer.
+        apiA.emitBytesReceived(
+            NwBytesReceived(selfConn, encodeFrame(NwHello.encode(PeerId("phantom-peer"), ByteArray(NONCE_BYTES) { 3 }))),
+        )
+        testScheduler.runCurrent()
+
+        // The receive loop is still healthy: a later legit frame on the live conn is still delivered.
+        apiA.emitBytesReceived(NwBytesReceived(live, encodeFrame("still-alive".encodeToByteArray())))
+        pumpUntil { received.any { it.decodeToString() == "still-alive" } }
+
+        assertAll(
+            { assertEquals(setOf(self, PeerId("peer-1")), seamA.peers.value, "no phantom peer from the resurrected tombstoned conn") },
+            { assertTrue(received.any { it.decodeToString() == "still-alive" }, "receive loop still delivers on the live conn") },
+        )
+    }
+
+    @Test
+    fun anUndecodableFirstFrameDoesNotKillTheReceiveLoop() = runTest(StandardTestDispatcher()) {
+        // #1528 part B (backstop). Even if a tombstone is missed, a first frame on an unresolved conn that
+        // fails NwHello.decode (garbage idLen → IndexOutOfBounds) must NOT propagate out of the collector and
+        // kill bytesReceivedLoop (leaving the seam permanently DEAF yet non-Torn). Pre-fix the throw escapes
+        // and kills the loop; post-fix the decode failure disconnects that conn and the loop keeps running —
+        // proven by a subsequent legit frame delivered on a DIFFERENT live conn.
+        val radio = FakeNwRadio()
+        val apiA = FakeNwApi(radio, deviceId = "dev-0", serviceName = "svc-0")
+        val self = PeerId("peer-0")
+        val seamA = NwSeam(self, apiA, seamScope(), Random(0))
+        val received = mutableListOf<Swatch>()
+        backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) { seamA.incoming.collect { received += it } }
+        testScheduler.runCurrent()
+
+        // A live conn resolved to peer-1.
+        val live = NwConnectionId("c-live")
+        apiA.emitConnectionOpened(NwConnectionOpened(live, endpoint = null))
+        testScheduler.runCurrent()
+        apiA.emitBytesReceived(
+            NwBytesReceived(live, encodeFrame(NwHello.encode(PeerId("peer-1"), ByteArray(NONCE_BYTES) { 1 }))),
+        )
+        assertTrue(pumpUntil { PeerId("peer-1") in seamA.peers.value }, "peer-1 resolved on the live conn")
+
+        // A genuinely-new conn whose FIRST frame is undecodable as an NwHello (idLen = 0x7fffffff → OOB).
+        val bad = NwConnectionId("c-bad")
+        apiA.emitConnectionOpened(NwConnectionOpened(bad, endpoint = null))
+        testScheduler.runCurrent()
+        val garbage = encodeFrame(byteArrayOf(0x7F.toByte(), 0xFF.toByte(), 0xFF.toByte(), 0xFF.toByte()))
+        apiA.emitBytesReceived(NwBytesReceived(bad, garbage))
+        testScheduler.runCurrent()
+
+        // The loop survived: a later legit frame on the live conn is still delivered.
+        apiA.emitBytesReceived(NwBytesReceived(live, encodeFrame("still-alive".encodeToByteArray())))
+        pumpUntil { received.any { it.decodeToString() == "still-alive" } }
+
+        assertAll(
+            { assertTrue(received.any { it.decodeToString() == "still-alive" }, "receive loop survived the undecodable frame and still delivers") },
+            { assertTrue(PeerId("peer-1") in seamA.peers.value, "peer-1 stays resolved") },
+            { assertTrue(seamA.state.value !is SeamState.Torn, "seam is not torn by the decode failure") },
+        )
+    }
+
+    @Test
+    fun aFramerLevelBadLengthPrefixOnALiveConnDoesNotKillTheReceiveLoop() = runTest(StandardTestDispatcher()) {
+        // #1528 finding 1 (framer-throw backstop). bytesReceivedLoop calls cs.framer.decode(bytes) UNGUARDED,
+        // and NwFramer.decode throws FrameTooLargeException on a bad 4-byte length prefix (negative or
+        // > maxFrameSize). A corrupt/hostile chunk on ANY live connection therefore escapes the collector and
+        // kills the receive loop — the exact deaf-seam symptom #1528 targets. Post-fix the framer throw routes
+        // through the same evict+tombstone+disconnect backstop as a hello-decode throw; the loop survives and
+        // keeps delivering on OTHER live conns. Fed as RAW bytes (NOT via encodeFrame) so the length prefix is
+        // the attacker-controlled garbage.
+        val radio = FakeNwRadio()
+        val apiA = FakeNwApi(radio, deviceId = "dev-0", serviceName = "svc-0")
+        val self = PeerId("peer-0")
+        val seamA = NwSeam(self, apiA, seamScope(), Random(0))
+        val received = mutableListOf<Swatch>()
+        backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) { seamA.incoming.collect { received += it } }
+        testScheduler.runCurrent()
+
+        // Two live resolved conns — the corrupt chunk lands on one; delivery must survive on the other.
+        val c1 = NwConnectionId("c-1")
+        apiA.emitConnectionOpened(NwConnectionOpened(c1, endpoint = null))
+        testScheduler.runCurrent()
+        apiA.emitBytesReceived(NwBytesReceived(c1, encodeFrame(NwHello.encode(PeerId("peer-1"), ByteArray(NONCE_BYTES) { 1 }))))
+        val c2 = NwConnectionId("c-2")
+        apiA.emitConnectionOpened(NwConnectionOpened(c2, endpoint = null))
+        testScheduler.runCurrent()
+        apiA.emitBytesReceived(NwBytesReceived(c2, encodeFrame(NwHello.encode(PeerId("peer-2"), ByteArray(NONCE_BYTES) { 2 }))))
+        assertTrue(
+            pumpUntil { setOf(PeerId("peer-1"), PeerId("peer-2")).all { it in seamA.peers.value } },
+            "both peers resolved",
+        )
+
+        // Corrupt RAW chunk on the LIVE peer-1 conn: a 4-byte length prefix of 0x7fffffff → NwFramer throws.
+        apiA.emitBytesReceived(NwBytesReceived(c1, byteArrayOf(0x7F.toByte(), 0xFF.toByte(), 0xFF.toByte(), 0xFF.toByte())))
+        testScheduler.runCurrent()
+
+        // The loop survived: a later legit frame on the OTHER live conn (peer-2) is still delivered.
+        apiA.emitBytesReceived(NwBytesReceived(c2, encodeFrame("still-alive".encodeToByteArray())))
+        pumpUntil { received.any { it.decodeToString() == "still-alive" } }
+
+        assertAll(
+            { assertTrue(received.any { it.decodeToString() == "still-alive" }, "receive loop survived the framer throw and still delivers on another conn") },
+            { assertTrue(PeerId("peer-2") in seamA.peers.value, "peer-2 stays resolved") },
+            { assertTrue(seamA.state.value !is SeamState.Torn, "seam is not torn by the framer throw") },
+        )
+    }
+
+    @Test
+    fun aHelloOnATombstonedButReTrackedConnIsNotResolvedIntoAZombiePeer() = runTest(StandardTestDispatcher()) {
+        // #1528 finding 2 (stale-cs classify guard). getOrCreateConnForBytes and processFrame are TWO lock
+        // acquisitions; under a MULTI-threaded dispatcher a removal path can run between them, tombstoning the
+        // connId, after which processFrame would resolveIdentity on a dead conn and register
+        // registry[peer] = Winner(deadConnId) — an UNEVICTABLE zombie (every eviction path bails "unknown-conn"
+        // because conns[connId] is gone). That exact interleave is not deterministically reproducible under a
+        // single-threaded StandardTestDispatcher (no suspension splits the two acquisitions), so this drives the
+        // SAME guarded classify path deterministically: a connId is closed (removed + tombstoned), then re-tracked
+        // by connectionOpenedLoop's tombstone-UNAWARE getOrCreateConn (so conns[connId] is live AND the connId is
+        // still tombstoned), then a hello arrives. processFrame must DROP it — the tombstone means the conn is
+        // dead — and register NO peer. Pre-fix (no guard) it resolves a phantom peer.
+        val radio = FakeNwRadio()
+        val apiA = FakeNwApi(radio, deviceId = "dev-0", serviceName = "svc-0")
+        val self = PeerId("peer-0")
+        val seamA = NwSeam(self, apiA, seamScope(), Random(0))
+        backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) { seamA.incoming.collect { } }
+        testScheduler.runCurrent()
+
+        val conn = NwConnectionId("c-zombie")
+        // 1) The conn opens then closes: connectionClosedLoop removes it from `conns` AND tombstones it.
+        apiA.emitConnectionOpened(NwConnectionOpened(conn, endpoint = null))
+        testScheduler.runCurrent()
+        apiA.emitConnectionClosed(NwConnectionClosed(conn, reason = null))
+        testScheduler.runCurrent()
+        // 2) The same connId is re-tracked by the opened loop (tombstone-unaware): `conns[conn]` is live again,
+        //    yet the connId remains tombstoned — the deterministic stand-in for the stale-cs interleave window.
+        apiA.emitConnectionOpened(NwConnectionOpened(conn, endpoint = null))
+        testScheduler.runCurrent()
+        // 3) A hello arrives on that tombstoned-but-tracked conn. The classify guard must DROP it (dead conn),
+        //    resolving NO identity — pre-fix it registers a phantom "peer-1" zombie.
+        apiA.emitBytesReceived(NwBytesReceived(conn, encodeFrame(NwHello.encode(PeerId("peer-1"), ByteArray(NONCE_BYTES) { 1 }))))
+        testScheduler.runCurrent()
+        pumpUntil(maxPumps = 50) { false } // let any (wrong) resolution surface
+
+        assertAll(
+            { assertEquals(setOf(self), seamA.peers.value, "no zombie peer resolved on the tombstoned conn") },
+            { assertTrue(seamA.state.value is SeamState.Weaving, "seam stayed Weaving — the dead conn never wove a peer") },
+        )
+    }
 }

@@ -4,6 +4,7 @@ import io.github.oshai.kotlinlogging.KotlinLogging
 import kotlinx.atomicfu.atomic
 import kotlinx.atomicfu.locks.reentrantLock
 import kotlinx.atomicfu.locks.withLock
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
@@ -162,6 +163,28 @@ internal class NwSeam(
     private val graceJobs = mutableMapOf<NwConnectionId, Job>()
 
     /**
+     * Bounded FIFO of connIds recently removed from [conns] (#1528). A late/buffered data frame can arrive
+     * on a connection AFTER it was evicted (dedup loser, self-connection drop, close, [removeByConn]); without
+     * this set [getOrCreateConnForBytes] would RESURRECT a fresh [ConnState] (`resolvedPeerId == null`) and
+     * misparse that DATA frame as an [NwHello] — throwing out of the decode (killing the receive loop) or
+     * registering a phantom peer. Every removal site records the connId here; the bytes loop then DROPS a
+     * frame for a connId that is not in [conns] but IS tombstoned. Genuinely-new connIds (never seen, never
+     * tombstoned) still create a [ConnState] — preserving the #1509 lost-wakeup reconcile where the bytes loop
+     * is the first to observe a new connection. A [LinkedHashSet] gives O(1) membership + insertion order for
+     * pruning; capped at [TOMBSTONE_CAP] so a long-lived churny seam can't grow it without bound (in-flight
+     * buffered frames arrive within milliseconds of removal, so a modest cap is ample). Guarded by [lock].
+     */
+    private val tombstones = LinkedHashSet<NwConnectionId>()
+
+    /** Record [connId] as recently-removed, pruning the oldest tombstone past [TOMBSTONE_CAP]. Called under [lock]. */
+    private fun tombstoneLocked(connId: NwConnectionId) {
+        if (tombstones.add(connId) && tombstones.size > TOMBSTONE_CAP) {
+            val oldest = tombstones.iterator().next()
+            tombstones.remove(oldest)
+        }
+    }
+
+    /**
      * Sticky map of resolved remote [PeerId] → the [NwEndpoint.id] a connection to it was dialled on
      * (learned from any connection to that peer that carried a non-null [NwConnectionOpened.endpoint],
      * winner or dedup-loser). Guarded by [lock]. Feeds [settledEndpoints] (#1513).
@@ -240,12 +263,28 @@ internal class NwSeam(
             if (closed.value) return@collect
             val connId = event.connectionId
             // Snapshot (get-or-create, minting its nonce once) the ConnState under the lock; decode OUTSIDE it.
-            val (cs, created) = getOrCreateConn(connId)
+            // A frame for a TOMBSTONED (recently-removed) connId is DROPPED — not resurrected (#1528).
+            val (cs, created) = getOrCreateConnForBytes(connId) ?: run {
+                log.debug { "nw.seam.bytes.dropped-tombstoned connId=${connId.value} self=${selfId.value} (removed conn)" }
+                return@collect
+            }
             // Same #1509 lost-wakeup guard as connectionOpenedLoop: if bytes are the first thing that puts
             // this connId into `conns`, re-reconcile the latest viability so a pending loss is not stranded.
             if (created) reconcileViability(api.connectionViability.value)
             // The framer is single-reader (only this loop touches it), so decoding outside the lock is safe.
-            for (frame in cs.framer.decode(event.bytes)) {
+            // #1528 finding 1: NwFramer.decode throws FrameTooLargeException on a bad 4-byte length prefix
+            // (negative or > maxFrameSize). Guard it so a corrupt/hostile chunk on ANY live conn routes through
+            // the SAME corrupt-inbound backstop instead of escaping the collector and killing the receive loop.
+            // A real structured-concurrency cancel is always re-thrown, never swallowed.
+            val frames = try {
+                cs.framer.decode(event.bytes)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                evictCorruptConn(connId, "framer decode failed: ${e.message}")
+                return@collect
+            }
+            for (frame in frames) {
                 processFrame(connId, cs, frame)
             }
         }
@@ -257,10 +296,9 @@ internal class NwSeam(
      * first enters [conns], its owning loop re-reconciles the latest viability state so a `viable=false`
      * that arrived (and was arm-skipped) before the connection was tracked is not silently lost.
      *
-     * NOTE (#1528, pre-existing, out of scope here): this re-creates a [ConnState] for a `connId` that
-     * was already evicted/closed if a late frame arrives on it — a bytes frame on a resurrected conn is
-     * then parsed as a fresh [NwHello], which can register a phantom peer. Fixing it needs a tombstone/
-     * restructure design decision, tracked on its own track (#1528) — do not conflate it with #1513.
+     * The bytes loop uses the tombstone-aware [getOrCreateConnForBytes] instead, so a late frame on an
+     * evicted connId cannot resurrect it (#1528); this variant is the [connectionOpenedLoop] path, where a
+     * connId is genuinely (re)opening and must always get a [ConnState].
      */
     private fun getOrCreateConn(connId: NwConnectionId): Pair<ConnState, Boolean> = lock.withLock {
         val existing = conns[connId]
@@ -271,6 +309,24 @@ internal class NwSeam(
         }
     }
 
+    /**
+     * Bytes-loop variant of [getOrCreateConn] (#1528): returns the [ConnState] plus whether it was newly
+     * inserted, or `null` when a frame arrives for a connId that is NOT in [conns] but IS [tombstones]-marked
+     * (recently removed). Returning `null` makes [bytesReceivedLoop] DROP the frame rather than RESURRECT the
+     * evicted connection and misparse its late/buffered DATA as a fresh [NwHello] (a phantom peer, or a decode
+     * throw that kills the loop). A genuinely-new connId — never seen AND never tombstoned — still creates a
+     * [ConnState], preserving the #1509 lost-wakeup reconcile where the bytes loop is the first to observe a
+     * new connection. Only tombstoned connIds are dropped; the never-seen case is unchanged.
+     */
+    private fun getOrCreateConnForBytes(connId: NwConnectionId): Pair<ConnState, Boolean>? = lock.withLock {
+        val existing = conns[connId]
+        when {
+            existing != null -> existing to false
+            connId in tombstones -> null // evicted conn — drop the late/buffered frame, do not resurrect
+            else -> ConnState(random.nextBytes(NONCE_BYTES)).also { conns[connId] = it } to true
+        }
+    }
+
     /** Outcome of classifying one frame under [lock]; the suspend action runs OUTSIDE the lock. */
     private sealed interface FrameOutcome {
         /** Already-resolved connection: [frame] is data attributed to [sender]. */
@@ -278,6 +334,23 @@ internal class NwSeam(
 
         /** Just-resolved identity: [loser] (if any) is the dedup loser to disconnect. */
         data class Resolved(val loser: NwConnectionId?) : FrameOutcome
+
+        /**
+         * The first frame on an unresolved connection failed to decode as an [NwHello] (#1528 part B):
+         * routed through the shared [evictCorruptConn] backstop OUTSIDE the lock rather than letting the
+         * decode throw escape [processFrame] and kill [bytesReceivedLoop]. Bounds the worst symptom even if
+         * a tombstone is missed.
+         */
+        object DecodeFailed : FrameOutcome
+
+        /**
+         * The connection is no longer the live one when classified (#1528 finding 2): [getOrCreateConnForBytes]
+         * and [processFrame] are two lock acquisitions, so a removal path can tombstone/replace the connId
+         * between them. Resolving identity on a dead conn would register `registry[peer] = Winner(deadConnId)`
+         * — an unevictable zombie. Detected under the lock (`conns[connId] !== cs` or the connId is tombstoned)
+         * and the frame is simply DROPPED.
+         */
+        object Dropped : FrameOutcome
     }
 
     /**
@@ -289,13 +362,34 @@ internal class NwSeam(
      * ([Spool.deliver], [NwApi.disconnect]) run OUTSIDE the lock.
      */
     private suspend fun processFrame(connId: NwConnectionId, cs: ConnState, frame: ByteArray) {
+        var decodeError: Throwable? = null
         val outcome = lock.withLock {
             val resolved = cs.resolvedPeerId
-            if (resolved != null) {
-                FrameOutcome.Data(resolved)
-            } else {
-                val hello = NwHello.decode(frame)
-                FrameOutcome.Resolved(resolveIdentity(connId, cs, hello.peerId, hello.nonce))
+            when {
+                // #1528 finding 2: getOrCreateConnForBytes and this classify are two lock acquisitions, so a
+                // removal path can tombstone/replace [connId] between them. Resolving identity on a dead conn
+                // would register registry[peer] = Winner(deadConnId) — an unevictable zombie. If this cs is no
+                // longer the live one (replaced) or its connId was tombstoned, DROP the frame.
+                conns[connId] !== cs || connId in tombstones -> FrameOutcome.Dropped
+                resolved != null -> FrameOutcome.Data(resolved)
+                else -> {
+                    // #1528 part B: a corrupt/undecodable first frame must NOT throw out of the collector and
+                    // kill the receive loop. Narrowly wrap ONLY the decode (never resolveIdentity); a real
+                    // structured-concurrency cancel is always re-thrown, never swallowed.
+                    val hello = try {
+                        NwHello.decode(frame)
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        decodeError = e
+                        null
+                    }
+                    if (hello == null) {
+                        FrameOutcome.DecodeFailed
+                    } else {
+                        FrameOutcome.Resolved(resolveIdentity(connId, cs, hello.peerId, hello.nonce))
+                    }
+                }
             }
         }
         when (outcome) {
@@ -313,7 +407,29 @@ internal class NwSeam(
                 runCatchingCancellable { api.disconnect(loserId) }
                     .onFailure { log.debug { "nw.dedup disconnect failed connId=${loserId.value}" } }
             }
+            // Undecodable first frame (#1528 part B) — routed through the shared corrupt-inbound backstop.
+            is FrameOutcome.DecodeFailed ->
+                evictCorruptConn(connId, "hello-decode failed: ${decodeError?.message}")
+            // Stale/dead conn at classify time (#1528 finding 2) — nothing to do; the frame is dropped.
+            is FrameOutcome.Dropped ->
+                log.debug { "nw.seam.classify.dropped-stale connId=${connId.value} self=${selfId.value} (conn removed/tombstoned before classify)" }
         }
+    }
+
+    /**
+     * Shared backstop for a corrupt inbound on [connId] that cannot be parsed (#1528): either [NwFramer.decode]
+     * threw on a bad length prefix (in [bytesReceivedLoop]) or [NwHello.decode] threw on an unresolved conn (in
+     * [processFrame]). Best-effort disconnect the connection OUTSIDE the lock, then drive the local eviction via
+     * [removeByConn] — which removes it from [conns], records a [tombstoneLocked], and evicts its peer if it was
+     * the live link (so a corrupt chunk on a *resolved* conn doesn't strand a zombie in [registry]). A single
+     * corrupt chunk can therefore never kill the receive loop. Suspends only OUTSIDE the lock, preserving the
+     * no-suspend-under-lock rule.
+     */
+    private suspend fun evictCorruptConn(connId: NwConnectionId, reason: String) {
+        log.warn { "nw.seam.corrupt-inbound connId=${connId.value} self=${selfId.value}: $reason → disconnect + evict (loop preserved)" }
+        runCatchingCancellable { api.disconnect(connId) }
+            .onFailure { log.debug { "nw.seam.corrupt-inbound.disconnect-failed connId=${connId.value}: ${it.message}" } }
+        removeByConn(connId)
     }
 
     /**
@@ -342,6 +458,7 @@ internal class NwSeam(
             // via Rendezvous.New is otherwise indistinguishable from a real peer at the loom's name check.
             cs.endpoint?.let { selfEndpointIds += it.id; refreshSettledLocked() }
             conns.remove(connId)
+            tombstoneLocked(connId) // #1528: a late frame on the dropped self-conn must not resurrect it
             log.info { "nw.seam.self-connection connId=${connId.value} self=${selfId.value} → dropped (dialed own endpoint)" }
             return connId
         }
@@ -366,6 +483,7 @@ internal class NwSeam(
         return if (canonical < existing.canonicalNonce) {
             registry[remoteId] = Winner(connId, canonical) // new winner; peer stays present
             conns.remove(existing.connId) // drop the displaced incumbent's state
+            tombstoneLocked(existing.connId) // #1528: late bytes on the displaced link must not resurrect it
             log.debug {
                 "nw.seam.dedup.replace remote=${remoteId.value} winner=${connId.value}(nonce=$canonical) " +
                     "loser=${existing.connId.value}(nonce=${existing.canonicalNonce}) → disconnect loser"
@@ -373,6 +491,7 @@ internal class NwSeam(
             existing.connId // disconnect the displaced incumbent
         } else {
             conns.remove(connId) // drop this loser's state
+            tombstoneLocked(connId) // #1528: late bytes on this loser link must not resurrect it
             log.debug {
                 "nw.seam.dedup.keep remote=${remoteId.value} winner=${existing.connId.value}(nonce=${existing.canonicalNonce}) " +
                     "loser=${connId.value}(nonce=$canonical) → disconnect loser"
@@ -439,6 +558,7 @@ internal class NwSeam(
             lock.withLock {
                 graceJob = graceJobs.remove(event.connectionId) // any pending path-loss timer is moot now
                 val cs = conns.remove(event.connectionId)
+                tombstoneLocked(event.connectionId) // #1528: a closed conn is dead — drop any late/buffered bytes on it
                 if (cs == null) { verdict = "unknown-conn"; return@withLock }
                 val peer = cs.resolvedPeerId
                 if (peer == null) { verdict = "unresolved-conn (no peer to evict)"; return@withLock }
@@ -605,6 +725,7 @@ internal class NwSeam(
         lock.withLock {
             graceJob = graceJobs.remove(connId)
             val cs = conns.remove(connId)
+            tombstoneLocked(connId) // #1528: this conn is being torn — drop any late/buffered bytes on it
             if (cs == null) { verdict = "unknown-conn"; return@withLock }
             val peer = cs.resolvedPeerId
             if (peer == null) { verdict = "unresolved-conn"; return@withLock }
@@ -628,6 +749,7 @@ internal class NwSeam(
         val targets = lock.withLock {
             val snapshot = registry.values.map { it.connId }
             registry.clear()
+            conns.keys.forEach { tombstoneLocked(it) } // #1528: every cleared conn is dead — no resurrection on a late frame
             conns.clear()
             graceJobs.clear() // scope cancellation (in latchTorn) stops the jobs; just drop the refs
             peerEndpoint.clear()
@@ -674,5 +796,13 @@ internal class NwSeam(
     internal companion object {
         /** Default grace given a path-lost (`ready → waiting`) connection to recover before the seam tears it (#1478). */
         val DEFAULT_WOVEN_PATH_GRACE: Duration = 10.seconds
+
+        /**
+         * Upper bound on the [tombstones] FIFO of recently-removed connIds (#1528). A late/buffered frame
+         * races its connection's eviction by at most a handful of milliseconds, so retaining the last
+         * [TOMBSTONE_CAP] removed connIds is far more than enough to catch every in-flight straggler while
+         * keeping the set from growing without bound on a long-lived, churny seam.
+         */
+        const val TOMBSTONE_CAP: Int = 1024
     }
 }
