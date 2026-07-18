@@ -19,7 +19,9 @@ Different transports fail in different ways. The contract keeps those difference
 | `Pattern` | Config for opening a session: display name, max peers |
 | `Tag` | Discovery handle for joining a session (`WebSocketAdvertisement`, `MDNSAdvertisement`, …) |
 | `PeerId` | Stable identifier for a peer within a session |
-| `FabricAvailability` | `Available` or `Unavailable(reason)` |
+| `FabricAvailability` | `Available`, `Unavailable(reason)`, or `Unknown(reason)` (no ground truth yet) |
+| `TransportCapability` | A fabric's self-report: the `roles` it plays plus its `FabricAvailability` |
+| `TransportRole` | What a transport does — e.g. `Data`, `Discovery`, `WifiLan`, `WifiDirect`, `Bluetooth`, `WebRtc`, `ServerRelay` |
 
 ## Loom
 
@@ -37,18 +39,37 @@ suspend fun host(pattern: Pattern): Seam = weave(Rendezvous.New(pattern))
 suspend fun join(tag: Tag): Seam = weave(Rendezvous.Existing(tag))
 ```
 
-`availability()` reports whether the fabric is usable on this runtime.
+Before you connect, a fabric can tell you two things: *what it is* and *whether
+it can run right now*. Both come from one method, `capability()`:
 
-- A fabric that is *absent* on a platform (for example, Multipeer on wasmJs)
+```kotlin
+fun capability(): TransportCapability   // roles + availability
+```
+
+- **Roles** describe what the transport does — carrying data, discovering peers,
+  Wi-Fi on a shared network vs. peer-to-peer Wi-Fi, Bluetooth, WebRTC, or
+  relaying through a server. A single fabric can hold several roles at once.
+- **Availability** says whether you can attempt it now. It is three-valued:
+    - `Available` — good to go.
+    - `Unavailable(reason)` — a capability that exists in principle but is
+      missing *right now* (for example, Play Services absent on an AOSP build).
+    - `Unknown(reason)` — the platform gives no ground truth up front, so the
+      only way to find out is to try (some peer-to-peer radios report this).
+
+  A fabric that is *absent* on a platform (for example, Multipeer on wasmJs)
   simply is not on the classpath.
-- `Unavailable(reason)` is for a capability that exists in principle but is
-  missing *right now* (for example, Play Services absent on an AOSP build).
+
+`availability()` is a convenience shortcut for the availability half of
+`capability()`; fabric authors override `capability()`, never `availability()`.
 
 A host composing fabrics can pick the first available loom:
 
 ```kotlin
 val activeLoom = looms.first { it.availability() is FabricAvailability.Available }
 ```
+
+At runtime the same report is available live per session as `Seam.capability`,
+so a host can react as a transport's real-world reachability changes.
 
 A `Loom` can also *combine* other `Loom`s rather than pick one: `CompositeLoom`
 runs several transports as one bonded session for the same peer. See

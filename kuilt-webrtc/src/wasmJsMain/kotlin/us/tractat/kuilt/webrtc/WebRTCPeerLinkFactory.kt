@@ -9,12 +9,15 @@ import us.tractat.kuilt.webrtc.internal.WebRTCPeerLink
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.launch
 import us.tractat.kuilt.core.DeliveryPolicy
+import us.tractat.kuilt.core.FabricAvailability
 import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.Spool
+import us.tractat.kuilt.core.TransportCapability
+import us.tractat.kuilt.core.TransportRole
 import kotlin.random.Random
 
 /**
@@ -38,6 +41,12 @@ public class WebRTCPeerLinkFactory
         private val facadeFactory: RtcPeerConnectionFacadeFactory,
         private val random: Random = Random.Default,
     ) : Loom {
+        override fun capability(): TransportCapability =
+            TransportCapability(
+                roles = setOf(TransportRole.WebRtc, TransportRole.Data),
+                availability = FabricAvailability.Available,
+            )
+
         public constructor(
             signaling: SignalingChannel,
             room: String,

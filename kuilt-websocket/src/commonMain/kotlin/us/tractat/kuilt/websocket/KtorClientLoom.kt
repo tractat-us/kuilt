@@ -6,7 +6,10 @@ import io.ktor.client.request.header
 import io.ktor.http.encodeURLParameter
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
+import us.tractat.kuilt.core.FabricAvailability
 import us.tractat.kuilt.core.Loom
+import us.tractat.kuilt.core.TransportCapability
+import us.tractat.kuilt.core.TransportRole
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.Seam
@@ -64,6 +67,12 @@ public class KtorClientLoom(
     public val selfPeerId: PeerId = PeerId(Uuid.random().toString()),
     private val weft: Weft<WebSocketDialContext> = { WebSocketDialContext() },
 ) : Loom {
+    override fun capability(): TransportCapability =
+        TransportCapability(
+            roles = setOf(TransportRole.ServerRelay, TransportRole.Data),
+            availability = FabricAvailability.Available,
+        )
+
     /**
      * Establishes a [Seam]:
      * - [Rendezvous.New] — not meaningful for a client; throws [UnsupportedOperationException].

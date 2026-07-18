@@ -13,6 +13,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import us.tractat.kuilt.core.FabricAvailability
+import us.tractat.kuilt.core.TransportCapability
+import us.tractat.kuilt.core.TransportRole
 import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.Pattern
@@ -66,7 +68,11 @@ public class NearbyLoom(
     // Stored after open(); used to notify join() when the host side completes.
     private var hostLinkDeferred: CompletableDeferred<ConnectedLink>? = null
 
-    override fun availability(): FabricAvailability = api.availability()
+    override fun capability(): TransportCapability =
+        TransportCapability(
+            roles = setOf(TransportRole.Bluetooth, TransportRole.WifiDirect, TransportRole.Data),
+            availability = api.availability(),
+        )
 
     override suspend fun weave(rendezvous: Rendezvous): Seam =
         when (rendezvous) {

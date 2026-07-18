@@ -12,6 +12,7 @@ import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.PlyId
 import us.tractat.kuilt.core.Rendezvous
+import us.tractat.kuilt.core.TransportCapability
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.test.FakeSeam
 import kotlin.test.Test
@@ -54,6 +55,7 @@ class CompositeAttachAnnounceOrderingTest {
     /** A [Loom] that hands back one prebuilt [Seam] (its inbound buffer may be preloaded). */
     private class FixedSeamLoom(private val seam: Seam) : Loom {
         override suspend fun weave(rendezvous: Rendezvous): Seam = seam
-        override fun availability(): FabricAvailability = FabricAvailability.Available
+        override fun capability(): TransportCapability =
+            TransportCapability(roles = emptySet(), availability = FabricAvailability.Available)
     }
 }

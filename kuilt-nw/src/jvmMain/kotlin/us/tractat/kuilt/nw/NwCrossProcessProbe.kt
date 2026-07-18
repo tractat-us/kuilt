@@ -152,5 +152,6 @@ public object NwCrossProcessProbe {
         when (val a = NwNativeLib.jvmAvailability()) {
             is FabricAvailability.Unavailable -> a.reason
             FabricAvailability.Available -> null
+            is FabricAvailability.Unknown -> null // not definitively unavailable — let the probe proceed
         }
 }

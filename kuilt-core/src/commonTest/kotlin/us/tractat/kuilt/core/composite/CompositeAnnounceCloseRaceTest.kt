@@ -15,6 +15,7 @@ import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.PlyId
 import us.tractat.kuilt.core.Rendezvous
+import us.tractat.kuilt.core.TransportCapability
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.Swatch
@@ -45,7 +46,8 @@ class CompositeAnnounceCloseRaceTest {
     /** A [Loom] whose woven [Seam] reports [SeamState.Woven] but throws on every send. */
     private class TornOnBroadcastLoom : Loom {
         override suspend fun weave(rendezvous: Rendezvous): Seam = TornOnBroadcastSeam()
-        override fun availability(): FabricAvailability = FabricAvailability.Available
+        override fun capability(): TransportCapability =
+            TransportCapability(roles = emptySet(), availability = FabricAvailability.Available)
     }
 
     private class TornOnBroadcastSeam : Seam {

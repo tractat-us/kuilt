@@ -20,10 +20,13 @@ import platform.MultipeerConnectivity.MCPeerID
 import platform.MultipeerConnectivity.MCSession
 import platform.darwin.NSObject
 import us.tractat.kuilt.core.ActiveSeamSlot
+import us.tractat.kuilt.core.FabricAvailability
 import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
+import us.tractat.kuilt.core.TransportCapability
+import us.tractat.kuilt.core.TransportRole
 import us.tractat.kuilt.multipeer.internal.MCSessionLink
 import us.tractat.kuilt.multipeer.internal.MultipeerPeerId
 
@@ -116,6 +119,17 @@ public actual class MultipeerPeerLinkFactory actual constructor(
      * close paths, and the slot reads that terminal state directly.
      */
     private val slot = ActiveSeamSlot("MultipeerPeerLinkFactory already has an active session")
+
+    public override fun capability(): TransportCapability =
+        TransportCapability(
+            roles = setOf(
+                TransportRole.Discovery,
+                TransportRole.Data,
+                TransportRole.WifiDirect,
+                TransportRole.Bluetooth,
+            ),
+            availability = FabricAvailability.Available,
+        )
 
     public actual override suspend fun weave(rendezvous: Rendezvous): Seam =
         when (rendezvous) {

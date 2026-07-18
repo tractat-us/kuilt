@@ -21,6 +21,7 @@ import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.PeerNotConnected
 import us.tractat.kuilt.core.PlyId
 import us.tractat.kuilt.core.Rendezvous
+import us.tractat.kuilt.core.TransportCapability
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.Swatch
@@ -131,7 +132,8 @@ class CompositeSendToctouTest {
         override suspend fun weave(rendezvous: Rendezvous): Seam =
             ReachablePlySeam(label, transportPeer, advertises, failOnSend, recorder).also { seam = it }
 
-        override fun availability(): FabricAvailability = FabricAvailability.Available
+        override fun capability(): TransportCapability =
+            TransportCapability(roles = emptySet(), availability = FabricAvailability.Available)
     }
 
     /**
@@ -176,7 +178,8 @@ class CompositeSendToctouTest {
     /** A [Loom] whose woven [Seam] reports [SeamState.Woven] but throws on every send. */
     private class TearOnSendLoom : Loom {
         override suspend fun weave(rendezvous: Rendezvous): Seam = TearOnSendSeam()
-        override fun availability(): FabricAvailability = FabricAvailability.Available
+        override fun capability(): TransportCapability =
+            TransportCapability(roles = emptySet(), availability = FabricAvailability.Available)
     }
 
     private class TearOnSendSeam : Seam {

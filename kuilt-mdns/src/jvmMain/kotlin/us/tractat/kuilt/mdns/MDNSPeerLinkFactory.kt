@@ -3,11 +3,14 @@ package us.tractat.kuilt.mdns
 import io.ktor.server.application.Application
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import us.tractat.kuilt.core.FabricAvailability
 import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.Seam
+import us.tractat.kuilt.core.TransportCapability
+import us.tractat.kuilt.core.TransportRole
 import us.tractat.kuilt.websocket.KtorClientLoom
 import us.tractat.kuilt.websocket.KtorServerLoom
 import us.tractat.kuilt.websocket.WebSocketAdvertisement
@@ -63,6 +66,12 @@ public class MDNSPeerLinkFactory(
         )
 
     private var advertiser: MDNSServiceAdvertiser? = null
+
+    override fun capability(): TransportCapability =
+        TransportCapability(
+            roles = setOf(TransportRole.Discovery, TransportRole.WifiLan),
+            availability = FabricAvailability.Available,
+        )
 
     /**
      * Establishes a [Seam]:

@@ -67,6 +67,15 @@ public interface Seam {
         get() = MappedStateFlow(state) { mapOf(PlyId.Sole to it) }
 
     /**
+     * Live capability of the fabric carrying this session — its role(s) and
+     * whether it is usable right now. Updates as radios, permissions, and network
+     * paths change. Default: a static roleless [FabricAvailability.Available] floor;
+     * fabrics with real OS observers override to make it reactive.
+     */
+    public val capability: StateFlow<TransportCapability>
+        get() = us.tractat.kuilt.core.internal.StaticAvailableCapability
+
+    /**
      * Frames received from peers, in send order, delivered to **a single collector**.
      * Cold/single-collection semantics: collect once per [Seam]; fan-out consumers
      * wrap with `shareIn`. A second concurrent collector is unsupported and will race.

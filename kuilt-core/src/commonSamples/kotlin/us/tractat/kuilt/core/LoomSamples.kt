@@ -63,6 +63,7 @@ internal fun sampleFabricAvailability() {
     when (val avail = loom.availability()) {
         is FabricAvailability.Available -> { /* ready to weave */ }
         is FabricAvailability.Unavailable -> error("Fabric not usable: ${avail.reason}")
+        is FabricAvailability.Unknown -> { /* best-effort: attempt anyway, surface avail.reason */ }
     }
 }
 

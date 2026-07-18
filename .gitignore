@@ -14,3 +14,7 @@ next-plan-*.md
 # Brainstorming visual companion sessions
 .superpowers/
 .jqwik-database
+
+# Xcode per-user data (spike/ Xcode project)
+**/xcuserdata/
+*.xcuserstate

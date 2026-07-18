@@ -18,6 +18,7 @@ import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.Spool
 import us.tractat.kuilt.core.Swatch
 import us.tractat.kuilt.core.Tag
+import us.tractat.kuilt.core.TransportCapability
 
 /**
  * A test [Loom] whose [Seam]s start in [SeamState.Weaving] and only transition
@@ -51,7 +52,8 @@ public class DelayedWovenLoom(
     private val links = mutableMapOf<PeerId, DelayedWovenSeam>()
     private var counter = 0
 
-    override fun availability(): FabricAvailability = FabricAvailability.Available
+    override fun capability(): TransportCapability =
+        TransportCapability(roles = emptySet(), availability = FabricAvailability.Available)
 
     override suspend fun weave(rendezvous: Rendezvous): Seam {
         val id = freshId()

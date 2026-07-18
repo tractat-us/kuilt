@@ -5,7 +5,10 @@ import io.ktor.client.plugins.websocket.webSocketSession
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import us.tractat.kuilt.core.DeliveryPolicy
+import us.tractat.kuilt.core.FabricAvailability
 import us.tractat.kuilt.core.Loom
+import us.tractat.kuilt.core.TransportCapability
+import us.tractat.kuilt.core.TransportRole
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.Seam
@@ -72,6 +75,12 @@ public class KtorMeshClientLoom(
     private val random: Random = Random.Default,
     private val policy: DeliveryPolicy = DeliveryPolicy.Reliable,
 ) : Loom {
+    override fun capability(): TransportCapability =
+        TransportCapability(
+            roles = setOf(TransportRole.ServerRelay, TransportRole.Data),
+            availability = FabricAvailability.Available,
+        )
+
     /**
      * Establishes a mesh spoke [Seam]:
      * - [Rendezvous.New] — not meaningful for a client; throws [UnsupportedOperationException].

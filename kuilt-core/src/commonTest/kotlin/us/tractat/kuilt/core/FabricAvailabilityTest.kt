@@ -15,4 +15,10 @@ class FabricAvailabilityTest {
         val u: FabricAvailability = FabricAvailability.Unavailable("no radio")
         assertEquals("no radio", (u as FabricAvailability.Unavailable).reason)
     }
+
+    @Test
+    fun unknownCarriesReason() {
+        val u: FabricAvailability = FabricAvailability.Unknown("local-network permission not yet probed")
+        assertEquals("local-network permission not yet probed", (u as FabricAvailability.Unknown).reason)
+    }
 }

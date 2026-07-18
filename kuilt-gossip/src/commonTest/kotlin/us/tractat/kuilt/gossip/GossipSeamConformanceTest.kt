@@ -68,7 +68,7 @@ internal class GossipLoom(
     private var seed = 0
     private val seams = mutableListOf<GossipSeam>()
 
-    override fun availability() = base.availability()
+    override fun capability() = base.capability()
 
     override suspend fun weave(rendezvous: Rendezvous): Seam {
         val scope = testScope ?: error("GossipLoom.weave needs a TestScope — use newLoomPair(testScope)")
