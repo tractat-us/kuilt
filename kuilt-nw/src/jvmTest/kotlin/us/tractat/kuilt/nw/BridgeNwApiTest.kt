@@ -196,6 +196,27 @@ class BridgeNwApiTest {
     }
 
     @Test
+    fun closeSynthesizesClosedConnectionsStateBypassingEventStaging() = runTest {
+        // #1522: the connectionClosed callback synthesizes a drop-tolerant closedConnections STATE entry
+        // directly (a monotone map add), bypassing the DROP_OLDEST close-EVENT staging that can drop the
+        // event. So a close is reflected in closedConnections whether or not the EVENT survives — the
+        // JVM-side fix for the event-drop zombie. Empty native reason ⇒ null (graceful).
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val fake = FakeNwNativeLib()
+        val host = BridgeNwApi(fake, FakeNwNativeLib.HOST, dispatcher)
+        testScheduler.runCurrent()
+
+        val hostId = NwConnectionId(FakeNwNativeLib.HOST_CONN)
+        host.disconnect(hostId)
+        testScheduler.runCurrent()
+
+        assertAll(
+            { assertTrue(hostId in host.closedConnections.value, "the close synthesizes a closedConnections STATE marker") },
+            { assertEquals(null, host.closedConnections.value[hostId], "empty native reason ⇒ null (graceful)") },
+        )
+    }
+
+    @Test
     fun deliversAfterGcChurn() = runTest {
         val dispatcher = StandardTestDispatcher(testScheduler)
         val fake = FakeNwNativeLib()

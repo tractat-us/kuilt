@@ -46,11 +46,18 @@ internal class FakeNwApi(
     // never lost — so the seam can reconcile a recovery/loss that a lossy event stream would have dropped.
     private val _connectionViability = MutableStateFlow<Map<NwConnectionId, Boolean>>(emptyMap())
 
+    // Drop-tolerant MONOTONE close markers (#1522), matching RealNwApi's MutableStateFlow. Entries only
+    // appear (latched terminal) until FIFO-cap-pruned — so a closure survives even when the connectionClosed
+    // EVENT is dropped (the [dropCloseEvents] hook). Driven only from the one test coroutine, so no lock.
+    private val _closedConnections = MutableStateFlow<Map<NwConnectionId, String?>>(emptyMap())
+    private val closedOrder = ArrayDeque<NwConnectionId>()
+
     override val endpointFound: Flow<NwEndpoint> = _endpointFound.asSharedFlow()
     override val connectionOpened: Flow<NwConnectionOpened> = _connectionOpened.asSharedFlow()
     override val bytesReceived: Flow<NwBytesReceived> = _bytesReceived.asSharedFlow()
     override val connectionClosed: Flow<NwConnectionClosed> = _connectionClosed.asSharedFlow()
     override val connectionViability: StateFlow<Map<NwConnectionId, Boolean>> = _connectionViability.asStateFlow()
+    override val closedConnections: StateFlow<Map<NwConnectionId, String?>> = _closedConnections.asStateFlow()
 
     init {
         radio.register(this)
@@ -62,6 +69,14 @@ internal class FakeNwApi(
      * identity handshake still succeeds.
      */
     var failSend: Boolean = false
+
+    /**
+     * The dropped-close test hook for #1522: when `true`, [emitConnectionClosed] SWALLOWS the close EVENT
+     * (simulating a lossy `tryEmit` drop under buffer pressure) while [FakeNwRadio.disconnect] still marks the
+     * drop-tolerant STATE via [markConnectionClosed]. This deterministically reproduces the scenario where a
+     * peer would be stranded as a zombie if the seam relied on the event alone — the STATE backstop must evict.
+     */
+    var dropCloseEvents: Boolean = false
 
     override fun availability(): FabricAvailability = FabricAvailability.Available
 
@@ -104,7 +119,16 @@ internal class FakeNwApi(
     internal suspend fun emitEndpointFound(event: NwEndpoint) = _endpointFound.emit(event)
     internal suspend fun emitConnectionOpened(event: NwConnectionOpened) = _connectionOpened.emit(event)
     internal suspend fun emitBytesReceived(event: NwBytesReceived) = _bytesReceived.emit(event)
-    internal suspend fun emitConnectionClosed(event: NwConnectionClosed) = _connectionClosed.emit(event)
+
+    /**
+     * Emit the close EVENT — UNLESS [dropCloseEvents] is set, in which case the event is swallowed (#1522).
+     * The drop-tolerant close STATE is marked separately via [markConnectionClosed] (from [FakeNwRadio]), so a
+     * dropped event still leaves a positive closure marker for the seam to reconcile.
+     */
+    internal suspend fun emitConnectionClosed(event: NwConnectionClosed) {
+        if (dropCloseEvents) return
+        _connectionClosed.emit(event)
+    }
 
     /**
      * Test hook for #1478: drive a Network.framework `ready ⇄ waiting` viability transition on
@@ -126,5 +150,24 @@ internal class FakeNwApi(
      */
     internal fun pruneConnectionViability(connectionId: NwConnectionId) {
         _connectionViability.update { it - connectionId }
+    }
+
+    /**
+     * Mark [connectionId] closed in the drop-tolerant MONOTONE close STATE (#1522), with [reason] (`null` =
+     * graceful). Mirrors `RealNwApi.markClosed`: the entry latches until the newest [CLOSED_RETENTION_CAP] cap
+     * prunes the oldest. Driven by [FakeNwRadio.disconnect] on BOTH sides of a link (as each side's own
+     * `closeConnection` would mark its own connId), so a zombie is evicted via STATE even when the EVENT drops.
+     */
+    internal fun markConnectionClosed(connectionId: NwConnectionId, reason: String?) {
+        closedOrder.addLast(connectionId)
+        if (closedOrder.size > CLOSED_RETENTION_CAP) {
+            _closedConnections.update { it - closedOrder.removeFirst() }
+        }
+        _closedConnections.update { it + (connectionId to reason) }
+    }
+
+    internal companion object {
+        /** FIFO retention bound on [closedConnections] — the newest N closures are retained (mirrors RealNwApi). */
+        const val CLOSED_RETENTION_CAP: Int = 256
     }
 }

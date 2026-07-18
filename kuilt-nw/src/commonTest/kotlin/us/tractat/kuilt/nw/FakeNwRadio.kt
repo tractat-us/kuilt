@@ -160,7 +160,12 @@ internal class FakeNwRadio {
         // prunes the handle it observes closing — so neither device's viability map keeps a stale key.
         devices[fromDeviceId]?.pruneConnectionViability(connectionId)
         devices.getValue(other.deviceId).pruneConnectionViability(other.connectionId)
-        // Only the REMOTE side observes the close.
+        // #1522: mark the closure in the drop-tolerant MONOTONE close STATE on BOTH sides — mirrors RealNwApi,
+        // where each side's own `closeConnection` marks its own connId closed. This STATE is what evicts a
+        // zombie peer even when the remote's connectionClosed EVENT is dropped (the `dropCloseEvents` hook).
+        devices[fromDeviceId]?.markConnectionClosed(connectionId, reason = null)
+        devices.getValue(other.deviceId).markConnectionClosed(other.connectionId, reason = null)
+        // Only the REMOTE side observes the close EVENT (the fast reason-carrying path); it may be dropped.
         devices.getValue(other.deviceId)
             .emitConnectionClosed(NwConnectionClosed(other.connectionId, reason = null))
     }
