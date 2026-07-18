@@ -170,7 +170,7 @@ internal const val RELAY_HEADER_BUDGET: Int = 256
  * @param headerBudget the [RaftRelay] envelope allowance subtracted from
  *   [inner]'s frame limit; defaults to [RELAY_HEADER_BUDGET].
  */
-public class RoutedRaftTransport(
+public class RoutedRaftTransport internal constructor(
     private val inner: RaftTransport,
     private val relayChannel: Seam,
     private val core: Set<NodeId>,
