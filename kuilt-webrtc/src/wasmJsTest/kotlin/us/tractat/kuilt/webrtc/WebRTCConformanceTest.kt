@@ -53,15 +53,11 @@ class WebRTCConformanceTest : SeamConformanceSuite() {
      * 2-peer PeerLink, no third peer to relay to — Task 1.8 / #1408 meshEvidence:
      * 2-peer vacuity).
      *
-     * `supportsSendTo = false` (#1409): the seam roster reports the construction-time
-     * placeholder `remoteId`, not the peer's resolved `PeerId`, so `sendTo(actualPeerId)`
-     * throws `PeerNotConnected`. Broadcast is unaffected. Flip to `true` once the resolved
-     * remote id is reconciled into the roster.
+     * `supportsSendTo = true` (#1409): the resolved remote `PeerId` is reconciled into
+     * the roster once the ID-exchange completes, and `sendTo` awaits that resolution,
+     * so `sendTo(actualPeerId)` delivers to the named peer. Fully conforming.
      */
-    override fun capabilities(): SeamCapabilities =
-        SeamCapabilities.FULL.copy(supportsSendTo = false)
+    override fun capabilities(): SeamCapabilities = SeamCapabilities.FULL
 
-    override fun capabilityGaps(): Map<String, String> = mapOf(
-        "supportsSendTo" to "https://github.com/tractat-us/kuilt/issues/1409",
-    )
+    override fun capabilityGaps(): Map<String, String> = emptyMap()
 }

@@ -13,6 +13,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import us.tractat.kuilt.core.CloseReason
 import us.tractat.kuilt.core.PeerId
@@ -74,6 +75,18 @@ internal class WebRTCPeerLink(
 
     init {
         log.debug { "Seam created self=$selfId remote=$remoteId" }
+        // Reconcile the resolved remote PeerId into the roster once the ID-exchange
+        // completes: swap the construction-time placeholder for the peer's real
+        // selfId, so `peers` reports the true id and `sendTo(realId)` succeeds.
+        // Guarded on state: a tear that already collapsed the roster to {selfId}
+        // wins — the reconcile must not resurrect a departed peer on a Torn seam.
+        scope.launch {
+            val resolved = senderIdDeferred.await()
+            _peers.update { current ->
+                if (_state.value is SeamState.Torn) current else current - remoteId + resolved
+            }
+            log.debug { "Seam roster reconciled self=$selfId placeholder=$remoteId resolved=$resolved" }
+        }
         // Shrink the peer set when the remote closes the channel.
         scope.launch {
             facade.awaitDataChannelClose()
@@ -105,9 +118,18 @@ internal class WebRTCPeerLink(
         payload: ByteArray,
     ) {
         check(_state.value !is SeamState.Torn) { closedMessage }
-        if (peer !in _peers.value) throw PeerNotConnected(peer)
+        if (peer !in resolvedRoster()) throw PeerNotConnected(peer)
         facade.sendBytes(payload)
     }
+
+    /**
+     * The roster with the remote's real [PeerId] resolved. Awaits the ID-exchange
+     * if it is still pending, so a `sendTo` addressed to the peer's real id — read
+     * out-of-band before the background reconciliation lands in [_peers] — succeeds
+     * rather than racing the placeholder swap. The remote's id is intrinsic to a
+     * 2-peer point-to-point link's handshake, so the await is bounded in practice.
+     */
+    private suspend fun resolvedRoster(): Set<PeerId> = setOf(selfId, senderIdDeferred.await())
 
     override suspend fun close(reason: CloseReason) {
         if (closed) return
