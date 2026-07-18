@@ -90,21 +90,35 @@ internal sealed interface MembershipState {
     }
 
     /**
-     * True iff [id] is a voter in ANY currently-active configuration.
+     * Every voter in ANY currently-active configuration.
      *
-     * Simple: a voter in the single config. Joint: a voter in `old` OR `new` — both
-     * sides are simultaneously active during the joint phase, so a node voting on
+     * Simple: the single config's voters. Joint: the union of `old` and `new` voters —
+     * both sides are simultaneously active during the joint phase, so a node voting on
      * either side is a legitimate voter.
+     *
+     * Empty ONLY in the pre-bootstrap learner seed (`ClusterConfig(voters = emptySet(),
+     * learners = {self})`) — a node that has not yet learned the cluster's config. A real
+     * Raft cluster always has at least one voter, so an established voter's set is never
+     * empty and always contains itself.
+     */
+    val voters: Set<NodeId>
+        get() = when (this) {
+            is Simple -> config.voters
+            is Joint  -> old.voters + new.voters
+        }
+
+    /**
+     * True iff [id] is a voter in ANY currently-active configuration.
      *
      * The §5.2 leader-authority boundary: only a voter can be leader, so only a voter
      * may originate an `AppendEntries`/`InstallSnapshot`. [RaftEngine.onMessage] uses
      * this to reject a leader→peer RPC forged by a non-voter (an admitted learner/spoke
-     * across the relay) before it can adopt a term, set the leader, or mutate the log.
+     * across the relay) before it can adopt a term, set the leader, or mutate the log —
+     * but ONLY once [voters] is non-empty, so a bootstrapping learner that has not yet
+     * learned the config can still catch up from the leader (see the gate in
+     * [RaftEngine.onMessage]).
      */
-    fun isVoter(id: NodeId): Boolean = when (this) {
-        is Simple -> id in config.voters
-        is Joint  -> id in old.voters || id in new.voters
-    }
+    fun isVoter(id: NodeId): Boolean = id in voters
 
     // ── Quorum helpers (all take `self` to credit the leader correctly) ────────
 

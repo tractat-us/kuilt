@@ -1937,11 +1937,21 @@ internal class RaftEngine(
         // (log corruption), and an InstallSnapshot would overwrite state — not the mere
         // term-inflation a spoof-only view suggests. `from` here is already the true
         // origin (SeamRaftTransport / RoutedRaftTransport / RaftRelayHub unwrap the relay
-        // envelope), and `membershipState` is the live committed voter set, so a legitimate
-        // leader (always a voter) and every leader→learner frame pass unchanged. See
-        // RoutedRaftTransport's "residual spoke→voter gap" note — this is that fix.
+        // envelope), and `membershipState.voters` is the live committed voter set, so a
+        // legitimate leader (always a voter) passes unchanged.
+        //
+        // The gate is skipped while `voters` is empty — the pre-bootstrap learner seed
+        // (`ClusterConfig(voters = emptySet(), learners = {self})`) of an appoint-the-host
+        // joiner/spectator, which has not yet learned the cluster's config and MUST accept
+        // the leader's AppendEntries/InstallSnapshot to catch up and be promoted (dropping
+        // them here would deadlock the join). This exposes no voter: a node with no known
+        // voters is by definition not a voter, and the issue is a *voter's* log integrity.
+        // The instant it applies the config entry that seats voters, the gate arms and
+        // every subsequent leader→peer frame is validated. Mirrors RoutedRaftTransport's
+        // player-side `origin ∈ voters()` check (the relay-side half of #1383).
+        val voters = state.membershipState.voters
         if ((m is RaftMessage.AppendEntries || m is RaftMessage.InstallSnapshot) &&
-            !state.membershipState.isVoter(from)
+            voters.isNotEmpty() && from !in voters
         ) {
             debug { "onMessage: dropped ${m::class.simpleName} from non-voter $from (§5.2 leader-authority gate) membershipState=${state.membershipState}" }
             return
