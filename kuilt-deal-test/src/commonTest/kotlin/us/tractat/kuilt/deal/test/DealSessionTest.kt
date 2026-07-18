@@ -8,36 +8,31 @@ import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.deal.DealSession
-import us.tractat.kuilt.deal.SraScheme
 import us.tractat.kuilt.test.FakeSeam
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNotEquals
-import kotlin.time.Duration.Companion.minutes
 
-// These tests run REAL 2048-bit SRA modular exponentiation. On Apple/K/N (and wasmJs)
-// there is no native BigInteger, so each modPow runs on the pure-Kotlin ionspin path —
-// ~40× slower than the JVM's `java.math` intrinsic (see kuilt-deal-test/build.gradle.kts
-// for the sibling karma/mocha timeout bump that covers the same crypto on wasmJs). A
-// single scenario chains several sequential modPows; `partialQuorum_membersDecrypt_
-// nonMemberCannot` — a 3-player shuffle plus per-member reveal-track strips — does the
-// most (~8), and on a contended CI runner intermittently exceeded runTest's default 60s
-// real-wall-clock timeout, surfacing as `UncompletedCoroutinesError: the test body did
-// not run to completion` (issue #1324). The work is correct and terminating (the JVM
-// runs the identical logic in milliseconds); it is purely slow. Give the crypto-bearing
-// tests generous real-time headroom so runner contention can't clip a completing body,
-// while still bounding a genuine hang.
-private val SLOW_KN_CRYPTO_TIMEOUT = 5.minutes
+// These tests exercise the deal SESSION / CRDT reveal logic, not the crypto itself.
+// They drive it with the fast [XorKeystreamScheme] test double instead of the real
+// 2048-bit SRA scheme: XOR is commutative and self-inverse, so it satisfies the same
+// commutative-encryption laws (verified by XorKeystreamSchemeConformanceTest) while
+// running in microseconds on every platform. Real-crypto byte-parity coverage lives in
+// SraSchemeConformanceTest. Using the real SraScheme here used to run the pure-Kotlin
+// ionspin big-integer path on Apple/K/N and wasmJs (~40× slower than the JVM intrinsic),
+// where the partial-quorum scenario's chained modPows intermittently blew runTest's
+// timeout on contended CI (issue #1332 / #1324) — the double removes that cost entirely,
+// so the default runTest timeout suffices.
 
 class DealSessionTest {
 
     @Test
-    fun twoPlayerPokerDeal_aliceSeesHerCard_bobCannotRead() = runTest(timeout = SLOW_KN_CRYPTO_TIMEOUT) {
+    fun twoPlayerPokerDeal_aliceSeesHerCard_bobCannotRead() = runTest {
         val alice = PeerId("alice")
         val bob = PeerId("bob")
-        val scheme = SraScheme()
+        val scheme = XorKeystreamScheme()
         val (aliceSession, bobSession) =
             fakeDealSessionPair(alice, bob, scheme, CoroutineScope(UnconfinedTestDispatcher(testScheduler)))
 
@@ -66,10 +61,10 @@ class DealSessionTest {
     }
 
     @Test
-    fun twoPlayerDeal_holderCannotSeeOwnCard() = runTest(timeout = SLOW_KN_CRYPTO_TIMEOUT) {
+    fun twoPlayerDeal_holderCannotSeeOwnCard() = runTest {
         val alice = PeerId("alice")
         val bob = PeerId("bob")
-        val scheme = SraScheme()
+        val scheme = XorKeystreamScheme()
         val (aliceSession, bobSession) =
             fakeDealSessionPair(alice, bob, scheme, CoroutineScope(UnconfinedTestDispatcher(testScheduler)))
 
@@ -97,10 +92,10 @@ class DealSessionTest {
     }
 
     @Test
-    fun communityCard_quorumOfAllPlayers_everyPlayerCanDecrypt() = runTest(timeout = SLOW_KN_CRYPTO_TIMEOUT) {
+    fun communityCard_quorumOfAllPlayers_everyPlayerCanDecrypt() = runTest {
         val alice = PeerId("alice")
         val bob = PeerId("bob")
-        val scheme = SraScheme()
+        val scheme = XorKeystreamScheme()
         val (aliceSession, bobSession) =
             fakeDealSessionPair(alice, bob, scheme, CoroutineScope(UnconfinedTestDispatcher(testScheduler)))
 
@@ -129,7 +124,7 @@ class DealSessionTest {
     fun assignQuorums_rejectsUnknownPlayers() = runTest {
         val alice = PeerId("alice")
         val bob = PeerId("bob")
-        val scheme = SraScheme()
+        val scheme = XorKeystreamScheme()
         val session = DealSession(
             seam = FakeSeam(selfId = alice),
             scheme = scheme,
@@ -144,7 +139,7 @@ class DealSessionTest {
     }
 
     @Test
-    fun partialQuorum_membersDecrypt_nonMemberCannot() = runTest(timeout = SLOW_KN_CRYPTO_TIMEOUT) {
+    fun partialQuorum_membersDecrypt_nonMemberCannot() = runTest {
         // A card visible to exactly 2 of 3 players (issue #1281): after carol (the
         // non-member) strips, the quorum members cooperatively strip per-member
         // reveal tracks so each member ends up holding a copy carrying only their
@@ -154,7 +149,7 @@ class DealSessionTest {
         val carol = PeerId("carol")
         val sessions = fakeDealSessionGroup(
             playerIds = listOf(alice, bob, carol),
-            scheme = SraScheme(),
+            scheme = XorKeystreamScheme(),
             scope = CoroutineScope(UnconfinedTestDispatcher(testScheduler)),
         )
         val (aliceSession, bobSession, carolSession) = sessions
