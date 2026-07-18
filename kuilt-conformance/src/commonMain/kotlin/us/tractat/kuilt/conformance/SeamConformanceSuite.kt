@@ -421,15 +421,17 @@ public abstract class SeamConformanceSuite {
     public fun closeIsIdempotent(): TestResult =
         runTest { runCloseIsIdempotent(this) }
 
-    // ── (6) availability returns Available or Unavailable ───────────────────
+    // ── (6) availability returns a known FabricAvailability variant ─────────
 
     internal fun runAvailabilityReturnsAKnownVariant() {
         val (hostLoom, _) = newLoomPair()
         val availability = hostLoom.availability()
 
         assertTrue(
-            availability is FabricAvailability.Available || availability is FabricAvailability.Unavailable,
-            "availability() must return Available or Unavailable, got $availability",
+            availability is FabricAvailability.Available ||
+                availability is FabricAvailability.Unavailable ||
+                availability is FabricAvailability.Unknown,
+            "availability() must return Available, Unavailable, or Unknown, got $availability",
         )
     }
 
@@ -437,6 +439,20 @@ public abstract class SeamConformanceSuite {
     public fun availabilityReturnsAKnownVariant() {
         runAvailabilityReturnsAKnownVariant()
     }
+
+    // ── (6b) a Woven Seam reports Available live capability ─────────────────
+
+    internal suspend fun runWovenSeamReportsAvailableCapability(scope: TestScope): Unit =
+        scope.connectedPair { host, _ ->
+            assertTrue(
+                host.capability.value.availability is FabricAvailability.Available,
+                "a Woven Seam must report Available capability, got ${host.capability.value}",
+            )
+        }
+
+    @Test
+    public fun wovenSeamReportsAvailableCapability(): TestResult =
+        runTest { runWovenSeamReportsAvailableCapability(this) }
 
     // ── (7) state is Woven after host and joiner both return ─────────────────
 
