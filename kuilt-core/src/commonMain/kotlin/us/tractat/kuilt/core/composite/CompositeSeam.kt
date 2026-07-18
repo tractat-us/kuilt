@@ -17,6 +17,7 @@ import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.update
 import us.tractat.kuilt.core.CloseReason
 import us.tractat.kuilt.core.DeliveryPolicy
+import us.tractat.kuilt.core.FabricAvailability
 import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.PeerNotConnected
@@ -27,6 +28,7 @@ import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.SeamStateGate
 import us.tractat.kuilt.core.Spool
 import us.tractat.kuilt.core.Swatch
+import us.tractat.kuilt.core.TransportCapability
 import us.tractat.kuilt.core.runCatchingCancellable
 import kotlin.coroutines.CoroutineContext
 
@@ -112,6 +114,12 @@ internal class CompositeSeam(
     private val _plies = MutableStateFlow<Map<PlyId, SeamState>>(emptyMap())
     override val plies: StateFlow<Map<PlyId, SeamState>> = _plies.asStateFlow()
 
+    // Live capability rollup: the union of the constituent Looms' roles for currently-Woven plies.
+    private val _capability = MutableStateFlow(
+        TransportCapability(emptySet(), FabricAvailability.Available),
+    )
+    override val capability: StateFlow<TransportCapability> = _capability.asStateFlow()
+
     // (plyId, transport id) -> composite id; built as Announce frames arrive. Guarded by [lock].
     private val idMap = mutableMapOf<Pair<PlyId, PeerId>, PeerId>()
 
@@ -172,7 +180,12 @@ internal class CompositeSeam(
         lock.withLock { live[id] = PlyHandle(seam, job) }
 
         seam.state
-            .onEach { s -> _plies.update { it + (id to s) } }
+            .onEach { s ->
+                _plies.update { it + (id to s) }
+                // A ply changing Woven state changes which Looms' roles union in — recompute
+                // OUTSIDE any lock (recomputeCapability re-takes the non-reentrant lock itself).
+                recomputeCapability()
+            }
             .launchIn(plyScope)
 
         // Re-announce on every Woven transition (cold start + recovery). Best-effort: the
@@ -201,6 +214,10 @@ internal class CompositeSeam(
                 }
             }
             .launchIn(plyScope)
+
+        // Fold this ply's Loom roles in immediately (the state pump fires asynchronously). No lock
+        // is held here; recomputeCapability re-takes the non-reentrant lock itself.
+        recomputeCapability()
     }
 
     private suspend fun detachPly(id: PlyId) {
@@ -216,6 +233,35 @@ internal class CompositeSeam(
         lock.withLock { idMap.keys.removeAll { it.first == id } }
         handle.seam.close(CloseReason.Normal)
         recomputePeers()
+        // This ply's roles no longer union in — recompute outside the lock.
+        recomputeCapability()
+    }
+
+    /**
+     * Recompute the live [capability] from the constituent Looms of currently-[SeamState.Woven]
+     * plies. Roles are static on the [Loom] (held in [desired]); the woven seams report only the
+     * floor, so the union is read from the desired set filtered to the woven ply ids. Reads of
+     * [live] / [desired] are non-suspending and happen under [lock]; the caller MUST hold NO lock —
+     * the non-reentrant [lock] is re-taken here, so calling this from inside a locked block deadlocks.
+     */
+    private fun recomputeCapability() {
+        val snapshot = lock.withLock {
+            val wovenIds = live.entries
+                .filter { it.value.seam.state.value is SeamState.Woven }
+                .map { it.key }.toSet()
+            val roles = desired.value
+                .filter { (id, _) -> id in wovenIds }
+                .flatMap { (_, loom) -> loom.capability().roles }.toSet()
+            roles to wovenIds.isNotEmpty()
+        }
+        _capability.value = TransportCapability(
+            roles = snapshot.first,
+            availability = if (snapshot.second) {
+                FabricAvailability.Available
+            } else {
+                FabricAvailability.Unavailable("no ply woven")
+            },
+        )
     }
 
     // Any-live ⇒ Woven; otherwise Weaving. A fully-degraded composite — empty OR every ply currently
