@@ -1924,7 +1924,42 @@ internal class RaftEngine(
 
     // ── Message dispatcher ────────────────────────────────────────────────────
 
-    private suspend fun onMessage(from: NodeId, m: RaftMessage) = when (m) {
+    private suspend fun onMessage(from: NodeId, m: RaftMessage) {
+        // ── §5.2 / §8 leader-authority gate (#1383) ──────────────────────────────
+        // AppendEntries and InstallSnapshot are leader→peer RPCs, and only a voter can
+        // ever be leader (§5.2: a candidate must win a majority of the voter set). So a
+        // frame of either type whose *sender* is not a current voter is a forgery — an
+        // admitted-but-malicious learner/spoke that reached us over the cross-server
+        // relay, which preserves the honest origin (`origin == sender` spoof-checking
+        // passes) yet cannot vouch for the RPC type. Drop it BEFORE dispatch: the log
+        // path does no `from` validation, so an accepted forged AppendEntries would
+        // adopt m.term, set `_leader` from the payload, and truncate-then-append
+        // (log corruption), and an InstallSnapshot would overwrite state — not the mere
+        // term-inflation a spoof-only view suggests. `from` here is already the true
+        // origin (SeamRaftTransport / RoutedRaftTransport / RaftRelayHub unwrap the relay
+        // envelope), and `membershipState.voters` is the live committed voter set, so a
+        // legitimate leader (always a voter) passes unchanged.
+        //
+        // The gate is skipped while `voters` is empty — the pre-bootstrap learner seed
+        // (`ClusterConfig(voters = emptySet(), learners = {self})`) of an appoint-the-host
+        // joiner/spectator, which has not yet learned the cluster's config and MUST accept
+        // the leader's AppendEntries/InstallSnapshot to catch up and be promoted (dropping
+        // them here would deadlock the join). This exposes no voter: a node with no known
+        // voters is by definition not a voter, and the issue is a *voter's* log integrity.
+        // The instant it applies the config entry that seats voters, the gate arms and
+        // every subsequent leader→peer frame is validated. Mirrors RoutedRaftTransport's
+        // player-side `origin ∈ voters()` check (the relay-side half of #1383).
+        val voters = state.membershipState.voters
+        if ((m is RaftMessage.AppendEntries || m is RaftMessage.InstallSnapshot) &&
+            voters.isNotEmpty() && from !in voters
+        ) {
+            debug { "onMessage: dropped ${m::class.simpleName} from non-voter $from (§5.2 leader-authority gate) membershipState=${state.membershipState}" }
+            return
+        }
+        onValidatedMessage(from, m)
+    }
+
+    private suspend fun onValidatedMessage(from: NodeId, m: RaftMessage) = when (m) {
         is RaftMessage.RequestVote             -> onRequestVote(from, m)
         is RaftMessage.RequestVoteResponse     -> onRequestVoteResponse(from, m)
         is RaftMessage.AppendEntries           -> onAppendEntries(from, m)

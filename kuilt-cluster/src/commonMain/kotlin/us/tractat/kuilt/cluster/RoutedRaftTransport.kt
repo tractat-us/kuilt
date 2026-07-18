@@ -94,37 +94,35 @@ internal const val RELAY_HEADER_BUDGET: Int = 256
  * sender rule and closes that log-corruption vector: the victim's engine does no
  * `from` validation and would otherwise truncate-and-append the forged log.
  *
- * ## The residual spoke→voter gap (a documented decision, not an oversight)
+ * ## The spoke→voter reach, and how it is contained (#1383)
  *
  * This relay is deliberately *reachability-complete*: the bounded
  * `spoke → core → core → spoke` path lets **any admitted learner address every
  * cluster member** with honest-origin frames. That reach is the point — it is how
- * a far player's `AppendEntries` response reaches a leader on another server. But
- * reach cuts both ways, and one direction is only *partially* hardened here:
+ * a far player's `AppendEntries` response reaches a leader on another server. Both
+ * directions are now hardened:
  *
  * - **Origin *spoofing* is blocked** in every direction. A spoke cannot claim to
  *   be another node: the first-hop rule ([validFirstHop]) rejects a spoke frame
  *   whose `origin` isn't the sender, and the player-side `origin ∈ voters()` gate
  *   rejects a fellow-spoke's forged down-frame. So no node is ever *impersonated*.
- * - **A voter accepting an *honest-origin* RPC it should never process is not.**
- *   A malicious-but-admitted learner can send a voter a `RaftRelay` carrying its
- *   own honest `origin` but an `AppendEntries` / `InstallSnapshot` body — RPC types
- *   only a *leader* should originate. The voter's `validFirstHop` passes (origin ==
- *   sender), the frame reaches the engine, and **the engine does no `from`
- *   validation on the RPC type**: an accepted `AppendEntries` from a non-leader
- *   truncates-and-appends the voter's log, and an `InstallSnapshot` overwrites its
- *   state — this is **log corruption**, not merely the term-inflation that a
- *   spoof-only view would suggest (votes and `matchIndex` are keyed on a validated
- *   `from`, but the *log itself* is not). The star topology this replaced happened
- *   to confine such a frame to one server; identity-preserving cluster-wide reach
- *   removes that accidental containment.
- *
- * Closing it needs a **voter-inbound RPC-type gate** (a voter accepts
- * `AppendEntries`/`InstallSnapshot` only from the node it currently believes is
- * leader), which lives at the `RaftRelayHub` fan-in, not in this send-side
- * decorator — tracked as follow-up **#1383**. It is called out here so the reach
- * this class grants is understood as a **deliberate, bounded decision** with a
- * known residual, not an accident.
+ * - **A voter accepting an *honest-origin* RPC it should never process is blocked
+ *   too.** A malicious-but-admitted learner can address a voter with a `RaftRelay`
+ *   carrying its own honest `origin` but an `AppendEntries` / `InstallSnapshot` body
+ *   — RPC types only a *leader* should originate. `validFirstHop` passes (origin ==
+ *   sender) and the frame reaches the engine, so the containment cannot live here at
+ *   the send-side decorator. It lives at the **engine**: `RaftEngine.onMessage`
+ *   applies a §5.2/§8 leader-authority gate — an `AppendEntries`/`InstallSnapshot`
+ *   whose sender is not a current voter (`membershipState.isVoter`) is dropped before
+ *   dispatch. Only the engine can do this: the RPC type is an internal `RaftMessage`
+ *   the relay layer cannot decode, and the engine's `membershipState` is the live
+ *   committed voter set. Without that gate an accepted forged `AppendEntries`
+ *   truncates-and-appends the voter's log and an `InstallSnapshot` overwrites its
+ *   state — **log corruption**, not merely the term-inflation a spoof-only view would
+ *   suggest (votes and `matchIndex` are keyed on a validated `from`, but the *log
+ *   itself* was not). The star topology this replaced happened to confine such a
+ *   frame to one server; the engine gate restores that containment for the
+ *   identity-preserving cluster-wide reach.
  *
  * ## One class, two roles
  *
