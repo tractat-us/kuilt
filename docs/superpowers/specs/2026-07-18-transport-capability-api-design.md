@@ -121,13 +121,17 @@ reactive observers (`NWPathMonitor`, `CBCentralManager` delegate, GMS listeners)
 land as **follow-up issues, one per fabric** — filed at plan time. This keeps the
 first PR small and matches the repo's incremental, aggressive-merge posture.
 
-The default `get()` must produce a `StateFlow` whose value reflects the woven
-fabric — roles from the constructing `Loom`, `availability = Available` (the Seam
-exists, so the fabric wove). Since `Seam` impls don't universally hold a
-back-reference to their `Loom`, the concrete `Seam` classes pass their static
-`TransportCapability` into a `MutableStateFlow` at construction (mirroring how
-`peers`/`state` are already seeded). The interface default returns a single
-`Available`/`emptySet()` value as a floor.
+The interface default returns a shared `Available`/`emptySet()` floor (exposed via
+`asStateFlow()` so it can't be downcast-and-mutated). Roles are *not* seeded into
+every concrete fabric `Seam` in this PR — that would be per-fabric work. Instead:
+
+- **`CompositeSeam`** unions roles from the constituent **`Loom`s** (which it holds
+  in `desired`), for currently-`Woven` plies — this is where the aggregated report
+  matters, and roles live statically on the `Loom`.
+- A **direct** (non-composite) fabric `Seam` reports the floor (roleless
+  `Available`) until its per-fabric live-observer follow-up seeds it. Acceptable
+  because the pre-connect role answer already comes from `Loom.capability()`; the
+  Seam-level report becomes rich when the follow-ups add real OS observers.
 
 ## Composition — `CompositeSeam` / `CompositeLoom`
 

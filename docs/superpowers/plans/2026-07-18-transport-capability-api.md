@@ -134,17 +134,28 @@ public data class TransportCapability(
 )
 ```
 
-- [ ] **Step 6: Run to verify pass**
+- [ ] **Step 6: Fix the one exhaustive `when` in `:kuilt-core` test source.** `LoomSamples.kt` is wired into **commonTest** by `build-logic/src/main/kotlin/kuilt.kmp-library.gradle.kts` (`src/commonSamples/kotlin` → commonTest roots), so adding `Unknown` breaks `compileTestKotlinJvm` here and now — not at runtime. Replace `LoomSamples.kt:63-67` body:
+
+```kotlin
+    when (val avail = loom.availability()) {
+        is FabricAvailability.Available -> { /* ready to weave */ }
+        is FabricAvailability.Unavailable -> error("Fabric not usable: ${avail.reason}")
+        is FabricAvailability.Unknown -> { /* best-effort: attempt anyway, surface avail.reason */ }
+    }
+```
+
+- [ ] **Step 7: Run to verify pass**
 
 Run: `./gradlew :kuilt-core:compileTestKotlinJvm`
-Expected: PASS (compiles). Note: `:kuilt-core:jvmTest` will now FAIL to compile at `LoomSamples.kt`'s exhaustive `when` — fixed in Task 2. Do not run the full module test yet.
+Expected: PASS (compiles — the new types resolve and no exhaustive `when` in `:kuilt-core` is broken). Downstream modules (`:kuilt-nw`) are not compiled by this task; their `when` break sites are handled in Task 5.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
 git add kuilt-core/src/commonMain/kotlin/us/tractat/kuilt/core/FabricAvailability.kt \
         kuilt-core/src/commonMain/kotlin/us/tractat/kuilt/core/TransportRole.kt \
         kuilt-core/src/commonMain/kotlin/us/tractat/kuilt/core/TransportCapability.kt \
+        kuilt-core/src/commonSamples/kotlin/us/tractat/kuilt/core/LoomSamples.kt \
         kuilt-core/src/commonTest/kotlin/us/tractat/kuilt/core/FabricAvailabilityTest.kt \
         kuilt-core/src/commonTest/kotlin/us/tractat/kuilt/core/TransportCapabilityTest.kt
 git commit -m "feat(core): add TransportRole, TransportCapability, FabricAvailability.Unknown (#1530)"
@@ -189,8 +200,8 @@ class CompositeLoomCapabilityTest {
     fun compositeUnionsPlyRoles() {
         val composite = CompositeLoom(
             listOf(
-                PlyId.of("a") to loomWith(TransportRole.Discovery),
-                PlyId.of("b") to loomWith(TransportRole.Data, TransportRole.Bluetooth),
+                PlyId("a") to loomWith(TransportRole.Discovery),
+                PlyId("b") to loomWith(TransportRole.Data, TransportRole.Bluetooth),
             ),
         )
         assertEquals(
@@ -201,7 +212,7 @@ class CompositeLoomCapabilityTest {
 }
 ```
 
-> Note: confirm `CompositeLoom`'s constructor + `PlyId.of` signatures against `CompositeLoom.kt` and the existing `Composite*Test.kt` fakes; adjust the ctor call to match (the existing tests show the exact shape).
+> Note: `PlyId` is a value class — construct with `PlyId("a")`, not a factory (`PlyId.kt:7`; cf. `CompositeSendReceiveTest.kt:25`). The `CompositeLoom(listOf(...))` list-ctor is correct (`CompositeLoom.kt:41-45`); constructing without weaving starts no coroutines, so the default dispatcher is fine.
 
 - [ ] **Step 2: Run to verify it fails**
 
@@ -246,27 +257,16 @@ Add `import`s are unnecessary (same package).
 
 Add `import us.tractat.kuilt.core.TransportCapability` if not already imported.
 
-- [ ] **Step 5: Fix the exhaustive `when` in `LoomSamples.kt`** — replace lines 63-67 body:
-
-```kotlin
-    when (val avail = loom.availability()) {
-        is FabricAvailability.Available -> { /* ready to weave */ }
-        is FabricAvailability.Unavailable -> error("Fabric not usable: ${avail.reason}")
-        is FabricAvailability.Unknown -> { /* best-effort: attempt anyway, surface avail.reason */ }
-    }
-```
-
-- [ ] **Step 6: Run to verify pass**
+- [ ] **Step 5: Run to verify pass**
 
 Run: `./gradlew :kuilt-core:jvmTest`
-Expected: PASS — the new test passes and the module compiles.
+Expected: PASS — the new test passes and the module compiles. (The `LoomSamples.kt` exhaustive-`when` was already fixed in Task 1 Step 6.)
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
 git add kuilt-core/src/commonMain/kotlin/us/tractat/kuilt/core/Loom.kt \
         kuilt-core/src/commonMain/kotlin/us/tractat/kuilt/core/composite/CompositeLoom.kt \
-        kuilt-core/src/commonSamples/kotlin/us/tractat/kuilt/core/LoomSamples.kt \
         kuilt-core/src/commonTest/kotlin/us/tractat/kuilt/core/composite/CompositeLoomCapabilityTest.kt
 git commit -m "feat(core): capability() as the primary Loom method, availability() derived (#1530)"
 ```
@@ -317,8 +317,10 @@ import us.tractat.kuilt.core.TransportCapability
  * their roles override [Seam.capability] with their own static/live StateFlow.
  */
 internal val StaticAvailableCapability: StateFlow<TransportCapability> =
-    MutableStateFlow(TransportCapability(emptySet(), FabricAvailability.Available))
+    MutableStateFlow(TransportCapability(emptySet(), FabricAvailability.Available)).asStateFlow()
 ```
+
+> `.asStateFlow()` is required, not cosmetic: without it a consumer could downcast the interface default to `MutableStateFlow` and mutate the one global value shared by *every* `Seam`. Add `import kotlinx.coroutines.flow.asStateFlow`.
 
 - [ ] **Step 4: Add the property to `Seam.kt`** — after the `plies` property, add:
 
@@ -333,7 +335,7 @@ internal val StaticAvailableCapability: StateFlow<TransportCapability> =
         get() = us.tractat.kuilt.core.internal.StaticAvailableCapability
 ```
 
-- [ ] **Step 5: Add the rollup to `CompositeSeam.kt`** — seed a `MutableStateFlow`, and in the existing per-ply pump (`onEach { s -> _plies.update … }` region, ~lines 175-215) recompute the capability from currently-`Woven` plies. Minimal correct version — derive from `plies` + the constituent seams' capabilities:
+- [ ] **Step 5: Add the rollup to `CompositeSeam.kt`.** Roles live on the **`Loom`** (static), so union them from the constituent Looms — held in `desired: StateFlow<List<Pair<PlyId, Loom>>>` (~line 87) — for the plies that are currently `Woven`. The constituent seams are in `live: LinkedHashMap<PlyId, PlyHandle>` (~line 126, `PlyHandle.seam`), and **every read of `live`/`desired`/`idMap` must be under `lock`** (the file's lock discipline, KDoc ~lines 97-100 / #411). Reading `.state.value`, `.capability.value`, and `loom.capability()` are all non-suspending, so computing under the lock is legal (no suspend call inside the locked section).
 
 ```kotlin
     private val _capability = MutableStateFlow(
@@ -341,17 +343,28 @@ internal val StaticAvailableCapability: StateFlow<TransportCapability> =
     )
     override val capability: StateFlow<TransportCapability> = _capability.asStateFlow()
 
+    /** Recompute from the constituent Looms of currently-Woven plies. Caller holds NO lock. */
     private fun recomputeCapability() {
-        val live = idMap.values.filter { it.state.value is SeamState.Woven }
-        val roles = live.flatMap { it.capability.value.roles }.toSet()
-        val availability =
-            if (live.isNotEmpty()) FabricAvailability.Available
-            else FabricAvailability.Unavailable("no ply woven")
-        _capability.value = TransportCapability(roles, availability)
+        val snapshot = lock.withLock {
+            val wovenIds = live.entries
+                .filter { it.value.seam.state.value is SeamState.Woven }
+                .map { it.key }.toSet()
+            val roles = desired.value
+                .filter { (id, _) -> id in wovenIds }
+                .flatMap { (_, loom) -> loom.capability().roles }.toSet()
+            roles to wovenIds.isNotEmpty()
+        }
+        _capability.value = TransportCapability(
+            roles = snapshot.first,
+            availability = if (snapshot.second) FabricAvailability.Available
+            else FabricAvailability.Unavailable("no ply woven"),
+        )
     }
 ```
 
-Call `recomputeCapability()` wherever `_plies` is updated (attach woven, detach, per-ply state change). Match `idMap`'s actual name/shape in the file; if plies are held under a different structure, adapt.
+Call `recomputeCapability()` from the same sites that mutate `_plies` — the per-ply `seam.state.onEach { … }` pump (~line 175), `attachPly` (after a ply goes live), and `detachPly` (~line 214) — **after** releasing any lock those sites hold (the method re-takes `lock` itself; do not call it from inside an already-locked block, to avoid the non-reentrant-lock deadlock the file guards against). Before writing, confirm the field names `live` / `PlyHandle.seam` / `desired` / `lock` against the current file — they were verified against `CompositeSeam.kt` at review time but line numbers drift.
+
+> **Scope note (from review):** this makes *composite* role-union correct because roles are read from the Looms. A **direct** (non-composite) fabric `Seam` (e.g. an NW or WebSocket seam) still reports the roleless floor until its per-fabric live-observer follow-up seeds it — acceptable because the pre-connect role answer already comes from `Loom.capability()` (Task 5). Do not attempt to seed every fabric Seam in this PR.
 
 - [ ] **Step 6: Run to verify pass**
 
@@ -373,13 +386,13 @@ git commit -m "feat(core): live Seam.capability StateFlow + CompositeSeam role r
 ### Task 4: Conformance suite — accept `Unknown`, assert roles
 
 **Files:**
-- Modify: `kuilt-conformance/src/commonMain/kotlin/us/tractat/kuilt/conformance/SeamConformanceSuite.kt:404-418`
+- Modify: `kuilt-conformance/src/commonMain/kotlin/us/tractat/kuilt/conformance/SeamConformanceSuite.kt` (obligation (6) at ~424-439; the `assertTrue` to edit is ~430-433; `connectedPair` helper ~line 275)
 
 **Interfaces:**
 - Consumes: `FabricAvailability.Unknown`, `TransportCapability`, `Loom.capability()`, `Seam.capability`.
 - Produces: widened obligation (6); new obligation asserting `capability.value.availability == Available` while `Woven`.
 
-- [ ] **Step 1: Read the current obligation (6)** at lines ~404-418 (`availabilityReturnsAKnownVariant`) to get the exact `assertTrue` expression and surrounding harness (`hostLoom`).
+- [ ] **Step 1: Read the current obligation (6)** at lines ~424-439 (`availabilityReturnsAKnownVariant`) to get the exact `assertTrue` expression (~430-433) and surrounding harness (`hostLoom`).
 
 - [ ] **Step 2: Widen the availability assertion** — replace the `Available || Unavailable` check with one that also accepts `Unknown`:
 
@@ -429,12 +442,13 @@ git commit -m "test(conformance): accept Unknown availability + assert Woven cap
 
 **Files (migrate every `override fun availability()` that overrides `Loom` — NOT `NwApi`/`NearbyApi`):**
 - Modify: `kuilt-websocket/.../KtorClientLoom.kt`, `KtorServerLoom.kt`, `KtorMeshClientLoom.kt` → add `capability()`
-- Modify: `kuilt-nw/src/commonMain/.../NwLoom.kt:100`
+- Modify: `kuilt-nw/src/commonMain/.../NwLoom.kt` (override at ~line 120)
 - Modify: `kuilt-nearby/src/commonMain/.../NearbyLoom.kt:69`
-- Modify: `kuilt-multipeer/src/jvmMain/.../MultipeerPeerLinkFactory.jvm.kt:115`
-- Modify: `kuilt-mdns/...` loom (find the `Loom` impl), `kuilt-tcp/.../TcpLoom.kt`, `kuilt-webrtc/...` loom
+- Modify: `kuilt-multipeer/src/jvmMain/.../MultipeerPeerLinkFactory.jvm.kt:115` **AND** the Apple actual `kuilt-multipeer/src/appleMain/.../MultipeerPeerLinkFactory.apple.kt` (~line 60) — see Step 4a; the JVM file is a macOS-only stub, the Apple actual is the *real* fabric and must also declare roles.
+- Modify: `kuilt-mdns/...` loom (find the `Loom` impl), `kuilt-tcp/.../TcpLoom.kt`, `kuilt-webrtc/src/wasmJsMain/.../WebRTCPeerLinkFactory.kt` (wasmJs-only)
+- Modify: `kuilt-nw/src/jvmMain/.../NwCrossProcessProbe.kt` (~line 151) — a second exhaustive `when` over `FabricAvailability`, in **main** source; see Step 4b.
 - Modify (test looms → `capability()`): `kuilt-conformance/.../DelayedWovenLoom.kt:54`, `kuilt-test/.../ControllableLoom.kt:67`, `kuilt-gossip/.../GossipSeamConformanceTest.kt:71`, the composite test fakes, `kuilt-nw/.../NwBridgeLoopbackConformanceTest.kt:121`, `NwConnectionDrainTest.kt:143`, `NwLoopbackConformanceTest.kt:102`
-- **Leave untouched (SPI, not Loom):** `NwApi.availability()` (`RealNwApi.kt:245`, `FakeNwApi.kt:66`, `BridgeNwApi.kt:145`, `NwNativeLib.jvmAvailability`), `NearbyApi.availability()` (`GmsNearbyApi.kt:102`, `FakeNearbyRadio.kt:152`), `ConnectStateMachineTest`/`NearbySeamTearDownTest` api fakes.
+- **Leave untouched (SPI, not Loom):** `NwApi.availability()` (`RealNwApi.kt:245`, `FakeNwApi.kt:66`, `BridgeNwApi.kt:~203`, `NwNativeLib.jvmAvailability`), `NearbyApi.availability()` (`GmsNearbyApi.kt:102`, `FakeNearbyRadio.kt:152`), `ConnectStateMachineTest`/`NearbySeamTearDownTest` api fakes.
 
 **Interfaces:**
 - Consumes: `TransportCapability`, `TransportRole`, each fabric's existing availability logic.
@@ -465,12 +479,17 @@ For each hit, open the file and check what interface it overrides. Migrate only 
 ```kotlin
 @Test
 fun declaresDiscoveryAndDataRoles() {
-    val loom = NwLoom(FakeNwApi())   // match NwLoom's real ctor
+    // NwLoom requires a serviceType; FakeNwApi needs (radio, deviceId, serviceName) —
+    // match the real ctors (NwLoom.kt:101-109; FakeNwApi.kt:33-37). Reuse whatever
+    // helper the existing NW tests use to build a FakeNwApi.
+    val loom = NwLoom(api = FakeNwApi(FakeNwRadio(), deviceId = "d", serviceName = "s"), serviceType = "_kuilt._udp")
     assertEquals(setOf(TransportRole.Discovery, TransportRole.Data), loom.capability().roles)
 }
 ```
 
-Repeat per module with that module's roles + a constructible fake.
+Repeat per module with that module's roles + a **constructible** fake. Note the awkward constructors, verified at review time:
+- **`TcpLoom`** has a *private* constructor (`TcpLoom.kt:38`); instances come only from `TcpLoom.host(serverSocket, selfId, selector, …)`. Its role test needs a real bound loopback `ServerSocket` + `SelectorManager` (construction does no IO, so it's cheap) — model it on the existing TCP tests, not a bare `TcpLoom(...)`.
+- **`WebRTCPeerLinkFactory`** is `wasmJsMain`-only; its role test lives in `wasmJsTest` and runs via `:kuilt-webrtc:wasmJsTest` (see Step 5).
 
 - [ ] **Step 3: Run to verify they fail** — `./gradlew :kuilt-nw:compileTestKotlinJvm` (etc.): FAIL, roles empty.
 
@@ -486,7 +505,25 @@ Repeat per module with that module's roles + a constructible fake.
 
 For test looms with a plain `= FabricAvailability.Available`, use `TransportCapability(emptySet(), FabricAvailability.Available)` (roles don't matter for a test double) unless a test asserts on them.
 
-- [ ] **Step 5: Run each module's tests** — `./gradlew :kuilt-nw:jvmTest :kuilt-nearby:jvmTest :kuilt-multipeer:jvmTest :kuilt-websocket:jvmTest :kuilt-mdns:jvmTest :kuilt-tcp:jvmTest :kuilt-gossip:jvmTest`: PASS.
+- [ ] **Step 4a: Migrate the Multipeer Apple actual (the real fabric).** `MultipeerPeerLinkFactory` is an `expect` class; only the JVM actual overrides availability today. Add `override fun capability()` to the **Apple** actual (`MultipeerPeerLinkFactory.apple.kt`, ~line 60) returning the real roles, so the spec's mapping lands where the fabric actually runs:
+
+```kotlin
+    override fun capability(): TransportCapability =
+        TransportCapability(
+            roles = setOf(TransportRole.Discovery, TransportRole.Data, TransportRole.WifiDirect, TransportRole.Bluetooth),
+            availability = FabricAvailability.Available,
+        )
+```
+
+The JVM actual keeps its native-lib gate but now via `capability()` with the *same* role set (availability = the existing `nativeLib != null` branch). The android/wasmJs stubs inherit the default (`Available`, `emptySet()`) while `weave` throws — leave them, or optionally return `Unavailable("Multipeer is Apple-only")` for honesty (one line; not required for #1530).
+
+- [ ] **Step 4b: Fix the second exhaustive `when` — `NwCrossProcessProbe.kt`.** `unavailableReason(): String?` (~line 151) is an expression `when` over `FabricAvailability` with `Unavailable -> a.reason` / `Available -> null` and no `else`; adding `Unknown` breaks `:kuilt-nw` **main** compilation. `Unknown` means "attempt anyway, best-effort" — so it is *not* a definitive unavailable reason; return `null`:
+
+```kotlin
+    is FabricAvailability.Unknown -> null   // not definitively unavailable — let the probe proceed
+```
+
+- [ ] **Step 5: Run each module's tests** — `./gradlew :kuilt-nw:jvmTest :kuilt-nearby:jvmTest :kuilt-multipeer:jvmTest :kuilt-websocket:jvmTest :kuilt-mdns:jvmTest :kuilt-tcp:jvmTest :kuilt-gossip:jvmTest :kuilt-webrtc:wasmJsTest`: PASS. (Multipeer's Apple actual + WebRTC's wasmJs code are compile-checked here for JVM/wasmJs respectively; full Apple/Native compile is Task 6.)
 
 - [ ] **Step 6: Commit**
 
@@ -501,11 +538,12 @@ git commit -m "feat(fabrics): declare TransportRole per fabric; migrate to capab
 
 **Files:**
 - Modify: `kuilt-core/module.md` and/or the `FabricAvailability`/`Loom`/`Seam` KDoc if a `@sample` reference needs updating.
+- Modify (Writerside guide — currently teaches the now-migrated pattern): `Writerside/topics/fabrics.md:100-102` (documents `override fun availability()` as the how-to-write-a-fabric pattern → change to `override fun capability()`), `Writerside/topics/contract.md:22` (documents `FabricAvailability` as two-valued → add `Unknown` + mention roles) and `contract.md:50` (samples `availability()`).
 
 - [ ] **Step 1: Full cache-disabled build (the real gate)**
 
 Run: `source ~/.sdkman/bin/sdkman-init.sh && sdk use java 21.0.5-tem && ./gradlew build detektAll --rerun-tasks`
-Expected: BUILD SUCCESSFUL — confirms Android + Kotlin/Native variants compile the new exhaustive `when`s and the `capability` overrides.
+Expected: BUILD SUCCESSFUL — confirms Android + Apple/Kotlin-Native variants compile the new exhaustive `when`s, the Multipeer Apple actual, and every `capability` override.
 
 - [ ] **Step 2: Grep for any remaining `Loom` `availability()` override** (must be zero):
 
@@ -515,7 +553,12 @@ grep -rn "override fun availability" --include="*.kt" . | grep -v "/build/"
 
 Expected: only `NwApi`/`NearbyApi` SPI overrides remain.
 
-- [ ] **Step 3: File follow-up issues** (per the spec's out-of-scope list) — one per fabric for **live OS observers** (`NWPathMonitor`, `CBCentralManager`, GMS listeners, WebRTC ICE) making `Seam.capability` reactive; plus one for **`CompositeSeam` transport-selection** consuming the aggregated capability. Reference #1530.
+- [ ] **Step 3: Update the Writerside guide** so it doesn't teach the migrated-away pattern:
+  - `Writerside/topics/fabrics.md:100-102` — replace the `override fun availability()` how-to-write-a-fabric snippet with `override fun capability()` (roles + availability), keeping the `<!-- verbatim from … -->` citation accurate if the snippet is test-cited.
+  - `Writerside/topics/contract.md:22` — `FabricAvailability` is now three-valued (`Available`/`Unavailable`/`Unknown`) and transports report roles; update the prose. `contract.md:50` — refresh the `availability()` sample if the change alters it.
+  - Keep the accessible-first flow (project docs rule): plain-language first, type names deeper.
+
+- [ ] **Step 4: File follow-up issues** (per the spec's out-of-scope list) — one per fabric for **live OS observers** (`NWPathMonitor`, `CBCentralManager`, GMS listeners, WebRTC ICE) making `Seam.capability` reactive; plus one for **`CompositeSeam` transport-selection** consuming the aggregated capability. Reference #1530.
 
 ```bash
 gh issue create --title "kuilt-nw: live Seam.capability via NWPathMonitor/permission observer" \
@@ -523,7 +566,7 @@ gh issue create --title "kuilt-nw: live Seam.capability via NWPathMonitor/permis
 # repeat for multipeer (CBCentralManager), nearby (GMS listener), webrtc (ICE state), + CompositeSeam selection.
 ```
 
-- [ ] **Step 4: Open the PR**
+- [ ] **Step 5: Open the PR**
 
 ```bash
 git push -u origin feat/1530-transport-capability-api
@@ -546,7 +589,7 @@ EOF
 gh pr view --web
 ```
 
-- [ ] **Step 5: Enable auto-merge once green**
+- [ ] **Step 6: Enable auto-merge once green**
 
 ```bash
 gh pr merge --auto --squash
@@ -557,3 +600,15 @@ gh pr merge --auto --squash
 - **Spec coverage:** core types ✓ (T1) · `Unknown` ✓ (T1) · `Loom.capability` primary + derived `availability` ✓ (T2) · `Seam.capability` live StateFlow ✓ (T3) · Composite role-union + rollup ✓ (T2/T3) · conformance widening ✓ (T4) · per-fabric roles + corrected Nearby/Multipeer mapping ✓ (T5) · naming-collision note ✓ (Global Constraints) · follow-up issues ✓ (T6). No gaps.
 - **Placeholders:** none — every code step shows code. Task 5's per-file loop is mechanical with an explicit pattern + role table; Task 3/5 flag "match the real ctor/field name" rather than guess a signature I haven't verified.
 - **Type consistency:** `TransportCapability(roles, availability)`, `capability()`, `Seam.capability`, `TransportRole.*` used identically across tasks. `StaticAvailableCapability` defined in T3, referenced only in the `Seam` default in the same task.
+
+## Fable review (claude-fable-5) — incorporated
+
+A read-only Fable pass against the real source found 9 actionable items; all folded in:
+- **B1** — second exhaustive `when` in `NwCrossProcessProbe.kt` (main source) → Task 5 Step 4b.
+- **B2** — `LoomSamples.kt` is `commonTest`, so its `when` break lands in Task 1's own compile gate → moved the fix to Task 1 Step 6.
+- **S1** — `CompositeSeam` rollup used a wrong field (`idMap`) and ignored the lock → Task 3 Step 5 rewritten to snapshot `live`/`desired` under `lock`.
+- **S2** — Multipeer roles must also land on the **Apple actual**, not just the JVM stub → Task 5 Step 4a.
+- **S3** — no concrete Seam is seeded, so composite role-union would be empty → union from constituent **Looms** (Task 3 Step 5); direct-Seam roles explicitly de-scoped to follow-ups (spec + Task 3 scope note).
+- **S4** — `PlyId("a")` (no `.of`), real `NwLoom`/`FakeNwApi`/`TcpLoom` ctors → Tasks 2 & 5 corrected.
+- **S5** — Writerside `fabrics.md`/`contract.md` teach the migrated-away pattern → Task 6 Step 3.
+- Verified-correct: the Loom-vs-SPI override split (all 22 grep hits classified) needs no change.
