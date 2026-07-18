@@ -6,10 +6,13 @@ import io.ktor.network.sockets.aSocket
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import us.tractat.kuilt.core.FabricAvailability
 import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.Seam
+import us.tractat.kuilt.core.TransportCapability
+import us.tractat.kuilt.core.TransportRole
 import us.tractat.kuilt.core.checkNotUnderTestDispatcher
 import us.tractat.kuilt.core.fabric.handshaking
 import kotlin.coroutines.CoroutineContext
@@ -42,6 +45,12 @@ public class TcpLoom private constructor(
     private val ioDispatcher: CoroutineDispatcher,
     private val serverSocket: ServerSocket?,
 ) : Loom {
+    override fun capability(): TransportCapability =
+        TransportCapability(
+            roles = setOf(TransportRole.Data),
+            availability = FabricAvailability.Available,
+        )
+
     override suspend fun weave(rendezvous: Rendezvous): Seam {
         // The real-IO TCP seam must never be built under a virtual TestDispatcher — its blocking
         // socket reads would never advance under virtual time, deadlocking the test silently. The

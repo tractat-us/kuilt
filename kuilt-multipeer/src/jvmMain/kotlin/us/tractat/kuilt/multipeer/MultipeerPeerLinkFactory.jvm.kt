@@ -8,6 +8,8 @@ import kotlinx.coroutines.flow.update
 import us.tractat.kuilt.core.ActiveSeamSlot
 import us.tractat.kuilt.core.CloseReason
 import us.tractat.kuilt.core.FabricAvailability
+import us.tractat.kuilt.core.TransportCapability
+import us.tractat.kuilt.core.TransportRole
 import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Rendezvous
@@ -112,15 +114,23 @@ public actual class MultipeerPeerLinkFactory actual constructor(
      */
     private val slot = ActiveSeamSlot("MultipeerPeerLinkFactory already has an active session")
 
-    public override fun availability(): FabricAvailability =
-        if (nativeLib != null) {
-            FabricAvailability.Available
-        } else {
-            FabricAvailability.Unavailable(
-                "MultipeerConnectivity is macOS-only on the JVM target; " +
-                    "use mDNS for cross-platform LAN on Linux/Windows.",
-            )
-        }
+    public override fun capability(): TransportCapability =
+        TransportCapability(
+            roles = setOf(
+                TransportRole.Discovery,
+                TransportRole.Data,
+                TransportRole.WifiDirect,
+                TransportRole.Bluetooth,
+            ),
+            availability = if (nativeLib != null) {
+                FabricAvailability.Available
+            } else {
+                FabricAvailability.Unavailable(
+                    "MultipeerConnectivity is macOS-only on the JVM target; " +
+                        "use mDNS for cross-platform LAN on Linux/Windows.",
+                )
+            },
+        )
 
     public actual override suspend fun weave(rendezvous: Rendezvous): Seam =
         when (rendezvous) {

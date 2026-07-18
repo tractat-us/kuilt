@@ -18,6 +18,7 @@ import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.Spool
 import us.tractat.kuilt.core.Swatch
+import us.tractat.kuilt.core.TransportCapability
 
 /**
  * A drop-in replacement for [us.tractat.kuilt.core.InMemoryLoom] with
@@ -64,7 +65,8 @@ public class ControllableLoom(
     override suspend fun weave(rendezvous: Rendezvous): ControllableSeam =
         mutex.withLock { newSeam(peerId(rendezvous)) }
 
-    override fun availability(): FabricAvailability = FabricAvailability.Available
+    override fun capability(): TransportCapability =
+        TransportCapability(roles = emptySet(), availability = FabricAvailability.Available)
 
     // ── Control surface ───────────────────────────────────────────────────────
     // holdDelivery and bufferedCount are synchronous — they only touch the hold

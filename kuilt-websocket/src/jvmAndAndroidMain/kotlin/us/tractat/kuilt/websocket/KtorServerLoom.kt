@@ -8,9 +8,12 @@ import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.first
+import us.tractat.kuilt.core.FabricAvailability
 import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Principal
+import us.tractat.kuilt.core.TransportCapability
+import us.tractat.kuilt.core.TransportRole
 import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.session.withPrincipal
@@ -60,6 +63,12 @@ public class KtorServerLoom(
     private val pingPeriod: Duration = DEFAULT_PING_PERIOD,
     private val principalExtractor: (ApplicationCall) -> Principal? = { null },
 ) : Loom {
+    override fun capability(): TransportCapability =
+        TransportCapability(
+            roles = setOf(TransportRole.ServerRelay, TransportRole.Data),
+            availability = FabricAvailability.Available,
+        )
+
     private val connectionChannel = Channel<Seam>(capacity = Channel.UNLIMITED)
 
     init {

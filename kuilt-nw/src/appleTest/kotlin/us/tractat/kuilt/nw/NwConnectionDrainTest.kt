@@ -11,12 +11,12 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import us.tractat.kuilt.core.CloseReason
-import us.tractat.kuilt.core.FabricAvailability
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.Seam
+import us.tractat.kuilt.core.TransportCapability
 import us.tractat.kuilt.test.assertAll
 import kotlin.random.Random
 import kotlin.test.AfterTest
@@ -140,6 +140,6 @@ class NwConnectionDrainTest {
         override suspend fun weave(rendezvous: Rendezvous): Seam =
             withContext(Dispatchers.Default) { delegate.weave(rendezvous) }
 
-        override fun availability(): FabricAvailability = delegate.availability()
+        override fun capability(): TransportCapability = delegate.capability()
     }
 }

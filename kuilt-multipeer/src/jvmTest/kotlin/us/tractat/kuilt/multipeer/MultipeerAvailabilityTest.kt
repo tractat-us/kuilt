@@ -3,6 +3,7 @@ package us.tractat.kuilt.multipeer
 import com.sun.jna.Pointer
 import org.junit.Assume.assumeFalse
 import us.tractat.kuilt.core.FabricAvailability
+import us.tractat.kuilt.core.TransportRole
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
@@ -46,6 +47,26 @@ class MultipeerAvailabilityTest {
                 injectedRuntimeHandle = Pointer(0x1L),
             )
         assertEquals(FabricAvailability.Available, factory.availability())
+    }
+
+    @Test
+    fun `capability declares the Multipeer fabric roles`() {
+        val factory =
+            MultipeerPeerLinkFactory(
+                displayName = "Test",
+                serviceType = "kuilt-test",
+                injectedLib = FakeMultipeerNativeLib(),
+                injectedRuntimeHandle = Pointer(0x1L),
+            )
+        assertEquals(
+            setOf(
+                TransportRole.Discovery,
+                TransportRole.Data,
+                TransportRole.WifiDirect,
+                TransportRole.Bluetooth,
+            ),
+            factory.capability().roles,
+        )
     }
 
     private fun isMacOs(): Boolean =

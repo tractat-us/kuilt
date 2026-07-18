@@ -8,12 +8,12 @@ import kotlinx.coroutines.withContext
 import org.junit.AssumptionViolatedException
 import us.tractat.kuilt.conformance.SeamCapabilities
 import us.tractat.kuilt.conformance.SeamConformanceSuite
-import us.tractat.kuilt.core.FabricAvailability
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.Tag
+import us.tractat.kuilt.core.TransportCapability
 import kotlin.random.Random
 import kotlin.test.AfterTest
 
@@ -118,6 +118,6 @@ class NwBridgeLoopbackConformanceTest : SeamConformanceSuite() {
         override suspend fun weave(rendezvous: Rendezvous): Seam =
             withContext(Dispatchers.Default) { delegate.weave(rendezvous) }
 
-        override fun availability(): FabricAvailability = delegate.availability()
+        override fun capability(): TransportCapability = delegate.capability()
     }
 }

@@ -22,6 +22,8 @@ import kotlinx.coroutines.withTimeoutOrNull
 import us.tractat.kuilt.core.CloseReason
 import us.tractat.kuilt.core.DeliveryPolicy
 import us.tractat.kuilt.core.FabricAvailability
+import us.tractat.kuilt.core.TransportCapability
+import us.tractat.kuilt.core.TransportRole
 import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Rendezvous
@@ -117,7 +119,11 @@ public class NwLoom(
      */
     public val visiblePeers: StateFlow<Set<NwEndpoint>> = _visiblePeers.asStateFlow()
 
-    override fun availability(): FabricAvailability = api.availability()
+    override fun capability(): TransportCapability =
+        TransportCapability(
+            roles = setOf(TransportRole.Discovery, TransportRole.Data),
+            availability = api.availability(),
+        )
 
     override suspend fun weave(rendezvous: Rendezvous): Seam {
         // Derive from the caller so background work runs on the test dispatcher; independent Job
