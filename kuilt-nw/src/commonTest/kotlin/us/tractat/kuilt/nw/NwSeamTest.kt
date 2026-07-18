@@ -646,4 +646,91 @@ class NwSeamTest {
             { assertTrue(seamA.state.value !is SeamState.Torn, "seam is not torn by the decode failure") },
         )
     }
+
+    @Test
+    fun aFramerLevelBadLengthPrefixOnALiveConnDoesNotKillTheReceiveLoop() = runTest(StandardTestDispatcher()) {
+        // #1528 finding 1 (framer-throw backstop). bytesReceivedLoop calls cs.framer.decode(bytes) UNGUARDED,
+        // and NwFramer.decode throws FrameTooLargeException on a bad 4-byte length prefix (negative or
+        // > maxFrameSize). A corrupt/hostile chunk on ANY live connection therefore escapes the collector and
+        // kills the receive loop — the exact deaf-seam symptom #1528 targets. Post-fix the framer throw routes
+        // through the same evict+tombstone+disconnect backstop as a hello-decode throw; the loop survives and
+        // keeps delivering on OTHER live conns. Fed as RAW bytes (NOT via encodeFrame) so the length prefix is
+        // the attacker-controlled garbage.
+        val radio = FakeNwRadio()
+        val apiA = FakeNwApi(radio, deviceId = "dev-0", serviceName = "svc-0")
+        val self = PeerId("peer-0")
+        val seamA = NwSeam(self, apiA, seamScope(), Random(0))
+        val received = mutableListOf<Swatch>()
+        backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) { seamA.incoming.collect { received += it } }
+        testScheduler.runCurrent()
+
+        // Two live resolved conns — the corrupt chunk lands on one; delivery must survive on the other.
+        val c1 = NwConnectionId("c-1")
+        apiA.emitConnectionOpened(NwConnectionOpened(c1, endpoint = null))
+        testScheduler.runCurrent()
+        apiA.emitBytesReceived(NwBytesReceived(c1, encodeFrame(NwHello.encode(PeerId("peer-1"), ByteArray(NONCE_BYTES) { 1 }))))
+        val c2 = NwConnectionId("c-2")
+        apiA.emitConnectionOpened(NwConnectionOpened(c2, endpoint = null))
+        testScheduler.runCurrent()
+        apiA.emitBytesReceived(NwBytesReceived(c2, encodeFrame(NwHello.encode(PeerId("peer-2"), ByteArray(NONCE_BYTES) { 2 }))))
+        assertTrue(
+            pumpUntil { setOf(PeerId("peer-1"), PeerId("peer-2")).all { it in seamA.peers.value } },
+            "both peers resolved",
+        )
+
+        // Corrupt RAW chunk on the LIVE peer-1 conn: a 4-byte length prefix of 0x7fffffff → NwFramer throws.
+        apiA.emitBytesReceived(NwBytesReceived(c1, byteArrayOf(0x7F.toByte(), 0xFF.toByte(), 0xFF.toByte(), 0xFF.toByte())))
+        testScheduler.runCurrent()
+
+        // The loop survived: a later legit frame on the OTHER live conn (peer-2) is still delivered.
+        apiA.emitBytesReceived(NwBytesReceived(c2, encodeFrame("still-alive".encodeToByteArray())))
+        pumpUntil { received.any { it.decodeToString() == "still-alive" } }
+
+        assertAll(
+            { assertTrue(received.any { it.decodeToString() == "still-alive" }, "receive loop survived the framer throw and still delivers on another conn") },
+            { assertTrue(PeerId("peer-2") in seamA.peers.value, "peer-2 stays resolved") },
+            { assertTrue(seamA.state.value !is SeamState.Torn, "seam is not torn by the framer throw") },
+        )
+    }
+
+    @Test
+    fun aHelloOnATombstonedButReTrackedConnIsNotResolvedIntoAZombiePeer() = runTest(StandardTestDispatcher()) {
+        // #1528 finding 2 (stale-cs classify guard). getOrCreateConnForBytes and processFrame are TWO lock
+        // acquisitions; under a MULTI-threaded dispatcher a removal path can run between them, tombstoning the
+        // connId, after which processFrame would resolveIdentity on a dead conn and register
+        // registry[peer] = Winner(deadConnId) — an UNEVICTABLE zombie (every eviction path bails "unknown-conn"
+        // because conns[connId] is gone). That exact interleave is not deterministically reproducible under a
+        // single-threaded StandardTestDispatcher (no suspension splits the two acquisitions), so this drives the
+        // SAME guarded classify path deterministically: a connId is closed (removed + tombstoned), then re-tracked
+        // by connectionOpenedLoop's tombstone-UNAWARE getOrCreateConn (so conns[connId] is live AND the connId is
+        // still tombstoned), then a hello arrives. processFrame must DROP it — the tombstone means the conn is
+        // dead — and register NO peer. Pre-fix (no guard) it resolves a phantom peer.
+        val radio = FakeNwRadio()
+        val apiA = FakeNwApi(radio, deviceId = "dev-0", serviceName = "svc-0")
+        val self = PeerId("peer-0")
+        val seamA = NwSeam(self, apiA, seamScope(), Random(0))
+        backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) { seamA.incoming.collect { } }
+        testScheduler.runCurrent()
+
+        val conn = NwConnectionId("c-zombie")
+        // 1) The conn opens then closes: connectionClosedLoop removes it from `conns` AND tombstones it.
+        apiA.emitConnectionOpened(NwConnectionOpened(conn, endpoint = null))
+        testScheduler.runCurrent()
+        apiA.emitConnectionClosed(NwConnectionClosed(conn, reason = null))
+        testScheduler.runCurrent()
+        // 2) The same connId is re-tracked by the opened loop (tombstone-unaware): `conns[conn]` is live again,
+        //    yet the connId remains tombstoned — the deterministic stand-in for the stale-cs interleave window.
+        apiA.emitConnectionOpened(NwConnectionOpened(conn, endpoint = null))
+        testScheduler.runCurrent()
+        // 3) A hello arrives on that tombstoned-but-tracked conn. The classify guard must DROP it (dead conn),
+        //    resolving NO identity — pre-fix it registers a phantom "peer-1" zombie.
+        apiA.emitBytesReceived(NwBytesReceived(conn, encodeFrame(NwHello.encode(PeerId("peer-1"), ByteArray(NONCE_BYTES) { 1 }))))
+        testScheduler.runCurrent()
+        pumpUntil(maxPumps = 50) { false } // let any (wrong) resolution surface
+
+        assertAll(
+            { assertEquals(setOf(self), seamA.peers.value, "no zombie peer resolved on the tombstoned conn") },
+            { assertTrue(seamA.state.value is SeamState.Weaving, "seam stayed Weaving — the dead conn never wove a peer") },
+        )
+    }
 }
