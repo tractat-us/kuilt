@@ -137,7 +137,10 @@ public class BridgeNwApi internal constructor(
         synchronized(closedOrderLock) {
             closedOrder.addLast(id)
             if (closedOrder.size > CLOSED_RETENTION_CAP) {
-                _closedConnections.update { it - closedOrder.removeFirst() }
+                // Hoist the FIFO mutation OUT of the CAS lambda (see RealNwApi.markClosed): `update{}` may
+                // re-run its lambda on contention, so a `removeFirst()` inside it would pop twice.
+                val evicted = closedOrder.removeFirst()
+                _closedConnections.update { it - evicted }
             }
             _closedConnections.update { it + (id to reason) }
         }
@@ -326,8 +329,9 @@ public class BridgeNwApi internal constructor(
         private const val CLOSED_ID_GUARD = 256
 
         // FIFO retention bound on the synthesized closedConnections STATE (#1522): the newest N close markers
-        // are retained, the oldest pruned — bounding the map on a long-lived, high-churn session.
-        private const val CLOSED_RETENTION_CAP = 256
+        // are retained, the oldest pruned — bounding the map on a long-lived, high-churn session. Matched to
+        // NwSeam.TOMBSTONE_CAP (1024): a pruned-before-observed marker recreates the permanent zombie.
+        private const val CLOSED_RETENTION_CAP = 1024
 
         // One shared Cleaner (its own daemon thread) for all bridge instances.
         private val CLEANER: Cleaner = Cleaner.create()

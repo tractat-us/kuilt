@@ -161,13 +161,15 @@ internal class FakeNwApi(
     internal fun markConnectionClosed(connectionId: NwConnectionId, reason: String?) {
         closedOrder.addLast(connectionId)
         if (closedOrder.size > CLOSED_RETENTION_CAP) {
-            _closedConnections.update { it - closedOrder.removeFirst() }
+            // Hoist the FIFO mutation OUT of the CAS lambda (see RealNwApi.markClosed).
+            val evicted = closedOrder.removeFirst()
+            _closedConnections.update { it - evicted }
         }
         _closedConnections.update { it + (connectionId to reason) }
     }
 
     internal companion object {
-        /** FIFO retention bound on [closedConnections] — the newest N closures are retained (mirrors RealNwApi). */
-        const val CLOSED_RETENTION_CAP: Int = 256
+        /** FIFO retention bound on [closedConnections] — the newest N closures are retained (mirrors RealNwApi, 1024). */
+        const val CLOSED_RETENTION_CAP: Int = 1024
     }
 }

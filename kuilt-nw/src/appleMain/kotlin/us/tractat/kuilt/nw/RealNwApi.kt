@@ -219,7 +219,11 @@ internal class RealNwApi(
         lock.withLock {
             closedOrder.addLast(id)
             if (closedOrder.size > CLOSED_RETENTION_CAP) {
-                _closedConnections.update { it - closedOrder.removeFirst() }
+                // Hoist the FIFO mutation OUT of the CAS lambda: `update{}` may re-run its lambda on
+                // contention, and a `removeFirst()` inside it would pop twice while removing one — the
+                // correctness must be local, not emergent from the surrounding lock (repo policy).
+                val evicted = closedOrder.removeFirst()
+                _closedConnections.update { it - evicted }
             }
             _closedConnections.update { it + (id to reason) }
         }
@@ -879,7 +883,10 @@ internal class RealNwApi(
          * FIFO retention bound on [closedConnections] (#1522): the newest N close markers are retained,
          * the oldest pruned. An in-flight close reconciles within milliseconds of the mark, so retaining
          * the last N is far more than enough while keeping the map from growing on a long-lived churny fabric.
+         * Matched to `NwSeam.TOMBSTONE_CAP` (1024): a pruned-before-observed close marker recreates the
+         * *permanent* zombie this signal exists to kill — a strictly worse symptom than a missed tombstone's
+         * bounded one-frame misparse — so retention is at least as deep as the tombstone bound.
          */
-        private const val CLOSED_RETENTION_CAP: Int = 256
+        private const val CLOSED_RETENTION_CAP: Int = 1024
     }
 }
