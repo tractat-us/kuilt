@@ -89,6 +89,23 @@ internal sealed interface MembershipState {
         }
     }
 
+    /**
+     * True iff [id] is a voter in ANY currently-active configuration.
+     *
+     * Simple: a voter in the single config. Joint: a voter in `old` OR `new` — both
+     * sides are simultaneously active during the joint phase, so a node voting on
+     * either side is a legitimate voter.
+     *
+     * The §5.2 leader-authority boundary: only a voter can be leader, so only a voter
+     * may originate an `AppendEntries`/`InstallSnapshot`. [RaftEngine.onMessage] uses
+     * this to reject a leader→peer RPC forged by a non-voter (an admitted learner/spoke
+     * across the relay) before it can adopt a term, set the leader, or mutate the log.
+     */
+    fun isVoter(id: NodeId): Boolean = when (this) {
+        is Simple -> id in config.voters
+        is Joint  -> id in old.voters || id in new.voters
+    }
+
     // ── Quorum helpers (all take `self` to credit the leader correctly) ────────
 
     /**

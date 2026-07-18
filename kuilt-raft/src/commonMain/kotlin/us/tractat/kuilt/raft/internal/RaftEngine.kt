@@ -1924,7 +1924,32 @@ internal class RaftEngine(
 
     // ── Message dispatcher ────────────────────────────────────────────────────
 
-    private suspend fun onMessage(from: NodeId, m: RaftMessage) = when (m) {
+    private suspend fun onMessage(from: NodeId, m: RaftMessage) {
+        // ── §5.2 / §8 leader-authority gate (#1383) ──────────────────────────────
+        // AppendEntries and InstallSnapshot are leader→peer RPCs, and only a voter can
+        // ever be leader (§5.2: a candidate must win a majority of the voter set). So a
+        // frame of either type whose *sender* is not a current voter is a forgery — an
+        // admitted-but-malicious learner/spoke that reached us over the cross-server
+        // relay, which preserves the honest origin (`origin == sender` spoof-checking
+        // passes) yet cannot vouch for the RPC type. Drop it BEFORE dispatch: the log
+        // path does no `from` validation, so an accepted forged AppendEntries would
+        // adopt m.term, set `_leader` from the payload, and truncate-then-append
+        // (log corruption), and an InstallSnapshot would overwrite state — not the mere
+        // term-inflation a spoof-only view suggests. `from` here is already the true
+        // origin (SeamRaftTransport / RoutedRaftTransport / RaftRelayHub unwrap the relay
+        // envelope), and `membershipState` is the live committed voter set, so a legitimate
+        // leader (always a voter) and every leader→learner frame pass unchanged. See
+        // RoutedRaftTransport's "residual spoke→voter gap" note — this is that fix.
+        if ((m is RaftMessage.AppendEntries || m is RaftMessage.InstallSnapshot) &&
+            !state.membershipState.isVoter(from)
+        ) {
+            debug { "onMessage: dropped ${m::class.simpleName} from non-voter $from (§5.2 leader-authority gate) membershipState=${state.membershipState}" }
+            return
+        }
+        onValidatedMessage(from, m)
+    }
+
+    private suspend fun onValidatedMessage(from: NodeId, m: RaftMessage) = when (m) {
         is RaftMessage.RequestVote             -> onRequestVote(from, m)
         is RaftMessage.RequestVoteResponse     -> onRequestVoteResponse(from, m)
         is RaftMessage.AppendEntries           -> onAppendEntries(from, m)
