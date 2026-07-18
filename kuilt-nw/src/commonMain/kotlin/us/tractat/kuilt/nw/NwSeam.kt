@@ -364,13 +364,14 @@ internal class NwSeam(
     private suspend fun processFrame(connId: NwConnectionId, cs: ConnState, frame: ByteArray) {
         var decodeError: Throwable? = null
         val outcome = lock.withLock {
+            val resolved = cs.resolvedPeerId
             when {
                 // #1528 finding 2: getOrCreateConnForBytes and this classify are two lock acquisitions, so a
                 // removal path can tombstone/replace [connId] between them. Resolving identity on a dead conn
                 // would register registry[peer] = Winner(deadConnId) — an unevictable zombie. If this cs is no
                 // longer the live one (replaced) or its connId was tombstoned, DROP the frame.
                 conns[connId] !== cs || connId in tombstones -> FrameOutcome.Dropped
-                cs.resolvedPeerId != null -> FrameOutcome.Data(cs.resolvedPeerId!!)
+                resolved != null -> FrameOutcome.Data(resolved)
                 else -> {
                     // #1528 part B: a corrupt/undecodable first frame must NOT throw out of the collector and
                     // kill the receive loop. Narrowly wrap ONLY the decode (never resolveIdentity); a real
