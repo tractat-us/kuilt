@@ -550,4 +550,100 @@ class NwSeamTest {
         assertFailsWith<IllegalStateException> { a.seam.broadcast("x".encodeToByteArray()) }
         assertFailsWith<IllegalStateException> { a.seam.sendTo(b.peerId, "x".encodeToByteArray()) }
     }
+
+    @Test
+    fun bufferedFrameOnATombstonedConnDoesNotResurrectItOrRegisterAPhantomPeer() = runTest(StandardTestDispatcher()) {
+        // #1528 part A (tombstone). A connId that was removed from `conns` (here: a self-connection the
+        // guard drops) must NOT be resurrected by a late/buffered frame that arrives on it afterwards.
+        // Pre-fix, getOrCreateConn re-creates a fresh ConnState (resolvedPeerId=null), so the late DATA
+        // frame is misparsed as an NwHello and a PHANTOM peer is registered. Post-fix the connId is
+        // tombstoned and the frame is dropped. A genuinely-new conn is unaffected (#1509 non-regression),
+        // proven by the still-live peer-1 link below.
+        val radio = FakeNwRadio()
+        val apiA = FakeNwApi(radio, deviceId = "dev-0", serviceName = "svc-0")
+        val self = PeerId("peer-0")
+        val seamA = NwSeam(self, apiA, seamScope(), Random(0))
+        val received = mutableListOf<Swatch>()
+        backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) { seamA.incoming.collect { received += it } }
+        testScheduler.runCurrent()
+
+        // A genuinely-new inbound conn resolves to a REAL remote peer-1 — the #1509 path that MUST keep working.
+        val live = NwConnectionId("c-live")
+        apiA.emitConnectionOpened(NwConnectionOpened(live, endpoint = null))
+        testScheduler.runCurrent()
+        apiA.emitBytesReceived(
+            NwBytesReceived(live, encodeFrame(NwHello.encode(PeerId("peer-1"), ByteArray(NONCE_BYTES) { 1 }))),
+        )
+        assertTrue(pumpUntil { PeerId("peer-1") in seamA.peers.value }, "peer-1 resolved on the live conn")
+
+        // A self-connection: its remote resolves to selfId, so the guard removes it from `conns` (and, once
+        // fixed, tombstones it).
+        val selfConn = NwConnectionId("c-self")
+        apiA.emitConnectionOpened(NwConnectionOpened(selfConn, endpoint = null))
+        testScheduler.runCurrent()
+        apiA.emitBytesReceived(
+            NwBytesReceived(selfConn, encodeFrame(NwHello.encode(self, ByteArray(NONCE_BYTES) { 2 }))),
+        )
+        testScheduler.runCurrent()
+        assertEquals(setOf(self, PeerId("peer-1")), seamA.peers.value, "self never joins the roster (pre-condition)")
+
+        // Late, buffered DATA frame arrives on the just-removed self-conn — pre-fix this resurrects it and is
+        // misparsed as an NwHello for a phantom peer.
+        apiA.emitBytesReceived(
+            NwBytesReceived(selfConn, encodeFrame(NwHello.encode(PeerId("phantom-peer"), ByteArray(NONCE_BYTES) { 3 }))),
+        )
+        testScheduler.runCurrent()
+
+        // The receive loop is still healthy: a later legit frame on the live conn is still delivered.
+        apiA.emitBytesReceived(NwBytesReceived(live, encodeFrame("still-alive".encodeToByteArray())))
+        pumpUntil { received.any { it.decodeToString() == "still-alive" } }
+
+        assertAll(
+            { assertEquals(setOf(self, PeerId("peer-1")), seamA.peers.value, "no phantom peer from the resurrected tombstoned conn") },
+            { assertTrue(received.any { it.decodeToString() == "still-alive" }, "receive loop still delivers on the live conn") },
+        )
+    }
+
+    @Test
+    fun anUndecodableFirstFrameDoesNotKillTheReceiveLoop() = runTest(StandardTestDispatcher()) {
+        // #1528 part B (backstop). Even if a tombstone is missed, a first frame on an unresolved conn that
+        // fails NwHello.decode (garbage idLen → IndexOutOfBounds) must NOT propagate out of the collector and
+        // kill bytesReceivedLoop (leaving the seam permanently DEAF yet non-Torn). Pre-fix the throw escapes
+        // and kills the loop; post-fix the decode failure disconnects that conn and the loop keeps running —
+        // proven by a subsequent legit frame delivered on a DIFFERENT live conn.
+        val radio = FakeNwRadio()
+        val apiA = FakeNwApi(radio, deviceId = "dev-0", serviceName = "svc-0")
+        val self = PeerId("peer-0")
+        val seamA = NwSeam(self, apiA, seamScope(), Random(0))
+        val received = mutableListOf<Swatch>()
+        backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) { seamA.incoming.collect { received += it } }
+        testScheduler.runCurrent()
+
+        // A live conn resolved to peer-1.
+        val live = NwConnectionId("c-live")
+        apiA.emitConnectionOpened(NwConnectionOpened(live, endpoint = null))
+        testScheduler.runCurrent()
+        apiA.emitBytesReceived(
+            NwBytesReceived(live, encodeFrame(NwHello.encode(PeerId("peer-1"), ByteArray(NONCE_BYTES) { 1 }))),
+        )
+        assertTrue(pumpUntil { PeerId("peer-1") in seamA.peers.value }, "peer-1 resolved on the live conn")
+
+        // A genuinely-new conn whose FIRST frame is undecodable as an NwHello (idLen = 0x7fffffff → OOB).
+        val bad = NwConnectionId("c-bad")
+        apiA.emitConnectionOpened(NwConnectionOpened(bad, endpoint = null))
+        testScheduler.runCurrent()
+        val garbage = encodeFrame(byteArrayOf(0x7F.toByte(), 0xFF.toByte(), 0xFF.toByte(), 0xFF.toByte()))
+        apiA.emitBytesReceived(NwBytesReceived(bad, garbage))
+        testScheduler.runCurrent()
+
+        // The loop survived: a later legit frame on the live conn is still delivered.
+        apiA.emitBytesReceived(NwBytesReceived(live, encodeFrame("still-alive".encodeToByteArray())))
+        pumpUntil { received.any { it.decodeToString() == "still-alive" } }
+
+        assertAll(
+            { assertTrue(received.any { it.decodeToString() == "still-alive" }, "receive loop survived the undecodable frame and still delivers") },
+            { assertTrue(PeerId("peer-1") in seamA.peers.value, "peer-1 stays resolved") },
+            { assertTrue(seamA.state.value !is SeamState.Torn, "seam is not torn by the decode failure") },
+        )
+    }
 }
