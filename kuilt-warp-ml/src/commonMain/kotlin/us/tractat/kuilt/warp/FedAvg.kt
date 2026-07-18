@@ -86,7 +86,10 @@ public class FedAvg private constructor(
      * Sums are evaluated in canonical [ReplicaId] order (lexicographic) for
      * bit-for-bit reproducibility across replicas and platforms.
      *
-     * @throws IllegalStateException if no peer has contributed (total sample count is zero).
+     * @throws IllegalStateException if no peer has contributed (total sample count is zero),
+     *   or if peers contributed weight vectors of differing dimension (the FedAvg contract
+     *   requires the same dimension across all peers — a mismatch would silently skew the
+     *   mean toward zero via padding, so fail loud instead).
      */
     public val weights: List<Double>
         get() {
@@ -94,7 +97,7 @@ public class FedAvg private constructor(
             check(totalCount > 0L) {
                 "FedAvg has no contributions — cannot compute weights (total sample count is zero)"
             }
-            return coordinateAverages(totalCount)
+            return coordinateAverages(totalCount, uniformDimension())
         }
 
     /** The join: per-peer union keeping the max slot (by total order) on collisions. */
@@ -120,10 +123,22 @@ public class FedAvg private constructor(
 
     private fun totalSampleCount(): Long = slots.values.sumOf { it.sampleCount }
 
-    private fun coordinateAverages(totalCount: Long): List<Double> {
-        val dimension = slots.values.maxOf { it.weightedSum.size }
-        return List(dimension) { i -> coordinateSum(i) / totalCount }
+    /**
+     * The single weight-vector dimension shared by every live slot. The FedAvg contract
+     * requires all peers to contribute the same dimension; a mismatch is a read precondition
+     * violation (fail loud rather than pad and skew the mean toward zero).
+     */
+    private fun uniformDimension(): Int {
+        val dimensions = slots.values.mapTo(HashSet()) { it.weightedSum.size }
+        check(dimensions.size == 1) {
+            "FedAvg peers contributed differing weight-vector dimensions $dimensions — " +
+                "every peer must contribute the same dimension"
+        }
+        return dimensions.single()
     }
+
+    private fun coordinateAverages(totalCount: Long, dimension: Int): List<Double> =
+        List(dimension) { i -> coordinateSum(i) / totalCount }
 
     /** Sum coordinate [index] in canonical [ReplicaId] order for bit-deterministic results. */
     private fun coordinateSum(index: Int): Double =
