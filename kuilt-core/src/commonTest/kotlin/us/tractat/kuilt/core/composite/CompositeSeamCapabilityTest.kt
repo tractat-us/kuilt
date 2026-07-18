@@ -18,6 +18,7 @@ import us.tractat.kuilt.core.TransportRole
 import us.tractat.kuilt.test.FakeSeam
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertIs
 
 /**
  * A [CompositeSeam]'s live [Seam.capability] unions the roles of the constituent **Looms** of
@@ -46,9 +47,36 @@ class CompositeSeamCapabilityTest {
         composite.close(CloseReason.Normal)
     }
 
+    @Test
+    fun allUnknownWovenPliesMakeCompositeAvailabilityUnknown() = runTest {
+        val loom = CompositeLoom(
+            listOf(
+                PlyId("a") to availabilityLoom(FabricAvailability.Unknown("x")),
+                PlyId("b") to availabilityLoom(FabricAvailability.Unknown("y")),
+            ),
+            dispatcher = UnconfinedTestDispatcher(testScheduler),
+        )
+        val composite = loom.host(Pattern("host"))
+
+        // Both plies are Woven FakeSeams whose Looms report Unknown availability → the composite
+        // must fold to Unknown (best-effort), NEVER Unavailable.
+        withTimeoutOrNull(2_000) {
+            composite.capability.first { it.availability is FabricAvailability.Unknown }
+        }
+        assertIs<FabricAvailability.Unknown>(composite.capability.value.availability)
+        composite.close(CloseReason.Normal)
+    }
+
     /** A [Loom] that reports one [role] and weaves a ready ([SeamState.Woven]) [FakeSeam]. */
     private fun roleLoom(role: TransportRole): Loom = object : Loom {
         override suspend fun weave(rendezvous: Rendezvous): Seam = FakeSeam(selfId = PeerId("ply-$role"))
         override fun capability() = TransportCapability(setOf(role), FabricAvailability.Available)
+    }
+
+    /** A [Loom] reporting a given [availability] that weaves a ready ([SeamState.Woven]) [FakeSeam]. */
+    private fun availabilityLoom(availability: FabricAvailability): Loom = object : Loom {
+        override suspend fun weave(rendezvous: Rendezvous): Seam =
+            FakeSeam(selfId = PeerId("ply-${availability::class.simpleName}"))
+        override fun capability() = TransportCapability(setOf(TransportRole.Data), availability)
     }
 }

@@ -56,12 +56,15 @@ public class CompositeLoom(
     override fun capability(): TransportCapability {
         val caps = plies.value.map { it.second.capability() }
         val roles = caps.flatMap { it.roles }.toSet()
-        val availability =
-            if (caps.any { it.availability == FabricAvailability.Available }) {
-                FabricAvailability.Available
-            } else {
-                FabricAvailability.Unavailable("no ply available")
-            }
+        // Three-way lattice fold: any ply Available ⇒ Available; else any Unknown ⇒ Unknown
+        // (attempt anyway, best-effort — don't collapse an unproven ply to Unavailable); else
+        // Unavailable.
+        val availability = when {
+            caps.any { it.availability is FabricAvailability.Available } -> FabricAvailability.Available
+            caps.any { it.availability is FabricAvailability.Unknown } ->
+                FabricAvailability.Unknown("no ply available; some unknown")
+            else -> FabricAvailability.Unavailable("no ply available")
+        }
         return TransportCapability(roles, availability)
     }
 }

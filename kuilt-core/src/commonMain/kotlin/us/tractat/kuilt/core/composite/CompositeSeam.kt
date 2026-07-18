@@ -249,19 +249,21 @@ internal class CompositeSeam(
             val wovenIds = live.entries
                 .filter { it.value.seam.state.value is SeamState.Woven }
                 .map { it.key }.toSet()
-            val roles = desired.value
-                .filter { (id, _) -> id in wovenIds }
-                .flatMap { (_, loom) -> loom.capability().roles }.toSet()
-            roles to wovenIds.isNotEmpty()
+            val wovenLooms = desired.value.filter { (id, _) -> id in wovenIds }
+            val roles = wovenLooms.flatMap { (_, loom) -> loom.capability().roles }.toSet()
+            val availabilities = wovenLooms.map { (_, loom) -> loom.capability().availability }
+            roles to availabilities
         }
-        _capability.value = TransportCapability(
-            roles = snapshot.first,
-            availability = if (snapshot.second) {
-                FabricAvailability.Available
-            } else {
-                FabricAvailability.Unavailable("no ply woven")
-            },
-        )
+        // Three-way lattice fold over the woven plies' Loom availabilities (mirrors
+        // CompositeLoom.capability): any Available ⇒ Available; else any Unknown ⇒ Unknown
+        // (best-effort — don't collapse an unproven ply to Unavailable); else Unavailable.
+        val availability = when {
+            snapshot.second.any { it is FabricAvailability.Available } -> FabricAvailability.Available
+            snapshot.second.any { it is FabricAvailability.Unknown } ->
+                FabricAvailability.Unknown("no ply available; some unknown")
+            else -> FabricAvailability.Unavailable("no ply woven")
+        }
+        _capability.value = TransportCapability(roles = snapshot.first, availability = availability)
     }
 
     // Any-live ⇒ Woven; otherwise Weaving. A fully-degraded composite — empty OR every ply currently
