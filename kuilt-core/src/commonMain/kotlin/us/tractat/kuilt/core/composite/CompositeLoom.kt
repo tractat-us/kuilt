@@ -9,6 +9,7 @@ import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.PlyId
 import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.Seam
+import us.tractat.kuilt.core.TransportCapability
 import kotlin.coroutines.CoroutineContext
 
 /**
@@ -52,10 +53,15 @@ public class CompositeLoom(
         return CompositeSeam(initial, rendezvous, plies, dispatcher, policy)
     }
 
-    override fun availability(): FabricAvailability =
-        if (plies.value.any { it.second.availability() == FabricAvailability.Available }) {
-            FabricAvailability.Available
-        } else {
-            FabricAvailability.Unavailable("no ply available")
-        }
+    override fun capability(): TransportCapability {
+        val caps = plies.value.map { it.second.capability() }
+        val roles = caps.flatMap { it.roles }.toSet()
+        val availability =
+            if (caps.any { it.availability == FabricAvailability.Available }) {
+                FabricAvailability.Available
+            } else {
+                FabricAvailability.Unavailable("no ply available")
+            }
+        return TransportCapability(roles, availability)
+    }
 }

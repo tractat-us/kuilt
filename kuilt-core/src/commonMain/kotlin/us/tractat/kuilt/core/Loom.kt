@@ -36,8 +36,16 @@ public interface Loom {
     public suspend fun join(tag: Tag): Seam = weave(Rendezvous.Existing(tag))
 
     /**
-     * Whether this fabric can be attempted now. Default [FabricAvailability.Available];
-     * fabrics gated on a runtime capability override.
+     * This fabric's role(s) and whether it can be attempted now. The single
+     * capability primitive — override this, not [availability]. Default: a
+     * roleless [FabricAvailability.Available].
      */
-    public fun availability(): FabricAvailability = FabricAvailability.Available
+    public fun capability(): TransportCapability =
+        TransportCapability(roles = emptySet(), availability = FabricAvailability.Available)
+
+    /**
+     * Whether this fabric can be attempted now — the availability half of
+     * [capability]. Derived; do not override.
+     */
+    public fun availability(): FabricAvailability = capability().availability
 }
