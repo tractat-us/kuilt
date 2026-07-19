@@ -127,14 +127,25 @@ auto-merge — it touches the reconnect module and the terminal event's data, an
 module-scoped build is a false green for reconnect changes — but there is no
 retry-behavior change to regress.
 
-**Message honesty.** `SeamRoom`'s host currently sends a generic
-`Reject("resume-rejected")`, so `Refused("resume-rejected")` is what fires in-tree;
-`Refused(message)` is the honest *shape* for when a host sends a meaningful reason.
-Threading the `tryResume` cause (never-opened / expired / token-invalid) into the
-host's reject string — which would make `Refused` non-vacuous and enable a smarter
-short-circuit on genuinely-terminal causes — is folded into the **typed reject
-codes** follow-up, not #1556. The KDoc states this plainly so the type does not
-promise semantics the built-in host does not yet carry.
+**Message honesty (host-side improvement, in scope).** `SeamRoom`'s host currently
+sends a single constant `Reject("resume-rejected")` for every failed resume,
+discarding what `tryResume` actually distinguished. As part of #1556, `handleResume`
+threads the `tryResume` cause into the reject string:
+
+- `ResumeResult.WindowClosed` → `Reject("resume-window-closed")`
+- `ResumeResult.TokenInvalid(reason)` → `Reject("resume-token-invalid: <reason>")`
+
+So `FailureReason.Refused(message)` carries a real cause (`"resume-window-closed"` /
+`"resume-token-invalid: session-mismatch"`) rather than an opaque constant. This is a
+pure host-side message refinement — no `ResumeResult` or controller change, no
+behavior change to the retry loop (still record-and-relabel, never short-circuit).
+
+One honest limit remains: `tryResume` folds *never-opened* (transient fast-reconnect
+race) and *expired/consumed* (terminal) both into `WindowClosed`, so
+`"resume-window-closed"` still cannot be split into transient-vs-terminal without a
+controller change — that finer split (and any fail-fast short-circuit it would
+enable) stays the **typed reject codes** follow-up. The KDoc states this so the type
+does not promise a distinction the wire does not yet carry.
 
 The `AdmissionFailure.Rejected(message)` variant (admit-phase, pre-admission) already
 carries a message and is left as-is; `FailureReason.Refused` is the post-admission

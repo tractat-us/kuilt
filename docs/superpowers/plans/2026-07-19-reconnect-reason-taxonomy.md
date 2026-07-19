@@ -377,12 +377,12 @@ Terminal-label refinement, **behavior-preserving**. Today a host `Reject` of a r
 
 **Files:**
 - Modify: `kuilt-session/src/commonMain/kotlin/us/tractat/kuilt/session/partition/JoinerResumeMachine.kt` (`rejectFlight`, `runReconnect`, new `refusal` field)
-- Modify: `kuilt-session/src/commonMain/kotlin/us/tractat/kuilt/session/SeamRoom.kt:862` (pass the reject message)
+- Modify: `kuilt-session/src/commonMain/kotlin/us/tractat/kuilt/session/SeamRoom.kt:862` (pass the reject message) and `:966–980` (`handleResume` — differentiate the reject message by cause)
 - Test: `kuilt-session/src/commonTest/kotlin/us/tractat/kuilt/session/JoinerReconnectTest.kt` (new)
 
 **Interfaces:**
-- Consumes: `FailureReason.Refused` from Task 1; `AdmitMessage.Reject.reason` (existing `String`, always `"resume-rejected"` from the built-in host today).
-- Produces: `JoinerResumeMachine.rejectFlight(message: String): Boolean` (signature change).
+- Consumes: `FailureReason.Refused` from Task 1; `AdmitMessage.Reject.reason` (existing `String`); `ResumeResult` (`Success` / `WindowClosed` / `TokenInvalid(reason)`).
+- Produces: `JoinerResumeMachine.rejectFlight(message: String): Boolean` (signature change); a cause-differentiated resume-reject message from `handleResume` (`"resume-window-closed"` / `"resume-token-invalid: <reason>"`).
 
 - [ ] **Step 1: Write the failing test**
 
@@ -400,13 +400,13 @@ fun `host reject during resume relabels HostLost as Refused`() =
         advanceTimeBy(joinerReconnectWindow + 1.milliseconds)  // exhaust the joiner window
         runCurrent()
         val event = hostLost.await()
-        assertEquals(FailureReason.Refused("resume-rejected"), event.reason)  // not WindowExpired
+        assertEquals(FailureReason.Refused("resume-window-closed"), event.reason)  // not WindowExpired
     }
 ```
 
-The assertion's teeth: the terminal reason is `Refused("resume-rejected")` (a reject was recorded), **not** `WindowExpired` (which is what fires with no reject). Retry timing is unchanged — the event still lands at window expiry.
+The assertion's teeth: the terminal reason is `Refused("resume-window-closed")` — a reject was recorded and its cause carried — **not** `WindowExpired` (which is what fires with no reject). The message is `"resume-window-closed"` because the host has no open window for the joiner (its shorter window already expired, or never opened), so `tryResume` → `WindowClosed` → the differentiated reject from Step 3a. Retry timing is unchanged — the event still lands at the joiner's window expiry.
 
-> If reproducing the host-rejects-before-joiner-window-closes timing with two real rooms proves fiddly, the fallback is a focused unit test on `JoinerResumeMachine` with a fake `JoinerResumeHost` and a `reweave` whose `resume` path drives `rejectFlight("resume-rejected")` — assert `onReconnectFailed(_, FailureReason.Refused("resume-rejected"))` at window expiry. Either proves the label; prefer the real-host version.
+> If reproducing the host-rejects-before-joiner-window-closes timing with two real rooms proves fiddly, the fallback is a focused unit test on `JoinerResumeMachine` with a fake `JoinerResumeHost` and a `reweave` whose `resume` path drives `rejectFlight("resume-window-closed")` — assert `onReconnectFailed(_, FailureReason.Refused("resume-window-closed"))` at window expiry. Either proves the label; prefer the real-host version.
 
 - [ ] **Step 2: Run to verify it fails**
 
@@ -482,7 +482,31 @@ if (!resumed && failureReason is FailureReason.WindowExpired) {
 
 Update the `rejectFlight` and `runReconnect` KDoc to state: a host reject is *recorded, not obeyed as authoritative* — the retry loop still runs, and the reject only refines the terminal label.
 
-- [ ] **Step 4: Pass the message at the `SeamRoom` call site**
+- [ ] **Step 3a: Differentiate the host's resume-reject message by cause**
+
+`SeamRoom.kt` `handleResume` (~lines 966–980) — replace the constant `Reject("resume-rejected")` with a cause-derived message so `Refused` carries a real reason. `ResumeResult` is exhaustively `Success` / `WindowClosed` / `TokenInvalid(reason)`:
+```kotlin
+private suspend fun handleResume(sender: PeerId, msg: AdmitMessage.Resume) {
+    val ctrl = reconnectController ?: return
+    val token = ResumeToken(
+        peerId = PeerId(msg.tokenPeerId),
+        roomId = RoomId(msg.tokenRoomId),
+        issuedAt = msg.issuedAt,
+    )
+    val rejectReason = when (val result = ctrl.tryResume(token, at = clock().toEpochMilliseconds())) {
+        ResumeResult.Success -> null // handleReconnectResumed fires via the controller event stream
+        ResumeResult.WindowClosed -> "resume-window-closed"
+        is ResumeResult.TokenInvalid -> "resume-token-invalid: ${result.reason}"
+    }
+    if (rejectReason != null) {
+        val rejectBytes = AdmitMessage.encode(AdmitMessage.Reject(rejectReason))
+        runCatchingCancellable { seam.sendTo(sender, rejectBytes) }
+    }
+}
+```
+Update the KDoc's "replies with [AdmitMessage.Reject]" line to note the reject reason now carries the cause. No test asserts on the old `"resume-rejected"` constant (verified repo-wide), so nothing else changes.
+
+- [ ] **Step 4: Pass the message at the joiner `SeamRoom` call site**
 
 `SeamRoom.kt:862`:
 ```kotlin
@@ -507,9 +531,10 @@ git commit --no-gpg-sign -m "feat(session): label a resume-window expiry that sa
 
 Behavior-preserving: the retry loop is unchanged (a reject can be the transient
 fast-reconnect race, which retry still recovers). A window expiry that saw a host
-Reject is relabeled HostLost(Refused(msg)) instead of WindowExpired, carrying the
-host's message. Built-in host sends a generic 'resume-rejected'; typed reject
-reasons are a follow-up.
+Reject is relabeled HostLost(Refused(msg)) instead of WindowExpired. handleResume now
+threads the tryResume cause into the reject message (resume-window-closed /
+resume-token-invalid:<reason>) so Refused carries a real cause; splitting
+window-closed into never-opened-vs-expired stays the typed-reject-codes follow-up.
 
 Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 ```
