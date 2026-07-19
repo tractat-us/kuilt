@@ -186,8 +186,79 @@ public suspend fun detectSilentPeerSample(
 
 ## Consensus & turns
 
-<!-- filled by Task 5 -->
+**Intent:** a turn-based session where actions are proposed and become authoritative (or rejected), with a leader/host and a term — "propose", "authoritative", "host elected".
+**Primitive:** `GameSession` + `TurnSequencer` (`:kuilt-game`) over `:kuilt-raft`. If you're building a `propose() → Proposed/Authoritative/Rejected` facade with a `HostElected(term)`, you're rebuilding this.
+
+<!-- verbatim from kuilt-game/src/commonSamples/kotlin/us/tractat/kuilt/game/GameSamples.kt#sampleGameHostJoin -->
+```kotlin
+internal fun sampleGameHostJoin() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    val loom = InMemoryLoom()
+    val hostSeam = loom.host(Pattern("tic-tac-toe"))
+    val joinSeam = loom.join(InMemoryTag("player-2"))
+
+    // Launch concurrently: gameHost suspends while admitting joiners;
+    // gameJoin suspends until the host promotes it to voter.
+    val hostDeferred = async {
+        backgroundScope.gameHost(
+            hostSeam,
+            peerCount = 2,
+            raftConfig = RaftConfig(expectVirtualTime = true),
+            // clock is required (no wall-clock default); production callers pass the system clock.
+            clock = { Clock.System.now() },
+        )
+    }
+    val joinDeferred = async {
+        backgroundScope.gameJoin(
+            joinSeam,
+            raftConfig = RaftConfig(expectVirtualTime = true),
+        )
+    }
+
+    val host = hostDeferred.await()
+    val joiner = joinDeferred.await()
+
+    // Both nodes are voters. propose() may be called on any node —
+    // followers forward to the leader transparently.
+    val hostGame = TurnSequencer(host.node, Int.serializer())
+    val joinerGame = TurnSequencer(joiner.node, Int.serializer())
+
+    val move = hostGame.propose(1)
+    assertEquals(1, move.action)
+
+    // Any node may propose; the joiner's call is forwarded to the host (leader).
+    val joinerMove = joinerGame.propose(2)
+    assertEquals(2, joinerMove.action)
+
+    // Ride an application channel (chat, cursors, …) over the same fabric as consensus.
+    val incoming = async { joiner.appChannel("chat").incoming.first() }
+    host.appChannel("chat").broadcast(byteArrayOf(0x68, 0x69)) // "hi"
+    assertEquals(2, incoming.await().payloadSize)
+
+    // Collect committed turns on any node in the game loop:
+    // scope.launch {
+    //     joinerGame.events.collect { event ->
+    //         when (event) {
+    //             is TurnEvent.Committed -> applyMove(event.indexed.index, event.indexed.action)
+    //             is TurnEvent.Reset -> resetStateMachine(event.snapshot)
+    //         }
+    //     }
+    // }
+
+    // Tear the session down when done (stops the node, then closes the fabric).
+    host.close()
+    joiner.close()
+}
+```
 
 ## Dedup
 
-<!-- filled by Task 5 -->
+**Intent:** skip a message/id you've already handled ("seenIds", "skip-if-exists").
+**Primitive:** `GSet` (`:kuilt-crdt`) for a converging grow-only set, or kuilt's dedup key where you're inside a replicated log. Don't keep an ad-hoc `mutableSetOf<Long>()`.
+
+<!-- verbatim from kuilt-crdt/src/commonSamples/kotlin/us/tractat/kuilt/crdt/CrdtSamples.kt#sampleGSet -->
+```kotlin
+var set = GSet.empty<String>()
+set = set.piece(set.add("alice"))
+set = set.piece(set.add("bob"))
+check(set.elements == setOf("alice", "bob"))
+```
