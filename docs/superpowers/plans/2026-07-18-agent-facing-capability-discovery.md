@@ -523,13 +523,79 @@ gh pr view --web
 
 ---
 
+## Task 10: Install the skill in fireworks-compose (SEPARATE REPO, SEPARATE PR)
+
+**Repo:** `fireworks-compose` (at `/Users/keddie/tractatus/fireworks-compose`) — **NOT** kuilt. This is a second PR in a different repository. Depends on Task 6 (the skill content must exist; copy it verbatim from the kuilt branch).
+
+**Files:**
+- Create in fireworks-compose: `.claude/skills/kuilt-primitives/SKILL.md` (verbatim copy of the kuilt one from Task 6)
+
+**Defensive contract (cross-repo dispatch — read `dispatch-existing-branch-footgun`):**
+- The fireworks-compose **main checkout stays on `main`** — Iain has it open in IntelliJ. Do **all** work in a dedicated ephemeral worktree under the main checkout, driven by absolute `git -C` paths. Never `cd`/`checkout`/`reset` the main checkout.
+- First commands: `git -C /Users/keddie/tractatus/fireworks-compose branch --show-current` (expect `main`) and `pwd`. If anything is off, ABORT and report — do not self-correct by switching branches.
+
+- [ ] **Step 1: Create an isolated fireworks-compose worktree off origin/main**
+
+```bash
+git -C /Users/keddie/tractatus/fireworks-compose fetch origin main
+WT=/Users/keddie/tractatus/fireworks-compose/.claude/worktrees/kuilt-skill
+git -C /Users/keddie/tractatus/fireworks-compose worktree add -b add-kuilt-primitives-skill "$WT" origin/main
+```
+
+- [ ] **Step 2: Copy the skill in verbatim**
+
+```bash
+mkdir -p "$WT/.claude/skills/kuilt-primitives"
+cp <kuilt-branch>/.claude/skills/kuilt-primitives/SKILL.md "$WT/.claude/skills/kuilt-primitives/SKILL.md"
+```
+
+Replace `<kuilt-branch>` with the absolute path to the kuilt worktree holding the Task 6 file. Confirm identical:
+Run: `diff <kuilt-branch>/.claude/skills/kuilt-primitives/SKILL.md "$WT/.claude/skills/kuilt-primitives/SKILL.md"`
+Expected: no output (identical).
+
+- [ ] **Step 3: Commit, push, PR (all via `git -C "$WT"`)**
+
+```bash
+git -C "$WT" add .claude/skills/kuilt-primitives/SKILL.md
+git -C "$WT" commit -m "feat(agent): install kuilt-primitives skill so agents reuse kuilt primitives"
+git -C "$WT" push -u origin add-kuilt-primitives-skill
+gh --repo tractat-us/fireworks-compose pr create \
+  --title "feat(agent): install the kuilt-primitives skill" \
+  --body "$(cat <<'EOF'
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Installs kuilt's `kuilt-primitives` skill into this repo so coding agents reach for
+existing kuilt primitives (ResumeToken, CRDTs, HeartbeatPartitionDetector,
+GameSession, GSet, ExponentialBackoff) instead of hand-rolling them. Trigger phrasing
+is tuned to this repo's vocabulary (rejoin/table/seat/idle-reaper/seenIds). The skill
+routes to kuilt's `docs/agent-cookbook.md`.
+
+Source-of-truth is the copy in the kuilt repo; keep them in sync when kuilt's skill
+changes.
+EOF
+)"
+```
+
+- [ ] **Step 4: Enable auto-merge and record**
+
+```bash
+gh --repo tractat-us/fireworks-compose pr merge --auto --squash
+gh --repo tractat-us/fireworks-compose pr view --web
+```
+
+- [ ] **Step 5: Clean up the worktree after merge**
+
+After the PR merges: `git -C /Users/keddie/tractatus/fireworks-compose worktree remove -f -f "$WT" && git -C /Users/keddie/tractatus/fireworks-compose branch -D add-kuilt-primitives-skill`.
+
+---
+
 ## Self-Review
 
 **Spec coverage:**
 - Layer 2 cookbook → Tasks 1–5. ✓
 - Layer 3 skill → Task 6. ✓
 - CLAUDE.md maintenance rule → Task 7 Step 1. ✓
-- Consumer opt-in (one step) → Task 7 Step 2. ✓
+- Consumer opt-in (one step) → Task 7 Step 2 (documented) + Task 10 (the actual fireworks-compose install PR). ✓
 - Anti-rot via verbatim citation → Global Constraints + Tasks 2–5 + Task 9 Step 2. ✓
 - Skill trigger in consumer vocabulary → Task 6 Step 1 + Task 9 Step 3. ✓
 - Four genuine-gap issues → Task 8. ✓
