@@ -996,4 +996,61 @@ class NwSeamTest {
             { assertTrue(NwConnectionId("closed-$cap") in api.closedConnections.value, "the newest entry is retained") },
         )
     }
+
+    // ── #1415: a slow local consumer must NOT wedge OTHER connections' handshakes ────────────────
+
+    @Test
+    fun aSlowConsumerDoesNotBlockAnotherConnectionsHandshake() = runTest(StandardTestDispatcher()) {
+        // #1415 HEADLINE. The demux/receive loop is SINGLE and shared across every connection. Pre-fix it
+        // called the (SUSPEND-under-Reliable) Spool.deliver INLINE, so the moment one peer's spool filled and
+        // its consumer stalled, the loop wedged INSIDE deliver — starving reads for ALL connections, including
+        // the identity handshake (NwHello) of a newly-arriving peer. Post-fix the loop hands data frames to a
+        // bounded staging channel drained by a dedicated coroutine, so a slow consumer backs up its own
+        // delivery WITHOUT blocking the loop — a later connection's handshake still resolves.
+        //
+        // Capacity-1 Reliable spool with NO incoming collector: after ONE delivered frame the spool is full and
+        // deliver() suspends on the next. Pre-fix that suspends the demux loop; the late peer's NwHello (behind
+        // the stuck data frame in the single loop) is never processed and peer-2 never resolves — pumpUntil
+        // returns false and the assertion fails. Post-fix the staging channel absorbs the stuck frames and the
+        // late handshake resolves.
+        val radio = FakeNwRadio()
+        val apiA = FakeNwApi(radio, deviceId = "dev-0", serviceName = "svc-0")
+        val self = PeerId("peer-0")
+        // capacity=1 so the spool fills after a single undrained frame — makes the stall deterministic.
+        val seam = NwSeam(self, apiA, seamScope(), Random(0), DeliveryPolicy(capacity = 1))
+        // Deliberately DO NOT collect incoming: the spool never drains, so it wedges at capacity.
+        testScheduler.runCurrent()
+
+        // A slow source (peer-1) resolves on c-src; its data will fill and then over-fill the spool.
+        val src = NwConnectionId("c-src")
+        apiA.emitConnectionOpened(NwConnectionOpened(src, endpoint = null))
+        testScheduler.runCurrent()
+        apiA.emitBytesReceived(NwBytesReceived(src, encodeFrame(NwHello.encode(PeerId("peer-1"), ByteArray(NONCE_BYTES) { 1 }))))
+        assertTrue(pumpUntil { PeerId("peer-1") in seam.peers.value }, "peer-1 (slow source) resolved")
+
+        // Flood c-src with data frames. The first fills the 1-slot spool; the rest have nowhere to go — pre-fix
+        // they suspend the demux loop inside deliver(). A handful (well under the staging depth) so post-fix the
+        // loop keeps flowing.
+        repeat(4) { i -> apiA.emitBytesReceived(NwBytesReceived(src, encodeFrame("data-$i".encodeToByteArray()))) }
+        testScheduler.runCurrent()
+
+        // A NEW peer (peer-2) arrives and sends its NwHello AFTER the slow source's flood. In the single demux
+        // loop this handshake sits behind the stuck data frames — it can only resolve if delivery is decoupled
+        // from the loop.
+        val late = NwConnectionId("c-late")
+        apiA.emitConnectionOpened(NwConnectionOpened(late, endpoint = null))
+        testScheduler.runCurrent()
+        apiA.emitBytesReceived(NwBytesReceived(late, encodeFrame(NwHello.encode(PeerId("peer-2"), ByteArray(NONCE_BYTES) { 2 }))))
+
+        assertAll(
+            {
+                assertTrue(
+                    pumpUntil { PeerId("peer-2") in seam.peers.value },
+                    "peer-2's handshake resolved despite peer-1's full/stalled spool — the receive loop was not wedged",
+                )
+            },
+            { assertTrue(PeerId("peer-1") in seam.peers.value, "peer-1 stays resolved") },
+            { assertTrue(seam.state.value is SeamState.Woven, "seam is Woven with both remotes") },
+        )
+    }
 }

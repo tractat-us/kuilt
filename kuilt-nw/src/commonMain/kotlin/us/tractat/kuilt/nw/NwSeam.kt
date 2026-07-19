@@ -8,6 +8,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
@@ -48,8 +49,9 @@ private val log = KotlinLogging.logger("us.tractat.kuilt.nw.NwSeam")
  *  1. **connectionOpened** — sends our identity frame ([NwHello]: this peer's [PeerId] plus this
  *     connection's per-connection dedup nonce).
  *  2. **bytesReceived** — the demux + inline handshake: the first decoded frame on an unresolved
- *     connection is the remote's [NwHello] (id + nonce); every later frame is data, delivered to
- *     [incoming] stamped with that sender.
+ *     connection is the remote's [NwHello] (id + nonce); every later frame is data, stamped with that
+ *     sender and handed to the bounded [deliveryStage] (drained by [deliveryDrainLoop] into [incoming]) so a
+ *     slow local consumer never wedges this shared loop's reads for other connections' handshakes (#1415).
  *  3. **connectionClosed** — the fast, reason-carrying close EVENT path: evicts the peer (conn-identity
  *     guarded so a deduped loser's close can't evict the survivor) and, when the last remote drops,
  *     **re-forms to [SeamState.Weaving] rather than latching [SeamState.Torn]** (#1513) — peer loss is
@@ -226,6 +228,27 @@ internal class NwSeam(
     private val spool = Spool<Swatch>(policy)
     override val incoming: Flow<Swatch> = spool.incoming
 
+    /**
+     * Bounded per-seam staging channel decoupling the single demux/receive loop from delivery
+     * backpressure (#1415). [bytesReceivedLoop] classifies a frame and hands the resulting DATA [Swatch]
+     * here; the single [deliveryDrainLoop] pulls from it and calls the (SUSPEND-under-[DeliveryPolicy.Reliable])
+     * [Spool.deliver]. Without this stage the demux loop suspends INSIDE [Spool.deliver] whenever ONE peer's
+     * consumer is slow and its [spool] is full — wedging reads for EVERY connection, including the identity
+     * handshakes of newly-arriving peers (per-link-loop fabrics like `MeshSeam` don't suffer this because each
+     * link has its own loop). With the stage, a slow consumer backs up its own delivery while the shared loop
+     * keeps flowing, so a later connection's handshake still resolves.
+     *
+     * It is **bounded** ([DELIVERY_STAGING_CAPACITY]) — no unbounded growth, which would be the contract
+     * violation this design must not introduce — so a consumer that stays slow *forever* still eventually
+     * backpressures the demux loop, but only after this headroom fills, and only DATA frames queue (identity
+     * frames resolve inline, never through the spool). Overflow is always SUSPEND (never lossy) regardless of
+     * [policy]: the [spool] alone applies the delivery policy; this stage only moves WHERE the backpressure is
+     * felt (the drain, not the shared loop). The single dedicated reader is the sanctioned FIFO pattern, not a
+     * single-thread-confinement crutch: sequence order is preserved because [bytesReceivedLoop] stamps each
+     * [Swatch]'s sequence in arrival order and enqueues it in that order.
+     */
+    private val deliveryStage: Channel<Swatch> = Channel(capacity = DELIVERY_STAGING_CAPACITY)
+
     // Single latch flag, read/written across every path (receive/close/send).
     private val closed = atomic(false)
 
@@ -241,6 +264,11 @@ internal class NwSeam(
     private val closedJob: Job = scope.launch(start = CoroutineStart.UNDISPATCHED) { connectionClosedLoop() }
     private val viabilityJob: Job = scope.launch(start = CoroutineStart.UNDISPATCHED) { connectionViabilityLoop() }
     private val closedStateJob: Job = scope.launch(start = CoroutineStart.UNDISPATCHED) { connectionClosedStateLoop() }
+
+    // The single dedicated reader draining [deliveryStage] into the [spool] (#1415). Launched like every
+    // other loop and cancelled with [scope] at teardown. It is the ONLY caller of [Spool.deliver], so the
+    // (possibly-suspending) delivery backpressure lives here, off the shared demux loop.
+    private val drainJob: Job = scope.launch(start = CoroutineStart.UNDISPATCHED) { deliveryDrainLoop() }
 
     // ── loop 1: connectionOpened ────────────────────────────────────────────────
 
@@ -309,6 +337,24 @@ internal class NwSeam(
             for (frame in frames) {
                 processFrame(connId, cs, frame)
             }
+        }
+    }
+
+    // ── delivery drain: single reader decoupling receive from spool backpressure (#1415) ─────────
+
+    /**
+     * The single dedicated reader draining [deliveryStage] into the [spool]. Moving the (SUSPEND-under-
+     * [DeliveryPolicy.Reliable]) [Spool.deliver] here is what keeps a slow local consumer from wedging the
+     * shared [bytesReceivedLoop] (#1415): a full spool suspends THIS loop, not the demux loop, so other
+     * connections' reads — including newly-arriving peers' identity handshakes — keep flowing. FIFO is
+     * preserved: [bytesReceivedLoop] stamps each [Swatch]'s sequence in arrival order and enqueues it in that
+     * order, and this reader delivers in the same order. Cancelled with [scope] at teardown like every other
+     * loop; a [Spool.deliver] suspended on a full-and-closing spool unwinds on cancellation (or the spool's
+     * own [Spool.deliver] drop when [Spool.close] races it).
+     */
+    private suspend fun deliveryDrainLoop() {
+        for (swatch in deliveryStage) {
+            spool.deliver(swatch)
         }
     }
 
@@ -415,9 +461,13 @@ internal class NwSeam(
             }
         }
         when (outcome) {
-            // Data frame — deliver OUTSIDE the lock (Spool.deliver suspends for backpressure).
+            // Data frame — hand OFF to the bounded staging channel (#1415), never call the SUSPEND-under-
+            // Reliable Spool.deliver inline here: that would wedge this shared demux loop (and every other
+            // connection's handshake) whenever THIS sender's consumer is slow. The single deliveryDrainLoop
+            // owns Spool.deliver. Sequence is stamped in arrival order here, so FIFO is preserved across the
+            // stage. Runs OUTSIDE the lock; deliveryStage.send only suspends when the (bounded) stage is full.
             is FrameOutcome.Data ->
-                spool.deliver(Swatch(payload = frame, sender = outcome.sender, sequence = seq.incrementAndGet()))
+                deliveryStage.send(Swatch(payload = frame, sender = outcome.sender, sequence = seq.incrementAndGet()))
             // Dedup loser (if any) — disconnect OUTSIDE the lock (best-effort). The loser's ConnState was
             // just removed from `conns` in resolveIdentity; cancel any grace timer armed for it too, for
             // symmetry with connectionClosedLoop/removeByConn. Normally the loser's own connectionClosed
@@ -867,6 +917,14 @@ internal class NwSeam(
     internal companion object {
         /** Default grace given a path-lost (`ready → waiting`) connection to recover before the seam tears it (#1478). */
         val DEFAULT_WOVEN_PATH_GRACE: Duration = 10.seconds
+
+        /**
+         * Depth of the [deliveryStage] staging channel (#1415) — the headroom by which the shared demux loop
+         * may run ahead of a slow local consumer before backpressure reaches reads. Bounded (never unbounded,
+         * which would be a contract violation); sized to the [spool]'s default capacity so a transient consumer
+         * stall of up to a spool's worth of frames is absorbed without touching the shared receive loop.
+         */
+        const val DELIVERY_STAGING_CAPACITY: Int = DeliveryPolicy.DEFAULT_CAPACITY
 
         /**
          * Upper bound on the [tombstones] FIFO of recently-removed connIds (#1528). A late/buffered frame
