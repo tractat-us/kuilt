@@ -21,7 +21,37 @@ If you catch yourself writing any of these, stop — kuilt already ships it:
 
 ## Rejoin & reconnect
 
-<!-- filled by Task 2 -->
+**Intent:** rejoin / reconnect after a dropped connection; "hold the slot open" for a grace window.
+**Primitive:** `ResumeToken` + the `SeamRoom` resume flow (`us.tractat.kuilt.session.partition`). Don't re-track the grace window yourself.
+
+<!-- verbatim from kuilt-session/src/commonSamples/kotlin/us/tractat/kuilt/session/AgentCookbookSamples.kt#resumeAfterDropSample -->
+```kotlin
+public suspend fun resumeAfterDropSample(room: Room) {
+    // After the admit handshake the joiner holds a reconnect credential — save it.
+    val token: ResumeToken = room.resumeToken ?: return
+    // ... transport drops; you redial the fabric and rebuild the room ...
+    // Present the saved token to re-enter within the leader's grace window.
+    when (room.resume(token)) {
+        ResumeResult.Success -> Unit // back in the room; state resync follows
+        ResumeResult.WindowClosed -> Unit // grace window elapsed — re-join fresh
+        is ResumeResult.TokenInvalid -> Unit // wrong session — re-join fresh
+    }
+}
+```
+
+**Intent:** retry with back-off after a failed dial.
+**Primitive:** `core.util.ExponentialBackoff` — don't hand-roll a `listOf(1.s, 5.s, 30.s)` delay table.
+
+<!-- verbatim from kuilt-session/src/commonSamples/kotlin/us/tractat/kuilt/session/AgentCookbookSamples.kt#retryWithBackoffSample -->
+```kotlin
+public suspend fun retryWithBackoffSample(random: Random, dial: suspend () -> Boolean) {
+    val backoff = ExponentialBackoff(base = 1.seconds, cap = 30.seconds, random = random)
+    var attempt = 0
+    while (!dial()) {
+        delay(backoff.delay(attempt++)) // full-jitter; decorrelates simultaneous retriers
+    }
+}
+```
 
 ## Replicated data
 
