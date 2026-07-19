@@ -5,6 +5,10 @@ package us.tractat.kuilt.nw
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.FlowCollector
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
@@ -1052,5 +1056,153 @@ class NwSeamTest {
             { assertTrue(PeerId("peer-1") in seam.peers.value, "peer-1 stays resolved") },
             { assertTrue(seam.state.value is SeamState.Woven, "seam is Woven with both remotes") },
         )
+    }
+
+    // ── #1566: reconcileStates reads the FRESHEST connectionStates under the lock, not a stale snapshot ──
+
+    /**
+     * #1566 anti-spurious-tear. The lost-wakeup catch-up guards (and the collector) used to reconcile from a
+     * snapshot of `connectionStates` captured on the caller's thread; under a multi-threaded dispatcher that
+     * snapshot could be STALE relative to the value the states collector had already processed, and because a
+     * [StateFlow] never re-emits an unchanged value the stale outcome was FINAL. Here the freshest truth is
+     * `{conn-Y: Viable}` (Y is healthy) while a STALE `{conn-Y: PathLost}` reaches the reconcile. Pre-fix the
+     * reconcile trusts the stale `PathLost` and arms a grace timer that tears a HEALTHY Y after the grace;
+     * post-fix it re-reads the fresh `Viable` under the lock and arms nothing, so Y is never torn.
+     *
+     * The staleness is forced deterministically (no real threads) by a [ControllableStates] whose collector
+     * emission and `.value` are decoupled: the collector receives the stale map while `.value` returns the
+     * fresh one — exactly the divergence the thread race produced. RED against the parameter-trusting version.
+     */
+    @Test
+    fun staleCatchUpSnapshotDoesNotTearAHealthyPeer_reconcileReadsFreshValue() = runTest(StandardTestDispatcher()) {
+        val grace = 10.seconds
+        val radio = FakeNwRadio()
+        val fake = FakeNwApi(radio, deviceId = "dev-0", serviceName = "svc-0")
+        val states = ControllableStates()
+        val api = DivergentStatesApi(fake, states)
+        val self = PeerId("peer-self")
+        val seam = NwSeam(self, api, seamScope(), Random(0), wovenPathGrace = grace)
+        backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) { seam.incoming.collect { } }
+        testScheduler.runCurrent()
+
+        val (connY, peerY) = weaveRemote(seam, fake, "conn-Y", "peer-Y")
+
+        // Freshest truth: Y's path is Viable (healthy). The reconcile the collector is about to run receives a
+        // STALE {conn-Y: PathLost} while `.value` already holds {conn-Y: Viable}.
+        states.diverge(
+            fresh = mapOf(connY to NwConnState.Viable),
+            staleEmission = mapOf(connY to NwConnState.PathLost),
+        )
+        testScheduler.runCurrent()
+        // Advance well past the grace: a spuriously-armed timer would fire and tear Y here.
+        testScheduler.advanceTimeBy(grace.inWholeMilliseconds * 2)
+        testScheduler.runCurrent()
+
+        assertAll(
+            { assertEquals(setOf(self, peerY), seam.peers.value, "healthy Y stays — fresh Viable won over the stale PathLost snapshot (#1566)") },
+            { assertTrue(seam.state.value is SeamState.Woven, "seam stays Woven — no spurious tear from a stale catch-up snapshot") },
+        )
+    }
+
+    /**
+     * #1566 anti-zombie (the worse half). Y is legitimately [NwConnState.PathLost] with its grace timer armed;
+     * a STALE `{conn-Y: Viable}` then reaches the reconcile while the freshest truth is still `PathLost`.
+     * Pre-fix the reconcile trusts the stale `Viable` and CANCELS the armed timer — and since a path-lost
+     * `waiting` connection fires no `connectionClosed`, and a [StateFlow] never re-emits an unchanged value, Y
+     * is NEVER re-armed and NEVER torn: a permanent zombie peer (the #1478 mechanism exists to kill exactly
+     * this). Post-fix the reconcile re-reads the fresh `PathLost` under the lock, leaves the timer armed, and Y
+     * tears on expiry (last-remote loss → re-form to Weaving, #1513). RED against the parameter-trusting version.
+     */
+    @Test
+    fun staleCatchUpSnapshotDoesNotCancelALegitimatelyArmedTimer_reconcileReadsFreshValue() = runTest(StandardTestDispatcher()) {
+        val grace = 10.seconds
+        val radio = FakeNwRadio()
+        val fake = FakeNwApi(radio, deviceId = "dev-0", serviceName = "svc-0")
+        val states = ControllableStates()
+        val api = DivergentStatesApi(fake, states)
+        val self = PeerId("peer-self")
+        val seam = NwSeam(self, api, seamScope(), Random(0), wovenPathGrace = grace)
+        backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) { seam.incoming.collect { } }
+        testScheduler.runCurrent()
+
+        val (connY, _) = weaveRemote(seam, fake, "conn-Y", "peer-Y")
+
+        // A real path loss on Y arms the grace timer (value and emission agree).
+        states.emit(mapOf(connY to NwConnState.PathLost))
+        testScheduler.runCurrent()
+        // Freshest truth stays PathLost, but a STALE {conn-Y: Viable} reaches the reconcile.
+        states.diverge(
+            fresh = mapOf(connY to NwConnState.PathLost),
+            staleEmission = mapOf(connY to NwConnState.Viable),
+        )
+        testScheduler.runCurrent()
+        // Advance past the grace: the armed timer must still fire (fixed) — pre-fix it was cancelled (zombie).
+        testScheduler.advanceTimeBy(grace.inWholeMilliseconds + 1)
+        val torn = pumpUntil { seam.peers.value == setOf(self) }
+
+        assertAll(
+            { assertTrue(torn, "the armed timer survived the stale Viable and tore Y — no zombie (#1566)") },
+            { assertEquals(setOf(self), seam.peers.value, "Y evicted — the stale Viable did not cancel the legitimately-armed timer") },
+            { assertTrue(seam.state.value is SeamState.Weaving, "last-remote loss re-forms to Weaving (#1513), not a zombie Woven peer") },
+        )
+    }
+
+    /** Weave [remote] into [seam] over a bare [fake] (connectionOpened + an NwHello frame), returning its handles. */
+    private suspend fun TestScope.weaveRemote(
+        seam: NwSeam,
+        fake: FakeNwApi,
+        connIdValue: String,
+        remoteValue: String,
+    ): Pair<NwConnectionId, PeerId> {
+        val connId = NwConnectionId(connIdValue)
+        val remote = PeerId(remoteValue)
+        fake.emitConnectionOpened(NwConnectionOpened(connId, endpoint = null))
+        testScheduler.runCurrent()
+        fake.emitBytesReceived(NwBytesReceived(connId, encodeFrame(NwHello.encode(remote, ByteArray(NONCE_BYTES) { 7 }))))
+        assertTrue(pumpUntil { remote in seam.peers.value }, "$remote woven on $connId")
+        return connId to remote
+    }
+
+    /**
+     * [NwApi] that delegates everything to a real [FakeNwApi] EXCEPT [connectionStates], which it serves from a
+     * [ControllableStates] whose collector emission and `.value` can be deliberately DIVERGED — the deterministic
+     * (no-real-thread) stand-in for the #1566 thread race, where a stale caller-captured snapshot reached the
+     * reconcile while `.value` had already advanced.
+     */
+    private class DivergentStatesApi(
+        private val delegate: FakeNwApi,
+        private val states: ControllableStates,
+    ) : NwApi by delegate {
+        override val connectionStates: StateFlow<Map<NwConnectionId, NwConnState>> get() = states
+    }
+
+    /**
+     * A [StateFlow] whose collector emission and `.value` are decoupled so a test can hand the reconcile a STALE
+     * snapshot while `.value` returns the FRESH one — reproducing the #1566 staleness deterministically under
+     * virtual time. [emit] keeps them in agreement (a normal update); [diverge] sets `.value` to `fresh` while
+     * the collector receives `staleEmission`.
+     */
+    @OptIn(kotlinx.coroutines.ExperimentalForInheritanceCoroutinesApi::class) // hand-rolled StateFlow: the #1566 divergence vehicle
+    private class ControllableStates : StateFlow<Map<NwConnectionId, NwConnState>> {
+        private val current = MutableStateFlow<Map<NwConnectionId, NwConnState>>(emptyMap())
+        private val feed = MutableSharedFlow<Map<NwConnectionId, NwConnState>>(replay = 1, extraBufferCapacity = 64)
+
+        override val value: Map<NwConnectionId, NwConnState> get() = current.value
+        override val replayCache: List<Map<NwConnectionId, NwConnState>> get() = listOf(current.value)
+
+        override suspend fun collect(collector: FlowCollector<Map<NwConnectionId, NwConnState>>): Nothing =
+            feed.collect(collector)
+
+        /** Normal update: `.value` and the collector emission agree. */
+        fun emit(map: Map<NwConnectionId, NwConnState>) {
+            current.value = map
+            feed.tryEmit(map)
+        }
+
+        /** #1566 exploit: the collector receives [staleEmission] while `.value` returns [fresh]. */
+        fun diverge(fresh: Map<NwConnectionId, NwConnState>, staleEmission: Map<NwConnectionId, NwConnState>) {
+            current.value = fresh
+            feed.tryEmit(staleEmission)
+        }
     }
 }
