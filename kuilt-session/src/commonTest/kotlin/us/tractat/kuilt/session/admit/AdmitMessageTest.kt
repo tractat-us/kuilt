@@ -3,6 +3,7 @@ package us.tractat.kuilt.session.admit
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -106,6 +107,59 @@ class AdmitMessageTest {
     fun `Farewell round-trips`() {
         val original = AdmitMessage.Farewell(peerId = "peer-7")
         assertEquals(original, AdmitMessage.decode(AdmitMessage.encode(original)))
+    }
+
+    /**
+     * #1557 added [AdmitMessage.Farewell.expired] to distinguish a propagated reconnect-window
+     * expiry from a clean leave. It must be wire-safe in both directions: a clean-leave Farewell
+     * still encodes to the pre-#1557 bytes (defaults are not written), so an older peer decodes
+     * it unchanged; and an expiry Farewell round-trips.
+     */
+    @Test
+    fun `Farewell expired flag round-trips and leaves the clean-leave wire unchanged`() {
+        val expiry = AdmitMessage.Farewell(peerId = "peer-7", expired = true)
+        assertEquals(expiry, AdmitMessage.decode(AdmitMessage.encode(expiry)))
+
+        val cleanLeave = AdmitMessage.encode(AdmitMessage.Farewell(peerId = "peer-7"))
+        assertFalse(
+            cleanLeave.decodeToString().contains("expired"),
+            "a clean-leave Farewell must not write the defaulted field — the wire an older peer " +
+                "sees has to stay byte-identical",
+        )
+        assertEquals(AdmitMessage.Farewell("peer-7", expired = false), AdmitMessage.decode(cleanLeave))
+    }
+
+    @Test
+    fun `Paused and Unpaused round-trip`() {
+        val paused = AdmitMessage.Paused(peerId = "peer-7", expiresAt = 1_234_567L)
+        val unpaused = AdmitMessage.Unpaused(peerId = "peer-7")
+        assertEquals(paused, AdmitMessage.decode(AdmitMessage.encode(paused)))
+        assertEquals(unpaused, AdmitMessage.decode(AdmitMessage.encode(unpaused)))
+    }
+
+    /**
+     * Forward compat for whole *variants*, not just fields (the claim #1557's additive
+     * [AdmitMessage.Paused] / [AdmitMessage.Unpaused] rely on): a frame naming a message type an
+     * older build has never heard of must be tolerated — [AdmitMessage.decode] returns null and
+     * the receiver ignores it — never thrown out of the decode path.
+     *
+     * Crafted from a real Farewell frame by overwriting its `"farewell"` discriminator with an
+     * equal-length unknown name, so only the variant tag differs.
+     */
+    @Test
+    fun `an unknown message variant decodes to null instead of throwing`() {
+        val frame = AdmitMessage.encode(AdmitMessage.Farewell(peerId = "peer-7"))
+        val discriminator = "farewell".encodeToByteArray()
+        val at = frame.indices.first { i ->
+            i + discriminator.size <= frame.size &&
+                discriminator.indices.all { frame[i + it] == discriminator[it] }
+        }
+        val unknown = frame.copyOf().also { "farewe11".encodeToByteArray().copyInto(it, at) }
+
+        assertNull(
+            AdmitMessage.decode(unknown),
+            "an unknown variant must decode to null (and be ignored), not propagate an exception",
+        )
     }
 
     /**
