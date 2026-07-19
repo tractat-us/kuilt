@@ -16,7 +16,8 @@ Read the first path that exists, in order:
 1. `docs/agent-cookbook.md` — if you are working inside the kuilt repo.
 2. `../kuilt/docs/agent-cookbook.md` — if kuilt is checked out side-by-side
    (the `includeBuild("../kuilt")` layout).
-3. Otherwise the published copy: `https://tractat-us.github.io/kuilt/` (search "cookbook").
+3. Otherwise the source-of-truth blob:
+   `https://github.com/tractat-us/kuilt/blob/main/docs/agent-cookbook.md`.
 
 ## The reflex
 
