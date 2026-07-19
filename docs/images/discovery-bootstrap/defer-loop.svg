@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 300" width="720" height="300" role="img" aria-label="Loop: host now, recompute on every change, defer to a lower id, fall back to hosting if dialling fails">
+  <style>
+    .bg    { fill: #0d1117; }
+    .step  { fill: #161b22; stroke: #30363d; stroke-width: 1.5; rx: 8; }
+    .host  { fill: #12261a; stroke: #2ea043; stroke-width: 1.5; rx: 8; }
+    .ttl   { fill: #e6edf3; font: 600 14px system-ui, -apple-system, sans-serif; }
+    .sub   { fill: #8b949e; font: 12px system-ui, -apple-system, sans-serif; }
+    .arrow { stroke: #58a6ff; stroke-width: 1.8; fill: none; }
+    .back  { stroke: #ff7b72; stroke-width: 1.8; fill: none; stroke-dasharray: 5 4; }
+    .edge  { fill: #58a6ff; font: 12px system-ui, -apple-system, sans-serif; }
+    .fail  { fill: #ff7b72; font: 12px system-ui, -apple-system, sans-serif; }
+  </style>
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+      <path d="M0 0 L10 5 L0 10 z" fill="#58a6ff"/>
+    </marker>
+    <marker id="r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+      <path d="M0 0 L10 5 L0 10 z" fill="#ff7b72"/>
+    </marker>
+  </defs>
+  <rect class="bg" width="720" height="300"/>
+
+  <rect class="host" x="30" y="96" width="160" height="72"/>
+  <text class="ttl" x="110" y="126" text-anchor="middle">host now</text>
+  <text class="sub" x="110" y="147" text-anchor="middle">don't wait to be sure</text>
+
+  <path class="arrow" d="M190 132 H250" marker-end="url(#a)"/>
+
+  <rect class="step" x="250" y="96" width="170" height="72"/>
+  <text class="ttl" x="335" y="126" text-anchor="middle">recompute</text>
+  <text class="sub" x="335" y="147" text-anchor="middle">on every list change</text>
+
+  <path class="arrow" d="M420 132 H480" marker-end="url(#a)"/>
+  <text class="edge" x="450" y="122" text-anchor="middle">lower id</text>
+
+  <rect class="step" x="480" y="96" width="170" height="72"/>
+  <text class="ttl" x="565" y="126" text-anchor="middle">defer + dial</text>
+  <text class="sub" x="565" y="147" text-anchor="middle">grab their address now</text>
+
+  <!-- keep-watching self loop -->
+  <path class="arrow" d="M335 96 C335 56, 260 56, 260 92" marker-end="url(#a)"/>
+  <text class="edge" x="298" y="50" text-anchor="middle">no change — keep hosting</text>
+
+  <!-- failure path back to hosting -->
+  <path class="back" d="M565 168 V212 H110 V168" marker-end="url(#r)"/>
+  <text class="fail" x="337" y="232" text-anchor="middle">dial failed or timed out — go back to hosting, never sit waiting</text>
+
+  <text class="sub" x="360" y="274" text-anchor="middle">The loop is the point: one guess at startup breaks, the same guess made continuously converges.</text>
+</svg>

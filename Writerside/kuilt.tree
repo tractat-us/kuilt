@@ -26,6 +26,7 @@
 
     <toc-element toc-title="Consensus">
         <toc-element topic="raft.md"/>
+        <toc-element topic="picking-a-host.md"/>
         <toc-element topic="game-bootstrap.md"/>
         <toc-element topic="cluster-server-client.md"/>
     </toc-element>
