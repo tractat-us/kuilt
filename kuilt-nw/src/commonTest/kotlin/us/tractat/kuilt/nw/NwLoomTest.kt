@@ -210,4 +210,43 @@ class NwLoomTest {
         spy.cancel()
         weave.cancel()
     }
+
+    /**
+     * #1447 item 2: [NwLoom.visiblePeers] must PRUNE a departed endpoint, not accumulate ghosts.
+     *
+     * Before the fix the roster only ever grew (`onDiscovered` added on `endpointFound`, nothing removed),
+     * so a peer that stopped advertising lingered forever — a latent footgun for any lobby view reading it.
+     * Here A discovers B into [NwLoom.visiblePeers]; when B stops advertising, A's browser reports the
+     * removal ([NwApi.endpointLost]) and the ghost is pruned. B runs no loom, so A never handshakes and
+     * `weave` blocks awaiting a peer — we only assert the discovery roster, then cancel.
+     */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun visiblePeersPrunesAnEndpointThatDeparts() = runTest(StandardTestDispatcher()) {
+        val radio = FakeNwRadio()
+        val apiA = FakeNwApi(radio, deviceId = "dev-0", serviceName = "peer-A")
+        val apiB = FakeNwApi(radio, deviceId = "dev-1", serviceName = "peer-B")
+        val loomA = NwLoom(apiA, serviceType = TYPE, selfId = PeerId("peer-A"), random = Random(0), weaveTimeout = 100.seconds)
+
+        // A weaves (advertise + browse). B advertises so A discovers it; B runs no loom, so A never
+        // handshakes and `weave` blocks awaiting a peer — we only care about the discovery roster here.
+        val weave = launch(start = CoroutineStart.UNDISPATCHED) {
+            runCatchingCancellable { loomA.join(InMemoryTag(sessionName = "lobby", peerKey = "peer-A")) }
+        }
+        apiB.startListening("peer-B", TYPE)
+        val bEndpoint = NwEndpoint(id = "ep-dev-1", serviceName = "peer-B")
+        assertTrue(
+            pumpUntil { bEndpoint in loomA.visiblePeers.value },
+            "A discovered B into visiblePeers, was ${loomA.visiblePeers.value}",
+        )
+
+        // B departs (stops advertising) → A's browser reports the removal → the ghost is pruned.
+        apiB.stopListening()
+        assertTrue(
+            pumpUntil { bEndpoint !in loomA.visiblePeers.value },
+            "B pruned from visiblePeers on departure, was ${loomA.visiblePeers.value}",
+        )
+
+        weave.cancel()
+    }
 }

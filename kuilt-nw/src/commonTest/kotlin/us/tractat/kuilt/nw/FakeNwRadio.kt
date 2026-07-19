@@ -94,8 +94,18 @@ internal class FakeNwRadio {
         }
     }
 
-    fun markStopListening(deviceId: String) {
-        listening.remove(deviceId)
+    suspend fun markStopListening(deviceId: String) {
+        val gone = listening.remove(deviceId) ?: return
+        // Symmetric with [markListening]: a listener that stops advertising is reported as REMOVED to every
+        // device still browsing its type — real Bonjour/mDNS fires the browser's removed-result callback,
+        // which RealNwApi surfaces as [NwApi.endpointLost]. This is what prunes a departed ghost from a
+        // discovery roster (#1447 item 2).
+        for ((browserId, browseType) in browsing) {
+            if (browseType != gone.serviceType) continue
+            devices.getValue(browserId).emitEndpointLost(
+                NwEndpoint(id = endpointIdFor(deviceId), serviceName = gone.serviceName),
+            )
+        }
     }
 
     suspend fun markBrowsing(deviceId: String, serviceType: String) {

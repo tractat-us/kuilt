@@ -180,6 +180,7 @@ internal class RealNwApi(
     private val queue = dispatch_queue_create("us.tractat.kuilt.nw", null)
 
     private val _endpointFound = MutableSharedFlow<NwEndpoint>(extraBufferCapacity = EVENT_BUFFER)
+    private val _endpointLost = MutableSharedFlow<NwEndpoint>(extraBufferCapacity = EVENT_BUFFER)
     private val _connectionOpened = MutableSharedFlow<NwConnectionOpened>(extraBufferCapacity = EVENT_BUFFER)
     private val _bytesReceived = MutableSharedFlow<NwBytesReceived>(extraBufferCapacity = BYTES_BUFFER)
     private val _connectionClosed = MutableSharedFlow<NwConnectionClosed>(extraBufferCapacity = EVENT_BUFFER)
@@ -203,6 +204,7 @@ internal class RealNwApi(
     private val closedOrder = ArrayDeque<NwConnectionId>()
 
     override val endpointFound: Flow<NwEndpoint> = _endpointFound.asSharedFlow()
+    override val endpointLost: Flow<NwEndpoint> = _endpointLost.asSharedFlow()
     override val connectionOpened: Flow<NwConnectionOpened> = _connectionOpened.asSharedFlow()
     override val bytesReceived: Flow<NwBytesReceived> = _bytesReceived.asSharedFlow()
     override val connectionClosed: Flow<NwConnectionClosed> = _connectionClosed.asSharedFlow()
@@ -420,8 +422,15 @@ internal class RealNwApi(
         val descriptor = nw_browse_descriptor_create_bonjour_service(serviceType, null)
         val newBrowser = nw_browser_create(descriptor, secureParams())
         nw_browser_set_queue(newBrowser, queue)
-        nw_browser_set_browse_results_changed_handler(newBrowser) { _, newResult, _ ->
-            if (newResult != null) onBrowseResult(newResult)
+        nw_browser_set_browse_results_changed_handler(newBrowser) { oldResult, newResult, _ ->
+            // Network.framework delivers a browse change as (old, new): an ADD carries new (old is nil), an
+            // UPDATE carries both, a REMOVAL carries only old (new is nil). Treat a present `new` as
+            // add/update (existing onBrowseResult path) and an old-only change as a removal so a departed
+            // endpoint is pruned from a discovery roster (#1447 item 2).
+            when {
+                newResult != null -> onBrowseResult(newResult)
+                oldResult != null -> onBrowseResultRemoved(oldResult)
+            }
         }
         // Swap in the new handle and cancel any superseded one OUTSIDE the lock (no nw_* under it):
         // a re-start would otherwise leave the previous browser holding AWDL up forever.
@@ -793,6 +802,16 @@ internal class RealNwApi(
             ?: "nw-ep-${connectionCounter.incrementAndGet()}"
         lock.withLock { endpointsById[name] = ep } // keep the latest endpoint (may swap to AWDL)
         _endpointFound.tryEmit(NwEndpoint(id = name, serviceName = name))
+    }
+
+    private fun onBrowseResultRemoved(result: nw_browse_result_t) {
+        val ep = nw_browse_result_copy_endpoint(result) ?: return
+        // Only a named Bonjour endpoint can be matched back to what onBrowseResult added (which keys on the
+        // service name); a nameless removal has no roster entry to prune, so drop it. Best-effort, like the
+        // other event streams — a missed removal simply leaves the roster one entry stale until re-browsed.
+        val name = nw_endpoint_get_bonjour_service_name(ep)?.toKString() ?: return
+        lock.withLock { endpointsById.remove(name) }
+        _endpointLost.tryEmit(NwEndpoint(id = name, serviceName = name))
     }
 
     // ── params ─────────────────────────────────────────────────────────────────

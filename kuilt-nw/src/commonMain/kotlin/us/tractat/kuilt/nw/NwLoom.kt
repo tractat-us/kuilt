@@ -113,9 +113,12 @@ public class NwLoom(
     private val _visiblePeers = MutableStateFlow<Set<NwEndpoint>>(emptySet())
 
     /**
-     * Every endpoint this loom has discovered while browsing, accumulated across the session.
-     * Intended for a lobby view (Phase 5) — it is a *discovery* roster, distinct from a woven
-     * [Seam.peers] set (resolved, connected identities).
+     * The endpoints this loom currently sees while browsing — a live *discovery* roster for a lobby view
+     * (Phase 5), distinct from a woven [Seam.peers] set (resolved, connected identities). An endpoint is
+     * added when the browser first reports it ([NwApi.endpointFound]) and **pruned** when the browser
+     * reports it removed ([NwApi.endpointLost], #1447 item 2), so a departed peer does not linger as a
+     * ghost. Removal is best-effort (a binding with no removal signal never prunes), so this is a *hint*
+     * for a lobby UI, never authoritative membership — that is [Seam.peers]' job.
      */
     public val visiblePeers: StateFlow<Set<NwEndpoint>> = _visiblePeers.asStateFlow()
 
@@ -147,6 +150,7 @@ public class NwLoom(
             selfId = selfId,
             random = random,
             onDiscovered = { endpoint -> _visiblePeers.update { it + endpoint } },
+            onLost = { endpoint -> _visiblePeers.update { it - endpoint } },
         )
         redial.start()
 
@@ -231,6 +235,7 @@ private class RedialCoordinator(
     private val selfId: PeerId,
     random: Random,
     private val onDiscovered: (NwEndpoint) -> Unit,
+    private val onLost: (NwEndpoint) -> Unit,
 ) {
     private val lock = reentrantLock()
 
@@ -251,6 +256,14 @@ private class RedialCoordinator(
     fun start() {
         scope.launch(start = CoroutineStart.UNDISPATCHED) {
             api.endpointFound.collect { onEndpointFound(it) }
+        }
+        // Prune the discovery roster when the browser reports an endpoint gone (#1447 item 2). This ONLY
+        // touches the [onLost]-fed visiblePeers roster — it deliberately does NOT stop that endpoint's
+        // redial loop: a real Bonjour removal is often transient interface churn (AWDL↔WiFi swaps), and
+        // #1513's unbounded redial (keyed on [NwSeam.settledEndpoints], not on discovery) is what recovers
+        // a flapping peer. Tearing the redialer on a removal would defeat that reconnection.
+        scope.launch(start = CoroutineStart.UNDISPATCHED) {
+            api.endpointLost.collect { onEndpointLost(it) }
         }
     }
 
@@ -287,6 +300,14 @@ private class RedialCoordinator(
             }
         }
         log.debug { "nw.loom.discovered endpoint=${endpoint.id} self=${selfId.value}${if (armed) " → redial armed" else " (already redialing)"}" }
+    }
+
+    private fun onEndpointLost(endpoint: NwEndpoint) {
+        // Symmetric with the self-skip in [onEndpointFound]: this loom's own endpoint was never added to the
+        // roster, so there is nothing to prune (and pruning a set that never held it is a harmless no-op).
+        if (endpoint.serviceName == selfId.value) return
+        onLost(endpoint)
+        log.debug { "nw.loom.lost endpoint=${endpoint.id} self=${selfId.value} → pruned from visiblePeers" }
     }
 
     private suspend fun redialLoop(endpointId: String) {
