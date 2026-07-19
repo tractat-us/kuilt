@@ -182,7 +182,7 @@ public suspend fun detectSilentPeerSample(
 > **Caveat — "idle reaper" is a different shape.** If you're closing a *connection*
 > that went idle (e.g. a half-formed room that never paired), that is connection-idle
 > reaping, not peer-liveness. kuilt-liveness detects peer partition; the "never-paired
-> room" reaper is a known gap — see the tracking issue, don't force-fit this primitive.
+> room" reaper is a known gap — see #1558, don't force-fit this primitive.
 
 ## Consensus & turns
 
