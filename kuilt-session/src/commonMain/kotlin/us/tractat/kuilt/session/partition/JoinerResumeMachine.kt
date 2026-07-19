@@ -15,6 +15,7 @@ import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.liveness.HeartbeatConfig
+import us.tractat.kuilt.session.FailureReason
 import us.tractat.kuilt.session.admit.AdmitMessage
 import kotlin.time.Instant
 
@@ -65,9 +66,10 @@ internal interface JoinerResumeHost {
 
     /**
      * The reconnect failed terminally (no credentials, window expired, or a non-conforming
-     * loom): the room marks the host lost and tears down.
+     * loom): the room marks the host lost and tears down. [reason] classifies the failure —
+     * see [FailureReason].
      */
-    suspend fun onReconnectFailed(at: Instant)
+    suspend fun onReconnectFailed(at: Instant, reason: FailureReason)
 }
 
 /**
@@ -283,7 +285,7 @@ internal class JoinerResumeMachine(
             // Clear reconnectJob FIRST (this coroutine IS it) so onReconnectFailed → leave()
             // doesn't cancel its own coroutine mid-teardown. See the failure branch below.
             lock.withLock { reconnectJob = null }
-            host.onReconnectFailed(at)
+            host.onReconnectFailed(at, FailureReason.Unrecoverable)
             return
         }
 
@@ -294,6 +296,11 @@ internal class JoinerResumeMachine(
 
         host.onReconnectStarted(hostId, at, at + heartbeatConfig.reconnectWindow)
 
+        // Default: a window that elapses without a successful resume is WindowExpired. Only the
+        // non-conforming-loom branch below reclassifies to Unrecoverable. This is a plain local,
+        // read/written solely on this reconnect coroutine (the withTimeoutOrNull block runs inline
+        // on it), so it needs no lock.
+        var failureReason: FailureReason = FailureReason.WindowExpired
         val resumed = withTimeoutOrNull(heartbeatConfig.reconnectWindow) {
             var ok = false
             while (!ok) {
@@ -317,6 +324,7 @@ internal class JoinerResumeMachine(
                     reweaved.getOrNull()?.takeIf { it !== seam }?.let { throwaway ->
                         runCatchingCancellable { throwaway.close() }
                     }
+                    failureReason = FailureReason.Unrecoverable
                     return@withTimeoutOrNull false
                 }
                 val result = runCatchingCancellable {
@@ -347,7 +355,7 @@ internal class JoinerResumeMachine(
             // onReconnectFailed → leave() must not cancel its own coroutine, or leave()'s
             // seam.close() would be cancelled mid-teardown. (If closed, leave() already owns
             // teardown; don't emit a spurious HostLost.)
-            host.onReconnectFailed(clock())
+            host.onReconnectFailed(clock(), failureReason)
         }
     }
 

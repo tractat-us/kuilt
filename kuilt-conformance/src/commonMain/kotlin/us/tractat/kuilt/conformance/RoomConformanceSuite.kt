@@ -19,6 +19,7 @@ import us.tractat.kuilt.session.LeaveReason
 import us.tractat.kuilt.session.Liveness
 import us.tractat.kuilt.session.Member
 import us.tractat.kuilt.session.MembershipEvent
+import us.tractat.kuilt.session.ReconnectReason
 import us.tractat.kuilt.session.RoomFactory
 import us.tractat.kuilt.session.SeamRoomFactory
 import us.tractat.kuilt.session.SessionRole
@@ -277,7 +278,9 @@ public abstract class RoomConformanceSuite {
             // Advance past heartbeat timeout (200 ms) — 4 steps gives margin.
             repeat(4) { h.advanceClock(100L); advanceTimeBy(100L) }
 
-            assertIs<MembershipEvent.Partitioned>(partitionedDeferred.await())
+            val partitioned = partitionedDeferred.await()
+            assertIs<MembershipEvent.Partitioned>(partitioned)
+            assertEquals(ReconnectReason.LinkTimeout, partitioned.reason)
             assertEquals(Liveness.Partitioned, hostRoom.roster.value.first().liveness)
 
             // Heal the host seam then advance one tick for ping/pong exchange.

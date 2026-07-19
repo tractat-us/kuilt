@@ -568,11 +568,12 @@ internal class SeamRoom(
                         this@SeamRoom.restartIncomingCollect()
 
                     override fun onReconnectStarted(hostId: PeerId, at: Instant, windowDeadline: Instant) {
-                        _events.tryEmit(MembershipEvent.Partitioned(hostId, at))
+                        _events.tryEmit(MembershipEvent.Partitioned(hostId, at, ReconnectReason.TransportClosed))
                         _events.tryEmit(MembershipEvent.WindowOpened(hostId, windowDeadline))
                     }
 
-                    override suspend fun onReconnectFailed(at: Instant) = markHostLost(at)
+                    override suspend fun onReconnectFailed(at: Instant, reason: FailureReason) =
+                        markHostLost(at, reason)
                 },
             )
         } else {
@@ -1185,13 +1186,13 @@ internal class SeamRoom(
         if (hostTransportClose) {
             resumeMachine?.attemptReconnect(event.at)
         } else {
-            markPartitioned(event.peerId, event.at)
+            markPartitioned(event.peerId, event.at, event.reason.toReconnectReason())
         }
     }
 
-    private fun markPartitioned(peerId: PeerId, at: Instant) {
+    private fun markPartitioned(peerId: PeerId, at: Instant, reason: ReconnectReason) {
         val updated = lock.withLock { updateMemberLiveness(peerId, Liveness.Partitioned) } ?: return
-        _events.tryEmit(MembershipEvent.Partitioned(updated.id, at))
+        _events.tryEmit(MembershipEvent.Partitioned(updated.id, at, reason))
         reconnectController?.onPeerUnresponsive(peerId, at.toEpochMilliseconds())
     }
 
@@ -1206,20 +1207,20 @@ internal class SeamRoom(
             _role.value == SessionRole.Joiner && peerId == hostPeerId
         }
         if (isHostPeer) {
-            markHostLost(at)
+            markHostLost(at, FailureReason.WindowExpired)
         } else {
             removeFromRoster(peerId, LeaveReason.PartitionExpired)
         }
     }
 
-    private suspend fun markHostLost(at: Instant) {
+    private suspend fun markHostLost(at: Instant, reason: FailureReason) {
         val alreadyLost = lock.withLock {
             val was = hostLost
             hostLost = true
             was
         }
         if (alreadyLost) return
-        _events.tryEmit(MembershipEvent.HostLost(at))
+        _events.tryEmit(MembershipEvent.HostLost(at, reason))
         leave(LeaveReason.Error("host lost"))
     }
 
