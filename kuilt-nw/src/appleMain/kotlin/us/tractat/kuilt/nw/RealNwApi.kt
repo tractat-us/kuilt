@@ -475,6 +475,15 @@ internal class RealNwApi(
 
     // ── data ─────────────────────────────────────────────────────────────────
 
+    /**
+     * **Fire-and-forget** (the [NwApi.send] best-effort contract, #1419). This NEVER throws to report a link
+     * failure: `nw_connection_send` returns immediately and any error surfaces only asynchronously in the
+     * completion block below (logged, not propagated). A broken link is therefore reported to `NwSeam` via
+     * [connectionClosed]/[closedConnections] (the `failed`/`cancelled` state → [closeConnection] path), never
+     * by a throw here. Consequence: `NwSeam`'s send-path eviction (`removeByConn` on a `send` throw) is
+     * exercised ONLY by `FakeNwApi`'s synchronous-throw hook — against the real transport it is dead weight,
+     * kept as idempotent best-effort. Eviction against reality is driven entirely by the close route.
+     */
     override suspend fun send(connectionId: NwConnectionId, bytes: ByteArray) {
         val connection = lock.withLock { connections[connectionId]?.connection }
         if (connection == null) {

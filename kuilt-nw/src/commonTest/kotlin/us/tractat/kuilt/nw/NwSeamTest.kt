@@ -187,6 +187,22 @@ class NwSeamTest {
     }
 
     @Test
+    fun closeStopsAdvertisingAndBrowsing() = runTest(StandardTestDispatcher()) {
+        // #1419 (I3): NwSeam owns the close lifecycle and holds the NwApi that NwLoom.weave started
+        // advertising/browsing on — so close() MUST stop the advertiser and the browser. On a real device
+        // an un-stopped NWListener/NWBrowser keeps the Bonjour advertiser + AWDL up and retains RealNwApi
+        // via the ObjC block captures. Assert close() invokes stopListening/stopBrowsing exactly once.
+        val (a, _, _) = buildMesh(3)
+        a.seam.close()
+        pumpUntil { a.seam.state.value is SeamState.Torn }
+
+        assertAll(
+            { assertEquals(1, a.api.stopListeningCalls, "close() stops advertising exactly once") },
+            { assertEquals(1, a.api.stopBrowsingCalls, "close() stops browsing exactly once") },
+        )
+    }
+
+    @Test
     fun closeConcurrentWithARemoteDepartureAlwaysEndsTornNeverReformsToWeaving() = runTest(StandardTestDispatcher()) {
         // #1513 review Fix 2: latchTorn writes _state=Torn UNDER the seam lock, so a concurrent locked
         // eviction (evictPeerLocked's Woven→Weaving reform) can never clobber terminal Torn back to Weaving.

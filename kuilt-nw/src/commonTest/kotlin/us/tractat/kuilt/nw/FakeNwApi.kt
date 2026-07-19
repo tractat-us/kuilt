@@ -86,7 +86,12 @@ internal class FakeNwApi(
         radio.markListening(deviceId, serviceName, serviceType)
     }
 
+    /** Test hook: total [stopListening] calls — lets a test prove `NwSeam.close()` stops advertising (#1419). */
+    var stopListeningCalls: Int = 0
+        private set
+
     override suspend fun stopListening() {
+        stopListeningCalls += 1
         radio.markStopListening(deviceId)
     }
 
@@ -94,7 +99,12 @@ internal class FakeNwApi(
         radio.markBrowsing(deviceId, serviceType)
     }
 
+    /** Test hook: total [stopBrowsing] calls — lets a test prove `NwSeam.close()` stops browsing (#1419). */
+    var stopBrowsingCalls: Int = 0
+        private set
+
     override suspend fun stopBrowsing() {
+        stopBrowsingCalls += 1
         radio.markStopBrowsing(deviceId)
     }
 
