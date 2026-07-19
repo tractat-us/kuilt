@@ -11,6 +11,12 @@ import us.tractat.kuilt.session.Room
  * Pure and deterministic: every peer computes the SAME function of the SAME membership set, so
  * they agree with no negotiation. [peers] must be non-empty ([us.tractat.kuilt.core.Seam.peers]
  * always includes this peer, so this holds for any live seam).
+ *
+ * **Same set, or no agreement.** The guarantee is only as good as the input. Applied to a
+ * *discovery* roster rather than `Seam.peers` — peers seen but not yet connected — the sets
+ * differ per peer and the results diverge, so the answer is **advisory** and must be recomputed
+ * continuously rather than acted on once. See `docs/discovery-bootstrap.md` for why kuilt ships
+ * no pre-`Seam` election primitive, and the documented pattern for fabrics that need one.
  */
 public fun electHost(peers: Set<PeerId>): PeerId =
     requireNotNull(peers.minByOrNull { it.value }) { "electHost requires a non-empty peer set" }

@@ -15,6 +15,13 @@ import us.tractat.kuilt.core.Tag
  * Implementations expose a *narrower* return type via Kotlin's covariant-return
  * support (e.g. `Flow<MDNSAdvertisement>`); direct callers keep their typed
  * APIs while the lobby treats every source as `Flow<Tag>`.
+ *
+ * **Not an election input.** A discovery feed is one peer's current best guess at who is around:
+ * it lags, it may never remove departed peers (see [departures]), and [Tag.peerKey] is
+ * transport-scoped, so the same physical peer carries different keys across sources. Two peers
+ * folding these flows can hold different rosters — and so compute different answers — even with
+ * perfect connectivity. Pick a host from [us.tractat.kuilt.core.Seam.peers] once connected, not
+ * from here. See `docs/discovery-bootstrap.md`.
  */
 public interface PeerDiscoverySource {
     /** Identifies the underlying transport (mDNS, MultipeerConnectivity, …). */

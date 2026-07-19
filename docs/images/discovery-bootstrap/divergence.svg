@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 300" width="720" height="300" role="img" aria-label="Three phones with different discovery views elect three different hosts">
+  <style>
+    .bg   { fill: #0d1117; }
+    .card { fill: #161b22; stroke: #30363d; stroke-width: 1.5; rx: 8; }
+    .name { fill: #e6edf3; font: 600 15px system-ui, -apple-system, sans-serif; }
+    .lbl  { fill: #8b949e; font: 13px system-ui, -apple-system, sans-serif; }
+    .sees { fill: #7ee787; font: 13px ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .pick { fill: #ff7b72; font: 600 13px ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .cap  { fill: #8b949e; font: 13px system-ui, -apple-system, sans-serif; }
+    .rule { fill: #58a6ff; font: 13px ui-monospace, SFMono-Regular, Menlo, monospace; }
+  </style>
+  <rect class="bg" width="720" height="300"/>
+
+  <text class="rule" x="360" y="34" text-anchor="middle">every phone runs the same rule:  host = min(ids it can see)</text>
+
+  <!-- Phone A -->
+  <rect class="card" x="40" y="62" width="180" height="150"/>
+  <text class="name" x="130" y="92" text-anchor="middle">phone A</text>
+  <text class="lbl"  x="130" y="118" text-anchor="middle">sees</text>
+  <text class="sees" x="130" y="140" text-anchor="middle">A, B</text>
+  <text class="lbl"  x="130" y="168" text-anchor="middle">picks</text>
+  <text class="pick" x="130" y="190" text-anchor="middle">A</text>
+
+  <!-- Phone B -->
+  <rect class="card" x="270" y="62" width="180" height="150"/>
+  <text class="name" x="360" y="92" text-anchor="middle">phone B</text>
+  <text class="lbl"  x="360" y="118" text-anchor="middle">sees</text>
+  <text class="sees" x="360" y="140" text-anchor="middle">A, B, C</text>
+  <text class="lbl"  x="360" y="168" text-anchor="middle">picks</text>
+  <text class="pick" x="360" y="190" text-anchor="middle">A</text>
+
+  <!-- Phone C -->
+  <rect class="card" x="500" y="62" width="180" height="150"/>
+  <text class="name" x="590" y="92" text-anchor="middle">phone C</text>
+  <text class="lbl"  x="590" y="118" text-anchor="middle">sees</text>
+  <text class="sees" x="590" y="140" text-anchor="middle">B, C</text>
+  <text class="lbl"  x="590" y="168" text-anchor="middle">picks</text>
+  <text class="pick" x="590" y="190" text-anchor="middle">B</text>
+
+  <text class="cap" x="360" y="252" text-anchor="middle">C hasn't discovered A yet — so C elects B while A and B elect A.</text>
+  <text class="cap" x="360" y="274" text-anchor="middle">Nobody broke the rule. There are now two hosts.</text>
+</svg>
