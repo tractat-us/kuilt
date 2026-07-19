@@ -785,7 +785,7 @@ class NwSeamTest {
         seamB.close()
         assertTrue(
             pumpUntil { seamA.peers.value == setOf(seamA.selfId) },
-            "A evicted B via the closedConnections STATE despite the dropped close EVENT (pre-fix: permanent zombie)",
+            "A evicted B via the connectionStates Closed STATE despite the dropped close EVENT (pre-fix: permanent zombie)",
         )
         pumpUntil(maxPumps = 50) { false } // let any wrong Torn / incoming completion surface
 
@@ -933,7 +933,7 @@ class NwSeamTest {
         // connId, if any). B is retained purely because a conn's ABSENCE from closedConnections is never
         // inferred as closure — were absence read as closure, B would have been evicted here.
         assertAll(
-            { assertEquals(setOf(seamA.selfId, PeerId("peer-1")), seamA.peers.value, "B stays — absence from closedConnections is never read as closure") },
+            { assertEquals(setOf(seamA.selfId, PeerId("peer-1")), seamA.peers.value, "B stays — absence from connectionStates is never read as closure") },
             { assertTrue(seamA.state.value is SeamState.Woven, "A stays Woven — no eviction from an absent marker") },
         )
     }

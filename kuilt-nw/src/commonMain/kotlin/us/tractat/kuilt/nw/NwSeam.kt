@@ -94,7 +94,7 @@ private val log = KotlinLogging.logger("us.tractat.kuilt.nw.NwSeam")
  * collector and read by another with no happens-before); the nonce rule cannot.
  *
  * ## Thread-safety
- * The [registry] and [conns] maps are shared across the three collectors (each `collect` is
+ * The [registry] and [conns] maps are shared across the four lifecycle collectors (each `collect` is
  * internally sequential, but they run concurrently) and the caller-driven [broadcast]/[sendTo].
  * All map access is guarded by one [reentrantLock] (atomicfu). **No `suspend`/`api.*` call ever
  * runs under the lock** — targets are snapshotted under the lock, then sent/disconnected/delivered
@@ -122,7 +122,7 @@ private val log = KotlinLogging.logger("us.tractat.kuilt.nw.NwSeam")
  * @param selfId this peer's stable identity, sent (with a per-connection nonce) as the first framed
  *   message on each connection.
  * @param api    the transport moving raw bytes over open connections.
- * @param scope  coroutine scope hosting the three collectors; cancelled on teardown.
+ * @param scope  coroutine scope hosting the collectors; cancelled on teardown.
  * @param random source of per-connection dedup nonces; production defaults to [Random.Default], tests
  *   inject a seeded [Random] so the dedup tiebreak is deterministic.
  * @param policy delivery policy for the inbound [Spool] (default [DeliveryPolicy.Reliable]).
@@ -269,8 +269,8 @@ internal class NwSeam(
 
     private val closedMessage get() = "NwSeam for ${selfId.value} is closed"
 
-    // UNDISPATCHED so all three collectors subscribe synchronously at construction — before any
-    // connectionOpened/bytes/close event can be emitted (subscribe-before-trigger).
+    // UNDISPATCHED so all four collectors subscribe synchronously at construction — before any
+    // connectionOpened/bytes/close/state event can be emitted (subscribe-before-trigger).
     private val openedJob: Job = scope.launch(start = CoroutineStart.UNDISPATCHED) { connectionOpenedLoop() }
     private val bytesJob: Job = scope.launch(start = CoroutineStart.UNDISPATCHED) { bytesReceivedLoop() }
     private val closedJob: Job = scope.launch(start = CoroutineStart.UNDISPATCHED) { connectionClosedLoop() }

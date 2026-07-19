@@ -282,6 +282,13 @@ internal class RealNwApi(
      * ref): append to the FIFO, prune the oldest past [CLOSED_RETENTION_CAP], then publish the latest map via a
      * CAS `update{}`. Bypasses the lossy `connectionClosed` tryEmit entirely. Because [setViability] refuses to
      * overwrite a `Closed` entry, this latch is dominant: a late `ready`/`waiting` for a closed id is ignored.
+     *
+     * **Cap-prune caveat (bounded, seam-harmless).** Once an id's `Closed` entry has been FIFO-pruned past
+     * [CLOSED_RETENTION_CAP], a *very*-late [setViability] for that same id would find no `Closed` guard and
+     * could write a `Viable` entry that nothing later removes. This is the same class as the existing
+     * pruned-before-observed cap risk, and it is harmless to the seam: by the time an id is that stale the
+     * connection is long torn and tombstoned (not in `conns`), so a spurious `Viable` never arms a grace timer
+     * nor resurrects a peer. The cap is sized far above the in-flight reorder window so this cannot happen in practice.
      */
     private fun markClosed(id: NwConnectionId, reason: String?) {
         lock.withLock {

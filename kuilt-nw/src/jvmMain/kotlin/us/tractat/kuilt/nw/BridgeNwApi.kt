@@ -55,7 +55,7 @@ import kotlin.coroutines.CoroutineContext
  * from their K/N threads. So a close is reflected in [connectionStates] whether or not the close EVENT survives.
  *
  * ## Strong callback references
- * The five [com.sun.jna.Callback] objects are held as fields so JNA's trampolines
+ * The six [com.sun.jna.Callback] objects are held as fields so JNA's trampolines
  * survive this object's lifetime; releasing them early would SIGSEGV the K/N side.
  *
  * ## Native-runtime lifecycle (GC parity with appleMain)
@@ -126,6 +126,13 @@ public class BridgeNwApi internal constructor(
      * publish is a CAS `update{}` (thread-safe), and the FIFO order tracking (for the [CLOSED_RETENTION_CAP]
      * prune) is guarded by the small [closedOrderLock]. Because [setViabilityFromCallback] refuses to overwrite
      * a `Closed` entry, this latch dominates — a late `ready`/`waiting` for a closed id cannot revert it.
+     *
+     * **Cap-prune caveat (bounded, seam-harmless).** Once an id's `Closed` entry has been FIFO-pruned past
+     * [CLOSED_RETENTION_CAP], a *very*-late [setViabilityFromCallback] for that id would find no `Closed` guard and
+     * could write a `Viable` entry that nothing later removes — the same class as the existing pruned-before-observed
+     * cap risk. It is harmless to the seam: by then the connection is long torn and tombstoned (not in `conns`), so a
+     * spurious `Viable` never arms a grace timer nor resurrects a peer. The cap is sized far above the in-flight
+     * reorder window so this cannot happen in practice.
      */
     private fun markClosedFromCallback(id: NwConnectionId, reason: String?) {
         synchronized(closedOrderLock) {
@@ -208,7 +215,7 @@ public class BridgeNwApi internal constructor(
         }
 
     init {
-        // Register all five callbacks BEFORE any start op (subscribe-before-start): the K/N side
+        // Register all six callbacks BEFORE any start op (subscribe-before-start): the K/N side
         // subscribes its forwarding collectors here, so no hot no-replay event is missed.
         nativeLib.nw_set_endpoint_found_callback(handle, endpointFoundCallback)
         nativeLib.nw_set_connection_opened_callback(handle, connectionOpenedCallback)
