@@ -30,7 +30,7 @@ import us.tractat.kuilt.core.runCatchingCancellable
  * - The JVM caller MUST hold a strong reference to every registered [Callback]
  *   object for the whole runtime lifetime, otherwise JNA may release the
  *   trampoline and the K/N side will SIGSEGV when it next fires the callback.
- *   [BridgeNwApi] holds them as fields for exactly this reason.
+ *   [BridgeNwApi] holds all six as fields for exactly this reason.
  */
 internal interface NwNativeLib : Library {
     @Suppress("ktlint:standard:function-naming")
@@ -118,10 +118,27 @@ internal interface NwNativeLib : Library {
     }
 
     /**
+     * `(connectionId: char*, reason: char*) -> void` (#1539). The drop-tolerant native `closedConnections`
+     * STATE signal: fires once per newly-latched close marker in `RealNwApi.closedConnections` (a monotone
+     * map, id → reason). Empty [reason] ⇒ graceful/`null`, matching [ConnectionClosedCallback].
+     *
+     * Unlike [ConnectionClosedCallback] — the lossy per-event close stream that can DROP a `failed`/`cancelled`
+     * close at the K/N `tryEmit` or JVM staging boundary and strand a zombie peer — this is sourced from the
+     * transport's authoritative monotone STATE, so a close it delivers can never be dropped. The bridge latches
+     * each marker into its own drop-tolerant `closedConnections` state (and prunes the closed connection's
+     * viability entry) off THIS callback, not the droppable event. Stage 1 of #1522's deferred follow-up.
+     */
+    fun interface ConnectionClosedStateCallback : Callback {
+        @Suppress("ktlint:standard:function-naming")
+        fun invoke(connectionId: String, reason: String)
+    }
+
+    /**
      * `(connectionId: char*, viable: int) -> void` (#1507). [viable] is `1` when the connection's path is
      * up (`ready`) and `0` when it is lost (`ready → waiting`). Fires once per per-connection change; the
      * bridge applies each as a latest-wins delta into its drop-tolerant `connectionViability` state (#1509).
-     * Entry removals are not delivered here — the bridge prunes a closed connection off [ConnectionClosedCallback].
+     * Entry removals are not delivered here — the bridge prunes a closed connection off the drop-tolerant
+     * [ConnectionClosedStateCallback] (#1539).
      */
     fun interface ViabilityCallback : Callback {
         @Suppress("ktlint:standard:function-naming")
@@ -139,6 +156,9 @@ internal interface NwNativeLib : Library {
 
     @Suppress("ktlint:standard:function-naming")
     fun nw_set_connection_closed_callback(handle: Pointer?, cb: ConnectionClosedCallback)
+
+    @Suppress("ktlint:standard:function-naming")
+    fun nw_set_connection_closed_state_callback(handle: Pointer?, cb: ConnectionClosedStateCallback)
 
     @Suppress("ktlint:standard:function-naming")
     fun nw_set_connection_viability_callback(handle: Pointer?, cb: ViabilityCallback)
@@ -172,8 +192,12 @@ internal interface NwNativeLib : Library {
          * Bridge ABI version this Kotlin code expects. Must match the
          * `PROTOCOL_VERSION` compiled into `Bridge.kt` on the macOS K/N side. A
          * mismatch means a stale or wrong-arch dylib is on the classpath.
+         *
+         * Bumped to `2` for the `nw_set_connection_closed_state_callback` export (#1539): the bridge now
+         * registers that callback at construction, so a stale dylib lacking the symbol must fail the fast
+         * ABI check ([NwFabric] `createRuntime`) rather than the later JNA `UnsatisfiedLinkError`.
          */
-        const val EXPECTED_PROTOCOL_VERSION: Int = 1
+        const val EXPECTED_PROTOCOL_VERSION: Int = 2
 
         /** The reason attached to [FabricAvailability.Unavailable] off macOS-arm64. */
         const val UNAVAILABLE_REASON: String =

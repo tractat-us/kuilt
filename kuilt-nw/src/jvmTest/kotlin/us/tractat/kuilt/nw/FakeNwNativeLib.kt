@@ -18,16 +18,23 @@ import com.sun.jna.Pointer
  *    the joiner with the dialled endpoint, the host inbound (empty endpoint).
  *  - [nw_send] routes the bytes to the OTHER runtime's `bytesReceived` callback,
  *    preserving call order (synchronous, in-thread).
- *  - [nw_disconnect] fires `connectionClosed` on both sides.
+ *  - [nw_disconnect] fires `connectionClosed` (unless [dropCloseEvents]) AND the
+ *    drop-tolerant `connectionClosedState` (#1539) on both sides.
  *
  * Fidelity is deliberately minimal — a 2-peer deliver-through is enough to prove
  * the wiring; full-mesh conformance is the gated real-dylib test (Task 4.2).
  *
  * [sendFailsFor] lets a test force `nw_send` to return `-1` for a chosen
  * connection id, exercising [BridgeNwApi.send]'s throw-on-`<0` path.
+ *
+ * [dropCloseEvents] models the lossy close-EVENT drop (#1539): when set, [nw_disconnect]
+ * SUPPRESSES the per-event `connectionClosed` callback while STILL firing the authoritative
+ * `connectionClosedState` callback — proving the bridge's `closedConnections` STATE is sourced
+ * from the drop-tolerant native signal, not the droppable event.
  */
 internal class FakeNwNativeLib(
     private val sendFailsFor: String? = null,
+    private val dropCloseEvents: Boolean = false,
 ) : NwNativeLib {
 
     /** How many times [nw_runtime_destroy] was invoked — for the close()-idempotency test. */
@@ -55,6 +62,7 @@ internal class FakeNwNativeLib(
     private val connectionOpenedCbs = mutableMapOf<Pointer, NwNativeLib.ConnectionOpenedCallback>()
     private val bytesReceivedCbs = mutableMapOf<Pointer, NwNativeLib.BytesReceivedCallback>()
     private val connectionClosedCbs = mutableMapOf<Pointer, NwNativeLib.ConnectionClosedCallback>()
+    private val connectionClosedStateCbs = mutableMapOf<Pointer, NwNativeLib.ConnectionClosedStateCallback>()
     private val viabilityCbs = mutableMapOf<Pointer, NwNativeLib.ViabilityCallback>()
 
     override fun kuilt_protocol_version(): Int = NwNativeLib.EXPECTED_PROTOCOL_VERSION
@@ -97,6 +105,10 @@ internal class FakeNwNativeLib(
         if (handle != null) connectionClosedCbs[handle] = cb
     }
 
+    override fun nw_set_connection_closed_state_callback(handle: Pointer?, cb: NwNativeLib.ConnectionClosedStateCallback) {
+        if (handle != null) connectionClosedStateCbs[handle] = cb
+    }
+
     override fun nw_set_connection_viability_callback(handle: Pointer?, cb: NwNativeLib.ViabilityCallback) {
         if (handle != null) viabilityCbs[handle] = cb
     }
@@ -131,8 +143,16 @@ internal class FakeNwNativeLib(
     }
 
     override fun nw_disconnect(handle: Pointer?, connectionId: String): Int {
-        connectionClosedCbs[HOST]?.invoke(HOST_CONN, "")
-        connectionClosedCbs[JOINER]?.invoke(JOINER_CONN, "")
+        // The authoritative drop-tolerant STATE signal fires on both sides ALWAYS (#1539) — the real
+        // dylib sources it from RealNwApi.closedConnections, which never drops a close.
+        connectionClosedStateCbs[HOST]?.invoke(HOST_CONN, "")
+        connectionClosedStateCbs[JOINER]?.invoke(JOINER_CONN, "")
+        // The lossy per-event close stream is suppressed under [dropCloseEvents], modelling a drop under
+        // buffer pressure — the bridge must still learn of the close via the STATE callback above.
+        if (!dropCloseEvents) {
+            connectionClosedCbs[HOST]?.invoke(HOST_CONN, "")
+            connectionClosedCbs[JOINER]?.invoke(JOINER_CONN, "")
+        }
         return 0
     }
 

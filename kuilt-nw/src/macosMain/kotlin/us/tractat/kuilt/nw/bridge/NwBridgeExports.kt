@@ -171,6 +171,14 @@ public fun nw_set_connection_closed_callback(handle: COpaquePointer?, cb: CPoint
 }
 
 @OptIn(ExperimentalForeignApi::class, ExperimentalNativeApi::class)
+@CName("nw_set_connection_closed_state_callback")
+@Suppress("ktlint:standard:function-naming")
+public fun nw_set_connection_closed_state_callback(handle: COpaquePointer?, cb: CPointer<ConnectionClosedStateCb>?) {
+    if (handle == null || cb == null) return
+    handle.asStableRef<NwBridgeRuntime>().get().setConnectionClosedStateCallback(cb)
+}
+
+@OptIn(ExperimentalForeignApi::class, ExperimentalNativeApi::class)
 @CName("nw_set_connection_viability_callback")
 @Suppress("ktlint:standard:function-naming")
 public fun nw_set_connection_viability_callback(handle: COpaquePointer?, cb: CPointer<ConnectionViabilityCb>?) {

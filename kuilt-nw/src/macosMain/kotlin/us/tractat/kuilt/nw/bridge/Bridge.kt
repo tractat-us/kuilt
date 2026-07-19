@@ -27,9 +27,12 @@ import kotlin.native.CName
 public fun kuilt_protocol_version(): Int = PROTOCOL_VERSION
 
 /**
- * Bridge ABI version. The JVM side expects `1`; mismatch is a build error.
+ * Bridge ABI version. The JVM side expects `2`; mismatch is a build error.
  *
- * Bump only when an existing cdecl signature changes. Adding new exports does
- * not require a bump.
+ * Bumped to `2` for the `nw_set_connection_closed_state_callback` export (#1539). Although the export is
+ * additive, the JVM bridge now *registers* it at construction — so a stale dylib lacking the symbol must fail
+ * the fast `kuilt_protocol_version()` ABI check ([NwFabric] `createRuntime`) rather than surface as a cryptic
+ * later JNA `UnsatisfiedLinkError`. Bump when an existing cdecl signature changes, OR when the JVM begins
+ * unconditionally calling a newly-added export (as here).
  */
-private const val PROTOCOL_VERSION: Int = 1
+private const val PROTOCOL_VERSION: Int = 2

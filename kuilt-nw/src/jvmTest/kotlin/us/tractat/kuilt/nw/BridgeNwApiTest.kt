@@ -217,6 +217,60 @@ class BridgeNwApiTest {
     }
 
     @Test
+    fun closedConnectionsSourcedFromNativeStateSurvivesDroppedCloseEvent() = runTest {
+        // #1539 Stage 1 — the whole point: the bridge's closedConnections STATE is sourced from the
+        // authoritative drop-tolerant native `connectionClosedState` callback, NOT the lossy per-event
+        // `connectionClosed` stream. Drop the close EVENT (buffer-pressure model) and the close must STILL
+        // be reflected in closedConnections — the zombie backstop that a native-signal source guarantees.
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val fake = FakeNwNativeLib(dropCloseEvents = true)
+        val host = BridgeNwApi(fake, FakeNwNativeLib.HOST, dispatcher)
+        testScheduler.runCurrent()
+
+        val hostId = NwConnectionId(FakeNwNativeLib.HOST_CONN)
+        val closedEvents = mutableListOf<NwConnectionClosed>()
+        host.connectionClosed.onEach { closedEvents += it }.launchIn(backgroundScope)
+        testScheduler.runCurrent()
+
+        host.disconnect(hostId)
+        testScheduler.runCurrent()
+
+        assertAll(
+            { assertTrue(closedEvents.isEmpty(), "the lossy close EVENT was dropped") },
+            {
+                assertTrue(
+                    hostId in host.closedConnections.value,
+                    "closedConnections STATE recovers the close from the native signal despite the dropped event",
+                )
+            },
+            { assertEquals(null, host.closedConnections.value[hostId], "empty native reason ⇒ null (graceful)") },
+        )
+    }
+
+    @Test
+    fun closedNativeStatePrunesViabilityEntry() = runTest {
+        // #1539: the viability prune ("absent ⇒ closed") is now driven off the drop-tolerant native
+        // closedState callback too, so a dropped close EVENT can't leave a stale viability entry.
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val fake = FakeNwNativeLib(dropCloseEvents = true)
+        val host = BridgeNwApi(fake, FakeNwNativeLib.HOST, dispatcher)
+        testScheduler.runCurrent()
+
+        val id = NwConnectionId(FakeNwNativeLib.HOST_CONN)
+        fake.fireViability(FakeNwNativeLib.HOST, FakeNwNativeLib.HOST_CONN, viable = true)
+        testScheduler.runCurrent()
+        val beforeClose = host.connectionViability.value[id]
+
+        host.disconnect(id)
+        testScheduler.runCurrent()
+
+        assertAll(
+            { assertEquals(true, beforeClose, "viability tracked while live") },
+            { assertFalse(id in host.connectionViability.value, "close prunes the viability entry via the native state signal") },
+        )
+    }
+
+    @Test
     fun deliversAfterGcChurn() = runTest {
         val dispatcher = StandardTestDispatcher(testScheduler)
         val fake = FakeNwNativeLib()
