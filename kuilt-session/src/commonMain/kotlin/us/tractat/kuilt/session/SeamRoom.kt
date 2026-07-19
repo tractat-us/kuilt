@@ -657,8 +657,11 @@ internal class SeamRoom(
      *
      * - [JoinerReconnectEvent.WindowOpened] → [MembershipEvent.WindowOpened] (host events).
      * - [JoinerReconnectEvent.Resumed] → [MembershipEvent.Resumed] (host events; liveness reset).
-     * - [JoinerReconnectEvent.WindowExpired] → no extra event here; the [HeartbeatPartitionDetector]
-     *   drives [PartitionEvent.PeerLost] which produces [MembershipEvent.Left] via [handlePeerLost].
+     * - [JoinerReconnectEvent.WindowExpired] → no extra *local* event here; the
+     *   [HeartbeatPartitionDetector] drives [PartitionEvent.PeerLost] which produces
+     *   [MembershipEvent.Left] via [handlePeerLost]. It does, however, propagate an
+     *   authoritative [AdmitMessage.Farewell] (`expired = true`) to the remaining members —
+     *   see [propagateFarewell] (#1557).
      */
     private suspend fun runReconnectEventLoop(ctrl: JoinerReconnectController) {
         ctrl.events.collect { event ->
@@ -673,8 +676,12 @@ internal class SeamRoom(
                 is JoinerReconnectEvent.Resumed ->
                     handleReconnectResumed(event.peerId)
                 is JoinerReconnectEvent.WindowExpired -> {
-                    // Window expired — PeerLost from the detector handles the final eviction.
-                    // No extra event emitted here; Left(PartitionExpired) follows from PeerLost.
+                    // Locally, PeerLost from the detector handles the final eviction — no extra
+                    // event here; Left(PartitionExpired) follows from PeerLost. Remotely, the
+                    // expiry needs the same authoritative fan-out a clean leave gets, or a peer
+                    // with no heartbeat edge against the expired member (a star topology's other
+                    // joiners) never evicts it (#1557).
+                    propagateFarewell(event.peerId, expired = true)
                 }
             }
         }
@@ -1055,19 +1062,25 @@ internal class SeamRoom(
 
     /**
      * Host-side: propagate an authoritative [AdmitMessage.Farewell] for [departed] to every
-     * remaining member, so joiners evict the cleanly-departed peer promptly with
-     * [LeaveReason.Normal] instead of waiting out their own heartbeat window and
-     * mislabelling the clean leave as [LeaveReason.PartitionExpired] (#1292).
+     * remaining member, so joiners evict the departed peer promptly instead of waiting out
+     * their own heartbeat window (#1292).
+     *
+     * [expired] selects the eviction reason members apply: `false` for a clean
+     * [AdmitMessage.Goodbye] ([LeaveReason.Normal] — the #1292 case, which otherwise gets
+     * mislabelled as a partition), `true` for a [JoinerReconnectEvent.WindowExpired]
+     * ([LeaveReason.PartitionExpired] — the #1557 case, which otherwise never arrives at all
+     * on a topology where members have no heartbeat edge to each other).
      *
      * The eviction counterpart of the [AdmitMessage.Welcome] roster-sync broadcast in
      * [admitPeer]: the host is the membership authority for joins *and* leaves. Best-effort —
-     * a lost Farewell degrades to that member's heartbeat-window eviction. Roster snapshot
-     * under [lock]; the suspend sends run on a launched child, outside the lock.
+     * a lost Farewell degrades to that member's heartbeat-window eviction *where such a window
+     * exists* (a mesh; on a star it does not, which is why the expiry fan-out matters).
+     * Roster snapshot under [lock]; the suspend sends run on a launched child, outside the lock.
      */
-    private fun propagateFarewell(departed: PeerId) {
-        val remaining = lock.withLock { admittedById.keys.toList() }
+    private fun propagateFarewell(departed: PeerId, expired: Boolean = false) {
+        val remaining = lock.withLock { admittedById.keys.filter { it != departed } }
         if (remaining.isEmpty()) return
-        val farewellBytes = AdmitMessage.encode(AdmitMessage.Farewell(departed.value))
+        val farewellBytes = AdmitMessage.encode(AdmitMessage.Farewell(departed.value, expired))
         scope.launch {
             for (peerId in remaining) {
                 runCatchingCancellable { seam.sendTo(peerId, farewellBytes) }
@@ -1077,8 +1090,10 @@ internal class SeamRoom(
 
     /**
      * Joiner-side: handle an authoritative [AdmitMessage.Farewell] — the host's notification
-     * that [farewell]'s peer departed cleanly. Stop that peer's liveness detector and remove
-     * it from the roster with [LeaveReason.Normal] (#1292).
+     * that [farewell]'s peer departed. Stop that peer's liveness detector and remove it from
+     * the roster with [LeaveReason.Normal] for a clean leave (#1292), or
+     * [LeaveReason.PartitionExpired] when the host is propagating a reconnect-window expiry
+     * ([AdmitMessage.Farewell.expired], #1557).
      *
      * **Host-authoritative gate:** only a Farewell from the identified host ([hostPeerId]) is
      * honored. Anything else — a forged Farewell from another joiner, or one arriving before
@@ -1094,7 +1109,10 @@ internal class SeamRoom(
             if (host == null || sender != host || departed == host) return
             stopDetector(departed)
         }
-        removeFromRoster(departed, LeaveReason.Normal)
+        removeFromRoster(
+            departed,
+            if (farewell.expired) LeaveReason.PartitionExpired else LeaveReason.Normal,
+        )
     }
 
     // ── Partition detection ───────────────────────────────────────────────────
