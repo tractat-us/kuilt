@@ -15,10 +15,12 @@ import us.tractat.kuilt.test.FaultyLoom
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
+import us.tractat.kuilt.session.FailureReason
 import us.tractat.kuilt.session.LeaveReason
 import us.tractat.kuilt.session.Liveness
 import us.tractat.kuilt.session.Member
 import us.tractat.kuilt.session.MembershipEvent
+import us.tractat.kuilt.session.ReconnectReason
 import us.tractat.kuilt.session.RoomFactory
 import us.tractat.kuilt.session.SeamRoomFactory
 import us.tractat.kuilt.session.SessionRole
@@ -277,7 +279,10 @@ public abstract class RoomConformanceSuite {
             // Advance past heartbeat timeout (200 ms) — 4 steps gives margin.
             repeat(4) { h.advanceClock(100L); advanceTimeBy(100L) }
 
-            assertIs<MembershipEvent.Partitioned>(partitionedDeferred.await())
+            val partitioned = assertIs<MembershipEvent.Partitioned>(partitionedDeferred.await())
+            // The taxonomy field must be populated, and it must be honest: a DropAll fault is
+            // silence, so the detector's Timeout lifts to LinkTimeout (#1556).
+            assertEquals(ReconnectReason.LinkTimeout, partitioned.reason)
             assertEquals(Liveness.Partitioned, hostRoom.roster.value.first().liveness)
 
             // Heal the host seam then advance one tick for ping/pong exchange.
@@ -351,7 +356,9 @@ public abstract class RoomConformanceSuite {
             faultyLoom.setFaultProfileOnAll(FaultProfile.DropAll(Direction.Both))
             repeat(9) { h.advanceClock(100L); advanceTimeBy(100L) }
 
-            assertIs<MembershipEvent.HostLost>(hostLostDeferred.await())
+            val hostLost = assertIs<MembershipEvent.HostLost>(hostLostDeferred.await())
+            // Nothing refused this joiner — the reconnect window simply elapsed (#1556).
+            assertEquals(FailureReason.WindowExpired, hostLost.reason)
 
             joinerRoom.broadcast("after-host-lost".encodeToByteArray())
         }

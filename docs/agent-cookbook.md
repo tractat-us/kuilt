@@ -13,6 +13,7 @@ If you catch yourself writing any of these, stop — kuilt already ships it:
 |---|---|---|
 | a rejoin / reconnect loop, a resume token, a "grace window / hold the slot open" | `ResumeToken` + `SeamRoom` resume | [Rejoin & reconnect](#rejoin--reconnect) |
 | a fixed-list or exponential retry/back-off loop | `ExponentialBackoff` | [Rejoin & reconnect](#rejoin--reconnect) |
+| a reconnect banner, a connected/retrying/failed enum, "why did the session drop?" | `MembershipEvent` + `ReconnectReason` / `FailureReason` | [Rejoin & reconnect](#rejoin--reconnect) |
 | a propose→authoritative/rejected turn/session facade, host election with a term | `GameSession` + `TurnSequencer` | [Consensus & turns](#consensus--turns) |
 | a heartbeat, an idle reaper, "is this peer still alive", "evict stale session" | `HeartbeatPartitionDetector` | [Liveness & presence](#liveness--presence) |
 | "close a room nobody joined", "reap an abandoned table/lobby", "nobody ever showed up" | `SoloDeadlineDetector` | [Liveness & presence](#liveness--presence) |
@@ -41,6 +42,41 @@ public suspend fun resumeAfterDropSample(room: Room) {
     }
 }
 ```
+
+**Intent:** drive a reconnect banner — tell the user we're retrying, or that the session is over and why.
+**Primitive:** `MembershipEvent.Partitioned.reason` (`ReconnectReason`) and `MembershipEvent.HostLost.reason` (`FailureReason`) — don't define your own connection-state enum next to kuilt's events.
+
+<!-- verbatim from kuilt-session/src/commonSamples/kotlin/us/tractat/kuilt/session/AgentCookbookSamples.kt#reconnectBannerSample -->
+```kotlin
+public suspend fun reconnectBannerSample(room: Room, show: (String) -> Unit) {
+    room.events.collect { event ->
+        when (event) {
+            // Still trying: a window is open, so phrase the wait — never an error.
+            is MembershipEvent.Partitioned -> show(
+                when (event.reason) {
+                    ReconnectReason.LinkTimeout -> "Connection is slow…"
+                    ReconnectReason.Backpressure -> "Catching up…"
+                    ReconnectReason.TransportClosed -> "Reconnecting…"
+                },
+            )
+            is MembershipEvent.Recovered -> show("Connected")
+            // Terminal: the reason says whether a fresh join is worth offering.
+            is MembershipEvent.HostLost -> show(
+                when (val reason = event.reason) {
+                    FailureReason.WindowExpired -> "Lost the session — try joining again"
+                    FailureReason.Unrecoverable -> "Can't reconnect to this session"
+                    is FailureReason.Refused -> "The host refused us: ${reason.message}"
+                },
+            )
+            else -> Unit
+        }
+    }
+}
+```
+
+A host `Reject` on its own is **not** the end: a host that hasn't noticed the drop yet refuses an
+early resume, and kuilt keeps retrying inside the window. `Refused` therefore only ever appears once
+the window has also expired — it means "we were refused *and* we ran out of time".
 
 **Intent:** retry with back-off after a failed dial.
 **Primitive:** `core.util.ExponentialBackoff` — don't hand-roll a `listOf(1.s, 5.s, 30.s)` delay table.

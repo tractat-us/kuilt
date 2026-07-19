@@ -71,6 +71,37 @@ public suspend fun observePausedPeersSample(room: Room) {
 }
 
 /**
+ * Drive a reconnect banner off [Room.events] instead of inventing your own
+ * connected / retrying / failed enum. [MembershipEvent.Partitioned] carries a
+ * [ReconnectReason] (we're still trying) and [MembershipEvent.HostLost] a [FailureReason]
+ * (we've stopped) — the one thing a banner has to decide is "keep waiting or give up".
+ */
+public suspend fun reconnectBannerSample(room: Room, show: (String) -> Unit) {
+    room.events.collect { event ->
+        when (event) {
+            // Still trying: a window is open, so phrase the wait — never an error.
+            is MembershipEvent.Partitioned -> show(
+                when (event.reason) {
+                    ReconnectReason.LinkTimeout -> "Connection is slow…"
+                    ReconnectReason.Backpressure -> "Catching up…"
+                    ReconnectReason.TransportClosed -> "Reconnecting…"
+                },
+            )
+            is MembershipEvent.Recovered -> show("Connected")
+            // Terminal: the reason says whether a fresh join is worth offering.
+            is MembershipEvent.HostLost -> show(
+                when (val reason = event.reason) {
+                    FailureReason.WindowExpired -> "Lost the session — try joining again"
+                    FailureReason.Unrecoverable -> "Can't reconnect to this session"
+                    is FailureReason.Refused -> "The host refused us: ${reason.message}"
+                },
+            )
+            else -> Unit
+        }
+    }
+}
+
+/**
  * Retry a failed dial with full-jitter exponential back-off. [random] is injected so tests can
  * seed it; production passes [Random.Default]. Don't hand-roll a fixed delay table.
  */

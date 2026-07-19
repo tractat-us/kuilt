@@ -297,6 +297,16 @@ private const val MEMBERSHIP_EVENT_REPLAY = 64
 private val EMPTY_ATTESTED_ROSTER: StateFlow<Map<PeerId, Principal>> =
     MutableStateFlow<Map<PeerId, Principal>>(emptyMap())
 
+/**
+ * Host reject text when the resume window is closed — either it has not opened yet
+ * (transient) or it expired/was consumed (terminal). The wire cannot tell those apart; see
+ * `handleResume`'s KDoc and #1572.
+ */
+internal const val REJECT_RESUME_WINDOW_CLOSED: String = "resume-window-closed"
+
+/** Host reject prefix when the presented [ResumeToken] failed structural validation. */
+internal const val REJECT_RESUME_TOKEN_INVALID: String = "resume-token-invalid"
+
 internal class SeamRoom(
     private val seam: Seam,
     role: SessionRole,
@@ -572,11 +582,16 @@ internal class SeamRoom(
                         this@SeamRoom.restartIncomingCollect()
 
                     override fun onReconnectStarted(hostId: PeerId, at: Instant, windowDeadline: Instant) {
-                        _events.tryEmit(MembershipEvent.Partitioned(hostId, at))
+                        // The joiner only ever begins an episode off a definitive tear (the
+                        // transport `Torn` watcher, or the host detector's TransportClosed).
+                        _events.tryEmit(
+                            MembershipEvent.Partitioned(hostId, at, ReconnectReason.TransportClosed),
+                        )
                         _events.tryEmit(MembershipEvent.WindowOpened(hostId, windowDeadline))
                     }
 
-                    override suspend fun onReconnectFailed(at: Instant) = markHostLost(at)
+                    override suspend fun onReconnectFailed(at: Instant, reason: FailureReason) =
+                        markHostLost(at, reason)
                 },
             )
         } else {
@@ -877,10 +892,13 @@ internal class SeamRoom(
             is AdmitMessage.Reject -> {
                 if (_role.value == SessionRole.Joiner) {
                     // A Reject means one of two things depending on where we are:
-                    //  - resume in flight  → resolve the parked resume as WindowClosed (existing behavior);
+                    //  - resume in flight  → resolve the parked resume as WindowClosed (existing behavior)
+                    //                         and RECORD the message; the reconnect loop keeps retrying,
+                    //                         because a host that hasn't opened its window yet rejects an
+                    //                         early resume that a later retry lands (#1556).
                     //  - initial join      → the host refused admission; fail loudly (#1178) instead of
                     //                         swallowing it and leaving join()'s consumer hanging.
-                    val hadPendingResume = resumeMachine?.rejectFlight() ?: false
+                    val hadPendingResume = resumeMachine?.rejectFlight(msg.reason) ?: false
                     if (!hadPendingResume) {
                         scope.launch { failAdmission(AdmissionFailure.Rejected(msg.reason), clock()) }
                     }
@@ -982,7 +1000,17 @@ internal class SeamRoom(
      *
      * Validates the token against the [reconnectController]. On [ResumeResult.Success],
      * [handleReconnectResumed] sends a [AdmitMessage.Welcome] confirmation to the joiner
-     * via the reconnect controller's event stream. On failure, replies with [AdmitMessage.Reject].
+     * via the reconnect controller's event stream. On failure, replies with an
+     * [AdmitMessage.Reject] naming the cause [ResumeResult] distinguished — the joiner
+     * surfaces it as [FailureReason.Refused] if its window ultimately expires (#1556).
+     *
+     * **Honest limit.** [JoinerReconnectController.tryResume] folds two very different
+     * situations into one [ResumeResult.WindowClosed]: a window that has *never opened* (the
+     * host has not yet noticed the drop — transient, and the joiner's next retry may well
+     * succeed) and one that *expired or was consumed* (terminal). `"resume-window-closed"`
+     * therefore cannot be split transient-vs-terminal by the receiver; doing so needs a
+     * controller change and a typed reject code on the wire, tracked in #1572. Do not read
+     * more into this string than the wire carries.
      */
     private suspend fun handleResume(sender: PeerId, msg: AdmitMessage.Resume) {
         val ctrl = reconnectController ?: return
@@ -991,9 +1019,13 @@ internal class SeamRoom(
             roomId = RoomId(msg.tokenRoomId),
             issuedAt = msg.issuedAt,
         )
-        val result = ctrl.tryResume(token, at = clock().toEpochMilliseconds())
-        if (result !is ResumeResult.Success) {
-            val rejectBytes = AdmitMessage.encode(AdmitMessage.Reject("resume-rejected"))
+        val rejectReason = when (val result = ctrl.tryResume(token, at = clock().toEpochMilliseconds())) {
+            is ResumeResult.Success -> null
+            is ResumeResult.WindowClosed -> REJECT_RESUME_WINDOW_CLOSED
+            is ResumeResult.TokenInvalid -> "$REJECT_RESUME_TOKEN_INVALID: ${result.reason}"
+        }
+        if (rejectReason != null) {
+            val rejectBytes = AdmitMessage.encode(AdmitMessage.Reject(rejectReason))
             runCatchingCancellable { seam.sendTo(sender, rejectBytes) }
         }
         // On Success: handleReconnectResumed fires via the controller's event stream
@@ -1217,7 +1249,7 @@ internal class SeamRoom(
         if (hostTransportClose) {
             resumeMachine?.attemptReconnect(event.at)
         } else {
-            markPartitioned(event.peerId, event.at)
+            markPartitioned(event.peerId, event.at, event.reason.asReconnectReason())
         }
     }
 
@@ -1231,14 +1263,17 @@ internal class SeamRoom(
      *
      * On the **host** the announcement is a [AdmitMessage.Paused] fan-out to the remaining
      * members — see [propagatePaused] for why local detection alone is not enough.
+     *
+     * [reason] is carried straight onto [MembershipEvent.Partitioned] so a consumer can phrase
+     * the pause (a slow link reads differently from a dropped socket).
      */
-    private fun markPartitioned(peerId: PeerId, at: Instant) {
+    private fun markPartitioned(peerId: PeerId, at: Instant, reason: ReconnectReason) {
         val (wasPartitioned, updated) = lock.withLock {
             val current = admittedById[peerId] ?: return
             val wasPartitioned = current.liveness == Liveness.Partitioned
             wasPartitioned to (updateMemberLiveness(peerId, Liveness.Partitioned) ?: return)
         }
-        if (!wasPartitioned) _events.tryEmit(MembershipEvent.Partitioned(updated.id, at))
+        if (!wasPartitioned) _events.tryEmit(MembershipEvent.Partitioned(updated.id, at, reason))
         reconnectController?.onPeerUnresponsive(peerId, at.toEpochMilliseconds())
         if (!wasPartitioned && _role.value == SessionRole.Host) {
             propagatePaused(
@@ -1316,7 +1351,11 @@ internal class SeamRoom(
             if (current.liveness == Liveness.Partitioned) return
             updateMemberLiveness(subject, Liveness.Partitioned) ?: return
         }
-        _events.tryEmit(MembershipEvent.Partitioned(updated.id, clock()))
+        // The host is the authority here and it only pauses a seat whose link dropped —
+        // TransportClosed is the honest lift of "the host told us this peer's link went away".
+        _events.tryEmit(
+            MembershipEvent.Partitioned(updated.id, clock(), ReconnectReason.TransportClosed),
+        )
         _events.tryEmit(
             MembershipEvent.WindowOpened(updated.id, Instant.fromEpochMilliseconds(paused.expiresAt)),
         )
@@ -1345,20 +1384,22 @@ internal class SeamRoom(
             _role.value == SessionRole.Joiner && peerId == hostPeerId
         }
         if (isHostPeer) {
-            markHostLost(at)
+            // The detector only reaches PeerLost after the full reconnect window elapsed with
+            // no recovery — nothing refused us, time simply ran out.
+            markHostLost(at, FailureReason.WindowExpired)
         } else {
             removeFromRoster(peerId, LeaveReason.PartitionExpired)
         }
     }
 
-    private suspend fun markHostLost(at: Instant) {
+    private suspend fun markHostLost(at: Instant, reason: FailureReason) {
         val alreadyLost = lock.withLock {
             val was = hostLost
             hostLost = true
             was
         }
         if (alreadyLost) return
-        _events.tryEmit(MembershipEvent.HostLost(at))
+        _events.tryEmit(MembershipEvent.HostLost(at, reason))
         leave(LeaveReason.Error("host lost"))
     }
 

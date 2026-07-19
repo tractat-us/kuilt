@@ -46,8 +46,16 @@ public sealed interface MembershipEvent {
      * member's [Liveness] transitioning to [Liveness.Partitioned]); and on a **joiner's** events
      * when its host link tears and the joiner begins an in-window resume attempt (#1037). Either
      * way [peerId] identifies the peer whose link dropped (the joiner, or the host, respectively).
+     *
+     * [reason] says *why* the link is down, at the granularity kuilt can honestly observe —
+     * enough to phrase a reconnect banner. It is never terminal: a window is open. The
+     * terminal counterpart is [HostLost]'s [FailureReason].
      */
-    public data class Partitioned(val peerId: PeerId, val at: Instant) : MembershipEvent
+    public data class Partitioned(
+        val peerId: PeerId,
+        val at: Instant,
+        val reason: ReconnectReason,
+    ) : MembershipEvent
 
     /**
      * A partitioned peer's link recovered before the window expired.
@@ -86,8 +94,13 @@ public sealed interface MembershipEvent {
      *
      * Driven by [us.tractat.kuilt.session.partition.PartitionEvent.PeerLost] for the
      * host peer. The room does not auto-elect a new host.
+     *
+     * [reason] says whether anything could have helped — the window merely elapsed
+     * ([FailureReason.WindowExpired]), the host actively refused a resume
+     * ([FailureReason.Refused]), or no resume path existed at all
+     * ([FailureReason.Unrecoverable]). It is the "retry or give up for good" signal.
      */
-    public data class HostLost(val at: Instant) : MembershipEvent
+    public data class HostLost(val at: Instant, val reason: FailureReason) : MembershipEvent
 
     /**
      * The joiner's admit handshake failed terminally — it never entered a roster

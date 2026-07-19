@@ -84,7 +84,9 @@ class TransportCloseWindowTest {
             // Transport close — the in-memory analog of a socket close.
             clientMesh.close()
 
-            assertIs<MembershipEvent.Partitioned>(partitioned.await())
+            val partitionedEvent = assertIs<MembershipEvent.Partitioned>(partitioned.await())
+            // A definitive close, not silence — the taxonomy must say so (#1556).
+            assertEquals(ReconnectReason.TransportClosed, partitionedEvent.reason)
             assertIs<MembershipEvent.WindowOpened>(windowOpened.await())
         }
 
