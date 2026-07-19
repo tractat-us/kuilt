@@ -188,11 +188,13 @@ public class NwLoom(
 
     public companion object {
         /**
-         * The roles a Network.framework fabric plays: it both finds peers ([TransportRole.Discovery], via
+         * The BASE roles a Network.framework fabric plays: it both finds peers ([TransportRole.Discovery], via
          * Bonjour advertise+browse) and carries frames ([TransportRole.Data]). The single source of these
-         * roles for both [capability] (pre-connect) and the [NwSeam] capability seed (live per-session). The
-         * monitor drives *availability*, never the roles — the path API cannot distinguish infrastructure
-         * Wi-Fi from peer-to-peer AWDL, so a Wi-Fi/cellular role split would be a guess (see #1541 follow-up).
+         * roles for both [capability] (pre-connect static) and the [NwSeam] capability seed (live per-session).
+         * The pre-connect [capability] carries exactly this base set (no path observed yet). Per-session, the
+         * live path monitor now folds the observed Wi-Fi medium ([TransportRole.WifiLan] infrastructure vs
+         * [TransportRole.WifiDirect] peer-to-peer AWDL) ON TOP of this base — recovered from the BSD interface
+         * name by [classifyWifiInterface] (#1554), the follow-up to #1541's availability-only reactive capability.
          */
         internal val NW_ROLES: Set<TransportRole> = setOf(TransportRole.Discovery, TransportRole.Data)
 

@@ -228,11 +228,12 @@ internal class NwSeam(
     private val _state = MutableStateFlow<SeamState>(SeamState.Weaving)
     override val state: StateFlow<SeamState> = _state.asStateFlow()
 
-    // Live capability (#1541): seeded from the loom's static report ([staticCapability]) and thereafter
-    // driven by the injected path monitor ([NwApi.pathState]). Roles never change (Discovery+Data — see
-    // [NwLoom.NW_ROLES]); the monitor moves only [TransportCapability.availability] as the real-world path
-    // goes up/down, swaps Wi-Fi↔cellular, or the Local-Network permission is denied. A MutableStateFlow so
-    // the write from the single [pathStateLoop] collector is thread-safe (CAS) under any dispatcher.
+    // Live capability (#1541/#1554): seeded from the loom's static report ([staticCapability]) and thereafter
+    // driven by the injected path monitor ([NwApi.pathState]). The monitor moves [TransportCapability.availability]
+    // as the real-world path goes up/down or the Local-Network permission is denied, AND now folds the live
+    // interface type into the ROLES — a peer-to-peer AWDL path adds [TransportRole.WifiDirect], an infrastructure
+    // path adds [TransportRole.WifiLan], atop the fabric's base Discovery+Data ([NwLoom.NW_ROLES]). A
+    // MutableStateFlow so the write from the single [pathStateLoop] collector is thread-safe (CAS) under any dispatcher.
     private val _capability = MutableStateFlow(staticCapability)
     override val capability: StateFlow<TransportCapability> = _capability.asStateFlow()
 
@@ -703,16 +704,25 @@ internal class NwSeam(
      * Fold the transport's live [NwApi.pathState] (an `NWPathMonitor` on `RealNwApi`) into [capability].
      * A `null` path state means "unknown" — the binding has not wired a real monitor (the JVM bridge, or the
      * default fake) — so we keep the [staticCapability] seed rather than guess. A non-null state supersedes the
-     * seed's availability via [NwPathState.toAvailability], leaving the roles untouched (the fabric is always
-     * [NwLoom.NW_ROLES]; the path API cannot tell infrastructure Wi-Fi from AWDL, so it never drives roles).
-     * The write goes to the seam-owned [_capability] MutableStateFlow, so this single collector is the sole
-     * writer — no lock needed. Terminates with [scope] on close (this loop holds no per-connection state).
+     * seed's availability via [NwPathState.toAvailability] AND drives the ROLES (#1554): the base fabric roles
+     * ([staticCapability]'s [NwLoom.NW_ROLES] = Discovery+Data) plus the live medium role — [TransportRole.WifiDirect]
+     * for a peer-to-peer AWDL path, [TransportRole.WifiLan] for an infrastructure path ([NwPathState.interfaceRoles],
+     * driven by the [classifyWifiInterface] BSD-name heuristic). A non-Wi-Fi path (cellular/wired/down) adds no
+     * medium role, so the roles revert to the base set. The write goes to the seam-owned [_capability]
+     * MutableStateFlow, so this single collector is the sole writer — no lock needed. Terminates with [scope]
+     * on close (this loop holds no per-connection state).
      */
     private suspend fun pathStateLoop() {
         api.pathState.collect { path ->
             _capability.value =
-                if (path == null) staticCapability
-                else staticCapability.copy(availability = path.toAvailability())
+                if (path == null) {
+                    staticCapability
+                } else {
+                    TransportCapability(
+                        roles = staticCapability.roles + path.interfaceRoles(),
+                        availability = path.toAvailability(),
+                    )
+                }
         }
     }
 
