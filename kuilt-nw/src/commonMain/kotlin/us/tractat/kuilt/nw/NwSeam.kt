@@ -306,8 +306,10 @@ internal class NwSeam(
             // latest-value STATE that will not re-emit an unchanged value. Now that `conns` has caught up,
             // re-reconcile the LATEST map so a pending path loss is armed (else the #1478 zombie returns: no
             // `connectionClosed` ever fires for a path-lost connection) AND a conn that closed before we
-            // tracked it is torn on registration.
-            if (created) reconcileStates(api.connectionStates.value)
+            // tracked it is torn on registration. reconcileStates re-reads the freshest state under the lock
+            // (#1566) — we no longer capture `connectionStates.value` here on the caller's thread, where it
+            // could go stale before the locked reconcile ran.
+            if (created) reconcileStates()
             log.debug { "nw.seam.opened connId=${connId.value} self=${selfId.value} → sending NwHello" }
             runCatchingCancellable { api.send(connId, encodeFrame(NwHello.encode(selfId, cs.nonce))) }
                 .onFailure { log.debug { "nw.seam.identity-send-failed connId=${connId.value} self=${selfId.value}: ${it.message}" } }
@@ -328,8 +330,9 @@ internal class NwSeam(
             }
             // Same #1509/#1522 lost-wakeup guard as connectionOpenedLoop: if bytes are the first thing that
             // puts this connId into `conns`, re-reconcile the latest connectionStates so a pending path loss
-            // is not stranded and a conn that closed before we tracked it is torn on registration.
-            if (created) reconcileStates(api.connectionStates.value)
+            // is not stranded and a conn that closed before we tracked it is torn on registration. The read
+            // happens under the lock inside reconcileStates (#1566), not on this caller's thread.
+            if (created) reconcileStates()
             // The framer is single-reader (only this loop touches it), so decoding outside the lock is safe.
             // #1528 finding 1: NwFramer.decode throws FrameTooLargeException on a bad 4-byte length prefix
             // (negative or > maxFrameSize). Guard it so a corrupt/hostile chunk on ANY live conn routes through
@@ -669,9 +672,11 @@ internal class NwSeam(
      * never be conflated away.
      */
     private suspend fun connectionStatesLoop() {
-        api.connectionStates.collect { states ->
+        api.connectionStates.collect {
             if (closed.value) return@collect
-            reconcileStates(states)
+            // The emission still DRIVES the reconcile (every state change fires it); reconcileStates re-reads
+            // the freshest `api.connectionStates.value` under the lock (#1566), so the emitted value is not used.
+            reconcileStates()
         }
     }
 
@@ -704,7 +709,7 @@ internal class NwSeam(
     }
 
     /**
-     * Reconcile the transport's per-connection latest [NwConnState] map [states] — the drop-tolerant #1539
+     * Reconcile the transport's per-connection latest [NwConnState] map — the drop-tolerant #1539
      * unification of the former `reconcileViability` (#1509) and `reconcileClosed` (#1522). On every emission
      * we re-derive the outcome from the LATEST value per connection, so a coalesced/lost intermediate
      * transition can never strand a timer, miss a loss, or lose a close. For each reported connection we
@@ -728,6 +733,18 @@ internal class NwSeam(
      * one lock acquisition, and `start()` on a lazily-armed job a concurrent reconcile already cancelled is a
      * harmless no-op.
      *
+     * ## Reads the freshest state UNDER the lock (#1566)
+     * The [NwConnState] map is re-read from [NwApi.connectionStates] `value` INSIDE [lock], **not** taken as a
+     * caller-supplied parameter. The lost-wakeup catch-up sites ([connectionOpenedLoop]/[bytesReceivedLoop])
+     * used to capture `api.connectionStates.value` on the caller's thread and pass it in; that snapshot could
+     * go stale before this locked section ran (a concurrent states emission the collector already reconciled),
+     * and because a [StateFlow] never re-emits an unchanged value the stale outcome was FINAL — a stale
+     * [NwConnState.PathLost] armed a grace timer that tore a healthy conn, and a stale [NwConnState.Viable]
+     * cancelled a legitimately-armed timer, stranding a permanent zombie peer. Re-reading `value` under the
+     * same lock that makes the arm/cancel/remove decision means whichever reconcile runs LAST operates on a
+     * map at least as fresh as any earlier one, closing the hole in both directions. The read is a
+     * non-suspending [StateFlow] field access — it introduces no lock ordering, and no suspend under the lock.
+     *
      * Acts ONLY on a state's PRESENCE — a connId absent from [states] is NEVER inferred to be closed.
      *
      * ## Accepted conflation trade-off
@@ -738,12 +755,15 @@ internal class NwSeam(
      * currently down; it can never strand a timer on, or tear, a path whose latest value is `Viable`. Inherent
      * to conflated state and acceptable — noted here so it isn't rediscovered as a "bug".
      */
-    private fun reconcileStates(states: Map<NwConnectionId, NwConnState>) {
+    private fun reconcileStates() {
         val toCancel = mutableListOf<Pair<NwConnectionId, Job>>()
         val armed = mutableListOf<Pair<NwConnectionId, Job>>()
         val armSkipped = mutableListOf<NwConnectionId>()
         val toRemove = mutableListOf<NwConnectionId>()
         lock.withLock {
+            // #1566: read the FRESHEST state under the lock, never a caller-captured snapshot that may have
+            // gone stale before we acquired it. A non-suspending StateFlow field access.
+            val states = api.connectionStates.value
             for ((connId, st) in states) {
                 when (st) {
                     is NwConnState.Closed -> if (connId in conns) toRemove += connId // terminal — tear immediately
