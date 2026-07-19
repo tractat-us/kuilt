@@ -17,6 +17,8 @@ If you catch yourself writing any of these, stop — kuilt already ships it:
 | a propose→authoritative/rejected turn/session facade, host election with a term | `GameSession` + `TurnSequencer` | [Consensus & turns](#consensus--turns) |
 | a heartbeat, an idle reaper, "is this peer still alive", "evict stale session" | `HeartbeatPartitionDetector` | [Liveness & presence](#liveness--presence) |
 | "close a room nobody joined", "reap an abandoned table/lobby", "nobody ever showed up" | `SoloDeadlineDetector` | [Liveness & presence](#liveness--presence) |
+| a "hold the seat open" / reconnect grace window on the host, a `pendingSeats` or `disconnectedAt` map | `JoinerReconnectController` | [Liveness & presence](#liveness--presence) |
+| a "paused / reconnecting…" presence flag, a `lastSeen` map for greying out a player | `Room.events` + `Member.liveness` | [Liveness & presence](#liveness--presence) |
 | a last-write-wins register, a grow-only set/counter, an add/remove set, a version vector, "merge these two states" | the CRDT zoo (`LWWRegister`, `GSet`, `PNCounter`, `ORSet`, …) | [Replicated data](#replicated-data) |
 | replicating a CRDT over a connection by hand | `Quilter` | [Replicated data](#replicated-data) |
 | a `seenIds` set to skip already-handled messages | `GSet` / kuilt dedup | [Dedup](#dedup) |
@@ -230,11 +232,61 @@ public suspend fun reapNeverPairedRoomSample(
 }
 ```
 
+**Intent:** hold a dropped peer's **seat** open for a grace window instead of evicting it — "keep the slot", "reserved", "reconnect window", "don't kick them yet".
+**Primitive:** `JoinerReconnectController` (`:kuilt-session`, `us.tractat.kuilt.session.partition`). It *is* the server-side seat-hold: `onPeerUnresponsive` opens the timed window, `tryResume` validates the returning peer's `ResumeToken` (right room, window still open, token not already used), and `events` reports `WindowOpened` / `Resumed` / `WindowExpired`. A `SeamRoom` host wires one for you — reach for this directly only when you own the host loop. Don't keep your own `pendingSeats` / `disconnectedAt` map.
+
+<!-- verbatim from kuilt-session/src/commonSamples/kotlin/us/tractat/kuilt/session/AgentCookbookSamples.kt#holdTheSeatOpenSample -->
+```kotlin
+public suspend fun holdTheSeatOpenSample(
+    controller: JoinerReconnectController,
+    dropped: PeerId,
+    nowEpochMs: Long,
+) {
+    // The peer's link dropped: open (or refresh) its reconnect window rather than evicting.
+    controller.onPeerUnresponsive(dropped, at = nowEpochMs)
+    controller.events.collect { event ->
+        when (event) {
+            // The seat is reserved until event.expiresAt.
+            is JoinerReconnectEvent.WindowOpened -> Unit
+            // It came back in time — push an application-state snapshot to event.peerId.
+            is JoinerReconnectEvent.Resumed -> Unit
+            // Window elapsed; the seat is released and MembershipEvent.Left(PartitionExpired) follows.
+            is JoinerReconnectEvent.WindowExpired -> Unit
+        }
+    }
+}
+```
+
 > **Which one?** `SoloDeadlineDetector` answers *"did anyone ever join?"* — it disarms
 > permanently on first pairing, so a room that fills and later empties emits nothing more.
 > `HeartbeatPartitionDetector` answers *"is this peer, who **was** here, still alive?"*.
 > Every `PartitionEvent` names a `peerId`; "nobody ever came" has no peer to name, which is
 > why the never-paired case is a separate type rather than a `PartitionEvent` variant.
+
+**Intent:** show a peer as **paused** (seat held) rather than gone — a greyed-out avatar, "reconnecting…", "waiting for player".
+**Primitive:** `Room.events` + `Member.liveness` (`:kuilt-session`). `MembershipEvent.Partitioned` / `WindowOpened` / `Recovered` are the pause/resume pair, and the roster entry reads `Liveness.Partitioned` for as long as the seat is held. Don't build a `lastSeen` map on top of application traffic.
+
+<!-- verbatim from kuilt-session/src/commonSamples/kotlin/us/tractat/kuilt/session/AgentCookbookSamples.kt#observePausedPeersSample -->
+```kotlin
+public suspend fun observePausedPeersSample(room: Room) {
+    // room.roster.value.filter { it.liveness == Liveness.Partitioned } is the same fact, pull-style.
+    room.events.collect { event ->
+        when (event) {
+            is MembershipEvent.Partitioned -> Unit // grey the seat out — this peer's link dropped
+            is MembershipEvent.WindowOpened -> Unit // its seat is held until event.expiresAt
+            is MembershipEvent.Recovered -> Unit // it returned inside the window — un-grey it
+            is MembershipEvent.Left -> Unit // gone for good: Normal (clean) or PartitionExpired
+            else -> Unit
+        }
+    }
+}
+```
+
+> These events mean the same thing on **every** member, whatever the topology underneath.
+> Liveness is detected locally, which is enough on a mesh but blind on a star — so the host
+> also fans out an authoritative `AdmitMessage.Paused` / `Unpaused`, and a `Farewell` when a
+> window expires (#1557). Receipt is idempotent: a peer that detects the drop itself *and*
+> receives the fan-out emits one event, not two.
 
 ## Consensus & turns
 
