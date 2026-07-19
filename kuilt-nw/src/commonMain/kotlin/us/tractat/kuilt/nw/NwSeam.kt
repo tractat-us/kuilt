@@ -745,15 +745,28 @@ internal class NwSeam(
      * map at least as fresh as any earlier one, closing the hole in both directions. The read is a
      * non-suspending [StateFlow] field access — it introduces no lock ordering, and no suspend under the lock.
      *
-     * Acts ONLY on a state's PRESENCE — a connId absent from [states] is NEVER inferred to be closed.
+     * Acts ONLY on a state's PRESENCE — a connId absent from the reconciled map is NEVER inferred to be closed.
      *
-     * ## Accepted conflation trade-off
-     * Because this is conflated latest-value state, a `PathLost → Viable → PathLost` burst that all lands while
-     * the collector is starved (on the order of the grace duration) delivers only the final `PathLost`: the
-     * intermediate `Viable` is conflated away, so the second loss does NOT restart the grace clock — it
-     * inherits the first timer's remaining time. This can only ever UNDER-grant grace to a path that is
-     * currently down; it can never strand a timer on, or tear, a path whose latest value is `Viable`. Inherent
-     * to conflated state and acceptable — noted here so it isn't rediscovered as a "bug".
+     * ## Accepted trade-off: a flap does not restart the grace clock
+     * A `PathLost → Viable → PathLost` flap does NOT restart the grace clock whenever the fresh read already
+     * shows the second loss: the reconcile driven by the `Viable` emission reads `value`, sees `PathLost`, and
+     * takes the `connId in graceJobs` no-op branch — so the recovery never cancels the timer and the second loss
+     * INHERITS the first timer's remaining time rather than arming a fresh full-length one. This holds
+     * unconditionally, not just for a burst that `StateFlow` conflated: since #1566 the reconcile acts on the
+     * freshest `value` rather than the emitted map, so the window is "the reconcile lagged the state change at
+     * all", not "the emissions were conflated away". (Before #1566 a *delivered* `Viable` emission did cancel
+     * the timer, and the following `PathLost` armed a full-length one.)
+     *
+     * This is the deliberate **level-triggered anti-flap** semantic: the timer tracks "how long has this path
+     * been down", not "how long since the most recent down-edge", so a rapidly flapping path cannot indefinitely
+     * postpone its own eviction by briefly recovering. It can only ever UNDER-grant grace to a path whose LATEST
+     * state is down; it can never strand a timer on, or tear, a path whose latest state is `Viable` (a recovery
+     * that is still the latest value when the reconcile runs always cancels).
+     *
+     * We chose NOT to restore full-grace-on-recovery: doing so would require tracking the last-acted-on state
+     * per connection and re-arming on an observed `Viable → PathLost` EDGE — reintroducing edge-triggered state
+     * into a deliberately level-triggered reconcile, for a strictly weaker liveness guarantee. Noted here so it
+     * isn't rediscovered as a "bug".
      */
     private fun reconcileStates() {
         val toCancel = mutableListOf<Pair<NwConnectionId, Job>>()
