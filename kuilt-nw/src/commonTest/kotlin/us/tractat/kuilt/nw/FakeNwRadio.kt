@@ -165,14 +165,10 @@ internal class FakeNwRadio {
         val other = links.remove(connectionId.value) ?: return
         // Drop the reverse mapping too so the link is fully torn down.
         links.remove(other.connectionId.value)
-        // Prune viability on BOTH sides, mirroring RealNwApi.clearViability (#1509): the local side closes
-        // its own handle (its cancel → cancelled → closeConnection prunes locally) and the remote side
-        // prunes the handle it observes closing — so neither device's viability map keeps a stale key.
-        devices[fromDeviceId]?.pruneConnectionViability(connectionId)
-        devices.getValue(other.deviceId).pruneConnectionViability(other.connectionId)
-        // #1522: mark the closure in the drop-tolerant MONOTONE close STATE on BOTH sides — mirrors RealNwApi,
-        // where each side's own `closeConnection` marks its own connId closed. This STATE is what evicts a
-        // zombie peer even when the remote's connectionClosed EVENT is dropped (the `dropCloseEvents` hook).
+        // #1522/#1539: latch the closure into the drop-tolerant [connectionStates] as Closed on BOTH sides —
+        // mirrors RealNwApi, where each side's own `closeConnection` marks its own connId closed. Closed
+        // supersedes any prior Viable/PathLost entry (no separate viability prune needed), and this STATE is
+        // what evicts a zombie peer even when the remote's connectionClosed EVENT is dropped (`dropCloseEvents`).
         devices[fromDeviceId]?.markConnectionClosed(connectionId, reason = null)
         devices.getValue(other.deviceId).markConnectionClosed(other.connectionId, reason = null)
         // Only the REMOTE side observes the close EVENT (the fast reason-carrying path); it may be dropped.

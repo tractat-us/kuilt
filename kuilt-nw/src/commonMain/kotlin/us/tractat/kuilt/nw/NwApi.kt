@@ -8,20 +8,12 @@ import kotlinx.coroutines.flow.emptyFlow
 import us.tractat.kuilt.core.FabricAvailability
 
 /**
- * Shared empty default for [NwApi.connectionViability] — a single immutable, never-updated [StateFlow]
+ * Shared empty default for [NwApi.connectionStates] — a single immutable, never-updated [StateFlow]
  * so the default getter allocates nothing per call. A binding that has not yet wired the underlying
- * `waiting`/`ready` viability transition inherits "every connection's path is unknown" (an empty map).
+ * `ready`/`waiting`/close transitions inherits "every connection's state is unknown" (an empty map).
  */
-private val EMPTY_CONNECTION_VIABILITY: StateFlow<Map<NwConnectionId, Boolean>> =
-    MutableStateFlow(emptyMap<NwConnectionId, Boolean>()).asStateFlow()
-
-/**
- * Shared empty default for [NwApi.closedConnections] — a single immutable, never-updated [StateFlow] so
- * the default getter allocates nothing per call. A binding that has not yet wired the underlying close
- * markers inherits "reports no closures" (an empty map) rather than being forced to implement it.
- */
-private val EMPTY_CLOSED_CONNECTIONS: StateFlow<Map<NwConnectionId, String?>> =
-    MutableStateFlow(emptyMap<NwConnectionId, String?>()).asStateFlow()
+private val EMPTY_CONNECTION_STATES: StateFlow<Map<NwConnectionId, NwConnState>> =
+    MutableStateFlow(emptyMap<NwConnectionId, NwConnState>()).asStateFlow()
 
 /**
  * Shared default for [NwApi.pathState] — a single immutable, never-updated [StateFlow] holding `null`
@@ -81,7 +73,7 @@ public interface NwApi {
      * that connection. But a real datagram transport reports most send failures asynchronously
      * (the link breaks after the call returns), surfacing them via [connectionClosed] rather than
      * by throwing here. Callers must therefore rely on [connectionClosed] (the fast reason-carrying
-     * path) — backstopped by the drop-tolerant [closedConnections] STATE — as the authoritative
+     * path) — backstopped by the drop-tolerant [connectionStates] `Closed` STATE — as the authoritative
      * teardown signal, and treat a non-throwing `send` as "handed off", not "delivered".
      */
     public suspend fun send(connectionId: NwConnectionId, bytes: ByteArray)
@@ -117,59 +109,46 @@ public interface NwApi {
      *
      * This is a **lossy** event stream (a full buffer drops the event under backpressure), so it is NOT the
      * sole teardown authority: a dropped `failed`/`cancelled` close would otherwise strand a zombie peer that
-     * no other signal evicts (#1522). [closedConnections] is the drop-tolerant STATE backstop — a close is
-     * reflected there whether or not this event survives. `NwSeam` consumes both; whichever observes the
-     * closure first tears the connection, the other is an idempotent no-op.
+     * no other signal evicts (#1522). [connectionStates] is the drop-tolerant STATE backstop — a close is
+     * reflected there (as [NwConnState.Closed]) whether or not this event survives. `NwSeam` consumes both;
+     * whichever observes the closure first tears the connection, the other is an idempotent no-op.
      */
     public val connectionClosed: Flow<NwConnectionClosed>
 
     /**
-     * The per-connection **latest** path-viability state: each live connection's [NwConnectionId] mapped
-     * to whether its path is currently up (`true` = `ready`; `false` = a `ready → waiting` path loss).
-     * A connection absent from the map has never established or has closed.
+     * The per-connection **latest lifecycle state**: each connection's [NwConnectionId] mapped to its current
+     * [NwConnState] — [NwConnState.Viable] (path up), [NwConnState.PathLost] (path unsatisfied), or
+     * [NwConnState.Closed] (terminally torn, carrying the raw close reason). This ONE drop-tolerant STATE
+     * signal unifies the two former parallel maps — `connectionViability` (#1509) and `closedConnections`
+     * (#1522) — into a single total sum type (#1539). A connection absent from the map has never established.
      *
-     * Viability is **state, not an event stream** (#1509). Network.framework moves a connection that loses
-     * its route from `ready` to `waiting` (NOT `failed`), so no [NwConnectionClosed] ever fires — the peer
-     * is silently unreachable; `NwSeam` reconciles this map to arm a bounded grace timer on a path loss and
-     * tear the peer if the path does not recover in time (the transport-level fix for #1478). Modelling it
-     * as a **[StateFlow] of the latest value per connection** (rather than a lossy `tryEmit` event flow)
-     * makes it **drop-tolerant**: intermediate transitions may coalesce under backpressure, but the LATEST
-     * value per connection is never lost — so a recovery (`true`) can never be dropped and strand an armed
-     * grace timer (a spurious tear), and a loss (`false`) can never be dropped and leave a zombie peer.
+     * It is **state, not an event stream**, and it drives two `NwSeam` reconciliations at once:
+     *  - **Path loss / recovery (#1478).** Network.framework moves a connection that loses its route from
+     *    `ready` to `waiting` (NOT `failed`), so no [NwConnectionClosed] ever fires — the peer is silently
+     *    unreachable. The seam arms a bounded grace timer while a connection is [NwConnState.PathLost] and
+     *    cancels it on recovery to [NwConnState.Viable]; if the path never recovers the peer is torn.
+     *  - **Terminal teardown (#1522).** [NwConnState.Closed] is the drop-tolerant backstop for the lossy
+     *    [connectionClosed] event: a `failed`/`cancelled` close dropped under buffer pressure would otherwise
+     *    strand a zombie peer. The seam tears any still-tracked connection whose state is [NwConnState.Closed],
+     *    IMMEDIATELY and with no grace timer.
      *
-     * Defaults to a never-updated empty map so a binding that has not yet wired the underlying
-     * `waiting`/`ready` transition (the JVM dylib bridge — see #1507) inherits "every connection's path is
-     * unknown" rather than being forced to implement it before the ABI lands. `RealNwApi` (appleMain) and
-     * the test fakes override it.
-     */
-    public val connectionViability: StateFlow<Map<NwConnectionId, Boolean>>
-        get() = EMPTY_CONNECTION_VIABILITY
-
-    /**
-     * The per-connection **latched-terminal** close markers: each closed connection's [NwConnectionId] mapped
-     * to its raw close reason (`null` = a graceful/local close; non-null = a failure reason, e.g. `receive:54`).
-     *
-     * Closure is modelled as a **monotone map of STATE**, not a lossy event stream, and NOT a live-set. This
-     * is the drop-tolerant backstop for [connectionClosed] (#1522): the event stream is a lossy `tryEmit`, so a
-     * `failed`/`cancelled` close event dropped under buffer pressure would strand a zombie peer forever (nothing
-     * else evicts it once the viability key is also cleared). Entries in this map only ever **appear** — once a
-     * connection is marked closed it stays closed (until FIFO-cap-pruned for retention) — so a closure can never
-     * be conflated away the way a StateFlow live-set's presence-then-absence would be under the same starvation
-     * that drops the event. `NwSeam` reconciles this map and tears any still-tracked connection whose id appears.
-     *
-     * A **live-set or a "seen-ready bit" would NOT be drop-tolerant**: presence-then-absence conflates under the
-     * same backpressure that drops the close, recreating the zombie. The monotone map also dissolves the
-     * pre-first-ready ambiguity — the seam acts ONLY on a positive closure marker.
+     * Modelling it as a **[StateFlow] of the latest value per connection** (rather than a lossy `tryEmit`
+     * event flow) makes it **drop-tolerant**: intermediate transitions may coalesce under backpressure, but
+     * the LATEST value per connection is never lost. [NwConnState.Closed] is furthermore **terminal, monotone
+     * and dominant** — producers latch it so a late [NwConnState.Viable]/[NwConnState.PathLost] for a closed
+     * id can never overwrite it (so a closure can never be conflated away the way a boolean live-set's
+     * presence-then-absence would be under the same starvation that drops the event).
      *
      * **Absence means NOTHING.** A connection absent from this map may be live, dialling, or never-having-existed
-     * — never infer a closure from a key being absent. The ONLY positive signal is a key's *presence*.
+     * — never infer a closure from a key being absent. The ONLY positive signal is a key's *presence* with a
+     * [NwConnState.Closed] value.
      *
-     * Defaults to a never-updated empty map so a binding that has not yet wired close markers (the JVM dylib
-     * bridge, pre-ABI — see #1507) inherits "reports no closures". `RealNwApi` (appleMain), `BridgeNwApi` (JVM),
-     * and the test fakes override it.
+     * Defaults to a never-updated empty map so a binding that has not yet wired the underlying transitions
+     * inherits "every connection's state is unknown" rather than being forced to implement it before the ABI
+     * lands. `RealNwApi` (appleMain), `BridgeNwApi` (JVM), and the test fakes override it.
      */
-    public val closedConnections: StateFlow<Map<NwConnectionId, String?>>
-        get() = EMPTY_CLOSED_CONNECTIONS
+    public val connectionStates: StateFlow<Map<NwConnectionId, NwConnState>>
+        get() = EMPTY_CONNECTION_STATES
 
     /**
      * The device's live network-path state (`NWPathMonitor`), or `null` while unknown. This is what

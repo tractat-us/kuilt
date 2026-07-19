@@ -118,15 +118,15 @@ internal interface NwNativeLib : Library {
     }
 
     /**
-     * `(connectionId: char*, reason: char*) -> void` (#1539). The drop-tolerant native `closedConnections`
-     * STATE signal: fires once per newly-latched close marker in `RealNwApi.closedConnections` (a monotone
-     * map, id → reason). Empty [reason] ⇒ graceful/`null`, matching [ConnectionClosedCallback].
+     * `(connectionId: char*, reason: char*) -> void` (#1539). The drop-tolerant native close STATE signal:
+     * fires once per newly-latched `Closed` marker in `RealNwApi.connectionStates` (the unified monotone map).
+     * Empty [reason] ⇒ graceful/`null`, matching [ConnectionClosedCallback].
      *
      * Unlike [ConnectionClosedCallback] — the lossy per-event close stream that can DROP a `failed`/`cancelled`
      * close at the K/N `tryEmit` or JVM staging boundary and strand a zombie peer — this is sourced from the
      * transport's authoritative monotone STATE, so a close it delivers can never be dropped. The bridge latches
-     * each marker into its own drop-tolerant `closedConnections` state (and prunes the closed connection's
-     * viability entry) off THIS callback, not the droppable event. Stage 1 of #1522's deferred follow-up.
+     * each marker into its own drop-tolerant `connectionStates` `Closed` state off THIS callback, not the
+     * droppable event (Closed supersedes the connection's prior viability entry — no separate prune needed).
      */
     fun interface ConnectionClosedStateCallback : Callback {
         @Suppress("ktlint:standard:function-naming")
@@ -135,10 +135,10 @@ internal interface NwNativeLib : Library {
 
     /**
      * `(connectionId: char*, viable: int) -> void` (#1507). [viable] is `1` when the connection's path is
-     * up (`ready`) and `0` when it is lost (`ready → waiting`). Fires once per per-connection change; the
-     * bridge applies each as a latest-wins delta into its drop-tolerant `connectionViability` state (#1509).
-     * Entry removals are not delivered here — the bridge prunes a closed connection off the drop-tolerant
-     * [ConnectionClosedStateCallback] (#1539).
+     * up (`ready`, `NwConnState.Viable`) and `0` when it is lost (`ready → waiting`, `NwConnState.PathLost`).
+     * Fires once per per-connection path-state change; the bridge applies each as a latest-wins delta into its
+     * drop-tolerant `connectionStates` state (#1509/#1539). Closed connections are not delivered here — the
+     * bridge learns "closed" from the drop-tolerant [ConnectionClosedStateCallback] (#1539).
      */
     fun interface ViabilityCallback : Callback {
         @Suppress("ktlint:standard:function-naming")

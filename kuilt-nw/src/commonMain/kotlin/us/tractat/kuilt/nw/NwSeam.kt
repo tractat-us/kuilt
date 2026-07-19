@@ -43,7 +43,7 @@ private val log = KotlinLogging.logger("us.tractat.kuilt.nw.NwSeam")
  * there is no per-connection machine/collector. The seam owns the connection lifecycle
  * from [NwApi.connectionOpened] onward; discovery + dialling belong to `NwLoom` (Task 2.7).
  *
- * Five collectors, all launched [CoroutineStart.UNDISPATCHED] at construction so they
+ * Four collectors, all launched [CoroutineStart.UNDISPATCHED] at construction so they
  * subscribe **before** `NwLoom` triggers advertise/browse/dial (subscribe-before-trigger,
  * since [NwApi]'s flows are hot with no replay):
  *
@@ -57,27 +57,27 @@ private val log = KotlinLogging.logger("us.tractat.kuilt.nw.NwSeam")
  *     guarded so a deduped loser's close can't evict the survivor) and, when the last remote drops,
  *     **re-forms to [SeamState.Weaving] rather than latching [SeamState.Torn]** (#1513) — peer loss is
  *     recoverable, not terminal.
- *  4. **connectionViability** — the #1478 path-loss timer, reconciled from drop-tolerant STATE (#1509).
- *     A Network.framework connection that loses its route goes `ready → waiting` (NOT `failed`), firing NO
- *     [NwApi.connectionClosed], so a dead peer would otherwise linger in [peers] forever.
- *     [NwApi.connectionViability] exposes each connection's LATEST viability as state (not a lossy event
- *     stream); [reconcileViability] arms a per-connection grace timer ([wovenPathGrace]) for a connection
- *     whose latest value is `false` and cancels it when the latest is `true`. If the path does not recover
- *     before the timer expires, the connection is evicted (last-remote ⇒ re-form to [SeamState.Weaving],
- *     #1513 — NOT [SeamState.Torn]). Reconciling the latest value (rather than reacting to transitions) means
- *     a dropped/coalesced signal can never strand an armed timer (a spurious tear) or miss a loss (a
- *     zombie peer). The timer lives HERE, not in [NwApi], because only the seam owns an injectable [scope]
- *     (the test dispatcher under `runTest`) — `RealNwApi` runs on a GCD queue with no injectable clock.
- *  5. **closedConnections** — the drop-tolerant TEARDOWN authority, backstopping collector 3 (#1522).
- *     [NwApi.connectionClosed] is a lossy `tryEmit` event; a dropped `failed`/`cancelled` close would strand a
- *     permanent zombie peer (its viability key already cleared, so no grace timer ever arms — nothing else
- *     evicts it). [NwApi.closedConnections] exposes closure as a **monotone map of latched-terminal STATE**;
- *     [reconcileClosed] tears any still-tracked connection whose id appears, reusing [removeByConn] verbatim
- *     (tombstone, grace-timer cancel, conn-identity guard, last-remote re-form). Closure is terminal — torn
- *     IMMEDIATELY, no grace timer. A monotone map (entries only appear) cannot lose a closure to conflation
- *     the way a live-set/seen-ready bit would under the same starvation that drops the event; the seam acts
- *     ONLY on a positive marker's presence, NEVER on a key's absence. Double-fire with collector 3 is safe:
- *     whichever runs first removes + tombstones the conn, the second sees `cs == null` → unknown-conn no-op.
+ *  4. **connectionStates** — the ONE drop-tolerant per-connection [NwConnState] STATE signal (#1539),
+ *     reconciled by [reconcileStates], which unifies the former separate viability (#1509) and
+ *     closed-markers (#1522) collectors. Each emission is a snapshot of every tracked connection's latest
+ *     state; the reconcile dispatches per entry:
+ *      - **[NwConnState.PathLost]** — a `ready → waiting` path loss (#1478) that fires NO
+ *        [NwApi.connectionClosed]. Arms a per-connection grace timer ([wovenPathGrace]); if the path does not
+ *        recover before it expires the connection is evicted (last-remote ⇒ re-form to [SeamState.Weaving],
+ *        #1513 — NOT [SeamState.Torn]). The timer lives HERE, not in [NwApi], because only the seam owns an
+ *        injectable [scope] (the test dispatcher under `runTest`) — `RealNwApi` runs on a GCD queue with no
+ *        injectable clock.
+ *      - **[NwConnState.Viable]** — a recovery (or the healthy steady state); cancels any armed grace timer.
+ *      - **[NwConnState.Closed]** — the drop-tolerant TEARDOWN authority backstopping collector 3. The
+ *        [NwApi.connectionClosed] event is a lossy `tryEmit`; a dropped `failed`/`cancelled` close would strand
+ *        a permanent zombie peer. `Closed` is terminal + monotone + dominant STATE, so the seam tears any
+ *        still-tracked connection whose state is `Closed` IMMEDIATELY (no grace timer), reusing [removeByConn]
+ *        verbatim (tombstone, grace-timer cancel, conn-identity guard, last-remote re-form). Double-fire with
+ *        collector 3 is safe: whichever runs first removes + tombstones the conn, the other sees `cs == null` →
+ *        unknown-conn no-op.
+ *     Reconciling the latest value (rather than reacting to transitions) means a dropped/coalesced signal can
+ *     never strand an armed timer, miss a loss, or lose a close; the seam acts ONLY on a state's PRESENCE,
+ *     NEVER on a key's absence.
  *
  * ## Duplicate-dial dedup (canonical-nonce rule, direction-free)
  * A full mesh double-dials each pair, producing two connections to the same peer. Each [ConnState]
@@ -94,7 +94,7 @@ private val log = KotlinLogging.logger("us.tractat.kuilt.nw.NwSeam")
  * collector and read by another with no happens-before); the nonce rule cannot.
  *
  * ## Thread-safety
- * The [registry] and [conns] maps are shared across the three collectors (each `collect` is
+ * The [registry] and [conns] maps are shared across the four lifecycle collectors (each `collect` is
  * internally sequential, but they run concurrently) and the caller-driven [broadcast]/[sendTo].
  * All map access is guarded by one [reentrantLock] (atomicfu). **No `suspend`/`api.*` call ever
  * runs under the lock** — targets are snapshotted under the lock, then sent/disconnected/delivered
@@ -122,7 +122,7 @@ private val log = KotlinLogging.logger("us.tractat.kuilt.nw.NwSeam")
  * @param selfId this peer's stable identity, sent (with a per-connection nonce) as the first framed
  *   message on each connection.
  * @param api    the transport moving raw bytes over open connections.
- * @param scope  coroutine scope hosting the three collectors; cancelled on teardown.
+ * @param scope  coroutine scope hosting the collectors; cancelled on teardown.
  * @param random source of per-connection dedup nonces; production defaults to [Random.Default], tests
  *   inject a seeded [Random] so the dedup tiebreak is deterministic.
  * @param policy delivery policy for the inbound [Spool] (default [DeliveryPolicy.Reliable]).
@@ -172,9 +172,9 @@ internal class NwSeam(
 
     /**
      * Connections currently under a path-loss grace timer (#1478): connId → the pending tear [Job].
-     * Armed by [reconcileViability] when a connection's latest viability is `false`, cancelled when it
-     * reconciles back to `true` (recovery) or on any close/eviction of the connection. Guarded by [lock]
-     * like [conns]/[registry].
+     * Armed by [reconcileStates] when a connection's latest state is [NwConnState.PathLost], cancelled when
+     * it reconciles back to [NwConnState.Viable] (recovery) or on any close/eviction of the connection.
+     * Guarded by [lock] like [conns]/[registry].
      */
     private val graceJobs = mutableMapOf<NwConnectionId, Job>()
 
@@ -269,13 +269,12 @@ internal class NwSeam(
 
     private val closedMessage get() = "NwSeam for ${selfId.value} is closed"
 
-    // UNDISPATCHED so all three collectors subscribe synchronously at construction — before any
-    // connectionOpened/bytes/close event can be emitted (subscribe-before-trigger).
+    // UNDISPATCHED so all four collectors subscribe synchronously at construction — before any
+    // connectionOpened/bytes/close/state event can be emitted (subscribe-before-trigger).
     private val openedJob: Job = scope.launch(start = CoroutineStart.UNDISPATCHED) { connectionOpenedLoop() }
     private val bytesJob: Job = scope.launch(start = CoroutineStart.UNDISPATCHED) { bytesReceivedLoop() }
     private val closedJob: Job = scope.launch(start = CoroutineStart.UNDISPATCHED) { connectionClosedLoop() }
-    private val viabilityJob: Job = scope.launch(start = CoroutineStart.UNDISPATCHED) { connectionViabilityLoop() }
-    private val closedStateJob: Job = scope.launch(start = CoroutineStart.UNDISPATCHED) { connectionClosedStateLoop() }
+    private val statesJob: Job = scope.launch(start = CoroutineStart.UNDISPATCHED) { connectionStatesLoop() }
 
     // The single dedicated reader draining [deliveryStage] into the [spool] (#1415). Launched like every
     // other loop and cancelled with [scope] at teardown. It is the ONLY caller of [Spool.deliver], so the
@@ -302,17 +301,13 @@ internal class NwSeam(
             // Record the dialled endpoint (outbound only; null inbound) so the peer's endpoint id can feed
             // [settledEndpoints] (#1513). Set under the lock like every other ConnState mutation.
             if (event.endpoint != null) lock.withLock { cs.endpoint = event.endpoint }
-            // #1509 lost-wakeup guard: a `viable=false` observed for this connId BEFORE it entered `conns`
-            // was arm-skipped, and viability is latest-value STATE that will not re-emit an unchanged value.
-            // Now that `conns` has caught up, re-reconcile the LATEST map so a pending path loss is armed
-            // (else the #1478 zombie returns: no `connectionClosed` ever fires for a path-lost connection).
-            // Same #1522 lost-wakeup guard for closedConnections: a close marked BEFORE this connId entered
-            // `conns` was arm-skipped by the filter and closedConnections is latest-value STATE that won't
-            // re-emit an unchanged map — so re-reconcile it here to tear a conn that closed before we tracked it.
-            if (created) {
-                reconcileViability(api.connectionViability.value)
-                reconcileClosed(api.closedConnections.value)
-            }
+            // #1509/#1522 lost-wakeup guard: a [NwConnState] observed for this connId BEFORE it entered
+            // `conns` was skipped (PathLost arm-skipped, Closed filtered), and connectionStates is
+            // latest-value STATE that will not re-emit an unchanged value. Now that `conns` has caught up,
+            // re-reconcile the LATEST map so a pending path loss is armed (else the #1478 zombie returns: no
+            // `connectionClosed` ever fires for a path-lost connection) AND a conn that closed before we
+            // tracked it is torn on registration.
+            if (created) reconcileStates(api.connectionStates.value)
             log.debug { "nw.seam.opened connId=${connId.value} self=${selfId.value} → sending NwHello" }
             runCatchingCancellable { api.send(connId, encodeFrame(NwHello.encode(selfId, cs.nonce))) }
                 .onFailure { log.debug { "nw.seam.identity-send-failed connId=${connId.value} self=${selfId.value}: ${it.message}" } }
@@ -332,12 +327,9 @@ internal class NwSeam(
                 return@collect
             }
             // Same #1509/#1522 lost-wakeup guard as connectionOpenedLoop: if bytes are the first thing that
-            // puts this connId into `conns`, re-reconcile the latest viability AND closed state so a pending
-            // loss is not stranded and a conn that closed before we tracked it is torn on registration.
-            if (created) {
-                reconcileViability(api.connectionViability.value)
-                reconcileClosed(api.closedConnections.value)
-            }
+            // puts this connId into `conns`, re-reconcile the latest connectionStates so a pending path loss
+            // is not stranded and a conn that closed before we tracked it is torn on registration.
+            if (created) reconcileStates(api.connectionStates.value)
             // The framer is single-reader (only this loop touches it), so decoding outside the lock is safe.
             // #1528 finding 1: NwFramer.decode throws FrameTooLargeException on a bad 4-byte length prefix
             // (negative or > maxFrameSize). Guard it so a corrupt/hostile chunk on ANY live conn routes through
@@ -665,40 +657,25 @@ internal class NwSeam(
         }
     }
 
-    // ── loop 4: connectionViability — the #1478 path-loss grace timer ────────────
+    // ── loop 4: connectionStates — the #1478 grace timer + #1522 teardown, unified (#1539) ──
 
     /**
-     * A path-lost (`ready → waiting`) connection fires NO [NwApi.connectionClosed] (#1478). The transport
-     * exposes viability as **drop-tolerant per-connection latest-value STATE** ([NwApi.connectionViability]),
-     * not a lossy event stream (#1509): each emission is a snapshot of every live connection's latest
-     * viability, so we [reconcileViability] rather than react to individual transitions. Because the LATEST
-     * value per connection is never lost (only intermediate transitions may coalesce), a dropped recovery
-     * can never strand an armed timer (spurious tear) and a dropped loss can never leave a zombie peer.
+     * The ONE drop-tolerant per-connection [NwConnState] STATE signal ([NwApi.connectionStates]), unifying
+     * the former separate viability (#1509) and closed-markers (#1522) collectors (#1539). Each emission is a
+     * snapshot of every tracked connection's latest state, so we [reconcileStates] rather than react to
+     * individual transitions. Because the LATEST value per connection is never lost (only intermediate
+     * transitions may coalesce) and [NwConnState.Closed] is monotone+dominant, a dropped recovery can never
+     * strand an armed timer (spurious tear), a dropped loss can never leave a zombie peer, and a close can
+     * never be conflated away.
      */
-    private suspend fun connectionViabilityLoop() {
-        api.connectionViability.collect { state ->
+    private suspend fun connectionStatesLoop() {
+        api.connectionStates.collect { states ->
             if (closed.value) return@collect
-            reconcileViability(state)
+            reconcileStates(states)
         }
     }
 
-    // ── loop 5: closedConnections — the #1522 drop-tolerant teardown backstop ────
-
-    /**
-     * [NwApi.connectionClosed] (loop 3) is a lossy `tryEmit` event: a dropped `failed`/`cancelled` close would
-     * strand a permanent zombie peer (#1522). [NwApi.closedConnections] is the drop-tolerant backstop — a
-     * **monotone map of latched-terminal close STATE** — so we [reconcileClosed] the latest map rather than
-     * react to a (droppable) event. The lambda param is named `closedMap` so it does NOT shadow the seam's
-     * terminal latch atomic [closed].
-     */
-    private suspend fun connectionClosedStateLoop() {
-        api.closedConnections.collect { closedMap ->
-            if (closed.value) return@collect
-            reconcileClosed(closedMap)
-        }
-    }
-
-    // ── loop 6: pathState — the #1541 reactive-capability driver ─────────────────
+    // ── loop 5: pathState — the #1541 reactive-capability driver ─────────────────
 
     /**
      * Fold the transport's live [NwApi.pathState] (an `NWPathMonitor` on `RealNwApi`) into [capability].
@@ -727,60 +704,51 @@ internal class NwSeam(
     }
 
     /**
-     * Reconcile the transport's monotone close markers [closedMap] against the still-tracked connections: any
-     * connId that appears in the map AND is still in [conns] is torn via [removeByConn] — reused verbatim, so
-     * closure teardown is identical to the send-failure / grace-expiry / #1478 paths (tombstone, grace-timer
-     * cancel, the conn-identity guard that spares a dedup-loser's survivor, and the last-remote re-form to
-     * [SeamState.Weaving] per #1513). Closure is TERMINAL, so we tear IMMEDIATELY — no grace timer, matching
-     * [connectionClosedLoop]. The `it in conns` pre-filter keeps steady-state re-reconciles silent, and makes
-     * double-fire with loop 3 safe: whichever runs first removes the conn, the other filters it out. Computed
-     * under [lock]; [removeByConn] runs OUTSIDE the lock (it re-acquires it), preserving no-suspend-under-lock.
+     * Reconcile the transport's per-connection latest [NwConnState] map [states] — the drop-tolerant #1539
+     * unification of the former `reconcileViability` (#1509) and `reconcileClosed` (#1522). On every emission
+     * we re-derive the outcome from the LATEST value per connection, so a coalesced/lost intermediate
+     * transition can never strand a timer, miss a loss, or lose a close. For each reported connection we
+     * dispatch on its single current state:
+     *  - **[NwConnState.Closed]** on a still-tracked connection → tear IMMEDIATELY via [removeByConn] (reused
+     *    verbatim, so closure teardown is identical to the send-failure / grace-expiry paths: tombstone,
+     *    grace-timer cancel, the conn-identity guard that spares a dedup-loser's survivor, and the last-remote
+     *    re-form to [SeamState.Weaving] per #1513). Closure is TERMINAL — no grace timer, matching
+     *    [connectionClosedLoop]. The `it in conns` pre-filter keeps steady-state re-reconciles silent and makes
+     *    double-fire with loop 3 safe: whichever runs first removes the conn, the other filters it out.
+     *  - **[NwConnState.Viable]** (path up / recovered) → cancel any armed grace timer (a no-op if none).
+     *  - **[NwConnState.PathLost]** on a still-tracked connection → arm a grace timer if not already armed.
      *
-     * Acts ONLY on a marker's PRESENCE — a connId absent from [closedMap] is NEVER inferred to be closed (a
-     * monotone map has no "absence"; that is the whole point vs a live-set/seen-ready bit, which would conflate
-     * presence-then-absence away under the same starvation that drops the close event).
-     */
-    private fun reconcileClosed(closedMap: Map<NwConnectionId, String?>) {
-        val toRemove = lock.withLock { closedMap.keys.filter { it in conns } }
-        for (connId in toRemove) {
-            log.info { "nw.seam.closed-state connId=${connId.value} self=${selfId.value} → removeByConn (drop-tolerant teardown)" }
-            removeByConn(connId)
-        }
-    }
-
-    /**
-     * Reconcile the transport's per-connection latest viability [state] against the armed grace timers
-     * ([graceJobs]) — the drop-tolerant #1509 replacement for reacting to viability *events*. On every
-     * emission we re-derive the armed set from the LATEST value per connection, so a coalesced/lost
-     * intermediate transition can never strand a timer or miss a loss. For each reported connection:
-     *  - latest `true` (path up / recovered) → cancel any armed grace timer (a no-op if none);
-     *  - latest `false` (path lost) on a still-tracked connection → arm a grace timer if not already armed.
-     * Idempotent: an already-armed loss or an already-clear recovery is a steady-state no-op. Arm/cancel
-     * decisions are taken under [lock] (so the [graceJobs] mutation is atomic); the [Job] `start`/`cancel`
-     * side effects run OUTSIDE the lock, matching the seam-wide "no non-trivial call under the lock" rule.
-     * Safe to call concurrently from the viability collector AND the [conns]-insertion sites (#1509
-     * lost-wakeup guard): the check-then-arm is one lock acquisition, and `start()` on a lazily-armed job
-     * a concurrent reconcile already cancelled is a harmless no-op.
+     * Because [NwConnState.Closed] is monotone+dominant at the producer, a connection reported `Closed` can
+     * never subsequently reappear as `Viable`/`PathLost`, so a torn peer never resurrects. Idempotent: an
+     * already-armed loss, an already-clear recovery, or an already-removed close is a steady-state no-op.
+     * Arm/cancel/remove decisions are taken under [lock] (so the [graceJobs] mutation is atomic); the [Job]
+     * `start`/`cancel` side effects and [removeByConn] run OUTSIDE the lock (the latter re-acquires it),
+     * preserving the seam-wide "no non-trivial call under the lock" rule. Safe to call concurrently from the
+     * states collector AND the [conns]-insertion sites (#1509/#1522 lost-wakeup guard): the check-then-arm is
+     * one lock acquisition, and `start()` on a lazily-armed job a concurrent reconcile already cancelled is a
+     * harmless no-op.
+     *
+     * Acts ONLY on a state's PRESENCE — a connId absent from [states] is NEVER inferred to be closed.
      *
      * ## Accepted conflation trade-off
-     * Because this is conflated latest-value state, a `false → true → false` burst that all lands while the
-     * collector is starved (on the order of the grace duration) delivers only the final `false`: the
-     * intermediate `true` is conflated away, so the second loss does NOT restart the grace clock — it
+     * Because this is conflated latest-value state, a `PathLost → Viable → PathLost` burst that all lands while
+     * the collector is starved (on the order of the grace duration) delivers only the final `PathLost`: the
+     * intermediate `Viable` is conflated away, so the second loss does NOT restart the grace clock — it
      * inherits the first timer's remaining time. This can only ever UNDER-grant grace to a path that is
-     * currently down (tearing a dead-then-recovered-then-dead-again peer slightly sooner); it can never
-     * strand a timer on, or tear, a path whose latest value is `true`. Inherent to conflated state and
-     * acceptable — noted here so it isn't rediscovered as a "bug".
+     * currently down; it can never strand a timer on, or tear, a path whose latest value is `Viable`. Inherent
+     * to conflated state and acceptable — noted here so it isn't rediscovered as a "bug".
      */
-    private fun reconcileViability(state: Map<NwConnectionId, Boolean>) {
+    private fun reconcileStates(states: Map<NwConnectionId, NwConnState>) {
         val toCancel = mutableListOf<Pair<NwConnectionId, Job>>()
         val armed = mutableListOf<Pair<NwConnectionId, Job>>()
         val armSkipped = mutableListOf<NwConnectionId>()
+        val toRemove = mutableListOf<NwConnectionId>()
         lock.withLock {
-            for ((connId, viable) in state) {
-                if (viable) {
-                    graceJobs.remove(connId)?.let { toCancel += connId to it }
-                } else {
-                    when {
+            for ((connId, st) in states) {
+                when (st) {
+                    is NwConnState.Closed -> if (connId in conns) toRemove += connId // terminal — tear immediately
+                    NwConnState.Viable -> graceJobs.remove(connId)?.let { toCancel += connId to it }
+                    NwConnState.PathLost -> when {
                         connId !in conns -> armSkipped += connId // conn closed/evicted or not yet tracked
                         connId in graceJobs -> Unit // already armed — reconcile steady state, no-op
                         else -> {
@@ -805,6 +773,10 @@ internal class NwSeam(
         }
         for (connId in armSkipped) {
             log.debug { "nw.seam.viability.arm-skipped connId=${connId.value} self=${selfId.value} reason=not-in-conns" }
+        }
+        for (connId in toRemove) {
+            log.info { "nw.seam.closed-state connId=${connId.value} self=${selfId.value} → removeByConn (drop-tolerant teardown)" }
+            removeByConn(connId)
         }
     }
 

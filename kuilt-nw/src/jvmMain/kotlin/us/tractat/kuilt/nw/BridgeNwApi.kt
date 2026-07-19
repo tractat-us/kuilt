@@ -25,8 +25,8 @@ import kotlin.coroutines.CoroutineContext
  * JVM [NwApi] proxying through the macOS K/N Network.framework bridge
  * ([NwNativeLib] over `libkuilt.dylib`). The JVM analogue of the appleMain
  * `RealNwApi`: it forwards the seven suspend ops to the dylib and re-publishes
- * the six native callback streams — four event [Flow]s plus the [connectionViability]
- * and [closedConnections] state signals — exactly as `NwLoom`/`NwSeam` consume `RealNwApi`.
+ * the native callback streams — four event [Flow]s plus the unified [connectionStates]
+ * STATE signal — exactly as `NwLoom`/`NwSeam` consume `RealNwApi`.
  *
  * ## JNA-callback → coroutine-flow bridge (the crown jewel)
  * The six native callbacks fire on JNA threads and must not suspend. Each one
@@ -39,29 +39,23 @@ import kotlin.coroutines.CoroutineContext
  * so a burst is lossy at the JNA boundary rather than blocking the native caller —
  * matching `RealNwApi`'s `tryEmit`-drops-when-full backpressure.
  *
- * ## Closure is drop-tolerant monotone STATE, sourced from a native signal (#1522 → #1539)
- * The `connectionClosed` staging channel is DROP_OLDEST, so a dropped close EVENT would strand a zombie peer.
- * [closedConnections] is the drop-tolerant backstop: a MONOTONE map of latched close markers (id → reason).
- * As of #1539 it is sourced from the **authoritative native `connectionClosedState` callback** — which fires
- * once per newly-latched marker in `RealNwApi.closedConnections`, the transport's own monotone STATE that
- * never drops a close — NOT from the droppable per-event stream. The [connectionClosedStateCallback] latches
- * each marker via a CAS `update{}` add plus a FIFO cap, and prunes the closed connection's viability entry,
- * both off that drop-tolerant signal. So a close is reflected in [closedConnections] whether or not the EVENT
- * survives, and the seam reconciles it. (This replaces #1522's JVM-side synthesis-off-the-droppable-event with
- * the native-signal source — the close set is now inherited from the transport, not re-derived JVM-side.)
- *
- * ## Viability is drop-tolerant STATE, not an event (#1507/#1509)
- * [connectionViability] mirrors `RealNwApi`'s `MutableStateFlow<Map>`: the fifth native callback delivers a
- * per-connection `(id, viable)` change, and a single drain applies it as a latest-wins delta so the map
- * converges to each connection's LATEST path-viability even if intermediate transitions coalesce or drop at
- * the JNA boundary. A close (from the drop-tolerant `connectionClosedState` signal, #1539) is routed through
- * the *same* drain as a prune, so the two are serialized without a lock; a per-drain guard set makes the prune
- * permanently win,
- * so a late viability change can never resurrect a closed connection (the order the two JNA callbacks fire
- * from their K/N threads does not matter). Result: "absent ⇒ closed", matching the appleMain contract.
+ * ## Lifecycle is drop-tolerant STATE, sourced from native signals (#1509/#1522/#1539)
+ * [connectionStates] mirrors `RealNwApi`'s `MutableStateFlow<Map<NwConnectionId, NwConnState>>`, unifying the
+ * former separate viability and closed-markers maps. Two native callbacks write it directly (no drain
+ * coroutine, no staging channel — each is an atomic CAS `update{}`, thread-safe from any JNA thread):
+ *  - [viabilityCallback] delivers a per-connection `(id, viable)` change → [NwConnState.Viable]/[NwConnState.PathLost],
+ *    so the map converges to each connection's LATEST path state even if intermediate transitions coalesce at
+ *    the JNA boundary;
+ *  - [connectionClosedStateCallback] — the **authoritative drop-tolerant native `connectionClosedState`
+ *    signal** — fires once per newly-latched marker in `RealNwApi.connectionStates` (the transport's own
+ *    monotone STATE that never drops a close), NOT the droppable per-event stream, and latches
+ *    [NwConnState.Closed] SYNCHRONOUSLY via [markClosedFromCallback] (CAS add + FIFO cap under [closedOrderLock]).
+ * Because [setViabilityFromCallback] refuses to overwrite a `Closed` entry (the in-lambda dominance check), a
+ * late viability change can never resurrect a closed connection regardless of the order the two callbacks fire
+ * from their K/N threads. So a close is reflected in [connectionStates] whether or not the close EVENT survives.
  *
  * ## Strong callback references
- * The five [com.sun.jna.Callback] objects are held as fields so JNA's trampolines
+ * The six [com.sun.jna.Callback] objects are held as fields so JNA's trampolines
  * survive this object's lifetime; releasing them early would SIGSEGV the K/N side.
  *
  * ## Native-runtime lifecycle (GC parity with appleMain)
@@ -111,17 +105,12 @@ public class BridgeNwApi internal constructor(
     private val _bytesReceived = MutableSharedFlow<NwBytesReceived>(extraBufferCapacity = BYTES_BUFFER)
     private val _connectionClosed = MutableSharedFlow<NwConnectionClosed>(extraBufferCapacity = EVENT_BUFFER)
 
-    // Per-connection LATEST viability as drop-tolerant STATE (#1509), the JVM analogue of RealNwApi's
-    // MutableStateFlow. Written only by the single viability drain (below) via atomic update{}, so no lock
-    // is needed even though the JNA callbacks fire on many threads.
-    private val _connectionViability = MutableStateFlow<Map<NwConnectionId, Boolean>>(emptyMap())
-
-    // Drop-tolerant MONOTONE close markers (#1522), the JVM analogue of RealNwApi's MutableStateFlow. Synthesized
-    // directly in the connectionClosed callback via a CAS update{} add (monotone ⇒ safe from the JNA thread with
-    // no drain) plus a FIFO cap under [closedOrderLock]. This bypasses the DROP_OLDEST close-EVENT staging, so a
-    // dropped close EVENT still leaves a positive closure marker — fixing the JVM-side event-drop zombie (#1522).
-    // (Re-sourcing this from a NATIVE closedConnections signal via a diff-forwarder is the deferred follow-up.)
-    private val _closedConnections = MutableStateFlow<Map<NwConnectionId, String?>>(emptyMap())
+    // Per-connection LATEST lifecycle state as the ONE drop-tolerant STATE signal (#1539), the JVM analogue of
+    // RealNwApi's MutableStateFlow, unifying the former separate viability (#1509) and closed-markers (#1522)
+    // maps. Two JNA callbacks write it, both via atomic CAS `update{}` (thread-safe from any JNA thread):
+    // [viabilityCallback] sets Viable/PathLost (refusing to overwrite a Closed entry — dominance), and
+    // [connectionClosedStateCallback] latches Closed (monotone, drop-tolerant) via [markClosedFromCallback].
+    private val _connectionStates = MutableStateFlow<Map<NwConnectionId, NwConnState>>(emptyMap())
     private val closedOrderLock = Any()
     private val closedOrder = ArrayDeque<NwConnectionId>()
 
@@ -129,13 +118,21 @@ public class BridgeNwApi internal constructor(
     override val connectionOpened: Flow<NwConnectionOpened> = _connectionOpened.asSharedFlow()
     override val bytesReceived: Flow<NwBytesReceived> = _bytesReceived.asSharedFlow()
     override val connectionClosed: Flow<NwConnectionClosed> = _connectionClosed.asSharedFlow()
-    override val connectionViability: StateFlow<Map<NwConnectionId, Boolean>> = _connectionViability.asStateFlow()
-    override val closedConnections: StateFlow<Map<NwConnectionId, String?>> = _closedConnections.asStateFlow()
+    override val connectionStates: StateFlow<Map<NwConnectionId, NwConnState>> = _connectionStates.asStateFlow()
 
     /**
-     * Latch [id]'s closure into the monotone [closedConnections] STATE (#1522). Called directly from the JNA
-     * [connectionClosedCallback] thread: the map publish is a CAS `update{}` (thread-safe), and the FIFO order
-     * tracking (for the [CLOSED_RETENTION_CAP] prune) is guarded by the small [closedOrderLock].
+     * Latch [id]'s closure into [connectionStates] as [NwConnState.Closed] (#1522/#1539) — terminal, monotone
+     * and dominant. Called directly from the drop-tolerant JNA [connectionClosedStateCallback] thread: the map
+     * publish is a CAS `update{}` (thread-safe), and the FIFO order tracking (for the [CLOSED_RETENTION_CAP]
+     * prune) is guarded by the small [closedOrderLock]. Because [setViabilityFromCallback] refuses to overwrite
+     * a `Closed` entry, this latch dominates — a late `ready`/`waiting` for a closed id cannot revert it.
+     *
+     * **Cap-prune caveat (bounded, seam-harmless).** Once an id's `Closed` entry has been FIFO-pruned past
+     * [CLOSED_RETENTION_CAP], a *very*-late [setViabilityFromCallback] for that id would find no `Closed` guard and
+     * could write a `Viable` entry that nothing later removes — the same class as the existing pruned-before-observed
+     * cap risk. It is harmless to the seam: by then the connection is long torn and tombstoned (not in `conns`), so a
+     * spurious `Viable` never arms a grace timer nor resurrects a peer. The cap is sized far above the in-flight
+     * reorder window so this cannot happen in practice.
      */
     private fun markClosedFromCallback(id: NwConnectionId, reason: String?) {
         synchronized(closedOrderLock) {
@@ -144,9 +141,23 @@ public class BridgeNwApi internal constructor(
                 // Hoist the FIFO mutation OUT of the CAS lambda (see RealNwApi.markClosed): `update{}` may
                 // re-run its lambda on contention, so a `removeFirst()` inside it would pop twice.
                 val evicted = closedOrder.removeFirst()
-                _closedConnections.update { it - evicted }
+                _connectionStates.update { it - evicted }
             }
-            _closedConnections.update { it + (id to reason) }
+            _connectionStates.update { it + (id to NwConnState.Closed(reason)) }
+        }
+    }
+
+    /**
+     * Publish [id]'s LATEST path state (#1509/#1539): `viable` ⇒ [NwConnState.Viable], else [NwConnState.PathLost].
+     * **Closed-dominance:** a no-op if the entry is already [NwConnState.Closed] — a late viability change for a
+     * terminally-closed id must never revert it (the terminal-closed-wins-over-late-viability latch, #1522). The
+     * `is Closed` check runs INSIDE the CAS `update{}` lambda, so it re-evaluates on retry: a [markClosedFromCallback]
+     * that lands mid-CAS still wins, regardless of the order the two JNA callbacks fire from their K/N threads.
+     */
+    private fun setViabilityFromCallback(id: NwConnectionId, viable: Boolean) {
+        _connectionStates.update { cur ->
+            if (cur[id] is NwConnState.Closed) cur // terminal Closed dominates — never revert to a live state
+            else cur + (id to if (viable) NwConnState.Viable else NwConnState.PathLost)
         }
     }
 
@@ -156,12 +167,6 @@ public class BridgeNwApi internal constructor(
     private val connectionOpenedStaging = Channel<NwConnectionOpened>(EVENT_BUFFER, BufferOverflow.DROP_OLDEST)
     private val bytesReceivedStaging = Channel<NwBytesReceived>(BYTES_BUFFER, BufferOverflow.DROP_OLDEST)
     private val connectionClosedStaging = Channel<NwConnectionClosed>(EVENT_BUFFER, BufferOverflow.DROP_OLDEST)
-
-    // Viability deltas (set-latest) AND close-prunes share ONE staging channel drained by ONE coroutine,
-    // so every mutation of _connectionViability is serialized without a lock and resurrection is
-    // impossible: once a Prune is processed, that connection is remembered as closed and any later Set for
-    // it is ignored — regardless of the order the two JNA callbacks happen to fire from their K/N threads.
-    private val connectionViabilityStaging = Channel<ViabilityDelta>(EVENT_BUFFER, BufferOverflow.DROP_OLDEST)
 
     // Strong refs so JNA trampolines aren't GC'd while the K/N side may still fire them.
     private val endpointFoundCallback =
@@ -184,38 +189,33 @@ public class BridgeNwApi internal constructor(
         }
 
     // The lossy per-EVENT close stream — the fast, reason-carrying path (NwSeam loop 3). It ONLY forwards
-    // the event to the staging channel; the drop-tolerant closedConnections STATE and the viability prune
-    // are sourced from the separate native [connectionClosedStateCallback] (#1539), NOT this droppable event.
+    // the event to the staging channel; the drop-tolerant [connectionStates] `Closed` STATE is sourced from
+    // the separate native [connectionClosedStateCallback] (#1539), NOT this droppable event.
     private val connectionClosedCallback =
         NwNativeLib.ConnectionClosedCallback { connectionId, reason ->
             val id = NwConnectionId(connectionId)
             connectionClosedStaging.trySend(NwConnectionClosed(id, reason.ifEmpty { null }))
         }
 
-    // #1539: the drop-tolerant native `closedConnections` STATE signal. Fires once per newly-latched close
-    // marker in RealNwApi.closedConnections (the transport's authoritative monotone map), so — unlike the
+    // #1539: the drop-tolerant native `connectionClosedState` STATE signal. Fires once per newly-latched close
+    // marker in RealNwApi.connectionStates (the transport's authoritative monotone map), so — unlike the
     // droppable [connectionClosedCallback] event above — a close it delivers can never be lost. This is where
-    // the JVM bridge learns "closed": it latches the marker into its own [closedConnections] STATE and prunes
-    // the connection's viability entry off THIS callback, so a dropped close EVENT can no longer strand a zombie.
+    // the JVM bridge learns "closed": it latches [NwConnState.Closed] into its own [connectionStates] STATE
+    // SYNCHRONOUSLY (monotone map add — safe from this JNA thread, never through the DROP_OLDEST staging), so a
+    // dropped close EVENT can no longer strand a zombie. Closed supersedes any prior Viable/PathLost entry, so
+    // there is no separate viability prune — the [setViabilityFromCallback] dominance check keeps a late Set out.
     private val connectionClosedStateCallback =
         NwNativeLib.ConnectionClosedStateCallback { connectionId, reason ->
-            val id = NwConnectionId(connectionId)
-            val mapped = reason.ifEmpty { null }
-            // Latch the drop-tolerant closedConnections STATE (monotone map add — safe from this JNA thread).
-            markClosedFromCallback(id, mapped)
-            // Drop the closed connection's viability entry so "absent ⇒ closed" holds (mirrors
-            // RealNwApi.clearViability). Routing the prune through the SAME viability channel serializes it
-            // with the viability sets — the reconciliation that keeps a late Set from resurrecting the entry.
-            connectionViabilityStaging.trySend(ViabilityDelta.Prune(id))
+            markClosedFromCallback(NwConnectionId(connectionId), reason.ifEmpty { null })
         }
 
     private val viabilityCallback =
         NwNativeLib.ViabilityCallback { connectionId, viable ->
-            connectionViabilityStaging.trySend(ViabilityDelta.Set(NwConnectionId(connectionId), viable != 0))
+            setViabilityFromCallback(NwConnectionId(connectionId), viable != 0)
         }
 
     init {
-        // Register all five callbacks BEFORE any start op (subscribe-before-start): the K/N side
+        // Register all six callbacks BEFORE any start op (subscribe-before-start): the K/N side
         // subscribes its forwarding collectors here, so no hot no-replay event is missed.
         nativeLib.nw_set_endpoint_found_callback(handle, endpointFoundCallback)
         nativeLib.nw_set_connection_opened_callback(handle, connectionOpenedCallback)
@@ -231,30 +231,10 @@ public class BridgeNwApi internal constructor(
         scope.launch { for (event in bytesReceivedStaging) _bytesReceived.emit(event) }
         scope.launch { for (event in connectionClosedStaging) _connectionClosed.emit(event) }
 
-        // The single viability drain: applies each Set as a latest-wins delta and each Prune as a removal,
-        // in FIFO order, so _connectionViability converges to the per-connection LATEST value (#1509). Its
-        // private closedIds guard makes a Prune permanently win over any Set for that id, so a late
-        // viability Set can never resurrect a closed connection (no lock — this coroutine is the sole
-        // writer). Bounded to recent closures: the in-flight reorder window is at most the channel buffer.
-        scope.launch {
-            // Sole-writer drain, so these need no synchronization. closedIds gives O(1) membership; the
-            // FIFO deque bounds it to the CLOSED_ID_GUARD most-recent closures (evicting the eldest).
-            val closedIds = HashSet<NwConnectionId>()
-            val closedOrder = ArrayDeque<NwConnectionId>()
-            for (delta in connectionViabilityStaging) {
-                when (delta) {
-                    is ViabilityDelta.Set ->
-                        if (delta.id !in closedIds) _connectionViability.update { it + (delta.id to delta.viable) }
-                    is ViabilityDelta.Prune -> {
-                        if (closedIds.add(delta.id)) {
-                            closedOrder.addLast(delta.id)
-                            if (closedOrder.size > CLOSED_ID_GUARD) closedIds.remove(closedOrder.removeFirst())
-                        }
-                        _connectionViability.update { it - delta.id }
-                    }
-                }
-            }
-        }
+        // NB: [connectionStates] needs no drain coroutine — the viability and closed-state callbacks write it
+        // directly via atomic CAS `update{}` (thread-safe from any JNA thread), and Closed-dominance is enforced
+        // in-lambda by [setViabilityFromCallback], so a late viability Set can never resurrect a closed
+        // connection regardless of the order the two callbacks fire.
     }
 
     override fun availability(): FabricAvailability = NwNativeLib.jvmAvailability()
@@ -323,27 +303,11 @@ public class BridgeNwApi internal constructor(
         }
     }
 
-    /**
-     * A single mutation of [_connectionViability], staged by a JNA callback and applied by the one
-     * viability drain. [Set] carries a connection's latest `ready`/`waiting` viability; [Prune] drops a
-     * connection whose close arrived on the drop-tolerant `connectionClosedState` signal (#1539). Draining
-     * both through one channel is what serializes them without a lock.
-     */
-    private sealed interface ViabilityDelta {
-        data class Set(val id: NwConnectionId, val viable: Boolean) : ViabilityDelta
-        data class Prune(val id: NwConnectionId) : ViabilityDelta
-    }
-
     private companion object {
         private const val EVENT_BUFFER = 16
         private const val BYTES_BUFFER = 64
 
-        // Cap on the drain's remembered-closed-ids guard. Only needs to exceed the reorder window (a late
-        // viability Set racing its own close), which is bounded by the staging channel buffer — so this is
-        // generous. Bounding it keeps a long-lived, high-churn session from leaking closed-connection ids.
-        private const val CLOSED_ID_GUARD = 256
-
-        // FIFO retention bound on the synthesized closedConnections STATE (#1522): the newest N close markers
+        // FIFO retention bound on the [connectionStates] `Closed` markers (#1522): the newest N close markers
         // are retained, the oldest pruned — bounding the map on a long-lived, high-churn session. Matched to
         // NwSeam.TOMBSTONE_CAP (1024): a pruned-before-observed marker recreates the permanent zombie.
         private const val CLOSED_RETENTION_CAP = 1024

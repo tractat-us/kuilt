@@ -42,15 +42,11 @@ internal class FakeNwApi(
     private val _bytesReceived = MutableSharedFlow<NwBytesReceived>(extraBufferCapacity = 64)
     private val _connectionClosed = MutableSharedFlow<NwConnectionClosed>(extraBufferCapacity = 16)
 
-    // Drop-tolerant per-connection latest-value STATE (#1509), matching RealNwApi's MutableStateFlow.
-    // Intermediate transitions may coalesce under backpressure, but the LATEST value per connection is
-    // never lost — so the seam can reconcile a recovery/loss that a lossy event stream would have dropped.
-    private val _connectionViability = MutableStateFlow<Map<NwConnectionId, Boolean>>(emptyMap())
-
-    // Drop-tolerant MONOTONE close markers (#1522), matching RealNwApi's MutableStateFlow. Entries only
-    // appear (latched terminal) until FIFO-cap-pruned — so a closure survives even when the connectionClosed
-    // EVENT is dropped (the [dropCloseEvents] hook). Driven only from the one test coroutine, so no lock.
-    private val _closedConnections = MutableStateFlow<Map<NwConnectionId, String?>>(emptyMap())
+    // The ONE drop-tolerant per-connection [NwConnState] STATE (#1539), matching RealNwApi's MutableStateFlow
+    // and unifying the former separate viability (#1509) and closed-markers (#1522) maps. Viability sets
+    // Viable/PathLost (Closed-dominant); a close latches Closed (monotone, terminal), which survives even when
+    // the connectionClosed EVENT is dropped (the [dropCloseEvents] hook). Driven only from the one test coroutine.
+    private val _connectionStates = MutableStateFlow<Map<NwConnectionId, NwConnState>>(emptyMap())
     private val closedOrder = ArrayDeque<NwConnectionId>()
 
     // Controllable live network-path state — the test vehicle for the reactive-capability path (#1541),
@@ -63,8 +59,7 @@ internal class FakeNwApi(
     override val connectionOpened: Flow<NwConnectionOpened> = _connectionOpened.asSharedFlow()
     override val bytesReceived: Flow<NwBytesReceived> = _bytesReceived.asSharedFlow()
     override val connectionClosed: Flow<NwConnectionClosed> = _connectionClosed.asSharedFlow()
-    override val connectionViability: StateFlow<Map<NwConnectionId, Boolean>> = _connectionViability.asStateFlow()
-    override val closedConnections: StateFlow<Map<NwConnectionId, String?>> = _closedConnections.asStateFlow()
+    override val connectionStates: StateFlow<Map<NwConnectionId, NwConnState>> = _connectionStates.asStateFlow()
     override val pathState: StateFlow<NwPathState?> = _pathState.asStateFlow()
 
     /**
@@ -166,38 +161,35 @@ internal class FakeNwApi(
      * sees for the link (`conn-<deviceId>-<n>` — see [FakeNwRadio]).
      */
     internal fun emitConnectionViability(connectionId: NwConnectionId, viable: Boolean) {
-        // Set the per-connection LATEST viability state (#1509). `update` is an atomic CAS, so this is
-        // safe to call from any thread; the seam reconciles from the latest map value, never losing it.
-        _connectionViability.update { it + (connectionId to viable) }
+        // Set the per-connection LATEST path state (#1509/#1539): Viable or PathLost. `update` is an atomic CAS,
+        // safe from any thread; the seam reconciles from the latest map value, never losing it. Closed-dominant:
+        // a viability change for an already-[NwConnState.Closed] id is ignored (mirrors RealNwApi.setViability).
+        _connectionStates.update { cur ->
+            if (cur[connectionId] is NwConnState.Closed) cur
+            else cur + (connectionId to if (viable) NwConnState.Viable else NwConnState.PathLost)
+        }
     }
 
     /**
-     * Prune [connectionId]'s viability entry when the connection closes — mirrors `RealNwApi.clearViability`
-     * so the fake honours the "a connection absent from the map has never established or has closed" contract
-     * (#1509) instead of letting the map grow monotonically with stale keys. Driven by [FakeNwRadio.disconnect].
-     */
-    internal fun pruneConnectionViability(connectionId: NwConnectionId) {
-        _connectionViability.update { it - connectionId }
-    }
-
-    /**
-     * Mark [connectionId] closed in the drop-tolerant MONOTONE close STATE (#1522), with [reason] (`null` =
-     * graceful). Mirrors `RealNwApi.markClosed`: the entry latches until the newest [CLOSED_RETENTION_CAP] cap
-     * prunes the oldest. Driven by [FakeNwRadio.disconnect] on BOTH sides of a link (as each side's own
-     * `closeConnection` would mark its own connId), so a zombie is evicted via STATE even when the EVENT drops.
+     * Latch [connectionId] into the drop-tolerant [connectionStates] as [NwConnState.Closed] (#1522/#1539), with
+     * [reason] (`null` = graceful) — terminal, monotone and dominant, so it supersedes any prior Viable/PathLost
+     * entry and a later [emitConnectionViability] cannot revert it. Mirrors `RealNwApi.markClosed`: the entry
+     * latches until the newest [CLOSED_RETENTION_CAP] cap prunes the oldest. Driven by [FakeNwRadio.disconnect]
+     * on BOTH sides of a link (as each side's own `closeConnection` would mark its own connId), so a zombie is
+     * evicted via STATE even when the close EVENT drops.
      */
     internal fun markConnectionClosed(connectionId: NwConnectionId, reason: String?) {
         closedOrder.addLast(connectionId)
         if (closedOrder.size > CLOSED_RETENTION_CAP) {
             // Hoist the FIFO mutation OUT of the CAS lambda (see RealNwApi.markClosed).
             val evicted = closedOrder.removeFirst()
-            _closedConnections.update { it - evicted }
+            _connectionStates.update { it - evicted }
         }
-        _closedConnections.update { it + (connectionId to reason) }
+        _connectionStates.update { it + (connectionId to NwConnState.Closed(reason)) }
     }
 
     internal companion object {
-        /** FIFO retention bound on [closedConnections] — the newest N closures are retained (mirrors RealNwApi, 1024). */
+        /** FIFO retention bound on [connectionStates] `Closed` entries — the newest N are retained (mirrors RealNwApi, 1024). */
         const val CLOSED_RETENTION_CAP: Int = 1024
     }
 }

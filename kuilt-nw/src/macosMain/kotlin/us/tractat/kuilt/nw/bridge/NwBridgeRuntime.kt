@@ -13,7 +13,9 @@
  * collector per flow preserves the single-collection contract of `RealNwApi`'s
  * `MutableSharedFlow`s (a second collector would duplicate delivery); two — the
  * `connectionViability` (#1507/#1509) and `connectionClosedState` (#1539) collectors —
- * observe a `StateFlow<Map>` and forward per-connection changes/new-markers.
+ * both observe the ONE unified `connectionStates` `StateFlow<Map>` (a `StateFlow` permits
+ * multiple collectors) and forward, respectively, its Viable/PathLost path-state changes
+ * and its newly-latched Closed markers.
  * Collectors start `UNDISPATCHED` so they subscribe synchronously before the
  * registering `nw_set_*` call returns — the JVM registers all six callbacks before
  * it issues any start op, so no hot no-replay event is missed (subscribe-before-start).
@@ -41,6 +43,7 @@ import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import us.tractat.kuilt.core.runCatchingCancellable
+import us.tractat.kuilt.nw.NwConnState
 import us.tractat.kuilt.nw.NwConnectionId
 import us.tractat.kuilt.nw.NwEndpoint
 import us.tractat.kuilt.nw.NwLoopbackConfig
@@ -80,8 +83,8 @@ internal typealias ConnectionClosedCb = CFunction<(CPointer<ByteVar>?, CPointer<
 
 /**
  * `(connectionId: char*, reason: char*) -> void` — the JNA-side `connectionClosedState` callback (#1539).
- * The drop-tolerant native `closedConnections` STATE signal: fires once per newly-latched close marker in
- * [RealNwApi.closedConnections] (a monotone map, id → reason). `reason` is empty for a graceful/`null` close
+ * The drop-tolerant native close STATE signal: fires once per newly-latched [NwConnState.Closed] entry in
+ * [RealNwApi.connectionStates] (the unified monotone map). `reason` is empty for a graceful/`null` close
  * (the JVM maps empty back to `null`, as for [ConnectionClosedCb]). Unlike the lossy [ConnectionClosedCb]
  * event, the marker is sourced from the transport's authoritative monotone STATE, so it cannot be dropped.
  */
@@ -90,10 +93,10 @@ internal typealias ConnectionClosedStateCb = CFunction<(CPointer<ByteVar>?, CPoi
 
 /**
  * `(connectionId: char*, viable: int) -> void` — the JNA-side `connectionViability` callback (#1507).
- * `viable` is `1` when the connection's path is up (`ready`) and `0` when it is lost (`ready → waiting`).
- * Fires once per **per-connection change** in [RealNwApi.connectionViability]; the JVM applies each as a
- * latest-wins delta into its own drop-tolerant `StateFlow<Map>`. Entry *removals* (a closed connection)
- * are NOT signalled here — the JVM prunes them from the observed `connectionClosed` stream instead.
+ * `viable` is `1` when the connection's path is up ([NwConnState.Viable]/`ready`) and `0` when it is lost
+ * ([NwConnState.PathLost]/`ready → waiting`). Fires once per **per-connection path-state change** in
+ * [RealNwApi.connectionStates]; the JVM applies each as a latest-wins delta into its own drop-tolerant map.
+ * [NwConnState.Closed] entries are NOT signalled here — the JVM learns "closed" from [ConnectionClosedStateCb].
  */
 @OptIn(ExperimentalForeignApi::class)
 internal typealias ConnectionViabilityCb = CFunction<(CPointer<ByteVar>?, Int) -> Unit>
@@ -176,23 +179,26 @@ internal class NwBridgeRuntime private constructor(private val api: RealNwApi) {
     }
 
     /**
-     * Forwards [RealNwApi.closedConnections] — the drop-tolerant MONOTONE close STATE (#1522) — to the JVM as
-     * per-connection `(id, reason)` callbacks (#1539). The collector diffs each new map snapshot against the
-     * previous one and fires the callback only for connections whose marker is **newly present** (the map is
-     * monotone within its FIFO cap — entries only appear until the eldest is pruned — so a new key IS a new
-     * close). Because it observes the transport's authoritative STATE rather than the lossy `connectionClosed`
-     * event, a close can never be dropped in transit: the JVM bridge inherits the transport's own close set and
-     * uses it as the drop-tolerant teardown authority (and to prune viability), instead of re-deriving it from
-     * the droppable event. `reason` is empty for a graceful/`null` close. Removals (a FIFO-cap prune of an old
-     * marker) are NOT forwarded — closure is terminal for the seam, so only a marker's *appearance* matters.
+     * Forwards the [NwConnState.Closed] entries of the unified [RealNwApi.connectionStates] STATE (#1522/#1539)
+     * to the JVM as per-connection `(id, reason)` callbacks. The collector diffs each new map snapshot against
+     * the previous one and fires the callback only for connections that became **newly [NwConnState.Closed]**
+     * (Closed is monotone+dominant — once latched it never reverts — so a first-time Closed IS a new close).
+     * Because it observes the transport's authoritative STATE rather than the lossy `connectionClosed` event, a
+     * close can never be dropped in transit: the JVM bridge inherits the transport's own close set and uses it
+     * as the drop-tolerant teardown authority, instead of re-deriving it from the droppable event. `reason` is
+     * empty for a graceful/`null` close. FIFO-cap prunes of an old marker are NOT forwarded — closure is
+     * terminal for the seam, so only a marker's *appearance* matters. Two collectors observe the one
+     * [RealNwApi.connectionStates] `StateFlow` (permitted — a `StateFlow` supports multiple collectors, unlike
+     * the single-collection event `SharedFlow`s); this one forwards Closed, [setConnectionViabilityCallback]
+     * forwards Viable/PathLost.
      */
     fun setConnectionClosedStateCallback(cb: CPointer<ConnectionClosedStateCb>) {
         scope.launch(start = CoroutineStart.UNDISPATCHED) {
-            var previous = emptyMap<NwConnectionId, String?>()
-            api.closedConnections.collect { current ->
-                for ((id, reason) in current) {
-                    if (id !in previous) {
-                        val r = reason ?: "" // empty ⇒ graceful/null on the JVM side
+            var previous = emptyMap<NwConnectionId, NwConnState>()
+            api.connectionStates.collect { current ->
+                for ((id, st) in current) {
+                    if (st is NwConnState.Closed && previous[id] !is NwConnState.Closed) {
+                        val r = st.reason ?: "" // empty ⇒ graceful/null on the JVM side
                         memScoped { cb.invoke(id.value.cstr.ptr, r.cstr.ptr) }
                     }
                 }
@@ -202,22 +208,24 @@ internal class NwBridgeRuntime private constructor(private val api: RealNwApi) {
     }
 
     /**
-     * Forwards [RealNwApi.connectionViability] — a drop-tolerant `StateFlow<Map>` (#1509) — to the JVM as
-     * per-connection `(id, viable)` callbacks. The collector diffs each new map snapshot against the
-     * previous one and fires the callback only for connections whose latest value *changed* (a new key or a
-     * flipped `true`/`false`). Because it observes the STATE flow, intermediate transitions may coalesce
-     * under backpressure, but the LATEST value per connection is never lost — so a recovery (`true`) can
-     * never be dropped and a loss (`false`) can never be dropped. Removals (a connection cleared from the
-     * map on close) are deliberately NOT forwarded here: the JVM learns "closed" from the `connectionClosed`
-     * stream and prunes the corresponding viability entry itself.
+     * Forwards the [NwConnState.Viable]/[NwConnState.PathLost] entries of the unified [RealNwApi.connectionStates]
+     * STATE (#1509/#1539) to the JVM as per-connection `(id, viable)` callbacks (`1` = Viable, `0` = PathLost).
+     * The collector diffs each new map snapshot against the previous one and fires only for connections whose
+     * path state *changed* (a new key or a Viable↔PathLost flip). Because it observes the STATE flow,
+     * intermediate transitions may coalesce under backpressure, but the LATEST value per connection is never
+     * lost. [NwConnState.Closed] entries are NOT forwarded here — those are the teardown authority forwarded by
+     * [setConnectionClosedStateCallback]; the JVM learns "closed" from that drop-tolerant path.
      */
     fun setConnectionViabilityCallback(cb: CPointer<ConnectionViabilityCb>) {
         scope.launch(start = CoroutineStart.UNDISPATCHED) {
-            var previous = emptyMap<NwConnectionId, Boolean>()
-            api.connectionViability.collect { current ->
-                for ((id, viable) in current) {
-                    if (previous[id] != viable) {
-                        memScoped { cb.invoke(id.value.cstr.ptr, if (viable) 1 else 0) }
+            var previous = emptyMap<NwConnectionId, NwConnState>()
+            api.connectionStates.collect { current ->
+                for ((id, st) in current) {
+                    if (previous[id] == st) continue
+                    when (st) {
+                        NwConnState.Viable -> memScoped { cb.invoke(id.value.cstr.ptr, 1) }
+                        NwConnState.PathLost -> memScoped { cb.invoke(id.value.cstr.ptr, 0) }
+                        is NwConnState.Closed -> Unit // closure is forwarded by setConnectionClosedStateCallback
                     }
                 }
                 previous = current
