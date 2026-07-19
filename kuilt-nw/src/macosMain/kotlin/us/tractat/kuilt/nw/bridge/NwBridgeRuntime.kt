@@ -8,15 +8,15 @@
  * `COpaquePointer` — internally a `StableRef<NwBridgeRuntime>` — that roots the
  * runtime so K/N's GC won't reclaim it while the JVM still holds the pointer.
  *
- * The five `set*Callback` methods each launch ONE collector on [scope] that
+ * The six `set*Callback` methods each launch ONE collector on [scope] that
  * forwards a `RealNwApi` flow to the registered JVM cdecl callback. Exactly one
  * collector per flow preserves the single-collection contract of `RealNwApi`'s
- * `MutableSharedFlow`s (a second collector would duplicate delivery); the fifth,
- * `connectionViability`, observes a `StateFlow<Map>` and forwards per-connection
- * changes (#1507/#1509). Collectors start `UNDISPATCHED` so they subscribe
- * synchronously before the registering `nw_set_*` call returns — the JVM registers
- * all five callbacks before it issues any start op, so no hot no-replay event is
- * missed (subscribe-before-start).
+ * `MutableSharedFlow`s (a second collector would duplicate delivery); two — the
+ * `connectionViability` (#1507/#1509) and `connectionClosedState` (#1539) collectors —
+ * observe a `StateFlow<Map>` and forward per-connection changes/new-markers.
+ * Collectors start `UNDISPATCHED` so they subscribe synchronously before the
+ * registering `nw_set_*` call returns — the JVM registers all six callbacks before
+ * it issues any start op, so no hot no-replay event is missed (subscribe-before-start).
  */
 package us.tractat.kuilt.nw.bridge
 
@@ -77,6 +77,16 @@ internal typealias BytesReceivedCb = CFunction<(CPointer<ByteVar>?, CPointer<Byt
  */
 @OptIn(ExperimentalForeignApi::class)
 internal typealias ConnectionClosedCb = CFunction<(CPointer<ByteVar>?, CPointer<ByteVar>?) -> Unit>
+
+/**
+ * `(connectionId: char*, reason: char*) -> void` — the JNA-side `connectionClosedState` callback (#1539).
+ * The drop-tolerant native `closedConnections` STATE signal: fires once per newly-latched close marker in
+ * [RealNwApi.closedConnections] (a monotone map, id → reason). `reason` is empty for a graceful/`null` close
+ * (the JVM maps empty back to `null`, as for [ConnectionClosedCb]). Unlike the lossy [ConnectionClosedCb]
+ * event, the marker is sourced from the transport's authoritative monotone STATE, so it cannot be dropped.
+ */
+@OptIn(ExperimentalForeignApi::class)
+internal typealias ConnectionClosedStateCb = CFunction<(CPointer<ByteVar>?, CPointer<ByteVar>?) -> Unit>
 
 /**
  * `(connectionId: char*, viable: int) -> void` — the JNA-side `connectionViability` callback (#1507).
@@ -161,6 +171,32 @@ internal class NwBridgeRuntime private constructor(private val api: RealNwApi) {
                 lock.withLock { openConnections.remove(event.connectionId) }
                 val reason = event.reason ?: "" // empty ⇒ graceful/null on the JVM side
                 memScoped { cb.invoke(event.connectionId.value.cstr.ptr, reason.cstr.ptr) }
+            }
+        }
+    }
+
+    /**
+     * Forwards [RealNwApi.closedConnections] — the drop-tolerant MONOTONE close STATE (#1522) — to the JVM as
+     * per-connection `(id, reason)` callbacks (#1539). The collector diffs each new map snapshot against the
+     * previous one and fires the callback only for connections whose marker is **newly present** (the map is
+     * monotone within its FIFO cap — entries only appear until the eldest is pruned — so a new key IS a new
+     * close). Because it observes the transport's authoritative STATE rather than the lossy `connectionClosed`
+     * event, a close can never be dropped in transit: the JVM bridge inherits the transport's own close set and
+     * uses it as the drop-tolerant teardown authority (and to prune viability), instead of re-deriving it from
+     * the droppable event. `reason` is empty for a graceful/`null` close. Removals (a FIFO-cap prune of an old
+     * marker) are NOT forwarded — closure is terminal for the seam, so only a marker's *appearance* matters.
+     */
+    fun setConnectionClosedStateCallback(cb: CPointer<ConnectionClosedStateCb>) {
+        scope.launch(start = CoroutineStart.UNDISPATCHED) {
+            var previous = emptyMap<NwConnectionId, String?>()
+            api.closedConnections.collect { current ->
+                for ((id, reason) in current) {
+                    if (id !in previous) {
+                        val r = reason ?: "" // empty ⇒ graceful/null on the JVM side
+                        memScoped { cb.invoke(id.value.cstr.ptr, r.cstr.ptr) }
+                    }
+                }
+                previous = current
             }
         }
     }
