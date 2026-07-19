@@ -5,7 +5,9 @@
 local.properties
 .idea
 .DS_Store
-.claude/
+.claude/worktrees/
+.claude/*.lock
+.claude/settings.local.json
 
 # Session-local "do next" scratch (see /next, /donext) — never committed
 next-plan.md

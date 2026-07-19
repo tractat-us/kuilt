@@ -575,3 +575,15 @@ deduplicates retries transparently.
 
 See `docs/architecture.md#server-cluster-topology` for the topology design and
 safety rationale.
+
+## For coding agents
+
+If you develop against kuilt with a coding agent (Claude Code, Cursor, …), install
+the `kuilt-primitives` skill so the agent reaches for existing primitives instead of
+reinventing them. One step — copy the skill folder into your repo:
+
+    cp -r <kuilt>/.claude/skills/kuilt-primitives .claude/skills/
+
+(When kuilt is checked out side-by-side via `includeBuild("../kuilt")`, `<kuilt>` is
+`../kuilt`.) The skill routes to `docs/agent-cookbook.md`, a symptom→primitive lookup
+for reconnect, replicated state, liveness, consensus, and dedup.

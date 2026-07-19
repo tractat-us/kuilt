@@ -303,6 +303,17 @@ When you change public API:
 
 When you rename or remove a test function that a Writerside snippet cites, update the `<!-- verbatim from … -->` comment and the inlined code block in the corresponding topic file. The guide has no compile-time check — the citation comment is the only link back to the source.
 
+- **Agent cookbook + skill stay in sync with the primitives.** When you add,
+  rename, or remove a public primitive a downstream consumer would reach for (a
+  fabric, a `Room`/reconnect entry point, a CRDT, a liveness detector, a
+  consensus/`GameSession` entry point, a dealing/gossip primitive): (1) add or
+  update its symptom→primitive entry in `docs/agent-cookbook.md`, quoting a
+  compiled snippet verbatim (`<!-- verbatim from … -->`); and (2) confirm
+  `.claude/skills/kuilt-primitives/SKILL.md` still routes to it and its
+  `description` still matches how a developer would phrase the need. A new
+  primitive with no cookbook entry is the exact failure this surface prevents —
+  treat a missing entry as a broken build even though nothing enforces it.
+
 ## CI & merging
 
 `.github/workflows/ci.yml` uses an aggregator pattern: a cheap `detect` job
