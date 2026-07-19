@@ -10,7 +10,7 @@ unsound to build at kuilt's layer; two are genuine, small, absent primitives.
 | Issue | Gap | Verdict |
 |-------|-----|---------|
 | [#1555](https://github.com/tractat-us/kuilt/issues/1555) | Pre-`Seam` bootstrap election over discovery advertisements | **Decline** + pattern doc |
-| [#1556](https://github.com/tractat-us/kuilt/issues/1556) | Reconnect state/reason taxonomy for UI | **Build**, honestly scoped + extensible |
+| [#1556](https://github.com/tractat-us/kuilt/issues/1556) | Reconnect state/reason taxonomy for UI | **Build**, threaded onto existing events |
 | [#1557](https://github.com/tractat-us/kuilt/issues/1557) | Server seat-hold + Paused presence | **Mostly built** — close the fan-out hole |
 | [#1558](https://github.com/tractat-us/kuilt/issues/1558) | Never-paired room reaping | **Build**, standalone in `:kuilt-liveness` |
 
@@ -93,96 +93,132 @@ Docs-only, so `ci-required` skips the build.
 
 ## #1556 — Reconnect taxonomy: BUILD, honestly scoped
 
-### The reframe
+> **Revised 2026-07-19** after harvesting an abandoned parallel implementation (branch
+> `reconnect-taxonomy`, never PR'd). That work is **not** being merged — it is re-implemented from
+> this spec — but its analysis found a load-bearing constraint the original version of this section
+> got **wrong**, plus two refinements worth keeping. Recorded below.
 
-The issue asks for four buckets: transient / auth-expired / protocol-mismatch / unrecoverable. **Two
-of them are not classification problems.**
+### The reframe: two of the four requested buckets are not classification problems
+
+The issue asks for transient / auth-expired / protocol-mismatch / unrecoverable.
 
 - **auth-expired** — kuilt issues exactly one credential: `ResumeToken`, whose expiry *is* the
-  reconnect window, already surfaced as `ResumeResult.WindowClosed`. Any other auth-expiry (a JWT, a
-  session cookie) lives behind `RoomAuthorizer`, which is **consumer-supplied policy**
-  (`RoomAuthorizer.kt`). kuilt classifying it would be claiming knowledge it structurally cannot have.
+  reconnect window. Any other auth-expiry lives behind `RoomAuthorizer`, which is
+  **consumer-supplied policy** (`RoomAuthorizer.kt`). kuilt classifying it would claim knowledge it
+  structurally cannot have — not merely knowledge it lacks today.
 - **protocol-mismatch** — `AdmitMessage.Hello` carries no version field; kuilt has no version
-  negotiation at all. This is a **missing feature**, not a missing classification. A bucket for it
-  would be a label with no producer.
+  negotiation at all. A missing **feature**, not a missing label; a bucket for it would have no
+  producer. Tracked in #1569.
 
-So: classify what kuilt actually observes, and file version negotiation separately.
+### The constraint that corrects this spec: a resume `Reject` is NOT always terminal
 
-### Why the raw material is there but unusable
+The original version of this section mapped `AdmissionFailure.Rejected` → a terminal
+`Disconnected(Rejected(...))`. **That is wrong, and shipping it would have regressed reconnection.**
 
-Five partial taxonomies across three modules, with no UI-facing rollup:
+`DefaultJoinerReconnectController.tryResume` returns `ResumeResult.WindowClosed` when the window has
+**not opened yet** (`state == null`) — the *fast-reconnect race*, where a silently-dropped joiner
+re-weaves and sends `Resume` before the host's own detector has fired. Today's retry loop is exactly
+what recovers that case: a later retry lands after the host opens the window and succeeds. Treating
+the first `Reject` as terminal would break fast-reconnect recovery and mislabel a Wi-Fi blip as a
+refusal.
 
-| Signal | Module |
-|--------|--------|
-| `CloseReason` (`Normal`/`Error`/`RemoteRequested`/`Unreachable`) | `:kuilt-core` |
-| `PartitionEvent.Reason` (`Timeout`/`Backpressure`/`TransportClosed`) | `:kuilt-liveness` |
-| `AdmissionFailure` (`Rejected(String)`/`TimedOut`) | `:kuilt-session` |
-| `LeaveReason` (`Normal`/`Error`/`PartitionExpired`) | `:kuilt-session` |
-| `ResumeResult` (`Success`/`WindowClosed`/`TokenInvalid`) | `:kuilt-session` |
+Compounding it, `SeamRoom`'s host collapses every reject cause into one constant
+`Reject("resume-rejected")` (`SeamRoom.kt:975`), so the joiner cannot distinguish a transient
+never-opened reject from a terminal one even in principle.
 
-Nothing tells a consumer the one thing a reconnect banner needs: *am I retrying, or do I give up?*
+**Therefore: record-and-relabel, never short-circuit.** The resume-reject path *records* the host's
+message; `runReconnect` keeps retrying exactly as today. When the window ultimately expires, the
+terminal event is `HostLost(Refused(message))` if a reject was seen during the window, else
+`HostLost(WindowExpired)`. If a later retry succeeds, the recorded message is discarded and no
+`HostLost` fires. **No retry or timing behavior changes** — this is a labelling change only.
 
 ### Design
 
-A read-only rollup in `:kuilt-session`, derived from signals kuilt already emits. No new state
-machine — a projection.
+Home: `:kuilt-session`, top-level `us.tractat.kuilt.session` package alongside `MembershipEvent`. It
+is the only layer that sees both the partition signal and the terminal session outcomes;
+`:kuilt-liveness` sits below and cannot reference session types.
 
 ```kotlin
-/** What a reconnect UI needs to know: are we live, retrying, or done. */
-public sealed interface ConnectionState {
-    public data object Connected : ConnectionState
-    /** Link dropped, a resume window is open. [expiresAt] bounds the retry. */
-    public data class Retrying(val since: Instant, val expiresAt: Instant) : ConnectionState
-    /** Terminal. [reason] says whether retrying could ever help. */
-    public data class Disconnected(val reason: FailureReason) : ConnectionState
+/** Why a peer's link is currently down and a reconnect / grace window is in progress. */
+public sealed interface ReconnectReason {
+    public data object LinkTimeout : ReconnectReason      // no heartbeat within HeartbeatConfig.timeout
+    public data object Backpressure : ReconnectReason     // per-peer outbound buffer over ceiling
+    public data object TransportClosed : ReconnectReason  // the underlying Seam closed or tore
 }
 
-/** Why a connection failed, at the granularity kuilt can honestly observe. */
+/** Why a joiner's session terminally failed. */
 public sealed interface FailureReason {
-    /** A later retry may succeed — timeout, backpressure, unreachable host. */
-    public data class Transient(val cause: PartitionEvent.Reason?) : FailureReason
-    /** The host actively refused. [code] is structured; [message] is its free text. */
-    public data class Rejected(val code: RejectCode, val message: String) : FailureReason
-    /** The resume window closed, or the session ended cleanly. Retrying is futile. */
-    public data object Unrecoverable : FailureReason
+    public data object WindowExpired : FailureReason          // window elapsed, no successful resume
+    public data class Refused(val message: String) : FailureReason  // host rejected; raw message
+    public data object Unrecoverable : FailureReason          // no resume path exists at all
 }
 ```
 
-`RejectCode` is an **open interface, not an enum** — matching the `DiscoveryKind` precedent
-(`DiscoveryKind.kt`), which is deliberately an interface "so transport modules in other Gradle
-modules can supply their own kinds without amending `:kuilt-core`." kuilt defines `RoomMismatch`,
-`ResumeWindowClosed`, and `Unknown(id)`; consumers add their own.
+`ReconnectReason` deliberately mirrors `PartitionEvent.Reason` rather than reusing it: the
+joiner-side `Partitioned` (host-tear) does **not** originate from a `PartitionEvent`, and the public
+session vocabulary should not leak the lower-level liveness enum. The lift is a one-liner.
 
-Mapping (all existing producers):
+**Threaded onto the two events that lack a "why"** — a breaking change to two data classes,
+acceptable under the pre-1.0 posture:
 
-| Source | → |
-|--------|---|
-| `MembershipEvent.WindowOpened` / `Partitioned` | `Retrying(since, expiresAt)` |
-| `MembershipEvent.Resumed` / `Joined(self)` | `Connected` |
-| `MembershipEvent.HostLost`, `LeaveReason.PartitionExpired` | `Disconnected(Unrecoverable)` |
-| `AdmissionFailure.Rejected(msg)` | `Disconnected(Rejected(code, msg))` |
-| `AdmissionFailure.TimedOut`, `CloseReason.Unreachable` | `Disconnected(Transient(null))` |
-| `PartitionEvent.Reason.*` | `Transient(reason)` |
+- `MembershipEvent.Partitioned(peerId, at, reason: ReconnectReason)`
+- `MembershipEvent.HostLost(at, reason: FailureReason)`
 
-Surface: `Room.connection: StateFlow<ConnectionState>`, folded from the existing `MembershipEvent`
-stream. Additive — no existing member changes.
+`WindowOpened` already carries `expiresAt`, `AdmissionFailed` already carries `AdmissionFailure`, and
+`Recovered` needs nothing. Only these two change.
 
-### Wire change (additive, not breaking)
+Producer wiring, all at existing emission sites:
 
-`AdmitMessage.Reject(reason: String)` gains an optional structured code alongside the existing free
-text. Today it has exactly two producers — `"room-mismatch: …"` (`SeamRoom.kt:820`) and
-`"resume-rejected"` (`SeamRoom.kt:975`) — which become `RoomMismatch` and `ResumeWindowClosed`. A
-peer that does not send a code decodes as `Unknown`, so old ↔ new interop degrades rather than breaks.
+| Site | Reason |
+|------|--------|
+| `markPartitioned` ← `PartitionEvent.PeerUnresponsive` | `Timeout`→`LinkTimeout`, `Backpressure`→`Backpressure`, `TransportClosed`→`TransportClosed` |
+| `onReconnectStarted` (joiner host-tear) | `TransportClosed` |
+| `onReconnectFailed`, immediate-terminal branch | `Unrecoverable` |
+| `onReconnectFailed` window-timeout; host `PeerLost` → `markHostLost` | `WindowExpired` |
+| resume-reject path, at window expiry | `Refused(message)` |
 
-`RoomAuthorizer.authorize` keeps returning `Boolean`. Widening it to a reason type is explicitly
-**out of scope**: authorization policy is the consumer's, and kuilt should not invite it to claim an
-auth-expiry semantic kuilt cannot verify.
+The first four rows are pure data-flow with **no behavior change** — every branch already knows which
+case it is in; only a value the code already holds is threaded through.
 
-### Follow-up issue
+### Host-side message honesty (in scope)
 
-Protocol-version negotiation in the admit handshake (`AdmitMessage.Hello` carries no version). Filed
-separately; a `ProtocolMismatch` reject code lands with that feature, not before.
+`handleResume` currently discards what `tryResume` distinguished. Thread the cause into the reject
+string so `Refused` carries something real:
 
+- `ResumeResult.WindowClosed` → `Reject("resume-window-closed")`
+- `ResumeResult.TokenInvalid(reason)` → `Reject("resume-token-invalid: <reason>")`
+
+Pure host-side message refinement — no `ResumeResult` or controller change, no retry-behavior change.
+
+**One honest limit stays, and the KDoc must say so:** `tryResume` folds *never-opened* (transient)
+and *expired/consumed* (terminal) both into `WindowClosed`, so `"resume-window-closed"` still cannot
+be split transient-vs-terminal without a controller change. The type must not promise a distinction
+the wire does not carry.
+
+### Dropped from the original version of this spec
+
+- **`RejectCode` as an open interface, landing now.** Deferred to the typed-reject-codes follow-up.
+  The `DiscoveryKind`-precedent argument still holds, and typed codes are in fact *more* valuable
+  than first assessed — they are what would finally split never-opened from expired — but they are a
+  **wire-protocol change** that overlaps #1557's `AdmitMessage` work, and the free-text `Refused`
+  carries the information in the meantime.
+- **`Room.connection: StateFlow<ConnectionState>`.** Over-scoped. Threading data onto existing events
+  is a contained data-type addition; a reducer that folds the event stream into a connection state
+  machine is a separate, larger surface a consumer can write itself. Deferred to a follow-up.
+
+### Testing
+
+Through the existing `SeamRoom` / reconnect harness — **no hand-rolled cluster**.
+
+- One parameterized test over the `PartitionEvent.Reason` → `ReconnectReason` map, all three variants.
+- Each `HostLost` branch → its `FailureReason`: window-timeout → `WindowExpired`; no-reweave /
+  non-conforming loom → `Unrecoverable`; host `PeerLost` → `WindowExpired`.
+- **`Refused`, failing-test-first:** a host `Reject(msg)` mid-resume ultimately yields
+  `HostLost(Refused(msg))`. Critically, also assert the **retry loop still runs** — a regression test
+  that a reject does *not* short-circuit, guarding the fast-reconnect race above.
+- A fast-reconnect test: `Resume` arriving before the host's window opens is rejected, retried, and
+  **succeeds** — no `HostLost` at all.
+- `RoomConformanceSuite` TCK: assert the new fields are populated on the relevant transitions.
 ---
 
 ## #1557 — Server seat-hold + Paused presence: mostly built, close the fan-out hole
@@ -306,7 +342,7 @@ Also: a `docs/agent-cookbook.md` entry under "Liveness & presence", quoting a co
 
 ## Cross-cutting requirements
 
-Per `CLAUDE.md`, **every new public primitive** (#1556's `ConnectionState`/`FailureReason`, #1557's
+Per `CLAUDE.md`, **every new public primitive** (#1556's `ReconnectReason`/`FailureReason`, #1557's
 `Paused`/`Unpaused`, #1558's `SoloDeadlineDetector`) requires:
 
 1. A symptom→primitive entry in `docs/agent-cookbook.md`, quoting a compiled snippet verbatim with a
@@ -319,9 +355,12 @@ A new primitive with no cookbook entry is treated as a broken build.
 
 ## Sequencing
 
-#1555 (docs), #1556, #1557, #1558 are mutually independent — no shared files. #1556 and #1557 both
-touch `AdmitMessage` and `SeamRoom`, so they are the one pair that must not be dispatched
-concurrently onto the same region; sequence #1557 after #1556, or brief both on the collision.
+#1555 (docs), #1557 and #1558 are mutually independent. **#1556 must land after #1557**: both edit
+`SeamRoom`'s reconnect region, and #1557 additionally adds `AdmitMessage` variants. #1556 is the
+smaller, more surgical of the two, so it rebases onto #1557 rather than the reverse.
+
+The typed-reject-codes follow-up is deliberately sequenced **after both** — it is a wire change that
+would collide with #1557's `AdmitMessage` work if run concurrently.
 
 ## Testing
 
