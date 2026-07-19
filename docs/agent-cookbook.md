@@ -13,6 +13,7 @@ If you catch yourself writing any of these, stop — kuilt already ships it:
 |---|---|---|
 | a rejoin / reconnect loop, a resume token, a "grace window / hold the slot open" | `ResumeToken` + `SeamRoom` resume | [Rejoin & reconnect](#rejoin--reconnect) |
 | a fixed-list or exponential retry/back-off loop | `ExponentialBackoff` | [Rejoin & reconnect](#rejoin--reconnect) |
+| a reconnect banner / "why did we drop" classifier — transient vs. unrecoverable buckets | `MembershipEvent.Partitioned.reason` + `HostLost.reason` (`ReconnectReason`/`FailureReason`) | [Rejoin & reconnect](#rejoin--reconnect) |
 | a propose→authoritative/rejected turn/session facade, host election with a term | `GameSession` + `TurnSequencer` | [Consensus & turns](#consensus--turns) |
 | a heartbeat, an idle reaper, "is this peer still alive", "evict stale session" | `HeartbeatPartitionDetector` | [Liveness & presence](#liveness--presence) |
 | a last-write-wins register, a grow-only set/counter, an add/remove set, a version vector, "merge these two states" | the CRDT zoo (`LWWRegister`, `GSet`, `PNCounter`, `ORSet`, …) | [Replicated data](#replicated-data) |
@@ -49,6 +50,29 @@ public suspend fun retryWithBackoffSample(random: Random, dial: suspend () -> Bo
     var attempt = 0
     while (!dial()) {
         delay(backoff.delay(attempt++)) // full-jitter; decorrelates simultaneous retriers
+    }
+}
+```
+
+**Intent:** drive a "reconnecting…" banner, or decide "give up and show an error", from the reason kuilt already observed.
+**Primitive:** `MembershipEvent.Partitioned.reason` (`ReconnectReason`) and `HostLost.reason` (`FailureReason`) — don't re-derive your own transient/unrecoverable classification.
+
+<!-- verbatim from kuilt-session/src/commonSamples/kotlin/us/tractat/kuilt/session/AgentCookbookSamples.kt#reconnectBannerSample -->
+```kotlin
+public suspend fun reconnectBannerSample(room: Room) {
+    room.events.collect { event ->
+        when (event) {
+            is MembershipEvent.Partitioned -> when (event.reason) {
+                ReconnectReason.LinkTimeout, ReconnectReason.TransportClosed -> Unit // "Reconnecting…"
+                ReconnectReason.Backpressure -> Unit // "Connection congested…"
+            }
+            is MembershipEvent.HostLost -> when (val reason = event.reason) {
+                FailureReason.WindowExpired -> Unit // "Lost the host — rejoin"
+                FailureReason.Unrecoverable -> Unit // "Can't reconnect — return to lobby"
+                is FailureReason.Refused -> Unit // show reason.message (auth-expired / version, …)
+            }
+            else -> Unit
+        }
     }
 }
 ```
