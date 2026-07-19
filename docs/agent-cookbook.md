@@ -15,6 +15,7 @@ If you catch yourself writing any of these, stop — kuilt already ships it:
 | a fixed-list or exponential retry/back-off loop | `ExponentialBackoff` | [Rejoin & reconnect](#rejoin--reconnect) |
 | a propose→authoritative/rejected turn/session facade, host election with a term | `GameSession` + `TurnSequencer` | [Consensus & turns](#consensus--turns) |
 | a heartbeat, an idle reaper, "is this peer still alive", "evict stale session" | `HeartbeatPartitionDetector` | [Liveness & presence](#liveness--presence) |
+| "close a room nobody joined", "reap an abandoned table/lobby", "nobody ever showed up" | `SoloDeadlineDetector` | [Liveness & presence](#liveness--presence) |
 | a last-write-wins register, a grow-only set/counter, an add/remove set, a version vector, "merge these two states" | the CRDT zoo (`LWWRegister`, `GSet`, `PNCounter`, `ORSet`, …) | [Replicated data](#replicated-data) |
 | replicating a CRDT over a connection by hand | `Quilter` | [Replicated data](#replicated-data) |
 | a `seenIds` set to skip already-handled messages | `GSet` / kuilt dedup | [Dedup](#dedup) |
@@ -179,10 +180,37 @@ public suspend fun detectSilentPeerSample(
 }
 ```
 
-> **Caveat — "idle reaper" is a different shape.** If you're closing a *connection*
-> that went idle (e.g. a half-formed room that never paired), that is connection-idle
-> reaping, not peer-liveness. kuilt-liveness detects peer partition; the "never-paired
-> room" reaper is a known gap — see #1558, don't force-fit this primitive.
+**Intent:** close a room/table/lobby that never filled; "idle-reap a session nobody joined", "nobody ever showed up", "expire an abandoned table".
+**Primitive:** `SoloDeadlineDetector` + `SoloDeadlineEvent` (`:kuilt-liveness`). Don't hand-roll a `launch { delay(timeout); if (peers.size < 2) close() }`. It **emits**, it never closes — reaping policy stays yours.
+
+<!-- verbatim from kuilt-liveness/src/commonSamples/kotlin/us/tractat/kuilt/liveness/AgentCookbookSamples.kt#reapNeverPairedRoomSample -->
+```kotlin
+public suspend fun reapNeverPairedRoomSample(
+    link: Seam,
+    scope: CoroutineScope,
+    clock: Clock,
+    closeRoom: suspend () -> Unit,
+) {
+    val detector = SoloDeadlineDetector(
+        minimumMembers = 2, // this peer plus one — "never paired"
+        deadline = 5.minutes,
+        clock = clock,
+        scope = scope,
+    )
+    // Feed it the roster on every change.
+    scope.launch { link.peers.collect { detector.observeMembership(it) } }
+    when (detector.events.first()) {
+        is SoloDeadlineEvent.NeverPaired -> closeRoom() // nobody came; reaping policy is yours
+        is SoloDeadlineEvent.Paired -> Unit // someone joined in time; the detector is done
+    }
+}
+```
+
+> **Which one?** `SoloDeadlineDetector` answers *"did anyone ever join?"* — it disarms
+> permanently on first pairing, so a room that fills and later empties emits nothing more.
+> `HeartbeatPartitionDetector` answers *"is this peer, who **was** here, still alive?"*.
+> Every `PartitionEvent` names a `peerId`; "nobody ever came" has no peer to name, which is
+> why the never-paired case is a separate type rather than a `PartitionEvent` variant.
 
 ## Consensus & turns
 
