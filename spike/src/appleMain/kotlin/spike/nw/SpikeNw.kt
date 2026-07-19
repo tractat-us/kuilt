@@ -28,9 +28,14 @@ import platform.Network.nw_connection_start
 import platform.Network.nw_browse_descriptor_create_bonjour_service
 import platform.Network.nw_browse_result_copy_endpoint
 import platform.Network.nw_browser_create
+import platform.Network.nw_browser_cancel
 import platform.Network.nw_browser_set_browse_results_changed_handler
 import platform.Network.nw_browser_set_queue
 import platform.Network.nw_browser_start
+import platform.Network.nw_browser_t
+import platform.Network.nw_connection_cancel
+import platform.Network.nw_listener_cancel
+import platform.Network.nw_listener_t
 import platform.Network.nw_content_context_create
 import platform.Network.nw_connection_state_cancelled
 import platform.Network.nw_connection_state_failed
@@ -72,8 +77,35 @@ public class SpikeNw {
     private var onLog: ((String) -> Unit)? = null
     private var pingSentAt: Double = 0.0
 
+    // Scenario-1 hooks (#1467): the connectivity suite drives the raw path as its transport control.
+    // The JOIN fires this with the measured RTT on its first round-trip; the HOST fires it with 0 the
+    // first time it echoes an inbound frame (host has no RTT of its own). Fired at most once.
+    private var onFirstRoundTrip: ((Int) -> Unit)? = null
+    private var firstRoundTripFired = false
+    private var listener: nw_listener_t? = null
+    private var browser: nw_browser_t? = null
+
     public fun setOnLog(cb: (String) -> Unit) {
         onLog = cb
+    }
+
+    public fun setOnFirstRoundTrip(cb: (Int) -> Unit) {
+        onFirstRoundTrip = cb
+    }
+
+    private fun fireFirstRoundTrip(rttMs: Int) {
+        if (firstRoundTripFired) return
+        firstRoundTripFired = true
+        onFirstRoundTrip?.invoke(rttMs)
+    }
+
+    /** Cancel all live connections + the listener/browser so the next scenario starts clean. */
+    public fun stop() {
+        connections.toList().forEach { nw_connection_cancel(it) }
+        connections.clear()
+        listener?.let { nw_listener_cancel(it) }; listener = null
+        browser?.let { nw_browser_cancel(it) }; browser = null
+        liveConn = null
     }
 
     /**
@@ -118,7 +150,7 @@ public class SpikeNw {
 
     // ── Host ─────────────────────────────────────────────────────────────────
     public fun startHost() {
-        val listener = nw_listener_create(secureParams())
+        val listener = nw_listener_create(secureParams()).also { this.listener = it }
         nw_listener_set_queue(listener, queue)
         nw_listener_set_advertise_descriptor(
             listener,
@@ -139,7 +171,7 @@ public class SpikeNw {
     // rides the AWDL interface the browser discovered.
     public fun startJoin() {
         val descriptor = nw_browse_descriptor_create_bonjour_service(SERVICE_TYPE, null)
-        val browser = nw_browser_create(descriptor, secureParams())
+        val browser = nw_browser_create(descriptor, secureParams()).also { this.browser = it }
         nw_browser_set_queue(browser, queue)
         nw_browser_set_browse_results_changed_handler(browser) { _, newResult, _ ->
             if (newResult != null) {
@@ -202,10 +234,12 @@ public class SpikeNw {
                 val text = bytes.decodeToString()
                 if (isHost) {
                     log("host: recv '$text' → echoing")
+                    fireFirstRoundTrip(0) // host has no RTT; signal "inbound data echoed"
                     send(connection, bytes, isHost) // echo
                 } else {
                     val rttMs = ((NSDate().timeIntervalSince1970 - pingSentAt) * 1000).toInt()
                     log("join: recv '$text'  RTT=${rttMs}ms")
+                    fireFirstRoundTrip(rttMs)
                     sendPing(connection)
                 }
             }
