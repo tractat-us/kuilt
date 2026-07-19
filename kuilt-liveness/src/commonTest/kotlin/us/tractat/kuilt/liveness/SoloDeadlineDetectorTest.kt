@@ -11,6 +11,7 @@ import us.tractat.kuilt.core.PeerId
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertIs
 import kotlin.test.assertTrue
 import kotlin.time.Clock
 import kotlin.time.Duration
@@ -134,6 +135,28 @@ class SoloDeadlineDetectorTest {
 
         assertEquals(listOf(neverPaired(observed = 1, required = 2)), events)
     }
+
+    @Test
+    fun neverPairedNeverReportsAMembershipThatMetTheRequirement() =
+        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+            val detector = detector(backgroundScope)
+            val events = backgroundScope.record(detector)
+
+            detector.observeMembership(setOf(self))
+            advanceTimeBy(deadline + 1.seconds)
+            // A paired roster arriving after the verdict must not retroactively become the
+            // reported count: `observed` is written only on the below-minimum path.
+            detector.observeMembership(setOf(self, other))
+            advanceTimeBy(1.seconds)
+
+            val verdict = events.single()
+            assertIs<SoloDeadlineEvent.NeverPaired>(verdict)
+            assertTrue(
+                verdict.observed < verdict.required,
+                "NeverPaired must never report a membership that met the requirement, was " +
+                    "observed=${verdict.observed} required=${verdict.required}",
+            )
+        }
 
     @Test
     fun minimumMembersBelowTwoIsRejected() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {

@@ -109,11 +109,18 @@ public class SoloDeadlineDetector(
      * calls are no-ops.
      */
     public fun observeMembership(members: Set<PeerId>) {
+        if (members.size >= minimumMembers) {
+            if (!decided.compareAndSet(expect = false, update = true)) return
+            deadlineJob.cancel()
+            mutableEvents.tryEmit(SoloDeadlineEvent.Paired(at = clock.now()))
+            return
+        }
+        // Recorded ONLY on the below-minimum path, so a paired roster can never leak into a
+        // NeverPaired verdict. Writing it unconditionally would race the deadline coroutine: a
+        // paired roster could publish its size and then lose the CAS, making the timer emit
+        // NeverPaired(observed = required) — a value the contract forbids. Narrow window, and
+        // invisible under a single-threaded test dispatcher, so it is closed structurally here.
         lastObserved.value = members.size
-        if (members.size < minimumMembers) return
-        if (!decided.compareAndSet(expect = false, update = true)) return
-        deadlineJob.cancel()
-        mutableEvents.tryEmit(SoloDeadlineEvent.Paired(at = clock.now()))
     }
 
     private companion object {

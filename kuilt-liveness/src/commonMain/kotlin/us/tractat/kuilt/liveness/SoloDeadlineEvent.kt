@@ -20,7 +20,9 @@ public sealed interface SoloDeadlineEvent {
      * consumer's policy call.
      *
      * @param observed the most recent membership size seen, or `0` if
-     *   [SoloDeadlineDetector.observeMembership] was never called.
+     *   [SoloDeadlineDetector.observeMembership] was never called. **Always strictly less than
+     *   [required]** — a roster that reached the minimum decides [Paired] instead, so this
+     *   verdict can never report a membership that satisfied the requirement.
      * @param required the configured [SoloDeadlineDetector] minimum.
      */
     public data class NeverPaired(
