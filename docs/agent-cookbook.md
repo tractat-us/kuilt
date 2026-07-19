@@ -156,7 +156,33 @@ late-joiner full-state sync, and scaling to many peers via `GossipSeam`.
 
 ## Liveness & presence
 
-<!-- filled by Task 4 -->
+**Intent:** detect that a peer went silent / is no longer alive; "heartbeat", "lastSeen".
+**Primitive:** `HeartbeatPartitionDetector` + `HeartbeatConfig` (`:kuilt-liveness`). Don't hand-roll a `while (true) { delay(); ping() }` loop.
+
+<!-- verbatim from kuilt-liveness/src/commonSamples/kotlin/us/tractat/kuilt/liveness/AgentCookbookSamples.kt#detectSilentPeerSample -->
+```kotlin
+public suspend fun detectSilentPeerSample(
+    link: Seam,
+    peerId: PeerId,
+    scope: CoroutineScope,
+    clock: () -> Instant,
+) {
+    val detector = HeartbeatPartitionDetector(link, peerId, HeartbeatConfig(), clock)
+    detector.start(scope)
+    detector.events.collect { event ->
+        when (event) {
+            is PartitionEvent.PeerUnresponsive -> Unit // pause app processing; reason says why
+            is PartitionEvent.PeerRecovered -> Unit // peer came back within the reconnect window
+            is PartitionEvent.PeerLost -> Unit // reconnect window elapsed — vacate the slot
+        }
+    }
+}
+```
+
+> **Caveat — "idle reaper" is a different shape.** If you're closing a *connection*
+> that went idle (e.g. a half-formed room that never paired), that is connection-idle
+> reaping, not peer-liveness. kuilt-liveness detects peer partition; the "never-paired
+> room" reaper is a known gap — see the tracking issue, don't force-fit this primitive.
 
 ## Consensus & turns
 
