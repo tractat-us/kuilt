@@ -24,7 +24,8 @@ class InMemoryLoomConformanceTest : SeamConformanceSuite() {
 
     /**
      * `meshDelivery = true` here is genuine, not vacuous: [InMemoryLoom] is an
-     * N-peer shared mesh (mesh evidence tracked in #1408, Task 1.8).
+     * N-peer shared mesh, proven against the shared [MeshConformanceSuite] by
+     * [InMemoryLoomMeshConformanceTest] (#1408, Task 1.8).
      */
     override fun capabilities() = SeamCapabilities.FULL.copy(securesTransport = false)
     override fun capabilityGaps() = mapOf("securesTransport" to CapabilityGaps.SECURES_TRANSPORT)
