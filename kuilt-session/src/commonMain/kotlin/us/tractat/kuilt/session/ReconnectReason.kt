@@ -38,7 +38,10 @@ public sealed interface FailureReason {
      * The host actively rejected the resume with an `AdmitMessage.Reject`, carrying its raw
      * [message]. kuilt cannot type the host's intent (auth-expired, protocol-mismatch, …) —
      * the admit protocol carries only a free-form string — so those surface here and the
-     * consumer parses semantics from [message]. Retrying the same token is futile.
+     * consumer parses semantics from [message]. The message is generic and may even reflect a
+     * resume window that had not opened yet (the fast-reconnect race); kuilt cannot distinguish
+     * that from a permanent refusal, so this is a terminal *label*, not a claim that the token
+     * was permanently rejected.
      */
     public data class Refused(public val message: String) : FailureReason
 

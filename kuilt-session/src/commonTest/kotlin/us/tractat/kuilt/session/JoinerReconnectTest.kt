@@ -274,6 +274,8 @@ class JoinerReconnectTest {
                 roomId = null,
                 // Delay the re-weave past the host's 100 ms window so the resume lands after the
                 // host window has closed (persistent WindowClosed reject).
+                // Timing: host reconnectWindow (100 ms) has already closed when this delay(250) fires,
+                // so the host has no open window when the Resume lands → persistent WindowClosed → Reject.
                 reweave = { delay(250L); muxClient.join(tag) },
             ).also { it.start() }
 

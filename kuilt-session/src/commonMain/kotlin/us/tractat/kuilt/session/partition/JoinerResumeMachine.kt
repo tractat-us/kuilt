@@ -378,6 +378,7 @@ internal class JoinerResumeMachine(
             lock.withLock {
                 reconnecting = false
                 reconnectJob = null
+                refusal = null
                 host.restoreHostDetector(hostId)
             }
         } else if (!lock.withLock { reconnectJob = null; host.isClosed() }) {
