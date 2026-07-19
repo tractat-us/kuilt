@@ -821,6 +821,17 @@ internal class NwSeam(
         for (connId in targets) {
             runCatchingCancellable { api.disconnect(connId) }
         }
+        // #1419 (I3): the seam owns the close lifecycle and holds the [api] that `NwLoom.weave` started
+        // advertising + browsing on — so tearing the connections is not enough. Stop the advertiser and the
+        // browser too, AFTER the connections are down. On a real device an un-stopped `NWListener`/`NWBrowser`
+        // keeps the Bonjour advertiser and AWDL up after the seam closes, and its ObjC block handlers capture
+        // `RealNwApi` — leaking the listener/browser/queue/`RealNwApi` per weave. `RealNwApi` already implements
+        // cancel-first-then-drop for both handles (and both are documented no-ops if not started); it just was
+        // never told to. Best-effort: a stop failure must not mask the close.
+        runCatchingCancellable { api.stopListening() }
+            .onFailure { log.debug { "nw.seam.close.stopListening-failed self=${selfId.value}: ${it.message}" } }
+        runCatchingCancellable { api.stopBrowsing() }
+            .onFailure { log.debug { "nw.seam.close.stopBrowsing-failed self=${selfId.value}: ${it.message}" } }
     }
 
     /**
