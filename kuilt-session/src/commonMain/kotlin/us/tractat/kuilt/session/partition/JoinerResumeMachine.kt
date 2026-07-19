@@ -59,7 +59,8 @@ internal interface JoinerResumeHost {
 
     /**
      * A reconnect attempt is underway: the room emits the dual-role
-     * `Partitioned(hostId, at)` + `WindowOpened(hostId, windowDeadline)` membership events
+     * `Partitioned(hostId, at, ReconnectReason.TransportClosed)` +
+     * `WindowOpened(hostId, windowDeadline)` membership events
      * (the same pair the host emits when it opens a window for a dropped joiner).
      */
     fun onReconnectStarted(hostId: PeerId, at: Instant, windowDeadline: Instant)
@@ -141,6 +142,18 @@ internal class JoinerResumeMachine(
     private var pendingResume: CompletableDeferred<ResumeResult>? = null
 
     /**
+     * The most recent host `Reject` message for a resume in this episode, or null. Set by
+     * [rejectFlight] when a flight was actually pending; read by [runReconnect] at window expiry to
+     * label the terminal event [FailureReason.Refused] instead of [FailureReason.WindowExpired].
+     *
+     * NOT a short-circuit: a `Reject` is not always terminal (a window that has not opened yet also
+     * rejects — the fast-reconnect race), so the retry loop is left intact and this only refines the
+     * label of a genuine window expiry. Reset at the start of each [runReconnect] episode; discarded
+     * if a later retry succeeds. Guarded by [lock].
+     */
+    private var refusal: String? = null
+
+    /**
      * Guards the single in-flight reconnect attempt so the two racing tear-detection paths —
      * transport `Torn` and heartbeat `TransportClosed` — cannot both drive a reconnect or
      * both mark the host lost. First path to flip it under [lock] owns the attempt; the other
@@ -201,10 +214,17 @@ internal class JoinerResumeMachine(
      * `Reject`, returning whether a flight was actually in flight — `false` means the Reject
      * arrived during the initial join (no resume pending), which the room fails loudly as an
      * admission rejection instead (#1178).
+     *
+     * The [message] is **recorded, not obeyed as authoritative**: a `Reject` is not always
+     * terminal (a window that has not opened yet also rejects — the fast-reconnect race), so the
+     * flight still completes as [ResumeResult.WindowClosed] and [runReconnect]'s retry loop runs
+     * unchanged. The recorded [refusal] only refines the terminal label to
+     * [FailureReason.Refused] if the window ultimately expires.
      */
-    fun rejectFlight(): Boolean = lock.withLock {
+    fun rejectFlight(message: String): Boolean = lock.withLock {
         val d = pendingResume
         pendingResume = null
+        if (d != null) refusal = message
         d?.complete(ResumeResult.WindowClosed)
         d != null
     }
@@ -289,6 +309,9 @@ internal class JoinerResumeMachine(
             return
         }
 
+        // Fresh episode: forget any reject recorded by a prior reconnect on this machine.
+        lock.withLock { refusal = null }
+
         // Silence the host-liveness detector: for the reconnect's duration WE decide
         // host-liveness, so a late PeerLost can't tear down an in-flight resume.
         // Restarted on success below.
@@ -336,6 +359,14 @@ internal class JoinerResumeMachine(
             }
             true
         } ?: false
+
+        // If we timed out (resumed == false, failureReason still WindowExpired) but saw a host
+        // reject during the window, label it Refused. A non-conforming loom already set
+        // Unrecoverable above and takes precedence (it returned false before any reject could be
+        // recorded). The reject was recorded, not obeyed — the retry loop still ran to the deadline.
+        if (!resumed && failureReason is FailureReason.WindowExpired) {
+            lock.withLock { refusal }?.let { failureReason = FailureReason.Refused(it) }
+        }
 
         if (resumed) {
             // Re-arm: clear the guard and restart host-liveness monitoring on the healed
