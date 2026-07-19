@@ -208,10 +208,93 @@ class JoinerReconnectTest {
             // Advance PAST the 500 ms window with margin.
             repeat(9) { clockMs += 100L; advanceTimeBy(100L) }
 
-            assertIs<MembershipEvent.HostLost>(hostLost.await())
+            val event = hostLost.await()
+            assertIs<MembershipEvent.HostLost>(event)
+            assertEquals(FailureReason.WindowExpired, event.reason)
 
             // Terminal after HostLost — a post-hoc resume is rejected.
             assertIs<ResumeResult.WindowClosed>(joinerRoom.resume(token))
+        }
+
+    @Test
+    fun `host reject during resume relabels HostLost as Refused`() =
+        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+            val dispatcher = coroutineContext[ContinuationInterceptor]!!
+            var clockMs = 0L
+            val clock: () -> Instant = { Instant.fromEpochMilliseconds(clockMs) }
+
+            // Host gets a SHORT reconnect window so, by the time the joiner re-weaves and Resumes,
+            // the host has no open window for it → tryResume → WindowClosed → Reject("resume-window-
+            // closed"). The joiner keeps a long (fast-config) window and retries, so the reject is
+            // recorded but not obeyed; the window then expires → HostLost(Refused).
+            val hostConfig = HeartbeatConfig(
+                interval = 100.milliseconds,
+                timeout = 200.milliseconds,
+                reconnectWindow = 100.milliseconds,
+            )
+
+            val source = InMemoryConnectionSource()
+            val serverLoom = MuxServerLoom(
+                source = source,
+                scope = backgroundScope,
+                selfId = PeerId("server"),
+                authorizer = RoomAuthorizer.AllowAll,
+                dispatcher = dispatcher,
+                random = Random(13L),
+            )
+            val hostSeam = serverLoom.host(Pattern("table-7"))
+            SeamRoom(
+                seam = hostSeam,
+                role = SessionRole.Host,
+                memberName = "table-7",
+                scope = backgroundScope,
+                clock = clock,
+                heartbeatConfig = hostConfig,
+                roomId = RoomId("room-1"),
+            ).also { it.start() }
+
+            val clientId = PeerId("client")
+            var seed = 1
+            val base = object : Loom {
+                override suspend fun weave(rendezvous: Rendezvous): Seam {
+                    val (serverConn, clientConn) = connectionPair()
+                    source.offer(serverConn)
+                    return hubMesh(clientId, listOf(clientConn), dispatcher, Random((seed++).toLong()))
+                }
+            }
+            val muxClient = MuxClientLoom(base, Rendezvous.New(Pattern("base")), backgroundScope, nameOf)
+            val tag = InMemoryTag("table-7")
+            val joinerRoom = SeamRoom(
+                seam = muxClient.join(tag),
+                role = SessionRole.Joiner,
+                memberName = "client",
+                scope = backgroundScope,
+                clock = clock,
+                heartbeatConfig = fastConfig,
+                roomId = null,
+                // Delay the re-weave past the host's 100 ms window so the resume lands after the
+                // host window has closed (persistent WindowClosed reject).
+                // Timing: host reconnectWindow (100 ms) has already closed when this delay(250) fires,
+                // so the host has no open window when the Resume lands → persistent WindowClosed → Reject.
+                reweave = { delay(250L); muxClient.join(tag) },
+            ).also { it.start() }
+
+            joinerRoom.roster.first { it.isNotEmpty() }
+            assertNotNull(joinerRoom.resumeToken, "joiner must hold a resume token after admit")
+
+            val hostLost = async { joinerRoom.events.filterIsInstance<MembershipEvent.HostLost>().first() }
+
+            muxClient.closeBase()
+
+            // Advance PAST the joiner's 500 ms window with margin, keeping the injected clock in
+            // step so the reconnect deadline is reached.
+            repeat(9) { clockMs += 100L; advanceTimeBy(100L) }
+
+            val event = hostLost.await()
+            assertIs<MembershipEvent.HostLost>(event)
+            // The teeth: a reject was seen and its cause carried — NOT the plain WindowExpired that
+            // fires when no reject arrives.
+            assertEquals(FailureReason.Refused("resume-window-closed"), event.reason)
         }
 
     @Test
@@ -247,6 +330,38 @@ class JoinerReconnectTest {
                 "with no resume token the joiner must go HostLost immediately, not hold the window",
             )
             assertIs<MembershipEvent.HostLost>(hostLost.await())
+        }
+
+    @Test
+    fun `joiner torn before admit reports HostLost Unrecoverable`() =
+        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+            val clock: () -> Instant = { Instant.fromEpochMilliseconds(0L) }
+
+            // A joiner with no host to admit it: it never mints a resume token, so a tear takes the
+            // immediate-terminal branch of runReconnect (no token / no host / no reweave target) and
+            // the HostLost is classified Unrecoverable — there was never a resume path.
+            val loom = FlakyLifecycleLoom(InMemoryLoom(), backgroundScope)
+            val tag = InMemoryTag("joiner")
+            val joinerSeam = loom.join(tag)
+            val joinerRoom = SeamRoom(
+                seam = joinerSeam,
+                role = SessionRole.Joiner,
+                memberName = "joiner",
+                scope = backgroundScope,
+                clock = clock,
+                heartbeatConfig = fastConfig,
+                roomId = null,
+                reweave = { loom.join(tag) },
+            ).also { it.start() }
+
+            val hostLost = async { joinerRoom.events.filterIsInstance<MembershipEvent.HostLost>().first() }
+            assertNull(joinerRoom.resumeToken, "joiner torn before admit has no resume token")
+
+            joinerSeam.tear()
+            runCurrent()
+            val event = hostLost.await()
+            assertIs<MembershipEvent.HostLost>(event)
+            assertEquals(FailureReason.Unrecoverable, event.reason)
         }
 
     @Test
@@ -406,7 +521,9 @@ class JoinerReconnectTest {
             joinerSeam.tear()
             repeat(2) { advanceTimeBy(100L) }
 
-            assertIs<MembershipEvent.HostLost>(hostLost.await()) // non-conforming heal → terminal
+            val hostLostEvent = hostLost.await() // non-conforming heal → terminal
+            assertIs<MembershipEvent.HostLost>(hostLostEvent)
+            assertEquals(FailureReason.Unrecoverable, hostLostEvent.reason)
             assertTrue(
                 throwaway.state.value is SeamState.Torn,
                 "the discarded re-wove seam must be closed, not leaked",

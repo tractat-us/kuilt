@@ -6,11 +6,13 @@ import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.session.FailureReason
 import us.tractat.kuilt.session.LeaveReason
 import us.tractat.kuilt.session.Liveness
 import us.tractat.kuilt.session.Member
 import us.tractat.kuilt.session.MemberIdentity
 import us.tractat.kuilt.session.MembershipEvent
+import us.tractat.kuilt.session.ReconnectReason
 import us.tractat.kuilt.session.SessionRole
 import us.tractat.kuilt.session.partition.ResumeResult
 import us.tractat.kuilt.session.partition.ResumeToken
@@ -134,7 +136,7 @@ class FakeRoomTest {
         val event = eventDeferred.await()
         assertAll(
             { assertEquals(Liveness.Partitioned, updatedMember.liveness) },
-            { assertEquals(MembershipEvent.Partitioned(PeerId("alice"), at), event) },
+            { assertEquals(MembershipEvent.Partitioned(PeerId("alice"), at, ReconnectReason.LinkTimeout), event) },
         )
     }
 
@@ -185,7 +187,7 @@ class FakeRoomTest {
         room.broadcast(byteArrayOf(1))
         room.sendTo(PeerId("someone"), byteArrayOf(2))
         assertAll(
-            { assertEquals(MembershipEvent.HostLost(at), event) },
+            { assertEquals(MembershipEvent.HostLost(at, FailureReason.WindowExpired), event) },
             { assertTrue(room.broadcasts.isEmpty()) },
             { assertTrue(room.directed.isEmpty()) },
         )

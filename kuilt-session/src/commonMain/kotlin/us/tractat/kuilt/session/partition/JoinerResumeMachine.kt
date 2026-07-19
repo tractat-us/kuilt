@@ -15,6 +15,7 @@ import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.liveness.HeartbeatConfig
+import us.tractat.kuilt.session.FailureReason
 import us.tractat.kuilt.session.admit.AdmitMessage
 import kotlin.time.Instant
 
@@ -58,16 +59,18 @@ internal interface JoinerResumeHost {
 
     /**
      * A reconnect attempt is underway: the room emits the dual-role
-     * `Partitioned(hostId, at)` + `WindowOpened(hostId, windowDeadline)` membership events
+     * `Partitioned(hostId, at, ReconnectReason.TransportClosed)` +
+     * `WindowOpened(hostId, windowDeadline)` membership events
      * (the same pair the host emits when it opens a window for a dropped joiner).
      */
     fun onReconnectStarted(hostId: PeerId, at: Instant, windowDeadline: Instant)
 
     /**
      * The reconnect failed terminally (no credentials, window expired, or a non-conforming
-     * loom): the room marks the host lost and tears down.
+     * loom): the room marks the host lost and tears down. [reason] classifies the failure —
+     * see [FailureReason].
      */
-    suspend fun onReconnectFailed(at: Instant)
+    suspend fun onReconnectFailed(at: Instant, reason: FailureReason)
 }
 
 /**
@@ -139,6 +142,18 @@ internal class JoinerResumeMachine(
     private var pendingResume: CompletableDeferred<ResumeResult>? = null
 
     /**
+     * The most recent host `Reject` message for a resume in this episode, or null. Set by
+     * [rejectFlight] when a flight was actually pending; read by [runReconnect] at window expiry to
+     * label the terminal event [FailureReason.Refused] instead of [FailureReason.WindowExpired].
+     *
+     * NOT a short-circuit: a `Reject` is not always terminal (a window that has not opened yet also
+     * rejects — the fast-reconnect race), so the retry loop is left intact and this only refines the
+     * label of a genuine window expiry. Reset at the start of each [runReconnect] episode; discarded
+     * if a later retry succeeds. Guarded by [lock].
+     */
+    private var refusal: String? = null
+
+    /**
      * Guards the single in-flight reconnect attempt so the two racing tear-detection paths —
      * transport `Torn` and heartbeat `TransportClosed` — cannot both drive a reconnect or
      * both mark the host lost. First path to flip it under [lock] owns the attempt; the other
@@ -199,10 +214,17 @@ internal class JoinerResumeMachine(
      * `Reject`, returning whether a flight was actually in flight — `false` means the Reject
      * arrived during the initial join (no resume pending), which the room fails loudly as an
      * admission rejection instead (#1178).
+     *
+     * The [message] is **recorded, not obeyed as authoritative**: a `Reject` is not always
+     * terminal (a window that has not opened yet also rejects — the fast-reconnect race), so the
+     * flight still completes as [ResumeResult.WindowClosed] and [runReconnect]'s retry loop runs
+     * unchanged. The recorded [refusal] only refines the terminal label to
+     * [FailureReason.Refused] if the window ultimately expires.
      */
-    fun rejectFlight(): Boolean = lock.withLock {
+    fun rejectFlight(message: String): Boolean = lock.withLock {
         val d = pendingResume
         pendingResume = null
+        if (d != null) refusal = message
         d?.complete(ResumeResult.WindowClosed)
         d != null
     }
@@ -283,9 +305,12 @@ internal class JoinerResumeMachine(
             // Clear reconnectJob FIRST (this coroutine IS it) so onReconnectFailed → leave()
             // doesn't cancel its own coroutine mid-teardown. See the failure branch below.
             lock.withLock { reconnectJob = null }
-            host.onReconnectFailed(at)
+            host.onReconnectFailed(at, FailureReason.Unrecoverable)
             return
         }
+
+        // Fresh episode: forget any reject recorded by a prior reconnect on this machine.
+        lock.withLock { refusal = null }
 
         // Silence the host-liveness detector: for the reconnect's duration WE decide
         // host-liveness, so a late PeerLost can't tear down an in-flight resume.
@@ -294,6 +319,11 @@ internal class JoinerResumeMachine(
 
         host.onReconnectStarted(hostId, at, at + heartbeatConfig.reconnectWindow)
 
+        // Default: a window that elapses without a successful resume is WindowExpired. Only the
+        // non-conforming-loom branch below reclassifies to Unrecoverable. This is a plain local,
+        // read/written solely on this reconnect coroutine (the withTimeoutOrNull block runs inline
+        // on it), so it needs no lock.
+        var failureReason: FailureReason = FailureReason.WindowExpired
         val resumed = withTimeoutOrNull(heartbeatConfig.reconnectWindow) {
             var ok = false
             while (!ok) {
@@ -317,6 +347,7 @@ internal class JoinerResumeMachine(
                     reweaved.getOrNull()?.takeIf { it !== seam }?.let { throwaway ->
                         runCatchingCancellable { throwaway.close() }
                     }
+                    failureReason = FailureReason.Unrecoverable
                     return@withTimeoutOrNull false
                 }
                 val result = runCatchingCancellable {
@@ -329,6 +360,14 @@ internal class JoinerResumeMachine(
             true
         } ?: false
 
+        // If we timed out (resumed == false, failureReason still WindowExpired) but saw a host
+        // reject during the window, label it Refused. A non-conforming loom already set
+        // Unrecoverable above and takes precedence (it returned false before any reject could be
+        // recorded). The reject was recorded, not obeyed — the retry loop still ran to the deadline.
+        if (!resumed && failureReason is FailureReason.WindowExpired) {
+            lock.withLock { refusal }?.let { failureReason = FailureReason.Refused(it) }
+        }
+
         if (resumed) {
             // Re-arm: clear the guard and restart host-liveness monitoring on the healed
             // generation. The restarted detector both keeps the resumed room monitored and,
@@ -339,6 +378,7 @@ internal class JoinerResumeMachine(
             lock.withLock {
                 reconnecting = false
                 reconnectJob = null
+                refusal = null
                 host.restoreHostDetector(hostId)
             }
         } else if (!lock.withLock { reconnectJob = null; host.isClosed() }) {
@@ -347,7 +387,7 @@ internal class JoinerResumeMachine(
             // onReconnectFailed → leave() must not cancel its own coroutine, or leave()'s
             // seam.close() would be cancelled mid-teardown. (If closed, leave() already owns
             // teardown; don't emit a spurious HostLost.)
-            host.onReconnectFailed(clock())
+            host.onReconnectFailed(clock(), failureReason)
         }
     }
 

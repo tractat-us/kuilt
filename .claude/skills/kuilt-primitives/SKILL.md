@@ -24,6 +24,7 @@ Read the first path that exists, in order:
 If you're about to write any of these, STOP and open the cookbook:
 
 - a rejoin / reconnect / resume-token loop, or a "hold the seat open" grace window → `ResumeToken` + `SeamRoom`
+- a reconnect banner / "why did we drop" classifier — transient vs. unrecoverable buckets → `MembershipEvent.Partitioned.reason` (`ReconnectReason`) + `HostLost.reason` (`FailureReason`)
 - a heartbeat / idle-reaper / "is this peer still alive" timer → `HeartbeatPartitionDetector`
 - a `delay(timeout); if (peers.size < 2) close()` reaper for a room/table nobody joined → `SoloDeadlineDetector`
 - a propose→authoritative/rejected turn or session facade, host election with a term → `GameSession` + `TurnSequencer`

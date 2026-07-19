@@ -16,11 +16,13 @@ import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.Spool
 import us.tractat.kuilt.core.Swatch
+import us.tractat.kuilt.session.FailureReason
 import us.tractat.kuilt.session.LeaveReason
 import us.tractat.kuilt.session.Liveness
 import us.tractat.kuilt.session.Member
 import us.tractat.kuilt.session.MemberIdentity
 import us.tractat.kuilt.session.MembershipEvent
+import us.tractat.kuilt.session.ReconnectReason
 import us.tractat.kuilt.session.Room
 import us.tractat.kuilt.session.RoomFrame
 import us.tractat.kuilt.session.SessionRole
@@ -180,9 +182,9 @@ public class FakeRoom(
      * Flip the named member's [Liveness] to [Liveness.Partitioned] and emit
      * [MembershipEvent.Partitioned].
      */
-    public suspend fun partition(peerId: PeerId, at: Instant) {
+    public suspend fun partition(peerId: PeerId, at: Instant, reason: ReconnectReason = ReconnectReason.LinkTimeout) {
         updateLiveness(peerId, Liveness.Partitioned)
-        eventsChannel.send(MembershipEvent.Partitioned(peerId, at))
+        eventsChannel.send(MembershipEvent.Partitioned(peerId, at, reason))
     }
 
     /**
@@ -214,9 +216,9 @@ public class FakeRoom(
      * Emit [MembershipEvent.HostLost] (terminal event on a joiner's room).
      * After this, [broadcast] and [sendTo] become silent no-ops per the contract.
      */
-    public suspend fun hostLost(at: Instant) {
+    public suspend fun hostLost(at: Instant, reason: FailureReason = FailureReason.WindowExpired) {
         left = true
-        eventsChannel.send(MembershipEvent.HostLost(at))
+        eventsChannel.send(MembershipEvent.HostLost(at, reason))
     }
 
     /**

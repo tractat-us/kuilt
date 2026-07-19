@@ -568,11 +568,12 @@ internal class SeamRoom(
                         this@SeamRoom.restartIncomingCollect()
 
                     override fun onReconnectStarted(hostId: PeerId, at: Instant, windowDeadline: Instant) {
-                        _events.tryEmit(MembershipEvent.Partitioned(hostId, at))
+                        _events.tryEmit(MembershipEvent.Partitioned(hostId, at, ReconnectReason.TransportClosed))
                         _events.tryEmit(MembershipEvent.WindowOpened(hostId, windowDeadline))
                     }
 
-                    override suspend fun onReconnectFailed(at: Instant) = markHostLost(at)
+                    override suspend fun onReconnectFailed(at: Instant, reason: FailureReason) =
+                        markHostLost(at, reason)
                 },
             )
         } else {
@@ -859,7 +860,7 @@ internal class SeamRoom(
                     //  - resume in flight  → resolve the parked resume as WindowClosed (existing behavior);
                     //  - initial join      → the host refused admission; fail loudly (#1178) instead of
                     //                         swallowing it and leaving join()'s consumer hanging.
-                    val hadPendingResume = resumeMachine?.rejectFlight() ?: false
+                    val hadPendingResume = resumeMachine?.rejectFlight(msg.reason) ?: false
                     if (!hadPendingResume) {
                         scope.launch { failAdmission(AdmissionFailure.Rejected(msg.reason), clock()) }
                     }
@@ -961,7 +962,9 @@ internal class SeamRoom(
      *
      * Validates the token against the [reconnectController]. On [ResumeResult.Success],
      * [handleReconnectResumed] sends a [AdmitMessage.Welcome] confirmation to the joiner
-     * via the reconnect controller's event stream. On failure, replies with [AdmitMessage.Reject].
+     * via the reconnect controller's event stream. On failure, replies with [AdmitMessage.Reject]
+     * whose reason now carries the cause (`resume-window-closed` / `resume-token-invalid:<reason>`)
+     * so the joiner can surface it as `FailureReason.Refused(message)`.
      */
     private suspend fun handleResume(sender: PeerId, msg: AdmitMessage.Resume) {
         val ctrl = reconnectController ?: return
@@ -970,9 +973,13 @@ internal class SeamRoom(
             roomId = RoomId(msg.tokenRoomId),
             issuedAt = msg.issuedAt,
         )
-        val result = ctrl.tryResume(token, at = clock().toEpochMilliseconds())
-        if (result !is ResumeResult.Success) {
-            val rejectBytes = AdmitMessage.encode(AdmitMessage.Reject("resume-rejected"))
+        val rejectReason = when (val result = ctrl.tryResume(token, at = clock().toEpochMilliseconds())) {
+            ResumeResult.Success -> null // handleReconnectResumed fires via the controller event stream
+            ResumeResult.WindowClosed -> "resume-window-closed"
+            is ResumeResult.TokenInvalid -> "resume-token-invalid: ${result.reason}"
+        }
+        if (rejectReason != null) {
+            val rejectBytes = AdmitMessage.encode(AdmitMessage.Reject(rejectReason))
             runCatchingCancellable { seam.sendTo(sender, rejectBytes) }
         }
         // On Success: handleReconnectResumed fires via the controller's event stream
@@ -1185,13 +1192,13 @@ internal class SeamRoom(
         if (hostTransportClose) {
             resumeMachine?.attemptReconnect(event.at)
         } else {
-            markPartitioned(event.peerId, event.at)
+            markPartitioned(event.peerId, event.at, event.reason.toReconnectReason())
         }
     }
 
-    private fun markPartitioned(peerId: PeerId, at: Instant) {
+    private fun markPartitioned(peerId: PeerId, at: Instant, reason: ReconnectReason) {
         val updated = lock.withLock { updateMemberLiveness(peerId, Liveness.Partitioned) } ?: return
-        _events.tryEmit(MembershipEvent.Partitioned(updated.id, at))
+        _events.tryEmit(MembershipEvent.Partitioned(updated.id, at, reason))
         reconnectController?.onPeerUnresponsive(peerId, at.toEpochMilliseconds())
     }
 
@@ -1206,20 +1213,20 @@ internal class SeamRoom(
             _role.value == SessionRole.Joiner && peerId == hostPeerId
         }
         if (isHostPeer) {
-            markHostLost(at)
+            markHostLost(at, FailureReason.WindowExpired)
         } else {
             removeFromRoster(peerId, LeaveReason.PartitionExpired)
         }
     }
 
-    private suspend fun markHostLost(at: Instant) {
+    private suspend fun markHostLost(at: Instant, reason: FailureReason) {
         val alreadyLost = lock.withLock {
             val was = hostLost
             hostLost = true
             was
         }
         if (alreadyLost) return
-        _events.tryEmit(MembershipEvent.HostLost(at))
+        _events.tryEmit(MembershipEvent.HostLost(at, reason))
         leave(LeaveReason.Error("host lost"))
     }
 

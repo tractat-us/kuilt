@@ -37,3 +37,25 @@ public suspend fun retryWithBackoffSample(random: Random, dial: suspend () -> Bo
         delay(backoff.delay(attempt++)) // full-jitter; decorrelates simultaneous retriers
     }
 }
+
+/**
+ * Drive a reconnect banner / terminal-error decision from the reason kuilt already classifies,
+ * instead of re-deriving your own transient/unrecoverable buckets. [ReconnectReason] says why the
+ * link is down while a window is open; [FailureReason] says why the session ended for good.
+ */
+public suspend fun reconnectBannerSample(room: Room) {
+    room.events.collect { event ->
+        when (event) {
+            is MembershipEvent.Partitioned -> when (event.reason) {
+                ReconnectReason.LinkTimeout, ReconnectReason.TransportClosed -> Unit // "Reconnecting…"
+                ReconnectReason.Backpressure -> Unit // "Connection congested…"
+            }
+            is MembershipEvent.HostLost -> when (val reason = event.reason) {
+                FailureReason.WindowExpired -> Unit // "Lost the host — rejoin"
+                FailureReason.Unrecoverable -> Unit // "Can't reconnect — return to lobby"
+                is FailureReason.Refused -> Unit // show reason.message (auth-expired / version, …)
+            }
+            else -> Unit
+        }
+    }
+}

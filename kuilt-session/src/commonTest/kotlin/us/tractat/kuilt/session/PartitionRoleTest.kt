@@ -260,6 +260,7 @@ class PartitionRoleTest {
         assertAll(
             { assertEquals(joinerPeerId, partitionedEvent.peerId) },
             { assertEquals(Liveness.Partitioned, hostRoom.roster.value.first().liveness) },
+            { assertEquals(ReconnectReason.LinkTimeout, partitionedEvent.reason) },
         )
 
         // Recover the link and wait for PeerRecovered.
