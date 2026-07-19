@@ -118,6 +118,107 @@ class StarTopologyPresenceFanoutTest {
             )
         }
 
+    /**
+     * A paused peer must be visible as paused to **every** member, not just the host.
+     *
+     * The host detects the drop locally and holds the seat; the bystander has no heartbeat
+     * edge to the dropped joiner, so without the host's [us.tractat.kuilt.session.admit.AdmitMessage.Paused]
+     * fan-out it sees the peer as `Connected` right up until it vanishes.
+     */
+    @Test
+    fun `a non-host member sees Partitioned and WindowOpened for a paused peer`() =
+        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+            val star = star()
+            val partitioned = mutableListOf<MembershipEvent.Partitioned>()
+            val windows = mutableListOf<MembershipEvent.WindowOpened>()
+            backgroundScope.launch {
+                star.bystander.events.collect { event ->
+                    when (event) {
+                        is MembershipEvent.Partitioned -> if (event.peerId == star.droppedId) partitioned += event
+                        is MembershipEvent.WindowOpened -> if (event.peerId == star.droppedId) windows += event
+                        else -> Unit
+                    }
+                }
+            }
+            testScheduler.runCurrent()
+
+            star.droppedLink.partition()
+            // Past the host's detection timeout, but well short of its reconnect window, so the
+            // seat is still held when we look.
+            testScheduler.advanceTimeBy(hostConfig.timeout + hostConfig.interval * 2)
+            testScheduler.runCurrent()
+
+            assertAll(
+                {
+                    assertEquals(
+                        1,
+                        partitioned.size,
+                        "a non-host member must see the paused peer as Partitioned — observed $partitioned",
+                    )
+                },
+                {
+                    assertEquals(
+                        1,
+                        windows.size,
+                        "…and must see the reconnect window that holds its seat — observed $windows",
+                    )
+                },
+                {
+                    assertEquals(
+                        Liveness.Partitioned,
+                        star.bystander.roster.value.first { it.id == star.droppedId }.liveness,
+                        "the roster entry must read Partitioned, not Connected",
+                    )
+                },
+            )
+        }
+
+    /**
+     * Mesh idempotency: a peer that detects the drop with its **own** detector *and* receives
+     * the host's fan-out for the same peer must emit one [MembershipEvent.Partitioned], not two.
+     *
+     * Unlike the star tests above, every room here runs [hostConfig], so the bystander's own
+     * detector fires inside the window — the double-source case the fan-out introduces.
+     */
+    @Test
+    fun `a mesh member that both detects locally and receives Paused emits once`() =
+        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+            val loom = InMemoryLoom()
+            val clock: () -> Instant = { Instant.fromEpochMilliseconds(testScheduler.currentTime) }
+            val factory = SeamRoomFactory(loom, backgroundScope, clock, hostConfig)
+
+            val hostRoom = factory.host(Pattern("Host"))
+            val droppedLink = FaultySeam(loom.join(InMemoryTag("Dropped")), backgroundScope)
+            val droppedRoom = factory.adopt(droppedLink, SessionRole.Joiner)
+            val bystander = factory.join(InMemoryTag("Bystander"))
+
+            hostRoom.roster.first { it.size == 2 }
+            droppedRoom.roster.first { it.size == 2 }
+            bystander.roster.first { it.size == 2 }
+
+            val droppedId = droppedRoom.selfId
+            val partitioned = mutableListOf<MembershipEvent.Partitioned>()
+            backgroundScope.launch {
+                bystander.events
+                    .filterIsInstance<MembershipEvent.Partitioned>()
+                    .collect { if (it.peerId == droppedId) partitioned += it }
+            }
+            testScheduler.runCurrent()
+
+            droppedLink.partition()
+            // Long enough for both sources to have fired: the bystander's own detector and the
+            // host's Paused fan-out. Still short of the reconnect window, so no eviction yet.
+            testScheduler.advanceTimeBy(hostConfig.timeout + hostConfig.interval * 4)
+            testScheduler.runCurrent()
+
+            assertEquals(
+                1,
+                partitioned.size,
+                "local detection and the host's Paused fan-out must coalesce into one " +
+                    "Partitioned event — observed $partitioned",
+            )
+        }
+
     // ── Harness ───────────────────────────────────────────────────────────────
 
     /**

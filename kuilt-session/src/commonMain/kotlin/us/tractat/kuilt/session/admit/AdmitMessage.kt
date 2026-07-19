@@ -159,6 +159,48 @@ public sealed interface AdmitMessage {
     @SerialName("farewell")
     public data class Farewell(val peerId: String, val expired: Boolean = false) : AdmitMessage
 
+    /**
+     * Sent by the host to every other member when a member's link drops and its seat is
+     * being held open — the *presence* counterpart of [Farewell]'s eviction (#1557).
+     *
+     * Liveness is detected **locally**, by each peer's own heartbeat detector. On a symmetric
+     * mesh that is enough: every peer watches every other and learns independently. On a
+     * **star/host-relayed topology a member has no heartbeat edge to another member**, so
+     * without this message it never learns that peer is paused, and
+     * [us.tractat.kuilt.session.MembershipEvent] means something different depending on the
+     * topology underneath — which is exactly what a consumer assumes it does not.
+     *
+     * On receipt a member applies [us.tractat.kuilt.session.Liveness.Partitioned] to [peerId]
+     * and emits the same [us.tractat.kuilt.session.MembershipEvent.Partitioned] +
+     * [us.tractat.kuilt.session.MembershipEvent.WindowOpened] pair a locally-detecting peer
+     * emits. **Idempotent** — a mesh peer that both detects locally and receives this emits
+     * once, not twice.
+     *
+     * **Host-authoritative, not peer-trust:** honored only from the identified host, exactly
+     * as [Farewell] is.
+     *
+     * [peerId] — the paused member's [us.tractat.kuilt.core.PeerId] value.
+     * [expiresAt] — epoch-millis at which the reconnect window closes; the seat is held until
+     *   then, after which a [Farewell] with `expired = true` follows.
+     */
+    @Serializable
+    @SerialName("paused")
+    public data class Paused(val peerId: String, val expiresAt: Long) : AdmitMessage
+
+    /**
+     * Sent by the host to every other member when a paused member's link recovered inside its
+     * reconnect window — the release counterpart of [Paused] (#1557).
+     *
+     * On receipt a member restores [us.tractat.kuilt.session.Liveness.Connected] for [peerId]
+     * and emits [us.tractat.kuilt.session.MembershipEvent.Recovered]. **Idempotent** — a no-op
+     * when the member is not currently paused. Host-authoritative, like [Paused].
+     *
+     * [peerId] — the recovered member's [us.tractat.kuilt.core.PeerId] value.
+     */
+    @Serializable
+    @SerialName("unpaused")
+    public data class Unpaused(val peerId: String) : AdmitMessage
+
     public companion object {
         /**
          * First byte of every encoded admit payload. Application frames must not

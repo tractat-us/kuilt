@@ -269,7 +269,11 @@ private const val MEMBERSHIP_EVENT_REPLAY = 64
  *   [PartitionEvent.PeerLost] of a non-host → [MembershipEvent.Left(PartitionExpired)].
  * - **Host**: [PartitionEvent.PeerLost] of any joiner → [MembershipEvent.Left(PartitionExpired)].
  * - Both roles: [PartitionEvent.PeerUnresponsive] → [MembershipEvent.Partitioned];
- *   [PartitionEvent.PeerRecovered] → [MembershipEvent.Recovered].
+ *   [PartitionEvent.PeerRecovered] → [MembershipEvent.Recovered]. On the host these also fan
+ *   out an authoritative [AdmitMessage.Paused] / [AdmitMessage.Unpaused] to the other members,
+ *   so a member with no heartbeat edge to the paused peer (a star topology's other joiners)
+ *   sees the same events a mesh peer detects for itself (#1557). Receipt is idempotent, so a
+ *   mesh peer that detects locally *and* receives the fan-out emits once.
  * - **Clean leave** (a peer's [AdmitMessage.Goodbye]): the host evicts with
  *   [MembershipEvent.Left(Normal)] and propagates an authoritative [AdmitMessage.Farewell]
  *   to every remaining member ([propagateFarewell]), so joiners also evict promptly with
@@ -860,6 +864,16 @@ internal class SeamRoom(
                     handleFarewell(sender, msg)
                 }
             }
+            is AdmitMessage.Paused -> {
+                if (_role.value == SessionRole.Joiner) {
+                    handlePaused(sender, msg)
+                }
+            }
+            is AdmitMessage.Unpaused -> {
+                if (_role.value == SessionRole.Joiner) {
+                    handleUnpaused(sender, msg)
+                }
+            }
             is AdmitMessage.Reject -> {
                 if (_role.value == SessionRole.Joiner) {
                     // A Reject means one of two things depending on where we are:
@@ -1207,15 +1221,122 @@ internal class SeamRoom(
         }
     }
 
+    /**
+     * Apply [Liveness.Partitioned] to [peerId] and announce it.
+     *
+     * **Idempotent** — a member already partitioned re-arms its reconnect window but emits no
+     * second [MembershipEvent.Partitioned] and re-announces nothing. That matters on a mesh,
+     * where a peer both detects the drop locally *and* receives the host's
+     * [AdmitMessage.Paused] for it (#1557): whichever arrives first wins, the other is a no-op.
+     *
+     * On the **host** the announcement is a [AdmitMessage.Paused] fan-out to the remaining
+     * members — see [propagatePaused] for why local detection alone is not enough.
+     */
     private fun markPartitioned(peerId: PeerId, at: Instant) {
-        val updated = lock.withLock { updateMemberLiveness(peerId, Liveness.Partitioned) } ?: return
-        _events.tryEmit(MembershipEvent.Partitioned(updated.id, at))
+        val (wasPartitioned, updated) = lock.withLock {
+            val current = admittedById[peerId] ?: return
+            val wasPartitioned = current.liveness == Liveness.Partitioned
+            wasPartitioned to (updateMemberLiveness(peerId, Liveness.Partitioned) ?: return)
+        }
+        if (!wasPartitioned) _events.tryEmit(MembershipEvent.Partitioned(updated.id, at))
         reconnectController?.onPeerUnresponsive(peerId, at.toEpochMilliseconds())
+        if (!wasPartitioned && _role.value == SessionRole.Host) {
+            propagatePaused(
+                peerId,
+                expiresAtMs = at.toEpochMilliseconds() + heartbeatConfig.reconnectWindow.inWholeMilliseconds,
+            )
+        }
     }
 
+    /**
+     * Restore [Liveness.Connected] for [peerId] and announce it. Idempotent counterpart of
+     * [markPartitioned]: a member that was not paused emits nothing and announces nothing.
+     */
     private fun markRecovered(peerId: PeerId, at: Instant) {
-        val updated = lock.withLock { updateMemberLiveness(peerId, Liveness.Connected) } ?: return
+        val (wasPartitioned, updated) = lock.withLock {
+            val current = admittedById[peerId] ?: return
+            val wasPartitioned = current.liveness == Liveness.Partitioned
+            wasPartitioned to (updateMemberLiveness(peerId, Liveness.Connected) ?: return)
+        }
+        if (!wasPartitioned) return
         _events.tryEmit(MembershipEvent.Recovered(updated.id, at))
+        if (_role.value == SessionRole.Host) propagateUnpaused(peerId)
+    }
+
+    /**
+     * Host-side: announce that [peerId]'s seat is held open until [expiresAtMs], by fanning an
+     * authoritative [AdmitMessage.Paused] to every *other* member (#1557).
+     *
+     * Liveness is detected locally, per peer. On a mesh that suffices — every member watches
+     * every other. On a star/host-relayed topology a member has no heartbeat edge to another
+     * member, so the pause would be invisible to it and [MembershipEvent.Partitioned] would
+     * silently mean different things on different topologies. Best-effort, like
+     * [propagateFarewell]; roster snapshot under [lock], sends on a launched child.
+     */
+    private fun propagatePaused(peerId: PeerId, expiresAtMs: Long) {
+        fanOutToOtherMembers(peerId, AdmitMessage.Paused(peerId.value, expiresAtMs))
+    }
+
+    /** Host-side release counterpart of [propagatePaused] — [peerId] recovered in-window. */
+    private fun propagateUnpaused(peerId: PeerId) {
+        fanOutToOtherMembers(peerId, AdmitMessage.Unpaused(peerId.value))
+    }
+
+    /** Encode [message] once and send it to every admitted member except [subject]. */
+    private fun fanOutToOtherMembers(subject: PeerId, message: AdmitMessage) {
+        val recipients = lock.withLock { admittedById.keys.filter { it != subject } }
+        if (recipients.isEmpty()) return
+        val bytes = AdmitMessage.encode(message)
+        scope.launch {
+            for (recipient in recipients) {
+                runCatchingCancellable { seam.sendTo(recipient, bytes) }
+            }
+        }
+    }
+
+    /**
+     * Member-side: the host says [paused]'s peer dropped its link and its seat is held open.
+     * Apply [Liveness.Partitioned] and emit the same [MembershipEvent.Partitioned] +
+     * [MembershipEvent.WindowOpened] pair a locally-detecting peer emits (#1557).
+     *
+     * **Host-authoritative gate**, identical to [handleFarewell]'s: only a [AdmitMessage.Paused]
+     * from the identified host is honored — a forgery from another joiner, or one arriving
+     * before the host is identified, is dropped. A Paused naming the host itself is ignored too;
+     * host liveness is the [JoinerResumeMachine]'s business, not a roster pause.
+     *
+     * **Idempotent**: a no-op when the member is already partitioned, so a mesh peer that
+     * detected the drop locally does not emit a second event on receiving this.
+     */
+    private fun handlePaused(sender: PeerId, paused: AdmitMessage.Paused) {
+        val subject = PeerId(paused.peerId)
+        val updated = lock.withLock {
+            val host = hostPeerId
+            if (host == null || sender != host || subject == host || subject == selfId) return
+            val current = admittedById[subject] ?: return
+            if (current.liveness == Liveness.Partitioned) return
+            updateMemberLiveness(subject, Liveness.Partitioned) ?: return
+        }
+        _events.tryEmit(MembershipEvent.Partitioned(updated.id, clock()))
+        _events.tryEmit(
+            MembershipEvent.WindowOpened(updated.id, Instant.fromEpochMilliseconds(paused.expiresAt)),
+        )
+    }
+
+    /**
+     * Member-side release counterpart of [handlePaused]: the host says [unpaused]'s peer
+     * recovered inside its window. Same host-authoritative gate; idempotent (a no-op when the
+     * member is not currently paused).
+     */
+    private fun handleUnpaused(sender: PeerId, unpaused: AdmitMessage.Unpaused) {
+        val subject = PeerId(unpaused.peerId)
+        val updated = lock.withLock {
+            val host = hostPeerId
+            if (host == null || sender != host || subject == host || subject == selfId) return
+            val current = admittedById[subject] ?: return
+            if (current.liveness != Liveness.Partitioned) return
+            updateMemberLiveness(subject, Liveness.Connected) ?: return
+        }
+        _events.tryEmit(MembershipEvent.Recovered(updated.id, clock()))
     }
 
     private suspend fun handlePeerLost(peerId: PeerId, at: Instant) {
