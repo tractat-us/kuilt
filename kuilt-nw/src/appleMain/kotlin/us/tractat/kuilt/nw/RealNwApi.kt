@@ -67,11 +67,14 @@ import platform.Network.nw_listener_start
 import platform.Network.nw_listener_state_failed
 import platform.Network.nw_listener_state_ready
 import platform.Network.nw_listener_t
+import platform.Network.nw_interface_get_name
+import platform.Network.nw_interface_get_type
 import platform.Network.nw_interface_type_cellular
 import platform.Network.nw_interface_type_loopback
 import platform.Network.nw_interface_type_other
 import platform.Network.nw_interface_type_wifi
 import platform.Network.nw_interface_type_wired
+import platform.Network.nw_path_enumerate_interfaces
 import platform.Network.nw_parameters_create_secure_tcp
 import platform.Network.nw_parameters_set_include_peer_to_peer
 import platform.Network.nw_parameters_t
@@ -405,11 +408,14 @@ internal class RealNwApi(
             else -> NwPathStatus.Invalid
         }
         val interfaces = buildSet {
-            if (nw_path_uses_interface_type(path, nw_interface_type_wifi)) add(NwInterfaceType.Wifi)
             if (nw_path_uses_interface_type(path, nw_interface_type_cellular)) add(NwInterfaceType.Cellular)
             if (nw_path_uses_interface_type(path, nw_interface_type_wired)) add(NwInterfaceType.Wired)
             if (nw_path_uses_interface_type(path, nw_interface_type_loopback)) add(NwInterfaceType.Loopback)
             if (nw_path_uses_interface_type(path, nw_interface_type_other)) add(NwInterfaceType.Other)
+            // Wi-Fi (#1554): nw_path_uses_interface_type collapses infra Wi-Fi and AWDL into one `wifi` type, so
+            // enumerate the path's interfaces and split each Wi-Fi one by BSD name (classifyWifiInterface). This
+            // recovers WifiLan vs WifiDirect, which then drives the seam's live capability roles.
+            if (nw_path_uses_interface_type(path, nw_interface_type_wifi)) addAll(wifiInterfaceTypes(path))
         }
         val reason = if (status == NwPathStatus.Unsatisfied) {
             when (nw_path_get_unsatisfied_reason(path)) {
@@ -424,6 +430,26 @@ internal class RealNwApi(
             null
         }
         return NwPathState(status, interfaces, nw_path_is_expensive(path), nw_path_is_constrained(path), reason)
+    }
+
+    /**
+     * The Wi-Fi [NwInterfaceType]s present on [path] (#1554), split infra vs peer-to-peer by BSD interface name.
+     * `nw_path_enumerate_interfaces` invokes its block SYNCHRONOUSLY for each interface (it returns before the
+     * enumerate call completes — no async callback outliving this frame, unlike the receive hot path, so no
+     * StableRef/shim is needed). Each Wi-Fi-type interface is classified by [classifyWifiInterface] over its
+     * `nw_interface_get_name` (`en0` ⇒ WifiLan, `awdl0`/`llw0` ⇒ WifiDirect). A path may carry both at once, so
+     * the result is a set. Fallback: if the path reports Wi-Fi usage but enumeration surfaces no Wi-Fi interface
+     * (a name we cannot classify), conservatively return [NwInterfaceType.WifiLan] — never over-claim AWDL.
+     */
+    private fun wifiInterfaceTypes(path: nw_path_t): Set<NwInterfaceType> {
+        val types = mutableSetOf<NwInterfaceType>()
+        nw_path_enumerate_interfaces(path) { iface ->
+            if (nw_interface_get_type(iface) == nw_interface_type_wifi) {
+                types.add(classifyWifiInterface(nw_interface_get_name(iface)?.toKString()))
+            }
+            true
+        }
+        return types.ifEmpty { setOf(NwInterfaceType.WifiLan) }
     }
 
     /**

@@ -18,8 +18,10 @@ import kotlin.test.assertEquals
 /**
  * `NwSeam.capability` is LIVE (#1541): seeded once at connect from the loom's static report, then driven
  * by the injected [FakeNwApi] path-monitor flow (standing in for `RealNwApi`'s `nw_path_monitor`). Flipping
- * the fake's path state — down, Local-Network-denied, recovered — moves the seam's availability, while its
- * roles stay [TransportRole.Discovery] + [TransportRole.Data]. Runs under a [StandardTestDispatcher].
+ * the fake's path state — down, Local-Network-denied, recovered — moves the seam's availability. The base
+ * roles are always [TransportRole.Discovery] + [TransportRole.Data]; the live Wi-Fi medium role split
+ * (WifiLan vs WifiDirect) is covered separately by [NwInterfaceRolesTest] (#1554). Runs under a
+ * [StandardTestDispatcher].
  */
 class NwSeamCapabilityTest {
 
@@ -78,7 +80,7 @@ class NwSeamCapabilityTest {
     fun capabilityFollowsPathDownThenRecovery() = runTest(StandardTestDispatcher()) {
         val (api, seam) = newSeam()
 
-        api.emitPathState(satisfied(NwInterfaceType.Wifi))
+        api.emitPathState(satisfied(NwInterfaceType.WifiLan))
         testScheduler.runCurrent()
         assertEquals(FabricAvailability.Available, seam.capability.value.availability, "a satisfied Wi-Fi path is Available")
 

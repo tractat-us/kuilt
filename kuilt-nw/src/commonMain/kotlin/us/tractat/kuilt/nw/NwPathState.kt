@@ -1,6 +1,7 @@
 package us.tractat.kuilt.nw
 
 import us.tractat.kuilt.core.FabricAvailability
+import us.tractat.kuilt.core.TransportRole
 
 /**
  * A snapshot of the device's current network path, as reported by Apple's `NWPathMonitor`
@@ -16,8 +17,9 @@ import us.tractat.kuilt.core.FabricAvailability
  *
  * @param status the overall reachability [NwPathStatus].
  * @param interfaces which physical interface types the path currently uses (Wi-Fi / cellular / wired…).
- *   Best-effort: the monitor cannot distinguish infrastructure Wi-Fi from peer-to-peer AWDL, so this is
- *   observability/telemetry, not a role source (see the module notes on why roles stay Discovery+Data).
+ *   Wi-Fi is disambiguated into infrastructure ([NwInterfaceType.WifiLan]) vs peer-to-peer
+ *   ([NwInterfaceType.WifiDirect], AWDL/low-latency Wi-Fi) by the BSD interface-name heuristic in
+ *   [classifyWifiInterface] (#1554), so this now feeds the seam's live capability ROLES, not just telemetry.
  * @param isExpensive the OS flags the path as expensive (e.g. cellular, personal hotspot).
  * @param isConstrained the OS flags the path as constrained (Low Data Mode).
  * @param unsatisfiedReason when [status] is [NwPathStatus.Unsatisfied], why — including
@@ -46,8 +48,49 @@ public enum class NwPathStatus {
     Invalid,
 }
 
-/** A physical interface type a path can traverse, mirroring `nw_interface_type_t`. */
-public enum class NwInterfaceType { Wifi, Cellular, Wired, Loopback, Other }
+/**
+ * A physical interface type a path can traverse. Cellular/Wired/Loopback/Other mirror `nw_interface_type_t`
+ * directly; Wi-Fi is split into two so a consumer can tell the "same access point" case from a true
+ * peer-to-peer link:
+ * - [WifiLan] — infrastructure Wi-Fi through a shared access point (BSD name `en*`).
+ * - [WifiDirect] — peer-to-peer Wi-Fi with no access point (AWDL / low-latency Wi-Fi; BSD name `awdl0`/`llw0`).
+ *
+ * `nw_interface_type_t` reports both as the single `wifi` type; the split is recovered from the BSD interface
+ * name by [classifyWifiInterface] (#1554) — a de-facto-stable but Apple-undocumented heuristic.
+ */
+public enum class NwInterfaceType { WifiLan, WifiDirect, Cellular, Wired, Loopback, Other }
+
+/**
+ * Classify a single Wi-Fi interface as infrastructure ([NwInterfaceType.WifiLan]) or peer-to-peer
+ * ([NwInterfaceType.WifiDirect]) from its BSD interface name (#1554).
+ *
+ * The rule: a name beginning `awdl` (Apple Wireless Direct Link) or `llw` (low-latency Wi-Fi) is a
+ * peer-to-peer link ⇒ [NwInterfaceType.WifiDirect]; any other Wi-Fi name (`en0`, …) is infrastructure
+ * ⇒ [NwInterfaceType.WifiLan]. A `null`/unreadable name falls back **conservatively** to
+ * [NwInterfaceType.WifiLan] — we never over-claim a peer-to-peer link we could not name.
+ *
+ * ⚠ This is a **de-facto-stable but undocumented BSD interface-name heuristic**: Apple's Network.framework
+ * exposes no contractual "is this AWDL?" flag and does not guarantee these names. Matching `awdl0`/`llw0` is
+ * nonetheless the mechanism #1554 explicitly sanctions to recover the distinction `nw_path_uses_interface_type`
+ * collapses. Treat it as a best-effort classification, not a guarantee.
+ */
+internal fun classifyWifiInterface(bsdName: String?): NwInterfaceType = when {
+    bsdName == null -> NwInterfaceType.WifiLan
+    bsdName.startsWith("awdl") || bsdName.startsWith("llw") -> NwInterfaceType.WifiDirect
+    else -> NwInterfaceType.WifiLan
+}
+
+/**
+ * The transport-medium [TransportRole]s this path's Wi-Fi interfaces imply (#1554): a [NwInterfaceType.WifiLan]
+ * interface contributes [TransportRole.WifiLan], a [NwInterfaceType.WifiDirect] interface contributes
+ * [TransportRole.WifiDirect]. A path may carry both at once (infra `en0` + AWDL `awdl0` up together), so this
+ * is a set. Non-Wi-Fi interfaces (cellular/wired/…) contribute no medium role — the base Discovery+Data roles
+ * stand alone. Folded onto the fabric's static roles by `NwSeam`'s live-capability driver.
+ */
+internal fun NwPathState.interfaceRoles(): Set<TransportRole> = buildSet {
+    if (NwInterfaceType.WifiLan in interfaces) add(TransportRole.WifiLan)
+    if (NwInterfaceType.WifiDirect in interfaces) add(TransportRole.WifiDirect)
+}
 
 /**
  * Why a path is [NwPathStatus.Unsatisfied], mirroring `nw_path_unsatisfied_reason_t`.
