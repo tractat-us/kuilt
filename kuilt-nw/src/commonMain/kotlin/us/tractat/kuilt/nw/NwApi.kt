@@ -24,6 +24,15 @@ private val EMPTY_CLOSED_CONNECTIONS: StateFlow<Map<NwConnectionId, String?>> =
     MutableStateFlow(emptyMap<NwConnectionId, String?>()).asStateFlow()
 
 /**
+ * Shared default for [NwApi.pathState] — a single immutable, never-updated [StateFlow] holding `null`
+ * ("path unknown") so the default getter allocates nothing per call. A binding that has not wired an
+ * `NWPathMonitor` (e.g. the JVM dylib bridge) inherits "unknown", and the seam keeps its static
+ * capability seed rather than guessing.
+ */
+private val EMPTY_PATH_STATE: StateFlow<NwPathState?> =
+    MutableStateFlow<NwPathState?>(null).asStateFlow()
+
+/**
  * Abstracts the slice of Apple's Network.framework needed by `NwLoom`.
  *
  * Implementations: `FakeNwApi` (tests, commonTest) and the real `RealNwApi`
@@ -161,4 +170,19 @@ public interface NwApi {
      */
     public val closedConnections: StateFlow<Map<NwConnectionId, String?>>
         get() = EMPTY_CLOSED_CONNECTIONS
+
+    /**
+     * The device's live network-path state (`NWPathMonitor`), or `null` while unknown. This is what
+     * makes a seam's [us.tractat.kuilt.core.Seam.capability] reactive: as the path goes up/down, swaps
+     * Wi-Fi↔cellular, or the Local-Network permission is denied, a fresh [NwPathState] appears here and
+     * the seam folds its [toAvailability] into the live capability.
+     *
+     * Modelled as latest-value **[StateFlow] state** (not a lossy event stream) — the current path is a
+     * level, and a late subscriber must see the latest value, never miss it. Defaults to a never-updated
+     * `null` ("unknown") so a binding without a real monitor (the JVM bridge) inherits "unknown" and the
+     * seam keeps its static seed. `RealNwApi` (appleMain) drives it from `nw_path_monitor_*`; the test
+     * fakes expose a controllable `MutableStateFlow` so no test touches the OS path monitor.
+     */
+    public val pathState: StateFlow<NwPathState?>
+        get() = EMPTY_PATH_STATE
 }

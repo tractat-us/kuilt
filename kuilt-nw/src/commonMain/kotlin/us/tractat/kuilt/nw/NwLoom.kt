@@ -123,16 +123,13 @@ public class NwLoom(
     public val visiblePeers: StateFlow<Set<NwEndpoint>> = _visiblePeers.asStateFlow()
 
     override fun capability(): TransportCapability =
-        TransportCapability(
-            roles = setOf(TransportRole.Discovery, TransportRole.Data),
-            availability = api.availability(),
-        )
+        TransportCapability(roles = NW_ROLES, availability = api.availability())
 
     override suspend fun weave(rendezvous: Rendezvous): Seam {
         // Derive from the caller so background work runs on the test dispatcher; independent Job
         // so seam close() cancels only this session's coroutines.
         val seamScope = CoroutineScope(currentCoroutineContext() + SupervisorJob())
-        val seam = NwSeam(selfId, api, seamScope, random, policy, wovenPathGrace)
+        val seam = NwSeam(selfId, api, seamScope, random, policy, wovenPathGrace, capability())
 
         val serviceName = when (rendezvous) {
             is Rendezvous.New -> rendezvous.pattern.sessionName
@@ -190,6 +187,15 @@ public class NwLoom(
     }
 
     public companion object {
+        /**
+         * The roles a Network.framework fabric plays: it both finds peers ([TransportRole.Discovery], via
+         * Bonjour advertise+browse) and carries frames ([TransportRole.Data]). The single source of these
+         * roles for both [capability] (pre-connect) and the [NwSeam] capability seed (live per-session). The
+         * monitor drives *availability*, never the roles — the path API cannot distinguish infrastructure
+         * Wi-Fi from peer-to-peer AWDL, so a Wi-Fi/cellular role split would be a guess (see #1541 follow-up).
+         */
+        internal val NW_ROLES: Set<TransportRole> = setOf(TransportRole.Discovery, TransportRole.Data)
+
         /** How long [weave] waits for the first peer before declaring the fabric [CloseReason.Unreachable]. */
         public val DEFAULT_WEAVE_TIMEOUT: Duration = 30.seconds
 

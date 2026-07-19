@@ -64,9 +64,34 @@ import platform.Network.nw_listener_start
 import platform.Network.nw_listener_state_failed
 import platform.Network.nw_listener_state_ready
 import platform.Network.nw_listener_t
+import platform.Network.nw_interface_type_cellular
+import platform.Network.nw_interface_type_loopback
+import platform.Network.nw_interface_type_other
+import platform.Network.nw_interface_type_wifi
+import platform.Network.nw_interface_type_wired
 import platform.Network.nw_parameters_create_secure_tcp
 import platform.Network.nw_parameters_set_include_peer_to_peer
 import platform.Network.nw_parameters_t
+import platform.Network.nw_path_get_status
+import platform.Network.nw_path_get_unsatisfied_reason
+import platform.Network.nw_path_is_constrained
+import platform.Network.nw_path_is_expensive
+import platform.Network.nw_path_monitor_cancel
+import platform.Network.nw_path_monitor_create
+import platform.Network.nw_path_monitor_set_queue
+import platform.Network.nw_path_monitor_set_update_handler
+import platform.Network.nw_path_monitor_start
+import platform.Network.nw_path_monitor_t
+import platform.Network.nw_path_status_satisfiable
+import platform.Network.nw_path_status_satisfied
+import platform.Network.nw_path_status_unsatisfied
+import platform.Network.nw_path_t
+import platform.Network.nw_path_unsatisfied_reason_cellular_denied
+import platform.Network.nw_path_unsatisfied_reason_local_network_denied
+import platform.Network.nw_path_unsatisfied_reason_not_available
+import platform.Network.nw_path_unsatisfied_reason_vpn_inactive
+import platform.Network.nw_path_unsatisfied_reason_wifi_denied
+import platform.Network.nw_path_uses_interface_type
 import platform.Network.nw_protocol_options_t
 import platform.Network.nw_tls_copy_sec_protocol_options
 import platform.Security.sec_protocol_options_add_pre_shared_key
@@ -203,6 +228,19 @@ internal class RealNwApi(
     // FIFO of connIds present in [_closedConnections], guarded by [lock], for the [CLOSED_RETENTION_CAP] prune.
     private val closedOrder = ArrayDeque<NwConnectionId>()
 
+    // Live device network path (#1541), driven by an `nw_path_monitor` started lazily on first [pathState] read.
+    // Latest-value STATE (not a lossy event) so a late subscriber always sees the current path; `null` until the
+    // monitor delivers its first update. The seam folds this into its live capability.
+    private val _pathState = MutableStateFlow<NwPathState?>(null)
+
+    // The single lazily-started `nw_path_monitor`, guarded by [lock] (its `nw_*` calls run OUTSIDE the lock, like
+    // the listener/browser handles). `null` until [ensurePathMonitor] starts it; nulled by [cancelPathMonitor].
+    private var pathMonitor: nw_path_monitor_t? = null
+
+    // Start-once latch for the path monitor: the CAS winner creates+starts it exactly once, so no `nw_*` call is
+    // needed under [lock] to serialize starts (the repo's no-nw_*-under-lock discipline).
+    private val pathMonitorStarted = atomic(false)
+
     override val endpointFound: Flow<NwEndpoint> = _endpointFound.asSharedFlow()
     override val endpointLost: Flow<NwEndpoint> = _endpointLost.asSharedFlow()
     override val connectionOpened: Flow<NwConnectionOpened> = _connectionOpened.asSharedFlow()
@@ -210,6 +248,21 @@ internal class RealNwApi(
     override val connectionClosed: Flow<NwConnectionClosed> = _connectionClosed.asSharedFlow()
     override val connectionViability: StateFlow<Map<NwConnectionId, Boolean>> = _connectionViability.asStateFlow()
     override val closedConnections: StateFlow<Map<NwConnectionId, String?>> = _closedConnections.asStateFlow()
+
+    private val pathStateFlow: StateFlow<NwPathState?> = _pathState.asStateFlow()
+
+    /**
+     * The device's live network path (#1541). Starts the `nw_path_monitor` lazily on first read (so a binding
+     * that never reports capability — e.g. an inert-connection unit test — spins up no OS monitor), then reports
+     * every `nw_path_monitor` update as latest-value STATE. Cancel via [cancelPathMonitor] at teardown so the
+     * monitor's queue callback does not outlive the binding (tests MUST cancel it; production holds it for the
+     * fabric's lifetime, there being no `NwApi` close hook).
+     */
+    override val pathState: StateFlow<NwPathState?>
+        get() {
+            ensurePathMonitor()
+            return pathStateFlow
+        }
 
     /**
      * Latch [id]'s close into the drop-tolerant monotone close STATE (#1522) with [reason] (`null` = graceful).
@@ -239,6 +292,76 @@ internal class RealNwApi(
     /** Drop [id]'s viability entry once the connection is gone (bounds the map to live connections). */
     private fun clearViability(id: NwConnectionId) {
         _connectionViability.update { it - id }
+    }
+
+    /**
+     * Start the single `nw_path_monitor` exactly once (#1541). The [pathMonitorStarted] CAS elects one starter,
+     * so no `nw_*` call runs under [lock] to serialize starts. The update handler fires on the shared [queue] and
+     * publishes the latest [NwPathState] (a thread-safe `MutableStateFlow.value` write, like the viability path).
+     * The handle is stashed under [lock] (a plain store, no `nw_*` under the lock) for [cancelPathMonitor]; start
+     * runs OUTSIDE the lock, mirroring the listener/browser swap discipline.
+     */
+    private fun ensurePathMonitor() {
+        if (!pathMonitorStarted.compareAndSet(expect = false, update = true)) return
+        val monitor = nw_path_monitor_create()
+        if (monitor == null) {
+            // Could not create — let a later reader retry rather than latch a dead "started" state.
+            pathMonitorStarted.value = false
+            log.debug { "nw.path.monitor.create-failed" }
+            return
+        }
+        nw_path_monitor_set_queue(monitor, queue)
+        nw_path_monitor_set_update_handler(monitor) { path ->
+            _pathState.value = readPath(path)
+        }
+        lock.withLock { pathMonitor = monitor }
+        nw_path_monitor_start(monitor)
+        log.debug { "nw.path.monitor.started" }
+    }
+
+    /**
+     * Cancel the `nw_path_monitor` and drop the handle (#1541). Idempotent. The `nw_path_monitor_cancel` call runs
+     * OUTSIDE [lock] (no `nw_*` under the lock). Tests MUST call this at teardown so the monitor's queue callback
+     * does not outlive the shared K/N test process; production has no `NwApi` close hook, so the monitor lives for
+     * the binding's lifetime (a single, cheap device-path observer).
+     */
+    internal fun cancelPathMonitor() {
+        val doomed = lock.withLock { pathMonitor.also { pathMonitor = null } } ?: return
+        nw_path_monitor_cancel(doomed)
+        log.debug { "nw.path.monitor.cancelled" }
+    }
+
+    /** Read an `nw_path_t` snapshot into a platform-neutral [NwPathState] (#1541). Pure — no `nw_*` mutation. */
+    private fun readPath(path: nw_path_t?): NwPathState {
+        if (path == null) {
+            return NwPathState(NwPathStatus.Invalid, emptySet(), isExpensive = false, isConstrained = false, unsatisfiedReason = null)
+        }
+        val status = when (nw_path_get_status(path)) {
+            nw_path_status_satisfied -> NwPathStatus.Satisfied
+            nw_path_status_satisfiable -> NwPathStatus.Satisfiable
+            nw_path_status_unsatisfied -> NwPathStatus.Unsatisfied
+            else -> NwPathStatus.Invalid
+        }
+        val interfaces = buildSet {
+            if (nw_path_uses_interface_type(path, nw_interface_type_wifi)) add(NwInterfaceType.Wifi)
+            if (nw_path_uses_interface_type(path, nw_interface_type_cellular)) add(NwInterfaceType.Cellular)
+            if (nw_path_uses_interface_type(path, nw_interface_type_wired)) add(NwInterfaceType.Wired)
+            if (nw_path_uses_interface_type(path, nw_interface_type_loopback)) add(NwInterfaceType.Loopback)
+            if (nw_path_uses_interface_type(path, nw_interface_type_other)) add(NwInterfaceType.Other)
+        }
+        val reason = if (status == NwPathStatus.Unsatisfied) {
+            when (nw_path_get_unsatisfied_reason(path)) {
+                nw_path_unsatisfied_reason_cellular_denied -> NwUnsatisfiedReason.CellularDenied
+                nw_path_unsatisfied_reason_wifi_denied -> NwUnsatisfiedReason.WifiDenied
+                nw_path_unsatisfied_reason_local_network_denied -> NwUnsatisfiedReason.LocalNetworkDenied
+                nw_path_unsatisfied_reason_vpn_inactive -> NwUnsatisfiedReason.VpnInactive
+                nw_path_unsatisfied_reason_not_available -> NwUnsatisfiedReason.NotAvailable
+                else -> NwUnsatisfiedReason.Unknown
+            }
+        } else {
+            null
+        }
+        return NwPathState(status, interfaces, nw_path_is_expensive(path), nw_path_is_constrained(path), reason)
     }
 
     /**
