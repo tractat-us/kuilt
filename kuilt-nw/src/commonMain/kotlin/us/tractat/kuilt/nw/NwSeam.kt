@@ -25,6 +25,7 @@ import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.Spool
 import us.tractat.kuilt.core.Swatch
+import us.tractat.kuilt.core.TransportCapability
 import us.tractat.kuilt.core.runCatchingCancellable
 import kotlin.random.Random
 import kotlin.time.Duration
@@ -137,6 +138,8 @@ internal class NwSeam(
     private val random: Random = Random.Default,
     private val policy: DeliveryPolicy = DeliveryPolicy.Reliable,
     private val wovenPathGrace: Duration = DEFAULT_WOVEN_PATH_GRACE,
+    private val staticCapability: TransportCapability =
+        TransportCapability(roles = NwLoom.NW_ROLES, availability = api.availability()),
 ) : Seam {
 
     /**
@@ -225,6 +228,14 @@ internal class NwSeam(
     private val _state = MutableStateFlow<SeamState>(SeamState.Weaving)
     override val state: StateFlow<SeamState> = _state.asStateFlow()
 
+    // Live capability (#1541): seeded from the loom's static report ([staticCapability]) and thereafter
+    // driven by the injected path monitor ([NwApi.pathState]). Roles never change (Discovery+Data — see
+    // [NwLoom.NW_ROLES]); the monitor moves only [TransportCapability.availability] as the real-world path
+    // goes up/down, swaps Wi-Fi↔cellular, or the Local-Network permission is denied. A MutableStateFlow so
+    // the write from the single [pathStateLoop] collector is thread-safe (CAS) under any dispatcher.
+    private val _capability = MutableStateFlow(staticCapability)
+    override val capability: StateFlow<TransportCapability> = _capability.asStateFlow()
+
     private val spool = Spool<Swatch>(policy)
     override val incoming: Flow<Swatch> = spool.incoming
 
@@ -269,6 +280,11 @@ internal class NwSeam(
     // other loop and cancelled with [scope] at teardown. It is the ONLY caller of [Spool.deliver], so the
     // (possibly-suspending) delivery backpressure lives here, off the shared demux loop.
     private val drainJob: Job = scope.launch(start = CoroutineStart.UNDISPATCHED) { deliveryDrainLoop() }
+
+    // #1541: fold the live network-path state into [capability]. Mirrors the other collectors — UNDISPATCHED
+    // so it subscribes (and reads the current path value) synchronously at construction, and cancelled with
+    // [scope] on [close]/[latchTorn] (the same launch/cancel lifecycle as [closedJob]).
+    private val pathJob: Job = scope.launch(start = CoroutineStart.UNDISPATCHED) { pathStateLoop() }
 
     // ── loop 1: connectionOpened ────────────────────────────────────────────────
 
@@ -678,6 +694,25 @@ internal class NwSeam(
         api.closedConnections.collect { closedMap ->
             if (closed.value) return@collect
             reconcileClosed(closedMap)
+        }
+    }
+
+    // ── loop 6: pathState — the #1541 reactive-capability driver ─────────────────
+
+    /**
+     * Fold the transport's live [NwApi.pathState] (an `NWPathMonitor` on `RealNwApi`) into [capability].
+     * A `null` path state means "unknown" — the binding has not wired a real monitor (the JVM bridge, or the
+     * default fake) — so we keep the [staticCapability] seed rather than guess. A non-null state supersedes the
+     * seed's availability via [NwPathState.toAvailability], leaving the roles untouched (the fabric is always
+     * [NwLoom.NW_ROLES]; the path API cannot tell infrastructure Wi-Fi from AWDL, so it never drives roles).
+     * The write goes to the seam-owned [_capability] MutableStateFlow, so this single collector is the sole
+     * writer — no lock needed. Terminates with [scope] on close (this loop holds no per-connection state).
+     */
+    private suspend fun pathStateLoop() {
+        api.pathState.collect { path ->
+            _capability.value =
+                if (path == null) staticCapability
+                else staticCapability.copy(availability = path.toAvailability())
         }
     }
 

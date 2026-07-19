@@ -65,6 +65,7 @@ class NwLoopbackConformanceTest : SeamConformanceSuite() {
         apis.forEach { api ->
             api.stopListening()
             api.stopBrowsing()
+            api.cancelPathMonitor() // #1541: don't leave the nw_path_monitor's queue callback armed across the run
         }
         apis.clear()
     }

@@ -53,6 +53,11 @@ internal class FakeNwApi(
     private val _closedConnections = MutableStateFlow<Map<NwConnectionId, String?>>(emptyMap())
     private val closedOrder = ArrayDeque<NwConnectionId>()
 
+    // Controllable live network-path state — the test vehicle for the reactive-capability path (#1541),
+    // standing in for RealNwApi's nw_path_monitor. Defaults to null ("unknown"); a test flips it to drive
+    // the seam's capability under virtual time. Latest-value STATE, matching RealNwApi's MutableStateFlow.
+    private val _pathState = MutableStateFlow<NwPathState?>(null)
+
     override val endpointFound: Flow<NwEndpoint> = _endpointFound.asSharedFlow()
     override val endpointLost: Flow<NwEndpoint> = _endpointLost.asSharedFlow()
     override val connectionOpened: Flow<NwConnectionOpened> = _connectionOpened.asSharedFlow()
@@ -60,6 +65,16 @@ internal class FakeNwApi(
     override val connectionClosed: Flow<NwConnectionClosed> = _connectionClosed.asSharedFlow()
     override val connectionViability: StateFlow<Map<NwConnectionId, Boolean>> = _connectionViability.asStateFlow()
     override val closedConnections: StateFlow<Map<NwConnectionId, String?>> = _closedConnections.asStateFlow()
+    override val pathState: StateFlow<NwPathState?> = _pathState.asStateFlow()
+
+    /**
+     * Test hook for #1541: drive a live `NWPathMonitor` transition (path up/down, Wi-Fi↔cellular, a
+     * Local-Network-permission denial) directly under virtual time. Sets the latest-value path STATE; the
+     * seam folds it into its live [us.tractat.kuilt.core.Seam.capability]. `null` restores "unknown".
+     */
+    internal fun emitPathState(state: NwPathState?) {
+        _pathState.value = state
+    }
 
     init {
         radio.register(this)
