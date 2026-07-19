@@ -53,6 +53,9 @@ import platform.Network.nw_content_context_create
 import platform.Network.nw_endpoint_create_host
 import platform.Network.nw_endpoint_get_bonjour_service_name
 import platform.Network.nw_endpoint_t
+import platform.Network.nw_error_get_error_code
+import platform.Network.nw_error_get_error_domain
+import platform.Network.nw_error_t
 import platform.Network.nw_listener_cancel
 import platform.Network.nw_listener_create
 import platform.Network.nw_listener_get_port
@@ -133,6 +136,20 @@ internal class NwLoopbackRendezvous {
 internal class NwLoopbackConfig(
     val dial: Boolean,
     val rendezvous: NwLoopbackRendezvous,
+)
+
+/**
+ * A decoded `nw_error` observed on a connection's FAILED (or path-lost WAITING) transition (#1560).
+ *
+ * [domain] is the raw `nw_error_domain_t` value (invalid=0/posix=1/dns=2/tls=3, matching the commonMain
+ * `NW_ERROR_DOMAIN_*` numbering); [code] is the domain-specific error code — for a TLS-domain failure the
+ * TLS alert / OSStatus that names WHY a handshake failed. Observability only, surfaced via
+ * [RealNwApi.lastConnectionFailure]; it is not part of the [NwApi] fabric contract.
+ */
+internal data class NwConnectionFailure(
+    val id: NwConnectionId,
+    val domain: Int,
+    val code: Int,
 )
 
 /**
@@ -294,6 +311,51 @@ internal class RealNwApi(
         _connectionViability.update { it - id }
     }
 
+    // The LATEST decoded nw_error observed on a FAILED (or path-lost WAITING) transition (#1560). Kept as
+    // drop-tolerant STATE so a test — or a diagnostic reader — can inspect the last handshake/link failure's
+    // domain+code without racing the info-level log. Null until the first error-bearing transition.
+    private val _lastConnectionFailure = MutableStateFlow<NwConnectionFailure?>(null)
+
+    /**
+     * Test/diagnostic window onto the last decoded connection failure (#1560): the [NwConnectionId], the raw
+     * `nw_error_domain_t` (invalid=0/posix=1/dns=2/tls=3, mirroring [NW_ERROR_DOMAIN_TLS] et al.) and the
+     * domain-specific `code` — for a TLS-domain failure the TLS alert / OSStatus. Not part of the fabric
+     * contract — for observability only; do not build behaviour on it.
+     */
+    internal val lastConnectionFailure: StateFlow<NwConnectionFailure?> = _lastConnectionFailure.asStateFlow()
+
+    /**
+     * Decode [error] (if present) into its (domain, code) primitives and record it via [captureFailure].
+     * Mirrors the receive-path shim's numbering (nwshim.def: invalid=0/posix=1/dns=2/tls=3) so a FAILED /
+     * path-lost WAITING transition is logged with the SAME vocabulary as [handleReceiveError] (#1560). No-op
+     * when [error] is null (a graceful/quiet transition), so the close semantics are behaviorally unchanged.
+     */
+    private fun recordFailure(id: NwConnectionId, error: nw_error_t?, phase: String) {
+        if (error == null) return
+        val domain = nw_error_get_error_domain(error).toInt()
+        val code = nw_error_get_error_code(error)
+        captureFailure(id, domain, code, phase)
+    }
+
+    /**
+     * Log (info) and record the decoded connection-failure [domain]/[code] for [id] observed in [phase]
+     * (`FAILED`/`WAITING`). Split from [recordFailure] so the capture+log plumbing is unit-testable with
+     * injected primitives (no synthesizable real `nw_error_t`) via [driveFailureForTest] (#1560).
+     */
+    private fun captureFailure(id: NwConnectionId, domain: Int, code: Int, phase: String) {
+        log.info { "nw.api.state.error id=${id.value} $phase nw_error domain=${nwErrorDomainName(domain)}($domain) code=$code" }
+        _lastConnectionFailure.value = NwConnectionFailure(id, domain, code)
+    }
+
+    /** A human tag for the raw `nw_error_domain_t` value, mirroring the [NW_ERROR_DOMAIN_TLS] et al. numbering. */
+    private fun nwErrorDomainName(domain: Int): String = when (domain) {
+        NW_ERROR_DOMAIN_INVALID -> "invalid"
+        NW_ERROR_DOMAIN_POSIX -> "posix"
+        NW_ERROR_DOMAIN_DNS -> "dns"
+        NW_ERROR_DOMAIN_TLS -> "tls"
+        else -> "unknown"
+    }
+
     /**
      * Start the single `nw_path_monitor` exactly once (#1541). The [pathMonitorStarted] CAS elects one starter,
      * so no `nw_*` call runs under [lock] to serialize starts. The update handler fires on the shared [queue] and
@@ -442,6 +504,15 @@ internal class RealNwApi(
 
     /** Test-only: drive a synthetic `waiting` for [id] ([onWaiting]'s viability mapping — no `nw_*` call). */
     internal fun driveWaitingForTest(id: NwConnectionId) = onWaiting(id)
+
+    /**
+     * Test-only: drive the failure-capture path for [id] with injected [domain]/[code], exercising the exact
+     * production [captureFailure] plumbing a FAILED/WAITING transition runs — but bypassing the real
+     * `nw_error_t` decode (no `nw_error_t` is synthesizable in a unit test). Asserts the (domain, code) is
+     * logged and exposed via [lastConnectionFailure] (#1560). Not part of the fabric contract.
+     */
+    internal fun driveFailureForTest(id: NwConnectionId, domain: Int, code: Int, phase: String = "FAILED") =
+        captureFailure(id, domain, code, phase)
 
     /**
      * Test-only (#1522): drive [id]'s close on an INERT connection — the SAME [closeConnection] path the
@@ -633,17 +704,26 @@ internal class RealNwApi(
         lock.withLock { connections[id] = ConnectionEntry(connection, endpoint) } // strong ref
         log.debug { "nw.api.retain-start id=${id.value} endpoint=${endpoint?.id ?: "<inbound>"} dir=${if (endpoint == null) "inbound" else "outbound"}" }
         nw_connection_set_queue(connection, queue)
-        nw_connection_set_state_changed_handler(connection) { state, _ -> onState(id, connection, state) }
+        // Thread the second block param — the nw_error_t — into onState (previously dropped as `_`), so a
+        // FAILED handshake's actual reason (TLS alert / OSStatus) is captured instead of thrown away (#1560).
+        nw_connection_set_state_changed_handler(connection) { state, error -> onState(id, connection, state, error) }
         nw_connection_start(connection)
     }
 
-    private fun onState(id: NwConnectionId, connection: nw_connection_t, state: nw_connection_state_t?) {
+    private fun onState(id: NwConnectionId, connection: nw_connection_t, state: nw_connection_state_t?, error: nw_error_t?) {
         when (state) {
             nw_connection_state_ready -> onReady(id, connection)
             // WAITING is the path-lost limbo (unsatisfied route) that fires NO close — the #1478 wedge.
-            nw_connection_state_waiting -> onWaiting(id)
+            // NW attaches an nw_error explaining WHY the path is unsatisfied; capture it if present (#1560).
+            nw_connection_state_waiting -> { recordFailure(id, error, "WAITING"); onWaiting(id) }
             nw_connection_state_preparing -> log.debug { "nw.api.state id=${id.value} PREPARING" }
-            nw_connection_state_failed -> { log.info { "nw.api.state id=${id.value} FAILED → closeConnection(failed=true)" }; closeConnection(id, failed = true) }
+            // FAILED carries the terminal nw_error — for a TLS handshake failure its code is the TLS alert /
+            // OSStatus. Decode+log it BEFORE closing so the reason is observable, not thrown away (#1560).
+            nw_connection_state_failed -> {
+                recordFailure(id, error, "FAILED")
+                log.info { "nw.api.state id=${id.value} FAILED → closeConnection(failed=true)" }
+                closeConnection(id, failed = true)
+            }
             nw_connection_state_cancelled -> {
                 // A cancel we escalated for a terminal receive error (#1479) maps to a FAILED close so
                 // the reason is non-graceful (receive:<code>); a plain local/remote cancel stays failed=false.
