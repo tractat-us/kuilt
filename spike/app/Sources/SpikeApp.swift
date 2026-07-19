@@ -86,6 +86,14 @@ struct ContentView: View {
                 Button("Join") { model.start(role: "join") }
                     .buttonStyle(.borderedProminent).disabled(model.running)
             }
+            // #1467 diagnostic: run ONLY scenario 4, with no earlier scenario having left a
+            // listener/browser alive — isolates accumulated state from the service type itself.
+            HStack(spacing: 16) {
+                Button("Host · S4 only") { model.start(role: "host-s4") }
+                    .buttonStyle(.bordered).disabled(model.running)
+                Button("Join · S4 only") { model.start(role: "join-s4") }
+                    .buttonStyle(.bordered).disabled(model.running)
+            }
             if model.running {
                 HStack(spacing: 8) { ProgressView(); Text("running \(model.role)…").font(.caption) }
             }
@@ -130,8 +138,12 @@ struct ContentView: View {
         .padding()
         .onAppear {
             // Harness drive: launch args `host`/`join` auto-start the battery headlessly.
+            // The `-s4` variants run scenario 4 alone (#1467 diagnostic); check them FIRST, since
+            // `contains` is exact-match and "host-s4" must not fall through to the full battery.
             let args = ProcessInfo.processInfo.arguments
-            if args.contains("host") { model.start(role: "host") }
+            if args.contains("host-s4") { model.start(role: "host-s4") }
+            else if args.contains("join-s4") { model.start(role: "join-s4") }
+            else if args.contains("host") { model.start(role: "host") }
             else if args.contains("join") { model.start(role: "join") }
         }
     }

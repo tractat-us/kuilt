@@ -2,11 +2,15 @@
 
 package spike.suite
 
+import io.github.oshai.kotlinlogging.DirectLoggerFactory
+import io.github.oshai.kotlinlogging.KotlinLoggingConfiguration
+import io.github.oshai.kotlinlogging.Level
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancelChildren
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
@@ -20,8 +24,10 @@ import spike.nw.SpikeNw
 import us.tractat.kuilt.core.CloseReason
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.Rendezvous
+import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.runCatchingCancellable
+import us.tractat.kuilt.nw.NwLoom
 import us.tractat.kuilt.nw.appleNwLoom
 import us.tractat.kuilt.session.SeamRoomFactory
 import kotlin.coroutines.cancellation.CancellationException
@@ -86,7 +92,25 @@ public class ConnectivitySuite {
         onComplete: (String) -> Unit,
     ) {
         results.clear()
-        onLog("suite start role=$role")
+        // A "-s4" role suffix runs ONLY scenario 4 — the #1467 controlled experiment. Scenario 4's leg1
+        // is structurally identical to scenario 2 (same weave call, different service type), yet it timed
+        // out at 45s in the field while 2/3/5 wove in under a second. Running it alone, in a process where
+        // no earlier scenario has left a listener/browser alive, isolates "accumulated state" from
+        // "intrinsic to this service type" — one variable.
+        val s4Only = role.endsWith(S4_SUFFIX)
+        val baseRole = role.removeSuffix(S4_SUFFIX)
+        if (s4Only) {
+            // Surface the fabric's OWN dial/connection logging (nw.loom.weave, nw.dial,
+            // nw.api.state/close, the #1560 nw_error capture) — the boundary AFTER discovery, which
+            // the field run proved is where scenario 4 actually fails.
+            // The Darwin default factory writes to os_log (the unified log), which `devicectl
+            // --console` does NOT capture — hence zero nw.* lines in the first diagnostic run.
+            // DirectLoggerFactory prints to stdout, which --console does capture.
+            KotlinLoggingConfiguration.loggerFactory = DirectLoggerFactory
+            KotlinLoggingConfiguration.direct.logLevel = Level.DEBUG
+            onLog("fabric logging → DirectLoggerFactory@DEBUG (diagnostic run)")
+        }
+        onLog("suite start role=$baseRole s4Only=$s4Only")
         val env = captureEnv()
         onLog(env.line)
         val startedAt = NSDate().timeIntervalSince1970
@@ -99,13 +123,27 @@ public class ConnectivitySuite {
             settle()
         }
 
-        step { scenarioRawRoundTrip(role, onLog) }
-        step { scenarioSeamWeave(role, onLog) }
-        step { scenarioElection(role, onLog) }
-        step { scenarioTeardownReconnect(role, onLog) }
-        step { scenarioSoak(role, onLog) }
+        if (s4Only) {
+            // Scenario 4 ALONE: no earlier loom exists, so no other PSK (a different serviceType ⇒
+            // different derived key) can be in play. If -9864 errSSLUnknownPSKIdentity STILL appears
+            // here, two devices with identical roomKey+serviceType are failing PSK identity — a real
+            // fabric bug, not cross-talk from a leaked scenario-2 listener.
+            step { scenarioTeardownReconnect(baseRole, onLog) }
+        } else {
+            step { scenarioRawRoundTrip(baseRole, onLog) }
+            step { scenarioSeamWeave(baseRole, onLog) }
+            step { scenarioElection(baseRole, onLog) }
+            step { scenarioTeardownReconnect(baseRole, onLog) }
+            step { scenarioSoak(baseRole, onLog) }
+        }
 
-        val report = SuiteReport(role, startedAt, env, device, results.toList())
+        val report = SuiteReport(
+            if (s4Only) "$baseRole S4-ONLY" else baseRole,
+            startedAt,
+            env,
+            device,
+            results.toList(),
+        )
         onLog("suite done: ${report.passed}/${report.results.size} passed")
         onComplete(report.text)
     }
@@ -162,7 +200,10 @@ public class ConnectivitySuite {
         scenario(2, "Fabric Seam weave", onLog) { hop ->
             hop("appleNwLoom.weave New svc=$SVC2")
             val loom = appleNwLoom(SVC2, ROOM_KEY, weaveTimeout = WEAVE_TIMEOUT)
-            val seam = loom.weave(Rendezvous.New(pattern()))
+            hop("self=${loom.selfId.value.take(8)}")
+            // Same instrumentation as scenario 4 — this is the WORKING control for the #1467 A/B.
+            val seam = instrumentedWeave("s2", loom, hop)
+                ?: return@scenario Verdict.FAIL to "weave never established on $SVC2"
             val woven = withTimeoutOrNull(5.seconds) { seam.state.first { it is SeamState.Woven } } != null
             val peers = seam.peers.value.size
             hop("wove peers=$peers state=${seam.state.value.short()}")
@@ -193,35 +234,111 @@ public class ConnectivitySuite {
 
     // ── 4. mid-session teardown + reconnect (ties to #1450) ───────────────────
 
+    /**
+     * `weave()` with the DISCOVERY boundary instrumented (#1467 field diagnosis).
+     *
+     * `weave()` blocks until woven or [WEAVE_TIMEOUT] and then *throws* — destroying every clue about
+     * where it stalled (the first field run reported only "no peer reached", with no way to tell a
+     * browse/advertise failure from a connection-establishment failure). This watches
+     * [NwLoom.visiblePeers] — the browser's roster, carrying endpoint IDENTITIES — for the whole call
+     * and drains that timeline into the report on BOTH the success and the throw path.
+     *
+     * Reading the result:
+     *  - `events=0 finalSeen=0` ⇒ the two sides never saw each other: browse/advertise never met
+     *    (Bonjour/AWDL/lingering-listener territory).
+     *  - endpoints seen but the weave still timed out ⇒ discovery is FINE; connection establishment
+     *    (TLS-PSK handshake / transport) is the failing hop — a different subsystem entirely.
+     *
+     * Returns the woven [Seam], or `null` if the weave threw (already logged).
+     */
+    private suspend fun instrumentedWeave(leg: String, loom: NwLoom, hop: (String) -> Unit): Seam? {
+        val t = TimeSource.Monotonic.markNow()
+        fun ms() = t.elapsedNow().inWholeMilliseconds
+        // The watcher runs on another thread; a Channel keeps hop()'s list single-writer (drained below).
+        val disco = Channel<String>(Channel.UNLIMITED)
+        var seam: Seam? = null
+        var failure: Throwable? = null
+        coroutineScope {
+            val watcher = launch {
+                loom.visiblePeers.collect { eps ->
+                    disco.trySend("t=${ms()}ms n=${eps.size} ids=[${eps.joinToString(",") { it.id }}]")
+                }
+            }
+            try {
+                seam = loom.weave(Rendezvous.New(pattern()))
+            } catch (e: CancellationException) {
+                watcher.cancel()
+                throw e
+            } catch (e: Throwable) {
+                failure = e
+            }
+            watcher.cancel()
+        }
+        disco.close()
+        var events = 0
+        while (true) {
+            val r = disco.tryReceive()
+            if (!r.isSuccess) break
+            hop("  $leg disco ${r.getOrNull()}")
+            events++
+        }
+        val seen = loom.visiblePeers.value
+        hop("$leg discovery: events=$events finalSeen=${seen.size} ids=[${seen.joinToString(",") { it.id }}] elapsed=${ms()}ms")
+        val f = failure
+        if (f != null) {
+            hop("$leg weave THREW after ${ms()}ms: ${f::class.simpleName}: ${f.message}")
+            return null
+        }
+        return seam
+    }
+
     private suspend fun scenarioTeardownReconnect(role: String, onLog: (String) -> Unit): ScenarioResult =
         scenario(4, "Teardown+reconnect", onLog) { hop ->
-            hop("leg1 weave svc=$SVC4")
+            val t0 = TimeSource.Monotonic.markNow()
+            fun ms() = t0.elapsedNow().inWholeMilliseconds
+
+            hop("role=$role svcLeg1=$SVC4 svcLeg2=$SVC4B weaveTimeout=$WEAVE_TIMEOUT tornTimeout=$TORN_TIMEOUT")
+            hop("leg1 weave svc=$SVC4 t=${ms()}ms")
             val loomA = appleNwLoom(SVC4, ROOM_KEY, weaveTimeout = WEAVE_TIMEOUT)
-            val seamA = loomA.weave(Rendezvous.New(pattern()))
+            hop("leg1 self=${loomA.selfId.value.take(8)}")
+            val seamA = instrumentedWeave("leg1", loomA, hop)
+                ?: return@scenario Verdict.FAIL to "leg1 never established on $SVC4 (teardown/reconnect NOT exercised)"
             withTimeoutOrNull(5.seconds) { seamA.state.first { it is SeamState.Woven } }
-            hop("leg1 wove peers=${seamA.peers.value.size}")
+            hop(
+                "leg1 wove state=${seamA.state.value.short()} " +
+                    "peers=[${seamA.peers.value.joinToString(",") { it.value.take(8) }}] t=${ms()}ms",
+            )
 
             val tornObserved: Boolean
             if (role == "host") {
                 delay(2.seconds) // let the joiner settle on the live link before the drop
-                hop("dropping link (host close)")
+                hop("dropping link (host close) t=${ms()}ms")
                 seamA.close(CloseReason.Normal)
                 tornObserved = true // a local close is this side's own terminal signal
+                hop("post-close stateA=${seamA.state.value.short()} t=${ms()}ms")
             } else {
-                hop("awaiting terminal Torn after host drop")
+                hop("awaiting terminal Torn after host drop t=${ms()}ms")
                 val torn = withTimeoutOrNull(TORN_TIMEOUT) { seamA.state.first { it is SeamState.Torn } }
                 tornObserved = torn != null
-                hop("torn=$tornObserved")
+                hop("torn=$tornObserved stateA=${seamA.state.value.short()} t=${ms()}ms")
                 seamA.close(CloseReason.Normal) // idempotent
             }
 
-            hop("leg2 reweave svc=$SVC4B")
+            hop("leg2 reweave svc=$SVC4B t=${ms()}ms")
             val loomB = appleNwLoom(SVC4B, ROOM_KEY, weaveTimeout = WEAVE_TIMEOUT)
+            hop("leg2 self=${loomB.selfId.value.take(8)}")
             val reMark = TimeSource.Monotonic.markNow()
-            val seamB = loomB.weave(Rendezvous.New(pattern()))
+            val seamB = instrumentedWeave("leg2", loomB, hop)
+                ?: return@scenario Verdict.FAIL to "torn=$tornObserved but leg2 never established on $SVC4B"
             val reMs = reMark.elapsedNow().inWholeMilliseconds
+            // Verdict still keys off the IMMEDIATE peer count (unchanged semantics); the post-wait
+            // sample is pure evidence — it tells us whether a convergence wait would have mattered.
             val peers = seamB.peers.value.size
-            hop("leg2 wove peers=$peers in ${reMs}ms")
+            val wovenB = withTimeoutOrNull(5.seconds) { seamB.state.first { it is SeamState.Woven } } != null
+            hop(
+                "leg2 wove state=${seamB.state.value.short()} peersImmediate=$peers " +
+                    "peersAfter5s=${seamB.peers.value.size} woven5s=$wovenB in ${reMs}ms",
+            )
             seamB.close(CloseReason.Normal)
             if (tornObserved && peers >= 2) Verdict.PASS to "Torn seen; re-wove in ${fmtMs(reMs)}"
             else Verdict.FAIL to "torn=$tornObserved reconnect peers=$peers"
@@ -306,8 +423,14 @@ public class ConnectivitySuite {
     private companion object {
         // The out-of-band shared secret → TLS-PSK. Both phones run the same binary, so the constant IS
         // the out-of-band channel for this diagnostic. NOT a production pattern.
+        // The ORIGINAL key — under the pre-#1577 derivation this derived a PSK identity with a 0x00 at
+        // byte 8 for _ksuite4a._tcp, and scenario 4 failed 100% on two iPhones. Restored deliberately:
+        // it is the reproducer, so the fix must be validated against THIS key, not a lucky one.
         const val ROOM_KEY = "kuilt-suite-psk"
         const val SESSION = "kuilt-suite"
+
+        /** Role suffix selecting the scenario-4-in-isolation diagnostic run (#1467). */
+        const val S4_SUFFIX = "-s4"
 
         // Per-scenario Bonjour service types keep each scenario's advertise/browse isolated so a
         // lingering listener from an earlier scenario can't cross-talk. ≤15-char service labels.
