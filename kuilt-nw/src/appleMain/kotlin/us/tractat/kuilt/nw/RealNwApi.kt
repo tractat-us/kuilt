@@ -198,24 +198,22 @@ internal data class NwConnectionFailure(
  * coroutine), so they publish via [MutableSharedFlow.tryEmit] onto a buffered, no-replay flow. A full
  * buffer therefore DROPS the event under `tryEmit` (bounded backpressure — the known head-of-line concern
  * for these event streams). For [connectionClosed] a dropped event would strand a zombie peer, so it is
- * backstopped by drop-tolerant [closedConnections] STATE (see below); the other three have no such backstop.
+ * backstopped by the drop-tolerant [connectionStates] `Closed` STATE (see below); the other three have no such backstop.
  *
- * ## Closure is drop-tolerant monotone STATE, not just an event (#1522)
- * [connectionClosed] above is lossy: a dropped `failed`/`cancelled` close used to strand a peer forever
- * (nothing else evicts it once its viability key is also cleared). [closedConnections] is the drop-tolerant
- * backstop — a MONOTONE map of latched-terminal close markers (id → reason). [closeConnection] latches the
- * closure there via [markClosed] BEFORE the lossy `tryEmit`, so the seam reconciles the closure whether or
- * not the event survives. Entries only appear (until the FIFO cap prunes the oldest), so a closure can never
- * be conflated away — the failure mode a StateFlow live-set/seen-ready bit would recreate under the same
- * starvation that drops the event.
- *
- * ## Viability is drop-tolerant STATE, not an event (#1509)
- * [connectionViability] is deliberately NOT one of those lossy event flows: a connection's viability is a
- * *level* (path up / path lost), inherently latest-wins state. It is a [MutableStateFlow] keyed by
- * [NwConnectionId]; each `ready`/`waiting` transition atomically updates that connection's entry, and the
- * seam reconciles the latest map value. Intermediate transitions may coalesce under backpressure, but the
- * LATEST value per connection is never lost — so a dropped recovery can never strand the seam's grace
- * timer (a spurious tear) and a dropped loss can never leave a zombie peer.
+ * ## Lifecycle is drop-tolerant STATE, not just an event (#1509/#1522/#1539)
+ * [connectionStates] is the ONE drop-tolerant per-connection [NwConnState] signal, unifying the former
+ * separate viability and closed-markers maps. It is a [MutableStateFlow] keyed by [NwConnectionId]:
+ *  - each `ready`/`waiting` transition atomically updates the entry to [NwConnState.Viable]/[NwConnState.PathLost]
+ *    via [setViability] (a CAS `update{}`, safe from the GCD queue); a connection's path is a *level*, so
+ *    intermediate transitions may coalesce under backpressure but the LATEST value is never lost — a dropped
+ *    recovery can never strand the seam's grace timer (a spurious tear) and a dropped loss can never leave a
+ *    zombie peer;
+ *  - a close latches [NwConnState.Closed] via [markClosed] (a MONOTONE, terminal marker: id → reason) BEFORE
+ *    the lossy `connectionClosed` tryEmit, so the seam reconciles the closure whether or not the event
+ *    survives. Closed is **dominant** — [setViability] refuses to overwrite it — so a late `ready`/`waiting`
+ *    for a closed id cannot revert it and a closure can never be conflated away (the failure mode a boolean
+ *    live-set would recreate under the same starvation that drops the event). Closed entries only appear until
+ *    the FIFO cap ([CLOSED_RETENTION_CAP]) prunes the oldest.
  */
 internal class RealNwApi(
     private val pskMaterial: NwPskMaterial,
@@ -230,22 +228,16 @@ internal class RealNwApi(
     private val _bytesReceived = MutableSharedFlow<NwBytesReceived>(extraBufferCapacity = BYTES_BUFFER)
     private val _connectionClosed = MutableSharedFlow<NwConnectionClosed>(extraBufferCapacity = EVENT_BUFFER)
 
-    // Per-connection LATEST viability, as drop-tolerant STATE — NOT a lossy tryEmit event stream (#1509).
-    // Each `ready`/`waiting` transition atomically updates this connection's entry via [MutableStateFlow.update]
-    // (a CAS, safe from the GCD queue); the seam reconciles the latest map value. Because the latest value
-    // per connection is never lost (only intermediate transitions coalesce), a recovery (`true`) can never
-    // be dropped and strand the seam's grace timer, and a loss (`false`) can never be dropped and leave a
-    // zombie peer — the two asymmetric failure modes of the old `tryEmit` event flow.
-    private val _connectionViability = MutableStateFlow<Map<NwConnectionId, Boolean>>(emptyMap())
+    // Per-connection LATEST lifecycle state, as the ONE drop-tolerant STATE signal (#1539) unifying the former
+    // separate viability (#1509) and closed-markers (#1522) maps. A `ready`/`waiting` transition atomically
+    // updates the entry to [NwConnState.Viable]/[NwConnState.PathLost] via [MutableStateFlow.update] (a CAS,
+    // safe from the GCD queue); a close latches [NwConnState.Closed] (monotone + dominant). The seam reconciles
+    // the latest map value. Because the latest value per connection is never lost (only intermediate viability
+    // transitions coalesce) and Closed is dominant, a recovery can never strand the seam's grace timer, a loss
+    // can never leave a zombie peer, and a close can never be conflated away — the failure modes of a lossy event.
+    private val _connectionStates = MutableStateFlow<Map<NwConnectionId, NwConnState>>(emptyMap())
 
-    // Per-connection LATCHED-TERMINAL close markers, as drop-tolerant MONOTONE STATE — the drop-tolerant
-    // backstop for the lossy `connectionClosed` tryEmit event (#1522). A `failed`/`cancelled` close dropped
-    // from the event buffer would otherwise strand a zombie peer that no signal evicts; a close is reflected
-    // HERE (id → reason, null = graceful) whether or not the event survives. Entries only appear (until the
-    // FIFO cap prunes the oldest), so a closure can never be conflated away by presence-then-absence.
-    private val _closedConnections = MutableStateFlow<Map<NwConnectionId, String?>>(emptyMap())
-
-    // FIFO of connIds present in [_closedConnections], guarded by [lock], for the [CLOSED_RETENTION_CAP] prune.
+    // FIFO of connIds latched Closed in [_connectionStates], guarded by [lock], for the [CLOSED_RETENTION_CAP] prune.
     private val closedOrder = ArrayDeque<NwConnectionId>()
 
     // Live device network path (#1541), driven by an `nw_path_monitor` started lazily on first [pathState] read.
@@ -266,8 +258,7 @@ internal class RealNwApi(
     override val connectionOpened: Flow<NwConnectionOpened> = _connectionOpened.asSharedFlow()
     override val bytesReceived: Flow<NwBytesReceived> = _bytesReceived.asSharedFlow()
     override val connectionClosed: Flow<NwConnectionClosed> = _connectionClosed.asSharedFlow()
-    override val connectionViability: StateFlow<Map<NwConnectionId, Boolean>> = _connectionViability.asStateFlow()
-    override val closedConnections: StateFlow<Map<NwConnectionId, String?>> = _closedConnections.asStateFlow()
+    override val connectionStates: StateFlow<Map<NwConnectionId, NwConnState>> = _connectionStates.asStateFlow()
 
     private val pathStateFlow: StateFlow<NwPathState?> = _pathState.asStateFlow()
 
@@ -285,10 +276,12 @@ internal class RealNwApi(
         }
 
     /**
-     * Latch [id]'s close into the drop-tolerant monotone close STATE (#1522) with [reason] (`null` = graceful).
-     * Under [lock] (no `nw_*`/suspend call — matches the seam-wide discipline; the caller [closeConnection]
-     * already released the connection ref): append to the FIFO, prune the oldest past [CLOSED_RETENTION_CAP],
-     * then publish the latest map via a CAS `update{}`. Bypasses the lossy `connectionClosed` tryEmit entirely.
+     * Latch [id]'s close into [connectionStates] as [NwConnState.Closed] with [reason] (`null` = graceful) —
+     * the drop-tolerant, terminal, monotone+dominant close STATE (#1522/#1539). Under [lock] (no `nw_*`/suspend
+     * call — matches the seam-wide discipline; the caller [closeConnection] already released the connection
+     * ref): append to the FIFO, prune the oldest past [CLOSED_RETENTION_CAP], then publish the latest map via a
+     * CAS `update{}`. Bypasses the lossy `connectionClosed` tryEmit entirely. Because [setViability] refuses to
+     * overwrite a `Closed` entry, this latch is dominant: a late `ready`/`waiting` for a closed id is ignored.
      */
     private fun markClosed(id: NwConnectionId, reason: String?) {
         lock.withLock {
@@ -298,20 +291,24 @@ internal class RealNwApi(
                 // contention, and a `removeFirst()` inside it would pop twice while removing one — the
                 // correctness must be local, not emergent from the surrounding lock (repo policy).
                 val evicted = closedOrder.removeFirst()
-                _closedConnections.update { it - evicted }
+                _connectionStates.update { it - evicted }
             }
-            _closedConnections.update { it + (id to reason) }
+            _connectionStates.update { it + (id to NwConnState.Closed(reason)) }
         }
     }
 
-    /** Publish [id]'s LATEST path viability (#1509): `true` = path up (`ready`), `false` = path lost (`waiting`). */
+    /**
+     * Publish [id]'s LATEST path state (#1509/#1539): `ready` ⇒ [NwConnState.Viable], `waiting` ⇒
+     * [NwConnState.PathLost]. **Closed-dominance:** if the entry is already [NwConnState.Closed] this is a
+     * no-op — a late viability change for a terminally-closed connection must never revert it to a live state
+     * (the terminal-closed-wins-over-late-viability latch, #1522). The `is Closed` check runs INSIDE the CAS
+     * `update{}` lambda, so it re-evaluates on retry: a [markClosed] that lands mid-CAS still wins.
+     */
     private fun setViability(id: NwConnectionId, viable: Boolean) {
-        _connectionViability.update { it + (id to viable) }
-    }
-
-    /** Drop [id]'s viability entry once the connection is gone (bounds the map to live connections). */
-    private fun clearViability(id: NwConnectionId) {
-        _connectionViability.update { it - id }
+        _connectionStates.update { cur ->
+            if (cur[id] is NwConnState.Closed) cur // terminal Closed dominates — never revert to a live state
+            else cur + (id to if (viable) NwConnState.Viable else NwConnState.PathLost)
+        }
     }
 
     // The LATEST decoded nw_error observed on a FAILED (or path-lost WAITING) transition (#1560). Kept as
@@ -532,6 +529,14 @@ internal class RealNwApi(
     internal fun driveWaitingForTest(id: NwConnectionId) = onWaiting(id)
 
     /**
+     * Test-only (#1539): drive a LATE [setViability] for [id] directly, bypassing the `connections`-entry
+     * gate that [driveReadyTransitionForTest]/[driveWaitingForTest] require — so a test can prove the
+     * Closed-dominance latch: a viability update for a connection already latched [NwConnState.Closed] must be
+     * ignored (terminal-closed-wins-over-late-viability). Not part of the fabric contract.
+     */
+    internal fun driveSetViabilityForTest(id: NwConnectionId, viable: Boolean) = setViability(id, viable)
+
+    /**
      * Test-only: drive the failure-capture path for [id] with injected [domain]/[code], exercising the exact
      * production [captureFailure] plumbing a FAILED/WAITING transition runs — but bypassing the real
      * `nw_error_t` decode (no `nw_error_t` is synthesizable in a unit test). Asserts the (domain, code) is
@@ -543,7 +548,7 @@ internal class RealNwApi(
     /**
      * Test-only (#1522): drive [id]'s close on an INERT connection — the SAME [closeConnection] path the
      * `cancelled`/`failed` state handlers use, with NO `nw_*` call — so appleTest can unit-prove that the
-     * closure is latched into [closedConnections] with the correctly-mapped reason. [failed] mirrors
+     * closure is latched into [connectionStates] (as [NwConnState.Closed]) with the correctly-mapped reason. [failed] mirrors
      * [onState]'s `failed`/escalation argument. Pair with [markClosingForTest]/[markEscalationForTest] to
      * exercise the graceful-null and `receive:<code>` reason branches. Not part of the fabric contract.
      */
@@ -699,7 +704,7 @@ internal class RealNwApi(
      * **Fire-and-forget** (the [NwApi.send] best-effort contract, #1419). This NEVER throws to report a link
      * failure: `nw_connection_send` returns immediately and any error surfaces only asynchronously in the
      * completion block below (logged, not propagated). A broken link is therefore reported to `NwSeam` via
-     * [connectionClosed]/[closedConnections] (the `failed`/`cancelled` state → [closeConnection] path), never
+     * [connectionClosed]/[connectionStates] (the `failed`/`cancelled` state → [closeConnection] path), never
      * by a throw here. Consequence: `NwSeam`'s send-path eviction (`removeByConn` on a `send` throw) is
      * exercised ONLY by `FakeNwApi`'s synchronous-throw hook — against the real transport it is dead weight,
      * kept as idempotent best-effort. Eviction against reality is driven entirely by the close route.
@@ -797,7 +802,7 @@ internal class RealNwApi(
     /**
      * The observable half of a `ready` transition — pure registry bookkeeping + state/flow update, with NO
      * `nw_*` call (arming the receive loop is [onReady]'s job). Marks [ConnectionEntry.wasReady], sets this
-     * connection's [connectionViability] latest value to `true` (path up), and — on the FIRST ready —
+     * connection's [connectionStates] latest value to [NwConnState.Viable] (path up), and — on the FIRST ready —
      * emits `connectionOpened` and returns `true` (caller must arm the receive loop); on a `waiting →
      * ready` recovery returns `false`; if the entry is already gone, returns `false`. Split out so the
      * ready/viability mapping and the first-ready double-arm guard are unit-testable without a live
@@ -866,12 +871,11 @@ internal class RealNwApi(
             entry.closing -> null // our own graceful cancel
             else -> "connection cancelled remotely"
         }
-        // #1522: latch the closure into the drop-tolerant MONOTONE close STATE FIRST — this is the authoritative
-        // teardown signal that the seam reconciles even when the `connectionClosed` tryEmit below is DROPPED
-        // under buffer pressure (the fixed zombie: a dropped close used to strand a peer forever). Then drop the
-        // stale per-conn viability latest-value (bounds the viability map; independent of close delivery).
+        // #1522/#1539: latch the closure into the drop-tolerant [connectionStates] as [NwConnState.Closed] —
+        // the authoritative teardown signal the seam reconciles even when the `connectionClosed` tryEmit below
+        // is DROPPED under buffer pressure (the fixed zombie: a dropped close used to strand a peer forever).
+        // Closed supersedes any prior Viable/PathLost entry for this id, so there is no separate viability-clear.
         markClosed(id, reason)
-        clearViability(id)
         log.info { "nw.api.close id=${id.value} failed=$failed closing=${entry.closing} → mark closed STATE + emit connectionClosed(reason=${reason ?: "null/graceful"})" }
         _connectionClosed.tryEmit(NwConnectionClosed(id, reason))
     }
@@ -1137,7 +1141,7 @@ internal class RealNwApi(
         private const val RECEIVE_RETRY_MAX_MS: Int = 2750
 
         /**
-         * FIFO retention bound on [closedConnections] (#1522): the newest N close markers are retained,
+         * FIFO retention bound on [connectionStates] `Closed` entries (#1522): the newest N close markers are retained,
          * the oldest pruned. An in-flight close reconciles within milliseconds of the mark, so retaining
          * the last N is far more than enough while keeping the map from growing on a long-lived churny fabric.
          * Matched to `NwSeam.TOMBSTONE_CAP` (1024): a pruned-before-observed close marker recreates the

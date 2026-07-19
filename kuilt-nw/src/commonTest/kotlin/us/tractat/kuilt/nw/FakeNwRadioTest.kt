@@ -8,6 +8,7 @@ import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 
 /**
  * Radio-level smoke tests for the role-split in-memory fake (Task 2.6). These exercise
@@ -156,10 +157,10 @@ class FakeNwRadioTest {
     }
 
     @Test
-    fun disconnectPrunesViabilityOnBothSidesNoStaleKeys() = runTest(StandardTestDispatcher()) {
-        // #1509: viability is per-connection latest-value STATE; RealNwApi prunes an entry on close
-        // (clearViability) so "absent ⇒ never established or closed" holds. The fake must match — otherwise
-        // its viability map grows monotonically with stale keys and diverges from the real transport.
+    fun disconnectLatchesClosedStateOnBothSidesSupersedingViability() = runTest(StandardTestDispatcher()) {
+        // #1509/#1539: per-connection state is one [NwConnState] map. A live connection reports Viable/PathLost;
+        // on close it latches [NwConnState.Closed] (terminal + dominant), superseding any prior live value on
+        // BOTH sides — mirroring RealNwApi, so a stale live key never lingers and the seam's teardown backstop fires.
         val radio = FakeNwRadio()
         val a = FakeNwApi(radio, deviceId = "A", serviceName = "svc-A")
         val b = FakeNwApi(radio, deviceId = "B", serviceName = "svc-B")
@@ -180,17 +181,38 @@ class FakeNwRadioTest {
         a.emitConnectionViability(connIdA, viable = false)
         b.emitConnectionViability(connIdB, viable = true)
         testScheduler.runCurrent()
-        val aHadKey = connIdA in a.connectionViability.value
-        val bHadKey = connIdB in b.connectionViability.value
+        val aBefore = a.connectionStates.value[connIdA]
+        val bBefore = b.connectionStates.value[connIdB]
 
         a.disconnect(connIdA)
         testScheduler.runCurrent()
 
         assertAll(
-            { assertEquals(true, aHadKey, "A tracked its handle's viability before close") },
-            { assertEquals(true, bHadKey, "B tracked its handle's viability before close") },
-            { assertEquals(false, connIdA in a.connectionViability.value, "A pruned its handle on local close") },
-            { assertEquals(false, connIdB in b.connectionViability.value, "B pruned its handle on the observed close") },
+            { assertEquals(NwConnState.PathLost, aBefore, "A tracked its handle's PathLost before close") },
+            { assertEquals(NwConnState.Viable, bBefore, "B tracked its handle's Viable before close") },
+            { assertTrue(a.connectionStates.value[connIdA] is NwConnState.Closed, "A latches Closed on local close (supersedes the live value)") },
+            { assertTrue(b.connectionStates.value[connIdB] is NwConnState.Closed, "B latches Closed on the observed close") },
+        )
+    }
+
+    @Test
+    fun closedIsDominant_aLateViabilityDoesNotRevertAClosedConnection() = runTest(StandardTestDispatcher()) {
+        // #1539 dominance/latch at the fake producer. Once markConnectionClosed latches [NwConnState.Closed],
+        // a later emitConnectionViability for the same id must be IGNORED — the fake must honour the terminal
+        // Closed latch exactly as RealNwApi/BridgeNwApi do, so a seam test driving this path can never see a
+        // torn connection resurrect as live.
+        val radio = FakeNwRadio()
+        val api = FakeNwApi(radio, deviceId = "A", serviceName = "svc-A")
+        val id = NwConnectionId("conn-A-0")
+
+        api.emitConnectionViability(id, viable = true) // Viable
+        api.markConnectionClosed(id, reason = "failed") // Closed(failed) — terminal
+        api.emitConnectionViability(id, viable = true) // late viability — must be ignored
+
+        assertEquals(
+            NwConnState.Closed("failed"),
+            api.connectionStates.value[id],
+            "a late Viable must NOT revert a Closed connection (terminal-closed-wins-over-late-viability)",
         )
     }
 

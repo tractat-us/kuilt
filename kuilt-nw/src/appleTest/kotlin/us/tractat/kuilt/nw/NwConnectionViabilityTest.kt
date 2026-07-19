@@ -8,7 +8,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 
 /**
- * Unit-tests [RealNwApi]'s `ready`/`waiting` → [NwApi.connectionViability] state mapping and the folded
+ * Unit-tests [RealNwApi]'s `ready`/`waiting` → [NwApi.connectionStates] path-state mapping and the folded
  * HIGH latent double-arm guard (#1478), driving the OBSERVABLE state-transition logic synthetically with
  * no real Bonjour/AWDL and — critically — no live `nw_connection`. `registerInertConnectionForTest`
  * seeds an inert registry entry; [RealNwApi.driveReadyTransitionForTest] and
@@ -21,11 +21,11 @@ import kotlin.test.assertEquals
  *     armed a receive loop). On a `waiting → ready` recovery — the path this PR introduces — that
  *     double-armed: a duplicate `NwHello` + a second concurrent receive loop. The fix opens only on the
  *     FIRST ready, so exactly ONE `connectionOpened` fires across `ready → waiting → ready`.
- *  2. **Viability state.** Viability is drop-tolerant per-connection latest-value STATE (#1509): the FIRST
- *     `ready` sets the connection's latest value `true` (path up), an established `ready → waiting` (path
- *     lost, no close fires) sets it `false`, and the `waiting → ready` recovery sets it `true` again. We
- *     assert the LATEST value ([NwApi.connectionViability]`.value[id]`) after each transition — never lost,
- *     regardless of coalescing.
+ *  2. **Viability state.** Path state is drop-tolerant per-connection latest-value STATE (#1509/#1539): the
+ *     FIRST `ready` sets the connection's latest value [NwConnState.Viable] (path up), an established
+ *     `ready → waiting` (path lost, no close fires) sets it [NwConnState.PathLost], and the `waiting → ready`
+ *     recovery sets it [NwConnState.Viable] again. We assert the LATEST value
+ *     ([NwApi.connectionStates]`.value[id]`) after each transition — never lost, regardless of coalescing.
  */
 class NwConnectionViabilityTest {
 
@@ -43,13 +43,13 @@ class NwConnectionViabilityTest {
         testScheduler.runCurrent()
 
         val id = api.registerInertConnectionForTest(endpoint = NwEndpoint(id = "ep", serviceName = "svc"))
-        // Read the LATEST viability state (a StateFlow) after each transition — no event collection needed.
-        val firstWasFirst = api.driveReadyTransitionForTest(id) // FIRST ready → viable=true, returns true
-        val afterFirstReady = api.connectionViability.value[id]
-        api.driveWaitingForTest(id) // established ready→waiting (path lost) → viable=false
-        val afterWaiting = api.connectionViability.value[id]
-        val recoveryWasFirst = api.driveReadyTransitionForTest(id) // waiting→ready recovery → viable=true, returns false
-        val afterRecovery = api.connectionViability.value[id]
+        // Read the LATEST path state (a StateFlow) after each transition — no event collection needed.
+        val firstWasFirst = api.driveReadyTransitionForTest(id) // FIRST ready → Viable, returns true
+        val afterFirstReady = api.connectionStates.value[id]
+        api.driveWaitingForTest(id) // established ready→waiting (path lost) → PathLost
+        val afterWaiting = api.connectionStates.value[id]
+        val recoveryWasFirst = api.driveReadyTransitionForTest(id) // waiting→ready recovery → Viable, returns false
+        val afterRecovery = api.connectionStates.value[id]
         testScheduler.runCurrent()
 
         assertAll(
@@ -57,9 +57,9 @@ class NwConnectionViabilityTest {
             { assertEquals(false, recoveryWasFirst, "the recovery ready is NOT first (must NOT re-arm the receive loop)") },
             { assertEquals(1, opened.size, "connectionOpened fired exactly ONCE across ready→waiting→ready (no double-arm)") },
             { assertEquals(id, opened.single().connectionId, "opened carries the test connection id") },
-            { assertEquals(true, afterFirstReady, "first ready ⇒ latest viability is true (path up)") },
-            { assertEquals(false, afterWaiting, "ready→waiting path loss ⇒ latest viability is false") },
-            { assertEquals(true, afterRecovery, "waiting→ready recovery ⇒ latest viability is true again") },
+            { assertEquals(NwConnState.Viable, afterFirstReady, "first ready ⇒ latest state is Viable (path up)") },
+            { assertEquals(NwConnState.PathLost, afterWaiting, "ready→waiting path loss ⇒ latest state is PathLost") },
+            { assertEquals(NwConnState.Viable, afterRecovery, "waiting→ready recovery ⇒ latest state is Viable again") },
         )
     }
 }

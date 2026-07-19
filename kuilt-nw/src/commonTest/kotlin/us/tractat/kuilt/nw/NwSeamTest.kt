@@ -991,9 +991,9 @@ class NwSeamTest {
         for (i in 1..cap) api.markConnectionClosed(NwConnectionId("closed-$i"), reason = null)
 
         assertAll(
-            { assertEquals(cap, api.closedConnections.value.size, "map retains exactly CAP entries") },
-            { assertFalse(oldest in api.closedConnections.value, "the oldest entry was pruned past the cap") },
-            { assertTrue(NwConnectionId("closed-$cap") in api.closedConnections.value, "the newest entry is retained") },
+            { assertEquals(cap, api.connectionStates.value.size, "map retains exactly CAP entries") },
+            { assertFalse(oldest in api.connectionStates.value, "the oldest entry was pruned past the cap") },
+            { assertTrue(NwConnectionId("closed-$cap") in api.connectionStates.value, "the newest entry is retained") },
         )
     }
 
