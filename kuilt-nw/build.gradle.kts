@@ -8,6 +8,20 @@ tasks.withType<Test>().configureEach {
     if (flag != null) systemProperty("nw.realnet.tests", flag)
 }
 
+// Forward -Pconcurrency.stress.tests to the Kotlin/Native macOS **host** test binary as the
+// environment variable CONCURRENCY_STRESS_TESTS, readable via platform.posix.getenv. This gates
+// the heavy, opt-in RealNwApi connection-leak stress probe (NwConnectionDrainStressTest) — hundreds
+// of concurrent real Network.framework open/close cycles on Dispatchers.Default — so it is NEVER in
+// ci-required; absent the flag the test self-skips at runtime. K/N test binaries don't support JVM
+// system properties, so env vars are the mechanism (mirrors :kuilt-mdns's MDNS_MULTICAST_TESTS
+// forwarding to the K/N simulator; here the target is the macosArm64 host test, KotlinNativeHostTest).
+val concurrencyStressFlag = providers.gradleProperty("concurrency.stress.tests").orNull
+if (concurrencyStressFlag != null) {
+    tasks
+        .withType<org.jetbrains.kotlin.gradle.targets.native.tasks.KotlinNativeHostTest>()
+        .configureEach { environment("CONCURRENCY_STRESS_TESTS", concurrencyStressFlag) }
+}
+
 kotlin {
     val macosLibName = "kuilt"
     macosArm64 { binaries.sharedLib { baseName = macosLibName } }
