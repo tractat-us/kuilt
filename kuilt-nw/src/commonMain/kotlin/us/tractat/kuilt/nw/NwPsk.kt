@@ -78,6 +78,7 @@ internal object NwPsk {
     private val PSK_INFO = "tls-psk|v1".encodeToByteArray()
     private val IDENTITY_INFO = "psk-id|v1".encodeToByteArray()
     private const val COUNTER_BYTE: Byte = 0x01
+    private const val HEX_DIGITS = "0123456789abcdef"
 
     /**
      * Derive the [NwPskMaterial] for [roomKey] under [serviceType].
@@ -91,7 +92,31 @@ internal object NwPsk {
         val salt = (SALT_PREFIX + serviceType).encodeToByteArray()
         val prk = HmacSHA256(salt).doFinal(roomKey.encodeToByteArray())
         val psk = HmacSHA256(prk).doFinal(PSK_INFO + COUNTER_BYTE)
-        val identity = HmacSHA256(prk).doFinal(IDENTITY_INFO + COUNTER_BYTE)
+        // The identity goes on the wire as `psk_identity` and MUST be lowercase-hex ASCII, never the
+        // raw 32 HMAC bytes (#1577). RFC 4279 §5.1 — the governing spec for the TLS 1.2 external-PSK
+        // path Apple's `sec_protocol_options_add_pre_shared_key` uses — requires the identity be "first
+        // converted to a character string, and then encoded to octets using UTF-8"; raw HMAC output is
+        // not a character string. Worse, that path is C-string-based end-to-end (as are OpenSSL's
+        // pre-1.3 PSK callback and wolfSSL, which both take `char*`), so an embedded 0x00 TRUNCATES the
+        // identity in transit: the acceptor compares a truncated prefix against its full identity,
+        // finds no match, and answers unknown_psk_identity (errSSLUnknownPSKIdentity, OSStatus -9864).
+        // A random 32-byte identity contains a NUL with probability 1-(255/256)^32 ≈ 11.8%, so ~1 room
+        // in 8 could NEVER connect — weave just timed out with "no peer reached" and no surfaced error.
+        // Proven on two iPhones and reproduced on the loopback path (NwPskNulIdentityTest).
+        // Hex keeps all 32 bytes of entropy; 64 octets sits inside the 128-octet identity length every
+        // conforming implementation must support (RFC 4279 §5.3).
+        val identity = HmacSHA256(prk).doFinal(IDENTITY_INFO + COUNTER_BYTE).toLowerHexAscii()
         return NwPskMaterial(psk = psk, identity = identity)
+    }
+
+    /** Lowercase-hex ASCII bytes — printable, valid UTF-8, and structurally NUL-free for any input. */
+    private fun ByteArray.toLowerHexAscii(): ByteArray {
+        val out = ByteArray(size * 2)
+        for (i in indices) {
+            val v = this[i].toInt() and 0xFF
+            out[i * 2] = HEX_DIGITS[v ushr 4].code.toByte()
+            out[i * 2 + 1] = HEX_DIGITS[v and 0x0F].code.toByte()
+        }
+        return out
     }
 }
