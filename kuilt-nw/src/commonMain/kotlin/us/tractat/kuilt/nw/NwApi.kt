@@ -4,6 +4,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.emptyFlow
 import us.tractat.kuilt.core.FabricAvailability
 
 /**
@@ -80,6 +81,21 @@ public interface NwApi {
 
     /** Emits when a remote endpoint is found while browsing. */
     public val endpointFound: Flow<NwEndpoint>
+
+    /**
+     * Emits when a previously-discovered endpoint is removed while browsing — the browse-time inverse of
+     * [endpointFound]. A consumer maintaining a discovery roster (e.g. `NwLoom.visiblePeers`) prunes the
+     * endpoint on this signal so departed peers don't accumulate as ghosts (#1447).
+     *
+     * Best-effort and lossy like the other event streams. A binding that has not wired the underlying
+     * browser removal callback inherits the **empty default** — no removals are ever reported, so a
+     * discovery roster keyed off it simply never shrinks (the pre-#1447 behaviour), rather than being
+     * forced to implement removal before the ABI lands. `RealNwApi` (appleMain) and the test fakes
+     * override it. A removal is best-effort: it may be missed (a browser cancel, TXT-record churn), so a
+     * consumer must never treat the roster as authoritative membership — that is `Seam.peers`' job.
+     */
+    public val endpointLost: Flow<NwEndpoint>
+        get() = emptyFlow()
 
     /** Emits when a connection is established — accepted (host role) or dialled (join role). */
     public val connectionOpened: Flow<NwConnectionOpened>

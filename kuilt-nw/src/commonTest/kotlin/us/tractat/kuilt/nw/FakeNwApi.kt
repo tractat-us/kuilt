@@ -37,6 +37,7 @@ internal class FakeNwApi(
 ) : NwApi {
 
     private val _endpointFound = MutableSharedFlow<NwEndpoint>(extraBufferCapacity = 16)
+    private val _endpointLost = MutableSharedFlow<NwEndpoint>(extraBufferCapacity = 16)
     private val _connectionOpened = MutableSharedFlow<NwConnectionOpened>(extraBufferCapacity = 16)
     private val _bytesReceived = MutableSharedFlow<NwBytesReceived>(extraBufferCapacity = 64)
     private val _connectionClosed = MutableSharedFlow<NwConnectionClosed>(extraBufferCapacity = 16)
@@ -53,6 +54,7 @@ internal class FakeNwApi(
     private val closedOrder = ArrayDeque<NwConnectionId>()
 
     override val endpointFound: Flow<NwEndpoint> = _endpointFound.asSharedFlow()
+    override val endpointLost: Flow<NwEndpoint> = _endpointLost.asSharedFlow()
     override val connectionOpened: Flow<NwConnectionOpened> = _connectionOpened.asSharedFlow()
     override val bytesReceived: Flow<NwBytesReceived> = _bytesReceived.asSharedFlow()
     override val connectionClosed: Flow<NwConnectionClosed> = _connectionClosed.asSharedFlow()
@@ -117,6 +119,7 @@ internal class FakeNwApi(
     // ── emit routers (called by the radio) ─────────────────────────────────────
 
     internal suspend fun emitEndpointFound(event: NwEndpoint) = _endpointFound.emit(event)
+    internal suspend fun emitEndpointLost(event: NwEndpoint) = _endpointLost.emit(event)
     internal suspend fun emitConnectionOpened(event: NwConnectionOpened) = _connectionOpened.emit(event)
     internal suspend fun emitBytesReceived(event: NwBytesReceived) = _bytesReceived.emit(event)
 
