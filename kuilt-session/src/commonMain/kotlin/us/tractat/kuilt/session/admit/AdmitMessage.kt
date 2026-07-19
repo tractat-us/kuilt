@@ -143,12 +143,21 @@ public sealed interface AdmitMessage {
      *
      * [peerId] — the departed member's [us.tractat.kuilt.core.PeerId] value.
      *
+     * [expired] — `false` (the default) for a clean [Goodbye]-driven departure, evicted with
+     * [us.tractat.kuilt.session.LeaveReason.Normal]; `true` when the host is propagating a
+     * **reconnect-window expiry**, evicted with
+     * [us.tractat.kuilt.session.LeaveReason.PartitionExpired]. Expiry needs the same
+     * authoritative fan-out as a clean leave — on a star topology a joiner has no heartbeat
+     * against another joiner, so without it an expired seat is never evicted from a peer
+     * joiner's roster (#1557). Defaulted so it is wire-safe: a frame from an older build that
+     * never sends the field decodes as a clean leave, which is what that build meant.
+     *
      * Wire-compatible: an older build that doesn't know this message drops it as
      * malformed and degrades to its own heartbeat-window eviction (the prior behavior).
      */
     @Serializable
     @SerialName("farewell")
-    public data class Farewell(val peerId: String) : AdmitMessage
+    public data class Farewell(val peerId: String, val expired: Boolean = false) : AdmitMessage
 
     public companion object {
         /**
