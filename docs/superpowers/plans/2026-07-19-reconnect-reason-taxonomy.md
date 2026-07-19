@@ -161,9 +161,10 @@ Add to `JoinerReconnectTest.kt` a new test asserting the terminal `reason`, and 
 ```kotlin
 @Test
 fun `joiner torn before admit reports HostLost Unrecoverable`() =
-    runReconnectTest {  // reuse whatever runTest wrapper the sibling tests use
-        // (Copy the exact setup from `joiner torn before admit goes straight to HostLost`:
-        //  a joiner SeamRoom with a reweave but torn before it ever admits / mints a token.)
+    runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        // Copy the exact setup from `joiner torn before admit goes straight to HostLost`
+        // (≈JoinerReconnectTest.kt:218): a joiner SeamRoom with a reweave but torn before it
+        // ever admits / mints a token. Use the file's real wrapper — there is no runReconnectTest.
         val hostLost = async { joinerRoom.events.filterIsInstance<MembershipEvent.HostLost>().first() }
         // tear the transport with no token held …
         val event = hostLost.await()
@@ -370,9 +371,9 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 
 ---
 
-### Task 3: `FailureReason.Refused(message)` — make a host resume-reject authoritative
+### Task 3: `FailureReason.Refused(message)` — relabel a window-expiry that saw a host reject
 
-Behavior refinement: today a host `Reject` of a resume resolves as `WindowClosed` and `runReconnect` keeps retrying the refused token until the window elapses (→ `WindowExpired`), discarding the host's message. Make the reject authoritative — short-circuit the retry loop and surface `HostLost(Refused(message))`.
+Terminal-label refinement, **behavior-preserving**. Today a host `Reject` of a resume resolves as `WindowClosed`, `runReconnect` retries to the window deadline → `HostLost(WindowExpired)`, and the host's message is discarded. **Do not short-circuit the retry** — a `Reject` is not always terminal: `DefaultJoinerReconnectController.tryResume` returns `WindowClosed` for a window that has *not opened yet* (`state == null`, the fast-reconnect race), and `SeamRoom`'s host collapses every cause into one constant `Reject("resume-rejected")`, so the joiner cannot tell a transient never-opened reject from a terminal one. The retry loop is what recovers the fast-reconnect case. So: **record** the reject message, keep retrying unchanged, and relabel the terminal event `Refused(message)` only when the window ultimately expires having seen a reject.
 
 **Files:**
 - Modify: `kuilt-session/src/commonMain/kotlin/us/tractat/kuilt/session/partition/JoinerResumeMachine.kt` (`rejectFlight`, `runReconnect`, new `refusal` field)
@@ -380,49 +381,56 @@ Behavior refinement: today a host `Reject` of a resume resolves as `WindowClosed
 - Test: `kuilt-session/src/commonTest/kotlin/us/tractat/kuilt/session/JoinerReconnectTest.kt` (new)
 
 **Interfaces:**
-- Consumes: `FailureReason.Refused` from Task 1; `AdmitMessage.Reject.reason` (existing `String`).
+- Consumes: `FailureReason.Refused` from Task 1; `AdmitMessage.Reject.reason` (existing `String`, always `"resume-rejected"` from the built-in host today).
 - Produces: `JoinerResumeMachine.rejectFlight(message: String): Boolean` (signature change).
 
 - [ ] **Step 1: Write the failing test**
 
-Add to `JoinerReconnectTest.kt`, mirroring the existing reconnect harness (the joiner holds a token and a reweave, but the host `Reject`s the resume with a message):
+Mirror the **exact harness** of the existing `` `joiner falls to HostLost when the base cannot re-weave within the window` `` test (≈JoinerReconnectTest.kt:151) — same `runTest(StandardTestDispatcher(), timeout = …)` wrapper and the same private `reconnectHarness()`/`muxClient.join` construction the file already uses (there is **no** `runReconnectTest {}` wrapper — use the file's real shape). The difference: the joiner *does* hold a token and re-weave, but the **host** room `Reject`s the resume. With the built-in host that means the host's own reconnect window must be shorter than the joiner's so the host rejects (`state == null` → `WindowClosed` → `Reject("resume-rejected")`) *before* the joiner's window closes; then advance the joiner's full window and assert the terminal label:
 
 ```kotlin
 @Test
-fun `host reject during resume reports HostLost Refused and does not retry to the window`() =
-    // Reuse the resumable-base harness from `joiner auto-resumes …`, but make the host
-    // reply AdmitMessage.Reject("auth-expired") to the joiner's Resume instead of ResumeAck.
-    runReconnectTest {
+fun `host reject during resume relabels HostLost as Refused`() =
+    runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        // Build host + joiner rooms as the sibling reconnect tests do. Give the HOST a
+        // reconnectWindow shorter than the joiner's so the host has no open window when the
+        // joiner re-weaves and Resumes → host replies Reject("resume-rejected").
         val hostLost = async { joinerRoom.events.filterIsInstance<MembershipEvent.HostLost>().first() }
-        // tear the transport; joiner re-weaves and sends Resume; host Rejects("auth-expired")
-        // Advance time by LESS than the full reconnect window:
-        advanceTimeBy(heartbeatConfig.interval)  // one retry interval, not the whole window
+        // ... tear the joiner transport; joiner re-weaves + Resumes; host Rejects ...
+        advanceTimeBy(joinerReconnectWindow + 1.milliseconds)  // exhaust the joiner window
         runCurrent()
         val event = hostLost.await()
-        assertEquals(FailureReason.Refused("auth-expired"), event.reason)
+        assertEquals(FailureReason.Refused("resume-rejected"), event.reason)  // not WindowExpired
     }
 ```
 
-The assertion has two teeth: the reason is `Refused("auth-expired")` (message carried), and `HostLost` fires after ~one interval, proving the loop did **not** spin to the window deadline.
+The assertion's teeth: the terminal reason is `Refused("resume-rejected")` (a reject was recorded), **not** `WindowExpired` (which is what fires with no reject). Retry timing is unchanged — the event still lands at window expiry.
+
+> If reproducing the host-rejects-before-joiner-window-closes timing with two real rooms proves fiddly, the fallback is a focused unit test on `JoinerResumeMachine` with a fake `JoinerResumeHost` and a `reweave` whose `resume` path drives `rejectFlight("resume-rejected")` — assert `onReconnectFailed(_, FailureReason.Refused("resume-rejected"))` at window expiry. Either proves the label; prefer the real-host version.
 
 - [ ] **Step 2: Run to verify it fails**
 
 Run: `./gradlew :kuilt-session:jvmTest --tests "*JoinerReconnectTest.host reject during resume*"`
-Expected: FAIL — today the reject retries to the window and yields `WindowExpired`, not `Refused`.
+Expected: FAIL — today a rejected resume ends as `WindowExpired`, not `Refused`.
 
-- [ ] **Step 3: Carry the reject message + short-circuit**
+- [ ] **Step 3: Record the reject message; relabel at expiry (no short-circuit)**
 
 `JoinerResumeMachine.kt` — add a lock-guarded field near `pendingResume`:
 ```kotlin
 /**
- * The host's `Reject` message for the in-flight resume, or null. Set by [rejectFlight] when a
- * flight was actually pending; consulted by [runReconnect] to abandon a refused token instead
- * of retrying it to the window deadline. Reset at the start of each [runReconnect] episode.
+ * The most recent host `Reject` message for a resume in this episode, or null. Set by
+ * [rejectFlight] when a flight was actually pending; read by [runReconnect] at window expiry to
+ * label the terminal event [FailureReason.Refused] instead of [FailureReason.WindowExpired].
+ *
+ * NOT a short-circuit: a `Reject` is not always terminal (a window that has not opened yet also
+ * rejects — the fast-reconnect race), so the retry loop is left intact and this only refines the
+ * label of a genuine window expiry. Reset at the start of each [runReconnect] episode; discarded
+ * if a later retry succeeds.
  */
 private var refusal: String? = null
 ```
 
-`rejectFlight` (line 203) — take the message, record it only when a flight was pending:
+`rejectFlight` (line 203) — take the message, record it only when a flight was pending; retry behavior unchanged (still completes the flight as `WindowClosed`):
 ```kotlin
 fun rejectFlight(message: String): Boolean = lock.withLock {
     val d = pendingResume
@@ -433,7 +441,7 @@ fun rejectFlight(message: String): Boolean = lock.withLock {
 }
 ```
 
-`runReconnect` — reset `refusal` before the loop (after the immediate-terminal guard), and check it after a non-Success resume:
+`runReconnect` — reset `refusal` before the loop (after the immediate-terminal guard), keep the retry loop exactly as Task 2 left it, and at window expiry prefer `Refused` when a reject was seen. The loop body and `delay` are unchanged from Task 2 — only the reset and the post-loop label differ:
 ```kotlin
 lock.withLock { refusal = null }
 host.silenceHostDetector(hostId)
@@ -458,23 +466,21 @@ val resumed = withTimeoutOrNull(heartbeatConfig.reconnectWindow) {
             host.restartIncomingCollect()
             resume(token)
         }.getOrNull()
-        if (result is ResumeResult.Success) {
-            ok = true
-        } else {
-            val refused = lock.withLock { refusal }
-            if (refused != null) {
-                failureReason = FailureReason.Refused(refused)
-                return@withTimeoutOrNull false
-            }
-            delay(heartbeatConfig.interval)
-        }
+        if (result is ResumeResult.Success) ok = true else delay(heartbeatConfig.interval)
     }
     true
 } ?: false
+
+// If we timed out (resumed == false, failureReason still WindowExpired) but saw a host reject
+// during the window, label it Refused. A non-conforming loom already set Unrecoverable above and
+// takes precedence (it returned false before any reject could be recorded).
+if (!resumed && failureReason is FailureReason.WindowExpired) {
+    lock.withLock { refusal }?.let { failureReason = FailureReason.Refused(it) }
+}
 ```
 (The `if (resumed) … else if (!isClosed) host.onReconnectFailed(clock(), failureReason)` tail from Task 2 is unchanged.)
 
-Update the `rejectFlight` and `runReconnect` KDoc: a host `Reject` is now authoritative — it abandons the token with `Refused` rather than retrying.
+Update the `rejectFlight` and `runReconnect` KDoc to state: a host reject is *recorded, not obeyed as authoritative* — the retry loop still runs, and the reject only refines the terminal label.
 
 - [ ] **Step 4: Pass the message at the `SeamRoom` call site**
 
@@ -486,22 +492,24 @@ val hadPendingResume = resumeMachine?.rejectFlight(msg.reason) ?: false
 - [ ] **Step 5: Run the test to verify it passes**
 
 Run: `./gradlew :kuilt-session:jvmTest --tests "*JoinerReconnectTest*"`
-Expected: PASS — the new test and every existing reconnect test green.
+Expected: PASS — the new test plus every existing reconnect test green (no existing test sends a resume-time Reject, so none change behavior).
 
-- [ ] **Step 6: Full-build gate (reconnect behavior changed)**
+- [ ] **Step 6: Full-build gate (reconnect module + terminal event data changed)**
 
 Run: `./gradlew build :examples:test detektAll --rerun-tasks`
-Expected: BUILD SUCCESSFUL, tasks genuinely `EXECUTED` (not `FROM-CACHE`). A `:kuilt-session`-scoped build is a false green for this change — the full build + `:examples:test` exercises the downstream cluster/runtime E2E stack.
+Expected: BUILD SUCCESSFUL, tasks genuinely `EXECUTED` (not `FROM-CACHE`). A `:kuilt-session`-scoped build is a false green for reconnect changes; the full build + `:examples:test` exercises the downstream cluster/runtime E2E stack.
 
 - [ ] **Step 7: Commit**
 
 ```bash
 git add -A
-git commit --no-gpg-sign -m "feat(session): host resume-reject is authoritative, surfaces Refused(message) (#1556)
+git commit --no-gpg-sign -m "feat(session): label a resume-window expiry that saw a host reject as Refused(message) (#1556)
 
-A host Reject of a resume no longer retries the refused token to the window
-deadline; it short-circuits to HostLost(Refused(msg)), carrying the host's
-reason. Where auth-expired / protocol-mismatch surface until typed reject codes.
+Behavior-preserving: the retry loop is unchanged (a reject can be the transient
+fast-reconnect race, which retry still recovers). A window expiry that saw a host
+Reject is relabeled HostLost(Refused(msg)) instead of WindowExpired, carrying the
+host's message. Built-in host sends a generic 'resume-rejected'; typed reject
+reasons are a follow-up.
 
 Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 ```

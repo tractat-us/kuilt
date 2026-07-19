@@ -98,20 +98,43 @@ through. `handleUnresponsive`, `markPartitioned`, `onReconnectStarted`,
 determines `Unrecoverable` vs `WindowExpired` at the two `onReconnectFailed` call
 sites it already distinguishes.
 
-### The `Refused(message)` behavior refinement (in scope)
+### The `Refused(message)` terminal-label refinement (in scope, behavior-preserving)
 
 Today a host `Reject` of a resume resolves the flight as `ResumeResult.WindowClosed`
-and `runReconnect` keeps retrying the refused token until the window elapses →
-`WindowExpired`. That is both futile (a refused token will never be accepted) and
-lossy (the host's message is discarded).
+and `runReconnect` retries until the window elapses → `HostLost(WindowExpired)`,
+discarding the host's message.
 
-Change: the resume-reject path (`rejectFlight` / the admit-frame `Reject` handler)
-carries the host's message and short-circuits the retry loop, so the terminal event
-is `HostLost(Refused(message))` instead of a delayed `HostLost(WindowExpired)`.
+**The retry is NOT futile — do not short-circuit it.** A host `Reject` of a resume is
+*not* always terminal: `DefaultJoinerReconnectController.tryResume` returns
+`WindowClosed` when the window has **not opened yet** (`state == null`) — the
+fast-reconnect race, where a silently-dropped joiner re-weaves and sends `Resume`
+before the host's detector fires. The current retry loop is exactly what recovers
+that case (a later retry lands after the host opens the window → `Success`).
+`SeamRoom`'s built-in host also collapses every reject cause into one constant
+`Reject("resume-rejected")`, so the joiner cannot tell a transient never-opened
+reject from a terminal one. Short-circuiting on the first `Reject` would regress the
+fast-reconnect recovery and mislabel a Wi-Fi blip as a refusal.
 
-This **touches reconnect behavior**, so it is gated separately:
-- its own failing-test-first TDD step: `Reject(msg) during resume → HostLost(Refused(msg))`, no retry-until-window;
-- the **full `./gradlew build`** (plus `:examples:test`) before auto-merge — a module-scoped build is a false green for reconnect-behavior changes.
+Change (label only, retry preserved): the resume-reject path (`rejectFlight` / the
+admit-frame `Reject` handler) **records** the host's message; `runReconnect` keeps
+retrying exactly as today. When the window ultimately expires, the terminal event is
+`HostLost(Refused(message))` if a reject was seen during the window, else
+`HostLost(WindowExpired)`. If a later retry succeeds, the recorded message is
+discarded (no `HostLost` fires). No retry/timing behavior changes.
+
+Still gated by the **full `./gradlew build`** (plus `:examples:test`) before
+auto-merge — it touches the reconnect module and the terminal event's data, and a
+module-scoped build is a false green for reconnect changes — but there is no
+retry-behavior change to regress.
+
+**Message honesty.** `SeamRoom`'s host currently sends a generic
+`Reject("resume-rejected")`, so `Refused("resume-rejected")` is what fires in-tree;
+`Refused(message)` is the honest *shape* for when a host sends a meaningful reason.
+Threading the `tryResume` cause (never-opened / expired / token-invalid) into the
+host's reject string — which would make `Refused` non-vacuous and enable a smarter
+short-circuit on genuinely-terminal causes — is folded into the **typed reject
+codes** follow-up, not #1556. The KDoc states this plainly so the type does not
+promise semantics the built-in host does not yet carry.
 
 The `AdmissionFailure.Rejected(message)` variant (admit-phase, pre-admission) already
 carries a message and is left as-is; `FailureReason.Refused` is the post-admission
