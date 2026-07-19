@@ -341,6 +341,34 @@ the check's `detailsUrl`) or treat a later `SUCCESS` as authoritative
 (`FAILURE,SUCCESS` for one check name ⇒ pass) — never a bare presence-of-`FAILURE`
 scan. (Open the PR ready when you can to avoid the stale draft run entirely.)
 
+**Before starting work on an issue, check whether someone already is.** Several
+Claude sessions run against this repo concurrently. Two independent sessions
+implemented #1556 in parallel on 2026-07-19; the second finished after the first
+had already merged and closed the issue, so the whole second implementation was
+thrown away. Two cheap checks prevent it:
+
+```bash
+gh issue view <N> --json closedByPullRequestsReferences \
+  --jq '.closedByPullRequestsReferences[]? | select(.state == "OPEN")'
+gh pr list --search "<N> in:body" --state open --json number,title,headRefName
+```
+
+An open PR referencing the issue means it is claimed — coordinate or pick
+something else. Then **claim it yourself the same way**: open a Draft PR with
+`closes #N` before the bulk of the work, so a parallel session sees your claim
+too. This matters most for a long-running dispatched worker, which can spend an
+hour on work that landed elsewhere in minute five.
+
+**A worktree with uncommitted changes is ACTIVE, not abandoned.** The same
+incident began with a session deleting a sibling worktree it read as dead. Both
+signals it relied on point the other way: uncommitted edits are the signature of
+a session *mid-edit*, and "no PR yet" means work *not yet claimed*, not work
+never shipped. Before removing any worktree or branch you did not create, check
+`git worktree list` for a lock, look for recent commits, and prefer asking over
+deleting. If you delete anyway, commit the uncommitted work first so it survives
+as a recoverable object — commits outlive a deleted branch, a dirty working tree
+does not.
+
 ## Versioning & publishing
 
 The `major.minor` version line lives in `kuiltVersionLine` in `gradle.properties`;
