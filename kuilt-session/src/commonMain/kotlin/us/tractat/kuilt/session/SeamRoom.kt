@@ -601,6 +601,7 @@ internal class SeamRoom(
         val jobs = mutableListOf(
             scope.launch { runMainLoop() },
             scope.launch { runTornWatcher() },
+            scope.launch { runDetectorRouteWatcher() },
         )
         if (reconnectController != null) {
             jobs += scope.launch { runReconnectEventLoop(reconnectController) }
@@ -1139,6 +1140,36 @@ internal class SeamRoom(
     // ── Partition detection ───────────────────────────────────────────────────
 
     /**
+     * Watches [Seam.peers] and starts a detector for any admitted member that **gains** a route
+     * (#1576).
+     *
+     * Roster admission and fabric connectivity are independent events: a member can be admitted
+     * to the room before the fabric has finished registering it in [Seam.peers] (a late mesh link
+     * forming, a re-woven base repopulating). Evaluating the route gate only at admit time would
+     * silently forfeit partition detection in those cases, so the gate is re-evaluated on every
+     * [Seam.peers] emission. [startDetector] is idempotent, so a member that already has one is
+     * untouched.
+     *
+     * Deliberately start-only. A peer *disappearing* from [Seam.peers] is the definitive
+     * transport close that [HeartbeatPartitionDetector] reports as
+     * [PartitionEvent.Reason.TransportClosed] — tearing its detector down here would suppress the
+     * very eviction the detector exists for.
+     *
+     * [Seam.peers] is a [StateFlow], so collecting it here does not contend with the
+     * single-collection [Seam.incoming] contract (ADR-034) held by [runMainLoop].
+     */
+    private suspend fun runDetectorRouteWatcher() {
+        seam.peers.collect { reachable ->
+            lock.withLock {
+                if (closed) return@withLock
+                for (member in admittedById.values.toList()) {
+                    if (member.id in reachable) startDetector(member)
+                }
+            }
+        }
+    }
+
+    /**
      * Launches a [HeartbeatPartitionDetector] for [member].
      *
      * The detector is given a [PerPeerSeam] — a thin adapter that filters [rawIncoming]
@@ -1154,9 +1185,39 @@ internal class SeamRoom(
      * (or [leave]) tears the whole detector down; without this single owner the heartbeat and
      * inbound coroutines would outlive the evicted member (#1001).
      *
+     * ## Route gate (#1576)
+     *
+     * A detector is started **only for a peer this member can actually reach** — one present in
+     * the seam's own [Seam.peers]. That set is exactly the directly-connected peers on every
+     * shipped fabric (`docs/fabric-peer-routing.md`); [CompositeSeam] even recomputes it as
+     * precisely the reachable set.
+     *
+     * On a host-relayed **star** (`RoomHubSeam`/`MuxServerLoom`, `MeshSeam` as a hub spoke,
+     * `:kuilt-multipeer`, `:kuilt-nearby`) a joiner has no route to a co-joiner, so its pings
+     * could never be answered — and the detector's *timeout* branch is not gated on the peer
+     * being in `link.peers` (only its `TransportClosed` branch is). Silence from an unroutable
+     * peer therefore matured into [PartitionEvent.PeerLost] and evicted a healthy member. That
+     * peer's presence is instead derived from the host's authoritative fan-out
+     * ([AdmitMessage.Paused] / [AdmitMessage.Unpaused] / [AdmitMessage.Farewell], #1557).
+     *
+     * The gate must not be keyed off catching [us.tractat.kuilt.core.PeerNotConnected]:
+     * `TieredSeam.sendTo` silently *drops* a peer owned by neither tier, so an exception-keyed
+     * check would miss it entirely.
+     *
+     * Seam membership is dynamic, so [runDetectorRouteWatcher] re-runs this for every admitted
+     * member whenever [Seam.peers] grows. A peer *leaving* [Seam.peers] deliberately does **not**
+     * stop its detector — that transition is precisely the definitive transport close the
+     * detector exists to report.
+     *
+     * Idempotent: a member that already has a live detector is left alone, so a re-evaluation
+     * (or [JoinerResumeHost.restoreHostDetector] racing the watcher) cannot orphan a detector's
+     * coroutines.
+     *
      * Callers must hold [lock] when invoking this method.
      */
     private fun startDetector(member: Member) {
+        if (member.id in detectorJobs) return
+        if (member.id !in seam.peers.value) return
         val perPeerSeam = PerPeerSeam(seam, member.id, rawIncoming)
         val detector = HeartbeatPartitionDetector(
             link = perPeerSeam,
