@@ -105,8 +105,24 @@ public sealed interface ResumeResult {
     /** The token was valid and the window was open. Peer is now resumed. */
     public data object Success : ResumeResult
 
-    /** The window for this peer has already closed (expired or never opened). */
+    /**
+     * The window for this peer has **closed**: it elapsed, or the token was already spent.
+     *
+     * Terminal — no later attempt with these credentials can succeed. Distinct from
+     * [WindowNotYetOpen], which looks identical from the outside but is transient (#1572).
+     */
     public data object WindowClosed : ResumeResult
+
+    /**
+     * No window has opened for this peer *yet*.
+     *
+     * The fast-reconnect race: a joiner whose link dropped silently can re-weave and present its
+     * token before the host's own liveness detector has noticed the drop. **Transient** — a retry
+     * a moment later, once the host opens the window, succeeds. Folding this into [WindowClosed]
+     * is why a joiner had to retry blindly for its whole window before it could surface a
+     * genuinely terminal refusal.
+     */
+    public data object WindowNotYetOpen : ResumeResult
 
     /** The token failed structural validation. [reason] describes the failure. */
     public data class TokenInvalid(

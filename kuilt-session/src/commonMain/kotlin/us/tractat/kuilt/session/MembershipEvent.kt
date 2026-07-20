@@ -1,6 +1,7 @@
 package us.tractat.kuilt.session
 
 import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.session.admit.RejectCode
 import kotlin.time.Instant
 
 /**
@@ -118,10 +119,16 @@ public sealed interface MembershipEvent {
 public sealed interface AdmissionFailure {
     /**
      * The host actively refused admission with an [us.tractat.kuilt.session.admit.AdmitMessage.Reject]
-     * — for example the #1172 room-mismatch gate. [message] is the host's stated reason.
+     * — for example the #1172 room-mismatch gate, which arrives as
+     * [us.tractat.kuilt.session.admit.RejectCode.RoomMismatch]. [message] is the host's stated
+     * reason (for logs); [code] is its structured counterpart, and is what to branch on. A host
+     * that predates typed codes surfaces [us.tractat.kuilt.session.admit.RejectCode.Unknown].
      * Retrying the same request is futile; the joiner needs to change something (e.g. its target room).
      */
-    public data class Rejected(val message: String) : AdmissionFailure
+    public data class Rejected(
+        val message: String,
+        val code: RejectCode = RejectCode.Unspecified,
+    ) : AdmissionFailure
 
     /**
      * No [us.tractat.kuilt.session.admit.AdmitMessage.Welcome] arrived within the admit deadline —

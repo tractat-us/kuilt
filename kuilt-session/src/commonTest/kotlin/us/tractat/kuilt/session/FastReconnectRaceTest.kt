@@ -4,6 +4,7 @@ package us.tractat.kuilt.session
 
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.async
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -31,6 +32,7 @@ import us.tractat.kuilt.core.Swatch
 import us.tractat.kuilt.core.TransportCapability
 import us.tractat.kuilt.core.fabric.hubMesh
 import us.tractat.kuilt.liveness.HeartbeatConfig
+import us.tractat.kuilt.session.admit.RejectCode
 import us.tractat.kuilt.session.partition.RoomId
 import us.tractat.kuilt.test.fabric.InMemoryConnectionSource
 import us.tractat.kuilt.test.fabric.connectionPair
@@ -46,19 +48,25 @@ import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
 
-/** The host's `Reject` message for a resume that finds no open window (`SeamRoom.kt`). */
-private const val REJECT_RESUME_WINDOW_CLOSED = "resume-window-closed"
+/** The host's `Reject` message for a resume that arrives before its window opens (`SeamRoom.kt`). */
+private const val REJECT_WINDOW_NOT_YET_OPEN = "resume-window-not-yet-open"
+
+/** The host's `Reject` message for a resume whose window has already closed (`SeamRoom.kt`). */
+private const val REJECT_WINDOW_EXPIRED = "resume-window-expired"
 
 /**
  * Guards the **fast-reconnect race**: a host `Reject` of a resume is *recorded, never obeyed*.
  *
- * The subtlety these two tests exist to protect:
+ * The subtlety these tests exist to protect:
  *
- * 1. The host answers a resume it cannot place with `Reject("resume-window-closed")`. That
- *    single message folds together **two very different situations** — a reconnect window that
- *    has *expired*, and one that has **not opened yet**, because the host's own liveness
- *    detector has not noticed the joiner's link drop. The wire cannot tell them apart.
- * 2. So a `Reject` is **not terminal**. `JoinerResumeMachine.rejectFlight` records the message
+ * 1. A host answers a resume it cannot place with a `Reject`. Two **very different situations**
+ *    produce one — a reconnect window that has *expired*, and one that has **not opened yet**,
+ *    because the host's own liveness detector has not noticed the joiner's link drop. Before
+ *    #1572 the wire could not tell them apart; now [RejectCode] does, and only a code the joiner
+ *    recognises as terminal ([RejectCode.retryable] false) short-circuits the loop. A reject
+ *    from a peer that sends no code at all decodes as [RejectCode.Unknown], which is retryable —
+ *    so an old host still gets the pre-#1572 retry-to-the-deadline behaviour.
+ * 2. So a `Reject` is **not terminal by default**. `JoinerResumeMachine.rejectFlight` records it
  *    and completes the flight as `WindowClosed`, but the reconnect loop in `runReconnect` keeps
  *    retrying to its own window deadline. The retry loop *is* the recovery mechanism for the
  *    race — the joiner that re-wove faster than the host could notice simply tries again a
@@ -69,9 +77,10 @@ private const val REJECT_RESUME_WINDOW_CLOSED = "resume-window-closed"
  * The failure mode this pins down is an inviting one: treating `Reject` as authoritative and
  * short-circuiting the loop. That reads as an optimisation ("the host said no — stop asking"),
  * keeps every label assertion green, and silently destroys fast-reconnect recovery. Hence the
- * matched pair below: one test asserts the loop **still ran** while the refusal was recorded
- * (`reweaveCount() > 1`), the other asserts an early refusal is retried **into a successful
- * resume** with no [MembershipEvent.HostLost] at all.
+ * matched set below: one test asserts the loop **still ran** while the refusal was recorded
+ * (`reweaveCount() > 1`), one asserts an early refusal is retried **into a successful resume**
+ * with no [MembershipEvent.HostLost] at all, and one asserts that a reject the host codes as
+ * genuinely terminal *does* short-circuit — the narrow case where stopping is correct.
  *
  * Determinism comes from [GatedPeersSeam]: the test, not the scheduler, decides when the host
  * notices the drop and opens its window.
@@ -110,7 +119,10 @@ class FastReconnectRaceTest {
             repeat(9) { advanceTimeBy(100L) }
 
             val event = hostLost.await()
-            assertEquals(FailureReason.Refused(REJECT_RESUME_WINDOW_CLOSED), event.reason)
+            assertEquals(
+                FailureReason.Refused(REJECT_WINDOW_NOT_YET_OPEN, RejectCode.ResumeWindowNotYetOpen),
+                event.reason,
+            )
             // The regression guard: a Reject must NOT short-circuit the loop. If it did, the
             // joiner would have re-woven exactly once and given up immediately.
             assertTrue(
@@ -156,6 +168,50 @@ class FastReconnectRaceTest {
             assertIs<MembershipEvent.Resumed>(outcome.await())
         }
 
+    /**
+     * The #1572 payoff, and the counterpart to the two tests above: a reject the host codes as
+     * **terminal** ([RejectCode.ResumeWindowExpired]) must surface `HostLost` at once, instead of
+     * retrying futilely until the joiner's own window elapses.
+     *
+     * Deterministic by construction, and no gating needed: the host's transport close is
+     * immediate, so its 100 ms window opens and closes while the joiner's re-weave is still
+     * sleeping out its 250 ms delay. Every resume can then only find an **expired** window. The
+     * joiner's own window is 10 s, so a single re-weave inside half a second is proof the loop
+     * short-circuited — retrying to the deadline would have re-woven ~100 times.
+     */
+    @Test
+    fun `a terminal reject surfaces HostLost without burning the joiner's window`() =
+        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+            var clockMs = 0L
+            val clock: () -> Instant = { Instant.fromEpochMilliseconds(clockMs) }
+            val h = gatedHostHarness(
+                clock,
+                hostConfig = fastConfig.copy(reconnectWindow = 100.milliseconds),
+                joinerConfig = fastConfig.copy(reconnectWindow = 10.seconds),
+                reweaveDelayMs = 250L,
+            )
+
+            h.hostRoom.roster.first { it.size == 1 }
+            h.joinerRoom.roster.first { it.isNotEmpty() }
+            assertNotNull(h.joinerRoom.resumeToken)
+
+            val hostLost = async { h.joinerRoom.events.filterIsInstance<MembershipEvent.HostLost>().first() }
+
+            h.muxClient.closeBase()
+            repeat(5) { clockMs += 100L; advanceTimeBy(100L) }
+
+            assertTrue(
+                hostLost.isCompleted,
+                "a terminal reject must fail fast, not wait out the joiner's 10 s window " +
+                    "(re-weaves: ${h.reweaveCount()})",
+            )
+            assertEquals(
+                FailureReason.Refused(REJECT_WINDOW_EXPIRED, RejectCode.ResumeWindowExpired),
+                hostLost.await().reason,
+            )
+            assertEquals(1, h.reweaveCount(), "a terminal reject must not be retried")
+        }
+
     // ── Harness ──────────────────────────────────────────────────────────────
 
     private class GatedHarness(
@@ -173,7 +229,12 @@ class FastReconnectRaceTest {
      * is the only way to make the fast-reconnect race (resume arrives before the host's window
      * opens) deterministic.
      */
-    private suspend fun TestScope.gatedHostHarness(clock: () -> Instant): GatedHarness {
+    private suspend fun TestScope.gatedHostHarness(
+        clock: () -> Instant,
+        hostConfig: HeartbeatConfig = fastConfig,
+        joinerConfig: HeartbeatConfig = fastConfig,
+        reweaveDelayMs: Long = 0L,
+    ): GatedHarness {
         val dispatcher = coroutineContext[ContinuationInterceptor]
         checkNotNull(dispatcher) { "the test dispatcher must be present in the test coroutine context" }
         val source = InMemoryConnectionSource()
@@ -192,7 +253,7 @@ class FastReconnectRaceTest {
             memberName = "table-7",
             scope = backgroundScope,
             clock = clock,
-            heartbeatConfig = fastConfig,
+            heartbeatConfig = hostConfig,
             roomId = RoomId("room-1"),
         ).also { it.start() }
 
@@ -214,10 +275,13 @@ class FastReconnectRaceTest {
             memberName = "client",
             scope = backgroundScope,
             clock = clock,
-            heartbeatConfig = fastConfig,
+            heartbeatConfig = joinerConfig,
             roomId = null,
             reweave = {
                 reweaveCount++
+                // Optionally hold the re-weave back, so the resume lands after a short host-side
+                // window has already closed.
+                if (reweaveDelayMs > 0L) delay(reweaveDelayMs)
                 muxClient.join(tag)
             },
         ).also { it.start() }

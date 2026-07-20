@@ -32,6 +32,7 @@ import us.tractat.kuilt.core.Swatch
 import us.tractat.kuilt.core.Tag
 import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.session.admit.AdmitMessage
+import us.tractat.kuilt.session.admit.RejectCode
 import us.tractat.kuilt.session.election.ElectionLobby
 import us.tractat.kuilt.session.election.LobbyMessage
 import us.tractat.kuilt.session.election.SeamElectionLobby
@@ -830,7 +831,10 @@ internal class SeamRoom(
                         }
                         scope.launch {
                             val rejectBytes = AdmitMessage.encode(
-                                AdmitMessage.Reject("room-mismatch: $target != $roomKey"),
+                                AdmitMessage.Reject(
+                                    "room-mismatch: $target != $roomKey",
+                                    RejectCode.RoomMismatch,
+                                ),
                             )
                             runCatchingCancellable { seam.sendTo(sender, rejectBytes) }
                         }
@@ -882,9 +886,11 @@ internal class SeamRoom(
                     //  - resume in flight  → resolve the parked resume as WindowClosed (existing behavior);
                     //  - initial join      → the host refused admission; fail loudly (#1178) instead of
                     //                         swallowing it and leaving join()'s consumer hanging.
-                    val hadPendingResume = resumeMachine?.rejectFlight(msg.reason) ?: false
+                    val hadPendingResume = resumeMachine?.rejectFlight(msg.reason, msg.code) ?: false
                     if (!hadPendingResume) {
-                        scope.launch { failAdmission(AdmissionFailure.Rejected(msg.reason), clock()) }
+                        scope.launch {
+                            failAdmission(AdmissionFailure.Rejected(msg.reason, msg.code), clock())
+                        }
                     }
                 }
             }
@@ -985,8 +991,9 @@ internal class SeamRoom(
      * Validates the token against the [reconnectController]. On [ResumeResult.Success],
      * [handleReconnectResumed] sends a [AdmitMessage.Welcome] confirmation to the joiner
      * via the reconnect controller's event stream. On failure, replies with [AdmitMessage.Reject]
-     * whose reason now carries the cause (`resume-window-closed` / `resume-token-invalid:<reason>`)
-     * so the joiner can surface it as `FailureReason.Refused(message)`.
+     * carrying both a human-readable reason and a structured [RejectCode], so the joiner can
+     * surface it as `FailureReason.Refused(message, code)` — and, when the code is terminal, stop
+     * retrying immediately instead of waiting out its window (#1572).
      */
     private suspend fun handleResume(sender: PeerId, msg: AdmitMessage.Resume) {
         val ctrl = reconnectController ?: return
@@ -995,14 +1002,20 @@ internal class SeamRoom(
             roomId = RoomId(msg.tokenRoomId),
             issuedAt = msg.issuedAt,
         )
-        val rejectReason = when (val result = ctrl.tryResume(token, at = clock().toEpochMilliseconds())) {
-            ResumeResult.Success -> null // handleReconnectResumed fires via the controller event stream
-            ResumeResult.WindowClosed -> "resume-window-closed"
-            is ResumeResult.TokenInvalid -> "resume-token-invalid: ${result.reason}"
+        val reject = when (val result = ctrl.tryResume(token, at = clock().toEpochMilliseconds())) {
+            // handleReconnectResumed fires via the controller event stream.
+            ResumeResult.Success -> null
+            // Transient: the host's own detector has not fired yet (fast-reconnect race). The
+            // joiner must keep retrying — coding this terminal would break that recovery.
+            ResumeResult.WindowNotYetOpen ->
+                AdmitMessage.Reject("resume-window-not-yet-open", RejectCode.ResumeWindowNotYetOpen)
+            ResumeResult.WindowClosed ->
+                AdmitMessage.Reject("resume-window-expired", RejectCode.ResumeWindowExpired)
+            is ResumeResult.TokenInvalid ->
+                AdmitMessage.Reject("resume-token-invalid: ${result.reason}", RejectCode.ResumeTokenInvalid)
         }
-        if (rejectReason != null) {
-            val rejectBytes = AdmitMessage.encode(AdmitMessage.Reject(rejectReason))
-            runCatchingCancellable { seam.sendTo(sender, rejectBytes) }
+        if (reject != null) {
+            runCatchingCancellable { seam.sendTo(sender, AdmitMessage.encode(reject)) }
         }
         // On Success: handleReconnectResumed fires via the controller's event stream
         // (runReconnectEventLoop collects JoinerReconnectEvent.Resumed and calls it).

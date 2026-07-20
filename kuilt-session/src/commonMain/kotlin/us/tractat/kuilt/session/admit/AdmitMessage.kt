@@ -77,13 +77,30 @@ public sealed interface AdmitMessage {
     ) : AdmitMessage
 
     /**
-     * Sent by the host to reject a joiner's [Hello].
+     * Sent by the host to reject a joiner's [Hello] or [Resume].
      *
-     * [reason] is a human-readable rejection cause for debugging.
+     * [reason] is a human-readable rejection cause for debugging; [code] is its structured
+     * counterpart, which is what a consumer should branch on (#1572).
+     *
+     * [codeId] is the wire form of [code] and is **additive**: nullable and defaulted, so a peer
+     * that predates typed codes decodes as [RejectCode.Unspecified], and a `Reject` carrying no
+     * code encodes to byte-identical output (kotlinx defaults are omitted from the encoding).
+     * Old↔new interop therefore degrades — an unrecognised code is retryable, the pre-#1572
+     * behaviour — rather than breaking.
+     *
+     * Construct with the typed secondary constructor: `Reject(reason, RejectCode.RoomMismatch)`.
      */
     @Serializable
     @SerialName("reject")
-    public data class Reject(val reason: String) : AdmitMessage
+    public data class Reject(
+        val reason: String,
+        @SerialName("code") val codeId: String? = null,
+    ) : AdmitMessage {
+        public constructor(reason: String, code: RejectCode) : this(reason, code.id)
+
+        /** The structured cause, or [RejectCode.Unknown] when the sender named one this build does not know. */
+        public val code: RejectCode get() = RejectCode.fromId(codeId)
+    }
 
     /**
      * Sent by a joiner to the host to resume a partitioned session.
