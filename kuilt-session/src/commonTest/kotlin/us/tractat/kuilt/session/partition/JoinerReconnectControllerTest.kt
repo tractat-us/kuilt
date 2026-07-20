@@ -214,13 +214,40 @@ class JoinerReconnectControllerTest {
     // ── Unknown peer ──────────────────────────────────────────────────────────
 
     @Test
-    fun `tryResume for peer with no open window returns WindowClosed`() =
+    fun `tryResume for peer with no open window returns WindowNotYetOpen`() =
         runTest {
             val ctrl = controller(backgroundScope)
 
             val token = ResumeToken(peerId = peerA, roomId = sessionId, issuedAt = 0L)
             val result = ctrl.tryResume(token, at = 0L)
-            assertIs<ResumeResult.WindowClosed>(result)
+            assertIs<ResumeResult.WindowNotYetOpen>(result)
+        }
+
+    /**
+     * The #1572 split. A window that has **not opened yet** is the fast-reconnect race — the
+     * joiner re-wove before the host's detector fired, and a retry a moment later recovers it.
+     * A window that **expired** (or whose token was already consumed) is terminal: no retry can
+     * ever succeed. Folding both into one result is what forced the joiner to retry blindly for
+     * the whole window before surfacing a genuinely terminal refusal.
+     */
+    @Test
+    fun `a window that never opened is distinguishable from one that expired`() =
+        runTest {
+            val ctrl = controller(backgroundScope)
+            val token = ResumeToken(peerId = peerA, roomId = sessionId, issuedAt = 0L)
+
+            val neverOpened = ctrl.tryResume(token, at = 0L)
+
+            ctrl.onPeerUnresponsive(peerA, at = 0L)
+            testScheduler.advanceTimeBy(1)
+            ctrl.expire(peerA, at = 1L)
+            testScheduler.advanceTimeBy(1)
+            val expired = ctrl.tryResume(token, at = 2L)
+
+            assertAll(
+                { assertIs<ResumeResult.WindowNotYetOpen>(neverOpened) },
+                { assertIs<ResumeResult.WindowClosed>(expired) },
+            )
         }
 
     // ── Per-peer independence ─────────────────────────────────────────────────
