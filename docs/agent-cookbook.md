@@ -38,9 +38,26 @@ public suspend fun resumeAfterDropSample(room: Room) {
     when (room.resume(token)) {
         ResumeResult.Success -> Unit // back in the room; state resync follows
         ResumeResult.WindowClosed -> Unit // grace window elapsed — re-join fresh
+        ResumeResult.WindowNotYetOpen -> Unit // host hasn't noticed the drop yet — retry shortly
         is ResumeResult.TokenInvalid -> Unit // wrong session — re-join fresh
     }
 }
+```
+
+**Intent:** decide whether a host's *refusal* is worth retrying, instead of string-matching the reason.
+**Primitive:** `RejectCode` on `FailureReason.Refused` / `AdmissionFailure.Rejected` (`us.tractat.kuilt.session.admit`) — branch on the code and treat anything unrecognised as retryable.
+
+<!-- verbatim from kuilt-session/src/commonSamples/kotlin/us/tractat/kuilt/session/AgentCookbookSamples.kt#classifyRejectCodeSample -->
+```kotlin
+public fun classifyRejectCodeSample(reason: FailureReason.Refused): Boolean =
+    when (reason.code) {
+        // Terminal: the window closed, or the credential can never validate here.
+        RejectCode.ResumeWindowExpired, RejectCode.ResumeTokenInvalid, RejectCode.RoomMismatch -> false
+        // Transient: the host hasn't opened the window yet (the fast-reconnect race).
+        RejectCode.ResumeWindowNotYetOpen -> true
+        // Anything else, including a code this build has never heard of.
+        else -> reason.code.retryable
+    }
 ```
 
 **Intent:** retry with back-off after a failed dial.
@@ -72,7 +89,7 @@ public suspend fun reconnectBannerSample(room: Room) {
             is MembershipEvent.HostLost -> when (val reason = event.reason) {
                 FailureReason.WindowExpired -> Unit // "Lost the host — rejoin"
                 FailureReason.Unrecoverable -> Unit // "Can't reconnect — return to lobby"
-                is FailureReason.Refused -> Unit // show reason.message (auth-expired / version, …)
+                is FailureReason.Refused -> Unit // branch on reason.code; reason.message is for logs
             }
             else -> Unit
         }
