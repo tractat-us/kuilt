@@ -44,7 +44,6 @@ import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.websocket.KtorClientLoom
 import us.tractat.kuilt.websocket.KtorServerLoom
 import us.tractat.kuilt.websocket.WebSocketAdvertisement
-import java.net.ServerSocket
 import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
 import kotlin.test.Test
@@ -105,12 +104,18 @@ class WarpNodeWebSocketTest {
 
     @BeforeTest
     fun setUp() {
-        port = ServerSocket(0).use { it.localPort }
-        server = embeddedServer(Netty, port = port) {
+        // Bind port 0 and read the port back from the *live* connector, rather than probing a
+        // free port with a throwaway ServerSocket and re-binding it. The probe is a TOCTOU: it
+        // closes the socket before Netty binds, so on a loaded box (several module builds running
+        // in parallel) another process can take the port in that window and Netty fails with
+        // `BindException: Address already in use` (#1586). Binding 0 directly never has a window —
+        // the port is ours from the moment it is allocated.
+        server = embeddedServer(Netty, port = 0) {
             // Fix the server's PeerId to RELAY_ID so client seams use the canonical relay ID.
             serverLoom = KtorServerLoom(this, serverPath, selfPeerId = RELAY_ID)
         }
         server.start(wait = false)
+        port = runBlocking { server.engine.resolvedConnectors().first().port }
         httpClient = HttpClient(OkHttp) { install(ClientWebSockets) }
     }
 
