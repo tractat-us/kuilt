@@ -22,6 +22,31 @@ If you catch yourself writing any of these, stop — kuilt already ships it:
 | a last-write-wins register, a grow-only set/counter, an add/remove set, a version vector, "merge these two states" | the CRDT zoo (`LWWRegister`, `GSet`, `PNCounter`, `ORSet`, …) | [Replicated data](#replicated-data) |
 | replicating a CRDT over a connection by hand | `Quilter` | [Replicated data](#replicated-data) |
 | a `seenIds` set to skip already-handled messages | `GSet` / kuilt dedup | [Dedup](#dedup) |
+| merging several mDNS/Multipeer discovery feeds into one lobby roster | `discoveryRoster` | [Discovery](#discovery) |
+
+## Discovery
+
+**Intent:** merge several `PeerDiscoverySource` feeds (mDNS, Multipeer, …) into one live roster for a lobby UI — "who can I currently see?"
+**Primitive:** `discoveryRoster(sources, scope)` (`us.tractat.kuilt.core.discovery`). Folds `discoveries()` minus `departures()`, keyed on `Tag.peerKey`, into one `StateFlow<Set<Tag>>`. Don't hand-roll the merge.
+
+It returns only **this peer's current best view** — not an agreement. It is **not** an election input: pick a host from `Seam.peers` once connected, never from this roster. And note the ghost caveat — a source whose `departures()` is the default (`emptyFlow()`) is add-only, so departed peers linger forever.
+
+<!-- verbatim from kuilt-core/src/commonSamples/kotlin/us/tractat/kuilt/core/discovery/DiscoverySamples.kt#sampleDiscoveryRoster -->
+```kotlin
+// One StateFlow the lobby UI renders directly — no hand-rolled merge.
+val roster = discoveryRoster(listOf(mdns, multipeer), backgroundScope)
+runCurrent()
+
+mdnsPeers.emit(InMemoryTag("alice"))
+mdnsPeers.emit(InMemoryTag("bob"))
+runCurrent()
+check(roster.value.map { it.peerKey }.toSet() == setOf("alice", "bob"))
+
+// A departure removes the peer, keyed on Tag.peerKey.
+mdnsGone.emit("alice")
+runCurrent()
+check(roster.value.map { it.peerKey }.toSet() == setOf("bob"))
+```
 
 ## Rejoin & reconnect
 
