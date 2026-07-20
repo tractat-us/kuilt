@@ -41,6 +41,30 @@ kotlin {
 
         @OptIn(ExperimentalWasmDsl::class)
         wasmJs { browser() }
+
+        // Symbolize Kotlin/Native stack traces in-process rather than through Apple's
+        // CoreSymbolication service (the Apple-target default for debug binaries).
+        //
+        // The first stack trace materialized in a test process — `Throwable.stackTrace`,
+        // `stackTraceToString()`, or any `logger.warn(e) { … }` — pays a ONE-TIME
+        // CoreSymbolication init that measured **~6 seconds** on macosArm64, almost
+        // entirely blocked (0.04 s CPU over 5.6 s wall). Every later trace costs ~8 ms.
+        //
+        // That one-time cost lands inside whichever test first logs a throwable, and a
+        // `runTest(timeout = 5.seconds)` body cannot survive it: the test dies with
+        // `UncompletedCoroutinesError: After waiting for 5s, the test body did not run to
+        // completion` — a "hang" with no hot loop and no leaked coroutine. Which test pays
+        // depends on execution order, so it reads as a load-dependent flake (#1586).
+        //
+        // `libbacktrace` symbolizes in-process: ~39 ms for the first trace, ~10 ms after,
+        // with file:line information fully preserved. Strictly better here, so it is not a
+        // debuggability trade-off. Applied to test binaries only — published artifacts are
+        // klibs, whose final binary options belong to the consuming application.
+        targets.withType<org.jetbrains.kotlin.gradle.plugin.mpp.KotlinNativeTarget>().configureEach {
+            binaries.withType<org.jetbrains.kotlin.gradle.plugin.mpp.TestExecutable>().configureEach {
+                binaryOptions["sourceInfoType"] = "libbacktrace"
+            }
+        }
     }
 
     sourceSets {
