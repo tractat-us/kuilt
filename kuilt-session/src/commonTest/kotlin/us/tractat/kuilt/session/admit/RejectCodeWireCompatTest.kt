@@ -66,6 +66,7 @@ class RejectCodeWireCompatTest {
         assertFalse(RejectCode.ResumeWindowExpired.retryable)
         assertFalse(RejectCode.ResumeTokenInvalid.retryable)
         assertFalse(RejectCode.RoomMismatch.retryable)
+        assertFalse(RejectCode.ProtocolMismatch.retryable)
         assertTrue(RejectCode.ResumeWindowNotYetOpen.retryable)
         assertTrue(RejectCode.Unknown("").retryable)
     }

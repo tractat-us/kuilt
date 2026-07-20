@@ -32,6 +32,7 @@ import us.tractat.kuilt.core.Swatch
 import us.tractat.kuilt.core.Tag
 import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.session.admit.AdmitMessage
+import us.tractat.kuilt.session.admit.ProtocolVersion
 import us.tractat.kuilt.session.admit.RejectCode
 import us.tractat.kuilt.session.election.ElectionLobby
 import us.tractat.kuilt.session.election.LobbyMessage
@@ -821,11 +822,31 @@ internal class SeamRoom(
             is AdmitMessage.Hello -> {
                 if (_role.value == SessionRole.Host) {
                     val target = msg.targetRoom
-                    // Room-bound admission gate (A2, #1172). Reject only a *positive*
-                    // mismatch — both sides name a room and they differ. A null target
-                    // (transport already bound the room) or a host without a declared
-                    // room key stays permissive, preserving existing single-room fabrics.
-                    if (target != null && roomKey != null && target != roomKey) {
+                    // Protocol-version gate (#1569). A joiner declaring a version outside this
+                    // build's supported range is refused at admit time with a terminal
+                    // ProtocolMismatch — better than completing the handshake and failing later on
+                    // a frame neither side can decode. A version-less Hello (a peer predating the
+                    // field) is legacy and stays permissive: ProtocolVersion.isSupported(null) is
+                    // true, so older peers are never locked out.
+                    if (!ProtocolVersion.isSupported(msg.protocolVersion)) {
+                        logger.debug {
+                            "Rejecting Hello from $sender: protocol-mismatch (${msg.protocolVersion})"
+                        }
+                        scope.launch {
+                            val rejectBytes = AdmitMessage.encode(
+                                AdmitMessage.Reject(
+                                    "protocol-mismatch: ${msg.protocolVersion} not in " +
+                                        "${ProtocolVersion.MIN_SUPPORTED}..${ProtocolVersion.MAX_SUPPORTED}",
+                                    RejectCode.ProtocolMismatch,
+                                ),
+                            )
+                            runCatchingCancellable { seam.sendTo(sender, rejectBytes) }
+                        }
+                    } else if (target != null && roomKey != null && target != roomKey) {
+                        // Room-bound admission gate (A2, #1172). Reject only a *positive*
+                        // mismatch — both sides name a room and they differ. A null target
+                        // (transport already bound the room) or a host without a declared
+                        // room key stays permissive, preserving existing single-room fabrics.
                         logger.debug {
                             "Rejecting Hello from $sender: room-mismatch ($target != $roomKey)"
                         }
@@ -981,6 +1002,7 @@ internal class SeamRoom(
             displayName = resolvedMemberName,
             sessionId = selfId.value,
             targetRoom = roomKey,
+            protocolVersion = ProtocolVersion.CURRENT,
         )
         runCatchingCancellable { seam.broadcast(AdmitMessage.encode(hello)) }
     }

@@ -38,8 +38,11 @@ public suspend fun resumeAfterDropSample(room: Room) {
  */
 public fun classifyRejectCodeSample(reason: FailureReason.Refused): Boolean =
     when (reason.code) {
-        // Terminal: the window closed, or the credential can never validate here.
-        RejectCode.ResumeWindowExpired, RejectCode.ResumeTokenInvalid, RejectCode.RoomMismatch -> false
+        // Terminal: the window closed, the credential can never validate here, or the two peers
+        // speak incompatible protocol versions (retrying a version you don't support is futile).
+        RejectCode.ResumeWindowExpired, RejectCode.ResumeTokenInvalid,
+        RejectCode.RoomMismatch, RejectCode.ProtocolMismatch,
+        -> false
         // Transient: the host hasn't opened the window yet (the fast-reconnect race).
         RejectCode.ResumeWindowNotYetOpen -> true
         // Anything else, including a code this build has never heard of.
