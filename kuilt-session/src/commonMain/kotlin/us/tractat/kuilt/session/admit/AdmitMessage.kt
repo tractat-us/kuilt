@@ -46,6 +46,12 @@ public sealed interface AdmitMessage {
      *   never sends it decodes as `null` (see the shared [cbor] codec's
      *   `ignoreUnknownKeys`), and an old encoded frame with no `targetRoom` key
      *   still decodes to `null`.
+     * [protocolVersion] — the admit-handshake version this joiner speaks
+     *   ([ProtocolVersion.CURRENT]). The host compares it against its supported range and
+     *   rejects a mismatch at admit time with [RejectCode.ProtocolMismatch] (#1569). **Additive**,
+     *   exactly like [targetRoom]: nullable + defaulted, so a peer that predates the field decodes
+     *   as `null` and is admitted as legacy (kotlinx omits the defaulted null, so a version-less
+     *   `Hello` is byte-identical to the pre-#1569 wire form).
      */
     @Serializable
     @SerialName("hello")
@@ -54,6 +60,7 @@ public sealed interface AdmitMessage {
         val sessionId: String,
         val deviceId: String? = null,
         val targetRoom: String? = null,
+        val protocolVersion: Int? = null,
     ) : AdmitMessage
 
     /**

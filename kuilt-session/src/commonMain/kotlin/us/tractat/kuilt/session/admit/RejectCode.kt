@@ -48,6 +48,18 @@ public interface RejectCode {
         override val id: String = "resume-window-not-yet-open"
     }
 
+    /**
+     * The joiner declared an admit-protocol version this host cannot speak — outside
+     * [ProtocolVersion.MIN_SUPPORTED]..[ProtocolVersion.MAX_SUPPORTED] (#1569). Terminal: retrying
+     * a version you don't support is futile; the peer must upgrade or downgrade its build. A joiner
+     * that sends *no* version (a peer predating the field) is admitted as legacy, so this code
+     * never fires for the additive case.
+     */
+    public object ProtocolMismatch : RejectCode {
+        override val id: String = "protocol-mismatch"
+        override val retryable: Boolean = false
+    }
+
     /** The reconnect window closed — it elapsed, or the token was already spent. Terminal. */
     public object ResumeWindowExpired : RejectCode {
         override val id: String = "resume-window-expired"
@@ -82,6 +94,7 @@ public interface RejectCode {
         public fun fromId(id: String?): RejectCode = when (id) {
             null -> Unspecified
             RoomMismatch.id -> RoomMismatch
+            ProtocolMismatch.id -> ProtocolMismatch
             ResumeWindowNotYetOpen.id -> ResumeWindowNotYetOpen
             ResumeWindowExpired.id -> ResumeWindowExpired
             ResumeTokenInvalid.id -> ResumeTokenInvalid
