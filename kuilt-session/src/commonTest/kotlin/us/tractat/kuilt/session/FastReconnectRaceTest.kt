@@ -4,6 +4,7 @@ package us.tractat.kuilt.session
 
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.async
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -172,20 +173,22 @@ class FastReconnectRaceTest {
      * **terminal** ([RejectCode.ResumeWindowExpired]) must surface `HostLost` at once, instead of
      * retrying futilely until the joiner's own window elapses.
      *
-     * Deterministic by construction — no timing race with the retry loop. The host is told the
-     * joiner dropped *while the link is still up*, so its window opens and expires (1 ms) before
-     * the joiner tears at all. Every resume the joiner then sends can only find an expired
-     * window. The joiner's window is 10 s, so a single re-weave is proof the loop short-circuited:
-     * had it retried to its deadline it would have re-woven ~100 times.
+     * Deterministic by construction, and no gating needed: the host's transport close is
+     * immediate, so its 100 ms window opens and closes while the joiner's re-weave is still
+     * sleeping out its 250 ms delay. Every resume can then only find an **expired** window. The
+     * joiner's own window is 10 s, so a single re-weave inside half a second is proof the loop
+     * short-circuited — retrying to the deadline would have re-woven ~100 times.
      */
     @Test
     fun `a terminal reject surfaces HostLost without burning the joiner's window`() =
         runTest(StandardTestDispatcher(), timeout = 5.seconds) {
-            val clock: () -> Instant = { Instant.fromEpochMilliseconds(0L) }
+            var clockMs = 0L
+            val clock: () -> Instant = { Instant.fromEpochMilliseconds(clockMs) }
             val h = gatedHostHarness(
                 clock,
-                hostConfig = fastConfig.copy(reconnectWindow = 1.milliseconds),
+                hostConfig = fastConfig.copy(reconnectWindow = 100.milliseconds),
                 joinerConfig = fastConfig.copy(reconnectWindow = 10.seconds),
+                reweaveDelayMs = 250L,
             )
 
             h.hostRoom.roster.first { it.size == 1 }
@@ -194,15 +197,8 @@ class FastReconnectRaceTest {
 
             val hostLost = async { h.joinerRoom.events.filterIsInstance<MembershipEvent.HostLost>().first() }
 
-            // Host-side only: it "notices" a drop and opens a 1 ms window, which expires long
-            // before the joiner's transport actually tears.
-            h.hostPeers.freeze()
-            h.hostPeers.drop(PeerId("client"))
-            repeat(2) { advanceTimeBy(100L) }
-
-            // Now the joiner really drops. Its first resume finds an expired window.
             h.muxClient.closeBase()
-            repeat(5) { advanceTimeBy(100L) }
+            repeat(5) { clockMs += 100L; advanceTimeBy(100L) }
 
             assertTrue(
                 hostLost.isCompleted,
@@ -237,6 +233,7 @@ class FastReconnectRaceTest {
         clock: () -> Instant,
         hostConfig: HeartbeatConfig = fastConfig,
         joinerConfig: HeartbeatConfig = fastConfig,
+        reweaveDelayMs: Long = 0L,
     ): GatedHarness {
         val dispatcher = coroutineContext[ContinuationInterceptor]
         checkNotNull(dispatcher) { "the test dispatcher must be present in the test coroutine context" }
@@ -282,6 +279,9 @@ class FastReconnectRaceTest {
             roomId = null,
             reweave = {
                 reweaveCount++
+                // Optionally hold the re-weave back, so the resume lands after a short host-side
+                // window has already closed.
+                if (reweaveDelayMs > 0L) delay(reweaveDelayMs)
                 muxClient.join(tag)
             },
         ).also { it.start() }

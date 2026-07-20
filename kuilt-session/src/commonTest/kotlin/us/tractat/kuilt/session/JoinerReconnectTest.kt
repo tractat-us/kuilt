@@ -28,6 +28,7 @@ import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.fabric.hubMesh
 import us.tractat.kuilt.liveness.HeartbeatConfig
+import us.tractat.kuilt.session.admit.RejectCode
 import us.tractat.kuilt.session.partition.ResumeResult
 import us.tractat.kuilt.session.partition.RoomId
 import us.tractat.kuilt.test.fabric.InMemoryConnectionSource
@@ -293,8 +294,12 @@ class JoinerReconnectTest {
             val event = hostLost.await()
             assertIs<MembershipEvent.HostLost>(event)
             // The teeth: a reject was seen and its cause carried — NOT the plain WindowExpired that
-            // fires when no reject arrives.
-            assertEquals(FailureReason.Refused("resume-window-closed"), event.reason)
+            // fires when no reject arrives. The window had genuinely closed, so the host codes it
+            // terminal and the joiner stops early rather than retrying to its own deadline (#1572).
+            assertEquals(
+                FailureReason.Refused("resume-window-expired", RejectCode.ResumeWindowExpired),
+                event.reason,
+            )
         }
 
     @Test

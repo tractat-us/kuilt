@@ -3,6 +3,7 @@ package us.tractat.kuilt.session
 import kotlinx.coroutines.delay
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.util.ExponentialBackoff
+import us.tractat.kuilt.session.admit.RejectCode
 import us.tractat.kuilt.session.partition.JoinerReconnectController
 import us.tractat.kuilt.session.partition.JoinerReconnectEvent
 import us.tractat.kuilt.session.partition.ResumeResult
@@ -25,9 +26,25 @@ public suspend fun resumeAfterDropSample(room: Room) {
     when (room.resume(token)) {
         ResumeResult.Success -> Unit // back in the room; state resync follows
         ResumeResult.WindowClosed -> Unit // grace window elapsed — re-join fresh
+        ResumeResult.WindowNotYetOpen -> Unit // host hasn't noticed the drop yet — retry shortly
         is ResumeResult.TokenInvalid -> Unit // wrong session — re-join fresh
     }
 }
+
+/**
+ * Decide whether a host's refusal is worth retrying. Branch on [RejectCode], not on the free-text
+ * reason — and treat anything you don't recognise as retryable, because a peer that predates typed
+ * codes (or a newer one that added its own) surfaces [RejectCode.Unknown].
+ */
+public fun classifyRejectCodeSample(reason: FailureReason.Refused): Boolean =
+    when (reason.code) {
+        // Terminal: the window closed, or the credential can never validate here.
+        RejectCode.ResumeWindowExpired, RejectCode.ResumeTokenInvalid, RejectCode.RoomMismatch -> false
+        // Transient: the host hasn't opened the window yet (the fast-reconnect race).
+        RejectCode.ResumeWindowNotYetOpen -> true
+        // Anything else, including a code this build has never heard of.
+        else -> reason.code.retryable
+    }
 
 /**
  * Hold a dropped peer's seat open for a grace window instead of evicting it immediately —

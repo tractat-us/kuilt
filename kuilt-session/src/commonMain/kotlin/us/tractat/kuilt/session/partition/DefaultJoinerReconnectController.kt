@@ -64,7 +64,10 @@ public class DefaultJoinerReconnectController(
             mutex.withLock {
                 val state = windows[token.peerId]
                 when {
-                    state == null -> ResumeResult.WindowClosed
+                    // No window has been opened for this peer at all — the fast-reconnect race
+                    // (transient), NOT a closed window. The distinction is the whole point of
+                    // #1572: only the two branches below are terminal.
+                    state == null -> ResumeResult.WindowNotYetOpen
                     state.consumed -> ResumeResult.WindowClosed
                     state.expiredAt != null -> ResumeResult.WindowClosed
                     else -> {

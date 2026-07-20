@@ -17,6 +17,7 @@ import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.session.FailureReason
 import us.tractat.kuilt.session.admit.AdmitMessage
+import us.tractat.kuilt.session.admit.RejectCode
 import kotlin.time.Instant
 
 /**
@@ -142,16 +143,20 @@ internal class JoinerResumeMachine(
     private var pendingResume: CompletableDeferred<ResumeResult>? = null
 
     /**
-     * The most recent host `Reject` message for a resume in this episode, or null. Set by
-     * [rejectFlight] when a flight was actually pending; read by [runReconnect] at window expiry to
-     * label the terminal event [FailureReason.Refused] instead of [FailureReason.WindowExpired].
+     * The most recent host `Reject` for a resume in this episode, or null. Set by [rejectFlight]
+     * when a flight was actually pending; read by [runReconnect] to label the terminal event
+     * [FailureReason.Refused] instead of [FailureReason.WindowExpired].
      *
-     * NOT a short-circuit: a `Reject` is not always terminal (a window that has not opened yet also
-     * rejects — the fast-reconnect race), so the retry loop is left intact and this only refines the
-     * label of a genuine window expiry. Reset at the start of each [runReconnect] episode; discarded
-     * if a later retry succeeds. Guarded by [lock].
+     * **Only a code that declares itself terminal short-circuits the loop** ([RejectCode.retryable]
+     * false, #1572). Every other reject — including one from a host that sends no code at all, which
+     * decodes as [RejectCode.Unknown] — is recorded and *not* obeyed: a window that has not opened
+     * yet also rejects (the fast-reconnect race), and the retry is what recovers it. Reset at the
+     * start of each [runReconnect] episode; discarded if a later retry succeeds. Guarded by [lock].
      */
-    private var refusal: String? = null
+    private var refusal: Refusal? = null
+
+    /** A host `Reject` observed during a reconnect episode: its free text and its structured code. */
+    private data class Refusal(val message: String, val code: RejectCode)
 
     /**
      * Guards the single in-flight reconnect attempt so the two racing tear-detection paths —
@@ -215,16 +220,19 @@ internal class JoinerResumeMachine(
      * arrived during the initial join (no resume pending), which the room fails loudly as an
      * admission rejection instead (#1178).
      *
-     * The [message] is **recorded, not obeyed as authoritative**: a `Reject` is not always
-     * terminal (a window that has not opened yet also rejects — the fast-reconnect race), so the
-     * flight still completes as [ResumeResult.WindowClosed] and [runReconnect]'s retry loop runs
-     * unchanged. The recorded [refusal] only refines the terminal label to
-     * [FailureReason.Refused] if the window ultimately expires.
+     * The [message] is **recorded, not obeyed as authoritative**, and so is [code] — with one
+     * exception. A `Reject` is usually not terminal (a window that has not opened yet also
+     * rejects — the fast-reconnect race), so the flight completes as [ResumeResult.WindowClosed]
+     * and [runReconnect]'s retry loop runs unchanged; the recorded [refusal] then only refines the
+     * terminal label to [FailureReason.Refused] if the window ultimately expires. Only when [code]
+     * declares itself non-[RejectCode.retryable] does [runReconnect] stop early — and a host that
+     * sends no code decodes as [RejectCode.Unknown], which is retryable, so old hosts keep the
+     * pre-#1572 behaviour exactly.
      */
-    fun rejectFlight(message: String): Boolean = lock.withLock {
+    fun rejectFlight(message: String, code: RejectCode): Boolean = lock.withLock {
         val d = pendingResume
         pendingResume = null
-        if (d != null) refusal = message
+        if (d != null) refusal = Refusal(message, code)
         d?.complete(ResumeResult.WindowClosed)
         d != null
     }
@@ -355,17 +363,26 @@ internal class JoinerResumeMachine(
                     host.restartIncomingCollect()
                     resume(token)
                 }.getOrNull()
-                if (result is ResumeResult.Success) ok = true else delay(heartbeatConfig.interval)
+                if (result is ResumeResult.Success) {
+                    ok = true
+                } else {
+                    // Fail fast ONLY on a code the host declared terminal (#1572). Everything
+                    // else — a not-yet-open window, an unrecognised code, a host too old to send
+                    // one — keeps retrying to the deadline, which is what recovers the
+                    // fast-reconnect race.
+                    if (lock.withLock { refusal }?.code?.retryable == false) return@withTimeoutOrNull false
+                    delay(heartbeatConfig.interval)
+                }
             }
             true
         } ?: false
 
-        // If we timed out (resumed == false, failureReason still WindowExpired) but saw a host
-        // reject during the window, label it Refused. A non-conforming loom already set
-        // Unrecoverable above and takes precedence (it returned false before any reject could be
-        // recorded). The reject was recorded, not obeyed — the retry loop still ran to the deadline.
+        // Not resumed (window elapsed, or a terminal reject cut the loop short) but a host reject
+        // was seen: label it Refused, carrying the code so the consumer can branch on it. A
+        // non-conforming loom already set Unrecoverable above and takes precedence (it returned
+        // false before any reject could be recorded).
         if (!resumed && failureReason is FailureReason.WindowExpired) {
-            lock.withLock { refusal }?.let { failureReason = FailureReason.Refused(it) }
+            lock.withLock { refusal }?.let { failureReason = FailureReason.Refused(it.message, it.code) }
         }
 
         if (resumed) {

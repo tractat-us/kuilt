@@ -1,6 +1,7 @@
 package us.tractat.kuilt.session
 
 import us.tractat.kuilt.liveness.PartitionEvent
+import us.tractat.kuilt.session.admit.RejectCode
 
 /**
  * Why a peer's link is currently down and a reconnect / grace window is in progress.
@@ -36,14 +37,23 @@ public sealed interface FailureReason {
 
     /**
      * The host actively rejected the resume with an `AdmitMessage.Reject`, carrying its raw
-     * [message]. kuilt cannot type the host's intent (auth-expired, protocol-mismatch, …) —
-     * the admit protocol carries only a free-form string — so those surface here and the
-     * consumer parses semantics from [message]. The message is generic and may even reflect a
-     * resume window that had not opened yet (the fast-reconnect race); kuilt cannot distinguish
-     * that from a permanent refusal, so this is a terminal *label*, not a claim that the token
-     * was permanently rejected.
+     * [message] and structured [code].
+     *
+     * Branch on [code], not [message]: the text is for a human reading a log. A host that
+     * predates typed codes (or one whose code this build does not know) surfaces
+     * [RejectCode.Unknown], and such a refusal is **not** a claim that the token was permanently
+     * rejected — it may well be a window that had not opened yet (the fast-reconnect race), which
+     * the joiner retried to its deadline before giving up. When [RejectCode.retryable] is false
+     * the refusal *is* terminal, and the joiner surfaces it without waiting out the window.
+     *
+     * kuilt still cannot type the host's *intent* beyond the codes it defines — an
+     * application-level refusal (auth policy, capacity) rides in [message] or a consumer-supplied
+     * [RejectCode] of its own.
      */
-    public data class Refused(public val message: String) : FailureReason
+    public data class Refused(
+        public val message: String,
+        public val code: RejectCode = RejectCode.Unspecified,
+    ) : FailureReason
 
     /** No resume path exists: no reweave support, a non-conforming loom, or no known host. */
     public data object Unrecoverable : FailureReason
