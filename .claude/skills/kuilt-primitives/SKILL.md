@@ -31,5 +31,6 @@ description: Use BEFORE writing any networking, session, reconnect, or shared-st
 - replicating a CRDT over a connection by hand → `Quilter`
 - a `seenIds` set → `GSet` / kuilt dedup
 - a fixed/exponential retry back-off → `ExponentialBackoff`
+- merging mDNS/Multipeer discovery feeds into one lobby roster → `discoveryRoster`
 
 Then follow the cookbook's exact primitive and snippet.
