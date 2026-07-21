@@ -128,4 +128,17 @@ public sealed interface ResumeResult {
     public data class TokenInvalid(
         val reason: String,
     ) : ResumeResult
+
+    /**
+     * No verdict — neither `ResumeAck` nor `Reject` — arrived within
+     * [HeartbeatConfig.resumeTimeout][us.tractat.kuilt.liveness.HeartbeatConfig.resumeTimeout].
+     *
+     * The host is unreachable *right now*: it is gone, the link is black-holed, or the reply
+     * was lost. **Not** a refusal — deliberately distinct from [WindowClosed], which conflates
+     * "expired" with "not yet open" (#1571); folding a silent host into that pile would hide a
+     * fourth, honest outcome. A later attempt with the same credentials may still succeed once
+     * the host is reachable again, so callers (and the internal auto-reconnect loop) treat it as
+     * a transient retry signal, not a terminal verdict.
+     */
+    public data object TimedOut : ResumeResult
 }

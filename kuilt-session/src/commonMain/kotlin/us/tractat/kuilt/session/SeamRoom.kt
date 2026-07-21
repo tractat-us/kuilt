@@ -1035,6 +1035,10 @@ internal class SeamRoom(
                 AdmitMessage.Reject("resume-window-expired", RejectCode.ResumeWindowExpired)
             is ResumeResult.TokenInvalid ->
                 AdmitMessage.Reject("resume-token-invalid: ${result.reason}", RejectCode.ResumeTokenInvalid)
+            // Host-side validation is synchronous and always renders a verdict; TimedOut is the
+            // joiner's await-side outcome only (#1587) and cannot originate here.
+            ResumeResult.TimedOut ->
+                error("tryResume must not return TimedOut: it is a joiner await outcome, not a host verdict")
         }
         if (reject != null) {
             runCatchingCancellable { seam.sendTo(sender, AdmitMessage.encode(reject)) }

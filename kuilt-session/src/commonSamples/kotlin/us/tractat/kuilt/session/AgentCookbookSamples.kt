@@ -27,6 +27,7 @@ public suspend fun resumeAfterDropSample(room: Room) {
         ResumeResult.Success -> Unit // back in the room; state resync follows
         ResumeResult.WindowClosed -> Unit // grace window elapsed — re-join fresh
         ResumeResult.WindowNotYetOpen -> Unit // host hasn't noticed the drop yet — retry shortly
+        ResumeResult.TimedOut -> Unit // no reply within resumeTimeout (host unreachable) — retry shortly
         is ResumeResult.TokenInvalid -> Unit // wrong session — re-join fresh
     }
 }
