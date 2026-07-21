@@ -773,6 +773,33 @@ public fun CoroutineScope.heddleGoverned(
 `limitedParallelism(1)` confinement) and exception discipline
 (`runCatchingCancellable` on best-effort fabric sends).
 
+### 11.1 The fairness draft — a builder over the topology
+
+Declaring the group tree by hand (`prepare`/`activate` per edge) is correct but
+noisy. A small type-safe builder — the **draft**, in the loom's own word — is
+pure sugar over those mutators: `group { }` is an internal node, `lane()` a leaf,
+weights are relationships among siblings. It produces an immutable topology value
+(a set of `AttachmentRecord`s plus the mint plan) that `heddleStatic`/
+`heddleGoverned` bootstrap from.
+
+```kotlin
+val fairness = draft {
+    group("acme", weight = 3) {
+        lane("interactive", weight = 3)
+        lane("batch", weight = 1)
+    }
+    group("hobby", weight = 1) { lane("default") }
+}
+```
+
+Because a weight is a sibling relationship, the builder can only *create*
+generations — there is no in-place weight mutation to express, so the DSL enforces
+"change = new generation" (§3) by construction. It lowers onto a fluent runtime
+API (`acme.lane("incident", weight = 5)`) which is what *dynamic* create/reparent/
+close (§5.3) uses directly. The builder is the static-policy front door; the
+fluent API is the runtime one; both are the same topology underneath. This is an
+ergonomics layer, not a semantic addition — it changes nothing below the surface.
+
 ---
 
 ## 12. What was dropped from the source, and what is genuinely new
@@ -961,10 +988,25 @@ public value class Lane(public val tag: String)
 // The tag → leaf-group binding and entitlement enforcement live in the
 // :kuilt-warp-heddle satellite, not in warp core.
 
-// Submission, in the vision surface's shape: unchanged, one new argument.
-warp.shuttle(corpus, lane = interactive) { doc -> score(query, doc) }
+// Submission: the lane is a DRAFT MODIFIER, not a shuttle argument. shuttle's
+// signature stays untouched; .lane() decorates the returned Draft with an
+// opaque tag that flows into the descriptor. This composes with warp's
+// draft-as-value model and keeps the lane orthogonal to submission.
+warp.shuttle(corpus)
+    .lane("acme/interactive")          // thread this draft through a lane
     .weave()
+
+// A scoped form is sugar over the same modifier, for a block of submissions
+// that share one lane:
+warp.inLane("acme/interactive") {
+    shuttle(corpus).weave()
+}
 ```
+
+The earlier idea of a `shuttle(corpus, lane = …)` overload is deliberately
+rejected: it couples the lane to submission and overloads `shuttle`'s signature.
+The `.lane()` modifier is the right shape — it treats the lane as one more
+decoration on a `Draft`, consistent with the opaque-tag/satellite decision above.
 
 Execution-side enforcement first (no producer API beyond the tag): the ring
 owner of a task must `reserve` from the task's lane before running it —
