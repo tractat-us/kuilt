@@ -489,7 +489,8 @@ internal class JoinerResumeMachine(
      * unchanged, preserving cancellation discipline.
      */
     private suspend fun awaitFlightBounded(deferred: CompletableDeferred<ResumeResult>): ResumeResult =
-        deferred.await()
+        withTimeoutOrNull(heartbeatConfig.resumeTimeout) { deferred.await() }
+            ?: ResumeResult.TimedOut.also { completeFlight(deferred, it) }
 
     /**
      * Resolve a failed resume flight as [ResumeResult.WindowClosed] (the send-failure /
