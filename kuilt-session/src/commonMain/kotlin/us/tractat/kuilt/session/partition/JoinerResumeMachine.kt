@@ -442,8 +442,8 @@ internal class JoinerResumeMachine(
                 CompletableDeferred<ResumeResult>().also { pendingResume = it } to true
             }
         }
-        // A resume is already in flight — join it rather than orphaning its reply slot.
-        if (!ownsFlight) return deferred.await()
+        // A resume is already in flight — join it (bounded) rather than orphaning its reply slot.
+        if (!ownsFlight) return awaitFlightBounded(deferred)
 
         val resumeMsg = AdmitMessage.encode(
             AdmitMessage.Resume(
@@ -464,20 +464,49 @@ internal class JoinerResumeMachine(
         if (sendResult.isFailure) {
             abandonFlight(deferred)
             // A reply may have raced the failure and resolved the flight first — honor it.
-            return deferred.await()
+            return awaitFlightBounded(deferred)
         }
 
-        return deferred.await()
+        return awaitFlightBounded(deferred)
     }
 
     /**
-     * Resolve a failed resume flight as [ResumeResult.WindowClosed]: clear the slot (only if
-     * this flight still owns it — a raced reply may already have taken it) and complete the
-     * deferred so every joined caller resolves. Completion runs outside [lock]; it is a no-op
-     * when a raced ResumeAck/Reject already completed the deferred.
+     * Await the shared flight [deferred] under the [HeartbeatConfig.resumeTimeout] deadline
+     * (#1587). A host that never replies — gone, black-holed, or a lost reply — must not park
+     * the caller forever. On expiry, resolve the flight as [ResumeResult.TimedOut] *for every
+     * caller of it* ([completeFlight] completes the shared deferred and clears the single-flight
+     * slot iff this flight still owns it) so the owner and every joined caller are released
+     * together and a subsequent [resume] starts a fresh flight.
+     *
+     * Both caller kinds route through here — the owner (after broadcasting) and a joined caller
+     * (the `!ownsFlight` early return) — so neither can hang. A late-arriving ResumeAck/Reject
+     * after the slot was cleared is a no-op: [takePendingFlight]/[rejectFlight] find no pending
+     * flight (or a *later* flight, which the host's single-use-per-window token still resolves
+     * honestly).
+     *
+     * Only [withTimeoutOrNull]'s own deadline yields null here; an *external* cancellation (e.g.
+     * the auto-reconnect window elapsing around an internal [resume]) propagates through
+     * unchanged, preserving cancellation discipline.
      */
-    private fun abandonFlight(deferred: CompletableDeferred<ResumeResult>) {
+    private suspend fun awaitFlightBounded(deferred: CompletableDeferred<ResumeResult>): ResumeResult =
+        deferred.await()
+
+    /**
+     * Resolve a failed resume flight as [ResumeResult.WindowClosed] (the send-failure /
+     * broadcast-cancellation paths): see [completeFlight] for the slot-clear + completion
+     * semantics.
+     */
+    private fun abandonFlight(deferred: CompletableDeferred<ResumeResult>) =
+        completeFlight(deferred, ResumeResult.WindowClosed)
+
+    /**
+     * Complete the shared flight [deferred] with [result], clearing the single-flight slot
+     * only if this flight still owns it — a raced reply may already have taken it. Completion
+     * runs outside [lock]; it is a no-op on the deferred when a raced ResumeAck/Reject already
+     * completed it.
+     */
+    private fun completeFlight(deferred: CompletableDeferred<ResumeResult>, result: ResumeResult) {
         lock.withLock { if (pendingResume === deferred) pendingResume = null }
-        deferred.complete(ResumeResult.WindowClosed)
+        deferred.complete(result)
     }
 }
