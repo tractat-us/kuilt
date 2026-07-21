@@ -110,6 +110,16 @@ public class SeamRoomFactory(
     private val clock: () -> Instant,
     private val heartbeatConfig: HeartbeatConfig = HeartbeatConfig(),
     private val admitTimeout: Duration = DEFAULT_ADMIT_TIMEOUT,
+    /**
+     * Optional override for the **host-side** reconnect-window controller (#1614). When supplied,
+     * every host room this factory creates drives the [JoinerReconnectController] this lambda builds
+     * instead of the default fixed-window [DefaultJoinerReconnectController] — letting a host
+     * application implement its own hold policy, e.g. a predicate/unbounded hold that keeps a
+     * disconnected joiner's seat open while a durable rejoin record exists and drives
+     * [JoinerReconnectController.expire] itself. Ignored for joiner rooms. See
+     * [JoinerReconnectControllerFactory].
+     */
+    private val reconnectControllerFactory: JoinerReconnectControllerFactory? = null,
 ) : RoomFactory {
     override suspend fun host(pattern: Pattern, memberName: String?): Room {
         val seam = loom.host(pattern)
@@ -130,6 +140,7 @@ public class SeamRoomFactory(
             // match (or leave null) to be admitted. Null (the Pattern default) means
             // this host declared no room and admits permissively.
             roomKey = pattern.roomKey,
+            reconnectControllerFactory = reconnectControllerFactory,
         ).also { room -> room.start() }
     }
 
@@ -188,6 +199,7 @@ public class SeamRoomFactory(
             admitTimeout = admitTimeout,
             roomId = roomId,
             roomKey = roomKey,
+            reconnectControllerFactory = reconnectControllerFactory,
         ).also { room -> room.start() }
     }
 
@@ -228,12 +240,14 @@ public class SeamRoomFactory(
             scope: CoroutineScope,
             heartbeatConfig: HeartbeatConfig = HeartbeatConfig(),
             admitTimeout: Duration = DEFAULT_ADMIT_TIMEOUT,
+            reconnectControllerFactory: JoinerReconnectControllerFactory? = null,
         ): SeamRoomFactory = SeamRoomFactory(
             loom = loom,
             scope = scope,
             clock = { Clock.System.now() },
             heartbeatConfig = heartbeatConfig,
             admitTimeout = admitTimeout,
+            reconnectControllerFactory = reconnectControllerFactory,
         )
 
         /**
@@ -545,16 +559,18 @@ internal class SeamRoom(
      */
     private val reconnectController: JoinerReconnectController? =
         if (role == SessionRole.Host && roomId != null) {
-            DefaultJoinerReconnectController(
-                roomId = roomId,
-                // Honor the configured window rather than the controller's 60 s default, so the
-                // host-side window matches the joiner-side window (the JoinerResumeMachine's
-                // reconnect also budgets on heartbeatConfig.reconnectWindow) — symmetric by
-                // construction.
-                reconnectWindowMs = heartbeatConfig.reconnectWindow.inWholeMilliseconds,
-                clock = { clock().toEpochMilliseconds() },
-                scope = scope,
-            )
+            // Caller-supplied hold policy (#1614) if injected; else the standard fixed-window default.
+            reconnectControllerFactory?.invoke(roomId, scope, clock)
+                ?: DefaultJoinerReconnectController(
+                    roomId = roomId,
+                    // Honor the configured window rather than the controller's 60 s default, so the
+                    // host-side window matches the joiner-side window (the JoinerResumeMachine's
+                    // reconnect also budgets on heartbeatConfig.reconnectWindow) — symmetric by
+                    // construction.
+                    reconnectWindowMs = heartbeatConfig.reconnectWindow.inWholeMilliseconds,
+                    clock = { clock().toEpochMilliseconds() },
+                    scope = scope,
+                )
         } else {
             null
         }
