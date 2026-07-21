@@ -56,6 +56,21 @@ import kotlin.time.Instant
 private val logger = KotlinLogging.logger("us.tractat.kuilt.session.SeamRoom")
 
 /**
+ * Factory for a **host-side** [JoinerReconnectController], invoked once when a host room starts
+ * with the room-owned [roomId], [scope], and clock — the three inputs a controller needs but that
+ * only exist after the seam is woven (the `roomId` is derived from the host's woven `selfId`), so a
+ * caller cannot pre-build the instance and must supply this lambda instead.
+ *
+ * Supply it to [SeamRoomFactory] to replace the default fixed-window hold with a custom policy —
+ * for example a **predicate or unbounded hold** that keeps a disconnected joiner's seat open for as
+ * long as a durable rejoin record exists, driving [JoinerReconnectController.expire] itself when
+ * that record is gone rather than on a fixed timer. When no factory is supplied the room builds the
+ * default [DefaultJoinerReconnectController], whose window is [HeartbeatConfig.reconnectWindow].
+ */
+public typealias JoinerReconnectControllerFactory =
+    (roomId: RoomId, scope: CoroutineScope, clock: () -> Instant) -> JoinerReconnectController
+
+/**
  * [Loom]-backed implementation of [RoomFactory].
  *
  * Each call to [host] or [join] weaves a new [Seam] via [loom], wraps it in a
@@ -95,6 +110,16 @@ public class SeamRoomFactory(
     private val clock: () -> Instant,
     private val heartbeatConfig: HeartbeatConfig = HeartbeatConfig(),
     private val admitTimeout: Duration = DEFAULT_ADMIT_TIMEOUT,
+    /**
+     * Optional override for the **host-side** reconnect-window controller (#1614). When supplied,
+     * every host room this factory creates drives the [JoinerReconnectController] this lambda builds
+     * instead of the default fixed-window [DefaultJoinerReconnectController] — letting a host
+     * application implement its own hold policy, e.g. a predicate/unbounded hold that keeps a
+     * disconnected joiner's seat open while a durable rejoin record exists and drives
+     * [JoinerReconnectController.expire] itself. Ignored for joiner rooms. See
+     * [JoinerReconnectControllerFactory].
+     */
+    private val reconnectControllerFactory: JoinerReconnectControllerFactory? = null,
 ) : RoomFactory {
     override suspend fun host(pattern: Pattern, memberName: String?): Room {
         val seam = loom.host(pattern)
@@ -115,6 +140,7 @@ public class SeamRoomFactory(
             // match (or leave null) to be admitted. Null (the Pattern default) means
             // this host declared no room and admits permissively.
             roomKey = pattern.roomKey,
+            reconnectControllerFactory = reconnectControllerFactory,
         ).also { room -> room.start() }
     }
 
@@ -173,6 +199,7 @@ public class SeamRoomFactory(
             admitTimeout = admitTimeout,
             roomId = roomId,
             roomKey = roomKey,
+            reconnectControllerFactory = reconnectControllerFactory,
         ).also { room -> room.start() }
     }
 
@@ -213,12 +240,14 @@ public class SeamRoomFactory(
             scope: CoroutineScope,
             heartbeatConfig: HeartbeatConfig = HeartbeatConfig(),
             admitTimeout: Duration = DEFAULT_ADMIT_TIMEOUT,
+            reconnectControllerFactory: JoinerReconnectControllerFactory? = null,
         ): SeamRoomFactory = SeamRoomFactory(
             loom = loom,
             scope = scope,
             clock = { Clock.System.now() },
             heartbeatConfig = heartbeatConfig,
             admitTimeout = admitTimeout,
+            reconnectControllerFactory = reconnectControllerFactory,
         )
 
         /**
@@ -368,6 +397,16 @@ internal class SeamRoom(
      * not `reweave == null` — is what decides resumable vs. non-resumable at tear time.
      */
     private val reweave: (suspend () -> Seam)? = null,
+    /**
+     * **Host only.** Optional override for the per-joiner reconnect-window controller (#1614).
+     *
+     * When non-null (and this room is a host with a [roomId]), invoked once here with [roomId],
+     * [scope], and [clock] to build the [JoinerReconnectController] this room drives. Lets a host
+     * application substitute its own hold policy — e.g. a predicate/unbounded hold that keeps a
+     * seat while a durable rejoin record exists. When null (the default), the room builds the
+     * standard [DefaultJoinerReconnectController] with the [heartbeatConfig]-derived window.
+     */
+    private val reconnectControllerFactory: JoinerReconnectControllerFactory? = null,
 ) : Room {
     override val selfId: PeerId = seam.selfId
 
@@ -520,16 +559,18 @@ internal class SeamRoom(
      */
     private val reconnectController: JoinerReconnectController? =
         if (role == SessionRole.Host && roomId != null) {
-            DefaultJoinerReconnectController(
-                roomId = roomId,
-                // Honor the configured window rather than the controller's 60 s default, so the
-                // host-side window matches the joiner-side window (the JoinerResumeMachine's
-                // reconnect also budgets on heartbeatConfig.reconnectWindow) — symmetric by
-                // construction.
-                reconnectWindowMs = heartbeatConfig.reconnectWindow.inWholeMilliseconds,
-                clock = { clock().toEpochMilliseconds() },
-                scope = scope,
-            )
+            // Caller-supplied hold policy (#1614) if injected; else the standard fixed-window default.
+            reconnectControllerFactory?.invoke(roomId, scope, clock)
+                ?: DefaultJoinerReconnectController(
+                    roomId = roomId,
+                    // Honor the configured window rather than the controller's 60 s default, so the
+                    // host-side window matches the joiner-side window (the JoinerResumeMachine's
+                    // reconnect also budgets on heartbeatConfig.reconnectWindow) — symmetric by
+                    // construction.
+                    reconnectWindowMs = heartbeatConfig.reconnectWindow.inWholeMilliseconds,
+                    clock = { clock().toEpochMilliseconds() },
+                    scope = scope,
+                )
         } else {
             null
         }
