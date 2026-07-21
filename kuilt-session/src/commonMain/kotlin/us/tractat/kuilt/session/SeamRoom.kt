@@ -56,6 +56,21 @@ import kotlin.time.Instant
 private val logger = KotlinLogging.logger("us.tractat.kuilt.session.SeamRoom")
 
 /**
+ * Factory for a **host-side** [JoinerReconnectController], invoked once when a host room starts
+ * with the room-owned [roomId], [scope], and clock — the three inputs a controller needs but that
+ * only exist after the seam is woven (the `roomId` is derived from the host's woven `selfId`), so a
+ * caller cannot pre-build the instance and must supply this lambda instead.
+ *
+ * Supply it to [SeamRoomFactory] to replace the default fixed-window hold with a custom policy —
+ * for example a **predicate or unbounded hold** that keeps a disconnected joiner's seat open for as
+ * long as a durable rejoin record exists, driving [JoinerReconnectController.expire] itself when
+ * that record is gone rather than on a fixed timer. When no factory is supplied the room builds the
+ * default [DefaultJoinerReconnectController], whose window is [HeartbeatConfig.reconnectWindow].
+ */
+public typealias JoinerReconnectControllerFactory =
+    (roomId: RoomId, scope: CoroutineScope, clock: () -> Instant) -> JoinerReconnectController
+
+/**
  * [Loom]-backed implementation of [RoomFactory].
  *
  * Each call to [host] or [join] weaves a new [Seam] via [loom], wraps it in a
@@ -368,6 +383,16 @@ internal class SeamRoom(
      * not `reweave == null` — is what decides resumable vs. non-resumable at tear time.
      */
     private val reweave: (suspend () -> Seam)? = null,
+    /**
+     * **Host only.** Optional override for the per-joiner reconnect-window controller (#1614).
+     *
+     * When non-null (and this room is a host with a [roomId]), invoked once here with [roomId],
+     * [scope], and [clock] to build the [JoinerReconnectController] this room drives. Lets a host
+     * application substitute its own hold policy — e.g. a predicate/unbounded hold that keeps a
+     * seat while a durable rejoin record exists. When null (the default), the room builds the
+     * standard [DefaultJoinerReconnectController] with the [heartbeatConfig]-derived window.
+     */
+    private val reconnectControllerFactory: JoinerReconnectControllerFactory? = null,
 ) : Room {
     override val selfId: PeerId = seam.selfId
 
