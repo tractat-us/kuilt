@@ -70,8 +70,18 @@ public class HeartbeatPartitionDetector(
     private var heartbeatJob: Job? = null
     private var incomingJob: Job? = null
 
+    // #1618 diagnostics: one-shot latch so the FIRST inbound frame from this peer logs (proving the
+    // per-peer link routes frames to this detector at all — i.e. pongs are stamped with the right
+    // sender and pass the caller's per-peer filter), while the every-`interval` traffic stays unlogged.
+    // Touched only from the single [collectIncoming] coroutine.
+    private var everObservedInbound: Boolean = false
+
     override fun start(scope: CoroutineScope) {
         lastSeenEpochMs = clock().toEpochMilliseconds()
+        logger.info {
+            "heartbeat.start peer=${peerId.value} interval=${config.interval} " +
+                "timeout=${config.timeout} window=${config.reconnectWindow}"
+        }
         incomingJob = scope.launch { collectIncoming() }
         heartbeatJob = scope.launch { runHeartbeatLoop() }
     }
@@ -103,10 +113,21 @@ public class HeartbeatPartitionDetector(
             // [HeartbeatConfig.timeout] contract: "without any inbound frame (ping or
             // application)". Pings additionally get a pong reply so the peer's own
             // detector sees us as live.
+            if (!everObservedInbound) {
+                everObservedInbound = true
+                // #1618 suspect 2: the FIRST frame reached this detector through the per-peer link,
+                // so routing is healthy for this peer. If this never logs but heartbeat.start did,
+                // no frame from the peer ever passed the caller's sender filter → the NW pong is
+                // mis-stamped or not delivered, and the detector will inevitably time out on Timeout.
+                logger.debug {
+                    "heartbeat.first-inbound peer=${peerId.value} ping=${isPingFrame(frame)} pong=${isPongFrame(frame)}"
+                }
+            }
             observedPeer(peerId)
             if (isPingFrame(frame)) replyWithPong()
         }
         // Flow completed — the link was closed.
+        logger.info { "heartbeat.link-closed peer=${peerId.value} → PeerUnresponsive(TransportClosed)" }
         emitIfOpen(PartitionEvent.PeerUnresponsive(peerId, clock(), PartitionEvent.Reason.TransportClosed))
     }
 
@@ -154,6 +175,15 @@ public class HeartbeatPartitionDetector(
      * was emitted (the loop should return).
      */
     private suspend fun handleUnresponsive(reason: PartitionEvent.Reason): Boolean {
+        // #1618: the measured silence at the moment of the Healthy→Unresponsive transition. Logged HERE
+        // (at the transition), never every loop, so the reader sees exactly how stale the peer's last
+        // inbound frame was when the detector gave up — distinguishing a genuine `timeout`-length silence
+        // (pongs stopped) from a `TransportClosed`/`Backpressure` edge that fired with lastSeen still fresh.
+        val silenceMs = clock().toEpochMilliseconds() - lastSeenEpochMs
+        logger.info {
+            "heartbeat.unresponsive peer=${peerId.value} reason=$reason silenceMs=$silenceMs " +
+                "timeoutMs=${config.timeout.inWholeMilliseconds} → PeerUnresponsive"
+        }
         emitIfOpen(PartitionEvent.PeerUnresponsive(peerId, clock(), reason))
         return awaitRecoveryOrLoss()
     }
