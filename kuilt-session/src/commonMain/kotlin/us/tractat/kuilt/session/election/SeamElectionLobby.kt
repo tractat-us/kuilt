@@ -414,7 +414,12 @@ internal class SeamElectionLobby(
             check(!adopted) { "lobby already adopted a room" }
             adopted = true
             collectorJob.cancelAndJoin()
-            factory.adopt(seam, role, memberName = memberName, roomKey = roomKey)
+            // reweave = { seam }: the adopted mesh seam self-heals in place — a fabric that re-forms
+            // Woven→Weaving→Woven on a peer drop (and redials) rather than latching Torn. Returning the
+            // SAME seam lets a joiner's host-link tear run the resume path (wait for Woven, re-present
+            // the token) instead of dying on the immediate-terminal branch, so a transient mesh blip
+            // resumes rather than collapsing the room and forcing a re-election (#1618).
+            factory.adopt(seam, role, memberName = memberName, roomKey = roomKey, reweave = { seam })
         }
 
     private companion object {

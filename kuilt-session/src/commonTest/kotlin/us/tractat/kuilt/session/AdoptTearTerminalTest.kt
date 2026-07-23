@@ -70,7 +70,7 @@ class AdoptTearTerminalTest {
      * That is the churn source: every transient mesh blip kills the adopted room.
      */
     @Test
-    fun `adopted joiner with no reweave goes terminal on a transient tear, never opening a window`() =
+    fun `adopted joiner with no reweave goes terminal on a transient tear without opening a window`() =
         runTest(StandardTestDispatcher(), timeout = 5.seconds) {
             // FIXED clock: the detector measures silence as clock() - lastSeen, so a frozen clock
             // makes a plain `Timeout` impossible — the ONLY partition the detector can report is the
@@ -131,6 +131,132 @@ class AdoptTearTerminalTest {
             assertFalse(
                 windowOpened.isCompleted,
                 "the immediate-terminal branch never opens a reconnect window",
+            )
+        }
+
+    /**
+     * **Task 2 fix (heal within the window; RED before the fix, GREEN after).**
+     *
+     * The same adopted joiner, now given `reweave = { seam }` (the electLobby → adopt wiring after
+     * #1618). A transient host-link tear that **heals within the reconnect window** must open a
+     * window and **resume** — emit [MembershipEvent.WindowOpened] then [MembershipEvent.Resumed],
+     * NOT [MembershipEvent.HostLost]. Before the fix (`reweave == null`) this same blip went straight
+     * to terminal; the `reweave = { seam }` non-null makes the resume path run first.
+     */
+    @Test
+    fun `adopted joiner with reweave resumes when a transient tear heals within the window`() =
+        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+            // Advancing clock: the host opens its reconnect window via a heartbeat-silence Timeout
+            // while the joiner is away; the joiner's own tear is the peers-based TransportClosed
+            // (independent of the clock) that reaches the reweave path.
+            var nowMs = 0L
+            val clock = { Instant.fromEpochMilliseconds(nowMs) }
+            fun tick() {
+                nowMs += 100L
+                advanceTimeBy(100L)
+                runCurrent()
+            }
+
+            val loom = FlakyLifecycleLoom(InMemoryLoom(), backgroundScope)
+            val factory = SeamRoomFactory(
+                loom = loom,
+                scope = backgroundScope,
+                clock = clock,
+                heartbeatConfig = fastConfig,
+            )
+
+            val hostSeam = loom.weave(Rendezvous.New(Pattern("s")))
+            val joinerSeam = loom.weave(Rendezvous.Existing(InMemoryTag("s")))
+            val hostRoom = factory.adopt(hostSeam, SessionRole.Host, memberName = "Host")
+            // The fix: adopt the self-healing seam WITH reweave = { seam }.
+            val joinerRoom =
+                factory.adopt(joinerSeam, SessionRole.Joiner, memberName = "Joiner", reweave = { joinerSeam })
+
+            hostRoom.roster.first { it.size == 1 }
+            joinerRoom.roster.first { it.isNotEmpty() }
+
+            val windowOpened = backgroundScope.async {
+                joinerRoom.events.filterIsInstance<MembershipEvent.WindowOpened>().first()
+            }
+            val resumed = backgroundScope.async {
+                joinerRoom.events.filterIsInstance<MembershipEvent.Resumed>().first()
+            }
+            val hostLost = backgroundScope.async {
+                joinerRoom.events.filterIsInstance<MembershipEvent.HostLost>().first()
+            }
+
+            // Settle so both detectors latch "peer was seen".
+            repeat(3) { tick() }
+
+            // Transient tear (self-heal shape, not Torn). The host, still Woven, sees the joiner go
+            // silent and opens its reconnect window; the joiner sees the host leave its peer set and
+            // starts the resume attempt.
+            joinerSeam.enterWeaving()
+            repeat(4) { tick() }
+
+            // Heal within the window: the seam re-forms in place.
+            joinerSeam.recover()
+            repeat(5) { tick() }
+
+            assertIs<MembershipEvent.WindowOpened>(windowOpened.await())
+            assertIs<MembershipEvent.Resumed>(resumed.await())
+            assertFalse(
+                hostLost.isCompleted,
+                "a transient blip that heals in-window must resume, not fall to HostLost",
+            )
+        }
+
+    /**
+     * **Task 2 companion (sustained tear still goes terminal).**
+     *
+     * `reweave = { seam }` must not paper over a genuine host loss: a tear that never heals inside the
+     * reconnect window still ends in [MembershipEvent.HostLost] ([FailureReason.WindowExpired]) — the
+     * resume path is tried and, when the window elapses without recovery, correctly gives up.
+     */
+    @Test
+    fun `adopted joiner with reweave still goes HostLost when the tear outlasts the window`() =
+        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+            var nowMs = 0L
+            val clock = { Instant.fromEpochMilliseconds(nowMs) }
+            fun tick() {
+                nowMs += 100L
+                advanceTimeBy(100L)
+                runCurrent()
+            }
+
+            val loom = FlakyLifecycleLoom(InMemoryLoom(), backgroundScope)
+            val factory = SeamRoomFactory(
+                loom = loom,
+                scope = backgroundScope,
+                clock = clock,
+                heartbeatConfig = fastConfig,
+            )
+
+            val hostSeam = loom.weave(Rendezvous.New(Pattern("s")))
+            val joinerSeam = loom.weave(Rendezvous.Existing(InMemoryTag("s")))
+            val hostRoom = factory.adopt(hostSeam, SessionRole.Host, memberName = "Host")
+            val joinerRoom =
+                factory.adopt(joinerSeam, SessionRole.Joiner, memberName = "Joiner", reweave = { joinerSeam })
+
+            hostRoom.roster.first { it.size == 1 }
+            joinerRoom.roster.first { it.isNotEmpty() }
+
+            val hostLost = backgroundScope.async {
+                joinerRoom.events.filterIsInstance<MembershipEvent.HostLost>().first()
+            }
+
+            repeat(3) { tick() }
+
+            // Tear and never heal — a sustained outage past the 1000 ms reconnect window.
+            joinerSeam.enterWeaving()
+            repeat(13) { tick() }
+
+            val lost = hostLost.await()
+            assertIs<MembershipEvent.HostLost>(lost)
+            assertEquals(
+                FailureReason.WindowExpired,
+                lost.reason,
+                "a sustained tear must expire the window and go terminal (WindowExpired)",
             )
         }
 }

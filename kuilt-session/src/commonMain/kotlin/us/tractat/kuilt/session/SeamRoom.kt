@@ -179,14 +179,23 @@ public class SeamRoomFactory(
      *
      * [role] is fixed for the room's lifetime. [roomKey] is the admit-gate key
      * ([us.tractat.kuilt.core.Pattern.roomKey]); [memberName] is this peer's own roster label
-     * (null → peer-id-derived). Resume-after-tear is not wired (no `reweave`): a joiner whose host
-     * link tears goes terminal ([MembershipEvent.HostLost]).
+     * (null → peer-id-derived).
+     *
+     * [reweave] threads resume-after-tear into the adopted room (#1618). When null (the default) a
+     * joiner whose host link tears goes terminal ([MembershipEvent.HostLost]) — the pre-#1618
+     * behaviour, correct for a seam that cannot heal. When the adopted seam **self-heals in place**
+     * (a fabric that re-forms `Woven → Weaving → Woven` on peer loss rather than latching
+     * [us.tractat.kuilt.core.SeamState.Torn] — e.g. a redialing radio loom), pass `reweave = { seam }`
+     * so a transient blip runs the [JoinerResumeMachine] resume path (wait for `Woven`, re-present the
+     * [ResumeToken]) instead of going straight to terminal. See the [SeamRoom] `reweave` KDoc for the
+     * same-instance-heal contract this must satisfy.
      */
     public suspend fun adopt(
         seam: Seam,
         role: SessionRole,
         memberName: String? = null,
         roomKey: String? = null,
+        reweave: (suspend () -> Seam)? = null,
     ): Room {
         val roomId = if (role == SessionRole.Host) RoomId(seam.selfId.value + "-room") else null
         return SeamRoom(
@@ -199,6 +208,7 @@ public class SeamRoomFactory(
             admitTimeout = admitTimeout,
             roomId = roomId,
             roomKey = roomKey,
+            reweave = reweave,
             reconnectControllerFactory = reconnectControllerFactory,
         ).also { room -> room.start() }
     }
