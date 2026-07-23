@@ -17,13 +17,20 @@ import kotlinx.serialization.Serializable
  * crossed — and every peer can merge its copy with any other and always agree,
  * with no clock and no central referee.
  *
- * ## This phase is inert
+ * ## What you can do with it
  *
- * This is the data layer only: you can construct ledger states (via [ZERO] and
- * [bootstrap], or the internal test factory) and merge them with [piece], and the
- * merge is a provable join-semilattice. The operations that *change* entitlement
- * (grant, return, transfer, spend) and the integrity checks are added in the next
- * phase; a ledger you can only construct and merge is the correct intermediate.
+ * Construct and merge ledger states (via [ZERO] and [bootstrap], or the internal
+ * test factory) — the merge ([piece]) is a provable join-semilattice — and drive
+ * the **economics** on top of it: [holdings] (derived spendable authority), the
+ * conserving mutators [mint] / [delegate] / [release] / [transfer] / [spend] (each
+ * returning a [Patch] or `null` when holdings are insufficient), and [validate]
+ * (the integrity report). Each feasibility-consuming mutator carries a
+ * self-justifying witness so [validate] never false-fires under honest partial
+ * delivery.
+ *
+ * Every present edge is treated as **ACTIVE** here; the lifecycle lattice (PREPARED
+ * / ACTIVE / CLOSING / RETIRED) and its `DualActiveInbound` / `ClosureViolation`
+ * conflicts are a later phase.
  *
  * ## The representation
  *
