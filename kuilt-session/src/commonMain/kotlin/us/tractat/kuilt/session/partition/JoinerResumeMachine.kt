@@ -1,5 +1,6 @@
 package us.tractat.kuilt.session.partition
 
+import io.github.oshai.kotlinlogging.KotlinLogging
 import kotlinx.atomicfu.locks.ReentrantLock
 import kotlinx.atomicfu.locks.withLock
 import kotlinx.coroutines.CancellationException
@@ -19,6 +20,8 @@ import us.tractat.kuilt.session.FailureReason
 import us.tractat.kuilt.session.admit.AdmitMessage
 import us.tractat.kuilt.session.admit.RejectCode
 import kotlin.time.Instant
+
+private val logger = KotlinLogging.logger("us.tractat.kuilt.session.partition.JoinerResumeMachine")
 
 /**
  * The room-side operations [JoinerResumeMachine] needs but cannot own: they touch state
@@ -310,6 +313,16 @@ internal class JoinerResumeMachine(
         val reweaveFn = reweave
         val (token, hostId) = lock.withLock { resumeToken to host.hostPeer() }
         if (reweaveFn == null || token == null || hostId == null) {
+            // #1618 evidence capture: name which of the three null gates sent this tear straight
+            // to terminal HostLost (no WindowOpened). Identities, not sizes — no behavior change.
+            logger.info {
+                val reason = when {
+                    reweaveFn == null -> "no-reweave"
+                    token == null -> "no-token"
+                    else -> "no-host"
+                }
+                "resume.terminal reason=$reason host=$hostId roomId=${token?.roomId?.value}"
+            }
             // Clear reconnectJob FIRST (this coroutine IS it) so onReconnectFailed → leave()
             // doesn't cancel its own coroutine mid-teardown. See the failure branch below.
             lock.withLock { reconnectJob = null }
@@ -364,6 +377,9 @@ internal class JoinerResumeMachine(
                     resume(token)
                 }.getOrNull()
                 if (result is ResumeResult.Success) {
+                    // #1618 evidence capture: the resume landed — this tear recovered without
+                    // going terminal. Identities, not sizes — no behavior change.
+                    logger.info { "resume.ok host=$hostId roomId=${token.roomId.value}" }
                     ok = true
                 } else {
                     // Fail fast ONLY on a code the host declared terminal (#1572). Everything
