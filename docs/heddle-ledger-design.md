@@ -34,9 +34,13 @@ toss — it is where the constraints force you. The reviews then found the sharp
 ```kotlin
 @Serializable
 public class EntitlementLedger private constructor(
-    // Immutable topology (grow-only union). Supplies parent/child/weight; H1b treats
-    // every present edge as ACTIVE (lifecycle is H2). One AttachmentId per generation.
-    private val records: Map<AttachmentId, AttachmentRecord>,
+    // Immutable topology, keyed by generation. Each value is a grow-only SET of records
+    // so a divergent same-id record is RETAINED, not collapsed — a healthy id has a
+    // singleton set; size > 1 is exactly what validate reports as RecordDivergence. A
+    // single value merged by priority (maxOf/LWW) would both destroy that evidence and
+    // resolve a parent-pointer conflict by priority, which heddle-design.md §5.2 forbids.
+    // Supplies parent/child/weight; H1b treats every present edge as ACTIVE (lifecycle H2).
+    private val records: Map<AttachmentId, Set<AttachmentRecord>>,
 
     // Root supply, keyed by a unique MintId (NOT by ReplicaId) so mints UNION, never
     // max-collide — see fix 4. Value carries the holder + amount.
@@ -112,9 +116,10 @@ honest traffic, with no reliance on delivery order or the anti-entropy window.
 
 ## `piece` (the join)
 
-Componentwise, every component a known join-semilattice — `records`/`minted` grow-only
-union (same `MintId`/`AttachmentId` ⇒ identical value), per-edge `GCounter` max, nested
-`transfers` per-row `GCounter` max. A finite product of semilattices is a semilattice, so
+Componentwise, every component a known join-semilattice — `records` a per-id grow-only
+**set union** (retaining any divergent record for `validate`), `minted` a grow-only union
+keyed by unique `MintId` (distinct mints never collide — see fix 4), per-edge `GCounter`
+max, nested `transfers` per-row `GCounter` max. A finite product of semilattices is a semilattice, so
 `piece` is idempotent/commutative/associative (the `LatticeProduct` argument, n-wise). A
 `GCounter` delta carries the resulting absolute slot value, so re-delivering any patch is
 absorbed idempotently by max — **duplicate-delivery idempotence comes from the lattice, not
