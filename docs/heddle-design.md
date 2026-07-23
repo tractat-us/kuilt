@@ -1028,6 +1028,79 @@ Everything in this module that runs per task or per allocation round is cloth
 fencing) are embroidery, and they are the *same needle* warp already threads.
 Nothing here moves the CALM boundary; it just makes the cloth fair.
 
+### 14.6 Location eligibility — “can I execute *here*” (Model A)
+
+So far the scheduler answers *whether* a task may run (entitlement) and *whose
+turn* it is (policy), but not *where it is even allowed to run*. Real grids need
+that third question: this work needs a GPU, must stay in-region, or should sit
+where its data already is. Call it **eligibility** — a predicate over
+`(task, peer)`, upstream of placement.
+
+The shape is deliberately the same as two things already in this design:
+
+- **Peer capabilities are soft state, exactly like demand (§6).** Each peer
+  advertises its own slot in an `EphemeralMap<PeerId, CapSet>` — attributes it
+  can serve (GPU, region, held datasets, runtime, memory class). Stale,
+  duplicated, or expiring is fine; capabilities are presence, not a ledger.
+- **A task's affinity is a predicate, like the lane tag (§14.4).** It rides the
+  same opaque envelope, decorating the `Draft`:
+
+  ```kotlin
+  warp.shuttle(work)
+      .where { it.has(GPU) && it.region == "us-east" }   // eligibility (Model A)
+      .lane("acme/gpu")                                   // entitlement lane
+      .weave()
+  ```
+
+Placement then consistent-hashes over the **eligible subset** of the roster, not
+the whole roster — every peer computes the same eligible set from the same
+convergent capability view, so determinism holds for the same reason the ring
+does. A stale view can only *misplace* work; warp's `Results` dedup and ring
+re-home already absorb the transient inconsistency. **Eligibility introduces no
+conserved quantity, so it cannot touch conservation** — it is purely a
+placement-side overlay, orthogonal to the ledger, and composes with lanes rather
+than living inside them. In practice it is a warp-side feature (the ring over an
+eligible subset + capability advertisements) that `:kuilt-warp-heddle` combines
+with entitlement.
+
+**The algebra — why this belongs here.** Allocating virtual *time* and virtual
+*space* are the same operation. Every selection in the system is an argmin over a
+weighted coordinate on a feasible set:
+
+```text
+select = argmin over { c ∈ candidates : feasible(c) } of ( weight(c)·coord(c), tieBreakId(c) )
+```
+
+- **coord = virtual service time**, feasible = `v ≤ V`, weight = share
+  → EEVDF fair-share (§7).
+- **coord = distance in a metric**, feasible = capability match, weight = affinity
+  → locality placement.
+
+The heddle policy is `argmin (deadline, id)`; weighted-rendezvous placement is
+`argmin (distance, id)` — the same functor on a different coordinate (the
+weighted-fair-queueing ↔ weighted-rendezvous-hashing correspondence is real, not
+loose). Two consequences worth recording:
+
+- **Model A’s “affinity as a score” is a coordinate position**, not a boolean —
+  which is how eligibility generalizes to NUMA-style data-locality,
+  latency-to-user, and cost-preference placement.
+- **Entitlement is a conserved budget along the *time* axis.** Model A adds no
+  budget to the *space* axis, which is exactly why it is safe and additive. The
+  mirror — a conserved *spatial* budget bound to a location set (a tenant’s
+  GPU-budget that only *exists* on GPU nodes) — is **Model B**, the cpuset
+  analogue: the heddle ledger with the axis relabelled, with the same partition
+  subtleties (a spatial budget on a vanished location is stranded). Model B is a
+  deliberate **north star**, not v1.
+
+This also unifies the two “pluggable” axes: because EEVDF and locality placement
+are one functor on two coordinates, a future `SchedulingPolicy` could be generic
+over a `Coordinate<C>` (`position`/`feasible`/`weight`), with EEVDF and placement
+as two instances. v1 keeps them concrete — premature generality is its own trap —
+but the coordinate abstraction is the principled reason the policy axis and the
+eligibility axis are the same axis. (Pluggable *policy per group* — the sibling
+axis — is already a seam here, §7/§11; making it selectable and shipping a small
+zoo is a small, separate follow-on.)
+
 ## 15. Implementation phasing
 
 Six phases, each independently landable as its own epic sub-issue track;
