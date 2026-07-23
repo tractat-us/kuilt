@@ -118,6 +118,7 @@ class EntitlementLedgerValidateTest {
     fun recordDivergenceIsReportedAndQuarantinesHoldings() {
         val left = EntitlementLedger.of(
             records = mapOf(e1 to setOf(AttachmentRecord(e1, root, g1, Weight.ONE, 0L))),
+            minted = mapOf(MintId("m") to MintRecord(alice, 10L)), // funded, so root is not itself negative
             issued = mapOf(e1 to GCounter.of(alice to 10L)),
         )
         val right = EntitlementLedger.of(
@@ -168,5 +169,85 @@ class EntitlementLedgerValidateTest {
         assertEquals(report, report.sorted(), "report not in canonical order")
         // PerEdgeSafety (order 0) sorts before RecordDivergence (order 2).
         assertTrue(report.indexOf(LedgerConflict.PerEdgeSafety(e1)) < report.indexOf(LedgerConflict.RecordDivergence(e2)))
+    }
+
+    /**
+     * A divergent CHILD edge must **deflate**, never inflate, the parent's holdings.
+     * `childEdges` uses `any` (matching `activeChildren`/lineage), so when `e2` forks
+     * it stays in `g1`'s delegated-out subtraction — the authority is frozen, not
+     * re-manufactured. Were it dropped (an earlier `singleOrNull`), `g1`'s holdings
+     * would jump by the delegated-out amount: a double-spend the sum check would miss.
+     */
+    @Test
+    fun divergentChildEdgeDeflatesNeverInflatesParentHoldings() {
+        val healthy = EntitlementLedger.of(
+            records = mapOf(
+                e1 to setOf(AttachmentRecord(e1, root, g1, Weight.ONE, 0L)),
+                e2 to setOf(AttachmentRecord(e2, g1, g2, Weight.ONE, 0L)),
+            ),
+            minted = mapOf(MintId("m") to MintRecord(alice, 50L)),
+            issued = mapOf(e1 to GCounter.of(alice to 50L), e2 to GCounter.of(alice to 20L)),
+        )
+        assertEquals(30L, healthy.holdings(g1, alice)) // 50 credited − 20 delegated to g2
+
+        // e2 forks (a second, differently-weighted record under the same id).
+        val divergent = healthy.piece(
+            EntitlementLedger.of(records = mapOf(e2 to setOf(AttachmentRecord(e2, g1, g2, Weight.of(3, 1), 0L)))),
+        )
+        assertTrue(LedgerConflict.RecordDivergence(e2) in divergent.validate())
+        assertEquals(30L, divergent.holdings(g1, alice), "divergent child must NOT inflate the parent")
+        assertEquals(0L, divergent.holdings(g2, alice), "the divergent child's subtree quarantines")
+
+        // Conservation never inflates: Σ holdings + Σ leafSpent ≤ minted (safe deflation).
+        val total = listOf(root, g1, g2).sumOf { g -> divergent.holdings(g, alice) } + divergent.leafSpentTotal()
+        assertTrue(total <= divergent.mintedTotal(), "divergence inflated conservation: $total > ${divergent.mintedTotal()}")
+    }
+
+    /**
+     * Depth-1 donor backing (design fix 2, narrowed): a **single-hop** transfer-funded
+     * spend, delivered to a replica that has genesis funding but is MISSING the donor's
+     * delegate AND the transfer, must not false-fire. The spend patch carries the
+     * transfer slot it consumed plus the donor's own `issued` backing at that edge.
+     */
+    @Test
+    fun singleHopTransferFundedSpendDoesNotFalseFireOnLaggingReplica() {
+        val leafTree = EntitlementLedger.of(
+            records = mapOf(e1 to setOf(AttachmentRecord(e1, root, g1, Weight.ONE, 0L))),
+        ) // root → g1, g1 is a leaf (no prefix edges → no roll-up)
+        var full = leafTree.piece(EntitlementLedger.bootstrap(root, mapOf(alice to 100L), nonce = "g"))
+        full = full.piece(full.delegate(alice, e1, 50L)!!) // alice funds g1
+        full = full.piece(full.transfer(g1, alice, bob, 20L)!!) // single hop: alice → bob at g1
+        val spendPatch = full.spend(bob, g1, 20L)!! // bob spends his transferred 20
+
+        // A lagging replica: genesis mint + topology only — no delegate, no transfer.
+        val lagging = leafTree.piece(EntitlementLedger.bootstrap(root, mapOf(alice to 100L), nonce = "g"))
+        val received = lagging.piece(spendPatch)
+
+        // The depth-1 backing brought issued(e1)[alice] and the transfer alongside the
+        // leafSpent, so neither PerEdgeSafety nor a spurious negative fires.
+        assertTrue(received.validate().isEmpty(), "single-hop witness failed: ${received.validate()}")
+    }
+
+    /**
+     * A **multi-hop** transfer-funded charge is the accepted transient: on a
+     * fully-delivered state `validate` is clean (it self-heals), so we pin only that —
+     * a partially-delivered replica MAY show a transient false conflict, which we do
+     * NOT assert against (the witness stops at depth 1, by design).
+     */
+    @Test
+    fun multiHopTransferFundedChargeIsCleanOnceFullyDelivered() {
+        val carol = ReplicaId("carol")
+        val leafTree = EntitlementLedger.of(
+            records = mapOf(e1 to setOf(AttachmentRecord(e1, root, g1, Weight.ONE, 0L))),
+        )
+        var full = leafTree.piece(EntitlementLedger.bootstrap(root, mapOf(alice to 100L), nonce = "g"))
+        full = full.piece(full.delegate(alice, e1, 60L)!!)
+        full = full.piece(full.transfer(g1, alice, bob, 40L)!!) // hop 1: alice → bob
+        full = full.piece(full.transfer(g1, bob, carol, 25L)!!) // hop 2: bob → carol
+        full = full.piece(full.spend(carol, g1, 25L)!!) // carol spends
+        // Local safety held throughout (every mutator returned non-null on sufficient
+        // holdings); the converged report is empty.
+        assertTrue(full.validate().isEmpty(), "converged multi-hop state must be clean: ${full.validate()}")
+        assertEquals(0L, full.holdings(g1, carol))
     }
 }

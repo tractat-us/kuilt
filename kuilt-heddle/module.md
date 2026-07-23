@@ -21,10 +21,15 @@ pass through — the same fair-share idea, mechanical instead of computational.
 The ledger's data layer — the shared tally and its order-independent merge rule —
 plus the **economics** that ride on top: who may spend what (derived *holdings*),
 the conserving operations that move entitlement around (granting, returning,
-transferring, spending), and the integrity report that flags tampering. Every
-operation checks feasibility locally and either returns a small patch to merge in
-or refuses, so no honest peer ever spends beyond its share, and the report reads
-the same on every copy.
+transferring, spending), and an integrity report that flags tampering.
+
+Safety lives in one place: before it moves anything, an operation checks feasibility
+against the peer's own complete copy and either returns a small patch to merge in or
+refuses — so no honest peer ever spends beyond its share, with no coordination. The
+integrity report is a **diagnostic, not a gate**: on a fully-shared copy it reads the
+same everywhere, but while a hand-off is still propagating it can momentarily flag a
+multi-hop transfer that has not yet caught up; that clears itself as copies reconcile.
+Don't block work on the report being empty — block on the operation refusing.
 
 The lifecycle of an edge (prepared → active → closing → retired) is treated as
 always-active for now; that gating arrives in a later phase.

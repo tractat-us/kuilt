@@ -24,9 +24,21 @@ import kotlinx.serialization.Serializable
  * the **economics** on top of it: [holdings] (derived spendable authority), the
  * conserving mutators [mint] / [delegate] / [release] / [transfer] / [spend] (each
  * returning a [Patch] or `null` when holdings are insufficient), and [validate]
- * (the integrity report). Each feasibility-consuming mutator carries a
- * self-justifying witness so [validate] never false-fires under honest partial
- * delivery.
+ * (the integrity report).
+ *
+ * ## Safety vs. diagnostics
+ *
+ * **Safety is the local holdings check** each mutator runs on the actor's own complete
+ * state before it emits a patch — a peer never spends beyond `holdings(P, self)`, with
+ * zero coordination, because every term of that check reads a slot only that peer
+ * writes. **[validate] is a diagnostic, not a safety gate.** It is eventually
+ * consistent: on a fully-delivered state its report is exact, but under *partial*
+ * delivery of a **multi-hop transfer-funded** charge it may transiently list a false
+ * [LedgerConflict.PerEdgeSafety] / [LedgerConflict.PersistentNegativeHoldings] that a
+ * later anti-entropy round dissolves. Each feasibility-consuming mutator carries a
+ * witness that keeps the **direct and single-hop-transfer** cases from false-firing;
+ * deeper transfer chains are the accepted transient. **Consumers must not hard-gate on
+ * `validate().isEmpty()`** while rebalancing is in flight — gate on the mutator's `null`.
  *
  * Every present edge is treated as **ACTIVE** here; the lifecycle lattice (PREPARED
  * / ACTIVE / CLOSING / RETIRED) and its `DualActiveInbound` / `ClosureViolation`
@@ -150,9 +162,18 @@ public class EntitlementLedger private constructor(
         return edges.toList()
     }
 
-    /** The child edges of [group] (singleton records whose parent is [group]), sorted. */
+    /**
+     * The child edges of [group] — every edge **any** of whose records names [group] as
+     * parent, sorted. Uses `any` (matching [activeChildren]/[lineageEdges]), deliberately
+     * *not* `singleOrNull`: were a child edge to go divergent (`size > 1`) and drop out of
+     * this set, its `issued(c)[r] − returned(c)[r]` would stop being subtracted and the
+     * parent's [holdings] would **inflate** — re-spendable authority manufactured from a
+     * conflict. Keeping the divergent child in the subtraction converts that into safe
+     * *deflation*: the authority is frozen, never created (a double-spend the sum-wise
+     * check alone would miss).
+     */
     private fun childEdges(group: GroupId): List<AttachmentId> =
-        records.filter { (_, recs) -> recs.singleOrNull()?.parent == group }.keys.sorted()
+        records.filter { (_, recs) -> recs.any { it.parent == group } }.keys.sorted()
 
     /** True when [group] has no child edges — the only groups at which service may be spent. */
     public fun isLeaf(group: GroupId): Boolean = childEdges(group).isEmpty()
@@ -212,12 +233,14 @@ public class EntitlementLedger private constructor(
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // Mutators — house idiom: check feasibility on `this`, return Patch?/null.
-    // Each feasibility-consuming patch also carries a self-justifying witness
-    // (design fix 2): the observed credit slots its holdings check read along the
-    // lineage, at their absolute values (max-safe), so a state that contains the
-    // debit always contains its justification and `validate` never false-fires
-    // under honest partial delivery.
+    // Mutators — house idiom: check feasibility on `this`, return Patch?/null. The
+    // `null` (insufficient holdings on the actor's own complete state) is the SAFETY
+    // gate. Each feasibility-consuming patch also carries a witness (design fix 2,
+    // narrowed): the observed credit slots its holdings check read along the lineage,
+    // plus a depth-1 backing of any donor who transferred into the actor — at their
+    // absolute values (max-safe). This keeps `validate` (a diagnostic, not a gate)
+    // from false-firing on the direct and single-hop-transfer cases under partial
+    // delivery; a multi-hop transfer-funded charge is an accepted transient.
     // ─────────────────────────────────────────────────────────────────────────
 
     /**
@@ -299,30 +322,59 @@ public class EntitlementLedger private constructor(
     }
 
     /**
-     * The self-justifying witness (design fix 2): the credit slots [actor]'s holdings
-     * check read along [lineage], at their observed absolute values. Carrying them in
-     * the patch guarantees any state holding the debit also holds a credit ≥ its
-     * justification, so [validate]'s [LedgerConflict.PerEdgeSafety] /
-     * [LedgerConflict.PersistentNegativeHoldings] cannot false-fire under honest
-     * partial delivery. Absolute values are max-safe, so over-inclusion is harmless.
+     * The witness a feasibility-consuming patch carries: the credit slots [actor]'s
+     * holdings check read along [lineage], at their observed absolute values (max-safe,
+     * so over-inclusion is harmless).
+     *
+     * **Scope — the honest boundary.** Safety is the *local* holdings check the mutator
+     * already ran on [actor]'s own complete state; the witness only keeps [validate]
+     * (a diagnostic) from false-firing under partial delivery. It covers:
+     *  - [actor]'s own credit read directly by the check — `issued`/`returned`[actor] on
+     *    every lineage edge, [actor]'s minted supply, and the transfer slots crediting
+     *    [actor];
+     *  - a **depth-1 backing** of each donor who transferred into [actor] at a level: the
+     *    donor's own `issued`/`returned`[donor] at that edge (or minted, at the root), so
+     *    a *single-hop* transfer-then-charge does not false-fire on a lagging replica.
+     *
+     * It deliberately does **not** chase a transfer's funding transitively (Iain's call):
+     * a *multi-hop* transfer-funded charge may transiently surface a false
+     * [LedgerConflict.PerEdgeSafety] / [LedgerConflict.PersistentNegativeHoldings] on a
+     * partially-delivered replica. That is an eventually-consistent diagnostic artifact
+     * that self-heals on anti-entropy — never an authorized overspend.
      */
     private fun witness(actor: ReplicaId, lineage: List<AttachmentId>): EntitlementLedger {
         val wIssued = HashMap<AttachmentId, GCounter>()
         val wReturned = HashMap<AttachmentId, GCounter>()
-        for (e in lineage) {
-            slot(issued, e, actor).takeIf { it > 0L }?.let { wIssued[e] = GCounter.of(actor to it) }
-            slot(returned, e, actor).takeIf { it > 0L }?.let { wReturned[e] = GCounter.of(actor to it) }
-        }
-        val wMinted = minted.filterValues { it.holder == actor }
+        val wMinted = HashMap<MintId, MintRecord>()
         val wTransfers = HashMap<PathKey, Map<ReplicaId, GCounter>>()
-        for (pathKey in listOf(PathKey.ROOT) + lineage.map { PathKey.of(it) }) {
+
+        // The actor's own credit read directly by the holdings check.
+        for (e in lineage) {
+            addSlot(wIssued, e, actor, slot(issued, e, actor))
+            addSlot(wReturned, e, actor, slot(returned, e, actor))
+        }
+        for ((id, m) in minted) if (m.holder == actor) wMinted[id] = m
+
+        // Each level names the path ending at it; the root has no edge.
+        for (edge in listOf<AttachmentId?>(null) + lineage) {
+            val pathKey = edge?.let { PathKey.of(it) } ?: PathKey.ROOT
             val rows = transfers[pathKey] ?: continue
             val kept = HashMap<ReplicaId, GCounter>()
             for ((donor, row) in rows) {
                 if (donor == actor) {
-                    kept[donor] = row // actor's own outflow row — actor-authored, max-safe
+                    kept[donor] = row // the actor's own outflow row — actor-authored, max-safe
+                    continue
+                }
+                val credited = row.count(actor)
+                if (credited <= 0L) continue
+                kept[donor] = GCounter.of(actor to credited)
+                // Depth-1 donor backing (see KDoc): the donor could only transfer what it
+                // held, so carry the donor's own backing at this edge / root.
+                if (edge == null) {
+                    for ((id, m) in minted) if (m.holder == donor) wMinted[id] = m
                 } else {
-                    row.count(actor).takeIf { it > 0L }?.let { kept[donor] = GCounter.of(actor to it) }
+                    addSlot(wIssued, edge, donor, slot(issued, edge, donor))
+                    addSlot(wReturned, edge, donor, slot(returned, edge, donor))
                 }
             }
             if (kept.isNotEmpty()) wTransfers[pathKey] = kept
@@ -336,8 +388,12 @@ public class EntitlementLedger private constructor(
 
     /**
      * The integrity faults derivable from this merged state, in one canonical order
-     * (identical on every replica). With the self-justifying witness these fire only
-     * on genuine faults, never honest lag:
+     * (identical on every replica). This is an **eventually-consistent diagnostic, not
+     * a safety gate** — safety is the local holdings check in the mutators. On a
+     * fully-delivered state the report is exact; the per-patch witness keeps the direct
+     * and single-hop-transfer cases honest under partial delivery, but a partially-
+     * delivered **multi-hop transfer-funded** charge may transiently list a false
+     * conflict that self-heals on anti-entropy. The checks:
      *
      *  - [LedgerConflict.PerEdgeSafety] — sum-wise `leafSpent + rollupSpent + returned
      *    > issued` on an edge's aggregate values.
@@ -502,6 +558,13 @@ private fun slot(counters: Map<AttachmentId, GCounter>, id: AttachmentId, r: Rep
 /** A `GCounter` carrying just the `(id, r)` slot bumped to its new absolute value (overflow-checked). */
 private fun bumpedSlot(counters: Map<AttachmentId, GCounter>, id: AttachmentId, r: ReplicaId, by: Long): GCounter =
     GCounter.of(r to checkedAdd(slot(counters, id, r), by))
+
+/** Merge a single `(edge, r) = value` slot into a witness accumulator (skips non-positive). */
+private fun addSlot(acc: HashMap<AttachmentId, GCounter>, edge: AttachmentId, r: ReplicaId, value: Long) {
+    if (value <= 0L) return
+    val one = GCounter.of(r to value)
+    acc[edge] = acc[edge]?.piece(one) ?: one
+}
 
 private fun Map<AttachmentId, GCounter>.mergeEdgeCounters(
     other: Map<AttachmentId, GCounter>,

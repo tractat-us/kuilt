@@ -103,16 +103,33 @@ witness** (fix 2). Overflow-checked adds throughout.
   `actualCost > maximumCost` rejected, never recorded. (`reserve`/`complete` are the H4
   node layer over this; earmarks are node-local, not replicated.)
 
-**Self-justifying witness (fix 2, from the C/A reviews).** Because a spend/delegate/release
-is causally *after* the `issued`/`transfers`/`minted` slots that justify its holdings check,
-and that causality crosses writer streams (a `GCounter` has no `causalDots`, and Quilter
-gives no cross-sender ordering), a naive `validate` false-fires on honest partial delivery
-(sees the debit, not yet the credit → "spent > issued" → quarantines a healthy lineage,
-divergently). Fix: each feasibility-consuming patch **also carries the credit slots its
-check read** (the observed `issued`/`returned`/`transfers`/`minted` values along the path —
-absolute values, already in hand, max-safe). Then any state containing the debit also
-contains a credit ≥ its justification, so the integrity checks below can never fire on
-honest traffic, with no reliance on delivery order or the anti-entropy window.
+**Self-justifying witness (fix 2, from the C/A reviews) — and its honest boundary.**
+Because a spend/delegate/release is causally *after* the `issued`/`transfers`/`minted`
+slots that justify its holdings check, and that causality crosses writer streams (a
+`GCounter` has no `causalDots`, and Quilter gives no cross-sender ordering), a naive
+`validate` false-fires on honest partial delivery (sees the debit, not yet the credit →
+"spent > issued" → quarantines a healthy lineage, divergently). Fix: each
+feasibility-consuming patch **also carries the credit slots its check read** (the
+observed `issued`/`returned`/`transfers`/`minted` values along the path — absolute
+values, already in hand, max-safe), **plus a depth-1 backing of any donor who
+transferred into the actor** (the donor's own `issued`/`returned` at that edge, or
+`minted` at the root — the donor could only transfer what it held). Then any state
+containing the debit also contains a credit ≥ its justification for the **direct and
+single-hop-transfer** cases, so the integrity checks below do not fire on that honest
+traffic.
+
+**What the witness deliberately does *not* cover.** A transfer's funding is transitive,
+and the witness stops at depth 1 (chasing it further is not paid for). So a
+**multi-hop transfer-funded** charge — B receives from A, hands to C, C spends — can, on
+a *partially-delivered* replica, transiently surface a false `PerEdgeSafety` /
+`PersistentNegativeHoldings` until anti-entropy catches up. This is acceptable because
+**`validate` is an eventually-consistent *diagnostic*, not a safety gate.** Safety is the
+*local* holdings check the mutator runs on the actor's own complete state (every term of
+which reads a slot only the actor writes); it never authorizes an overspend regardless of
+what any partial `validate` reports. Consumers must gate on the mutator returning `null`,
+**not** on `validate().isEmpty()` while rebalancing is in flight. (The alternative —
+demote `validate` to converged-state-only, or pay for a full transitive witness — was
+weighed and rejected; the depth-1 witness plus the diagnostic framing is the chosen point.)
 
 ## `piece` (the join)
 
@@ -151,8 +168,11 @@ rejected as buying ~nothing). Quarantine: if any edge on `group`'s lineage is in
 ## `validate(): List<LedgerConflict>` (fix 3)
 
 A pure, deterministically-sorted fold over merged state — identical report on every replica,
-never resolved by timestamp. With self-justifying patches (fix 2) these fire only on genuine
-integrity faults, never honest lag:
+never resolved by timestamp. It is an **eventually-consistent diagnostic, not a safety gate**
+(safety is the mutators' local holdings check): on a fully-delivered state the report is exact,
+and the depth-1 witness (fix 2) keeps the direct and single-hop-transfer cases honest under
+partial delivery, but a partially-delivered multi-hop transfer-funded charge may transiently
+list a false conflict that self-heals on anti-entropy. The checks:
 
 - **`PerEdgeSafety(e)`** — `(leafSpent(e)+rollupSpent(e)+returned(e)).value > issued(e).value`.
   **Sum-wise on aggregate values** (per-slot is legitimately violable: a peer may return
