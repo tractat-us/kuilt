@@ -4,6 +4,7 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.filterIsInstance
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runTest
@@ -15,6 +16,7 @@ import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.liveness.HeartbeatConfig
+import us.tractat.kuilt.session.admit.AdmitMessage
 import us.tractat.kuilt.session.partition.ResumeResult
 import us.tractat.kuilt.session.partition.ResumeToken
 import us.tractat.kuilt.session.partition.RoomId
@@ -276,6 +278,70 @@ class RoomResumeTest {
         assertTrue(
             event.expiresAt > Instant.fromEpochMilliseconds(0L),
             "expiresAt must be a non-epoch-zero Instant derived from the internal controller's expiry",
+        )
+    }
+
+    // ── Test 6: ResumeAck host-authoritative gate + Resumed idempotence (#1618) ─
+
+    /**
+     * Regression for #1618: [SeamRoom]'s ResumeAck handler must be
+     * host-authoritative and idempotent — mirroring the Farewell gate.
+     *
+     * A ResumeAck from a **non-host** peer is ignored, and a **duplicate**
+     * ResumeAck from the host emits exactly **one** [MembershipEvent.Resumed].
+     * The sequence {non-host ack, host ack, duplicate host ack} must therefore
+     * yield a single Resumed. Before the fix the handler emitted unconditionally
+     * for every ResumeAck, so this sequence produced three.
+     */
+    @Test
+    fun `ResumeAck is host-gated and Resumed is idempotent`() = runTest {
+        var clockMs = 0L
+        val clock: () -> Instant = { Instant.fromEpochMilliseconds(clockMs) }
+        val loom = InMemoryLoom()
+        val hostSeam = loom.host(Pattern("Alice"))
+        val hostRoom = makeSeamRoom(hostSeam, SessionRole.Host, "Alice", clock, RoomId("room-1618"))
+        val joinerDelegate = loom.join(InMemoryTag("Bob"))
+        val joinerSeam = FaultySeam(joinerDelegate, backgroundScope, FaultProfile.Healthy)
+        val joinerRoom = makeSeamRoom(joinerSeam, SessionRole.Joiner, "Bob", clock)
+        // A third, non-host peer in the mesh whose ResumeAck must be ignored.
+        val nonHostSeam = loom.join(InMemoryTag("Carol"))
+
+        hostRoom.roster.first { it.size == 1 }
+        joinerRoom.roster.first { it.isNotEmpty() } // host now identified as hostPeerId
+        val token = joinerRoom.resumeToken
+        assertNotNull(token, "joiner must hold a resume token after admit")
+
+        val resumed = mutableListOf<MembershipEvent.Resumed>()
+        backgroundScope.launch {
+            joinerRoom.events.filterIsInstance<MembershipEvent.Resumed>().collect { resumed.add(it) }
+        }
+        advanceTimeBy(1L) // let the collector subscribe
+
+        // Drop the joiner's outbound so its Resume never reaches the host: the host
+        // never auto-answers, leaving a pending resume flight we resolve by hand.
+        joinerSeam.setFaultProfile(FaultProfile.DropAll(Direction.Outbound))
+        val resumeResult = async { joinerRoom.resume(token) }
+        advanceTimeBy(10L) // resume() installs the pending flight and enters its await
+
+        val ack = AdmitMessage.encode(AdmitMessage.ResumeAck)
+
+        // 1. Non-host peer's ResumeAck — ignored (no Resumed, flight untouched).
+        nonHostSeam.sendTo(joinerRoom.selfId, ack)
+        advanceTimeBy(10L)
+
+        // 2. Host's ResumeAck — resolves the flight, emits exactly one Resumed.
+        hostSeam.sendTo(joinerRoom.selfId, ack)
+        advanceTimeBy(10L)
+
+        // 3. Duplicate host ResumeAck — no pending flight, no second Resumed.
+        hostSeam.sendTo(joinerRoom.selfId, ack)
+        advanceTimeBy(10L)
+
+        assertIs<ResumeResult.Success>(resumeResult.await())
+        assertEquals(
+            1,
+            resumed.size,
+            "exactly one Resumed after {non-host, host, duplicate-host} acks",
         )
     }
 
