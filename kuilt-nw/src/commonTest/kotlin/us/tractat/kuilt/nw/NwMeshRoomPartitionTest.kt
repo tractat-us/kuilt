@@ -78,7 +78,11 @@ class NwMeshRoomPartitionTest {
             val radio = FakeNwRadio()
             val clock: () -> Instant = { Instant.fromEpochMilliseconds(testScheduler.currentTime) }
             fun nwLoom(i: Int) =
-                NwLoom(FakeNwApi(radio, deviceId = "dev-$i", serviceName = "dev-$i"), SERVICE_TYPE, Random(i.toLong()))
+                NwLoom(
+                    FakeNwApi(radio, deviceId = "dev-$i", serviceName = "dev-$i"),
+                    serviceType = SERVICE_TYPE,
+                    random = Random(i.toLong()),
+                )
 
             val hostFactory = SeamRoomFactory(nwLoom(0), backgroundScope, clock, heartbeat)
             val droppedLoom = nwLoom(1)
