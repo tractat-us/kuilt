@@ -34,6 +34,8 @@ import kotlin.time.Instant
  * The raw, no-[Room] bootstraps ([gameNode] / [gameHost] / [gameJoin]) return a plain [GameSession]
  * with no presence surface — "this session has presence" is a compile-time fact of the type, not a
  * silently-empty flow.
+ *
+ * @sample us.tractat.kuilt.game.sampleGameOverRoom
  */
 public class RoomGameSession internal constructor(
     node: RaftNode,
