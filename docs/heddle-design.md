@@ -386,9 +386,10 @@ just no longer a design risk.
 
 With no Byzantine peers (out of scope, as in the source), overspend cannot
 arise from honest concurrency — the exclusive-slot discipline removes the
-race. What merge *can* reveal is an integrity violation: two different values
-for a slot only one peer may write, or an edge where
-`spent + returned > issued`. The required behavior is the source's, restated:
+race. What merge *can* reveal is an integrity violation: an edge whose
+aggregate `leafSpent + rollupSpent + returned > issued`, or a lineage whose
+holdings derive **persistently** negative on a causally-complete state (the
+real overspend signal). The required behavior is the source's, restated:
 
 - every replica derives the **same** conflict report from the same state,
 - the affected lineage contributes **no** spendable holdings (quarantine is
@@ -396,8 +397,17 @@ for a slot only one peer may write, or an edge where
 - nothing is ever silently resolved by timestamp or arrival order.
 
 This is a `validate(): List<LedgerConflict>` derivation over the merged state
-— structured data (edge, slot, both observed values), in the spirit of the
-diagnostics discipline the repo already enforces.
+— structured data — in the spirit of the diagnostics discipline the repo already
+enforces. **Honest scope note:** because `piece` is a `GCounter` max-join, an
+*equivocated* one-writer slot (a non-Byzantine peer forking its own history into
+two values from one prefix) converges silently to the larger value — the "two
+different values for one slot" fault is **not** recoverable from merged state
+alone without per-slot version dots, which this design deliberately does not pay
+for under the non-Byzantine model. Feasibility-*violating* equivocation is still
+caught (it drives a persistently-negative holdings derivation); pure feasible
+equivocation is out of scope. See [`heddle-ledger-design.md`](heddle-ledger-design.md)
+§`validate` for the concrete checks and the self-justifying-patch mechanism that
+keeps them from false-firing on honest partial delivery.
 
 ## 5. Topology as a lattice: lifecycle, strict reparenting, and `MovableTree`
 
