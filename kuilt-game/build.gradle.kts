@@ -8,6 +8,11 @@ kotlin {
         commonMain.dependencies {
             api(project(":kuilt-core"))
             api(project(":kuilt-raft"))
+            // Promoted from the transitive `implementation(:kuilt-cluster) → api(:kuilt-session)`
+            // edge to a direct `api` because the room-backed bootstrap (`gameOverRoom`) returns a
+            // `RoomGameSession` whose public surface exposes session types (`Room`,
+            // `MembershipEvent`, `Member`). Acyclic: `kuilt-session` does not depend on `kuilt-game`.
+            api(project(":kuilt-session"))
             // The approved :kuilt-game → :kuilt-cluster direction (#1349): game grows a federated
             // bootstrap (gameNodeRoomFederated) that documents/consumes cluster's game-agnostic
             // two-tier substrate (AttachmentDirectory / OverlayServer). Cluster never depends on

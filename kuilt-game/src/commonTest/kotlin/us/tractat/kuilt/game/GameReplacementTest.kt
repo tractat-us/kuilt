@@ -151,7 +151,7 @@ class GameReplacementTest {
         // has been called and broadcast. Without this gate a race exists between the host's
         // HOST_DECLARED broadcast reaching j1 and the replacement's Quilter receiving j1's
         // FullState: j1's stale FullState with admission-closed:... would cause RosterFullException.
-        host.presence!!.admissionClosed.first { it == null }
+        host.lobbyPresence!!.admissionClosed.first { it == null }
 
         // A replacement can immediately take the freed seat.
         val replacementRaw = loom.join(InMemoryTag("replacement"))

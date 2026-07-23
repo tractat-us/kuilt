@@ -29,18 +29,23 @@ import us.tractat.kuilt.raft.RaftNode
  * before the peer subscribes to that name is not replayed. Layer your own reliability on top if
  * you need at-least-once delivery.
  */
-public class GameSession internal constructor(
+public open class GameSession internal constructor(
     public val node: RaftNode,
     private val seam: Seam,
     private val appMux: NamedMux,
     /**
-     * Presence channel for this peer, non-null when this session was bootstrapped via
+     * Lobby presence channel for this peer, non-null when this session was bootstrapped via
      * [gameJoin] or [gameHost]. Null for [gameNode] (roster-given path — no presence channel).
      *
      * Held to support [leave]: the departing peer publishes a vacate signal on the presence
      * channel so the host can evict immediately without waiting the reconnect window.
+     *
+     * Named `lobbyPresence` (not `presence`) so the name `presence` is free for the room-liveness
+     * surface on the [RoomGameSession] subtype — the two are distinct concepts: this is the
+     * appoint-the-host **lobby** vacate channel, `RoomGameSession.presence` is the backing room's
+     * live membership/liveness stream.
      */
-    internal val presence: GamePresence? = null,
+    internal val lobbyPresence: GamePresence? = null,
 ) {
     /**
      * Returns the application [Seam] for the channel named [name], idempotent per name.
@@ -91,7 +96,7 @@ public class GameSession internal constructor(
      * returns after eviction joins as a new voter via a fresh [gameJoin] into the freed seat.
      */
     public fun leave() {
-        presence?.declareVacate()
+        lobbyPresence?.declareVacate()
     }
 
     /**
@@ -105,7 +110,7 @@ public class GameSession internal constructor(
      * ([RaftNode.changeMembership]) first. For a voluntary voter departure use [leave] before
      * calling [close].
      */
-    public suspend fun close(reason: CloseReason = CloseReason.Normal) {
+    public open suspend fun close(reason: CloseReason = CloseReason.Normal) {
         node.close()
         seam.close(reason)
     }
