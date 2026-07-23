@@ -1152,14 +1152,25 @@ internal class SeamRoom(
      * window was still open. Update liveness, emit [MembershipEvent.Resumed], and
      * resolve the pending resume flight ([JoinerResumeMachine.takePendingFlight]) so
      * [resume] returns [ResumeResult.Success].
+     *
+     * **Host-authoritative gate + idempotence latch:** mirroring [handleFarewell],
+     * only a ResumeAck from the identified host ([hostPeerId]) is honored — a forged
+     * ack from another admitted peer, or one arriving before the host is identified,
+     * is dropped. The pending resume flight is the idempotence latch: a genuine ack
+     * takes it and fires exactly one [MembershipEvent.Resumed]; a duplicate or stray
+     * host ack finds no pending flight ([JoinerResumeMachine.takePendingFlight]
+     * returns `null`) and emits nothing.
      */
     private fun handleResumeAck(sender: PeerId) {
         val deferred = lock.withLock {
+            val host = hostPeerId
+            if (host == null || sender != host) return
+            val flight = resumeMachine?.takePendingFlight() ?: return
             updateMemberLiveness(sender, Liveness.Connected)
-            resumeMachine?.takePendingFlight()
+            flight
         }
         _events.tryEmit(MembershipEvent.Resumed(selfId))
-        deferred?.complete(ResumeResult.Success)
+        deferred.complete(ResumeResult.Success)
     }
 
     /**
