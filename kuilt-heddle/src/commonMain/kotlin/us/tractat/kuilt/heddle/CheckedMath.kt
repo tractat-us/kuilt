@@ -20,6 +20,16 @@ internal fun checkedAdd(a: Long, b: Long): Long {
     return sum
 }
 
+/** Subtract [b] from [a], throwing [ArithmeticException] on `Long` overflow. */
+internal fun checkedSub(a: Long, b: Long): Long {
+    val diff = a - b
+    // Overflow iff a and b differ in sign and the result's sign differs from a's.
+    if ((a xor b) and (a xor diff) < 0L) {
+        throw ArithmeticException("Long overflow: $a - $b")
+    }
+    return diff
+}
+
 /** Multiply [a] and [b], throwing [ArithmeticException] on `Long` overflow. */
 internal fun checkedMul(a: Long, b: Long): Long {
     if (a == 0L || b == 0L) return 0L

@@ -18,13 +18,21 @@ pass through — the same fair-share idea, mechanical instead of computational.
 
 ## What this phase ships
 
-This is the ledger's data layer only — the shared tally and the rule for merging
-two copies of it. It is deliberately **inert**: you can build ledger states and
-merge them, and the merge is provably order-independent, but the operations that
-*change* entitlement (granting, returning, spending) and the checks that flag
-tampering arrive in the next phase. A ledger you can only construct and merge is
-the correct intermediate step — it lets the merge law be pinned down on its own,
-before any economics ride on top of it.
+The ledger's data layer — the shared tally and its order-independent merge rule —
+plus the **economics** that ride on top: who may spend what (derived *holdings*),
+the conserving operations that move entitlement around (granting, returning,
+transferring, spending), and an integrity report that flags tampering.
+
+Safety lives in one place: before it moves anything, an operation checks feasibility
+against the peer's own complete copy and either returns a small patch to merge in or
+refuses — so no honest peer ever spends beyond its share, with no coordination. The
+integrity report is a **diagnostic, not a gate**: on a fully-shared copy it reads the
+same everywhere, but while a hand-off is still propagating it can momentarily flag a
+multi-hop transfer that has not yet caught up; that clears itself as copies reconcile.
+Don't block work on the report being empty — block on the operation refusing.
+
+The lifecycle of an edge (prepared → active → closing → retired) is treated as
+always-active for now; that gating arrives in a later phase.
 
 ## How the tally is kept
 

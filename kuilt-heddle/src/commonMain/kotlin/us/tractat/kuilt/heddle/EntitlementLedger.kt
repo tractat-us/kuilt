@@ -1,6 +1,7 @@
 package us.tractat.kuilt.heddle
 
 import us.tractat.kuilt.crdt.GCounter
+import us.tractat.kuilt.crdt.Patch
 import us.tractat.kuilt.crdt.Quilted
 import us.tractat.kuilt.crdt.ReplicaId
 import kotlinx.serialization.Serializable
@@ -16,13 +17,32 @@ import kotlinx.serialization.Serializable
  * crossed — and every peer can merge its copy with any other and always agree,
  * with no clock and no central referee.
  *
- * ## This phase is inert
+ * ## What you can do with it
  *
- * This is the data layer only: you can construct ledger states (via [ZERO] and
- * [bootstrap], or the internal test factory) and merge them with [piece], and the
- * merge is a provable join-semilattice. The operations that *change* entitlement
- * (grant, return, transfer, spend) and the integrity checks are added in the next
- * phase; a ledger you can only construct and merge is the correct intermediate.
+ * Construct and merge ledger states (via [ZERO] and [bootstrap], or the internal
+ * test factory) — the merge ([piece]) is a provable join-semilattice — and drive
+ * the **economics** on top of it: [holdings] (derived spendable authority), the
+ * conserving mutators [mint] / [delegate] / [release] / [transfer] / [spend] (each
+ * returning a [Patch] or `null` when holdings are insufficient), and [validate]
+ * (the integrity report).
+ *
+ * ## Safety vs. diagnostics
+ *
+ * **Safety is the local holdings check** each mutator runs on the actor's own complete
+ * state before it emits a patch — a peer never spends beyond `holdings(P, self)`, with
+ * zero coordination, because every term of that check reads a slot only that peer
+ * writes. **[validate] is a diagnostic, not a safety gate.** It is eventually
+ * consistent: on a fully-delivered state its report is exact, but under *partial*
+ * delivery of a **multi-hop transfer-funded** charge it may transiently list a false
+ * [LedgerConflict.PerEdgeSafety] / [LedgerConflict.PersistentNegativeHoldings] that a
+ * later anti-entropy round dissolves. Each feasibility-consuming mutator carries a
+ * witness that keeps the **direct and single-hop-transfer** cases from false-firing;
+ * deeper transfer chains are the accepted transient. **Consumers must not hard-gate on
+ * `validate().isEmpty()`** while rebalancing is in flight — gate on the mutator's `null`.
+ *
+ * Every present edge is treated as **ACTIVE** here; the lifecycle lattice (PREPARED
+ * / ACTIVE / CLOSING / RETIRED) and its `DualActiveInbound` / `ClosureViolation`
+ * conflicts are a later phase.
  *
  * ## The representation
  *
@@ -110,6 +130,346 @@ public class EntitlementLedger private constructor(
             .sorted()
             .mapNotNull { edge(it) }
 
+    // ─────────────────────────────────────────────────────────────────────────
+    // Topology helpers (H1b treats every present, singleton-recorded edge as ACTIVE)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /** The single record for [id], or `null` if [id] is unknown *or divergent* (`size > 1`). */
+    private fun recordOf(id: AttachmentId): AttachmentRecord? = records[id]?.singleOrNull()
+
+    /**
+     * The edges from the root down to [group]'s inbound edge, in root→group order
+     * (empty when [group] is the root). `null` signals the lineage is **quarantined**
+     * and no holdings may be derived: a divergent record on the path
+     * ([LedgerConflict.RecordDivergence]), a group with two inbound edges (a
+     * [LedgerConflict.PersistentNegativeHoldings]-adjacent H2 `DualActiveInbound`,
+     * treated conservatively here as a quarantine), or a cycle.
+     */
+    private fun lineageEdges(group: GroupId): List<AttachmentId>? {
+        val edges = ArrayDeque<AttachmentId>()
+        val seen = HashSet<GroupId>()
+        var cur = group
+        while (true) {
+            if (!seen.add(cur)) return null // cycle
+            val inboundIds = records.filter { (_, recs) -> recs.any { it.child == cur } }.keys
+            if (inboundIds.isEmpty()) break // reached the root
+            if (inboundIds.size > 1) return null // dual inbound (H2) → quarantine
+            val id = inboundIds.single()
+            val rec = recordOf(id) ?: return null // divergent record on the lineage → quarantine
+            edges.addFirst(id)
+            cur = rec.parent
+        }
+        return edges.toList()
+    }
+
+    /**
+     * The child edges of [group] — every edge **any** of whose records names [group] as
+     * parent, sorted. Uses `any` (matching [activeChildren]/[lineageEdges]), deliberately
+     * *not* `singleOrNull`: were a child edge to go divergent (`size > 1`) and drop out of
+     * this set, its `issued(c)[r] − returned(c)[r]` would stop being subtracted and the
+     * parent's [holdings] would **inflate** — re-spendable authority manufactured from a
+     * conflict. Keeping the divergent child in the subtraction converts that into safe
+     * *deflation*: the authority is frozen, never created (a double-spend the sum-wise
+     * check alone would miss).
+     */
+    private fun childEdges(group: GroupId): List<AttachmentId> =
+        records.filter { (_, recs) -> recs.any { it.parent == group } }.keys.sorted()
+
+    /** True when [group] has no child edges — the only groups at which service may be spent. */
+    public fun isLeaf(group: GroupId): Boolean = childEdges(group).isEmpty()
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // holdings — spendable authority, derived, never stored (design §4.2)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /**
+     * The units [r] may spend at [group], derived from the merged state:
+     *
+     * ```
+     * holdings = creditIn + transferNet(f, r)
+     *          − Σ_{c ∈ childEdges(group)} (issued(c)[r] − returned(c)[r])
+     *          − leafSpent(f)[r]
+     * ```
+     *
+     * where `f = inbound(group)`; `creditIn` is the sum of minted amounts held by
+     * [r] at the root, else `issued(f)[r] − returned(f)[r]`. `leafSpent(f)[r]` is
+     * subtracted **unconditionally** — no `isLeaf` test — which keeps conservation
+     * topology-independent when a former leaf later gains a child (design fix 1).
+     *
+     * Every subtracted term reads a slot only [r] writes, so a peer's local
+     * feasibility check is sound with zero coordination. If [group]'s lineage is
+     * quarantined (see [lineageEdges]) this returns `0` — quarantine is transitive
+     * down the path (design §4.6). May be negative (a real overspell net; see
+     * [LedgerConflict.PersistentNegativeHoldings]).
+     */
+    public fun holdings(group: GroupId, r: ReplicaId): Long {
+        val lineage = lineageEdges(group) ?: return 0L
+        val f = lineage.lastOrNull()
+        val pathKey = if (f == null) PathKey.ROOT else PathKey.of(f)
+        val creditIn = if (f == null) mintedHeldBy(r) else netInflow(f, r)
+        var acc = checkedAdd(creditIn, transferNet(pathKey, r))
+        for (c in childEdges(group)) {
+            acc = checkedSub(acc, netInflow(c, r))
+        }
+        if (f != null) acc = checkedSub(acc, slot(leafSpent, f, r))
+        return acc
+    }
+
+    /** `issued(edge)[r] − returned(edge)[r]` — [r]'s net inflow across one edge. */
+    private fun netInflow(edge: AttachmentId, r: ReplicaId): Long =
+        checkedSub(slot(issued, edge, r), slot(returned, edge, r))
+
+    /** Σ minted amounts credited to [r] (the root's `creditIn`). */
+    private fun mintedHeldBy(r: ReplicaId): Long =
+        minted.values.fold(0L) { acc, m -> if (m.holder == r) checkedAdd(acc, m.amount) else acc }
+
+    /** `Σ_s transfers[pathKey][s][r] − Σ_t transfers[pathKey][r][t]` — [r]'s net transfer at a path. */
+    private fun transferNet(pathKey: PathKey, r: ReplicaId): Long {
+        val rows = transfers[pathKey] ?: return 0L
+        var inflow = 0L
+        for ((_, row) in rows) inflow = checkedAdd(inflow, row.count(r))
+        val outflow = rows[r]?.value ?: 0L
+        return checkedSub(inflow, outflow)
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Mutators — house idiom: check feasibility on `this`, return Patch?/null. The
+    // `null` (insufficient holdings on the actor's own complete state) is the SAFETY
+    // gate. Each feasibility-consuming patch also carries a witness (design fix 2,
+    // narrowed): the observed credit slots its holdings check read along the lineage,
+    // plus a depth-1 backing of any donor who transferred into the actor — at their
+    // absolute values (max-safe). This keeps `validate` (a diagnostic, not a gate)
+    // from false-firing on the direct and single-hop-transfer cases under partial
+    // delivery; a multi-hop transfer-funded charge is an accepted transient.
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /**
+     * Introduce root supply: credit [holder] with [amount] units under [mintId].
+     * Control-plane only (design §9); the one non-conserving op and the only mutator
+     * with no feasibility gate, so it never returns `null`. [mintId] MUST be unique
+     * per mint act so distinct acts union rather than max-collide (design fix 4).
+     */
+    public fun mint(mintId: MintId, holder: ReplicaId, amount: Long): Patch<EntitlementLedger> {
+        require(amount >= 0L) { "mint amount must be non-negative, was $amount" }
+        return Patch(of(minted = mapOf(mintId to MintRecord(holder, amount))))
+    }
+
+    /**
+     * [r] delegates [amount] down [edge], moving authority from the parent group into
+     * the child. `null` if [r]'s holdings at the parent are insufficient, or [edge] is
+     * unknown/divergent. Bumps `issued(edge)[r]`.
+     */
+    public fun delegate(r: ReplicaId, edge: AttachmentId, amount: Long): Patch<EntitlementLedger>? {
+        require(amount >= 1L) { "delegate amount must be positive, was $amount" }
+        val parent = recordOf(edge)?.parent ?: return null
+        if (amount > holdings(parent, r)) return null
+        val lineage = lineageEdges(parent) ?: return null
+        val bump = of(issued = mapOf(edge to bumpedSlot(issued, edge, r, amount)))
+        return Patch(bump.piece(witness(r, lineage)))
+    }
+
+    /**
+     * [r] returns [amount] of unused entitlement up [edge], restoring the parent's
+     * holdings. `null` if [r]'s holdings at the child are insufficient, or [edge] is
+     * unknown/divergent. Bumps `returned(edge)[r]`.
+     */
+    public fun release(r: ReplicaId, edge: AttachmentId, amount: Long): Patch<EntitlementLedger>? {
+        require(amount >= 1L) { "release amount must be positive, was $amount" }
+        val child = recordOf(edge)?.child ?: return null
+        if (amount > holdings(child, r)) return null
+        val lineage = lineageEdges(child) ?: return null
+        val bump = of(returned = mapOf(edge to bumpedSlot(returned, edge, r, amount)))
+        return Patch(bump.piece(witness(r, lineage)))
+    }
+
+    /**
+     * Move [amount] of holdings at [group] from peer [from] to peer [to] — same
+     * lineage, different pocket (design §4.3, verbatim `BoundedCounter.transfer`).
+     * `null` if [from]'s holdings at [group] are insufficient. Appends to [from]'s own
+     * transfer row.
+     */
+    public fun transfer(group: GroupId, from: ReplicaId, to: ReplicaId, amount: Long): Patch<EntitlementLedger>? {
+        require(from != to) { "transfer from and to must differ, both were $from" }
+        require(amount >= 1L) { "transfer amount must be positive, was $amount" }
+        if (amount > holdings(group, from)) return null
+        val lineage = lineageEdges(group) ?: return null
+        val pathKey = lineage.lastOrNull()?.let { PathKey.of(it) } ?: PathKey.ROOT
+        val current = transfers[pathKey]?.get(from)?.count(to) ?: 0L
+        val bump = of(transfers = mapOf(pathKey to mapOf(from to GCounter.of(to to checkedAdd(current, amount)))))
+        return Patch(bump.piece(witness(from, lineage)))
+    }
+
+    /**
+     * Charge [amount] of completed service by [r] at leaf [group]. `require`s [group]
+     * is a leaf; `null` if [r]'s holdings there are insufficient. Charges
+     * `leafSpent(inbound(group))[r]` **and** `rollupSpent(e)[r]` for every strict-prefix
+     * edge `e` — one atomic patch keeping per-edge `outstanding` correct at every level
+     * (design fix 1). [amount] `0` is a no-op cancel.
+     */
+    public fun spend(r: ReplicaId, group: GroupId, amount: Long): Patch<EntitlementLedger>? {
+        require(amount >= 0L) { "spend amount must be non-negative, was $amount" }
+        require(isLeaf(group)) { "spend requires a leaf group, $group has active children" }
+        if (amount == 0L) return Patch(of()) // cancel: a no-op delta
+        val lineage = lineageEdges(group) ?: return null
+        val f = lineage.lastOrNull() ?: return null // a root leaf has no edge to charge
+        if (amount > holdings(group, r)) return null
+        val prefix = lineage.dropLast(1)
+        val bump = of(
+            leafSpent = mapOf(f to bumpedSlot(leafSpent, f, r, amount)),
+            rollupSpent = prefix.associateWith { e -> bumpedSlot(rollupSpent, e, r, amount) },
+        )
+        return Patch(bump.piece(witness(r, lineage)))
+    }
+
+    /**
+     * The witness a feasibility-consuming patch carries: the credit slots [actor]'s
+     * holdings check read along [lineage], at their observed absolute values (max-safe,
+     * so over-inclusion is harmless).
+     *
+     * **Scope — the honest boundary.** Safety is the *local* holdings check the mutator
+     * already ran on [actor]'s own complete state; the witness only keeps [validate]
+     * (a diagnostic) from false-firing under partial delivery. It covers:
+     *  - [actor]'s own credit read directly by the check — `issued`/`returned`[actor] on
+     *    every lineage edge, [actor]'s minted supply, and the transfer slots crediting
+     *    [actor];
+     *  - a **depth-1 backing** of each donor who transferred into [actor] at a level: the
+     *    donor's own `issued`/`returned`[donor] at that edge (or minted, at the root), so
+     *    a *single-hop* transfer-then-charge does not false-fire on a lagging replica.
+     *
+     * It deliberately does **not** chase a transfer's funding transitively (Iain's call):
+     * a *multi-hop* transfer-funded charge may transiently surface a false
+     * [LedgerConflict.PerEdgeSafety] / [LedgerConflict.PersistentNegativeHoldings] on a
+     * partially-delivered replica. That is an eventually-consistent diagnostic artifact
+     * that self-heals on anti-entropy — never an authorized overspend.
+     */
+    private fun witness(actor: ReplicaId, lineage: List<AttachmentId>): EntitlementLedger {
+        val wIssued = HashMap<AttachmentId, GCounter>()
+        val wReturned = HashMap<AttachmentId, GCounter>()
+        val wMinted = HashMap<MintId, MintRecord>()
+        val wTransfers = HashMap<PathKey, Map<ReplicaId, GCounter>>()
+
+        // The actor's own credit read directly by the holdings check.
+        for (e in lineage) {
+            addSlot(wIssued, e, actor, slot(issued, e, actor))
+            addSlot(wReturned, e, actor, slot(returned, e, actor))
+        }
+        for ((id, m) in minted) if (m.holder == actor) wMinted[id] = m
+
+        // Each level names the path ending at it; the root has no edge.
+        for (edge in listOf<AttachmentId?>(null) + lineage) {
+            val pathKey = edge?.let { PathKey.of(it) } ?: PathKey.ROOT
+            val rows = transfers[pathKey] ?: continue
+            val kept = HashMap<ReplicaId, GCounter>()
+            for ((donor, row) in rows) {
+                if (donor == actor) {
+                    kept[donor] = row // the actor's own outflow row — actor-authored, max-safe
+                    continue
+                }
+                val credited = row.count(actor)
+                if (credited <= 0L) continue
+                kept[donor] = GCounter.of(actor to credited)
+                // Depth-1 donor backing (see KDoc): the donor could only transfer what it
+                // held, so carry the donor's own backing at this edge / root.
+                if (edge == null) {
+                    for ((id, m) in minted) if (m.holder == donor) wMinted[id] = m
+                } else {
+                    addSlot(wIssued, edge, donor, slot(issued, edge, donor))
+                    addSlot(wReturned, edge, donor, slot(returned, edge, donor))
+                }
+            }
+            if (kept.isNotEmpty()) wTransfers[pathKey] = kept
+        }
+        return of(minted = wMinted, issued = wIssued, returned = wReturned, transfers = wTransfers)
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // validate — integrity faults surfaced from merged state (design §4.6)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /**
+     * The integrity faults derivable from this merged state, in one canonical order
+     * (identical on every replica). This is an **eventually-consistent diagnostic, not
+     * a safety gate** — safety is the local holdings check in the mutators. On a
+     * fully-delivered state the report is exact; the per-patch witness keeps the direct
+     * and single-hop-transfer cases honest under partial delivery, but a partially-
+     * delivered **multi-hop transfer-funded** charge may transiently list a false
+     * conflict that self-heals on anti-entropy. The checks:
+     *
+     *  - [LedgerConflict.PerEdgeSafety] — sum-wise `leafSpent + rollupSpent + returned
+     *    > issued` on an edge's aggregate values.
+     *  - [LedgerConflict.PersistentNegativeHoldings] — a `(group, replica)` with
+     *    negative derived [holdings]: the real overspend net. Quarantined lineages
+     *    (holdings `0`) are excluded — they surface as [LedgerConflict.RecordDivergence].
+     *  - [LedgerConflict.RecordDivergence] — two distinct records under one id.
+     *
+     * `DualActiveInbound` / `ClosureViolation` are the lifecycle phase (H2) and are
+     * deliberately not reported here.
+     */
+    public fun validate(): List<LedgerConflict> {
+        val conflicts = ArrayList<LedgerConflict>()
+        for (e in allEdges()) {
+            val charged = checkedAdd(
+                checkedAdd(counterValue(leafSpent, e), counterValue(rollupSpent, e)),
+                counterValue(returned, e),
+            )
+            if (charged > counterValue(issued, e)) conflicts += LedgerConflict.PerEdgeSafety(e)
+        }
+        for ((id, recs) in records) {
+            if (recs.size > 1) conflicts += LedgerConflict.RecordDivergence(id)
+        }
+        for (g in allGroups()) {
+            for (r in allReplicas()) {
+                if (holdings(g, r) < 0L) conflicts += LedgerConflict.PersistentNegativeHoldings(g, r)
+            }
+        }
+        return conflicts.sorted()
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Enumeration + test-support accessors (internal — used by validate and tests)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /** Every edge id mentioned by any component. */
+    internal fun allEdges(): Set<AttachmentId> =
+        records.keys + issued.keys + returned.keys + leafSpent.keys + rollupSpent.keys
+
+    /** Every group named as a parent or child by any (singleton or divergent) record. */
+    internal fun allGroups(): Set<GroupId> =
+        records.values.flatten().flatMapTo(HashSet()) { listOf(it.parent, it.child) }
+
+    /** Every replica that authored a slot, holds a mint, or sent/received a transfer. */
+    internal fun allReplicas(): Set<ReplicaId> {
+        val out = HashSet<ReplicaId>()
+        for (m in minted.values) out += m.holder
+        for (map in listOf(issued, returned, leafSpent, rollupSpent)) {
+            for (counter in map.values) out += counter.replicas()
+        }
+        for (rows in transfers.values) {
+            for ((donor, row) in rows) { out += donor; out += row.replicas() }
+        }
+        return out
+    }
+
+    /** Total minted supply. */
+    internal fun mintedTotal(): Long = minted.values.fold(0L) { acc, m -> checkedAdd(acc, m.amount) }
+
+    /** Total service charged where an edge is a path's final edge (the conservation term). */
+    internal fun leafSpentTotal(): Long = leafSpent.values.fold(0L) { acc, c -> checkedAdd(acc, c.value) }
+
+    /**
+     * The sub-ledger restricted to [id]'s own components (plus its path's transfer
+     * rows). Pins the projection homomorphism (design §10.8): restriction to an
+     * edge's components commutes with [piece]. `internal` — test support.
+     */
+    internal fun projectEdge(id: AttachmentId): EntitlementLedger = of(
+        records = records[id]?.let { mapOf(id to it) } ?: emptyMap(),
+        issued = issued[id]?.let { mapOf(id to it) } ?: emptyMap(),
+        returned = returned[id]?.let { mapOf(id to it) } ?: emptyMap(),
+        leafSpent = leafSpent[id]?.let { mapOf(id to it) } ?: emptyMap(),
+        rollupSpent = rollupSpent[id]?.let { mapOf(id to it) } ?: emptyMap(),
+        transfers = transfers[PathKey.of(id)]?.let { mapOf(PathKey.of(id) to it) } ?: emptyMap(),
+    )
+
     override fun equals(other: Any?): Boolean =
         other is EntitlementLedger &&
             records == other.records &&
@@ -190,6 +550,21 @@ public class EntitlementLedger private constructor(
 
 private fun counterValue(counters: Map<AttachmentId, GCounter>, id: AttachmentId): Long =
     counters[id]?.value ?: 0L
+
+/** The single `(id, r)` slot value, or 0. */
+private fun slot(counters: Map<AttachmentId, GCounter>, id: AttachmentId, r: ReplicaId): Long =
+    counters[id]?.count(r) ?: 0L
+
+/** A `GCounter` carrying just the `(id, r)` slot bumped to its new absolute value (overflow-checked). */
+private fun bumpedSlot(counters: Map<AttachmentId, GCounter>, id: AttachmentId, r: ReplicaId, by: Long): GCounter =
+    GCounter.of(r to checkedAdd(slot(counters, id, r), by))
+
+/** Merge a single `(edge, r) = value` slot into a witness accumulator (skips non-positive). */
+private fun addSlot(acc: HashMap<AttachmentId, GCounter>, edge: AttachmentId, r: ReplicaId, value: Long) {
+    if (value <= 0L) return
+    val one = GCounter.of(r to value)
+    acc[edge] = acc[edge]?.piece(one) ?: one
+}
 
 private fun Map<AttachmentId, GCounter>.mergeEdgeCounters(
     other: Map<AttachmentId, GCounter>,
