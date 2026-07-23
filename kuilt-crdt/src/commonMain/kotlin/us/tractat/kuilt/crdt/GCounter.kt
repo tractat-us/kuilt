@@ -28,6 +28,9 @@ public class GCounter private constructor(
     /** This replica's current count (0 if it has never incremented). */
     public fun count(replica: ReplicaId): Long = counts[replica] ?: 0L
 
+    /** The replicas that have ever incremented a slot — the counter's non-zero authors. */
+    public fun replicas(): Set<ReplicaId> = counts.keys
+
     /**
      * Increment [replica]'s own slot by [by] (must be positive). Returns the
      * delta to merge in with [piece]; the receiver is unchanged.
