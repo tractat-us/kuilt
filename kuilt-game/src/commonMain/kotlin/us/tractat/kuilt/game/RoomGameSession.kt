@@ -3,6 +3,10 @@ package us.tractat.kuilt.game
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.filterIsInstance
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
+import us.tractat.kuilt.core.CloseReason
 import us.tractat.kuilt.core.NamedMux
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.raft.ClientIdentity
@@ -11,6 +15,7 @@ import us.tractat.kuilt.raft.NodeId
 import us.tractat.kuilt.raft.RaftConfig
 import us.tractat.kuilt.raft.RaftNode
 import us.tractat.kuilt.raft.RaftStorage
+import us.tractat.kuilt.session.LeaveReason
 import us.tractat.kuilt.session.Member
 import us.tractat.kuilt.session.MembershipEvent
 import us.tractat.kuilt.session.Room
@@ -52,6 +57,31 @@ public class RoomGameSession internal constructor(
 
     /** Live roster with per-member [Member.liveness] — identical to the backing [Room]'s `roster`. */
     public val roster: StateFlow<Set<Member>> get() = room.roster
+
+    /**
+     * Tears down the game **and** the room it owns: stops the consensus node and closes the game
+     * channel view ([GameSession.close]), then leaves the backing [Room].
+     *
+     * A bare [GameSession.close] would close only the game's channel *view* — a no-op, since the
+     * [Room] owns the channel's lifecycle — leaking the room, its liveness detectors, and the
+     * underlying fabric. Because `gameOverRoom` takes ownership of the room, this override is the
+     * single teardown path; the caller must **not** call [Room.leave] directly.
+     *
+     * Idempotent: a second call is safe — [Room.leave] latches on the room's `closed` flag.
+     */
+    override suspend fun close(reason: CloseReason) {
+        super.close(reason)
+        room.leave(reason.toLeave())
+    }
+}
+
+/**
+ * Maps a game [CloseReason] to the room [LeaveReason] `close` propagates into [Room.leave]:
+ * an [CloseReason.Error] carries its message forward; every other reason is a graceful leave.
+ */
+private fun CloseReason.toLeave(): LeaveReason = when (this) {
+    is CloseReason.Error -> LeaveReason.Error(throwable.message ?: "closed")
+    else -> LeaveReason.Normal
 }
 
 /**
@@ -103,5 +133,13 @@ public fun CoroutineScope.gameOverRoom(
         placement = ConsensusPlacement.SessionOwned,
         overlay = overlay,
     )
-    return RoomGameSession(bootstrap.node, room, bootstrap.appMux, lobby = null)
+    val session = RoomGameSession(bootstrap.node, room, bootstrap.appMux, lobby = null)
+    // If the room dies on its own (terminal HostLost), close the session so a torn room never
+    // leaves a live consensus node spinning over a dead transport. Double-close-safe via the leave
+    // latch. Lives on the bootstrap scope, so it is cancelled when the session's scope ends.
+    launch {
+        room.events.filterIsInstance<MembershipEvent.HostLost>().first()
+        session.close(CloseReason.Normal)
+    }
+    return session
 }
