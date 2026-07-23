@@ -1380,9 +1380,14 @@ internal class SeamRoom(
      * reconnect window via [markPartitioned].
      */
     private suspend fun handleUnresponsive(event: PartitionEvent.PeerUnresponsive) {
-        val hostTransportClose = lock.withLock {
+        val isHost = lock.withLock {
             _role.value == SessionRole.Joiner && event.peerId == hostPeerId
-        } && event.reason == PartitionEvent.Reason.TransportClosed
+        }
+        val hostTransportClose = isHost && event.reason == PartitionEvent.Reason.TransportClosed
+        logger.info {
+            "membership.unresponsive peer=${event.peerId.value} reason=${event.reason} " +
+                "isHost=$isHost branch=${if (hostTransportClose) "resume" else "markPartitioned"}"
+        }
         if (hostTransportClose) {
             resumeMachine?.attemptReconnect(event.at)
         } else {
