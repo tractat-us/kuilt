@@ -436,7 +436,6 @@ internal fun sampleGameOverRoom() = runTest(StandardTestDispatcher(), timeout = 
 
     val game = backgroundScope.gameOverRoom(
         hostRoom,
-        clock = clock,
         raftConfig = RaftConfig(expectVirtualTime = true, random = Random(1)),
     )
 

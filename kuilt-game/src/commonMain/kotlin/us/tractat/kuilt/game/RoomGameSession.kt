@@ -19,7 +19,6 @@ import us.tractat.kuilt.session.LeaveReason
 import us.tractat.kuilt.session.Member
 import us.tractat.kuilt.session.MembershipEvent
 import us.tractat.kuilt.session.Room
-import kotlin.time.Instant
 
 /**
  * A [GameSession] bootstrapped over a membership-aware [Room] — so the game speaks the **same**
@@ -103,12 +102,12 @@ private fun CloseReason.toLeave(): LeaveReason = when (this) {
  * **Mesh-latency note.** On a mesh, joiner↔joiner Raft frames over the room channel are dropped
  * until the host has admitted each member; Raft retries make convergence eventual.
  *
+ * **Clock.** The game inherits the [room]'s time domain — the room's own detectors run on the clock
+ * it was constructed with — so, like [gameNode] (the other roster-given path), `gameOverRoom` takes
+ * no `clock`. Timing is the room's concern here.
+ *
  * @param room The already-adopted room (e.g. from an election lobby's `adopt`). Its current
  *   [Room.roster] plus this peer becomes the voter set.
- * @param clock Clock for the game's time domain, matching the clock the [room] was constructed
- *   with. **Required** — no wall-clock default, so a virtual-time caller can never silently fall
- *   through to the system clock (the same "optional ≠ tuning" convention [gameHost] follows).
- *   Production callers pass `{ kotlin.time.Clock.System.now() }`; tests inject a controllable clock.
  * @param storage Durable Raft state. Defaults to [InMemoryRaftStorage].
  * @param raftConfig Timing and behaviour parameters. Tests pass `RaftConfig(expectVirtualTime = true)`.
  * @param identity How this peer obtains its Raft §8 dedup id. See [gameNode].
@@ -117,7 +116,6 @@ private fun CloseReason.toLeave(): LeaveReason = when (this) {
  */
 public fun CoroutineScope.gameOverRoom(
     room: Room,
-    clock: () -> Instant,
     storage: RaftStorage = InMemoryRaftStorage(),
     raftConfig: RaftConfig = RaftConfig(),
     identity: ClientIdentity = ClientIdentity.Auto,

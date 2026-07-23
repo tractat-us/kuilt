@@ -35,7 +35,6 @@ class RoomGamePresenceTest {
             val fixture = adopt3PeerMeshRoom(backgroundScope, fastHeartbeat, clock)
             val session = backgroundScope.gameOverRoom(
                 fixture.hostRoom,
-                clock = clock,
                 raftConfig = fastRaftConfig(seed = 1L),
             )
 
