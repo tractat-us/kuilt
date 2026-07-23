@@ -43,6 +43,15 @@ import kotlin.time.Instant
 private const val RAFT_CHANNEL: Byte = 1
 
 /**
+ * The single named [us.tractat.kuilt.session.Room] channel view that carries **all** of
+ * `gameOverRoom`'s game traffic. The game's own [MuxSeam] byte-tags (Raft, app-envelope, …) nest
+ * *inside* this one channel view — so the game rides a `Room.channel(GAME_ROOM_CHANNEL)` [Seam]
+ * without a second `room.incoming` collector (ADR-034-safe: the channel view is a shared-flow
+ * projection of the room's single main loop, not a rival collector).
+ */
+internal const val GAME_ROOM_CHANNEL: String = "kuilt.game"
+
+/**
  * MuxSeam channel tag carrying the single flooded broadcast plane when an `overlay` is supplied.
  *
  * **Commit-safety layering (#1370).** When a bootstrap path rides a gossip flood (a
@@ -302,6 +311,34 @@ public fun CoroutineScope.gameNode(
     placement: ConsensusPlacement = ConsensusPlacement.SessionOwned,
     overlay: (CoroutineScope.(Seam) -> Seam)? = null,
 ): GameSession {
+    val bootstrap = bootstrapRosterGiven(seam, voterIds, storage, raftConfig, identity, placement, overlay)
+    return GameSession(bootstrap.node, seam, bootstrap.appMux)
+}
+
+/**
+ * The consensus [node] plus application-envelope [appMux] built by the roster-given bootstrap,
+ * before either is wrapped in a [GameSession] (or the room-backed [RoomGameSession]) return type.
+ */
+internal class RosterGivenBootstrap(val node: RaftNode, val appMux: NamedMux)
+
+/**
+ * The shared roster-given wiring behind both [gameNode] (returns a plain [GameSession]) and
+ * [gameOverRoom] (returns a [RoomGameSession]): builds the [MuxSeam], the Raft [node] for the given
+ * [placement], the placement's admission loop, and the application-envelope [appMux] over [seam].
+ *
+ * @param voterIds full voter roster; this peer's [NodeId] must appear in it under a
+ *   [AuthoritySeating.SessionPeers] placement (a [AuthoritySeating.CoreVoters] caller may be a
+ *   non-voting learner).
+ */
+internal fun CoroutineScope.bootstrapRosterGiven(
+    seam: Seam,
+    voterIds: Set<NodeId>,
+    storage: RaftStorage,
+    raftConfig: RaftConfig,
+    identity: ClientIdentity,
+    placement: ConsensusPlacement,
+    overlay: (CoroutineScope.(Seam) -> Seam)?,
+): RosterGivenBootstrap {
     val self = NodeId(seam.selfId.value)
     if (placement.seating is AuthoritySeating.SessionPeers) {
         require(self in voterIds) {
@@ -326,7 +363,7 @@ public fun CoroutineScope.gameNode(
     // (both seat AuthoritySeating.CoreVoters, so `seating` alone cannot).
     placement.launchAdmission(this, node, binding, seam)
     val appMux = appMuxOver(mux, overlay)
-    return GameSession(node, seam, appMux)
+    return RosterGivenBootstrap(node, appMux)
 }
 
 /**

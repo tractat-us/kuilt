@@ -9,6 +9,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.Serializable
@@ -29,6 +30,7 @@ import us.tractat.kuilt.raft.NodeId
 import us.tractat.kuilt.raft.RaftConfig
 import us.tractat.kuilt.raft.RaftRole
 import us.tractat.kuilt.raft.test.FakeRaftNode
+import us.tractat.kuilt.session.SeamRoomFactory
 import us.tractat.kuilt.test.fabric.InMemoryRoomFabric
 import kotlin.random.Random
 import kotlin.test.assertEquals
@@ -401,4 +403,51 @@ internal fun sampleGameRooms() = runTest(StandardTestDispatcher(), timeout = 10.
     assertEquals(1, casualMove.action)
     assertEquals(2, rankedMove.action)
     casualHost.await().close()
+}
+
+// ── gameOverRoom: presence from a game ────────────────────────────────────────
+
+/**
+ * [gameOverRoom] over an already-formed [us.tractat.kuilt.session.Room]: the game surfaces the
+ * room's presence directly.
+ *
+ * A game bootstrapped over a room **is** a [RoomGameSession] — so
+ * [RoomGameSession.presence] is the backing room's `events` and [RoomGameSession.roster] is its
+ * `roster`. There is no hand-wired `room.events` → presence adapter: "who dropped / who's back" is
+ * answered with the same [us.tractat.kuilt.session.MembershipEvent] +
+ * [us.tractat.kuilt.session.Member] vocabulary a plain [us.tractat.kuilt.session.Room] emits.
+ *
+ * Presence here is **link liveness** — a [us.tractat.kuilt.session.MembershipEvent.Resumed] a few
+ * seconds after a drop can be a legitimate link heal, not a bug; layer human "seated / away" state
+ * on top. A real app hands `gameOverRoom` a room adopted from an election lobby; this sample forms
+ * one the plain host/join way. `gameOverRoom` takes ownership of the room — tear both down with
+ * [RoomGameSession.close], never `room.leave()` directly.
+ */
+@Suppress("unused")
+internal fun sampleGameOverRoom() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    val loom = InMemoryLoom()
+    val clock = { Instant.fromEpochMilliseconds(0) }
+    fun factory() = SeamRoomFactory(loom, backgroundScope, clock)
+
+    // Two peers form one room; the host hands its room to gameOverRoom.
+    val hostRoom = factory().host(Pattern("my-game"))
+    backgroundScope.launch { factory().join(InMemoryTag("my-game")) }
+    hostRoom.roster.first { it.size == 1 }
+
+    val game = backgroundScope.gameOverRoom(
+        hostRoom,
+        raftConfig = RaftConfig(expectVirtualTime = true, random = Random(1)),
+    )
+
+    // Render "who dropped / who's back" from the game's presence — the room's vocabulary, unchanged:
+    // game.presence.collect { event ->
+    //     when (event) {
+    //         is MembershipEvent.Partitioned -> greyOut(event.peerId) // a link went silent
+    //         is MembershipEvent.Resumed -> unGrey(event.peerId)      // …a legitimate link heal
+    //         else -> Unit
+    //     }
+    // }
+    assertEquals(1, game.roster.value.size) // the joiner is a live member of the game's roster
+
+    game.close()
 }
