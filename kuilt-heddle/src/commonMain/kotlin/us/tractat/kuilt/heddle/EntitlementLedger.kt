@@ -29,8 +29,11 @@ import kotlinx.serialization.Serializable
  * Seven components, each already a join-semilattice, so [piece] is just their
  * componentwise join (the product-of-lattices idiom):
  *
- *  - [records] — the immutable topology (parent/child/weight per edge), grow-only
- *    union; one [AttachmentId] ⇒ one [AttachmentRecord].
+ *  - [records] — the immutable topology (parent/child/weight per edge) as a
+ *    grow-only **set of records per edge id**. A healthy id carries a singleton
+ *    set; two divergent records under one id are **both retained** (never collapsed
+ *    by a last-writer-wins on a parent pointer, which §5.2 forbids) so a later
+ *    phase's `validate` can report the divergence.
  *  - [minted] — root supply, keyed by a unique [MintId] so mints union rather than
  *    collide.
  *  - `issued` / `returned` / `leafSpent` / `rollupSpent` — per-edge monotone
@@ -53,7 +56,7 @@ import kotlinx.serialization.Serializable
  */
 @Serializable
 public class EntitlementLedger private constructor(
-    private val records: Map<AttachmentId, AttachmentRecord>,
+    private val records: Map<AttachmentId, Set<AttachmentRecord>>,
     private val minted: Map<MintId, MintRecord>,
     private val issued: Map<AttachmentId, GCounter>,
     private val returned: Map<AttachmentId, GCounter>,
@@ -65,7 +68,7 @@ public class EntitlementLedger private constructor(
     /** The join: the componentwise least-upper-bound of `this` and [other]. */
     override fun piece(other: EntitlementLedger): EntitlementLedger =
         EntitlementLedger(
-            records = records.mergeValues(other.records) { mine, theirs -> maxOf(mine, theirs) },
+            records = records.mergeValues(other.records) { mine, theirs -> mine + theirs },
             minted = minted.mergeValues(other.minted) { mine, theirs -> maxOf(mine, theirs) },
             issued = issued.mergeEdgeCounters(other.issued),
             returned = returned.mergeEdgeCounters(other.returned),
@@ -96,12 +99,14 @@ public class EntitlementLedger private constructor(
     /**
      * Summaries of every edge whose parent is [parent], in a deterministic order
      * (by [AttachmentId]). In this phase every present edge is treated as active;
-     * lifecycle filtering arrives with the lifecycle register in a later phase.
+     * lifecycle filtering arrives with the lifecycle register in a later phase. An
+     * edge counts if **any** record under its id names [parent] — divergent records
+     * are retained, not collapsed, and their reconciliation is a later phase's job.
      */
     public fun activeChildren(parent: GroupId): List<EdgeSummary> =
-        records.values
-            .filter { it.parent == parent }
-            .map { it.id }
+        records
+            .filter { (_, recs) -> recs.any { it.parent == parent } }
+            .keys
             .sorted()
             .mapNotNull { edge(it) }
 
@@ -136,14 +141,22 @@ public class EntitlementLedger private constructor(
             EntitlementLedger(emptyMap(), emptyMap(), emptyMap(), emptyMap(), emptyMap(), emptyMap(), emptyMap())
 
         /**
-         * A ledger seeded with root supply: each `(replica, amount)` in [mint]
-         * becomes a [MintRecord] credited to that replica, keyed by a deterministic
-         * [MintId] namespaced to [root]. No edges yet — the topology is grown by the
-         * mutators (a later phase). Every amount must be non-negative.
+         * A ledger seeded with root supply for one **mint act**: each
+         * `(replica, amount)` in [mint] becomes a [MintRecord] credited to that
+         * replica, keyed by a [MintId] unique to this act.
+         *
+         * [nonce] identifies the mint act and MUST be distinct across independent
+         * acts (a fresh value per commit; a sequence number, a Raft log index, a
+         * UUID). This is load-bearing, not decoration: mints are keyed so that two
+         * *distinct* acts crediting the same holder **union** rather than
+         * max-collide into one lost mint (design fix 4). The same act observed on
+         * two peers carries the same [nonce], so it converges to one entry. No edges
+         * yet — the topology is grown by the mutators (a later phase). Every amount
+         * must be non-negative.
          */
-        public fun bootstrap(root: GroupId, mint: Map<ReplicaId, Long>): EntitlementLedger {
+        public fun bootstrap(root: GroupId, mint: Map<ReplicaId, Long>, nonce: String): EntitlementLedger {
             val minted = mint.entries.associate { (holder, amount) ->
-                MintId("${root.value}#${holder.value}") to MintRecord(holder, amount)
+                MintId("${root.value}#$nonce#${holder.value}") to MintRecord(holder, amount)
             }
             return EntitlementLedger(
                 records = emptyMap(),
@@ -163,7 +176,7 @@ public class EntitlementLedger private constructor(
          * states of the still-inert lattice.
          */
         internal fun of(
-            records: Map<AttachmentId, AttachmentRecord> = emptyMap(),
+            records: Map<AttachmentId, Set<AttachmentRecord>> = emptyMap(),
             minted: Map<MintId, MintRecord> = emptyMap(),
             issued: Map<AttachmentId, GCounter> = emptyMap(),
             returned: Map<AttachmentId, GCounter> = emptyMap(),

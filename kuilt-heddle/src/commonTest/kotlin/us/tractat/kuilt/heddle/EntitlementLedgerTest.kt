@@ -5,6 +5,7 @@ import us.tractat.kuilt.crdt.ReplicaId
 import kotlinx.serialization.json.Json
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNotEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -25,17 +26,32 @@ class EntitlementLedgerTest {
 
     @Test
     fun bootstrapRecordsMintedSupplyAndMergesConsistently() {
-        val a = EntitlementLedger.bootstrap(root, mapOf(alice to 100L, bob to 50L))
-        val b = EntitlementLedger.bootstrap(root, mapOf(alice to 100L, bob to 50L))
-        // Same supply observed independently on two peers converges to itself.
+        val a = EntitlementLedger.bootstrap(root, mapOf(alice to 100L, bob to 50L), nonce = "genesis")
+        val b = EntitlementLedger.bootstrap(root, mapOf(alice to 100L, bob to 50L), nonce = "genesis")
+        // The same mint act (same nonce) observed independently on two peers converges to itself.
         assertEquals(a, a.piece(b))
         assertEquals(a, b.piece(a))
     }
 
     @Test
+    fun distinctMintActsUnionRatherThanCollide() {
+        // Two independent acts crediting the SAME holder must both survive (fix 4):
+        // a lost mint would be a conservation break the moment holdings derive from it.
+        val first = EntitlementLedger.bootstrap(root, mapOf(alice to 100L), nonce = "act-1")
+        val second = EntitlementLedger.bootstrap(root, mapOf(alice to 40L), nonce = "act-2")
+        val merged = first.piece(second)
+        // Distinct MintIds ⇒ the union carries BOTH mints, so it equals neither operand.
+        // (A per-(root,holder) key would max-collide to `first` and silently drop act-2.)
+        assertNotEquals(first, merged)
+        assertNotEquals(second, merged)
+        // ...and the union is still order-independent.
+        assertEquals(merged, second.piece(first))
+    }
+
+    @Test
     fun edgeReturnsNullForUnknownAndSummaryForKnown() {
         val ledger = EntitlementLedger.of(
-            records = mapOf(e1 to AttachmentRecord(e1, root, GroupId("child"), Weight.ONE, 0L)),
+            records = mapOf(e1 to setOf(AttachmentRecord(e1, root, GroupId("child"), Weight.ONE, 0L))),
             issued = mapOf(e1 to GCounter.of(alice to 10L)),
             returned = mapOf(e1 to GCounter.of(alice to 3L)),
             leafSpent = mapOf(e1 to GCounter.of(alice to 2L)),
@@ -56,14 +72,35 @@ class EntitlementLedgerTest {
         val eA = AttachmentId("a")
         val ledger = EntitlementLedger.of(
             records = mapOf(
-                eB to AttachmentRecord(eB, root, child, Weight.ONE, 0L),
-                eA to AttachmentRecord(eA, root, child, Weight.ONE, 0L),
+                eB to setOf(AttachmentRecord(eB, root, child, Weight.ONE, 0L)),
+                eA to setOf(AttachmentRecord(eA, root, child, Weight.ONE, 0L)),
             ),
             issued = mapOf(eA to GCounter.of(alice to 5L), eB to GCounter.of(alice to 7L)),
         )
         val kids = ledger.activeChildren(root)
         assertEquals(listOf(AttachmentId("a"), AttachmentId("b")), kids.map { it.attachment })
         assertTrue(ledger.activeChildren(GroupId("elsewhere")).isEmpty())
+    }
+
+    @Test
+    fun divergentRecordsUnderOneIdAreBothRetained() {
+        // Same edge id, two different parent pointers on two peers. The merge must NOT
+        // pick a winner (LWW on a parent pointer is forbidden, §5.2): both survive so a
+        // later phase can flag RecordDivergence. Observable here because the edge then
+        // appears as a child of BOTH parents.
+        val leftParent = GroupId("left")
+        val rightParent = GroupId("right")
+        val onLeft = EntitlementLedger.of(
+            records = mapOf(e1 to setOf(AttachmentRecord(e1, leftParent, GroupId("c"), Weight.ONE, 0L))),
+        )
+        val onRight = EntitlementLedger.of(
+            records = mapOf(e1 to setOf(AttachmentRecord(e1, rightParent, GroupId("c"), Weight.ONE, 0L))),
+        )
+        val merged = onLeft.piece(onRight)
+        assertEquals(listOf(e1), merged.activeChildren(leftParent).map { it.attachment })
+        assertEquals(listOf(e1), merged.activeChildren(rightParent).map { it.attachment })
+        // order-independent
+        assertEquals(merged, onRight.piece(onLeft))
     }
 
     @Test
@@ -77,9 +114,9 @@ class EntitlementLedgerTest {
 
     @Test
     fun roundTripsThroughJson() {
-        val ledger = EntitlementLedger.bootstrap(root, mapOf(alice to 100L)).piece(
+        val ledger = EntitlementLedger.bootstrap(root, mapOf(alice to 100L), nonce = "genesis").piece(
             EntitlementLedger.of(
-                records = mapOf(e1 to AttachmentRecord(e1, root, GroupId("child"), Weight.of(3, 1), 12L)),
+                records = mapOf(e1 to setOf(AttachmentRecord(e1, root, GroupId("child"), Weight.of(3, 1), 12L))),
                 issued = mapOf(e1 to GCounter.of(alice to 40L)),
                 transfers = mapOf(PathKey.of(e1) to mapOf(alice to GCounter.of(bob to 5L))),
             ),

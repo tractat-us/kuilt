@@ -31,16 +31,21 @@ class EntitlementLedgerLawsTest {
     private fun randomEdgeCounters(rnd: Random): Map<AttachmentId, GCounter> =
         edges.filter { rnd.nextBoolean() }.associateWith { randomGCounter(rnd) }
 
+    private fun randomRecord(id: AttachmentId, rnd: Random): AttachmentRecord =
+        AttachmentRecord(
+            id = id,
+            parent = groups.random(rnd),
+            child = groups.random(rnd),
+            weight = Weight.of(rnd.nextLong(1L, 8L), rnd.nextLong(1L, 8L)),
+            initialVirtualTime = rnd.nextLong(0L, 1_000L),
+        )
+
     private fun randomLedger(rnd: Random): EntitlementLedger =
         EntitlementLedger.of(
-            records = edges.filter { rnd.nextBoolean() }.associateWith {
-                AttachmentRecord(
-                    id = it,
-                    parent = groups.random(rnd),
-                    child = groups.random(rnd),
-                    weight = Weight.of(rnd.nextLong(1L, 8L), rnd.nextLong(1L, 8L)),
-                    initialVirtualTime = rnd.nextLong(0L, 1_000L),
-                )
+            // Occasionally emit a *divergent* set (>1 record) under one id, so the laws
+            // are exercised on the grow-only-set-union path that retains conflicts.
+            records = edges.filter { rnd.nextBoolean() }.associateWith { id ->
+                List(rnd.nextInt(1, 3)) { randomRecord(id, rnd) }.toSet()
             },
             minted = mintIds.filter { rnd.nextBoolean() }.associateWith {
                 MintRecord(replicas.random(rnd), rnd.nextLong(0L, 1_000L))

@@ -12,9 +12,9 @@ internal fun sampleEntitlementLedgerMerge() {
     val alice = ReplicaId("alice")
     val bob = ReplicaId("bob")
 
-    // The same root supply, observed independently on two peers.
-    val onAlice = EntitlementLedger.bootstrap(root, mapOf(alice to 100L, bob to 100L))
-    val onBob = EntitlementLedger.bootstrap(root, mapOf(alice to 100L, bob to 100L))
+    // The same mint act (same nonce) observed independently on two peers.
+    val onAlice = EntitlementLedger.bootstrap(root, mapOf(alice to 100L, bob to 100L), nonce = "genesis")
+    val onBob = EntitlementLedger.bootstrap(root, mapOf(alice to 100L, bob to 100L), nonce = "genesis")
 
     // Merging is idempotent, commutative, and associative — either order agrees.
     check(onAlice.piece(onBob) == onBob.piece(onAlice))

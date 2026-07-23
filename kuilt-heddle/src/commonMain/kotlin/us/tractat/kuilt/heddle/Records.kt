@@ -9,11 +9,14 @@ import kotlinx.serialization.Serializable
  * [initialVirtualTime] a fresh generation starts at (never with lifetime credit;
  * design §10.5).
  *
- * Records are immutable and grow-only: the ledger's merge unions them, and one
- * [AttachmentId] maps to exactly one record. Two *different* records under one id
- * is an integrity fault (surfaced by validation in a later phase), never resolved
- * silently — but the merge still converges deterministically, so [Comparable]
- * gives it a total order to converge on.
+ * Records are immutable and grow-only. In a healthy ledger one [AttachmentId] maps
+ * to exactly one record, but the merge **never collapses divergent records under
+ * one id** — the ledger keeps a *set* of records per id (see
+ * [EntitlementLedger]), so two conflicting records both survive the join and a
+ * later phase's `validate` can report the divergence. This is deliberate: silently
+ * picking a winner would be last-writer-wins on a parent pointer, which
+ * `heddle-design.md` §5.2 forbids. Set union is a join-semilattice on its own, so
+ * the record type needs no ordering.
  *
  * @property id this generation's identity.
  * @property parent the parent group the entitlement flows from.
@@ -28,15 +31,7 @@ public data class AttachmentRecord(
     public val child: GroupId,
     public val weight: Weight,
     public val initialVirtualTime: Long,
-) : Comparable<AttachmentRecord> {
-    override fun compareTo(other: AttachmentRecord): Int {
-        id.compareTo(other.id).let { if (it != 0) return it }
-        parent.compareTo(other.parent).let { if (it != 0) return it }
-        child.compareTo(other.child).let { if (it != 0) return it }
-        weight.compareTo(other.weight).let { if (it != 0) return it }
-        return initialVirtualTime.compareTo(other.initialVirtualTime)
-    }
-}
+)
 
 /**
  * One act of introducing root supply: [holder] is credited [amount] units at the
