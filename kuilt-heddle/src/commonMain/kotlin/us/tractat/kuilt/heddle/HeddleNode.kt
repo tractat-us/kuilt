@@ -183,15 +183,15 @@ public class HeddleNode internal constructor(
     public fun retire(edge: AttachmentId): Boolean = applyIfPresent { it.retire(edge) }
 
     /**
-     * The seam the H5 [HeddleControlPlane] drives to apply a **committed** control act into this
-     * node's replicated ledger: it runs [block] against the current merged state inside the Quilter
-     * (so the act replicates over the data-plane seam like any mutation) under the node lock, keeping
-     * lock ordering uniform with [schedule]/[applyIfPresent]. Governed mode routes mint/reshape acts
-     * through the log and applies them here; the data plane (reserve/complete/schedule) never touches
-     * this path. `internal` — only [heddleGoverned] wires it.
+     * The sink the H5 [HeddleControlPlane] uses to **publish an already-approved** control patch
+     * into this node's replicated ledger, so data-plane consumers converge over the seam. The
+     * accept/refuse *decision* is made upstream against the control plane's log-pure projection —
+     * this only replicates a patch the log already ordered and admitted, so a rejected act never
+     * reaches the Quilter. Applied under the node lock, keeping lock ordering uniform with
+     * [schedule]/[applyIfPresent]. `internal` — only [heddleGoverned] wires it.
      */
-    internal fun asLedgerControl(): LedgerControl = LedgerControl { block ->
-        lock.withLock { ledgerQuilter.mutate(block) }
+    internal fun asControlSink(): ControlLedgerSink = ControlLedgerSink { patch ->
+        lock.withLock { ledgerQuilter.mutate { patch } }
     }
 
     // ─────────────────────────────────────────────────────────────────────────────

@@ -3,10 +3,12 @@ package us.tractat.kuilt.heddle
 import kotlinx.atomicfu.locks.reentrantLock
 import kotlinx.atomicfu.locks.withLock
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.Pattern
@@ -15,6 +17,7 @@ import us.tractat.kuilt.crdt.Patch
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.quilter.QuilterConfig
+import us.tractat.kuilt.raft.LeadershipLostException
 import us.tractat.kuilt.raft.LogEntry
 import us.tractat.kuilt.raft.NodeId
 import us.tractat.kuilt.raft.RaftNode
@@ -24,6 +27,7 @@ import us.tractat.kuilt.raft.test.MultiNodeRaftSim
 import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
@@ -33,16 +37,16 @@ import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
 
 /**
- * H5 acceptance suite (design §15 Phase 5, §9 "the embroidery", §10.13): the Raft-backed control
- * plane — mint and topology reconfiguration serialized on the consensus log, while the spend path
- * stays coordination-free.
+ * H5 acceptance + consensus-safety suite (design §15 Phase 5, §9 "the embroidery", §10.13): the
+ * Raft-backed control plane — mint and topology reconfiguration serialized on the consensus log,
+ * gated against a **log-pure control-state projection** (never the gossip-merged data plane), while
+ * the spend path stays coordination-free.
  *
  * **Test discipline (repo CLAUDE.md).** Consensus tests run through the canonical `MultiNodeRaftSim`
  * from `:kuilt-raft-test` — never a hand-rolled cluster network: `StandardTestDispatcher`, tight 5 s
  * timeout, node coroutines on `backgroundScope`, per-node seeded election RNG, bounded `await*`
- * helpers only (never `advanceUntilIdle`). The single-node message-accounting test uses a
- * [FakeRaftNode] (also a `:kuilt-raft-test` double) — the data plane's zero-consensus property is
- * structural and needs no convergence.
+ * helpers only (never `advanceUntilIdle`). Single-node determinism/idempotence tests use a
+ * [FakeRaftNode] double.
  */
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class HeddleControlPlaneTest {
@@ -50,15 +54,57 @@ class HeddleControlPlaneTest {
     private val root = GroupId("root")
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // 1. Split-brain mint impossible (§9 #1) — a partitioned minority can never
-    //    commit a mint; at most one side mints against a given supply.
+    // BLOCKER 1 (consensus safety): the gate reads LOG-ORDER state, not gossip-merged
+    // state. A data-plane view that has merged the converged state (eA RETIRED) must
+    // NOT let the out-of-log-order Activate(eB) slip past — the projection has eA still
+    // ACTIVE at that index, so eB loses. (Fable's executed kill chain; §5.4.3.)
+    // ═══════════════════════════════════════════════════════════════════════════
+    @Test
+    fun gateIgnoresGossipMergedAheadState() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        val fake = FakeRaftNode(selfId = NodeId("solo"), initialRole = RaftRole.Leader)
+        val sink = RecordingSink()
+        val plane = HeddleControlPlane(
+            raft = fake, self = ReplicaId("solo"), scope = backgroundScope,
+            sink = sink, initial = EntitlementLedger.ZERO, random = Random(1),
+        )
+        val c = GroupId("c")
+        val eA = AttachmentId("eA")
+        val eB = AttachmentId("eB")
+
+        assertIs<ControlOutcome.Applied>(plane.submit(ControlCommand.Prepare(AttachmentRecord(eA, GroupId("pA"), c, Weight.ONE, 0L))))
+        assertIs<ControlOutcome.Applied>(plane.submit(ControlCommand.Prepare(AttachmentRecord(eB, GroupId("pB"), c, Weight.ONE, 0L))))
+        assertIs<ControlOutcome.Applied>(plane.submit(ControlCommand.Activate(eA)))
+
+        // Simulate the data plane having gossip-merged the CONVERGED state ahead of the log: eA
+        // closed+retired, so in the *merged* view `c` has no live inbound. A gate that read this
+        // (the BLOCKER-1 bug) would see no incumbent and wrongly ADMIT eB.
+        sink.forceMerge(
+            EntitlementLedger.ZERO
+                .piece(EntitlementLedger.of(lifecycle = mapOf(eA to Lifecycle.CLOSING)))
+                .piece(EntitlementLedger.of(lifecycle = mapOf(eA to Lifecycle.RETIRED))),
+        )
+        assertEquals(0, sink.snapshot().liveInboundEdges(c).size, "the merged data-plane view shows no live inbound")
+
+        // The projection still has eA ACTIVE at eB's log index, so eB LOSES — deterministically.
+        val outcome = plane.submit(ControlCommand.Activate(eB))
+        assertIs<ControlOutcome.Conflict>(outcome)
+        val conflict = outcome.conflict
+        assertIs<ControlConflict.DualInbound>(conflict)
+        assertEquals(c, conflict.child)
+        assertEquals(eA, conflict.incumbent)
+        assertEquals(eB, conflict.rejected)
+        assertEquals(listOf(eA), plane.projectionSnapshot().liveInboundEdges(c), "log-order state kept exactly one inbound")
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // 1. Split-brain mint impossible (§9 #1) — a partitioned minority can never commit.
     // ═══════════════════════════════════════════════════════════════════════════
     @Test
     fun splitBrainMintImpossible() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
         val ids = (1..5).map { NodeId("v$it") }
         val sim = MultiNodeRaftSim(nodeIds = ids, scope = this, nodeScope = backgroundScope)
-        val sinks = ids.associateWith { InMemoryLedgerControl(EntitlementLedger.ZERO) }
-        val planes = ids.associateWith { HeddleControlPlane(sim.nodes.getValue(it), backgroundScope, sinks.getValue(it)) }
+        val sinks = ids.associateWith { RecordingSink() }
+        val planes = ids.associateWith { plane(sim.nodes.getValue(it), it, sinks.getValue(it), backgroundScope) }
 
         sim.awaitLeader()
         val majority = setOf(NodeId("v1"), NodeId("v2"), NodeId("v3"))
@@ -67,23 +113,16 @@ class HeddleControlPlaneTest {
         sim.awaitLeader(among = majority)
 
         val holder = ReplicaId("acme")
-        // Majority proposes a mint — it can reach quorum, so it commits.
-        val majMint = backgroundScope.async { planes.getValue(NodeId("v1")).submit(ControlCommand.Mint(MintId("maj"), holder, 100L)) }
-        // Minority proposes a mint of its own — it can NEVER reach quorum, so it must never commit
-        // (it stays pending on backgroundScope, cancelled at teardown).
-        val minMint = backgroundScope.async { planes.getValue(NodeId("v4")).submit(ControlCommand.Mint(MintId("min"), holder, 100L)) }
+        val majMint = backgroundScope.async { planes.getValue(NodeId("v1")).submit(ControlCommand.Mint(holder, 100L)) }
+        val minMint = backgroundScope.async { planes.getValue(NodeId("v4")).submit(ControlCommand.Mint(holder, 100L)) }
 
-        // Wait until the mint has committed AND every majority node's apply loop has caught up.
         sim.awaitTrue("majority mint committed and applied across the majority") {
             majMint.isCompleted && majority.all { sinks.getValue(it).snapshot().mintedTotal() == 100L }
         }
         assertIs<ControlOutcome.Applied>(majMint.await())
         assertFalse(minMint.isCompleted, "minority partition committed a mint — split-brain mint")
-
-        // No minority node minted anything — it cannot reach quorum.
         minority.forEach { assertEquals(0L, sinks.getValue(it).snapshot().mintedTotal(), "minority $it minted while partitioned") }
 
-        // Heal: the minority catches up to the one committed mint (its own proposal is discarded).
         sim.heal()
         sim.awaitLeader()
         sim.awaitTrue("all nodes converge to exactly one mint") {
@@ -92,50 +131,43 @@ class HeddleControlPlaneTest {
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // 2. Overlapping reshapes serialize; the loser surfaces as a structured conflict
-    //    (§9 #2, §5.2, §10.11) — not a silent drop, not last-writer-wins.
+    // 2. Overlapping reshapes serialize; the loser surfaces as a structured conflict.
     // ═══════════════════════════════════════════════════════════════════════════
     @Test
     fun overlappingReshapesSerializeLoserSurfacesConflict() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
         val ids = (1..3).map { NodeId("v$it") }
         val sim = MultiNodeRaftSim(nodeIds = ids, scope = this, nodeScope = backgroundScope)
-        val sinks = ids.associateWith { InMemoryLedgerControl(EntitlementLedger.ZERO) }
-        val planes = ids.associateWith { HeddleControlPlane(sim.nodes.getValue(it), backgroundScope, sinks.getValue(it)) }
+        val sinks = ids.associateWith { RecordingSink() }
+        val planes = ids.associateWith { plane(sim.nodes.getValue(it), it, sinks.getValue(it), backgroundScope) }
         sim.awaitLeader()
 
-        // One child `c`, two candidate inbound generations from different parents — an overlapping
-        // reshape: two peers each try to attach `c` to a different parent.
         val c = GroupId("c")
         val eA = AttachmentId("eA")
         val eB = AttachmentId("eB")
         val v1 = planes.getValue(NodeId("v1"))
         val v2 = planes.getValue(NodeId("v2"))
-
-        // Both generations are prepared (no conflict at prepare — different ids).
         awaitOutcome(sim, backgroundScope) { v1.submit(ControlCommand.Prepare(AttachmentRecord(eA, GroupId("pA"), c, Weight.ONE, 0L))) }
         awaitOutcome(sim, backgroundScope) { v1.submit(ControlCommand.Prepare(AttachmentRecord(eB, GroupId("pB"), c, Weight.ONE, 0L))) }
 
-        // Two peers concurrently activate a different inbound edge for `c`. The log serializes them.
         val actA = async { v1.submit(ControlCommand.Activate(eA)) }
         val actB = async { v2.submit(ControlCommand.Activate(eB)) }
         sim.awaitTrue("both activates committed") { actA.isCompleted && actB.isCompleted }
 
         val outcomes = listOf(actA.await(), actB.await())
-        val applied = outcomes.filterIsInstance<ControlOutcome.Applied>()
+        assertEquals(1, outcomes.filterIsInstance<ControlOutcome.Applied>().size, "exactly one winner, got $outcomes")
         val conflicts = outcomes.filterIsInstance<ControlOutcome.Conflict>()
-        assertEquals(1, applied.size, "exactly one overlapping reshape must win, got $outcomes")
         assertEquals(1, conflicts.size, "the loser must surface as a conflict, got $outcomes")
-
         val dual = conflicts.single().conflict
         assertIs<ControlConflict.DualInbound>(dual)
         assertEquals(c, dual.child)
-        assertTrue(dual.incumbent != dual.rejected)
-        assertTrue(dual.rejected in setOf(eA, eB) && dual.incumbent in setOf(eA, eB))
+        assertTrue(dual.incumbent != dual.rejected && dual.incumbent in setOf(eA, eB) && dual.rejected in setOf(eA, eB))
 
-        // The loser was REFUSED, not applied-and-quarantined: `c` has exactly one live inbound edge
-        // on every node (a silent-drop-into-quarantine would leave two).
-        sim.awaitTrue("child has exactly one live inbound on every node") {
-            ids.all { sinks.getValue(it).snapshot().liveInboundEdges(c).size == 1 }
+        // Every node's LOG-ORDER projection AND its published data-plane view keep exactly one inbound.
+        sim.awaitTrue("child has exactly one live inbound on every node (projection + data plane)") {
+            ids.all {
+                planes.getValue(it).projectionSnapshot().liveInboundEdges(c).size == 1 &&
+                    sinks.getValue(it).snapshot().liveInboundEdges(c).size == 1
+            }
         }
     }
 
@@ -146,11 +178,10 @@ class HeddleControlPlaneTest {
     fun nonOverlappingReshapesCommitIndependently() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
         val ids = (1..3).map { NodeId("v$it") }
         val sim = MultiNodeRaftSim(nodeIds = ids, scope = this, nodeScope = backgroundScope)
-        val sinks = ids.associateWith { InMemoryLedgerControl(EntitlementLedger.ZERO) }
-        val planes = ids.associateWith { HeddleControlPlane(sim.nodes.getValue(it), backgroundScope, sinks.getValue(it)) }
+        val sinks = ids.associateWith { RecordingSink() }
+        val planes = ids.associateWith { plane(sim.nodes.getValue(it), it, sinks.getValue(it), backgroundScope) }
         sim.awaitLeader()
 
-        // Two DIFFERENT children, each reshaped by a different peer — no shared edge, no contention.
         val c1 = GroupId("c1")
         val c2 = GroupId("c2")
         val e1 = AttachmentId("e1")
@@ -163,21 +194,80 @@ class HeddleControlPlaneTest {
         val a1 = async { v1.submit(ControlCommand.Activate(e1)) }
         val a2 = async { v2.submit(ControlCommand.Activate(e2)) }
         sim.awaitTrue("both independent activates committed") { a1.isCompleted && a2.isCompleted }
-
         assertIs<ControlOutcome.Applied>(a1.await())
         assertIs<ControlOutcome.Applied>(a2.await())
         sim.awaitTrue("both children have a live inbound on every node") {
             ids.all {
-                val s = sinks.getValue(it).snapshot()
-                s.liveInboundEdges(c1).size == 1 && s.liveInboundEdges(c2).size == 1
+                val p = planes.getValue(it).projectionSnapshot()
+                p.liveInboundEdges(c1).size == 1 && p.liveInboundEdges(c2).size == 1
             }
         }
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // 4. Zero consensus messages on the spend path (§10.13 message accounting) — the
-    //    coordination-free spend/schedule/reserve path never calls into Raft, even
-    //    while a control-plane proposal is in flight. A message-COUNT assertion.
+    // BLOCKER 2a (conservation): mint identity is unique per act AND restart-safe —
+    // a re-created node's regenerated ids never collide, so no committed mint evaporates.
+    // ═══════════════════════════════════════════════════════════════════════════
+    @Test
+    fun mintIdentitySurvivesRestartWithoutCollision() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        val fake = FakeRaftNode(selfId = NodeId("solo"), initialRole = RaftRole.Leader)
+        val durable = RecordingSink() // the durable replicated ledger, shared across the "restart"
+        val holder = ReplicaId("acme")
+
+        // Incarnation A mints 100.
+        val a = HeddleControlPlane(fake, ReplicaId("solo"), backgroundScope, durable, EntitlementLedger.ZERO, Random(1))
+        assertIs<ControlOutcome.Applied>(a.submit(ControlCommand.Mint(holder, 100L)))
+        assertEquals(100L, durable.snapshot().mintedTotal())
+
+        // "Restart": a fresh control plane (fresh random ⇒ fresh incarnation) over the same log/ledger,
+        // replaying the committed log, then minting 40. In-memory-seq ids would regenerate `#0` and
+        // max-collide the 40 into the 100 (a lost mint); the incarnation nonce keeps them distinct.
+        val b = HeddleControlPlane(fake, ReplicaId("solo"), backgroundScope, durable, EntitlementLedger.ZERO, Random(2))
+        runCurrent() // let B replay the committed mint
+        assertIs<ControlOutcome.Applied>(b.submit(ControlCommand.Mint(holder, 40L)))
+        assertEquals(140L, durable.snapshot().mintedTotal(), "the second mint must not collide with the first")
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // BLOCKER 2b (conservation): a retry after LeadershipLost commits exactly one mint —
+    // the apply loop dedups the re-committed entry on its stable requestKey.
+    // ═══════════════════════════════════════════════════════════════════════════
+    @Test
+    fun retryAfterLeadershipLossMintsExactlyOnce() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        val fake = FakeRaftNode(selfId = NodeId("solo"), initialRole = RaftRole.Leader)
+        // The leader commits the entry BUT the caller's forwarded proposal is rejected (LeadershipLost)
+        // on the first attempt — the "outcome unknown" case — so submit retries, re-committing the SAME
+        // requestKey. Two committed entries, one logical mint.
+        var firstAttempt = true
+        fake.proposeBehavior = { command ->
+            val entry = fake.pushCommitted(command)
+            if (firstAttempt) { firstAttempt = false; throw LeadershipLostException() }
+            entry
+        }
+        val sink = RecordingSink()
+        val plane = HeddleControlPlane(fake, ReplicaId("solo"), backgroundScope, sink, EntitlementLedger.ZERO, Random(3))
+
+        val outcome = plane.submit(ControlCommand.Mint(ReplicaId("acme"), 100L))
+        assertIs<ControlOutcome.Applied>(outcome)
+        assertEquals(100L, sink.snapshot().mintedTotal(), "the retry must not double-mint")
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // BLOCKER 2 (ergonomics): a bounded submit surfaces a leader crash as a timeout
+    // instead of hanging forever.
+    // ═══════════════════════════════════════════════════════════════════════════
+    @Test
+    fun submitTimeoutSurfacesLeaderCrash() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        val fake = FakeRaftNode(selfId = NodeId("solo"), initialRole = RaftRole.Leader)
+        fake.proposeBehavior = { awaitCancellation() } // a forwarded proposal that never commits (leader crash)
+        val plane = HeddleControlPlane(fake, ReplicaId("solo"), backgroundScope, RecordingSink(), EntitlementLedger.ZERO, Random(4))
+        assertFailsWith<TimeoutCancellationException> {
+            plane.submit(ControlCommand.Mint(ReplicaId("acme"), 100L), timeout = 1.seconds)
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // 4. Zero consensus messages on the spend path (§10.13 message accounting).
     // ═══════════════════════════════════════════════════════════════════════════
     @Test
     fun spendPathIssuesZeroConsensusMessages() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
@@ -200,17 +290,16 @@ class HeddleControlPlaneTest {
         assertIs<ControlOutcome.Applied>(governed.activate(eLeaf))
         assertTrue(counting.consensusCalls > 0, "control-plane setup must issue consensus messages")
         governed.advertise(eLeaf, Demand(targetOutstanding = 1_000L, maximumUsefulGrant = 1_000L))
-        governed.schedule(root) // delegate root supply down to the leaf (data-plane)
+        governed.schedule(root)
         assertTrue(governed.ledger.value.holdings(leaf, self) > 0L, "schedule should have seeded the leaf")
 
         // Put a control-plane proposal genuinely in flight (it never commits) and hold the baseline.
         fake.proposeBehavior = { awaitCancellation() }
         val inFlight = backgroundScope.async { governed.mint(self, 1L) }
-        testScheduler.runCurrent() // let the in-flight proposal reach the raft `propose` (count++), then hang
+        testScheduler.runCurrent()
         assertFalse(inFlight.isCompleted, "the in-flight proposal must still be pending")
 
         val baseline = counting.consensusCalls
-        // The spend/schedule/reserve path — zero consensus messages, even with a proposal in flight.
         governed.advertise(eLeaf, Demand(targetOutstanding = 500L, maximumUsefulGrant = 500L))
         governed.schedule(root)
         val reservation = governed.reserve(leaf, 10L)
@@ -251,6 +340,9 @@ class HeddleControlPlaneTest {
         random = Random(seed),
     )
 
+    private fun plane(raft: RaftNode, id: NodeId, sink: ControlLedgerSink, scope: CoroutineScope) =
+        HeddleControlPlane(raft, ReplicaId(id.value), scope, sink, EntitlementLedger.ZERO, Random(id.value.hashCode()))
+
     /** Launch [block] on [scope], pump [sim]'s virtual time until it commits, then return the outcome. */
     private suspend fun awaitOutcome(
         sim: MultiNodeRaftSim,
@@ -262,12 +354,16 @@ class HeddleControlPlaneTest {
         return d.await()
     }
 
-    /** An in-memory [LedgerControl] for control-plane tests — a lock-guarded ledger merged by `piece`. */
-    private class InMemoryLedgerControl(initial: EntitlementLedger) : LedgerControl {
+    /** A [ControlLedgerSink] that accumulates published patches into a ledger — the data-plane view. */
+    private class RecordingSink : ControlLedgerSink {
         private val lock = reentrantLock()
-        private val state = MutableStateFlow(initial)
-        override fun mutate(block: (EntitlementLedger) -> Patch<EntitlementLedger>) {
-            lock.withLock { state.value = state.value.piece(block(state.value).delta) }
+        private val state = MutableStateFlow(EntitlementLedger.ZERO)
+        override fun publish(patch: Patch<EntitlementLedger>) {
+            lock.withLock { state.value = state.value.piece(patch.delta) }
+        }
+        /** Simulate gossip merging state ahead of the log order (independent transport). */
+        fun forceMerge(other: EntitlementLedger) {
+            lock.withLock { state.value = state.value.piece(other) }
         }
         fun snapshot(): EntitlementLedger = state.value
     }

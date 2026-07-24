@@ -1,7 +1,5 @@
 package us.tractat.kuilt.heddle
 
-import kotlinx.atomicfu.locks.reentrantLock
-import kotlinx.atomicfu.locks.withLock
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
@@ -9,39 +7,48 @@ import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.liveness.PartitionEvent
 import us.tractat.kuilt.raft.RaftNode
+import kotlin.time.Duration
 import kotlin.time.Instant
 
 /**
  * Bootstrap a **Raft-governed** [HeddleNode] over [seam] — the consensus-backed front door of
  * design §9, parallel to [heddleStatic]. The data plane is unchanged from H4 (a replicated ledger,
- * demand board, reservations, and liveness over the [seam]); what governance adds is that the three
+ * demand board, reservations, and liveness over the [seam]); what governance adds is that the
  * non-monotone acts — **mint** and **topology reconfiguration** — are serialized through the [raft]
  * log rather than applied locally:
  *
  *  - **Mint** ([GovernedHeddleNode.mint]) is a Raft proposal; a partitioned minority can never
- *    commit one, so two halves of a split can never both mint against the same supply (§9 #1).
+ *    commit one, so two halves of a split can never both mint against the same supply (§9 #1). Mint
+ *    identity is derived from a per-act key that is unique, retry-stable, and restart-safe, so a
+ *    distinct act never silently collides and a retry never double-mints.
  *  - **Reshape** ([GovernedHeddleNode.prepare]/[activate][GovernedHeddleNode.activate]/…) serializes
- *    through the log; two overlapping reshapes of one child are ordered by commit index and the loser
- *    surfaces as a structured [ControlConflict], never resolved by a clock (§9 #2, §4.6, §10.11).
+ *    through the log; the accept/refuse decision is made against a **log-pure control-state
+ *    projection** (a deterministic function of the log prefix — never the gossip-merged Quilter), so
+ *    two overlapping reshapes of one child are ordered by commit index and the loser surfaces as a
+ *    structured [ControlConflict], identically on every peer (§9 #2, §4.6, §10.11).
  *  - **Fencing/reclamation** ([GovernedHeddleNode.revocation]) is *specified only* — the seam is
  *    defined, reclamation is a later feature (§9 #3; part of #1602).
  *
  * The coordination-free **spend/schedule/reserve** path never touches the log at any frequency —
- * the whole point of confining consensus to the embroidery (§10.13). [reserve][GovernedHeddleNode.reserve],
- * [complete][GovernedHeddleNode.complete], [schedule][GovernedHeddleNode.schedule], and
- * [advertise][GovernedHeddleNode.advertise] delegate straight to the underlying [HeddleNode].
+ * the whole point of confining consensus to the embroidery (§10.13).
+ *
+ * **All supply and topology come from the log.** Unlike [heddleStatic], `heddleGoverned` takes **no**
+ * pre-partitioned mint or pre-built topology: a governed node starts from the empty ledger and every
+ * peer builds identical state by applying the same committed log. This is deliberate — a locally
+ * applied genesis could diverge silently across peers (inflating total supply under a front door
+ * meant to *prevent* split-brain supply), so genesis is not a governed-mode concept; mint the initial
+ * supply and prepare the initial tree through the control-plane verbs after bootstrap.
  *
  * **Paired entry points, no nullable consensus** (§9): [heddleStatic] takes a pre-partitioned mint
- * and no [RaftNode]; `heddleGoverned` takes a required [RaftNode] and no pre-partitioned mint. Each
- * takes exactly the dependencies its path needs — the repo's "Optional ≠ tuning" rule forbids one
- * door with a nullable `RaftNode?` knob.
+ * and no [RaftNode]; `heddleGoverned` takes a required [RaftNode] and no mint. Each takes exactly the
+ * dependencies its path needs — the repo's "Optional ≠ tuning" rule forbids one door with a nullable
+ * `RaftNode?` knob.
  *
- * **Genesis vs. runtime supply.** [genesisMint]/[genesisTopology] seed an initial tree that is
- * *identical configuration on every peer* — applied locally at bootstrap (like [heddleStatic]), so it
- * needs no consensus and is not a split-brain risk (every peer is handed the same input). Consensus
- * gates **runtime** supply and reshape — the acts that create *new* authority after peers may have
- * diverged. Both default empty, so the pure "everything through the log" shape is
- * `heddleGoverned(seam, self, raft, root, clock, config)`.
+ * **Shared-RaftNode compaction caveat.** v1 does not publish snapshots to [raft] (log compaction is
+ * off), so the control plane can replay the whole log via `committedFrom(1)`. If [raft] is a node
+ * shared with another state machine that publishes snapshots, a control entry below the compaction
+ * floor would be skipped on replay — give the control plane a dedicated Raft node (or one whose
+ * compaction floor never advances past unreplayed control entries).
  *
  * Time is a dependency (§11): [clock] is required, never a wall-clock default.
  *
@@ -50,11 +57,9 @@ import kotlin.time.Instant
  * @param seam the data-plane fabric this peer participates over.
  * @param self this peer's replica identity; matches [Seam.selfId] by string value.
  * @param raft the control plane — the required consensus log mint and reshape serialize through.
- * @param root the root group of the fairness tree.
+ * @param root the root group of the fairness tree (the handle consumers build [AttachmentRecord]s against).
  * @param clock the injected wall clock, used for demand TTL and liveness timing.
- * @param config the policy caps, §8.2 bound cap, TTL, and replication/liveness knobs.
- * @param genesisMint pre-agreed initial root supply per peer (configuration, applied locally).
- * @param genesisTopology pre-agreed initial edges, all prepared and activated at bootstrap.
+ * @param config the policy caps, §8.2 bound cap, TTL, and replication/liveness/RNG knobs.
  * @sample us.tractat.kuilt.heddle.sampleHeddleGoverned
  */
 public fun CoroutineScope.heddleGoverned(
@@ -64,20 +69,28 @@ public fun CoroutineScope.heddleGoverned(
     root: GroupId,
     clock: () -> Instant,
     config: HeddleConfig,
-    genesisMint: Map<ReplicaId, Long> = emptyMap(),
-    genesisTopology: List<AttachmentRecord> = emptyList(),
 ): GovernedHeddleNode {
+    val initialLedger = EntitlementLedger.bootstrap(root, emptyMap(), nonce = GOVERNED_GENESIS_NONCE)
     val node = HeddleNode(
         scope = this,
         seam = seam,
         self = self,
-        initialLedger = buildInitialLedger(root, genesisMint, genesisTopology),
+        initialLedger = initialLedger,
         clock = clock,
         config = config,
     )
-    val control = HeddleControlPlane(raft = raft, scope = this, ledger = node.asLedgerControl())
-    return GovernedHeddleNode(node, control, self)
+    val control = HeddleControlPlane(
+        raft = raft,
+        self = self,
+        scope = this,
+        sink = node.asControlSink(),
+        initial = initialLedger,
+        random = config.random,
+    )
+    return GovernedHeddleNode(node, control)
 }
+
+private const val GOVERNED_GENESIS_NONCE: String = "heddle-governed-genesis"
 
 /**
  * A Raft-governed [HeddleNode]: the H4 data-plane surface (reserve/complete/schedule/advertise plus
@@ -88,18 +101,21 @@ public fun CoroutineScope.heddleGoverned(
  * [ControlOutcome.Applied] when admitted, or [Conflict][ControlOutcome.Conflict] carrying a structured
  * [ControlConflict] when the log serialized the act as a loser. The data-plane verbs are the exact H4
  * calls and never coordinate.
+ *
+ * The **ungoverned** lifecycle mutators (`HeddleNode.prepare`/`activate`/…) are deliberately **not**
+ * re-exposed here: routing them around the log would recreate the very [LedgerConflict.DualActiveInbound]
+ * fork the control plane serializes away. Only the governed verbs and the read/spend surface are public.
  */
 public class GovernedHeddleNode internal constructor(
     private val node: HeddleNode,
     private val control: HeddleControlPlane,
-    private val self: ReplicaId,
 ) {
-    private val mintLock = reentrantLock()
-    private var mintSeq = 0L
-
     // ── data plane (design §4/§6/§7 — coordination-free, never touches the log) ──────
 
-    /** The replicated entitlement ledger as converged on this peer. */
+    /** This peer's replica identity. */
+    public val self: ReplicaId get() = node.self
+
+    /** The replicated entitlement ledger as converged on this peer (the gossip-merged data-plane view). */
     public val ledger: StateFlow<EntitlementLedger> get() = node.ledger
 
     /** Peer-liveness signals (design §8.1); the node takes no ledger action on either. */
@@ -107,9 +123,6 @@ public class GovernedHeddleNode internal constructor(
 
     /** Peers currently flagged unresponsive or lost by the liveness detectors. */
     public val unreachable: StateFlow<Set<ReplicaId>> get() = node.unreachable
-
-    /** The underlying [HeddleNode] — the full data-plane surface, for advanced use. */
-    public val dataPlane: HeddleNode get() = node
 
     /** Earmark up to [maximumCost] against holdings at leaf [leaf] ([HeddleNode.reserve]). */
     public fun reserve(leaf: GroupId, maximumCost: Long): ReservationId? = node.reserve(leaf, maximumCost)
@@ -137,35 +150,54 @@ public class GovernedHeddleNode internal constructor(
     /**
      * Mint [amount] root supply to [holder], serialized through the log (design §9 #1). Suspends
      * until the act commits; a partitioned minority never returns (it can never reach quorum), so a
-     * split can never both mint. Each mint act carries a per-proposer-unique [MintId] so independent
-     * acts **union** rather than collide (design fix 4). Returns [ControlOutcome.Applied].
+     * split can never both mint. Bound with [timeout] to surface a leader crash instead of hanging.
+     * Returns [ControlOutcome.Applied].
      */
-    public suspend fun mint(holder: ReplicaId, amount: Long): ControlOutcome {
+    public suspend fun mint(holder: ReplicaId, amount: Long, timeout: Duration? = null): ControlOutcome {
         require(amount >= 0L) { "mint amount must be non-negative, was $amount" }
-        val mintId = mintLock.withLock { MintId("mint#${self.value}#${mintSeq++}") }
-        return control.submit(ControlCommand.Mint(mintId, holder, amount))
+        return control.submit(ControlCommand.Mint(holder, amount), timeout)
     }
 
     /** Introduce a new attachment generation, serialized through the log ([EntitlementLedger.prepare]). */
-    public suspend fun prepare(record: AttachmentRecord): ControlOutcome =
-        control.submit(ControlCommand.Prepare(record))
+    public suspend fun prepare(record: AttachmentRecord, timeout: Duration? = null): ControlOutcome =
+        control.submit(ControlCommand.Prepare(record), timeout)
 
     /**
      * Open delegation across [edge], serialized through the log (design §9 #2). The **reshape
-     * serialization point**: if another peer's overlapping reshape already gave [edge]'s child a live
-     * inbound generation, this act loses and returns [ControlOutcome.Conflict] with a
+     * serialization point**: if the log-order state already gives [edge]'s child a live inbound
+     * generation, this act loses and returns [ControlOutcome.Conflict] with a
      * [ControlConflict.DualInbound].
      */
-    public suspend fun activate(edge: AttachmentId): ControlOutcome =
-        control.submit(ControlCommand.Activate(edge))
+    public suspend fun activate(edge: AttachmentId, timeout: Duration? = null): ControlOutcome =
+        control.submit(ControlCommand.Activate(edge), timeout)
 
     /** Stop new delegation across [edge], serialized through the log ([EntitlementLedger.close]). */
-    public suspend fun close(edge: AttachmentId): ControlOutcome =
-        control.submit(ControlCommand.Close(edge))
+    public suspend fun close(edge: AttachmentId, timeout: Duration? = null): ControlOutcome =
+        control.submit(ControlCommand.Close(edge), timeout)
 
-    /** Retire a drained [edge], serialized through the log ([EntitlementLedger.retire]). */
-    public suspend fun retire(edge: AttachmentId): ControlOutcome =
-        control.submit(ControlCommand.Retire(edge))
+    /**
+     * Retire [edge], serialized through the log ([EntitlementLedger.retire]). **Refused locally**
+     * (before proposing, returning a [ControlConflict.Refused] at index [ControlOutcome.NOT_COMMITTED])
+     * when the data-plane view shows the edge is not drained ([EdgeSummary.outstanding] `!= 0`):
+     * retiring a non-drained edge would strand its outstanding entitlement, because a RETIRED edge
+     * drops off the live lineage the data plane drains through. Once past the local drain check, the
+     * committed retire is gated purely on the **log-order** lifecycle being CLOSING — a deterministic
+     * apply. A drain race the local view missed degrades to the self-healing
+     * [LedgerConflict.ClosureViolation] diagnostic (§10.10), never a quarantine.
+     */
+    public suspend fun retire(edge: AttachmentId, timeout: Duration? = null): ControlOutcome {
+        // Advisory local drain gate: refuse only a *clear* drain violation (outstanding > 0 in the
+        // data-plane view). An edge the Quilter hasn't merged yet (null) goes to the log, where the
+        // log-pure projection gates it on CLOSING; a drain race degrades to a self-healing diagnostic.
+        val outstanding = node.ledger.value.edge(edge)?.outstanding
+        if (outstanding != null && outstanding != 0L) {
+            return ControlOutcome.Conflict(
+                ControlOutcome.NOT_COMMITTED,
+                ControlConflict.Refused("retire refused locally: edge ${edge.value} not drained (outstanding=$outstanding)"),
+            )
+        }
+        return control.submit(ControlCommand.Retire(edge), timeout)
+    }
 
     /**
      * The `readIndex()`-fenced revocation seam (design §9 #3) — **specified, not shipped** in v1.
