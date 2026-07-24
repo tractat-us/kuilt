@@ -67,6 +67,24 @@ class NwSeamTest {
     /** Endpoint the radio maps back to device `dev-<i>` (see FakeNwRadio's `ep-<deviceId>`). */
     private fun endpointFor(i: Int) = NwEndpoint(id = "ep-dev-$i", serviceName = "svc-$i")
 
+    /** All radios off (airplane mode) — the device path the #1618 Track A self-loss hook keys on. */
+    private fun airplaneDown() = NwPathState(
+        status = NwPathStatus.Unsatisfied,
+        interfaces = emptySet(),
+        isExpensive = false,
+        isConstrained = false,
+        unsatisfiedReason = NwUnsatisfiedReason.NotAvailable,
+    )
+
+    /** A satisfied peer-to-peer Wi-Fi path — the recovery the false-positive-safety test drives. */
+    private fun wifiUp() = NwPathState(
+        status = NwPathStatus.Satisfied,
+        interfaces = setOf(NwInterfaceType.WifiDirect),
+        isExpensive = false,
+        isConstrained = false,
+        unsatisfiedReason = null,
+    )
+
     /**
      * Build an N-node full mesh over one radio and wait for every node's `peers` to converge to
      * all N ids. Each unordered pair is dialled from BOTH ends (a double-dial), so dedup runs.
@@ -436,6 +454,81 @@ class NwSeamTest {
             { assertEquals(setOf(seamA.selfId), seamA.peers.value, "A's peers collapse to {A}") },
             { assertTrue(seamA.state.value is SeamState.Weaving, "A re-forms to Weaving, NOT Torn(Unreachable) — was ${seamA.state.value}") },
             { assertTrue(!completed && !collectJob.isCompleted, "A.incoming stays OPEN after the grace-expiry eviction") },
+        )
+    }
+
+    @Test
+    fun devicePathUnsatisfiedDrivesFastSelfLossAndReformsAfterGrace() = runTest(StandardTestDispatcher()) {
+        // #1618 Track A: on a 2-phone airplane drop, the dropped phone's radios go off and its device-wide
+        // NWPathMonitor reports `unsatisfied` — but its per-connection `ready→waiting` signal may not fire
+        // promptly, so the phone used to learn of the loss only from the peer's 15s silence. This wires the
+        // device-path-unsatisfied event to drive EVERY live connection to PathLost, reusing the SAME #1478
+        // grace pipeline: the phone self-observes near the grace window instead of 15–75s later. Detection ≈
+        // grace (false-positive-safe by construction — a recovering blip within grace is a no-op, see the
+        // companion test below), NOT an immediate 1s tear.
+        val grace = 10.seconds
+        val radio = FakeNwRadio()
+        val apiA = FakeNwApi(radio, deviceId = "dev-0", serviceName = "svc-0")
+        val apiB = FakeNwApi(radio, deviceId = "dev-1", serviceName = "svc-1")
+        val seamA = NwSeam(PeerId("peer-0"), apiA, seamScope(), Random(0), wovenPathGrace = grace)
+        val seamB = NwSeam(PeerId("peer-1"), apiB, seamScope(), Random(1), wovenPathGrace = grace)
+        var completed = false
+        val collectJob = backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
+            seamA.incoming.collect { }
+            completed = true
+        }
+        backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) { seamB.incoming.collect { } }
+        testScheduler.runCurrent()
+        apiA.connect(NwEndpoint(id = "ep-dev-1", serviceName = "svc-1"))
+        assertTrue(pumpUntil { seamA.peers.value.size == 2 }, "A wove to 2 peers")
+
+        // A's radios drop: the device path goes unsatisfied. This must demote A's live connection(s) to
+        // PathLost and arm the grace timer — WITHOUT the peer's own connectionClosed/waiting ever firing.
+        apiA.emitPathState(airplaneDown())
+        testScheduler.runCurrent()
+        testScheduler.advanceTimeBy(grace.inWholeMilliseconds + 1)
+        assertTrue(pumpUntil { seamA.peers.value == setOf(seamA.selfId) }, "device-path grace exhausted → A evicted B")
+        pumpUntil(maxPumps = 50) { false }
+
+        assertAll(
+            { assertEquals(setOf(seamA.selfId), seamA.peers.value, "A's peers collapse to {A}") },
+            { assertTrue(seamA.state.value is SeamState.Weaving, "A re-forms to Weaving (recoverable), NOT Torn — was ${seamA.state.value}") },
+            { assertTrue(!completed && !collectJob.isCompleted, "A.incoming stays OPEN after the device-path self-loss eviction") },
+        )
+    }
+
+    @Test
+    fun devicePathUnsatisfiedThenSatisfiedWithinGraceDoesNotTear() = runTest(StandardTestDispatcher()) {
+        // #1618 Track A false-positive safety: NWPathMonitor fires `unsatisfied` on every transient path
+        // reshuffle (a brief total-loss blip, Wi-Fi↔cellular churn). An UNgraced tear would evict healthy
+        // sessions. Reusing the #1478 grace makes a recovering blip a no-op: the device path going back to
+        // satisfied within the grace restores viability and cancels the tear — the peer STAYS, no eviction.
+        val grace = 10.seconds
+        val radio = FakeNwRadio()
+        val apiA = FakeNwApi(radio, deviceId = "dev-0", serviceName = "svc-0")
+        val apiB = FakeNwApi(radio, deviceId = "dev-1", serviceName = "svc-1")
+        val seamA = NwSeam(PeerId("peer-0"), apiA, seamScope(), Random(0), wovenPathGrace = grace)
+        val seamB = NwSeam(PeerId("peer-1"), apiB, seamScope(), Random(1), wovenPathGrace = grace)
+        backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) { seamA.incoming.collect { } }
+        backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) { seamB.incoming.collect { } }
+        testScheduler.runCurrent()
+        apiA.connect(NwEndpoint(id = "ep-dev-1", serviceName = "svc-1"))
+        assertTrue(pumpUntil { seamA.peers.value.size == 2 }, "A wove to 2 peers")
+
+        // Device path blips down, then recovers JUST before the grace expiry.
+        apiA.emitPathState(airplaneDown())
+        testScheduler.runCurrent()
+        testScheduler.advanceTimeBy(grace.inWholeMilliseconds - 1)
+        testScheduler.runCurrent()
+        apiA.emitPathState(wifiUp())
+        testScheduler.runCurrent()
+        // Advance well past the original expiry: proves the grace timer was cancelled, not merely deferred.
+        testScheduler.advanceTimeBy(grace.inWholeMilliseconds * 2)
+        testScheduler.runCurrent()
+
+        assertAll(
+            { assertEquals(setOf(seamA.selfId, PeerId("peer-1")), seamA.peers.value, "B stays in A's peers") },
+            { assertTrue(seamA.state.value is SeamState.Woven, "A stays Woven — the recovered device path did not tear") },
         )
     }
 

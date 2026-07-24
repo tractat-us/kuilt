@@ -54,6 +54,16 @@ internal class FakeNwApi(
     // the seam's capability under virtual time. Latest-value STATE, matching RealNwApi's MutableStateFlow.
     private val _pathState = MutableStateFlow<NwPathState?>(null)
 
+    // #1618 Track A: the live connIds this device currently holds (open→closed), mirroring RealNwApi's
+    // `connections` registry — the set a device-path-unsatisfied event demotes to PathLost. Added on
+    // [emitConnectionOpened], removed on [markConnectionClosed]. Touched only from the one test coroutine.
+    private val liveConnIds = mutableSetOf<NwConnectionId>()
+
+    // #1618 Track A edge-tracking, mirroring RealNwApi.onDevicePathState: whether the last device path was
+    // unsatisfied, and the connIds we demoted on that edge so the matching recovery restores exactly those.
+    private var devicePathUnsatisfied = false
+    private val devicePathLostConns = mutableSetOf<NwConnectionId>()
+
     override val endpointFound: Flow<NwEndpoint> = _endpointFound.asSharedFlow()
     override val endpointLost: Flow<NwEndpoint> = _endpointLost.asSharedFlow()
     override val connectionOpened: Flow<NwConnectionOpened> = _connectionOpened.asSharedFlow()
@@ -66,9 +76,31 @@ internal class FakeNwApi(
      * Test hook for #1541: drive a live `NWPathMonitor` transition (path up/down, Wi-Fi↔cellular, a
      * Local-Network-permission denial) directly under virtual time. Sets the latest-value path STATE; the
      * seam folds it into its live [us.tractat.kuilt.core.Seam.capability]. `null` restores "unknown".
+     *
+     * ## #1618 Track A — mirrors `RealNwApi.onDevicePathState`
+     * A device-path **unsatisfied** transition also drives every LIVE connection to [NwConnState.PathLost]
+     * (fast self-loss), so the seam self-observes a radios-off drop near its #1478 grace window instead of
+     * waiting 15–75s for the peer's silence. The matching **satisfied** recovery restores exactly the
+     * connections that edge demoted (a reshuffle blip is a no-op — false-positive-safe by construction).
+     * This is the fake twin of the production hook; the real emission is proven on hardware.
      */
     internal fun emitPathState(state: NwPathState?) {
         _pathState.value = state
+        val unsatisfied = state?.status == NwPathStatus.Unsatisfied
+        when {
+            unsatisfied && !devicePathUnsatisfied -> {
+                devicePathUnsatisfied = true
+                devicePathLostConns.clear()
+                devicePathLostConns.addAll(liveConnIds)
+                devicePathLostConns.forEach { emitConnectionViability(it, viable = false) }
+            }
+            !unsatisfied && devicePathUnsatisfied -> {
+                devicePathUnsatisfied = false
+                val restore = devicePathLostConns.toList()
+                devicePathLostConns.clear()
+                restore.forEach { emitConnectionViability(it, viable = true) }
+            }
+        }
     }
 
     init {
@@ -140,7 +172,10 @@ internal class FakeNwApi(
 
     internal suspend fun emitEndpointFound(event: NwEndpoint) = _endpointFound.emit(event)
     internal suspend fun emitEndpointLost(event: NwEndpoint) = _endpointLost.emit(event)
-    internal suspend fun emitConnectionOpened(event: NwConnectionOpened) = _connectionOpened.emit(event)
+    internal suspend fun emitConnectionOpened(event: NwConnectionOpened) {
+        liveConnIds += event.connectionId // #1618: track liveness for the device-path self-loss demotion
+        _connectionOpened.emit(event)
+    }
     internal suspend fun emitBytesReceived(event: NwBytesReceived) = _bytesReceived.emit(event)
 
     /**
@@ -179,6 +214,7 @@ internal class FakeNwApi(
      * evicted via STATE even when the close EVENT drops.
      */
     internal fun markConnectionClosed(connectionId: NwConnectionId, reason: String?) {
+        liveConnIds -= connectionId // #1618: a closed conn is no longer demotable by a device-path event
         closedOrder.addLast(connectionId)
         if (closedOrder.size > CLOSED_RETENTION_CAP) {
             // Hoist the FIFO mutation OUT of the CAS lambda (see RealNwApi.markClosed).
