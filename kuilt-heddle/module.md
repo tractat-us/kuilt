@@ -94,8 +94,38 @@ whole ledger inherits the three merge laws for free.
 - `EdgeSummary` — the parent-facing projection of one edge (`issued`/`returned`/
   `spent` and the derived `outstanding`).
 - `EntitlementLedger` — the replicated `Quilted` state itself.
+- `HeddlePolicy` — the pure EEVDF scheduling policy. `HeddlePolicy.pick(edges, config,
+  localHoldings)` decides which child to delegate the next quantum to: among the
+  children that both want service (`Demand`) and are not running ahead of their fair
+  share, it serves the one whose next grant finishes soonest in virtual time, breaking
+  ties by a stable identity so every replica picks the same winner. No wall clock, no
+  randomness, no floating point — so partitioned peers stay consistent.
+- `Demand` — how much more service a child could usefully take right now. Advisory
+  only: it can be stale or lost and the worst outcome is entitlement briefly parked in
+  the wrong pocket; it can never authorize a spend.
+- `Rational` — an exact `numerator/denominator` value over `Long`, the type the policy
+  reasons in. Virtual times are compared by exact cross-multiplication (never `Double`),
+  which is what makes a scheduling decision bit-identical on every platform.
 
 Arithmetic that would exceed `Long` throws rather than wrapping: a fair-share
 tally that silently overflowed would be worse than one that stopped.
+
+## Deciding who runs next
+
+Fairness state is kept per edge, but the *decision* — which child to hand the next
+quantum to — is a separate, **pure** step: `HeddlePolicy.pick`. It reads only the
+parent's immediate children (their `EdgeSummary`, their advertised `Demand`, and the
+immutable weight/virtual-time origin from the `AttachmentRecord`) and returns a single
+`Grant`, or `null` when nobody is both eligible and demanding.
+
+The rule is *earliest eligible virtual deadline first* (EEVDF): each child has a
+virtual time that advances as it is granted service (so a hoarder is charged the moment
+it is issued entitlement, not only when it spends); a child is *eligible* when it is not
+ahead of the weighted-mean of its siblings; among the eligible, the one whose next grant
+would finish soonest wins. A freshly created child starts level with its siblings — no
+credit for the parent's whole past — and an idle child that wakes is clamped forward to
+the current front, so neither can bank an unfair head start (design §7, §10.5–6). Every
+comparison is exact integer arithmetic on `Rational`, so the same inputs produce the
+same pick on JVM, Android, iOS, macOS, and wasmJs.
 
 See `docs/heddle-design.md` and `docs/heddle-ledger-design.md` for the full model.
