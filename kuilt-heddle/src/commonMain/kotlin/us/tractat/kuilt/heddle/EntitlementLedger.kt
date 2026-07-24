@@ -119,9 +119,7 @@ public class EntitlementLedger private constructor(
      * `leafSpent + rollupSpent`.
      */
     public fun edge(id: AttachmentId): EdgeSummary? {
-        val known = id in records ||
-            id in issued || id in returned || id in leafSpent || id in rollupSpent
-        if (!known) return null
+        if (!isKnown(id)) return null
         return EdgeSummary(
             attachment = id,
             issued = counterValue(issued, id),
@@ -150,6 +148,15 @@ public class EntitlementLedger private constructor(
      * A known edge with no explicit register entry reads as [Lifecycle.ACTIVE] (the
      * H1b default); the transitions [prepare] / [activate] / [close] / [retire] write
      * the register explicitly.
+     *
+     * **This derived read is not the register value and is not monotone.** An observer
+     * that has seen only a counter patch (e.g. `delegate`) but not the edge's `prepare`
+     * reads the default [Lifecycle.ACTIVE]; when the lagging `prepare` (carrying
+     * [Lifecycle.PREPARED]) later merges, the read *regresses* ACTIVE→PREPARED. The
+     * stored register itself is a monotone max-register (a real promotion never regresses);
+     * only the default-for-absent read is transient, and it self-heals once the edge's
+     * own lifecycle entry has arrived. Do not treat a single derived read as authoritative
+     * mid-convergence.
      */
     public fun lifecycle(id: AttachmentId): Lifecycle? = if (isKnown(id)) lifecycleOf(id) else null
 
@@ -339,14 +346,36 @@ public class EntitlementLedger private constructor(
      * spent). This is the drain gate: a retire is refused while entitlement is still
      * outstanding across the edge. Once retired, nothing crosses again and its history
      * stays queryable via [edge] forever.
+     *
+     * The patch carries a **drain witness** — the edge's observed `issued`/`returned`/
+     * `leafSpent`/`rollupSpent` counter slots at their absolute values (max-safe, same
+     * house idiom as the feasibility mutators' [witness]). Retirement is causally after
+     * the drain, but that causality crosses writer streams; without the witness a laggard
+     * holding `{delegate, close, retire}` but not the draining `release`/`spend` patch
+     * would compute `outstanding != 0` against RETIRED and false-fire
+     * [LedgerConflict.ClosureViolation] on honest single-hop delivery. The witness ships
+     * the drained counters alongside RETIRED so the retired-and-drained state travels as one.
      */
     public fun retire(edge: AttachmentId): Patch<EntitlementLedger>? {
         recordOf(edge) ?: return null
         if (lifecycleOf(edge) != Lifecycle.CLOSING) return null
         val summary = edge(edge) ?: return null
         if (summary.outstanding != 0L) return null
-        return Patch(of(lifecycle = mapOf(edge to Lifecycle.RETIRED)))
+        val retired = of(lifecycle = mapOf(edge to Lifecycle.RETIRED))
+        return Patch(retired.piece(drainWitness(edge)))
     }
+
+    /**
+     * The counter slots of [edge] at their observed absolute values — the witness a
+     * [retire] patch carries so its RETIRED marker never outruns the drain that justified
+     * it. Absolute values are max-safe: re-delivery is absorbed idempotently.
+     */
+    private fun drainWitness(edge: AttachmentId): EntitlementLedger = of(
+        issued = issued[edge]?.let { mapOf(edge to it) } ?: emptyMap(),
+        returned = returned[edge]?.let { mapOf(edge to it) } ?: emptyMap(),
+        leafSpent = leafSpent[edge]?.let { mapOf(edge to it) } ?: emptyMap(),
+        rollupSpent = rollupSpent[edge]?.let { mapOf(edge to it) } ?: emptyMap(),
+    )
 
     /**
      * Introduce root supply: credit [holder] with [amount] units under [mintId].
@@ -386,14 +415,26 @@ public class EntitlementLedger private constructor(
 
     /**
      * [r] returns [amount] of unused entitlement up [edge], restoring the parent's
-     * holdings. `null` if [r]'s holdings at the child are insufficient, or [edge] is
-     * unknown/divergent. Bumps `returned(edge)[r]`.
+     * holdings. `null` if:
+     *  - [edge] is unknown or divergent;
+     *  - [edge] is **not the child's live inbound edge** — the pocket credited
+     *    (`returned(edge)`) must be the same pocket the feasibility check reads
+     *    (`holdings(child)`, funded by the live inbound). Without this tie, a caller
+     *    could gate on a child's live pocket yet credit an unrelated (prepared/retired)
+     *    edge and mint holdings from nothing (breaks conservation, design §4.3). Because
+     *    [lineageEdges] follows only live (active|closing) edges, this one check also
+     *    refuses release across a prepared or retired edge — they are never the live
+     *    inbound — while still admitting release across a **closing** edge so it can drain;
+     *  - [r]'s holdings at the child are insufficient.
+     *
+     * Bumps `returned(edge)[r]`.
      */
     public fun release(r: ReplicaId, edge: AttachmentId, amount: Long): Patch<EntitlementLedger>? {
         require(amount >= 1L) { "release amount must be positive, was $amount" }
         val child = recordOf(edge)?.child ?: return null
-        if (amount > holdings(child, r)) return null
         val lineage = lineageEdges(child) ?: return null
+        if (lineage.lastOrNull() != edge) return null // credited pocket must be the checked live pocket
+        if (amount > holdings(child, r)) return null
         val bump = of(returned = mapOf(edge to bumpedSlot(returned, edge, r, amount)))
         return Patch(bump.piece(witness(r, lineage)))
     }
@@ -544,7 +585,7 @@ public class EntitlementLedger private constructor(
             if (recs.size > 1) conflicts += LedgerConflict.RecordDivergence(id)
         }
         for (g in allGroups()) {
-            if (activeInboundCount(g) >= 2) conflicts += LedgerConflict.DualActiveInbound(g)
+            if (liveInboundCount(g) >= 2) conflicts += LedgerConflict.DualActiveInbound(g)
             for (r in allReplicas()) {
                 if (holdings(g, r) < 0L) conflicts += LedgerConflict.PersistentNegativeHoldings(g, r)
             }
@@ -552,9 +593,16 @@ public class EntitlementLedger private constructor(
         return conflicts.sorted()
     }
 
-    /** The number of [Lifecycle.ACTIVE] inbound edges into [group] — `≥ 2` is a fork. */
-    private fun activeInboundCount(group: GroupId): Int =
-        records.count { (id, recs) -> recs.any { it.child == group } && lifecycleOf(id) == Lifecycle.ACTIVE }
+    /**
+     * The number of **live** ([Lifecycle.ACTIVE] or [Lifecycle.CLOSING]) inbound edges
+     * into [group] — `≥ 2` is a fork. This is deliberately the *same* predicate
+     * [lineageEdges] quarantines on, so a quarantined child (holdings `0`, undrainable)
+     * always has a matching [LedgerConflict.DualActiveInbound] report (invariant §10.11:
+     * quarantine ⟺ explicit report). Counting only ACTIVE would leave an ACTIVE+CLOSING
+     * fork silently quarantined with an empty `validate()`.
+     */
+    private fun liveInboundCount(group: GroupId): Int =
+        records.count { (id, recs) -> recs.any { it.child == group } && isLiveEdge(id) }
 
     // ─────────────────────────────────────────────────────────────────────────
     // Enumeration + test-support accessors (internal — used by validate and tests)

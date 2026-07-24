@@ -21,7 +21,10 @@ import kotlinx.serialization.Serializable
  * The stored register is a per-edge `Map<AttachmentId, Lifecycle>` inside
  * [EntitlementLedger], merged componentwise by [maxOf] — a product of max-registers,
  * itself a join-semilattice, so it slots into the ledger's product-of-lattices `piece`
- * with no new merge machinery.
+ * with no new merge machinery. Note: [EntitlementLedger.lifecycle] returns a *derived*
+ * read that defaults a known edge with no register entry to [ACTIVE] — that derived read
+ * is not the register value and can transiently regress before the edge's own entry has
+ * merged; the stored register itself never regresses. See that method's KDoc.
  *
  * Semantics per state (design §5.1):
  *  - [PREPARED] — the edge exists, but **no entitlement may cross it** (delegation is

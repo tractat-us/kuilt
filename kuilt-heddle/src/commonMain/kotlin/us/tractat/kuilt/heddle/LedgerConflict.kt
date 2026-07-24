@@ -79,15 +79,26 @@ public sealed interface LedgerConflict : Comparable<LedgerConflict> {
     }
 
     /**
-     * A group with **two or more [Lifecycle.ACTIVE] inbound generations** — the topology
-     * fork the design forbids resolving by last-writer-wins on a parent pointer (§5.2,
-     * §10.11). It arises when two replicas concurrently activate a different inbound edge
-     * for the same child; the lifecycle max-register keeps *both* ACTIVE, so every replica
-     * folds the merged state into the **same** report rather than silently picking a
-     * winner. The child's whole lineage is quarantined — [EntitlementLedger.holdings]
-     * returns zero at or below it — and **no new entitlement may be delegated across
-     * either contested edge** ([EntitlementLedger.delegate] returns `null`) until the
-     * control plane close-drains all but one generation.
+     * A group with **two or more live inbound generations** — two inbound edges that are
+     * each [Lifecycle.ACTIVE] or [Lifecycle.CLOSING] (a still-draining closing edge counts;
+     * it can still carry entitlement). This is the topology fork the design forbids
+     * resolving by last-writer-wins on a parent pointer (§5.2, §10.11). It arises when two
+     * replicas concurrently attach a different inbound edge for the same child — e.g. one
+     * activates `e2` while another has `e1` active or closing; the lifecycle max-register
+     * keeps *both* live, so every replica folds the merged state into the **same** report
+     * rather than silently picking a winner. The child's whole lineage is quarantined —
+     * [EntitlementLedger.holdings] returns zero at or below it — and **no new entitlement
+     * may be delegated across either contested edge** ([EntitlementLedger.delegate]
+     * returns `null`). This predicate is exactly the one [EntitlementLedger] quarantines
+     * on, so quarantine and report always coincide (§10.11).
+     *
+     * **Resolution is a control-plane (H5) concern, not an in-ledger operation.** A
+     * quarantined generation has holdings `0`, so it *cannot be drained* — the naive
+     * "close-drain-retire all but one" recipe deadlocks (a closing edge with zero holdings
+     * can neither spend nor release). Resolving a genuine fork means the control plane
+     * decides which generation is canonical and **retires-and-abandons** the loser's edge
+     * (accepting any entitlement stranded on it), not draining it. H2 surfaces the fork;
+     * it does not resolve it.
      */
     public data class DualActiveInbound(public val group: GroupId) : LedgerConflict {
         override val order: Int get() = 3
@@ -95,15 +106,22 @@ public sealed interface LedgerConflict : Comparable<LedgerConflict> {
 
     /**
      * A [Lifecycle.RETIRED] edge across which entitlement nonetheless still stands —
-     * `outstanding(e) != 0` (design §5.1, §10.10). [EntitlementLedger.retire] refuses
-     * to retire an edge until it has fully drained, so a retired edge that later shows
-     * outstanding entitlement can only mean a **late delegation crossed a generation the
-     * cluster had already retired**: a replica acting on stale [Lifecycle.ACTIVE] state
-     * delegated down an edge that another replica had already close-drained-retired. The
-     * max-register makes RETIRED dominate the merge (closure dominance); this report
-     * surfaces the late crossing rather than resolving it by arrival order. The
-     * entitlement is stranded on a dead generation and must be reconciled by the control
-     * plane.
+     * `outstanding(e) != 0` (design §5.1, §10.10). [EntitlementLedger.retire] refuses to
+     * retire an edge until it has fully drained, so on a **causally-complete** state this
+     * means a **late delegation crossed a generation the cluster had already retired**: a
+     * replica acting on stale [Lifecycle.ACTIVE] state delegated down an edge another
+     * replica had already close-drained-retired. The max-register makes RETIRED dominate
+     * the merge (closure dominance); this report surfaces the late crossing rather than
+     * resolving it by arrival order, and the stranded entitlement is reconciled by the
+     * control plane.
+     *
+     * It can **also** fire transiently on a *lagging observer* — one holding the
+     * `{delegate, close, retire}` patches but not yet the draining `release`/`spend` — for
+     * which `issued > returned + spent` against RETIRED. The [EntitlementLedger.retire]
+     * patch carries a drain witness (the edge's counter slots) specifically to minimize
+     * this transient for honest single-hop delivery; like every `validate` conflict, this
+     * is a diagnostic, not a safety gate, and a lagging false-positive self-heals on
+     * anti-entropy.
      */
     public data class ClosureViolation(public val edge: AttachmentId) : LedgerConflict {
         override val order: Int get() = 4
