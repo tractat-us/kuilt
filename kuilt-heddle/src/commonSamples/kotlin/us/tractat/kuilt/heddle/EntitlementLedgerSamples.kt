@@ -91,6 +91,41 @@ internal fun CoroutineScope.sampleHeddleNode(seam: Seam) {
     }
 }
 
+/**
+ * Bootstrap a **Raft-governed** node: the same data plane as [heddleStatic], but supply and topology
+ * are created at runtime through the consensus log, so a split-brain can never both mint and two
+ * overlapping reshapes serialize (the loser surfaces as a [ControlConflict]). The spend path
+ * (`schedule`/`reserve`/`complete`) never touches the log. Here `raft` is any [RaftNode] over the
+ * cluster; in tests it comes from `MultiNodeRaftSim`.
+ */
+@Suppress("unused")
+internal suspend fun CoroutineScope.sampleHeddleGoverned(seam: Seam, raft: us.tractat.kuilt.raft.RaftNode) {
+    val root = GroupId("root")
+    val leaf = GroupId("leaf")
+    val self = ReplicaId(seam.selfId.value)
+    val edge = AttachmentId("root→leaf")
+
+    val node = heddleGoverned(
+        seam = seam,
+        self = self,
+        raft = raft,
+        root = root,
+        clock = { Instant.fromEpochMilliseconds(0L) },
+        config = HeddleConfig(policy = PolicyConfig(quantum = 10L), maxHoldingsPerPeer = 1_000L),
+        incarnation = "boot-2026-07-24T00:00:00Z", // fresh per process incarnation — a boot id / epoch / UUID
+    )
+
+    // Mint and reshape are serialized through the Raft log — each returns a structured outcome.
+    check(node.mint(self, 100L) is ControlOutcome.Applied)
+    node.prepare(AttachmentRecord(edge, root, leaf, Weight.ONE, initialVirtualTime = 0L))
+    node.activate(edge)
+
+    // The spend path is coordination-free — it issues no consensus messages.
+    node.advertise(edge, Demand(targetOutstanding = 100L, maximumUsefulGrant = 100L))
+    node.schedule(root)
+    node.reserve(leaf, maximumCost = 10L)?.let { node.complete(it, actualCost = 7L) }
+}
+
 /** Weights order by exact cross-multiplication — see [Weight]. */
 @Suppress("unused")
 internal fun sampleWeightOrdering() {

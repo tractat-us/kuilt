@@ -108,6 +108,9 @@ whole ledger inherits the three merge laws for free.
   which is what makes a scheduling decision bit-identical on every platform.
 - `HeddleNode` / `heddleStatic` — the node that runs the tally, demand board, reservations,
   and liveness over a `Seam`, and its fixed-roster bootstrap (see below).
+- `GovernedHeddleNode` / `heddleGoverned` — the same node with runtime supply creation and
+  reshapes serialized through `kuilt-raft`; its control calls return a `ControlOutcome`
+  (`Applied` / `Conflict`) so an overlapping reshape's loser surfaces, never silently drops.
 - `HeddleConfig` — the node's policy caps, the §8.2 bound cap, the demand-staleness window,
   and the injected replication/liveness/RNG knobs.
 - `DemandBoard` — one peer's advertised appetite across the edges it serves; the value
@@ -166,8 +169,32 @@ What a node does for you:
   current, and actually-observed fairness gap, so a consumer never claims tighter fairness
   than it can prove while peers are still reconciling.
 
-`heddleStatic` is the fixed-roster front door (supply is created once, at start-up); a
-Raft-backed `heddleGoverned` front door — for runtime supply creation and serialized
-reshapes — arrives in a later phase.
+## Creating supply and reshaping at runtime
+
+`heddleStatic` is the fixed-roster front door: the supply is decided once, at start-up, and
+every peer is handed the same starting tree. Its sibling **`heddleGoverned`** is for when supply
+and shape have to change *while the system is running* — a new tenant arrives, a lane is added,
+entitlement is topped up. Those few decisions are the only ones that genuinely need everyone to
+agree on an order, so `heddleGoverned` runs them through a small agreement step (`kuilt-raft`)
+and nothing else does:
+
+- **Creating supply can't be double-counted.** Minting new entitlement (`mint`) goes through the
+  agreement step, so if the network splits, the smaller half simply can't create supply — two
+  halves of a split can never both mint against the same pool.
+- **Two conflicting reshapes don't corrupt the tree.** If two peers try to re-attach the same
+  child to different parents at once, the agreement step picks an order: the first wins, and the
+  second comes back as a **structured conflict** (`ControlConflict.DualInbound`) for the operator
+  to resolve — never a silent overwrite, never a coin-flip on a timestamp. Reshapes that don't
+  touch the same child don't wait on each other at all.
+- **The everyday path is untouched.** Handing out and charging for work — `schedule`, `reserve`,
+  `complete` — never goes through the agreement step, at any rate. That is the whole point:
+  agreement appears only at the two rare moments that need it.
+
+`heddleGoverned` returns a `GovernedHeddleNode`: the same data-plane calls as `HeddleNode` plus
+`mint`/`prepare`/`activate`/`close`/`retire`, each of which returns a `ControlOutcome` — `Applied`
+when it took effect, or `Conflict` carrying the structured reason when it lost a race. Reclaiming a
+crashed peer's stranded share is a fenced control-plane act whose seam is **defined but not yet
+shipped** (`revocation`): a wrong reclaim would let two peers spend the same units, so v1 leaves the
+share safely stranded.
 
 See `docs/heddle-design.md` and `docs/heddle-ledger-design.md` for the full model.

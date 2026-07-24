@@ -182,6 +182,18 @@ public class HeddleNode internal constructor(
     /** Retire a drained [edge] ([EntitlementLedger.retire]); returns whether it applied. */
     public fun retire(edge: AttachmentId): Boolean = applyIfPresent { it.retire(edge) }
 
+    /**
+     * The sink the H5 [HeddleControlPlane] uses to **publish an already-approved** control patch
+     * into this node's replicated ledger, so data-plane consumers converge over the seam. The
+     * accept/refuse *decision* is made upstream against the control plane's log-pure projection —
+     * this only replicates a patch the log already ordered and admitted, so a rejected act never
+     * reaches the Quilter. Applied under the node lock, keeping lock ordering uniform with
+     * [schedule]/[applyIfPresent]. `internal` — only [heddleGoverned] wires it.
+     */
+    internal fun asControlSink(): ControlLedgerSink = ControlLedgerSink { patch ->
+        lock.withLock { ledgerQuilter.mutate { patch } }
+    }
+
     // ─────────────────────────────────────────────────────────────────────────────
     // Scheduling — one or more EEVDF allocation rounds at [parent], delegating this
     // peer's holdings down toward demanding children. Pure and bounded: each grant
