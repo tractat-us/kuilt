@@ -69,6 +69,8 @@ public value class ReservationId internal constructor(public val value: String)
  * synchronization. There is **no** `limitedParallelism(1)` confinement.
  *
  * Construct via [heddleStatic] (design §9); the constructor is internal.
+ *
+ * @sample us.tractat.kuilt.heddle.sampleHeddleNode
  */
 @OptIn(ExperimentalSerializationApi::class)
 public class HeddleNode internal constructor(

@@ -1,7 +1,10 @@
 package us.tractat.kuilt.heddle
 
+import kotlinx.coroutines.CoroutineScope
+import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.crdt.piece
+import kotlin.time.Instant
 
 /**
  * Two peers each bootstrap the same root supply and merge their copies. The merge
@@ -51,6 +54,41 @@ internal fun sampleEntitlementLedgerLifecycle() {
     ledger = ledger.piece(checkNotNull(ledger.release(alice, e, 10L)))
     ledger = ledger.piece(checkNotNull(ledger.retire(e)))
     check(ledger.lifecycle(e) == Lifecycle.RETIRED)
+}
+
+/**
+ * Bootstrap a node over a live [Seam] with a fixed roster, advertise appetite, run an
+ * allocation round, then reserve and complete leaf work. Every peer that calls
+ * [heddleStatic] with the same root, mint, and topology begins from an identical ledger
+ * and stays in step over the fabric.
+ */
+@Suppress("unused")
+internal fun CoroutineScope.sampleHeddleNode(seam: Seam) {
+    val root = GroupId("root")
+    val leaf = GroupId("leaf")
+    val self = ReplicaId(seam.selfId.value)
+    val e = AttachmentRecord(AttachmentId("root→leaf"), root, leaf, Weight.ONE, initialVirtualTime = 0L)
+
+    val node = heddleStatic(
+        seam = seam,
+        self = self,
+        root = root,
+        mint = mapOf(self to 100L),        // this peer starts holding 100 units at the root
+        topology = listOf(e),              // root → leaf, prepared and active at bootstrap
+        clock = { Instant.fromEpochMilliseconds(0L) },
+        config = HeddleConfig(policy = PolicyConfig(quantum = 10L), maxHoldingsPerPeer = 1_000L),
+    )
+
+    // The leaf wants work; one scheduling round delegates entitlement down toward it.
+    node.advertise(e.id, Demand(targetOutstanding = 100L, maximumUsefulGrant = 100L))
+    node.schedule(root)
+
+    // Leaf work reserves a slice, runs, then completes — completing twice charges once.
+    val reservation = node.reserve(leaf, maximumCost = 10L)
+    if (reservation != null) {
+        node.complete(reservation, actualCost = 7L)
+        node.complete(reservation, actualCost = 7L) // idempotent no-op
+    }
 }
 
 /** Weights order by exact cross-multiplication — see [Weight]. */

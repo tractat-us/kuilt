@@ -5,6 +5,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.transform
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
@@ -97,6 +98,30 @@ class HeddleNodeTest {
         // All 200 minted units were delegated down (100 by each peer).
         val issued = h.peers[0].node.ledger.value.let { it.edge(e1)!!.issued + it.edge(e2)!!.issued }
         assertEquals(200L, issued, "every minted unit delegated once, converged")
+    }
+
+    @Test
+    fun convergesUnderDuplicatedDelivery() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        // Every frame is delivered twice in and out on both peers — the lattice must absorb it (§10.7).
+        val h = harness(
+            peers = 2,
+            mint = mapOf(0 to 100L, 1 to 100L),
+            topology = flatTopology(),
+            wrap = { DuplicatingSeam(it) },
+        )
+        h.pump()
+        for (p in h.peers) {
+            p.node.advertise(e1, hungry)
+            p.node.advertise(e2, hungry)
+        }
+        h.pump()
+        for (p in h.peers) p.node.schedule(root)
+        h.pump(600)
+
+        assertEquals(h.peers[0].node.ledger.value, h.peers[1].node.ledger.value, "converge despite duplication")
+        // Duplication did not double-count: exactly the 200 minted units were delegated.
+        val issued = h.peers[0].node.ledger.value.let { it.edge(e1)!!.issued + it.edge(e2)!!.issued }
+        assertEquals(200L, issued, "duplicate delivery is idempotent — no phantom entitlement")
     }
 
     // ─────────────────────────────────────────────────────────────────────────────
@@ -385,6 +410,7 @@ class HeddleNodeTest {
         peers: Int,
         mint: Map<Int, Long>,
         topology: List<AttachmentRecord>,
+        wrap: (Seam) -> Seam = { it },
     ): Harness {
         val loom = InMemoryLoom()
         val clock: () -> Instant = { Instant.fromEpochMilliseconds(testScheduler.currentTime) }
@@ -396,7 +422,7 @@ class HeddleNodeTest {
         }.toMap()
 
         val nodes = seams.mapIndexed { i, seam ->
-            val gate = GatedSeam(seam)
+            val gate = GatedSeam(wrap(seam))
             val self = ReplicaId(seam.selfId.value)
             val node = backgroundScope.heddleStatic(
                 seam = gate,
@@ -436,6 +462,24 @@ class HeddleNodeTest {
         }
         override suspend fun sendTo(peer: PeerId, payload: ByteArray) {
             if (connected.value) delegate.sendTo(peer, payload)
+        }
+        override suspend fun close(reason: CloseReason): Unit = delegate.close(reason)
+    }
+
+    /** A seam wrapper that delivers every frame twice, in and out — a duplicating fabric (§10.7). */
+    private class DuplicatingSeam(private val delegate: Seam) : Seam {
+        override val selfId: PeerId get() = delegate.selfId
+        override val peers: StateFlow<Set<PeerId>> get() = delegate.peers
+        override val state: StateFlow<SeamState> get() = delegate.state
+        override val incoming: Flow<Swatch>
+            get() = delegate.incoming.transform { emit(it); emit(it) }
+        override suspend fun broadcast(payload: ByteArray) {
+            delegate.broadcast(payload)
+            delegate.broadcast(payload)
+        }
+        override suspend fun sendTo(peer: PeerId, payload: ByteArray) {
+            delegate.sendTo(peer, payload)
+            delegate.sendTo(peer, payload)
         }
         override suspend fun close(reason: CloseReason): Unit = delegate.close(reason)
     }
