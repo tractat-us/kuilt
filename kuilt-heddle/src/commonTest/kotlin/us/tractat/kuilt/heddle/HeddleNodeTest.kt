@@ -24,6 +24,7 @@ import us.tractat.kuilt.quilter.QuilterConfig
 import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -183,53 +184,158 @@ class HeddleNodeTest {
         }
 
     // ─────────────────────────────────────────────────────────────────────────────
-    // 4. Full §10.1 conservation identity WITH earmarks.
-    //    minted = Σ available-holdings + Σ earmarked + Σ spent.
+    // 4. Full §10.1 conservation identity WITH a reservation in flight, across a merge.
+    //    On the CONVERGED ledger: Σ holdings(g,r) over ALL replicas + leafSpentTotal == minted.
     // ─────────────────────────────────────────────────────────────────────────────
 
     @Test
-    fun conservationHoldsWithEarmarks() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
-        val minted = 100L
-        val h = harness(peers = 1, mint = mapOf(0 to minted), topology = flatTopology())
-        h.pump()
-        val node = h.peers[0].node
-        node.advertise(e1, hungry)
-        node.advertise(e2, hungry)
-        node.schedule(root)
-        h.pump()
+    fun globalConservationHoldsWithReservationInFlightAcrossMerge() =
+        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+            val minted = 200L
+            val h = harness(peers = 2, mint = mapOf(0 to 100L, 1 to 100L), topology = flatTopology())
+            h.pump()
+            for (p in h.peers) {
+                p.node.advertise(e1, hungry)
+                p.node.advertise(e2, hungry)
+            }
+            h.pump()
+            for (p in h.peers) p.node.schedule(root)
+            h.pump(600)
 
-        // Reserve on both leaves (earmarks), complete one partially, cancel the other.
-        val r1 = node.reserve(g1, 20L)!!
-        val r2 = node.reserve(g2, 15L)!!
-        assertConservationWithEarmarks(node, minted)
+            // A reservation is outstanding on peer0 while global conservation is checked.
+            val id = h.peers[0].node.reserve(g1, 20L)
+            assertNotNull(id, "peer0 reserves against its delegated holdings")
+            assertGlobalConservation(h, minted)
 
-        node.complete(r1, 12L)
-        h.pump()
-        assertConservationWithEarmarks(node, minted)
-
-        node.cancel(r2)
-        h.pump()
-        assertConservationWithEarmarks(node, minted)
-    }
-
-    private fun assertConservationWithEarmarks(node: HeddleNode, minted: Long) {
-        val ledger = node.ledger.value
-        val groups = listOf(root, g1, g2)
-        var sumHoldings = 0L
-        var earmarked = 0L
-        for (g in groups) {
-            sumHoldings += ledger.holdings(g, node.self)
-            earmarked += node.earmarked(g)
+            // Complete part of it, converge across the merge, re-check.
+            h.peers[0].node.complete(id, 15L)
+            h.pump(600)
+            assertGlobalConservation(h, minted)
+            assertEquals(0L, h.peers[0].node.earmarked(g1), "earmark released after completion")
         }
-        val available = sumHoldings - earmarked
+
+    private fun assertGlobalConservation(h: Harness, minted: Long) {
+        val ledger = h.peers[0].node.ledger.value
+        assertEquals(ledger, h.peers[1].node.ledger.value, "ledgers converged for the conservation check")
+        val groups = listOf(root, g1, g2)
+        val replicas = h.peers.map { it.id }
+        var sumHoldings = 0L
+        for (g in groups) for (r in replicas) sumHoldings += ledger.holdings(g, r)
         assertEquals(
             minted,
-            available + earmarked + ledger.leafSpentTotal(),
-            "minted = Σ available + Σ earmarked + Σ spent",
+            sumHoldings + ledger.leafSpentTotal(),
+            "global §10.1: Σ holdings over ALL replicas + Σ spent == minted, reservation in flight",
         )
-        // The ledger-level (earmark-free) identity holds too — earmarks are a sub-bucket of holdings.
-        assertEquals(minted, sumHoldings + ledger.leafSpentTotal(), "ledger conservation intact")
     }
+
+    // ─────────────────────────────────────────────────────────────────────────────
+    // 4b. complete() must charge the CAPTURED path even when the leaf is quarantined or
+    //     gains a child concurrently — never swallow, never throw (§4.4 / §10.4).
+    // ─────────────────────────────────────────────────────────────────────────────
+
+    @Test
+    fun completeChargesCapturedPathWhenLeafQuarantinedConcurrently() =
+        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+            val h = harness(peers = 1, mint = mapOf(0 to 100L), topology = flatTopology())
+            h.pump()
+            val node = h.peers[0].node
+            node.advertise(e1, hungry)
+            node.schedule(root)
+            h.pump()
+            val id = node.reserve(g1, 10L)
+            assertNotNull(id)
+
+            // A second inbound generation into g1 → DualActiveInbound quarantines g1's lineage.
+            val e1b = AttachmentRecord(AttachmentId("e1b"), root, g1, Weight.ONE, 0L)
+            assertTrue(node.prepare(e1b) && node.activate(e1b.id))
+            h.pump()
+            assertEquals(0L, node.ledger.value.holdings(g1, node.self), "g1 quarantined: holdings collapse")
+
+            // Work finished — complete must still charge the captured historical path e1.
+            node.complete(id, 7L)
+            h.pump()
+            assertEquals(7L, node.ledger.value.edge(e1)!!.spent, "captured-path charge lands despite quarantine")
+            assertEquals(0L, node.earmarked(g1), "earmark released exactly once")
+        }
+
+    @Test
+    fun completeChargesWhenLeafGainsChildConcurrently() =
+        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+            val h = harness(peers = 1, mint = mapOf(0 to 100L), topology = flatTopology())
+            h.pump()
+            val node = h.peers[0].node
+            node.advertise(e1, hungry)
+            node.schedule(root)
+            h.pump()
+            val id = node.reserve(g1, 10L)
+            assertNotNull(id)
+
+            // g1 gains a PREPARED child concurrently → isLeaf(g1) becomes false.
+            val child = AttachmentRecord(AttachmentId("g1-child"), g1, GroupId("gc"), Weight.ONE, 0L)
+            assertTrue(node.prepare(child))
+            h.pump()
+
+            // complete must NOT throw; it charges the captured path.
+            node.complete(id, 6L)
+            h.pump()
+            assertEquals(6L, node.ledger.value.edge(e1)!!.spent, "charge lands though the leaf gained a child")
+        }
+
+    @Test
+    fun reserveRejectsNonLeafGroup() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        val h = harness(peers = 1, mint = mapOf(0 to 100L), topology = flatTopology())
+        h.pump()
+        // root has children → not a leaf → reserve must refuse (else every complete throws).
+        assertNull(h.peers[0].node.reserve(root, 10L), "reserve refuses a non-leaf group")
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────
+    // 4c. An invalid actualCost is rejected WITHOUT corrupting the earmark or losing the
+    //     reservation (§4.4 — a validation failure must not corrupt state).
+    // ─────────────────────────────────────────────────────────────────────────────
+
+    @Test
+    fun invalidActualCostDoesNotLeakEarmarkOrLoseReservation() =
+        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+            val h = harness(peers = 1, mint = mapOf(0 to 100L), topology = flatTopology())
+            h.pump()
+            val node = h.peers[0].node
+            node.advertise(e1, hungry)
+            node.schedule(root)
+            h.pump()
+            val id = node.reserve(g1, 10L)!!
+            assertEquals(10L, node.earmarked(g1))
+
+            // Over-max completion is rejected — earmark intact, reservation still present.
+            assertFailsWith<IllegalArgumentException> { node.complete(id, 11L) }
+            assertEquals(10L, node.earmarked(g1), "earmark not leaked by a rejected completion")
+
+            // The reservation survived; a valid completion still charges.
+            node.complete(id, 8L)
+            h.pump()
+            assertEquals(0L, node.earmarked(g1), "earmark released by the valid completion")
+            assertEquals(8L, node.ledger.value.edge(e1)!!.spent, "the retried completion charges")
+        }
+
+    // ─────────────────────────────────────────────────────────────────────────────
+    // 4d. §8.2 bound is consistent under ASYMMETRIC demand — a fair scheduler serving only
+    //     the demanding child is not a fairness error.
+    // ─────────────────────────────────────────────────────────────────────────────
+
+    @Test
+    fun boundMetricsConsistentUnderAsymmetricDemand() =
+        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+            val h = harness(peers = 1, mint = mapOf(0 to 100L), topology = flatTopology())
+            h.pump()
+            val node = h.peers[0].node
+            // Only g1 wants service; g2 is idle. Serving only g1 is fair, not an error.
+            node.advertise(e1, hungry)
+            node.schedule(root)
+            h.pump()
+            val m = node.boundMetrics(root)
+            assertTrue(m.isConsistent, "asymmetric demand must not read as a bound violation: $m")
+            assertEquals(0L, m.observedDeviation, "no demanding-sibling imbalance → zero observed deviation")
+        }
 
     // ─────────────────────────────────────────────────────────────────────────────
     // 5. Partition, schedule both sides, heal, converge; bound metrics stay consistent (§8.2, §10.7).

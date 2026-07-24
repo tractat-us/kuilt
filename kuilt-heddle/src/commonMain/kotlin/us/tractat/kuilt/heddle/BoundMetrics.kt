@@ -24,9 +24,13 @@ import us.tractat.kuilt.crdt.ReplicaId
  *   independently steerable among [parent]'s children), plus discretization, never
  *   exceeding [configuredWorstCase]. Falls as peers spend down and reconcile.
  * @property observedDeviation the fairness error actually present now: the largest gap,
- *   over [parent]'s active children, between a child's *ideal* committed service
- *   (`weightShare · totalCommitted`) and its *actual* committed service, in whole
- *   service units (rounded up). Zero when children sit exactly on their weight ratio.
+ *   over [parent]'s **demanding** active children, between a child's *ideal* committed
+ *   service (its share of `totalCommitted` **among the demanding children**) and its
+ *   *actual* committed service, in whole service units (rounded up). A child advertising
+ *   no demand is not owed service (design §8.2's fairness-error model is over the
+ *   *active/backlogged* set), so it is excluded — otherwise a fair scheduler legitimately
+ *   serving only the demanding child would read as a bound violation. Zero when the
+ *   demanding children sit exactly on their weight ratio.
  */
 public data class BoundMetrics(
     public val parent: GroupId,
@@ -41,14 +45,17 @@ public data class BoundMetrics(
     public companion object {
         /**
          * Derive the bound metrics at [parent] from the merged [ledger], the live [roster]
-         * (every peer that can steer entitlement here, including self), and the [config]
-         * caps. Pure — a function of the arguments, computed identically on every peer that
-         * has merged the same state.
+         * (every peer that can steer entitlement here — including self **and** currently
+         * unreachable peers, since a partitioned peer is exactly the divergence source the
+         * bound must count), the set of [demanding] child edges (those advertising live
+         * demand), and the [config] caps. Pure — a function of the arguments, computed
+         * identically on every peer that has merged the same state.
          */
         public fun at(
             ledger: EntitlementLedger,
             parent: GroupId,
             roster: Set<ReplicaId>,
+            demanding: Set<AttachmentId>,
             config: HeddleConfig,
         ): BoundMetrics {
             val discretization = config.policy.quantum
@@ -67,21 +74,28 @@ public data class BoundMetrics(
                 parent = parent,
                 configuredWorstCase = configuredWorstCase,
                 currentBound = currentBound,
-                observedDeviation = observedDeviation(ledger, parent),
+                observedDeviation = observedDeviation(ledger, parent, demanding),
             )
         }
 
         /**
          * The current fairness error at [parent]: `max_i |idealCommitted_i − actualCommitted_i|`
-         * over active children, in whole service units (rounded up). Exact rational
-         * throughout — no floating point — so every peer computes the same value from the
-         * same state.
+         * over the **demanding** active children `i` (those in [demanding]), in whole service
+         * units (rounded up). The ideal is a child's weight-share of the service committed
+         * *among the demanding set* — a non-demanding child is not owed service (EEVDF measures
+         * lag over the backlogged set, design §8.2), so it is excluded from both the total and
+         * the max. Exact rational throughout — no floating point — so every peer computes the
+         * same value from the same state.
          */
-        private fun observedDeviation(ledger: EntitlementLedger, parent: GroupId): Long {
-            val children = ledger.activeChildren(parent)
+        private fun observedDeviation(
+            ledger: EntitlementLedger,
+            parent: GroupId,
+            demanding: Set<AttachmentId>,
+        ): Long {
+            val children = ledger.activeChildren(parent).filter { it.attachment in demanding }
             if (children.isEmpty()) return 0L
 
-            // Total committed service and total weight over the active children.
+            // Total committed service and total weight over the DEMANDING active children.
             var totalCommitted = 0L
             var weightSum = Rational.ZERO
             val weights = HashMap<AttachmentId, Weight>()

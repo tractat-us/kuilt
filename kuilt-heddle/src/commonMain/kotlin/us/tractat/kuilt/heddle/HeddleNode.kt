@@ -201,6 +201,10 @@ public class HeddleNode internal constructor(
     public fun schedule(parent: GroupId): Int = lock.withLock {
         var grants = 0
         while (grants < MAX_ROUNDS_PER_CALL) {
+            // Peek on the current state: if nothing is delegable, stop *without* entering the
+            // Quilter (which would consume a seq and broadcast an empty delta — chatty).
+            val peek = pickOne(ledger.value, parent)
+            if (peek == null || ledger.value.delegate(self, peek.attachment, peek.amount) == null) break
             var applied = false
             ledgerQuilter.mutate { s ->
                 val grant = pickOne(s, parent)
@@ -218,9 +222,20 @@ public class HeddleNode internal constructor(
         grants
     }
 
-    /** The current §8.2 bound metrics at [parent], from the merged ledger and live roster. */
-    public fun boundMetrics(parent: GroupId): BoundMetrics =
-        BoundMetrics.at(ledger.value, parent, roster(), config)
+    /**
+     * The current §8.2 bound metrics at [parent], from the merged ledger, the roster (live
+     * peers plus currently-[unreachable] ones, since a partitioned peer is exactly the
+     * divergence source the bound must count), and the set of children with live demand.
+     */
+    public fun boundMetrics(parent: GroupId): BoundMetrics {
+        val s = ledger.value
+        val demanding = lock.withLock {
+            val live = demandTracker.live()
+            s.activeChildren(parent)
+                .mapNotNullTo(HashSet()) { c -> c.attachment.takeIf { foldDemand(live, it).targetOutstanding > 0L } }
+        }
+        return BoundMetrics.at(s, parent, roster(), demanding, config)
+    }
 
     // ─────────────────────────────────────────────────────────────────────────────
     // Reservations — leaf earmark → completion, with local single-writer idempotence.
@@ -237,10 +252,17 @@ public class HeddleNode internal constructor(
     public fun reserve(leaf: GroupId, maximumCost: Long): ReservationId? {
         require(maximumCost > 0L) { "maximumCost must be positive, was $maximumCost" }
         return lock.withLock {
-            val available = ledger.value.holdings(leaf, self) - (earmarks[leaf] ?: 0L)
+            val s = ledger.value
+            // Reject a non-leaf group up front (else every completion would throw), and
+            // capture the entitlement path NOW, while the topology is valid (design §4.4):
+            // the completion charges these exact captured edges, never a later recompute.
+            if (!s.isLeaf(leaf)) return@withLock null
+            val captured = s.lineageOf(leaf) ?: return@withLock null // quarantined lineage → refuse
+            if (captured.isEmpty()) return@withLock null // a root leaf has no edge to charge
+            val available = s.holdings(leaf, self) - (earmarks[leaf] ?: 0L)
             if (available < maximumCost) return@withLock null
             val id = ReservationId("$self#${reservationSeq++}")
-            reservations[id] = Reservation(leaf, maximumCost)
+            reservations[id] = Reservation(leaf, maximumCost, captured)
             earmarks[leaf] = (earmarks[leaf] ?: 0L) + maximumCost
             id
         }
@@ -248,24 +270,44 @@ public class HeddleNode internal constructor(
 
     /**
      * Complete reservation [id], charging [actualCost] service (`0 ≤ actualCost ≤` the
-     * reserved maximum) to the ledger and releasing the earmark. **Idempotent by local
-     * single-writer discipline** (design §4.4): the first call removes the reservation and
-     * spends once; any later call for the same [id] finds nothing and is a no-op, so
-     * delivering a completion N times raises history exactly once. An unknown [id] is
-     * silently ignored.
+     * reserved maximum) against the **path captured at [reserve]** and releasing the
+     * earmark. **Idempotent by local single-writer discipline** (design §4.4): the first
+     * call charges once and removes the reservation; any later call for the same [id] finds
+     * nothing and is a no-op, so delivering a completion N times raises history exactly
+     * once. An unknown [id] is silently ignored.
+     *
+     * Ordering is deliberate (design §4.4 — a validation failure must not corrupt state):
+     * the [actualCost] bound is checked **before** the reservation is removed or the earmark
+     * decremented, and the earmark/reservation are cleared only **after** the charge lands.
+     * The charge uses the captured path, so it succeeds even if the leaf was concurrently
+     * reparented, quarantined, or gained a child; a swallowed positive charge would silently
+     * lose service, so a null result **fails loud** rather than being dropped.
+     *
+     * @throws IllegalArgumentException if [actualCost] is out of range (state untouched).
      */
     public fun complete(id: ReservationId, actualCost: Long) {
         lock.withLock {
-            val reservation = reservations.remove(id) ?: return
+            val reservation = reservations[id] ?: return
             require(actualCost in 0L..reservation.maximumCost) {
                 "actualCost $actualCost must be in 0..${reservation.maximumCost}"
             }
-            earmarks[reservation.leaf] = (earmarks[reservation.leaf] ?: 0L) - reservation.maximumCost
             if (actualCost > 0L) {
+                var charged = false
                 ledgerQuilter.mutate { s ->
-                    s.spend(self, reservation.leaf, actualCost) ?: Patch(EntitlementLedger.ZERO)
+                    val patch = s.spendCaptured(self, reservation.capturedPath, actualCost)
+                    if (patch != null) {
+                        charged = true
+                        patch
+                    } else {
+                        Patch(EntitlementLedger.ZERO)
+                    }
+                }
+                check(charged) {
+                    "spendCaptured returned null for captured path ${reservation.capturedPath} — charge lost"
                 }
             }
+            reservations.remove(id)
+            earmarks[reservation.leaf] = (earmarks[reservation.leaf] ?: 0L) - reservation.maximumCost
         }
     }
 
@@ -339,6 +381,9 @@ public class HeddleNode internal constructor(
 
     private fun applyIfPresent(op: (EntitlementLedger) -> Patch<EntitlementLedger>?): Boolean =
         lock.withLock {
+            // Fast-refuse on the current state so a refused op does not enter the Quilter and
+            // broadcast an empty delta; the real op still runs inside mutate on fresh state.
+            if (op(ledger.value) == null) return@withLock false
             var applied = false
             ledgerQuilter.mutate { s ->
                 val patch = op(s)
@@ -352,14 +397,26 @@ public class HeddleNode internal constructor(
             applied
         }
 
-    /** The live replica roster: every peer visible on the seam, always including self. */
+    /**
+     * The replica roster for the §8.2 bound: every peer visible on the seam, plus self, plus
+     * any currently-[unreachable] peer. Including the unreachable peers is deliberate — a
+     * partitioned peer may have dropped out of [Seam.peers], yet it still holds entitlement
+     * that can diverge, so the bound must keep counting it (otherwise `n·E` would *shrink*
+     * exactly when the divergence risk appears).
+     */
     private fun roster(): Set<ReplicaId> {
         val rs = peersFlow.value.mapTo(HashSet()) { ReplicaId(it.value) }
         rs += self
+        rs += _unreachable.value
         return rs
     }
 
     private fun reconcileDetectors(peers: Set<PeerId>) {
+        // Deliberately add-only for v1: once a peer is monitored it stays monitored, and a peer
+        // flagged lost is cleared from `unreachable` only by an explicit PeerRecovered event —
+        // there is no re-monitoring dance on rejoin. This matches the §8.1/§9 "no automatic
+        // reclamation" posture (a crashed peer's holdings stay stranded until an operator
+        // recovers them); richer rejoin handling belongs with the control plane (H5).
         for (peer in peers) {
             if (peer == selfPeer || peer in detectors) continue
             val link = PerPeerLivenessSeam(livenessSeam, peer, rawLiveness)
@@ -390,7 +447,16 @@ public class HeddleNode internal constructor(
         }
     }
 
-    private data class Reservation(val leaf: GroupId, val maximumCost: Long)
+    /**
+     * A local earmark awaiting completion. [capturedPath] is the entitlement path (root→leaf
+     * edge list) captured at [reserve] time, charged verbatim at [complete] so history follows
+     * the generation the work was admitted under, never the topology visible at completion.
+     */
+    private data class Reservation(
+        val leaf: GroupId,
+        val maximumCost: Long,
+        val capturedPath: List<AttachmentId>,
+    )
 
     public companion object {
         /** NamedMux channel carrying [Quilter] ledger-replication traffic. */
