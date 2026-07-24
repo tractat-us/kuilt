@@ -260,4 +260,142 @@ class EntitlementLedgerLifecycleTest {
             "entitlement crossing a retired generation surfaces ClosureViolation: ${violated.validate()}",
         )
     }
+
+    // ── BREAK 1: release must credit only the child's live inbound edge ────────
+
+    @Test
+    fun releaseDownNonLiveInboundEdgeMintsNothing() {
+        // Repro A: a child c reachable via an ACTIVE e2, plus a stray PREPARED e1 that never
+        // carried anything. release() up e1 gates on c's (e2-funded) pocket but would credit
+        // returned(e1) — minting holdings from nothing. It must be refused.
+        val e1 = edge("e1")
+        val e2 = edge("e2")
+        var l: EntitlementLedger = EntitlementLedger.bootstrap(root, mapOf(bob to 100L), "g")
+        l = l.applying(l.prepare(record("e1", root, c)))
+        l = l.applying(l.prepare(record("e2", root, c)))
+        l = l.applying(l.activate(e2))
+        l = l.applying(l.delegate(bob, e2, 7L))
+        assertEquals(93L, l.holdings(root, bob))
+        assertEquals(7L, l.holdings(c, bob))
+
+        // e1 is PREPARED and is NOT c's live inbound edge → release across it is refused.
+        assertNull(l.release(bob, e1, 7L))
+        // Conservation intact: still exactly the 100 minted, split 93 + 7.
+        assertEquals(93L, l.holdings(root, bob))
+        assertEquals(7L, l.holdings(c, bob))
+        // No phantom authority was manufactured — bob cannot delegate the un-held 100.
+        assertNull(l.delegate(bob, e2, 100L))
+    }
+
+    @Test
+    fun releaseDownRetiredInboundEdgeMintsNothing() {
+        // Repro B: e1 drained + retired, then c re-funded via a fresh ACTIVE e2. release() up
+        // the RETIRED e1 (not c's live inbound) must be refused.
+        val e1 = edge("e1")
+        val e2 = edge("e2")
+        var l: EntitlementLedger = EntitlementLedger.bootstrap(root, mapOf(bob to 100L), "g")
+        l = l.applying(l.prepare(record("e1", root, c)))
+        l = l.applying(l.activate(e1))
+        l = l.applying(l.delegate(bob, e1, 5L))
+        l = l.applying(l.release(bob, e1, 5L))
+        l = l.applying(l.close(e1))
+        l = l.applying(l.retire(e1))
+        // Fresh generation carries c now.
+        l = l.applying(l.prepare(record("e2", root, c)))
+        l = l.applying(l.activate(e2))
+        l = l.applying(l.delegate(bob, e2, 7L))
+
+        assertNull(l.release(bob, e1, 7L)) // e1 RETIRED, not live inbound → refused
+        assertEquals(93L, l.holdings(root, bob))
+        assertEquals(7L, l.holdings(c, bob))
+    }
+
+    @Test
+    fun releaseDownTheLiveClosingInboundStillDrains() {
+        // A CLOSING edge IS still the child's live inbound — release across it must be admitted
+        // so the edge can drain (design §5.1).
+        val e = edge("e")
+        var l: EntitlementLedger = EntitlementLedger.bootstrap(root, mapOf(alice to 100L), "g")
+        l = l.applying(l.prepare(record("e", root, leaf)))
+        l = l.applying(l.activate(e))
+        l = l.applying(l.delegate(alice, e, 10L))
+        l = l.applying(l.close(e))
+        // Draining across the closing edge is allowed.
+        l = l.applying(l.release(alice, e, 10L))
+        assertEquals(0L, l.edge(e)?.outstanding)
+    }
+
+    // ── BREAK 2: an ACTIVE + CLOSING dual inbound must be reported, not silent ──
+
+    @Test
+    fun activePlusClosingDualInboundIsReportedNotSilentlyQuarantined() {
+        val e1 = edge("e1")
+        val e2 = edge("e2")
+        val base = EntitlementLedger.bootstrap(root, mapOf(alice to 100L), "g")
+
+        // Replica X: prepare + activate + close e1 → e1 CLOSING (still live, draining).
+        var x = base.applying(base.prepare(record("e1", root, c)))
+        x = x.applying(x.activate(e1))
+        x = x.applying(x.close(e1))
+        // Replica Y: prepare + activate e2 → e2 ACTIVE.
+        var y = base.applying(base.prepare(record("e2", root, c)))
+        y = y.applying(y.activate(e2))
+
+        val merged = x.piece(y)
+        val mergedOther = y.piece(x)
+        assertEquals(merged, mergedOther)
+        assertEquals(merged.validate(), mergedOther.validate())
+
+        // c has one CLOSING + one ACTIVE inbound = two LIVE inbound → quarantined AND reported.
+        assertEquals(0L, merged.holdings(c, alice))
+        assertTrue(
+            LedgerConflict.DualActiveInbound(c) in merged.validate(),
+            "a live (active|closing) dual inbound must surface DualActiveInbound: ${merged.validate()}",
+        )
+    }
+
+    // ── BREAK 3: retire must witness the drain so laggards don't false-fire ────
+
+    @Test
+    fun retirePatchWitnessesDrainSoLaggardSeesNoFalseClosureViolation() {
+        val e = edge("e")
+        var setup: EntitlementLedger = EntitlementLedger.bootstrap(root, mapOf(alice to 100L), "g")
+        setup = setup.applying(setup.prepare(record("e", root, leaf)))
+        setup = setup.applying(setup.activate(e))
+
+        val delegateP = setup.delegate(alice, e, 10L)
+        assertNotNull(delegateP)
+        val afterDelegate = setup.piece(delegateP)
+        val releaseP = afterDelegate.release(alice, e, 10L)
+        assertNotNull(releaseP)
+        val afterRelease = afterDelegate.piece(releaseP)
+        val closeP = afterRelease.close(e)
+        assertNotNull(closeP)
+        val afterClose = afterRelease.piece(closeP)
+        val retireP = afterClose.retire(e)
+        assertNotNull(retireP)
+
+        // Fully delivered: clean.
+        assertTrue(afterClose.piece(retireP).validate().isEmpty())
+
+        // A laggard that has {delegate, close, retire} but NOT the release patch must still not
+        // false-fire ClosureViolation — the retire patch carries the drained counters as a witness.
+        val laggard = setup.piece(delegateP).piece(closeP).piece(retireP)
+        assertEquals(Lifecycle.RETIRED, laggard.lifecycle(e))
+        assertFalse(
+            LedgerConflict.ClosureViolation(e) in laggard.validate(),
+            "retire's drain witness must keep a laggard from false-firing ClosureViolation: ${laggard.validate()}",
+        )
+    }
+
+    // ── Minor: edge()'s known-check must include the lifecycle register ────────
+
+    @Test
+    fun lifecycleOnlyEdgeIsKnownToBothLifecycleAndEdge() {
+        // An activate/close patch delivered before its prepare carries only a lifecycle entry.
+        val e = edge("e")
+        val lifecycleOnly = EntitlementLedger.of(lifecycle = mapOf(e to Lifecycle.ACTIVE))
+        assertNotNull(lifecycleOnly.lifecycle(e))
+        assertNotNull(lifecycleOnly.edge(e)) // must be consistent with lifecycle()'s known-check
+    }
 }
