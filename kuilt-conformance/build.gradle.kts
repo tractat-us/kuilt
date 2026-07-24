@@ -27,6 +27,20 @@ kotlin {
         // JVM & Android resolve kotlin.test.Test via a JUnit typealias — supply it.
         jvmMain.dependencies { api(kotlin("test-junit")) }
         androidMain.dependencies { api(kotlin("test-junit")) }
+        // SLF4J backend for kotlin-logging on the JVM + Android unit-test variants.
+        // RoomConformanceSuite constructs SeamRoom, which (via HeartbeatPartitionDetector
+        // and its own file-level logger) initialises kotlin-logging. kuilt-session /
+        // kuilt-liveness declare kotlin-logging as `implementation` (non-transitive), so
+        // slf4j-api never reaches this module's test runtime classpath; the first logger
+        // call on the room-startup path then throws NoClassDefFoundError:
+        // org/slf4j/LoggerFactory and poisons every conformance test. logback brings the
+        // slf4j-api + a backend. Mirrors :kuilt-session (raft issue #222).
+        jvmTest.dependencies {
+            runtimeOnly(libs.logback)
+        }
+        androidUnitTest.dependencies {
+            runtimeOnly(libs.logback)
+        }
     }
 }
 
