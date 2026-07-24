@@ -144,6 +144,14 @@ public class EntitlementLedger private constructor(
             .mapNotNull { edge(it) }
 
     /**
+     * The single [AttachmentRecord] for [id] — its parent, child, weight, and virtual-time
+     * origin — or `null` if [id] is unknown *or divergent* (two conflicting records under
+     * one id, which a healthy ledger never has; see [validate]). The parent-facing read a
+     * scheduler pairs with [edge]'s [EdgeSummary] to build a policy input.
+     */
+    public fun record(id: AttachmentId): AttachmentRecord? = recordOf(id)
+
+    /**
      * The [Lifecycle] of [id], or `null` if [id] is entirely unknown to this ledger.
      * A known edge with no explicit register entry reads as [Lifecycle.ACTIVE] (the
      * H1b default); the transitions [prepare] / [activate] / [close] / [retire] write
@@ -476,6 +484,47 @@ public class EntitlementLedger private constructor(
             rollupSpent = prefix.associateWith { e -> bumpedSlot(rollupSpent, e, r, amount) },
         )
         return Patch(bump.piece(witness(r, lineage)))
+    }
+
+    /**
+     * The live entitlement path from the root down to [group]'s inbound edge, in root→group
+     * order (empty when [group] is the root), or `null` if the lineage is **quarantined**
+     * (a divergent record, two live inbound edges, no live path to the root, or a cycle —
+     * see [holdings]/[validate]). A caller that must charge service against a *captured*
+     * path (design §4.4) reads this **at reservation time**, while the topology is valid,
+     * and later hands the captured list to [spendCaptured].
+     */
+    public fun lineageOf(group: GroupId): List<AttachmentId>? = lineageEdges(group)
+
+    /**
+     * Charge [amount] of completed service by [r] against a **path captured earlier**
+     * (design §4.4 / §10.4: "charge every edge of the path captured at reservation; history
+     * never moves to a newer generation"). Unlike [spend], this does **not** recompute the
+     * lineage or re-check `isLeaf`/holdings from the *current* topology — it charges the
+     * exact [capturedPath] edges directly: `leafSpent` on the captured final edge and
+     * `rollupSpent` on every captured strict-prefix edge.
+     *
+     * This is always valid because records are immutable and the spend counters are
+     * monotone: the historical generation the work was admitted under still exists and can
+     * still be charged, even if the child's lineage has since been reparented, quarantined
+     * ([LedgerConflict.DualActiveInbound]), or gained a child (so the former leaf is no
+     * longer `isLeaf`). Those concurrent reshapes make [spend] return `null` or throw; a
+     * completion must **never** be silently dropped, so the node charges the captured path.
+     *
+     * `null` only for a structurally-impossible [capturedPath] (empty — a root leaf has no
+     * edge to charge); the caller must surface that, never swallow it. [amount] `0` is a
+     * no-op cancel; negative is rejected.
+     */
+    public fun spendCaptured(r: ReplicaId, capturedPath: List<AttachmentId>, amount: Long): Patch<EntitlementLedger>? {
+        require(amount >= 0L) { "spendCaptured amount must be non-negative, was $amount" }
+        if (amount == 0L) return Patch(of()) // cancel: a no-op delta
+        val f = capturedPath.lastOrNull() ?: return null // a root leaf has no edge to charge
+        val prefix = capturedPath.dropLast(1)
+        val bump = of(
+            leafSpent = mapOf(f to bumpedSlot(leafSpent, f, r, amount)),
+            rollupSpent = prefix.associateWith { e -> bumpedSlot(rollupSpent, e, r, amount) },
+        )
+        return Patch(bump.piece(witness(r, capturedPath)))
     }
 
     /**

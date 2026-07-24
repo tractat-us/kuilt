@@ -106,6 +106,16 @@ whole ledger inherits the three merge laws for free.
 - `Rational` — an exact `numerator/denominator` value over `Long`, the type the policy
   reasons in. Virtual times are compared by exact cross-multiplication (never `Double`),
   which is what makes a scheduling decision bit-identical on every platform.
+- `HeddleNode` / `heddleStatic` — the node that runs the tally, demand board, reservations,
+  and liveness over a `Seam`, and its fixed-roster bootstrap (see below).
+- `HeddleConfig` — the node's policy caps, the §8.2 bound cap, the demand-staleness window,
+  and the injected replication/liveness/RNG knobs.
+- `DemandBoard` — one peer's advertised appetite across the edges it serves; the value
+  carried in that peer's slot of the presence-style demand board.
+- `ReservationId` — the handle a leaf earmark is completed against.
+- `BoundMetrics` — the three consistent pieces of the temporary fairness-error bound at a
+  parent (§8.2): the configured worst case, the current state-dependent bound, and the
+  fairness gap actually observed.
 
 Arithmetic that would exceed `Long` throws rather than wrapping: a fair-share
 tally that silently overflowed would be worse than one that stopped.
@@ -127,5 +137,37 @@ credit for the parent's whole past — and an idle child that wakes is clamped f
 the current front, so neither can bank an unfair head start (design §7, §10.5–6). Every
 comparison is exact integer arithmetic on `Rational`, so the same inputs produce the
 same pick on JVM, Android, iOS, macOS, and wasmJs.
+
+## Running it over a network
+
+`HeddleNode` is the piece that puts the tally, the policy, and the schedule onto a live
+connection between peers. Start one with `heddleStatic` — you hand it the connection, this
+peer's identity, the root group, the starting supply (who begins with how much), and the
+starting shape of the tree; every peer that starts with the same inputs begins from an
+identical tally, and from then on their copies stay in step over the wire on their own.
+
+What a node does for you:
+
+- **Keeps every peer's tally in step.** Grants, returns, and charges are exchanged as they
+  happen and reconciled in the background, so a peer that was briefly cut off catches up on
+  reconnect — no referee, no lost history.
+- **Collects "who wants work right now."** Each peer advertises appetite per child with
+  `advertise`; a peer that stops refreshing (say, it crashed) has its appetite quietly
+  expire, so stale wants can't keep pulling work its way. Appetite is only advice — it can
+  never authorize spending.
+- **Hands out and charges for work.** `schedule(parent)` runs allocation rounds, delegating
+  this peer's share down toward the children that want it. Leaf work `reserve`s a slice,
+  runs, then `complete`s it — and completing the same reservation twice charges exactly once.
+- **Notices when a peer goes quiet.** It distinguishes a temporary split from a real crash
+  and reports it (`partitionEvents`). It deliberately does **not** claw back a crashed peer's
+  share: a wrong reclaim would let two peers spend the same units, so a crashed peer's share
+  simply sits unused until an operator recovers it.
+- **Publishes how far off fair it could be.** `boundMetrics(parent)` reports the worst-case,
+  current, and actually-observed fairness gap, so a consumer never claims tighter fairness
+  than it can prove while peers are still reconciling.
+
+`heddleStatic` is the fixed-roster front door (supply is created once, at start-up); a
+Raft-backed `heddleGoverned` front door — for runtime supply creation and serialized
+reshapes — arrives in a later phase.
 
 See `docs/heddle-design.md` and `docs/heddle-ledger-design.md` for the full model.
