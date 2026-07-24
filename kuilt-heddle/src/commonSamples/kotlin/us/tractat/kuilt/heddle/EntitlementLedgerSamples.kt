@@ -30,3 +30,40 @@ internal fun sampleWeightOrdering() {
     check(Weight.of(1, 3) < Weight.of(1, 2))
     check(Weight.of(2, 4) == Weight.of(1, 2))
 }
+
+/**
+ * The pure EEVDF policy picks which child to delegate the next quantum to. Two
+ * saturated siblings weighted 3:1 both want service; the heavier one wins the
+ * first grant, and over many rounds their committed service converges to 3:1.
+ */
+@Suppress("unused")
+internal fun samplePolicyPick() {
+    fun edge(id: String, weight: Weight, issued: Long) = PolicyEdge(
+        record = AttachmentRecord(AttachmentId(id), GroupId("root"), GroupId(id), weight, initialVirtualTime = 0L),
+        summary = EdgeSummary(AttachmentId(id), issued = issued, returned = 0L, spent = issued),
+        demand = Demand(targetOutstanding = 100L, maximumUsefulGrant = 100L),
+    )
+
+    // Both start level (no service yet); the heavier-weighted child has the earliest
+    // virtual deadline, so it is served first.
+    val grant = HeddlePolicy.pick(
+        edges = listOf(edge("heavy", Weight.of(3), issued = 0L), edge("light", Weight.of(1), issued = 0L)),
+        config = PolicyConfig(quantum = 6L),
+        localHoldings = 1_000L,
+    )
+    check(grant == Grant(AttachmentId("heavy"), 6L))
+
+    // A child with no appetite advertises Demand.NONE and is never a candidate.
+    val idle = HeddlePolicy.pick(
+        edges = listOf(
+            PolicyEdge(
+                AttachmentRecord(AttachmentId("idle"), GroupId("root"), GroupId("idle"), Weight.ONE, 0L),
+                EdgeSummary(AttachmentId("idle"), 0L, 0L, 0L),
+                Demand.NONE,
+            ),
+        ),
+        config = PolicyConfig(quantum = 6L),
+        localHoldings = 1_000L,
+    )
+    check(idle == null)
+}

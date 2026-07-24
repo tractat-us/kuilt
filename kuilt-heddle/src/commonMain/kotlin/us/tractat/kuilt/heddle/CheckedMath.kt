@@ -30,6 +30,12 @@ internal fun checkedSub(a: Long, b: Long): Long {
     return diff
 }
 
+/** Negate [a], throwing [ArithmeticException] on `Long` overflow (only `Long.MIN_VALUE`). */
+internal fun checkedNegate(a: Long): Long {
+    if (a == Long.MIN_VALUE) throw ArithmeticException("Long overflow: -$a")
+    return -a
+}
+
 /** Multiply [a] and [b], throwing [ArithmeticException] on `Long` overflow. */
 internal fun checkedMul(a: Long, b: Long): Long {
     if (a == 0L || b == 0L) return 0L
