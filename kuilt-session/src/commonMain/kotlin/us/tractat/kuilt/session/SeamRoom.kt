@@ -1320,7 +1320,15 @@ internal class SeamRoom(
         val detectorScope = CoroutineScope(scope.coroutineContext + detectorJob)
         detector.start(detectorScope)
         detectorScope.launch {
-            detector.events.collect { event -> handlePartitionEvent(event) }
+            logger.debug { "detector-collector.start peer=${member.id.value} role=${_role.value}" }
+            detector.events.collect { event ->
+                if (event is PartitionEvent.PeerLost) {
+                    logger.info {
+                        "detector-collector.received PeerLost peer=${member.id.value} role=${_role.value} at=${event.at}"
+                    }
+                }
+                handlePartitionEvent(event)
+            }
         }
         detectorJobs[member.id] = detectorJob
     }
@@ -1502,13 +1510,16 @@ internal class SeamRoom(
     }
 
     private suspend fun handlePeerLost(peerId: PeerId, at: Instant) {
+        logger.info { "handlePeerLost peer=${peerId.value} role=${_role.value} at=$at" }
         val isHostPeer = lock.withLock {
             stopDetector(peerId)
             _role.value == SessionRole.Joiner && peerId == hostPeerId
         }
         if (isHostPeer) {
+            logger.info { "handlePeerLost.markHostLost peer=${peerId.value}" }
             markHostLost(at, FailureReason.WindowExpired)
         } else {
+            logger.info { "handlePeerLost.evict peer=${peerId.value} reason=PartitionExpired" }
             removeFromRoster(peerId, LeaveReason.PartitionExpired)
         }
     }

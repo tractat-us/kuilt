@@ -1,5 +1,6 @@
 package us.tractat.kuilt.liveness
 
+import io.github.oshai.kotlinlogging.KotlinLogging
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelAndJoin
@@ -15,6 +16,8 @@ import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.Swatch
 import us.tractat.kuilt.core.runCatchingCancellable
 import kotlin.time.Instant
+
+private val logger = KotlinLogging.logger("us.tractat.kuilt.liveness.HeartbeatPartitionDetector")
 
 /**
  * Application-level heartbeat-based implementation of [PartitionDetector].
@@ -164,14 +167,32 @@ public class HeartbeatPartitionDetector(
     private suspend fun awaitRecoveryOrLoss(): Boolean {
         val windowMs = config.reconnectWindow.inWholeMilliseconds
         val pollMs = config.interval.inWholeMilliseconds
+        val timeoutMs = config.timeout.inWholeMilliseconds
         var elapsed = 0L
+        // Wall-clock anchor for suspension detection (#1618). The loop credits `elapsed += pollMs`
+        // per iteration on the assumption that `delay(pollMs)` costs ~pollMs of real time. If the
+        // process/dispatch is suspended (iOS backgrounding), the injected clock jumps by far more
+        // than pollMs in one iteration — the loop under-counts `elapsed` while `silenceMs` races
+        // ahead, and the window can read un-expired long after the peer is truly gone.
+        var prevClockMs = clock().toEpochMilliseconds()
 
         while (elapsed < windowMs) {
             delay(pollMs)
             elapsed += pollMs
 
-            val silenceMs = clock().toEpochMilliseconds() - lastSeenEpochMs
-            if (silenceMs < config.timeout.inWholeMilliseconds) {
+            val nowMs = clock().toEpochMilliseconds()
+            val silenceMs = nowMs - lastSeenEpochMs
+            val clockDeltaMs = nowMs - prevClockMs
+            prevClockMs = nowMs
+            logger.debug {
+                "awaitRecoveryOrLoss.poll peer=${peerId.value} elapsedMs=$elapsed windowMs=$windowMs " +
+                    "silenceMs=$silenceMs timeoutMs=$timeoutMs pollMs=$pollMs clockDeltaMs=$clockDeltaMs " +
+                    "suspected_suspension=${clockDeltaMs > pollMs * 2}"
+            }
+            if (silenceMs < timeoutMs) {
+                logger.debug {
+                    "awaitRecoveryOrLoss.recovered peer=${peerId.value} silenceMs=$silenceMs elapsedMs=$elapsed"
+                }
                 emitIfOpen(PartitionEvent.PeerRecovered(peerId, clock()))
                 return true
             }
@@ -179,6 +200,10 @@ public class HeartbeatPartitionDetector(
             sendPing()
         }
 
+        logger.info {
+            "awaitRecoveryOrLoss.emit PeerLost peer=${peerId.value} elapsedMs=$elapsed windowMs=$windowMs " +
+                "silenceMs=${clock().toEpochMilliseconds() - lastSeenEpochMs}"
+        }
         emitIfOpen(PartitionEvent.PeerLost(peerId, clock()))
         closeChannel()
         return false
