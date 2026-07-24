@@ -18,15 +18,22 @@ import kotlin.time.Clock
  * ## Self-capture exclusion (safety invariant)
  *
  * Capture hooks the process-global logging config, so it sees *every* event in
- * the process — including kuilt's own internal logging. The durable exporter
- * itself logs on its hot path (a buffer-cap eviction warning, store-failure
- * errors), so capturing those would feed a captured eviction-warn back into
- * export → evict again → warn again — a self-sustaining loop that crowds out real
- * application logs. To make that impossible, [capture] drops any event whose
- * `loggerName` is under kuilt's own package (`us.tractat.kuilt`) before building a
- * record. This is a non-negotiable invariant, not a configurable filter: a
- * consumer app is never under that package, so it only ever excludes kuilt
- * internals, and every capture edge inherits it through this one core.
+ * the process. The durable exporter itself logs on its hot path (a buffer-cap
+ * eviction warning, store-failure errors), so capturing those would feed a
+ * captured eviction-warn back into export → evict again → warn again — a
+ * self-sustaining loop that crowds out real application logs. To make that
+ * impossible, [capture] drops any event whose `loggerName` is under the
+ * exporter's own package (`us.tractat.kuilt.otel`) before building a record.
+ *
+ * The exclusion is scoped to **only** the exporter's own `us.tractat.kuilt.otel.*`
+ * loggers — narrow enough to break the export feedback loop, but no broader. In
+ * particular it does **not** exclude kuilt's *library* loggers
+ * (`us.tractat.kuilt.session.*`, `...liveness.*`, `...raft.*`, `...nw.*`, …): a
+ * consumer that uses kuilt as its networking library depends on those library
+ * diagnostics being captured just like its own application logs, and any consumer
+ * running under the `us.tractat.kuilt` package (but outside `.otel`) is captured
+ * normally. This is a non-negotiable invariant, not a configurable filter, and
+ * every capture edge inherits it through this one core.
  *
  * ## Injected dependencies
  *
@@ -74,9 +81,9 @@ public class LogCapture(
      * Map [event] to a [LogRecord] and export it.
      *
      * Returns the exporter's [ExportResult], or `null` if [event] was dropped
-     * before any record was built — because its `loggerName` is one of kuilt's
-     * own (`us.tractat.kuilt`) loggers (the self-capture exclusion above),
-     * because it was below [CaptureConfig.minLevel], or because the trace gate
+     * before any record was built — because its `loggerName` is one of the
+     * exporter's own (`us.tractat.kuilt.otel`) loggers (the self-capture exclusion
+     * above), because it was below [CaptureConfig.minLevel], or because the trace gate
      * dropped it: when a [TraceContextProvider] is wired, an active-but-unsampled
      * trace is dropped, and an untraced event is dropped when
      * [CaptureConfig.untracedPolicy] is [UntracedPolicy.DROP]. On a sampled
@@ -126,8 +133,9 @@ public class LogCapture(
         private const val RECORD_ID_BYTES = 8
         private const val NANOS_PER_SECOND = 1_000_000_000L
 
-        // kuilt's own loggers are never captured — see the self-capture exclusion
-        // invariant in the class KDoc. A consumer app is never under this package.
-        private const val KUILT_INTERNAL_LOGGER_PREFIX = "us.tractat.kuilt"
+        // Only the exporter's own loggers are excluded — see the self-capture
+        // exclusion invariant in the class KDoc. This is the exporter package, NOT
+        // kuilt's whole namespace: kuilt library loggers are captured for consumers.
+        private const val KUILT_INTERNAL_LOGGER_PREFIX = "us.tractat.kuilt.otel"
     }
 }
