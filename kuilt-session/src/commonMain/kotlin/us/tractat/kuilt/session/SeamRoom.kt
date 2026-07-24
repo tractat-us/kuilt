@@ -725,12 +725,17 @@ internal class SeamRoom(
                 is JoinerReconnectEvent.Resumed ->
                     handleReconnectResumed(event.peerId)
                 is JoinerReconnectEvent.WindowExpired -> {
-                    // Locally, PeerLost from the detector handles the final eviction — no extra
-                    // event here; Left(PartitionExpired) follows from PeerLost. Remotely, the
-                    // expiry needs the same authoritative fan-out a clean leave gets, or a peer
-                    // with no heartbeat edge against the expired member (a star topology's other
-                    // joiners) never evicts it (#1557).
+                    // Remotely, the expiry needs the same authoritative fan-out a clean leave gets,
+                    // or a peer with no heartbeat edge against the expired member (a star topology's
+                    // other joiners) never evicts it (#1557).
                     propagateFarewell(event.peerId, expired = true)
+                    // Locally the detector's PeerLost is normally the evictor, and Left(PartitionExpired)
+                    // follows from it. But PeerLost is the SOLE evictor, and on a real transport the
+                    // detector can stall in Partitioned and never mature to PeerLost — the host then
+                    // sticks in Partitioned forever, never emitting Left (#1618 Track C). The reconnect
+                    // window is an independent timer; when it expires with the member STILL Partitioned,
+                    // back-stop the eviction here. Idempotent against a later PeerLost.
+                    evictOnExpiredWindowIfPartitioned(event.peerId)
                 }
             }
         }
@@ -1520,6 +1525,34 @@ internal class SeamRoom(
             markHostLost(at, FailureReason.WindowExpired)
         } else {
             logger.info { "handlePeerLost.evict peer=${peerId.value} reason=PartitionExpired" }
+            removeFromRoster(peerId, LeaveReason.PartitionExpired)
+        }
+    }
+
+    /**
+     * Host-eviction backstop for #1618 Track C. Evicts [peerId] iff it is **still**
+     * [Liveness.Partitioned] when its reconnect window expires.
+     *
+     * The per-peer [HeartbeatPartitionDetector]'s [PartitionEvent.PeerLost] is normally the sole
+     * evictor (and normally fires around the same virtual instant as [JoinerReconnectEvent.WindowExpired],
+     * with the same [heartbeatConfig]-derived window). On a real transport the detector can stall in
+     * `Partitioned` and never mature to `PeerLost`, so this covers that gap. Mirrors the non-host branch
+     * of [handlePeerLost]: stop the detector, then [removeFromRoster] with [LeaveReason.PartitionExpired].
+     *
+     * Idempotent — a member already evicted by `PeerLost` (absent from [admittedById]) or recovered
+     * ([Liveness.Connected]) is a no-op; and [removeFromRoster] itself guards a duplicate [MembershipEvent.Left],
+     * so a subsequent late `PeerLost` emits nothing. This loop runs on the host only ([reconnectController]
+     * is null for joiners), so it never pre-empts a joiner's terminal `HostLost` path.
+     */
+    private fun evictOnExpiredWindowIfPartitioned(peerId: PeerId) {
+        val shouldEvict = lock.withLock {
+            val current = admittedById[peerId] ?: return
+            if (current.liveness != Liveness.Partitioned) return
+            stopDetector(peerId)
+            true
+        }
+        if (shouldEvict) {
+            logger.info { "windowExpired.evict peer=${peerId.value} reason=PartitionExpired backstop=PeerLost-absent" }
             removeFromRoster(peerId, LeaveReason.PartitionExpired)
         }
     }
