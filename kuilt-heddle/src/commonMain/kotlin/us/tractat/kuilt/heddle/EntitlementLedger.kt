@@ -144,6 +144,14 @@ public class EntitlementLedger private constructor(
             .mapNotNull { edge(it) }
 
     /**
+     * The single [AttachmentRecord] for [id] — its parent, child, weight, and virtual-time
+     * origin — or `null` if [id] is unknown *or divergent* (two conflicting records under
+     * one id, which a healthy ledger never has; see [validate]). The parent-facing read a
+     * scheduler pairs with [edge]'s [EdgeSummary] to build a policy input.
+     */
+    public fun record(id: AttachmentId): AttachmentRecord? = recordOf(id)
+
+    /**
      * The [Lifecycle] of [id], or `null` if [id] is entirely unknown to this ledger.
      * A known edge with no explicit register entry reads as [Lifecycle.ACTIVE] (the
      * H1b default); the transitions [prepare] / [activate] / [close] / [retire] write

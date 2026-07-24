@@ -7,7 +7,13 @@ kotlin {
     sourceSets {
         commonMain.dependencies {
             api(project(":kuilt-crdt"))
+            api(project(":kuilt-core"))
+            implementation(project(":kuilt-quilter"))
+            implementation(project(":kuilt-liveness"))
             implementation(libs.kotlinx.serialization.core)
+            implementation(libs.kotlinx.serialization.cbor)
+            implementation(libs.kotlinx.coroutines.core)
+            implementation(libs.kotlinx.atomicfu)
         }
         commonTest.dependencies {
             implementation(project(":kuilt-test"))
