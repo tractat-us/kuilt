@@ -123,6 +123,9 @@ class HeddleControlPlaneTest {
         assertFalse(minMint.isCompleted, "minority partition committed a mint — split-brain mint")
         minority.forEach { assertEquals(0L, sinks.getValue(it).snapshot().mintedTotal(), "minority $it minted while partitioned") }
 
+        // The minority proposer gives up (its forwarded proposal never committed). Post-heal it would
+        // be a *legitimate* second mint, not split-brain — cancel it so convergence-to-one is deterministic.
+        minMint.cancel()
         sim.heal()
         sim.awaitLeader()
         sim.awaitTrue("all nodes converge to exactly one mint") {

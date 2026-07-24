@@ -185,7 +185,12 @@ internal class HeddleControlPlane(
     /** In-flight local submits awaiting their committed outcome, keyed by requestKey. */
     private val pending = HashMap<String, CompletableDeferred<ControlOutcome>>()
 
-    /** Dedup table: requestKey → the outcome it applied at (exactly-once under retry / re-commit). */
+    /**
+     * Dedup table: requestKey → the outcome it applied at (exactly-once under retry / re-commit).
+     * Grows with the number of *distinct committed control acts* — never with data-plane traffic —
+     * so it is bounded in practice for a low-frequency control plane. (Windowed pruning by a
+     * client-session watermark, à la Raft's ClientSessionTable, is a future refinement.)
+     */
     private val applied = HashMap<String, ControlOutcome>()
 
     /** Per-incarnation nonce so a restart's regenerated keys never collide with the prior run's. */
