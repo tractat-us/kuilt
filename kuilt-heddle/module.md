@@ -31,8 +31,18 @@ same everywhere, but while a hand-off is still propagating it can momentarily fl
 multi-hop transfer that has not yet caught up; that clears itself as copies reconcile.
 Don't block work on the report being empty — block on the operation refusing.
 
-The lifecycle of an edge (prepared → active → closing → retired) is treated as
-always-active for now; that gating arrives in a later phase.
+Every edge also carries a **lifecycle** — `prepared → active → closing → retired` —
+kept as a max-register that only ever climbs. Preparing an edge creates it without
+letting entitlement cross; activating it opens delegation; closing it stops *new*
+delegation while still letting entitlement drain back out; retiring it is allowed only
+once the edge has fully drained, after which nothing crosses it again and its history
+stays queryable forever. Because merging takes the higher state, closure always wins
+over a lagging peer still trying to activate — a closed edge can never be resurrected.
+Changing a child's weight or parent is not a mutation: it mints a **new** generation
+(a new edge id) and drains the old one, so old history is never overwritten. Two peers
+that concurrently activate different inbound edges for one child surface a reported
+`DualActiveInbound` conflict — not a silently-picked winner — and delegation across
+either is refused until the control plane resolves it.
 
 ## How the tally is kept
 
@@ -76,6 +86,11 @@ whole ledger inherits the three merge laws for free.
 - `ServiceUnits` — a non-negative quantity of service, with overflow-checked
   arithmetic.
 - `AttachmentRecord` / `MintRecord` — the immutable facts the ledger unions.
+- `Lifecycle` — an edge's `PREPARED → ACTIVE → CLOSING → RETIRED` state, merged by
+  taking the higher one so closure always dominates activation.
+- `LedgerConflict` — the surfaced integrity/topology faults, including
+  `DualActiveInbound` (a child with two active inbound generations) and
+  `ClosureViolation` (entitlement crossing a retired generation).
 - `EdgeSummary` — the parent-facing projection of one edge (`issued`/`returned`/
   `spent` and the derived `outstanding`).
 - `EntitlementLedger` — the replicated `Quilted` state itself.

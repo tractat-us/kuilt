@@ -36,6 +36,8 @@ public sealed interface LedgerConflict : Comparable<LedgerConflict> {
                 group.compareTo(other.group).let { if (it != 0) return it }
                 replica.compareTo(other.replica)
             }
+            is DualActiveInbound -> group.compareTo((other as DualActiveInbound).group)
+            is ClosureViolation -> edge.compareTo((other as ClosureViolation).edge)
         }
     }
 
@@ -74,5 +76,36 @@ public sealed interface LedgerConflict : Comparable<LedgerConflict> {
      */
     public data class RecordDivergence(public val id: AttachmentId) : LedgerConflict {
         override val order: Int get() = 2
+    }
+
+    /**
+     * A group with **two or more [Lifecycle.ACTIVE] inbound generations** — the topology
+     * fork the design forbids resolving by last-writer-wins on a parent pointer (§5.2,
+     * §10.11). It arises when two replicas concurrently activate a different inbound edge
+     * for the same child; the lifecycle max-register keeps *both* ACTIVE, so every replica
+     * folds the merged state into the **same** report rather than silently picking a
+     * winner. The child's whole lineage is quarantined — [EntitlementLedger.holdings]
+     * returns zero at or below it — and **no new entitlement may be delegated across
+     * either contested edge** ([EntitlementLedger.delegate] returns `null`) until the
+     * control plane close-drains all but one generation.
+     */
+    public data class DualActiveInbound(public val group: GroupId) : LedgerConflict {
+        override val order: Int get() = 3
+    }
+
+    /**
+     * A [Lifecycle.RETIRED] edge across which entitlement nonetheless still stands —
+     * `outstanding(e) != 0` (design §5.1, §10.10). [EntitlementLedger.retire] refuses
+     * to retire an edge until it has fully drained, so a retired edge that later shows
+     * outstanding entitlement can only mean a **late delegation crossed a generation the
+     * cluster had already retired**: a replica acting on stale [Lifecycle.ACTIVE] state
+     * delegated down an edge that another replica had already close-drained-retired. The
+     * max-register makes RETIRED dominate the merge (closure dominance); this report
+     * surfaces the late crossing rather than resolving it by arrival order. The
+     * entitlement is stranded on a dead generation and must be reconciled by the control
+     * plane.
+     */
+    public data class ClosureViolation(public val edge: AttachmentId) : LedgerConflict {
+        override val order: Int get() = 4
     }
 }
