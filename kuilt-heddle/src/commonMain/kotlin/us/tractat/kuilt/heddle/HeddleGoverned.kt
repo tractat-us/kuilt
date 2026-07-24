@@ -55,6 +55,7 @@ import kotlin.time.Instant
  * @param config the policy caps, §8.2 bound cap, TTL, and replication/liveness knobs.
  * @param genesisMint pre-agreed initial root supply per peer (configuration, applied locally).
  * @param genesisTopology pre-agreed initial edges, all prepared and activated at bootstrap.
+ * @sample us.tractat.kuilt.heddle.sampleHeddleGoverned
  */
 public fun CoroutineScope.heddleGoverned(
     seam: Seam,
