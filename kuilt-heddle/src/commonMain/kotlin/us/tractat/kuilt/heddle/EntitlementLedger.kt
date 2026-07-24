@@ -664,6 +664,24 @@ public class EntitlementLedger private constructor(
     internal fun allEdges(): Set<AttachmentId> =
         records.keys + issued.keys + returned.keys + leafSpent.keys + rollupSpent.keys + lifecycle.keys
 
+    /**
+     * The **live inbound** edges of [child] — every non-divergent edge whose record targets [child]
+     * and whose lifecycle is [Lifecycle.ACTIVE] or [Lifecycle.CLOSING] (a still-draining closing edge
+     * counts; it can carry entitlement). Sorted by id so every peer folds the same order.
+     *
+     * This is the exact predicate [LedgerConflict.DualActiveInbound] fires on. The **H5 control plane**
+     * reads it *before* applying an `activate` proposal so the log's serialization can refuse the
+     * loser of two overlapping reshapes as a structured conflict — instead of letting both apply and
+     * quarantine the lineage (design §9, §5.2, §10.11). `internal` — control-plane + test support.
+     */
+    internal fun liveInboundEdges(child: GroupId): List<AttachmentId> =
+        allEdges()
+            .filter { e ->
+                recordOf(e)?.child == child &&
+                    lifecycleOf(e).let { it == Lifecycle.ACTIVE || it == Lifecycle.CLOSING }
+            }
+            .sorted()
+
     /** Every group named as a parent or child by any (singleton or divergent) record. */
     internal fun allGroups(): Set<GroupId> =
         records.values.flatten().flatMapTo(HashSet()) { listOf(it.parent, it.child) }

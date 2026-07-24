@@ -8,6 +8,7 @@ kotlin {
         commonMain.dependencies {
             api(project(":kuilt-crdt"))
             api(project(":kuilt-core"))
+            api(project(":kuilt-raft"))
             implementation(project(":kuilt-quilter"))
             implementation(project(":kuilt-liveness"))
             implementation(libs.kotlinx.serialization.core)
@@ -17,6 +18,7 @@ kotlin {
         }
         commonTest.dependencies {
             implementation(project(":kuilt-test"))
+            implementation(project(":kuilt-raft-test"))
             implementation(libs.kotlinx.serialization.json)
         }
         jvmTest.dependencies {

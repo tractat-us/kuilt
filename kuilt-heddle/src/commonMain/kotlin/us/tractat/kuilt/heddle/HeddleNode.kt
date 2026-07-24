@@ -182,6 +182,18 @@ public class HeddleNode internal constructor(
     /** Retire a drained [edge] ([EntitlementLedger.retire]); returns whether it applied. */
     public fun retire(edge: AttachmentId): Boolean = applyIfPresent { it.retire(edge) }
 
+    /**
+     * The seam the H5 [HeddleControlPlane] drives to apply a **committed** control act into this
+     * node's replicated ledger: it runs [block] against the current merged state inside the Quilter
+     * (so the act replicates over the data-plane seam like any mutation) under the node lock, keeping
+     * lock ordering uniform with [schedule]/[applyIfPresent]. Governed mode routes mint/reshape acts
+     * through the log and applies them here; the data plane (reserve/complete/schedule) never touches
+     * this path. `internal` — only [heddleGoverned] wires it.
+     */
+    internal fun asLedgerControl(): LedgerControl = LedgerControl { block ->
+        lock.withLock { ledgerQuilter.mutate(block) }
+    }
+
     // ─────────────────────────────────────────────────────────────────────────────
     // Scheduling — one or more EEVDF allocation rounds at [parent], delegating this
     // peer's holdings down toward demanding children. Pure and bounded: each grant
