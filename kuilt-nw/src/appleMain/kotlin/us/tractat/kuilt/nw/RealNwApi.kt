@@ -381,7 +381,16 @@ internal class RealNwApi(
         }
         nw_path_monitor_set_queue(monitor, queue)
         nw_path_monitor_set_update_handler(monitor) { path ->
-            _pathState.value = readPath(path)
+            val state = readPath(path)
+            // #1618 Commit 1 (instrumentation): log EVERY device-path update — status, interface types, and the
+            // unsatisfied reason — at info so the morning airplane-toggle can measure the path-unsatisfied latency
+            // (identities+state, never sizes). Previously this handler logged nothing, silently discarding the one
+            // fast local signal a radios-off drop produces.
+            log.info {
+                "nw.path.update status=${state.status} interfaces=${state.interfaces} " +
+                    "reason=${state.unsatisfiedReason} expensive=${state.isExpensive} constrained=${state.isConstrained}"
+            }
+            _pathState.value = state
         }
         lock.withLock { pathMonitor = monitor }
         nw_path_monitor_start(monitor)
