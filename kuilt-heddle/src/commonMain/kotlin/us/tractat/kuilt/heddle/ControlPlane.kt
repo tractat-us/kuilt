@@ -16,7 +16,6 @@ import us.tractat.kuilt.raft.Committed
 import us.tractat.kuilt.raft.LeadershipLostException
 import us.tractat.kuilt.raft.LogEntry
 import us.tractat.kuilt.raft.RaftNode
-import kotlin.random.Random
 import kotlin.time.Duration
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -52,9 +51,14 @@ internal sealed interface ControlCommand {
     @Serializable
     data class Close(val edge: AttachmentId) : ControlCommand
 
-    /** Retire a drained [edge] ([EntitlementLedger.retire]); gated on the log-order lifecycle being CLOSING. */
+    /**
+     * Retire a drained [edge] ([EntitlementLedger.retire]); gated on the log-order lifecycle being
+     * CLOSING. [witness] is the proposer's observed drain witness for [edge] (its counter slots),
+     * carried so the committed RETIRED patch ships the drained counters — a governed projection has
+     * empty counters, so without it a laggard would transiently false-fire [LedgerConflict.ClosureViolation].
+     */
     @Serializable
-    data class Retire(val edge: AttachmentId) : ControlCommand
+    data class Retire(val edge: AttachmentId, val witness: EntitlementLedger? = null) : ControlCommand
 }
 
 /**
@@ -158,10 +162,16 @@ internal fun interface ControlLedgerSink {
  * ## Exactly-once
  *
  * Each act carries a [ControlEnvelope.requestKey] unique per logical act and stable across a retry
- * (`self#incarnation#seq`; a fresh random [incarnation] per construction makes it restart-safe). The
- * apply loop dedups on it ([applied]), and a mint derives its [MintId] from it — so a distinct act
- * never collides (no silent mint loss) and a retry never double-mints. [submit] retries on
- * [LeadershipLostException] reusing the same key + Raft `requestId`, and can be bounded by a timeout.
+ * (`self#incarnation#seq`). The apply loop dedups on it ([applied]), and a mint derives its [MintId]
+ * from it — so a distinct act never collides (no silent mint loss) and a retry never double-mints.
+ * [submit] retries on [LeadershipLostException] reusing the same key + Raft `requestId`, and can be
+ * bounded by a timeout.
+ *
+ * **[incarnation] must be fresh per process incarnation.** The requestKey's restart-safety rests
+ * entirely on it: two runs that reuse the same [incarnation] regenerate colliding keys, so a new act
+ * would hit the [applied] dedup and silently vanish behind a stale outcome. The node cannot
+ * self-generate this without durable storage or true entropy, so the caller injects it ([heddleGoverned])
+ * — a boot id, a persisted monotonic epoch, or a UUID. Never derive it from a test-seedable `Random`.
  *
  * @param initial the projection's initial state — the same ledger the data-plane node bootstraps from.
  * @param nextIndex the first log index to replay from — `1` for a fresh node ([RaftNode.committedFrom]
@@ -174,7 +184,7 @@ internal class HeddleControlPlane(
     scope: CoroutineScope,
     private val sink: ControlLedgerSink,
     initial: EntitlementLedger,
-    random: Random,
+    private val incarnation: String,
     nextIndex: Long = 1L,
 ) {
     private val lock = reentrantLock()
@@ -193,8 +203,6 @@ internal class HeddleControlPlane(
      */
     private val applied = HashMap<String, ControlOutcome>()
 
-    /** Per-incarnation nonce so a restart's regenerated keys never collide with the prior run's. */
-    private val incarnation: Long = random.nextLong()
     private var seq: Long = 0L
 
     /**
@@ -209,8 +217,14 @@ internal class HeddleControlPlane(
                 when (committed) {
                     is Committed.Entry -> applyEntry(committed.entry)
                     // v1 does not publish snapshots to raft (compaction disabled — see heddleGoverned),
-                    // so no Install arrives; the replicated ledger is carried by the data-plane Quilter.
-                    is Committed.Install -> Unit
+                    // so no Install ever arrives. If one does, a shared RaftNode compacted below an
+                    // unreplayed control entry — the projection would silently continue from a wrong
+                    // state, so fail loud rather than diverge (repo fail-fast discipline).
+                    is Committed.Install -> error(
+                        "HeddleControlPlane received a Committed.Install (log compacted below an " +
+                            "unreplayed control entry) — give the control plane a dedicated, " +
+                            "non-compacting Raft node (design §9).",
+                    )
                 }
             }
         }
@@ -224,6 +238,11 @@ internal class HeddleControlPlane(
      * loop recorded. Retries on [LeadershipLostException] with the **same** requestKey + Raft
      * `requestId`, so a leader step-down mid-flight never double-applies. If [timeout] is non-null the
      * await is bounded, so a leader *crash* surfaces as a timeout instead of hanging.
+     *
+     * **Outcome-unknown on timeout.** A [timeout] cancels the *await*, not the proposal: the act may
+     * still commit afterwards. A fresh [submit] call draws a *new* requestKey, so a caller retry after a
+     * timeout is a **new logical act** (a retried mint can double-mint). Exactly-once across a timeout is
+     * a caller concern — resubmit only if a subsequent read shows the first act did not land.
      */
     suspend fun submit(command: ControlCommand, timeout: Duration? = null): ControlOutcome {
         val (key, requestId) = lock.withLock {
@@ -302,9 +321,22 @@ internal class HeddleControlPlane(
             }
 
             is ControlCommand.Prepare -> {
-                // A duplicate prepare (id already known) yields a null patch — an idempotent no-op, applied.
-                projection.prepare(command.record)?.let { apply(it) }
-                ControlOutcome.Applied(index)
+                val patch = projection.prepare(command.record)
+                when {
+                    patch != null -> {
+                        apply(patch)
+                        ControlOutcome.Applied(index)
+                    }
+                    // Id already known with the SAME record — an idempotent no-op, applied.
+                    projection.record(command.record.id) == command.record -> ControlOutcome.Applied(index)
+                    // Id already bound to a DIFFERENT record (or a divergent set) — refuse, don't lie Applied.
+                    else -> ControlOutcome.Conflict(
+                        index,
+                        ControlConflict.Refused(
+                            "prepare: id ${command.record.id.value} already bound to a different record",
+                        ),
+                    )
+                }
             }
 
             is ControlCommand.Activate -> {
@@ -359,7 +391,11 @@ internal class HeddleControlPlane(
                         ControlConflict.Refused("retire refused (edge not CLOSING in log order) ${command.edge.value}"),
                     )
                 } else {
-                    apply(patch)
+                    projection = projection.piece(patch.delta)
+                    // Publish the lifecycle→RETIRED bump enriched with the proposer's carried drain witness,
+                    // so a laggard that gets RETIRED before the draining deltas doesn't false-fire ClosureViolation.
+                    val published = command.witness?.let { patch.delta.piece(it) } ?: patch.delta
+                    sink.publish(Patch(published))
                     ControlOutcome.Applied(index)
                 }
             }

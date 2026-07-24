@@ -112,6 +112,7 @@ internal suspend fun CoroutineScope.sampleHeddleGoverned(seam: Seam, raft: us.tr
         root = root,
         clock = { Instant.fromEpochMilliseconds(0L) },
         config = HeddleConfig(policy = PolicyConfig(quantum = 10L), maxHoldingsPerPeer = 1_000L),
+        incarnation = "boot-2026-07-24T00:00:00Z", // fresh per process incarnation — a boot id / epoch / UUID
     )
 
     // Mint and reshape are serialized through the Raft log — each returns a structured outcome.

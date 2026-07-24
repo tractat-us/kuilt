@@ -65,7 +65,7 @@ class HeddleControlPlaneTest {
         val sink = RecordingSink()
         val plane = HeddleControlPlane(
             raft = fake, self = ReplicaId("solo"), scope = backgroundScope,
-            sink = sink, initial = EntitlementLedger.ZERO, random = Random(1),
+            sink = sink, initial = EntitlementLedger.ZERO, incarnation = "boot-1",
         )
         val c = GroupId("c")
         val eA = AttachmentId("eA")
@@ -218,14 +218,14 @@ class HeddleControlPlaneTest {
         val holder = ReplicaId("acme")
 
         // Incarnation A mints 100.
-        val a = HeddleControlPlane(fake, ReplicaId("solo"), backgroundScope, durable, EntitlementLedger.ZERO, Random(1))
+        val a = HeddleControlPlane(fake, ReplicaId("solo"), backgroundScope, durable, EntitlementLedger.ZERO, "boot-A")
         assertIs<ControlOutcome.Applied>(a.submit(ControlCommand.Mint(holder, 100L)))
         assertEquals(100L, durable.snapshot().mintedTotal())
 
-        // "Restart": a fresh control plane (fresh random ⇒ fresh incarnation) over the same log/ledger,
-        // replaying the committed log, then minting 40. In-memory-seq ids would regenerate `#0` and
-        // max-collide the 40 into the 100 (a lost mint); the incarnation nonce keeps them distinct.
-        val b = HeddleControlPlane(fake, ReplicaId("solo"), backgroundScope, durable, EntitlementLedger.ZERO, Random(2))
+        // "Restart": a fresh control plane with a FRESH injected incarnation over the same log/ledger,
+        // replaying the committed log, then minting 40. A reused incarnation would regenerate `#0` and
+        // max-collide the 40 into the 100 (a lost mint); a fresh incarnation keeps them distinct.
+        val b = HeddleControlPlane(fake, ReplicaId("solo"), backgroundScope, durable, EntitlementLedger.ZERO, "boot-B")
         runCurrent() // let B replay the committed mint
         assertIs<ControlOutcome.Applied>(b.submit(ControlCommand.Mint(holder, 40L)))
         assertEquals(140L, durable.snapshot().mintedTotal(), "the second mint must not collide with the first")
@@ -248,7 +248,7 @@ class HeddleControlPlaneTest {
             entry
         }
         val sink = RecordingSink()
-        val plane = HeddleControlPlane(fake, ReplicaId("solo"), backgroundScope, sink, EntitlementLedger.ZERO, Random(3))
+        val plane = HeddleControlPlane(fake, ReplicaId("solo"), backgroundScope, sink, EntitlementLedger.ZERO, "boot-3")
 
         val outcome = plane.submit(ControlCommand.Mint(ReplicaId("acme"), 100L))
         assertIs<ControlOutcome.Applied>(outcome)
@@ -263,7 +263,7 @@ class HeddleControlPlaneTest {
     fun submitTimeoutSurfacesLeaderCrash() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
         val fake = FakeRaftNode(selfId = NodeId("solo"), initialRole = RaftRole.Leader)
         fake.proposeBehavior = { awaitCancellation() } // a forwarded proposal that never commits (leader crash)
-        val plane = HeddleControlPlane(fake, ReplicaId("solo"), backgroundScope, RecordingSink(), EntitlementLedger.ZERO, Random(4))
+        val plane = HeddleControlPlane(fake, ReplicaId("solo"), backgroundScope, RecordingSink(), EntitlementLedger.ZERO, "boot-4")
         assertFailsWith<TimeoutCancellationException> {
             plane.submit(ControlCommand.Mint(ReplicaId("acme"), 100L), timeout = 1.seconds)
         }
@@ -283,6 +283,7 @@ class HeddleControlPlaneTest {
 
         val governed = backgroundScope.heddleGoverned(
             seam = seam, self = self, raft = counting, root = root, clock = clock, config = config(seed = 7),
+            incarnation = "boot-msg",
         )
 
         // Control-plane setup (these DO consense — mint + reshape ride the log): seed a leaf holding.
@@ -326,8 +327,71 @@ class HeddleControlPlaneTest {
         val governed = backgroundScope.heddleGoverned(
             seam = seam, self = self, raft = fake, root = root,
             clock = { Instant.fromEpochMilliseconds(testScheduler.currentTime) }, config = config(seed = 9),
+            incarnation = "boot-revoke",
         )
         assertEquals(RevocationOutcome.NotShipped, governed.revocation.revoke(self, root))
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // FIX 3b: a second Prepare under an existing id with a DIFFERENT record is a
+    // structured Refused, not a lying Applied. Same record stays idempotent-Applied.
+    // ═══════════════════════════════════════════════════════════════════════════
+    @Test
+    fun prepareConflictingRecordIsRefusedNotSilentlyApplied() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        val fake = FakeRaftNode(selfId = NodeId("solo"), initialRole = RaftRole.Leader)
+        val plane = HeddleControlPlane(fake, ReplicaId("solo"), backgroundScope, RecordingSink(), EntitlementLedger.ZERO, "boot-prep")
+        val id = AttachmentId("e")
+        val rec = AttachmentRecord(id, root, GroupId("c"), Weight.ONE, 0L)
+        val differentRec = AttachmentRecord(id, GroupId("otherParent"), GroupId("c"), Weight.ONE, 0L)
+
+        assertIs<ControlOutcome.Applied>(plane.submit(ControlCommand.Prepare(rec)))
+        assertIs<ControlOutcome.Applied>(plane.submit(ControlCommand.Prepare(rec))) // idempotent: same record
+        val conflict = plane.submit(ControlCommand.Prepare(differentRec))
+        assertIs<ControlOutcome.Conflict>(conflict)
+        assertIs<ControlConflict.Refused>(conflict.conflict)
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // FIX 1: governed retire's advisory drain gate — a drained CLOSING edge retires;
+    // a non-drained edge is refused LOCALLY (retiring it would strand entitlement).
+    // ═══════════════════════════════════════════════════════════════════════════
+    @Test
+    fun governedRetireDrainGate() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        val fake = FakeRaftNode(selfId = NodeId("solo"), initialRole = RaftRole.Leader)
+        val loom = InMemoryLoom()
+        val seam: Seam = loom.host(Pattern("heddle-h5-retire"))
+        val self = ReplicaId(seam.selfId.value)
+        val governed = backgroundScope.heddleGoverned(
+            seam = seam, self = self, raft = fake, root = root,
+            clock = { Instant.fromEpochMilliseconds(testScheduler.currentTime) }, config = config(seed = 11),
+            incarnation = "boot-retire",
+        )
+        assertIs<ControlOutcome.Applied>(governed.mint(self, 1_000L))
+
+        // A drained edge (activated, never delegated → outstanding 0) retires once CLOSING.
+        val drained = AttachmentId("drained")
+        assertIs<ControlOutcome.Applied>(governed.prepare(AttachmentRecord(drained, root, GroupId("d"), Weight.ONE, 0L)))
+        assertIs<ControlOutcome.Applied>(governed.activate(drained))
+        assertIs<ControlOutcome.Applied>(governed.close(drained))
+        assertIs<ControlOutcome.Applied>(governed.retire(drained))
+        assertEquals(Lifecycle.RETIRED, governed.ledger.value.lifecycle(drained))
+
+        // A non-drained edge (delegated down via schedule → outstanding > 0) is refused locally.
+        val live = AttachmentId("live")
+        val leaf = GroupId("leaf")
+        assertIs<ControlOutcome.Applied>(governed.prepare(AttachmentRecord(live, root, leaf, Weight.ONE, 0L)))
+        assertIs<ControlOutcome.Applied>(governed.activate(live))
+        governed.advertise(live, Demand(targetOutstanding = 500L, maximumUsefulGrant = 500L))
+        governed.schedule(root)
+        val liveEdge = governed.ledger.value.edge(live)
+        assertNotNull(liveEdge)
+        assertTrue(liveEdge.outstanding > 0L, "live edge should carry outstanding entitlement")
+        assertIs<ControlOutcome.Applied>(governed.close(live))
+        val refused = governed.retire(live)
+        assertIs<ControlOutcome.Conflict>(refused)
+        assertEquals(ControlOutcome.NOT_COMMITTED, refused.index)
+        assertIs<ControlConflict.Refused>(refused.conflict)
+        assertEquals(Lifecycle.CLOSING, governed.ledger.value.lifecycle(live), "the refused retire left the edge CLOSING, not RETIRED")
     }
 
     // ─────────────────────────────────────────────────────────────────────────────
@@ -344,7 +408,7 @@ class HeddleControlPlaneTest {
     )
 
     private fun plane(raft: RaftNode, id: NodeId, sink: ControlLedgerSink, scope: CoroutineScope) =
-        HeddleControlPlane(raft, ReplicaId(id.value), scope, sink, EntitlementLedger.ZERO, Random(id.value.hashCode()))
+        HeddleControlPlane(raft, ReplicaId(id.value), scope, sink, EntitlementLedger.ZERO, "inc-${id.value}")
 
     /** Launch [block] on [scope], pump [sim]'s virtual time until it commits, then return the outcome. */
     private suspend fun awaitOutcome(

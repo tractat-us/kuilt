@@ -386,6 +386,17 @@ public class EntitlementLedger private constructor(
     )
 
     /**
+     * [edge]'s drain witness — its counter slots at their observed absolute values — read from **this**
+     * (the proposer's) state so the **H5 control plane** can carry it in a governed [Retire] command.
+     * Governed retire applies against a topology-only projection whose counters are empty, so without
+     * this the published RETIRED patch would carry no witness and a laggard that received RETIRED before
+     * the draining `release`/`spend` deltas would transiently false-fire [LedgerConflict.ClosureViolation].
+     * Carrying the proposer's observed witness ships the drained counters alongside RETIRED (§5.1, §10.10).
+     * `internal` — control-plane support.
+     */
+    internal fun drainWitnessFor(edge: AttachmentId): EntitlementLedger = drainWitness(edge)
+
+    /**
      * Introduce root supply: credit [holder] with [amount] units under [mintId].
      * Control-plane only (design §9); the one non-conserving op and the only mutator
      * with no feasibility gate, so it never returns `null`. [mintId] MUST be unique

@@ -60,6 +60,12 @@ import kotlin.time.Instant
  * @param root the root group of the fairness tree (the handle consumers build [AttachmentRecord]s against).
  * @param clock the injected wall clock, used for demand TTL and liveness timing.
  * @param config the policy caps, §8.2 bound cap, TTL, and replication/liveness/RNG knobs.
+ * @param incarnation a token that MUST be **fresh on every process incarnation** of this peer — a boot
+ *   id, a persisted monotonic epoch, or a UUID. It namespaces the per-act idempotency keys, so restart
+ *   safety rests on it: reusing a value across restarts would regenerate colliding keys and a new act
+ *   could silently vanish behind the dedup table. It is a required injected dependency precisely because
+ *   the node cannot self-generate restart-uniqueness without durable storage or true entropy — never
+ *   pass a value derived from a test-seedable `Random`.
  * @sample us.tractat.kuilt.heddle.sampleHeddleGoverned
  */
 public fun CoroutineScope.heddleGoverned(
@@ -69,6 +75,7 @@ public fun CoroutineScope.heddleGoverned(
     root: GroupId,
     clock: () -> Instant,
     config: HeddleConfig,
+    incarnation: String,
 ): GovernedHeddleNode {
     val initialLedger = EntitlementLedger.bootstrap(root, emptyMap(), nonce = GOVERNED_GENESIS_NONCE)
     val node = HeddleNode(
@@ -85,7 +92,7 @@ public fun CoroutineScope.heddleGoverned(
         scope = this,
         sink = node.asControlSink(),
         initial = initialLedger,
-        random = config.random,
+        incarnation = incarnation,
     )
     return GovernedHeddleNode(node, control)
 }
@@ -150,8 +157,10 @@ public class GovernedHeddleNode internal constructor(
     /**
      * Mint [amount] root supply to [holder], serialized through the log (design §9 #1). Suspends
      * until the act commits; a partitioned minority never returns (it can never reach quorum), so a
-     * split can never both mint. Bound with [timeout] to surface a leader crash instead of hanging.
-     * Returns [ControlOutcome.Applied].
+     * split can never both mint. Bound with [timeout] to surface a leader crash instead of hanging —
+     * but a timeout only cancels the await, not the proposal: the act may still commit, and a fresh
+     * `mint` call is a *new* act (a retried mint can double-mint), so resubmit only if a read confirms
+     * the first did not land. Returns [ControlOutcome.Applied].
      */
     public suspend fun mint(holder: ReplicaId, amount: Long, timeout: Duration? = null): ControlOutcome {
         require(amount >= 0L) { "mint amount must be non-negative, was $amount" }
@@ -181,22 +190,33 @@ public class GovernedHeddleNode internal constructor(
      * when the data-plane view shows the edge is not drained ([EdgeSummary.outstanding] `!= 0`):
      * retiring a non-drained edge would strand its outstanding entitlement, because a RETIRED edge
      * drops off the live lineage the data plane drains through. Once past the local drain check, the
-     * committed retire is gated purely on the **log-order** lifecycle being CLOSING — a deterministic
-     * apply. A drain race the local view missed degrades to the self-healing
-     * [LedgerConflict.ClosureViolation] diagnostic (§10.10), never a quarantine.
+     * committed retire is gated purely on the **log-order** lifecycle being CLOSING — a deterministic apply.
+     *
+     * **The local drain check is advisory, and a missed race strands entitlement — safely, but
+     * permanently.** If a peer's in-flight `delegate` has not yet merged into this proposer's view, the
+     * check reads `outstanding == 0`, the retire is admitted, and on the converged state the edge is
+     * RETIRED with entitlement still outstanding: a **persistent** [LedgerConflict.ClosureViolation] and
+     * that entitlement is **stranded permanently** (`release` refuses a retired edge; §10.4 reparenting
+     * cannot recover it), reclaimable only via the future [revocation] seam (not shipped in v1). This is
+     * *safe* — it never overspends, drives holdings negative, quarantines the lineage, or breaks the
+     * deterministic apply; it is the same accepted stranding class as a crashed peer's holdings (§8.1).
+     * It does **not** self-heal.
      */
     public suspend fun retire(edge: AttachmentId, timeout: Duration? = null): ControlOutcome {
         // Advisory local drain gate: refuse only a *clear* drain violation (outstanding > 0 in the
         // data-plane view). An edge the Quilter hasn't merged yet (null) goes to the log, where the
-        // log-pure projection gates it on CLOSING; a drain race degrades to a self-healing diagnostic.
-        val outstanding = node.ledger.value.edge(edge)?.outstanding
+        // log-pure projection gates it on CLOSING.
+        val ledger = node.ledger.value
+        val outstanding = ledger.edge(edge)?.outstanding
         if (outstanding != null && outstanding != 0L) {
             return ControlOutcome.Conflict(
                 ControlOutcome.NOT_COMMITTED,
                 ControlConflict.Refused("retire refused locally: edge ${edge.value} not drained (outstanding=$outstanding)"),
             )
         }
-        return control.submit(ControlCommand.Retire(edge), timeout)
+        // Carry the proposer's observed drain witness so the committed RETIRED patch ships the drained
+        // counters (a governed projection has empty counters), sparing laggards a transient false-fire.
+        return control.submit(ControlCommand.Retire(edge, ledger.drainWitnessFor(edge)), timeout)
     }
 
     /**
