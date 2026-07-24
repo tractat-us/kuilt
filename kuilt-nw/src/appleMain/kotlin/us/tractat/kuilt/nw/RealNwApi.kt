@@ -253,6 +253,12 @@ internal class RealNwApi(
     // needed under [lock] to serialize starts (the repo's no-nw_*-under-lock discipline).
     private val pathMonitorStarted = atomic(false)
 
+    // #1618 Track A device-path self-loss edge state (guarded by [lock]): whether the LAST device path update was
+    // `unsatisfied`, and the connIds we demoted to PathLost on that down-edge — so the matching recovery restores
+    // exactly those (and only those) to Viable, never reverting a connection lost by its own `waiting` transition.
+    private var devicePathUnsatisfied = false
+    private val devicePathLostConns = mutableSetOf<NwConnectionId>()
+
     override val endpointFound: Flow<NwEndpoint> = _endpointFound.asSharedFlow()
     override val endpointLost: Flow<NwEndpoint> = _endpointLost.asSharedFlow()
     override val connectionOpened: Flow<NwConnectionOpened> = _connectionOpened.asSharedFlow()
@@ -381,7 +387,17 @@ internal class RealNwApi(
         }
         nw_path_monitor_set_queue(monitor, queue)
         nw_path_monitor_set_update_handler(monitor) { path ->
-            _pathState.value = readPath(path)
+            val state = readPath(path)
+            // #1618 Commit 1 (instrumentation): log EVERY device-path update — status, interface types, and the
+            // unsatisfied reason — at info so the morning airplane-toggle can measure the path-unsatisfied latency
+            // (identities+state, never sizes). Previously this handler logged nothing, silently discarding the one
+            // fast local signal a radios-off drop produces.
+            log.info {
+                "nw.path.update status=${state.status} interfaces=${state.interfaces} " +
+                    "reason=${state.unsatisfiedReason} expensive=${state.isExpensive} constrained=${state.isConstrained}"
+            }
+            _pathState.value = state
+            onDevicePathState(state)
         }
         lock.withLock { pathMonitor = monitor }
         nw_path_monitor_start(monitor)
@@ -398,6 +414,66 @@ internal class RealNwApi(
         val doomed = lock.withLock { pathMonitor.also { pathMonitor = null } } ?: return
         nw_path_monitor_cancel(doomed)
         log.debug { "nw.path.monitor.cancelled" }
+    }
+
+    /**
+     * #1618 Track A — fast self-detection of a radios-off drop. When the device's `NWPathMonitor` reports the
+     * path is **unsatisfied** (airplane mode / all radios off), drive EVERY live connection to
+     * [NwConnState.PathLost] via [setViability]`(false)`, so the seam self-observes the loss near its #1478
+     * grace window instead of only inferring it from the peer's 15 s silence 15–75 s later.
+     *
+     * ## Reuses the #1478 grace — deliberately NOT an immediate tear
+     * `NWPathMonitor` fires `unsatisfied` on every transient path reshuffle (a brief total-loss blip). Marking a
+     * connection [NwConnState.PathLost] arms the seam's existing `wovenPathGrace` timer, NOT an eviction: a device
+     * path that returns to satisfied within the grace restores viability (below) and the tear never fires —
+     * false-positive-safe by construction. Detection latency ≈ the grace (tunable), not ~1 s.
+     *
+     * ## Down-edge / up-edge, restoring only what we demoted
+     * On the satisfied→unsatisfied EDGE we snapshot the live connIds and demote them, remembering the set in
+     * [devicePathLostConns]. On the unsatisfied→satisfied EDGE we restore exactly those to [NwConnState.Viable]
+     * (the [setViability] Closed-dominance guard leaves any that closed meanwhile terminal), so a device-path blip
+     * is a net no-op and we never revert a connection that lost its OWN path via `waiting`. Reads `connections`
+     * under [lock]; [setViability] (a [MutableStateFlow] CAS, no `nw_*` call) runs OUTSIDE it.
+     *
+     * ## Coverage limit
+     * This catches **airplane mode / all radios off**, where the whole device path goes unsatisfied. It does NOT
+     * catch walking a single peer out of AWDL range while another interface stays up (e.g. cellular): the device
+     * path stays *satisfied*, so no unsatisfied edge fires. That case is still governed by the connection's own
+     * `ready→waiting` (#1478) or the peer-silence timeout above the seam.
+     */
+    private fun onDevicePathState(state: NwPathState) {
+        val unsatisfied = state.status == NwPathStatus.Unsatisfied
+        var demote: List<NwConnectionId> = emptyList()
+        var restore: List<NwConnectionId> = emptyList()
+        lock.withLock {
+            when {
+                unsatisfied && !devicePathUnsatisfied -> {
+                    devicePathUnsatisfied = true
+                    demote = connections.keys.toList()
+                    devicePathLostConns.clear()
+                    devicePathLostConns.addAll(demote)
+                }
+                !unsatisfied && devicePathUnsatisfied -> {
+                    devicePathUnsatisfied = false
+                    restore = devicePathLostConns.toList()
+                    devicePathLostConns.clear()
+                }
+            }
+        }
+        for (id in demote) setViability(id, viable = false)
+        for (id in restore) setViability(id, viable = true)
+        if (demote.isNotEmpty()) {
+            log.info {
+                "nw.path.self-loss device-path unsatisfied → setViability(false) for ${demote.size} live conn(s) " +
+                    "${demote.map { it.value }} (#1478 grace governs the tear)"
+            }
+        }
+        if (restore.isNotEmpty()) {
+            log.info {
+                "nw.path.self-recover device-path satisfied → setViability(true) restoring ${restore.size} conn(s) " +
+                    "${restore.map { it.value }}"
+            }
+        }
     }
 
     /** Read an `nw_path_t` snapshot into a platform-neutral [NwPathState] (#1541). Pure — no `nw_*` mutation. */
