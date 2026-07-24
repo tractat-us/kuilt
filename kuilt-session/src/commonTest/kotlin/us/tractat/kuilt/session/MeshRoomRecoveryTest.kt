@@ -12,6 +12,7 @@ import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.liveness.HeartbeatConfig
+import us.tractat.kuilt.session.partition.DefaultJoinerReconnectController
 import us.tractat.kuilt.test.FaultySeam
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
@@ -229,5 +230,125 @@ class MeshRoomRecoveryTest {
 
             mesh.host.leave()
             mesh.survivor.leave()
+        }
+
+    /**
+     * #1618 Track C — the **host-eviction single-point-of-failure**.
+     *
+     * On real hardware (a 2-phone airplane drop) the host fired `Partitioned` but the detector's
+     * [us.tractat.kuilt.liveness.PartitionEvent.PeerLost] — the *only* evictor — never matured, so
+     * the host stuck in `Partitioned` forever and never emitted [MembershipEvent.Left].
+     *
+     * The reconnect window ([JoinerReconnectController]) is an **independent** timer. This test
+     * decouples the two — a **long** detector window (10 s, so `PeerLost` cannot fire inside the
+     * advance) against a **short** injected reconnect window (400 ms) — to prove the host still
+     * resolves the seat on [JoinerReconnectEvent.WindowExpired] with the member **still Partitioned**,
+     * even though `PeerLost` is absent. The survivor's seat must stay untouched, and a later
+     * (real-timing) `PeerLost` must not double-evict.
+     */
+    @Test
+    fun `host evicts a still-partitioned member on window expiry even when PeerLost never fires`() =
+        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+            // Detector window far longer than anything this test advances: PeerLost, the pre-fix
+            // sole evictor, is effectively absent.
+            val longDetectorWindow = HeartbeatConfig(
+                interval = 100.milliseconds,
+                timeout = 300.milliseconds,
+                reconnectWindow = 10.seconds,
+            )
+            val shortWindowMs = 400L
+
+            val loom = InMemoryLoom()
+            val clock: () -> Instant = { Instant.fromEpochMilliseconds(testScheduler.currentTime) }
+            // Inject a reconnect controller whose window is SHORT and independent of the detector's.
+            val controllerFactory: JoinerReconnectControllerFactory = { roomId, scope, c ->
+                DefaultJoinerReconnectController(
+                    roomId = roomId,
+                    reconnectWindowMs = shortWindowMs,
+                    clock = { c().toEpochMilliseconds() },
+                    scope = scope,
+                )
+            }
+            val factory = SeamRoomFactory(
+                loom,
+                backgroundScope,
+                clock,
+                longDetectorWindow,
+                reconnectControllerFactory = controllerFactory,
+            )
+
+            val host = factory.host(Pattern("Host"))
+            val droppedLink = FaultySeam(loom.join(InMemoryTag("Dropped")), backgroundScope)
+            val droppedRoom = factory.adopt(droppedLink, SessionRole.Joiner)
+            val survivor = factory.join(InMemoryTag("Survivor"))
+            host.roster.first { it.size == 2 }
+            droppedRoom.roster.first { it.size == 2 }
+            survivor.roster.first { it.size == 2 }
+            val droppedId = droppedRoom.selfId
+            val survivorId = survivor.selfId
+
+            val leftForDropped = mutableListOf<MembershipEvent.Left>()
+            val leftForSurvivor = mutableListOf<MembershipEvent.Left>()
+            backgroundScope.launch {
+                host.events.filterIsInstance<MembershipEvent.Left>().collect { event ->
+                    when (event.peerId) {
+                        droppedId -> leftForDropped += event
+                        survivorId -> leftForSurvivor += event
+                        else -> Unit
+                    }
+                }
+            }
+            testScheduler.runCurrent()
+
+            droppedLink.partition()
+            // Past detection (timeout) and the SHORT reconnect window, but far short of the 10 s
+            // detector window — so only the WindowExpired backstop can evict.
+            testScheduler.advanceTimeBy(
+                longDetectorWindow.timeout + shortWindowMs.milliseconds + longDetectorWindow.interval * 4,
+            )
+            testScheduler.runCurrent()
+
+            assertAll(
+                {
+                    assertEquals(
+                        1,
+                        leftForDropped.size,
+                        "a still-Partitioned member must be evicted on WindowExpired even without PeerLost — observed $leftForDropped",
+                    )
+                },
+                {
+                    assertEquals(
+                        LeaveReason.PartitionExpired,
+                        leftForDropped.firstOrNull()?.reason,
+                        "an expired seat is not a clean leave — the reason must be PartitionExpired",
+                    )
+                },
+                {
+                    assertEquals(
+                        emptyList(),
+                        host.roster.value.filter { it.id == droppedId },
+                        "the evicted member must be gone from the host's roster",
+                    )
+                },
+                {
+                    assertTrue(
+                        leftForSurvivor.isEmpty(),
+                        "the survivor must never be evicted by another member's expiry — observed $leftForSurvivor",
+                    )
+                },
+            )
+
+            // Idempotence: advance past the long detector window so a late PeerLost would also fire.
+            // removeFromRoster already guards duplicate Left, so exactly one eviction survives.
+            testScheduler.advanceTimeBy(longDetectorWindow.reconnectWindow)
+            testScheduler.runCurrent()
+            assertEquals(
+                1,
+                leftForDropped.size,
+                "a double-evict (WindowExpired then a late PeerLost) must stay idempotent — observed $leftForDropped",
+            )
+
+            host.leave()
+            survivor.leave()
         }
 }
