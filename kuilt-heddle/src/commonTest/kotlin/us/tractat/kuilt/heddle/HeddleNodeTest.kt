@@ -217,6 +217,9 @@ class HeddleNodeTest {
     private fun assertGlobalConservation(h: Harness, minted: Long) {
         val ledger = h.peers[0].node.ledger.value
         assertEquals(ledger, h.peers[1].node.ledger.value, "ledgers converged for the conservation check")
+        // The Σ-identity balances THROUGH a negative-holdings overspend (−50 cancels +50), so it
+        // cannot detect that class alone; validate() catches a PersistentNegativeHoldings overspend.
+        assertTrue(ledger.validate().isEmpty(), "no integrity conflict (overspend) on the converged ledger: ${ledger.validate()}")
         val groups = listOf(root, g1, g2)
         val replicas = h.peers.map { it.id }
         var sumHoldings = 0L
@@ -316,6 +319,51 @@ class HeddleNodeTest {
             assertEquals(0L, node.earmarked(g1), "earmark released by the valid completion")
             assertEquals(8L, node.ledger.value.edge(e1)!!.spent, "the retried completion charges")
         }
+
+    // ─────────────────────────────────────────────────────────────────────────────
+    // 4b'. schedule() must not delegate away EARMARKED units — else a later complete()
+    //      overspends (holdings go negative). The scheduling path must be earmark-aware.
+    // ─────────────────────────────────────────────────────────────────────────────
+
+    @Test
+    fun scheduleNeverDelegatesEarmarkedUnits() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        val minted = 100L
+        val h = harness(peers = 1, mint = mapOf(0 to minted), topology = flatTopology())
+        h.pump()
+        val node = h.peers[0].node
+
+        // 1. Delegate the whole supply down e1 to leaf g1.
+        node.advertise(e1, hungry)
+        node.schedule(root)
+        h.pump()
+        assertTrue(node.ledger.value.holdings(g1, node.self) >= 50L, "g1 holds the delegated units")
+
+        // 2. Reserve 50 at g1 (captured path [e1]).
+        val id = node.reserve(g1, 50L)
+        assertNotNull(id)
+
+        // 3. g1 gains an ACTIVE child e3 — the exact reshape captured-path charging supports.
+        val g3 = GroupId("g3")
+        val e3 = AttachmentRecord(AttachmentId("e3"), g1, g3, Weight.ONE, 0L)
+        assertTrue(node.prepare(e3) && node.activate(e3.id))
+        h.pump()
+
+        // 4. Schedule g1's new child — must leave the earmarked 50 unspendable.
+        node.advertise(e3.id, hungry)
+        node.schedule(g1)
+        h.pump()
+
+        // 5. Complete the reservation for the full 50.
+        node.complete(id, 50L)
+        h.pump()
+
+        val ledger = node.ledger.value
+        assertTrue(ledger.holdings(g1, node.self) >= 0L, "no negative holdings at g1: ${ledger.holdings(g1, node.self)}")
+        assertTrue(ledger.validate().isEmpty(), "no overspend conflict: ${ledger.validate()}")
+        var sum = 0L
+        for (g in listOf(root, g1, g3)) sum += ledger.holdings(g, node.self)
+        assertEquals(minted, sum + ledger.leafSpentTotal(), "extractable == minted (no phantom 50 units)")
+    }
 
     // ─────────────────────────────────────────────────────────────────────────────
     // 4d. §8.2 bound is consistent under ASYMMETRIC demand — a fair scheduler serving only

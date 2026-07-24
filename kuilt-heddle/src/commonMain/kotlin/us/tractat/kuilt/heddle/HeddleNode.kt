@@ -352,9 +352,20 @@ public class HeddleNode internal constructor(
     // internals
     // ─────────────────────────────────────────────────────────────────────────────
 
-    /** Build the policy input at [parent] from [s] + live demand and run one [HeddlePolicy.pick]. */
+    /**
+     * Build the policy input at [parent] from [s] + live demand and run one [HeddlePolicy.pick].
+     *
+     * The schedulable holdings subtract this peer's **earmark at [parent]**: units reserved at
+     * [parent] (as a leaf) via [reserve] must not be delegated down [parent]'s children, or a
+     * later [complete] — which charges the captured path *ungated*, relying on the earmark to
+     * have kept the units — would overspend and drive holdings negative (the "one unforgivable
+     * failure", design §10.1/§10.7). This is the only holdings-reducing path the node exposes
+     * (there is no public `delegate`/`transfer`), so this subtraction closes the leak entirely.
+     * Always called under [lock] (both [schedule] call sites hold it), so the [earmarks] read is
+     * race-free.
+     */
     private fun pickOne(s: EntitlementLedger, parent: GroupId): Grant? {
-        val localHoldings = s.holdings(parent, self)
+        val localHoldings = s.holdings(parent, self) - (earmarks[parent] ?: 0L)
         if (localHoldings <= 0L) return null
         val live = demandTracker.live()
         val edges = s.activeChildren(parent).mapNotNull { summary ->
