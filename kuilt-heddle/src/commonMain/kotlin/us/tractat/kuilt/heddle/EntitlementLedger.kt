@@ -40,13 +40,22 @@ import kotlinx.serialization.Serializable
  * deeper transfer chains are the accepted transient. **Consumers must not hard-gate on
  * `validate().isEmpty()`** while rebalancing is in flight — gate on the mutator's `null`.
  *
- * Every present edge is treated as **ACTIVE** here; the lifecycle lattice (PREPARED
- * / ACTIVE / CLOSING / RETIRED) and its `DualActiveInbound` / `ClosureViolation`
- * conflicts are a later phase.
+ * ## Lifecycle (H2)
+ *
+ * Each edge carries a [Lifecycle] in a per-edge **max-register**
+ * (`PREPARED < ACTIVE < CLOSING < RETIRED`, join = max). The transitions
+ * [prepare] / [activate] / [close] / [retire] climb that chain under strict
+ * generation-and-drain discipline (design §5.3): [close] admits no new delegation,
+ * [retire] finalizes only a **fully drained** edge (`outstanding == 0`). An edge
+ * present without an explicit register entry defaults to [Lifecycle.ACTIVE] — the
+ * H1b "present edge is ACTIVE" assumption, now made explicit rather than assumed.
+ * Delegation is gated on [Lifecycle.ACTIVE], and two [Lifecycle.ACTIVE] inbound
+ * generations for one child surface as [LedgerConflict.DualActiveInbound] with the
+ * contested lineage quarantined (§5.2, §10.11).
  *
  * ## The representation
  *
- * Seven components, each already a join-semilattice, so [piece] is just their
+ * Eight components, each already a join-semilattice, so [piece] is just their
  * componentwise join (the product-of-lattices idiom):
  *
  *  - [records] — the immutable topology (parent/child/weight per edge) as a
@@ -73,6 +82,7 @@ import kotlinx.serialization.Serializable
  * event ids.
  *
  * @sample us.tractat.kuilt.heddle.sampleEntitlementLedgerMerge
+ * @sample us.tractat.kuilt.heddle.sampleEntitlementLedgerLifecycle
  */
 @Serializable
 public class EntitlementLedger private constructor(
@@ -83,6 +93,7 @@ public class EntitlementLedger private constructor(
     private val leafSpent: Map<AttachmentId, GCounter>,
     private val rollupSpent: Map<AttachmentId, GCounter>,
     private val transfers: Map<PathKey, Map<ReplicaId, GCounter>>,
+    private val lifecycle: Map<AttachmentId, Lifecycle> = emptyMap(),
 ) : Quilted<EntitlementLedger> {
 
     /** The join: the componentwise least-upper-bound of `this` and [other]. */
@@ -97,6 +108,9 @@ public class EntitlementLedger private constructor(
             transfers = transfers.mergeValues(other.transfers) { mine, theirs ->
                 mine.mergeRows(theirs)
             },
+            // The lifecycle max-register: join = max, so CLOSING/RETIRED dominates a
+            // laggard's ACTIVE regardless of merge order (design §5.1, §10.10).
+            lifecycle = lifecycle.mergeValues(other.lifecycle) { mine, theirs -> maxOf(mine, theirs) },
         )
 
     /**
@@ -117,18 +131,39 @@ public class EntitlementLedger private constructor(
     }
 
     /**
-     * Summaries of every edge whose parent is [parent], in a deterministic order
-     * (by [AttachmentId]). In this phase every present edge is treated as active;
-     * lifecycle filtering arrives with the lifecycle register in a later phase. An
-     * edge counts if **any** record under its id names [parent] — divergent records
-     * are retained, not collapsed, and their reconciliation is a later phase's job.
+     * Summaries of every **[Lifecycle.ACTIVE]** edge whose parent is [parent], in a
+     * deterministic order (by [AttachmentId]). Non-active generations (prepared,
+     * closing, retired) are excluded — this is the parent-facing scheduling view, and
+     * only active edges are candidates. An edge counts if **any** record under its id
+     * names [parent] *and* its lifecycle is active — divergent records are retained,
+     * not collapsed, and their reconciliation is a later concern.
      */
     public fun activeChildren(parent: GroupId): List<EdgeSummary> =
         records
-            .filter { (_, recs) -> recs.any { it.parent == parent } }
+            .filter { (id, recs) -> recs.any { it.parent == parent } && lifecycleOf(id) == Lifecycle.ACTIVE }
             .keys
             .sorted()
             .mapNotNull { edge(it) }
+
+    /**
+     * The [Lifecycle] of [id], or `null` if [id] is entirely unknown to this ledger.
+     * A known edge with no explicit register entry reads as [Lifecycle.ACTIVE] (the
+     * H1b default); the transitions [prepare] / [activate] / [close] / [retire] write
+     * the register explicitly.
+     */
+    public fun lifecycle(id: AttachmentId): Lifecycle? = if (isKnown(id)) lifecycleOf(id) else null
+
+    /** Whether [id] is mentioned by any component (records or any counter). */
+    private fun isKnown(id: AttachmentId): Boolean =
+        id in records || id in issued || id in returned || id in leafSpent || id in rollupSpent ||
+            id in lifecycle
+
+    /** The lifecycle of a **known** edge: the stored value, or [Lifecycle.ACTIVE] by default. */
+    private fun lifecycleOf(id: AttachmentId): Lifecycle = lifecycle[id] ?: Lifecycle.ACTIVE
+
+    /** True when [id] can still carry entitlement (active or draining) — used for lineage. */
+    private fun isLiveEdge(id: AttachmentId): Boolean =
+        lifecycleOf(id) == Lifecycle.ACTIVE || lifecycleOf(id) == Lifecycle.CLOSING
 
     // ─────────────────────────────────────────────────────────────────────────
     // Topology helpers (H1b treats every present, singleton-recorded edge as ACTIVE)
@@ -138,12 +173,17 @@ public class EntitlementLedger private constructor(
     private fun recordOf(id: AttachmentId): AttachmentRecord? = records[id]?.singleOrNull()
 
     /**
-     * The edges from the root down to [group]'s inbound edge, in root→group order
-     * (empty when [group] is the root). `null` signals the lineage is **quarantined**
-     * and no holdings may be derived: a divergent record on the path
-     * ([LedgerConflict.RecordDivergence]), a group with two inbound edges (a
-     * [LedgerConflict.PersistentNegativeHoldings]-adjacent H2 `DualActiveInbound`,
-     * treated conservatively here as a quarantine), or a cycle.
+     * The **live** edges from the root down to [group]'s inbound edge, in root→group
+     * order (empty when [group] is the root). Only [Lifecycle.ACTIVE]/[Lifecycle.CLOSING]
+     * edges count as a live path — a closing edge still drains, but prepared and retired
+     * edges carry nothing. `null` signals the lineage is **quarantined** and no holdings
+     * may be derived:
+     *  - a divergent record on the path ([LedgerConflict.RecordDivergence]);
+     *  - two live inbound edges into one group — the [LedgerConflict.DualActiveInbound]
+     *    topology fork, now reported (§5.2, §10.11) — so delegation across either is refused;
+     *  - a group whose only inbound edges are all prepared/retired (no live path to the
+     *    root — e.g. mid-reparent, before the new generation activates);
+     *  - a cycle.
      */
     private fun lineageEdges(group: GroupId): List<AttachmentId>? {
         val edges = ArrayDeque<AttachmentId>()
@@ -153,8 +193,10 @@ public class EntitlementLedger private constructor(
             if (!seen.add(cur)) return null // cycle
             val inboundIds = records.filter { (_, recs) -> recs.any { it.child == cur } }.keys
             if (inboundIds.isEmpty()) break // reached the root
-            if (inboundIds.size > 1) return null // dual inbound (H2) → quarantine
-            val id = inboundIds.single()
+            val liveInbound = inboundIds.filter { isLiveEdge(it) }
+            if (liveInbound.isEmpty()) return null // no live path to the root → quarantine
+            if (liveInbound.size > 1) return null // dual live inbound → quarantine
+            val id = liveInbound.single()
             val rec = recordOf(id) ?: return null // divergent record on the lineage → quarantine
             edges.addFirst(id)
             cur = rec.parent
@@ -243,6 +285,69 @@ public class EntitlementLedger private constructor(
     // delivery; a multi-hop transfer-funded charge is an accepted transient.
     // ─────────────────────────────────────────────────────────────────────────
 
+    // ─────────────────────────────────────────────────────────────────────────
+    // Topology transitions — climb the lifecycle chain under strict generation-and-
+    // drain discipline (design §5.1–5.3). Same house idiom: check on `this`, return a
+    // Patch?/null. The register merges by max, so a promotion never regresses under any
+    // merge order (closure dominance, §10.10).
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /**
+     * Introduce a new attachment generation: record [record] and mark its edge
+     * [Lifecycle.PREPARED] (design §5.3 *create*). `null` if the edge id is **already
+     * known** to this ledger — each generation is prepared exactly once; changing a
+     * weight or parent mints a *new* id, never re-preparing an old one. No entitlement
+     * may cross a prepared edge until [activate].
+     */
+    public fun prepare(record: AttachmentRecord): Patch<EntitlementLedger>? {
+        if (isKnown(record.id)) return null
+        return Patch(
+            of(
+                records = mapOf(record.id to setOf(record)),
+                lifecycle = mapOf(record.id to Lifecycle.PREPARED),
+            ),
+        )
+    }
+
+    /**
+     * Promote [edge] to [Lifecycle.ACTIVE] — delegation across it is now admitted
+     * (design §5.3). `null` if [edge] is unknown/divergent, or already
+     * [Lifecycle.CLOSING]/[Lifecycle.RETIRED] (a closing edge cannot be resurrected —
+     * closure dominance, §10.10). Idempotent from prepared/active.
+     */
+    public fun activate(edge: AttachmentId): Patch<EntitlementLedger>? {
+        recordOf(edge) ?: return null
+        if (lifecycleOf(edge) >= Lifecycle.CLOSING) return null
+        return Patch(of(lifecycle = mapOf(edge to Lifecycle.ACTIVE)))
+    }
+
+    /**
+     * Promote [edge] to [Lifecycle.CLOSING] — no new delegation is admitted, but spend
+     * and release still drain it (design §5.3). `null` if [edge] is unknown/divergent,
+     * or already [Lifecycle.RETIRED]. Idempotent from closing.
+     */
+    public fun close(edge: AttachmentId): Patch<EntitlementLedger>? {
+        recordOf(edge) ?: return null
+        if (lifecycleOf(edge) == Lifecycle.RETIRED) return null
+        return Patch(of(lifecycle = mapOf(edge to Lifecycle.CLOSING)))
+    }
+
+    /**
+     * Finalize a **drained** edge: promote [edge] to [Lifecycle.RETIRED] (design §5.3).
+     * `null` unless [edge] is currently [Lifecycle.CLOSING] **and** fully drained
+     * ([EdgeSummary.outstanding] `== 0`, i.e. every delegated unit has been returned or
+     * spent). This is the drain gate: a retire is refused while entitlement is still
+     * outstanding across the edge. Once retired, nothing crosses again and its history
+     * stays queryable via [edge] forever.
+     */
+    public fun retire(edge: AttachmentId): Patch<EntitlementLedger>? {
+        recordOf(edge) ?: return null
+        if (lifecycleOf(edge) != Lifecycle.CLOSING) return null
+        val summary = edge(edge) ?: return null
+        if (summary.outstanding != 0L) return null
+        return Patch(of(lifecycle = mapOf(edge to Lifecycle.RETIRED)))
+    }
+
     /**
      * Introduce root supply: credit [holder] with [amount] units under [mintId].
      * Control-plane only (design §9); the one non-conserving op and the only mutator
@@ -256,14 +361,25 @@ public class EntitlementLedger private constructor(
 
     /**
      * [r] delegates [amount] down [edge], moving authority from the parent group into
-     * the child. `null` if [r]'s holdings at the parent are insufficient, or [edge] is
-     * unknown/divergent. Bumps `issued(edge)[r]`.
+     * the child. `null` if:
+     *  - [edge] is unknown or divergent;
+     *  - [edge] is not [Lifecycle.ACTIVE] (prepared/closing/retired admit no new
+     *    delegation — design §5.1);
+     *  - the child's inbound topology is ambiguous (two live inbound edges — a
+     *    [LedgerConflict.DualActiveInbound] — quarantines the contested lineage, §10.11);
+     *  - [r]'s holdings at the parent are insufficient.
+     *
+     * Bumps `issued(edge)[r]`.
      */
     public fun delegate(r: ReplicaId, edge: AttachmentId, amount: Long): Patch<EntitlementLedger>? {
         require(amount >= 1L) { "delegate amount must be positive, was $amount" }
-        val parent = recordOf(edge)?.parent ?: return null
-        if (amount > holdings(parent, r)) return null
-        val lineage = lineageEdges(parent) ?: return null
+        val rec = recordOf(edge) ?: return null
+        if (lifecycleOf(edge) != Lifecycle.ACTIVE) return null
+        // The child's live inbound must be unambiguous (exactly this edge); a contested
+        // child (two active inbound) has a null lineage, so delegation across either is refused.
+        if (lineageEdges(rec.child) == null) return null
+        if (amount > holdings(rec.parent, r)) return null
+        val lineage = lineageEdges(rec.parent) ?: return null
         val bump = of(issued = mapOf(edge to bumpedSlot(issued, edge, r, amount)))
         return Patch(bump.piece(witness(r, lineage)))
     }
@@ -401,9 +517,13 @@ public class EntitlementLedger private constructor(
      *    negative derived [holdings]: the real overspend net. Quarantined lineages
      *    (holdings `0`) are excluded — they surface as [LedgerConflict.RecordDivergence].
      *  - [LedgerConflict.RecordDivergence] — two distinct records under one id.
-     *
-     * `DualActiveInbound` / `ClosureViolation` are the lifecycle phase (H2) and are
-     * deliberately not reported here.
+     *  - [LedgerConflict.DualActiveInbound] — a group with two or more
+     *    [Lifecycle.ACTIVE] inbound generations (§5.2, §10.11). Its lineage is
+     *    quarantined (holdings `0`), so it is *excluded* from the negative-holdings
+     *    check above — it surfaces here instead.
+     *  - [LedgerConflict.ClosureViolation] — a [Lifecycle.RETIRED] edge with non-zero
+     *    outstanding entitlement: a late delegation crossed a generation the cluster had
+     *    already retired (closure dominance, §10.10).
      */
     public fun validate(): List<LedgerConflict> {
         val conflicts = ArrayList<LedgerConflict>()
@@ -413,11 +533,18 @@ public class EntitlementLedger private constructor(
                 counterValue(returned, e),
             )
             if (charged > counterValue(issued, e)) conflicts += LedgerConflict.PerEdgeSafety(e)
+            // A retired edge must have drained before retiring; non-zero outstanding
+            // means entitlement crossed a generation already retired elsewhere.
+            if (lifecycleOf(e) == Lifecycle.RETIRED) {
+                val summary = edge(e)
+                if (summary != null && summary.outstanding != 0L) conflicts += LedgerConflict.ClosureViolation(e)
+            }
         }
         for ((id, recs) in records) {
             if (recs.size > 1) conflicts += LedgerConflict.RecordDivergence(id)
         }
         for (g in allGroups()) {
+            if (activeInboundCount(g) >= 2) conflicts += LedgerConflict.DualActiveInbound(g)
             for (r in allReplicas()) {
                 if (holdings(g, r) < 0L) conflicts += LedgerConflict.PersistentNegativeHoldings(g, r)
             }
@@ -425,13 +552,20 @@ public class EntitlementLedger private constructor(
         return conflicts.sorted()
     }
 
+    /** The number of [Lifecycle.ACTIVE] inbound edges into [group] — `≥ 2` is a fork. */
+    private fun activeInboundCount(group: GroupId): Int =
+        records.count { (id, recs) -> recs.any { it.child == group } && lifecycleOf(id) == Lifecycle.ACTIVE }
+
     // ─────────────────────────────────────────────────────────────────────────
     // Enumeration + test-support accessors (internal — used by validate and tests)
     // ─────────────────────────────────────────────────────────────────────────
 
+    /** The record set under [id] (empty if unknown) — `internal`, test support. */
+    internal fun recordsOf(id: AttachmentId): Set<AttachmentRecord> = records[id] ?: emptySet()
+
     /** Every edge id mentioned by any component. */
     internal fun allEdges(): Set<AttachmentId> =
-        records.keys + issued.keys + returned.keys + leafSpent.keys + rollupSpent.keys
+        records.keys + issued.keys + returned.keys + leafSpent.keys + rollupSpent.keys + lifecycle.keys
 
     /** Every group named as a parent or child by any (singleton or divergent) record. */
     internal fun allGroups(): Set<GroupId> =
@@ -468,6 +602,7 @@ public class EntitlementLedger private constructor(
         leafSpent = leafSpent[id]?.let { mapOf(id to it) } ?: emptyMap(),
         rollupSpent = rollupSpent[id]?.let { mapOf(id to it) } ?: emptyMap(),
         transfers = transfers[PathKey.of(id)]?.let { mapOf(PathKey.of(id) to it) } ?: emptyMap(),
+        lifecycle = lifecycle[id]?.let { mapOf(id to it) } ?: emptyMap(),
     )
 
     override fun equals(other: Any?): Boolean =
@@ -478,7 +613,8 @@ public class EntitlementLedger private constructor(
             returned == other.returned &&
             leafSpent == other.leafSpent &&
             rollupSpent == other.rollupSpent &&
-            transfers == other.transfers
+            transfers == other.transfers &&
+            lifecycle == other.lifecycle
 
     override fun hashCode(): Int {
         var h = records.hashCode()
@@ -488,12 +624,14 @@ public class EntitlementLedger private constructor(
         h = 31 * h + leafSpent.hashCode()
         h = 31 * h + rollupSpent.hashCode()
         h = 31 * h + transfers.hashCode()
+        h = 31 * h + lifecycle.hashCode()
         return h
     }
 
     override fun toString(): String =
         "EntitlementLedger(records=$records, minted=$minted, issued=$issued, " +
-            "returned=$returned, leafSpent=$leafSpent, rollupSpent=$rollupSpent, transfers=$transfers)"
+            "returned=$returned, leafSpent=$leafSpent, rollupSpent=$rollupSpent, " +
+            "transfers=$transfers, lifecycle=$lifecycle)"
 
     public companion object {
         /** The empty ledger: no topology, no supply, no accounting. The lattice bottom. */
@@ -543,8 +681,9 @@ public class EntitlementLedger private constructor(
             leafSpent: Map<AttachmentId, GCounter> = emptyMap(),
             rollupSpent: Map<AttachmentId, GCounter> = emptyMap(),
             transfers: Map<PathKey, Map<ReplicaId, GCounter>> = emptyMap(),
+            lifecycle: Map<AttachmentId, Lifecycle> = emptyMap(),
         ): EntitlementLedger =
-            EntitlementLedger(records, minted, issued, returned, leafSpent, rollupSpent, transfers)
+            EntitlementLedger(records, minted, issued, returned, leafSpent, rollupSpent, transfers, lifecycle)
     }
 }
 

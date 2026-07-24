@@ -1,6 +1,7 @@
 package us.tractat.kuilt.heddle
 
 import us.tractat.kuilt.crdt.ReplicaId
+import us.tractat.kuilt.crdt.piece
 
 /**
  * Two peers each bootstrap the same root supply and merge their copies. The merge
@@ -21,6 +22,35 @@ internal fun sampleEntitlementLedgerMerge() {
 
     // Reading one edge's summary is a pure projection (null here — no edges minted yet).
     check(onAlice.edge(AttachmentId("acme")) == null)
+}
+
+/**
+ * An edge climbs its lifecycle chain under strict generation-and-drain: prepare (no
+ * entitlement crosses) → activate (delegation opens) → close (no *new* delegation, still
+ * drains) → retire (only once fully drained). A retire is refused while entitlement is
+ * still outstanding.
+ */
+@Suppress("unused")
+internal fun sampleEntitlementLedgerLifecycle() {
+    val root = GroupId("root")
+    val leaf = GroupId("leaf")
+    val alice = ReplicaId("alice")
+    val e = AttachmentId("root→leaf")
+
+    var ledger = EntitlementLedger.bootstrap(root, mapOf(alice to 100L), nonce = "genesis")
+    // prepare then activate the edge, then delegate 10 units down it.
+    ledger = ledger.piece(checkNotNull(ledger.prepare(AttachmentRecord(e, root, leaf, Weight.ONE, 0L))))
+    ledger = ledger.piece(checkNotNull(ledger.activate(e)))
+    ledger = ledger.piece(checkNotNull(ledger.delegate(alice, e, 10L)))
+
+    // Close the edge, then try to retire it while entitlement is still outstanding — refused.
+    ledger = ledger.piece(checkNotNull(ledger.close(e)))
+    check(ledger.retire(e) == null) // 10 units still outstanding
+
+    // Drain it (return the grant), then retire succeeds; the register now reads RETIRED.
+    ledger = ledger.piece(checkNotNull(ledger.release(alice, e, 10L)))
+    ledger = ledger.piece(checkNotNull(ledger.retire(e)))
+    check(ledger.lifecycle(e) == Lifecycle.RETIRED)
 }
 
 /** Weights order by exact cross-multiplication — see [Weight]. */
