@@ -66,7 +66,7 @@ class HeddleControlPlaneTest {
         val sink = RecordingSink()
         val plane = HeddleControlPlane(
             raft = fake, self = ReplicaId("solo"), scope = backgroundScope,
-            sink = sink, initial = EntitlementLedger.ZERO, incarnation = "boot-1",
+            sink = sink, membership = NO_REMONITOR, initial = EntitlementLedger.ZERO, incarnation = "boot-1",
         )
         val c = GroupId("c")
         val eA = AttachmentId("eA")
@@ -219,14 +219,14 @@ class HeddleControlPlaneTest {
         val holder = ReplicaId("acme")
 
         // Incarnation A mints 100.
-        val a = HeddleControlPlane(fake, ReplicaId("solo"), backgroundScope, durable, EntitlementLedger.ZERO, "boot-A")
+        val a = HeddleControlPlane(fake, ReplicaId("solo"), backgroundScope, durable, NO_REMONITOR, EntitlementLedger.ZERO, "boot-A")
         assertIs<ControlOutcome.Applied>(a.submit(ControlCommand.Mint(holder, 100L)))
         assertEquals(100L, durable.snapshot().mintedTotal())
 
         // "Restart": a fresh control plane with a FRESH injected incarnation over the same log/ledger,
         // replaying the committed log, then minting 40. A reused incarnation would regenerate `#0` and
         // max-collide the 40 into the 100 (a lost mint); a fresh incarnation keeps them distinct.
-        val b = HeddleControlPlane(fake, ReplicaId("solo"), backgroundScope, durable, EntitlementLedger.ZERO, "boot-B")
+        val b = HeddleControlPlane(fake, ReplicaId("solo"), backgroundScope, durable, NO_REMONITOR, EntitlementLedger.ZERO, "boot-B")
         runCurrent() // let B replay the committed mint
         assertIs<ControlOutcome.Applied>(b.submit(ControlCommand.Mint(holder, 40L)))
         assertEquals(140L, durable.snapshot().mintedTotal(), "the second mint must not collide with the first")
@@ -249,7 +249,7 @@ class HeddleControlPlaneTest {
             entry
         }
         val sink = RecordingSink()
-        val plane = HeddleControlPlane(fake, ReplicaId("solo"), backgroundScope, sink, EntitlementLedger.ZERO, "boot-3")
+        val plane = HeddleControlPlane(fake, ReplicaId("solo"), backgroundScope, sink, NO_REMONITOR, EntitlementLedger.ZERO, "boot-3")
 
         val outcome = plane.submit(ControlCommand.Mint(ReplicaId("acme"), 100L))
         assertIs<ControlOutcome.Applied>(outcome)
@@ -264,7 +264,7 @@ class HeddleControlPlaneTest {
     fun submitTimeoutSurfacesLeaderCrash() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
         val fake = FakeRaftNode(selfId = NodeId("solo"), initialRole = RaftRole.Leader)
         fake.proposeBehavior = { awaitCancellation() } // a forwarded proposal that never commits (leader crash)
-        val plane = HeddleControlPlane(fake, ReplicaId("solo"), backgroundScope, RecordingSink(), EntitlementLedger.ZERO, "boot-4")
+        val plane = HeddleControlPlane(fake, ReplicaId("solo"), backgroundScope, RecordingSink(), NO_REMONITOR, EntitlementLedger.ZERO, "boot-4")
         assertFailsWith<TimeoutCancellationException> {
             plane.submit(ControlCommand.Mint(ReplicaId("acme"), 100L), timeout = 1.seconds)
         }
@@ -340,7 +340,7 @@ class HeddleControlPlaneTest {
     @Test
     fun prepareConflictingRecordIsRefusedNotSilentlyApplied() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
         val fake = FakeRaftNode(selfId = NodeId("solo"), initialRole = RaftRole.Leader)
-        val plane = HeddleControlPlane(fake, ReplicaId("solo"), backgroundScope, RecordingSink(), EntitlementLedger.ZERO, "boot-prep")
+        val plane = HeddleControlPlane(fake, ReplicaId("solo"), backgroundScope, RecordingSink(), NO_REMONITOR, EntitlementLedger.ZERO, "boot-prep")
         val id = AttachmentId("e")
         val rec = AttachmentRecord(id, root, GroupId("c"), Weight.ONE, 0L)
         val differentRec = AttachmentRecord(id, GroupId("otherParent"), GroupId("c"), Weight.ONE, 0L)
@@ -361,7 +361,7 @@ class HeddleControlPlaneTest {
     @Test
     fun activateAndCloseOfMissingOrRetiredEdgeAreRefused() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
         val fake = FakeRaftNode(selfId = NodeId("solo"), initialRole = RaftRole.Leader)
-        val plane = HeddleControlPlane(fake, ReplicaId("solo"), backgroundScope, RecordingSink(), EntitlementLedger.ZERO, "boot-refuse")
+        val plane = HeddleControlPlane(fake, ReplicaId("solo"), backgroundScope, RecordingSink(), NO_REMONITOR, EntitlementLedger.ZERO, "boot-refuse")
         val unknown = AttachmentId("never-prepared")
 
         // Activate/Close of an edge the projection has never seen: refused, not applied.
@@ -530,7 +530,7 @@ class HeddleControlPlaneTest {
         val sink = RecordingSink()
         val plane = HeddleControlPlane(
             raft = fake, self = ReplicaId("solo"), scope = backgroundScope,
-            sink = sink, initial = EntitlementLedger.ZERO, incarnation = "boot-reloc-gate",
+            sink = sink, membership = NO_REMONITOR, initial = EntitlementLedger.ZERO, incarnation = "boot-reloc-gate",
         )
         val child = GroupId("g")
         val p3 = ReplicaId("p3")
@@ -618,7 +618,7 @@ class HeddleControlPlaneTest {
     )
 
     private fun plane(raft: RaftNode, id: NodeId, sink: ControlLedgerSink, scope: CoroutineScope) =
-        HeddleControlPlane(raft, ReplicaId(id.value), scope, sink, EntitlementLedger.ZERO, "inc-${id.value}")
+        HeddleControlPlane(raft, ReplicaId(id.value), scope, sink, NO_REMONITOR, EntitlementLedger.ZERO, "inc-${id.value}")
 
     /** Launch [block] on [scope], pump [sim]'s virtual time until it commits, then return the outcome. */
     private suspend fun awaitOutcome(
@@ -630,6 +630,9 @@ class HeddleControlPlaneTest {
         sim.awaitTrue("control op committed") { d.isCompleted }
         return d.await()
     }
+
+    /** These suites do not exercise the node-side enrollment effect (#1652) — see `HeddleRosterTest`. */
+    private val NO_REMONITOR = ControlMembershipSink { }
 
     /** A [ControlLedgerSink] that accumulates published patches into a ledger — the data-plane view. */
     private class RecordingSink : ControlLedgerSink {

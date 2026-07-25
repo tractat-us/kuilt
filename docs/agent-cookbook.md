@@ -478,7 +478,10 @@ live lineage through the log (behind a §9 #3 `readIndex()` leader fence) — co
 nothing), clearing the resulting `PersistentNegativeHoldings`/`PerEdgeSafety`/`ClosureViolation`.
 It fails closed (leaving the conflicts standing, never a silent break) when the strand can't be
 cleared conservingly — service spent *through* the stranded edge, or a transfer-tangled strand
-(part of #1665). The spend path (`schedule`/`reserve`/`complete`) never touches the log.
+(part of #1665). `enroll(replica)`/`depart()` keep an **agreed participant list** on the same
+log (`enrolledReplicas()` reads it back) — so "wait for every participant" is a defined
+question; only a peer may depart itself. The spend path (`schedule`/`reserve`/`complete`) never
+touches the log.
 
 <!-- verbatim from kuilt-heddle/src/commonSamples/kotlin/us/tractat/kuilt/heddle/EntitlementLedgerSamples.kt#sampleHeddleGoverned -->
 ```kotlin
