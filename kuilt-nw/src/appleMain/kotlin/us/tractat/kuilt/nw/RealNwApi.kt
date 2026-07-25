@@ -31,6 +31,7 @@ import platform.Network.nw_advertise_descriptor_create_bonjour_service
 import platform.Network.nw_advertise_descriptor_set_txt_record_object
 import platform.Network.nw_advertise_descriptor_t
 import platform.Network.nw_browse_descriptor_create_bonjour_service
+import platform.Network.nw_browse_descriptor_set_include_txt_record
 import platform.Network.nw_browse_result_copy_endpoint
 import platform.Network.nw_browse_result_copy_txt_record_object
 import platform.Network.nw_browse_result_t
@@ -747,6 +748,14 @@ internal class RealNwApi(
             return
         }
         val descriptor = nw_browse_descriptor_create_bonjour_service(serviceType, null)
+        // Opt in to TXT records. Network.framework's default is NOT to query them
+        // ("by default, the browser will not automatically query for TXT records" —
+        // browse_descriptor.h), so without this the per-peer PeerId we advertise is
+        // never delivered on browse: readPeerId() returns null, every endpoint falls
+        // back to `id = serviceName`, and under Rendezvous.New (one shared session
+        // serviceName) the pre-dial self-filter can never fire — the peer dials its
+        // own endpoint and is only caught post-connect by NwSeam (#1660 root 1).
+        nw_browse_descriptor_set_include_txt_record(descriptor, true)
         val newBrowser = nw_browser_create(descriptor, secureParams())
         nw_browser_set_queue(newBrowser, queue)
         nw_browser_set_browse_results_changed_handler(newBrowser) { oldResult, newResult, _ ->
