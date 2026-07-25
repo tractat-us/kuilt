@@ -24,12 +24,22 @@ import us.tractat.kuilt.core.PeerId
  * **ByteArray equality.** Kotlin's default `==` on `ByteArray` is identity, not content.
  * This class overrides [equals] and [hashCode] to use [ByteArray.contentEquals] /
  * [ByteArray.contentHashCode] so two descriptors built from the same input compare equal.
+ * (Declaring them explicitly also suppresses the `data` modifier's generated versions —
+ * `data` is here for `copy`, not for equality.)
+ *
+ * **Derive a descriptor with [copy], never by re-invoking the constructor.** Every field is
+ * part of the opaque envelope, and most default to a "no requirement" sentinel — so a rebuild
+ * that names only the fields it cares about *silently resets* the rest. That is exactly how
+ * [WarpNode.enqueueLocal] dropped [lane] and [affinity] on the floor (#1674). The generated
+ * [copy] is derived from the primary constructor, so it carries every present field and every
+ * field added later for free; a hand-rolled rebuild has to be re-audited on each new field, and
+ * the compiler will not remind anyone. Keep new envelope fields flowing through [copy].
  *
  * @see OpRegistry
  * @see OpId
  */
 @Serializable
-public class TaskDescriptor(
+public data class TaskDescriptor(
     /** The symbolic name of the operation to dispatch. */
     public val op: OpId,
     /** The serialised arguments passed to [Op.invoke] on the claiming peer. */

@@ -91,10 +91,18 @@ public class EphemeralEntry<V>(
  * per-observer, receive-time signal: within the TTL window an observer that has
  * not yet expired the dead slot still hides the restart (the accepted ephemeral
  * within-TTL skew), and a stale re-delivery of the dead incarnation's high-clock
- * entry (e.g. via anti-entropy) can re-pin it. For clock-domination that does
- * **not** depend on TTL timing, drive [put] from a clock whose high bits carry a
+ * entry (e.g. via anti-entropy) can re-pin it.
+ *
+ * TTL eviction also cannot recover a replica that departed *gracefully*: [leave]
+ * is permanent by design, and the tracker will not drop a tombstone to admit an
+ * entry that tombstone already outranks (#1675). Such a replica rejoins only by
+ * out-clocking its own departure.
+ *
+ * So for clock-domination that does **not** depend on TTL timing — and for any
+ * rejoin after [leave] — drive [put] from a clock whose high bits carry a
  * per-boot incarnation epoch, so a restart's clock always exceeds the dead
- * incarnation's — then TTL eviction is only the backstop, not the sole mechanism.
+ * incarnation's; then TTL eviction is only the backstop, not the sole mechanism.
+ * [IncarnationClock] packs exactly that layout.
  *
  * @param V the value type carried in each presence entry.
  */
@@ -122,6 +130,16 @@ public class EphemeralMap<V> private constructor(
      * Signal graceful departure for [replica]: publishes a `null`-value entry
      * with [clock], which must be higher than any prior entry. Peers that
      * merge this departure will suppress [replica] from [live] output.
+     *
+     * **Departure is permanent, not TTL-bounded.** The tombstone outranks every
+     * entry the replica published before it, so no re-delivery of one of those —
+     * however late, whoever relays it — can bring the replica back; the join
+     * discards it, and [EphemeralMapTracker] will not evict a tombstone to let it
+     * in (#1675). A departed replica returns only by publishing a presence entry
+     * at a clock **strictly above** its own departure clock. A replica that
+     * restarts with a reset counter therefore cannot rejoin on the counter alone:
+     * carry a per-boot epoch in the clock's high bits (see the restart-recovery
+     * section of the class KDoc) so its first heartbeat outranks the tombstone.
      */
     public fun leave(replica: ReplicaId, clock: Long): EphemeralMap<V> {
         val current = entries[replica]
@@ -187,6 +205,11 @@ public class EphemeralMap<V> private constructor(
      * receive-time TTL, exactly the same local, per-observer, eventually-consistent presence
      * signal that [live] already filters on; it is `internal` because only the tracker may drive
      * it.
+     *
+     * Because it is not monotone, its use is confined to that single case: the tracker calls it
+     * only for a slot holding an **expired presence entry** that an inbound **presence entry**
+     * is re-opening. It is never used to drop a departure tombstone, nor to install a departure
+     * the standing entry dominates — either would invert the lattice's own ordering (#1675).
      */
     internal fun evicting(replicas: Set<ReplicaId>): EphemeralMap<V> =
         if (replicas.isEmpty() || entries.isEmpty()) this

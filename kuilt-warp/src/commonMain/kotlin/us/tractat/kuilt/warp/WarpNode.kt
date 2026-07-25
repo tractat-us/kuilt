@@ -36,6 +36,7 @@ import us.tractat.kuilt.crdt.EphemeralMap
 import us.tractat.kuilt.crdt.EphemeralMapTracker
 import us.tractat.kuilt.crdt.GCounter
 import us.tractat.kuilt.crdt.GSet
+import us.tractat.kuilt.crdt.IncarnationClock
 import us.tractat.kuilt.crdt.LWWRegister
 import us.tractat.kuilt.crdt.ORMap
 import us.tractat.kuilt.crdt.ORSet
@@ -381,11 +382,11 @@ public class WarpNode(
     /**
      * Monotonic per-replica publish clock for this peer's capability slot. Guarded by [lock].
      *
-     * Packs the per-boot [epoch] into the high bits and a per-boot `++` counter into the low 32,
-     * so it strictly increases within a boot AND a higher [epoch] strictly dominates any clock a
-     * lower one could reach — a restart is always fresh by clock, not merely by TTL timing (#1666).
+     * Packs the per-boot [epoch] above a monotonic per-boot counter, so a higher [epoch] strictly
+     * dominates any clock a lower one could reach — a restart is always fresh by clock, not merely
+     * by TTL timing (#1666). See [IncarnationClock]. Advanced only under [lock].
      */
-    private var capabilityClock = epochClockBase(epoch)
+    private var capabilityClock = IncarnationClock.base(epoch)
 
     /** Current consistent-hash ring, rebuilt whenever the effective roster changes. */
     private var ring: TaskRing = TaskRing(setOf(selfId))
@@ -623,23 +624,18 @@ public class WarpNode(
      *
      * The task is enqueued with [TaskDescriptor.pinnedOwner] forced to [selfId]; any owner the
      * caller may have set on [descriptor] is overridden so "local" always means *this* peer.
+     * **Nothing else about the envelope changes** — the fair-share [TaskDescriptor.lane], the
+     * location [TaskDescriptor.affinity], the trace context and the args all ride through the pin
+     * untouched, so a pinned task is admission-gated and traced exactly like a ring-assigned one.
      * It then travels and is claimed exactly like any free-path task via [enqueue] — the pin is
      * just the descriptor field the ring-owner filter consults (see [effectiveOwner]).
      *
      * @param taskId The identifier of the task to enqueue.
      * @param descriptor The unit of work; its [TaskDescriptor.pinnedOwner] is replaced with
-     *   [selfId] before replication.
+     *   [selfId] before replication and every other field is preserved.
      */
     public fun enqueueLocal(taskId: TaskId, descriptor: TaskDescriptor) {
-        enqueue(
-            taskId,
-            TaskDescriptor(
-                op = descriptor.op,
-                args = descriptor.args,
-                traceparent = descriptor.traceparent,
-                pinnedOwner = selfId,
-            ),
-        )
+        enqueue(taskId, descriptor.copy(pinnedOwner = selfId))
     }
 
     // ---------------------------------------------------------------------------
@@ -664,7 +660,8 @@ public class WarpNode(
      */
     public fun advertiseCapabilities(caps: CapSet) {
         val update = lock.withLock {
-            val u = EphemeralMap.empty<CapSet>().put(replica, caps, ++capabilityClock)
+            capabilityClock = IncarnationClock.next(capabilityClock)
+            val u = EphemeralMap.empty<CapSet>().put(replica, caps, capabilityClock)
             capabilityTracker.received(u)
             u
         }
@@ -1646,17 +1643,3 @@ public fun Seam.rosterSnapshot(): Flow<Set<PeerId>> = peers
 public fun RaftNode.rosterSnapshot(): Flow<Set<PeerId>> =
     membership.map { config -> config.voters.mapTo(mutableSetOf()) { PeerId(it.value) } }
 
-/** Low bits reserved for the per-boot capability counter; the epoch occupies the bits above. */
-private const val EPOCH_CLOCK_SHIFT: Int = 32
-
-/**
- * The starting capability clock for a node booted at [epoch]: the epoch shifted into the high
- * bits, leaving the low [EPOCH_CLOCK_SHIFT] bits for a per-boot `++` counter. A strictly-greater
- * epoch therefore yields a strictly-greater clock than any the previous boot could reach (its
- * counter can never carry into the epoch bits within a boot), so a restarted replica always
- * out-clocks its dead incarnation.
- */
-private fun epochClockBase(epoch: Long): Long {
-    require(epoch in 0 until (1L shl 31)) { "epoch must be in [0, 2^31), was $epoch" }
-    return epoch shl EPOCH_CLOCK_SHIFT
-}

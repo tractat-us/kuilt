@@ -151,6 +151,7 @@ class FederatedLearningExampleTest {
                 strategy = ClaimStrategy.Ring,
                 registry = deviceRegistry(creel, hash, runtimes[i], batches.getValue(owners[i])),
                 raftNode = checkNotNull(sim.nodes[id]),
+                epoch = 0L,
             )
         }
         try {
@@ -253,6 +254,7 @@ class FederatedLearningExampleTest {
                         clock = { Clock.System.now() },
                         strategy = ClaimStrategy.Ring,
                         registry = deviceRegistry(creel, hash, runtimes[i], batches.getValue(wsOwners[i])),
+                        epoch = 0L,
                     )
                 }
                 // Both peers must see each other before either can pin and run its local step.

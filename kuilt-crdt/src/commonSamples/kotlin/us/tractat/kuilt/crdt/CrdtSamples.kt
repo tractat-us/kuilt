@@ -604,3 +604,31 @@ internal fun sampleLatticeProduct() {
     check(merged.piece(replicaA) == merged)
 }
 
+
+// ── EphemeralMapTracker ─────────────────────────────────────────────────────
+
+/**
+ * The two update channels: a peer's own heartbeat is an author-fresh delta, whereas an
+ * anti-entropy exchange re-delivers state whose author may be long gone.
+ */
+@Suppress("unused")
+internal fun sampleEphemeralMapTrackerChannels() {
+    val a = ReplicaId("A")
+    var now = 0L
+    val tracker = EphemeralMapTracker<String>(ttlMs = 5_000L, clock = { now })
+
+    // A heartbeat straight from its author: `received` — this is what liveness is measured on.
+    val heartbeat = EphemeralMap.empty<String>().put(a, "editing", clock = 1L)
+    tracker.received(heartbeat)
+    check(tracker.live()[a] == "editing")
+
+    // A goes silent and ages out.
+    now = 5_000L
+    check(a !in tracker.live())
+
+    // An anti-entropy round re-delivers A's last frame, held by some other peer. Merged with
+    // `relayed` it joins the state without re-stamping the TTL, so A stays correctly absent.
+    tracker.relayed(heartbeat)
+    check(a !in tracker.live())
+    check(tracker.snapshot().entries[a]?.clock == 1L)
+}

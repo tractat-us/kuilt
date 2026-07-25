@@ -1,7 +1,5 @@
 package us.tractat.kuilt.heddle
 
-import kotlinx.serialization.Serializable
-
 /**
  * An **exact rational number** — a `numerator/denominator` pair over `Long`, kept
  * reduced to lowest terms with a strictly positive denominator.
@@ -21,10 +19,19 @@ import kotlinx.serialization.Serializable
  * portable choice; the reduce-after-every-op keeps realistic scheduler workloads far
  * from the ceiling.
  *
+ * **Deliberately not `@Serializable`.** A `Rational` is scheduler-local: it appears only
+ * as [PolicyEdge.virtualOffset], which design §7.2 explicitly does not replicate. The
+ * generated serializer would deserialize past [of] — the only path that reduces and
+ * forces a positive denominator — so an unreduced or sign-denormalized value could
+ * arrive over the wire and break [equals]/[compareTo] exactly as it could for [Weight]
+ * (#1647). Leaving the annotation off makes that unreachable by construction: a future
+ * change that tries to replicate a `Rational` fails to compile instead of silently
+ * shipping a bypassing serializer. If a virtual time ever must be replicated, give it a
+ * normalizing serializer routed through [of], the way [WeightSerializer] does.
+ *
  * @property numerator the reduced numerator; may be negative, zero, or positive.
  * @property denominator the reduced denominator; always `> 0` and coprime with [numerator].
  */
-@Serializable
 public class Rational private constructor(
     public val numerator: Long,
     public val denominator: Long,
@@ -68,6 +75,22 @@ public class Rational private constructor(
      */
     override fun compareTo(other: Rational): Int =
         checkedMul(numerator, other.denominator).compareTo(checkedMul(other.numerator, denominator))
+
+    /**
+     * The **exact ceiling** — the least `Long` that is `>= this`. `7/2` ceils to `4`,
+     * `-7/2` to `-3`, and a whole number to itself.
+     *
+     * This is the only sanctioned way to land an exact virtual time on a `Long` field
+     * (see [AttachmentRecord.neutralInitialVirtualTime]). Note that Kotlin's `/` on `Long`
+     * truncates toward zero — for the non-negative virtual times the scheduler deals in
+     * that is a *floor*, which rounds the wrong way for fairness.
+     */
+    public fun ceil(): Long {
+        val quotient = numerator / denominator
+        // The denominator is strictly positive, so the remainder carries the numerator's sign;
+        // a positive remainder means the truncation went down and one step back up is owed.
+        return if (numerator % denominator > 0L) checkedAdd(quotient, 1L) else quotient
+    }
 
     override fun equals(other: Any?): Boolean =
         other is Rational && numerator == other.numerator && denominator == other.denominator

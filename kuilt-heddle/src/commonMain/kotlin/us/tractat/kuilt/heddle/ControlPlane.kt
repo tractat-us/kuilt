@@ -59,6 +59,26 @@ internal sealed interface ControlCommand {
      */
     @Serializable
     data class Retire(val edge: AttachmentId, val witness: EntitlementLedger? = null) : ControlCommand
+
+    /**
+     * Reconcile the budget stranded on RETIRED inbound edges of [child] onto [liveEdge] — the conserving
+     * recovery for the advisory-retire race (design §9 #3, §5.4; issue #1665). [witness] is the proposer's
+     * conserving re-home patch computed on its data-plane view ([EntitlementLedger.reconcileStranded]): it
+     * carries **only** `returned` slots (releasing the strand up each retired edge) and `issuedRelocIn` slots
+     * on [liveEdge] (re-delegating it down), at absolute values. Applied deterministically on every peer — the
+     * decision gates on the log-pure projection's topology ([child]'s sole live inbound is [liveEdge], the
+     * witness touches only that edge's `issuedRelocIn` and RETIRED-inbound `returned` slots), never the
+     * gossip-merged data plane, so the witness is republished identically everywhere and no new supply can be
+     * smuggled past. The re-delegation rides the control-plane-owned relocation family rather than the live
+     * edge's base `issued` slot, which the data plane writes concurrently (#1691 — see
+     * [EntitlementLedger.reconcileStranded]).
+     */
+    @Serializable
+    data class Reconcile(
+        val child: GroupId,
+        val liveEdge: AttachmentId,
+        val witness: EntitlementLedger,
+    ) : ControlCommand
 }
 
 /**
@@ -234,6 +254,20 @@ internal class HeddleControlPlane(
     fun projectionSnapshot(): EntitlementLedger = lock.withLock { projection }
 
     /**
+     * The design §9 #3 **leader-authority fence** for a recovery decision: confirm this node still holds
+     * a voter quorum at its term via [RaftNode.readIndex] before it computes and proposes a
+     * reconciliation from its data-plane view, so a partitioned ex-leader can never drive recovery from
+     * stale authority (the same deposed-leader-cannot-pass-the-fence mechanism the coordinated path
+     * uses). Throws [us.tractat.kuilt.raft.NotLeaderException] on a non-leader/deposed proposer.
+     *
+     * **Scope — authority, not magnitude.** This fences the *log-order authority* of the decision. It
+     * does **not** fence the freshness of the gossip-replicated data-plane counters the witness
+     * magnitude is computed from (those ride an independent transport and are not in the log). A
+     * causally-lagged leader can still commit a wrong magnitude — the issue #1665 residual (Wall A).
+     */
+    suspend fun fenceReadIndex(): Long = raft.readIndex()
+
+    /**
      * Propose [command], suspend until it commits (or is deduped), and return the outcome the apply
      * loop recorded. Retries on [LeadershipLostException] with the **same** requestKey + Raft
      * `requestId`, so a leader step-down mid-flight never double-applies. If [timeout] is non-null the
@@ -396,6 +430,35 @@ internal class HeddleControlPlane(
                     // so a laggard that gets RETIRED before the draining deltas doesn't false-fire ClosureViolation.
                     val published = command.witness?.let { patch.delta.piece(it) } ?: patch.delta
                     sink.publish(Patch(published))
+                    ControlOutcome.Applied(index)
+                }
+            }
+
+            is ControlCommand.Reconcile -> {
+                // Gate on the LOG-PURE projection's topology (never the gossip-merged data plane, per
+                // BLOCKER-1): the child must have exactly one live inbound — the [liveEdge] to re-home onto —
+                // and the witness must touch ONLY that edge's `issuedRelocIn` and the child's RETIRED-inbound
+                // `returned` slots. This makes the accept/refuse decision a deterministic function of the log
+                // prefix (identical on every peer) and structurally forbids the witness from minting supply,
+                // from writing the live edge's contended base `issued` slot (#1691), and from relocating
+                // already-charged spend (which stays gated until the per-peer quiesce fence ships).
+                val live = projection.liveInboundEdges(command.child)
+                val retiredInbound = projection.retiredInboundEdges(command.child).toSet()
+                val w = command.witness
+                val wellFormed = live.size == 1 &&
+                    live.single() == command.liveEdge &&
+                    w.carriesOnlyRehomeSlots() &&
+                    w.issuedRelocInEdges().all { it == command.liveEdge } &&
+                    w.returnedEdges().all { it in retiredInbound }
+                if (!wellFormed) {
+                    ControlOutcome.Conflict(
+                        index,
+                        ControlConflict.Refused("reconcile refused (no unique live inbound or malformed witness) for ${command.child.value}"),
+                    )
+                } else {
+                    // The projection stays topology/lifecycle-only (its counters are empty by design, so
+                    // future retire gates keep working); only the data-plane sink receives the counter re-home.
+                    sink.publish(Patch(w))
                     ControlOutcome.Applied(index)
                 }
             }

@@ -472,8 +472,13 @@ reshapes don't corrupt the tree.
 **Primitive:** `heddleGoverned(...)` → `GovernedHeddleNode` (`:kuilt-heddle`) — the same data
 plane as `heddleStatic`, but `mint`/`prepare`/`activate`/`close`/`retire` are serialized
 through `:kuilt-raft`; each returns a `ControlOutcome` (`Applied`, or `Conflict` with the
-structured reason when it loses a race). The spend path (`schedule`/`reserve`/`complete`)
-never touches the log.
+structured reason when it loses a race). If a gossip-lagged peer's `retire` races a delegate
+and strands budget on a since-reparented child, `reconcile(child)` re-homes it onto the child's
+live lineage through the log (behind a §9 #3 `readIndex()` leader fence) — conservingly (mints
+nothing), clearing the resulting `PersistentNegativeHoldings`/`PerEdgeSafety`/`ClosureViolation`.
+It fails closed (leaving the conflicts standing, never a silent break) when the strand can't be
+cleared conservingly — service spent *through* the stranded edge, or a transfer-tangled strand
+(part of #1665). The spend path (`schedule`/`reserve`/`complete`) never touches the log.
 
 <!-- verbatim from kuilt-heddle/src/commonSamples/kotlin/us/tractat/kuilt/heddle/EntitlementLedgerSamples.kt#sampleHeddleGoverned -->
 ```kotlin
