@@ -26,11 +26,35 @@ public value class NwConnectionId(public val value: String)
  *
  * [serviceName] is the advertised Bonjour instance name of the remote endpoint —
  * a human-readable label, shared by all peers under `Rendezvous.New`.
+ *
+ * [identityResolved] says which of those two [id] actually is: `true` when it came from a
+ * resolved TXT record (a real per-peer identity), `false` when it is the [serviceName]
+ * backstop. Without it the two are the same `String` and a consumer cannot tell a peer's
+ * identity from a placeholder — which is exactly the #1709 race: Network.framework can
+ * deliver the browse `add` BEFORE TXT resolves, and in that window an endpoint under
+ * `Rendezvous.New`'s shared session name is indistinguishable from this peer's own.
  */
 public data class NwEndpoint(
     public val id: String,
     public val serviceName: String,
-)
+    public val identityResolved: Boolean = true,
+) {
+    /**
+     * Equality is over ([id], [serviceName]) ONLY — [identityResolved] is provenance of a *sighting*,
+     * not part of the endpoint's identity. The same endpoint is routinely re-sighted as its TXT record
+     * resolves; folding the flag into equality would make those two sightings unequal, so a set-keyed
+     * discovery roster ([NwLoom.visiblePeers]) would gain a ghost entry for one peer, and an
+     * `endpointLost` carrying the other flag value would fail to prune the one that was added.
+     * Same reason [NwBytesReceived] hand-writes its equality: the generated one would be wrong.
+     */
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (other !is NwEndpoint) return false
+        return id == other.id && serviceName == other.serviceName
+    }
+
+    override fun hashCode(): Int = 31 * id.hashCode() + serviceName.hashCode()
+}
 
 /**
  * A connection was established on [connectionId].
