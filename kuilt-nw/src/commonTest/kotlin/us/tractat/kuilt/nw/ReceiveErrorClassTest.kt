@@ -49,6 +49,18 @@ class ReceiveErrorClassTest {
     }
 
     @Test
+    fun awdl_formation_ENODATA_is_transient_not_terminal() {
+        // #1660 root 2: on real 2-iPhone AWDL hardware a receive completion arrives with
+        // domain=POSIX code=96 (ENODATA) *while the link is still forming*. Classified Terminal it
+        // escalated to a close → connectionClosed → NwSeam evicted the peer mid-lobby-2PC ("lost the
+        // other player"). The misclassification costs are asymmetric — see [classifyReceiveError] —
+        // so a formation blip must be retried, not made permanent.
+        // Literal 96 (not PosixErrno.ENODATA) on purpose: this pins the numeric wire value the
+        // hardware actually emits, independently of the named constant.
+        assertEquals(Transient, classifyReceiveError(NW_ERROR_DOMAIN_POSIX, code = 96))
+    }
+
+    @Test
     fun unknown_posix_code_is_terminal_fail_fast() {
         // Anything we don't positively recognise as transient escalates to a close — a dead connection
         // must always end in a `connectionClosed`, never a receive loop that gives up in silence (#1479).

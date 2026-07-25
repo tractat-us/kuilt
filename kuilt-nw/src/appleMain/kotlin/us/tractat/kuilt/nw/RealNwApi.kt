@@ -1106,9 +1106,13 @@ internal class RealNwApi(
 
     /**
      * Exponential backoff for transient-receive retry [retry] (1-based): `BASE_MS * 2^(retry-1)`, capped
-     * at [RECEIVE_RETRY_CAP_MS]. Widening from a flat delay to exponential (#1479 review): with no
-     * per-seam redial (#1513) an escalate is permanent, so the budget must tolerate a real transient
-     * storm (~${RECEIVE_RETRY_MAX_MS}ms total while `ready`) rather than the old ~250ms.
+     * at [RECEIVE_RETRY_CAP_MS]. Widening from a flat delay to exponential (#1479 review): an escalate
+     * was permanent when this was written, so the budget must tolerate a real transient storm
+     * (~${RECEIVE_RETRY_MAX_MS}ms total while `ready`) rather than the old ~250ms.
+     *
+     * #1513 has since added the per-seam redial, so an escalate is no longer *permanent* — but it is
+     * still expensive: it evicts the peer, re-forms the seam Woven→Weaving, and tears any lobby round
+     * in flight before the redial recovers. The wide budget therefore stays justified.
      */
     private fun backoffMsFor(retry: Int): Int {
         val shift = (retry - 1).coerceIn(0, RECEIVE_RETRY_MAX_SHIFT)
