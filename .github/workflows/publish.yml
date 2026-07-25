@@ -104,10 +104,26 @@ jobs:
         # workers.max=16 helps the per-task assemble/sign step.
         run: ./gradlew -Pversion=${{ env.PUBLISH_VERSION }} -Dorg.gradle.workers.max=16 publishAllPublicationsToTigrisStagingRepository
 
-      # Step B: aws s3 sync uploads the whole tree to Tigris in one parallel
-      # pass (~10 concurrent uploads by default). Measured ~20 s for ~1,560
-      # files — vs ~12 min for the old Gradle s3:// path.
-      - name: Sync staged repo to Tigris
+      # Step B: aws s3 cp --recursive uploads the whole tree to Tigris in one
+      # parallel pass (~10 concurrent uploads by default) — vs ~12 min for the
+      # old Gradle s3:// path.
+      #
+      # `cp --recursive`, NOT `sync` (#1702). `sync` computes a transfer delta,
+      # which means it must LIST THE DESTINATION first — and Tigris's
+      # ListObjectsV2 over the accumulated s3://buildcache/maven/ tree now dies
+      # with `RequestCanceled` after ~3.5 min. Four retries plus backoff outran
+      # the job's remaining budget, so runs #952–#962 were killed by the 30-min
+      # job timeout and the snapshot channel sat frozen at dev.950 for ~11 h.
+      #
+      # The listing was always pure waste here: each run stages a fresh, NEW
+      # version directory, so the delta is by construction "upload everything".
+      # `cp --recursive` walks only the local source and PUTs — no destination
+      # listing, so bucket size no longer bounds whether a publish can complete.
+      - name: Upload staged repo to Tigris
+        # Fail the STEP at a known bound rather than silently consuming the
+        # job's 30-min budget: a job-timeout kill reports as `cancelled`, which
+        # the alert below could not see. A step timeout surfaces as a failure.
+        timeout-minutes: 12
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.S3_BUILD_CACHE_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.S3_BUILD_CACHE_SECRET_KEY }}
@@ -118,19 +134,19 @@ jobs:
           STAGED=build/staged-maven-repo
           TOTAL=$(find "$STAGED" -type f | wc -l)
           echo "=== publishing version $PUBLISH_VERSION ($TOTAL files) ==="
-          # `aws s3 sync` is idempotent — it transfers only files missing/changed at the
-          # destination — so retry on transient Tigris errors (e.g. a spurious NoSuchBucket
-          # under parallel PUTs, which once partially published a release). Each retry uploads
-          # only what the previous pass missed, so it's cheap and converges.
+          # Re-PUTting an object is idempotent, so retry on transient Tigris errors
+          # (e.g. a spurious NoSuchBucket under parallel PUTs, which once partially
+          # published a release). A retry re-uploads the whole tree; at ~1.5k small
+          # files that is cheap, and it converges.
           attempt=1
           max=4
-          until time aws --endpoint-url=https://fly.storage.tigris.dev s3 sync \
+          until time aws --endpoint-url=https://fly.storage.tigris.dev s3 cp --recursive \
                 "$STAGED/" s3://buildcache/maven/ --no-progress; do
             if [ "$attempt" -ge "$max" ]; then
-              echo "::error::aws s3 sync failed after $max attempts" >&2
+              echo "::error::aws s3 cp failed after $max attempts" >&2
               exit 1
             fi
-            echo "::warning::aws s3 sync attempt $attempt failed; retrying in $((attempt * 5))s" >&2
+            echo "::warning::aws s3 cp attempt $attempt failed; retrying in $((attempt * 5))s" >&2
             sleep $((attempt * 5))
             attempt=$((attempt + 1))
           done
@@ -141,8 +157,14 @@ jobs:
       # notification. Idempotent by title: an existing OPEN issue is commented on,
       # not duplicated. Best-effort — never let the alert itself fail the job (the
       # publish already failed; that's the signal that matters).
+      # `failure() || cancelled()` — NOT bare `failure()` (#1702). A job that
+      # exceeds `timeout-minutes` is reported as `cancelled`, not `failure`, so
+      # this alert stayed silent through eleven consecutive broken publishes
+      # (#952–#962). Cancellation is rare and the alert is idempotent by title,
+      # so a spurious comment from a genuine manual cancel is a cheap trade for
+      # never missing a timeout again.
       - name: Alert on publish failure
-        if: failure()
+        if: failure() || cancelled()
         env:
           GH_TOKEN: ${{ github.token }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
