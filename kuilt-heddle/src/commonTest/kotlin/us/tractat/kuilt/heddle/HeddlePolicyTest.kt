@@ -37,6 +37,22 @@ class HeddlePolicyTest {
     private fun pick(children: List<Sim>, config: PolicyConfig, holdings: Long = 1_000_000L): Grant? =
         HeddlePolicy.pick(children.map { it.edge() }, config, holdings)
 
+    /**
+     * The parent's current virtual time `V = Σ w·ev / Σ w` (design §7.3 step 2), computed
+     * over [children] in exact rational arithmetic — the value a newly created generation
+     * must start at (§7.2).
+     */
+    private fun parentVirtualTime(children: List<Sim>): Rational {
+        var weighted = Rational.ZERO
+        var total = Rational.ZERO
+        for (c in children) {
+            val w = Rational.of(c.weight.numerator, c.weight.denominator)
+            weighted += w * c.virtualService()
+            total += w
+        }
+        return weighted / total
+    }
+
     @Test
     fun pickReturnsTheSingleDemandingChild() {
         val a = Sim("a", Weight.ONE)
@@ -237,5 +253,57 @@ class HeddlePolicyTest {
             child.spent += g.amount
         }
         assertTrue(newbornGrants in 8..12, "neutral newborn should get a fair ~half, got $newbornGrants")
+    }
+
+    /**
+     * Neutral creation at a **genuinely fractional** parent virtual time (design §7.2, §10.5).
+     *
+     * `V = Σ w·ev / Σ w` is a [Rational] and is almost never integral, while
+     * [AttachmentRecord.initialVirtualTime] is a `Long` — so creation must round, and the
+     * direction carries a fairness sign. Rounding *down* seats the newborn **behind** the
+     * front, which is exactly the "lifetime credit" §10.5 forbids; rounding *up* is
+     * conservative. [neutralCreationGivesNoHeadStart] cannot see this: it creates at `V = 30/1`,
+     * where every rounding rule agrees.
+     *
+     * Here two near-converged siblings put the parent at `V = 109/10`, and the floor (`10`)
+     * versus the ceiling (`11`) is the whole difference between the newborn taking the very
+     * next grant and waiting its turn.
+     */
+    @Test
+    fun neutralCreationAtFractionalVirtualTimeGivesNoHeadStart() {
+        // ev(l) = 11/1 and ev(h) = 98/9, so V = (1·11 + 9·(98/9)) / (1 + 9) = 109/10.
+        val light = Sim("l", Weight.ONE, issued = 11L, spent = 11L)
+        val heavy = Sim("h", Weight.of(9), issued = 98L, spent = 98L)
+        val config = PolicyConfig(quantum = 1L)
+        val v = parentVirtualTime(listOf(light, heavy))
+        assertEquals(Rational.of(109, 10), v, "the fixture must put the parent at a fractional V")
+
+        val newborn = Sim("n", Weight.ONE, initialVirtualTime = v.numerator / v.denominator)
+
+        assertAll(
+            // §10.5: a newborn never starts behind the front — that is lifetime credit.
+            {
+                assertTrue(
+                    newborn.virtualService() >= v,
+                    "newborn at ${newborn.virtualService()} starts behind the front $v — a head start",
+                )
+            },
+            // ...and the rounding is a bounded sliver forward, never an arbitrary penalty.
+            {
+                assertTrue(
+                    newborn.virtualService() - v < Rational.ONE,
+                    "newborn at ${newborn.virtualService()} is more than one virtual unit past the front $v",
+                )
+            },
+            // Behaviourally: it does not take the round it was created in. Seated at the floor
+            // it is the only eligible candidate and wins the grant outright.
+            {
+                assertEquals(
+                    "h",
+                    pick(listOf(light, heavy, newborn), config)?.attachment?.value,
+                    "the newborn must not win the round it was created in",
+                )
+            },
+        )
     }
 }
