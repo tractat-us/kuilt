@@ -46,7 +46,8 @@ package us.tractat.kuilt.nw
  *    `peerId` falls back to `id = serviceName`, the documented `?: name` backstop.
  *  - **TXT late** — [markListening] with `txtResolved = false` models the browse `add` arriving
  *    BEFORE the TXT record resolves (id falls back to `serviceName` even for an opted-in browser);
- *    [resolveTxt] then delivers the identity on a later browse *update*.
+ *    [resolveTxt] then delivers the identity on a later browse *update*. Every fallback id is emitted
+ *    with `identityResolved = false` so a consumer can tell a real identity from the backstop (#1709).
  *  - **Bonjour name collision / rename** — [renameService] models mDNS disambiguating two peers that
  *    advertise the same `serviceName` (`"lobby"` → `"lobby (2)"`), so the SAME peer is seen under
  *    BOTH names across sightings. Identity must therefore key on the TXT `peerId`, never `serviceName`.
@@ -160,7 +161,14 @@ internal class FakeNwRadio {
      */
     private fun endpointFor(l: Listening, browserWantsTxt: Boolean): NwEndpoint {
         val txtId = l.txtPeerId?.takeIf { browserWantsTxt && l.txtResolved }
-        return NwEndpoint(id = txtId ?: l.serviceName, serviceName = l.serviceName)
+        // identityResolved mirrors RealNwApi.onBrowseResult: true iff the id came from a TXT record
+        // this browser actually received, false when it is the serviceName backstop (#1709). All three
+        // conditions above collapse it to false, exactly as they collapse the id.
+        return NwEndpoint(
+            id = txtId ?: l.serviceName,
+            serviceName = l.serviceName,
+            identityResolved = txtId != null,
+        )
     }
 
     /**

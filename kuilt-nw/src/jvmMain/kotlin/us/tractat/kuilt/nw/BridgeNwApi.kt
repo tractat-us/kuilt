@@ -171,6 +171,12 @@ public class BridgeNwApi internal constructor(
     // Strong refs so JNA trampolines aren't GC'd while the K/N side may still fire them.
     private val endpointFoundCallback =
         NwNativeLib.EndpointFoundCallback { endpointId, serviceName ->
+            // The ABI marshals only (id, serviceName), so [NwEndpoint.identityResolved] cannot cross it and
+            // takes its default `true` here — the bridge asserts every discovered id is a real identity. On
+            // the bridge that is the safe default rather than a lie of consequence: the JVM side reaches
+            // this fabric via Rendezvous.Existing, where the #1709 deferral is inert anyway (an endpoint
+            // under our own advertised name is the self case the pre-dial filter already catches). Widening
+            // the callback signature belongs with the rest of the ABI identity work in #1539.
             endpointFoundStaging.trySend(NwEndpoint(id = endpointId, serviceName = serviceName))
         }
 

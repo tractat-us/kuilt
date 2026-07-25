@@ -10,6 +10,7 @@ import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -69,6 +70,16 @@ public class NwUnreachableException(message: String) : Exception(message)
  * parks, and the moment its peer drops (the seam re-forms to [us.tractat.kuilt.core.SeamState.Weaving],
  * #1513) it redials. A fresh `endpointFound` sighting resets that endpoint's backoff. The whole
  * mechanism lives on the seam scope, so [Seam.close] cancels it.
+ *
+ * ## Deferring the dial until identity resolves (#1709)
+ * A browse `add` can arrive BEFORE the endpoint's TXT record does, so [NwEndpoint.id] is briefly the
+ * [NwEndpoint.serviceName] backstop rather than the peer's `PeerId`. Under [Rendezvous.New] that
+ * backstop is the shared session name — the same string this loom advertises for itself — so the
+ * pre-dial self-filter cannot fire and the loom dials its OWN endpoint. When an endpoint arrives with
+ * `identityResolved = false` under the serviceName this loom itself advertises, the dial is therefore
+ * **deferred**: the endpoint might be self, and there is no way to tell yet. It is neither dialled nor
+ * rostered into [visiblePeers] until identity settles one way or the other. The deferral is **bounded**
+ * by [IDENTITY_GRACE] so a peer that publishes no TXT at all is still reached — see that constant.
  *
  * ## UUID self-identity (#1405)
  * [selfId] defaults to a fresh random UUID via [freshPeerId], so two devices never mint the same
@@ -145,6 +156,9 @@ public class NwLoom(
             seam = seam,
             scope = seamScope,
             selfId = selfId,
+            // The name THIS loom advertises — the discriminator for the #1709 identity deferral: an
+            // endpoint under this name whose identity has not resolved could be our own advertisement.
+            advertisedServiceName = serviceName,
             random = random,
             onDiscovered = { endpoint -> _visiblePeers.update { it + endpoint } },
             onLost = { endpoint -> _visiblePeers.update { it - endpoint } },
@@ -206,6 +220,32 @@ public class NwLoom(
 
         /** Ceiling the redial backoff doubles up to — a gone endpoint's dials keep failing fast here (#1513). */
         internal val MAX_REDIAL_BACKOFF: Duration = 5.seconds
+
+        /**
+         * How long a possibly-self endpoint whose TXT identity has NOT resolved is held back before it is
+         * dialled on the [NwEndpoint.serviceName] fallback anyway (#1709).
+         *
+         * **Why bounded at all.** `RealNwApi.onBrowseResult` cannot distinguish "TXT has not arrived yet"
+         * from "this advertiser publishes no TXT" — both surface as `readPeerIdFromTxt() == null`. A hard
+         * gate would therefore never dial a peer on a pre-#1673 build, trading a self-dial storm for a
+         * liveness cliff. After the grace the loom dials the fallback id and the post-connect `NwSeam`
+         * self-connection guard (which resolves the `PeerId` from the [NwHello] handshake) stays the
+         * correctness backstop, exactly as it is today.
+         *
+         * **Why 750 ms.** Bonjour resolves a TXT record within tens of milliseconds on a warm mDNS cache
+         * and a few hundred on a cold AWDL link, so 750 ms clears the observed resolution window with
+         * room to spare while staying far below [DEFAULT_WEAVE_TIMEOUT] (30 s) and below
+         * [MAX_REDIAL_BACKOFF] (5 s) — a peer held back by the grace is delayed by less than one redial
+         * backoff step, and a full mesh has that peer dialling US in the meantime regardless.
+         *
+         * **Residual, stated plainly.** The deferral is dropped early the moment this loom sees its OWN
+         * advertisement resolve under the same serviceName, which is the common case and is what removes
+         * the self-dial outright. When it is not dropped, the post-grace dial is a coin flip over the
+         * endpoints collapsed onto that shared name and may still land on self — once, not repeatedly,
+         * since the seam guard settles the endpoint and the redial loop parks. That is a large reduction
+         * of #1660 root 1, not its elimination; eliminating it needs identity that does not depend on TXT.
+         */
+        internal val IDENTITY_GRACE: Duration = 750.milliseconds
     }
 }
 
@@ -225,9 +265,23 @@ public class NwLoom(
  * [PeerId] and reports an endpoint as settled while its peer is connected (learned from whichever link
  * carried the endpoint), so the coordinator dials only genuinely-unreached endpoints — no storm.
  *
+ * ## Identity deferral (#1709)
+ * A sighting whose identity has not resolved ([NwEndpoint.identityResolved] `false`) and whose
+ * [NwEndpoint.serviceName] is the name THIS loom advertises ([advertisedServiceName]) *could be this
+ * loom's own endpoint* — under [Rendezvous.New] every peer shares that name, so the fallback id is the
+ * same string for self and peer. Such a sighting arms no redialer and is not rostered; instead a
+ * [deferrals] entry holds it for [NwLoom.IDENTITY_GRACE]. Two things end the wait:
+ *  - **our own advertisement resolves under that name** — a resolved self sighting proves this loom
+ *    occupies the name, so the pending fallback dial is dropped (it would be a coin flip that may hit
+ *    self, which is the whole bug). A later unresolved sighting under the name re-arms a fresh
+ *    deferral, so a TXT-less peer arriving afterwards is still reached;
+ *  - **the grace expires** — the endpoint is armed on its fallback id, deliberately (see
+ *    [NwLoom.IDENTITY_GRACE]: an advertiser that publishes no TXT is indistinguishable from one whose
+ *    TXT is merely late, and must not be starved).
+ *
  * ## Thread-safety
- * The [redialers] map and each entry's mutable `backoffMs`/`job` are read-modify-written only under
- * [lock] (atomicfu). No suspend call ([NwApi.connect], [delay], flow collection) runs under the lock:
+ * The [redialers] and [deferrals] maps and each entry's mutable `backoffMs`/`job` are read-modify-written
+ * only under [lock] (atomicfu). No suspend call ([NwApi.connect], [delay], flow collection) runs under the lock:
  * each iteration snapshots what it needs under the lock and acts outside it. The backoff jitter draws
  * from [jitterRandom] — a DEDICATED [Random] seeded once at construction from the injected `random` —
  * NOT the seam's shared `random`: the seam uses its `random` for nonce generation on its own coroutines,
@@ -241,6 +295,7 @@ private class RedialCoordinator(
     private val seam: NwSeam,
     private val scope: CoroutineScope,
     private val selfId: PeerId,
+    private val advertisedServiceName: String,
     random: Random,
     private val onDiscovered: (NwEndpoint) -> Unit,
     private val onLost: (NwEndpoint) -> Unit,
@@ -259,6 +314,15 @@ private class RedialCoordinator(
 
     /** endpoint id → its redial state. Guarded by [lock]. */
     private val redialers = mutableMapOf<String, Redialer>()
+
+    /**
+     * Bonjour serviceName → the pending grace timer for a possibly-self endpoint under that name whose
+     * identity has not resolved (#1709). Guarded by [lock]. Keyed on the serviceName rather than the id
+     * because that is the *collision set* the ambiguity lives in: an unresolved endpoint's id IS its
+     * serviceName (the `readPeerIdFromTxt() ?: name` fallback), so every unresolved sighting under one
+     * name shares a single entry, and the resolved self sighting that drops it is matched by name too.
+     */
+    private val deferrals = mutableMapOf<String, Job>()
 
     /** Subscribe to discovery UNDISPATCHED (before advertise/browse) so no sighting is missed. */
     fun start() {
@@ -298,9 +362,29 @@ private class RedialCoordinator(
         // Rendezvous.New serviceName is the shared session name (never a PeerId), so the clause is inert
         // there and the id clause does the real work.
         if (endpoint.id == selfId.value || endpoint.serviceName == selfId.value) {
+            // A RESOLVED self sighting proves our OWN advertisement occupies this serviceName. Any dial
+            // still pending on that name's fallback id is therefore a coin flip that may land on self —
+            // the #1709 bug itself — so drop it. Non-sticky on purpose: a later unresolved sighting under
+            // the name re-arms a fresh deferral, so a genuinely TXT-less peer is not starved.
+            if (endpoint.identityResolved) dropDeferralFor(endpoint.serviceName)
             log.info { "nw.loom.self-skip endpoint=${endpoint.id} serviceName=${endpoint.serviceName} self=${selfId.value}" }
             return
         }
+        // #1709: identity has not resolved AND the endpoint is advertised under the name THIS loom
+        // advertises — under Rendezvous.New that is the shared session name, so this could be our own
+        // endpoint with its TXT record still in flight. Dialling now is what reintroduced the #1660
+        // root-1 self-dial for as long as TXT took to resolve. Hold it, bounded, instead. Under
+        // Rendezvous.Existing this cannot fire for a REMOTE peer: there `advertisedServiceName` is
+        // selfId.value, so a match means the self-filter above already returned.
+        if (!endpoint.identityResolved && endpoint.serviceName == advertisedServiceName) {
+            deferUntilIdentityResolves(endpoint)
+            return
+        }
+        arm(endpoint)
+    }
+
+    /** Roster the endpoint and start (or leave running) its redial campaign. */
+    private fun arm(endpoint: NwEndpoint) {
         onDiscovered(endpoint)
         val armed = lock.withLock {
             val existing = redialers[endpoint.id]
@@ -327,6 +411,50 @@ private class RedialCoordinator(
         log.info {
             "nw.loom.discovered endpoint=${endpoint.id} serviceName=${endpoint.serviceName} " +
                 "self=${selfId.value}${if (armed) " → redial armed" else " (already redialing)"}"
+        }
+    }
+
+    /**
+     * Hold a possibly-self, identity-unresolved [endpoint] for [NwLoom.IDENTITY_GRACE], then [arm] it on
+     * its fallback id anyway (#1709). One timer per serviceName; a re-emit while one is pending, or while
+     * that name's fallback id is already being redialled, is a no-op.
+     *
+     * The timer runs on the seam [scope], so it is driven by the caller's dispatcher (virtual time under
+     * `runTest`) and is cancelled with the seam. `delay` is the first statement, so the body never touches
+     * [lock] inline from under the `launch` site's own lock acquisition.
+     */
+    private fun deferUntilIdentityResolves(endpoint: NwEndpoint) {
+        val deferred = lock.withLock {
+            if (deferrals[endpoint.serviceName]?.isActive == true) return@withLock false
+            if (redialers[endpoint.id]?.job?.isActive == true) return@withLock false
+            deferrals[endpoint.serviceName] = scope.launch {
+                delay(NwLoom.IDENTITY_GRACE)
+                lock.withLock { deferrals.remove(endpoint.serviceName) }
+                log.info {
+                    "nw.loom.identity-grace-expired endpoint=${endpoint.id} serviceName=${endpoint.serviceName} " +
+                        "self=${selfId.value} → dialling on the unresolved fallback id (advertiser may publish no TXT)"
+                }
+                arm(endpoint)
+            }
+            true
+        }
+        // INFO like its self-skip/discovered siblings: on-device telemetry keeps INFO+, and this is the
+        // third possible verdict per sighting — deferred, alongside filtered and armed.
+        if (deferred) {
+            log.info {
+                "nw.loom.identity-deferred endpoint=${endpoint.id} serviceName=${endpoint.serviceName} " +
+                    "self=${selfId.value} — TXT unresolved under our own advertised name, could be self"
+            }
+        }
+    }
+
+    /** Drop a pending identity deferral for [serviceName] — its fallback dial is no longer safe to make. */
+    private fun dropDeferralFor(serviceName: String) {
+        val pending = lock.withLock { deferrals.remove(serviceName) } ?: return
+        pending.cancel()
+        log.info {
+            "nw.loom.identity-deferral-dropped serviceName=$serviceName self=${selfId.value} — " +
+                "our own advertisement resolved under this name, so its fallback id may be us"
         }
     }
 

@@ -1171,7 +1171,11 @@ internal class RealNwApi(
             "nw.api.browse-result name=$name txt=${txtPeerId ?: "ABSENT"} → id=$id self=${selfId.value}"
         }
         lock.withLock { endpointsById[id] = ep } // keyed on the stable id we put in NwEndpoint.id
-        _endpointFound.tryEmit(NwEndpoint(id = id, serviceName = name))
+        // identityResolved says which branch the id came from (#1709). It is NOT "did this advertiser
+        // publish TXT" — we cannot know that here: an absent record and a record still in flight are the
+        // same `null`. It is exactly "is this id a real per-peer identity, or the serviceName backstop",
+        // which is what NwLoom needs to decide whether the endpoint could be its own.
+        _endpointFound.tryEmit(NwEndpoint(id = id, serviceName = name, identityResolved = txtPeerId != null))
     }
 
     private fun onBrowseResultRemoved(result: nw_browse_result_t) {
@@ -1181,9 +1185,10 @@ internal class RealNwApi(
         // removal simply leaves the roster one entry stale until re-browsed. Recover the SAME id we added
         // under (the TXT PeerId, or the name backstop) so the prune targets the right entry (#1502).
         val name = nw_endpoint_get_bonjour_service_name(ep)?.toKString() ?: return
-        val id = readPeerIdFromTxt(result) ?: name
+        val txtPeerId = readPeerIdFromTxt(result)
+        val id = txtPeerId ?: name
         lock.withLock { endpointsById.remove(id) }
-        _endpointLost.tryEmit(NwEndpoint(id = id, serviceName = name))
+        _endpointLost.tryEmit(NwEndpoint(id = id, serviceName = name, identityResolved = txtPeerId != null))
     }
 
     /**
