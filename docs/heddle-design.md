@@ -539,6 +539,20 @@ rounding.
 - **Neutral creation:** a new generation's `initialVirtualTime` is the
   parent's current virtual time, recorded immutably in the record. A newborn
   starts level with its siblings — no credit for the parent's whole past.
+
+  The parent's virtual time `V = Σ w·ev / Σ w` is a rational and almost never
+  integral, while `initialVirtualTime` is a `Long`, so creation must round.
+  **The rule is the exact ceiling — `initialVirtualTime = ⌈V⌉`** — and the
+  direction is normative, not a matter of taste. Flooring would seat the
+  newborn *behind* the front, and lower virtual service reads as "has had less
+  than its share", so the newborn would be eligible ahead of every sibling and
+  take the next grants outright: a sliver of lifetime credit, which §10.5
+  forbids, accrued systematically by any subtree that churns generations. The
+  ceiling can only ever give up a fraction of a service unit, never claim one,
+  and the deviation is bounded by `0 ≤ ⌈V⌉ − V < 1` virtual unit. It is exact
+  and deterministic, so every replica re-deriving a record from the same `V`
+  lands on the same `Long`. `AttachmentRecord.neutral` / `neutralInitialVirtualTime`
+  are the single implementation of the rule.
 - **No unlimited idle credit:** when a child goes from not-demanding to
   demanding, a local wake offset clamps it forward:
 
@@ -674,7 +688,9 @@ Carried over from the source intact; each is a named property test (§13).
 4. **Path-relative accounting.** A completion charges every edge of the path
    captured at reservation; history never moves to a newer generation.
 5. **Neutral attachment initialization.** A new generation starts at the
-   parent's current virtual time — never with lifetime credit.
+   parent's current virtual time — never with lifetime credit. Where that
+   virtual time is fractional, the record takes its **exact ceiling** (§7.2):
+   rounding away from credit, never toward it.
 6. **No unlimited idle credit.** Default sleeper credit is zero; waking
    clamps forward.
 7. **Partition safety.** No peer ever spends beyond `holdings(P, self)`;
