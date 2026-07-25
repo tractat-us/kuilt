@@ -298,7 +298,7 @@ private class RedialCoordinator(
         // Rendezvous.New serviceName is the shared session name (never a PeerId), so the clause is inert
         // there and the id clause does the real work.
         if (endpoint.id == selfId.value || endpoint.serviceName == selfId.value) {
-            log.debug { "nw.loom.self-skip endpoint=${endpoint.id} serviceName=${endpoint.serviceName} self=${selfId.value}" }
+            log.info { "nw.loom.self-skip endpoint=${endpoint.id} serviceName=${endpoint.serviceName} self=${selfId.value}" }
             return
         }
         onDiscovered(endpoint)
@@ -322,7 +322,12 @@ private class RedialCoordinator(
                 true
             }
         }
-        log.debug { "nw.loom.discovered endpoint=${endpoint.id} self=${selfId.value}${if (armed) " → redial armed" else " (already redialing)"}" }
+        // INFO: the complement of nw.loom.self-skip — together they say, per sighting, whether the
+        // pre-dial self-filter fired and on what operands. Only INFO+ reaches the on-device store.
+        log.info {
+            "nw.loom.discovered endpoint=${endpoint.id} serviceName=${endpoint.serviceName} " +
+                "self=${selfId.value}${if (armed) " → redial armed" else " (already redialing)"}"
+        }
     }
 
     private fun onEndpointLost(endpoint: NwEndpoint) {

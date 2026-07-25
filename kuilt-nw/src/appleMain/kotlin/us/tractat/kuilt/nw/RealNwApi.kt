@@ -1158,7 +1158,14 @@ internal class RealNwApi(
         // pre-dial self-filter can drop self. Backstop: when the TXT record is absent/malformed/missing the
         // key, fall back to the service name (today's behaviour) — the post-connect NwSeam self-guard, which
         // resolves the PeerId from the NwHello handshake, stays the correctness backstop for that case.
-        val id = readPeerIdFromTxt(result) ?: name
+        val txtPeerId = readPeerIdFromTxt(result)
+        val id = txtPeerId ?: name
+        // INFO (not debug) on purpose: this is the branch that decides whether the loom's pre-dial
+        // self-filter CAN fire, and the on-device telemetry store keeps only INFO+. Log the identities
+        // (not a count) so a hardware capture says which branch was taken (#1660 root 1).
+        log.info {
+            "nw.api.browse-result name=$name txt=${txtPeerId ?: "ABSENT"} → id=$id self=${selfId.value}"
+        }
         lock.withLock { endpointsById[id] = ep } // keyed on the stable id we put in NwEndpoint.id
         _endpointFound.tryEmit(NwEndpoint(id = id, serviceName = name))
     }
