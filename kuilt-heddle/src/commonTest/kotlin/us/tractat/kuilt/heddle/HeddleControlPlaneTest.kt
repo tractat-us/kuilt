@@ -554,6 +554,29 @@ class HeddleControlPlaneTest {
         assertIs<ControlOutcome.Conflict>(contended)
         assertIs<ControlConflict.Refused>(contended.conflict)
         assertTrue(sink.snapshot().issuedEdges().isEmpty(), "a refused witness must publish nothing")
+
+        // Through-service relocation is NOT un-gated in slice 1: a witness carrying spend
+        // relocation is refused even though the representation can express it, because moving
+        // an already-charged spend safely needs the per-peer quiesce fence that is not built.
+        val spendRelocationWitness = EntitlementLedger.of(
+            returned = mapOf(old to GCounter.of(p3 to 10L)),
+            issuedRelocIn = mapOf(live to GCounter.of(p3 to 10L)),
+            rollupRelocOut = mapOf(old to GCounter.of(p3 to 3L)),
+            rollupRelocIn = mapOf(live to GCounter.of(p3 to 3L)),
+        )
+        val relocating = plane.submit(ControlCommand.Reconcile(child, live, spendRelocationWitness))
+        assertIs<ControlOutcome.Conflict>(relocating)
+        assertIs<ControlConflict.Refused>(relocating.conflict)
+
+        // The well-formed shape — a base `returned` drain on the retired edge plus an
+        // `issuedRelocIn` credit on the live one — is the ONLY thing that gets through.
+        val wellFormed = EntitlementLedger.of(
+            returned = mapOf(old to GCounter.of(p3 to 10L)),
+            issuedRelocIn = mapOf(live to GCounter.of(p3 to 10L)),
+        )
+        assertIs<ControlOutcome.Applied>(plane.submit(ControlCommand.Reconcile(child, live, wellFormed)))
+        assertEquals(10L, sink.snapshot().effectiveIssued(live, p3), "the accepted re-home credits the live edge")
+        assertTrue(sink.snapshot().issuedEdges().isEmpty(), "…and still never writes a base issued slot")
     }
 
     // ═══════════════════════════════════════════════════════════════════════════

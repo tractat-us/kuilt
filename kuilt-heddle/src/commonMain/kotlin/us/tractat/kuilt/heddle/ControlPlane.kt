@@ -64,11 +64,14 @@ internal sealed interface ControlCommand {
      * Reconcile the budget stranded on RETIRED inbound edges of [child] onto [liveEdge] — the conserving
      * recovery for the advisory-retire race (design §9 #3, §5.4; issue #1665). [witness] is the proposer's
      * conserving re-home patch computed on its data-plane view ([EntitlementLedger.reconcileStranded]): it
-     * carries **only** `returned` slots (releasing the strand up each retired edge) and `issued` slots on
-     * [liveEdge] (re-delegating it down), at absolute values. Applied deterministically on every peer — the
+     * carries **only** `returned` slots (releasing the strand up each retired edge) and `issuedRelocIn` slots
+     * on [liveEdge] (re-delegating it down), at absolute values. Applied deterministically on every peer — the
      * decision gates on the log-pure projection's topology ([child]'s sole live inbound is [liveEdge], the
-     * witness touches only that edge's `issued` and RETIRED-inbound `returned` slots), never the gossip-merged
-     * data plane, so the witness is republished identically everywhere and no new supply can be smuggled past.
+     * witness touches only that edge's `issuedRelocIn` and RETIRED-inbound `returned` slots), never the
+     * gossip-merged data plane, so the witness is republished identically everywhere and no new supply can be
+     * smuggled past. The re-delegation rides the control-plane-owned relocation family rather than the live
+     * edge's base `issued` slot, which the data plane writes concurrently (#1691 — see
+     * [EntitlementLedger.reconcileStranded]).
      */
     @Serializable
     data class Reconcile(
@@ -434,16 +437,18 @@ internal class HeddleControlPlane(
             is ControlCommand.Reconcile -> {
                 // Gate on the LOG-PURE projection's topology (never the gossip-merged data plane, per
                 // BLOCKER-1): the child must have exactly one live inbound — the [liveEdge] to re-home onto —
-                // and the witness must touch ONLY that edge's `issued` and the child's RETIRED-inbound
+                // and the witness must touch ONLY that edge's `issuedRelocIn` and the child's RETIRED-inbound
                 // `returned` slots. This makes the accept/refuse decision a deterministic function of the log
-                // prefix (identical on every peer) and structurally forbids the witness from minting supply.
+                // prefix (identical on every peer) and structurally forbids the witness from minting supply,
+                // from writing the live edge's contended base `issued` slot (#1691), and from relocating
+                // already-charged spend (which stays gated until the per-peer quiesce fence ships).
                 val live = projection.liveInboundEdges(command.child)
                 val retiredInbound = projection.retiredInboundEdges(command.child).toSet()
                 val w = command.witness
                 val wellFormed = live.size == 1 &&
                     live.single() == command.liveEdge &&
-                    w.carriesOnlyReturnedAndIssued() &&
-                    w.issuedEdges().all { it == command.liveEdge } &&
+                    w.carriesOnlyRehomeSlots() &&
+                    w.issuedRelocInEdges().all { it == command.liveEdge } &&
                     w.returnedEdges().all { it in retiredInbound }
                 if (!wellFormed) {
                     ControlOutcome.Conflict(

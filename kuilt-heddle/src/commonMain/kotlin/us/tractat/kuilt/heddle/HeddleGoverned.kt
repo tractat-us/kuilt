@@ -242,6 +242,11 @@ public class GovernedHeddleNode internal constructor(
      * global conservation identity is *restored*. The decision is applied deterministically on every peer
      * against the **log-pure projection** (topology + witness *shape*), so every peer converges identically.
      *
+     * The re-delegated credit lands on the live edge's **relocation** counter, a family the control plane
+     * owns exclusively — never on its base `issued` slot, which this peer's own data plane writes
+     * concurrently. Two writers on one max-joined slot would silently erase one side with every diagnostic
+     * blind to it (#1691); the apply gate refuses any witness that touches a base `issued` slot at all.
+     *
      * **Two fences, one still open (issue #1665 review):**
      *  - **Leader authority (shipped).** Before computing the witness this calls the §9 #3
      *    [readIndex()][HeddleControlPlane.fenceReadIndex] fence, so only a leader still holding a voter

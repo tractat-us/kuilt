@@ -1,8 +1,10 @@
 package us.tractat.kuilt.heddle
 
+import us.tractat.kuilt.crdt.GCounter
 import us.tractat.kuilt.crdt.Patch
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.crdt.piece
+import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
@@ -75,6 +77,49 @@ class EntitlementLedgerRelocationTest {
         var acc = 0L
         for (grp in listOf(root, g, h)) for (r in replicas) acc = acc + l.holdings(grp, r)
         return acc + l.leafSpentTotal()
+    }
+
+    // ── the representation: a net decrease with no decrement anywhere ───────────────────
+
+    @Test
+    fun effectiveValuesAreBasePlusInMinusOutAndEveryStoredSlotOnlyGrows() {
+        val base = EntitlementLedger.of(
+            records = mapOf(e1 to setOf(rec(e1, root, g))),
+            issued = mapOf(e1 to GCounter.of(p3 to 10L)),
+            leafSpent = mapOf(e1 to GCounter.of(p3 to 4L)),
+            rollupSpent = mapOf(e1 to GCounter.of(p3 to 3L)),
+        )
+        // A relocation moves 4 leaf-spend and 3 roll-up-spend units off e1 and onto e3, and
+        // re-homes the 10 units of issuance with it — all through grow-only counters.
+        val move = EntitlementLedger.of(
+            leafRelocOut = mapOf(e1 to GCounter.of(p3 to 4L)),
+            leafRelocIn = mapOf(e3 to GCounter.of(p3 to 4L)),
+            rollupRelocOut = mapOf(e1 to GCounter.of(p3 to 3L)),
+            rollupRelocIn = mapOf(e3 to GCounter.of(p3 to 3L)),
+            issuedRelocIn = mapOf(e3 to GCounter.of(p3 to 10L)),
+        )
+        val moved = base.piece(move)
+
+        // e1 reads DRAINED of spend, e3 reads charged — with no counter ever decremented.
+        assertEquals(0L, moved.edge(e1)!!.spent, "e1's effective spend nets to zero")
+        assertEquals(10L, moved.edge(e1)!!.issued, "e1's issuance is untouched by the spend move")
+        assertEquals(7L, moved.edge(e3)!!.spent, "the 4 + 3 units land on e3")
+        assertEquals(10L, moved.edge(e3)!!.issued, "e3's effective issuance is 0 base + 10 relocated")
+        assertEquals(10L, moved.effectiveIssued(e3, p3))
+        // Σ effective leaf spend is invariant under the move — the conservation term does not drift.
+        assertEquals(base.leafSpentTotal(), moved.leafSpentTotal(), "leaf-spend relocation is conservation-neutral")
+
+        // Every stored slot in every family only ever grew.
+        for (family in CounterFamily.entries) {
+            for (e in listOf(e1, e3)) {
+                assertTrue(
+                    moved.storedSlot(family, e, p3) >= base.storedSlot(family, e, p3),
+                    "$family slot on $e fell — a decrement leaked into the representation",
+                )
+            }
+        }
+        // …and re-delivering the move is a no-op.
+        assertEquals(moved, moved.piece(move))
     }
 
     // ── the structural guarantee: no contended slot exists ───────────────────────────────
@@ -201,6 +246,48 @@ class EntitlementLedgerRelocationTest {
         var doubled = converged
         for (d in deltas) doubled = doubled.piece(d.delta)
         assertEquals(converged, doubled, "re-delivery must be a no-op (max-join idempotence)")
+    }
+
+    @Test
+    fun randomizedStrandsRehomeExactlyOnceWithConservationAndPlacementHolding() {
+        val rnd = Random(0x1665)
+        val replicas = listOf(p3, q)
+        repeat(120) {
+            val mintP3 = rnd.nextLong(60L, 200L)
+            val mintQ = rnd.nextLong(60L, 200L)
+            val strandP3 = rnd.nextLong(1L, 40L)
+            val strandQ = rnd.nextLong(1L, 40L)
+            val onward = rnd.nextLong(1L, strandP3 + 1L) // p3 hands some of its strand down to h
+            val l = strandedNoThroughService(
+                mint = mapOf(p3 to mintP3, q to mintQ),
+                downE1 = listOf(p3 to strandP3, q to strandQ),
+                downE2 = listOf(p3 to onward),
+            )
+            val minted = mintP3 + mintQ
+            val stranded = strandP3 + strandQ
+            assertEquals(minted - stranded, conservation(l, replicas), "the deficit is exactly the strand")
+
+            val rehome = assertNotNull(l.reconcileStranded(g))
+            // Concurrent, independently-feasible delegations down the live edge by both replicas.
+            val dP3 = rnd.nextLong(1L, 30L)
+            val dQ = rnd.nextLong(1L, 30L)
+            var converged = l.piece(rehome.delta)
+            for ((r, amount) in listOf(p3 to dP3, q to dQ)) {
+                val d = l.delegate(r, e3, amount) ?: continue
+                converged = converged.piece(d.delta)
+            }
+            assertEquals(minted, conservation(converged, replicas), "conservation restored exactly")
+            // Placement: nothing the re-home moved was erased by a concurrent delegate.
+            assertEquals(
+                strandP3 + dP3 - onward,
+                converged.holdings(g, p3),
+                "p3's re-homed strand and its concurrent delegate both landed at g",
+            )
+            assertEquals(strandQ + dQ, converged.holdings(g, q), "q's re-homed strand and delegate both landed at g")
+            assertTrue(converged.validate().isEmpty(), "no conflict remains: ${converged.validate()}")
+            // Re-homed exactly once: the strand is cleared, so a second pass finds nothing.
+            assertNull(converged.reconcileStranded(g), "a second reconcile must find nothing to move")
+        }
     }
 
     // ── slice 1 fails closed: through-service relocation is NOT un-gated here ────────────
