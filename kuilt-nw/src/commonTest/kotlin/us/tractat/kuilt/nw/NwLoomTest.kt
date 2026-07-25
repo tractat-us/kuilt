@@ -264,6 +264,52 @@ class NwLoomTest {
     }
 
     /**
+     * Regression for the JVM↔native-bridge divergence (#1539) the #1660-root-1 review caught: the
+     * advertised TXT [NwEndpoint.id] and the [NwLoom.selfId] the filter compares against can be DISTINCT
+     * UUIDs. On the bridge the loom defaults its `selfId` while the dylib's `RealNwApi` defaults its OWN,
+     * so under [Rendezvous.Existing] self's own advertisement arrives as
+     * `(id = dylib-selfId, serviceName = loom-selfId)`. An id-ONLY self-filter misses it — reintroducing
+     * the #1502 self-dial on the bridge — because `id != loom-selfId`. The self-filter must therefore
+     * also match on `serviceName == selfId` (a safe backstop: under Existing the loom advertises
+     * `serviceName = selfId.value`, and a real peer never advertises OUR selfId).
+     *
+     * This models the divergence directly: `peerId` (the TXT id) is a DIFFERENT value from the loom's
+     * `selfId`, while the Existing weave advertises `serviceName = selfId.value`. Against an id-only
+     * filter this FAILS (self rostered AND self-dialled); with the id-OR-serviceName filter it passes.
+     */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun existingRendezvousFiltersSelfWhenTheTxtIdDivergesFromSelfId() = runTest(StandardTestDispatcher()) {
+        val radio = FakeNwRadio()
+        val selfId = PeerId("loom-self-1539")
+        // The advertiser (bridge dylib) publishes a TXT PeerId that is NOT the loom's selfId — the two
+        // default to independent UUIDs across the JNI ABI until #1539 threads one through. Under Existing
+        // the loom still advertises serviceName = selfId.value, so the emitted self-endpoint is
+        // (id = "dylib-self-divergent", serviceName = "loom-self-1539").
+        val api = FakeNwApi(radio, deviceId = "solo", serviceName = "solo", peerId = "dylib-self-divergent")
+        val loom = NwLoom(api, serviceType = TYPE, selfId = selfId, random = Random(0), weaveTimeout = 1.seconds)
+
+        val opened = mutableListOf<NwConnectionOpened>()
+        val spy = launch(start = CoroutineStart.UNDISPATCHED) {
+            api.connectionOpened.collect { opened += it }
+        }
+
+        val weave = launch(start = CoroutineStart.UNDISPATCHED) {
+            runCatchingCancellable { loom.join(InMemoryTag(sessionName = "sess", peerKey = selfId.value)) }
+        }
+        testScheduler.advanceTimeBy(500)
+        testScheduler.runCurrent()
+
+        assertAll(
+            { assertTrue(loom.visiblePeers.value.isEmpty(), "self-endpoint never rostered when TXT id diverges from selfId, was ${loom.visiblePeers.value}") },
+            { assertTrue(opened.isEmpty(), "no self-dial when TXT id diverges from selfId, was $opened") },
+        )
+
+        spy.cancel()
+        weave.cancel()
+    }
+
+    /**
      * #1447 item 2: [NwLoom.visiblePeers] must PRUNE a departed endpoint, not accumulate ghosts.
      *
      * Before the fix the roster only ever grew (`onDiscovered` added on `endpointFound`, nothing removed),

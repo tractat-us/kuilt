@@ -287,7 +287,17 @@ private class RedialCoordinator(
         // id), so this stays correct there too. Backstop: if a browsed endpoint carries no TXT PeerId,
         // RealNwApi falls back to id = serviceName; under Rendezvous.New that is the shared name, so this
         // filter cannot fire and the NwSeam self-connection guard resolves+settles it post-connect (#1466).
-        if (endpoint.id == selfId.value) {
+        //
+        // The filter is an OR of id AND serviceName against selfId, because the two can DIVERGE when the
+        // advertiser and the loom don't share one selfId. On the JVM↔native bridge the loom defaults its
+        // selfId while the dylib's RealNwApi defaults its OWN (a distinct UUID) — until the bridge threads
+        // a single selfId across the ABI (#1539), self's own advertisement arrives as
+        // (id = dylib-selfId, serviceName = loom-selfId). An id-only filter would miss it and reintroduce
+        // the #1502 self-dial under Rendezvous.Existing (where serviceName == loom-selfId). The serviceName
+        // clause is a safe backstop: a real peer never advertises OUR selfId as its serviceName, and under
+        // Rendezvous.New serviceName is the shared session name (never a PeerId), so the clause is inert
+        // there and the id clause does the real work.
+        if (endpoint.id == selfId.value || endpoint.serviceName == selfId.value) {
             log.debug { "nw.loom.self-skip endpoint=${endpoint.id} serviceName=${endpoint.serviceName} self=${selfId.value}" }
             return
         }
@@ -316,10 +326,10 @@ private class RedialCoordinator(
     }
 
     private fun onEndpointLost(endpoint: NwEndpoint) {
-        // Symmetric with the self-skip in [onEndpointFound] (keyed on the stable TXT-derived id, #1502):
+        // Symmetric with the self-skip in [onEndpointFound] (id OR serviceName == selfId, #1502/#1539):
         // this loom's own endpoint was never added to the roster, so there is nothing to prune (and pruning
         // a set that never held it is a harmless no-op).
-        if (endpoint.id == selfId.value) return
+        if (endpoint.id == selfId.value || endpoint.serviceName == selfId.value) return
         onLost(endpoint)
         log.debug { "nw.loom.lost endpoint=${endpoint.id} self=${selfId.value} → pruned from visiblePeers" }
     }
