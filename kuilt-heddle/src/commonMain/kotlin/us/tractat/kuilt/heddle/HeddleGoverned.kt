@@ -4,6 +4,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
 import us.tractat.kuilt.core.Seam
+import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.liveness.PartitionEvent
 import us.tractat.kuilt.raft.RaftNode
@@ -199,15 +200,17 @@ public class GovernedHeddleNode internal constructor(
      * drops off the live lineage the data plane drains through. Once past the local drain check, the
      * committed retire is gated purely on the **log-order** lifecycle being CLOSING — a deterministic apply.
      *
-     * **The local drain check is advisory, and a missed race strands entitlement — safely, but
-     * permanently.** If a peer's in-flight `delegate` has not yet merged into this proposer's view, the
-     * check reads `outstanding == 0`, the retire is admitted, and on the converged state the edge is
-     * RETIRED with entitlement still outstanding: a **persistent** [LedgerConflict.ClosureViolation] and
-     * that entitlement is **stranded permanently** (`release` refuses a retired edge; §10.4 reparenting
-     * cannot recover it), reclaimable only via the future [revocation] seam (not shipped in v1). This is
-     * *safe* — it never overspends, drives holdings negative, quarantines the lineage, or breaks the
-     * deterministic apply; it is the same accepted stranding class as a crashed peer's holdings (§8.1).
-     * It does **not** self-heal.
+     * **The local drain check is advisory, and a missed race strands entitlement.** If a peer's in-flight
+     * `delegate` has not yet merged into this proposer's view, the check reads `outstanding == 0`, the retire
+     * is admitted, and on the converged state the edge is RETIRED with entitlement still outstanding: a
+     * [LedgerConflict.ClosureViolation], and the budget is stranded on a generation no longer on the live
+     * lineage (`release` refuses a retired edge). Worse, once the raced child is **legally reparented** onto a
+     * fresh inbound edge, [holdings] at the child derive **persistently negative** — a permanent
+     * [LedgerConflict.PersistentNegativeHoldings] / [LedgerConflict.PerEdgeSafety] with zero real overspend
+     * (issue #1665). The strand does **not** self-heal. [reconcile] re-homes it onto the child's live lineage
+     * through the log, restoring conservation and clearing the conflicts — **when no service was spent
+     * *through* the stranded edge** (the through-service and transfer-tangled cases are carved out and remain
+     * open, part of #1665). Until reconciled it is the same safe stranding class as a crashed peer's holdings (§8.1).
      */
     public suspend fun retire(edge: AttachmentId, timeout: Duration? = null): ControlOutcome {
         // Advisory local drain gate: refuse only a *clear* drain violation (outstanding > 0 in the
@@ -227,8 +230,59 @@ public class GovernedHeddleNode internal constructor(
     }
 
     /**
-     * The `readIndex()`-fenced revocation seam (design §9 #3) — **specified, not shipped** in v1.
-     * Reclaiming a crashed peer's stranded holdings is a later feature (part of #1602).
+     * Reconcile the budget **stranded** on [child]'s RETIRED inbound edge(s) by re-homing [child]'s full
+     * net inflow onto its live inbound lineage, serialized through the log (design §9 #3, §5.4; issue
+     * #1665). This unparks the reconciliation slice of the specified-only [revocation] seam: for the
+     * cases it clears, it removes the permanent [LedgerConflict.PersistentNegativeHoldings] /
+     * [LedgerConflict.PerEdgeSafety] / [ClosureViolation][LedgerConflict.ClosureViolation] left by a
+     * raced advisory-[retire] followed by a legal reparent.
+     *
+     * The re-home is **conserving** ([EntitlementLedger.reconcileStranded], release-up-then-redelegate):
+     * it relocates already-minted units, never mints new supply, so `mintedTotal` is unchanged and the
+     * global conservation identity is *restored*. The decision is applied deterministically on every peer
+     * against the **log-pure projection** (topology + witness *shape*), so every peer converges identically.
+     *
+     * **Two fences, one still open (issue #1665 review):**
+     *  - **Leader authority (shipped).** Before computing the witness this calls the §9 #3
+     *    [readIndex()][HeddleControlPlane.fenceReadIndex] fence, so only a leader still holding a voter
+     *    quorum drives recovery; a deposed/partitioned proposer is refused.
+     *  - **Data-plane magnitude freshness (NOT shipped — the residual).** The witness *magnitude* is
+     *    computed from this peer's gossip-replicated ledger, which is **not** fenced by `readIndex()`
+     *    (it rides an independent transport) and is not even stable post-retire (captured-path
+     *    completions can still charge the edge). A causally-lagged leader can therefore commit a **wrong
+     *    magnitude** → a conservation break on the converged state. Until a causal-stability quiesce of
+     *    the stranded edge's counters is wired in, this recovery is **only sound on a causally-complete
+     *    view** and must not be driven from an actively-diverging one.
+     *
+     * **Carve-outs — [ControlConflict.Refused] at [ControlOutcome.NOT_COMMITTED] (fail-closed).** No
+     * unique live inbound edge; nothing stranded; **through-service** on the stranded edge
+     * (`spent(s) != 0` — grow-only `rollupSpent` cannot be relocated, so no conserving patch exists); a
+     * **transfer-tangled** strand. A refusal leaves the conflicts standing (safe), never a silent break.
+     */
+    public suspend fun reconcile(child: GroupId, timeout: Duration? = null): ControlOutcome {
+        // §9 #3 leader-authority fence — only a leader still holding quorum drives recovery.
+        val fenced = runCatchingCancellable { control.fenceReadIndex() }
+        if (fenced.isFailure) {
+            return ControlOutcome.Conflict(
+                ControlOutcome.NOT_COMMITTED,
+                ControlConflict.Refused("reconcile refused: readIndex fence failed — recovery must be proposed by the current leader (§9 #3)"),
+            )
+        }
+        val ledger = node.ledger.value
+        val patch = ledger.reconcileStranded(child)
+            ?: return ControlOutcome.Conflict(
+                ControlOutcome.NOT_COMMITTED,
+                ControlConflict.Refused("reconcile refused locally: nothing stranded / through-service or transfer-tangled / no unique live inbound for ${child.value}"),
+            )
+        // reconcileStranded returned non-null ⇒ the child has exactly one live inbound edge.
+        val liveEdge = ledger.liveInboundEdges(child).single()
+        return control.submit(ControlCommand.Reconcile(child, liveEdge, patch.delta), timeout)
+    }
+
+    /**
+     * The `readIndex()`-fenced revocation seam (design §9 #3) — reclaiming a **crashed peer's** stranded
+     * holdings remains **specified, not shipped** in v1 (part of #1602). The advisory-retire strand is a
+     * distinct, log-serialized recovery: see [reconcile].
      */
     public val revocation: RevocationSeam get() = control.revocation
 }

@@ -397,6 +397,109 @@ public class EntitlementLedger private constructor(
     internal fun drainWitnessFor(edge: AttachmentId): EntitlementLedger = drainWitness(edge)
 
     /**
+     * Re-home the entitlement **stranded on RETIRED inbound edges** of [child] onto [child]'s single
+     * live inbound edge — the conserving reconciliation for the advisory-retire race of design §5.4
+     * (reparent) / §9 #3 (recovery), issue #1665. Returns the patch, or `null` when the strand **cannot
+     * be conservingly cleared** on this view (see the carve-outs below) — a deliberate *fail-closed*: a
+     * refusal leaves the pre-existing conflicts standing (safe, recoverable), never a silent
+     * conservation break.
+     *
+     * ## The strand, and why the child needs its FULL net inflow re-homed
+     *
+     * When a gossip-lagged peer retires an edge whose `delegate` it had not yet merged, the edge is
+     * RETIRED with `outstanding != 0` and its budget is stranded on a generation no longer on the live
+     * lineage (`GovernedHeddleNode.retire`). Once [child] is legally reparented onto a fresh inbound
+     * edge with `issued = 0`, [holdings] at [child] derive **permanently negative** — a persistent
+     * [LedgerConflict.PersistentNegativeHoldings] / [LedgerConflict.PerEdgeSafety] with zero real
+     * overspend. `release` refuses a retired edge, so the data plane cannot recover it.
+     *
+     * [child]'s holdings under the old edge `s` were credited by its **full net inflow**
+     * `netInflow(s)[r] = issued(s)[r] − returned(s)[r]` — *not* its `outstanding` (which nets out
+     * `spent(s)`). So making [child] whole means re-homing `netInflow(s)[r]`.
+     *
+     * ## Release-up-then-redelegate (conserving by construction)
+     *
+     * For each stranded retired inbound edge `s`, and each replica `r`, the patch:
+     *  - **releases up `s`** — bumps `returned(s)[r]` to `issued(s)[r]`, driving `netInflow(s)[r] → 0`
+     *    and `outstanding(s) → 0` (clearing its [LedgerConflict.ClosureViolation]); and
+     *  - **re-delegates down the live edge** — bumps `issued(liveEdge)[r]` by the same `netInflow(s)[r]`,
+     *    restoring [child]'s inbound credit.
+     *
+     * Both bumps move the **same** already-minted units, so `mintedTotal` is unchanged and the global
+     * conservation identity (`minted = Σ holdings + Σ leafSpent`) is *restored*. Counter targets are
+     * shipped at their **absolute** values, so duplicate delivery is absorbed idempotently by the
+     * `GCounter` max-join.
+     *
+     * ## Carve-outs — cases this fails closed on (issue #1665 review; the two representation walls)
+     *
+     *  - **Through-service (`spent(s) != 0`).** If service was spent *through* `s` before the reparent
+     *    (`leafSpent(s)`/`rollupSpent(s) > 0`), releasing the full net inflow up `s` would need
+     *    `returned(s) = issued(s)`, which **violates per-edge safety** on `s` (`spent + returned ≤
+     *    issued`) — and faithfully relocating that already-charged service onto the live edge would
+     *    require *decreasing* the grow-only `rollupSpent(s)`, which the CRDT representation forbids.
+     *    Re-homing only `outstanding(s)` instead silently **destroys** `spent(s)` units (breaks
+     *    conservation). No conserving patch exists under the current counters, so this refuses.
+     *  - **Transfer-tangle** (a replica left net-negative on `s` by a transfer *at [child]* then a
+     *    release): re-homing faithfully would also have to relocate the transfer rows. Out of scope; refuses.
+     *
+     * ## Not a safety fence — magnitudes are read from THIS (possibly stale) view
+     *
+     * This computes the re-home amounts from `this` ledger. If `this` is a **gossip-lagged** view of
+     * `s`'s counters, the amounts (and even the `spent(s) == 0` carve-out test) are wrong, and committing
+     * them would break conservation on the converged state (issue #1665 review, "phantom supply"). The
+     * caller MUST compute this on a **causally-complete** view of `s`; the governed control plane fences
+     * *leader authority* via `readIndex()` (§9 #3) but does **not** yet fence data-plane magnitude
+     * freshness — see `GovernedHeddleNode.reconcile`.
+     */
+    public fun reconcileStranded(child: GroupId): Patch<EntitlementLedger>? {
+        val live = liveInboundEdges(child)
+        if (live.size != 1) return null
+        val liveEdge = live.single()
+        val returnedTargets = HashMap<AttachmentId, GCounter>()
+        val rehomedByReplica = HashMap<ReplicaId, Long>()
+        for (s in retiredInboundEdges(child)) {
+            val summary = edge(s) ?: continue
+            if (summary.outstanding <= 0L) continue
+            // Carve-out: through-service on the retired edge cannot be re-homed conservingly (grow-only
+            // rollupSpent can't be relocated; releasing the full net inflow would break per-edge safety).
+            if (summary.spent != 0L) return null
+            val perReplica = ArrayList<Pair<ReplicaId, Long>>()
+            var positiveSum = 0L
+            for (r in replicasOnEdge(s)) {
+                val net = netInflow(s, r) // == the per-replica strand, since spent(s) == 0 here
+                if (net > 0L) {
+                    perReplica += r to net
+                    positiveSum = checkedAdd(positiveSum, net)
+                }
+            }
+            // Carve-out: a replica left net-negative on s by a transfer-at-child (positiveSum overshoots
+            // the edge's outstanding). Re-homing would have to move transfer rows too — out of scope.
+            if (positiveSum != summary.outstanding) return null
+            for ((r, net) in perReplica) {
+                // returned(s)[r] → issued(s)[r]: drains s (netInflow → 0), keeps per-edge safety (spent == 0).
+                val returnedTarget = checkedAdd(slot(returned, s, r), net)
+                returnedTargets[s] = returnedTargets[s]?.piece(GCounter.of(r to returnedTarget)) ?: GCounter.of(r to returnedTarget)
+                rehomedByReplica[r] = checkedAdd(rehomedByReplica[r] ?: 0L, net)
+            }
+        }
+        if (rehomedByReplica.isEmpty()) return null
+        var issuedTarget = GCounter.ZERO
+        for ((r, add) in rehomedByReplica) {
+            issuedTarget = issuedTarget.piece(GCounter.of(r to checkedAdd(slot(issued, liveEdge, r), add)))
+        }
+        return Patch(of(returned = returnedTargets, issued = mapOf(liveEdge to issuedTarget)))
+    }
+
+    /** The replicas that authored any counter slot on [edge]. */
+    private fun replicasOnEdge(edge: AttachmentId): Set<ReplicaId> {
+        val out = HashSet<ReplicaId>()
+        for (counters in listOf(issued, returned, leafSpent, rollupSpent)) {
+            counters[edge]?.let { out += it.replicas() }
+        }
+        return out
+    }
+
+    /**
      * Introduce root supply: credit [holder] with [amount] units under [mintId].
      * Control-plane only (design §9); the one non-conserving op and the only mutator
      * with no feasibility gate, so it never returns `null`. [mintId] MUST be unique
@@ -692,6 +795,31 @@ public class EntitlementLedger private constructor(
                     lifecycleOf(e).let { it == Lifecycle.ACTIVE || it == Lifecycle.CLOSING }
             }
             .sorted()
+
+    /**
+     * The **RETIRED inbound** edges of [child] — every non-divergent edge whose record targets [child]
+     * and whose lifecycle is [Lifecycle.RETIRED]. These are the edges a raced advisory-retire may have
+     * stranded budget on ([reconcileStranded]); the **H5 control plane** reads it on its log-pure
+     * projection to gate a reconciliation witness (§9 #3, §5.4). `internal` — control-plane + test support.
+     */
+    internal fun retiredInboundEdges(child: GroupId): List<AttachmentId> =
+        allEdges().filter { recordOf(it)?.child == child && lifecycleOf(it) == Lifecycle.RETIRED }.sorted()
+
+    /** The edge ids carrying an `issued` slot — the control plane's reconciliation witness-shape gate. */
+    internal fun issuedEdges(): Set<AttachmentId> = issued.keys
+
+    /** The edge ids carrying a `returned` slot — the control plane's reconciliation witness-shape gate. */
+    internal fun returnedEdges(): Set<AttachmentId> = returned.keys
+
+    /**
+     * True when this ledger carries **only** `issued`/`returned` counter slots — no topology, supply,
+     * spend, or transfer components. The control plane asserts this of a governed reconciliation witness
+     * before publishing it, so a malformed witness can never smuggle new minted supply or topology past
+     * the log-pure gate (design §9 #3). `internal` — control-plane support.
+     */
+    internal fun carriesOnlyReturnedAndIssued(): Boolean =
+        records.isEmpty() && minted.isEmpty() && leafSpent.isEmpty() &&
+            rollupSpent.isEmpty() && transfers.isEmpty() && lifecycle.isEmpty()
 
     /** Every group named as a parent or child by any (singleton or divergent) record. */
     internal fun allGroups(): Set<GroupId> =
