@@ -1,5 +1,15 @@
 # Adopt-path resume (#1618 root cause) — Investigation & Fix Plan
 
+> **⚠ SUPERSEDED — read before using (2026-07-24).** This plan's premise — that the adopt-path
+> no-`reweave` gap is *the* #1618 root cause and wiring `reweave` is *the* fix — did **not** hold. The
+> confirmed #1618 cause is that a real drop rides `Timeout → markPartitioned` on **both** peers; it is
+> fixed by **A (#1650)** (dropped peer self-observes device-path loss fast) + **C (#1649)** (host evicts
+> on `WindowExpired`), both **merged**. A Fable design review + bench evidence further showed that routing
+> a joiner-host `Timeout` into `JoinerResumeMachine` (this plan's direction) would **regress** the
+> self-healing case. The adopt-path `reweave` work (#1632) is **not dead** but **re-scoped** to a
+> *building block* for **#1655** (recovery of a black-holed / non-self-healing host transport). Retained
+> as a historical planning record — do not execute as written.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development or superpowers:executing-plans. Steps use checkbox (`- [ ]`) syntax. **Rebase onto `origin/main` first** — `MeshRoomPartitionTest` + `FaultyLoom` (the harness this plan reuses) merged with #1619 and are on `origin/main` but not necessarily on your branch. Do NOT assume PR #1621's `NwMeshRoomPartitionTest` is available (still open).
 
 **Goal:** Stop the #1618 re-election storm and make presence fire on a real Wi-Fi drop, by giving the `electLobby`/`adopt` Room **resume-after-tear** so a transient NW blip resumes the same Room within a window (emitting `WindowOpened`) instead of going straight to terminal `HostLost` and forcing a full re-election.

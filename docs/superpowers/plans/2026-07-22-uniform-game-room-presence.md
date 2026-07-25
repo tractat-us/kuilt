@@ -1,5 +1,11 @@
 # Uniform Game/Room Presence — Implementation Plan (Track 1)
 
+> **⚠ PARTIALLY LANDED / re-framed (2026-07-24).** The core of this plan — a `RoomGameSession` subtype +
+> `gameOverRoom` surfacing room presence, plus the ungated-`ResumeAck` fix — **shipped in #1631**. Its
+> aside that "the #1618 fix is Track 2 (adopt-reweave)" is **superseded**: the #1618 fix is **A (#1650) +
+> C (#1649)**; adopt-reweave (#1632) is now a building block for **#1655**. Retained as a historical
+> planning record — check current `main` before acting on any remaining item.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development or superpowers:executing-plans. Steps use checkbox (`- [ ]`) syntax. **Rebase onto `origin/main` first** — `MeshRoomPartitionTest` + `FaultyLoom` merged with #1619 and are on `origin/main`; do NOT assume PR #1621's `NwMeshRoomPartitionTest` is available (still open).
 
 **Goal:** Surface a `Room`'s presence (`MembershipEvent` + `Member.liveness`) through a `RoomGameSession` subtype + `gameOverRoom` bootstrap so a game speaks the same presence vocabulary as a room; fix an ungated `ResumeAck` that can duplicate `Resumed`; and isolate channel backpressure so app traffic can't starve heartbeat delivery.
