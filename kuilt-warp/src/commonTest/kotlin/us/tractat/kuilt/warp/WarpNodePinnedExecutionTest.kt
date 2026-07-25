@@ -237,4 +237,72 @@ class WarpNodePinnedExecutionTest {
         nodeA.close()
         nodeB.close()
     }
+
+    /**
+     * [WarpNode.enqueueLocal] preserves **every** field of the envelope it pins — it overrides
+     * exactly one, [TaskDescriptor.pinnedOwner].
+     *
+     * Regression for #1674: the rebuild named `op`/`args`/`traceparent`/`pinnedOwner` explicitly
+     * and let everything else fall back to its constructor default, silently resetting the H6
+     * fair-share [Lane] to [Lane.ROOT] and the H8 [Affinity] to [Affinity.Anywhere]. Admission
+     * control keys on the lane, so a pinned task could never be fair-share gated — on exactly the
+     * node-local path (federated learning, data-local work) that needs it most.
+     *
+     * Observed at the [AdmissionControl] seam: warp hands the gate the descriptor that actually
+     * travelled, so what the gate sees is what the pin preserved.
+     */
+    @Test
+    fun enqueueLocalPreservesTheWholeEnvelope() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        val seam = InMemoryLoom().host(Pattern("enqueue-local-envelope-test"))
+        val roster = MutableStateFlow(setOf(seam.selfId))
+        val lock = reentrantLock()
+        val admitted = mutableListOf<TaskDescriptor>()
+
+        val node = WarpNode(
+            seam.selfId,
+            seam,
+            roster,
+            backgroundScope,
+            PINNED_QUILTER_CONFIG,
+            pinnedClock(testScheduler),
+            strategy = ClaimStrategy.Ring,
+            registry = trackingRegistry(seam.selfId, mutableMapOf(), lock),
+            admissionControl = { descriptor ->
+                lock.withLock { admitted += descriptor }
+                AdmissionTicket.NOOP
+            },
+            epoch = 0L,
+        )
+
+        val taskId = TaskId("envelope-carrier")
+        val lane = Lane("acme/batch")
+        val affinity = Affinity.has("gpu") and Affinity.attr("region", "us-east")
+        val traceparent = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+        node.enqueueLocal(
+            taskId,
+            TaskDescriptor(
+                op = PIN_OP,
+                args = taskId.value.encodeToByteArray(),
+                traceparent = traceparent,
+                pinnedOwner = PeerId("some-other-peer"), // overridden to self by enqueueLocal
+                lane = lane,
+                affinity = affinity,
+            ),
+        )
+        drainPinned()
+
+        val seen = lock.withLock { admitted.toList() }
+        val pinned = seen.singleOrNull()
+        assertAll(
+            { assertEquals(1, seen.size, "the locally-pinned task reached admission control exactly once") },
+            { assertEquals(seam.selfId, pinned?.pinnedOwner, "enqueueLocal overrides the pin to this peer") },
+            { assertEquals(lane, pinned?.lane, "the fair-share lane survives the pin (#1674)") },
+            { assertEquals(affinity, pinned?.affinity, "the location affinity survives the pin (#1674)") },
+            { assertEquals(traceparent, pinned?.traceparent, "the trace context survives the pin") },
+            { assertEquals(PIN_OP, pinned?.op, "the op survives the pin") },
+            { assertEquals(taskId.value, pinned?.args?.decodeToString(), "the args survive the pin") },
+        )
+
+        node.close()
+    }
 }
