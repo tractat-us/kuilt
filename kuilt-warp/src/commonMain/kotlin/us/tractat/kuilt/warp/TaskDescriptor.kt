@@ -55,6 +55,14 @@ public class TaskDescriptor(
      * @sample us.tractat.kuilt.warp.samplePinnedExecution
      */
     public val pinnedOwner: PeerId? = null,
+    /**
+     * The opaque fair-share [Lane] this task rides. Defaults to [Lane.ROOT] — *no lane*,
+     * the untagged path — so warp core assigns it no meaning and an untagged descriptor is
+     * byte-for-byte unchanged on the wire (CBOR omits a field at its default). An enforcement
+     * adapter (`:kuilt-warp-heddle`) binds the tag to a fair-share leaf and gates execution
+     * on entitlement; warp core never interprets it.
+     */
+    public val lane: Lane = Lane.ROOT,
 ) {
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
@@ -62,7 +70,8 @@ public class TaskDescriptor(
         return op == other.op &&
             args.contentEquals(other.args) &&
             traceparent == other.traceparent &&
-            pinnedOwner == other.pinnedOwner
+            pinnedOwner == other.pinnedOwner &&
+            lane == other.lane
     }
 
     override fun hashCode(): Int {
@@ -70,10 +79,11 @@ public class TaskDescriptor(
         hash = 31 * hash + args.contentHashCode()
         hash = 31 * hash + (traceparent?.hashCode() ?: 0)
         hash = 31 * hash + (pinnedOwner?.hashCode() ?: 0)
+        hash = 31 * hash + lane.hashCode()
         return hash
     }
 
     override fun toString(): String =
         "TaskDescriptor(op=${op.value}, args=[${args.size} bytes], " +
-            "traceparent=$traceparent, pinnedOwner=${pinnedOwner?.value})"
+            "traceparent=$traceparent, pinnedOwner=${pinnedOwner?.value}, lane=${lane.tag})"
 }
