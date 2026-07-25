@@ -67,13 +67,19 @@ internal object PosixErrno {
  * raises it on receive completions *during formation* — a phase where the link is by construction
  * still settling — and the two misclassification costs are asymmetric:
  *
- *  - transient-classified-as-terminal evicts the peer immediately and, as `RealNwApi.backoffMsFor`
- *    puts it, "an escalate is permanent" (a dialled endpoint is never redialled for the seam's life,
- *    #1513). Mid-lobby that surfaces as "lost the other player" and nothing recovers it.
+ *  - transient-classified-as-terminal escalates to a close at once, so `NwSeam` evicts the peer and
+ *    re-forms Woven→Weaving. Since #1513 that is *recoverable* — `NwLoom`'s unbounded redial, keyed on
+ *    [NwSeam.settledEndpoints], re-dials the endpoint — but only after a full evict→re-form→redial→
+ *    re-handshake cycle. Landing mid-`lobby.freeze-round` it tears the 2PC (`committed=false` →
+ *    `LobbyTornException` → re-elect); repeated across a formation that is the ~35s of churn and the
+ *    user-visible "lost the other player" of #1660.
  *  - terminal-classified-as-transient costs at most `RECEIVE_RETRY_BUDGET` (8) retries over
  *    ~`RECEIVE_RETRY_MAX_MS` (2750ms) while still `ready`, after which
  *    `RealNwApi.onTransientReceiveError` maps the exhausted budget to `TransientAction.Escalate` —
- *    the *same* close, just later. Self-correcting.
+ *    the *same* close, just later. Self-correcting, and it never tears a round that would have held.
+ *
+ * (`RealNwApi.backoffMsFor`'s KDoc still says "an escalate is permanent". That predates #1513, which
+ * added the per-seam redial; it is stale, and the argument above deliberately does not rest on it.)
  *
  * Bounded retry is therefore strictly the safer classification for a code observed during formation.
  *
