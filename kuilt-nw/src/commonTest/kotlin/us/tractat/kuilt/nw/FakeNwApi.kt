@@ -36,9 +36,22 @@ internal class FakeNwApi(
     private val serviceName: String,
     // The stable identity this device publishes in its Bonjour TXT record (Option A, #1502/#1660) —
     // the fake twin of `RealNwApi`'s constructor `selfId`. Non-null ⇒ the emitted [NwEndpoint.id] is
-    // this peerId; null ⇒ the id derives from the advertised serviceName (the pre-fix backstop). A
-    // test models the Option A fix by passing `peerId = selfId.value`.
+    // this peerId; null (or blank — malformed) ⇒ the id derives from the advertised serviceName (the
+    // pre-fix backstop). A test models the Option A fix by passing `peerId = selfId.value`.
     private val peerId: String? = null,
+    /**
+     * Whether this device's BROWSER opts in to Bonjour TXT records — the fake twin of
+     * `nw_browse_descriptor_set_include_txt_record(descriptor, true)` in `RealNwApi.startBrowsing`
+     * (#1706). Defaults to `true` because the production binding now makes that call; a test models
+     * the shipped omission (the #1660 root-1 bug) by passing `false`, which drops this browser back to
+     * Network.framework's OWN default of never querying TXT — every endpoint then falls back to
+     * `id = serviceName` and the loom's pre-dial self-filter can no longer fire.
+     *
+     * Note what this knob can and cannot prove. It makes the *consequence* of skipping the opt-in
+     * testable on the JVM, and pins the opt-in as load-bearing; it cannot detect `RealNwApi` dropping
+     * the native call, which lives in appleMain behind Network.framework.
+     */
+    private val browserIncludesTxtRecord: Boolean = true,
 ) : NwApi {
 
     private val _endpointFound = MutableSharedFlow<NwEndpoint>(extraBufferCapacity = 16)
@@ -143,7 +156,9 @@ internal class FakeNwApi(
     }
 
     override suspend fun startBrowsing(serviceType: String) {
-        radio.markBrowsing(deviceId, serviceType)
+        // Mirrors RealNwApi.startBrowsing's explicit nw_browse_descriptor_set_include_txt_record call:
+        // the radio (like Network.framework) delivers no TXT unless the browser asks (#1706).
+        radio.markBrowsing(deviceId, serviceType, includeTxtRecord = browserIncludesTxtRecord)
     }
 
     /** Test hook: total [stopBrowsing] calls — lets a test prove `NwSeam.close()` stops browsing (#1419). */
