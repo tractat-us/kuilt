@@ -190,9 +190,17 @@ and nothing else does:
   `complete` — never goes through the agreement step, at any rate. That is the whole point:
   agreement appears only at the two rare moments that need it.
 
+- **Who is taking part is written down, not guessed.** A peer says `enroll` when it joins and
+  `depart` when it leaves cleanly, and both go through the agreement step — so every peer agrees on
+  exactly who the participants are, and *when* each of them joined or left. That matters for any
+  operation that has to wait for *everyone* to answer: without an agreed list, "everyone" has no
+  meaning. Only a peer itself may say it is leaving; a peer that has crashed stays on the list (and
+  keeps its share) until it comes back — see `revocation` below.
+
 `heddleGoverned` returns a `GovernedHeddleNode`: the same data-plane calls as `HeddleNode` plus
-`mint`/`prepare`/`activate`/`close`/`retire`, each of which returns a `ControlOutcome` — `Applied`
-when it took effect, or `Conflict` carrying the structured reason when it lost a race. Reclaiming a
+`mint`/`prepare`/`activate`/`close`/`retire` and `enroll`/`depart`, each of which returns a
+`ControlOutcome` — `Applied` when it took effect, or `Conflict` carrying the structured reason when
+it lost a race (`enrolledReplicas()` reads back the agreed list). Reclaiming a
 crashed peer's stranded share is a fenced control-plane act whose seam is **defined but not yet
 shipped** (`revocation`): a wrong reclaim would let two peers spend the same units, so v1 leaves the
 share safely stranded.

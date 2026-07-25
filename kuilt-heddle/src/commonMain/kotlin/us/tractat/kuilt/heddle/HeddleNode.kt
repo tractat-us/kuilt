@@ -160,6 +160,13 @@ public class HeddleNode internal constructor(
     private var reservationSeq = 0L
     private val detectors = HashMap<PeerId, HeartbeatPartitionDetector>()
 
+    /**
+     * Peers whose detector reached the terminal [PartitionEvent.PeerLost] state — the only ones a
+     * committed enrollment re-monitors ([remonitorOnEnrollment]). Lock-guarded because it is written
+     * from the detector-event collectors and read from the control plane's apply loop.
+     */
+    private val lostPeers = HashSet<ReplicaId>()
+
     private val selfPeer = PeerId(self.value)
     private val scopeRef = scope
 
@@ -210,6 +217,15 @@ public class HeddleNode internal constructor(
     internal fun asControlSink(): ControlLedgerSink = ControlLedgerSink { patch ->
         lock.withLock { ledgerQuilter.mutate { patch } }
     }
+
+    /**
+     * The seam the H5 [HeddleControlPlane] uses to report a **committed enrollment** into this
+     * node's local liveness state ([remonitorOnEnrollment]) — the rejoin half of membership (#1652).
+     * Nothing here is replicated and nothing feeds back into a control-plane gate. `internal` —
+     * only [heddleGoverned] wires it.
+     */
+    internal fun asMembershipSink(): ControlMembershipSink =
+        ControlMembershipSink { replica -> remonitorOnEnrollment(replica) }
 
     // ─────────────────────────────────────────────────────────────────────────────
     // Scheduling — one or more EEVDF allocation rounds at [parent], delegating this
@@ -452,34 +468,87 @@ public class HeddleNode internal constructor(
         return rs
     }
 
+    /**
+     * Seam-driven monitoring is **add-only**: a peer newly visible on the seam gets a detector, and
+     * one it already has is left alone. It deliberately does *not* re-monitor a peer whose detector
+     * reached the terminal Lost state — mere reappearance on the seam is not evidence the peer is a
+     * participant again, and churning a live detector on every roster wobble would lose the
+     * in-flight unresponsive/recovered transition. Rejoin is **membership**, so it is driven by a
+     * committed `Enroll` instead ([remonitorOnEnrollment]).
+     */
     private fun reconcileDetectors(peers: Set<PeerId>) {
-        // Deliberately add-only for v1: once a peer is monitored it stays monitored, and a peer
-        // flagged lost is cleared from `unreachable` only by an explicit PeerRecovered event —
-        // there is no re-monitoring dance on rejoin. This matches the §8.1/§9 "no automatic
-        // reclamation" posture (a crashed peer's holdings stay stranded until an operator
-        // recovers them); richer rejoin handling belongs with the control plane (H5).
-        for (peer in peers) {
-            if (peer == selfPeer || peer in detectors) continue
-            val link = PerPeerLivenessSeam(livenessSeam, peer, rawLiveness)
-            val detector = HeartbeatPartitionDetector(
-                link = link,
+        for (peer in peers) attachDetector(peer)
+    }
+
+    /**
+     * Re-monitor [replica] after a committed `ControlCommand.Enroll` — the local, node-side effect
+     * of the log-known roster gaining (or reasserting) a participant (#1652).
+     *
+     * A [PartitionEvent.PeerLost] detector is **terminal**: it closes its event channel and its
+     * heartbeat loop returns, so the peer would stay in [unreachable] forever and never be watched
+     * again, even after it came back. Reappearing on the seam is not enough to justify a fresh
+     * detector — enrolling is, because it is the peer declaring itself a participant again, agreed
+     * through the log. Only a **Lost** peer is re-attached: a healthy or merely unresponsive peer
+     * has a live detector that is still tracking the truth, and replacing it would throw away the
+     * recovery transition it is about to report.
+     *
+     * Idempotent, and safe to call for an enrollment that races the seam: if the peer is not
+     * visible yet, clearing the terminal entry is enough — [reconcileDetectors] attaches when it
+     * appears. It reclaims **nothing**: whatever the peer held while gone stays exactly where it is
+     * (design §8.1; recovering an absent peer's entitlement is the unshipped `RevocationSeam`'s job).
+     */
+    internal fun remonitorOnEnrollment(replica: ReplicaId) {
+        val peer = PeerId(replica.value)
+        if (peer == selfPeer) return
+        val terminal = lock.withLock {
+            if (replica !in lostPeers) return
+            detectors.remove(peer)
+        }
+        // The Lost detector already closed its channel, but its inbound-frame collector is still
+        // running — reap it. `stop()` suspends, so it cannot run under the lock.
+        terminal?.let { stopped -> scopeRef.launch { stopped.stop() } }
+        if (peer in peersFlow.value) attachDetector(peer)
+    }
+
+    /**
+     * Attach a detector for [peer] unless one is already live — the single place a detector is
+     * created, shared by the seam-driven [reconcileDetectors] and the enrollment-driven
+     * [remonitorOnEnrollment], so the two can race without ever producing two detectors for one peer.
+     *
+     * A fresh detector starts from a clean slate and reports only *transitions*, so it would never
+     * emit the [PartitionEvent.PeerRecovered] that clears [unreachable]; attaching is therefore
+     * itself the recovery signal for that peer. (On a first-ever attach the peer cannot be in
+     * [unreachable] — only its own detector could have put it there — so this clears nothing.)
+     */
+    private fun attachDetector(peer: PeerId) {
+        val replica = ReplicaId(peer.value)
+        val detector = lock.withLock {
+            if (peer == selfPeer || peer in detectors) return
+            val fresh = HeartbeatPartitionDetector(
+                link = PerPeerLivenessSeam(livenessSeam, peer, rawLiveness),
                 peerId = peer,
                 config = config.heartbeat,
                 clock = clock,
             )
-            detectors[peer] = detector
-            detector.start(scopeRef)
-            scopeRef.launch {
-                detector.events.collect { event ->
-                    _partitionEvents.emit(event)
-                    applyLivenessEvent(event)
-                }
+            detectors[peer] = fresh
+            lostPeers -= replica
+            fresh
+        }
+        _unreachable.update { it - replica }
+        detector.start(scopeRef)
+        scopeRef.launch {
+            detector.events.collect { event ->
+                _partitionEvents.emit(event)
+                applyLivenessEvent(event)
             }
         }
     }
 
     private fun applyLivenessEvent(event: PartitionEvent) {
         val r = ReplicaId(event.peerId.value)
+        // Remember the terminal transition: only a Lost peer is eligible for enrollment-driven
+        // re-monitoring, and its detector can never report anything again.
+        if (event is PartitionEvent.PeerLost) lock.withLock { lostPeers += r }
         _unreachable.update { current ->
             when (event) {
                 is PartitionEvent.PeerRecovered -> current - r

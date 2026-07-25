@@ -27,6 +27,12 @@ import kotlin.time.Instant
  *    projection** (a deterministic function of the log prefix — never the gossip-merged Quilter), so
  *    two overlapping reshapes of one child are ordered by commit index and the loser surfaces as a
  *    structured [ControlConflict], identically on every peer (§9 #2, §4.6, §10.11).
+ *  - **Membership** ([GovernedHeddleNode.enroll]/[depart][GovernedHeddleNode.depart]) is a
+ *    **log-known roster**: the set an operation that must wait for *every* participant quantifies
+ *    over. The data-plane roster is seam-derived and therefore open, so it cannot serve; the
+ *    enrolled set is a fold of the committed log and identical on every peer that applied that
+ *    prefix (§9; `docs/heddle-ledger-relocation-design.md` §6.2). A peer should [enroll]
+ *    [GovernedHeddleNode.enroll] itself before its first data-plane call.
  *  - **Fencing/reclamation** ([GovernedHeddleNode.revocation]) is *specified only* — the seam is
  *    defined, reclamation is a later feature (§9 #3; part of #1602).
  *
@@ -99,6 +105,7 @@ public fun CoroutineScope.heddleGoverned(
         self = self,
         scope = this,
         sink = node.asControlSink(),
+        membership = node.asMembershipSink(),
         initial = initialLedger,
         incarnation = incarnation,
     )

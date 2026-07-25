@@ -658,6 +658,38 @@ the heddle introduces **no new category of coordination**:
    path already uses. v1 defines the seam and ships only mint + topology;
    reclamation stays an explicit later feature.
 
+**The log-known roster** (`Enroll`/`Depart`, `EnrolledRoster`) is the membership
+prerequisite of (3), not a fourth non-monotone question. A barrier that waits for
+*every participant* to answer quantifies over a set, and the data-plane roster is
+**open** — seam-derived (visible peers ∪ self ∪ flagged-unreachable), so it moves
+with no log record and two peers can legitimately disagree at one instant.
+`Enroll`/`Depart` commit through the same log and fold, in index order, into an
+`EnrolledRoster` held *beside* the control-plane projection; `enrolledAt(index)`
+answers "who was enrolled as of this commit index", identically on every peer that
+applied that prefix. It is deliberately **independent** of both the Raft voter set
+(voters are consensus members, `NodeId`s; the quantifier is over ledger *writers*,
+`ReplicaId`s — a learner or a non-voting data-plane peer authors slots too) and the
+seam roster. Enrolling is open to any proposer because it only ever *enlarges* the
+set (a mistake costs a barrier's liveness, never its safety); departing is
+**self-service** because it *shrinks* it, and "this replica will never author
+another slot" is a promise about the future that only that replica can make.
+Departing therefore reclaims nothing — an absent peer's authority is (3)'s problem,
+and its share stays stranded per §8.1. See
+`docs/heddle-ledger-relocation-design.md` §6.2.
+
+**Rejoin is membership, so enrollment drives it** (#1652). A
+`HeartbeatPartitionDetector` that reaches `PeerLost` is terminal — it closes its
+event channel and its heartbeat loop returns — so a peer declared lost would stay
+in `unreachable` forever and never be watched again. Reappearing on the *seam* is
+deliberately not enough to justify a fresh detector: the seam roster is the open
+one, and churning a live detector on every wobble would discard the
+unresponsive→recovered transition it is about to report. A committed `Enroll` is
+the peer declaring itself a participant again, agreed through the log, so that is
+what re-attaches its detector and clears it from `unreachable` — and only for a
+peer in the terminal Lost state. A **departure** fires nothing: a departed peer's
+entitlement is stranded exactly like a crashed peer's, so it must keep counting
+toward the §8.2 bound. Re-monitoring reclaims no entitlement; that is still (3).
+
 **Bootstrap: paired entry points, no nullable consensus.** A `RaftNode?`
 parameter defaulting to `null` would gate a functional code path on an
 optional — the repo's "Optional ≠ tuning" rule forbids it. Following

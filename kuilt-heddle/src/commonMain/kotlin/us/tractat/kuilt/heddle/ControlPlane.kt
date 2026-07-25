@@ -188,6 +188,25 @@ internal fun interface ControlLedgerSink {
 }
 
 /**
+ * The seam the control plane uses to tell the **node** that the log-known roster admitted a
+ * participant, so the node can take its local, non-replicated effects — re-attaching the liveness
+ * detector of a peer that had been declared lost (#1652). The governed node backs this with
+ * [HeddleNode.remonitorOnEnrollment]; tests back it with a recorder.
+ *
+ * Deliberately one act, not two. A *departure* fires nothing: a departed peer's entitlement stays
+ * stranded exactly as a crashed peer's does (`heddle-design.md` §8.1), so it must keep counting
+ * toward the §8.2 bound — dropping it from the node's roster on `Depart` would understate the
+ * bound at the moment its divergence risk is highest.
+ *
+ * The effect is strictly downstream: nothing the node does here feeds back into a control-plane
+ * gate, so the roster stays a pure function of the log.
+ */
+internal fun interface ControlMembershipSink {
+    /** A committed `Enroll` for [replica] — fired on **every** applied act, idempotent ones included. */
+    fun enrolled(replica: ReplicaId)
+}
+
+/**
  * The Raft-backed control plane of design §9. It proposes each act to the [raft] log and, on the
  * committed-log apply loop that runs on **every** peer, applies the act — in log order — against a
  * **private log-pure control-state projection** it owns, then publishes the approved patch into the
@@ -225,6 +244,7 @@ internal fun interface ControlLedgerSink {
  * self-generate this without durable storage or true entropy, so the caller injects it ([heddleGoverned])
  * — a boot id, a persisted monotonic epoch, or a UUID. Never derive it from a test-seedable `Random`.
  *
+ * @param membership the seam the node's local enrollment effects ride ([ControlMembershipSink]).
  * @param initial the projection's initial state — the same ledger the data-plane node bootstraps from.
  * @param nextIndex the first log index to replay from — `1` for a fresh node ([RaftNode.committedFrom]
  *   replays from the start with no gap; replay-0 `committed` would miss an act committed before subscription).
@@ -235,6 +255,7 @@ internal class HeddleControlPlane(
     private val self: ReplicaId,
     scope: CoroutineScope,
     private val sink: ControlLedgerSink,
+    private val membership: ControlMembershipSink,
     initial: EntitlementLedger,
     private val incarnation: String,
     nextIndex: Long = 1L,
@@ -525,6 +546,10 @@ internal class HeddleControlPlane(
                 // mistaken enroll costs the fence's liveness, never its safety. A no-op (already
                 // enrolled) is Applied, not Refused: the post-state is exactly what was asked for.
                 roster.enroll(command.replica)?.let { roster = it }
+                // Fired even when the fold did not change: a peer that restarts is ALREADY enrolled,
+                // and its re-enroll is precisely the act that must re-attach its detector (#1652).
+                // Same lock order as `sink.publish` — control lock, then node lock, never the reverse.
+                membership.enrolled(command.replica)
                 ControlOutcome.Applied(index)
             }
 

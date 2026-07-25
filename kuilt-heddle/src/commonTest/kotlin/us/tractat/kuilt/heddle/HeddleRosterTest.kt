@@ -196,14 +196,14 @@ class HeddleRosterTest {
             val fake = FakeRaftNode(selfId = NodeId("solo"), initialRole = RaftRole.Leader)
             val solo = ReplicaId("solo")
             val author = HeddleControlPlane(
-                fake, solo, backgroundScope, RecordingSink(), EntitlementLedger.ZERO, "boot-author",
+                fake, solo, backgroundScope, RecordingSink(), NO_REMONITOR, EntitlementLedger.ZERO, "boot-author",
             )
             assertIs<ControlOutcome.Applied>(author.submit(ControlCommand.Enroll(a)))
             assertIs<ControlOutcome.Applied>(author.submit(ControlCommand.Enroll(solo)))
             assertIs<ControlOutcome.Applied>(author.submit(ControlCommand.Depart(solo)))
 
             val observer = HeddleControlPlane(
-                fake, ReplicaId("observer"), backgroundScope, RecordingSink(), EntitlementLedger.ZERO, "boot-obs",
+                fake, ReplicaId("observer"), backgroundScope, RecordingSink(), NO_REMONITOR, EntitlementLedger.ZERO, "boot-obs",
             )
             runCurrent() // let the observer replay the committed prefix
             assertEquals(author.rosterSnapshot(), observer.rosterSnapshot())
@@ -293,6 +293,38 @@ class HeddleRosterTest {
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
+    // #1652 — rejoin is membership: a committed Enroll is what re-monitors a peer.
+    // (The node-side effect itself is covered by HeddleNodeTest's lost→rejoin test.)
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    @Test
+    fun everyAppliedEnrollSignalsTheNodeIncludingAnIdempotentOne() =
+        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+            // A peer that crashed is ALREADY enrolled, so its re-enroll on restart appends no roster
+            // transition — yet that act is exactly the one that must re-attach its detector. The
+            // signal therefore rides the applied *command*, not the fold's delta.
+            val enrolled = mutableListOf<ReplicaId>()
+            val plane = soloPlane(backgroundScope, RecordingSink(), ControlMembershipSink { enrolled += it })
+            assertIs<ControlOutcome.Applied>(plane.submit(ControlCommand.Enroll(a)))
+            assertIs<ControlOutcome.Applied>(plane.submit(ControlCommand.Enroll(a)))
+            assertEquals(listOf(a, a), enrolled, "the idempotent re-enroll must still signal the node")
+        }
+
+    @Test
+    fun departAndRefusedActsSignalNothingToTheNode() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        // A departed peer's entitlement stays stranded like a crashed peer's (§8.1), so it must keep
+        // counting toward the §8.2 bound — dropping it from the node's roster would understate the
+        // bound exactly when its divergence risk is highest. And a refused act changes nothing at all.
+        val enrolled = mutableListOf<ReplicaId>()
+        val solo = ReplicaId("solo")
+        val plane = soloPlane(backgroundScope, RecordingSink(), ControlMembershipSink { enrolled += it })
+        assertIs<ControlOutcome.Applied>(plane.submit(ControlCommand.Enroll(solo)))
+        assertIs<ControlOutcome.Applied>(plane.submit(ControlCommand.Depart(solo)))
+        assertIs<ControlOutcome.Conflict>(plane.submit(ControlCommand.Depart(a))) // third-party: refused
+        assertEquals(listOf(solo), enrolled, "only an applied Enroll signals the node")
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
     // The governed public verbs.
     // ═══════════════════════════════════════════════════════════════════════════
 
@@ -324,9 +356,15 @@ class HeddleRosterTest {
         if (failures.isNotEmpty()) throw AssertionError(failures.joinToString("\n") { it.message ?: it.toString() })
     }
 
-    private fun soloPlane(scope: CoroutineScope, sink: ControlLedgerSink) = HeddleControlPlane(
+    private val NO_REMONITOR = ControlMembershipSink { }
+
+    private fun soloPlane(
+        scope: CoroutineScope,
+        sink: ControlLedgerSink,
+        membership: ControlMembershipSink = NO_REMONITOR,
+    ) = HeddleControlPlane(
         raft = FakeRaftNode(selfId = NodeId("solo"), initialRole = RaftRole.Leader),
-        self = ReplicaId("solo"), scope = scope, sink = sink,
+        self = ReplicaId("solo"), scope = scope, sink = sink, membership = membership,
         initial = EntitlementLedger.ZERO, incarnation = "boot-roster",
     )
 
@@ -340,7 +378,7 @@ class HeddleRosterTest {
     )
 
     private fun plane(raft: RaftNode, id: NodeId, sink: ControlLedgerSink, scope: CoroutineScope) =
-        HeddleControlPlane(raft, ReplicaId(id.value), scope, sink, EntitlementLedger.ZERO, "inc-${id.value}")
+        HeddleControlPlane(raft, ReplicaId(id.value), scope, sink, NO_REMONITOR, EntitlementLedger.ZERO, "inc-${id.value}")
 
     /** Launch [block] on [scope], pump [sim]'s virtual time until it commits, and require it Applied. */
     private suspend fun applied(

@@ -23,10 +23,12 @@ import us.tractat.kuilt.core.Swatch
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.liveness.PartitionEvent
 import us.tractat.kuilt.quilter.QuilterConfig
+import us.tractat.kuilt.test.assertAll
 import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -521,8 +523,62 @@ class HeddleNodeTest {
 
             // The §8.2 bound still folds the unreachable peer into the roster — the metrics stay
             // consistent, they don't silently exclude a partitioned peer.
-            assertTrue(silent in observer.unreachable.value, "the lost peer stays unreachable (add-only, no auto re-monitor)")
+            assertTrue(
+                silent in observer.unreachable.value,
+                "the lost peer stays unreachable — reappearing on the seam alone never re-monitors it",
+            )
             assertTrue(observer.boundMetrics(root).isConsistent, "boundMetrics stays consistent with a peer unreachable")
+        }
+
+    // ─────────────────────────────────────────────────────────────────────────────
+    // 6c. #1652 — a lost-then-rejoined peer IS re-monitored, and enrollment is what does it.
+    //     A PeerLost detector is terminal (channel closed, heartbeat loop returned), so without
+    //     this the peer stays in `unreachable` forever and is never watched again.
+    // ─────────────────────────────────────────────────────────────────────────────
+
+    @Test
+    fun enrollmentReMonitorsALostPeerAndSeamReappearanceAloneDoesNot() =
+        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+            val h = harness(peers = 2, mint = mapOf(0 to 100L, 1 to 100L), topology = flatTopology())
+            h.pump()
+            val observer = h.peers[0].node
+            val rejoiner = h.peers[1].id
+
+            val events = mutableListOf<PartitionEvent>()
+            backgroundScope.launch { observer.partitionEvents.collect { events += it } }
+            h.pump()
+
+            // Drive peer 1 all the way to Lost, then heal its link.
+            h.partition(1)
+            h.pump(90.seconds.inWholeMilliseconds)
+            assertTrue(
+                events.any { it is PartitionEvent.PeerLost && ReplicaId(it.peerId.value) == rejoiner },
+                "setup: the silent peer must reach PeerLost, got $events",
+            )
+            h.heal(1)
+            h.pump(30.seconds.inWholeMilliseconds)
+            assertTrue(
+                rejoiner in observer.unreachable.value,
+                "coming back on the seam is not membership — it must not clear `unreachable` on its own",
+            )
+
+            // The committed enrollment is the event that re-monitors it (here: the node-side effect
+            // the control plane's ControlMembershipSink fires — see HeddleRosterTest for the wiring).
+            observer.remonitorOnEnrollment(rejoiner)
+            h.pump()
+            assertFalse(rejoiner in observer.unreachable.value, "enrollment must clear the rejoined peer")
+
+            // Prove the detector is genuinely live, not just the flag cleared: silence it again and a
+            // SECOND unresponsive must surface. A terminal detector could never report anything.
+            val before = events.count { it is PartitionEvent.PeerUnresponsive && ReplicaId(it.peerId.value) == rejoiner }
+            h.partition(1)
+            h.pump(30.seconds.inWholeMilliseconds)
+            val after = events.count { it is PartitionEvent.PeerUnresponsive && ReplicaId(it.peerId.value) == rejoiner }
+            assertAll(
+                { assertTrue(after > before, "the re-attached detector must report again, got $events") },
+                { assertTrue(rejoiner in observer.unreachable.value, "and flag it unreachable again") },
+                { assertTrue(observer.boundMetrics(root).isConsistent, "boundMetrics stays consistent throughout") },
+            )
         }
 
     // ─────────────────────────────────────────────────────────────────────────────
