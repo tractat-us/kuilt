@@ -28,11 +28,16 @@ import us.tractat.kuilt.heddle.AttachmentId
 import us.tractat.kuilt.heddle.AttachmentRecord
 import us.tractat.kuilt.heddle.Demand
 import us.tractat.kuilt.heddle.GroupId
+import us.tractat.kuilt.heddle.ControlOutcome
 import us.tractat.kuilt.heddle.HeddleConfig
 import us.tractat.kuilt.heddle.HeddleNode
 import us.tractat.kuilt.heddle.PolicyConfig
 import us.tractat.kuilt.heddle.Weight
+import us.tractat.kuilt.heddle.heddleGoverned
 import us.tractat.kuilt.heddle.heddleStatic
+import us.tractat.kuilt.raft.NodeId
+import us.tractat.kuilt.raft.RaftRole
+import us.tractat.kuilt.raft.test.FakeRaftNode
 import us.tractat.kuilt.quilter.QuilterConfig
 import us.tractat.kuilt.warp.AdmissionControl
 import us.tractat.kuilt.warp.ClaimStrategy
@@ -48,6 +53,7 @@ import kotlin.random.Random
 import kotlin.test.Test
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.assertEquals
+import kotlin.test.assertIs
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
@@ -338,6 +344,80 @@ class HeddleAdmissionControlTest {
             { assertTrue(done > 0, "the free path actually ran tasks ($done completed)") },
             { assertEquals(0, coordFrames, "zero frames on the coordinated/consensus channel") },
             { assertTrue(freeFrames > 0, "the free path did produce (coordination-free) traffic") },
+        )
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────
+    // 5. An H5 GOVERNED node composes into HeddleAdmissionControl exactly like the
+    //    static node — the "heddleStatic OR governed" surface the KDoc promises. The
+    //    adapter takes a data-plane FairShareExecution, so a governed node's tagged
+    //    tasks are admitted (reserve) and settled (complete) off its replicated ledger,
+    //    while its consensus front door is untouched by the free execution path.
+    // ─────────────────────────────────────────────────────────────────────────────
+
+    @Test
+    fun governedNodeComposesIntoAdmissionControl() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        val clock = schedulerClock(testScheduler)
+        val heddleSeam = InMemoryLoom().host(Pattern("h6-governed-heddle"))
+        val self = ReplicaId(heddleSeam.selfId.value)
+
+        // A Raft-governed node: supply and topology arrive through the consensus log, not a
+        // pre-partitioned genesis. A leader FakeRaftNode commits every proposal immediately.
+        val raft = FakeRaftNode(selfId = NodeId(self.value), initialRole = RaftRole.Leader)
+        val governed = backgroundScope.heddleGoverned(
+            seam = heddleSeam,
+            self = self,
+            raft = raft,
+            root = root,
+            clock = clock,
+            config = heddleConfig(seed = 5),
+            incarnation = "boot-governed-compose",
+        )
+
+        // Mint + build the 3:1 tree through the governed control plane, then delegate down.
+        assertIs<ControlOutcome.Applied>(governed.mint(self, 40L))
+        assertIs<ControlOutcome.Applied>(governed.prepare(AttachmentRecord(eA, root, laneA, Weight.of(3), 0L)))
+        assertIs<ControlOutcome.Applied>(governed.prepare(AttachmentRecord(eB, root, laneB, Weight.of(1), 0L)))
+        assertIs<ControlOutcome.Applied>(governed.activate(eA))
+        assertIs<ControlOutcome.Applied>(governed.activate(eB))
+        governed.advertise(eA, hungry)
+        governed.advertise(eB, hungry)
+        governed.schedule(root)
+
+        val holdingsA = governed.ledger.value.holdings(laneA, self)
+        val holdingsB = governed.ledger.value.holdings(laneB, self)
+        assertTrue(holdingsA > 0 && holdingsB > 0, "both lanes received governed entitlement: A=$holdingsA B=$holdingsB")
+
+        // The bug this test pins: HeddleAdmissionControl(governed) must COMPILE and gate on the
+        // governed node's data plane. Before #1664 GovernedHeddleNode was not a HeddleNode and had
+        // no shared interface, so this line failed to compile.
+        val warpSeam = InMemoryLoom().host(Pattern("h6-governed-warp"))
+        val roster = MutableStateFlow(setOf(warpSeam.selfId))
+        val recorder = Recorder()
+        val node = WarpNode(
+            selfId = warpSeam.selfId,
+            seam = warpSeam,
+            rosterFlow = roster,
+            scope = backgroundScope,
+            quilterConfig = warpQuilterConfig,
+            clock = clock,
+            strategy = ClaimStrategy.Ring,
+            registry = recordingRegistry(recorder),
+            admissionControl = HeddleAdmissionControl(governed),
+        )
+
+        val perLane = 80
+        repeat(perLane) { i -> node.enqueue(TaskId("laneA-$i"), TaskId("laneA-$i").descriptor().inLane("laneA")) }
+        repeat(perLane) { i -> node.enqueue(TaskId("laneB-$i"), TaskId("laneB-$i").descriptor().inLane("laneB")) }
+        drainAntiEntropy(warpQuilterConfig.antiEntropyInterval, rounds = 8, settleWindow = 0.milliseconds)
+
+        val done = recorder.snapshot()
+        val doneA = done.count { it.value.startsWith("laneA-") }
+        val doneB = done.count { it.value.startsWith("laneB-") }
+        assertAll(
+            { assertEquals(holdingsA, doneA.toLong(), "laneA completes exactly its governed entitlement") },
+            { assertEquals(holdingsB, doneB.toLong(), "laneB completes exactly its governed entitlement") },
+            { assertTrue(doneA + doneB < 2 * perLane, "surplus tagged tasks DEFERRED, not dropped (ran ${doneA + doneB} of ${2 * perLane})") },
         )
     }
 

@@ -81,7 +81,7 @@ public class HeddleNode internal constructor(
     initialLedger: EntitlementLedger,
     private val clock: () -> Instant,
     private val config: HeddleConfig,
-) {
+) : FairShareExecution {
     // ── channels over the one physical seam (byte-frugal String namespace) ──────────
     private val peersFlow: StateFlow<Set<PeerId>> = seam.peers
     private val mux = NamedMux(seam, scope)
@@ -261,7 +261,7 @@ public class HeddleNode internal constructor(
      * units simply stay `outstanding` on the leaf edge until spent, which the accounting
      * already charges. A crashed peer strands its earmarks (design §8.1).
      */
-    public fun reserve(leaf: GroupId, maximumCost: Long): ReservationId? {
+    override fun reserve(leaf: GroupId, maximumCost: Long): ReservationId? {
         require(maximumCost > 0L) { "maximumCost must be positive, was $maximumCost" }
         return lock.withLock {
             val s = ledger.value
@@ -297,7 +297,7 @@ public class HeddleNode internal constructor(
      *
      * @throws IllegalArgumentException if [actualCost] is out of range (state untouched).
      */
-    public fun complete(id: ReservationId, actualCost: Long) {
+    override fun complete(id: ReservationId, actualCost: Long) {
         lock.withLock {
             val reservation = reservations[id] ?: return
             require(actualCost in 0L..reservation.maximumCost) {
@@ -324,7 +324,7 @@ public class HeddleNode internal constructor(
     }
 
     /** Cancel reservation [id] — a completion charging zero service (design §4.4). */
-    public fun cancel(id: ReservationId): Unit = complete(id, 0L)
+    override fun cancel(id: ReservationId): Unit = complete(id, 0L)
 
     /**
      * This peer's total outstanding earmark at leaf [leaf] — reserved-but-not-yet-completed
@@ -332,7 +332,7 @@ public class HeddleNode internal constructor(
      * other peer's ledger; the reserved units simply stay `outstanding` on the leaf edge. The
      * spendable-now amount is `holdings(leaf, self) − earmarked(leaf)`.
      */
-    public fun earmarked(leaf: GroupId): Long = lock.withLock { earmarks[leaf] ?: 0L }
+    override fun earmarked(leaf: GroupId): Long = lock.withLock { earmarks[leaf] ?: 0L }
 
     // ─────────────────────────────────────────────────────────────────────────────
     // Demand board — advertise this peer's per-edge appetite (design §6).

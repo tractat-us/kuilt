@@ -10,6 +10,7 @@ kotlin {
         }
         commonTest.dependencies {
             implementation(project(":kuilt-test"))
+            implementation(project(":kuilt-raft-test"))
             implementation(libs.kotlinx.coroutines.test)
             implementation(libs.kotlinx.atomicfu)
             implementation(libs.kotlinx.serialization.cbor)
