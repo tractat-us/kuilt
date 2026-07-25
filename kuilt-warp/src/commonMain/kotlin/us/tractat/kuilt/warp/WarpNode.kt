@@ -623,23 +623,18 @@ public class WarpNode(
      *
      * The task is enqueued with [TaskDescriptor.pinnedOwner] forced to [selfId]; any owner the
      * caller may have set on [descriptor] is overridden so "local" always means *this* peer.
+     * **Nothing else about the envelope changes** — the fair-share [TaskDescriptor.lane], the
+     * location [TaskDescriptor.affinity], the trace context and the args all ride through the pin
+     * untouched, so a pinned task is admission-gated and traced exactly like a ring-assigned one.
      * It then travels and is claimed exactly like any free-path task via [enqueue] — the pin is
      * just the descriptor field the ring-owner filter consults (see [effectiveOwner]).
      *
      * @param taskId The identifier of the task to enqueue.
      * @param descriptor The unit of work; its [TaskDescriptor.pinnedOwner] is replaced with
-     *   [selfId] before replication.
+     *   [selfId] before replication and every other field is preserved.
      */
     public fun enqueueLocal(taskId: TaskId, descriptor: TaskDescriptor) {
-        enqueue(
-            taskId,
-            TaskDescriptor(
-                op = descriptor.op,
-                args = descriptor.args,
-                traceparent = descriptor.traceparent,
-                pinnedOwner = selfId,
-            ),
-        )
+        enqueue(taskId, descriptor.copy(pinnedOwner = selfId))
     }
 
     // ---------------------------------------------------------------------------

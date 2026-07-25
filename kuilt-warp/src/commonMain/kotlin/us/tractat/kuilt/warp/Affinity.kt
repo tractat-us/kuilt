@@ -102,15 +102,7 @@ public fun not(affinity: Affinity): Affinity = Affinity.Not(affinity)
  * lane. This is the shipped `.where { }` surface: build a [TaskDescriptor], tag it with
  * [where], and enqueue it on a [WarpNode]. Placement then hashes over the eligible subset.
  */
-public fun TaskDescriptor.where(affinity: Affinity): TaskDescriptor =
-    TaskDescriptor(
-        op = op,
-        args = args,
-        traceparent = traceparent,
-        pinnedOwner = pinnedOwner,
-        lane = lane,
-        affinity = affinity,
-    )
+public fun TaskDescriptor.where(affinity: Affinity): TaskDescriptor = copy(affinity = affinity)
 
 /** Flatten same-kind combinators so `a and b and c` is one [Affinity.And], not a nested tree. */
 private inline fun <reified T : Affinity> flatten(a: Affinity, b: Affinity, terms: (T) -> List<Affinity>): List<Affinity> {
