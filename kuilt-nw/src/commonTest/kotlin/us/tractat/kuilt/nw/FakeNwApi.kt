@@ -52,6 +52,13 @@ internal class FakeNwApi(
      * the native call, which lives in appleMain behind Network.framework.
      */
     private val browserIncludesTxtRecord: Boolean = true,
+    /**
+     * Whether this device's ADVERTISED TXT record is readable the instant the endpoint becomes
+     * discoverable (#1706). `true` is the simultaneous case; `false` models Network.framework delivering
+     * the browse `add` BEFORE the TXT record resolves, so browsers first see the endpoint with its
+     * identity unknown (`id = serviceName`) and only a later [FakeNwRadio.resolveTxt] supplies it.
+     */
+    private val txtResolvedOnAdvertise: Boolean = true,
 ) : NwApi {
 
     private val _endpointFound = MutableSharedFlow<NwEndpoint>(extraBufferCapacity = 16)
@@ -143,7 +150,7 @@ internal class FakeNwApi(
     override fun availability(): FabricAvailability = FabricAvailability.Available
 
     override suspend fun startListening(serviceName: String, serviceType: String) {
-        radio.markListening(deviceId, serviceName, serviceType, peerId)
+        radio.markListening(deviceId, serviceName, serviceType, peerId, txtResolvedOnAdvertise)
     }
 
     /** Test hook: total [stopListening] calls — lets a test prove `NwSeam.close()` stops advertising (#1419). */
