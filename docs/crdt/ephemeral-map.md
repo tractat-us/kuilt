@@ -43,6 +43,29 @@ at `clock+1`. Graceful self-leave always wins cleanly (self increments past
 whatever the detector could mint). Crash detection mints the tombstone on behalf
 of the absent peer.
 
+**Departure is permanent, not TTL-bounded.** The tombstone outranks every entry
+the replica published before it, so no late re-delivery of one of those can bring
+it back — the join discards it, and the tracker will not evict a tombstone to let
+it in. A departed replica returns only by publishing at a clock strictly above its
+own departure clock; a replica whose counter reset on restart needs the
+`IncarnationClock` packing to do that.
+
+## Freshness lives outside the lattice too
+
+TTL expiry reads "this replica has gone quiet" from *when its update arrived
+here*. That inference only holds if the update was published by the replica it
+names — a relayed or re-exchanged frame says nothing about whether its author is
+still alive. `EphemeralMapTracker` therefore takes updates on two channels:
+`received` for author-fresh deltas (which may evict an expired slot so a restarted
+replica is not pinned behind its own dead incarnation) and `relayed` for
+anti-entropy, forwarded slots, and whole-state exchange (a pure join that never
+evicts and refreshes a TTL only on a genuine advance).
+
+Eviction is the tracker's one non-monotone step, so it is confined to the single
+case that needs it: a presence entry re-opening an expired presence slot. It never
+drops a tombstone, and never installs an entry the standing one already dominates
+— either would invert the ordering the lattice exists to preserve.
+
 ## What `EphemeralMap` is not
 
 It does not implement at-least-once delivery guarantees and does not participate

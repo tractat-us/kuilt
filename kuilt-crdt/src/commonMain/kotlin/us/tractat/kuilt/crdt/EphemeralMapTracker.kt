@@ -30,8 +30,13 @@ package us.tractat.kuilt.crdt
  * slot (#1675). What remains is genuinely undecidable: a relayed *presence* entry
  * differing from an expired *presence* slot looks exactly like a restarted
  * replica's first heartbeat, and is admitted as one — re-stamping the TTL and
- * showing a dead replica live for another window, once per such delivery. That
- * residue is why the contract is a contract and not just a guard.
+ * showing a dead replica live for another window, once per such delivery.
+ *
+ * That residue is why there are two channels. If a delivery is not a heartbeat
+ * from the replica it names, hand it to [relayed] instead: it joins the state
+ * without ever evicting, and stamps only entries that genuinely advance, so the
+ * undecidable case never arises. [received] for author-fresh deltas, [relayed]
+ * for everything else.
  *
  * ## Clock contract
  *
@@ -147,6 +152,36 @@ public class EphemeralMapTracker<V>(
     }
 
     /**
+     * Merge state this replica did **not** receive from its author — an anti-entropy round, a
+     * full-state exchange, a forwarded slot, a merged map echoed back. The compliant way to feed
+     * a tracker anything [received] must not be given.
+     *
+     * A pure join plus a receive-time stamp for entries that genuinely advance the local state.
+     * Nothing here can evict, so no relayed frame can drop a tombstone or displace a standing
+     * entry; and a non-advancing frame stamps nothing, so re-delivering state this replica
+     * already holds is a complete no-op however many rounds run.
+     *
+     * What relaying still costs, and its bound: an entry that *does* advance the local state
+     * re-stamps the TTL even though its author may be long gone, so a relayed replica can read
+     * live for one window per **distinct** entry of its slot still circulating. That total is
+     * finite and monotonically exhausted — once this replica holds the highest entry the network
+     * has for a slot, no further relay of it can ever stamp again. Contrast [received], where a
+     * differing frame re-arms the timer on every delivery, without bound.
+     *
+     * Presence is a claim about the author being alive *now*, and only the author can make it.
+     * Route each replica's own heartbeat to [received] and everything else here.
+     *
+     * @sample us.tractat.kuilt.crdt.sampleEphemeralMapTrackerChannels
+     */
+    public fun relayed(update: EphemeralMap<V>) {
+        val now = clock()
+        for ((replica, inbound) in update.entries) {
+            if (advancesEntry(inbound, state.entries[replica])) receiveTime[replica] = now
+        }
+        state = state.piece(update)
+    }
+
+    /**
      * Returns the current set of live entries: non-departed, non-expired
      * replicas mapped to their values.
      *
@@ -162,7 +197,9 @@ public class EphemeralMapTracker<V>(
      * Intended for inspection and persistence. **Not** a frame to broadcast: it
      * carries other replicas' slots, so feeding it to a remote [received] relays
      * entries this replica did not author — see the update contract in the class
-     * KDoc. Publish only your own slot.
+     * KDoc. Publish only your own slot. If a peer must exchange whole states
+     * anyway (generic anti-entropy), the receiving side merges it with [relayed],
+     * never [received].
      */
     public fun snapshot(): EphemeralMap<V> = state
 }
