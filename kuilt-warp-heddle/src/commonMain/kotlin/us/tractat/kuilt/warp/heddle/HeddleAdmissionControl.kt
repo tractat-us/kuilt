@@ -1,5 +1,6 @@
 package us.tractat.kuilt.warp.heddle
 
+import us.tractat.kuilt.heddle.FairShareExecution
 import us.tractat.kuilt.heddle.GroupId
 import us.tractat.kuilt.heddle.HeddleNode
 import us.tractat.kuilt.warp.AdmissionControl
@@ -16,17 +17,17 @@ import us.tractat.kuilt.warp.WarpNode
  * claim path). It has no notion of *how much* any lane may take. This adapter supplies that
  * missing dimension without warp core learning a single fair-share type: it implements warp's
  * opaque [AdmissionControl], and warp calls it just before running each task. The adapter maps
- * the task's [Lane] to a fair-share **leaf** and [reserves][HeddleNode.reserve] one task's
+ * the task's [Lane] to a fair-share **leaf** and [reserves][FairShareExecution.reserve] one task's
  * worth of that leaf's entitlement; when the task finishes warp calls [AdmissionTicket.settle],
- * which [completes][HeddleNode.complete] the reservation and charges the ledger exactly once.
+ * which [completes][FairShareExecution.complete] the reservation and charges the ledger exactly once.
  *
  * The behaviour that falls out, per warp's contract:
  *  - **Untagged is free.** A task on the [Lane.ROOT] lane (the default) is admitted immediately
  *    with a no-op ticket — no reservation, no ledger touch — so an untagged workload is
  *    bit-for-bit today's warp.
  *  - **Exhaustion defers, never drops.** When a lane's leaf has no spare entitlement,
- *    [HeddleNode.reserve] returns `null`; this adapter returns `null` too, so warp *defers* the
- *    task (leaves it pending) and re-attempts it on a later claim cycle — work resumes when
+ *    [FairShareExecution.reserve] returns `null`; this adapter returns `null` too, so warp *defers*
+ *    the task (leaves it pending) and re-attempts it on a later claim cycle — work resumes when
  *    entitlement flows in.
  *  - **Zero consensus on the hot path.** [reserve] / [complete] are local reads and writes of
  *    already-converged holdings; admitting a task adds no consensus round. The heddle's own
@@ -37,8 +38,10 @@ import us.tractat.kuilt.warp.WarpNode
  * therefore complete tasks in a `3:1` ratio: each lane runs exactly as many tasks as it was
  * delegated entitlement for.
  *
- * @param heddle the fair-share node whose holdings this adapter reserves against; typically a
- *   [us.tractat.kuilt.heddle.heddleStatic] node (no consensus) or an H5 governed node.
+ * @param heddle the fair-share data plane whose holdings this adapter reserves against — the
+ *   [FairShareExecution] surface shared by both front doors, so this accepts either a
+ *   [us.tractat.kuilt.heddle.heddleStatic] node (no consensus) or an H5
+ *   [us.tractat.kuilt.heddle.heddleGoverned] node (governed) interchangeably.
  * @param costPerTask service units reserved and charged per task. Defaults to `1` — the §14.4
  *   "one unit per task" costing; a caller with variable-cost work supplies a per-descriptor cost
  *   via [costOf].
@@ -51,7 +54,7 @@ import us.tractat.kuilt.warp.WarpNode
  * @see WarpNode
  */
 public class HeddleAdmissionControl(
-    private val heddle: HeddleNode,
+    private val heddle: FairShareExecution,
     private val costPerTask: Long = 1L,
     private val costOf: (TaskDescriptor) -> Long = { costPerTask },
     private val laneToLeaf: (Lane) -> GroupId? = { lane -> defaultLeafOf(lane) },

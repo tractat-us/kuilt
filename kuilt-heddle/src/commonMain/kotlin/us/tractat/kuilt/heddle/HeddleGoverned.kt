@@ -116,7 +116,7 @@ private const val GOVERNED_GENESIS_NONCE: String = "heddle-governed-genesis"
 public class GovernedHeddleNode internal constructor(
     private val node: HeddleNode,
     private val control: HeddleControlPlane,
-) {
+) : FairShareExecution {
     // ── data plane (design §4/§6/§7 — coordination-free, never touches the log) ──────
 
     /** This peer's replica identity. */
@@ -132,16 +132,16 @@ public class GovernedHeddleNode internal constructor(
     public val unreachable: StateFlow<Set<ReplicaId>> get() = node.unreachable
 
     /** Earmark up to [maximumCost] against holdings at leaf [leaf] ([HeddleNode.reserve]). */
-    public fun reserve(leaf: GroupId, maximumCost: Long): ReservationId? = node.reserve(leaf, maximumCost)
+    override fun reserve(leaf: GroupId, maximumCost: Long): ReservationId? = node.reserve(leaf, maximumCost)
 
     /** Complete reservation [id], charging [actualCost] ([HeddleNode.complete]). */
-    public fun complete(id: ReservationId, actualCost: Long): Unit = node.complete(id, actualCost)
+    override fun complete(id: ReservationId, actualCost: Long): Unit = node.complete(id, actualCost)
 
     /** Cancel reservation [id] ([HeddleNode.cancel]). */
-    public fun cancel(id: ReservationId): Unit = node.cancel(id)
+    override fun cancel(id: ReservationId): Unit = node.cancel(id)
 
     /** This peer's outstanding earmark at leaf [leaf] ([HeddleNode.earmarked]). */
-    public fun earmarked(leaf: GroupId): Long = node.earmarked(leaf)
+    override fun earmarked(leaf: GroupId): Long = node.earmarked(leaf)
 
     /** Advertise this peer's per-edge appetite ([HeddleNode.advertise]). */
     public fun advertise(edge: AttachmentId, demand: Demand): Unit = node.advertise(edge, demand)
