@@ -15,14 +15,27 @@ drops the answers into a shared board everyone can read. Nobody is in charge; no
 job runs twice that matters. That much is **built and measured** — the foundation
 shipped in Phase 1 ([epic #809](https://github.com/tractat-us/kuilt/issues/809)).
 
-What's left is the dream: letting a task escalate to a real agreement when it
-*must* run exactly once, shipping the *code* of a job across a phone and a server
-and a browser at once, planning a distributed query to spend the fewest
-agreements, and running a shared machine-learning round across everyone's data
-without collecting it. Those are the five epics below.
+The dream was: letting a task escalate to a real agreement when it *must* run
+exactly once, shipping the *code* of a job across a phone and a server and a
+browser at once, planning a distributed query to spend the fewest agreements, and
+running a shared machine-learning round across everyone's data without collecting
+it. Those were the five epics below.
 
-The honest part first: **only the first of them is near-term.** The other four are
-laid out here so the work is legible and ready to pick up — not so it's scheduled.
+> **Reconciliation (2026-07-24, Track 0).** The framing above ("only the first is
+> near-term") is historical — most of the dream has since **landed on `main`**.
+> **B, C, D, E, and G all substantially shipped**, and the Phase-H module
+> decomposition is complete: `:kuilt-warp` was carved into `:kuilt-warp-runtime`
+> (the three wasm engines), `:kuilt-warp-planning` (the CALM planner),
+> `:kuilt-warp-ml` (FedAvg), `:kuilt-warp-compiler` (binaryen), plus `-ksp` / `-otel`
+> / `-test` / `-heddle` satellites — every one a real implementation, not a
+> scaffold. Epic issues **B (#852), E (#854), G (#907), and Phase H (#969) are
+> CLOSED.** The genuine remainder is small: **F4** (the end-to-end federated-ML
+> demo, #957, still unmerged), the **C-polish** and **F-polish** passes (Epics C
+> #853 and F #856 stay OPEN until those land), F3 secure-aggregation (optional),
+> and a handful of explicitly-parked toolchains (D4·kwasm #968, D4·graal #967) and
+> a portability ceiling (#1335, `wasm-opt` bundled build-host-only). The per-epic
+> tables below have been updated to reflect landed state; the spine narrative that
+> follows is preserved as the original plan-of-record.
 
 ## What Phase 1 already settled
 
@@ -51,21 +64,23 @@ driven by *value and risk*, not by hard blockers.
 ```
 
 **B first**, then **E and C in parallel**, then **D after C**, with **F** trailing
-(its first piece can start anytime; its full demo waits on C). Build-next is **B**.
+(its first piece can start anytime; its full demo waits on C). Build-next was **B**.
+_(As of 2026-07-24 this sequence has substantially executed — B/E/C/D/G landed on
+`main`; only F's end-to-end demo and the C/F polish passes remain.)_
 
 The reasoning: B is the smallest and most coherent — it finishes a promise the
 shipped foundation already makes but doesn't yet keep. E and C are independent of
 each other and both unblocked, so they parallelize cleanly. D and F's kernel work
 genuinely need C's task-descriptor envelope, so they come after.
 
-| Epic | What | Gate | Reality |
+| Epic | What | Gate | Reality (2026-07-24) |
 |---|---|---|---|
-| **B — coordination seam** | finish the exactly-once / coordinated path | none | **committed (build-next)** |
-| **E — query planning** | `Draft → Draft`, coordination-cost model | B1 types (done) | exploratory |
-| **C — code mobility** | named ops → wasm kernels + bobbin/creel cache | spike (done) | exploratory |
-| **D — compiler nodes** | distributed tiered compilation | C (via C2) | exploratory |
-| **F — federated ML** | FedAvg on the substrate, end-to-end demo | F1 none; F2/F4 need a C3 wasm runtime | exploratory |
-| **G — Draft → DAG** | reshape `Draft` into a dependency DAG; consolidate coordination rounds (min rounds = DAG depth) | E (done) | exploratory |
+| **B — coordination seam** | finish the exactly-once / coordinated path | none | **LANDED** — epic #852 CLOSED |
+| **E — query planning** | `Draft → Draft`, coordination-cost model | B1 types (done) | **LANDED** — epic #854 CLOSED (`:kuilt-warp-planning` shipped) |
+| **C — code mobility** | named ops → wasm kernels + bobbin/creel cache | spike (done) | **core LANDED** (C1–C5 merged; runtimes in `:kuilt-warp-runtime`) — **C-polish open**, epic #853 still OPEN |
+| **D — compiler nodes** | distributed tiered compilation | C (via C2) | **core LANDED** (D1–D3, D4·binaryen; `:kuilt-warp-compiler`) — **parked** D4·kwasm #968 / D4·graal #967, and #1335 open; epic #855 still OPEN |
+| **F — federated ML** | FedAvg on the substrate, end-to-end demo | F1 none; F2/F4 need a C3 wasm runtime | **PARTIAL** — F1/F2 landed (`:kuilt-warp-ml`); **F4 demo #957 unmerged**, F-polish + F3 (optional) remain; epic #856 OPEN |
+| **G — Draft → DAG** | reshape `Draft` into a dependency DAG; consolidate coordination rounds (min rounds = DAG depth) | E (done) | **LANDED** — epic #907 CLOSED |
 
 Every epic stays **experimental**: `:kuilt-warp` remains out of `:kuilt-bom` and
 out of `kuilt.publish` for the duration. Each of C–F carries an explicit
@@ -288,10 +303,12 @@ H-2 (`:kuilt-warp-planning`), H-3 (`:kuilt-warp-ml`), and H-4 (this entry). Full
 
 ## Reading this roadmap
 
-- **B is the only commitment.** It completes the foundation's own contract and
-  leaves no placeholder in a shipped module. Everything else is laid out, labelled
-  exploratory, and waits on its own go/no-go.
-- **The gates have loosened** — most of the published DAG's blockers were retired in
-  Phase 1, so E and C can open in parallel with B the moment there's capacity.
+- **B was the only commitment; the rest followed.** As of 2026-07-24, B/C/D/E/G and
+  Phase H have all substantially landed on `main` (see the reconciliation note under
+  "Where we are"). What remains is F4 (the end-to-end demo, #957), the C/F polish
+  passes, and explicitly-parked toolchains — not the "only B is near-term" posture
+  this page opened with.
+- **The gates loosened, then cleared** — most of the published DAG's blockers were
+  retired in Phase 1, and E/C/D/G have since shipped.
 - **Nothing here changes the experimental posture.** `:kuilt-warp` stays out of the
   BOM and the release until a slice earns its way in.
