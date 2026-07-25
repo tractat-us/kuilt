@@ -80,6 +80,8 @@ public data class Grant(
  * (*eligible*), serve the one whose next grant would finish soonest in virtual time
  * (*earliest virtual deadline*), breaking ties by a stable identity so every replica
  * picks the same winner.
+ *
+ * @sample us.tractat.kuilt.heddle.samplePolicyPick
  */
 public object HeddlePolicy {
 
