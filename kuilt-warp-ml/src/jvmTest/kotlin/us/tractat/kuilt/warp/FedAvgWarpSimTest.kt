@@ -148,6 +148,7 @@ class FedAvgWarpSimTest {
                     strategy = ClaimStrategy.Ring,
                     registry = deviceRegistry(creel, hash, runtimes[i], batches.getValue(owners[i])),
                     raftNode = checkNotNull(sim.nodes[nodeId]),
+                    epoch = 0L,
                 )
             }
             try {
@@ -226,6 +227,7 @@ class FedAvgWarpSimTest {
                     strategy = ClaimStrategy.Ring,
                     registry = deviceRegistry(creel, hash, runtimes[i], batches.getValue(owners[i])),
                     raftNode = checkNotNull(sim.nodes[nodeId]),
+                    epoch = 0L,
                 )
             }
             try {
