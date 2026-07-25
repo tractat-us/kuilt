@@ -167,6 +167,9 @@ public class GovernedHeddleNode internal constructor(
     /** The §8.2 bound metrics at [parent] ([HeddleNode.boundMetrics]). */
     public fun boundMetrics(parent: GroupId): BoundMetrics = node.boundMetrics(parent)
 
+    /** [parent]'s current virtual time on this peer ([HeddleNode.parentVirtualTime]). */
+    public fun parentVirtualTime(parent: GroupId): Rational? = node.parentVirtualTime(parent)
+
     // ── control plane (design §9 — serialized through the Raft log) ──────────────────
 
     /**
@@ -185,6 +188,42 @@ public class GovernedHeddleNode internal constructor(
     /** Introduce a new attachment generation, serialized through the log ([EntitlementLedger.prepare]). */
     public suspend fun prepare(record: AttachmentRecord, timeout: Duration? = null): ControlOutcome =
         control.submit(ControlCommand.Prepare(record), timeout)
+
+    /**
+     * Introduce a generation seated **neutrally** — at [parent]'s current virtual time, read here
+     * and rounded by the one documented rule `initialVirtualTime = ⌈V⌉`
+     * ([AttachmentRecord.neutral]) — and serialize it through the log. This is the supported way
+     * to create a generation under a parent that has already run (design §7.2, §10.5; issue
+     * #1688): building the record by hand at a literal `0` hands the newborn the parent's entire
+     * past as lifetime credit, and it takes the next grants outright.
+     *
+     * A parent with no active children yet has no front; the first generation under it is seated
+     * at `0`, which *is* that parent's virtual-time origin.
+     *
+     * **Compute-and-record is deliberately one act, by one proposer.** `V` is read from this
+     * peer's view — demand ages out by local receive time and wake clamps are not replicated — so
+     * peers legitimately disagree on it. What makes creation deterministic is that the *finished*
+     * record travels in the log entry and every peer applies the same bytes. Two peers calling
+     * this for the same [id] therefore propose two different records: they do not merge, the id
+     * resolves to no record, and the child starves. Drive each generation from one proposer.
+     */
+    public suspend fun prepareNeutral(
+        id: AttachmentId,
+        parent: GroupId,
+        child: GroupId,
+        weight: Weight,
+        timeout: Duration? = null,
+    ): ControlOutcome =
+        prepare(
+            AttachmentRecord.neutral(
+                id = id,
+                parent = parent,
+                child = child,
+                weight = weight,
+                parentVirtualTime = node.parentVirtualTime(parent) ?: Rational.ZERO,
+            ),
+            timeout,
+        )
 
     /**
      * Open delegation across [edge], serialized through the log (design §9 #2). The **reshape

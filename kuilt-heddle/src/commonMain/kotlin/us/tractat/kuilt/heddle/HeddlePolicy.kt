@@ -14,7 +14,8 @@ package us.tractat.kuilt.heddle
  * @property demand how much more the child could usefully take (design §6).
  * @property virtualOffset scheduler-local forward clamp applied on wake so an idle
  *   child cannot bank a backlog of virtual time (design §7.2). `ZERO` for a child
- *   that never slept; computed by [HeddlePolicy.wakeOffset] on an idle→demand edge.
+ *   that never slept; computed by [HeddlePolicy.wakeOffset] on an idle→demand edge —
+ *   [HeddleNode] detects that edge and carries the offset here (issue #1695).
  *   Deliberately *not* replicated — divergent offsets reorder locally but never touch
  *   conservation.
  */
@@ -115,8 +116,8 @@ public object HeddlePolicy {
         }
         if (candidates.isEmpty()) return null
 
-        // 2. Weighted-mean parent virtual time V = Σ w·ev / Σ w.
-        val v = weightedMeanVirtualTime(candidates)
+        // 2. Weighted-mean parent virtual time V = Σ w·ev / Σ w — the same front [front] names.
+        val v = weightedMeanVirtualTime(candidates.map { it.edge })
 
         // 3. Eligible candidates: ev ≤ V. The minimum ev is always ≤ the mean, so the
         //    eligible set is non-empty; the min-ev fallback is defensive only.
@@ -144,13 +145,77 @@ public object HeddlePolicy {
     }
 
     /**
+     * Is [edge] **currently competing** — does its child want more service than it already
+     * holds? `additionalNeed = targetOutstanding − outstanding > 0`, which is [pick]'s step-1
+     * candidate predicate with the quantum trims (holdings, `maximumUsefulGrant`, the caps)
+     * dropped.
+     *
+     * Those trims decide who can be *served this round on this peer*; that is a different
+     * question from who is competing, and a peer with nothing to delegate must still be able to
+     * answer the second one — it may be the one creating a generation. This is the single
+     * definition of the set [front] takes its mean over (issue #1688).
+     */
+    public fun isDemanding(edge: PolicyEdge): Boolean =
+        edge.demand.targetOutstanding - edge.summary.outstanding > 0L
+
+    /**
+     * The parent's **current virtual time** — the front of the set of children competing under
+     * it right now (design §7.2, §7.3 step 2). This is the value a *joiner* is seated at, under
+     * one rule for both kinds of joiner: [AttachmentRecord.neutral] rounds it into a newborn's
+     * `initialVirtualTime`, and [wakeOffset] clamps a waking child up to it.
+     *
+     * The set is the **demanding candidates** ([isDemanding]), not every ACTIVE child. The two
+     * differ the moment a sibling idles, and the difference has a fairness sign in *both*
+     * directions: with a runner at `ev = 20` and an idler parked at `0` the all-ACTIVE mean is
+     * `10`, so a newborn seated there starts half the runner's lifetime behind the front — the
+     * lifetime credit §10.5 forbids, and precisely the idle credit the §10.6 clamp denies the
+     * idler itself. Symmetrically, a sibling that is *satisfied and ahead* pulls the all-ACTIVE
+     * mean past the real front and the newborn takes an arbitrary penalty. The mean over the set
+     * the joiner will actually compete in is neutral by construction.
+     *
+     * [excluding] names edges that must not count toward the front. A newborn is excluded for
+     * free — it is not an edge yet — but a waker is already ACTIVE and already demanding by the
+     * time the clamp is computed, so it has to be named, or it drags the front back toward its
+     * own stale virtual service and banks the credit anyway. Co-wakers must be named for the
+     * same reason: two siblings waking together would otherwise average each other's staleness
+     * into the front and both keep it.
+     *
+     * When nothing in the surviving set is demanding, the fallback is the **maximum** effective
+     * virtual service rather than the mean. §10.5 is one-directional — credit is forbidden, a
+     * sliver of penalty is merely undesirable — so the conservative choice is the bound that can
+     * only ever give up.
+     *
+     * **Not derivable from replicated state, by design.** Demand ages out by *local* receive
+     * time and [PolicyEdge.virtualOffset] is deliberately not replicated, so two peers can and
+     * do compute different fronts. That is safe only because creation agrees by **carriage, not
+     * derivation**: the finished record travels in the log entry and every peer applies the same
+     * bytes. Never invite two peers to derive the same generation independently — divergent
+     * records under one id do not collapse, and the child starves.
+     *
+     * @param edges the parent's immediate children.
+     * @param excluding edges that must not count toward the front — the joiner, plus any
+     *   co-joiners being seated in the same act.
+     * @return the front, or `null` when no edge survives [excluding] and there is therefore no
+     *   set to take a front of.
+     */
+    public fun front(edges: List<PolicyEdge>, excluding: Set<AttachmentId> = emptySet()): Rational? {
+        val considered = if (excluding.isEmpty()) edges else edges.filterNot { it.record.id in excluding }
+        if (considered.isEmpty()) return null
+        val demanding = considered.filter { isDemanding(it) }
+        // Nothing competing ⇒ no mean to take; fall back to the max, which can only give up.
+        if (demanding.isEmpty()) return considered.maxOf { effectiveVirtualService(it) }
+        return weightedMeanVirtualTime(demanding)
+    }
+
+    /**
      * The forward clamp applied when a child transitions idle→demanding
      * (design §7.2): `max(0, front − vRaw − sleeperCredit / weight)`. Adding this
      * offset to [virtualService] clamps the waker up to the current front (with default
      * `sleeperCredit = 0`, exactly to the front), so it cannot claim a backlog of idle
      * virtual time. The result is the [PolicyEdge.virtualOffset] the caller stores.
      *
-     * @param front the parent's virtual time at the moment of waking.
+     * @param front the parent's virtual time at the moment of waking — [front], with the waker
+     *   itself (and any co-waker) excluded.
      * @param vRaw the edge's raw [virtualService].
      * @param weight the edge's weight.
      * @param sleeperCredit bounded credit the waker may keep (default `0`).
@@ -190,13 +255,16 @@ public object HeddlePolicy {
         )
     }
 
-    /** `V = Σ w·ev / Σ w` over the candidate set (design §7.3 step 2), exact rational. */
-    private fun weightedMeanVirtualTime(candidates: List<Candidate>): Rational {
+    /**
+     * `V = Σ w·ev / Σ w` over [edges] (design §7.3 step 2), exact rational. One definition
+     * shared by [pick]'s step 2 and [front]; [edges] must be non-empty.
+     */
+    private fun weightedMeanVirtualTime(edges: List<PolicyEdge>): Rational {
         var weightedSum = Rational.ZERO
         var weightSum = Rational.ZERO
-        for (c in candidates) {
-            val w = Rational.of(c.edge.record.weight.numerator, c.edge.record.weight.denominator)
-            weightedSum += w * c.virtualService
+        for (e in edges) {
+            val w = Rational.of(e.record.weight.numerator, e.record.weight.denominator)
+            weightedSum += w * effectiveVirtualService(e)
             weightSum += w
         }
         return weightedSum / weightSum
