@@ -40,7 +40,10 @@ public fun appleNwLoom(
     policy: DeliveryPolicy = DeliveryPolicy.Reliable,
     weaveTimeout: Duration = NwLoom.DEFAULT_WEAVE_TIMEOUT,
 ): NwLoom = NwLoom(
-    api = RealNwApi(NwPsk.derive(roomKey, serviceType)),
+    // Pass selfId to BOTH: the loom keys its pre-dial self-filter on it, and RealNwApi advertises it in
+    // the Bonjour TXT record as the discovered NwEndpoint.id — the two MUST agree for self-filtering to
+    // fire under Rendezvous.New's shared service name (Option A, #1502).
+    api = RealNwApi(NwPsk.derive(roomKey, serviceType), selfId = selfId),
     serviceType = serviceType,
     selfId = selfId,
     policy = policy,

@@ -277,13 +277,18 @@ private class RedialCoordinator(
 
     private fun onEndpointFound(endpoint: NwEndpoint) {
         // Drop this loom's OWN endpoint. A device that advertises AND browses the same type is delivered
-        // its own advertisement by real Bonjour/mDNS (and by FakeNwRadio, #1485). For Rendezvous.Existing
-        // this loom advertised serviceName = selfId.value (distinct UUIDs), so only self carries it — skip
-        // it entirely (no self-ghost in the lobby, no self-redial). For Rendezvous.New the serviceName is
-        // the shared session name, so self is indistinguishable here; the redial loop still parks once the
-        // NwSeam self-connection guard resolves it to selfId and marks the endpoint settled.
-        if (endpoint.serviceName == selfId.value) {
-            log.debug { "nw.loom.self-skip endpoint=${endpoint.id} self=${selfId.value}" }
+        // its own advertisement by real Bonjour/mDNS (and by FakeNwRadio, #1485). The self-filter keys on
+        // the STABLE [NwEndpoint.id] — the peer's PeerId, published per-peer in the Bonjour TXT record
+        // (Option A, #1502) — NOT on the human-readable serviceName. This matters under Rendezvous.New,
+        // where EVERY peer advertises the same shared session name as its serviceName: a serviceName-keyed
+        // filter could never recognise self there, so the loom dialled its own endpoint dozens of times
+        // per session (caught only post-connect by the NwSeam guard) — the AWDL-only symptom of #1502.
+        // For Rendezvous.Existing the id is still selfId (the loom advertises selfId as both name and TXT
+        // id), so this stays correct there too. Backstop: if a browsed endpoint carries no TXT PeerId,
+        // RealNwApi falls back to id = serviceName; under Rendezvous.New that is the shared name, so this
+        // filter cannot fire and the NwSeam self-connection guard resolves+settles it post-connect (#1466).
+        if (endpoint.id == selfId.value) {
+            log.debug { "nw.loom.self-skip endpoint=${endpoint.id} serviceName=${endpoint.serviceName} self=${selfId.value}" }
             return
         }
         onDiscovered(endpoint)
@@ -311,9 +316,10 @@ private class RedialCoordinator(
     }
 
     private fun onEndpointLost(endpoint: NwEndpoint) {
-        // Symmetric with the self-skip in [onEndpointFound]: this loom's own endpoint was never added to the
-        // roster, so there is nothing to prune (and pruning a set that never held it is a harmless no-op).
-        if (endpoint.serviceName == selfId.value) return
+        // Symmetric with the self-skip in [onEndpointFound] (keyed on the stable TXT-derived id, #1502):
+        // this loom's own endpoint was never added to the roster, so there is nothing to prune (and pruning
+        // a set that never held it is a harmless no-op).
+        if (endpoint.id == selfId.value) return
         onLost(endpoint)
         log.debug { "nw.loom.lost endpoint=${endpoint.id} self=${selfId.value} → pruned from visiblePeers" }
     }
