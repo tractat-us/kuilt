@@ -55,4 +55,31 @@ class GCounterTest {
         val encoded = Json.encodeToString(GCounter.serializer(), gc)
         assertEquals(gc, Json.decodeFromString(GCounter.serializer(), encoded))
     }
+
+    @Test
+    fun replicasListsEverySlotHolder() {
+        assertEquals(setOf(a, b), GCounter.of(a to 2L, b to 5L).replicas())
+    }
+
+    @Test
+    fun replicasIsEmptyForZero() {
+        assertEquals(emptySet(), GCounter.ZERO.replicas())
+    }
+
+    @Test
+    fun replicasCountsAnIncrementerButNotAnUntouchedReplica() {
+        val gc = GCounter.ZERO.let { it.piece(it.inc(a)) }
+        assertEquals(setOf(a), gc.replicas())
+    }
+
+    /**
+     * [GCounter.of] can seed a slot at `0`, and such a replica *is* listed — the set is every
+     * replica with a slot, not every replica with a positive count. Through [GCounter.inc] the
+     * two coincide (an increment must be positive), so this only bites a hand-seeded or
+     * deserialized counter. Pinned because the distinction is invisible on the mutator path.
+     */
+    @Test
+    fun replicasListsAZeroSeededSlot() {
+        assertEquals(setOf(a, b), GCounter.of(a to 0L, b to 5L).replicas())
+    }
 }

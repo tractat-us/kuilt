@@ -28,7 +28,12 @@ public class GCounter private constructor(
     /** This replica's current count (0 if it has never incremented). */
     public fun count(replica: ReplicaId): Long = counts[replica] ?: 0L
 
-    /** The replicas that have ever incremented a slot — the counter's non-zero authors. */
+    /**
+     * The replicas holding a slot in this counter. On the mutator path that is exactly the
+     * replicas that have ever incremented, since [inc] must be positive — but [of] can seed a
+     * slot at `0`, and such a replica *is* listed. The set is "has a slot", not "has a positive
+     * count"; take [count] if you need the latter.
+     */
     public fun replicas(): Set<ReplicaId> = counts.keys
 
     /**
