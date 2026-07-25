@@ -242,7 +242,7 @@ class HeddlePolicyTest {
         }
         val parentVt = incumbent.virtualService() // 30
         // Newborn created neutrally: its baseline is the parent's current virtual time.
-        val newborn = Sim("n", Weight.ONE, initialVirtualTime = parentVt.numerator / parentVt.denominator)
+        val newborn = Sim("n", Weight.ONE, initialVirtualTime = AttachmentRecord.neutralInitialVirtualTime(parentVt))
         assertEquals(incumbent.virtualService(), newborn.virtualService(), "newborn should start level")
 
         var newbornGrants = 0
@@ -278,7 +278,7 @@ class HeddlePolicyTest {
         val v = parentVirtualTime(listOf(light, heavy))
         assertEquals(Rational.of(109, 10), v, "the fixture must put the parent at a fractional V")
 
-        val newborn = Sim("n", Weight.ONE, initialVirtualTime = v.numerator / v.denominator)
+        val newborn = Sim("n", Weight.ONE, initialVirtualTime = AttachmentRecord.neutralInitialVirtualTime(v))
 
         assertAll(
             // §10.5: a newborn never starts behind the front — that is lifetime credit.

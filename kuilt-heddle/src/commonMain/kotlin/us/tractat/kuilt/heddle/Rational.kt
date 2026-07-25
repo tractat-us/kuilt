@@ -69,6 +69,22 @@ public class Rational private constructor(
     override fun compareTo(other: Rational): Int =
         checkedMul(numerator, other.denominator).compareTo(checkedMul(other.numerator, denominator))
 
+    /**
+     * The **exact ceiling** — the least `Long` that is `>= this`. `7/2` ceils to `4`,
+     * `-7/2` to `-3`, and a whole number to itself.
+     *
+     * This is the only sanctioned way to land an exact virtual time on a `Long` field
+     * (see [AttachmentRecord.neutralInitialVirtualTime]). Note that Kotlin's `/` on `Long`
+     * truncates toward zero — for the non-negative virtual times the scheduler deals in
+     * that is a *floor*, which rounds the wrong way for fairness.
+     */
+    public fun ceil(): Long {
+        val quotient = numerator / denominator
+        // The denominator is strictly positive, so the remainder carries the numerator's sign;
+        // a positive remainder means the truncation went down and one step back up is owed.
+        return if (numerator % denominator > 0L) checkedAdd(quotient, 1L) else quotient
+    }
+
     override fun equals(other: Any?): Boolean =
         other is Rational && numerator == other.numerator && denominator == other.denominator
 
