@@ -15,6 +15,7 @@ import kotlinx.serialization.Serializable
  *
  * @property numerator the ratio's numerator; always `> 0` and coprime with [denominator].
  * @property denominator the ratio's denominator; always `> 0` and coprime with [numerator].
+ * @sample us.tractat.kuilt.heddle.sampleWeightOrdering
  */
 @Serializable
 public class Weight private constructor(

@@ -6,6 +6,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.transform
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
@@ -20,6 +21,7 @@ import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.Swatch
 import us.tractat.kuilt.crdt.ReplicaId
+import us.tractat.kuilt.liveness.PartitionEvent
 import us.tractat.kuilt.quilter.QuilterConfig
 import kotlin.random.Random
 import kotlin.test.Test
@@ -477,6 +479,50 @@ class HeddleNodeTest {
                 "crashed peer's root holdings unchanged by the crash",
             )
             assertTrue(crashing.earmarked(g1) > 0L, "the crashed peer's earmark is still held, stranded")
+        }
+
+    // ─────────────────────────────────────────────────────────────────────────────
+    // 6b. The liveness surface fires: a silent peer surfaces on `partitionEvents` and in
+    //     `unreachable`, and the §8.2 bound keeps counting it (never silently forgotten).
+    // ─────────────────────────────────────────────────────────────────────────────
+
+    @Test
+    fun silentPeerSurfacesOnPartitionEventsAndUnreachable() =
+        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+            val h = harness(peers = 2, mint = mapOf(0 to 100L, 1 to 100L), topology = flatTopology())
+            h.pump()
+            val observer = h.peers[0].node
+            val silent = h.peers[1].id
+
+            // Record every liveness signal the observer emits, before anything goes wrong.
+            val events = mutableListOf<PartitionEvent>()
+            backgroundScope.launch { observer.partitionEvents.collect { events += it } }
+            h.pump()
+
+            // Peer 1 goes silent (a crash): its heartbeats stop reaching peer 0, but it stays in
+            // the roster — so peer 0's detector must time it out and report it, never silently drop it.
+            h.partition(1)
+
+            // Past the 15 s unresponsive timeout: a PeerUnresponsive must surface for the silent peer.
+            h.pump(20.seconds.inWholeMilliseconds)
+            assertTrue(
+                events.any { it is PartitionEvent.PeerUnresponsive && ReplicaId(it.peerId.value) == silent },
+                "a silent peer must surface a PeerUnresponsive on partitionEvents, got $events",
+            )
+            // The durable `unreachable` set reflects it as soon as it is flagged.
+            assertTrue(silent in observer.unreachable.value, "the silent peer is marked unreachable")
+
+            // Past the further 60 s reconnect window: it escalates to PeerLost (still stranded, never reclaimed).
+            h.pump(70.seconds.inWholeMilliseconds)
+            assertTrue(
+                events.any { it is PartitionEvent.PeerLost && ReplicaId(it.peerId.value) == silent },
+                "past the reconnect window the silent peer must surface a PeerLost, got $events",
+            )
+
+            // The §8.2 bound still folds the unreachable peer into the roster — the metrics stay
+            // consistent, they don't silently exclude a partitioned peer.
+            assertTrue(silent in observer.unreachable.value, "the lost peer stays unreachable (add-only, no auto re-monitor)")
+            assertTrue(observer.boundMetrics(root).isConsistent, "boundMetrics stays consistent with a peer unreachable")
         }
 
     // ─────────────────────────────────────────────────────────────────────────────

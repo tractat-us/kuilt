@@ -24,6 +24,11 @@ If you catch yourself writing any of these, stop — kuilt already ships it:
 | replicating a CRDT over a connection by hand | `Quilter` | [Replicated data](#replicated-data) |
 | a `seenIds` set to skip already-handled messages | `GSet` / kuilt dedup | [Dedup](#dedup) |
 | merging several mDNS/Multipeer discovery feeds into one lobby roster | `discoveryRoster` | [Discovery](#discovery) |
+| a weighted / fair-share scheduler — "give this group 3× the share", "who runs the next quantum", a hoarder-proof round-robin | `HeddlePolicy` + `HeddleNode` | [Fair share & placement](#fair-share--placement) |
+| an entitlement / quota ledger, "reserve a slot before running then charge once", a coordination-free budget that converges across peers | `EntitlementLedger` + `HeddleNode.reserve`/`complete` | [Fair share & placement](#fair-share--placement) |
+| minting new quota or re-parenting a group at runtime and needing everyone to agree on the order (no double-mint on a split) | `heddleGoverned` (`GovernedHeddleNode`) | [Fair share & placement](#fair-share--placement) |
+| gating a `WarpNode`'s tasks by a weighted lane — "interactive gets 3× batch" | `HeddleAdmissionControl` + `TaskDescriptor.inLane` | [Fair share & placement](#fair-share--placement) |
+| "only run this on a GPU / in-region peer", a placement predicate over peer capabilities, "can this peer run this task" | `Affinity` + `TaskDescriptor.where` + `CapSet` | [Fair share & placement](#fair-share--placement) |
 
 ## Discovery
 
@@ -401,6 +406,143 @@ internal fun sampleGameHostJoin() = runTest(StandardTestDispatcher(), timeout = 
     host.close()
     joiner.close()
 }
+```
+
+## Fair share & placement
+
+When several groups draw from one shared pool — computing time, task slots, a rate
+budget — and you want each to get the slice it was promised (say three parts to one),
+a spare-capacity lender when someone is idle, and all of it holding up while the
+network is flaky with **no central referee**, that is `:kuilt-heddle`. Don't hand-roll
+a weighted round-robin, a quota counter, or a "reserve then charge" bookkeeper — the
+pieces below already converge across partitioned peers with no coordination on the
+spend path.
+
+### Who runs the next quantum (weighted fair share)
+
+**Intent:** decide which of several competing children gets the next slice of a shared
+budget, weighted (3:1) and hoarder-proof — "who runs next", a weighted scheduler, EEVDF.
+**Primitive:** `HeddlePolicy.pick(edges, config, localHoldings)` (`:kuilt-heddle`) — a
+**pure** function: no wall clock, no randomness, no floating point, so every replica picks
+the same winner. It serves the eligible child (not running ahead of its fair share) whose
+next grant finishes soonest in virtual time. Returns `null` when nobody is both eligible
+and demanding.
+
+<!-- verbatim from kuilt-heddle/src/commonSamples/kotlin/us/tractat/kuilt/heddle/EntitlementLedgerSamples.kt#samplePolicyPick -->
+```kotlin
+    // Both start level (no service yet); the heavier-weighted child has the earliest
+    // virtual deadline, so it is served first.
+    val grant = HeddlePolicy.pick(
+        edges = listOf(edge("heavy", Weight.of(3), issued = 0L), edge("light", Weight.of(1), issued = 0L)),
+        config = PolicyConfig(quantum = 6L),
+        localHoldings = 1_000L,
+    )
+    check(grant == Grant(AttachmentId("heavy"), 6L))
+```
+
+### Run it over a network — reserve, run, charge once
+
+**Intent:** put the fair-share tally on a live connection between peers — advertise appetite,
+allocate entitlement down a tree, then reserve a slot before running work and charge it
+exactly once on completion (even if `complete` is called twice).
+**Primitive:** `HeddleNode` via `heddleStatic(...)` (`:kuilt-heddle`) — hands you the tally,
+the demand board, reservations, and liveness over a `Seam` from a fixed roster. Every peer
+that bootstraps with the same root, mint, and topology begins from an identical ledger and
+stays in step over the wire on its own.
+
+<!-- verbatim from kuilt-heddle/src/commonSamples/kotlin/us/tractat/kuilt/heddle/EntitlementLedgerSamples.kt#sampleHeddleNode -->
+```kotlin
+    // The leaf wants work; one scheduling round delegates entitlement down toward it.
+    node.advertise(e.id, Demand(targetOutstanding = 100L, maximumUsefulGrant = 100L))
+    node.schedule(root)
+
+    // Leaf work reserves a slice, runs, then completes — completing twice charges once.
+    val reservation = node.reserve(leaf, maximumCost = 10L)
+    if (reservation != null) {
+        node.complete(reservation, actualCost = 7L)
+        node.complete(reservation, actualCost = 7L) // idempotent no-op
+    }
+```
+
+### Creating quota or reshaping the tree at runtime (with agreement)
+
+**Intent:** mint new entitlement or re-parent a group *while the system runs*, and need
+everyone to agree on the order so a split-brain can't double-mint and two overlapping
+reshapes don't corrupt the tree.
+**Primitive:** `heddleGoverned(...)` → `GovernedHeddleNode` (`:kuilt-heddle`) — the same data
+plane as `heddleStatic`, but `mint`/`prepare`/`activate`/`close`/`retire` are serialized
+through `:kuilt-raft`; each returns a `ControlOutcome` (`Applied`, or `Conflict` with the
+structured reason when it loses a race). The spend path (`schedule`/`reserve`/`complete`)
+never touches the log.
+
+<!-- verbatim from kuilt-heddle/src/commonSamples/kotlin/us/tractat/kuilt/heddle/EntitlementLedgerSamples.kt#sampleHeddleGoverned -->
+```kotlin
+    // Mint and reshape are serialized through the Raft log — each returns a structured outcome.
+    check(node.mint(self, 100L) is ControlOutcome.Applied)
+    node.prepare(AttachmentRecord(edge, root, leaf, Weight.ONE, initialVirtualTime = 0L))
+    node.activate(edge)
+
+    // The spend path is coordination-free — it issues no consensus messages.
+    node.advertise(edge, Demand(targetOutstanding = 100L, maximumUsefulGrant = 100L))
+    node.schedule(root)
+    node.reserve(leaf, maximumCost = 10L)?.let { node.complete(it, actualCost = 7L) }
+```
+
+### Weighted lanes over a warp workload
+
+**Intent:** you already run tasks across peers with `:kuilt-warp` and want to say
+"interactive work gets 3× the pool that batch work does" — without changing how warp picks
+who runs what.
+**Primitive:** `HeddleAdmissionControl(heddle)` plugged into `WarpNode`'s admission gate,
+plus `TaskDescriptor.inLane("...")` on the producer side (`:kuilt-warp-heddle`). A lane maps
+to a fair-share leaf; the task reserves that leaf's entitlement before it runs and is charged
+on completion. Out of entitlement ⇒ the task **defers** (never dropped). An untagged task
+rides the root lane and is admitted for free — warp's fast path stays exactly as cheap.
+
+<!-- verbatim from kuilt-warp-heddle/src/commonSamples/kotlin/us/tractat/kuilt/warp/heddle/WarpHeddleSamples.kt#sampleHeddleAdmissionControl -->
+```kotlin
+    // 1. Build the adapter — warp's opaque AdmissionControl, backed by the fair-share ledger.
+    val admission = HeddleAdmissionControl(heddle)
+    // Pass it to a node:  WarpNode(selfId, seam, roster, scope, clock = …, registry = …,
+    //                              admissionControl = admission)
+
+    // 2. Tag a task into a lane on the producer side.
+    val interactive: TaskDescriptor =
+        TaskDescriptor(op = OpId("score"), args = "doc-1".encodeToByteArray())
+            .inLane("acme/interactive")
+    check(interactive.lane == Lane("acme/interactive"))
+
+    // 3. An untagged task rides the default root lane and is admitted un-gated.
+    val untagged = TaskDescriptor(op = OpId("score"), args = ByteArray(0))
+    check(untagged.lane == Lane.ROOT)
+    check(admission.admit(untagged) === AdmissionTicket.NOOP)
+```
+
+### Where a task may run (location eligibility)
+
+**Intent:** *where* a task is allowed to run — "needs a GPU", "must stay in us-east", "sit
+where the data is". This is orthogonal to the *how much* a lane answers: eligibility
+introduces no budget and never touches the ledger.
+**Primitive:** `TaskDescriptor.where(affinity)` with an `Affinity` predicate over the `CapSet`
+tokens a peer advertises (`:kuilt-warp`). The predicate is a serializable value (`has`/`attr`
+combined with `and`/`or`/`not`), not a lambda — it rides the wire, and placement hashes over
+only the eligible peers. `Affinity.Anywhere` (the default) requires nothing. Composes with
+`inLane(...)`: a task may carry both.
+
+<!-- verbatim from kuilt-warp/src/commonSamples/kotlin/us/tractat/kuilt/warp/WarpSamples.kt#sampleAffinity -->
+```kotlin
+    // "must run on a GPU node in us-east" — a composable predicate, not a lambda (it rides the wire).
+    val where = Affinity.has("GPU") and Affinity.attr("region", "us-east")
+
+    val gpuUsEast = CapSet(tokens = setOf("GPU"), attributes = mapOf("region" to "us-east"))
+    val cpuUsWest = CapSet(tokens = setOf("CPU"), attributes = mapOf("region" to "us-west"))
+    check(where.matches(gpuUsEast))       // eligible
+    check(!where.matches(cpuUsWest))      // not eligible
+    check(Affinity.Anywhere.matches(cpuUsWest)) // the default requires nothing
+
+    // Tag a task with the requirement; placement then hashes over only the eligible peers.
+    val task = TaskDescriptor(OpId("train"), byteArrayOf(1, 2, 3)).where(where)
+    check(task.affinity == where)
 ```
 
 ## Dedup

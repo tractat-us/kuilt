@@ -352,6 +352,41 @@ class HeddleControlPlaneTest {
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
+    // H7 coverage: Activate/Close of an unknown edge — and Activate of a RETIRED edge —
+    // surface as a structured `Refused`, never a lying `Applied`. Exercises the three
+    // local-refusal branches in decideAndApply (activate-unknown, activate-retired,
+    // close-refused) that the DualInbound/Prepare tests never reach.
+    // ═══════════════════════════════════════════════════════════════════════════
+    @Test
+    fun activateAndCloseOfMissingOrRetiredEdgeAreRefused() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        val fake = FakeRaftNode(selfId = NodeId("solo"), initialRole = RaftRole.Leader)
+        val plane = HeddleControlPlane(fake, ReplicaId("solo"), backgroundScope, RecordingSink(), EntitlementLedger.ZERO, "boot-refuse")
+        val unknown = AttachmentId("never-prepared")
+
+        // Activate/Close of an edge the projection has never seen: refused, not applied.
+        val activateUnknown = plane.submit(ControlCommand.Activate(unknown))
+        assertIs<ControlOutcome.Conflict>(activateUnknown)
+        assertIs<ControlConflict.Refused>(activateUnknown.conflict)
+
+        val closeUnknown = plane.submit(ControlCommand.Close(unknown))
+        assertIs<ControlOutcome.Conflict>(closeUnknown)
+        assertIs<ControlConflict.Refused>(closeUnknown.conflict)
+
+        // Drive an edge all the way to RETIRED, then re-activating it is refused (retired/divergent) —
+        // a closed generation can never be resurrected (design §5.4.3 / module.md closure-wins rule).
+        val e = AttachmentId("e")
+        assertIs<ControlOutcome.Applied>(plane.submit(ControlCommand.Prepare(AttachmentRecord(e, root, GroupId("c"), Weight.ONE, 0L))))
+        assertIs<ControlOutcome.Applied>(plane.submit(ControlCommand.Activate(e)))
+        assertIs<ControlOutcome.Applied>(plane.submit(ControlCommand.Close(e)))
+        assertIs<ControlOutcome.Applied>(plane.submit(ControlCommand.Retire(e))) // projection has no outstanding
+        assertEquals(Lifecycle.RETIRED, plane.projectionSnapshot().lifecycle(e))
+
+        val reactivateRetired = plane.submit(ControlCommand.Activate(e))
+        assertIs<ControlOutcome.Conflict>(reactivateRetired)
+        assertIs<ControlConflict.Refused>(reactivateRetired.conflict)
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
     // FIX 1: governed retire's advisory drain gate — a drained CLOSING edge retires;
     // a non-drained edge is refused LOCALLY (retiring it would strand entitlement).
     // ═══════════════════════════════════════════════════════════════════════════
