@@ -20,6 +20,7 @@ import us.tractat.kuilt.core.Swatch
 import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.crdt.EphemeralMap
 import us.tractat.kuilt.crdt.EphemeralMapTracker
+import us.tractat.kuilt.crdt.IncarnationClock
 import us.tractat.kuilt.crdt.Patch
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.liveness.HeartbeatPartitionDetector
@@ -32,21 +33,6 @@ import kotlin.time.Instant
 /** Identity of one local reservation — a leaf earmark awaiting completion (design §4.4). */
 @JvmInline
 public value class ReservationId internal constructor(public val value: String)
-
-/** Low bits reserved for the per-boot demand counter; the epoch occupies the bits above. */
-private const val EPOCH_CLOCK_SHIFT: Int = 32
-
-/**
- * The starting demand/capability clock for a node booted at [epoch]: the epoch shifted into
- * the high bits, leaving the low [EPOCH_CLOCK_SHIFT] bits for a per-boot `++` counter. A
- * strictly-greater epoch therefore yields a strictly-greater clock than any the previous boot
- * could reach (its counter can never carry into the epoch bits within a boot), so a restarted
- * replica always out-clocks its dead incarnation.
- */
-private fun epochClockBase(epoch: Long): Long {
-    require(epoch in 0 until (1L shl 31)) { "epoch must be in [0, 2^31), was $epoch" }
-    return epoch shl EPOCH_CLOCK_SHIFT
-}
 
 /**
  * One peer's live view of a weighted fair-share session over a [Seam] — the **join
@@ -167,11 +153,10 @@ public class HeddleNode internal constructor(
     private val earmarks = HashMap<GroupId, Long>()
     private val selfDemand = HashMap<AttachmentId, Demand>()
 
-    // The demand-board clock packs the per-boot [epoch] in the high bits and a monotonic
-    // per-boot counter in the low 32 bits, so (a) it strictly increases within a boot (++)
-    // and (b) a higher [epoch] strictly dominates any clock from a lower one — a restart is
-    // always fresh by clock, not merely by TTL timing (#1666).
-    private var demandClock = epochClockBase(epoch)
+    // The demand-board clock packs the per-boot [epoch] above a monotonic per-boot counter, so
+    // a restart is always fresh by clock rather than merely by TTL timing (#1666). See
+    // [IncarnationClock]. Advanced only under [lock].
+    private var demandClock = IncarnationClock.base(epoch)
     private var reservationSeq = 0L
     private val detectors = HashMap<PeerId, HeartbeatPartitionDetector>()
 
@@ -381,7 +366,8 @@ public class HeddleNode internal constructor(
         val update = lock.withLock {
             if (demand == Demand.NONE) selfDemand.remove(edge) else selfDemand[edge] = demand
             val board = DemandBoard(selfDemand.toMap())
-            val u = EphemeralMap.empty<DemandBoard>().put(self, board, ++demandClock)
+            demandClock = IncarnationClock.next(demandClock)
+            val u = EphemeralMap.empty<DemandBoard>().put(self, board, demandClock)
             demandTracker.received(u)
             u
         }

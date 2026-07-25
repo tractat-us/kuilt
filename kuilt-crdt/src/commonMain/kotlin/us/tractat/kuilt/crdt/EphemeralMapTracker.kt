@@ -13,6 +13,23 @@ package us.tractat.kuilt.crdt
  *   stale re-deliveries.
  * - Surfaces [live]: the set of entries not yet expired and not departed.
  *
+ * ## Update contract — feed [received] author-fresh deltas
+ *
+ * Every entry handed to [received] should be one its **author** just published.
+ * That is what makes "an update arrived" mean "that replica is alive", which is
+ * the whole basis of TTL presence.
+ *
+ * Relaying is the thing to avoid: re-sending another replica's slot, echoing a
+ * merged map back, or exchanging [snapshot] wholesale (as generic anti-entropy
+ * does) delivers entries whose author may be long gone. A relayed entry that
+ * *differs* from what this observer holds is indistinguishable from a fresh
+ * heartbeat, so it re-stamps the TTL and keeps a dead — or gracefully
+ * departed — replica visible for another full window, once per delivery.
+ * [received] does guard the common steady-state case: an inbound entry
+ * **identical** to the one already held is inert (see [received]), so echoing an
+ * unchanged merged map cannot resurrect anyone. But that guard is a backstop,
+ * not a licence to relay.
+ *
  * ## Clock contract
  *
  * [clock] is a `() -> Long` that returns the current local monotonic time in
@@ -51,6 +68,16 @@ public class EphemeralMapTracker<V>(
      * one TTL of its first heartbeat, rather than being pinned behind the dead
      * incarnation's higher clock forever — honouring [EphemeralMap]'s
      * restart-recovery contract.
+     *
+     * **Identical re-delivery is inert.** An inbound entry equal to the one already
+     * held (same value, same clock) carries no evidence that its author is alive —
+     * it is this observer's own copy coming back, via a merged-state echo or an
+     * anti-entropy round. Such an entry never re-stamps the receive time, expired
+     * slot or not, so a crashed peer stays evicted however many times its last
+     * frame is re-delivered. A genuine restart's heartbeat differs (a new
+     * incarnation-epoch clock, or simply a different counter) and is still
+     * accepted. The one cost: a restart whose very first heartbeat reproduces the
+     * dead entry exactly is deferred to its *next* heartbeat.
      */
     public fun received(update: EphemeralMap<V>) {
         val now = clock()
@@ -59,7 +86,8 @@ public class EphemeralMapTracker<V>(
             val existing = state.entries[replica]
             // An expired existing slot reads as absent: accept the inbound as fresh (re-stamp)
             // and mark the stale slot for eviction so the join takes the lower-clock restart.
-            val expired = existing != null && isExpired(replica, now)
+            // Unless the inbound is our own copy echoed back — that is no evidence of life.
+            val expired = existing != null && inbound != existing && isExpired(replica, now)
             if (expired || advancesEntry(inbound, existing)) {
                 receiveTime[replica] = now
             }
@@ -87,7 +115,14 @@ public class EphemeralMapTracker<V>(
     public fun live(): Map<ReplicaId, V> =
         state.live(receiveTime = receiveTime, now = clock(), ttlMs = ttlMs)
 
-    /** The current merged CRDT state (all entries, including departed/stale). */
+    /**
+     * The current merged CRDT state (all entries, including departed/stale).
+     *
+     * Intended for inspection and persistence. **Not** a frame to broadcast: it
+     * carries other replicas' slots, so feeding it to a remote [received] relays
+     * entries this replica did not author — see the update contract in the class
+     * KDoc. Publish only your own slot.
+     */
     public fun snapshot(): EphemeralMap<V> = state
 }
 

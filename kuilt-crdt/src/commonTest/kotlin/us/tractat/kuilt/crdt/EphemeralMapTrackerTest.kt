@@ -165,6 +165,99 @@ class EphemeralMapTrackerTest {
         assertEquals("v100", t.live()[a], "a within-TTL lower-clock delivery must not overwrite")
     }
 
+    // ---- identical re-delivery must not resurrect an expired slot (#1675) ----
+
+    @Test
+    fun identicalRedelivery_doesNotResurrectExpiredSlot() {
+        // Regression for #1675 break 1 ("zombie resurrection"): evict-on-read accepted ANY
+        // inbound entry for an expired slot as fresh, including a stale re-delivery of the dead
+        // incarnation's own frame. A re-delivery that is byte-identical to what we already hold
+        // carries no new information and must never re-stamp the TTL.
+        var time = 0L
+        val t = EphemeralMapTracker<String>(ttlMs = 5000L, clock = { time })
+        val frame = EphemeralMap.empty<String>().put(a, "dead", clock = 100L)
+        t.received(frame)
+        assertTrue(a in t.live())
+        // The peer crashes and never restarts; its slot ages out.
+        time = 5000L
+        assertFalse(a in t.live(), "crashed peer's slot must expire")
+        // A relay/anti-entropy round re-delivers the SAME entry after expiry.
+        t.received(frame)
+        assertFalse(a in t.live(), "an identical re-delivery must not resurrect a dead peer")
+    }
+
+    @Test
+    fun repeatedIdenticalRedelivery_neverResurrects() {
+        // Break 3: repeated post-expiry re-deliveries re-stamped the slot on every round, so the
+        // zombie stayed "live" indefinitely rather than for a bounded single TTL.
+        var time = 0L
+        val t = EphemeralMapTracker<String>(ttlMs = 5000L, clock = { time })
+        val frame = EphemeralMap.empty<String>().put(a, "dead", clock = 100L)
+        t.received(frame)
+        time = 5000L
+        repeat(10) {
+            t.received(frame)
+            time += 1000L
+            assertFalse(a in t.live(), "dead peer must stay evicted across repeated re-deliveries")
+        }
+    }
+
+    @Test
+    fun mergedStateRedelivery_evictsSilentPeer() {
+        // The shipped-consumer shape: a Quilter-backed presence loop feeds the MERGED map back
+        // into received() on every local heartbeat, so a silent peer's unchanged entry is
+        // re-delivered every heartbeat interval. Before the guard the silent peer was re-stamped
+        // once per interval and could never be TTL-evicted at all.
+        var time = 0L
+        val t = EphemeralMapTracker<String>(ttlMs = 5000L, clock = { time })
+        var selfClock = 1L
+        var merged = EphemeralMap.empty<String>()
+            .put(a, "self", clock = selfClock)
+            .put(b, "peer", clock = 1L) // b heartbeats once, then goes silent
+        t.received(merged)
+        assertTrue(b in t.live())
+        // a heartbeats every ttl/3; each heartbeat re-delivers the merged map, b's slot unchanged.
+        repeat(6) {
+            time += 5000L / 3
+            merged = merged.put(a, "self", clock = ++selfClock)
+            t.received(merged)
+        }
+        assertTrue(a in t.live(), "the heartbeating replica stays live")
+        assertFalse(b in t.live(), "a silent replica must be TTL-evicted despite merged re-delivery")
+    }
+
+    @Test
+    fun restartAfterIdenticalRedelivery_isStillAccepted() {
+        // The guard must not weaken #1666 restart recovery: a genuine restart heartbeat differs
+        // from the dead entry (per-boot epoch clock, or simply a different counter), so it is
+        // still accepted as fresh even after identical re-deliveries have been ignored.
+        var time = 0L
+        val t = EphemeralMapTracker<String>(ttlMs = 5000L, clock = { time })
+        val frame = EphemeralMap.empty<String>().put(a, "dead", clock = 100L)
+        t.received(frame)
+        time = 5000L
+        t.received(frame) // ignored — identical
+        assertFalse(a in t.live())
+        // Restart: lower counter, but a different entry.
+        t.received(EphemeralMap.empty<String>().put(a, "restarted", clock = 1L))
+        assertTrue(a in t.live(), "a genuine restart heartbeat must still be accepted")
+        assertEquals("restarted", t.live()[a])
+    }
+
+    @Test
+    fun identicalRedelivery_withinTtl_doesNotExtendTtl() {
+        // The pre-expiry path already ignored identical re-deliveries; pin it so the guard's
+        // symmetry (before and after expiry, an identical frame is inert) cannot regress.
+        var time = 0L
+        val t = EphemeralMapTracker<String>(ttlMs = 5000L, clock = { time })
+        val frame = EphemeralMap.empty<String>().put(a, "here", clock = 7L)
+        t.received(frame)
+        time = 4000L
+        t.received(frame)
+        time = 5000L
+        assertFalse(a in t.live(), "TTL must run from the original stamp, not the re-delivery")
+    }
+
     @Test
     fun equalClock_nullOverPresent_doesNotResetReceiveTime() {
         // A same-clock departure arriving AFTER a presence entry must lose (present wins),
