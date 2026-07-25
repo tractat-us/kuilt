@@ -79,16 +79,48 @@ internal sealed interface ControlCommand {
         val liveEdge: AttachmentId,
         val witness: EntitlementLedger,
     ) : ControlCommand
+     * Add [replica] to the **log-known roster** — the set a fence quantifies its acks over
+     * (`docs/heddle-ledger-relocation-design.md` §6.2; [EnrolledRoster]). Idempotent per replica.
+     *
+     * Any peer may enroll any replica: enrolling only ever **enlarges** the quantifier, so the
+     * error direction is a barrier that refuses (or waits) — never one that completes without a
+     * promise it needed. The reverse act, [Depart], is restricted for exactly that reason.
+     */
+    @Serializable
+    data class Enroll(val replica: ReplicaId) : ControlCommand
+
+    /**
+     * Remove [replica] from the log-known roster — **self-service only**: applied iff the act's
+     * [ControlEnvelope.proposer] *is* [replica]. Departing **shrinks** the quantifier, so it is a
+     * promise about the future ("I will never author another slot") and, per §6.1, only the
+     * promiser can make it. Third-party removal of a peer's authority is the unshipped
+     * [RevocationSeam]'s problem (§6.5 residual 1), not this command's. Idempotent per replica.
+     *
+     * Departing reclaims **nothing**: the replica's holdings and earmarks stay exactly where they
+     * are (`heddle-design.md` §8.1 — v1 ships no automatic reclamation).
+     */
+    @Serializable
+    data class Depart(val replica: ReplicaId) : ControlCommand
 }
 
 /**
- * The wire framing for one act: the [command] plus a [requestKey] that is **unique per logical
- * act and stable across a retry** (design §9 exactly-once). The apply loop dedups on it, and a
- * mint derives its [MintId] from it — so a retried act is applied at most once and distinct acts
- * never collide, restart-safe.
+ * The wire framing for one act: the [command], a [requestKey] that is **unique per logical act and
+ * stable across a retry** (design §9 exactly-once), and the [proposer] that submitted it. The apply
+ * loop dedups on the key, and a mint derives its [MintId] from it — so a retried act is applied at
+ * most once and distinct acts never collide, restart-safe.
+ *
+ * [proposer] is carried on the wire rather than inferred locally so that a proposer-sensitive gate
+ * — [ControlCommand.Depart]'s self-service rule — stays a **deterministic function of the log
+ * prefix**: every peer reads the same proposer out of the same committed bytes. It is self-asserted,
+ * which matches the module's crash-fault (not Byzantine) trust model, the same model the Raft log
+ * itself assumes.
  */
 @Serializable
-internal data class ControlEnvelope(val requestKey: String, val command: ControlCommand)
+internal data class ControlEnvelope(
+    val requestKey: String,
+    val command: ControlCommand,
+    val proposer: ReplicaId,
+)
 
 /**
  * The outcome of a committed control act, keyed to the log [index] it committed at. Because every
@@ -212,6 +244,13 @@ internal class HeddleControlPlane(
     /** The log-pure control-state projection — mutated ONLY by [applyEntry], in index order. */
     private var projection: EntitlementLedger = initial
 
+    /**
+     * The log-known roster (§6.2 prerequisite), held **beside** the projection rather than inside
+     * its ledger — the projection's counters must stay empty for the lifecycle gates to keep
+     * working. Mutated ONLY by [applyEntry], in index order, so it is log-pure by the same argument.
+     */
+    private var roster: EnrolledRoster = EnrolledRoster.before(nextIndex)
+
     /** In-flight local submits awaiting their committed outcome, keyed by requestKey. */
     private val pending = HashMap<String, CompletableDeferred<ControlOutcome>>()
 
@@ -266,6 +305,11 @@ internal class HeddleControlPlane(
      * causally-lagged leader can still commit a wrong magnitude — the issue #1665 residual (Wall A).
      */
     suspend fun fenceReadIndex(): Long = raft.readIndex()
+     * The log-known roster as applied so far — an immutable value, so the caller holds a consistent
+     * snapshot including its [EnrolledRoster.appliedIndex] and can ask [EnrolledRoster.enrolledAt]
+     * for the set as of any index in that prefix.
+     */
+    fun rosterSnapshot(): EnrolledRoster = lock.withLock { roster }
 
     /**
      * Propose [command], suspend until it commits (or is deduped), and return the outcome the apply
@@ -290,7 +334,7 @@ internal class HeddleControlPlane(
             applied[key]?.let { return it }
             pending[key] = deferred
         }
-        val bytes = Cbor.encodeToByteArray(ControlEnvelope.serializer(), ControlEnvelope(key, command))
+        val bytes = Cbor.encodeToByteArray(ControlEnvelope.serializer(), ControlEnvelope(key, command, self))
         try {
             // The timeout spans BOTH the propose and the apply-await, so a leader *crash* (a forwarded
             // proposal that never commits and never rejects) surfaces instead of hanging forever.
@@ -325,32 +369,42 @@ internal class HeddleControlPlane(
     private fun applyEntry(entry: LogEntry) {
         val envelope = runCatchingCancellable {
             Cbor.decodeFromByteArray(ControlEnvelope.serializer(), entry.command)
-        }.getOrNull() ?: return // a non-heddle entry (e.g. a config change) — no outcome, no projection change
+        }.getOrNull()
         lock.withLock {
+            // Advance the roster's applied index for EVERY committed entry, decodable or not — it is
+            // the prefix marker `enrolledAt` answers against, so it must track the log, not just the
+            // roster acts. A non-heddle entry (e.g. a config change) contributes only the index.
+            roster = roster.advancedTo(entry.index)
+            if (envelope == null) return // a non-heddle entry — no outcome, no projection change
             val prior = applied[envelope.requestKey]
             if (prior != null) {
                 // A retry that still committed a second entry — never apply twice; hand back the first outcome.
                 pending[envelope.requestKey]?.complete(prior)
                 return
             }
-            val outcome = decideAndApply(envelope.command, envelope.requestKey, entry.index)
+            val outcome = decideAndApply(envelope, entry.index)
             applied[envelope.requestKey] = outcome
             pending[envelope.requestKey]?.complete(outcome)
         }
     }
 
     /**
-     * Decide [command] against the **log-pure [projection]** and, if approved, apply its patch to the
-     * projection AND publish it to the data-plane [sink]. Called under [lock] so the projection read
-     * and mutation are atomic in log order. The dual-inbound gate reading `projection.liveInboundEdges`
-     * is why the control plane exists (see the class KDoc).
+     * Decide [envelope]'s command against the **log-pure [projection]** (and, for the roster acts,
+     * the log-pure [roster]) and, if approved, apply its patch to the projection AND publish it to
+     * the data-plane [sink]. Called under [lock] so the read and the mutation are atomic in log
+     * order. The dual-inbound gate reading `projection.liveInboundEdges` is why the control plane
+     * exists (see the class KDoc).
+     *
+     * Every input is a function of the log prefix — including [ControlEnvelope.proposer], which is
+     * read out of the committed bytes rather than from local knowledge, so the `Depart` gate below
+     * decides identically on every peer.
      */
-    private fun decideAndApply(command: ControlCommand, requestKey: String, index: Long): ControlOutcome =
-        when (command) {
+    private fun decideAndApply(envelope: ControlEnvelope, index: Long): ControlOutcome =
+        when (val command = envelope.command) {
             is ControlCommand.Mint -> {
                 // Mint identity is derived from the (unique, retry-stable, restart-safe) requestKey, so
                 // distinct acts never max-collide into one lost mint and a retry never double-mints.
-                apply(projection.mint(MintId("mint#$requestKey"), command.holder, command.amount))
+                apply(projection.mint(MintId("mint#${envelope.requestKey}"), command.holder, command.amount))
                 ControlOutcome.Applied(index)
             }
 
@@ -459,6 +513,38 @@ internal class HeddleControlPlane(
                     // The projection stays topology/lifecycle-only (its counters are empty by design, so
                     // future retire gates keep working); only the data-plane sink receives the counter re-home.
                     sink.publish(Patch(w))
+                    ControlOutcome.Applied(index)
+                }
+            }
+            // ── the log-known roster (§6.2 prerequisite) ────────────────────────────────
+            // Neither act publishes to the data-plane sink or touches the projection: the roster
+            // lives beside the entitlement state, and enrolling or departing moves no entitlement.
+
+            is ControlCommand.Enroll -> {
+                // Anyone may enroll anyone — it can only ENLARGE a later barrier's ack set, so a
+                // mistaken enroll costs the fence's liveness, never its safety. A no-op (already
+                // enrolled) is Applied, not Refused: the post-state is exactly what was asked for.
+                roster.enroll(command.replica)?.let { roster = it }
+                ControlOutcome.Applied(index)
+            }
+
+            is ControlCommand.Depart -> {
+                // Self-service only. Departing SHRINKS a later barrier's ack set — it asserts "this
+                // replica will never author another slot", which per §6.1 only that replica can
+                // promise. Letting a third party assert it would let the survivors declare a peer
+                // done while it still holds unreplicated reservations, completing a fence without a
+                // promise it needed. Removing an absent peer's authority is the unshipped
+                // RevocationSeam's job (§6.5 residual 1), and this refusal is where that boundary is.
+                if (envelope.proposer != command.replica) {
+                    ControlOutcome.Conflict(
+                        index,
+                        ControlConflict.Refused(
+                            "depart refused: only ${command.replica.value} may depart itself " +
+                                "(proposed by ${envelope.proposer.value})",
+                        ),
+                    )
+                } else {
+                    roster.depart(command.replica)?.let { roster = it }
                     ControlOutcome.Applied(index)
                 }
             }

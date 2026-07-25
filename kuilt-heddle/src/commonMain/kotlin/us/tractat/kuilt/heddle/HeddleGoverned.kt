@@ -284,10 +284,51 @@ public class GovernedHeddleNode internal constructor(
         return control.submit(ControlCommand.Reconcile(child, liveEdge, patch.delta), timeout)
     }
 
+     * Add [replica] to the **log-known roster**, serialized through the log — the set a later
+     * barrier quantifies its acknowledgments over (`docs/heddle-ledger-relocation-design.md` §6.2).
+     * Idempotent: enrolling an already-enrolled replica is [ControlOutcome.Applied].
+     *
+     * Any peer may enroll any replica, because enrolling only ever *enlarges* that set: a wrong
+     * enroll makes a barrier wait for a promise that never comes (a liveness cost, and the same
+     * class as an unreachable enrolled peer), never lets one complete without a promise it needed.
+     *
+     * **A peer must enroll before it authors any entitlement.** The roster is what makes "every
+     * writer has promised" a well-defined question; a replica that spends, delegates, or completes
+     * without being enrolled is a writer no barrier is waiting for. Enrolling costs one log entry
+     * at bootstrap — do it before the first data-plane call. (Nothing enforces this yet: the
+     * boot-ordering gate that makes it structural arrives with the fence, §6.5 residual 3.)
+     */
+    public suspend fun enroll(replica: ReplicaId, timeout: Duration? = null): ControlOutcome =
+        control.submit(ControlCommand.Enroll(replica), timeout)
+
+    /**
+     * Remove **this peer** from the log-known roster, serialized through the log. Idempotent.
+     *
+     * There is deliberately no `depart(other)`: departing *shrinks* the ack set, which asserts the
+     * departing replica will never author another counter slot — a promise about the future that
+     * only the promiser can make (§6.1). The apply gate enforces it too, so a hand-built act from
+     * another peer is refused with a [ControlConflict.Refused], identically on every peer.
+     *
+     * **Departing reclaims nothing.** Holdings and earmarks stay exactly where they are, on the
+     * same terms as a crashed peer's (design §8.1 — v1 ships no automatic reclamation), so this is
+     * a clean, voluntary exit and not a way to recover a lost peer's entitlement. It also does not
+     * cancel this peer's *local, unreplicated* reservations: call it after quiescing local work,
+     * or the peer keeps a promise it has already broken. Recovering an **absent** peer's authority
+     * needs the fenced [revocation] seam, which v1 does not ship.
+     */
+    public suspend fun depart(timeout: Duration? = null): ControlOutcome =
+        control.submit(ControlCommand.Depart(self), timeout)
+
+    /**
+     * The replicas enrolled as of the control log this peer has applied — the log-order membership
+     * fact, not the seam's open, moment-to-moment peer set. Two peers that have applied the same
+     * log prefix return the same set.
+     */
+    public fun enrolledReplicas(): Set<ReplicaId> = control.rosterSnapshot().enrolled
+
     /**
      * The `readIndex()`-fenced revocation seam (design §9 #3) — reclaiming a **crashed peer's** stranded
      * holdings remains **specified, not shipped** in v1 (part of #1602). The advisory-retire strand is a
-     * distinct, log-serialized recovery: see [reconcile].
-     */
+     * distinct, log-serialized recovery: see [reconcile].     */
     public val revocation: RevocationSeam get() = control.revocation
 }
