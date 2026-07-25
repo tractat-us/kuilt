@@ -21,6 +21,9 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.serialization.cbor.Cbor
+import kotlinx.serialization.decodeFromByteArray
+import kotlinx.serialization.encodeToByteArray
 import kotlinx.serialization.serializer
 import us.tractat.kuilt.core.CloseReason
 import us.tractat.kuilt.core.MuxSeam
@@ -29,6 +32,8 @@ import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.Swatch
 import us.tractat.kuilt.core.runCatchingCancellable
+import us.tractat.kuilt.crdt.EphemeralMap
+import us.tractat.kuilt.crdt.EphemeralMapTracker
 import us.tractat.kuilt.crdt.GCounter
 import us.tractat.kuilt.crdt.GSet
 import us.tractat.kuilt.crdt.LWWRegister
@@ -45,6 +50,8 @@ import us.tractat.kuilt.quilter.Quilter
 import us.tractat.kuilt.raft.Committed
 import us.tractat.kuilt.raft.RaftNode
 import us.tractat.kuilt.raft.RaftRole
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
 
 private val logger = KotlinLogging.logger("us.tractat.kuilt.warp.WarpNode")
@@ -197,6 +204,12 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.warp.WarpNode")
  *   ticket, so an un-gated node behaves bit-for-bit as before. The `:kuilt-warp-heddle` satellite
  *   supplies a weighted fair-share implementation keyed on [TaskDescriptor.lane]; warp core
  *   references no such type.
+ * @param capabilityTtl How long a peer's advertised [CapSet] stays live on this node after it
+ *   was last received, aged out by **local** receive time (never cross-peer wall-clock). A slot
+ *   that stops refreshing expires after this window so a crashed peer's stale capability stops
+ *   steering placement (H8, design §14.6). Re-advertise via [advertiseCapabilities] periodically
+ *   to keep a slot live. A pure TTL tuning knob; the empty default view leaves placement over the
+ *   whole roster (today's behaviour) until the first advertisement.
  */
 public class WarpNode(
     public val selfId: PeerId,
@@ -215,6 +228,7 @@ public class WarpNode(
     private val lazyFetch: WarpLazyFetch? = null,
     private val target: Target? = null,
     private val admissionControl: AdmissionControl = AdmissionControl.OPEN,
+    private val capabilityTtl: Duration = 30.seconds,
 ) {
     private val replica = ReplicaId(selfId.value)
 
@@ -338,8 +352,22 @@ public class WarpNode(
     private val bobbinExchange: BobbinExchange? =
         lazyFetch?.let { BobbinExchange(mux.channel(CHANNEL_BOBBIN), it.creel, scope, quilterConfig) }
 
+    // ── capability board: an EphemeralMap of per-peer CapSets, broadcast best-effort and aged
+    //    out by local receive time — the H8 location-eligibility soft state (design §14.6). It
+    //    is deliberately NOT a Quilter: anti-entropy would resurrect a crashed peer's stale
+    //    capability; presence-with-TTL lets it decay. Same shape as heddle's demand board (§6).
+    private val capabilitySeam = mux.channel(CHANNEL_CAPABILITY)
+    private val capabilitySerializer = EphemeralMap.serializer(CapSet.serializer())
+    private val capabilityTracker = EphemeralMapTracker<CapSet>(
+        ttlMs = capabilityTtl.inWholeMilliseconds,
+        clock = { clock().toEpochMilliseconds() },
+    )
+
     // --- Shared mutable state (guarded by lock) ---
     private val lock = reentrantLock()
+
+    /** Monotonic per-replica publish clock for this peer's capability slot. Guarded by [lock]. */
+    private var capabilityClock = 0L
 
     /** Current consistent-hash ring, rebuilt whenever the effective roster changes. */
     private var ring: TaskRing = TaskRing(setOf(selfId))
@@ -491,6 +519,18 @@ public class WarpNode(
             }
         }
 
+        // Capability board: single-collect our reserved channel, fold each frame into the local
+        // TTL tracker, then re-evaluate ownership (a fresher eligible set may re-home a task).
+        ownScope.launch {
+            capabilitySeam.incoming.collect { swatch ->
+                val update = runCatchingCancellable {
+                    Cbor.decodeFromByteArray(capabilitySerializer, swatch.toByteArray())
+                }.getOrNull() ?: return@collect
+                lock.withLock { capabilityTracker.received(update) }
+                claimOwned(queueQuilter.state.value.keys, CoordinationKind.Free)
+            }
+        }
+
         // Rebuild the ring whenever the roster changes, then re-evaluate ownership.
         rosterFlow
             .onEach { peers -> onPeersChanged(peers) }
@@ -583,6 +623,64 @@ public class WarpNode(
             ),
         )
     }
+
+    // ---------------------------------------------------------------------------
+    // Location eligibility — capability advertisement + eligible-subset view (H8, §14.6)
+    // ---------------------------------------------------------------------------
+
+    /**
+     * Advertise the capabilities **this peer** serves — GPU, region, held datasets, runtime,
+     * memory class — as an opaque [CapSet]. Publishes into this peer's own slot of the capability
+     * board, folds it into the local TTL tracker, and broadcasts it best-effort over the
+     * capability channel (H8, design §14.6).
+     *
+     * A task carrying an [Affinity] is then placed only on peers whose advertised [CapSet]
+     * satisfies it (see [eligiblePeers] / [TaskRing.owner]). Advertisement is **soft state**, not
+     * authority: it can be stale, duplicated, or lost, and the worst outcome is a task briefly
+     * misplaced — absorbed by the `Results` dedup and ring re-home. It never authorizes anything;
+     * eligibility introduces no conserved quantity, so it cannot touch conservation.
+     *
+     * Re-advertise periodically to keep the slot live — a slot that stops refreshing ages out
+     * after [capabilityTtl]. Passing [CapSet.EMPTY] makes this peer eligible only for
+     * [Affinity.Anywhere] work.
+     */
+    public fun advertiseCapabilities(caps: CapSet) {
+        val update = lock.withLock {
+            val u = EphemeralMap.empty<CapSet>().put(replica, caps, ++capabilityClock)
+            capabilityTracker.received(u)
+            u
+        }
+        // Re-evaluate ownership immediately: our own updated view may make us the eligible owner.
+        claimOwned(queueQuilter.state.value.keys, CoordinationKind.Free)
+        ownScope.launch {
+            runCatchingCancellable {
+                capabilitySeam.broadcast(Cbor.encodeToByteArray(capabilitySerializer, update))
+            }
+        }
+    }
+
+    /**
+     * The current **live** capability view converged on this node — each peer that has a
+     * non-expired advertisement mapped to its [CapSet]. A peer absent from this map has either
+     * never advertised or has aged out; it is treated as [CapSet.EMPTY] for eligibility.
+     *
+     * Snapshot semantics; every peer computes the same map once the capability board converges,
+     * which is why the eligible subset is bit-identical across peers (design §14.6).
+     */
+    public fun capabilityView(): Map<PeerId, CapSet> =
+        lock.withLock { capabilityTracker.live() }.mapKeys { (replica, _) -> PeerId(replica.value) }
+
+    /**
+     * The **eligible subset** of the current effective roster for a task requiring [affinity]:
+     * the peers whose advertised [CapSet] satisfies the predicate (a peer with no live
+     * advertisement is [CapSet.EMPTY], eligible only for [Affinity.Anywhere]).
+     *
+     * This is the set placement consistent-hashes over ([TaskRing.owner]). Every peer derives it
+     * from the same convergent capability view + the same roster + the same (envelope-carried)
+     * predicate, so it is identical across peers under a converged view — the determinism the
+     * eligible-set acceptance test asserts.
+     */
+    public fun eligiblePeers(affinity: Affinity): Set<PeerId> = lock.withLock { eligiblePeersLocked(affinity) }
 
     /**
      * Add [taskId] to the distributed work queue on the [CoordinationKind.Coordinated] path.
@@ -862,10 +960,34 @@ public class WarpNode(
      * on both paths would let a stray free-path pin gate who *proposes* the coordinated task —
      * and an absent pinned owner would strand it. Keep the id spaces separate.
      *
+     * **Location eligibility (H8, §14.6).** For a free-path task carrying an [Affinity] other
+     * than [Affinity.Anywhere], the owner is resolved over only the **eligible subset** of the
+     * roster — the peers whose advertised [CapSet] satisfies the predicate — via
+     * [TaskRing.owner]. `Anywhere` (the default) short-circuits to the plain [TaskRing.owner],
+     * so the no-affinity path is placement over the whole roster, bit-for-bit as before. A pin
+     * outranks eligibility (a pinned task is data-local by construction).
+     *
      * Caller holds [lock].
      */
-    private fun effectiveOwner(taskId: TaskId): PeerId? =
-        queueQuilter.state.value[taskId]?.value?.pinnedOwner ?: ring.owner(taskId)
+    private fun effectiveOwner(taskId: TaskId): PeerId? {
+        val descriptor = queueQuilter.state.value[taskId]?.value
+        descriptor?.pinnedOwner?.let { return it }
+        val affinity = descriptor?.affinity ?: Affinity.Anywhere
+        if (affinity == Affinity.Anywhere) return ring.owner(taskId)
+        return ring.owner(taskId, eligiblePeersLocked(affinity))
+    }
+
+    /**
+     * The eligible subset of the effective roster (`rosterPeers - partitionedPeers`) for
+     * [affinity], evaluated against each peer's live [CapSet] (absent ⇒ [CapSet.EMPTY]).
+     * Caller holds [lock].
+     */
+    private fun eligiblePeersLocked(affinity: Affinity): Set<PeerId> {
+        val caps = capabilityTracker.live()
+        return (rosterPeers - partitionedPeers).filterTo(mutableSetOf()) { peer ->
+            affinity.matches(caps[ReplicaId(peer.value)] ?: CapSet.EMPTY)
+        }
+    }
 
     /** Execute every owned, unclaimed task immediately on the given [kind] path. */
     private fun claimOwnedRing(taskIds: Collection<TaskId>, kind: CoordinationKind) {
@@ -1413,6 +1535,9 @@ public class WarpNode(
 
         /** Mux-channel reserved for the node-owned [BobbinExchange] (lazy fetch-and-run). */
         const val CHANNEL_BOBBIN: Byte = 0x06
+
+        /** Mux-channel for the H8 capability board (per-peer [CapSet] advertisements). */
+        const val CHANNEL_CAPABILITY: Byte = 0x07
     }
 }
 

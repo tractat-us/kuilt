@@ -271,6 +271,28 @@ the owner is offline the task simply waits for it to come back rather than re-ho
 That last property is what makes the data-local model honest: the work never silently moves to a
 peer that does not have the data.
 
+### Running a job only where it fits (location eligibility)
+
+Pinning names *one exact* peer. A softer, more common need is "run this anywhere that can handle
+it" — anywhere with a GPU, anywhere in a region, anywhere holding the right dataset. That is
+**location eligibility**. Each peer advertises what it can offer as a `CapSet` — a plain bag of
+capability tokens (`"GPU"`) and keyed attributes (`region → "us-east"`) — by calling
+`WarpNode.advertiseCapabilities`. A task then carries a requirement, a `where { }` predicate over
+those capabilities:
+
+```kotlin
+val task = TaskDescriptor(op, args).where(Affinity.has("GPU") and Affinity.attr("region", "us-east"))
+```
+
+Warp places the task by hashing over only the peers whose advertised `CapSet` satisfies the
+predicate — the *eligible subset* of the ring — so it never lands somewhere it cannot run. Every
+peer computes the same eligible set from the same shared capability view, so the choice is
+deterministic for the same reason the plain ring is. The capabilities are **soft state**: they are
+advertised best-effort and expire if a peer goes quiet, so a crashed peer stops attracting work on
+its own. A task with no `where` (the default) is eligible everywhere and places exactly as it
+always did. Eligibility answers *where* a task may run; it adds no budget and never touches the
+fair-share ledger — that stays the separate *how much* question of `:kuilt-warp-heddle`.
+
 **Module map.** You only pay for the parts of warp you actually use. The core module —
 `:kuilt-warp` — is the scheduler itself: the ring that decides who does what, the shared task
 list, and the results board. It also holds the lightweight *contract* for sending code to a peer

@@ -240,3 +240,27 @@ internal fun samplePinnedExecution() {
     val pinned = TaskDescriptor(OpId("train"), byteArrayOf(1, 2, 3), pinnedOwner = alice)
     check(pinned.pinnedOwner == alice)
 }
+
+// ── location eligibility (H8, §14.6) ───────────────────────────────────────────
+
+/**
+ * A location-[Affinity] is a serializable predicate over the capability tokens a peer
+ * advertises in its [CapSet]. It rides the task envelope with `where` and is placed only on
+ * peers whose advertised capabilities satisfy it; the no-requirement default is
+ * [Affinity.Anywhere].
+ */
+@Suppress("unused")
+internal fun sampleAffinity() {
+    // "must run on a GPU node in us-east" — a composable predicate, not a lambda (it rides the wire).
+    val where = Affinity.has("GPU") and Affinity.attr("region", "us-east")
+
+    val gpuUsEast = CapSet(tokens = setOf("GPU"), attributes = mapOf("region" to "us-east"))
+    val cpuUsWest = CapSet(tokens = setOf("CPU"), attributes = mapOf("region" to "us-west"))
+    check(where.matches(gpuUsEast))       // eligible
+    check(!where.matches(cpuUsWest))      // not eligible
+    check(Affinity.Anywhere.matches(cpuUsWest)) // the default requires nothing
+
+    // Tag a task with the requirement; placement then hashes over only the eligible peers.
+    val task = TaskDescriptor(OpId("train"), byteArrayOf(1, 2, 3)).where(where)
+    check(task.affinity == where)
+}

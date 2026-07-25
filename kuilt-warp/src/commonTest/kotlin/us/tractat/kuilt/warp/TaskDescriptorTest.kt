@@ -113,4 +113,43 @@ class TaskDescriptorTest {
         assertEquals(original, restored)
         assertNull(restored.traceparent)
     }
+
+    @Test
+    fun differingAffinityIsNotEqual() {
+        val a = TaskDescriptor(OpId("score"), byteArrayOf(1), affinity = Affinity.has("GPU"))
+        val b = TaskDescriptor(OpId("score"), byteArrayOf(1), affinity = Affinity.has("TPU"))
+        assertNotEquals(a, b)
+        assertNotEquals(a.hashCode(), b.hashCode())
+    }
+
+    @Test
+    fun serializationRoundTripsWithAffinity() {
+        val original = TaskDescriptor(
+            OpId("train"),
+            byteArrayOf(7),
+            affinity = Affinity.has("GPU") and Affinity.attr("region", "us-east"),
+        )
+        val restored = Cbor.decodeFromByteArray(
+            TaskDescriptor.serializer(),
+            Cbor.encodeToByteArray(original),
+        )
+        assertEquals(original, restored)
+        assertEquals(original.affinity, restored.affinity)
+    }
+
+    /**
+     * A descriptor left at the default [Affinity.Anywhere] serialises to the **same bytes** it
+     * did before H8 — the no-affinity default is wire-backward-compatible (CBOR omits a field at
+     * its default), so today's placement is reproduced bit-for-bit.
+     */
+    @Test
+    fun defaultAffinityIsWireBackwardCompatible() {
+        val descriptor = TaskDescriptor(OpId("score"), byteArrayOf(9, 8, 7), traceparent = "00-t-s-01")
+        assertEquals(Affinity.Anywhere, descriptor.affinity)
+        val bytes = Cbor.encodeToByteArray(descriptor)
+        val restored = Cbor.decodeFromByteArray(TaskDescriptor.serializer(), bytes)
+        assertEquals(descriptor, restored)
+        assertEquals(Affinity.Anywhere, restored.affinity)
+        assertContentEquals(bytes, Cbor.encodeToByteArray(restored))
+    }
 }

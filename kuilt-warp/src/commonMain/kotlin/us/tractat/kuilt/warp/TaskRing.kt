@@ -51,7 +51,25 @@ public class TaskRing(
      * The owner is the first peer clockwise of `hash(taskId)` on the ring.
      * Deterministic: same roster + same seed → same result for every peer in the session.
      */
-    public fun owner(taskId: TaskId): PeerId? = firstClockwise(taskId, excluding = emptySet())
+    public fun owner(taskId: TaskId): PeerId? = firstClockwise(taskId) { true }
+
+    /**
+     * Returns the owner of [taskId] **restricted to the [eligible] subset** of the roster, or
+     * `null` if no ring peer is eligible.
+     *
+     * This is the H8 location-eligibility hook (design §14.6): consistent-hashing over only the
+     * eligible peers is identical to walking the full ring and returning the first clockwise
+     * peer that is in [eligible] — removing a peer from a consistent-hash ring is exactly
+     * "skip its virtual nodes." Passing an [eligible] set that contains the whole roster
+     * therefore reproduces [owner] **bit-for-bit**, so the no-affinity path is unchanged.
+     *
+     * Deterministic: the same ring + same [eligible] set → same result on every peer. Callers
+     * derive [eligible] by filtering the roster with a task's [Affinity] against each peer's
+     * advertised [CapSet]; every peer computes the same eligible set from the same convergent
+     * capability view.
+     */
+    public fun owner(taskId: TaskId, eligible: Set<PeerId>): PeerId? =
+        firstClockwise(taskId) { it in eligible }
 
     /**
      * Returns the first peer clockwise of [taskId]'s position that is NOT in [excluding],
@@ -61,19 +79,19 @@ public class TaskRing(
      * peers) in [excluding]. The result is deterministic for the same inputs.
      */
     public fun successor(taskId: TaskId, excluding: Set<PeerId>): PeerId? =
-        firstClockwise(taskId, excluding = excluding)
+        firstClockwise(taskId) { it !in excluding }
 
     // -------------------------------------------------------------------------
     // Internal — ring search
     // -------------------------------------------------------------------------
 
-    private fun firstClockwise(taskId: TaskId, excluding: Set<PeerId>): PeerId? {
+    private inline fun firstClockwise(taskId: TaskId, accept: (PeerId) -> Boolean): PeerId? {
         if (ring.isEmpty()) return null
         val hash = taskHash(taskId)
         val startIdx = lowerBound(hash)
         repeat(ring.size) { offset ->
             val candidate = ring[(startIdx + offset) % ring.size].peer
-            if (candidate !in excluding) return candidate
+            if (accept(candidate)) return candidate
         }
         return null
     }
