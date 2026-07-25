@@ -52,9 +52,10 @@ class FakeNwRadioTest {
 
         // Real Bonjour returns a device's own advertisement to its own browser, so each device
         // that both advertises AND browses TYPE sees BOTH peers — its own endpoint included (#1485).
+        // The endpoint id derives from the advertised serviceName here (no TXT peerId — #1502).
         assertAll(
-            { assertEquals(setOf("ep-A", "ep-B"), ids(foundByA)) },
-            { assertEquals(setOf("ep-A", "ep-B"), ids(foundByB)) },
+            { assertEquals(setOf("svc-A", "svc-B"), ids(foundByA)) },
+            { assertEquals(setOf("svc-A", "svc-B"), ids(foundByB)) },
             { assertEquals(2, foundByA.size) },
             { assertEquals(2, foundByB.size) },
         )
@@ -75,7 +76,8 @@ class FakeNwRadioTest {
         a.startBrowsing(TYPE)
         testScheduler.runCurrent()
 
-        assertEquals(listOf(NwEndpoint(id = "ep-A", serviceName = "svc-A")), foundByA)
+        // No TXT peerId ⇒ the endpoint id derives from the advertised serviceName (#1502).
+        assertEquals(listOf(NwEndpoint(id = "svc-A", serviceName = "svc-A")), foundByA)
     }
 
     @Test
@@ -240,10 +242,11 @@ class FakeNwRadioTest {
 
         assertAll(
             // Real mDNS returns a device's own advertisement to its own browser, so each device
-            // that both advertises AND browses TYPE sees ALL three — itself included (#1485).
-            { assertEquals(setOf("ep-A", "ep-B", "ep-C"), ids(foundByA)) },
-            { assertEquals(setOf("ep-A", "ep-B", "ep-C"), ids(foundByB)) },
-            { assertEquals(setOf("ep-A", "ep-B", "ep-C"), ids(foundByC)) },
+            // that both advertises AND browses TYPE sees ALL three — itself included (#1485). The
+            // endpoint id derives from the advertised serviceName here (no TXT peerId — #1502).
+            { assertEquals(setOf("svc-A", "svc-B", "svc-C"), ids(foundByA)) },
+            { assertEquals(setOf("svc-A", "svc-B", "svc-C"), ids(foundByB)) },
+            { assertEquals(setOf("svc-A", "svc-B", "svc-C"), ids(foundByC)) },
             { assertEquals(3, foundByA.size) },
             { assertEquals(3, foundByB.size) },
             { assertEquals(3, foundByC.size) },

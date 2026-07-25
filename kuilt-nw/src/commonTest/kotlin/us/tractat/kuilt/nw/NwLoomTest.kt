@@ -212,6 +212,58 @@ class NwLoomTest {
     }
 
     /**
+     * Root #1 of #1660 / the #1502 blind spot: under [Rendezvous.New] a peer must NOT self-dial even
+     * though every peer advertises the SAME shared Bonjour service name (the session name).
+     *
+     * The symmetric election lobby ([Rendezvous.New]) has every peer advertise `serviceName =
+     * pattern.sessionName` — a value shared by all peers, NOT this peer's identity. Stable per-peer
+     * identity rides in the Bonjour **TXT record** (Option A): the advertised [NwEndpoint.id] is the
+     * peer's `PeerId`, distinct per peer, while `serviceName` stays the shared human-readable label.
+     * The pre-dial self-filter must therefore fire on [NwEndpoint.id] (== [NwLoom.selfId]), NOT on
+     * `serviceName` — under a shared `serviceName` an id-less filter can never recognise self, so the
+     * loom dials its own endpoint dozens of times per session (only caught post-connect by the
+     * `NwSeam` guard) — the AWDL-only symptom of #1502.
+     *
+     * The harness now models the TXT PeerId ([FakeNwApi] `peerId` → the emitted endpoint id), so this
+     * collision is finally visible on the JVM. Against the pre-fix `serviceName`-keyed self-filter this
+     * test FAILS (self is rostered AND self-dialled); with the id-keyed filter it passes. A lone device
+     * reaches no OTHER peer, so `weave` times out (harmless — we only assert the pre-timeout self-handling).
+     */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun newRendezvousNeitherDialsNorRostersItsOwnEndpointUnderASharedServiceName() = runTest(StandardTestDispatcher()) {
+        val radio = FakeNwRadio()
+        val selfId = PeerId("self-uuid-1502")
+        // Rendezvous.New advertises the SHARED session name as the Bonjour serviceName; the per-peer
+        // stable identity (selfId) rides in the TXT record → it is the advertised endpoint id (Option A).
+        val api = FakeNwApi(radio, deviceId = "solo", serviceName = "solo", peerId = selfId.value)
+        val loom = NwLoom(api, serviceType = TYPE, selfId = selfId, random = Random(0), weaveTimeout = 1.seconds)
+
+        // Spy the device's connectionOpened flow: a self-dial would open a connection and surface here.
+        val opened = mutableListOf<NwConnectionOpened>()
+        val spy = launch(start = CoroutineStart.UNDISPATCHED) {
+            api.connectionOpened.collect { opened += it }
+        }
+
+        // Rendezvous.New with a session name that is NOT this peer's identity — the shared-lobby case
+        // a serviceName-keyed self-filter cannot distinguish self from a real peer.
+        val weave = launch(start = CoroutineStart.UNDISPATCHED) {
+            runCatchingCancellable { loom.weave(Rendezvous.New(Pattern(sessionName = "shared-lobby"))) }
+        }
+        // Bounded advance: enough for discovery (and, on a broken impl, a self-dial) to occur; never advanceUntilIdle().
+        testScheduler.advanceTimeBy(500)
+        testScheduler.runCurrent()
+
+        assertAll(
+            { assertTrue(loom.visiblePeers.value.isEmpty(), "self-endpoint never rostered under Rendezvous.New's shared serviceName, was ${loom.visiblePeers.value}") },
+            { assertTrue(opened.isEmpty(), "no self-dial under Rendezvous.New's shared serviceName, was $opened") },
+        )
+
+        spy.cancel()
+        weave.cancel()
+    }
+
+    /**
      * #1447 item 2: [NwLoom.visiblePeers] must PRUNE a departed endpoint, not accumulate ghosts.
      *
      * Before the fix the roster only ever grew (`onDiscovered` added on `endpointFound`, nothing removed),
@@ -234,7 +286,8 @@ class NwLoomTest {
             runCatchingCancellable { loomA.join(InMemoryTag(sessionName = "lobby", peerKey = "peer-A")) }
         }
         apiB.startListening("peer-B", TYPE)
-        val bEndpoint = NwEndpoint(id = "ep-dev-1", serviceName = "peer-B")
+        // No TXT peerId ⇒ the discovered endpoint id derives from the advertised serviceName (#1502).
+        val bEndpoint = NwEndpoint(id = "peer-B", serviceName = "peer-B")
         assertTrue(
             pumpUntil { bEndpoint in loomA.visiblePeers.value },
             "A discovered B into visiblePeers, was ${loomA.visiblePeers.value}",
