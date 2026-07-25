@@ -29,6 +29,17 @@ An **untagged** task (the default) skips all of this and behaves exactly as warp
 - **`TaskDescriptor.inLane(...)`** — the producer-side tagging step: copy a descriptor onto a
   lane before you enqueue it.
 
+## Where a task may run vs. how much it may take
+
+A lane answers *how much* of the pool a kind of work may take. A separate, orthogonal question
+is *where* a task is even allowed to run — this needs a GPU, must stay in-region, or should sit
+where its data already is. That is **location eligibility**, and it lives in `:kuilt-warp` itself
+(`CapSet`, `Affinity`, `TaskDescriptor.where(...)`), not here: a peer advertises the capabilities
+it serves, and a task carries a predicate over them, so placement hashes over only the *eligible*
+peers. It **composes** with a lane — a task may carry both a `where { }` and an `inLane(...)` —
+and because eligibility introduces no budget, it never touches the ledger's conservation. This
+module simply lets the two ride the same descriptor: *where* from warp, *how much* from heddle.
+
 ## Deeper: why this is cheap
 
 The budget itself is a `:kuilt-heddle` `EntitlementLedger` — a coordination-free replicated
