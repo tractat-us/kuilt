@@ -480,6 +480,29 @@ internal class SeamRoom(
     )
     override val events: Flow<MembershipEvent> = _events.asSharedFlow()
 
+    /**
+     * Emit a [MembershipEvent] on [events], logging it first (#1618 presence/partition diagnostics).
+     *
+     * Every membership transition this room announces — `Joined`/`Partitioned`/`WindowOpened`/
+     * `Recovered`/`Left`/`HostLost`/… — flows through here, so a single off-device log stream names each
+     * event with its peer id, reason, and (for `WindowOpened`) `expiresAt`, via the data-class
+     * `toString()`. That is the artifact that makes an NW-mesh presence failure legible without
+     * re-running the session: if the host never logs `Partitioned`/`WindowOpened` on a Wi-Fi drop, the
+     * break is upstream (detector never started / heartbeat frames never routed), not in event fan-out.
+     * Behaviour is unchanged — this is [MutableSharedFlow.tryEmit] with a preceding log.
+     */
+    private fun emitEvent(event: MembershipEvent) {
+        logger.info { "room.event self=${selfId.value} role=${_role.value} $event" }
+        _events.tryEmit(event)
+    }
+
+    /**
+     * One-shot-per-sender latch (#1618): peers from which this room has already logged a first inbound
+     * heartbeat frame. Keeps the every-5s ping/pong traffic out of the log while still proving, once,
+     * that [seam] delivered a heartbeat frame stamped with that sender. Touched only under [lock].
+     */
+    private val heartbeatSendersSeen = mutableSetOf<PeerId>()
+
     private val _incoming = MutableSharedFlow<RoomFrame>(extraBufferCapacity = 64)
     override val incoming: Flow<RoomFrame> = _incoming.asSharedFlow()
 
@@ -615,8 +638,8 @@ internal class SeamRoom(
                         this@SeamRoom.restartIncomingCollect()
 
                     override fun onReconnectStarted(hostId: PeerId, at: Instant, windowDeadline: Instant) {
-                        _events.tryEmit(MembershipEvent.Partitioned(hostId, at, ReconnectReason.TransportClosed))
-                        _events.tryEmit(MembershipEvent.WindowOpened(hostId, windowDeadline))
+                        emitEvent(MembershipEvent.Partitioned(hostId, at, ReconnectReason.TransportClosed))
+                        emitEvent(MembershipEvent.WindowOpened(hostId, windowDeadline))
                     }
 
                     override suspend fun onReconnectFailed(at: Instant, reason: FailureReason) =
@@ -716,7 +739,7 @@ internal class SeamRoom(
         ctrl.events.collect { event ->
             when (event) {
                 is JoinerReconnectEvent.WindowOpened ->
-                    _events.tryEmit(
+                    emitEvent(
                         MembershipEvent.WindowOpened(
                             event.peerId,
                             Instant.fromEpochMilliseconds(event.expiresAt),
@@ -750,7 +773,7 @@ internal class SeamRoom(
      */
     private suspend fun handleReconnectResumed(peerId: PeerId) {
         val updated = lock.withLock { updateMemberLiveness(peerId, Liveness.Connected) } ?: return
-        _events.tryEmit(MembershipEvent.Resumed(updated.id))
+        emitEvent(MembershipEvent.Resumed(updated.id))
         val ackBytes = AdmitMessage.encode(AdmitMessage.ResumeAck)
         runCatchingCancellable { seam.sendTo(peerId, ackBytes) }
     }
@@ -810,7 +833,7 @@ internal class SeamRoom(
             if (closed || hostLost || admissionFailed || admitted.isCompleted) return
             admissionFailed = true
         }
-        _events.tryEmit(MembershipEvent.AdmissionFailed(reason, at))
+        emitEvent(MembershipEvent.AdmissionFailed(reason, at))
         leave(LeaveReason.Error("admission failed: $reason"))
     }
 
@@ -842,6 +865,28 @@ internal class SeamRoom(
             HeartbeatPartitionDetector.isHeartbeatFrame(bytes) -> {
                 // Heartbeat frames are consumed by per-peer detectors via rawIncoming.
                 // No further action needed here — the detector's incomingJob handles them.
+                //
+                // #1618 suspect 2 diagnostic: log the FIRST heartbeat frame seen from each sender (once
+                // per sender — the every-5s ping/pong traffic stays out of the log). This fires at the
+                // point BEFORE PerPeerSeam's `sender == targetPeerId` filter, so it proves the NwSeam
+                // stamped this heartbeat frame with a concrete `sender` and delivered it to rawIncoming.
+                // Read against detector.first-inbound: if the room logs a heartbeat frame from peer X here
+                // but that peer's detector never logs first-inbound, the break is the PerPeerSeam filter /
+                // sender mismatch; if this line never fires for X at all, NwSeam is not delivering X's
+                // heartbeats to the room.
+                val firstFromSender = lock.withLock {
+                    if (heartbeatSendersSeen.add(sender)) detectorJobs.containsKey(sender) else null
+                }
+                if (firstFromSender != null) {
+                    val kind = when {
+                        bytes.decodeToString().startsWith(HeartbeatPartitionDetector.PONG_PREFIX) -> "pong"
+                        else -> "ping"
+                    }
+                    logger.debug {
+                        "room.heartbeat.first-from sender=${sender.value} self=${selfId.value} " +
+                            "kind=$kind hasDetector=$firstFromSender"
+                    }
+                }
             }
             AdmitMessage.isAdmitFrame(bytes) -> handleAdmitFrame(sender, bytes)
             RoomChannel.isChannelFrame(bytes) -> {
@@ -1174,7 +1219,7 @@ internal class SeamRoom(
             updateMemberLiveness(sender, Liveness.Connected)
             flight
         }
-        _events.tryEmit(MembershipEvent.Resumed(selfId))
+        emitEvent(MembershipEvent.Resumed(selfId))
         deferred.complete(ResumeResult.Success)
     }
 
@@ -1312,8 +1357,22 @@ internal class SeamRoom(
      * Callers must hold [lock] when invoking this method.
      */
     private fun startDetector(member: Member) {
-        if (member.id in detectorJobs) return
-        if (member.id !in seam.peers.value) return
+        if (member.id in detectorJobs) return // steady-state re-evaluation — already monitored, silent
+        if (member.id !in seam.peers.value) {
+            // #1618 route-gate (#1576) diagnostic: this member is admitted to the roster but the fabric
+            // has NOT (yet) reported a route to it in seam.peers, so NO partition detector is started —
+            // the member's Wi-Fi drop would then produce no PeerUnresponsive/Partitioned at all. On the
+            // NW mesh this is the prime suspect: if this line logs for a peer that is nonetheless in the
+            // roster, the break is that NwSeam never surfaced the peer in `peers` (or surfaced then
+            // dropped it), not the session heartbeat path. Re-evaluated on every seam.peers emission, so
+            // debug-level keeps a persistently-ungated peer from spamming.
+            logger.debug {
+                "detector.gated peer=${member.id.value} self=${selfId.value} " +
+                    "reason=not-in-seam.peers seamPeers=${seam.peers.value.map { it.value }} " +
+                    "roster=${admittedById.keys.map { it.value }}"
+            }
+            return
+        }
         val perPeerSeam = PerPeerSeam(seam, member.id, rawIncoming)
         val detector = HeartbeatPartitionDetector(
             link = perPeerSeam,
@@ -1336,6 +1395,15 @@ internal class SeamRoom(
             }
         }
         detectorJobs[member.id] = detectorJob
+        // #1618 suspect 1: the per-peer detector is now live. If this logs for every admitted mesh peer,
+        // detector startup is NOT the break — attention moves to whether healthy pongs keep it alive
+        // (suspect 2) and whether the drop fires PeerUnresponsive.
+        logger.info {
+            "detector.start peer=${member.id.value} self=${selfId.value} " +
+                "seamPeers=${seam.peers.value.map { it.value }} roster=${admittedById.keys.map { it.value }} " +
+                "config=[interval=${heartbeatConfig.interval} timeout=${heartbeatConfig.timeout} " +
+                "window=${heartbeatConfig.reconnectWindow}]"
+        }
     }
 
     /**
@@ -1391,6 +1459,16 @@ internal class SeamRoom(
             "membership.unresponsive peer=${event.peerId.value} reason=${event.reason} " +
                 "isHost=$isHost branch=${if (hostTransportClose) "resume" else "markPartitioned"}"
         }
+        // #1618 suspect 2/3: the detector fired PeerUnresponsive — name the peer, the reason
+        // (Timeout / TransportClosed / Backpressure), and which fork handles it (host-resume vs
+        // markPartitioned). This is the pivot the whole diagnosis turns on: it proving the drop was
+        // detected at all is the difference between "the heartbeat path works" and "the peer vanished
+        // silently". Its ABSENCE on a Wi-Fi drop (with a detector.start logged earlier) is the signal
+        // that pongs never reached the detector.
+        logger.info {
+            "detector.unresponsive peer=${event.peerId.value} self=${selfId.value} " +
+                "reason=${event.reason} fork=${if (hostTransportClose) "host-resume" else "markPartitioned"}"
+        }
         if (hostTransportClose) {
             resumeMachine?.attemptReconnect(event.at)
         } else {
@@ -1416,7 +1494,7 @@ internal class SeamRoom(
             val wasPartitioned = current.liveness == Liveness.Partitioned
             wasPartitioned to (updateMemberLiveness(peerId, Liveness.Partitioned) ?: return)
         }
-        if (!wasPartitioned) _events.tryEmit(MembershipEvent.Partitioned(updated.id, at, reason))
+        if (!wasPartitioned) emitEvent(MembershipEvent.Partitioned(updated.id, at, reason))
         reconnectController?.onPeerUnresponsive(peerId, at.toEpochMilliseconds())
         if (!wasPartitioned && _role.value == SessionRole.Host) {
             propagatePaused(
@@ -1437,7 +1515,7 @@ internal class SeamRoom(
             wasPartitioned to (updateMemberLiveness(peerId, Liveness.Connected) ?: return)
         }
         if (!wasPartitioned) return
-        _events.tryEmit(MembershipEvent.Recovered(updated.id, at))
+        emitEvent(MembershipEvent.Recovered(updated.id, at))
         if (_role.value == SessionRole.Host) propagateUnpaused(peerId)
     }
 
@@ -1496,8 +1574,8 @@ internal class SeamRoom(
         }
         // The host told us the link dropped; TransportClosed is the honest reason here — we
         // observed no timeout or backpressure ourselves, only the authoritative Paused (#1556).
-        _events.tryEmit(MembershipEvent.Partitioned(updated.id, clock(), ReconnectReason.TransportClosed))
-        _events.tryEmit(
+        emitEvent(MembershipEvent.Partitioned(updated.id, clock(), ReconnectReason.TransportClosed))
+        emitEvent(
             MembershipEvent.WindowOpened(updated.id, Instant.fromEpochMilliseconds(paused.expiresAt)),
         )
     }
@@ -1516,7 +1594,7 @@ internal class SeamRoom(
             if (current.liveness != Liveness.Partitioned) return
             updateMemberLiveness(subject, Liveness.Connected) ?: return
         }
-        _events.tryEmit(MembershipEvent.Recovered(updated.id, clock()))
+        emitEvent(MembershipEvent.Recovered(updated.id, clock()))
     }
 
     private suspend fun handlePeerLost(peerId: PeerId, at: Instant) {
@@ -1569,7 +1647,7 @@ internal class SeamRoom(
             was
         }
         if (alreadyLost) return
-        _events.tryEmit(MembershipEvent.HostLost(at, reason))
+        emitEvent(MembershipEvent.HostLost(at, reason))
         leave(LeaveReason.Error("host lost"))
     }
 
@@ -1614,7 +1692,7 @@ internal class SeamRoom(
         _roster.update { current -> current.filterNot { it.id == member.id }.toSet() + member }
         _rosterPeers.update { current -> current + member.id }
         if (!isReadmit) {
-            _events.tryEmit(MembershipEvent.Joined(member))
+            emitEvent(MembershipEvent.Joined(member))
             startDetector(member)
         }
     }
@@ -1624,7 +1702,7 @@ internal class SeamRoom(
         removed ?: return // already removed, avoid duplicate Left events
         _roster.update { current -> current.filterNot { it.id == peerId }.toSet() }
         _rosterPeers.update { current -> current - peerId }
-        _events.tryEmit(MembershipEvent.Left(peerId, reason))
+        emitEvent(MembershipEvent.Left(peerId, reason))
     }
 
     private fun isAdmittedPeer(peerId: PeerId): Boolean = lock.withLock { admittedById.containsKey(peerId) }
