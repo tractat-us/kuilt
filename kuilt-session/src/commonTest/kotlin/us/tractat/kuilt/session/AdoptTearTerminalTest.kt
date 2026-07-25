@@ -24,31 +24,45 @@ import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
 
 /**
- * Reproduction + fix for #1618: the app's mesh path is
- * `electLobby → adopt → SeamRoom`. When [SeamRoomFactory.adopt] wires **no** `reweave`, a joiner
- * whose host link tears runs [us.tractat.kuilt.session.partition.JoinerResumeMachine.attemptReconnect]
- * and takes the **immediate-terminal** branch (`reweaveFn == null` → `onReconnectFailed(Unrecoverable)`),
- * so a transient blip kills the adopted room ([MembershipEvent.HostLost]) with no
- * [MembershipEvent.WindowOpened] — no room ever lives the ~window a resume needs. The fix threads a
- * `reweave` into [SeamRoomFactory.adopt] and wires `reweave = { seam }` on the election-lobby path,
- * so the resume machine runs the retry loop over the self-healing seam instead of going terminal.
+ * Resume-after-tear on the adopt path (#1618) — **the recovery half of Track A's self-detection.**
+ *
+ * The app's mesh path is `electLobby → adopt → SeamRoom`. [SeamRoomFactory.adopt] wired **no**
+ * `reweave`, so a joiner whose host link tears runs
+ * [us.tractat.kuilt.session.partition.JoinerResumeMachine.attemptReconnect] and takes the
+ * **immediate-terminal** branch (`reweaveFn == null` → `onReconnectFailed(Unrecoverable)`): the
+ * adopted room dies with [MembershipEvent.HostLost] and no [MembershipEvent.WindowOpened], so no
+ * room ever lives the window a resume needs. The fix threads a `reweave` into [SeamRoomFactory.adopt]
+ * and wires `reweave = { seam }` on the election-lobby path, so the resume machine runs its retry
+ * loop over the self-healing seam instead of going terminal.
+ *
+ * ## Which phone this is about
+ *
+ * This is the **dropped** phone — the one whose Wi-Fi went away — not its surviving partner.
+ * On the surviving phone a remote drop rides `Timeout → markPartitioned`, which never enters this
+ * lane. On the dropped phone Track A (#1650) manufactures the lane: a device path reported
+ * *unsatisfied* demotes every live connection to `NwConnState.PathLost`, arming `NwSeam`'s existing
+ * #1478 `wovenPathGrace`; if the path does not return within the grace, `NwSeam.onGraceExpired`
+ * disconnects and evicts the peer, dropping the host out of `peers`. The heartbeat detector wakes on
+ * exactly that (`peers.first { observedPresent && peerId !in it }`) and reports
+ * [us.tractat.kuilt.liveness.PartitionEvent.Reason.TransportClosed] — the branch
+ * [us.tractat.kuilt.session.SeamRoom] routes to `attemptReconnect`. Before Track A the dropped phone
+ * self-detected nothing at all; Track A creates the detection, and this wiring is what turns that
+ * detection into a **resume** instead of a terminal `HostLost`.
  *
  * ## Harness note — why [FlakyLifecycleLoom], not `FaultyLoom.partition(Both)`
  *
- * The real fault this bug hits is a **transport tear**: the host endpoint drops (leaves the seam's
- * peer set) and the fabric re-forms. `NwSeam` models this as `Woven → Weaving → Woven` (it does NOT
- * latch `Torn` on peer loss; `NwLoom` redials and it heals in place). Only that shape reaches
- * `attemptReconnect`: [us.tractat.kuilt.session.SeamRoom]'s host-liveness handler calls it solely on
- * [us.tractat.kuilt.liveness.PartitionEvent.Reason.TransportClosed] (peer gone from `peers`), never
- * on a plain `Timeout`. A `FaultySeam.partition(Both)` only **drops frames** — the peer stays in
- * `peers`, so the detector fires `Timeout`, which routes to `markPartitioned` → `PeerLost` →
- * `HostLost` and **never enters the reweave path this fix changes**. [FlakyLifecycleLoom]'s
- * `enterWeaving()` / `recover()` / `tear()` reproduce the real transport-tear shape, so these tests
- * genuinely exercise the resume plumbing.
+ * The fault this rides is a **transport tear**: the host leaves the seam's peer set and the fabric
+ * re-forms. `NwSeam` models this as `Woven → Weaving → Woven` — it does NOT latch `Torn` on peer
+ * loss; `NwLoom` redials and it heals in place, which is why `reweave = { seam }` (return the SAME
+ * seam) is the correct wiring. Only that shape reaches `attemptReconnect`. A
+ * `FaultySeam.partition(Both)` only **drops frames** — the peer stays in `peers`, so the detector
+ * fires `Timeout`, which routes to `markPartitioned` → `PeerLost` → `HostLost` and never enters the
+ * reweave path. [FlakyLifecycleLoom]'s `enterWeaving()` / `recover()` / `tear()` reproduce the real
+ * transport-tear shape, so these tests genuinely exercise the resume plumbing.
  *
- * **This is still session-layer plumbing only**, NOT the real `NwSeam` self-heal: these doubles
- * prove `reweave → wait-for-Woven → resume`, not that a real Network.framework link recovers.
- * #1618 cannot be closed by this PR — it needs a 2-phone hardware validation.
+ * **This is session-layer plumbing only**, NOT the real `NwSeam` self-heal: these doubles prove
+ * `reweave → wait-for-Woven → resume`, not that a real Network.framework link recovers. #1618 cannot
+ * be closed by this — it needs a 2-phone hardware validation of the drop-and-return.
  *
  * Timing (fast config): interval 100 ms, timeout 200 ms, reconnect window 1000 ms.
  */
@@ -61,13 +75,18 @@ class AdoptTearTerminalTest {
     )
 
     /**
-     * **Task 1 repro (pins the bug; PASSES on current code).**
+     * **The original repro, now the default-branch contract.**
      *
-     * An adopted joiner with **no** `reweave` (the pre-fix `electLobby → adopt` wiring) is torn by a
-     * transient blip. Because `reweave == null`, the resume machine's immediate-terminal branch fires:
-     * the joiner emits [MembershipEvent.HostLost] ([FailureReason.Unrecoverable]) and **never**
-     * [MembershipEvent.WindowOpened] — even though the seam self-heals moments later (`recover()`).
-     * That is the churn source: every transient mesh blip kills the adopted room.
+     * An adopted joiner with **no** `reweave` is torn by a transient blip. Because `reweave == null`,
+     * the resume machine's immediate-terminal branch fires: the joiner emits [MembershipEvent.HostLost]
+     * ([FailureReason.Unrecoverable]) and **never** [MembershipEvent.WindowOpened] — even though the
+     * seam self-heals moments later (`recover()`).
+     *
+     * This was written as the #1618 repro, when the election-lobby path *was* this wiring. That path
+     * now passes `reweave = { seam }`, so what this pins is the surviving contract of the
+     * no-`reweave` default: a caller that adopts a seam which cannot heal still gets the honest
+     * terminal outcome rather than a resume loop that could never succeed. It is the control for the
+     * two tests below — the same blip, the only difference being `reweave`.
      */
     @Test
     fun `adopted joiner with no reweave goes terminal on a transient tear without opening a window`() =
@@ -135,13 +154,16 @@ class AdoptTearTerminalTest {
         }
 
     /**
-     * **Task 2 fix (heal within the window; RED before the fix, GREEN after).**
+     * **The fix (heal within the window; RED before it, GREEN after).**
      *
-     * The same adopted joiner, now given `reweave = { seam }` (the electLobby → adopt wiring after
-     * #1618). A transient host-link tear that **heals within the reconnect window** must open a
-     * window and **resume** — emit [MembershipEvent.WindowOpened] then [MembershipEvent.Resumed],
-     * NOT [MembershipEvent.HostLost]. Before the fix (`reweave == null`) this same blip went straight
-     * to terminal; the `reweave = { seam }` non-null makes the resume path run first.
+     * The same adopted joiner, now given `reweave = { seam }` — the electLobby → adopt wiring. A
+     * host-link tear that **heals within the reconnect window** must open a window and **resume**:
+     * emit [MembershipEvent.WindowOpened] then [MembershipEvent.Resumed], NOT
+     * [MembershipEvent.HostLost]. With `reweave == null` this same blip went straight to terminal.
+     *
+     * On device this is the dropped phone whose Wi-Fi returns inside the window: Track A's
+     * path-unsatisfied → grace → evict tears the host out of `peers`, and this wiring is what lets
+     * the returning path re-present the resume token instead of collapsing the room.
      */
     @Test
     fun `adopted joiner with reweave resumes when a transient tear heals within the window`() =
@@ -207,11 +229,12 @@ class AdoptTearTerminalTest {
         }
 
     /**
-     * **Task 2 companion (sustained tear still goes terminal).**
+     * **Sustained tear still goes terminal.**
      *
      * `reweave = { seam }` must not paper over a genuine host loss: a tear that never heals inside the
      * reconnect window still ends in [MembershipEvent.HostLost] ([FailureReason.WindowExpired]) — the
-     * resume path is tried and, when the window elapses without recovery, correctly gives up.
+     * resume path is tried and, when the window elapses without recovery, correctly gives up. This is
+     * the guard that the wiring above buys recovery without buying a room that refuses to die.
      */
     @Test
     fun `adopted joiner with reweave still goes HostLost when the tear outlasts the window`() =
