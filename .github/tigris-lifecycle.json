@@ -1,0 +1,16 @@
+{
+  "Rules": [
+    {
+      "ID": "expire-kuilt-maven-snapshots-30d",
+      "Status": "Enabled",
+      "Filter": { "Prefix": "maven/us/tractat/kuilt/" },
+      "Expiration": { "Days": 30 }
+    },
+    {
+      "ID": "expire-gradle-build-cache-30d",
+      "Status": "Enabled",
+      "Filter": { "Prefix": "cache/" },
+      "Expiration": { "Days": 30 }
+    }
+  ]
+}
