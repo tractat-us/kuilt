@@ -12,7 +12,6 @@ import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.test.assertAll
 import kotlin.random.Random
-import kotlin.test.Ignore
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -230,12 +229,11 @@ class NwTxtFidelityTest {
      * as long as TXT takes to resolve. That is the leading suspect for the run-to-run variance seen on
      * hardware (identical builds gave 4/4 self-dials in one formation and 0/0 in the next).
      *
-     * Disabled pending triage: this asserts behaviour the production code does not currently implement,
-     * so it documents a suspected product bug rather than guarding a fixed one. Fixing it means gating
-     * the dial on a resolved identity, which is a production change and belongs in its own PR — see
-     * the #1706 discussion. Enable it with that fix.
+     * Fixed by #1709: [NwLoom] defers the dial of an unresolved endpoint advertised under its OWN
+     * serviceName until identity arrives, bounded by [NwLoom.IDENTITY_GRACE]. Here the self endpoint's
+     * TXT resolves inside that grace, so the deferral is dropped and the resolved sighting is filtered
+     * on its PeerId — no dial ever happens.
      */
-    @Ignore
     @OptIn(ExperimentalCoroutinesApi::class)
     @Test
     fun anEndpointWhoseTxtHasNotResolvedYetIsNotDialled() = runTest(StandardTestDispatcher()) {
