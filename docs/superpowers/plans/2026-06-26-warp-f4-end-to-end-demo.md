@@ -69,9 +69,17 @@ sim.awaitRole(id, RaftRole.Follower); sim.partitionOff(id); sim.heal(); sim.sett
 
 ## File Structure
 
-- `kuilt-warp/src/jvmTest/kotlin/us/tractat/kuilt/warp/FedAvgWarpSimTest.kt` — **new.** The proof: two `@Test`s (convergence; leader-failover) + private fold/setup helpers.
-- `kuilt-warp/src/jvmMain/resources/us/tractat/kuilt/warp/fedavg_train.wasm` — **moved** from `jvmTest/resources` (Task 3) so `:examples` can load it off the `:kuilt-warp` JVM artifact. (jvmTest references update to the same resource path — it resolves transitively.)
-- `examples/build.gradle.kts` — **modified.** Add `testImplementation(project(":kuilt-warp"))` + `-Pwarp.fl.ws` → system property.
+> **Rebase note (post-Phase-H).** This plan predates the Phase-H split that moved `FedAvg` into
+> `:kuilt-warp-ml` and the wasm runtimes into `:kuilt-warp-runtime`. On landing, `FedAvgWarpSimTest`
+> was placed in **`:kuilt-warp-ml`** jvmTest (beside its FedAvg-focused sibling `FedAvgFetchAndTrainTest`
+> and the `fedavg_train.wasm` test resource), **not** `:kuilt-warp`. The kernel resource was **not**
+> promoted to `jvmMain`; it stays in `:kuilt-warp-ml/src/jvmTest/resources`, and the `:examples` demo
+> carries its own byte-identical copy in `examples/src/test/resources`. The paths below reflect the
+> original plan; read them through this note.
+
+- `kuilt-warp-ml/src/jvmTest/kotlin/us/tractat/kuilt/warp/FedAvgWarpSimTest.kt` — **new.** The proof: two `@Test`s (convergence; leader-failover) + private fold/setup helpers.
+- `kuilt-warp-ml/src/jvmTest/resources/us/tractat/kuilt/warp/fedavg_train.wasm` — the content-addressed kernel (already present on post-Phase-H main). `:examples` loads a byte-identical copy from its own `src/test/resources`.
+- `examples/build.gradle.kts` — **modified.** Add `testImplementation` on `:kuilt-warp` / `:kuilt-warp-ml` / `:kuilt-warp-runtime` + `-Pwarp.fl.ws` → system property.
 - `examples/src/test/kotlin/us/tractat/kuilt/examples/warp/FederatedLearningExampleTest.kt` — **new.** Two tiers (in-process default; `-P`-gated WebSocket).
 - `examples/README.md` — **modified.** One row for the new example.
 

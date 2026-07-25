@@ -76,7 +76,12 @@ replicated CRDT instance: each node reads its board, folds the latest per-peer `
 
 ## Design
 
-### 1. The proof — `:kuilt-warp` jvmTest `FedAvgWarpSimTest`
+### 1. The proof — `:kuilt-warp-ml` jvmTest `FedAvgWarpSimTest`
+
+> **Rebase note (post-Phase-H):** this design predates the Phase-H module split. `FedAvg` now lives
+> in `:kuilt-warp-ml` and the wasm runtimes in `:kuilt-warp-runtime`, so the proof landed in
+> `:kuilt-warp-ml` jvmTest (not `:kuilt-warp`), and the kernel resource stays in
+> `:kuilt-warp-ml/src/jvmTest/resources` rather than being promoted to `jvmMain`.
 
 JVM-only (the kernel needs `ChicoryWasmRuntime`). Uses the canonical harness: `MultiNodeRaftSim` from
 `:kuilt-raft-test` (a `jvmTest` may consume it — it's published in that module's `commonMain`),
@@ -157,10 +162,10 @@ kuilt's "runnable example" = a self-contained JVM `@Test` under `examples/src/te
 
 ## Files
 
-- **New (`:kuilt-warp` jvmTest):** `kuilt-warp/src/jvmTest/kotlin/us/tractat/kuilt/warp/FedAvgWarpSimTest.kt`.
+- **New (`:kuilt-warp-ml` jvmTest):** `kuilt-warp-ml/src/jvmTest/kotlin/us/tractat/kuilt/warp/FedAvgWarpSimTest.kt` (post-Phase-H home — see the rebase note under Design §1).
 - **New (`:examples`):**
   `examples/src/test/kotlin/us/tractat/kuilt/examples/warp/FederatedLearningExampleTest.kt`.
-- **Modified:** `examples/build.gradle.kts` (+`:kuilt-warp` dep, `-P` forwarding); `examples/README.md` (+1 row).
+- **Modified:** `examples/build.gradle.kts` (+`:kuilt-warp` / `:kuilt-warp-ml` / `:kuilt-warp-runtime` deps, `-P` forwarding); `examples/README.md` (+1 row).
 - No `commonMain`/public-API changes — F4 is integration + example only; F1/F2 already shipped the API.
 
 ## Dependency & risk
@@ -172,13 +177,12 @@ kuilt's "runnable example" = a self-contained JVM `@Test` under `examples/src/te
   updates present)` before computing the next global model; the monotone `FedAvg` epoch join makes a
   stale/partial read safe (it never regresses). If the failover test proves flaky, that's a real ordering
   defect to fix (per "it's never a flake"), not a timeout to widen.
-- **Risk — `:examples` is a plain-JVM module** (not KMP); `:kuilt-warp` resolves there as its JVM artifact, so
-  `ChicoryWasmRuntime` and the kernel resource are available. Confirm the kernel `.wasm` resource is reachable
-  on the `:examples` test classpath (it lives in `:kuilt-warp` jvmTest resources — may need to publish it to
-  `jvmMain` resources or duplicate a copy into `:examples` test resources). **Resolve at implementation:** if
-  the kernel resource isn't transitively visible, the cleanest fix is to move `fedavg_train.wasm` to
-  `kuilt-warp/src/jvmMain/resources` (it is production-shippable kernel content, not test-only) — a small,
-  defensible relocation.
+- **Risk — `:examples` is a plain-JVM module** (not KMP); `:kuilt-warp` / `:kuilt-warp-ml` /
+  `:kuilt-warp-runtime` resolve there as JVM artifacts, so `ChicoryWasmRuntime`, `FedAvgKernelCodec`, and
+  `WarpNode` are available. The kernel `.wasm` resource lives in `:kuilt-warp-ml/src/jvmTest/resources` (test
+  resources are not exported across modules), so — as resolved at implementation — the `:examples` demo carries
+  its own byte-identical copy in `examples/src/test/resources` rather than promoting the kernel to a `jvmMain`
+  artifact. The content address keeps the two copies in lockstep.
 
 ## Deferred (follow-up)
 

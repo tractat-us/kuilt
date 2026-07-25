@@ -7,6 +7,7 @@ import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.quilter.QuilterConfig
+import us.tractat.kuilt.raft.RaftRole
 import us.tractat.kuilt.raft.test.raftSimTest
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
@@ -146,7 +147,7 @@ class FedAvgWarpSimTest {
                     clock = { Instant.fromEpochMilliseconds(testScheduler.currentTime) },
                     strategy = ClaimStrategy.Ring,
                     registry = deviceRegistry(creel, hash, runtimes[i], batches.getValue(owners[i])),
-                    raftNode = sim.nodes[nodeId]!!,
+                    raftNode = checkNotNull(sim.nodes[nodeId]),
                 )
             }
             try {
@@ -179,6 +180,97 @@ class FedAvgWarpSimTest {
                     { assertEquals(1.0, globalModel[1], absoluteTolerance = 0.05) },
                     { assertTrue(perNode.all { it == perNode[0] }, "all devices agree bit-for-bit: $perNode") },
                 )
+            } finally {
+                warpNodes.forEach { it.close() }
+                runtimes.forEach { it.close() }
+            }
+        }
+
+    /**
+     * F4's headline resilience proof — **convergence survives a Raft leader failover mid-round**.
+     *
+     * While the data-local round is training, the underlying Raft cluster loses its leader
+     * (the simulation's `partitionOff`), re-elects among the survivors, heals, and the deposed
+     * leader steps back down to follower. The federated round runs straight through the
+     * churn: each device's step is pinned to itself on the free path over an **independent** seam,
+     * so the consensus-layer failover never stalls a training task, and every device still folds the
+     * same replicated board to the same model — bit-for-bit — once the run completes.
+     *
+     * This is the honest scope of the claim: with pinned free-path tasks the demo does not route
+     * task coordination through Raft, so the assertion is *resilience to* leadership churn (the run
+     * completes and all devices agree) rather than a claim that Raft orders the training itself. The
+     * raft-coordinated escalation path (`WarpNode.enqueue(taskId, CoordinationKind.Coordinated)`) is
+     * exercised by [WarpNode]'s own coordinated-execution tests; here it is the substrate whose
+     * failover the demo must survive.
+     */
+    @Test
+    fun `convergence survives leader failover mid-round`() =
+        raftSimTest(n = 3, timeout = 60.seconds) { sim ->
+            val loom = InMemoryLoom()
+            val seams = listOf(
+                loom.host(Pattern("warp-fedavg-failover")),
+                loom.join(InMemoryTag("wff-b")),
+                loom.join(InMemoryTag("wff-c")),
+            )
+            val runtimes = sim.nodeIds.map { ChicoryWasmRuntime() }
+            val warpNodes = sim.nodeIds.mapIndexed { i, nodeId ->
+                val creel = Creel()
+                val hash = creel.put(kernel)
+                WarpNode(
+                    selfId = seams[i].selfId,
+                    seam = seams[i],
+                    rosterFlow = seams[i].rosterSnapshot(),
+                    scope = backgroundScope,
+                    quilterConfig = quilterConfig,
+                    clock = { Instant.fromEpochMilliseconds(testScheduler.currentTime) },
+                    strategy = ClaimStrategy.Ring,
+                    registry = deviceRegistry(creel, hash, runtimes[i], batches.getValue(owners[i])),
+                    raftNode = checkNotNull(sim.nodes[nodeId]),
+                )
+            }
+            try {
+                sim.settle()
+                sim.awaitLeader()
+                val leaderId = sim.nodeIds.first { checkNotNull(sim.nodes[it]).role.value is RaftRole.Leader }
+
+                val epochs = 500
+                val preFailover = 20
+                var globalModel = listOf(0.0, 0.0)
+                suspend fun runEpoch(epoch: Int) {
+                    // Each device pins its own step to itself and trains on its own private batch;
+                    // args carry only the public (model, lr) header.
+                    warpNodes.forEachIndexed { i, node ->
+                        node.enqueueLocal(
+                            taskId(epoch, owners[i]),
+                            TaskDescriptor(op = kernelOp, args = ModelArgs.encode(globalModel, lr)),
+                        )
+                    }
+                    sim.awaitTrue("epoch $epoch converged", within = 4.seconds) {
+                        warpNodes.all { node -> owners.all { node.results[taskId(epoch, it)] != null } }
+                    }
+                    globalModel = foldGlobalModel(warpNodes[0], epoch)
+                }
+
+                // Train normally up to the failover point.
+                for (epoch in 0 until preFailover) runEpoch(epoch)
+
+                // Fail the Raft leader mid-training, re-elect among survivors, heal, let it step down.
+                val survivors = sim.nodeIds.filter { it != leaderId }.toSet()
+                sim.partitionOff(leaderId)
+                sim.awaitLeader(among = survivors)
+                sim.heal()
+                sim.awaitRole(leaderId, RaftRole.Follower)
+
+                // Keep training to convergence; the round survives the failover and every device agrees.
+                for (epoch in preFailover until epochs) runEpoch(epoch)
+
+                val perNode = warpNodes.map { foldGlobalModel(it, epochs - 1) }
+                assertAll(
+                    { assertEquals(2.0, globalModel[0], absoluteTolerance = 0.05) },
+                    { assertEquals(1.0, globalModel[1], absoluteTolerance = 0.05) },
+                    { assertTrue(perNode.all { it == perNode[0] }, "all devices agree bit-for-bit: $perNode") },
+                )
+                sim.checkInvariants()
             } finally {
                 warpNodes.forEach { it.close() }
                 runtimes.forEach { it.close() }
