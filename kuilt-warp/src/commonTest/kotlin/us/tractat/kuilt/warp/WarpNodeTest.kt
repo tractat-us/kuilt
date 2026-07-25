@@ -131,6 +131,7 @@ class WarpNodeTest {
             quilterConfig = TEST_QUILTER_CONFIG,
             clock = schedulerClock(testScheduler),
             registry = trackA,
+            epoch = 0L,
         )
         val nodeB = WarpNode(
             selfId = seamB.selfId,
@@ -140,6 +141,7 @@ class WarpNodeTest {
             quilterConfig = TEST_QUILTER_CONFIG,
             clock = schedulerClock(testScheduler),
             registry = trackB,
+            epoch = 0L,
         )
 
         // With only peer A in the roster, A owns every task.
@@ -214,6 +216,7 @@ class WarpNodeTest {
             quilterConfig = TEST_QUILTER_CONFIG,
             clock = schedulerClock(testScheduler),
             registry = trackingRegistry(seamA.selfId),
+            epoch = 0L,
         )
         val nodeB = WarpNode(
             selfId = seamB.selfId,
@@ -223,6 +226,7 @@ class WarpNodeTest {
             quilterConfig = TEST_QUILTER_CONFIG,
             clock = schedulerClock(testScheduler),
             registry = trackingRegistry(seamB.selfId),
+            epoch = 0L,
         )
 
         val tasks = (1..10).map { TaskId("task-$it") }
@@ -260,9 +264,9 @@ class WarpNodeTest {
             })
         }
 
-        val nodeA = WarpNode(seamA.selfId, seamA, seamA.rosterSnapshot(), backgroundScope, TEST_QUILTER_CONFIG, schedulerClock(testScheduler), registry = trackingRegistry())
-        val nodeB = WarpNode(seamB.selfId, seamB, seamB.rosterSnapshot(), backgroundScope, TEST_QUILTER_CONFIG, schedulerClock(testScheduler), registry = trackingRegistry())
-        val nodeC = WarpNode(seamC.selfId, seamC, seamC.rosterSnapshot(), backgroundScope, TEST_QUILTER_CONFIG, schedulerClock(testScheduler), registry = trackingRegistry())
+        val nodeA = WarpNode(seamA.selfId, seamA, seamA.rosterSnapshot(), backgroundScope, TEST_QUILTER_CONFIG, schedulerClock(testScheduler), registry = trackingRegistry(), epoch = 0L)
+        val nodeB = WarpNode(seamB.selfId, seamB, seamB.rosterSnapshot(), backgroundScope, TEST_QUILTER_CONFIG, schedulerClock(testScheduler), registry = trackingRegistry(), epoch = 0L)
+        val nodeC = WarpNode(seamC.selfId, seamC, seamC.rosterSnapshot(), backgroundScope, TEST_QUILTER_CONFIG, schedulerClock(testScheduler), registry = trackingRegistry(), epoch = 0L)
 
         // Let the three-peer mesh stabilise
         drain()
@@ -306,6 +310,7 @@ class WarpNodeTest {
             quilterConfig = TEST_QUILTER_CONFIG,
             clock = schedulerClock(testScheduler),
             registry = echoRegistry(),
+            epoch = 0L,
         )
         val nodeB = WarpNode(
             selfId = seamB.selfId,
@@ -315,6 +320,7 @@ class WarpNodeTest {
             quilterConfig = TEST_QUILTER_CONFIG,
             clock = schedulerClock(testScheduler),
             registry = echoRegistry(),
+            epoch = 0L,
         )
 
         val tasks = (1..8).map { TaskId("conv-task-$it") }
@@ -354,6 +360,7 @@ class WarpNodeTest {
             quilterConfig = TEST_QUILTER_CONFIG,
             clock = schedulerClock(testScheduler),
             registry = echoRegistry(),
+            epoch = 0L,
         )
         val nodeB = WarpNode(
             selfId = seamB.selfId,
@@ -363,6 +370,7 @@ class WarpNodeTest {
             quilterConfig = TEST_QUILTER_CONFIG,
             clock = schedulerClock(testScheduler),
             registry = echoRegistry(),
+            epoch = 0L,
         )
 
         val taskId = TaskId("dedup-task")
@@ -406,6 +414,7 @@ class WarpNodeTest {
                 quilterConfig = TEST_QUILTER_CONFIG,
                 clock = schedulerClock(testScheduler),
                 registry = echoRegistry(),
+                epoch = 0L,
             )
             val nodeB = WarpNode(
                 selfId = seamB.selfId,
@@ -415,6 +424,7 @@ class WarpNodeTest {
                 quilterConfig = TEST_QUILTER_CONFIG,
                 clock = schedulerClock(testScheduler),
                 registry = echoRegistry(),
+                epoch = 0L,
             )
 
             // Collect the first swatch that arrives on B's rawIncoming.

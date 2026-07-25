@@ -181,6 +181,7 @@ public class MultiNodeWarpSim internal constructor(
                 heartbeatConfig = heartbeatConfig,
                 strategy = strategy,
                 registry = registryFactory(this, id),
+                epoch = 0L,
             )
         }
     }

@@ -92,6 +92,7 @@ class LazyFetchAndRunTest {
                         clock = c5bClock(testScheduler),
                         registry = registryA,
                         lazyFetch = WarpLazyFetch(Creel(), runtimeA, opToBobbin),
+                        epoch = 0L,
                     )
                     @Suppress("UNUSED_VARIABLE")
                     val nodeB = WarpNode(
@@ -100,6 +101,7 @@ class LazyFetchAndRunTest {
                         clock = c5bClock(testScheduler),
                         registry = OpRegistry(), // also lacks reverse; serves bytes from its creel
                         lazyFetch = WarpLazyFetch(servingCreel, runtimeB, opToBobbin),
+                        epoch = 0L,
                     )
 
                     val input = "Hello, warp!".encodeToByteArray()
@@ -161,6 +163,7 @@ class LazyFetchAndRunTest {
                         clock = c5bClock(testScheduler),
                         registry = OpRegistry(),
                         lazyFetch = WarpLazyFetch(Creel(), runtimeA, opToBobbin),
+                        epoch = 0L,
                     )
                     @Suppress("UNUSED_VARIABLE")
                     val nodeB = WarpNode(
@@ -169,6 +172,7 @@ class LazyFetchAndRunTest {
                         clock = c5bClock(testScheduler),
                         registry = OpRegistry(),
                         lazyFetch = WarpLazyFetch(servingCreel, runtimeB, opToBobbin),
+                        epoch = 0L,
                     )
 
                     val taskId = taskOwnedBy(seamA.selfId, setOf(seamA.selfId, seamB.selfId))
@@ -249,6 +253,7 @@ class LazyFetchAndRunTest {
                         clock = c5bClock(testScheduler),
                         registry = OpRegistry(),
                         lazyFetch = WarpLazyFetch(Creel(), runtimeA, opToBobbin),
+                        epoch = 0L,
                     )
                     @Suppress("UNUSED_VARIABLE")
                     val nodeB = WarpNode(
@@ -257,6 +262,7 @@ class LazyFetchAndRunTest {
                         clock = c5bClock(testScheduler),
                         registry = OpRegistry(),
                         lazyFetch = WarpLazyFetch(servingCreel, runtimeB, opToBobbin),
+                        epoch = 0L,
                     )
 
                     val taskId = taskOwnedBy(seamA.selfId, setOf(seamA.selfId, seamB.selfId))
@@ -334,6 +340,7 @@ class LazyFetchAndRunTest {
                 scope = backgroundScope, quilterConfig = C5B_QUILTER_CONFIG,
                 clock = c5bClock(testScheduler),
                 registry = OpRegistry(),
+                epoch = 0L,
             )
             @Suppress("UNUSED_VARIABLE")
             val nodeB = WarpNode(
@@ -341,6 +348,7 @@ class LazyFetchAndRunTest {
                 scope = backgroundScope, quilterConfig = C5B_QUILTER_CONFIG,
                 clock = c5bClock(testScheduler),
                 registry = OpRegistry(),
+                epoch = 0L,
             )
 
             val taskId = taskOwnedBy(seamA.selfId, setOf(seamA.selfId, seamB.selfId))

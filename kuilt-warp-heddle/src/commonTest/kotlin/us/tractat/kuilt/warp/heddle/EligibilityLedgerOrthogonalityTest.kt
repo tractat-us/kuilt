@@ -110,7 +110,7 @@ class EligibilityLedgerOrthogonalityTest {
         val self = ReplicaId(seam.selfId.value)
         val node = heddleStatic(
             seam = seam, self = self, root = root, mint = mapOf(self to mint),
-            topology = threeToOneTopology(), clock = clock, config = heddleConfig(seed),
+            topology = threeToOneTopology(), clock = clock, config = heddleConfig(seed), epoch = 0L,
         )
         node.advertise(eA, hungry)
         node.advertise(eB, hungry)
@@ -135,6 +135,7 @@ class EligibilityLedgerOrthogonalityTest {
             selfId = warpSeam.selfId, seam = warpSeam, rosterFlow = roster, scope = backgroundScope,
             quilterConfig = warpQuilterConfig, clock = clock, strategy = ClaimStrategy.Ring,
             registry = recordingRegistry(recorder), admissionControl = HeddleAdmissionControl(heddle),
+            epoch = 0L,
         )
         if (affinity != Affinity.Anywhere) {
             node.advertiseCapabilities(gpuUsEast)

@@ -109,6 +109,7 @@ class WarpNodeCoordinatedChurnSimTest {
                     "coordinated"
                 },
                 raftNode = sim.nodes[nodeId]!!,
+                epoch = 0L,
             )
         }
 

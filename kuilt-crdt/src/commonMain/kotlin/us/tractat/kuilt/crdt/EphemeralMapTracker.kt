@@ -40,16 +40,41 @@ public class EphemeralMapTracker<V>(
      * same-clock null), the local receive time is re-stamped to `clock()`.
      * Stale deliveries and same-clock equal-value duplicates do **not** update
      * the receive time — they leave the existing TTL timer intact.
+     *
+     * **Evict-on-read past TTL.** An existing slot whose local receive time has
+     * aged past [ttlMs] reads as *absent* here — exactly as it already does in
+     * [live]. So when an inbound entry arrives for an expired slot, it is accepted
+     * as **fresh**: the receive time is re-stamped and the stale slot is dropped
+     * before the join, so the merge takes the inbound entry even when its clock
+     * counter is *lower* than the dead one's. This is what makes a restarted
+     * replica (whose process-local clock restarts from zero) visible again within
+     * one TTL of its first heartbeat, rather than being pinned behind the dead
+     * incarnation's higher clock forever — honouring [EphemeralMap]'s
+     * restart-recovery contract.
      */
     public fun received(update: EphemeralMap<V>) {
         val now = clock()
+        var evicted: MutableSet<ReplicaId>? = null
         for ((replica, inbound) in update.entries) {
             val existing = state.entries[replica]
-            if (advancesEntry(inbound, existing)) {
+            // An expired existing slot reads as absent: accept the inbound as fresh (re-stamp)
+            // and mark the stale slot for eviction so the join takes the lower-clock restart.
+            val expired = existing != null && isExpired(replica, now)
+            if (expired || advancesEntry(inbound, existing)) {
                 receiveTime[replica] = now
             }
+            if (expired) {
+                (evicted ?: mutableSetOf<ReplicaId>().also { evicted = it }).add(replica)
+            }
         }
-        state = state.piece(update)
+        val base = evicted?.let { state.evicting(it) } ?: state
+        state = base.piece(update)
+    }
+
+    /** True when [replica]'s slot has no receive time, or its last update aged past [ttlMs]. */
+    private fun isExpired(replica: ReplicaId, now: Long): Boolean {
+        val receivedAt = receiveTime[replica] ?: return true
+        return (now - receivedAt) >= ttlMs
     }
 
     /**

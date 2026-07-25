@@ -67,11 +67,13 @@ class SettleUntilRealIoTest {
                 selfId = seamA.selfId, seam = seamA, rosterFlow = seamA.rosterSnapshot(),
                 scope = backgroundScope, quilterConfig = REAL_IO_CONFIG,
                 clock = realIoClock(testScheduler), registry = reg(),
+                epoch = 0L,
             )
             val nodeB = WarpNode(
                 selfId = seamB.selfId, seam = seamB, rosterFlow = seamB.rosterSnapshot(),
                 scope = backgroundScope, quilterConfig = REAL_IO_CONFIG,
                 clock = realIoClock(testScheduler), registry = reg(),
+                epoch = 0L,
             )
 
             val taskId = TaskId("square-5")

@@ -171,6 +171,7 @@ class WarpNodeWebSocketTest {
                     quilterConfig = WS_QUILTER_CONFIG,
                     clock = { kotlin.time.Clock.System.now() },
                     registry = wsRegistry(RELAY_ID),
+                    epoch = 0L,
                 )
                 val nodeA = WarpNode(
                     selfId = CLIENT_A_ID,
@@ -180,6 +181,7 @@ class WarpNodeWebSocketTest {
                     quilterConfig = WS_QUILTER_CONFIG,
                     clock = { kotlin.time.Clock.System.now() },
                     registry = wsRegistry(CLIENT_A_ID),
+                    epoch = 0L,
                 )
                 val nodeB = WarpNode(
                     selfId = CLIENT_B_ID,
@@ -189,6 +191,7 @@ class WarpNodeWebSocketTest {
                     quilterConfig = WS_QUILTER_CONFIG,
                     clock = { kotlin.time.Clock.System.now() },
                     registry = wsRegistry(CLIENT_B_ID),
+                    epoch = 0L,
                 )
 
                 // Enqueue all tasks on the relay.
@@ -281,6 +284,7 @@ class WarpNodeWebSocketTest {
                     quilterConfig = WS_QUILTER_CONFIG,
                     clock = { kotlin.time.Clock.System.now() },
                     registry = foRegistry(RELAY_ID),
+                    epoch = 0L,
                 )
                 val nodeA = WarpNode(
                     selfId = CLIENT_A_ID,
@@ -290,6 +294,7 @@ class WarpNodeWebSocketTest {
                     quilterConfig = WS_QUILTER_CONFIG,
                     clock = { kotlin.time.Clock.System.now() },
                     registry = foRegistry(CLIENT_A_ID),
+                    epoch = 0L,
                 )
 
                 // Enqueue tasks.
@@ -406,6 +411,7 @@ class WarpNodeWebSocketTest {
                     quilterConfig = WS_QUILTER_CONFIG,
                     clock = { kotlin.time.Clock.System.now() },
                     registry = strongRegistry(RELAY_ID),
+                    epoch = 0L,
                 )
                 val nodeA = WarpNode(
                     selfId = CLIENT_A_ID,
@@ -415,6 +421,7 @@ class WarpNodeWebSocketTest {
                     quilterConfig = WS_QUILTER_CONFIG,
                     clock = { kotlin.time.Clock.System.now() },
                     registry = strongRegistry(CLIENT_A_ID),
+                    epoch = 0L,
                 )
                 val nodeB = WarpNode(
                     selfId = CLIENT_B_ID,
@@ -424,6 +431,7 @@ class WarpNodeWebSocketTest {
                     quilterConfig = WS_QUILTER_CONFIG,
                     clock = { kotlin.time.Clock.System.now() },
                     registry = strongRegistry(CLIENT_B_ID),
+                    epoch = 0L,
                 )
 
                 val tasks = (1..TASK_COUNT).map { TaskId("strong-task-$it") }

@@ -80,14 +80,21 @@ public class EphemeralEntry<V>(
  *
  * When a replica restarts it resets its local clock to zero (or a low value),
  * which is below the stale high-clock entry that peers already have for that
- * replica. Writes from the restarted replica will be silently dropped by [piece]
- * and [put] until its clock catches up. The **only recovery mechanism is TTL
- * eviction**: each observer holds the stale entry until it expires, at which
- * point the slot is cleared and the next heartbeat from the restarted replica
- * is accepted as fresh. Rejoin-visibility latency is therefore bounded by
- * `ttlMs`. There is no explicit "reset" message — design reconnect flows to
- * either (a) persist and restore the last clock so it is always increasing, or
- * (b) accept the TTL-bounded window before the restarted replica becomes visible.
+ * replica. The join ([piece], [put]) alone would silently drop the restarted
+ * replica's writes until its clock catches up. **TTL eviction is what recovers
+ * it**: an observer measures staleness by its own local receive time, and once a
+ * slot has gone `ttlMs` without a fresh update it reads as *absent*
+ * ([EphemeralMapTracker] evicts it on the next inbound update — see [evicting]),
+ * so the restarted replica's next heartbeat is accepted as fresh even though its
+ * clock counter is lower. Rejoin-visibility latency is therefore bounded by
+ * `ttlMs` from the restart's first heartbeat — **not** unbounded. Note this is a
+ * per-observer, receive-time signal: within the TTL window an observer that has
+ * not yet expired the dead slot still hides the restart (the accepted ephemeral
+ * within-TTL skew), and a stale re-delivery of the dead incarnation's high-clock
+ * entry (e.g. via anti-entropy) can re-pin it. For clock-domination that does
+ * **not** depend on TTL timing, drive [put] from a clock whose high bits carry a
+ * per-boot incarnation epoch, so a restart's clock always exceeds the dead
+ * incarnation's — then TTL eviction is only the backstop, not the sole mechanism.
  *
  * @param V the value type carried in each presence entry.
  */
@@ -167,6 +174,23 @@ public class EphemeralMap<V> private constructor(
     override fun hashCode(): Int = entries.hashCode()
 
     override fun toString(): String = "EphemeralMap($entries)"
+
+    /**
+     * Returns a copy with [replicas] dropped from the slot map.
+     *
+     * This is **not** a join-lattice operation — dropping a slot is not monotone. It exists
+     * solely so [EphemeralMapTracker] can evict a slot whose local receive time has aged past
+     * the TTL, honouring the restart-recovery contract (see the "Reconnect and clock-reset
+     * recovery" section of the class KDoc): once the dead incarnation's slot reads as absent,
+     * the restarted replica's next heartbeat — even with a lower clock counter — is accepted as
+     * fresh rather than pinned behind the dead entry's higher clock. Removal is driven by
+     * receive-time TTL, exactly the same local, per-observer, eventually-consistent presence
+     * signal that [live] already filters on; it is `internal` because only the tracker may drive
+     * it.
+     */
+    internal fun evicting(replicas: Set<ReplicaId>): EphemeralMap<V> =
+        if (replicas.isEmpty() || entries.isEmpty()) this
+        else EphemeralMap(entries.filterKeys { it !in replicas })
 
     public companion object {
         /** The empty map — the CRDT's bottom element. */

@@ -71,11 +71,13 @@ class TieredCompilationGoNoGoTest {
                 selfId = seamC.selfId, seam = seamC, rosterFlow = roster, scope = backgroundScope,
                 quilterConfig = GNG_CONFIG, clock = gngClock(testScheduler), strategy = ClaimStrategy.Ring,
                 registry = OpRegistry(), lazyFetch = lfC, target = Target.Jvm,
+                epoch = 0L,
             )
             val weakNode = WarpNode(
                 selfId = seamW.selfId, seam = seamW, rosterFlow = roster, scope = backgroundScope,
                 quilterConfig = GNG_CONFIG, clock = gngClock(testScheduler), strategy = ClaimStrategy.Ring,
                 registry = OpRegistry(), lazyFetch = lfW, target = Target.Jvm,
+                epoch = 0L,
             )
 
             // Phase 1 — interpret: the weak node runs a task on the raw bobbin.

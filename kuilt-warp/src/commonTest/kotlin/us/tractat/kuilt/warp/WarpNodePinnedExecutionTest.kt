@@ -95,8 +95,8 @@ class WarpNodePinnedExecutionTest {
         val executedBy = mutableMapOf<TaskId, PeerId>()
         val lock = reentrantLock()
 
-        val nodeA = WarpNode(seamA.selfId, seamA, seamA.rosterSnapshot(), backgroundScope, PINNED_QUILTER_CONFIG, pinnedClock(testScheduler), registry = trackingRegistry(seamA.selfId, executedBy, lock))
-        val nodeB = WarpNode(seamB.selfId, seamB, seamB.rosterSnapshot(), backgroundScope, PINNED_QUILTER_CONFIG, pinnedClock(testScheduler), registry = trackingRegistry(seamB.selfId, executedBy, lock))
+        val nodeA = WarpNode(seamA.selfId, seamA, seamA.rosterSnapshot(), backgroundScope, PINNED_QUILTER_CONFIG, pinnedClock(testScheduler), registry = trackingRegistry(seamA.selfId, executedBy, lock), epoch = 0L)
+        val nodeB = WarpNode(seamB.selfId, seamB, seamB.rosterSnapshot(), backgroundScope, PINNED_QUILTER_CONFIG, pinnedClock(testScheduler), registry = trackingRegistry(seamB.selfId, executedBy, lock), epoch = 0L)
 
         drainPinned() // let the two-peer mesh form
 
@@ -138,9 +138,9 @@ class WarpNodePinnedExecutionTest {
         val executedBy = mutableMapOf<TaskId, PeerId>()
         val lock = reentrantLock()
 
-        val nodeA = WarpNode(seamA.selfId, seamA, roster, backgroundScope, PINNED_QUILTER_CONFIG, pinnedClock(testScheduler), registry = trackingRegistry(seamA.selfId, executedBy, lock))
-        val nodeB = WarpNode(seamB.selfId, seamB, roster, backgroundScope, PINNED_QUILTER_CONFIG, pinnedClock(testScheduler), registry = trackingRegistry(seamB.selfId, executedBy, lock))
-        val nodeC = WarpNode(seamC.selfId, seamC, roster, backgroundScope, PINNED_QUILTER_CONFIG, pinnedClock(testScheduler), registry = trackingRegistry(seamC.selfId, executedBy, lock))
+        val nodeA = WarpNode(seamA.selfId, seamA, roster, backgroundScope, PINNED_QUILTER_CONFIG, pinnedClock(testScheduler), registry = trackingRegistry(seamA.selfId, executedBy, lock), epoch = 0L)
+        val nodeB = WarpNode(seamB.selfId, seamB, roster, backgroundScope, PINNED_QUILTER_CONFIG, pinnedClock(testScheduler), registry = trackingRegistry(seamB.selfId, executedBy, lock), epoch = 0L)
+        val nodeC = WarpNode(seamC.selfId, seamC, roster, backgroundScope, PINNED_QUILTER_CONFIG, pinnedClock(testScheduler), registry = trackingRegistry(seamC.selfId, executedBy, lock), epoch = 0L)
 
         drainPinned()
 
@@ -186,8 +186,8 @@ class WarpNodePinnedExecutionTest {
         val executedBy = mutableMapOf<TaskId, PeerId>()
         val lock = reentrantLock()
 
-        val nodeA = WarpNode(seamA.selfId, seamA, seamA.rosterSnapshot(), backgroundScope, PINNED_QUILTER_CONFIG, pinnedClock(testScheduler), registry = trackingRegistry(seamA.selfId, executedBy, lock))
-        val nodeB = WarpNode(seamB.selfId, seamB, seamB.rosterSnapshot(), backgroundScope, PINNED_QUILTER_CONFIG, pinnedClock(testScheduler), registry = trackingRegistry(seamB.selfId, executedBy, lock))
+        val nodeA = WarpNode(seamA.selfId, seamA, seamA.rosterSnapshot(), backgroundScope, PINNED_QUILTER_CONFIG, pinnedClock(testScheduler), registry = trackingRegistry(seamA.selfId, executedBy, lock), epoch = 0L)
+        val nodeB = WarpNode(seamB.selfId, seamB, seamB.rosterSnapshot(), backgroundScope, PINNED_QUILTER_CONFIG, pinnedClock(testScheduler), registry = trackingRegistry(seamB.selfId, executedBy, lock), epoch = 0L)
 
         drainPinned()
 
@@ -218,8 +218,8 @@ class WarpNodePinnedExecutionTest {
         val executedBy = mutableMapOf<TaskId, PeerId>()
         val lock = reentrantLock()
 
-        val nodeA = WarpNode(seamA.selfId, seamA, seamA.rosterSnapshot(), backgroundScope, PINNED_QUILTER_CONFIG, pinnedClock(testScheduler), registry = trackingRegistry(seamA.selfId, executedBy, lock))
-        val nodeB = WarpNode(seamB.selfId, seamB, seamB.rosterSnapshot(), backgroundScope, PINNED_QUILTER_CONFIG, pinnedClock(testScheduler), registry = trackingRegistry(seamB.selfId, executedBy, lock))
+        val nodeA = WarpNode(seamA.selfId, seamA, seamA.rosterSnapshot(), backgroundScope, PINNED_QUILTER_CONFIG, pinnedClock(testScheduler), registry = trackingRegistry(seamA.selfId, executedBy, lock), epoch = 0L)
+        val nodeB = WarpNode(seamB.selfId, seamB, seamB.rosterSnapshot(), backgroundScope, PINNED_QUILTER_CONFIG, pinnedClock(testScheduler), registry = trackingRegistry(seamB.selfId, executedBy, lock), epoch = 0L)
 
         drainPinned()
 

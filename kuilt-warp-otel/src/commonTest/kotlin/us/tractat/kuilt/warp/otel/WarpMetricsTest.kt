@@ -106,6 +106,7 @@ class WarpMetricsTest {
             clock = schedulerClock(testScheduler),
             strategy = ClaimStrategy.Ring,
             registry = echoRegistry(),
+            epoch = 0L,
         )
     }
 
@@ -198,6 +199,7 @@ class WarpMetricsTest {
                 selfId = self, seam = seam, rosterFlow = roster, scope = backgroundScope,
                 quilterConfig = testQuilterConfig, clock = schedulerClock(testScheduler),
                 strategy = ClaimStrategy.Ring, registry = OpRegistry(), lazyFetch = lf, target = Target.Jvm,
+                epoch = 0L,
             )
             val compilerNode = tieringNode(seamC.selfId, seamC, lfC)
             val weakNode = tieringNode(seamW.selfId, seamW, lfW)

@@ -77,6 +77,7 @@ internal fun CoroutineScope.sampleHeddleNode(seam: Seam) {
         topology = listOf(e),              // root → leaf, prepared and active at bootstrap
         clock = { Instant.fromEpochMilliseconds(0L) },
         config = HeddleConfig(policy = PolicyConfig(quantum = 10L), maxHoldingsPerPeer = 1_000L),
+        epoch = 1L,                        // a persisted monotonic boot counter — bumped every restart
     )
 
     // The leaf wants work; one scheduling round delegates entitlement down toward it.
@@ -113,6 +114,7 @@ internal suspend fun CoroutineScope.sampleHeddleGoverned(seam: Seam, raft: us.tr
         clock = { Instant.fromEpochMilliseconds(0L) },
         config = HeddleConfig(policy = PolicyConfig(quantum = 10L), maxHoldingsPerPeer = 1_000L),
         incarnation = "boot-2026-07-24T00:00:00Z", // fresh per process incarnation — a boot id / epoch / UUID
+        epoch = 1L,                                // numeric per-boot counter — bumped every restart
     )
 
     // Mint and reshape are serialized through the Raft log — each returns a structured outcome.

@@ -42,6 +42,12 @@ import kotlin.time.Instant
  *   Runtime additions go through [HeddleNode.prepare]/[HeddleNode.activate].
  * @param clock the injected wall clock, used for demand TTL and liveness timing.
  * @param config the policy caps, §8.2 bound cap, TTL, and replication/liveness knobs.
+ * @param epoch a per-process-boot value that MUST be **fresh and strictly increasing on every
+ *   incarnation** of this peer (a persisted monotonic boot counter is canonical). It seeds the
+ *   high bits of the demand-board clock so a restarted peer's demand always out-clocks its dead
+ *   incarnation's regardless of TTL timing (#1666). Required, not defaulted — the node cannot
+ *   self-generate restart-freshness; never derive it from a test-seedable `Random`. Must be in
+ *   `[0, 2^31)`.
  */
 public fun CoroutineScope.heddleStatic(
     seam: Seam,
@@ -51,6 +57,7 @@ public fun CoroutineScope.heddleStatic(
     topology: List<AttachmentRecord> = emptyList(),
     clock: () -> Instant,
     config: HeddleConfig,
+    epoch: Long,
 ): HeddleNode = HeddleNode(
     scope = this,
     seam = seam,
@@ -58,6 +65,7 @@ public fun CoroutineScope.heddleStatic(
     initialLedger = buildInitialLedger(root, mint, topology),
     clock = clock,
     config = config,
+    epoch = epoch,
 )
 
 /**

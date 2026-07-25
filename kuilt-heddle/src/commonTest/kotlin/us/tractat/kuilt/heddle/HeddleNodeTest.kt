@@ -632,6 +632,7 @@ class HeddleNodeTest {
                 topology = topology,
                 clock = clock,
                 config = config(seed = 1_000 + i),
+                epoch = 0L,
             )
             Peer(self, node, gate)
         }
