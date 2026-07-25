@@ -63,6 +63,17 @@ public class TaskDescriptor(
      * on entitlement; warp core never interprets it.
      */
     public val lane: Lane = Lane.ROOT,
+    /**
+     * The opaque location-[Affinity] this task requires — the "can I execute *here*" predicate
+     * (H8, design §14.6). Defaults to [Affinity.Anywhere] — *no requirement*, so placement is
+     * over the whole roster and an unrestricted descriptor is byte-for-byte unchanged on the
+     * wire (CBOR omits a field at its default). When set, warp core hashes the task over only
+     * the **eligible subset** of the roster: the peers whose advertised [CapSet] satisfies this
+     * predicate (see [WarpNode.advertiseCapabilities]). Eligibility is independent of the [lane]
+     * — a task may carry both — and introduces no conserved quantity, so it never touches the
+     * ledger's conservation.
+     */
+    public val affinity: Affinity = Affinity.Anywhere,
 ) {
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
@@ -71,7 +82,8 @@ public class TaskDescriptor(
             args.contentEquals(other.args) &&
             traceparent == other.traceparent &&
             pinnedOwner == other.pinnedOwner &&
-            lane == other.lane
+            lane == other.lane &&
+            affinity == other.affinity
     }
 
     override fun hashCode(): Int {
@@ -80,10 +92,11 @@ public class TaskDescriptor(
         hash = 31 * hash + (traceparent?.hashCode() ?: 0)
         hash = 31 * hash + (pinnedOwner?.hashCode() ?: 0)
         hash = 31 * hash + lane.hashCode()
+        hash = 31 * hash + affinity.hashCode()
         return hash
     }
 
     override fun toString(): String =
         "TaskDescriptor(op=${op.value}, args=[${args.size} bytes], " +
-            "traceparent=$traceparent, pinnedOwner=${pinnedOwner?.value}, lane=${lane.tag})"
+            "traceparent=$traceparent, pinnedOwner=${pinnedOwner?.value}, lane=${lane.tag}, affinity=$affinity)"
 }

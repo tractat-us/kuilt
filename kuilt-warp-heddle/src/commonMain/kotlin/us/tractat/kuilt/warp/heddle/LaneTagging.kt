@@ -19,6 +19,7 @@ public fun TaskDescriptor.inLane(lane: Lane): TaskDescriptor =
         traceparent = traceparent,
         pinnedOwner = pinnedOwner,
         lane = lane,
+        affinity = affinity,
     )
 
 /** Sugar for [inLane] with a string tag: `descriptor.inLane("acme/batch")`. */
