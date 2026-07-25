@@ -79,6 +79,8 @@ internal sealed interface ControlCommand {
         val liveEdge: AttachmentId,
         val witness: EntitlementLedger,
     ) : ControlCommand
+
+    /**
      * Add [replica] to the **log-known roster** — the set a fence quantifies its acks over
      * (`docs/heddle-ledger-relocation-design.md` §6.2; [EnrolledRoster]). Idempotent per replica.
      *
@@ -326,6 +328,8 @@ internal class HeddleControlPlane(
      * causally-lagged leader can still commit a wrong magnitude — the issue #1665 residual (Wall A).
      */
     suspend fun fenceReadIndex(): Long = raft.readIndex()
+
+    /**
      * The log-known roster as applied so far — an immutable value, so the caller holds a consistent
      * snapshot including its [EnrolledRoster.appliedIndex] and can ask [EnrolledRoster.enrolledAt]
      * for the set as of any index in that prefix.

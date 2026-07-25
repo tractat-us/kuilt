@@ -530,7 +530,7 @@ class HeddleControlPlaneTest {
         val sink = RecordingSink()
         val plane = HeddleControlPlane(
             raft = fake, self = ReplicaId("solo"), scope = backgroundScope,
-            sink = sink, initial = EntitlementLedger.ZERO, incarnation = "boot-reloc-gate",
+            sink = sink, membership = NO_REMONITOR, initial = EntitlementLedger.ZERO, incarnation = "boot-reloc-gate",
         )
         val child = GroupId("g")
         val p3 = ReplicaId("p3")

@@ -291,6 +291,8 @@ public class GovernedHeddleNode internal constructor(
         return control.submit(ControlCommand.Reconcile(child, liveEdge, patch.delta), timeout)
     }
 
+
+    /**
      * Add [replica] to the **log-known roster**, serialized through the log — the set a later
      * barrier quantifies its acknowledgments over (`docs/heddle-ledger-relocation-design.md` §6.2).
      * Idempotent: enrolling an already-enrolled replica is [ControlOutcome.Applied].
