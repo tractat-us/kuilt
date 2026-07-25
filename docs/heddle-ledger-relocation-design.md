@@ -708,3 +708,42 @@ authored-slot storage — a dependency this design declines to smuggle in.
 fence. If the reviewer rejects the §7 invariant weakening or the slice-2/3 machinery,
 the strictly-safe fallback (slice 1 only: representation present, #1669 migrated off
 the contested slot, through-service still refused) is the recommended landing.*
+
+---
+
+## 12. Implementation feedback from slice 1 (#1691 / PR #1694)
+
+Slice 1 landed the representation and the finding-1 ownership fix. Five corrections to
+this document surfaced while building to it. **Slice 3 must read these** — three of them
+change what the fence has to do.
+
+1. **§4's drain target is wrong: `iss = issued(s)[r]` should be `effIssued(s)[r]`.** A
+   retired edge may itself have received an earlier relocation, so draining against the
+   *base* value under-drains it. No behavioural difference in slice 1 (nothing relocates
+   onto an edge that later retires), but it bites in slice 3.
+
+2. **§6.3's ownership table is coarser than reality, and the missing line is load-bearing.**
+   The table lumps "base counters on a fenced edge → control plane". In fact the
+   `returned(s)` write is safe *without* any fence, for a narrower reason: `release` refuses
+   a non-live inbound edge, so `returned` on a RETIRED edge has **no data-plane writer at
+   all**. This does **not** extend to `leafSpent`/`rollupSpent`, which a captured-path
+   `spendCaptured` can still charge on a retired edge. That asymmetry is precisely why
+   *spend* relocation needs the fence and the `returned` drain does not — the table should
+   say so rather than implying a uniform rule.
+
+3. **§5.4's idempotence clause (iii) leans on fence state slice 1 does not have.** Absent a
+   fence, the guard against double relocation is that `reconcileStranded` returns `null`
+   once `outstanding <= 0` — a **proposer-side** check the apply gate cannot re-derive,
+   because the projection's counters are empty. It is still safe (a stale witness carries
+   absolutes ≤ what already merged, so max-join absorbs it), but there is a real residual:
+   **two relocations onto the same live edge must each be computed from a view that merged
+   the previous one**, or the second absolute undershoots and is swallowed. This is the
+   Wall-A magnitude-freshness residual again, narrowed from two writers to one. Slice 3's
+   apply-derived magnitude is what removes it.
+
+4. **§3(A) says five new maps; §8 says "two new `@Serializable` maps".** It is five.
+
+5. **`validate()` has no negative-effective-spend check.** §5.3's observer-negative proviso
+   cannot fire in slice 1 (nothing writes spend relocation) and a new `LedgerConflict`
+   variant is slice-3 scope — but §6.4's observer-completeness work must add it, or the
+   condition §5.3 describes will be unreportable.
