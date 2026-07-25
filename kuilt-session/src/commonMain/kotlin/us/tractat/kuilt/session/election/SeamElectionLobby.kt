@@ -414,7 +414,18 @@ internal class SeamElectionLobby(
             check(!adopted) { "lobby already adopted a room" }
             adopted = true
             collectorJob.cancelAndJoin()
-            factory.adopt(seam, role, memberName = memberName, roomKey = roomKey)
+            // reweave = { seam }: the adopted mesh seam self-heals in place — a fabric that re-forms
+            // Woven→Weaving→Woven on a peer drop (and redials) rather than latching Torn. Returning the
+            // SAME seam lets a joiner's host-link tear run the resume path (wait for Woven, re-present
+            // the token) instead of dying on the immediate-terminal branch (#1618).
+            //
+            // This is the recovery half of #1618 Track A. On the phone that LOST its path, Track A
+            // drives every live connection to PathLost, the #1478 grace expires, NwSeam evicts the host
+            // from `peers`, and the detector reports TransportClosed — the one reason SeamRoom routes to
+            // attemptReconnect. Without a reweave that lane ends at HostLost(Unrecoverable) with no
+            // WindowOpened; with it, a path that returns inside the window resumes the same room instead
+            // of collapsing it and forcing a re-election. A tear past the window still ends terminal.
+            factory.adopt(seam, role, memberName = memberName, roomKey = roomKey, reweave = { seam })
         }
 
     private companion object {
