@@ -78,11 +78,13 @@ class Wasm3RuntimeDispatchTest {
                 selfId = seamA.selfId, seam = seamA, rosterFlow = seamA.rosterSnapshot(),
                 scope = backgroundScope, quilterConfig = C3_QUILTER_CONFIG,
                 clock = c3Clock(testScheduler), registry = registryWith(wasm3SquareOp()),
+                epoch = 0L,
             )
             val nodeB = WarpNode(
                 selfId = seamB.selfId, seam = seamB, rosterFlow = seamB.rosterSnapshot(),
                 scope = backgroundScope, quilterConfig = C3_QUILTER_CONFIG,
                 clock = c3Clock(testScheduler), registry = registryWith(wasm3SquareOp()),
+                epoch = 0L,
             )
 
             val input = 5

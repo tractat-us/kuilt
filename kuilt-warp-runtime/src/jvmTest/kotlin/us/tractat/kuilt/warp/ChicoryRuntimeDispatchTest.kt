@@ -64,11 +64,13 @@ class ChicoryRuntimeDispatchTest {
                 selfId = seamA.selfId, seam = seamA, rosterFlow = seamA.rosterSnapshot(),
                 scope = backgroundScope, quilterConfig = C3_QUILTER_CONFIG,
                 clock = c3Clock(testScheduler), registry = registryWith(chicorySquareOp()),
+                epoch = 0L,
             )
             val nodeB = WarpNode(
                 selfId = seamB.selfId, seam = seamB, rosterFlow = seamB.rosterSnapshot(),
                 scope = backgroundScope, quilterConfig = C3_QUILTER_CONFIG,
                 clock = c3Clock(testScheduler), registry = registryWith(chicorySquareOp()),
+                epoch = 0L,
             )
 
             val input = 5

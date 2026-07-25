@@ -66,6 +66,11 @@ import kotlin.time.Instant
  *   could silently vanish behind the dedup table. It is a required injected dependency precisely because
  *   the node cannot self-generate restart-uniqueness without durable storage or true entropy — never
  *   pass a value derived from a test-seedable `Random`.
+ * @param epoch the **numeric** sibling of [incarnation]: same required per-boot discipline, but it must
+ *   be a strictly-increasing `Long` (a persisted monotonic boot counter) because it seeds the *ordering*
+ *   of the demand-board clock rather than the *uniqueness* of a dedup key. A restarted peer's demand
+ *   out-clocks its dead incarnation's by this epoch, closing the TTL-timing-dependent restart window on
+ *   the ephemeral demand board (#1666). Must be in `[0, 2^31)`.
  * @sample us.tractat.kuilt.heddle.sampleHeddleGoverned
  */
 public fun CoroutineScope.heddleGoverned(
@@ -76,6 +81,7 @@ public fun CoroutineScope.heddleGoverned(
     clock: () -> Instant,
     config: HeddleConfig,
     incarnation: String,
+    epoch: Long,
 ): GovernedHeddleNode {
     val initialLedger = EntitlementLedger.bootstrap(root, emptyMap(), nonce = GOVERNED_GENESIS_NONCE)
     val node = HeddleNode(
@@ -85,6 +91,7 @@ public fun CoroutineScope.heddleGoverned(
         initialLedger = initialLedger,
         clock = clock,
         config = config,
+        epoch = epoch,
     )
     val control = HeddleControlPlane(
         raft = raft,

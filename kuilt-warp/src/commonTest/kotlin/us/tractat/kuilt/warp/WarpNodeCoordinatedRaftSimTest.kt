@@ -119,6 +119,7 @@ class WarpNodeCoordinatedRaftSimTest {
                     "raft-result"
                 },
                 raftNode = fakeRaft,
+                epoch = 0L,
             )
 
             nodeA.enqueue(taskId, CoordinationKind.Coordinated)
@@ -174,6 +175,7 @@ class WarpNodeCoordinatedRaftSimTest {
                 clock = schedulerClock(testScheduler),
                 registry = OpRegistry().also { it.register(OpId("free"), Op { args -> args }) },
                 // raftNode intentionally omitted — must fail loud at enqueue
+                epoch = 0L,
             )
 
             assertFailsWith<IllegalStateException>("enqueue(Coordinated) without raftNode must throw") {
@@ -230,6 +232,7 @@ class WarpNodeCoordinatedRaftSimTest {
                     "raft-coordinated"
                 },
                 raftNode = sim.nodes[nodeId]!!,
+                epoch = 0L,
             )
         }
 
@@ -320,6 +323,7 @@ class WarpNodeCoordinatedRaftSimTest {
                     "redriven"
                 },
                 raftNode = sim.nodes[nodeId]!!,
+                epoch = 0L,
             )
         }
 

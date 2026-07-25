@@ -136,12 +136,14 @@ class RealVariantTieringTest {
                     selfId = seamC.selfId, seam = seamC, rosterFlow = roster, scope = backgroundScope,
                     quilterConfig = REAL_VARIANT_CONFIG, clock = realVariantClock(testScheduler),
                     strategy = ClaimStrategy.Ring, registry = OpRegistry(), lazyFetch = lfC, target = Target.Jvm,
+                    epoch = 0L,
                 )
                 compilerNode.registerBinaryenCompiler(optimizer)
                 val weakNode = WarpNode(
                     selfId = seamW.selfId, seam = seamW, rosterFlow = roster, scope = backgroundScope,
                     quilterConfig = REAL_VARIANT_CONFIG, clock = realVariantClock(testScheduler),
                     strategy = ClaimStrategy.Ring, registry = OpRegistry(), lazyFetch = lfW, target = Target.Jvm,
+                    epoch = 0L,
                 )
 
                 // Phase 1 — interpret: the weak node runs a reverse task on the raw bobbin.

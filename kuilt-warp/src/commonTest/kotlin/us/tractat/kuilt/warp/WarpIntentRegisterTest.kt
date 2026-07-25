@@ -79,6 +79,7 @@ class WarpIntentRegisterTest {
             registry = intentRegistry { args ->
                 lock.withLock { executed[TaskId(args.decodeToString())] = seam.selfId.value }
             },
+            epoch = 0L,
         )
         val a = node(seamA); val b = node(seamB)
         val tasks = (1..10).map { TaskId("t-$it") }
@@ -125,6 +126,7 @@ class WarpIntentRegisterTest {
                     args
                 })
             },
+            epoch = 0L,
         )
         // First enqueue — op throws; task must be unclaimed so it can be retried.
         val t = TaskId("fail-task")
@@ -191,6 +193,7 @@ class WarpIntentRegisterTest {
             scope = backgroundScope, quilterConfig = TEST_QUILTER_CONFIG, clock = clock,
             strategy = ClaimStrategy.RingWithIntent(),
             registry = intentRegistry { lock.withLock { executed += a } },
+            epoch = 0L,
         )
         // Lands before any roster emission: A claims under the self-only ring, announces
         // intent, resolves against the empty roster (winner == null) and stands down —
@@ -205,6 +208,7 @@ class WarpIntentRegisterTest {
             scope = backgroundScope, quilterConfig = TEST_QUILTER_CONFIG, clock = clock,
             strategy = ClaimStrategy.RingWithIntent(),
             registry = intentRegistry { lock.withLock { executed += b } },
+            epoch = 0L,
         )
         drain()
 
@@ -240,6 +244,7 @@ class WarpIntentRegisterTest {
             scope = backgroundScope, quilterConfig = TEST_QUILTER_CONFIG, clock = clock,
             strategy = ClaimStrategy.RingWithIntent(),
             registry = intentRegistry(),
+            epoch = 0L,
         )
         val t = TaskId("gc-task")
         a.enqueue(t, t.intentDescriptor())

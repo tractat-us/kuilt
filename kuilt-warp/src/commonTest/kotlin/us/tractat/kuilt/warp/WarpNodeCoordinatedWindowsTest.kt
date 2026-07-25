@@ -81,6 +81,7 @@ class WarpNodeCoordinatedWindowsTest {
         registry = OpRegistry(),
         coordinatedExecutor = coordinatedExecutor,
         raftNode = fakeRaft,
+        epoch = 0L,
     )
 
     /**

@@ -88,9 +88,9 @@ class WarpNodeEligibilityTest {
         val executedBy = mutableMapOf<TaskId, MutableList<PeerId>>()
         val lock = reentrantLock()
 
-        val nodeA = WarpNode(seamA.selfId, seamA, seamA.rosterSnapshot(), backgroundScope, ELIG_QUILTER_CONFIG, eligClock(testScheduler), registry = trackingRegistry(seamA.selfId, executedBy, lock))
-        val nodeB = WarpNode(seamB.selfId, seamB, seamB.rosterSnapshot(), backgroundScope, ELIG_QUILTER_CONFIG, eligClock(testScheduler), registry = trackingRegistry(seamB.selfId, executedBy, lock))
-        val nodeC = WarpNode(seamC.selfId, seamC, seamC.rosterSnapshot(), backgroundScope, ELIG_QUILTER_CONFIG, eligClock(testScheduler), registry = trackingRegistry(seamC.selfId, executedBy, lock))
+        val nodeA = WarpNode(seamA.selfId, seamA, seamA.rosterSnapshot(), backgroundScope, ELIG_QUILTER_CONFIG, eligClock(testScheduler), registry = trackingRegistry(seamA.selfId, executedBy, lock), epoch = 0L)
+        val nodeB = WarpNode(seamB.selfId, seamB, seamB.rosterSnapshot(), backgroundScope, ELIG_QUILTER_CONFIG, eligClock(testScheduler), registry = trackingRegistry(seamB.selfId, executedBy, lock), epoch = 0L)
+        val nodeC = WarpNode(seamC.selfId, seamC, seamC.rosterSnapshot(), backgroundScope, ELIG_QUILTER_CONFIG, eligClock(testScheduler), registry = trackingRegistry(seamC.selfId, executedBy, lock), epoch = 0L)
 
         drainElig()
 
@@ -128,9 +128,9 @@ class WarpNodeEligibilityTest {
         val executedBy = mutableMapOf<TaskId, MutableList<PeerId>>()
         val lock = reentrantLock()
 
-        val nodeA = WarpNode(seamA.selfId, seamA, seamA.rosterSnapshot(), backgroundScope, ELIG_QUILTER_CONFIG, eligClock(testScheduler), registry = trackingRegistry(seamA.selfId, executedBy, lock))
-        val nodeB = WarpNode(seamB.selfId, seamB, seamB.rosterSnapshot(), backgroundScope, ELIG_QUILTER_CONFIG, eligClock(testScheduler), registry = trackingRegistry(seamB.selfId, executedBy, lock))
-        val nodeC = WarpNode(seamC.selfId, seamC, seamC.rosterSnapshot(), backgroundScope, ELIG_QUILTER_CONFIG, eligClock(testScheduler), registry = trackingRegistry(seamC.selfId, executedBy, lock))
+        val nodeA = WarpNode(seamA.selfId, seamA, seamA.rosterSnapshot(), backgroundScope, ELIG_QUILTER_CONFIG, eligClock(testScheduler), registry = trackingRegistry(seamA.selfId, executedBy, lock), epoch = 0L)
+        val nodeB = WarpNode(seamB.selfId, seamB, seamB.rosterSnapshot(), backgroundScope, ELIG_QUILTER_CONFIG, eligClock(testScheduler), registry = trackingRegistry(seamB.selfId, executedBy, lock), epoch = 0L)
+        val nodeC = WarpNode(seamC.selfId, seamC, seamC.rosterSnapshot(), backgroundScope, ELIG_QUILTER_CONFIG, eligClock(testScheduler), registry = trackingRegistry(seamC.selfId, executedBy, lock), epoch = 0L)
 
         drainElig()
         nodeA.advertiseCapabilities(gpuUsEast)
@@ -183,9 +183,9 @@ class WarpNodeEligibilityTest {
         val executedBy = mutableMapOf<TaskId, MutableList<PeerId>>()
         val lock = reentrantLock()
 
-        val nodeA = WarpNode(seamA.selfId, seamA, seamA.rosterSnapshot(), backgroundScope, ELIG_QUILTER_CONFIG, eligClock(testScheduler), registry = trackingRegistry(seamA.selfId, executedBy, lock))
-        val nodeB = WarpNode(seamB.selfId, seamB, seamB.rosterSnapshot(), backgroundScope, ELIG_QUILTER_CONFIG, eligClock(testScheduler), registry = trackingRegistry(seamB.selfId, executedBy, lock))
-        val nodeC = WarpNode(seamC.selfId, seamC, seamC.rosterSnapshot(), backgroundScope, ELIG_QUILTER_CONFIG, eligClock(testScheduler), registry = trackingRegistry(seamC.selfId, executedBy, lock))
+        val nodeA = WarpNode(seamA.selfId, seamA, seamA.rosterSnapshot(), backgroundScope, ELIG_QUILTER_CONFIG, eligClock(testScheduler), registry = trackingRegistry(seamA.selfId, executedBy, lock), epoch = 0L)
+        val nodeB = WarpNode(seamB.selfId, seamB, seamB.rosterSnapshot(), backgroundScope, ELIG_QUILTER_CONFIG, eligClock(testScheduler), registry = trackingRegistry(seamB.selfId, executedBy, lock), epoch = 0L)
+        val nodeC = WarpNode(seamC.selfId, seamC, seamC.rosterSnapshot(), backgroundScope, ELIG_QUILTER_CONFIG, eligClock(testScheduler), registry = trackingRegistry(seamC.selfId, executedBy, lock), epoch = 0L)
 
         drainElig()
 
@@ -239,8 +239,8 @@ class WarpNodeEligibilityTest {
         val executedBy = mutableMapOf<TaskId, MutableList<PeerId>>()
         val lock = reentrantLock()
 
-        val nodeA = WarpNode(seamA.selfId, seamA, seamA.rosterSnapshot(), backgroundScope, ELIG_QUILTER_CONFIG, eligClock(testScheduler), registry = trackingRegistry(seamA.selfId, executedBy, lock))
-        val nodeB = WarpNode(seamB.selfId, seamB, seamB.rosterSnapshot(), backgroundScope, ELIG_QUILTER_CONFIG, eligClock(testScheduler), registry = trackingRegistry(seamB.selfId, executedBy, lock))
+        val nodeA = WarpNode(seamA.selfId, seamA, seamA.rosterSnapshot(), backgroundScope, ELIG_QUILTER_CONFIG, eligClock(testScheduler), registry = trackingRegistry(seamA.selfId, executedBy, lock), epoch = 0L)
+        val nodeB = WarpNode(seamB.selfId, seamB, seamB.rosterSnapshot(), backgroundScope, ELIG_QUILTER_CONFIG, eligClock(testScheduler), registry = trackingRegistry(seamB.selfId, executedBy, lock), epoch = 0L)
 
         drainElig()
         // Capabilities advertised but irrelevant to Anywhere tasks.

@@ -125,6 +125,46 @@ class EphemeralMapTrackerTest {
         assertFalse(a in t.live(), "entry must expire exactly at TTL after re-stamp")
     }
 
+    // ---- restart recovery: an expired slot reads as absent (evict-on-read past TTL) ----
+
+    @Test
+    fun restartedReplica_becomesVisibleWithinTtl_afterExpiry() {
+        // Regression for #1666: a restarted replica (process-local clock from 0) was pinned
+        // behind the dead incarnation's higher clock forever, because received() compared the
+        // inbound clock against a state that never evicts. Evict-on-read past TTL fixes it.
+        var time = 0L
+        val t = EphemeralMapTracker<String>(ttlMs = 5000L, clock = { time })
+        // Dead incarnation advertises with a HIGH clock, then goes silent.
+        t.received(EphemeralMap.empty<String>().put(a, "dead", clock = 100L))
+        assertTrue(a in t.live())
+        // The peer crashes; its slot ages out past the TTL.
+        time = 5000L
+        assertFalse(a in t.live(), "crashed peer's slot must expire")
+        // The restarted replica re-advertises with a fresh clock from zero (BELOW the dead one).
+        t.received(EphemeralMap.empty<String>().put(a, "restarted", clock = 1L))
+        // Before the fix this stayed invisible forever (1 < 100). Now the expired slot read as
+        // absent, so the lower-clock heartbeat was accepted as fresh.
+        assertTrue(a in t.live(), "restarted replica must become visible again within one TTL")
+        assertEquals("restarted", t.live()[a])
+        // And its TTL now runs from the restart heartbeat, not the dead incarnation's stamp.
+        time = 9999L
+        assertTrue(a in t.live(), "restart slot still live 4999 ms after its heartbeat")
+        time = 10000L
+        assertFalse(a in t.live(), "restart slot expires 5000 ms after its heartbeat")
+    }
+
+    @Test
+    fun nonExpiredLowerClock_isStillDropped() {
+        // The evict-on-read path must not weaken the normal stale-drop: a lower-clock delivery
+        // for a slot that is still WITHIN its TTL is a stale re-delivery and must be ignored.
+        var time = 0L
+        val t = EphemeralMapTracker<String>(ttlMs = 5000L, clock = { time })
+        t.received(EphemeralMap.empty<String>().put(a, "v100", clock = 100L))
+        time = 4999L // still inside the TTL window
+        t.received(EphemeralMap.empty<String>().put(a, "v1", clock = 1L))
+        assertEquals("v100", t.live()[a], "a within-TTL lower-clock delivery must not overwrite")
+    }
+
     @Test
     fun equalClock_nullOverPresent_doesNotResetReceiveTime() {
         // A same-clock departure arriving AFTER a presence entry must lose (present wins),

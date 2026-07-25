@@ -67,6 +67,7 @@ class WarpContestedSettleTest {
                     clock = sim.virtualClock,
                     strategy = ClaimStrategy.RingWithIntent(),
                     registry = sim.trackedEchoRegistry(id),
+                    epoch = 0L,
                 )
             },
         ) { sim ->

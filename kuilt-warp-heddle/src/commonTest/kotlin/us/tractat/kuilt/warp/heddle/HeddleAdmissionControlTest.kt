@@ -146,6 +146,7 @@ class HeddleAdmissionControlTest {
             topology = threeToOneTopology(),
             clock = clock,
             config = heddleConfig(seed),
+            epoch = 0L,
         )
         node.advertise(eA, hungry)
         node.advertise(eB, hungry)
@@ -182,6 +183,7 @@ class HeddleAdmissionControlTest {
             strategy = ClaimStrategy.Ring,
             registry = recordingRegistry(recorder),
             admissionControl = HeddleAdmissionControl(heddle),
+            epoch = 0L,
         )
 
         // Enqueue more tasks than either lane can afford — the surplus must DEFER, not run.
@@ -268,6 +270,7 @@ class HeddleAdmissionControlTest {
             strategy = ClaimStrategy.Ring,
             registry = recordingRegistry(recorder),
             admissionControl = admission,
+            epoch = 0L,
         )
         ids.forEach { node.enqueue(it, it.descriptor()) } // no .inLane → Lane.ROOT
         drainAntiEntropy(warpQuilterConfig.antiEntropyInterval, rounds = 5, settleWindow = 0.milliseconds)
@@ -329,6 +332,7 @@ class HeddleAdmissionControlTest {
             registry = recordingRegistry(recorder),
             admissionControl = HeddleAdmissionControl(heddle),
             raftNode = null, // free path only — no consensus engine exists
+            epoch = 0L,
         )
 
         repeat(30) { i -> node.enqueue(TaskId("t-$i"), TaskId("t-$i").descriptor().inLane("laneA")) }
@@ -372,6 +376,7 @@ class HeddleAdmissionControlTest {
             clock = clock,
             config = heddleConfig(seed = 5),
             incarnation = "boot-governed-compose",
+            epoch = 0L,
         )
 
         // Mint + build the 3:1 tree through the governed control plane, then delegate down.
@@ -404,6 +409,7 @@ class HeddleAdmissionControlTest {
             strategy = ClaimStrategy.Ring,
             registry = recordingRegistry(recorder),
             admissionControl = HeddleAdmissionControl(governed),
+            epoch = 0L,
         )
 
         val perLane = 80

@@ -33,6 +33,21 @@ import kotlin.time.Instant
 @JvmInline
 public value class ReservationId internal constructor(public val value: String)
 
+/** Low bits reserved for the per-boot demand counter; the epoch occupies the bits above. */
+private const val EPOCH_CLOCK_SHIFT: Int = 32
+
+/**
+ * The starting demand/capability clock for a node booted at [epoch]: the epoch shifted into
+ * the high bits, leaving the low [EPOCH_CLOCK_SHIFT] bits for a per-boot `++` counter. A
+ * strictly-greater epoch therefore yields a strictly-greater clock than any the previous boot
+ * could reach (its counter can never carry into the epoch bits within a boot), so a restarted
+ * replica always out-clocks its dead incarnation.
+ */
+private fun epochClockBase(epoch: Long): Long {
+    require(epoch in 0 until (1L shl 31)) { "epoch must be in [0, 2^31), was $epoch" }
+    return epoch shl EPOCH_CLOCK_SHIFT
+}
+
 /**
  * One peer's live view of a weighted fair-share session over a [Seam] — the **join
  * point** of the fair-share layer (design §15 Phase 4). It bonds four coordination-free
@@ -81,6 +96,18 @@ public class HeddleNode internal constructor(
     initialLedger: EntitlementLedger,
     private val clock: () -> Instant,
     private val config: HeddleConfig,
+    /**
+     * A per-process-boot **epoch** that seeds the high bits of this peer's demand-board clock,
+     * so a restarted replica's demand always out-clocks its dead incarnation's regardless of TTL
+     * timing (design §6; the ephemeral demand board rides an [EphemeralMap], whose restart
+     * recovery is otherwise only TTL-bounded — see #1666). It MUST be **fresh and strictly
+     * increasing on every incarnation** of this peer — a persisted monotonic boot counter is the
+     * canonical source. It is a required injected dependency for the same reason H5's
+     * `incarnation` is: the node cannot self-generate restart-freshness without durable storage or
+     * true entropy, and a test-seedable value derived from a `Random` would defeat it. Must be in
+     * `[0, 2^31)` (a boot counter is effectively unbounded here).
+     */
+    epoch: Long,
 ) : FairShareExecution {
     // ── channels over the one physical seam (byte-frugal String namespace) ──────────
     private val peersFlow: StateFlow<Set<PeerId>> = seam.peers
@@ -139,7 +166,12 @@ public class HeddleNode internal constructor(
     private val reservations = HashMap<ReservationId, Reservation>()
     private val earmarks = HashMap<GroupId, Long>()
     private val selfDemand = HashMap<AttachmentId, Demand>()
-    private var demandClock = 0L
+
+    // The demand-board clock packs the per-boot [epoch] in the high bits and a monotonic
+    // per-boot counter in the low 32 bits, so (a) it strictly increases within a boot (++)
+    // and (b) a higher [epoch] strictly dominates any clock from a lower one — a restart is
+    // always fresh by clock, not merely by TTL timing (#1666).
+    private var demandClock = epochClockBase(epoch)
     private var reservationSeq = 0L
     private val detectors = HashMap<PeerId, HeartbeatPartitionDetector>()
 

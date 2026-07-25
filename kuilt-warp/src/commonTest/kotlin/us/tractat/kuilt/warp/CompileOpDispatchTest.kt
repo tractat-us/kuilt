@@ -75,12 +75,14 @@ class CompileOpDispatchTest {
                 selfId = seamC.selfId, seam = seamC, rosterFlow = roster, scope = backgroundScope,
                 quilterConfig = COMPILE_CONFIG, clock = compileClock(testScheduler), strategy = ClaimStrategy.Ring,
                 registry = OpRegistry(), lazyFetch = lfC, target = Target.Jvm,
+                epoch = 0L,
             )
             compilerNode.registerCompiler { source, target, _ -> fakeCompile(source, target) }
             val weakNode = WarpNode(
                 selfId = seamW.selfId, seam = seamW, rosterFlow = roster, scope = backgroundScope,
                 quilterConfig = COMPILE_CONFIG, clock = compileClock(testScheduler), strategy = ClaimStrategy.Ring,
                 registry = OpRegistry(), lazyFetch = lfW, target = Target.Jvm,
+                epoch = 0L,
             )
 
             // Phase 1 — interpret: the weak node runs a task on the raw bobbin.
@@ -129,6 +131,7 @@ class CompileOpDispatchTest {
                 selfId = seam.selfId, seam = seam, rosterFlow = roster, scope = backgroundScope,
                 quilterConfig = COMPILE_CONFIG, clock = compileClock(testScheduler),
                 registry = OpRegistry(), // no lazyFetch ⇒ cannot fetch sources or publish variants
+                epoch = 0L,
             )
             assertFailsWith<IllegalStateException> {
                 node.registerCompiler { source, _, _ -> source }

@@ -88,6 +88,7 @@ class BoundedLazyFetchTest {
                 lazyFetch = WarpLazyFetch(
                     Creel(), neverLoadsRuntime, opToBobbin, fetchTimeout = 200.milliseconds,
                 ),
+                epoch = 0L,
             )
 
             val task = TaskId("stuck")

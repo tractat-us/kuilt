@@ -88,11 +88,13 @@ class SymbolicDispatchTest {
                 selfId = seamA.selfId, seam = seamA, rosterFlow = seamA.rosterSnapshot(),
                 scope = backgroundScope, quilterConfig = DISPATCH_QUILTER_CONFIG,
                 clock = dispatchClock(testScheduler), registry = registryFor(seamA.selfId),
+                epoch = 0L,
             )
             val nodeB = WarpNode(
                 selfId = seamB.selfId, seam = seamB, rosterFlow = seamB.rosterSnapshot(),
                 scope = backgroundScope, quilterConfig = DISPATCH_QUILTER_CONFIG,
                 clock = dispatchClock(testScheduler), registry = registryFor(seamB.selfId),
+                epoch = 0L,
             )
 
             val tasks = (1..6).map { TaskId("rev-$it") }
@@ -135,11 +137,13 @@ class SymbolicDispatchTest {
                 selfId = seamA.selfId, seam = seamA, rosterFlow = roster, scope = backgroundScope,
                 quilterConfig = DISPATCH_QUILTER_CONFIG, clock = dispatchClock(testScheduler),
                 strategy = ClaimStrategy.Ring, registry = regA,
+                epoch = 0L,
             )
             val nodeB = WarpNode(
                 selfId = seamB.selfId, seam = seamB, rosterFlow = roster, scope = backgroundScope,
                 quilterConfig = DISPATCH_QUILTER_CONFIG, clock = dispatchClock(testScheduler),
                 strategy = ClaimStrategy.Ring, registry = regB,
+                epoch = 0L,
             )
 
             val task = TaskId("x")

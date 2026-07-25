@@ -229,6 +229,18 @@ public class WarpNode(
     private val target: Target? = null,
     private val admissionControl: AdmissionControl = AdmissionControl.OPEN,
     private val capabilityTtl: Duration = 30.seconds,
+    /**
+     * A per-process-boot **epoch** that seeds the high bits of this peer's capability-board clock,
+     * so a restarted peer's capability advertisement always out-clocks its dead incarnation's
+     * regardless of TTL timing. The capability board is an [EphemeralMap] (design §14.6), and its
+     * restart recovery is otherwise only TTL-bounded — a permanent pre/post-restart divergence in
+     * [capabilityView] would diverge [eligiblePeers] and therefore the ring owner, breaking the
+     * §14.6 placement determinism (#1666). It MUST be **fresh and strictly increasing on every
+     * incarnation** of this peer — a persisted monotonic boot counter is canonical. Required, not
+     * defaulted: the node cannot self-generate restart-freshness without durable storage or true
+     * entropy; never derive it from a test-seedable `Random`. Must be in `[0, 2^31)`.
+     */
+    epoch: Long,
 ) {
     private val replica = ReplicaId(selfId.value)
 
@@ -366,8 +378,14 @@ public class WarpNode(
     // --- Shared mutable state (guarded by lock) ---
     private val lock = reentrantLock()
 
-    /** Monotonic per-replica publish clock for this peer's capability slot. Guarded by [lock]. */
-    private var capabilityClock = 0L
+    /**
+     * Monotonic per-replica publish clock for this peer's capability slot. Guarded by [lock].
+     *
+     * Packs the per-boot [epoch] into the high bits and a per-boot `++` counter into the low 32,
+     * so it strictly increases within a boot AND a higher [epoch] strictly dominates any clock a
+     * lower one could reach — a restart is always fresh by clock, not merely by TTL timing (#1666).
+     */
+    private var capabilityClock = epochClockBase(epoch)
 
     /** Current consistent-hash ring, rebuilt whenever the effective roster changes. */
     private var ring: TaskRing = TaskRing(setOf(selfId))
@@ -1627,3 +1645,18 @@ public fun Seam.rosterSnapshot(): Flow<Set<PeerId>> = peers
  */
 public fun RaftNode.rosterSnapshot(): Flow<Set<PeerId>> =
     membership.map { config -> config.voters.mapTo(mutableSetOf()) { PeerId(it.value) } }
+
+/** Low bits reserved for the per-boot capability counter; the epoch occupies the bits above. */
+private const val EPOCH_CLOCK_SHIFT: Int = 32
+
+/**
+ * The starting capability clock for a node booted at [epoch]: the epoch shifted into the high
+ * bits, leaving the low [EPOCH_CLOCK_SHIFT] bits for a per-boot `++` counter. A strictly-greater
+ * epoch therefore yields a strictly-greater clock than any the previous boot could reach (its
+ * counter can never carry into the epoch bits within a boot), so a restarted replica always
+ * out-clocks its dead incarnation.
+ */
+private fun epochClockBase(epoch: Long): Long {
+    require(epoch in 0 until (1L shl 31)) { "epoch must be in [0, 2^31), was $epoch" }
+    return epoch shl EPOCH_CLOCK_SHIFT
+}

@@ -131,6 +131,7 @@ class WarpNodePartitionFailoverTest {
                 clock = clock.asClock(),
                 heartbeatConfig = FAST_HEARTBEAT,
                 registry = trackRegistry(seamA.selfId),
+                epoch = 0L,
             )
             val nodeB = WarpNode(
                 selfId = seamB.selfId,
@@ -141,6 +142,7 @@ class WarpNodePartitionFailoverTest {
                 clock = clock.asClock(),
                 heartbeatConfig = FAST_HEARTBEAT,
                 registry = trackRegistry(seamB.selfId),
+                epoch = 0L,
             )
             val nodeC = WarpNode(
                 selfId = seamC.selfId,
@@ -151,6 +153,7 @@ class WarpNodePartitionFailoverTest {
                 clock = clock.asClock(),
                 heartbeatConfig = FAST_HEARTBEAT,
                 registry = trackRegistry(seamC.selfId),
+                epoch = 0L,
             )
 
             // Let the mesh stabilise — tick forward so detectors start.
@@ -253,6 +256,7 @@ class WarpNodePartitionFailoverTest {
                 clock = clock.asClock(),
                 heartbeatConfig = FAST_HEARTBEAT,
                 registry = OpRegistry().also { it.register(OpId("ping-test"), Op { args -> args }) },
+                epoch = 0L,
             )
 
             // Let the detector start and fire at least one ping interval.

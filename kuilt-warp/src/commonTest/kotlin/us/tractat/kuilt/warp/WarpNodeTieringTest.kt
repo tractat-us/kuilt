@@ -69,6 +69,7 @@ class WarpNodeTieringTest {
                 strategy = ClaimStrategy.Ring,
                 registry = OpRegistry(), // op NOT registered ⇒ resolved via lazyFetch
                 lazyFetch = lazyFetch, target = Target.Jvm,
+                epoch = 0L,
             )
 
             // Interpret phase: run a task; only the raw bobbin exists.

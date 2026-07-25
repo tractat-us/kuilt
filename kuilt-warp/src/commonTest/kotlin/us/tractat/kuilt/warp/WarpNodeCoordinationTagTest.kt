@@ -92,6 +92,7 @@ class WarpNodeCoordinationTagTest {
                 lock.withLock { coordExecuted.add(taskId) }
                 "coord-${taskId.value}"
             },
+            epoch = 0L,
         )
 
         val nodeA = makeNode(seamA)
@@ -144,6 +145,7 @@ class WarpNodeCoordinationTagTest {
                 "coord-${taskId.value}"
             },
             raftNode = FakeRaftNode(initialRole = RaftRole.Leader),
+            epoch = 0L,
         )
 
         val nodeA = makeNode(seamA)
@@ -196,6 +198,7 @@ class WarpNodeCoordinationTagTest {
                 "coord-${taskId.value}"
             },
             raftNode = FakeRaftNode(initialRole = RaftRole.Leader),
+            epoch = 0L,
         )
 
         val nodeA = makeNode(seamA)

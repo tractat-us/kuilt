@@ -283,7 +283,7 @@ class HeddleControlPlaneTest {
 
         val governed = backgroundScope.heddleGoverned(
             seam = seam, self = self, raft = counting, root = root, clock = clock, config = config(seed = 7),
-            incarnation = "boot-msg",
+            incarnation = "boot-msg", epoch = 0L,
         )
 
         // Control-plane setup (these DO consense — mint + reshape ride the log): seed a leaf holding.
@@ -327,7 +327,7 @@ class HeddleControlPlaneTest {
         val governed = backgroundScope.heddleGoverned(
             seam = seam, self = self, raft = fake, root = root,
             clock = { Instant.fromEpochMilliseconds(testScheduler.currentTime) }, config = config(seed = 9),
-            incarnation = "boot-revoke",
+            incarnation = "boot-revoke", epoch = 0L,
         )
         assertEquals(RevocationOutcome.NotShipped, governed.revocation.revoke(self, root))
     }
@@ -399,7 +399,7 @@ class HeddleControlPlaneTest {
         val governed = backgroundScope.heddleGoverned(
             seam = seam, self = self, raft = fake, root = root,
             clock = { Instant.fromEpochMilliseconds(testScheduler.currentTime) }, config = config(seed = 11),
-            incarnation = "boot-retire",
+            incarnation = "boot-retire", epoch = 0L,
         )
         assertIs<ControlOutcome.Applied>(governed.mint(self, 1_000L))
 
