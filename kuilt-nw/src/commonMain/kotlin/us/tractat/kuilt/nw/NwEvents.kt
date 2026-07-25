@@ -14,13 +14,18 @@ public value class NwConnectionId(public val value: String)
 /**
  * A remote endpoint discovered while browsing.
  *
- * [id] is the browse-time opaque endpoint identifier assigned by the runtime —
- * it is NOT a stable cross-session peer identity. It only identifies the
- * endpoint for the duration of this browse/dial. Stable identity (`PeerId`) is
- * exchanged as the first framed message during the connection handshake (see
- * the transport plan's Task 2.4), mirroring `NearbyApi`'s `endpointId` caveat.
+ * [id] is the endpoint's **stable per-peer identity** — the remote's `PeerId`,
+ * published in its Bonjour **TXT record** and read back at browse time (Option A,
+ * #1502). It is the key the pre-dial self-filter and the redial coordinator key on:
+ * because every peer under `Rendezvous.New` shares one [serviceName] (the session
+ * name), only a per-peer id can distinguish this loom's own advertisement from a
+ * real peer's. **Backstop:** if a browsed endpoint carries no TXT PeerId (absent or
+ * malformed), the runtime falls back to `id = serviceName` (the pre-Option-A
+ * behaviour); the post-connect `NwSeam` self-connection guard, which resolves the
+ * `PeerId` from the [NwHello] handshake, remains the correctness backstop for that case.
  *
- * [serviceName] is the advertised Bonjour instance name of the remote endpoint.
+ * [serviceName] is the advertised Bonjour instance name of the remote endpoint —
+ * a human-readable label, shared by all peers under `Rendezvous.New`.
  */
 public data class NwEndpoint(
     public val id: String,

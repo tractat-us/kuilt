@@ -34,6 +34,11 @@ internal class FakeNwApi(
     private val radio: FakeNwRadio,
     val deviceId: String,
     private val serviceName: String,
+    // The stable identity this device publishes in its Bonjour TXT record (Option A, #1502/#1660) —
+    // the fake twin of `RealNwApi`'s constructor `selfId`. Non-null ⇒ the emitted [NwEndpoint.id] is
+    // this peerId; null ⇒ the id derives from the advertised serviceName (the pre-fix backstop). A
+    // test models the Option A fix by passing `peerId = selfId.value`.
+    private val peerId: String? = null,
 ) : NwApi {
 
     private val _endpointFound = MutableSharedFlow<NwEndpoint>(extraBufferCapacity = 16)
@@ -125,7 +130,7 @@ internal class FakeNwApi(
     override fun availability(): FabricAvailability = FabricAvailability.Available
 
     override suspend fun startListening(serviceName: String, serviceType: String) {
-        radio.markListening(deviceId, serviceName, serviceType)
+        radio.markListening(deviceId, serviceName, serviceType, peerId)
     }
 
     /** Test hook: total [stopListening] calls — lets a test prove `NwSeam.close()` stops advertising (#1419). */

@@ -11,13 +11,27 @@ package us.tractat.kuilt.nw
  * where the same loom sees both ends of a link, so cross-device roster/identity/dedup
  * bugs surface on the JVM exactly as they would across two phones.
  *
- * ## Discovery
- * Each device may [markListening] (advertise + accept, under a `serviceName`/`serviceType`)
- * and/or [markBrowsing] (under a `serviceType`). When a device starts browsing type `T`,
- * every device already listening on `T` is delivered to it as an
- * [NwEndpoint]; symmetrically, when a device starts listening on `T`, it is delivered to
- * every device already browsing `T`. The endpoint `id` encodes the LISTENING device's
- * id (`"ep-<listenerDeviceId>"`) so [connect] can map an endpoint back to its device.
+ * ## Discovery — endpoint id models the Bonjour TXT PeerId (Option A, #1502/#1660)
+ * Each device may [markListening] (advertise + accept, under a `serviceName`/`serviceType`,
+ * plus an optional per-peer `peerId`) and/or [markBrowsing] (under a `serviceType`). When a
+ * device starts browsing type `T`, every device already listening on `T` is delivered to it as
+ * an [NwEndpoint]; symmetrically, when a device starts listening on `T`, it is delivered to
+ * every device already browsing `T`.
+ *
+ * The emitted [NwEndpoint.id] mirrors production ([RealNwApi.onBrowseResult]): when the listener
+ * advertises a stable `peerId` in its Bonjour **TXT record** the id is that `peerId`; absent a
+ * `peerId` the id derives from the advertised **`serviceName`** (the Bonjour service name
+ * backstop). This is the faithful model that closes the #1502 blind spot: the harness previously
+ * keyed every endpoint on a per-device-unique token (`"ep-<listenerDeviceId>"`), so two devices
+ * advertising the SAME shared `serviceName` (as every peer does under `Rendezvous.New`) never
+ * collided on one id — the exact self-vs-peer collision that only reproduced on AWDL hardware.
+ * With `id = peerId ?: serviceName`, a shared-`serviceName` lobby with no TXT peerId collapses
+ * self and peer onto one id (as real Bonjour + `RealNwApi.endpointsById` do), and the Option A
+ * fix — advertising a distinct `peerId` per peer — separates them again.
+ *
+ * [connect] maps an endpoint back to its listening device through [endpointOwners] (the id → device
+ * registry populated on [markListening]); a manually-constructed endpoint that was never advertised
+ * falls back to the `"ep-<deviceId>"` naming convention ([listenerDeviceIdOf]).
  *
  * A device that both advertises AND browses type `T` is delivered its OWN endpoint — real
  * Bonjour/mDNS returns a device's own advertisement to its own browser, so the fake must too
@@ -47,8 +61,12 @@ package us.tractat.kuilt.nw
  */
 internal class FakeNwRadio {
 
-    /** Per-device advertise state. */
-    private data class Listening(val serviceName: String, val serviceType: String)
+    /**
+     * Per-device advertise state. [peerId] models the stable identity a device publishes in its
+     * Bonjour TXT record (Option A, #1502): when non-null it becomes the emitted [NwEndpoint.id];
+     * when null the id derives from [serviceName] (the service-name backstop).
+     */
+    private data class Listening(val serviceName: String, val serviceType: String, val peerId: String?)
 
     /** One end of an open link: which device, and the handle that device sees. */
     private data class LinkEnd(val deviceId: String, val connectionId: NwConnectionId)
@@ -56,6 +74,14 @@ internal class FakeNwRadio {
     private val devices = mutableMapOf<String, FakeNwApi>()
     private val listening = mutableMapOf<String, Listening>()
     private val browsing = mutableMapOf<String, String>() // deviceId -> serviceType
+
+    /**
+     * Emitted-endpoint-id → owning device id, populated on [markListening] (#1502). This is the fake
+     * twin of `RealNwApi.endpointsById`: when two devices advertise the SAME id (a shared `serviceName`
+     * with no TXT `peerId`), the later registration OVERWRITES the earlier — the id collapse the Option A
+     * fix exists to prevent. [connect] resolves through this map first, then the `"ep-<deviceId>"` fallback.
+     */
+    private val endpointOwners = mutableMapOf<String, String>()
 
     /** connId string of one end -> the OTHER end. Populated for BOTH directions. */
     private val links = mutableMapOf<String, LinkEnd>()
@@ -71,6 +97,14 @@ internal class FakeNwRadio {
 
     private fun endpointIdFor(listenerDeviceId: String) = "ep-$listenerDeviceId"
 
+    /**
+     * The [NwEndpoint.id] a listener advertises, mirroring [RealNwApi.onBrowseResult]: the TXT-record
+     * [peerId] when present, else the Bonjour [serviceName] (#1502). Under `Rendezvous.New` every peer
+     * shares one [serviceName], so a null [peerId] makes self and peer collide on the same id — the
+     * blind spot Option A closes by publishing a distinct [peerId] per peer.
+     */
+    private fun advertisedEndpointId(serviceName: String, peerId: String?): String = peerId ?: serviceName
+
     private fun listenerDeviceIdOf(endpointId: String): String =
         endpointId.removePrefix("ep-")
 
@@ -82,20 +116,29 @@ internal class FakeNwRadio {
 
     // ── discovery ────────────────────────────────────────────────────────────
 
-    suspend fun markListening(deviceId: String, serviceName: String, serviceType: String) {
-        listening[deviceId] = Listening(serviceName, serviceType)
+    suspend fun markListening(deviceId: String, serviceName: String, serviceType: String, peerId: String? = null) {
+        listening[deviceId] = Listening(serviceName, serviceType, peerId)
+        val endpointId = advertisedEndpointId(serviceName, peerId)
+        // Register the id → device mapping (the fake twin of RealNwApi.endpointsById). Under a shared
+        // serviceName with no peerId, a later listener OVERWRITES an earlier one on the same id — the
+        // self/peer collapse Option A prevents.
+        endpointOwners[endpointId] = deviceId
         // Announce this new listener to every device already browsing the type — INCLUDING
         // itself if it also browses `serviceType` (real mDNS returns self; see class KDoc / #1485).
         for ((browserId, browseType) in browsing) {
             if (browseType != serviceType) continue
             devices.getValue(browserId).emitEndpointFound(
-                NwEndpoint(id = endpointIdFor(deviceId), serviceName = serviceName),
+                NwEndpoint(id = endpointId, serviceName = serviceName),
             )
         }
     }
 
     suspend fun markStopListening(deviceId: String) {
         val gone = listening.remove(deviceId) ?: return
+        val endpointId = advertisedEndpointId(gone.serviceName, gone.peerId)
+        // Only relinquish ownership if this device still owns the id — a collided id may have been
+        // overwritten by another listener, whose entry must survive this device's departure.
+        if (endpointOwners[endpointId] == deviceId) endpointOwners.remove(endpointId)
         // Symmetric with [markListening]: a listener that stops advertising is reported as REMOVED to every
         // device still browsing its type — real Bonjour/mDNS fires the browser's removed-result callback,
         // which RealNwApi surfaces as [NwApi.endpointLost]. This is what prunes a departed ghost from a
@@ -103,7 +146,7 @@ internal class FakeNwRadio {
         for ((browserId, browseType) in browsing) {
             if (browseType != gone.serviceType) continue
             devices.getValue(browserId).emitEndpointLost(
-                NwEndpoint(id = endpointIdFor(deviceId), serviceName = gone.serviceName),
+                NwEndpoint(id = endpointId, serviceName = gone.serviceName),
             )
         }
     }
@@ -115,7 +158,7 @@ internal class FakeNwRadio {
         for ((listenerId, l) in listening) {
             if (l.serviceType != serviceType) continue
             devices.getValue(deviceId).emitEndpointFound(
-                NwEndpoint(id = endpointIdFor(listenerId), serviceName = l.serviceName),
+                NwEndpoint(id = advertisedEndpointId(l.serviceName, l.peerId), serviceName = l.serviceName),
             )
         }
     }
@@ -127,7 +170,10 @@ internal class FakeNwRadio {
     // ── connect / data / close ─────────────────────────────────────────────────
 
     suspend fun connect(dialerDeviceId: String, endpoint: NwEndpoint) {
-        val accepterId = listenerDeviceIdOf(endpoint.id)
+        // Resolve the endpoint back to its listening device through the id → device registry
+        // (populated on [markListening]); fall back to the `"ep-<deviceId>"` naming for a
+        // manually-constructed endpoint that was never advertised (the direct-connect seam tests).
+        val accepterId = endpointOwners[endpoint.id] ?: listenerDeviceIdOf(endpoint.id)
         require(accepterId in devices) { "no device for endpoint '${endpoint.id}'" }
         val connIdDialer = nextConnId(dialerDeviceId)
         val connIdAccepter = nextConnId(accepterId)

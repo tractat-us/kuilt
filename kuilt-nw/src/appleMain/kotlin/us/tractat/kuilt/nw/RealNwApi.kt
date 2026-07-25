@@ -6,6 +6,7 @@ import io.github.oshai.kotlinlogging.KotlinLogging
 import kotlinx.atomicfu.atomic
 import kotlinx.atomicfu.locks.reentrantLock
 import kotlinx.atomicfu.locks.withLock
+import kotlinx.cinterop.ByteVar
 import kotlinx.cinterop.COpaquePointer
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.cinterop.StableRef
@@ -13,6 +14,7 @@ import kotlinx.cinterop.addressOf
 import kotlinx.cinterop.asStableRef
 import kotlinx.cinterop.convert
 import kotlinx.cinterop.readBytes
+import kotlinx.cinterop.reinterpret
 import kotlinx.cinterop.staticCFunction
 import kotlinx.cinterop.toKString
 import kotlinx.cinterop.usePinned
@@ -26,9 +28,17 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import platform.Network.NW_PARAMETERS_DEFAULT_CONFIGURATION
 import platform.Network.nw_advertise_descriptor_create_bonjour_service
+import platform.Network.nw_advertise_descriptor_set_txt_record_object
+import platform.Network.nw_advertise_descriptor_t
 import platform.Network.nw_browse_descriptor_create_bonjour_service
+import platform.Network.nw_browse_descriptor_set_include_txt_record
 import platform.Network.nw_browse_result_copy_endpoint
+import platform.Network.nw_browse_result_copy_txt_record_object
 import platform.Network.nw_browse_result_t
+import platform.Network.nw_txt_record_access_key
+import platform.Network.nw_txt_record_create_dictionary
+import platform.Network.nw_txt_record_find_key_non_empty_value
+import platform.Network.nw_txt_record_set_key
 import platform.Network.nw_browser_cancel
 import platform.Network.nw_browser_create
 import platform.Network.nw_browser_set_browse_results_changed_handler
@@ -108,6 +118,7 @@ import platform.darwin.dispatch_data_t
 import platform.darwin.dispatch_queue_create
 import platform.darwin.dispatch_time
 import us.tractat.kuilt.core.FabricAvailability
+import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.nw.cinterop.kuilt_nw_connection_receive
 
 private val log = KotlinLogging.logger("us.tractat.kuilt.nw.RealNwApi")
@@ -218,6 +229,12 @@ internal data class NwConnectionFailure(
 internal class RealNwApi(
     private val pskMaterial: NwPskMaterial,
     private val loopback: NwLoopbackConfig? = null,
+    // This peer's stable identity, published in the Bonjour TXT record so a browser recovers it as the
+    // discovered [NwEndpoint.id] (Option A, #1502). Defaults to a fresh UUID (matching NwLoom.selfId) —
+    // the meaningful P2P path (appleNwLoom) MUST pass the loom's own selfId so the advertised TXT id and
+    // the loom's pre-dial self-filter agree; loopback/bridge paths never advertise over Bonjour, so their
+    // default id is inert.
+    private val selfId: PeerId = freshPeerId(),
 ) : NwApi {
 
     private val queue = dispatch_queue_create("us.tractat.kuilt.nw", null)
@@ -661,10 +678,13 @@ internal class RealNwApi(
         val newListener = nw_listener_create(secureParams())
         nw_listener_set_queue(newListener, queue)
         if (loopback == null) {
-            nw_listener_set_advertise_descriptor(
-                newListener,
-                nw_advertise_descriptor_create_bonjour_service(serviceName, serviceType, null),
-            )
+            val descriptor = nw_advertise_descriptor_create_bonjour_service(serviceName, serviceType, null)
+            // Publish this peer's stable [selfId] in the Bonjour TXT record so a browser recovers it as the
+            // discovered [NwEndpoint.id] (Option A, #1502). Under Rendezvous.New every peer advertises the
+            // SAME shared serviceName, so the service name alone cannot distinguish self from a real peer;
+            // the per-peer TXT id can. A null descriptor (create failed) simply advertises nothing here.
+            if (descriptor != null) advertisePeerIdInTxt(descriptor)
+            nw_listener_set_advertise_descriptor(newListener, descriptor)
         }
         nw_listener_set_state_changed_handler(newListener) { state, _ ->
             when (state) {
@@ -728,6 +748,14 @@ internal class RealNwApi(
             return
         }
         val descriptor = nw_browse_descriptor_create_bonjour_service(serviceType, null)
+        // Opt in to TXT records. Network.framework's default is NOT to query them
+        // ("by default, the browser will not automatically query for TXT records" —
+        // browse_descriptor.h), so without this the per-peer PeerId we advertise is
+        // never delivered on browse: readPeerId() returns null, every endpoint falls
+        // back to `id = serviceName`, and under Rendezvous.New (one shared session
+        // serviceName) the pre-dial self-filter can never fire — the peer dials its
+        // own endpoint and is only caught post-connect by NwSeam (#1660 root 1).
+        nw_browse_descriptor_set_include_txt_record(descriptor, true)
         val newBrowser = nw_browser_create(descriptor, secureParams())
         nw_browser_set_queue(newBrowser, queue)
         nw_browser_set_browse_results_changed_handler(newBrowser) { oldResult, newResult, _ ->
@@ -1125,18 +1153,67 @@ internal class RealNwApi(
         val ep = nw_browse_result_copy_endpoint(result) ?: return
         val name = nw_endpoint_get_bonjour_service_name(ep)?.toKString()
             ?: "nw-ep-${connectionCounter.incrementAndGet()}"
-        lock.withLock { endpointsById[name] = ep } // keep the latest endpoint (may swap to AWDL)
-        _endpointFound.tryEmit(NwEndpoint(id = name, serviceName = name))
+        // Prefer the stable PeerId from the Bonjour TXT record (Option A, #1502) as the endpoint id, so
+        // self and a real peer sharing one service name (Rendezvous.New) get DISTINCT ids and the loom's
+        // pre-dial self-filter can drop self. Backstop: when the TXT record is absent/malformed/missing the
+        // key, fall back to the service name (today's behaviour) — the post-connect NwSeam self-guard, which
+        // resolves the PeerId from the NwHello handshake, stays the correctness backstop for that case.
+        val txtPeerId = readPeerIdFromTxt(result)
+        val id = txtPeerId ?: name
+        // INFO (not debug) on purpose: this is the branch that decides whether the loom's pre-dial
+        // self-filter CAN fire, and the on-device telemetry store keeps only INFO+. Log the identities
+        // (not a count) so a hardware capture says which branch was taken (#1660 root 1).
+        log.info {
+            "nw.api.browse-result name=$name txt=${txtPeerId ?: "ABSENT"} → id=$id self=${selfId.value}"
+        }
+        lock.withLock { endpointsById[id] = ep } // keyed on the stable id we put in NwEndpoint.id
+        _endpointFound.tryEmit(NwEndpoint(id = id, serviceName = name))
     }
 
     private fun onBrowseResultRemoved(result: nw_browse_result_t) {
         val ep = nw_browse_result_copy_endpoint(result) ?: return
-        // Only a named Bonjour endpoint can be matched back to what onBrowseResult added (which keys on the
-        // service name); a nameless removal has no roster entry to prune, so drop it. Best-effort, like the
-        // other event streams — a missed removal simply leaves the roster one entry stale until re-browsed.
+        // Only a named Bonjour endpoint can be matched back to what onBrowseResult added; a nameless removal
+        // has no roster entry to prune, so drop it. Best-effort, like the other event streams — a missed
+        // removal simply leaves the roster one entry stale until re-browsed. Recover the SAME id we added
+        // under (the TXT PeerId, or the name backstop) so the prune targets the right entry (#1502).
         val name = nw_endpoint_get_bonjour_service_name(ep)?.toKString() ?: return
-        lock.withLock { endpointsById.remove(name) }
-        _endpointLost.tryEmit(NwEndpoint(id = name, serviceName = name))
+        val id = readPeerIdFromTxt(result) ?: name
+        lock.withLock { endpointsById.remove(id) }
+        _endpointLost.tryEmit(NwEndpoint(id = id, serviceName = name))
+    }
+
+    /**
+     * Attach this peer's stable [selfId] to [descriptor] as a Bonjour TXT-record key (Option A, #1502),
+     * so a browser recovers it via [readPeerIdFromTxt] as the discovered [NwEndpoint.id]. Uses the modern
+     * `nw_txt_record` object API: create an empty dictionary, set [TXT_KEY_PEER_ID] to the id's UTF-8
+     * bytes, then bind the record object onto the advertise descriptor. A failed dictionary create simply
+     * advertises no TXT (the browser falls back to the service name — the documented backstop).
+     */
+    private fun advertisePeerIdInTxt(descriptor: nw_advertise_descriptor_t) {
+        val txt = nw_txt_record_create_dictionary() ?: return
+        val idBytes = selfId.value.encodeToByteArray()
+        idBytes.usePinned { pinned ->
+            nw_txt_record_set_key(txt, TXT_KEY_PEER_ID, pinned.addressOf(0).reinterpret(), idBytes.size.convert())
+        }
+        nw_advertise_descriptor_set_txt_record_object(descriptor, txt)
+    }
+
+    /**
+     * Read the stable PeerId from a browse [result]'s Bonjour TXT record (Option A, #1502), or `null` when
+     * the record is absent, carries no [TXT_KEY_PEER_ID], or the key has an empty value. `nw_txt_record_access_key`
+     * invokes its block SYNCHRONOUSLY (non-escaping), so writing the captured [found] var from inside it is
+     * safe — the value pointer is valid only for the block's duration, hence the eager copy+decode there.
+     */
+    private fun readPeerIdFromTxt(result: nw_browse_result_t): String? {
+        val txt = nw_browse_result_copy_txt_record_object(result) ?: return null
+        var peerId: String? = null
+        nw_txt_record_access_key(txt, TXT_KEY_PEER_ID) { _, found, value, valueLen ->
+            if (found == nw_txt_record_find_key_non_empty_value && value != null && valueLen.toInt() > 0) {
+                peerId = value.reinterpret<ByteVar>().readBytes(valueLen.toInt()).decodeToString()
+            }
+            true
+        }
+        return peerId
     }
 
     // ── params ─────────────────────────────────────────────────────────────────
@@ -1199,6 +1276,13 @@ internal class RealNwApi(
                 ref.dispose()
                 rc.api.onReceiveComplete(rc.id, rc.connection, bytes, len, hasError, errDomain, errCode)
             }
+
+        /**
+         * The Bonjour TXT-record key this fabric publishes its stable [PeerId] under (Option A, #1502). A
+         * wire identifier shared only between kuilt peers — kept short (TXT keys are length-bounded). A
+         * browser reads it back via [readPeerIdFromTxt] to key the discovered [NwEndpoint.id].
+         */
+        private const val TXT_KEY_PEER_ID = "pid"
 
         /** Stable discovery id for the single synthesized loopback peer (loopback mode has no Bonjour name). */
         private const val LOOPBACK_PEER_ID = "loopback-peer"
