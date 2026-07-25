@@ -12,15 +12,7 @@ import us.tractat.kuilt.warp.TaskDescriptor
  * [HeddleAdmissionControl]. (The design's `Draft.lane("…")` modifier is the eventual dataflow
  * surface, once warp's `Draft` gains a runtime; until then the descriptor is the seam.)
  */
-public fun TaskDescriptor.inLane(lane: Lane): TaskDescriptor =
-    TaskDescriptor(
-        op = op,
-        args = args,
-        traceparent = traceparent,
-        pinnedOwner = pinnedOwner,
-        lane = lane,
-        affinity = affinity,
-    )
+public fun TaskDescriptor.inLane(lane: Lane): TaskDescriptor = copy(lane = lane)
 
 /** Sugar for [inLane] with a string tag: `descriptor.inLane("acme/batch")`. */
 public fun TaskDescriptor.inLane(tag: String): TaskDescriptor = inLane(Lane(tag))
