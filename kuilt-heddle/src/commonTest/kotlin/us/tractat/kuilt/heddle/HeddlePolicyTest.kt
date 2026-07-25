@@ -3,6 +3,7 @@ package us.tractat.kuilt.heddle
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -302,6 +303,132 @@ class HeddlePolicyTest {
                     "h",
                     pick(listOf(light, heavy, newborn), config)?.attachment?.value,
                     "the newborn must not win the round it was created in",
+                )
+            },
+        )
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────
+    // The front — the parent's current virtual time, over the demanding candidates
+    // (design §7.2/§7.3 step 2; issue #1688).
+    // ─────────────────────────────────────────────────────────────────────────────
+
+    private fun front(children: List<Sim>, excluding: Set<String> = emptySet()): Rational? =
+        HeddlePolicy.front(children.map { it.edge() }, excluding.mapTo(HashSet()) { AttachmentId(it) })
+
+    /**
+     * The front is the weighted mean over the children that are **actually competing**, not
+     * over every ACTIVE child. The two differ the moment a sibling idles, and the difference
+     * is a fairness sign: with a runner at `ev = 20` and an idler parked at `0`, the
+     * all-ACTIVE mean is `10` — seat a newborn there and it starts half a lifetime behind the
+     * front, which is exactly the lifetime credit §10.5 forbids.
+     */
+    @Test
+    fun frontIsTheWeightedMeanOverDemandingCandidatesOnly() {
+        val runner = Sim("r", Weight.ONE, issued = 20L, spent = 20L)
+        val idler = Sim("i", Weight.ONE, demand = Demand.NONE)
+        assertAll(
+            { assertEquals(Rational.of(20L), front(listOf(runner, idler))) },
+            { assertEquals(Rational.of(10L), parentVirtualTime(listOf(runner, idler))) },
+        )
+    }
+
+    /**
+     * A joiner must be excluded **by hand**. A newborn is excluded for free — it is not an
+     * edge yet — but a waker is already ACTIVE and already demanding by the time the clamp is
+     * computed, so leaving it in drags the front back toward its own stale virtual service and
+     * it banks exactly the idle credit the clamp exists to deny.
+     */
+    @Test
+    fun frontExcludesTheNamedEdges() {
+        val runner = Sim("r", Weight.ONE, issued = 20L, spent = 20L)
+        val waker = Sim("w", Weight.ONE)
+        assertAll(
+            { assertEquals(Rational.of(10L), front(listOf(runner, waker))) },
+            { assertEquals(Rational.of(20L), front(listOf(runner, waker), excluding = setOf("w"))) },
+        )
+    }
+
+    /**
+     * The front drops [HeddlePolicy.pick]'s holdings and useful-grant trims: those decide who
+     * can be *served this round* on *this peer*, which is not the same question as who is
+     * competing. A peer with nothing to delegate must still be able to name the front — it may
+     * be the one creating the generation.
+     */
+    @Test
+    fun frontIgnoresTheHoldingsAndUsefulGrantTrims() {
+        val runner = Sim(
+            "r",
+            Weight.ONE,
+            issued = 20L,
+            spent = 20L,
+            demand = Demand(targetOutstanding = 100L, maximumUsefulGrant = 0L),
+        )
+        assertAll(
+            { assertEquals(Rational.of(20L), front(listOf(runner))) },
+            { assertNull(pick(listOf(runner), PolicyConfig(quantum = 1L)), "…while pick() still declines to serve it") },
+        )
+    }
+
+    /**
+     * Nothing is competing, so there is no mean to take. The fallback is the **maximum**
+     * effective virtual service, not the mean: §10.5 is one-directional — credit is forbidden,
+     * a sliver of penalty merely undesirable — and a max can only ever give up.
+     */
+    @Test
+    fun frontFallsBackToTheMaximumVirtualServiceWhenNothingDemands() {
+        val ahead = Sim("a", Weight.ONE, issued = 30L, spent = 30L, demand = Demand.NONE)
+        val behind = Sim("b", Weight.ONE, issued = 10L, spent = 10L, demand = Demand.NONE)
+        assertEquals(Rational.of(30L), front(listOf(ahead, behind)))
+    }
+
+    /** No edge survives the exclusion ⇒ the front is undefined, and says so rather than dividing by zero. */
+    @Test
+    fun frontIsNullWhenNoEdgeSurvives() {
+        val only = Sim("o", Weight.ONE)
+        assertAll(
+            { assertNull(HeddlePolicy.front(emptyList())) },
+            { assertNull(front(listOf(only), excluding = setOf("o"))) },
+        )
+    }
+
+    /** `ev = virtualService + virtualOffset`: an already-clamped waker counts at the front it was clamped to. */
+    @Test
+    fun frontCountsTheWakeClampInEachEdgesVirtualService() {
+        val clamped = Sim("c", Weight.ONE, offset = Rational.of(20L))
+        assertEquals(Rational.of(20L), front(listOf(clamped)))
+    }
+
+    /**
+     * The decisive case for #1688: one rule — *a joiner is seated at the front of the currently
+     * competing set* — puts a **newborn** and a **waking sibling** on exactly the same effective
+     * virtual time. Under the "all ACTIVE children" definition the newborn is seated at the
+     * mean instead, which hands it precisely the idle credit the §10.6 clamp denies the idler
+     * itself — and *permanently*, since `initialVirtualTime` is immutable while the clamp is a
+     * recomputed local offset.
+     */
+    @Test
+    fun newbornAndWakerLandOnTheSameFront() {
+        val runner = Sim("r", Weight.ONE, issued = 20L, spent = 20L)
+        val sleeper = Sim("s", Weight.ONE, demand = Demand.NONE)
+        val config = PolicyConfig(quantum = 1L)
+
+        // The sleeper wakes and is clamped to the front of the set it is joining, itself excluded.
+        sleeper.demand = Demand(targetOutstanding = 1_000L, maximumUsefulGrant = 1_000L)
+        val wakeFront = assertNotNull(front(listOf(runner, sleeper), excluding = setOf("s")))
+        sleeper.offset = HeddlePolicy.wakeOffset(wakeFront, sleeper.virtualService(), sleeper.weight, config.sleeperCredit)
+
+        // A newborn arrives under the same parent, seated at the same front.
+        val creationFront = assertNotNull(front(listOf(runner, sleeper)))
+        val newborn = Sim("n", Weight.ONE, initialVirtualTime = AttachmentRecord.neutralInitialVirtualTime(creationFront))
+
+        assertAll(
+            { assertEquals(Rational.of(20L), wakeFront, "the waker is clamped to the runner, not to the mean") },
+            {
+                assertEquals(
+                    sleeper.virtualService() + sleeper.offset,
+                    newborn.virtualService(),
+                    "waker and newborn must be seated on one front",
                 )
             },
         )
