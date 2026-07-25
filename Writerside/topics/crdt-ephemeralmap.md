@@ -12,6 +12,12 @@ A replica writes only its own slot. Updates to that slot are ordered by a monoto
 
 Writing `leave(replica, clock)` records a null value at a higher clock — a tombstone that signals the peer left on purpose (the Yjs awareness pattern). A later non-null `put` at a still-higher clock means the peer rejoined. Because the merge is driven purely by clock comparison within the slot, it is commutative regardless of arrival order.
 
+Leaving is meant to stick. A message that was sent *before* the departure can still arrive afterwards — over a slow link, or when peers re-sync and hand each other everything they know — and that late arrival must not put the departed peer back on the list. It doesn't: the departure was recorded at a higher clock than anything the peer said earlier, so the older message loses. Coming back is something the peer has to do itself, by saying something newer than its own goodbye.
+
+## Who told you, and when
+
+Expiry answers "have we heard from this device lately?", so it only means something if the update really did come *from* that device. A copy passed along by somebody else, or a bulk re-sync of everything a peer knows, tells you nothing about whether the original device is still switched on. `EphemeralMapTracker` keeps the two apart: hand it a device's own update with `received`, and anything second-hand with `relayed` — the second one merges the data without restarting anybody's countdown unless it genuinely carries something newer.
+
 ## Expiry: caller-supplied receive times and TTL
 
 `EphemeralMap` holds no clock of its own. To compute the live view, the caller passes a map of per-replica *receive* times, the current `now`, and a `ttlMs`; `live(...)` returns only the slots seen within the window (and never a departed/null slot). Expiry is therefore a function of local receive time, not of any cross-peer wall clock — see `EphemeralMapTracker` for tracking those receive times.
