@@ -51,7 +51,7 @@ import kotlin.time.Instant
 import us.tractat.kuilt.quilter.QuilterConfig
 
 /**
- * Tests for the [WarpMetricBridge] extension functions.
+ * Tests for the [WarpMetricExporter] extension functions defined in `WarpMetrics.kt`.
  *
  * Verifies:
  * 1. Counter → MetricKey mapping for [recordWarp].
@@ -60,7 +60,7 @@ import us.tractat.kuilt.quilter.QuilterConfig
  * 4. CRDT commutativity: merge-then-record == record-then-merge.
  * 5. Planned vs. unplanned [Draft] → correct `warp.coordination.volume` gauge ([recordPlan]).
  */
-class WarpMetricBridgeTest {
+class WarpMetricsTest {
 
     private val testReplicaId = ReplicaId("test-replica")
 
