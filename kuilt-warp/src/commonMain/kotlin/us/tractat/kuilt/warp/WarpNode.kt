@@ -189,6 +189,14 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.warp.WarpNode")
  *   up when one gossips in (counted in [executionsCompiled]). When null, resolution is exactly the
  *   C5b lazy-fetch behaviour (no tiering). Required to be explicit — a platform's target is never
  *   guessed.
+ * @param admissionControl Opaque gate consulted on the free ([CoordinationKind.Free]) path
+ *   immediately before a resolved op runs (see [executeViaRegistry]). [AdmissionControl.admit]
+ *   returning `null` **defers** the task — it is unclaimed and retried on a later cycle, never
+ *   dropped; a returned [AdmissionTicket] admits it and its [AdmissionTicket.settle] fires once
+ *   the task completes. Defaults to [AdmissionControl.OPEN], which admits everything with a no-op
+ *   ticket, so an un-gated node behaves bit-for-bit as before. The `:kuilt-warp-heddle` satellite
+ *   supplies a weighted fair-share implementation keyed on [TaskDescriptor.lane]; warp core
+ *   references no such type.
  */
 public class WarpNode(
     public val selfId: PeerId,
@@ -206,6 +214,7 @@ public class WarpNode(
     private val raftNode: RaftNode? = null,
     private val lazyFetch: WarpLazyFetch? = null,
     private val target: Target? = null,
+    private val admissionControl: AdmissionControl = AdmissionControl.OPEN,
 ) {
     private val replica = ReplicaId(selfId.value)
 
@@ -1064,7 +1073,7 @@ public class WarpNode(
         }
         // Symbolic op already in the registry: run it directly (non-tiered path, unchanged).
         registry.resolve(descriptor.op)?.let { op ->
-            return runOpOrTerminal(taskId, op, descriptor.args)
+            return admitAndRun(taskId, descriptor, op)
         }
 
         val lf = lazyFetch ?: return standBy(taskId, descriptor.op)
@@ -1080,7 +1089,7 @@ public class WarpNode(
                 return recordTerminalError(taskId, e) // verified bytes, but broken/malicious — terminal
             }
             val op = registerOrResolve(descriptor.op, loaded)
-            return runOpOrTerminal(taskId, op, descriptor.args)
+            return admitAndRun(taskId, descriptor, op)
         }
 
         // Tiering enabled: resolve best variant per execution, cache loaded ops by BobbinHash.
@@ -1098,7 +1107,7 @@ public class WarpNode(
             lock.withLock { bobbinToOp.getOrPut(hash) { loaded } }
         }
         val isCompiled = hash != source
-        val result = runOpOrTerminal(taskId, op, descriptor.args) ?: return null
+        val result = admitAndRun(taskId, descriptor, op) ?: return null
         lock.withLock {
             if (isCompiled) {
                 _executionsCompiled = _executionsCompiled.piece(_executionsCompiled.inc(replica).delta)
@@ -1120,6 +1129,38 @@ public class WarpNode(
         } catch (e: WasmException) {
             recordTerminalError(taskId, e) // trap/timeout at run time — terminal
         }
+
+    /**
+     * Gate the free-path run of [op] for [taskId] on [admissionControl], then execute.
+     *
+     * The single choke point for actually invoking a free-path op: [admissionControl] is
+     * consulted here — only once a descriptor and a resolved op are in hand, so a task that
+     * stands by earlier (op not loaded) never reserves. [AdmissionControl.admit] returning
+     * `null` **defers** the task via [deferAdmission] (unclaimed, retried later) and no
+     * [AdmissionTicket.settle] runs. An admitted task runs to completion (or terminal error)
+     * and its ticket settles exactly once in the `finally`. With the default
+     * [AdmissionControl.OPEN] the ticket is a no-op, so this reduces to a bare
+     * [runOpOrTerminal] and the untagged path is unchanged.
+     */
+    private suspend fun admitAndRun(taskId: TaskId, descriptor: TaskDescriptor, op: Op): ByteArray? {
+        val ticket = admissionControl.admit(descriptor) ?: return deferAdmission(taskId, descriptor.lane)
+        return try {
+            runOpOrTerminal(taskId, op, descriptor.args)
+        } finally {
+            ticket.settle()
+        }
+    }
+
+    /**
+     * Defer [taskId]: admission control declined it *for now* (e.g. its lane is out of
+     * entitlement). Unclaim it so a later claim cycle re-evaluates once entitlement flows in —
+     * a deferral, never a drop, exactly like [standBy] on an unresolved op.
+     */
+    private fun deferAdmission(taskId: TaskId, lane: Lane): ByteArray? {
+        logger.debug { "WarpNode($selfId): task $taskId deferred by admission control (lane='${lane.tag}') — standing by (entitlement will retry)" }
+        lock.withLock { claimed.remove(taskId) }
+        return null
+    }
 
     /**
      * The best bobbin to run for this node's [target]: the highest-[OptLevel] compiled variant of
