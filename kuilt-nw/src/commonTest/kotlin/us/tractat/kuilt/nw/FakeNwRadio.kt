@@ -29,6 +29,28 @@ package us.tractat.kuilt.nw
  * self and peer onto one id (as real Bonjour + `RealNwApi.endpointsById` do), and the Option A
  * fix — advertising a distinct `peerId` per peer — separates them again.
  *
+ * ### TXT delivery is a CONTRACT, not a courtesy (#1706)
+ * A browser only receives TXT records **if it asked for them**. Network.framework's default is
+ * NOT to query TXT (`browse_descriptor.h`: "by default, the browser will not automatically query
+ * for TXT records") — [markBrowsing]'s `includeTxtRecord` therefore defaults to `false`, matching
+ * the real descriptor, and only a browser that opted in is delivered the advertised `peerId`. This
+ * is the exact axis the harness was blind to before #1706: it modelled the real API's *success*
+ * behaviour (a `peerId` was handed over because [markListening] was given one) rather than its
+ * *contract* (including what the real API declines to do unless asked). `RealNwApi.startBrowsing`
+ * omitted `nw_browse_descriptor_set_include_txt_record`, so no TXT ever arrived, every endpoint
+ * fell back to `id = serviceName`, and the pre-dial self-filter could never fire — a bug that
+ * passed every in-harness test and was caught only by a 2-iPhone AWDL run.
+ *
+ * Three further real-wire conditions the fake now models, each previously assumed away:
+ *  - **TXT absent / malformed** — a `null` (or blank, mirroring `nw_txt_record_find_key_non_empty_value`)
+ *    `peerId` falls back to `id = serviceName`, the documented `?: name` backstop.
+ *  - **TXT late** — [markListening] with `txtResolved = false` models the browse `add` arriving
+ *    BEFORE the TXT record resolves (id falls back to `serviceName` even for an opted-in browser);
+ *    [resolveTxt] then delivers the identity on a later browse *update*.
+ *  - **Bonjour name collision / rename** — [renameService] models mDNS disambiguating two peers that
+ *    advertise the same `serviceName` (`"lobby"` → `"lobby (2)"`), so the SAME peer is seen under
+ *    BOTH names across sightings. Identity must therefore key on the TXT `peerId`, never `serviceName`.
+ *
  * [connect] maps an endpoint back to its listening device through [endpointOwners] (the id → device
  * registry populated on [markListening]); a manually-constructed endpoint that was never advertised
  * falls back to the `"ep-<deviceId>"` naming convention ([listenerDeviceIdOf]).
@@ -63,23 +85,49 @@ internal class FakeNwRadio {
 
     /**
      * Per-device advertise state. [peerId] models the stable identity a device publishes in its
-     * Bonjour TXT record (Option A, #1502): when non-null it becomes the emitted [NwEndpoint.id];
-     * when null the id derives from [serviceName] (the service-name backstop).
+     * Bonjour TXT record (Option A, #1502): when non-null (and non-blank — mirroring
+     * `nw_txt_record_find_key_non_empty_value`) it becomes the emitted [NwEndpoint.id] **for a
+     * browser that requested TXT**; otherwise the id derives from [serviceName] (the service-name
+     * backstop). [txtResolved] models whether the TXT record has resolved yet: Network.framework
+     * can deliver the browse `add` before TXT arrives and supply it on a later update (#1706), so
+     * `false` means "advertised, identity not yet knowable" until [resolveTxt] fires.
      */
-    private data class Listening(val serviceName: String, val serviceType: String, val peerId: String?)
+    private data class Listening(
+        val serviceName: String,
+        val serviceType: String,
+        val peerId: String?,
+        val txtResolved: Boolean,
+    ) {
+        /** The advertised TXT PeerId, or `null` when absent OR malformed (empty value). */
+        val txtPeerId: String? get() = peerId?.takeIf { it.isNotEmpty() }
+    }
+
+    /**
+     * Per-device browse state. [includeTxtRecord] is the fake twin of
+     * `nw_browse_descriptor_set_include_txt_record` — when `false` (Network.framework's DEFAULT)
+     * this browser is never delivered a TXT record, so every endpoint it sees falls back to
+     * `id = serviceName` (#1706).
+     */
+    private data class Browsing(val serviceType: String, val includeTxtRecord: Boolean)
 
     /** One end of an open link: which device, and the handle that device sees. */
     private data class LinkEnd(val deviceId: String, val connectionId: NwConnectionId)
 
     private val devices = mutableMapOf<String, FakeNwApi>()
     private val listening = mutableMapOf<String, Listening>()
-    private val browsing = mutableMapOf<String, String>() // deviceId -> serviceType
+    private val browsing = mutableMapOf<String, Browsing>()
 
     /**
      * Emitted-endpoint-id → owning device id, populated on [markListening] (#1502). This is the fake
      * twin of `RealNwApi.endpointsById`: when two devices advertise the SAME id (a shared `serviceName`
      * with no TXT `peerId`), the later registration OVERWRITES the earlier — the id collapse the Option A
      * fix exists to prevent. [connect] resolves through this map first, then the `"ep-<deviceId>"` fallback.
+     *
+     * BOTH candidate ids are registered per listener — the TXT `peerId` AND the `serviceName` (#1706) —
+     * because the id a browser sees now depends on whether IT requested TXT: an opted-in browser dials
+     * the `peerId`, a non-opted-in browser dials the `serviceName`, and both must resolve back to the same
+     * listening device. The shared-`serviceName` overwrite (and hence the self/peer collapse) is preserved
+     * exactly, since the `serviceName` key is still last-writer-wins.
      */
     private val endpointOwners = mutableMapOf<String, String>()
 
@@ -98,12 +146,38 @@ internal class FakeNwRadio {
     private fun endpointIdFor(listenerDeviceId: String) = "ep-$listenerDeviceId"
 
     /**
-     * The [NwEndpoint.id] a listener advertises, mirroring [RealNwApi.onBrowseResult]: the TXT-record
-     * [peerId] when present, else the Bonjour [serviceName] (#1502). Under `Rendezvous.New` every peer
-     * shares one [serviceName], so a null [peerId] makes self and peer collide on the same id — the
-     * blind spot Option A closes by publishing a distinct [peerId] per peer.
+     * The [NwEndpoint] a browser that did-or-didn't request TXT sees for listener [l], mirroring
+     * [RealNwApi.onBrowseResult]'s `id = readPeerIdFromTxt(result) ?: name` (#1502/#1706).
+     *
+     * Three independent conditions each collapse the id back onto the [Listening.serviceName] backstop:
+     *  1. the browser never asked for TXT (`browserWantsTxt == false` — Network.framework's default);
+     *  2. the advertiser published no TXT PeerId, or a malformed/empty one ([Listening.txtPeerId]);
+     *  3. the TXT record has not resolved yet ([Listening.txtResolved] — the add-before-TXT ordering).
+     *
+     * Under `Rendezvous.New` every peer shares one `serviceName`, so ANY of the three makes self and
+     * peer collide on the same id — the blind spot Option A closes by publishing a distinct `peerId`
+     * per peer AND opting the browser in to receive it.
      */
-    private fun advertisedEndpointId(serviceName: String, peerId: String?): String = peerId ?: serviceName
+    private fun endpointFor(l: Listening, browserWantsTxt: Boolean): NwEndpoint {
+        val txtId = l.txtPeerId?.takeIf { browserWantsTxt && l.txtResolved }
+        return NwEndpoint(id = txtId ?: l.serviceName, serviceName = l.serviceName)
+    }
+
+    /**
+     * Register BOTH ids this listener can be dialled under — the TXT `peerId` and the `serviceName`
+     * (#1706) — so an opted-in and a non-opted-in browser both resolve back to [deviceId]. Last writer
+     * wins per key, preserving the shared-`serviceName` collapse.
+     */
+    private fun registerOwnership(deviceId: String, l: Listening) {
+        endpointOwners[l.serviceName] = deviceId
+        l.txtPeerId?.let { endpointOwners[it] = deviceId }
+    }
+
+    /** Release only the ids this device still owns — a collided id may have been taken over by a later listener. */
+    private fun releaseOwnership(deviceId: String, l: Listening) {
+        if (endpointOwners[l.serviceName] == deviceId) endpointOwners.remove(l.serviceName)
+        l.txtPeerId?.let { if (endpointOwners[it] == deviceId) endpointOwners.remove(it) }
+    }
 
     private fun listenerDeviceIdOf(endpointId: String): String =
         endpointId.removePrefix("ep-")
@@ -116,50 +190,109 @@ internal class FakeNwRadio {
 
     // ── discovery ────────────────────────────────────────────────────────────
 
-    suspend fun markListening(deviceId: String, serviceName: String, serviceType: String, peerId: String? = null) {
-        listening[deviceId] = Listening(serviceName, serviceType, peerId)
-        val endpointId = advertisedEndpointId(serviceName, peerId)
-        // Register the id → device mapping (the fake twin of RealNwApi.endpointsById). Under a shared
+    /**
+     * Advertise [serviceName] on [serviceType], optionally publishing [peerId] in the Bonjour TXT record.
+     *
+     * [txtResolved] models WHEN that TXT record becomes readable by a browser: `true` (the default) is the
+     * simultaneous case — the browse `add` already carries TXT; `false` is the **add-before-TXT** ordering
+     * Network.framework also produces, where the endpoint is discoverable but its identity is not yet
+     * knowable and only a later [resolveTxt] supplies it (#1706).
+     */
+    suspend fun markListening(
+        deviceId: String,
+        serviceName: String,
+        serviceType: String,
+        peerId: String? = null,
+        txtResolved: Boolean = true,
+    ) {
+        val l = Listening(serviceName, serviceType, peerId, txtResolved)
+        listening[deviceId] = l
+        // Register the id → device mappings (the fake twin of RealNwApi.endpointsById). Under a shared
         // serviceName with no peerId, a later listener OVERWRITES an earlier one on the same id — the
         // self/peer collapse Option A prevents.
-        endpointOwners[endpointId] = deviceId
+        registerOwnership(deviceId, l)
         // Announce this new listener to every device already browsing the type — INCLUDING
         // itself if it also browses `serviceType` (real mDNS returns self; see class KDoc / #1485).
-        for ((browserId, browseType) in browsing) {
-            if (browseType != serviceType) continue
-            devices.getValue(browserId).emitEndpointFound(
-                NwEndpoint(id = endpointId, serviceName = serviceName),
-            )
+        // The id each browser sees depends on whether IT requested TXT (#1706).
+        for ((browserId, b) in browsing) {
+            if (b.serviceType != serviceType) continue
+            devices.getValue(browserId).emitEndpointFound(endpointFor(l, b.includeTxtRecord))
+        }
+    }
+
+    /**
+     * Deliver [deviceId]'s TXT record on a LATER browse update, after its `add` already went out with the
+     * identity unresolved (`markListening(txtResolved = false)`). Network.framework re-fires the
+     * results-changed handler with `(old, new)` both present; `RealNwApi.onBrowseResult` treats a present
+     * `new` as add-or-update and re-emits `endpointFound` — now with the TXT-derived id (#1706). No-op for
+     * a device that is not listening, that published no TXT PeerId, or whose TXT already resolved.
+     */
+    suspend fun resolveTxt(deviceId: String) {
+        val l = listening[deviceId] ?: return
+        if (l.txtResolved || l.txtPeerId == null) return
+        val resolved = l.copy(txtResolved = true)
+        listening[deviceId] = resolved
+        registerOwnership(deviceId, resolved)
+        for ((browserId, b) in browsing) {
+            if (b.serviceType != l.serviceType) continue
+            devices.getValue(browserId).emitEndpointFound(endpointFor(resolved, b.includeTxtRecord))
+        }
+    }
+
+    /**
+     * Model mDNS **name-collision disambiguation** (#1706): [deviceId] keeps advertising the same TXT
+     * `peerId` but its Bonjour instance name changes (`"lobby"` → `"lobby (2)"`) because a peer already
+     * claimed the original. Real hardware showed exactly this under `Rendezvous.New`, where every peer
+     * advertises the SAME `serviceName` — and the SAME peer then appeared under BOTH names across
+     * sightings. A browser observes the old name removed and the new name added; for a TXT-opted-in
+     * browser BOTH sightings carry the same `id`, which is precisely why identity must key on the TXT
+     * `peerId` and never on `serviceName`. No-op if the device is not listening.
+     */
+    suspend fun renameService(deviceId: String, newServiceName: String) {
+        val old = listening[deviceId] ?: return
+        if (old.serviceName == newServiceName) return
+        releaseOwnership(deviceId, old)
+        val renamed = old.copy(serviceName = newServiceName)
+        listening[deviceId] = renamed
+        registerOwnership(deviceId, renamed)
+        for ((browserId, b) in browsing) {
+            if (b.serviceType != old.serviceType) continue
+            val browser = devices.getValue(browserId)
+            browser.emitEndpointLost(endpointFor(old, b.includeTxtRecord))
+            browser.emitEndpointFound(endpointFor(renamed, b.includeTxtRecord))
         }
     }
 
     suspend fun markStopListening(deviceId: String) {
         val gone = listening.remove(deviceId) ?: return
-        val endpointId = advertisedEndpointId(gone.serviceName, gone.peerId)
-        // Only relinquish ownership if this device still owns the id — a collided id may have been
+        // Only relinquish ownership of ids this device still owns — a collided id may have been
         // overwritten by another listener, whose entry must survive this device's departure.
-        if (endpointOwners[endpointId] == deviceId) endpointOwners.remove(endpointId)
+        releaseOwnership(deviceId, gone)
         // Symmetric with [markListening]: a listener that stops advertising is reported as REMOVED to every
         // device still browsing its type — real Bonjour/mDNS fires the browser's removed-result callback,
         // which RealNwApi surfaces as [NwApi.endpointLost]. This is what prunes a departed ghost from a
         // discovery roster (#1447 item 2).
-        for ((browserId, browseType) in browsing) {
-            if (browseType != gone.serviceType) continue
-            devices.getValue(browserId).emitEndpointLost(
-                NwEndpoint(id = endpointId, serviceName = gone.serviceName),
-            )
+        for ((browserId, b) in browsing) {
+            if (b.serviceType != gone.serviceType) continue
+            devices.getValue(browserId).emitEndpointLost(endpointFor(gone, b.includeTxtRecord))
         }
     }
 
-    suspend fun markBrowsing(deviceId: String, serviceType: String) {
-        browsing[deviceId] = serviceType
+    /**
+     * Begin browsing [serviceType]. [includeTxtRecord] is the fake twin of
+     * `nw_browse_descriptor_set_include_txt_record` and defaults to **`false`** — Network.framework's own
+     * default ("by default, the browser will not automatically query for TXT records"). A browser that
+     * does not opt in never receives an advertised `peerId`, so every endpoint it sees falls back to
+     * `id = serviceName` (#1706). `RealNwApi.startBrowsing` opts in explicitly, and so does [FakeNwApi] —
+     * a test models the omission by constructing the device with `browserIncludesTxtRecord = false`.
+     */
+    suspend fun markBrowsing(deviceId: String, serviceType: String, includeTxtRecord: Boolean = false) {
+        browsing[deviceId] = Browsing(serviceType, includeTxtRecord)
         // Deliver every device already listening on the type to this browser — INCLUDING
         // itself if it also advertises `serviceType` (real mDNS returns self; see class KDoc / #1485).
-        for ((listenerId, l) in listening) {
+        for ((_, l) in listening) {
             if (l.serviceType != serviceType) continue
-            devices.getValue(deviceId).emitEndpointFound(
-                NwEndpoint(id = advertisedEndpointId(l.serviceName, l.peerId), serviceName = l.serviceName),
-            )
+            devices.getValue(deviceId).emitEndpointFound(endpointFor(l, includeTxtRecord))
         }
     }
 
