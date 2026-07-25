@@ -56,6 +56,15 @@ public class EntitlementLedger private constructor(
     // Peer-to-peer transfers AT the path ending at this edge (root path keyed by a
     // sentinel). transfers(e)[from].count(to); row `from` owned exclusively by `from`.
     private val transfers: Map<PathKey, Map<ReplicaId, GCounter>>,
+
+    // Relocation counters — the signed adjustment that lets an already-recorded quantity
+    // MOVE between edges without any counter ever decreasing (#1665 slice 1, #1691).
+    // Written EXCLUSIVELY by the control plane's log apply; the data plane never touches them.
+    private val issuedRelocIn:   Map<AttachmentId, GCounter>,   // credit re-homed ONTO e
+    private val leafRelocIn:     Map<AttachmentId, GCounter>,
+    private val leafRelocOut:    Map<AttachmentId, GCounter>,
+    private val rollupRelocIn:   Map<AttachmentId, GCounter>,
+    private val rollupRelocOut:  Map<AttachmentId, GCounter>,
 ) : Quilted<EntitlementLedger>
 ```
 
@@ -79,6 +88,41 @@ child, its historical `leafSpent(f)` stays subtracted from holdings and stays in
 conservation sum; nothing depends on `isLeaf` at read time. It also dissolves candidate
 D's telescoping fragility (holdings no longer differences `spent` across children, so no
 "sum-domination" precondition exists to violate).
+
+### Relocation counters — a net decrease without a decrement (#1665 slice 1)
+
+A generation is sometimes retired with entitlement still riding on it (the advisory-retire
+race), and making the child whole means **moving** an already-recorded quantity onto the
+generation that replaced it. A grow-only `GCounter` cannot go down, so the move rides a
+*second* monotone counter that cancels the first — the `PNCounter` idiom, per edge per slot:
+
+```
+effIssued(e)[r]      = issued(e)[r]      + issuedRelocIn(e)[r]
+effLeafSpent(e)[r]   = leafSpent(e)[r]   + leafRelocIn(e)[r]   − leafRelocOut(e)[r]
+effRollupSpent(e)[r] = rollupSpent(e)[r] + rollupRelocIn(e)[r] − rollupRelocOut(e)[r]
+```
+
+Moving `δ` units from `s` to `t` bumps `reloc.out(s)[r] += δ` **and** `reloc.in(t)[r] += δ`.
+Every *stored* component still only grows; the effective value is derived and may fall,
+exactly as `outstanding`/`holdings` already do. There is no `issuedRelocOut` — issuance is
+never net-decreased. Every read that used to name a base counter now names its effective
+value: `edge()`/`EdgeSummary`, `netInflow`, `holdings`, `leafSpentTotal()`, and `validate()`'s
+`PerEdgeSafety`.
+
+**Slot ownership is what makes it sound.** The base counters on a *live* edge belong to the
+data plane (replica `r` writes its own slot, only locally-derived values); the base counters
+on a *retired* edge may be written by the control plane, because no data-plane mutator can
+author them again; and the relocation counters belong to the control plane **exclusively**.
+So the reconciliation re-home credits `issuedRelocIn(liveEdge)[r]` rather than fabricating an
+absolute on the contended base `issued(liveEdge)[r]` that `r`'s own `delegate` writes
+concurrently — two writers on one max-joined slot silently erase one side, with conservation
+*and* per-edge safety blind to the loss (#1691).
+
+**Spend relocation is expressible but not enabled.** `reconcileStranded` still refuses a
+strand with service spent through it: the move drains the retired edge to zero headroom, so a
+straggler charge arriving afterwards would leave a permanently unclearable per-edge-safety
+violation. Un-gating it needs a per-peer quiesce fence recording, in the log, that every
+replica has sworn off writing the edge again — a later slice.
 
 ## Mutators
 
@@ -136,7 +180,8 @@ weighed and rejected; the depth-1 witness plus the diagnostic framing is the cho
 Componentwise, every component a known join-semilattice — `records` a per-id grow-only
 **set union** (retaining any divergent record for `validate`), `minted` a grow-only union
 keyed by unique `MintId` (distinct mints never collide — see fix 4), per-edge `GCounter`
-max, nested `transfers` per-row `GCounter` max. A finite product of semilattices is a semilattice, so
+max (base **and** relocation families alike), nested `transfers` per-row `GCounter` max.
+A finite product of semilattices is a semilattice, so
 `piece` is idempotent/commutative/associative (the `LatticeProduct` argument, n-wise). A
 `GCounter` delta carries the resulting absolute slot value, so re-delivering any patch is
 absorbed idempotently by max — **duplicate-delivery idempotence comes from the lattice, not
@@ -149,10 +194,10 @@ Let `f = inbound(group)` (`ROOT`/`null` for the root):
 ```
 holdings(group, r) =
       creditIn                                   // Σ minted amounts held by r   (root)
-                                                 // issued(f)[r] − returned(f)[r] (non-root: r's net inflow across f)
+                                                 // effIssued(f)[r] − returned(f)[r] (non-root: r's net inflow across f)
     + transferNet(f, r)                          // Σ_s transfers[f][s][r] − Σ_t transfers[f][r][t]
-    − Σ_{c ∈ childEdges(group)} (issued(c)[r] − returned(c)[r])   // r's net delegated-out
-    − leafSpent(f)[r]                            // consumed here; 0 at root; UNCONDITIONAL
+    − Σ_{c ∈ childEdges(group)} (effIssued(c)[r] − returned(c)[r])   // r's net delegated-out
+    − effLeafSpent(f)[r]                         // consumed here; 0 at root; UNCONDITIONAL
 ```
 
 Every subtracted term reads a slot **only `r` writes**, so `r`'s local `null`-check is
@@ -162,8 +207,8 @@ every child `EdgeSummary` per pick (so candidate B's stored-aggregate optimizati
 rejected as buying ~nothing). Quarantine: if any edge on `group`'s lineage is in the
 `validate()` conflict set, `holdings` returns 0 (transitive, §4.6).
 
-`edge(id) = EdgeSummary(issued(id).value, returned(id).value, (leafSpent(id)+rollupSpent(id)).value)`
-— a per-edge read. `activeChildren(g)` = summaries of `childEdges(g)`.
+`edge(id) = EdgeSummary(effIssued(id), returned(id).value, effLeafSpent(id)+effRollupSpent(id))`
+— a per-edge read, at effective values. `activeChildren(g)` = summaries of `childEdges(g)`.
 
 ## `validate(): List<LedgerConflict>` (fix 3)
 
@@ -174,7 +219,7 @@ and the depth-1 witness (fix 2) keeps the direct and single-hop-transfer cases h
 partial delivery, but a partially-delivered multi-hop transfer-funded charge may transiently
 list a false conflict that self-heals on anti-entropy. The checks:
 
-- **`PerEdgeSafety(e)`** — `(leafSpent(e)+rollupSpent(e)+returned(e)).value > issued(e).value`.
+- **`PerEdgeSafety(e)`** — `effLeafSpent(e)+effRollupSpent(e)+returned(e) > effIssued(e)`.
   **Sum-wise on aggregate values** (per-slot is legitimately violable: a peer may return
   entitlement it received by transfer, so per-slot `returned(e)[r] > issued(e)[r]` is fine).
 - **`PersistentNegativeHoldings(group, r)`** — `holdings(group, r) < 0` on a

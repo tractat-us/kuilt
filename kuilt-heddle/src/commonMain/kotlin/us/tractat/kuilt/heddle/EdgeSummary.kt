@@ -13,6 +13,11 @@ import kotlinx.serialization.Serializable
  * `spent` is the **total** service charged through the edge — the sum of service
  * charged where the edge is a path's final edge and where it is a strict prefix.
  *
+ * Every figure is an **effective** value: the grow-only base counter plus any relocation
+ * recorded against it (see [EntitlementLedger]'s "relocation counters"). So an edge that
+ * received a re-homed generation reports the credit it now carries, and one whose generation
+ * was moved away reports itself drained — without any counter ever having been decremented.
+ *
  * The projection is a merge homomorphism: because the ledger merges per-edge,
  * componentwise, reading one edge's summary from a merged ledger equals merging the
  * two edges' summaries (design §10.8).

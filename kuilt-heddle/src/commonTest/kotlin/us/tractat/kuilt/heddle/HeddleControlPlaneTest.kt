@@ -13,6 +13,7 @@ import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.Seam
+import us.tractat.kuilt.crdt.GCounter
 import us.tractat.kuilt.crdt.Patch
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.liveness.HeartbeatConfig
@@ -427,6 +428,180 @@ class HeddleControlPlaneTest {
         assertEquals(ControlOutcome.NOT_COMMITTED, refused.index)
         assertIs<ControlConflict.Refused>(refused.conflict)
         assertEquals(Lifecycle.CLOSING, governed.ledger.value.lifecycle(live), "the refused retire left the edge CLOSING, not RETIRED")
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // #1665 (D1): a raced advisory-retire + legal reparent leaves permanent conflicts;
+    // a governed reconcile re-homes the stranded budget through the log, clearing them
+    // deterministically on EVERY peer while conserving supply. MultiNodeRaftSim for the
+    // consensus apply; RecordingSink+forceMerge models the gossip-merged data plane.
+    // ═══════════════════════════════════════════════════════════════════════════
+    @Test
+    fun reconcileClearsRacedRetireStrandAcrossAllPeers() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        val ids = (1..3).map { NodeId("v$it") }
+        val sim = MultiNodeRaftSim(nodeIds = ids, scope = this, nodeScope = backgroundScope)
+        val sinks = ids.associateWith { RecordingSink() }
+        val planes = ids.associateWith { plane(sim.nodes.getValue(it), it, sinks.getValue(it), backgroundScope) }
+        sim.awaitLeader()
+
+        val g = GroupId("g")
+        val h = GroupId("h")
+        val p3 = ReplicaId("p3")
+        val e1 = AttachmentId("e1") // root → g (stranded by the raced retire)
+        val e2 = AttachmentId("e2") // g    → h
+        val e3 = AttachmentId("e3") // root → g (the legal reparent generation)
+        val v1 = planes.getValue(NodeId("v1"))
+        fun rec(id: AttachmentId, parent: GroupId, child: GroupId) = AttachmentRecord(id, parent, child, Weight.ONE, 0L)
+
+        // Control-plane topology: e1,e2 active; then close+retire e1 with a LAGGED (empty) drain witness —
+        // the projection has no data-plane counters, so its outstanding reads 0 and the retire is admitted.
+        awaitOutcome(sim, backgroundScope) { v1.submit(ControlCommand.Mint(p3, 10L)) }
+        awaitOutcome(sim, backgroundScope) { v1.submit(ControlCommand.Prepare(rec(e1, root, g))) }
+        awaitOutcome(sim, backgroundScope) { v1.submit(ControlCommand.Activate(e1)) }
+        awaitOutcome(sim, backgroundScope) { v1.submit(ControlCommand.Prepare(rec(e2, g, h))) }
+        awaitOutcome(sim, backgroundScope) { v1.submit(ControlCommand.Activate(e2)) }
+        awaitOutcome(sim, backgroundScope) { v1.submit(ControlCommand.Close(e1)) }
+        assertIs<ControlOutcome.Applied>(awaitOutcome(sim, backgroundScope) { v1.submit(ControlCommand.Retire(e1, witness = null)) })
+        // Legal reparent: e1 is RETIRED (not live), so activating e3 passes the dual-inbound gate.
+        awaitOutcome(sim, backgroundScope) { v1.submit(ControlCommand.Prepare(rec(e3, root, g))) }
+        assertIs<ControlOutcome.Applied>(awaitOutcome(sim, backgroundScope) { v1.submit(ControlCommand.Activate(e3)) })
+
+        // The real data plane gossips in AFTER the retire: p3 delegated 10↓e1 and 6↓e2, then the +6 at h
+        // was spent through [e3,e2]. Model the converged data-plane view by merging those counters into
+        // every peer's sink.
+        val dataCounters = EntitlementLedger.of(
+            issued = mapOf(e1 to GCounter.of(p3 to 10L), e2 to GCounter.of(p3 to 6L)),
+            leafSpent = mapOf(e2 to GCounter.of(p3 to 6L)),
+            rollupSpent = mapOf(e3 to GCounter.of(p3 to 6L)),
+        )
+        sinks.values.forEach { it.forceMerge(dataCounters) }
+
+        // Every peer converges (each applies the committed log at its own virtual-time cadence) on the
+        // three permanent conflicts, identically.
+        val d1Conflicts = listOf(
+            LedgerConflict.PerEdgeSafety(e3),
+            LedgerConflict.PersistentNegativeHoldings(g, p3),
+            LedgerConflict.ClosureViolation(e1),
+        )
+        sim.awaitTrue("every peer converges on the D1 conflicts pre-reconcile") {
+            ids.all { sinks.getValue(it).snapshot().validate() == d1Conflicts }
+        }
+        ids.forEach { assertEquals(-6L, sinks.getValue(it).snapshot().holdings(g, p3), "peer $it holdings(g,p3) permanently negative") }
+
+        // Governed reconcile: compute the conserving re-home witness on the leader's data-plane view (exactly
+        // what GovernedHeddleNode.reconcile does) and submit it through the log.
+        val dataView = sinks.getValue(NodeId("v1")).snapshot()
+        val rehome = dataView.reconcileStranded(g)
+        assertNotNull(rehome, "the leader's data view has a strand to reconcile")
+        val liveEdge = dataView.liveInboundEdges(g).single()
+        val outcome = awaitOutcome(sim, backgroundScope) {
+            v1.submit(ControlCommand.Reconcile(g, liveEdge, rehome.delta))
+        }
+        assertIs<ControlOutcome.Applied>(outcome)
+
+        // Every peer converges to the same cleared, conserved state.
+        sim.awaitTrue("every peer cleared its conflicts after the governed reconcile") {
+            ids.all { sinks.getValue(it).snapshot().validate().isEmpty() }
+        }
+        val converged = sinks.getValue(NodeId("v1")).snapshot()
+        ids.forEach {
+            val v = sinks.getValue(it).snapshot()
+            assertEquals(converged, v, "peer $it must converge to the identical reconciled ledger")
+            assertTrue(v.holdings(g, p3) >= 0L, "peer $it holdings(g,p3) non-negative")
+        }
+        assertEquals(4L, converged.holdings(g, p3), "g re-homes to the un-spent remainder (10 − 6)")
+        // Conservation: supply unchanged, and Σ holdings + leafSpent == minted restored.
+        var sumHoldings = 0L
+        for (grp in listOf(root, g, h)) sumHoldings += converged.holdings(grp, p3)
+        assertEquals(10L, converged.mintedTotal(), "reconciliation minted nothing")
+        assertEquals(converged.mintedTotal(), sumHoldings + converged.leafSpentTotal(), "conservation restored across the cluster")
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // #1691 (slice 1 of #1665, relocation design §6.3): the apply gate refuses ANY
+    // reconciliation witness that writes a slot the control plane does not own — a base
+    // `issued` slot on the LIVE edge (finding 1's contended slot), or a spend-relocation
+    // counter (through-service relocation, which stays gated until the §6 fence ships).
+    // Structural, not advisory: a buggy or hostile proposer cannot smuggle either past it.
+    // ═══════════════════════════════════════════════════════════════════════════
+    @Test
+    fun reconcileWitnessTouchingAContendedOrUnfencedSlotIsRefusedAtApply() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        val fake = FakeRaftNode(selfId = NodeId("solo"), initialRole = RaftRole.Leader)
+        val sink = RecordingSink()
+        val plane = HeddleControlPlane(
+            raft = fake, self = ReplicaId("solo"), scope = backgroundScope,
+            sink = sink, initial = EntitlementLedger.ZERO, incarnation = "boot-reloc-gate",
+        )
+        val child = GroupId("g")
+        val p3 = ReplicaId("p3")
+        val old = AttachmentId("eOld") // root → g, retired
+        val live = AttachmentId("eNew") // root → g, the reparent generation
+
+        assertIs<ControlOutcome.Applied>(plane.submit(ControlCommand.Prepare(AttachmentRecord(old, root, child, Weight.ONE, 0L))))
+        assertIs<ControlOutcome.Applied>(plane.submit(ControlCommand.Activate(old)))
+        assertIs<ControlOutcome.Applied>(plane.submit(ControlCommand.Close(old)))
+        assertIs<ControlOutcome.Applied>(plane.submit(ControlCommand.Retire(old, witness = null)))
+        assertIs<ControlOutcome.Applied>(plane.submit(ControlCommand.Prepare(AttachmentRecord(live, root, child, Weight.ONE, 0L))))
+        assertIs<ControlOutcome.Applied>(plane.submit(ControlCommand.Activate(live)))
+
+        // Finding 1's shape: a base `issued(live)[p3]` absolute, on a slot p3's own `delegate`
+        // writes concurrently. Under per-slot max-join one of the two writers is silently erased.
+        val contendedWitness = EntitlementLedger.of(
+            returned = mapOf(old to GCounter.of(p3 to 10L)),
+            issued = mapOf(live to GCounter.of(p3 to 10L)),
+        )
+        val contended = plane.submit(ControlCommand.Reconcile(child, live, contendedWitness))
+        assertIs<ControlOutcome.Conflict>(contended)
+        assertIs<ControlConflict.Refused>(contended.conflict)
+        assertTrue(sink.snapshot().issuedEdges().isEmpty(), "a refused witness must publish nothing")
+
+        // Through-service relocation is NOT un-gated in slice 1: a witness carrying spend
+        // relocation is refused even though the representation can express it, because moving
+        // an already-charged spend safely needs the per-peer quiesce fence that is not built.
+        val spendRelocationWitness = EntitlementLedger.of(
+            returned = mapOf(old to GCounter.of(p3 to 10L)),
+            issuedRelocIn = mapOf(live to GCounter.of(p3 to 10L)),
+            rollupRelocOut = mapOf(old to GCounter.of(p3 to 3L)),
+            rollupRelocIn = mapOf(live to GCounter.of(p3 to 3L)),
+        )
+        val relocating = plane.submit(ControlCommand.Reconcile(child, live, spendRelocationWitness))
+        assertIs<ControlOutcome.Conflict>(relocating)
+        assertIs<ControlConflict.Refused>(relocating.conflict)
+
+        // The well-formed shape — a base `returned` drain on the retired edge plus an
+        // `issuedRelocIn` credit on the live one — is the ONLY thing that gets through.
+        val wellFormed = EntitlementLedger.of(
+            returned = mapOf(old to GCounter.of(p3 to 10L)),
+            issuedRelocIn = mapOf(live to GCounter.of(p3 to 10L)),
+        )
+        assertIs<ControlOutcome.Applied>(plane.submit(ControlCommand.Reconcile(child, live, wellFormed)))
+        assertEquals(10L, sink.snapshot().effectiveIssued(live, p3), "the accepted re-home credits the live edge")
+        assertTrue(sink.snapshot().issuedEdges().isEmpty(), "…and still never writes a base issued slot")
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // #1665 (§9 #3): reconcile is fenced by readIndex() — a deposed/non-leader proposer
+    // is refused BEFORE it computes a witness from its (unfenced) data-plane view, so a
+    // partitioned ex-leader can never drive recovery from stale authority.
+    // ═══════════════════════════════════════════════════════════════════════════
+    @Test
+    fun reconcileReadIndexFenceRefusesANonLeaderProposer() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        val fake = FakeRaftNode(selfId = NodeId("solo"), initialRole = RaftRole.Leader)
+        fake.readIndexBehavior = { throw us.tractat.kuilt.raft.NotLeaderException("deposed") }
+        val loom = InMemoryLoom()
+        val seam: Seam = loom.host(Pattern("heddle-h5-reconcile-fence"))
+        val self = ReplicaId(seam.selfId.value)
+        val governed = backgroundScope.heddleGoverned(
+            seam = seam, self = self, raft = fake, root = root,
+            clock = { Instant.fromEpochMilliseconds(testScheduler.currentTime) }, config = config(seed = 13),
+            incarnation = "boot-reconcile-fence", epoch = 0L,
+        )
+        val outcome = governed.reconcile(GroupId("anything"))
+        assertIs<ControlOutcome.Conflict>(outcome)
+        assertEquals(ControlOutcome.NOT_COMMITTED, outcome.index)
+        val conflict = outcome.conflict
+        assertIs<ControlConflict.Refused>(conflict)
+        assertTrue(conflict.reason.contains("readIndex"), "the refusal must name the §9 #3 fence, was: ${conflict.reason}")
     }
 
     // ─────────────────────────────────────────────────────────────────────────────

@@ -55,7 +55,7 @@ import kotlinx.serialization.Serializable
  *
  * ## The representation
  *
- * Eight components, each already a join-semilattice, so [piece] is just their
+ * Thirteen components, each already a join-semilattice, so [piece] is just their
  * componentwise join (the product-of-lattices idiom):
  *
  *  - [records] — the immutable topology (parent/child/weight per edge) as a
@@ -70,6 +70,8 @@ import kotlinx.serialization.Serializable
  *    replica, so the merge is per-slot max and no honest concurrency can race.
  *  - `transfers` — peer-to-peer hand-offs at a path, a per-donor-row matrix keyed
  *    by [PathKey]; the row for a donor is written only by that donor.
+ *  - the **relocation counters** — `issuedRelocIn`, `leafRelocIn`/`leafRelocOut`,
+ *    `rollupRelocIn`/`rollupRelocOut`, described next.
  *
  * The `spent` split ([leafSpent] vs [rollupSpent]) is the load-bearing choice: a
  * completed charge on a leaf path charges the leaf's own final edge in `leafSpent`
@@ -80,6 +82,40 @@ import kotlinx.serialization.Serializable
  * construction, and duplicate or reordered delivery of any patch is absorbed
  * idempotently by the counters' max — convergence comes from the lattice, not from
  * event ids.
+ *
+ * ## Relocation counters — a net decrease without a decrement (#1665 slice 1)
+ *
+ * A generation is sometimes retired with entitlement still riding on it (the advisory-retire
+ * race), and making the child whole means **moving** an already-recorded quantity from the
+ * dead edge onto the live one. A grow-only [GCounter] cannot be decreased, so the move rides
+ * a *second* monotone counter that cancels the first — the `PNCounter` idiom, applied
+ * per-edge-per-slot:
+ *
+ * ```
+ * effIssued(e)[r]      = issued(e)[r]      + issuedRelocIn(e)[r]
+ * effLeafSpent(e)[r]   = leafSpent(e)[r]   + leafRelocIn(e)[r]   − leafRelocOut(e)[r]
+ * effRollupSpent(e)[r] = rollupSpent(e)[r] + rollupRelocIn(e)[r] − rollupRelocOut(e)[r]
+ * ```
+ *
+ * Every **stored** component still only grows; the effective value is *derived* and may fall,
+ * exactly as `outstanding`/[holdings] already do. There is no `issuedRelocOut` — issuance is
+ * never net-decreased. Because the five new families are ordinary [GCounter] maps joined
+ * componentwise, [piece] stays idempotent/commutative/associative by the **same**
+ * product-of-lattices argument that already covers the other eight; adding them makes the
+ * CRDT strictly larger, not structurally different.
+ *
+ * **Slot ownership is what makes this sound.** The base counters on a *live* edge belong to
+ * the data plane — replica `r` writes its own slot, and only ever a value it derived locally.
+ * The relocation counters belong to the **control plane** exclusively (log apply); the data
+ * plane never touches them. So a re-home adds its credit to `issuedRelocIn(t)[r]` rather than
+ * fabricating an absolute on the contended base `issued(t)[r]` that `r`'s own [delegate]
+ * writes concurrently — two writers on one max-joined slot would silently erase one side,
+ * with conservation *and* per-edge safety blind to the loss.
+ *
+ * Slice 1 ships the representation and moves the re-home onto it. **Spend relocation is not
+ * enabled**: [reconcileStranded] still refuses a strand with service spent through it, because
+ * relocating an already-charged spend safely needs a per-peer quiesce fence that is not built
+ * yet.
  *
  * @sample us.tractat.kuilt.heddle.sampleEntitlementLedgerMerge
  * @sample us.tractat.kuilt.heddle.sampleEntitlementLedgerLifecycle
@@ -94,6 +130,11 @@ public class EntitlementLedger private constructor(
     private val rollupSpent: Map<AttachmentId, GCounter>,
     private val transfers: Map<PathKey, Map<ReplicaId, GCounter>>,
     private val lifecycle: Map<AttachmentId, Lifecycle> = emptyMap(),
+    private val issuedRelocIn: Map<AttachmentId, GCounter> = emptyMap(),
+    private val leafRelocIn: Map<AttachmentId, GCounter> = emptyMap(),
+    private val leafRelocOut: Map<AttachmentId, GCounter> = emptyMap(),
+    private val rollupRelocIn: Map<AttachmentId, GCounter> = emptyMap(),
+    private val rollupRelocOut: Map<AttachmentId, GCounter> = emptyMap(),
 ) : Quilted<EntitlementLedger> {
 
     /** The join: the componentwise least-upper-bound of `this` and [other]. */
@@ -111,20 +152,54 @@ public class EntitlementLedger private constructor(
             // The lifecycle max-register: join = max, so CLOSING/RETIRED dominates a
             // laggard's ACTIVE regardless of merge order (design §5.1, §10.10).
             lifecycle = lifecycle.mergeValues(other.lifecycle) { mine, theirs -> maxOf(mine, theirs) },
+            // The relocation families are ordinary GCounter maps, so they join exactly as the
+            // base counters do — the product-of-lattices argument is unchanged in shape.
+            issuedRelocIn = issuedRelocIn.mergeEdgeCounters(other.issuedRelocIn),
+            leafRelocIn = leafRelocIn.mergeEdgeCounters(other.leafRelocIn),
+            leafRelocOut = leafRelocOut.mergeEdgeCounters(other.leafRelocOut),
+            rollupRelocIn = rollupRelocIn.mergeEdgeCounters(other.rollupRelocIn),
+            rollupRelocOut = rollupRelocOut.mergeEdgeCounters(other.rollupRelocOut),
         )
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Effective counter reads — base ± relocation. Derived, never stored; the only
+    // values the economics and diagnostics ever look at (see the class KDoc).
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /** `issued(e)[r] + issuedRelocIn(e)[r]` — [r]'s effective issuance across [e]. */
+    private fun effIssuedSlot(e: AttachmentId, r: ReplicaId): Long =
+        checkedAdd(slot(issued, e, r), slot(issuedRelocIn, e, r))
+
+    /** `leafSpent(e)[r] + leafRelocIn(e)[r] − leafRelocOut(e)[r]`. */
+    private fun effLeafSpentSlot(e: AttachmentId, r: ReplicaId): Long =
+        checkedSub(checkedAdd(slot(leafSpent, e, r), slot(leafRelocIn, e, r)), slot(leafRelocOut, e, r))
+
+    /** The edge-wide (all-replica) effective issuance across [e]. */
+    private fun effIssuedTotal(e: AttachmentId): Long =
+        checkedAdd(counterValue(issued, e), counterValue(issuedRelocIn, e))
+
+    /** The edge-wide effective leaf spend on [e] — the conservation-identity term. */
+    private fun effLeafSpentTotal(e: AttachmentId): Long =
+        checkedSub(checkedAdd(counterValue(leafSpent, e), counterValue(leafRelocIn, e)), counterValue(leafRelocOut, e))
+
+    /** The edge-wide effective roll-up spend through [e]. */
+    private fun effRollupSpentTotal(e: AttachmentId): Long =
+        checkedSub(checkedAdd(counterValue(rollupSpent, e), counterValue(rollupRelocIn, e)), counterValue(rollupRelocOut, e))
 
     /**
      * The parent-facing [EdgeSummary] for [id], or `null` if the edge is entirely
-     * unknown to this ledger. `spent` is the total charged through the edge —
-     * `leafSpent + rollupSpent`.
+     * unknown to this ledger. Reported at **effective** values (base ± relocation, see the
+     * class KDoc), so an edge that received a re-homed generation reads the credit it now
+     * carries and a drained one reads zero outstanding. `spent` is the total charged through
+     * the edge — effective `leafSpent + rollupSpent`.
      */
     public fun edge(id: AttachmentId): EdgeSummary? {
         if (!isKnown(id)) return null
         return EdgeSummary(
             attachment = id,
-            issued = counterValue(issued, id),
+            issued = effIssuedTotal(id),
             returned = counterValue(returned, id),
-            spent = counterValue(leafSpent, id) + counterValue(rollupSpent, id),
+            spent = checkedAdd(effLeafSpentTotal(id), effRollupSpentTotal(id)),
         )
     }
 
@@ -171,7 +246,8 @@ public class EntitlementLedger private constructor(
     /** Whether [id] is mentioned by any component (records or any counter). */
     private fun isKnown(id: AttachmentId): Boolean =
         id in records || id in issued || id in returned || id in leafSpent || id in rollupSpent ||
-            id in lifecycle
+            id in lifecycle || id in issuedRelocIn || id in leafRelocIn || id in leafRelocOut ||
+            id in rollupRelocIn || id in rollupRelocOut
 
     /** The lifecycle of a **known** edge: the stored value, or [Lifecycle.ACTIVE] by default. */
     private fun lifecycleOf(id: AttachmentId): Lifecycle = lifecycle[id] ?: Lifecycle.ACTIVE
@@ -249,9 +325,11 @@ public class EntitlementLedger private constructor(
      * ```
      *
      * where `f = inbound(group)`; `creditIn` is the sum of minted amounts held by
-     * [r] at the root, else `issued(f)[r] − returned(f)[r]`. `leafSpent(f)[r]` is
+     * [r] at the root, else `effIssued(f)[r] − returned(f)[r]`. `effLeafSpent(f)[r]` is
      * subtracted **unconditionally** — no `isLeaf` test — which keeps conservation
-     * topology-independent when a former leaf later gains a child (design fix 1).
+     * topology-independent when a former leaf later gains a child (design fix 1). Both the
+     * issuance and the leaf-spend terms read **effective** values (base ± relocation), so a
+     * re-homed generation credits the child that now owns it.
      *
      * Every subtracted term reads a slot only [r] writes, so a peer's local
      * feasibility check is sound with zero coordination. If [group]'s lineage is
@@ -268,13 +346,13 @@ public class EntitlementLedger private constructor(
         for (c in childEdges(group)) {
             acc = checkedSub(acc, netInflow(c, r))
         }
-        if (f != null) acc = checkedSub(acc, slot(leafSpent, f, r))
+        if (f != null) acc = checkedSub(acc, effLeafSpentSlot(f, r))
         return acc
     }
 
-    /** `issued(edge)[r] − returned(edge)[r]` — [r]'s net inflow across one edge. */
+    /** `effIssued(edge)[r] − returned(edge)[r]` — [r]'s net inflow across one edge. */
     private fun netInflow(edge: AttachmentId, r: ReplicaId): Long =
-        checkedSub(slot(issued, edge, r), slot(returned, edge, r))
+        checkedSub(effIssuedSlot(edge, r), slot(returned, edge, r))
 
     /** Σ minted amounts credited to [r] (the root's `creditIn`). */
     private fun mintedHeldBy(r: ReplicaId): Long =
@@ -383,6 +461,14 @@ public class EntitlementLedger private constructor(
         returned = returned[edge]?.let { mapOf(edge to it) } ?: emptyMap(),
         leafSpent = leafSpent[edge]?.let { mapOf(edge to it) } ?: emptyMap(),
         rollupSpent = rollupSpent[edge]?.let { mapOf(edge to it) } ?: emptyMap(),
+        // Any relocation already recorded on the edge travels with the drain: the witness is a
+        // republish of *observed* values, so max-join absorbs it, and shipping the base without
+        // its cancelling relocation would let a laggard read a spend the edge no longer carries.
+        issuedRelocIn = issuedRelocIn[edge]?.let { mapOf(edge to it) } ?: emptyMap(),
+        leafRelocIn = leafRelocIn[edge]?.let { mapOf(edge to it) } ?: emptyMap(),
+        leafRelocOut = leafRelocOut[edge]?.let { mapOf(edge to it) } ?: emptyMap(),
+        rollupRelocIn = rollupRelocIn[edge]?.let { mapOf(edge to it) } ?: emptyMap(),
+        rollupRelocOut = rollupRelocOut[edge]?.let { mapOf(edge to it) } ?: emptyMap(),
     )
 
     /**
@@ -395,6 +481,141 @@ public class EntitlementLedger private constructor(
      * `internal` — control-plane support.
      */
     internal fun drainWitnessFor(edge: AttachmentId): EntitlementLedger = drainWitness(edge)
+
+    /**
+     * Re-home the entitlement **stranded on RETIRED inbound edges** of [child] onto [child]'s single
+     * live inbound edge — the conserving reconciliation for the advisory-retire race of design §5.4
+     * (reparent) / §9 #3 (recovery), issue #1665. Returns the patch, or `null` when the strand **cannot
+     * be conservingly cleared** on this view (see the carve-outs below) — a deliberate *fail-closed*: a
+     * refusal leaves the pre-existing conflicts standing (safe, recoverable), never a silent
+     * conservation break.
+     *
+     * ## The strand, and why the child needs its FULL net inflow re-homed
+     *
+     * When a gossip-lagged peer retires an edge whose `delegate` it had not yet merged, the edge is
+     * RETIRED with `outstanding != 0` and its budget is stranded on a generation no longer on the live
+     * lineage (`GovernedHeddleNode.retire`). Once [child] is legally reparented onto a fresh inbound
+     * edge with `issued = 0`, [holdings] at [child] derive **permanently negative** — a persistent
+     * [LedgerConflict.PersistentNegativeHoldings] / [LedgerConflict.PerEdgeSafety] with zero real
+     * overspend. `release` refuses a retired edge, so the data plane cannot recover it.
+     *
+     * [child]'s holdings under the old edge `s` were credited by its **full net inflow**
+     * `netInflow(s)[r] = issued(s)[r] − returned(s)[r]` — *not* its `outstanding` (which nets out
+     * `spent(s)`). So making [child] whole means re-homing `netInflow(s)[r]`.
+     *
+     * ## Release-up-then-redelegate (conserving by construction)
+     *
+     * For each stranded retired inbound edge `s`, and each replica `r`, the patch:
+     *  - **releases up `s`** — bumps `returned(s)[r]` to `effIssued(s)[r]`, driving `netInflow(s)[r] → 0`
+     *    and `outstanding(s) → 0` (clearing its [LedgerConflict.ClosureViolation]); and
+     *  - **re-delegates down the live edge** — bumps `issuedRelocIn(liveEdge)[r]` by the same
+     *    `netInflow(s)[r]`, restoring [child]'s inbound credit.
+     *
+     * Both bumps move the **same** already-minted units, so `mintedTotal` is unchanged and the global
+     * conservation identity (`minted = Σ holdings + Σ leafSpent`) is *restored*. Counter targets are
+     * shipped at their **absolute** values, so duplicate delivery is absorbed idempotently by the
+     * `GCounter` max-join.
+     *
+     * ## Why the re-delegation rides `issuedRelocIn`, not base `issued` (#1691, design §6.3)
+     *
+     * The live edge is *live*: replica `r` writes `issued(liveEdge)[r]` concurrently through an
+     * ordinary [delegate]. Writing an absolute target into that slot puts **two independent writers
+     * on one max-joined slot**, and the join silently keeps the larger — erasing either the concurrent
+     * delegation or the whole re-home. Nothing surfaces: conservation still balances and every edge
+     * still passes per-edge safety, so the units simply end up at the wrong node. Routing the credit
+     * through the control-plane-owned `issuedRelocIn` family removes the contended slot altogether,
+     * so both writes survive and `effIssued(liveEdge)[r] = delegated + re-homed`. The retired edge's
+     * `returned` slot stays a base write: `s` is RETIRED, so no data-plane mutator will ever author it
+     * again ([release] refuses a non-live inbound edge).
+     *
+     * **Residual — the magnitude is still read from this view.** Two re-homes onto the *same* live edge
+     * must each be computed from a view that has merged the previous one, or the second absolute
+     * under-shoots and max-join keeps the first. That is the same unfenced-magnitude residual described
+     * below, narrowed: the relocation slot has exactly one writer (the log-serialized control plane),
+     * where the base slot had two.
+     *
+     * ## Carve-outs — cases this fails closed on (issue #1665 review; the two representation walls)
+     *
+     *  - **Through-service (`spent(s) != 0`) — still refused.** If service was spent *through* `s`
+     *    before the reparent (`leafSpent(s)`/`rollupSpent(s) > 0`), releasing the full net inflow up
+     *    `s` would need `returned(s) = effIssued(s)`, which **violates per-edge safety** on `s`
+     *    (`spent + returned ≤ issued`) unless the already-charged service is relocated too. The
+     *    `leafReloc`/`rollupReloc` families make that *expressible* — but not yet *safe to compute*:
+     *    the move drains `s` to zero headroom, so a single straggler charge arriving afterwards
+     *    (a captured-path completion can still charge a RETIRED edge) leaves a **permanently
+     *    unclearable** per-edge-safety violation. Making it safe needs a per-peer quiesce fence that
+     *    records, in the log, that every replica has sworn off writing `s` again. That fence is not
+     *    built, so this case **fails closed** — deliberately, and it is the whole reason the
+     *    representation ships ahead of the un-gate.
+     *  - **Transfer-tangle** (a replica left net-negative on `s` by a transfer *at [child]* then a
+     *    release): re-homing faithfully would also have to relocate the transfer rows. Out of scope; refuses.
+     *
+     * ## Not a safety fence — magnitudes are read from THIS (possibly stale) view
+     *
+     * This computes the re-home amounts from `this` ledger. If `this` is a **gossip-lagged** view of
+     * `s`'s counters, the amounts (and even the `spent(s) == 0` carve-out test) are wrong, and committing
+     * them would break conservation on the converged state (issue #1665 review, "phantom supply"). The
+     * caller MUST compute this on a **causally-complete** view of `s`; the governed control plane fences
+     * *leader authority* via `readIndex()` (§9 #3) but does **not** yet fence data-plane magnitude
+     * freshness — see `GovernedHeddleNode.reconcile`.
+     */
+    public fun reconcileStranded(child: GroupId): Patch<EntitlementLedger>? {
+        val live = liveInboundEdges(child)
+        if (live.size != 1) return null
+        val liveEdge = live.single()
+        val returnedTargets = HashMap<AttachmentId, GCounter>()
+        val rehomedByReplica = HashMap<ReplicaId, Long>()
+        for (s in retiredInboundEdges(child)) {
+            val summary = edge(s) ?: continue
+            if (summary.outstanding <= 0L) continue
+            // Carve-out: through-service on the retired edge cannot be re-homed conservingly (grow-only
+            // rollupSpent can't be relocated; releasing the full net inflow would break per-edge safety).
+            if (summary.spent != 0L) return null
+            val perReplica = ArrayList<Pair<ReplicaId, Long>>()
+            var positiveSum = 0L
+            for (r in replicasOnEdge(s)) {
+                val net = netInflow(s, r) // == the per-replica strand, since spent(s) == 0 here
+                if (net > 0L) {
+                    perReplica += r to net
+                    positiveSum = checkedAdd(positiveSum, net)
+                }
+            }
+            // Carve-out: a replica left net-negative on s by a transfer-at-child (positiveSum overshoots
+            // the edge's outstanding). Re-homing would have to move transfer rows too — out of scope.
+            if (positiveSum != summary.outstanding) return null
+            for ((r, net) in perReplica) {
+                // returned(s)[r] → effIssued(s)[r]: drains s (netInflow → 0), keeps per-edge safety
+                // (spent == 0 here). A base write, legal because s is RETIRED — no data-plane mutator
+                // can author it again, so the control plane is its only writer.
+                val returnedTarget = checkedAdd(slot(returned, s, r), net)
+                returnedTargets[s] = returnedTargets[s]?.piece(GCounter.of(r to returnedTarget)) ?: GCounter.of(r to returnedTarget)
+                rehomedByReplica[r] = checkedAdd(rehomedByReplica[r] ?: 0L, net)
+            }
+        }
+        if (rehomedByReplica.isEmpty()) return null
+        // The re-delegation lands on the control-plane-owned relocation family, NEVER on the live
+        // edge's contended base `issued` slot (#1691 / design §6.3 — see the KDoc above).
+        var relocTarget = GCounter.ZERO
+        for ((r, add) in rehomedByReplica) {
+            relocTarget = relocTarget.piece(GCounter.of(r to checkedAdd(slot(issuedRelocIn, liveEdge, r), add)))
+        }
+        return Patch(of(returned = returnedTargets, issuedRelocIn = mapOf(liveEdge to relocTarget)))
+    }
+
+    /** The replicas that authored any counter slot on [edge] — base or relocation. */
+    private fun replicasOnEdge(edge: AttachmentId): Set<ReplicaId> {
+        val out = HashSet<ReplicaId>()
+        for (counters in allEdgeCounters()) {
+            counters[edge]?.let { out += it.replicas() }
+        }
+        return out
+    }
+
+    /** Every per-edge [GCounter] family — base and relocation — in one list. */
+    private fun allEdgeCounters(): List<Map<AttachmentId, GCounter>> = listOf(
+        issued, returned, leafSpent, rollupSpent,
+        issuedRelocIn, leafRelocIn, leafRelocOut, rollupRelocIn, rollupRelocOut,
+    )
 
     /**
      * Introduce root supply: credit [holder] with [amount] units under [mintId].
@@ -612,8 +833,8 @@ public class EntitlementLedger private constructor(
      * delivered **multi-hop transfer-funded** charge may transiently list a false
      * conflict that self-heals on anti-entropy. The checks:
      *
-     *  - [LedgerConflict.PerEdgeSafety] — sum-wise `leafSpent + rollupSpent + returned
-     *    > issued` on an edge's aggregate values.
+     *  - [LedgerConflict.PerEdgeSafety] — sum-wise `effLeafSpent + effRollupSpent + returned
+     *    > effIssued` on an edge's aggregate **effective** values (base ± relocation).
      *  - [LedgerConflict.PersistentNegativeHoldings] — a `(group, replica)` with
      *    negative derived [holdings]: the real overspend net. Quarantined lineages
      *    (holdings `0`) are excluded — they surface as [LedgerConflict.RecordDivergence].
@@ -630,10 +851,10 @@ public class EntitlementLedger private constructor(
         val conflicts = ArrayList<LedgerConflict>()
         for (e in allEdges()) {
             val charged = checkedAdd(
-                checkedAdd(counterValue(leafSpent, e), counterValue(rollupSpent, e)),
+                checkedAdd(effLeafSpentTotal(e), effRollupSpentTotal(e)),
                 counterValue(returned, e),
             )
-            if (charged > counterValue(issued, e)) conflicts += LedgerConflict.PerEdgeSafety(e)
+            if (charged > effIssuedTotal(e)) conflicts += LedgerConflict.PerEdgeSafety(e)
             // A retired edge must have drained before retiring; non-zero outstanding
             // means entitlement crossed a generation already retired elsewhere.
             if (lifecycleOf(e) == Lifecycle.RETIRED) {
@@ -673,7 +894,7 @@ public class EntitlementLedger private constructor(
 
     /** Every edge id mentioned by any component. */
     internal fun allEdges(): Set<AttachmentId> =
-        records.keys + issued.keys + returned.keys + leafSpent.keys + rollupSpent.keys + lifecycle.keys
+        records.keys + lifecycle.keys + allEdgeCounters().flatMapTo(HashSet()) { it.keys }
 
     /**
      * The **live inbound** edges of [child] — every non-divergent edge whose record targets [child]
@@ -693,6 +914,39 @@ public class EntitlementLedger private constructor(
             }
             .sorted()
 
+    /**
+     * The **RETIRED inbound** edges of [child] — every non-divergent edge whose record targets [child]
+     * and whose lifecycle is [Lifecycle.RETIRED]. These are the edges a raced advisory-retire may have
+     * stranded budget on ([reconcileStranded]); the **H5 control plane** reads it on its log-pure
+     * projection to gate a reconciliation witness (§9 #3, §5.4). `internal` — control-plane + test support.
+     */
+    internal fun retiredInboundEdges(child: GroupId): List<AttachmentId> =
+        allEdges().filter { recordOf(it)?.child == child && lifecycleOf(it) == Lifecycle.RETIRED }.sorted()
+
+    /** The edge ids carrying a base `issued` slot — the control plane's reconciliation witness-shape gate. */
+    internal fun issuedEdges(): Set<AttachmentId> = issued.keys
+
+    /** The edge ids carrying a `returned` slot — the control plane's reconciliation witness-shape gate. */
+    internal fun returnedEdges(): Set<AttachmentId> = returned.keys
+
+    /** The edge ids carrying an `issuedRelocIn` slot — where a re-home's credit legally lands. */
+    internal fun issuedRelocInEdges(): Set<AttachmentId> = issuedRelocIn.keys
+
+    /**
+     * True when this ledger carries **only** `returned` slots and `issuedRelocIn` slots — no topology,
+     * supply, base issuance, spend, spend-relocation, or transfer components. The control plane asserts
+     * this of a governed reconciliation witness before publishing it, so a malformed witness can never
+     * (a) smuggle new minted supply or topology past the log-pure gate (design §9 #3), (b) fabricate a
+     * value on a **live** edge's contended base `issued` slot (#1691 / relocation design §6.3 — the
+     * silent max-join erasure), or (c) relocate already-charged **spend**, which stays gated until the
+     * per-peer quiesce fence ships. `internal` — control-plane support.
+     */
+    internal fun carriesOnlyRehomeSlots(): Boolean =
+        records.isEmpty() && minted.isEmpty() && issued.isEmpty() && leafSpent.isEmpty() &&
+            rollupSpent.isEmpty() && transfers.isEmpty() && lifecycle.isEmpty() &&
+            leafRelocIn.isEmpty() && leafRelocOut.isEmpty() &&
+            rollupRelocIn.isEmpty() && rollupRelocOut.isEmpty()
+
     /** Every group named as a parent or child by any (singleton or divergent) record. */
     internal fun allGroups(): Set<GroupId> =
         records.values.flatten().flatMapTo(HashSet()) { listOf(it.parent, it.child) }
@@ -701,7 +955,7 @@ public class EntitlementLedger private constructor(
     internal fun allReplicas(): Set<ReplicaId> {
         val out = HashSet<ReplicaId>()
         for (m in minted.values) out += m.holder
-        for (map in listOf(issued, returned, leafSpent, rollupSpent)) {
+        for (map in allEdgeCounters()) {
             for (counter in map.values) out += counter.replicas()
         }
         for (rows in transfers.values) {
@@ -713,8 +967,36 @@ public class EntitlementLedger private constructor(
     /** Total minted supply. */
     internal fun mintedTotal(): Long = minted.values.fold(0L) { acc, m -> checkedAdd(acc, m.amount) }
 
-    /** Total service charged where an edge is a path's final edge (the conservation term). */
-    internal fun leafSpentTotal(): Long = leafSpent.values.fold(0L) { acc, c -> checkedAdd(acc, c.value) }
+    /**
+     * Total service charged where an edge is a path's final edge (the conservation term), at
+     * **effective** values — a relocation moves leaf spend between edges in equal and opposite
+     * amounts, so this sum is invariant under any move.
+     */
+    internal fun leafSpentTotal(): Long =
+        allEdges().fold(0L) { acc, e -> checkedAdd(acc, effLeafSpentTotal(e)) }
+
+    /** [r]'s effective issuance across [edge] — `issued + issuedRelocIn`. `internal`, test support. */
+    internal fun effectiveIssued(edge: AttachmentId, r: ReplicaId): Long = effIssuedSlot(edge, r)
+
+    /**
+     * The raw **stored** slot value of one counter [family] at `(edge, r)`. Every family is grow-only,
+     * so this value never falls under [piece] — the property the lattice rests on, and the one the
+     * derived effective reads deliberately do not have. `internal`, test support.
+     */
+    internal fun storedSlot(family: CounterFamily, edge: AttachmentId, r: ReplicaId): Long =
+        slot(counterMap(family), edge, r)
+
+    private fun counterMap(family: CounterFamily): Map<AttachmentId, GCounter> = when (family) {
+        CounterFamily.ISSUED -> issued
+        CounterFamily.RETURNED -> returned
+        CounterFamily.LEAF_SPENT -> leafSpent
+        CounterFamily.ROLLUP_SPENT -> rollupSpent
+        CounterFamily.ISSUED_RELOC_IN -> issuedRelocIn
+        CounterFamily.LEAF_RELOC_IN -> leafRelocIn
+        CounterFamily.LEAF_RELOC_OUT -> leafRelocOut
+        CounterFamily.ROLLUP_RELOC_IN -> rollupRelocIn
+        CounterFamily.ROLLUP_RELOC_OUT -> rollupRelocOut
+    }
 
     /**
      * The sub-ledger restricted to [id]'s own components (plus its path's transfer
@@ -729,6 +1011,11 @@ public class EntitlementLedger private constructor(
         rollupSpent = rollupSpent[id]?.let { mapOf(id to it) } ?: emptyMap(),
         transfers = transfers[PathKey.of(id)]?.let { mapOf(PathKey.of(id) to it) } ?: emptyMap(),
         lifecycle = lifecycle[id]?.let { mapOf(id to it) } ?: emptyMap(),
+        issuedRelocIn = issuedRelocIn[id]?.let { mapOf(id to it) } ?: emptyMap(),
+        leafRelocIn = leafRelocIn[id]?.let { mapOf(id to it) } ?: emptyMap(),
+        leafRelocOut = leafRelocOut[id]?.let { mapOf(id to it) } ?: emptyMap(),
+        rollupRelocIn = rollupRelocIn[id]?.let { mapOf(id to it) } ?: emptyMap(),
+        rollupRelocOut = rollupRelocOut[id]?.let { mapOf(id to it) } ?: emptyMap(),
     )
 
     override fun equals(other: Any?): Boolean =
@@ -740,7 +1027,12 @@ public class EntitlementLedger private constructor(
             leafSpent == other.leafSpent &&
             rollupSpent == other.rollupSpent &&
             transfers == other.transfers &&
-            lifecycle == other.lifecycle
+            lifecycle == other.lifecycle &&
+            issuedRelocIn == other.issuedRelocIn &&
+            leafRelocIn == other.leafRelocIn &&
+            leafRelocOut == other.leafRelocOut &&
+            rollupRelocIn == other.rollupRelocIn &&
+            rollupRelocOut == other.rollupRelocOut
 
     override fun hashCode(): Int {
         var h = records.hashCode()
@@ -751,13 +1043,20 @@ public class EntitlementLedger private constructor(
         h = 31 * h + rollupSpent.hashCode()
         h = 31 * h + transfers.hashCode()
         h = 31 * h + lifecycle.hashCode()
+        h = 31 * h + issuedRelocIn.hashCode()
+        h = 31 * h + leafRelocIn.hashCode()
+        h = 31 * h + leafRelocOut.hashCode()
+        h = 31 * h + rollupRelocIn.hashCode()
+        h = 31 * h + rollupRelocOut.hashCode()
         return h
     }
 
     override fun toString(): String =
         "EntitlementLedger(records=$records, minted=$minted, issued=$issued, " +
             "returned=$returned, leafSpent=$leafSpent, rollupSpent=$rollupSpent, " +
-            "transfers=$transfers, lifecycle=$lifecycle)"
+            "transfers=$transfers, lifecycle=$lifecycle, issuedRelocIn=$issuedRelocIn, " +
+            "leafRelocIn=$leafRelocIn, leafRelocOut=$leafRelocOut, " +
+            "rollupRelocIn=$rollupRelocIn, rollupRelocOut=$rollupRelocOut)"
 
     public companion object {
         /** The empty ledger: no topology, no supply, no accounting. The lattice bottom. */
@@ -808,9 +1107,34 @@ public class EntitlementLedger private constructor(
             rollupSpent: Map<AttachmentId, GCounter> = emptyMap(),
             transfers: Map<PathKey, Map<ReplicaId, GCounter>> = emptyMap(),
             lifecycle: Map<AttachmentId, Lifecycle> = emptyMap(),
+            issuedRelocIn: Map<AttachmentId, GCounter> = emptyMap(),
+            leafRelocIn: Map<AttachmentId, GCounter> = emptyMap(),
+            leafRelocOut: Map<AttachmentId, GCounter> = emptyMap(),
+            rollupRelocIn: Map<AttachmentId, GCounter> = emptyMap(),
+            rollupRelocOut: Map<AttachmentId, GCounter> = emptyMap(),
         ): EntitlementLedger =
-            EntitlementLedger(records, minted, issued, returned, leafSpent, rollupSpent, transfers, lifecycle)
+            EntitlementLedger(
+                records, minted, issued, returned, leafSpent, rollupSpent, transfers, lifecycle,
+                issuedRelocIn, leafRelocIn, leafRelocOut, rollupRelocIn, rollupRelocOut,
+            )
     }
+}
+
+/**
+ * The nine per-edge [GCounter] families of [EntitlementLedger] — four base, five relocation.
+ * Names one family for [EntitlementLedger.storedSlot], whose contract is that **every** family is
+ * grow-only: no `piece` on any state may lower a stored slot. `internal` — test support.
+ */
+internal enum class CounterFamily {
+    ISSUED,
+    RETURNED,
+    LEAF_SPENT,
+    ROLLUP_SPENT,
+    ISSUED_RELOC_IN,
+    LEAF_RELOC_IN,
+    LEAF_RELOC_OUT,
+    ROLLUP_RELOC_IN,
+    ROLLUP_RELOC_OUT,
 }
 
 private fun counterValue(counters: Map<AttachmentId, GCounter>, id: AttachmentId): Long =

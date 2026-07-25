@@ -5,6 +5,7 @@ import us.tractat.kuilt.crdt.ReplicaId
 import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 
 /**
  * The standard zoo lattice-law property suite for [EntitlementLedger]: [piece] is
@@ -57,6 +58,13 @@ class EntitlementLedgerLawsTest {
             transfers = pathKeys.filter { rnd.nextBoolean() }.associateWith {
                 replicas.filter { rnd.nextBoolean() }.associateWith { randomGCounter(rnd) }
             },
+            // The relocation families (#1691) are ordinary GCounter maps, so the laws must hold
+            // over them by the same product-of-lattices argument — parameterise them in too.
+            issuedRelocIn = randomEdgeCounters(rnd),
+            leafRelocIn = randomEdgeCounters(rnd),
+            leafRelocOut = randomEdgeCounters(rnd),
+            rollupRelocIn = randomEdgeCounters(rnd),
+            rollupRelocOut = randomEdgeCounters(rnd),
         )
 
     @Test
@@ -101,6 +109,38 @@ class EntitlementLedgerLawsTest {
                 val shuffled = states.shuffled(rnd).reduce { acc, s -> acc.piece(s) }
                 assertEquals(canonical, shuffled)
             }
+        }
+    }
+
+    /**
+     * Monotonicity, the property the whole representation rests on: **no** stored counter slot
+     * — base or relocation — ever falls under [EntitlementLedger.piece]. A net decrease is
+     * expressed only by a second grow-only counter cancelling the first (#1691), never by a
+     * decrement, so the merge stays a join and duplicate/reordered delivery stays absorbing.
+     */
+    @Test
+    fun pieceNeverLowersAStoredCounterSlotInAnyFamily() {
+        val rnd = Random(0x30A7)
+        repeat(ITERATIONS) {
+            val a = randomLedger(rnd)
+            val b = randomLedger(rnd)
+            val merged = a.piece(b)
+            for (family in CounterFamily.entries) {
+                for (e in edges) {
+                    for (r in replicas) {
+                        val before = a.storedSlot(family, e, r)
+                        val after = merged.storedSlot(family, e, r)
+                        assertTrue(after >= before, "$family slot ($e, $r) fell $before → $after under piece")
+                        assertEquals(
+                            maxOf(before, b.storedSlot(family, e, r)),
+                            after,
+                            "$family slot ($e, $r) is not the per-slot max of the two operands",
+                        )
+                    }
+                }
+            }
+            // The lattice-order statement of the same fact: a ⊑ a ⊔ b.
+            assertEquals(merged, merged.piece(a), "a is absorbed by a.piece(b) — a ⊑ a ⊔ b")
         }
     }
 
