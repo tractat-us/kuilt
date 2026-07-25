@@ -61,3 +61,9 @@ self-contained JVM test (`@Test`), compiled from `examples/src/test/kotlin/`.
 | `ExactlyOnceHappyPathTest.kt` | M=1 exactly-once deduplication — a retry with the same `requestId` coalesces to the original committed entry |
 | `NoDoubleApplyFailoverTest.kt` | Exactly-once under mid-flight leader change + entry-server death — round-robin retry, `ClientSessionTable` dedup |
 | `ResumeTokenFailoverTest.kt` | `ResumeToken` behaviour under real relay change — documents degradation to fresh-join when the new relay has no window |
+
+## Warp — federated learning
+
+| File | What it teaches |
+|------|-----------------|
+| `warp/FederatedLearningExampleTest.kt` | End-to-end federated learning on the substrate: devices fetch a wasm training kernel by content address, and each device pins its training step **to itself** (`WarpNode.enqueueLocal`) so it runs only on that device's own private batch — captured in a node-local op, never serialized. Only the `(model, lr)` header and the resulting model update travel; the updates converge to one shared model through the replicated results board. The data never moves. The default test runs in-process under the `raftSimTest` virtual-time cluster; add `-Pwarp.fl.ws=true` to run the same round over a real Ktor WebSocket fabric (reader-run — it binds a localhost port, so CI skips it). Both print the convergence trajectory. |

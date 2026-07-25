@@ -13,6 +13,9 @@ dependencies {
     testImplementation(project(":kuilt-session"))
     testImplementation(project(":kuilt-cluster"))
     testImplementation(project(":kuilt-gossip"))
+    testImplementation(project(":kuilt-warp"))
+    testImplementation(project(":kuilt-warp-ml"))
+    testImplementation(project(":kuilt-warp-runtime"))
     testImplementation(project(":kuilt-websocket"))
     testImplementation(project(":kuilt-test"))
     testImplementation(libs.kotlinx.coroutines.test)
@@ -22,9 +25,11 @@ dependencies {
     testImplementation(libs.ktor.serverWebsockets)
     testImplementation(libs.ktor.serverNetty)
     testImplementation(libs.ktor.client.websockets)
+    testImplementation(libs.ktor.client.okhttp)
     testRuntimeOnly(libs.logback)
 }
 
 tasks.test {
     useJUnitPlatform()
+    systemProperty("warp.fl.ws", (project.findProperty("warp.fl.ws") ?: "false").toString())
 }

@@ -13,6 +13,9 @@ kotlin {
             implementation(libs.kotlinx.coroutines.test)
         }
         jvmTest.dependencies {
+            // FedAvgWarpSimTest drives three WarpNodes over a raftSimTest cluster (F4 E2E),
+            // so it needs the shared Raft simulation harness (raftSimTest).
+            implementation(project(":kuilt-raft-test"))
             runtimeOnly(libs.logback)
         }
         androidUnitTest.dependencies {
