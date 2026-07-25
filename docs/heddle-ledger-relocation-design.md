@@ -747,3 +747,35 @@ change what the fence has to do.
    cannot fire in slice 1 (nothing writes spend relocation) and a new `LedgerConflict`
    variant is slice-3 scope — but §6.4's observer-completeness work must add it, or the
    condition §5.3 describes will be unreportable.
+
+## 13. Implementation feedback from slice 2 (#1692 / PR #1698)
+
+Slice 2 landed the `Enroll`/`Depart` log-known roster. Four gaps in §6.2 surfaced. The
+first two are safety-relevant and **slice 3 must close the second one**.
+
+1. **§6.2 never says who may enroll or depart.** It names the command pair and stops.
+   Slice 2 inferred the rule from §6.1's promise argument and it should be stated here:
+   **`Depart` is self-service** — applied iff the committed `ControlEnvelope.proposer` *is*
+   the departing replica — because departing *shrinks* the ack set, which asserts "I will
+   never author another slot," a promise about the future only the promiser can make.
+   **`Enroll` is open to any proposer**, because it only *enlarges* the set: a mistaken
+   enroll costs a barrier's liveness, never its safety. That asymmetry is the roster's
+   load-bearing safety property and belongs in the normative text.
+
+2. **An unenrolled writer defeats the fence.** §6.2 quantifies the barrier over the enrolled
+   set, but nothing makes enrollment a *precondition* for authoring a counter slot. A peer
+   that spends without enrolling is a writer no barrier ever waits for — which reintroduces
+   finding 2 through a side door. Slice 2 could only document this as an obligation on
+   `enroll`; **only slice 3's boot gate can make it structural, and slice 3 must.**
+
+3. **A wrongly-enrolled phantom wedges every future fence, permanently.** Because `Depart`
+   is self-service, a replica that is enrolled but never existed (or is gone for good)
+   cannot be removed, and every subsequent barrier waits on it forever. Liveness, not
+   safety, and the same class as §6.5 residual 1 — but §6.5 does not name it. It is the
+   direct cost of the §6.1 asymmetry in item 1, and the exit is the unshipped
+   `RevocationSeam`.
+
+4. **`enrolledAt` needs a companion applied-index**, unmentioned in §6.2. Without one a peer
+   can silently answer the barrier quantifier from a log prefix it has not applied — a short
+   fold that looks like an answer. `EnrolledRoster` carries `appliedIndex` and throws rather
+   than answering beyond it.
