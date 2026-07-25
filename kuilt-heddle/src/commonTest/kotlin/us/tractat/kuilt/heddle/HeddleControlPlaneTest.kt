@@ -518,6 +518,45 @@ class HeddleControlPlaneTest {
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
+    // #1691 (slice 1 of #1665, relocation design §6.3): the apply gate refuses ANY
+    // reconciliation witness that writes a slot the control plane does not own — a base
+    // `issued` slot on the LIVE edge (finding 1's contended slot), or a spend-relocation
+    // counter (through-service relocation, which stays gated until the §6 fence ships).
+    // Structural, not advisory: a buggy or hostile proposer cannot smuggle either past it.
+    // ═══════════════════════════════════════════════════════════════════════════
+    @Test
+    fun reconcileWitnessTouchingAContendedOrUnfencedSlotIsRefusedAtApply() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        val fake = FakeRaftNode(selfId = NodeId("solo"), initialRole = RaftRole.Leader)
+        val sink = RecordingSink()
+        val plane = HeddleControlPlane(
+            raft = fake, self = ReplicaId("solo"), scope = backgroundScope,
+            sink = sink, initial = EntitlementLedger.ZERO, incarnation = "boot-reloc-gate",
+        )
+        val child = GroupId("g")
+        val p3 = ReplicaId("p3")
+        val old = AttachmentId("eOld") // root → g, retired
+        val live = AttachmentId("eNew") // root → g, the reparent generation
+
+        assertIs<ControlOutcome.Applied>(plane.submit(ControlCommand.Prepare(AttachmentRecord(old, root, child, Weight.ONE, 0L))))
+        assertIs<ControlOutcome.Applied>(plane.submit(ControlCommand.Activate(old)))
+        assertIs<ControlOutcome.Applied>(plane.submit(ControlCommand.Close(old)))
+        assertIs<ControlOutcome.Applied>(plane.submit(ControlCommand.Retire(old, witness = null)))
+        assertIs<ControlOutcome.Applied>(plane.submit(ControlCommand.Prepare(AttachmentRecord(live, root, child, Weight.ONE, 0L))))
+        assertIs<ControlOutcome.Applied>(plane.submit(ControlCommand.Activate(live)))
+
+        // Finding 1's shape: a base `issued(live)[p3]` absolute, on a slot p3's own `delegate`
+        // writes concurrently. Under per-slot max-join one of the two writers is silently erased.
+        val contendedWitness = EntitlementLedger.of(
+            returned = mapOf(old to GCounter.of(p3 to 10L)),
+            issued = mapOf(live to GCounter.of(p3 to 10L)),
+        )
+        val contended = plane.submit(ControlCommand.Reconcile(child, live, contendedWitness))
+        assertIs<ControlOutcome.Conflict>(contended)
+        assertIs<ControlConflict.Refused>(contended.conflict)
+        assertTrue(sink.snapshot().issuedEdges().isEmpty(), "a refused witness must publish nothing")
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
     // #1665 (§9 #3): reconcile is fenced by readIndex() — a deposed/non-leader proposer
     // is refused BEFORE it computes a witness from its (unfenced) data-plane view, so a
     // partitioned ex-leader can never drive recovery from stale authority.
