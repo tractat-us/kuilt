@@ -212,8 +212,11 @@ public class GovernedHeddleNode internal constructor(
      *  1. the §9 #3 [readIndex()][HeddleControlPlane.fenceReadIndex] leader-authority fence — the
      *     same one [reconcile] uses; a deposed or partitioned proposer is refused; then
      *  2. this peer's **applied prefix** must have caught up to the fenced index. `applyEntry`
-     *     advances it for every committed entry, decodable or not, so it genuinely tracks the log
-     *     prefix; behind ⇒ the empty view is *stale*, not a first generation ⇒ refused.
+     *     advances it for every entry the log *delivers* — decodable or not — so within the
+     *     application-visible stream it tracks the prefix faithfully; behind ⇒ the empty view is
+     *     *stale*, not a first generation ⇒ refused. (It does **not** see entries Raft withholds from
+     *     [RaftNode.committedFrom]; that is the second residual below, and it is why this gate can
+     *     refuse conservatively rather than wrongly admit.)
      *
      * Both are [ControlConflict.Refused] at [ControlOutcome.NOT_COMMITTED] — fail-closed, nothing
      * is written, and the caller may retry. A **non-null** front is used as read: it is fenced by

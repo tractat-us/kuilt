@@ -396,9 +396,15 @@ internal class HeddleControlPlane(
             Cbor.decodeFromByteArray(ControlEnvelope.serializer(), entry.command)
         }.getOrNull()
         lock.withLock {
-            // Advance the roster's applied index for EVERY committed entry, decodable or not — it is
-            // the prefix marker `enrolledAt` answers against, so it must track the log, not just the
-            // roster acts. A non-heddle entry (e.g. a config change) contributes only the index.
+            // Advance the roster's applied index for every DELIVERED entry, decodable or not — it is the
+            // prefix marker `enrolledAt` answers against, so it must track the delivered log, not just
+            // the roster acts. An undecodable entry contributes only its index.
+            //
+            // It therefore tracks the *application-visible* prefix, NOT Raft's commit index: the §5.4.2
+            // election no-op and configuration entries advance commitIndex but are deliberately withheld
+            // from `committedFrom`, so they never arrive here and this index can sit legitimately below
+            // `readIndex()`. Any caller comparing the two must expect that gap — see
+            // `GovernedHeddleNode.prepareNeutral`, which refuses conservatively because of it.
             roster = roster.advancedTo(entry.index)
             if (envelope == null) return // a non-heddle entry — no outcome, no projection change
             val prior = applied[envelope.requestKey]
