@@ -4,7 +4,7 @@
 
 **Goal:** A joiner whose link blips for less than the host's liveness timeout resumes its room instead of burning its 60 s budget and dying with `HostLost(Refused)`.
 
-**Architecture:** Entirely **joiner-side**, in `JoinerResumeMachine.runReconnect`'s retry loop. The joiner already receives an unambiguous signal — a `ResumeWindowNotYetOpen` reject means *no window has ever been opened* (an open window returns `Success`, an expired one `WindowClosed`). Today that is retried until the window budget elapses. This plan makes the joiner conclude, after dwelling on that reject for longer than the host's own detector timeout, that **the host never partitioned it**, and complete the episode as a local no-op resume: restore the host detector, emit `Resumed`, stay live. No wire change, no host change, no new config knob.
+**Architecture:** Entirely **joiner-side**, in `JoinerResumeMachine.runReconnect`'s retry loop. The joiner already receives an unambiguous signal — a `ResumeWindowNotYetOpen` reject means *no window has ever been opened* (an open window returns `Success`, an expired one `WindowClosed`). Today that is retried until the window budget elapses. This plan makes the joiner conclude, after dwelling on that reject for longer than the host's own detector timeout, that **the host never partitioned it**, and complete the episode as a local no-op resume: restore the host detector, close the arc with `Recovered(hostId)` (see the Amendment below — the original plan said `Resumed`, which the success branch does not in fact emit), stay live. No wire change, no new config knob; one small `SeamRoom` callback, added by the Amendment.
 
 **Tech Stack:** Kotlin Multiplatform, kotlinx-coroutines (`StandardTestDispatcher`, virtual time), kotlin-test.
 
@@ -35,11 +35,76 @@ Verified against `origin/main` on 2026-07-26:
 
 ---
 
+## AMENDMENT 2026-07-26 — the episode must close itself (read before Task 2)
+
+Verified against `origin/main` @ `8717f823` while designing #1712 Track A. **The plan as originally
+written does not emit anything on the no-op path, contradicting its own Task 2 Step 4 expectation.**
+
+`JoinerResumeMachine`'s success branch does **not** emit `Resumed`. Its own KDoc says so
+(`JoinerResumeMachine.kt:284`): *"On `ResumeResult.Success` the room stays live (its ResumeAck
+handler already emitted `Resumed`)."* The `if (ok)` block (`405-416`) only clears the guard and calls
+`restoreHostDetector`. Both the `Resumed` emission **and** `updateMemberLiveness(hostId, Connected)`
+live in `SeamRoom.handleResumeAck` (`1224-1234`).
+
+The no-op path sets `ok = true` **precisely when no `ResumeAck` will ever arrive**, so
+`handleResumeAck` never runs and the episode closes silently — leaving the `Partitioned(hostId)` +
+`WindowOpened(hostId)` arc this machine already emitted permanently open.
+
+### What the no-op branch must do
+
+Add a `JoinerResumeHost` callback — `onNoOpResume(hostId: PeerId, at: Instant)` — invoked from the
+`if (ok)` block when the episode completed via the dwell (not via a real `ResumeAck`). `SeamRoom`
+implements it as the two things `handleResumeAck` does:
+
+1. `updateMemberLiveness(hostId, Liveness.Connected)`
+2. emit the closing edge
+
+### Emit `Recovered(hostId)`, not `Resumed(selfId)` — changed from the original plan
+
+`handleResumeAck` emits `MembershipEvent.Resumed(**selfId**)` — naming self, which is **not in
+`roster`** (`Room.roster` excludes this peer). An edge-keying consumer therefore cannot match it to
+the `Partitioned(hostId)` that opened the arc. Three reasons the no-op path should close with
+`Recovered(hostId)` instead:
+
+- **It names the right peer.** The arc opened on `hostId`; the closing edge should too.
+- **It is semantically true.** `Recovered` is documented as *"a partitioned peer's link recovered
+  before the window expired"* — exactly what happened. `Resumed` means "resumed via `Room.resume`",
+  and in the no-op case nothing resumed; that is the whole point.
+- **It removes a consumer problem instead of adding one.** #1618's Correction 2 advises *"always
+  `Recovered`, both sides"*. Emitting `Resumed` here would make that guidance stale on the joiner
+  lane and force every consumer to clear on `Recovered` **or** `Resumed`, either alone hanging a real
+  case. Emitting `Recovered` keeps Correction 2 true.
+
+**Update Task 1's test and Task 2 Step 4 accordingly:** expect `Recovered(hostId)`, not `Resumed`.
+
+### Cross-track constraint with #1712 Track A
+
+Track A (`docs/superpowers/specs/2026-07-26-local-fabric-vocabulary-design.md`, branch
+`design/1712-local-fabric`) fixes **D3**: a joiner currently never sets its host's `Member.liveness`,
+so `roster` reports the host `Connected` while `events` said `Partitioned`. After D3,
+`onReconnectStarted` sets `Liveness.Partitioned(since, windowExpiresAt)` on the host — which makes
+step 1 above **mandatory**, not merely tidy: without it the host stays pinned `Partitioned` in the
+joiner's roster forever after a sub-timeout blip.
+
+Whichever track lands first, the other must not regress this. The two touch different lines, so they
+do not conflict textually — only semantically.
+
+### "Identically wired" ≠ "both sides see the same sequence"
+
+This fix is explicitly **joiner-side only — no wire change, no host change**. A sub-timeout blip
+therefore gives the joiner `Partitioned → Recovered` and the host **nothing at all**, because the
+host genuinely never observed a drop. Any consumer instruction to wire both roles identically must
+mean *both roles run the same code against their own stream*, never *both roles observe the same
+events*. The symmetric thing is the **level** (`roster` + `Member.liveness`), not the edge stream.
+
+---
+
 ## File Structure
 
 | File | Responsibility |
 |---|---|
-| `kuilt-session/src/commonMain/kotlin/us/tractat/kuilt/session/partition/JoinerResumeMachine.kt` | **Modify.** The retry loop inside `runReconnect` gains a dwell timer on `ResumeWindowNotYetOpen` and a no-op-resume completion path. |
+| `kuilt-session/src/commonMain/kotlin/us/tractat/kuilt/session/partition/JoinerResumeMachine.kt` | **Modify.** The retry loop inside `runReconnect` gains a dwell timer on `ResumeWindowNotYetOpen` and a no-op-resume completion path; the `if (ok)` block gains the `onNoOpResume` call (see Amendment). |
+| `kuilt-session/src/commonMain/kotlin/us/tractat/kuilt/session/SeamRoom.kt` | **Modify** (added by Amendment). Implement the new `JoinerResumeHost.onNoOpResume` callback: clear the host's liveness and emit `Recovered(hostId)`. |
 | `kuilt-session/src/commonTest/kotlin/us/tractat/kuilt/session/partition/SubTimeoutBlipResumeTest.kt` | **Create.** The #1637 repro plus the two guards that keep it honest. |
 | `kuilt-session/src/commonTest/kotlin/us/tractat/kuilt/session/FastReconnectRaceTest.kt` | **Read only** — the #1572 regression guard. Must keep passing untouched. |
 
@@ -231,8 +296,10 @@ with:
                     // Dwelling past the host's own timeout discriminates them: a window the host
                     // intends to open is open by then. Past that, treat the episode as a no-op
                     // resume — we were never partitioned, so there is nothing to resume onto.
-                    // The success branch below restores the host detector and emits Resumed,
-                    // closing the Partitioned/WindowOpened arc this machine already emitted.
+                    // The success branch below restores the host detector AND calls the new
+                    // host.onNoOpResume(hostId) — see the Amendment: no ResumeAck arrives here, so
+                    // handleResumeAck never runs, and without that call the Partitioned/WindowOpened
+                    // arc this machine already emitted would stay open forever.
                     //
                     // WindowNotYetOpen is unambiguous: an OPEN window returns Success and an
                     // EXPIRED one returns WindowClosed, so this can never mask a real loss.
@@ -264,7 +331,7 @@ import us.tractat.kuilt.session.admit.RejectCode
 - [ ] **Step 4: Run the Task 1 test and verify it passes**
 
 Run: `./gradlew :kuilt-session:jvmTest --tests "*SubTimeoutBlipResumeTest*"`
-Expected: **PASS** — `Resumed` emitted, no `HostLost`.
+Expected: **PASS** — `Recovered(hostId)` emitted (see Amendment; **not** `Resumed`), no `HostLost`.
 
 - [ ] **Step 5: Run the #1572 regression guard**
 
@@ -389,7 +456,7 @@ Body must state: the mechanism (host `lastSeen` refreshed by the joiner's own Re
 
 - [ ] **Step 3: Hardware check before closing the issue**
 
-Do **not** `closes #1637`. Use `part of #1637`. Two phones, per `docs/one-phone-hardware-debugging.md`: airplane-mode the **joiner** (identify it from `lobby.freeze-matched` vs `lobby.freeze-round` in the logs) for **~8 seconds** — under the 15 s host timeout, over the 10 s `wovenPathGrace`. Expect `resume.no-op` in the joiner's log and a `Resumed` membership event, where the current build produces `HostLost(Refused)` at ~60 s. Close by hand once that reproduces.
+Do **not** `closes #1637`. Use `part of #1637`. Two phones, per `docs/one-phone-hardware-debugging.md`: airplane-mode the **joiner** (identify it from `lobby.freeze-matched` vs `lobby.freeze-round` in the logs) for **~8 seconds** — under the 15 s host timeout, over the 10 s `wovenPathGrace`. Expect `resume.no-op` in the joiner's log and a `Recovered(hostId)` membership event (see Amendment), where the current build produces `HostLost(Refused)` at ~60 s. Close by hand once that reproduces.
 
 ---
 
