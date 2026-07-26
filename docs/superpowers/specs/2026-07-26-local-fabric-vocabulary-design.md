@@ -252,14 +252,27 @@ already looks it up there.) `roster` and `events` stop contradicting each other.
 
 ### Why the level settles the `Recovered`-vs-`Resumed` ambiguity
 
-#1618's Correction 2 advises "always `Recovered`, both sides." #1637 makes the joiner's no-op resume
-emit `Resumed` instead, so an edge-keyed consumer must clear on `Recovered` **or** `Resumed` — either
-alone hangs a real case. A consumer reading `Member.liveness` keys on neither.
+#1618's Correction 2 advises "always `Recovered`, both sides." #1637 was going to make the joiner's
+no-op resume emit `Resumed` instead, so an edge-keyed consumer would have to clear on `Recovered`
+**or** `Resumed` — either alone hanging a real case. A consumer reading `Member.liveness` keys on
+neither.
 
-This creates a hard cross-track constraint: because **D3** makes the joiner *set* its host's liveness,
-**#1637's no-op-resume path is obligated to clear it**, whichever terminal event it emits. That
-belongs in #1637's plan (`docs/superpowers/plans/2026-07-26-1637-sub-timeout-blip.md`, branch
-`plan/1637-sub-timeout-blip`).
+There is a sharper reason the edge is unreliable here, found while checking this. On a joiner,
+`handleResumeAck` emits **`MembershipEvent.Resumed(selfId)`** (`SeamRoom.kt:1232`) — naming *self*,
+which is **not in `roster`** (`Room.roster` excludes this peer). So the edge that closes a host
+partition names a peer the consumer cannot look up, while the arc that opened it named `hostId`. The
+level has no such problem: `handleResumeAck` also does `updateMemberLiveness(sender, Liveness.Connected)`
+one line above (`1229`), keyed correctly on the host.
+
+**Cross-track constraint, now recorded in #1637's plan.** Because **D3** makes the joiner *set* its
+host's liveness, #1637's no-op-resume path is obligated to *clear* it. Verifying that turned up a
+defect in that plan independent of Track A: `JoinerResumeMachine`'s success branch does **not** emit
+`Resumed` (its KDoc at `284` says the ResumeAck handler does), and the no-op path is defined by no
+`ResumeAck` arriving — so the episode would close silently, contradicting the plan's own test
+expectation. The plan has been amended (branch `plan/1637-sub-timeout-blip`) to add a
+`JoinerResumeHost.onNoOpResume` callback that clears the liveness and closes the arc with
+**`Recovered(hostId)`** rather than `Resumed(selfId)` — which keeps Correction 2 true instead of
+making it stale, and names a peer that is actually in the roster.
 
 ## What deliberately does not change
 
