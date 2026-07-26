@@ -334,16 +334,18 @@ device has been observed rendering self-attribution rather than peer misattribut
 
 ## Breaking changes
 
-All four are real consumer breaks. Pre-1.0 makes them acceptable, not invisible.
+Three real consumer breaks. Pre-1.0 makes them acceptable, not invisible.
 
 1. `Liveness` enum → sealed interface: every `== Liveness.Partitioned` becomes `is`, including
    `agent-cookbook.md:323` and its `Member.liveness` rows (21, 318).
 2. `Partitioned` / `HostLost` gain a field — positional construction in tests breaks.
 3. `Seam.capability` floor flips to `Unknown` — `SeamConformanceSuite:448` and any consumer reading
    it on a non-nw fabric.
-4. **`kuiltVersionLine` 0.7 → 0.8.** Per the repo's own rule a minor bump is *"reserved for a
-   deliberate breaking-API release and is a human call, not a default."* Flagged here; **not** to be
-   put in a PR without that decision.
+
+**Version line stays `0.7`; this ships on the normal patch cadence** (decided 2026-07-26). Do **not**
+touch `kuiltVersionLine`. The consequence to carry into the release notes: a patch number here still
+requires **source changes** in consumers — the three breaks above are source-incompatible, and the
+patch bump reflects the repo's pre-1.0 cadence, not API stability.
 
 ## Scope boundary
 
