@@ -116,7 +116,10 @@ public object HeddlePolicy {
         }
         if (candidates.isEmpty()) return null
 
-        // 2. Weighted-mean parent virtual time V = Σ w·ev / Σ w — the same front [front] names.
+        // 2. Weighted-mean parent virtual time V = Σ w·ev / Σ w, over the *trimmed* candidate set
+        //    (§7.3 step 2 specifies the candidate set, so this is the correct input here). [front]
+        //    shares this same helper but takes it over the **untrimmed** demanding set, so the two
+        //    values coincide only when no quantum trim binds — they are not one number.
         val v = weightedMeanVirtualTime(candidates.map { it.edge })
 
         // 3. Eligible candidates: ev ≤ V. The minimum ev is always ≤ the mean, so the
@@ -189,8 +192,12 @@ public object HeddlePolicy {
      * time and [PolicyEdge.virtualOffset] is deliberately not replicated, so two peers can and
      * do compute different fronts. That is safe only because creation agrees by **carriage, not
      * derivation**: the finished record travels in the log entry and every peer applies the same
-     * bytes. Never invite two peers to derive the same generation independently — divergent
-     * records under one id do not collapse, and the child starves.
+     * bytes. Which peer's reading wins is then a question of who proposes: the consensus log
+     * orders concurrent proposals first-wins and refuses the loser
+     * ([GovernedHeddleNode.prepareNeutral]), while the ungoverned [HeddleNode.prepare] has no
+     * serializer and leaves the id bound to a divergent record *set*, starving the child. Drive a
+     * generation from one proposer either way — a race between two legitimate fronts is not a seat
+     * anyone can predict.
      *
      * @param edges the parent's immediate children.
      * @param excluding edges that must not count toward the front — the joiner, plus any
@@ -256,8 +263,9 @@ public object HeddlePolicy {
     }
 
     /**
-     * `V = Σ w·ev / Σ w` over [edges] (design §7.3 step 2), exact rational. One definition
-     * shared by [pick]'s step 2 and [front]; [edges] must be non-empty.
+     * `V = Σ w·ev / Σ w` over [edges] (design §7.3 step 2), exact rational. The one arithmetic
+     * shared by [pick]'s step 2 and [front] — over *different* sets, though: [pick] passes its
+     * trimmed candidates, [front] the untrimmed demanding ones. [edges] must be non-empty.
      */
     private fun weightedMeanVirtualTime(edges: List<PolicyEdge>): Rational {
         var weightedSum = Rational.ZERO

@@ -211,7 +211,24 @@ public class HeddleNode internal constructor(
     // see the matching EntitlementLedger mutator's contract).
     // ─────────────────────────────────────────────────────────────────────────────
 
-    /** Introduce a new generation ([EntitlementLedger.prepare]); returns whether it applied. */
+    /**
+     * Introduce a new generation ([EntitlementLedger.prepare]); returns whether it applied.
+     *
+     * **Two peers preparing one id starve the child — on this ungoverned path only.** There is no
+     * serializer here: both peers pass their own local `isKnown` check, the Quilter merges the
+     * results, and the per-id join is a **set union** (§5.2 deliberately refuses last-writer-wins on
+     * a parent pointer), so the id ends up bound to a divergent *set*. [EntitlementLedger.record]
+     * then resolves to `null`, the policy drops the edge as inconsistent input, and the child never
+     * competes again — permanently, on every peer, with no way to re-prepare the id. One proposer
+     * per generation is a hard requirement in static mode, not a habit.
+     *
+     * The governed path does not have this failure mode:
+     * [GovernedHeddleNode.prepare][GovernedHeddleNode.prepare] /
+     * [prepareNeutral][GovernedHeddleNode.prepareNeutral] route through the consensus log, which
+     * orders concurrent proposals **first-wins** and answers the loser with a structured
+     * `Conflict(Refused)` naming the bound id. That is why this mutator is not re-exposed on
+     * [GovernedHeddleNode].
+     */
     public fun prepare(record: AttachmentRecord): Boolean =
         applyIfPresent { it.prepare(record) }
 
@@ -290,8 +307,8 @@ public class HeddleNode internal constructor(
 
     /**
      * [parent]'s **current virtual time** `V` on this peer — the front a new generation under it
-     * must be seated at (design §7.2; issue #1688). `null` when [parent] has no active children
-     * and there is therefore no front to take.
+     * must be seated at (design §7.2; issue #1688). `null` when [parent] has no active children in
+     * *this peer's view* and there is therefore no front to take.
      *
      * Round it into a record with [AttachmentRecord.neutral], which applies the one documented
      * rule `initialVirtualTime = ⌈V⌉`; never seat a runtime generation by hand, and never at a
@@ -301,11 +318,17 @@ public class HeddleNode internal constructor(
      * demand that ages out by *local* receive time and on non-replicated wake clamps, so two
      * peers legitimately read different values at the same instant. That is safe only because a
      * generation is agreed by **carriage**: the finished record travels in the control-plane log
-     * entry and every peer applies the same bytes. Two peers preparing the *same* attachment id
-     * with different values do not merge — the records diverge under one id, [record] resolves to
-     * nothing, and the child is starved permanently. One proposer per generation.
+     * entry and every peer applies the same bytes.
      *
-     * @see GovernedHeddleNode.prepareNeutral for the governed one-act form.
+     * **Unfenceable here, and a `null` is ambiguous.** This node has no control plane, so there is
+     * no `readIndex()` to confirm the view is not merely behind: a `null` may mean [parent] genuinely
+     * has no children *or* that this peer has not yet merged them, and the two are indistinguishable
+     * from the view alone (issue #1713). A static node must therefore not treat `null` as licence to
+     * seat at the origin unless it *knows* the generation is the first. The governed
+     * [GovernedHeddleNode.prepareNeutral] does fence that case.
+     *
+     * @see GovernedHeddleNode.prepareNeutral for the governed, fenced, one-act form.
+     * @see prepare for the divergence hazard of two peers preparing one id on the ungoverned path.
      */
     public fun parentVirtualTime(parent: GroupId): Rational? =
         lock.withLock { HeddlePolicy.front(policyEdges(ledger.value, parent)) }
