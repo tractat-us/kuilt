@@ -159,11 +159,13 @@ class CompositeSeamCloseTornConcurrencyTest {
      * An observed-state snapshot for the harness's on-timeout diagnostic (see #1135), reporting
      * **identities and state, never sizes** — which is what makes a stall name its own cause.
      *
-     * It reports both composites and each ply's underlying mesh membership, because that is exactly the
-     * fork a `peers` stall presents: if a ply's `InMemoryLoom.peers` holds both transport ids, the mesh
-     * formed and the composite never learned the `(plyId, transportId) → compositeId` mapping (a lost
-     * Announce); if it does not, the transport itself never came up. The two need entirely different
-     * investigations and the old snapshot could not tell them apart.
+     * It reports both composites, each ply's underlying mesh membership, and — the load-bearing part —
+     * [peersStrand]. Mesh membership answers whether the transport came up at all: if a ply's
+     * `InMemoryLoom.peers` holds both transport ids the mesh formed, and if it does not the transport
+     * never did. But it cannot say why a *formed* mesh failed to become `peers`, because it reads as
+     * formed whether the `(plyId, transportId) → compositeId` mapping was never learned or was learned
+     * and never published. Only the learned `idMap` beside the published `peers` separates those — see
+     * [CompositeSeam.learnedIdMapOrNull].
      *
      * [closed] must be passed honestly. The previous version appended a hardcoded "(close() was called)"
      * to *every* stage including the pre-close `peers` waits, which is how #1784's first diagnosis went
@@ -178,19 +180,48 @@ class CompositeSeamCloseTornConcurrencyTest {
     ): String = buildString {
         append("iter=").append(iter)
         append(" closeCalled=").append(closed)
-        append(" host{id=").append(host.selfId.value)
+        append("\n  host{id=").append(host.selfId.value)
         append(" state=").append(host.state.value)
         append(" peers=").append(host.peers.value.map { it.value })
         append(" plies=").append(host.plies.value.mapKeys { it.key.value })
-        append("} joiner{id=").append(joiner.selfId.value)
+        append(" ").append(peersStrand(host))
+        append("}\n  joiner{id=").append(joiner.selfId.value)
         append(" state=").append(joiner.state.value)
         append(" peers=").append(joiner.peers.value.map { it.value })
         append(" plies=").append(joiner.plies.value.mapKeys { it.key.value })
-        append("} mesh{")
+        append(" ").append(peersStrand(joiner))
+        append("}\n  mesh{")
         plies.joinTo(this) { (id, loom) ->
             val members = (loom as? InMemoryLoom)?.peers?.value?.map { it.value }
             "${id.value}=$members"
         }
         append("}")
+    }
+
+    /**
+     * The composite's peers strand: the learned `(plyId, transport peer) → composite peer` mapping
+     * beside the published `peers`, with the verdict spelled out rather than left to be re-derived.
+     *
+     * `idMap` non-empty for a peer that `peers` omits is a **lost derived publish** — the mapping was
+     * learned and `recomputePeers`, which has no periodic backstop, published a stale set last. `idMap`
+     * empty is the opposite finding: no `Announce` was ever recorded, so the stall is upstream of this
+     * strand. Four investigation cycles on #1784 could not choose between those, because no artifact
+     * carried `idMap`.
+     */
+    private fun peersStrand(seam: Seam): String {
+        val composite = seam as? CompositeSeam ?: return "idMap=<not a CompositeSeam>"
+        val idMap = composite.learnedIdMapOrNull()
+            ?: return "idMap=<lock busy — not read>"
+        val entries = idMap.entries.map { (key, compositeId) ->
+            "(${key.first.value}, ${key.second.value})->${compositeId.value}"
+        }
+        val published = seam.peers.value.map { it.value }.toSet()
+        val learnedButUnpublished = idMap.values.map { it.value }.toSet() - published
+        val verdict = when {
+            entries.isEmpty() -> "no Announce recorded on any ply — stall is upstream of the peers strand"
+            learnedButUnpublished.isEmpty() -> "every learned mapping is published — peers is consistent with idMap"
+            else -> "LEARNED BUT UNPUBLISHED $learnedButUnpublished — a lost recomputePeers publish"
+        }
+        return "idMap=$entries verdict=[$verdict]"
     }
 }

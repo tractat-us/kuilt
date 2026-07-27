@@ -672,6 +672,39 @@ internal class CompositeSeam(
         _peers.value = reachable
     }
 
+    /**
+     * **Diagnostic only.** The learned `(plyId, transport peer) → composite peer` mapping, copied, or
+     * `null` if [lock] was busy. Read by the real-threaded concurrency probes' on-timeout snapshot; it
+     * is `internal`, takes no part in any code path, and nothing in the library calls it.
+     *
+     * It exists because it is the **only** observable that decides why a composite's [peers] can stall
+     * short of the expected set (#1784). [recomputePeers] is a read-modify-write whose snapshot is
+     * totally ordered by [lock] but whose publish is not, and it has **no periodic backstop** — it fires
+     * only on an `Announce`, a ply membership change, or a detach. So two very different failures
+     * present identically, as total quiescence with every worker parked:
+     *  - `idMap` **holds** the far peer's mapping while [peers] does not ⇒ the mapping was learned and a
+     *    *derived publish* was lost (a stale `reachable` computed before the peer existed, published
+     *    last after a preemption between the lock release and the write). Nothing recomputes; permanent.
+     *  - `idMap` is **empty** ⇒ no `Announce` was ever recorded, so the failure is upstream of the peers
+     *    strand entirely.
+     *
+     * Neither the mesh membership of the underlying plies nor either composite's [peers] can tell those
+     * apart — the mesh reads as formed in both. Only `idMap` itself does, which is why it is exposed.
+     *
+     * [tryLock] rather than [withLock] deliberately: this is called from a **failure reporting path**
+     * while the system under test is wedged. A blocking read that met a permanently-held lock would
+     * consume the diagnostic it was written to produce, so a busy lock degrades to `null` — itself a
+     * reportable fact — rather than to a second hang.
+     */
+    internal fun learnedIdMapOrNull(): Map<Pair<PlyId, PeerId>, PeerId>? {
+        if (!lock.tryLock()) return null
+        return try {
+            idMap.toMap()
+        } finally {
+            lock.unlock()
+        }
+    }
+
     override suspend fun broadcast(payload: ByteArray) {
         check(state.value !is SeamState.Torn) { "seam is Torn" }
         val bytes = PlyFrame.encode(PlyFrame.Data(selfId, outSeq.getAndIncrement(), payload))
