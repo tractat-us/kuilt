@@ -70,7 +70,7 @@ class HeddleControlPlaneTest {
         val sink = RecordingSink()
         val plane = HeddleControlPlane(
             raft = fake, self = ReplicaId("solo"), scope = backgroundScope,
-            sink = sink, membership = NO_REMONITOR, initial = EntitlementLedger.ZERO, incarnation = "boot-1",
+            sink = sink, membership = NO_REMONITOR, barrier = NO_BARRIER, initial = EntitlementLedger.ZERO, incarnation = "boot-1",
         )
         val c = GroupId("c")
         val eA = AttachmentId("eA")
@@ -223,14 +223,14 @@ class HeddleControlPlaneTest {
         val holder = ReplicaId("acme")
 
         // Incarnation A mints 100.
-        val a = HeddleControlPlane(fake, ReplicaId("solo"), backgroundScope, durable, NO_REMONITOR, EntitlementLedger.ZERO, "boot-A")
+        val a = HeddleControlPlane(fake, ReplicaId("solo"), backgroundScope, durable, NO_REMONITOR, NO_BARRIER, EntitlementLedger.ZERO, "boot-A")
         assertIs<ControlOutcome.Applied>(a.submit(ControlCommand.Mint(holder, 100L)))
         assertEquals(100L, durable.snapshot().mintedTotal())
 
         // "Restart": a fresh control plane with a FRESH injected incarnation over the same log/ledger,
         // replaying the committed log, then minting 40. A reused incarnation would regenerate `#0` and
         // max-collide the 40 into the 100 (a lost mint); a fresh incarnation keeps them distinct.
-        val b = HeddleControlPlane(fake, ReplicaId("solo"), backgroundScope, durable, NO_REMONITOR, EntitlementLedger.ZERO, "boot-B")
+        val b = HeddleControlPlane(fake, ReplicaId("solo"), backgroundScope, durable, NO_REMONITOR, NO_BARRIER, EntitlementLedger.ZERO, "boot-B")
         runCurrent() // let B replay the committed mint
         assertIs<ControlOutcome.Applied>(b.submit(ControlCommand.Mint(holder, 40L)))
         assertEquals(140L, durable.snapshot().mintedTotal(), "the second mint must not collide with the first")
@@ -253,7 +253,7 @@ class HeddleControlPlaneTest {
             entry
         }
         val sink = RecordingSink()
-        val plane = HeddleControlPlane(fake, ReplicaId("solo"), backgroundScope, sink, NO_REMONITOR, EntitlementLedger.ZERO, "boot-3")
+        val plane = HeddleControlPlane(fake, ReplicaId("solo"), backgroundScope, sink, NO_REMONITOR, NO_BARRIER, EntitlementLedger.ZERO, "boot-3")
 
         val outcome = plane.submit(ControlCommand.Mint(ReplicaId("acme"), 100L))
         assertIs<ControlOutcome.Applied>(outcome)
@@ -268,7 +268,7 @@ class HeddleControlPlaneTest {
     fun submitTimeoutSurfacesLeaderCrash() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
         val fake = FakeRaftNode(selfId = NodeId("solo"), initialRole = RaftRole.Leader)
         fake.proposeBehavior = { awaitCancellation() } // a forwarded proposal that never commits (leader crash)
-        val plane = HeddleControlPlane(fake, ReplicaId("solo"), backgroundScope, RecordingSink(), NO_REMONITOR, EntitlementLedger.ZERO, "boot-4")
+        val plane = HeddleControlPlane(fake, ReplicaId("solo"), backgroundScope, RecordingSink(), NO_REMONITOR, NO_BARRIER, EntitlementLedger.ZERO, "boot-4")
         assertFailsWith<TimeoutCancellationException> {
             plane.submit(ControlCommand.Mint(ReplicaId("acme"), 100L), timeout = 1.seconds)
         }
@@ -292,8 +292,12 @@ class HeddleControlPlaneTest {
         )
 
         // Control-plane setup (these DO consense — mint + reshape ride the log): seed a leaf holding.
+        // Enrolling self is what opens the §6.5.3 boot gate; until then reserve/schedule refuse.
         val leaf = GroupId("leaf")
         val eLeaf = AttachmentId("eLeaf")
+        assertFalse(governed.isWritable, "a governed node boots closed to writes")
+        assertIs<ControlOutcome.Applied>(governed.enroll(self))
+        assertTrue(governed.isWritable, "the applied self-enroll opens the boot gate")
         assertIs<ControlOutcome.Applied>(governed.mint(self, 1_000L))
         assertIs<ControlOutcome.Applied>(governed.prepare(AttachmentRecord(eLeaf, root, leaf, Weight.ONE, 0L)))
         assertIs<ControlOutcome.Applied>(governed.activate(eLeaf))
@@ -344,7 +348,7 @@ class HeddleControlPlaneTest {
     @Test
     fun prepareConflictingRecordIsRefusedNotSilentlyApplied() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
         val fake = FakeRaftNode(selfId = NodeId("solo"), initialRole = RaftRole.Leader)
-        val plane = HeddleControlPlane(fake, ReplicaId("solo"), backgroundScope, RecordingSink(), NO_REMONITOR, EntitlementLedger.ZERO, "boot-prep")
+        val plane = HeddleControlPlane(fake, ReplicaId("solo"), backgroundScope, RecordingSink(), NO_REMONITOR, NO_BARRIER, EntitlementLedger.ZERO, "boot-prep")
         val id = AttachmentId("e")
         val rec = AttachmentRecord(id, root, GroupId("c"), Weight.ONE, 0L)
         val differentRec = AttachmentRecord(id, GroupId("otherParent"), GroupId("c"), Weight.ONE, 0L)
@@ -365,7 +369,7 @@ class HeddleControlPlaneTest {
     @Test
     fun activateAndCloseOfMissingOrRetiredEdgeAreRefused() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
         val fake = FakeRaftNode(selfId = NodeId("solo"), initialRole = RaftRole.Leader)
-        val plane = HeddleControlPlane(fake, ReplicaId("solo"), backgroundScope, RecordingSink(), NO_REMONITOR, EntitlementLedger.ZERO, "boot-refuse")
+        val plane = HeddleControlPlane(fake, ReplicaId("solo"), backgroundScope, RecordingSink(), NO_REMONITOR, NO_BARRIER, EntitlementLedger.ZERO, "boot-refuse")
         val unknown = AttachmentId("never-prepared")
 
         // Activate/Close of an edge the projection has never seen: refused, not applied.
@@ -406,6 +410,7 @@ class HeddleControlPlaneTest {
             clock = { Instant.fromEpochMilliseconds(testScheduler.currentTime) }, config = config(seed = 11),
             incarnation = "boot-retire", epoch = 0L,
         )
+        assertIs<ControlOutcome.Applied>(governed.enroll(self))
         assertIs<ControlOutcome.Applied>(governed.mint(self, 1_000L))
 
         // A drained edge (activated, never delegated → outstanding 0) retires once CLOSING.
@@ -442,10 +447,14 @@ class HeddleControlPlaneTest {
     // ═══════════════════════════════════════════════════════════════════════════
     @Test
     fun reconcileClearsRacedRetireStrandAcrossAllPeers() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
-        val ids = (1..3).map { NodeId("v$it") }
+        // The three raft nodes ARE the three data-plane replicas here, so each plane's barrier reads
+        // and acks its own slots — which is what the fence quantifies over.
+        val ids = listOf(NodeId("p1"), NodeId("p2"), NodeId("p3"))
         val sim = MultiNodeRaftSim(nodeIds = ids, scope = this, nodeScope = backgroundScope)
         val sinks = ids.associateWith { RecordingSink() }
-        val planes = ids.associateWith { plane(sim.nodes.getValue(it), it, sinks.getValue(it), backgroundScope) }
+        val planes = ids.associateWith { id ->
+            fencedPlane(sim.nodes.getValue(id), id, sinks.getValue(id), backgroundScope)
+        }
         sim.awaitLeader()
 
         val g = GroupId("g")
@@ -454,9 +463,15 @@ class HeddleControlPlaneTest {
         val e1 = AttachmentId("e1") // root → g (stranded by the raced retire)
         val e2 = AttachmentId("e2") // g    → h
         val e3 = AttachmentId("e3") // root → g (the legal reparent generation)
-        val v1 = planes.getValue(NodeId("v1"))
+        val v1 = planes.getValue(NodeId("p1"))
         fun rec(id: AttachmentId, parent: GroupId, child: GroupId) = AttachmentRecord(id, parent, child, Weight.ONE, 0L)
 
+        // Every peer enrolls: the fence's ack set is exactly the enrolled set at the barrier's index.
+        for (id in ids) {
+            awaitOutcome(sim, backgroundScope) {
+                planes.getValue(id).submit(ControlCommand.Enroll(ReplicaId(id.value)))
+            }
+        }
         // Control-plane topology: e1,e2 active; then close+retire e1 with a LAGGED (empty) drain witness —
         // the projection has no data-plane counters, so its outstanding reads 0 and the retire is admitted.
         awaitOutcome(sim, backgroundScope) { v1.submit(ControlCommand.Mint(p3, 10L)) }
@@ -492,22 +507,27 @@ class HeddleControlPlaneTest {
         }
         ids.forEach { assertEquals(-6L, sinks.getValue(it).snapshot().holdings(g, p3), "peer $it holdings(g,p3) permanently negative") }
 
-        // Governed reconcile: compute the conserving re-home witness on the leader's data-plane view (exactly
-        // what GovernedHeddleNode.reconcile does) and submit it through the log.
-        val dataView = sinks.getValue(NodeId("v1")).snapshot()
-        val rehome = dataView.reconcileStranded(g)
-        assertNotNull(rehome, "the leader's data view has a strand to reconcile")
-        val liveEdge = dataView.liveInboundEdges(g).single()
-        val outcome = awaitOutcome(sim, backgroundScope) {
-            v1.submit(ControlCommand.Reconcile(g, liveEdge, rehome.delta))
+        // A Reconcile BEFORE the barrier is refused — the strand stays standing rather than being
+        // drained to zero headroom on a magnitude nobody has promised (§6.2 step 4).
+        val premature = awaitOutcome(sim, backgroundScope) { v1.submit(ControlCommand.Reconcile(g)) }
+        assertIs<ControlOutcome.Conflict>(premature)
+        assertIs<ControlConflict.Refused>(premature.conflict)
+
+        // Open the barrier. Each peer applies it, marks e1 unwritable, and answers with its own finals.
+        assertIs<ControlOutcome.Applied>(awaitOutcome(sim, backgroundScope) { v1.submit(ControlCommand.Quiesce(e1)) })
+        sim.awaitTrue("every enrolled peer acked the barrier over e1") {
+            ids.all { planes.getValue(it).pendingAcks(e1)?.isEmpty() == true }
         }
+
+        // The Reconcile carries only the child — the patch is DERIVED from the acked finals at apply.
+        val outcome = awaitOutcome(sim, backgroundScope) { v1.submit(ControlCommand.Reconcile(g)) }
         assertIs<ControlOutcome.Applied>(outcome)
 
         // Every peer converges to the same cleared, conserved state.
         sim.awaitTrue("every peer cleared its conflicts after the governed reconcile") {
             ids.all { sinks.getValue(it).snapshot().validate().isEmpty() }
         }
-        val converged = sinks.getValue(NodeId("v1")).snapshot()
+        val converged = sinks.getValue(NodeId("p1")).snapshot()
         ids.forEach {
             val v = sinks.getValue(it).snapshot()
             assertEquals(converged, v, "peer $it must converge to the identical reconciled ledger")
@@ -519,68 +539,124 @@ class HeddleControlPlaneTest {
         for (grp in listOf(root, g, h)) sumHoldings += converged.holdings(grp, p3)
         assertEquals(10L, converged.mintedTotal(), "reconciliation minted nothing")
         assertEquals(converged.mintedTotal(), sumHoldings + converged.leafSpentTotal(), "conservation restored across the cluster")
+        // Idempotence at the apply gate (§5.4 iii): the fenced edge now reads drained on log-pure
+        // state, so a second Reconcile is refused — no re-inflation, deterministically.
+        val second = awaitOutcome(sim, backgroundScope) { v1.submit(ControlCommand.Reconcile(g)) }
+        assertIs<ControlOutcome.Conflict>(second)
+        assertEquals(converged, sinks.getValue(NodeId("p1")).snapshot(), "a refused second reconcile publishes nothing")
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // #1691 (slice 1 of #1665, relocation design §6.3): the apply gate refuses ANY
-    // reconciliation witness that writes a slot the control plane does not own — a base
-    // `issued` slot on the LIVE edge (finding 1's contended slot), or a spend-relocation
-    // counter (through-service relocation, which stays gated until the §6 fence ships).
-    // Structural, not advisory: a buggy or hostile proposer cannot smuggle either past it.
+    // #1693 (relocation design §6.3): the DERIVED patch never writes a slot the control
+    // plane does not own — in particular never the live edge's base `issued` slot, which
+    // the data plane writes concurrently (finding 1's silently-erased contended slot).
+    // Structural rather than validated: with the proposer sending no magnitudes at all,
+    // there is no witness to smuggle anything through.
     // ═══════════════════════════════════════════════════════════════════════════
     @Test
-    fun reconcileWitnessTouchingAContendedOrUnfencedSlotIsRefusedAtApply() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
-        val fake = FakeRaftNode(selfId = NodeId("solo"), initialRole = RaftRole.Leader)
+    fun theDerivedReconcileNeverWritesTheLiveEdgesBaseIssuedSlot() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        val fake = FakeRaftNode(selfId = NodeId("p3"), initialRole = RaftRole.Leader)
         val sink = RecordingSink()
+        val p3 = ReplicaId("p3")
         val plane = HeddleControlPlane(
-            raft = fake, self = ReplicaId("solo"), scope = backgroundScope,
-            sink = sink, membership = NO_REMONITOR, initial = EntitlementLedger.ZERO, incarnation = "boot-reloc-gate",
+            raft = fake, self = p3, scope = backgroundScope, sink = sink, membership = NO_REMONITOR,
+            barrier = ControlBarrierSink { edge -> sink.snapshot().baseFinalsOn(edge, p3) },
+            initial = EntitlementLedger.ZERO, incarnation = "boot-reloc-gate",
         )
         val child = GroupId("g")
-        val p3 = ReplicaId("p3")
         val old = AttachmentId("eOld") // root → g, retired
         val live = AttachmentId("eNew") // root → g, the reparent generation
 
+        assertIs<ControlOutcome.Applied>(plane.submit(ControlCommand.Enroll(p3)))
         assertIs<ControlOutcome.Applied>(plane.submit(ControlCommand.Prepare(AttachmentRecord(old, root, child, Weight.ONE, 0L))))
         assertIs<ControlOutcome.Applied>(plane.submit(ControlCommand.Activate(old)))
         assertIs<ControlOutcome.Applied>(plane.submit(ControlCommand.Close(old)))
         assertIs<ControlOutcome.Applied>(plane.submit(ControlCommand.Retire(old, witness = null)))
         assertIs<ControlOutcome.Applied>(plane.submit(ControlCommand.Prepare(AttachmentRecord(live, root, child, Weight.ONE, 0L))))
         assertIs<ControlOutcome.Applied>(plane.submit(ControlCommand.Activate(live)))
-
-        // Finding 1's shape: a base `issued(live)[p3]` absolute, on a slot p3's own `delegate`
-        // writes concurrently. Under per-slot max-join one of the two writers is silently erased.
-        val contendedWitness = EntitlementLedger.of(
-            returned = mapOf(old to GCounter.of(p3 to 10L)),
-            issued = mapOf(live to GCounter.of(p3 to 10L)),
+        // The data plane: p3 delegated 10 down the old edge and charged 3 of service through it.
+        sink.forceMerge(
+            EntitlementLedger.of(
+                issued = mapOf(old to GCounter.of(p3 to 10L)),
+                rollupSpent = mapOf(old to GCounter.of(p3 to 3L)),
+            ),
         )
-        val contended = plane.submit(ControlCommand.Reconcile(child, live, contendedWitness))
-        assertIs<ControlOutcome.Conflict>(contended)
-        assertIs<ControlConflict.Refused>(contended.conflict)
-        assertTrue(sink.snapshot().issuedEdges().isEmpty(), "a refused witness must publish nothing")
 
-        // Through-service relocation is NOT un-gated in slice 1: a witness carrying spend
-        // relocation is refused even though the representation can express it, because moving
-        // an already-charged spend safely needs the per-peer quiesce fence that is not built.
-        val spendRelocationWitness = EntitlementLedger.of(
-            returned = mapOf(old to GCounter.of(p3 to 10L)),
-            issuedRelocIn = mapOf(live to GCounter.of(p3 to 10L)),
-            rollupRelocOut = mapOf(old to GCounter.of(p3 to 3L)),
-            rollupRelocIn = mapOf(live to GCounter.of(p3 to 3L)),
-        )
-        val relocating = plane.submit(ControlCommand.Reconcile(child, live, spendRelocationWitness))
-        assertIs<ControlOutcome.Conflict>(relocating)
-        assertIs<ControlConflict.Refused>(relocating.conflict)
+        // Unfenced: refused, and nothing published.
+        val unfenced = plane.submit(ControlCommand.Reconcile(child))
+        assertIs<ControlOutcome.Conflict>(unfenced)
+        assertIs<ControlConflict.Refused>(unfenced.conflict)
+        assertTrue(sink.snapshot().issuedRelocInEdges().isEmpty(), "an unfenced reconcile must publish nothing")
 
-        // The well-formed shape — a base `returned` drain on the retired edge plus an
-        // `issuedRelocIn` credit on the live one — is the ONLY thing that gets through.
-        val wellFormed = EntitlementLedger.of(
-            returned = mapOf(old to GCounter.of(p3 to 10L)),
-            issuedRelocIn = mapOf(live to GCounter.of(p3 to 10L)),
+        assertIs<ControlOutcome.Applied>(plane.submit(ControlCommand.Quiesce(old)))
+        runCurrent() // let the barrier's own QuiesceAck commit and apply
+        assertEquals(emptySet<ReplicaId>(), plane.pendingAcks(old), "the solo peer acked its own barrier")
+        assertIs<ControlOutcome.Applied>(plane.submit(ControlCommand.Reconcile(child)))
+
+        val published = sink.snapshot()
+        assertAll(
+            { assertEquals(10L, published.effectiveIssued(live, p3), "the re-home credits the live edge") },
+            {
+                assertTrue(
+                    live !in published.issuedEdges(),
+                    "the live edge's contended base `issued` slot must never be written; wrote ${published.issuedEdges()}",
+                )
+            },
+            { assertEquals(3L, published.edge(live)?.spent, "the through-service charge re-homes with the issuance") },
+            { assertEquals(0L, published.edge(old)?.spent, "the fenced edge's effective spend nets to zero") },
+            { assertEquals(0L, published.edge(old)?.outstanding, "the fenced edge is drained") },
         )
-        assertIs<ControlOutcome.Applied>(plane.submit(ControlCommand.Reconcile(child, live, wellFormed)))
-        assertEquals(10L, sink.snapshot().effectiveIssued(live, p3), "the accepted re-home credits the live edge")
-        assertTrue(sink.snapshot().issuedEdges().isEmpty(), "…and still never writes a base issued slot")
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // #1693 §6.1/§13.1: a QuiesceAck is SELF-SERVICE. An ack shrinks what the barrier is
+    // still waiting for, so only the acking replica may assert it — exactly the Depart
+    // asymmetry. A third-party ack would let the survivors declare a peer done while it
+    // still holds an unreplicated reservation: finding 2 through a side door.
+    // ═══════════════════════════════════════════════════════════════════════════
+    @Test
+    fun aThirdPartyQuiesceAckIsRefusedAndDoesNotCompleteTheFence() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        val absent = ReplicaId("absent")
+        val solo = ReplicaId("solo")
+        val fake = FakeRaftNode(selfId = NodeId("solo"), initialRole = RaftRole.Leader)
+        val sink = RecordingSink()
+        val plane = HeddleControlPlane(
+            raft = fake, self = solo, scope = backgroundScope, sink = sink, membership = NO_REMONITOR,
+            barrier = NO_BARRIER, initial = EntitlementLedger.ZERO, incarnation = "boot-ack-gate",
+        )
+        val edge = AttachmentId("e")
+        assertIs<ControlOutcome.Applied>(plane.submit(ControlCommand.Enroll(solo)))
+        assertIs<ControlOutcome.Applied>(plane.submit(ControlCommand.Enroll(absent)))
+        assertIs<ControlOutcome.Applied>(plane.submit(ControlCommand.Prepare(AttachmentRecord(edge, root, GroupId("c"), Weight.ONE, 0L))))
+        assertIs<ControlOutcome.Applied>(plane.submit(ControlCommand.Activate(edge)))
+        assertIs<ControlOutcome.Applied>(plane.submit(ControlCommand.Close(edge)))
+        assertIs<ControlOutcome.Applied>(plane.submit(ControlCommand.Retire(edge, witness = null)))
+
+        // A barrier over a LIVE edge is refused outright — a peer cannot promise never to write an
+        // edge the data plane may still legitimately use.
+        val live = AttachmentId("live")
+        assertIs<ControlOutcome.Applied>(plane.submit(ControlCommand.Prepare(AttachmentRecord(live, root, GroupId("c2"), Weight.ONE, 0L))))
+        assertIs<ControlOutcome.Applied>(plane.submit(ControlCommand.Activate(live)))
+        val onLive = plane.submit(ControlCommand.Quiesce(live))
+        assertIs<ControlOutcome.Conflict>(onLive)
+        assertIs<ControlConflict.Refused>(onLive.conflict)
+        assertNull(plane.pendingAcks(live), "a refused Quiesce opens no barrier")
+
+        assertIs<ControlOutcome.Applied>(plane.submit(ControlCommand.Quiesce(edge)))
+        runCurrent() // solo's own barrier acks for itself
+        assertEquals(setOf(absent), plane.pendingAcks(edge), "the fence still waits on the absent peer")
+
+        // `solo` tries to ack ON BEHALF OF `absent` — refused, and the fence stays open.
+        val impersonated = plane.submit(ControlCommand.QuiesceAck(edge, absent, SlotFinals(99L, 0L, 0L, 0L)))
+        assertIs<ControlOutcome.Conflict>(impersonated)
+        assertAll(
+            { assertIs<ControlConflict.Refused>(impersonated.conflict) },
+            { assertEquals(setOf(absent), plane.pendingAcks(edge), "a refused ack must not complete the fence") },
+        )
+        // An ack for an unbarriered edge promises nothing, and is refused too.
+        val unbarriered = plane.submit(ControlCommand.QuiesceAck(AttachmentId("never-fenced"), solo, SlotFinals.ZERO))
+        assertIs<ControlOutcome.Conflict>(unbarriered)
+        assertIs<ControlConflict.Refused>(unbarriered.conflict)
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -674,6 +750,7 @@ class HeddleControlPlaneTest {
         )
         // A real committed act first, so the applied prefix is genuinely level with the fence
         // (FakeRaftNode's readIndex returns its commitIndex) — and so the tree has supply to render.
+        assertIs<ControlOutcome.Applied>(governed.enroll(self))
         assertIs<ControlOutcome.Applied>(governed.mint(self, 1_000L))
 
         val first = AttachmentId("first")
@@ -711,7 +788,7 @@ class HeddleControlPlaneTest {
     fun twoProposersOfOneIdAreOrderedFirstWinsAndDoNotStarveTheChild() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
         val fake = FakeRaftNode(selfId = NodeId("solo"), initialRole = RaftRole.Leader)
         val plane = HeddleControlPlane(
-            fake, ReplicaId("solo"), backgroundScope, RecordingSink(), NO_REMONITOR, EntitlementLedger.ZERO, "boot-two-fronts",
+            fake, ReplicaId("solo"), backgroundScope, RecordingSink(), NO_REMONITOR, NO_BARRIER, EntitlementLedger.ZERO, "boot-two-fronts",
         )
         val id = AttachmentId("contested")
         val child = GroupId("c")
@@ -766,7 +843,7 @@ class HeddleControlPlaneTest {
         val fake = FakeRaftNode(selfId = NodeId("solo"), initialRole = RaftRole.Leader)
         val sink = RecordingSink()
         val plane = HeddleControlPlane(
-            fake, ReplicaId("solo"), backgroundScope, sink, NO_REMONITOR, EntitlementLedger.ZERO, "boot-1717",
+            fake, ReplicaId("solo"), backgroundScope, sink, NO_REMONITOR, NO_BARRIER, EntitlementLedger.ZERO, "boot-1717",
         )
 
         assertIs<ControlOutcome.Applied>(plane.submit(ControlCommand.Mint(ReplicaId("acme"), 100L)))
@@ -813,7 +890,20 @@ class HeddleControlPlaneTest {
     )
 
     private fun plane(raft: RaftNode, id: NodeId, sink: ControlLedgerSink, scope: CoroutineScope) =
-        HeddleControlPlane(raft, ReplicaId(id.value), scope, sink, NO_REMONITOR, EntitlementLedger.ZERO, "inc-${id.value}")
+        HeddleControlPlane(raft, ReplicaId(id.value), scope, sink, NO_REMONITOR, NO_BARRIER, EntitlementLedger.ZERO, "inc-${id.value}")
+
+    /**
+     * A plane whose §6.2 barrier answers from its **own** data-plane view for its **own** replica —
+     * the shape `HeddleNode.asBarrierSink()` has in production, modelled over a [RecordingSink].
+     */
+    private fun fencedPlane(raft: RaftNode, id: NodeId, sink: RecordingSink, scope: CoroutineScope): HeddleControlPlane {
+        val replica = ReplicaId(id.value)
+        return HeddleControlPlane(
+            raft, replica, scope, sink, NO_REMONITOR,
+            ControlBarrierSink { edge -> sink.snapshot().baseFinalsOn(edge, replica) },
+            EntitlementLedger.ZERO, "inc-${id.value}",
+        )
+    }
 
     /** Launch [block] on [scope], pump [sim]'s virtual time until it commits, then return the outcome. */
     private suspend fun awaitOutcome(
@@ -828,6 +918,9 @@ class HeddleControlPlaneTest {
 
     /** These suites do not exercise the node-side enrollment effect (#1652) — see `HeddleRosterTest`. */
     private val NO_REMONITOR = ControlMembershipSink { }
+
+    /** …nor the §6.2 peer-local quiesce barrier — see `HeddleFenceTest`. */
+    private val NO_BARRIER = ControlBarrierSink { SlotFinals.ZERO }
 
     /** A [ControlLedgerSink] that accumulates published patches into a ledger — the data-plane view. */
     private class RecordingSink : ControlLedgerSink {

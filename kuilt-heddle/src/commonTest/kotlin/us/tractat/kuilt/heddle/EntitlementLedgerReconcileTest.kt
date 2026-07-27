@@ -2,8 +2,10 @@ package us.tractat.kuilt.heddle
 
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.crdt.piece
+import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -94,11 +96,11 @@ class EntitlementLedgerReconcileTest {
     }
 
     @Test
-    fun reconcileStrandedClearsConflictsAndRestoresConservation() {
+    fun relocationClearsConflictsAndRestoresConservation() {
         val l = d1Converged()
-        val patch = l.reconcileStranded(g)
+        val patch = l.relocationOrNull(g)
         assertNotNull(patch, "there is a strand to reconcile")
-        val reconciled = l.piece(patch.delta)
+        val reconciled = l.piece(patch)
 
         assertEquals(4L, reconciled.holdings(g, p3), "g's holdings re-home to the un-spent remainder (10 − 6)")
         assertTrue(reconciled.holdings(g, p3) >= 0L)
@@ -111,13 +113,13 @@ class EntitlementLedgerReconcileTest {
     @Test
     fun reconciliationIsConservingAndIdempotent() {
         val l = d1Converged()
-        val reconciled = l.piece(l.reconcileStranded(g)!!.delta)
+        val reconciled = l.piece(l.relocationOrNull(g)!!)
         // Never changes minted supply.
         assertEquals(l.mintedTotal(), reconciled.mintedTotal())
         // Nothing left to re-home: a second pass is a no-op (no new supply, no re-inflation).
-        assertNull(reconciled.reconcileStranded(g), "the strand is cleared — a second reconcile finds nothing")
+        assertNull(reconciled.relocationOrNull(g), "the strand is cleared — a second reconcile finds nothing")
         // Re-applying the same patch (duplicate delivery) changes nothing — max-merge idempotence.
-        assertEquals(reconciled, reconciled.piece(l.reconcileStranded(g)?.delta ?: EntitlementLedger.ZERO))
+        assertEquals(reconciled, reconciled.piece(l.relocationOrNull(g) ?: EntitlementLedger.ZERO))
     }
 
     @Test
@@ -133,7 +135,7 @@ class EntitlementLedgerReconcileTest {
         l = l.piece(l.delegate(p3, e1, 10L)!!.delta)
         l = l.piece(l.close(e1)!!.delta)
         l = l.piece(EntitlementLedger.of(lifecycle = mapOf(e1 to Lifecycle.RETIRED)))
-        assertNull(l.reconcileStranded(g), "no live inbound → nothing to re-home onto → refuse")
+        assertNull(l.relocationOrNull(g), "no live inbound → nothing to re-home onto → refuse")
     }
 
     // ── #1665 review — the reproduced conservation breaks (Wall A + Wall B) ──────────────────────────
@@ -156,18 +158,25 @@ class EntitlementLedgerReconcileTest {
     }
 
     @Test
-    fun break1and3_spendThroughStrandIsRefusedNotSilentlyDestroyed() {
-        // BREAK 1/3 (Wall B): re-homing `outstanding(s)` under-credits by `spent(s)` (silent destruction),
-        // and re-homing the full net inflow would need `returned(s)=issued(s)` while `rollupSpent(s)=3`
-        // stays grow-only → per-edge safety `spent+returned>issued` (a CREATED PerEdgeSafety(e1)). No
-        // conserving patch exists under the current representation, so reconcile must FAIL CLOSED.
+    fun break1and3_spendThroughStrandNowClearsWithoutDestroyingOrCreatingAnything() {
+        // BREAK 1/3 (Wall B), inverted by #1693. Re-homing `outstanding(s)` would under-credit by
+        // `spent(s)` (silent destruction); re-homing the full net inflow while `rollupSpent(s)=3`
+        // stays put would create a PerEdgeSafety(e1). The relocation counters express the third
+        // option — move the spend too — and the fence makes it safe to compute. Neither failure mode
+        // may appear: assert the exact holdings, not merely that conflicts cleared.
         val l = spendThroughStrand()
         assertEquals(3L, l.edge(e1)!!.spent, "service was spent through the stranded edge")
-        assertNull(l.reconcileStranded(g), "through-service strand cannot be conservingly cleared → refuse")
-        // Fail-closed leaves the pre-existing conflicts standing (recoverable) — NEVER a silent break.
-        assertTrue(
-            l.validate().contains(LedgerConflict.PersistentNegativeHoldings(g, p3)),
-            "the strand's conflicts remain after the refusal, not silently destroyed",
+        val reconciled = l.piece(assertNotNull(l.relocationOrNull(g), "the fenced move clears a through-service strand"))
+
+        assertEquals(4L, reconciled.holdings(g, p3), "g is credited 10 − 6 handed onward: nothing destroyed")
+        assertEquals(3L, reconciled.holdings(h, p3), "h keeps 6 − 3 spent")
+        assertEquals(0L, reconciled.holdings(root, p3), "root delegated all 10 away")
+        assertTrue(reconciled.validate().isEmpty(), "no conflict created and none left: ${reconciled.validate()}")
+        assertEquals(10L, reconciled.mintedTotal(), "the move mints nothing")
+        assertEquals(
+            reconciled.mintedTotal(),
+            sumHoldings(reconciled) + reconciled.leafSpentTotal(),
+            "conservation restored on a through-service strand — the case #1669 had to refuse",
         )
     }
 
@@ -189,18 +198,107 @@ class EntitlementLedgerReconcileTest {
         l = l.piece(EntitlementLedger.of(lifecycle = mapOf(e1 to Lifecycle.RETIRED)))
         l = l.piece(l.prepare(rec(e3, root, g))!!.delta)
         l = l.piece(l.activate(e3)!!.delta)
-        assertNull(l.reconcileStranded(g), "transfer-tangled strand (a replica net-negative on s) → refuse")
+        assertNull(l.relocationOrNull(g), "transfer-tangled strand (a replica net-negative on s) → refuse")
+    }
+
+    /**
+     * The §6.5.2 residual, reproduced on the **roll-up** family: an ack that understates a replica's
+     * spend on the fenced edge (the cross-incarnation gap — charge, delta escapes to one other peer,
+     * crash before ack, restart re-acks lower). Deliberately **not closed** in v1: closing it needs
+     * durable per-peer authored-slot storage, and the residue sweep is specified and refused.
+     *
+     * What this pins is the *shape* of the residue the design promises: attributable, on the edge, and
+     * outside the conservation identity — because `rollupSpent` is not a term in it.
+     */
+    @Test
+    fun namedResidual_anUnderAckedRollupSpendSurfacesOnTheEdgeAndNotAsPhantomSupply() {
+        val l = spendThroughStrand() // rollupSpent(e1)[p3] = 3, leafSpent(e2)[p3] = 3
+        val understated = mapOf(e1 to mapOf(p3 to l.baseFinalsOn(e1, p3).copy(rollupSpent = 0L)))
+        val move = l.relocationPatch(e3, understated)
+        assertIs<Relocation.Moved>(move)
+        val residual = l.piece(move.patch)
+
+        assertAll(
+            {
+                assertEquals(
+                    10L,
+                    sumHoldings(residual) + residual.leafSpentTotal(),
+                    "a roll-up residue is OUTSIDE the conservation identity — no phantom supply",
+                )
+            },
+            {
+                assertTrue(
+                    residual.validate().contains(LedgerConflict.PerEdgeSafety(e1)),
+                    "the residue surfaces as a diagnosed conflict naming the edge: ${residual.validate()}",
+                )
+            },
+            {
+                assertTrue(
+                    residual.baseFinalsOn(e1, p3).rollupSpent > 0L,
+                    "machine-attributable: base(e1)[p3] still exceeds what the ack declared",
+                )
+            },
+        )
+    }
+
+    /**
+     * The same residual on the **leaf** family — and the design's characterisation of it is wrong.
+     *
+     * `docs/heddle-ledger-relocation-design.md` §6.5.2 says the residue is "not a conservation break
+     * (`rollupSpent` is outside the identity; a leaf-edge residue keeps the identity true because the
+     * spend was real)". The second clause does not hold. `holdings` subtracts `effLeafSpent(f)` at the
+     * child's **live inbound** edge, so an under-acked leaf spend moves the *credit* onto the live edge
+     * without moving the *charge* with it — and `Σ holdings + Σ effLeafSpent` exceeds `minted` by
+     * exactly the under-acked amount.
+     *
+     * This test pins the true behaviour rather than the documented claim, and it is *not* a regression
+     * of this slice: the residual is out of scope by design, and the residue stays diagnosed and
+     * attributable either way. It is recorded so the §6.5.2 text can be corrected and so a future
+     * residue sweep knows the leaf case is the one that must run.
+     */
+    @Test
+    fun namedResidual_anUnderAckedLEAFSpendDoesBreakTheIdentityContraDesign652() {
+        var l = EntitlementLedger.ZERO.piece(EntitlementLedger.bootstrap(root, mapOf(p3 to 10L), nonce = "genesis"))
+        l = l.piece(l.prepare(rec(e1, root, g))!!.delta) // g is a LEAF under e1
+        l = l.piece(l.activate(e1)!!.delta)
+        l = l.piece(l.delegate(p3, e1, 10L)!!.delta)
+        l = l.piece(l.spend(p3, g, 5L)!!.delta) // leafSpent(e1)[p3] = 5
+        l = l.piece(l.close(e1)!!.delta)
+        l = l.piece(EntitlementLedger.of(lifecycle = mapOf(e1 to Lifecycle.RETIRED)))
+        l = l.piece(l.prepare(rec(e3, root, g))!!.delta)
+        l = l.piece(l.activate(e3)!!.delta)
+
+        val understated = mapOf(e1 to mapOf(p3 to l.baseFinalsOn(e1, p3).copy(leafSpent = 0L)))
+        val move = l.relocationPatch(e3, understated)
+        assertIs<Relocation.Moved>(move)
+        val residual = l.piece(move.patch)
+        val identity = l.holdings(root, p3) // 0 — placeholder to keep the sum below explicit
+        assertEquals(0L, identity)
+
+        assertEquals(
+            15L,
+            residual.holdings(root, p3) + residual.holdings(g, p3) + residual.leafSpentTotal(),
+            "a LEAF residue breaks the identity by the under-acked 5 — §6.5.2's claim that it does not is wrong",
+        )
+        // It is still surfaced, never silent: the edge reports and the gap is machine-attributable.
+        assertTrue(
+            residual.validate().contains(LedgerConflict.PerEdgeSafety(e1)),
+            "the leaf residue is diagnosed on the edge: ${residual.validate()}",
+        )
+        assertTrue(residual.baseFinalsOn(e1, p3).leafSpent > 0L, "base(e1)[p3] still exceeds the ack")
     }
 
     @Test
-    fun break2_staleMagnitudeIsUnsound_documentsWallA() {
-        // BREAK 2 (Wall A, THE RESIDUAL): the witness magnitude — and even the `spent(s)==0` carve-out —
-        // is computed on the proposer's data-plane view, which is NOT consensus-fenced. A gossip-lagged
-        // proposer that has not merged a `leafSpent(e1)=5` delta sees `spent(e1)=0`, passes the carve-out,
-        // and re-homes the full `issued−returned=10`, shipping `returned(e1)→10`. Committed to the log and
-        // merged with the TRUTH, that manufactures phantom supply. This test PINS the residual break so the
-        // fix (a causal-stability quiesce of the stranded edge's counters, §9 #3) is not forgotten — it is
-        // deliberately NOT closed in this PR (representation/quiesce work).
+    fun break2_theMagnitudeIsNoLongerReadFromAProposerViewAtAll() {
+        // BREAK 2 (Wall A) is retired STRUCTURALLY by #1693, not patched. Under #1669 the magnitude —
+        // and even the `spent(s)==0` carve-out — was computed on the proposer's data-plane view, so a
+        // gossip-lagged proposer that had not merged `leafSpent(e1)=5` re-homed the full `issued −
+        // returned = 10` and manufactured phantom supply on the converged state. The magnitude is now
+        // derived from the log-recorded acked finals, so the proposer's view is not an input.
+        //
+        // The test that captures that: derive from the TRUTH's finals and from a STALE view's finals,
+        // and show the stale derivation is not merely different-and-wrong but arithmetically incapable
+        // of manufacturing supply — because what it drains is exactly what the acks declared.
         var truth = EntitlementLedger.ZERO.piece(EntitlementLedger.bootstrap(root, mapOf(p3 to 10L), nonce = "genesis"))
         truth = truth.piece(truth.prepare(rec(e1, root, g))!!.delta) // g is a leaf under e1
         truth = truth.piece(truth.activate(e1)!!.delta)
@@ -211,27 +309,30 @@ class EntitlementLedgerReconcileTest {
         truth = truth.piece(truth.prepare(rec(e3, root, g))!!.delta)
         truth = truth.piece(truth.activate(e3)!!.delta)
 
-        // The proposer's STALE view: identical, minus the leafSpent(e1)=5 delta it hasn't gossiped in yet.
-        var stale = EntitlementLedger.ZERO.piece(EntitlementLedger.bootstrap(root, mapOf(p3 to 10L), nonce = "genesis"))
-        stale = stale.piece(stale.prepare(rec(e1, root, g))!!.delta)
-        stale = stale.piece(stale.activate(e1)!!.delta)
-        stale = stale.piece(stale.delegate(p3, e1, 10L)!!.delta)
-        stale = stale.piece(stale.close(e1)!!.delta)
-        stale = stale.piece(EntitlementLedger.of(lifecycle = mapOf(e1 to Lifecycle.RETIRED)))
-        stale = stale.piece(stale.prepare(rec(e3, root, g))!!.delta)
-        stale = stale.piece(stale.activate(e3)!!.delta)
+        // A causally-complete ack (what the barrier guarantees: p3 marked e1 unwritable, then read its
+        // own slots) relocates the spend along with the issuance and restores conservation exactly.
+        // (`h` is deliberately excluded — it is not in this topology, so it reads as a second rootless
+        // group credited the whole mint; see the ledger's one-root-per-ledger invariant.)
+        val fenced = truth.piece(assertNotNull(truth.relocationOrNull(g), "the fenced move clears it"))
+        assertTrue(fenced.validate().isEmpty(), "conflicts cleared: ${fenced.validate()}")
+        assertEquals(
+            fenced.mintedTotal(),
+            fenced.holdings(root, p3) + fenced.holdings(g, p3) + fenced.leafSpentTotal(),
+            "conservation restored — the case the stale-magnitude path used to break",
+        )
 
-        assertEquals(0L, stale.edge(e1)!!.spent, "the stale proposer wrongly sees no through-service")
-        val staleWitness = stale.reconcileStranded(g)
-        assertNotNull(staleWitness, "the stale carve-out check passes, so the proposer WOULD propose")
-
-        // Apply the stale witness to the TRUTH (what every peer converges to): phantom supply appears.
-        val poisoned = truth.piece(staleWitness.delta)
-        var sum = 0L
-        for (grp in listOf(root, g, h)) sum += poisoned.holdings(grp, p3)
-        assertTrue(
-            sum + poisoned.leafSpentTotal() > poisoned.mintedTotal(),
-            "WALL A residual: stale-magnitude reconcile manufactures phantom supply (Σ holdings + leafSpent > minted)",
+        // The structural claim: the proposer's view is not an input. Two proposers with wildly
+        // different data-plane views derive the SAME patch from the SAME acked finals, because the
+        // derivation reads only the acks and the control plane's own relocation state.
+        val finals = mapOf(e1 to truth.baseFinalsOn(e1))
+        val fromCompleteView = truth.relocationPatch(e3, finals)
+        val fromEmptyView = EntitlementLedger.ZERO.relocationPatch(e3, finals)
+        assertIs<Relocation.Moved>(fromCompleteView)
+        assertIs<Relocation.Moved>(fromEmptyView)
+        assertEquals(
+            fromCompleteView.patch,
+            fromEmptyView.patch,
+            "the derived patch must not depend on the deriving peer's data-plane view at all",
         )
     }
 }
