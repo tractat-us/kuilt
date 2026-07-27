@@ -1,6 +1,6 @@
 [versions]
 detekt = "1.23.8"  # latest 1.23.x — avoid 2.0 alpha (KMP type-resolution perf regression)
-kotlin = "2.3.21"
+kotlin = "2.4.10"
 atomicfu = "0.33.0"
 kotlinx-coroutines = "1.11.0"
 kotlinx-io = "0.9.1"
