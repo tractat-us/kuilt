@@ -10,6 +10,7 @@ import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
 import us.tractat.kuilt.core.CloseReason
 import us.tractat.kuilt.core.DeliveryPolicy
+import us.tractat.kuilt.core.FabricAvailability
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Principal
 import us.tractat.kuilt.core.Seam
@@ -84,6 +85,17 @@ public class FakeRoom(
     public fun setAttestedPrincipals(principals: Map<PeerId, Principal>) {
         _attestedPrincipals.value = principals
     }
+
+    private val _localFabric = MutableStateFlow<FabricAvailability>(FabricAvailability.Available)
+    override val localFabric: StateFlow<FabricAvailability> = _localFabric.asStateFlow()
+
+    /**
+     * The last [FabricAvailability] that *decided* something — [FabricAvailability.Available] or
+     * [FabricAvailability.Unavailable], never [FabricAvailability.Unknown]. What
+     * [setLocalFabric] measures an edge against, so a recovery that passes through `Unknown` still
+     * emits [MembershipEvent.LocalFabricRestored], exactly as the real room does.
+     */
+    private var lastDecidedFabric: FabricAvailability = FabricAvailability.Available
 
     /**
      * Admitted roster as peer ids including self. Kept in sync with [_roster] by
@@ -230,6 +242,43 @@ public class FakeRoom(
     public suspend fun hostLost(at: Instant, reason: FailureReason = FailureReason.WindowExpired) {
         left = true
         eventsChannel.send(MembershipEvent.HostLost(at, reason))
+    }
+
+    /**
+     * Drive this fake's own self-reachability ([Room.localFabric]), emitting the matching edge.
+     *
+     * Starts at [FabricAvailability.Available] so existing tests are unaffected — a fake is exactly
+     * the thing that *can* tell, so it does not sit at [FabricAvailability.Unknown] the way a real
+     * fabric with no path observer does.
+     *
+     * Mirrors the real room's rule: an edge only on a transition into [FabricAvailability.Available]
+     * or [FabricAvailability.Unavailable]; [FabricAvailability.Unknown] is level-only, because
+     * "we stopped being able to tell" is neither a loss nor a recovery. Recovery **through**
+     * `Unknown` still restores — the last *decided* level is what a `Restored` is measured against,
+     * not the immediately preceding one.
+     *
+     * No-op when [availability] already equals the current level.
+     */
+    public suspend fun setLocalFabric(availability: FabricAvailability, at: Instant) {
+        val previous = _localFabric.value
+        if (previous == availability) return
+        _localFabric.value = availability
+        when (availability) {
+            is FabricAvailability.Unavailable -> {
+                if (lastDecidedFabric !is FabricAvailability.Unavailable) {
+                    lastDecidedFabric = availability
+                    eventsChannel.send(MembershipEvent.LocalFabricLost(at, availability.reason))
+                }
+            }
+
+            is FabricAvailability.Available -> {
+                val restored = lastDecidedFabric is FabricAvailability.Unavailable
+                lastDecidedFabric = availability
+                if (restored) eventsChannel.send(MembershipEvent.LocalFabricRestored(at))
+            }
+
+            is FabricAvailability.Unknown -> Unit
+        }
     }
 
     /**

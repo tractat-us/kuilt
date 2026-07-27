@@ -2,6 +2,7 @@ package us.tractat.kuilt.session
 
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
+import us.tractat.kuilt.core.FabricAvailability
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Principal
@@ -84,6 +85,36 @@ public interface Room {
      * in-memory fabric without attached principals). Roster-first, mirroring `GameSession`.
      */
     public val attestedPrincipals: StateFlow<Map<PeerId, Principal>>
+
+    /**
+     * Whether **this peer's own end of the fabric carrying this room** can carry frames now.
+     *
+     * Session-scoped, never device-scoped: a peer in two rooms over two fabrics has two
+     * independent values and neither speaks for the other. A room over a bonded `CompositeSeam`
+     * reports [FabricAvailability.Unavailable] only when every woven ply is down.
+     *
+     * [FabricAvailability.Unknown] means the fabric has no live path observer. Treat it as
+     * "kuilt cannot tell", never as either answer — and expect it: it is the value every fabric
+     * but a path-observing one reports, so it is the common case rather than an error.
+     *
+     * **This is the authoritative, replay-safe level.** Being a [StateFlow], a late collector
+     * immediately reads the current value and so cannot miss a drop, where
+     * [MembershipEvent.LocalFabricLost] / [MembershipEvent.LocalFabricRestored] on [events] are
+     * only notifications that it moved.
+     *
+     * The level is never *staler* than an edge — so it never claims the fabric is up while an
+     * emitted [MembershipEvent.LocalFabricLost] says otherwise. It can, however, be **ahead** of the
+     * edge you are handling: events are buffered, so under a rapid flap
+     * (`Available → Unavailable → Available`) a handler may read `Available` while processing the
+     * `LocalFabricLost`, with the matching `LocalFabricRestored` still queued behind it. Treat the
+     * edges as idempotent notifications and this level as authoritative; do not assert that the level
+     * matches the edge in hand (#1712).
+     *
+     * Deliberately has **no** interface default. An implementation that silently inherited
+     * `Unknown` would be claiming it cannot tell, when a `Room` implementation — a fake above all —
+     * is exactly the thing that can.
+     */
+    public val localFabric: StateFlow<FabricAvailability>
 
     /** Broadcast [bytes] to all other admitted members. */
     public suspend fun broadcast(bytes: ByteArray)
