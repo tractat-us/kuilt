@@ -116,5 +116,39 @@ Seeds the "implementing a new transport" skill. Newest entries at the bottom.
   resolve from the auto-generated `platform.Network` klib and need no entitlement — unlike SSID
   (`CNCopyCurrentNetworkInfo` needs a Location entitlement), which the suite deliberately omits.
 - Coroutine entry from Swift is non-suspending: `ConnectivitySuite.start(role, onLog, onScenario,
-  onComplete)` launches on a `Dispatchers.Default` scope and marshals callbacks; Swift hops them to
-  the main thread. A real dispatcher is correct here (production app entry, not a test).
+  onPrompt, onComplete)` launches on a `Dispatchers.Default` scope and marshals callbacks; Swift hops
+  them to the main thread. A real dispatcher is correct here (production app entry, not a test).
+
+## Scenario 6 (#1712) — the operator-driven scenario, and what it cost
+- **`Info.plist` is BOTH generated and committed.** `CONNECTIVITY-SUITE.md` says "edit the yml, not the
+  plist" — true only if you then run `xcodegen generate`. `spike/app/Info.plist` is checked in, so a new
+  Bonjour service type added to `project.yml` alone leaves a **stale committed plist** that silently
+  blocks discovery for anyone who builds without regenerating. Edit **both**; `_ksuite6._tcp` went into
+  each. (The real fix is to gitignore the generated plist, but that is a change to how the app is built,
+  not to a scenario.)
+- **The role has to come from the button, not the election.** Scenarios 2–5 are symmetric and let
+  `electLobby` pick `min(peerId)` as host — fine when nobody has to know who won. Scenario 6's operator
+  must be told *which phone to switch off*, and "whichever one won an election you can't see" is not an
+  instruction. So it weaves symmetrically like the others and then calls `SeamRoomFactory.adopt` with the
+  role the button chose — exactly what the lobby does *after* electing, minus the election.
+- **`reweave = { seam }` is load-bearing on the joiner.** Without it a joiner whose path dies goes
+  straight to terminal `HostLost` and the short outage can never recover, so the "seat survives a brief
+  blip" half of the gate would be unprovable. `SeamElectionLobby` already passes it for the same reason;
+  a hand-rolled `adopt` has to remember to.
+- **A phase wait must drain a queue, not re-subscribe to `Room.events`.** `events` has a bounded replay
+  cache (by design, #692), so a second `awaitEvent(LocalFabricLost)` re-subscribing would happily match
+  the *first* outage's event and the second outage would assert nothing. One long-lived collector feeding
+  an UNLIMITED `Channel` that the phases drain forward is the only shape that can't do that.
+- **Await the level, then the edge — never the reverse.** `Room.localFabric` is allowed to run *ahead*
+  of its `LocalFabricLost`/`Restored` notifications (events are buffered), and the KDoc says so
+  explicitly. Waiting for the edge first and then asserting on the level is the race; waiting for the
+  level and then bounding the edge's lag is not.
+- **Default heartbeat timing hides the asymmetry.** With the stock 15 s detect, an ~8 s outage is over
+  before the *surviving* phone notices, so half the feature goes untested and the run looks green.
+  Scenario 6 tightens detect to 5 s and keeps the 60 s window — the window is what makes one outage
+  "short" and the other "long", and it also sets the long outage's length so the operator never has to
+  time the interval that must overrun.
+- **No automatic variant exists, and adding one would be worse than nothing.** `localFabric` moves only
+  when `nw_path_monitor` reports the path gone, so tearing a socket (the obvious no-human shortcut)
+  leaves it `Available` on both sides — the correct reading for a socket tear, and the exact opposite of
+  what #1712 needs proven. It would put a green light in the matrix for a lane the feature never touched.
