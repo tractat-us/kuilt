@@ -472,12 +472,20 @@ converges to `effIssued(t)[r] = delegate's base + relocated n`: both writes surv
 
 ### 6.4 Observer completeness (finding 3)
 
-The published `Reconcile` delta carries `s`'s **final base spend slots at their acked
-values** alongside the reloc slots — the same one-delta drain-witness idiom `Retire`
-already uses (`ControlPlane.kt:397`: the lifecycle bump is published merged with the
-proposer's carried witness, precisely so a laggard cannot observe the conclusion
-without its premises). An observer therefore can never hold `reloc.out(s)` without the
-base it cancels: `effRollup(s) ≥ 0` at every observer (§5.3 proviso). #1669's
+The published `Reconcile` delta carries **every slot the derivation read on the fenced
+edge** — base `issued`, both spend families at their acked values, and the three
+`relocIn` families — alongside the reloc slots it writes. This is the same one-delta
+drain-witness idiom `Retire` already uses (`ControlPlane.kt:397`: the lifecycle bump is
+published merged with the proposer's carried witness, precisely so a laggard cannot
+observe the conclusion without its premises).
+
+Republishing the *whole* read set, rather than only the final base spend slots, is
+load-bearing in two ways an earlier revision of this section missed. The drain also
+writes `returned(s)[r] → effIssued(s)[r]`, so an observer holding the drain without
+`issued(s)[r]` reads `returned > issued` and **false-fires `PerEdgeSafety`**; and an
+observer holding `leafRelocOut(s)` without `leafRelocIn(s)` reads a **negative**
+effective spend. With the full read set carried, no observer can hold the conclusion
+without its premises at all: `effRollup(s) ≥ 0` at every observer (§5.3 proviso). #1669's
 `carriesOnlyReturnedAndIssued()` witness-shape gate is superseded by the apply-derived
 patch — the shape is no longer an input to validate but an output of a deterministic
 derivation.
@@ -501,17 +509,41 @@ derivation.
    `PerEdgeSafety(s)` — finding 2's disease through a needle's eye. Fully closing this
    requires per-peer **durable** authored-slot storage, which heddle does not have and
    this design does not smuggle in. Instead: (a) the **boot-ordering invariant**
-   (below) forces a restarted peer to replay the control log *and complete one
-   anti-entropy exchange* before acking, which recovers its floating write in every
-   case where any peer holding it is reachable; (b) re-acks join by max, so a late
-   recovery *raises* the recorded finals; (c) if the residue lands anyway, it is
-   **detectable and attributable** — `base(s)[r] > ackedFinal(s)[r]` is machine-checkable
-   from the log — and a **residue sweep** (a second quiesce/ack/derive round moving
-   `base − ackedFinal` through the reloc counters, iff the live edge's headroom covers
-   it) is *specified as a follow-up and refused in v1*. Until it ships, a post-fence
-   residue surfaces as a diagnosed, attributed conflict — not silent corruption, and
-   not a conservation break (`rollupSpent` is outside the identity; a leaf-edge
-   residue keeps the identity true because the spend was real).
+   (below) forces a restarted peer to replay the control log before acking; (b) re-acks
+   join by max, so a late recovery *raises* the recorded finals; (c) if the residue
+   lands anyway, it is **detectable and attributable** — `base(s)[r] > ackedFinal(s)[r]`
+   is machine-checkable from the log — and a **residue sweep** (a second
+   quiesce/ack/derive round moving `base − ackedFinal` through the reloc counters, iff
+   the live edge's headroom covers it) is *specified as a follow-up and refused in v1*.
+
+   Two corrections to earlier revisions of this clause, both found by implementing it
+   (§14 forks 3 and 4):
+
+   - **(a) ships as control-log replay only.** An earlier revision also required the
+     restarted peer to "complete one anti-entropy exchange" before acking. There is no
+     `Quilter` primitive that signals *"one full exchange has completed"*, so that half
+     was never implementable as written and is **not** shipped. The consequence is that
+     this residual is exactly as wide as stated above when no anti-entropy has run,
+     rather than narrowed — do not assume the narrowing. Adding the Quilter signal is
+     tracked as #1782.
+   - **A leaf-edge residue IS a conservation break.** An earlier revision claimed a
+     post-fence residue was "not a conservation break (`rollupSpent` is outside the
+     identity; a leaf-edge residue keeps the identity true because the spend was
+     real)". The first clause holds. **The second is false.** `holdings` subtracts
+     `effLeafSpent(f)` at the child's *live inbound* edge, so an under-acked leaf spend
+     moves the **credit** onto the live edge without moving the **charge** with it, and
+     `Σ holdings + Σ effLeafSpent` exceeds `minted` by exactly the under-acked amount.
+     It remains surfaced (`PerEdgeSafety` on the edge) and machine-attributable, so it
+     is **diagnosed rather than silent** — but it is a conservation break, not a benign
+     residue. Pinned by
+     `EntitlementLedgerReconcileTest.namedResidual_anUnderAckedLEAFSpendDoesBreakTheIdentityContraDesign652`.
+     **This is the case the refused-in-v1 residue sweep exists for**, and its
+     justification should be read that way rather than as an optional tidy-up
+     (tracked as #1783).
+
+   Both shapes are reachable only through the cross-incarnation gap described above: a
+   peer that acks normally marks the edge unwritable and then reads its own slots, so it
+   cannot understate. A restart with an empty local ledger can.
 3. **The boot-ordering invariant (new normative obligation).** A peer — fresh joiner
    or restart — must not execute data-plane mutators until its control-plane apply has
    caught up to the leader's commit index at boot (one `readIndex()` + wait). Without
@@ -783,8 +815,13 @@ first two are safety-relevant and **slice 3 must close the second one**.
 ## 14. Implementation feedback from slice 3 (#1693)
 
 Slice 3 landed the fence, the apply-derived `Reconcile`, the boot gate, and the through-service
-un-gate. Six corrections. **Two are forks the implementation deliberately did not resolve** — they
-are marked ⚠ and were surfaced rather than invented around.
+un-gate. Seven corrections.
+
+Items 3 and 4 were surfaced by the implementation as **forks rather than invented around** — both
+are cases where the design's normative text promised something the code does not do. Both are now
+resolved *in the design's favour of honesty*: the text is corrected to describe what ships, and the
+missing capability is tracked (#1782, #1783). Item 4 is the consequential one — a residue this
+section documented as safe turns out to be a real conservation break in one shape.
 
 1. **`QuiesceAck` must be self-service, and §6.2 never says so.** §6.2 step 2.3 says a peer
    "proposes `QuiesceAck(s, r, finals)` with its own requestKey", which *implies* self-authorship
@@ -808,17 +845,19 @@ are marked ⚠ and were surfaced rather than invented around.
    points that author a slot, and `complete` is transitively gated because a reservation can only
    come from `reserve`.
 
-3. **⚠ FORK — §6.5.2(a) requires "one anti-entropy exchange" before acking, and nothing supports
-   it.** §6.5.2 narrows the cross-incarnation ack gap by having a restarted peer "replay the
+3. **§6.5.2(a) required "one anti-entropy exchange" before acking, and nothing supports it.**
+   §6.5.2 narrowed the cross-incarnation ack gap by having a restarted peer "replay the
    control log *and complete one anti-entropy exchange* before acking". §6.5.3's normative text
    mentions only the control-log half. The anti-entropy half needs a *Quilter* primitive that does
    not exist — there is no "one full exchange has completed" signal to wait on — so shipping it
    means designing that primitive. **Not implemented; the control-log half is.** The consequence
    is that the §6.5.2 residual is exactly as wide as the design says it is when no anti-entropy
-   has run, rather than narrowed. Decide whether to add the Quilter signal before assuming the
-   narrowing.
+   has run, rather than narrowed.
 
-4. **⚠ FORK — §6.5.2's "not a conservation break" is wrong for a *leaf*-edge residue.** The text
+   **Resolved:** §6.5.2(a) now describes what actually ships, so the design no longer promises a
+   narrowing the code does not perform. Adding the Quilter signal is tracked as **#1782**.
+
+4. **§6.5.2's "not a conservation break" was wrong for a *leaf*-edge residue.** The text
    says the residue is "not a conservation break (`rollupSpent` is outside the identity; a
    leaf-edge residue keeps the identity true because the spend was real)". The parenthetical's
    first clause holds and is now pinned by a test; **the second does not.** `holdings` subtracts
@@ -828,8 +867,12 @@ are marked ⚠ and were surfaced rather than invented around.
    surfaced (`PerEdgeSafety` on the edge) and still machine-attributable (`base > ackedFinal`), so
    it is diagnosed rather than silent — but it is a conservation break, and the refused-in-v1
    residue sweep must therefore treat the leaf case as the one it exists for. Pinned by
-   `EntitlementLedgerReconcileTest.namedResidual_anUnderAckedLEAFSpendDoesBreakTheIdentityContraDesign652`;
-   §6.5.2's text should be corrected.
+   `EntitlementLedgerReconcileTest.namedResidual_anUnderAckedLEAFSpendDoesBreakTheIdentityContraDesign652`.
+
+   **Resolved:** §6.5.2's text is corrected, and the residue sweep's justification is restated as
+   *this is the case it exists for* rather than an optional tidy-up. Tracked as **#1783**. Both
+   shapes are reachable only through the cross-incarnation gap — a peer that acks normally marks
+   the edge unwritable and then reads its own slots, so it cannot understate.
 
 5. **The published move must republish more than §6.4 says.** §6.4 says the delta carries "`s`'s
    **final base spend slots** at their acked values". That is necessary but not sufficient: the
@@ -850,3 +893,17 @@ are marked ⚠ and were surfaced rather than invented around.
    refusing with the pending set (`pendingAcks(edge)`) is fail-closed and observable; a caller that
    blocked would be waiting, unbounded, inside a recovery path whose completion is by design as
    available as the slowest enrolled peer.
+
+7. **The write gate is a breaking behaviour change for consumers, and it fails *silently*.** The
+   §13.2 gate (item 2) means a governed node that has not applied `enroll(self)` delegates nothing
+   and reserves nothing. Correct — but the closed gate is reported through **in-band values that
+   already mean something else**: `reserve` returns `null` (which also means "no holdings") and
+   `schedule` returns `0` (which also means "nothing to delegate"). A consumer that forgets to
+   enroll therefore gets a scheduler that silently does nothing, indistinguishable from an idle one.
+   The full build caught exactly this downstream — `:kuilt-warp-heddle`'s
+   `HeddleAdmissionControlTest.governedNodeComposesIntoAdmissionControl` failed with `A=0 B=0` —
+   while every `:kuilt-heddle` test passed, so a module-scoped build would have green-lit it. Two
+   things to carry: consumers must enroll on **every** boot (now stated on
+   `HeddleAdmissionControl`'s KDoc and in the cookbook), and **whether the gate should refuse
+   loudly rather than return an ambiguous in-band value is an open question** — this module's own
+   precedent (#1737, #1753) is to fail loudly rather than return a silent fallback.
