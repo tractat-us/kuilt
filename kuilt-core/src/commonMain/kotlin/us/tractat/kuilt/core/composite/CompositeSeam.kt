@@ -564,18 +564,40 @@ internal class CompositeSeam(
             .catch { failure -> raisePlyFailure(id, PlyReconcileException.Phase.INBOUND, failure) }
             .launchIn(plyScope)
 
-        // Recompute peers on transport membership changes; re-announce to newcomers.
-        //
-        // This pump's DELIVERED value is the peers fold's input (mirrored onto the handle BEFORE the
+        // Mirror this ply's peer set and request a fold — and NOTHING ELSE, least of all anything that
+        // suspends. Its DELIVERED value is the peers fold's input (mirrored onto the handle BEFORE the
         // request, exactly as the two pumps above do for the capability rollup). It is not merely a wakeup
         // for a fresh read of `seam.peers` — that distinction is the whole of [publishPeers]'s correctness
         // argument, and getting it wrong leaves the wedge reachable even with the writer in place (#1784).
+        //
+        // ### Why the re-announce is a SEPARATE collector, and must stay one (#1784)
+        // `onEach` is sequential and `Seam.broadcast` "suspends until accepted by the local transport" —
+        // unbounded on a backpressured or black-holing transport, with no timeout here. Fused into this
+        // collector, emission N's parked send queues emission N+1's **mirror write** behind it. Because the
+        // fold reads only the mirror, that freezes the fold's ONLY input: no trigger anywhere can observe
+        // this ply's true peer set until the send returns, so `peers` keeps advertising a departed peer while
+        // [resolveSendTargets] — live-reading, correctly — finds no candidate, and `sendTo` throws
+        // [PeerNotConnected] for a peer `peers` calls reachable. Bounded by the send in general, absorbing
+        // under a transport that black-holes without tearing. So the mirror stays in a collector with no
+        // suspension point in it, and the send lives below — the same split `seam.state` already has between
+        // its mirror pump and its Woven re-announce pump.
         seam.peers
             .onEach { newPeers ->
                 lock.withLock { live[id]?.transportPeers = newPeers }
                 recomputePeers()
+            }
+            .launchIn(plyScope)
+
+        // Re-announce to newcomers, isolated exactly as the Woven re-announce above is, and for the same
+        // reason: it makes a suspending consumer-authored call. Best-effort — swallow a torn-ply send (#535).
+        //
+        // Collector order versus the mirror pump above is irrelevant: the frame carries only [selfId], which
+        // is immutable, and the `Woven` gate reads `seam.state` live (as it always did). The two collectors
+        // conflate independently, so this one may skip an intermediate peers value the mirror pump saw —
+        // already within contract, since the far side re-learns the mapping on the next Woven/peers event.
+        seam.peers
+            .onEach { newPeers ->
                 if (newPeers.size > 1 && seam.state.value is SeamState.Woven) {
-                    // Best-effort re-announce to newcomers — swallow a torn-ply send (#535).
                     runCatchingCancellable { seam.broadcast(PlyFrame.encode(PlyFrame.Announce(selfId))) }
                 }
             }
@@ -828,6 +850,31 @@ internal class CompositeSeam(
      * before requesting; and a request always yields a later drain, so once the plies quiesce some fold runs
      * strictly after the final mirror write. The composite can lag by a *pending* delivery, never by a
      * *swallowed* one.
+     *
+     * **What bounds "pending" is a design constraint, not an accident.** A pending delivery is only harmless
+     * while the mirror pump can actually run, so that pump is kept free of suspension points: it mirrors,
+     * requests, and returns. Anything suspending in it — above all a consumer-authored `Seam.broadcast`,
+     * contractually "suspends until accepted by the local transport" — makes the lag last as long as that
+     * call, and a transport that black-holes without tearing (#1655) makes it permanent, because the mirror is
+     * the fold's *only* input. That is why [attachPly] collects `seam.peers` twice and the re-announce lives
+     * in the second collector; the pinning test is
+     * `CompositePeersWriterTest.aPlyWhoseReAnnounceNeverReturnsStillLetsTheMirrorAdvance`.
+     *
+     * ### Liveness here is `live[plyId] != null` only — it does NOT screen a torn ply
+     * A ply that has latched `Torn` but is not yet detached still contributes its mirror to this fold, where
+     * [resolveSendTargets] filters it. What closes the gap today is a **convention, not the contract**: every
+     * in-tree fabric collapses its roster to `{selfId}` *before* latching `Torn` (`LinkSeam`, `MeshSeam`), so
+     * a torn ply's mirrored peer set is empty and contributes nothing. That obligation is not stated on
+     * [Seam] and not asserted by the conformance suite, so a consumer fabric that tears without collapsing
+     * would leave [peers] stale-inclusive until detach.
+     *
+     * Adding `handle.woven` to the predicate below looks like the fix and **is not**: the pump that mirrors
+     * [PlyHandle.woven] requests only a *capability* recompute, never a peers one, so `woven` would become an
+     * input to this fold with no trigger — a fresh instance of the very lost-trigger defect above (a ply
+     * reaching `Woven` after its peers were mirrored would stay stale-*exclusive*, permanently). Taking it
+     * safely means also requesting a peers recompute from the state pump, which is a behaviour change this
+     * fold's tests do not cover. The durable fix is to put the obligation in [Seam]'s contract and assert it
+     * in the conformance suite; tracked separately rather than smuggled in here.
      *
      * ### Why [resolveSendTargets] still reads the live ply peers
      * Deliberate, not an oversight. The lost-trigger argument bites on a **published derived value with no

@@ -220,12 +220,106 @@ class CompositePeersWriterTest {
     }
 
     /**
+     * A ply whose own re-announce `broadcast` never returns must not freeze the peers fold's only input.
+     *
+     * `onEach` is sequential and [us.tractat.kuilt.core.Seam.broadcast] is contractually *"suspends until
+     * accepted by the local transport"* — unbounded on a backpressured or black-holing transport, with no
+     * timeout at the call site. So if one collector both mirrors the peer set **and** does the best-effort
+     * re-announce, emission *N*'s parked send queues emission *N+1*'s **mirror write** behind it.
+     *
+     * That is only a wedge *because* the fold reads the mirror: before the mirror existed the fold live-read
+     * `seam.peers.value`, so any sibling trigger corrected the composite immediately. Once the mirror is the
+     * fold's sole input, a parked send means **no trigger in the system** can observe that ply's true peer
+     * set for the duration — `peers` advertises a departed composite peer while `resolveSendTargets`
+     * (live-reading, correctly) finds no candidate, so `sendTo` throws
+     * [us.tractat.kuilt.core.PeerNotConnected] for a peer `peers` calls reachable. Exactly the inconsistency
+     * [CompositeSeam] guards against on the detach path. It clears when the send completes — but under a
+     * black-holing transport that never tears (#1655) it does not, which is the class this strand exists to
+     * close.
+     *
+     * The fix is to collect `seam.peers` **twice**: mirror-and-request in one collector with nothing
+     * suspending in it, and the re-announce isolated in its own — precisely how `seam.state` is already
+     * split between its mirror pump and its Woven re-announce pump. This test pins the split so it cannot be
+     * refused later as duplication.
+     */
+    @Test
+    fun aPlyWhoseReAnnounceNeverReturnsStillLetsTheMirrorAdvance() = runTest {
+        val plyA = ParkingBroadcastSeam(FakeSeam(selfId = A_LOCAL, initialPeers = setOf(A_LOCAL)))
+        val plyB = FakeSeam(selfId = B_LOCAL, initialPeers = setOf(B_LOCAL, B_REMOTE))
+        plyA.delegate.deliver(A_REMOTE, PlyFrame.encode(PlyFrame.Announce(VIA_A)))
+        plyB.deliver(B_REMOTE, PlyFrame.encode(PlyFrame.Announce(VIA_B)))
+
+        val composite = CompositeLoom(
+            plies = listOf(PlyId(PLY_A) to OnePlyLoom(plyA), PlyId(PLY_B) to OnePlyLoom(plyB)),
+            dispatcher = UnconfinedTestDispatcher(testScheduler),
+        ).host(Pattern("host"))
+
+        // Ply A's remote joins. Its peers pump mirrors {A_LOCAL, A_REMOTE} and then — size > 1 and Woven —
+        // enters the best-effort re-announce, whose send never returns.
+        plyA.delegate.addPeer(A_REMOTE)
+        val both = setOf(composite.selfId, VIA_A, VIA_B)
+        assertEquals(both, await(composite) { it == both }, "precondition: both composite peers are reachable")
+
+        // The remote leaves. Pre-split this delivery queues behind the parked send, so the mirror — the
+        // fold's only input — is frozen holding a peer that is gone.
+        plyA.delegate.removePeer(A_REMOTE)
+        // A surviving trigger drives a fold.
+        plyB.deliver(B_REMOTE, PlyFrame.encode(PlyFrame.Announce(VIA_B)))
+        runCurrent()
+
+        val reachable = setOf(composite.selfId, VIA_B)
+        val observed = await(composite) { it == reachable }
+        assertAll(
+            {
+                assertTrue(
+                    plyA.parkedSends >= 1,
+                    "precondition: ply A's re-announce must actually be parked, or nothing is being modelled",
+                )
+            },
+            {
+                assertEquals(
+                    setOf(A_LOCAL),
+                    plyA.peers.value,
+                    "precondition: the ply's TRUE peer set no longer holds the remote",
+                )
+            },
+            {
+                assertEquals(
+                    reachable,
+                    observed,
+                    "the peers mirror froze behind this ply's own parked re-announce, so no trigger could " +
+                        "observe its true peer set and `peers` kept advertising a departed peer. The mirror " +
+                        "write must live in a collector with nothing suspending in it — split the " +
+                        "re-announce out, exactly as seam.state's mirror and re-announce already are.",
+                )
+            },
+        )
+        composite.close(CloseReason.Normal)
+    }
+
+    /**
      * Await a composite peer set matching [predicate] under virtual time, returning the observed value (or
      * the current one if it never matched, so the caller's `assertEquals` names the strand).
      */
     private suspend fun await(composite: Seam, predicate: (Set<PeerId>) -> Boolean): Set<PeerId> {
         withTimeoutOrNull(AWAIT_MILLIS) { composite.peers.first { predicate(it) } }
         return composite.peers.value
+    }
+
+    /**
+     * A ply seam whose [broadcast] **never returns**, modelling a backpressured or black-holing transport —
+     * the `Seam` contract's "suspends until accepted by the local transport" with no bound and no timeout at
+     * the composite's call site. Everything else delegates, so its `peers`/`state`/`incoming` behave normally
+     * and only the *send* parks.
+     */
+    private class ParkingBroadcastSeam(val delegate: FakeSeam) : Seam by delegate {
+        var parkedSends: Int = 0
+            private set
+
+        override suspend fun broadcast(payload: ByteArray): Nothing {
+            parkedSends++
+            awaitCancellation()
+        }
     }
 
     /** A [Loom] that hands back the one prebuilt ply [Seam] a test drives. */
@@ -251,14 +345,18 @@ class CompositePeersWriterTest {
     ) : Seam by delegate {
         private var current = initial
         private var lastDelivered: Set<PeerId>? = null
-        private var pump: FlowCollector<Set<PeerId>>? = null
+
+        // `peers` is a StateFlow, so the composite may legitimately collect it more than once — it attaches a
+        // mirror pump and a separate re-announce pump. [runPump] drives every subscriber in lockstep, which
+        // models both pumps being dispatched together; conflation is still tracked against the last value
+        // DELIVERED, which is the property these tests turn on.
+        private val pumps = mutableListOf<FlowCollector<Set<PeerId>>>()
 
         override val peers: StateFlow<Set<PeerId>> = object : StateFlow<Set<PeerId>> {
             override val value: Set<PeerId> get() = current
             override val replayCache: List<Set<PeerId>> get() = listOf(current)
             override suspend fun collect(collector: FlowCollector<Set<PeerId>>): Nothing {
-                check(pump == null) { "DrivenPeersSeam models a single-collection peers pump" }
-                pump = collector
+                pumps += collector
                 // A real collector always delivers its first value (`oldState == null`).
                 lastDelivered = current
                 collector.emit(current)
@@ -271,14 +369,15 @@ class CompositePeersWriterTest {
             current = peers
         }
 
-        /** Run one collect-loop iteration; returns whether a value was actually delivered. */
+        /** Run one collect-loop iteration for every subscriber; returns whether a value was delivered. */
         fun runPump(): Boolean {
-            val collector = checkNotNull(pump) { "the composite has not subscribed to this ply's peers yet" }
+            check(pumps.isNotEmpty()) { "the composite has not subscribed to this ply's peers yet" }
             val latest = current
             if (latest == lastDelivered) return false
             lastDelivered = latest
+            val targets = pumps.toList()
             var outcome: Result<Unit>? = null
-            val delivery: suspend () -> Unit = { collector.emit(latest) }
+            val delivery: suspend () -> Unit = { targets.forEach { it.emit(latest) } }
             // No ContinuationInterceptor in the completion's context, so `intercepted()` is a no-op and the
             // body runs inline on this thread instead of being dispatched.
             delivery.startCoroutine(Continuation(EmptyCoroutineContext) { outcome = it })
