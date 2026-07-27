@@ -6,6 +6,7 @@ import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.test.assertAll
 import us.tractat.kuilt.warp.test.WasmKernelFixtures
+import us.tractat.kuilt.warp.test.retryingOnlyBudgetOverruns
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertTrue
@@ -39,29 +40,61 @@ class ChicoryWasmRuntimeTest {
      * earlier runaway's free-time (its own `submit + T`), so it cannot be deterministically
      * false-timed. A reproducible false-timeout would need *completing* slow kernels stacked so
      * cumulative queue-wait exceeds the budget — i.e. a test gated on real wall-clock durations,
-     * which this repo's coroutine-determinism policy forbids. So this asserts the post-fix
-     * guarantee (concurrent ops over one runtime all succeed) deterministically, instead of
-     * chasing a flaky red. The 30 s `runTest` ceiling is a safety bound, not a timed assertion.
+     * which this repo's coroutine-determinism policy forbids.
+     *
+     * ## Why the innocent arm asserts eventual success (#1739)
+     *
+     * The *mechanism* is already pinned deterministically, with no wall clock anywhere, by
+     * [ChicoryWasmRuntimeTimingTest.concurrentOpGetsFreshTimeoutBudgetAfterFirstTimesOut] over an
+     * injected [TimedGuestRunner]. What this test adds on top is the real-CPU integration proof:
+     * that a *real* Chicory interpreter really does free the shared worker when the runaway's
+     * `Future.cancel(true)` interrupts it, so a *really* concurrent innocent op really does run.
+     * That proof is only obtainable with a real budget over real guest CPU — and a real budget on
+     * the *innocent* op is a statement about the host: it blew its 200 ms at 1-minute load average
+     * 52 on 2026-07-27 and passed in isolation, 174/174.
+     *
+     * Raising 200 ms would buy a slower false red, and would loosen the runaway bound this test
+     * also asserts. So the whole concurrent scenario is retried instead, on a fresh runtime each
+     * attempt — every attempt is a complete observation of the concurrent property, nothing is
+     * downgraded to a weaker assertion — and **only** a budget overrun is retried, so a trap, a
+     * poisoned worker, wrong bytes, or a runaway that escapes its bound all still fail on the first
+     * attempt — see [retryingOnlyBudgetOverruns] for the ordered safety argument (type, then
+     * message, then persistence) and the one class it deliberately absorbs (#1802). The 60 s
+     * `runTest` ceiling is a wedge backstop covering all attempts, not a timed assertion; the
+     * reference invocation gets a *strictly smaller* 5 s budget so it can still report inside that
+     * ceiling after the attempts have spent part of it.
      */
     @Test
-    fun concurrentOpsOverSharedRuntimeAllSucceed() = runTest(timeout = 30.seconds) {
-        ChicoryWasmRuntime(WasmSandboxConfig(executionTimeout = 200.milliseconds)).use { rt ->
-            val loop = rt.load(WasmKernelFixtures.CPU_BOMB)
-            val reverse = rt.load(WasmKernelFixtures.REVERSE)
-            coroutineScope {
-                val runaway = async { runCatchingCancellable { loop.invoke(ByteArray(0)) } }
-                val innocent = async { reverse.invoke(byteArrayOf(1, 2, 3, 4)) }
-                val innocentBytes = innocent.await()
-                val runawayOutcome = runaway.await()
-                assertAll(
-                    { assertContentEquals(byteArrayOf(4, 3, 2, 1), innocentBytes, "innocent op succeeds") },
-                    {
-                        assertTrue(
-                            runawayOutcome.exceptionOrNull() is WasmExecutionException,
-                            "runaway op is bounded by the timeout",
-                        )
-                    },
-                )
+    fun concurrentOpsOverSharedRuntimeAllSucceed() = runTest(timeout = 60.seconds) {
+        // One literal for both the runtime's budget and the budget the failure message names.
+        val budget = 200.milliseconds
+        retryingOnlyBudgetOverruns(
+            what = "an innocent op running concurrently with a runaway over one shared runtime",
+            budget = budget,
+            referenceInvoke = {
+                ChicoryWasmRuntime(WasmSandboxConfig(executionTimeout = 5.seconds)).use {
+                    it.load(WasmKernelFixtures.REVERSE).invoke(byteArrayOf(1, 2, 3, 4))
+                }
+            },
+        ) {
+            ChicoryWasmRuntime(WasmSandboxConfig(executionTimeout = budget)).use { rt ->
+                val loop = rt.load(WasmKernelFixtures.CPU_BOMB)
+                val reverse = rt.load(WasmKernelFixtures.REVERSE)
+                coroutineScope {
+                    val runaway = async { runCatchingCancellable { loop.invoke(ByteArray(0)) } }
+                    val innocent = async { reverse.invoke(byteArrayOf(1, 2, 3, 4)) }
+                    val innocentBytes = innocent.await()
+                    val runawayOutcome = runaway.await()
+                    assertAll(
+                        { assertContentEquals(byteArrayOf(4, 3, 2, 1), innocentBytes, "innocent op succeeds") },
+                        {
+                            assertTrue(
+                                runawayOutcome.exceptionOrNull() is WasmExecutionException,
+                                "runaway op is bounded by the timeout",
+                            )
+                        },
+                    )
+                }
             }
         }
     }

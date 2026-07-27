@@ -12,6 +12,7 @@ import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertContentEquals
 import kotlin.test.assertFailsWith
+import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 
@@ -56,9 +57,11 @@ import kotlin.time.Duration.Companion.seconds
  * [WasmExecutionException]), a `(start)` CPU bomb must fail terminally near the budget —
  * never hang the host (see [startSectionCpuBombIsBoundedNotHung]).
  *
- * The CPU-bomb vectors burn REAL wall-clock CPU: the sandbox budget is dropped to 250 ms and
- * `runTest` timeouts are kept tight so a non-conforming impl fails fast instead of wedging
- * the test host.
+ * The CPU-bomb vectors burn REAL wall-clock CPU: the sandbox budget is dropped to 250 ms so a
+ * non-conforming impl fails fast instead of wedging the test host. The `runTest` ceilings behind
+ * that budget are *wedge backstops*, not measurements — a real-millisecond ceiling over real CPU
+ * work measures the host as much as the code (#1739) — so they are sized with slack and must not
+ * be tightened to "fail faster"; the impl's own budget is the fast detector.
  */
 public abstract class WasmRuntimeConformanceSuite {
 
@@ -192,17 +195,54 @@ public abstract class WasmRuntimeConformanceSuite {
      * invocation (whatever the impl's recovery mechanism — a cleared interrupt, a re-armed
      * deadline, a respawned worker — it must re-enforce the budget), and a well-behaved op on
      * the SAME runtime still produces correct bytes afterwards.
+     *
+     * ## Why the well-behaved arm asserts eventual success (#1739)
+     *
+     * Both arms share one runtime and therefore one [WasmSandboxConfig.executionTimeout]. The
+     * runaway arm needs it *tight* (250 ms) or a non-conforming impl burns the test host; the
+     * well-behaved arm needs it *generous*, because reversing three bytes costs microseconds of
+     * guest work but its deadline also covers being scheduled onto a CPU. The well-behaved arm
+     * lost that argument twice on 2026-07-27, false-timing-out at 1-minute load averages of 41
+     * and 71.6 and passing in isolation both times — a budget on the *innocent* op asserts
+     * "this host is not busy", not "the runtime recovered".
+     *
+     * Since one config cannot be both tight and generous, the scenario is retried instead —
+     * and **only** on a budget overrun. Nothing this test protects is weakened, but the reason
+     * is *not* that a poisoned runtime reads differently: an unreset deadline is mapped to an
+     * overrun message by at least one impl. It is that (i) wrong bytes and a non-firing
+     * `assertFailsWith` never reach the retry (they are [AssertionError]s, not
+     * [WasmExecutionException]s), (ii) a trap, an interrupt or a dead worker carries different
+     * message text, and (iii) any real recovery failure is **persistent**, so every attempt
+     * overruns and the bounded retry still fails. See [retryingOnlyBudgetOverruns] for the
+     * ordered argument and the one class it deliberately absorbs (#1802).
+     *
+     * One runtime is reused across attempts deliberately: each extra attempt puts two more
+     * timeouts in front of the well-behaved invoke, which strengthens the recovery assertion,
+     * and a common-code suite cannot close a [WasmRuntime] to reclaim a discarded one.
      */
     @Test
-    public fun timeoutDoesNotPoisonSubsequentInvokes(): TestResult = runTest(timeout = 15.seconds) {
-        val bounded = newRuntime(WasmSandboxConfig(executionTimeout = 250.milliseconds))
+    public fun timeoutDoesNotPoisonSubsequentInvokes(): TestResult = runTest(timeout = WEDGE_BACKSTOP) {
+        // One literal, used both to configure the runtime and to name the budget in the failure
+        // message — editing them apart would make the diagnosis lie about what it diagnosed.
+        val budget = 250.milliseconds
+        val bounded = newRuntime(WasmSandboxConfig(executionTimeout = budget))
         val runaway = bounded.load(WasmKernelFixtures.CPU_BOMB)
         val reverse = bounded.load(WasmKernelFixtures.REVERSE)
-        assertFailsWith<WasmExecutionException> { runaway.invoke(ByteArray(0)) }
-        assertFailsWith<WasmExecutionException>("recovered guest must time out again") {
-            runaway.invoke(ByteArray(0))
+        retryingOnlyBudgetOverruns(
+            what = "a well-behaved op on a runtime that has just recovered from a timeout",
+            budget = budget,
+            referenceInvoke = {
+                newRuntime(WasmSandboxConfig(executionTimeout = REFERENCE_BUDGET))
+                    .load(WasmKernelFixtures.REVERSE)
+                    .invoke(byteArrayOf(1, 2, 3))
+            },
+        ) {
+            assertFailsWith<WasmExecutionException> { runaway.invoke(ByteArray(0)) }
+            assertFailsWith<WasmExecutionException>("recovered guest must time out again") {
+                runaway.invoke(ByteArray(0))
+            }
+            assertContentEquals(byteArrayOf(3, 2, 1), reverse.invoke(byteArrayOf(1, 2, 3)))
         }
-        assertContentEquals(byteArrayOf(3, 2, 1), reverse.invoke(byteArrayOf(1, 2, 3)))
     }
 
     /**
@@ -236,5 +276,24 @@ public abstract class WasmRuntimeConformanceSuite {
     public fun allocPointerWithHighBitSetIsBounded(): TestResult = runTest(timeout = 10.seconds) {
         val op = newRuntime().load(WasmKernelFixtures.HIGH_BIT_ALLOC_POINTER)
         assertFailsWith<WasmExecutionException> { op.invoke(byteArrayOf(1, 2, 3, 4)) }
+    }
+
+    private companion object {
+        /**
+         * The `runTest` ceiling for [timeoutDoesNotPoisonSubsequentInvokes]. A wedge backstop only:
+         * it catches an impl that hangs where its own [WasmSandboxConfig.executionTimeout] should
+         * have fired, and it has to cover several retried attempts on a contended host, so it is
+         * deliberately far larger than the work it bounds (#1739).
+         */
+        val WEDGE_BACKSTOP: Duration = 60.seconds
+
+        /**
+         * The generous budget the exhaustion-path reference invocation runs under. Strictly smaller
+         * than [WEDGE_BACKSTOP], and by a wide margin: the retried attempts have already spent part
+         * of that ceiling by the time the reference runs, so a reference sharing the ceiling's value
+         * could never complete before `runTest` fired — yielding an opaque timeout in place of the
+         * diagnostic report. Five seconds is ~1400x the measured reference cost on an idle host.
+         */
+        val REFERENCE_BUDGET: Duration = 5.seconds
     }
 }
