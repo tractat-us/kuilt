@@ -205,7 +205,7 @@ public class NwLoom(
     /**
      * Close a seam [weave] wove but will never return, so its parentless [kotlinx.coroutines.SupervisorJob]
      * scope stops redialling every discovered endpoint forever (#1513). Shielded, because on both callers'
-     * paths the throwable being handled may itself be this coroutine's cancellation and [NwSeam.close]
+     * paths the throwable being handled may itself be this coroutine's cancellation and `Seam.close`
      * suspends.
      *
      * `try`/`catch (Throwable)` rather than `runCatchingCancellable` — the distinction this file documents at
