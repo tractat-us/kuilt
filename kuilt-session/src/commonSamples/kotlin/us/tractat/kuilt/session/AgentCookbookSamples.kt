@@ -1,6 +1,7 @@
 package us.tractat.kuilt.session
 
 import kotlinx.coroutines.delay
+import us.tractat.kuilt.core.FabricAvailability
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.util.ExponentialBackoff
 import us.tractat.kuilt.session.admit.RejectCode
@@ -110,19 +111,57 @@ public suspend fun retryWithBackoffSample(random: Random, dial: suspend () -> Bo
  * Drive a reconnect banner / terminal-error decision from the reason kuilt already classifies,
  * instead of re-deriving your own transient/unrecoverable buckets. [ReconnectReason] says why the
  * link is down while a window is open; [FailureReason] says why the session ended for good.
+ *
+ * Check the `localFabric` tag **first**. Both events carry this peer's own
+ * [Room.localFabric] as it stood when they were emitted, and when that is
+ * [FabricAvailability.Unavailable] the event is not evidence about the peer it names — our own end
+ * of the fabric was down, so their silence says nothing about them. Without that branch a joiner
+ * whose own radio died renders "lost the host" (#1712).
  */
 public suspend fun reconnectBannerSample(room: Room) {
     room.events.collect { event ->
-        when (event) {
-            is MembershipEvent.Partitioned -> when (event.reason) {
+        val ourOwnEndWasDown = when (event) {
+            is MembershipEvent.Partitioned -> event.localFabric is FabricAvailability.Unavailable
+            is MembershipEvent.HostLost -> event.localFabric is FabricAvailability.Unavailable
+            else -> false
+        }
+        when {
+            // First branch, deliberately: never say "lost the host" when *we* are the ones offline.
+            ourOwnEndWasDown -> Unit // "You're offline — check your connection"
+            event is MembershipEvent.Partitioned -> when (event.reason) {
                 ReconnectReason.LinkTimeout, ReconnectReason.TransportClosed -> Unit // "Reconnecting…"
                 ReconnectReason.Backpressure -> Unit // "Connection congested…"
             }
-            is MembershipEvent.HostLost -> when (val reason = event.reason) {
+            event is MembershipEvent.HostLost -> when (val reason = event.reason) {
                 FailureReason.WindowExpired -> Unit // "Lost the host — rejoin"
                 FailureReason.Unrecoverable -> Unit // "Can't reconnect — return to lobby"
                 is FailureReason.Refused -> Unit // show reason.message (auth-expired / version, …)
             }
+            else -> Unit
+        }
+    }
+}
+
+/**
+ * Tell "**you** are offline" apart from "**they** are offline". Every other member of the presence
+ * vocabulary names somebody else, so a peer that loses its own network blames its peers.
+ * [Room.localFabric] is the level — a `StateFlow`, so a late reader cannot miss a drop — and
+ * [MembershipEvent.LocalFabricLost] / [MembershipEvent.LocalFabricRestored] are the notifications
+ * that it moved. Don't reach past [Room] into a transport-specific path monitor.
+ */
+public suspend fun localFabricBannerSample(room: Room) {
+    // Pull-style: the authoritative answer, readable at any instant.
+    when (room.localFabric.value) {
+        FabricAvailability.Available -> Unit // no banner
+        is FabricAvailability.Unavailable -> Unit // "You're offline" — this room's fabric, not the device
+        is FabricAvailability.Unknown -> Unit // kuilt cannot tell on this fabric — say nothing
+    }
+    // Push-style: only transitions into Unavailable and into Available emit. A move into Unknown
+    // emits nothing — "we stopped being able to tell" is not a loss.
+    room.events.collect { event ->
+        when (event) {
+            is MembershipEvent.LocalFabricLost -> Unit // show it; event.reason is the transport's own words
+            is MembershipEvent.LocalFabricRestored -> Unit // clear it — may arrive with no preceding Lost
             else -> Unit
         }
     }

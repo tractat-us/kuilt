@@ -13,13 +13,14 @@ If you catch yourself writing any of these, stop — kuilt already ships it:
 |---|---|---|
 | a rejoin / reconnect loop, a resume token, a "grace window / hold the slot open" | `ResumeToken` + `SeamRoom` resume | [Rejoin & reconnect](#rejoin--reconnect) |
 | a fixed-list or exponential retry/back-off loop | `ExponentialBackoff` | [Rejoin & reconnect](#rejoin--reconnect) |
-| a reconnect banner / "why did we drop" classifier — transient vs. unrecoverable buckets | `MembershipEvent.Partitioned.reason` + `HostLost.reason` (`ReconnectReason`/`FailureReason`) | [Rejoin & reconnect](#rejoin--reconnect) |
+| a reconnect banner / "why did we drop" classifier — transient vs. unrecoverable buckets | `MembershipEvent.Partitioned.reason` + `HostLost.reason` (`ReconnectReason`/`FailureReason`), plus their `localFabric` tag | [Rejoin & reconnect](#rejoin--reconnect) |
 | a propose→authoritative/rejected turn/session facade, host election with a term | `GameSession` + `TurnSequencer` | [Consensus & turns](#consensus--turns) |
 | a heartbeat, an idle reaper, "is this peer still alive", "evict stale session" | `HeartbeatPartitionDetector` | [Liveness & presence](#liveness--presence) |
 | "close a room nobody joined", "reap an abandoned table/lobby", "nobody ever showed up" | `SoloDeadlineDetector` | [Liveness & presence](#liveness--presence) |
 | a "hold the seat open" / reconnect grace window on the host, a `pendingSeats` or `disconnectedAt` map | `JoinerReconnectController` | [Liveness & presence](#liveness--presence) |
-| a "paused / reconnecting…" presence flag, a `lastSeen` map for greying out a player | `Room.events` + `Member.liveness` | [Liveness & presence](#liveness--presence) |
+| a "paused / reconnecting…" presence flag, a `lastSeen` map for greying out a player | `Room.roster` + `Member.liveness` — the level; `Room.events` is the notification | [Liveness & presence](#liveness--presence) |
 | that same "paused / reconnecting…" surface for a **game** (not a bare room), a `room.events` → game-presence adapter | `RoomGameSession.presence` via `gameOverRoom` | [Liveness & presence](#liveness--presence) |
+| a "you are offline" / "your connection dropped" indicator, distinguishing *your* outage from *their* outage | `Room.localFabric` + `MembershipEvent.LocalFabricLost` | [Liveness & presence](#liveness--presence) |
 | a last-write-wins register, a grow-only set/counter, an add/remove set, a version vector, "merge these two states" | the CRDT zoo (`LWWRegister`, `GSet`, `PNCounter`, `ORSet`, …) | [Replicated data](#replicated-data) |
 | replicating a CRDT over a connection by hand | `Quilter` | [Replicated data](#replicated-data) |
 | averaging model updates from many devices without collecting their data — federated learning / federated analytics, "train locally, share only the update" | `FedAvg` + `TrainingUpdate` | [Replicated data](#replicated-data) |
@@ -73,6 +74,7 @@ public suspend fun resumeAfterDropSample(room: Room) {
         ResumeResult.Success -> Unit // back in the room; state resync follows
         ResumeResult.WindowClosed -> Unit // grace window elapsed — re-join fresh
         ResumeResult.WindowNotYetOpen -> Unit // host hasn't noticed the drop yet — retry shortly
+        ResumeResult.TimedOut -> Unit // no reply within resumeTimeout (host unreachable) — retry shortly
         is ResumeResult.TokenInvalid -> Unit // wrong session — re-join fresh
     }
 }
@@ -114,19 +116,34 @@ public suspend fun retryWithBackoffSample(random: Random, dial: suspend () -> Bo
 **Intent:** drive a "reconnecting…" banner, or decide "give up and show an error", from the reason kuilt already observed.
 **Primitive:** `MembershipEvent.Partitioned.reason` (`ReconnectReason`) and `HostLost.reason` (`FailureReason`) — don't re-derive your own transient/unrecoverable classification.
 
+Check the `localFabric` tag **before** the reason. Both events carry this peer's own
+`Room.localFabric` as it stood when they were emitted, and when that reads `Unavailable` the event
+is **not evidence about the peer it names** — your own end of the fabric was down, so their silence
+says nothing about them. Skip that branch and a joiner whose own radio died renders "lost the host",
+which is the bug this pattern used to ship. Precedence is readable straight off the event; you never
+have to correlate two streams by timestamp. See
+[the "you are offline" entry](#liveness--presence) for the level behind the tag.
+
 <!-- verbatim from kuilt-session/src/commonSamples/kotlin/us/tractat/kuilt/session/AgentCookbookSamples.kt#reconnectBannerSample -->
 ```kotlin
 public suspend fun reconnectBannerSample(room: Room) {
     room.events.collect { event ->
-        when (event) {
-            is MembershipEvent.Partitioned -> when (event.reason) {
+        val ourOwnEndWasDown = when (event) {
+            is MembershipEvent.Partitioned -> event.localFabric is FabricAvailability.Unavailable
+            is MembershipEvent.HostLost -> event.localFabric is FabricAvailability.Unavailable
+            else -> false
+        }
+        when {
+            // First branch, deliberately: never say "lost the host" when *we* are the ones offline.
+            ourOwnEndWasDown -> Unit // "You're offline — check your connection"
+            event is MembershipEvent.Partitioned -> when (event.reason) {
                 ReconnectReason.LinkTimeout, ReconnectReason.TransportClosed -> Unit // "Reconnecting…"
                 ReconnectReason.Backpressure -> Unit // "Connection congested…"
             }
-            is MembershipEvent.HostLost -> when (val reason = event.reason) {
+            event is MembershipEvent.HostLost -> when (val reason = event.reason) {
                 FailureReason.WindowExpired -> Unit // "Lost the host — rejoin"
                 FailureReason.Unrecoverable -> Unit // "Can't reconnect — return to lobby"
-                is FailureReason.Refused -> Unit // branch on reason.code; reason.message is for logs
+                is FailureReason.Refused -> Unit // show reason.message (auth-expired / version, …)
             }
             else -> Unit
         }
@@ -275,6 +292,15 @@ costing if you gate the workload with `HeddleAdmissionControl`.
 
 ## Liveness & presence
 
+People close laptops, step into lifts, and lose Wi-Fi. When that happens your app has to say
+something — "reconnecting…", "waiting for player", or "you're offline" — and *which* of those it says
+is most of the problem. Getting it wrong is very visible: a phone that drops its own signal and then
+announces "everyone else vanished" has told the user the one thing that isn't true.
+
+kuilt already notices the silence, holds someone's seat open while they are away, and — where the
+platform can tell it — knows whether the connection that broke was theirs or yours. Read the state it
+publishes instead of building a `lastSeen` map on top of your own traffic.
+
 **Intent:** detect that a peer went silent / is no longer alive; "heartbeat", "lastSeen".
 **Primitive:** `HeartbeatPartitionDetector` + `HeartbeatConfig` (`:kuilt-liveness`). Don't hand-roll a `while (true) { delay(); ping() }` loop.
 
@@ -356,7 +382,20 @@ public suspend fun holdTheSeatOpenSample(
 > why the never-paired case is a separate type rather than a `PartitionEvent` variant.
 
 **Intent:** show a peer as **paused** (seat held) rather than gone — a greyed-out avatar, "reconnecting…", "waiting for player".
-**Primitive:** `Room.events` + `Member.liveness` (`:kuilt-session`). `MembershipEvent.Partitioned` / `WindowOpened` / `Recovered` are the pause/resume pair, and the roster entry reads `Liveness.Partitioned` for as long as the seat is held. Don't build a `lastSeen` map on top of application traffic.
+**Primitive:** `Room.roster` + `Member.liveness` (`:kuilt-session`) — the **level**, and what to key your UI on. `Room.events` (`MembershipEvent.Partitioned` / `WindowOpened` / `Recovered`) is the *notification* that it moved. Don't build a `lastSeen` map on top of application traffic.
+
+The roster entry reads `Liveness.Partitioned(since, windowExpiresAt)` for as long as the seat is
+held, so the countdown you display needs no event replay, and a late subscriber reads the current
+state rather than missing the `Partitioned` that announced it. It reads the same way on **both**
+roles — a joiner watching its host, and a host watching a joiner — so `roster` and `events` never
+contradict each other about who is currently away. Two corollaries worth spelling out:
+
+- **Don't key the un-grey on `Recovered` vs `Resumed`.** They differ by role and by recovery path,
+  so either one alone leaves a real case hanging. The level clears on both.
+- **A later `WindowOpened` for the same peer supersedes an earlier one.** A dropped link can
+  re-open (refresh) its window, and the host also fans out its own authoritative deadline — so hold
+  the latest `expiresAt` rather than assuming the first is final. Reading `windowExpiresAt` off the
+  roster sidesteps the question entirely.
 
 <!-- verbatim from kuilt-session/src/commonSamples/kotlin/us/tractat/kuilt/session/AgentCookbookSamples.kt#observePausedPeersSample -->
 ```kotlin
@@ -385,6 +424,54 @@ public suspend fun observePausedPeersSample(room: Room) {
 
 **Intent:** the same pause/resume presence, but your session is a **game** bootstrapped over a room — "how do I know a player dropped?" should have one answer for a game and a room, not two.
 **Primitive:** `RoomGameSession.presence` + `RoomGameSession.roster` (`:kuilt-game`). Bootstrap the game with `gameOverRoom(adoptedRoom)` and it returns a `RoomGameSession` whose `presence` **is** `room.events` and whose `roster` **is** `room.roster` — the exact `MembershipEvent` + `Member.liveness` vocabulary above. Don't hand-wire a `room.events` → game-presence adapter (and don't infer presence from Raft roster churn — that is where a "premature Resumed" lives). Presence here is **link liveness**: a `Resumed` a few seconds after a drop can be a legitimate link heal, so layer human "seated / away" state on top. `gameOverRoom` owns the room — tear both down with `RoomGameSession.close`, never `room.leave()`. See the compiled `sampleGameOverRoom` (`kuilt-game/src/commonSamples/kotlin/us/tractat/kuilt/game/GameSamples.kt`).
+
+**Intent:** say "**you're** offline" instead of "everyone else vanished" — a "your connection dropped" banner, and deciding whether a peer's silence is really about *them*.
+**Primitive:** `Room.localFabric` + `MembershipEvent.LocalFabricLost` / `LocalFabricRestored` (`:kuilt-session`). Every other member of the presence vocabulary names *somebody else*, so a device that loses its own network attributes the outage to its peers — and in a two-peer session the two cases are indistinguishable from peer-side observation alone. `localFabric` publishes the fact the transport already knew. Don't reach past `Room` into a transport-specific path monitor, and don't try to tell the cases apart by racing timestamps between two flows.
+
+<!-- verbatim from kuilt-session/src/commonSamples/kotlin/us/tractat/kuilt/session/AgentCookbookSamples.kt#localFabricBannerSample -->
+```kotlin
+public suspend fun localFabricBannerSample(room: Room) {
+    // Pull-style: the authoritative answer, readable at any instant.
+    when (room.localFabric.value) {
+        FabricAvailability.Available -> Unit // no banner
+        is FabricAvailability.Unavailable -> Unit // "You're offline" — this room's fabric, not the device
+        is FabricAvailability.Unknown -> Unit // kuilt cannot tell on this fabric — say nothing
+    }
+    // Push-style: only transitions into Unavailable and into Available emit. A move into Unknown
+    // emits nothing — "we stopped being able to tell" is not a loss.
+    room.events.collect { event ->
+        when (event) {
+            is MembershipEvent.LocalFabricLost -> Unit // show it; event.reason is the transport's own words
+            is MembershipEvent.LocalFabricRestored -> Unit // clear it — may arrive with no preceding Lost
+            else -> Unit
+        }
+    }
+}
+```
+
+Four things to know before you bind this to a UI:
+
+- **It is session-scoped, never device-scoped.** A `Room` rides exactly one fabric, so this only ever
+  means *"my end of **this room's** fabric."* A peer in two rooms over two fabrics has two independent
+  values and neither speaks for the other; kuilt has no device-level registry. A room over a bonded
+  `CompositeSeam` reports `Unavailable` only when **every** woven ply is down.
+- **`Unknown` is a real third answer, and today it is the usual one.** Only a fabric wired to the
+  operating system's own path monitor can watch its own reachability — that is `kuilt-nw`, and nothing
+  else so far — so every other lane honestly reports `Unknown`, meaning *kuilt cannot tell on this
+  fabric*. Treat it as no information, never as either answer, and expect it as the common case rather
+  than an error. The per-fabric flag is `reportsLiveCapability`; see
+  [architecture.md](architecture.md#reportslivecapability--fabrics-without-a-path-observer).
+- **`Partitioned` and `HostLost` carry the same value as a tag**, captured at the instant they were
+  emitted, which is what makes precedence readable from the stream. When the tag is `Unavailable`, that
+  event is *not* evidence about the peer it names — see
+  [the reconnect-banner entry](#rejoin--reconnect).
+- **The level is authoritative; the edges are notifications.** `Room.localFabric` is a `StateFlow`, so
+  a late collector cannot miss a drop, while the events only announce transitions *into* `Unavailable`
+  and *into* `Available` — a move into `Unknown` emits nothing. A `LocalFabricRestored` can therefore
+  arrive with no preceding `LocalFabricLost` (a room whose fabric was already down when it was built),
+  and the level can legitimately be *ahead* of the edge you are handling during a rapid flap. On a
+  bonded `CompositeSeam` the **tag** is best-effort when every transport drops inside one dispatch
+  window (#1778): re-read `Room.localFabric` at handling time if a decision must be certain.
 
 ## Consensus & turns
 
