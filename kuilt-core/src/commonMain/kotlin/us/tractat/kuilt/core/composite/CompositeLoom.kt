@@ -13,7 +13,6 @@ import us.tractat.kuilt.core.PlyId
 import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.TransportCapability
-import us.tractat.kuilt.core.runCatchingCancellable
 import kotlin.coroutines.CoroutineContext
 
 /**
@@ -94,7 +93,20 @@ public class CompositeLoom(
             // throw at its first suspension point and leak the very transports being reclaimed. One ply
             // refusing to close must not stop its siblings being closed either.
             withContext(NonCancellable) {
-                woven.forEach { runCatchingCancellable { it.seam.close(CloseReason.Normal) } }
+                // Which is why the per-ply guard is `try`/`catch (Throwable)` and NOT
+                // `runCatchingCancellable`: inside the shield this block's Job is parented to
+                // [NonCancellable], so a `CancellationException` arriving here can only be one the
+                // consumer's `close` minted itself (a close-handshake `withTimeout`), never our own.
+                // `runCatchingCancellable` rethrows exactly that case — defeating the "one ply must not
+                // stop its siblings" half of the paragraph above (#1803). Same shape, same reason, as
+                // `CompositeSeam.discardOrphanedPly`.
+                woven.forEach {
+                    try {
+                        it.seam.close(CloseReason.Normal)
+                    } catch (_: Throwable) {
+                        // Best-effort reclamation: this ply's transport is lost either way.
+                    }
+                }
             }
             throw failure
         }

@@ -189,17 +189,41 @@ public class NwLoom(
             }
         } catch (_: TimeoutCancellationException) {
             log.info { "nw.loom.weave-timeout self=${selfId.value} serviceType=$serviceType after=$weaveTimeout → Unreachable" }
-            withContext(NonCancellable) { runCatchingCancellable { seam.close(CloseReason.Unreachable) } }
+            discardUnreturnedSeam(seam)
             throw NwUnreachableException(
                 "nw weave timed out: no peer reached for serviceType=$serviceType within $weaveTimeout",
             )
         } catch (e: Throwable) {
             log.info { "nw.loom.weave-aborted self=${selfId.value} serviceType=$serviceType reason=${e::class.simpleName} → closing seam so redial stops" }
-            withContext(NonCancellable) { runCatchingCancellable { seam.close(CloseReason.Unreachable) } }
+            discardUnreturnedSeam(seam)
             throw e
         }
         log.debug { "nw.loom.wove self=${selfId.value} peers=${seam.peers.value.map { it.value }} state=${seam.state.value}" }
         return seam
+    }
+
+    /**
+     * Close a seam [weave] wove but will never return, so its parentless [kotlinx.coroutines.SupervisorJob]
+     * scope stops redialling every discovered endpoint forever (#1513). Shielded, because on both callers'
+     * paths the throwable being handled may itself be this coroutine's cancellation and [NwSeam.close]
+     * suspends.
+     *
+     * `try`/`catch (Throwable)` rather than `runCatchingCancellable` — the distinction this file documents at
+     * `:41-48` and, until #1803, contradicted right here. Inside the shield this block's Job is parented to
+     * [NonCancellable], so a `CancellationException` arriving here can only be one `close` minted itself (a
+     * close-handshake `withTimeout`; note `Seam.close` carries no "never report failure as cancellation"
+     * obligation, unlike `sendTo`/`broadcast`/`weave`). `runCatchingCancellable` rethrows exactly that case —
+     * which would replace the caller's deliberate [NwUnreachableException] (or the original abort cause) with
+     * a bare masquerading cancellation, silently cancelling the caller instead of failing it.
+     */
+    private suspend fun discardUnreturnedSeam(seam: Seam) {
+        withContext(NonCancellable) {
+            try {
+                seam.close(CloseReason.Unreachable)
+            } catch (failure: Throwable) {
+                log.debug { "nw.loom.discard-close-failed self=${selfId.value} reason=${failure::class.simpleName}" }
+            }
+        }
     }
 
     public companion object {

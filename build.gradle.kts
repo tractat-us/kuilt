@@ -654,6 +654,142 @@ val verifyDocCitations by tasks.registering {
     }
 }
 
+// Guard: forbid `runCatchingCancellable` lexically inside a `withContext(NonCancellable)` block (#1803).
+//
+// `runCatchingCancellable` rethrows every `CancellationException`, which is right almost everywhere — it
+// stops a structured-concurrency cancel being swallowed into a `Result`. But it discriminates on TYPE, and
+// type cannot separate "my job was cancelled" from "a callee minted one" — most often `withTimeout`, which
+// throws `TimeoutCancellationException` *to its caller* without cancelling that caller's job.
+//
+// Inside a `NonCancellable` shield that distinction collapses. The shield exists precisely so best-effort
+// cleanup completes despite outer cancellation, so our own job is never cancelled there — which makes EVERY
+// `CancellationException` reachable inside it necessarily callee-minted, and rethrowing it aborts the very
+// cleanup the shield was written to guarantee. One `withTimeout` inside a consumer's `Seam.close` and every
+// remaining close is skipped. Note that `Seam.close` carries no "must not report failure as cancellation"
+// obligation (unlike `sendTo`/`broadcast`/`Loom.weave`, see `Seam.kt:106-126`), so a consumer minting one
+// there is not even a contract violation.
+//
+// The correct form inside the shield is a plain `try` / `catch (Throwable)` with a debug log, PER cleanup
+// item so one failure cannot skip the rest. No `ensureActive()`: `NonCancellable.isActive` is always true,
+// so it is dead code. `CompositeSeam.discardOrphanedPly`/`detachPly` and `NwLoom.weave` are the in-tree
+// patterns.
+//
+// Detection is LEXICAL: a real comment/string-literal-aware scanner strips `//`, `/* */` (nesting), `"…"`,
+// `"""…"""` and `'…'`, then brace-depth-walks each `withContext(NonCancellable) {` block and flags any
+// `runCatchingCancellable` inside it. Two deliberate under-detections — both fail toward silence, never
+// toward blocking a correct change:
+//   - the shield's `{` must be on the anchor's own line (every in-tree site is), and
+//   - a `runCatchingCancellable` reached through a HELPER called from inside the shield is invisible
+//     (e.g. `CompositeSeam.raisePlyFailure`), because the call site, not the callee, is what is scanned.
+// It also flags a `runCatchingCancellable` nested under an intervening `withTimeoutOrNull` inside the
+// shield. That is not a false positive: the shape only survives its OWN timeout — a callee-minted
+// cancellation escapes the `withTimeoutOrNull` (`e.coroutine !== coroutine` ⇒ rethrow) and leaves the
+// shield entirely, skipping the rest of the cleanup. Hoist the `try`/`catch` OUTSIDE the inner bound.
+//
+// Production sources only (`*Main` source sets). Test-support modules' `commonMain` (`:kuilt-conformance`,
+// `:kuilt-*-test`) IS in scope: it ships as a published artifact consumers subclass, so an aborted teardown
+// there is a shipped defect, not a local test failure. Every `*Test`/`*Samples` set is out.
+val forbidRunCatchingCancellableUnderNonCancellable by tasks.registering {
+    group = "verification"
+    description = "Fails if runCatchingCancellable appears inside a withContext(NonCancellable) block (#1803)."
+    val srcDirs = subprojects.flatMap { sub ->
+        val src = sub.projectDir.resolve("src")
+        (src.listFiles()?.toList() ?: emptyList()).filter { it.isDirectory && it.name.endsWith("Main") }
+    }
+    srcDirs.forEach { inputs.dir(it) }
+    val rootPath = rootDir
+    val stamp = layout.buildDirectory.file("verification/forbid-runcatching-under-noncancellable.ok")
+    outputs.file(stamp)
+    doLast {
+        // Replace every comment, string and char literal with equivalent blank space, preserving newlines
+        // (hence line numbers) so the brace walk below cannot be fooled by a `{` in prose or in a literal —
+        // the hazard #1799's citation checker hit. Block comments nest, as they do in Kotlin.
+        fun stripNonCode(text: String): String {
+            val out = StringBuilder(text.length)
+            var i = 0
+            var blockDepth = 0
+            while (i < text.length) {
+                val c = text[i]
+                val next = if (i + 1 < text.length) text[i + 1] else ' '
+                when {
+                    blockDepth > 0 -> when {
+                        c == '/' && next == '*' -> { blockDepth++; i += 2 }
+                        c == '*' && next == '/' -> { blockDepth--; i += 2 }
+                        else -> { if (c == '\n') out.append('\n'); i++ }
+                    }
+                    c == '/' && next == '*' -> { blockDepth = 1; i += 2 }
+                    c == '/' && next == '/' -> while (i < text.length && text[i] != '\n') i++
+                    text.startsWith("\"\"\"", i) -> {
+                        i += 3
+                        while (i < text.length && !text.startsWith("\"\"\"", i)) {
+                            if (text[i] == '\n') out.append('\n')
+                            i++
+                        }
+                        i = minOf(i + 3, text.length)
+                    }
+                    c == '"' || c == '\'' -> {
+                        i++ // bounded to this line, so an unterminated literal cannot run away
+                        while (i < text.length && text[i] != c && text[i] != '\n') {
+                            if (text[i] == '\\') i++
+                            i++
+                        }
+                        if (i < text.length && text[i] == c) i++
+                    }
+                    else -> { out.append(c); i++ }
+                }
+            }
+            return out.toString()
+        }
+        // `[^;{}\n]*` bounds the argument list to one line and cannot swallow the block's own brace.
+        val anchor = Regex("""withContext\s*\(\s*[^;{}\n]*\bNonCancellable\b[^;{}\n]*\)\s*\{""")
+        val call = Regex("""\brunCatchingCancellable\b""")
+        val offenders = srcDirs.asSequence().flatMap { dir ->
+            dir.walkTopDown().filter { it.isFile && it.extension == "kt" }
+        }.flatMap { file ->
+            val raw = file.readText()
+            val code = stripNonCode(raw)
+            // Character interval of every shielded block: from its `{` to the matching `}`.
+            val shielded = anchor.findAll(code).mapNotNull { match ->
+                var depth = 0
+                var j = match.range.last // the `{` itself
+                while (j < code.length) {
+                    if (code[j] == '{') depth++ else if (code[j] == '}') depth--
+                    if (depth == 0) break
+                    j++
+                }
+                (match.range.last..minOf(j, code.length - 1)).takeIf { depth == 0 }
+            }.toList()
+            if (shielded.isEmpty()) {
+                emptySequence()
+            } else {
+                val rawLines = raw.lines()
+                call.findAll(code)
+                    .filter { hit -> shielded.any { hit.range.first in it } }
+                    .map { hit ->
+                        val line = code.take(hit.range.first).count { it == '\n' } + 1
+                        "${file.relativeTo(rootPath)}:$line  ${rawLines.getOrElse(line - 1) { "" }.trim()}"
+                    }
+            }
+        }.toList()
+        if (offenders.isNotEmpty()) {
+            error(
+                "`runCatchingCancellable` inside a `withContext(NonCancellable)` block (#1803). Inside the " +
+                    "shield your own job is never cancelled, so every `CancellationException` reachable there " +
+                    "is callee-minted (a `withTimeout` in the callee) — rethrowing it ABORTS the cleanup the " +
+                    "shield exists to guarantee, skipping every remaining close. Replace it with a plain " +
+                    "`try` / `catch (failure: Throwable)` + debug log, one guard PER cleanup item, and no " +
+                    "`ensureActive()` (dead inside the shield). Settled patterns: " +
+                    "`CompositeSeam.discardOrphanedPly`, `CompositeSeam.detachPly`, `NwLoom.weave`. If an " +
+                    "inner `withTimeoutOrNull` is in the way, hoist the `try`/`catch` outside it:\n  " +
+                    offenders.joinToString("\n  "),
+            )
+        }
+        val out = stamp.get().asFile
+        out.parentFile.mkdirs()
+        out.writeText("ok\n")
+    }
+}
+
 // Run the guards as part of `check` (hence `build`, hence CI) in every module.
 allprojects {
     tasks.matching { it.name == "check" }.configureEach {
@@ -661,5 +797,6 @@ allprojects {
         dependsOn(rootProject.tasks.named("forbidSourcelessKmpTarget"))
         dependsOn(rootProject.tasks.named("forbidPortProbeRebind"))
         dependsOn(rootProject.tasks.named("verifyDocCitations"))
+        dependsOn(rootProject.tasks.named("forbidRunCatchingCancellableUnderNonCancellable"))
     }
 }

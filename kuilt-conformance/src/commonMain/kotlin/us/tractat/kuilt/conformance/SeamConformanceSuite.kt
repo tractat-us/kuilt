@@ -26,7 +26,6 @@ import us.tractat.kuilt.core.PeerNotConnected
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.Tag
-import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -309,12 +308,27 @@ public abstract class SeamConformanceSuite {
                 // BOUNDED best-effort cleanup: `withContext(NonCancellable)` shields it from the outer
                 // cancellation so it always runs (even if `block` failed); `withTimeoutOrNull(2s)` bounds a
                 // close() that can WEDGE on a dead transport (e.g. a WS close handshake) so one bad fabric
-                // can't hang every conformance test; `runCatchingCancellable` tolerates a close error. A
-                // timeout or error here is deliberately swallowed — teardown is best-effort, and any real
-                // close bug surfaces in the dedicated close-obligation tests, not here.
+                // can't hang every conformance test; the `try`/`catch` tolerates a close error. A timeout or
+                // error here is deliberately swallowed — teardown is best-effort, and any real close bug
+                // surfaces in the dedicated close-obligation tests, not here.
+                //
+                // The guard sits OUTSIDE the bound and is a plain `catch (Throwable)`, not a
+                // `runCatchingCancellable` inside it (#1803). `withTimeoutOrNull` already absorbs its OWN
+                // timeout; what it rethrows is a `CancellationException` the fabric's `close` minted itself
+                // (`e.coroutine !== coroutine`). Inside the shield ours is never cancelled, so that is the
+                // only kind reachable — and letting it out would escape the whole `NonCancellable` block,
+                // skip the second close, and throw from this `finally`, masking the test's real failure.
                 withContext(NonCancellable) {
-                    withTimeoutOrNull(2.seconds) { runCatchingCancellable { host.close() } }
-                    withTimeoutOrNull(2.seconds) { runCatchingCancellable { joiner.close() } }
+                    try {
+                        withTimeoutOrNull(2.seconds) { host.close() }
+                    } catch (_: Throwable) {
+                        // Best-effort: the joiner below must still be torn down.
+                    }
+                    try {
+                        withTimeoutOrNull(2.seconds) { joiner.close() }
+                    } catch (_: Throwable) {
+                        // Best-effort: teardown must never fail the test it is cleaning up after.
+                    }
                 }
             }
         }

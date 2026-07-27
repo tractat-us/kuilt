@@ -15,7 +15,6 @@ import us.tractat.kuilt.core.fabric.ConnectionSource
 import us.tractat.kuilt.core.fabric.Mesh
 import us.tractat.kuilt.core.fabric.acceptPump
 import us.tractat.kuilt.core.fabric.hubMesh
-import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.core.util.ExponentialBackoff
 import us.tractat.kuilt.raft.InMemoryRaftStorage
 import us.tractat.kuilt.raft.NodeId
@@ -224,7 +223,19 @@ internal suspend fun CoroutineScope.assembleVoterMesh(
         // so cancelling meshScope does not close them. Uncancellable so a TimeoutCancellationException
         // context does not skip the cleanup; best-effort per seam.
         withContext(NonCancellable) {
-            meshes.values.forEach { runCatchingCancellable { it.close() } }
+            // Per-seam `try`/`catch (Throwable)`, NOT `runCatchingCancellable`. The shield is here because
+            // the failure being handled may itself be a `TimeoutCancellationException` — but inside it this
+            // block's Job is parented to [NonCancellable], so a `CancellationException` arriving here can
+            // only be one the seam's own `close` minted. `runCatchingCancellable` rethrows that case and
+            // skips every remaining seam, which is the same skipped-cleanup this shield was written to
+            // prevent, one level in (#1803).
+            meshes.values.forEach {
+                try {
+                    it.close()
+                } catch (_: Throwable) {
+                    // Best-effort: one seam refusing to close must not strand its siblings open.
+                }
+            }
         }
         throw e
     }
