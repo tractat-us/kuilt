@@ -237,8 +237,23 @@ bounded replay cache, so a late `Room.events` collector still sees it.
 **Authority hazard, and its fix.** A joiner watching *another joiner* time out would compute a
 deadline the **host** is authoritative for, and `handlePaused` currently `return`s early when the
 member is already `Partitioned`, so the host's real `expiresAt` could never correct the local guess.
-`handlePaused` keeps its early return for *event* emission (idempotent) but is allowed to **refine
-the deadline** on the level. A joiner watching its *host* has no such problem: there the joiner's own
+~~`handlePaused` keeps its early return for *event* emission (idempotent) but is allowed to **refine
+the deadline** on the level.~~ **Corrected 2026-07-27 — this was wrong, and shipped a defect.** A
+refinement that moves the level but announces nothing leaves the last `WindowOpened` a consumer heard
+permanently false: with a 5 s local estimate later refined to the host's 30 s, a consumer keyed on the
+event drops the peer's seat ~25 s early while the roster says otherwise. That is the *same* failure
+this section's own D2 fix exists to remove ("a consumer would count down to a deadline earlier than the
+seat is actually held"), and it contradicts D4's acceptance requirement that the deadline be readable
+on **both** `events` and `roster`.
+
+What is idempotent is the **partition**, not the deadline. So `handlePaused` keeps its early return for
+a duplicate `Partitioned`, but a *moved* deadline must be announced — routed through the same
+authority-hop as the injected-controller path, so both lanes behave identically. The rejected
+alternative was to make that hop stop announcing too and document `WindowOpened.expiresAt` as silently
+supersedable; that was declined because it would degrade #1614 (an injected unbounded hold policy would
+become observable only by polling the roster, losing the event that surfaces it today).
+
+A joiner watching its *host* has no such problem: there the joiner's own
 `reconnectWindow` budget genuinely is the authority. (Alternative considered and rejected: an
 `authoritative: Boolean` on `Liveness.Partitioned` — more honest, more surface, and no consumer has
 asked to distinguish them.)

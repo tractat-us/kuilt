@@ -1102,6 +1102,29 @@ If the `when` becomes non-exhaustive, add `is JoinerReconnectEvent.WindowOpened 
 
 `handlePaused` currently returns early when the member is already `Partitioned`, so a host's authoritative `expiresAt` can never correct a local estimate. Split idempotence-of-events from freshness-of-level:
 
+> **⚠ Corrected 2026-07-27 — the snippet below is WRONG and shipped a blocking defect. Read this first.**
+>
+> "Split idempotence-of-events from freshness-of-level" is right about the *partition* and wrong about
+> the *deadline*. The snippet keeps the early return above **both** emissions, so a refinement moves the
+> roster level and announces nothing — leaving the last `WindowOpened` a consumer heard permanently
+> false. With a 5 s local estimate later refined to the host's 30 s, a consumer keyed on the event drops
+> the peer's seat **~25 s early** while the roster says otherwise. That is the very failure Step 3 of
+> this same task exists to remove, reintroduced on the mesh lane.
+>
+> A reviewer caught it only *after* implementation, and correctly assigned the fault here rather than to
+> the implementer: this text, and #1724's body, both say to keep the early return for event emission.
+>
+> **Correct behaviour:** the early return still suppresses a duplicate `Partitioned`, but a deadline
+> that **moved** must be announced — routed through the same authority-hop the injected-controller path
+> uses, so both lanes behave identically. The alternative (make that hop stop announcing, and document
+> `WindowOpened.expiresAt` as silently supersedable) was declined: it would degrade #1614, since an
+> injected unbounded hold policy would become observable only by polling the roster.
+>
+> Note the tell for next time: the task's own `refineWindow` KDoc argued the opposite for the identical
+> situation, and a test in the same PR asserted a re-announcement was mandatory. **When one lane of a
+> change contradicts another lane of the same change, one of them is a defect** — that inconsistency is
+> a stronger signal than either lane's local reasoning.
+
 ```kotlin
     private fun handlePaused(sender: PeerId, paused: AdmitMessage.Paused) {
         val subject = PeerId(paused.peerId)
