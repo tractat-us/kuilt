@@ -10,7 +10,8 @@ import kotlin.test.assertNull
 /**
  * Self-tests for [MultiNodeRaftSim] — proves the harness works end-to-end.
  *
- * Each test runs under [raftSimTest] (`StandardTestDispatcher` + 5 s timeout). These are
+ * Each test runs under [raftSimTest] (`StandardTestDispatcher` + the [RAFT_SIM_WEDGE_BACKSTOP]
+ * wall-clock wedge backstop). These are
  * deliberately narrow: they validate the harness machinery, not Raft correctness (that lives in
  * `:kuilt-raft`'s own suite).
  */

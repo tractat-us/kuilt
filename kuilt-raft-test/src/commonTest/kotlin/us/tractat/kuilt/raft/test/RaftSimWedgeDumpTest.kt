@@ -67,16 +67,16 @@ class RaftSimWedgeDumpTest {
     @Test
     fun ordinaryFailureIsNotTreatedAsAWedge() = raftSimTest(n = 3) { sim ->
         val dumps = mutableListOf<String>()
-        var caught: IllegalStateException? = null
+        var caughtMessage: String? = null
 
         try {
             dumpOnWedge(sim, emit = { dumps += it }) { error("boom") }
         } catch (e: IllegalStateException) {
-            caught = e
+            caughtMessage = e.message
         }
 
         assertAll(
-            { assertEquals("boom", caught?.message, "the original failure must propagate untouched") },
+            { assertEquals("boom", caughtMessage, "the original failure must propagate untouched") },
             { assertTrue(dumps.isEmpty(), "an ordinary failure must not emit a wedge dump: $dumps") },
         )
     }

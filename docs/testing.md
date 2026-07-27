@@ -58,7 +58,7 @@ public fun raftSimTest(
     n: Int = 3,
     baseConfig: RaftConfig = MULTI_NODE_SIM_BASE_CONFIG,
     baseSeed: Long = MULTI_NODE_SIM_SEED,
-    timeout: Duration = 5.seconds,
+    timeout: Duration = RAFT_SIM_WEDGE_BACKSTOP,
     body: suspend TestScope.(MultiNodeRaftSim) -> Unit,
 ): TestResult
 ```
@@ -79,12 +79,19 @@ builds a `RaftSimulation`. Both harnesses expose the same surface:
 The harness encodes four rules because each one, dropped, produces a test that *hangs*
 rather than fails:
 
-1. **Tight timeout (5 s), never the 60 s default.** The engine's election and heartbeat
-   timers re-arm forever, so `runTest` never auto-idles. Without a tight cap the only
-   backstop is the default, which surfaces as an opaque failure with zero state.
-2. **Bounded `await*`, never `advanceUntilIdle()`.** A never-quiescing system has no idle
+1. **Bounded `await*`, never `advanceUntilIdle()`.** A never-quiescing system has no idle
    state to advance to; the awaits step the clock forward in bounded 1 ms increments and
-   fail fast on non-convergence.
+   fail fast on non-convergence — with a `dumpState()`. This, plus the election-churn
+   bound, is where fast failure actually comes from: both bounds are **virtual**-time, so
+   they are immune to machine load.
+2. **The outer `runTest` timeout is a wedge backstop, not a budget.** `RAFT_SIM_WEDGE_BACKSTOP`
+   (30 s) exists only to bound a wedge that escapes the bounded helpers entirely — an
+   unbounded `await`, a deadlocked hand-rolled receive. Do **not** tighten it: everything
+   it caps is virtual-time and deterministic, so a tight wall-clock cap asserts only that
+   the *host* is fast enough, and fires before the legible detectors can speak. That is
+   exactly the false-red class of [#1382](https://github.com/tractat-us/kuilt/issues/1382).
+   When it does fire, `dumpOnWedge` prints the cluster state alongside the
+   `UncompletedCoroutinesError`.
 3. **Per-node seeded election RNG.** Scheduling is deterministic under
    `StandardTestDispatcher`, but the *duration* each node waits is still an RNG draw.
    `MultiNodeRaftSim` seeds `Random(baseSeed + nodeIndex)` per node so timeouts differ
@@ -93,8 +100,8 @@ rather than fails:
 4. **Node coroutines on `backgroundScope`.** The infinite loops must be cancelled at
    teardown, or `runTest` reports `UncompletedCoroutinesError`.
 
-A hang or timeout in a cluster test is a **stop-and-investigate** signal — get a thread
-dump, name the spinning test, fix convergence. Never widen the timeout and retry.
+A hang in a cluster test is a **stop-and-investigate** signal — read the state dump, name
+the spinning test, fix convergence. Never widen a bounded `await*` and retry.
 
 ## Observability, in depth
 
