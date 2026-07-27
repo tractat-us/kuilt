@@ -548,6 +548,44 @@ jobs:
         # pass) — the module-doc build is what parses module.md + KDoc and is far faster.
         run: ./gradlew dokkaGenerateModuleHtml --max-workers=2
 
+  # ── doc-citations ───────────────────────────────────────────────────────────
+  # Verifies every `<!-- verbatim from <path>#<symbol> -->` doc citation still matches the
+  # source it names, and that no citation dangles off a renamed/deleted symbol (#1792).
+  #
+  # ORTHOGONAL to docs-only, for exactly the reason the Dokka gate is: the likeliest way to
+  # drift a citation is a docs-only PR editing the quoted block, and that path skips
+  # build-jvm/build-native entirely. `verifyDocCitations` is wired into `check` (so
+  # `./gradlew build` covers it on any code change), but `check`-wiring ALONE would never
+  # fire on the very class of change most likely to break it. Cheap enough to always run:
+  # no compilation and no Kotlin/Native toolchain, just a file-reading verification task.
+  doc-citations:
+    needs: detect
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v5
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+
+      # Read-only cache: this job compiles nothing, so it has no build output worth
+      # publishing and should not contend with the heavy jobs' cache writes.
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          gradle-version: wrapper
+          cache-read-only: true
+
+      # Configuring the Android library modules needs an SDK even though nothing is built.
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v4
+
+      - name: Verify doc citations match their cited sources
+        run: ./gradlew verifyDocCitations
+
   # ── concurrency-probes ──────────────────────────────────────────────────────
   # Every `*ConcurrencyTest` in kuilt-core is a real-threaded probe (the name is the
   # contract — deliberately not an enumeration here, which is what went stale as
@@ -649,7 +687,7 @@ jobs:
   #   - dokka skipped/failed on a Dokka-input change → fails → closes the
   #     module.md-freezes-the-deploy gap (#1061).
   ci-required:
-    needs: [detect, build-jvm, build-native, detekt, dokka]
+    needs: [detect, build-jvm, build-native, detekt, dokka, doc-citations]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -677,6 +715,7 @@ jobs:
           BUILD_NATIVE="${{ needs.build-native.result }}"
           DETEKT="${{ needs.detekt.result }}"
           DOKKA="${{ needs.dokka.result }}"
+          DOC_CITATIONS="${{ needs.doc-citations.result }}"
           DOCS_ONLY="${{ needs.detect.outputs.docs-only }}"
           DOKKA_INPUTS="${{ needs.detect.outputs.dokka-inputs }}"
           echo "detect:        $DETECT"
@@ -684,6 +723,7 @@ jobs:
           echo "build-native:  $BUILD_NATIVE"
           echo "detekt:        $DETEKT"
           echo "dokka:         $DOKKA"
+          echo "doc-citations: $DOC_CITATIONS"
           echo "docs-only:     $DOCS_ONLY"
           echo "dokka-inputs:  $DOKKA_INPUTS"
 
@@ -704,6 +744,14 @@ jobs:
             if [ "$DOKKA" != "skipped" ] && [ "$DOKKA" != "success" ]; then
               echo "::error::dokka had unexpected result: $DOKKA."; exit 1
             fi
+          fi
+
+          # Doc-citation gate — ORTHOGONAL to docs-only, like the Dokka gate above and for
+          # the same reason: a docs-only PR editing a quoted block is the likeliest way to
+          # drift a `<!-- verbatim from … -->` citation, and that path skips the build. The
+          # job always runs, so skipped is never acceptable here (#1792).
+          if [ "$DOC_CITATIONS" != "success" ]; then
+            echo "::error::Doc-citation verification did not succeed (result: $DOC_CITATIONS). skipped is not accepted."; exit 1
           fi
 
           if [ "$DOCS_ONLY" = "true" ]; then

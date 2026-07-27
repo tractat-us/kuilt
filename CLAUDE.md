@@ -301,7 +301,16 @@ When you change public API:
 - Update (or add) the matching `@sample` function in `src/commonSamples/kotlin/`.
 - If the type has a `crdt-<type>.md` Writerside topic, update its inlined snippet so it still matches the source, and update the `<!-- verbatim from … -->` citation if the function was renamed.
 
-When you rename or remove a test function that a Writerside snippet cites, update the `<!-- verbatim from … -->` comment and the inlined code block in the corresponding topic file. The guide has no compile-time check — the citation comment is the only link back to the source.
+When you rename or remove a test function that a Writerside snippet cites, update the `<!-- verbatim from … -->` comment and the inlined code block in the corresponding topic file.
+
+**Citations are enforced — `verifyDocCitations` (in the root `build.gradle.kts`, wired into `check`, and run as its own `doc-citations` CI job so docs-only PRs are covered too) fails the build on a citation that has drifted from, or dangles off, the source it names (#1792).** Two markers, two strengths:
+
+- `<!-- verbatim from <path>#<symbol> -->` — the block must still appear in the cited declaration character-for-character, modulo indentation. Accepted forms: the whole declaration (including its leading `@annotations`), its body with braces stripped, or a *contiguous* run of either (which is what lets one long test back several walkthrough blocks). A citation with no `#symbol` is matched against the whole file.
+- `<!-- condensed from <path>#<symbol> -->` — the block is deliberately abridged or reworded; only the path and symbol have to resolve.
+
+So when a block stops being a literal quote — you dropped the source's own comments, trimmed an assertion message, spliced two non-adjacent chunks — **relabel it `condensed from` rather than leaving a `verbatim from` that lies.** A block that claims to be verbatim and isn't is worse than no citation, because a reader stops checking. Run `./gradlew verifyDocCitations` (about a second) after touching either side.
+
+**Relabel only when the block *cannot* be a literal quote — otherwise re-copy it.** `condensed from` is the cheapest way past a red gate and it is a **one-way door**: that block is never content-checked again. Reach for it when the snippet is genuinely illustrative, splices non-adjacent chunks, or abridges a class down to the members being discussed; not when re-copying is a two-line edit. And relabelling never hides a *rename* — a `condensed` citation whose symbol disappears still fails.
 
 - **Agent cookbook + skill stay in sync with the primitives.** When you add,
   rename, or remove a public primitive a downstream consumer would reach for (a

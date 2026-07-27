@@ -30,7 +30,7 @@ kuilt ships a ready-made checklist of everything a fabric must do — the
 suite at your fabric by handing it a pair of peers, and every rule in the contract is
 checked for you:
 
-<!-- verbatim from kuilt-conformance/src/commonTest/kotlin/us/tractat/kuilt/conformance/InMemoryLoomConformanceTest.kt -->
+<!-- condensed from kuilt-conformance/src/commonTest/kotlin/us/tractat/kuilt/conformance/InMemoryLoomConformanceTest.kt -->
 
 ```kotlin
 class InMemoryLoomConformanceTest : SeamConformanceSuite() {
@@ -39,7 +39,9 @@ class InMemoryLoomConformanceTest : SeamConformanceSuite() {
 }
 ```
 
-That's the whole test class. `newLoomPair()` returns the two peers to wire together —
+That's the binding. The real class adds a few more overrides — which guarantees this fabric
+does and doesn't offer, plus two hooks the harness needs — but this is the part that matters.
+`newLoomPair()` returns the two peers to wire together —
 for the in-memory mesh the same instance plays both roles, so it's `loom to loom`. A
 new fabric (a WebSocket, a TCP socket) returns two distinct peers wired to reach each
 other, and passes the *same* suite. One checklist, every fabric.

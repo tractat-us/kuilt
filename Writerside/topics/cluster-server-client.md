@@ -75,7 +75,7 @@ Join the server relay room, derive the client's `NodeId` from the Seam `selfId`
 assigned at join time, wait for the admit handshake, then start the learner
 `RaftNode` and wrap it in a `ClusterClient`:
 
-<!-- verbatim from examples/src/test/kotlin/us/tractat/kuilt/examples/ServerClusterE2ETest.kt#`ClusterClient propose commits end-to-end through ServerCluster facade` -->
+<!-- condensed from examples/src/test/kotlin/us/tractat/kuilt/examples/ServerClusterE2ETest.kt#`ClusterClient propose commits end-to-end through ServerCluster facade` -->
 ```kotlin
 val clientScope = CoroutineScope(coroutineContext + Job())
 val clientRoom = SeamRoomFactory.systemClock(loom = clientLoom, scope = clientScope)
@@ -99,9 +99,17 @@ val learnerConfig = ClusterConfig(
 // Ensure the admit handshake is complete before starting the RaftNode.
 withTimeout(5.seconds) { clientRoom.roster.first { it.isNotEmpty() } }
 
+// The client speaks the relay dialect: a player relay transport over a
+// no-peer inner wraps every send as a RaftRelay(dest = leader) addressed to
+// its single relay server, matching the server-side RaftRelayHub.
 val clientNode = clientScope.raftNode(
     clusterConfig = learnerConfig,
-    transport = SeamRaftTransport(clientSeam),
+    transport = playerRelayTransport(
+        inner = noPeerInnerTransport(clientNodeId),
+        relayChannel = clientSeam,
+        voters = { setOf(voterId) },
+        scope = clientScope,
+    ),
     storage = InMemoryRaftStorage(),
     raftConfig = raftCfg,
 )
@@ -112,7 +120,7 @@ val client: ClusterClient = clusterClientWithNode(clientNode)
 
 ## Propose and observe
 
-<!-- verbatim from examples/src/test/kotlin/us/tractat/kuilt/examples/ServerClusterE2ETest.kt#`ClusterClient propose commits end-to-end through ServerCluster facade` -->
+<!-- condensed from examples/src/test/kotlin/us/tractat/kuilt/examples/ServerClusterE2ETest.kt#`ClusterClient propose commits end-to-end through ServerCluster facade` -->
 ```kotlin
 // Observe committed entries via the ClusterClient.committed surface.
 clientScope.launch {

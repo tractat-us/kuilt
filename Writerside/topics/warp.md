@@ -132,7 +132,7 @@ Three pure rewrites can improve a draft without changing what it computes:
 
 `optimize()` applies all three to a fixpoint and returns a structurally equivalent draft:
 
-<!-- verbatim from kuilt-warp-planning/src/commonSamples/kotlin/us/tractat/kuilt/warp/PlanningSamples.kt#sampleOptimize -->
+<!-- condensed from kuilt-warp-planning/src/commonSamples/kotlin/us/tractat/kuilt/warp/PlanningSamples.kt#sampleOptimize -->
 
 ```kotlin
 val optimized = unoptimized.optimize()
@@ -151,7 +151,7 @@ check(unoptimized.isEquivalentTo(optimized))              // same convergent res
 For a single `embroider`, `plan` reduces `coordinatedVolume` by deferring the embroider
 past selective filters:
 
-<!-- verbatim from kuilt-warp-planning/src/commonSamples/kotlin/us/tractat/kuilt/warp/PlanningSamples.kt#sampleCoordinationCost -->
+<!-- condensed from kuilt-warp-planning/src/commonSamples/kotlin/us/tractat/kuilt/warp/PlanningSamples.kt#sampleCoordinationCost -->
 
 ```kotlin
 // Unplanned: embroider before filter → consensus sees ~1000 docs

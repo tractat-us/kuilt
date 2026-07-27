@@ -74,8 +74,9 @@ val mergedByA = fA3.apply(opB1).apply(opB2)
 val mergedByB = fB2.apply(opA1).apply(opA2).apply(opA3)
 
 // Both converge to the same order.
-check(mergedByA.toList() == mergedByB.toList())
+check(mergedByA.toList() == mergedByB.toList()) { "Convergence: both must agree" }
 
+val merged = mergedByA.toList()
 // The A-run and B-run each form a contiguous block — no interleaving.
 ```
 
