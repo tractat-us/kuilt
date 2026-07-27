@@ -160,8 +160,11 @@ public interface NwApi {
      * Modelled as latest-value **[StateFlow] state** (not a lossy event stream) — the current path is a
      * level, and a late subscriber must see the latest value, never miss it. Defaults to a never-updated
      * `null` ("unknown") so a binding without a real monitor (the JVM bridge) inherits "unknown" and the
-     * seam keeps its static seed. `RealNwApi` (appleMain) drives it from `nw_path_monitor_*`; the test
-     * fakes expose a controllable `MutableStateFlow` so no test touches the OS path monitor.
+     * seam reports [us.tractat.kuilt.core.FabricAvailability.Unknown] rather than guessing — the loom's
+     * static report supplies only the ROLES, never a path verdict (#1712). Wiring a monitor here is
+     * therefore what takes a binding's seam OFF that floor; nothing else can. `RealNwApi` (appleMain)
+     * drives it from `nw_path_monitor_*`; the test fakes expose a controllable `MutableStateFlow` so no
+     * test touches the OS path monitor.
      */
     public val pathState: StateFlow<NwPathState?>
         get() = EMPTY_PATH_STATE

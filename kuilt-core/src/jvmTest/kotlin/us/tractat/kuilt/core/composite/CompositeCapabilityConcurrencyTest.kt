@@ -48,7 +48,9 @@ import kotlin.test.assertIs
  * is why this lives here rather than as a deterministic unit test.
  *
  * **JVM-hosted, `-Pconcurrency.stress.tests`-gated** (matches the other seam probes): excluded from the
- * normal `jvmTest` run and executed on the dedicated concurrency-stress CI job.
+ * normal `jvmTest` run and executed on the dedicated concurrency-stress CI job. That job is
+ * **deliberately outside `ci-required`'s aggregation** (see `.github/workflows/ci.yml`), so a regression
+ * caught here produces signal but does NOT block a merge — read it, don't assume green means checked.
  */
 class CompositeCapabilityConcurrencyTest {
 
