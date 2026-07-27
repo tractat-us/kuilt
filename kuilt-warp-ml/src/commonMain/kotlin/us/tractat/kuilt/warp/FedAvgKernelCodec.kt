@@ -59,14 +59,6 @@ public object FedAvgKernelCodec {
         return TrainingUpdate(count, listOf(getF64(bytes, 16), getF64(bytes, 24)))
     }
 
-    /** Test-only: builds an output region matching the kernel's, for round-trip tests. */
-    internal fun encodeOutputForTest(sampleCount: Long, weights: List<Double>): ByteArray {
-        val out = ByteArray(RESULT_LEN)
-        putU32(out, 0, MAGIC); putU32(out, 4, DIM); putU64(out, 8, sampleCount)
-        putF64(out, 16, weights[0]); putF64(out, 24, weights[1])
-        return out
-    }
-
     private fun putU32(b: ByteArray, o: Int, v: Int) {
         b[o] = v.toByte(); b[o + 1] = (v ushr 8).toByte()
         b[o + 2] = (v ushr 16).toByte(); b[o + 3] = (v ushr 24).toByte()

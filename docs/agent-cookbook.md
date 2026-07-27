@@ -22,6 +22,7 @@ If you catch yourself writing any of these, stop — kuilt already ships it:
 | that same "paused / reconnecting…" surface for a **game** (not a bare room), a `room.events` → game-presence adapter | `RoomGameSession.presence` via `gameOverRoom` | [Liveness & presence](#liveness--presence) |
 | a last-write-wins register, a grow-only set/counter, an add/remove set, a version vector, "merge these two states" | the CRDT zoo (`LWWRegister`, `GSet`, `PNCounter`, `ORSet`, …) | [Replicated data](#replicated-data) |
 | replicating a CRDT over a connection by hand | `Quilter` | [Replicated data](#replicated-data) |
+| averaging model updates from many devices without collecting their data — federated learning / federated analytics, "train locally, share only the update" | `FedAvg` + `TrainingUpdate` | [Replicated data](#replicated-data) |
 | a `seenIds` set to skip already-handled messages | `GSet` / kuilt dedup | [Dedup](#dedup) |
 | merging several mDNS/Multipeer discovery feeds into one lobby roster | `discoveryRoster` | [Discovery](#discovery) |
 | a weighted / fair-share scheduler — "give this group 3× the share", "who runs the next quantum", a hoarder-proof round-robin | `HeddlePolicy` + `HeddleNode` | [Fair share & placement](#fair-share--placement) |
@@ -233,6 +234,44 @@ internal fun sampleQuilterSetup() = runTest(
 
 See [`crdt-quilter.md`](../Writerside/topics/crdt-quilter.md) for `Quilter`'s wire protocol,
 late-joiner full-state sync, and scaling to many peers via `GossipSeam`.
+
+**Intent:** learn one shared model from data spread across many devices without collecting the data — federated learning / federated analytics, "each device trains locally and publishes only the update".
+**Primitive:** `FedAvg` + `TrainingUpdate` (`:kuilt-warp-ml`). The count-weighted mean across peers, as a CRDT: contributions merge in any order, duplicates are absorbed, and every replica reads the same model bit-for-bit. Don't hand-roll a `(Σweights, Σcount)` accumulator or a round barrier.
+
+<!-- verbatim from kuilt-warp-ml/src/commonSamples/kotlin/us/tractat/kuilt/warp/FedAvgSamples.kt#sampleFedAvg -->
+```kotlin
+val alice = ReplicaId("alice")
+val bob = ReplicaId("bob")
+val carol = ReplicaId("carol")
+
+// Each peer trains locally and contributes its results.
+val fromAlice = FedAvg.contribution(alice, sampleCount = 100L, localWeights = listOf(0.5, 0.3))
+val fromBob   = FedAvg.contribution(bob,   sampleCount = 200L, localWeights = listOf(0.7, 0.1))
+val fromCarol = FedAvg.contribution(carol, sampleCount = 300L, localWeights = listOf(0.9, 0.5))
+
+// Any replica merges contributions in any order — result is the same.
+val merged = FedAvg.ZERO.piece(fromAlice).piece(fromBob).piece(fromCarol)
+
+// weights[i] = Σ(n_k * w_k[i]) / Σ(n_k)
+val w = merged.weights
+check(w.size == 2)
+// Spot-check: (100*0.5 + 200*0.7 + 300*0.9) / (100+200+300) = 460/600 ≈ 0.7667
+check(w[0] in 0.766..0.768)
+
+// Idempotent: absorbing the same contribution again changes nothing.
+check(merged.piece(fromAlice) == merged)
+check(merged.piece(fromBob) == merged)
+
+// Rides the coordination-free path — no Seam or Raft required.
+val free = CoordinationFree(fromAlice).embroider(CoordinationFree(fromBob))
+check(free.state == FedAvg.ZERO.piece(fromAlice).piece(fromBob))
+```
+
+The training step can travel too: `FedAvgKernelCodec` marshals the same step as a
+content-addressed WebAssembly kernel shipped through [Code mobility](#code-mobility), and
+`ReferenceTrainer` is the Kotlin oracle it is held bit-for-bit equal to. See
+[`kuilt-warp-ml/module.md`](../kuilt-warp-ml/module.md) — including the honest seam on lane
+costing if you gate the workload with `HeddleAdmissionControl`.
 
 ## Liveness & presence
 
