@@ -575,7 +575,10 @@ Per allocation round at one parent, on one peer:
    localHoldings, perChildOutstandingCap)`, dropping `q == 0`.
 2. **Parent virtual time:** the weighted mean
    `V = Σ w(e)·effectiveVirtualService(e) / Σ w(e)` over the fixed candidate
-   set.
+   set — the *trimmed* one from step 1, quanta and all. This is the same
+   arithmetic as §7.2's seating front, over a deliberately different set: the
+   front drops the quantum trims, this step keeps them, and the two values
+   coincide only when no trim binds. Do not read them as one number.
 3. **Eligibility:** `effectiveVirtualService(e) ≤ V`. (If rounding ever
    yields no eligible candidate: take the minimum, emit a diagnostic, carry
    on.)
