@@ -1,5 +1,6 @@
 package us.tractat.kuilt.session
 
+import us.tractat.kuilt.core.FabricAvailability
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.session.admit.RejectCode
 import kotlin.time.Instant
@@ -51,7 +52,25 @@ public sealed interface MembershipEvent {
      * [reason] classifies why the link is down (silent timeout / backpressure / transport close),
      * so a consumer can tailor its "reconnecting…" surface — see [ReconnectReason].
      */
-    public data class Partitioned(val peerId: PeerId, val at: Instant, val reason: ReconnectReason) : MembershipEvent
+    public data class Partitioned(
+        val peerId: PeerId,
+        val at: Instant,
+        val reason: ReconnectReason,
+        /**
+         * This peer's own [Room.localFabric] at the instant this event was emitted.
+         *
+         * **Precedence.** When this is [FabricAvailability.Unavailable], this event is **not
+         * evidence about [peerId]** — our own end of the fabric was down, so their silence says
+         * nothing about them. Read it off the event rather than correlating two streams by
+         * timestamp (#1712).
+         *
+         * [FabricAvailability.Unknown] means the fabric has no path observer, so precedence cannot
+         * be determined — treat it as "no information", not as "we were fine". It is the **normal**
+         * value on every fabric without a live OS path observer, which today is all of them bar
+         * one, so a consumer must handle it as a first-class third answer rather than a gap.
+         */
+        val localFabric: FabricAvailability,
+    ) : MembershipEvent
 
     /**
      * A partitioned peer's link recovered before the window expired.
@@ -94,7 +113,25 @@ public sealed interface MembershipEvent {
      * [reason] classifies the terminal failure (window expired / refused / unrecoverable) — see
      * [FailureReason], the post-admission analogue of [AdmissionFailure] on [AdmissionFailed].
      */
-    public data class HostLost(val at: Instant, val reason: FailureReason) : MembershipEvent
+    public data class HostLost(
+        val at: Instant,
+        val reason: FailureReason,
+        /**
+         * This peer's own [Room.localFabric] at the instant this event was emitted.
+         *
+         * **Precedence.** When this is [FabricAvailability.Unavailable], this event is **not
+         * evidence about the host** — our own end of the fabric was down, so its silence says
+         * nothing about it. This is the highest-value site for the distinction: a joiner whose own
+         * radio died would otherwise render "the host is gone" (#1712). Read it off the event
+         * rather than correlating two streams by timestamp.
+         *
+         * [FabricAvailability.Unknown] means the fabric has no path observer, so precedence cannot
+         * be determined — treat it as "no information", not as "we were fine". It is the **normal**
+         * value on every fabric without a live OS path observer, which today is all of them bar
+         * one, so a consumer must handle it as a first-class third answer rather than a gap.
+         */
+        val localFabric: FabricAvailability,
+    ) : MembershipEvent
 
     /**
      * **This peer's own end** of the fabric carrying this room can no longer carry frames.

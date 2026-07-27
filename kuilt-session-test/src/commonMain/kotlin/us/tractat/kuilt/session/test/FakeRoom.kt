@@ -199,6 +199,11 @@ public class FakeRoom(
      * since [Liveness.Partitioned] carries a real deadline in production. Pass an explicit value
      * when a test asserts on the countdown. It is the **last** parameter so existing positional
      * `partition(peerId, at, reason)` call sites keep compiling.
+     *
+     * The event's [MembershipEvent.Partitioned.localFabric] tag is this fake's **current** level, so
+     * a test that drives [setLocalFabric] first gets the same precedence signal a real room would
+     * (#1712): drop our own fabric, then partition a peer, and the event says the silence is not
+     * evidence about that peer.
      */
     public suspend fun partition(
         peerId: PeerId,
@@ -207,7 +212,7 @@ public class FakeRoom(
         windowExpiresAt: Instant = at + 1.minutes,
     ) {
         updateLiveness(peerId, Liveness.Partitioned(since = at, windowExpiresAt = windowExpiresAt))
-        eventsChannel.send(MembershipEvent.Partitioned(peerId, at, reason))
+        eventsChannel.send(MembershipEvent.Partitioned(peerId, at, reason, localFabric = _localFabric.value))
     }
 
     /**
@@ -238,10 +243,14 @@ public class FakeRoom(
     /**
      * Emit [MembershipEvent.HostLost] (terminal event on a joiner's room).
      * After this, [broadcast] and [sendTo] become silent no-ops per the contract.
+     *
+     * Tagged with this fake's **current** [Room.localFabric], as [partition] is — so a test can
+     * reproduce #1712's headline case (our own radio died, so "the host is gone" is not a claim
+     * about the host) by calling [setLocalFabric] with [FabricAvailability.Unavailable] first.
      */
     public suspend fun hostLost(at: Instant, reason: FailureReason = FailureReason.WindowExpired) {
         left = true
-        eventsChannel.send(MembershipEvent.HostLost(at, reason))
+        eventsChannel.send(MembershipEvent.HostLost(at, reason, localFabric = _localFabric.value))
     }
 
     /**

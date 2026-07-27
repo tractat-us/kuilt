@@ -673,7 +673,14 @@ internal class SeamRoom(
                         this@SeamRoom.restartIncomingCollect()
 
                     override fun onReconnectStarted(hostId: PeerId, at: Instant, windowDeadline: Instant) {
-                        emitEvent(MembershipEvent.Partitioned(hostId, at, ReconnectReason.TransportClosed))
+                        emitEvent(
+                            MembershipEvent.Partitioned(
+                                hostId,
+                                at,
+                                ReconnectReason.TransportClosed,
+                                localFabric = localFabric.value,
+                            ),
+                        )
                         emitEvent(MembershipEvent.WindowOpened(hostId, windowDeadline))
                     }
 
@@ -1607,7 +1614,12 @@ internal class SeamRoom(
             )
             (existing != null) to (updateMemberLiveness(peerId, level) ?: return)
         }
-        if (!wasPartitioned) emitEvent(MembershipEvent.Partitioned(updated.id, at, reason))
+        // localFabric read outside `lock` (which guards admittedById only) and off the zero-lag
+        // projection, never a mirrored copy: this runs on the detector's coroutine, so a mirror
+        // written by the capability collector could still read Available on a radio death (#1712).
+        if (!wasPartitioned) {
+            emitEvent(MembershipEvent.Partitioned(updated.id, at, reason, localFabric = localFabric.value))
+        }
         reconnectController?.onPeerUnresponsive(peerId, at.toEpochMilliseconds())
         // The host always recomputes, so the level and this fan-out carry the same `expiresAt`.
         if (!wasPartitioned && isHost) {
@@ -1691,7 +1703,14 @@ internal class SeamRoom(
         }
         // The host told us the link dropped; TransportClosed is the honest reason here — we
         // observed no timeout or backpressure ourselves, only the authoritative Paused (#1556).
-        emitEvent(MembershipEvent.Partitioned(updated.id, clock(), ReconnectReason.TransportClosed))
+        emitEvent(
+            MembershipEvent.Partitioned(
+                updated.id,
+                clock(),
+                ReconnectReason.TransportClosed,
+                localFabric = localFabric.value,
+            ),
+        )
         emitEvent(
             MembershipEvent.WindowOpened(updated.id, Instant.fromEpochMilliseconds(paused.expiresAt)),
         )
@@ -1764,7 +1783,7 @@ internal class SeamRoom(
             was
         }
         if (alreadyLost) return
-        emitEvent(MembershipEvent.HostLost(at, reason))
+        emitEvent(MembershipEvent.HostLost(at, reason, localFabric = localFabric.value))
         leave(LeaveReason.Error("host lost"))
     }
 

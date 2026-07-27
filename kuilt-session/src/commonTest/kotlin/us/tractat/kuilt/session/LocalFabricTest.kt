@@ -5,23 +5,30 @@ package us.tractat.kuilt.session
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.filterIsInstance
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.FabricAvailability
+import us.tractat.kuilt.core.InMemoryLoom
+import us.tractat.kuilt.core.InMemoryTag
+import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.TransportCapability
 import us.tractat.kuilt.core.TransportRole
 import us.tractat.kuilt.liveness.HeartbeatConfig
+import us.tractat.kuilt.session.admit.AdmitMessage
 import us.tractat.kuilt.test.FakeSeam
+import us.tractat.kuilt.test.FaultySeam
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
+import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
 
@@ -264,7 +271,226 @@ class LocalFabricTest {
             )
         }
 
+    // ── The precedence tag (#1712) ───────────────────────────────────────────
+
+    /**
+     * **The headline #1712 case.** A joiner whose own radio dies must not report "the host is gone"
+     * as if it were news about the host.
+     *
+     * Both events the drop produces — [MembershipEvent.Partitioned] for the host peer and the
+     * terminal [MembershipEvent.HostLost] — carry this peer's own
+     * [FabricAvailability.Unavailable], so a consumer branches on one event instead of correlating
+     * the partition stream against the fabric stream by timestamp.
+     */
+    @Test
+    fun ourOwnRadioDyingTagsBothPartitionedAndHostLostAsSelfAttributed() =
+        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+            val loom = InMemoryLoom()
+            val factory = SeamRoomFactory(loom, backgroundScope, virtualClock(), dropConfig)
+            factory.host(Pattern("Table"))
+
+            val capability = MutableStateFlow(
+                TransportCapability(emptySet(), FabricAvailability.Available),
+            )
+            val radio = FaultySeam(loom.join(InMemoryTag("Table")), backgroundScope)
+            val joiner = factory.adopt(CapabilitySeam(radio, capability), SessionRole.Joiner)
+            joiner.roster.first { it.size == 1 }
+
+            val seen = mutableListOf<MembershipEvent>()
+            backgroundScope.launch { joiner.events.collect { seen += it } }
+            runCurrent()
+
+            // Airplane mode: frames stop flowing AND the platform reports our own path down.
+            radio.partition()
+            capability.value = TransportCapability(emptySet(), FabricAvailability.Unavailable("radio off"))
+            testScheduler.advanceTimeBy(
+                dropConfig.timeout + dropConfig.reconnectWindow + dropConfig.interval * 6,
+            )
+            runCurrent()
+
+            assertAll(
+                {
+                    assertIs<FabricAvailability.Unavailable>(
+                        seen.filterIsInstance<MembershipEvent.Partitioned>().single().localFabric,
+                        "the host going quiet while our own fabric is down is not evidence about " +
+                            "the host: $seen",
+                    )
+                },
+                {
+                    assertIs<FabricAvailability.Unavailable>(
+                        seen.filterIsInstance<MembershipEvent.HostLost>().single().localFabric,
+                        "HostLost is the highest-value site — a joiner whose own radio died must " +
+                            "not render 'the host is gone': $seen",
+                    )
+                },
+            )
+        }
+
+    /**
+     * The contrast that makes the tag worth carrying: *their* network died, not ours.
+     *
+     * Same injected drop as above, read from the other end. The host's own fabric never moved, so
+     * its [MembershipEvent.Partitioned] carries [FabricAvailability.Available] — and the two cases
+     * are now distinguishable from one event, which is the whole ask.
+     */
+    @Test
+    fun aPeerDroppingWhileOurOwnFabricIsUpIsNotSelfAttributed() =
+        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+            val loom = InMemoryLoom()
+            val factory = SeamRoomFactory(loom, backgroundScope, virtualClock(), dropConfig)
+
+            val capability = MutableStateFlow(
+                TransportCapability(emptySet(), FabricAvailability.Available),
+            )
+            val host = factory.adopt(
+                CapabilitySeam(loom.host(Pattern("Table")), capability),
+                SessionRole.Host,
+            )
+            val joinerLink = FaultySeam(loom.join(InMemoryTag("Table")), backgroundScope)
+            factory.adopt(joinerLink, SessionRole.Joiner)
+            host.roster.first { it.size == 1 }
+
+            val seen = mutableListOf<MembershipEvent>()
+            backgroundScope.launch { host.events.collect { seen += it } }
+            runCurrent()
+
+            joinerLink.partition()
+            // Detection only — short of the reconnect window, so the seat is still held.
+            testScheduler.advanceTimeBy(dropConfig.timeout + dropConfig.interval * 3)
+            runCurrent()
+
+            assertIs<FabricAvailability.Available>(
+                seen.filterIsInstance<MembershipEvent.Partitioned>().single().localFabric,
+                "our own fabric never moved, so this partition IS evidence about the peer: $seen",
+            )
+        }
+
+    /**
+     * The tag is read from the **zero-lag projection**, correct with no dispatch in between.
+     *
+     * The ordering here is the entire test. The host's authoritative
+     * [us.tractat.kuilt.session.admit.AdmitMessage.Paused] is already queued on this room's link
+     * when our own fabric dies, and there is deliberately **no** `runCurrent()` between the two —
+     * so when the room's main loop emits [MembershipEvent.Partitioned], the capability collector
+     * has not yet been dispatched for the new value. A level mirrored into a `MutableStateFlow` by
+     * that collector would still read `Available` at this instant, tagging a radio death as a
+     * healthy-fabric peer drop: the #1712 headline case exactly inverted, and the worst possible
+     * failure of this feature. Reading [Room.localFabric] — which projects [Seam.capability]
+     * directly — is what makes it impossible.
+     */
+    @Test
+    fun theTagIsCurrentWithNoDispatchBetweenTheFabricChangeAndTheEmission() =
+        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+            val loom = InMemoryLoom()
+            // Detection an order of magnitude beyond this test's advancement budget: no detector can
+            // fire on its own, so the only Partitioned is the one the Paused frame drives, at the
+            // instant we choose.
+            val factory = SeamRoomFactory(loom, backgroundScope, virtualClock(), inertConfig)
+
+            // Adopting the host's seam keeps a handle on it, so the authoritative Paused can be sent
+            // by hand rather than waiting for a detector inside an advanceTimeBy.
+            val hostLink = loom.host(Pattern("Table"))
+            factory.adopt(hostLink, SessionRole.Host)
+            val capability = MutableStateFlow(
+                TransportCapability(emptySet(), FabricAvailability.Available),
+            )
+            val self = factory.adopt(
+                CapabilitySeam(loom.join(InMemoryTag("Table")), capability),
+                SessionRole.Joiner,
+            )
+            val other = factory.join(InMemoryTag("Table"))
+            self.roster.first { it.size == 2 }
+
+            val seen = mutableListOf<MembershipEvent>()
+            backgroundScope.launch { self.events.collect { seen += it } }
+            runCurrent()
+
+            hostLink.sendTo(
+                self.selfId,
+                AdmitMessage.encode(AdmitMessage.Paused(other.selfId.value, expiresAt = 60_000L)),
+            )
+            capability.value = TransportCapability(emptySet(), FabricAvailability.Unavailable("radio off"))
+            runCurrent()
+
+            assertIs<FabricAvailability.Unavailable>(
+                seen.filterIsInstance<MembershipEvent.Partitioned>().single().localFabric,
+                "the tag must be read from the zero-lag projection, not a mirrored level one " +
+                    "collector dispatch behind the seam: $seen",
+            )
+        }
+
+    /**
+     * The floor, and what a consumer observes on **every fabric but a path-observing one today**:
+     * the tag reads [FabricAvailability.Unknown].
+     *
+     * `Unknown` is the normal value here, not an error and not missing data. It must stay readable
+     * as itself — "kuilt cannot tell whether our own end was up" — rather than being coerced to
+     * `Available` (which would silently re-assert the very claim #1712 exists to stop the library
+     * making) or to `Unavailable` (which would suppress every honest peer-drop signal).
+     */
+    @Test
+    fun aFabricWithNoPathObserverTagsTheEventsUnknown() =
+        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+            val loom = InMemoryLoom()
+            val factory = SeamRoomFactory(loom, backgroundScope, virtualClock(), dropConfig)
+            factory.host(Pattern("Table"))
+
+            val radio = FaultySeam(loom.join(InMemoryTag("Table")), backgroundScope)
+            val joiner = factory.adopt(radio, SessionRole.Joiner)
+            joiner.roster.first { it.size == 1 }
+
+            val seen = mutableListOf<MembershipEvent>()
+            backgroundScope.launch { joiner.events.collect { seen += it } }
+            runCurrent()
+
+            radio.partition()
+            testScheduler.advanceTimeBy(
+                dropConfig.timeout + dropConfig.reconnectWindow + dropConfig.interval * 6,
+            )
+            runCurrent()
+
+            assertAll(
+                {
+                    assertIs<FabricAvailability.Unknown>(
+                        seen.filterIsInstance<MembershipEvent.Partitioned>().single().localFabric,
+                        "an observer-less fabric must tag Partitioned Unknown, never Available: $seen",
+                    )
+                },
+                {
+                    assertIs<FabricAvailability.Unknown>(
+                        seen.filterIsInstance<MembershipEvent.HostLost>().single().localFabric,
+                        "…and must tag HostLost Unknown too: $seen",
+                    )
+                },
+            )
+        }
+
     // ── Harness ──────────────────────────────────────────────────────────────
+
+    /**
+     * Fast detection with a generous window, matching [MembershipEventDropContractTest]: the whole
+     * `Partitioned → HostLost` arc fits in a couple of seconds of virtual time.
+     */
+    private val dropConfig = HeartbeatConfig(
+        interval = 100.milliseconds,
+        timeout = 300.milliseconds,
+        reconnectWindow = 2.seconds,
+    )
+
+    /**
+     * Detection far beyond any advancement budget below, so no detector can reach a conclusion on
+     * its own — the [StarTopologyPresenceFanoutTest] idiom for making a room's *only* partition
+     * source an injected, hand-timed frame.
+     */
+    private val inertConfig = HeartbeatConfig(
+        interval = 10.seconds,
+        timeout = 60.seconds,
+        reconnectWindow = 60.seconds,
+    )
+
+    /** Virtual-time clock for the multi-room tests, which assert on real detector trajectories. */
+    private fun TestScope.virtualClock(): () -> Instant =
+        { Instant.fromEpochMilliseconds(testScheduler.currentTime) }
 
     /**
      * A host room over a seam whose [Seam.capability] the test drives, on [TestScope.backgroundScope]
