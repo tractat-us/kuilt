@@ -359,18 +359,20 @@ internal class CompositeSeam(
      * true value. The composite can lag only by a *pending* delivery, never by a *swallowed* one.
      */
     private fun publishCapability() {
-        val snapshot = lock.withLock {
+        // Only the mirrors are read under the lock. Availability comes from the woven plies' SEAMS (mirrored
+        // by their pumps), not their Looms: the Loom value is the static pre-connect claim, and folding it
+        // would launder an observer-less ply's claim into a confident live verdict.
+        val (wovenIds, availabilities) = lock.withLock {
             val wovenEntries = live.entries.filter { it.value.woven }
-            val wovenIds = wovenEntries.map { it.key }.toSet()
-            // Roles ARE static on the Loom — a ply's medium does not change under it.
-            val roles = desired.value.filter { (id, _) -> id in wovenIds }
-                .flatMap { (_, loom) -> loom.capability().roles }.toSet()
-            // Availability comes from the woven plies' SEAMS (mirrored above), not their Looms: the Loom
-            // value is the static pre-connect claim, and folding it would launder an observer-less ply's
-            // claim into a confident live verdict.
-            val availabilities = wovenEntries.map { it.value.availability }
-            roles to availabilities
+            wovenEntries.map { it.key }.toSet() to wovenEntries.map { it.value.availability }
         }
+        // Roles ARE static on the Loom — a ply's medium does not change under it — so they are resolved
+        // OUTSIDE the lock. `Loom.capability()` is consumer-authored code, and this class treats [lock] as
+        // non-reentrant: calling into a foreign implementation while holding it risks a deadlock (and stalls
+        // every sender behind an arbitrarily slow callee) for no benefit, since the result is a constant.
+        val roles = desired.value.filter { (id, _) -> id in wovenIds }
+            .flatMap { (_, loom) -> loom.capability().roles }.toSet()
+        val snapshot = roles to availabilities
         // Three-way lattice fold over the woven plies' Seam availabilities (mirrors
         // CompositeLoom.capability): any Available ⇒ Available; else any Unknown ⇒ Unknown
         // (best-effort — don't collapse an unproven ply to Unavailable); else Unavailable.
