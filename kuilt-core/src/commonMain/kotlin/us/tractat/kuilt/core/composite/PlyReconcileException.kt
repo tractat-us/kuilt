@@ -5,32 +5,38 @@ import us.tractat.kuilt.core.PlyId
 import us.tractat.kuilt.core.Seam
 
 /**
- * One ply's failure to attach or detach during a [CompositeLoom] reconciliation, raised through
- * `CompositeLoom(onPlyFailure = …)`.
+ * One ply's failure inside a live [CompositeLoom] session — attaching, detaching, or processing an
+ * inbound frame — raised through `CompositeLoom(onPlyFailure = …)`.
  *
  * A ply is built from a **consumer-authored** [Loom], so `Loom.capability()`, `Loom.weave()` and the
- * ply [Seam]'s own `close()` can all throw. The composite absorbs those failures — one ply must not be
- * able to stop the reconciliation of the others, still less kill the reconcile pump for the life of the
- * seam (#1784) — but absorbing them *silently* would leave a consumer with a ply that simply never
- * appears and nothing at all to look at. `kuilt-core` is logger-free by contract, so this is the
- * signal: the composite raises it, and the consumer's own logger records it.
+ * ply [Seam]'s own `close()` can all throw; and a ply's inbound frames are **peer-supplied bytes**, so
+ * a merely buggy or version-skewed peer can send one that does not decode. The composite absorbs all of
+ * those — one ply must not be able to stop the reconciliation of the others, still less kill a pump for
+ * the life of the seam (#1784), and no peer may crash the process with a short frame (#1788) — but
+ * absorbing them *silently* would leave a consumer with a ply that never appears, or frames that quietly
+ * vanish, and nothing at all to look at. `kuilt-core` is logger-free by contract, so this is the signal:
+ * the composite raises it, and the consumer's own logger records it.
  *
  * It carries the ply's [plyId], which [phase] failed, and the originating [cause] — identity and
  * exception, never a bare count, because "a ply failed" is not a diagnosis and "which ply, doing what,
  * and why" is.
  *
- * The composite keeps going regardless: the other plies in the same pass still attach and detach, and a
- * ply that failed to attach is retried on the next desired-set emission (it is left un-live, not
- * recorded as failed). Ignoring this signal therefore costs observability, never liveness.
+ * The composite keeps going regardless: the other plies in the same pass still attach and detach, a ply
+ * that failed to attach is retried on the next desired-set emission (it is left un-live, not recorded as
+ * failed), and a ply whose inbound frame failed keeps delivering the frames after it. Ignoring this
+ * signal therefore costs observability, never liveness.
+ *
+ * (The name predates [Phase.INBOUND], which is not a reconciliation step. It is kept because this is the
+ * one type `onPlyFailure` carries and the whole point of that hook is a single per-ply failure signal.)
  */
 public class PlyReconcileException(
     public val plyId: PlyId,
     public val phase: Phase,
     override val cause: Throwable,
-) : Exception("composite ply '${plyId.value}' failed to ${phase.name.lowercase()}: $cause", cause) {
+) : Exception("composite ply '${plyId.value}' ${clauseFor(phase)}: $cause", cause) {
 
     /**
-     * Which part of the reconciliation the ply failed in.
+     * Which part of the ply's life failed.
      *
      * Pre-1.0 this may gain values: a `when` over it should carry an `else`.
      */
@@ -40,6 +46,14 @@ public class PlyReconcileException(
 
         /** The ply's teardown threw. Its pumps are stopped and it is out of the composite regardless. */
         DETACH,
+
+        /**
+         * An inbound frame on this ply could not be processed — most often a malformed [PlyFrame] from a
+         * peer (#1788). **That frame is dropped and the ply keeps delivering**; the ply is neither torn
+         * nor detached, deliberately, because tearing would hand any peer a one-frame way to remove a ply
+         * from someone else's composite.
+         */
+        INBOUND,
 
         /**
          * The ply was woven but could not be attached — the composite had already been closed — and
@@ -52,3 +66,16 @@ public class PlyReconcileException(
         SALVAGE,
     }
 }
+
+/**
+ * The message clause for [phase], rather than `phase.name.lowercase()`: the phases are not all verbs
+ * ("failed to inbound"), and the message a consumer's logger records is the diagnosis. Exhaustive on
+ * purpose — a new [PlyReconcileException.Phase] must choose its own wording.
+ */
+private fun clauseFor(phase: PlyReconcileException.Phase): String =
+    when (phase) {
+        PlyReconcileException.Phase.ATTACH -> "failed to attach"
+        PlyReconcileException.Phase.DETACH -> "failed to detach"
+        PlyReconcileException.Phase.INBOUND -> "failed to process an inbound frame"
+        PlyReconcileException.Phase.SALVAGE -> "failed to salvage"
+    }

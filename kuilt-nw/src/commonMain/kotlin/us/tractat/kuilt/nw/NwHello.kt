@@ -34,10 +34,28 @@ internal data class NwHello(val peerId: PeerId, val nonce: ByteArray) {
             }
         }
 
+        /**
+         * Decode a preamble frame, throwing [IllegalArgumentException] if it is malformed.
+         *
+         * The frame is the **first bytes a remote sends**, so every check runs before the read it
+         * protects (#1788): a frame shorter than the 4-byte length prefix would index-fault inside
+         * [readInt], a negative declared length passes any `size >= 4 + idLen` test (the prefix is read
+         * as a signed [Int]), and a large one wraps `4 + idLen` negative so that test passes too — hence
+         * the subtraction. `NwSeam.processFrame` does guard this call, but the frame's own decoder is
+         * where a peer-supplied length belongs: a typed rejection here says *what* was wrong, where an
+         * `IndexOutOfBoundsException` escaping from inside [readInt] says only that something did.
+         */
         fun decode(frame: ByteArray): NwHello {
+            require(frame.size >= Int.SIZE_BYTES) {
+                "truncated NwHello: ${frame.size} bytes cannot hold the ${Int.SIZE_BYTES}-byte id length"
+            }
             val idLen = frame.readInt(offset = 0)
-            val peerId = PeerId(frame.decodeToString(startIndex = 4, endIndex = 4 + idLen))
-            val nonce = frame.copyOfRange(4 + idLen, frame.size)
+            require(idLen >= 0) { "malformed NwHello: negative declared id length $idLen" }
+            require(frame.size - Int.SIZE_BYTES >= idLen) {
+                "truncated NwHello: declared id length $idLen exceeds the ${frame.size}-byte frame"
+            }
+            val peerId = PeerId(frame.decodeToString(startIndex = Int.SIZE_BYTES, endIndex = Int.SIZE_BYTES + idLen))
+            val nonce = frame.copyOfRange(Int.SIZE_BYTES + idLen, frame.size)
             return NwHello(peerId, nonce)
         }
     }

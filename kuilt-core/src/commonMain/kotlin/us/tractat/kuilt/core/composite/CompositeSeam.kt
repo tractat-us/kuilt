@@ -16,6 +16,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.update
@@ -91,7 +92,9 @@ internal class PeersStrand(
  * falling through to the next when a ply tears mid-send.
  *
  * **Receive:** Inbound [PlyFrame.Data] frames are de-duplicated and reordered per
- * origin by a [PlyInboundGate]; application payloads emerge as [Swatch] values.
+ * origin by a [PlyInboundGate]; application payloads emerge as [Swatch] values. A frame that cannot be
+ * processed — a malformed [PlyFrame] from a peer being the reachable case — is **dropped and reported**
+ * through [onPlyFailure]; it never kills the ply's inbound pump (see [attachPly], #1788).
  *
  * **Thread-safety.** This type is correct under a *multi-threaded* dispatcher — the
  * injected [dispatcher] is only the scope for the internal coroutines (the reconcile,
@@ -119,8 +122,9 @@ internal class PeersStrand(
  *   thread-safety note above). Production callers pass `Dispatchers.Default`; test callers
  *   pass a dispatcher derived from the test scheduler so the seam's pumps share the same
  *   virtual clock as the test, driving reconciliation eagerly.
- * @param onPlyFailure Raised whenever one ply fails to attach or detach — see [reconcile] and
- *   [PlyReconcileException]. Best-effort and non-suspending; defaults to a silent absorb.
+ * @param onPlyFailure Raised whenever one ply fails to attach, detach, or process an inbound frame —
+ *   see [reconcile], [attachPly] and [PlyReconcileException]. Best-effort and non-suspending; defaults
+ *   to a silent absorb.
  */
 internal class CompositeSeam(
     initial: List<InitialPly>,
@@ -386,9 +390,25 @@ internal class CompositeSeam(
         }
     }
 
-    /** Raise one ply's reconciliation failure to the consumer. Best-effort: a throwing observer is absorbed. */
+    /**
+     * Raise one ply's failure to the consumer. Best-effort: a throwing observer is absorbed — **including**
+     * one that throws a [kotlin.coroutines.cancellation.CancellationException].
+     *
+     * That total absorption is why this is `catch (Throwable)` and not `runCatchingCancellable` (#1788).
+     * [onPlyFailure] is a **non-suspending** consumer callback, invoked outside any cancellation contract:
+     * there is no cancellation of ours for it to be reporting, so a `CancellationException` arriving from it
+     * can only be one it minted itself and there is nothing to preserve by rethrowing. Rethrowing is
+     * actively harmful — this is called from inside the inbound pump's own guard, so the rethrow escapes
+     * that guard, and a `CancellationException` escaping an `onEach` body **cancels the coroutine
+     * silently**: the pump dies, the ply stays `Woven`, and nothing is reported. That is the very defect
+     * this hook was added to make observable, reached through the hook itself.
+     */
     private fun raisePlyFailure(id: PlyId, phase: PlyReconcileException.Phase, cause: Throwable) {
-        runCatchingCancellable { onPlyFailure(PlyReconcileException(id, phase, cause)) }
+        try {
+            onPlyFailure(PlyReconcileException(id, phase, cause))
+        } catch (_: Throwable) {
+            // Deliberately total — see the KDoc. A consumer's logger must never be able to kill a pump.
+        }
     }
 
     /**
@@ -467,8 +487,49 @@ internal class CompositeSeam(
             }
             .launchIn(plyScope)
 
+        // The inbound pump — GUARDED, because this is the one pump whose input is bytes from another
+        // peer. "What if this throws" is therefore not a question about consumer code but about anything
+        // any peer can put on the wire: [PlyFrame.decode] rejects a malformed frame, the gate is keyed on
+        // peer-chosen origins and sequences, and `spool.deliver` can fail on a closing seam.
+        //
+        // An escape here was not merely a dead pump (the ply staying `Woven` while the composite kept
+        // advertising it as a send target). `plyScope`'s job is a [SupervisorJob], and suppressing PARENT
+        // propagation is exactly what routes an unhandled throw to the global handler — so on
+        // Kotlin/Native, where kuilt installs no `setUnhandledExceptionHook`, the runtime default
+        // **aborted the process**. A single 2-byte frame from any peer crashed a shipped iOS app (#1788).
+        //
+        // So a malformed frame is a DROPPED frame: reported through [onPlyFailure], never fatal, and the
+        // ply keeps delivering the frames after it. Dropping rather than tearing the ply is deliberate —
+        // tearing would hand any peer a one-frame way to remove a ply from someone else's composite.
+        // `catch (Throwable)` + `ensureActive()` and NOT `runCatchingCancellable`, the same discriminator
+        // for the same reason as [reconcile]: that helper rethrows a `CancellationException` the callee
+        // minted itself (a consumer `Seam`'s own `withTimeout`), which on a long-lived pump means the pump
+        // is *cancelled, not failed* — dead silently, with [onPlyFailure] never invoked and not even a
+        // stack trace left behind.
+        //
+        // **The `onEach` guard alone is not the whole pump.** `.onEach { … }.launchIn(scope)` desugars to
+        // `scope.launch { flow.onEach { … }.collect() }`, so the `try` below is INSIDE the collector and
+        // sees only what [onPlyFrame] throws. A throw raised by `seam.incoming` **itself** propagates out
+        // of `collect`, out of the `launch` body, and straight down the abort route above. `incoming` is
+        // the likeliest of a ply's five flows to do it, being the only one that is not a `StateFlow` but an
+        // arbitrary consumer-authored `Flow<Swatch>` (`MuxClientLoom` has the shape in tree:
+        // `flow { emitAll(current().incoming) }` over a `?: error(…)`). Hence the [catch] — an upstream
+        // throw legitimately ENDS the flow, which is what an upstream throw means, but it ends it with a
+        // diagnosis instead of a `SIGABRT`. [catch] needs no `ensureActive` of its own: `catchImpl`
+        // rethrows when the throwable is this coroutine's own cancellation cause and catches otherwise —
+        // the same discriminator, already built in.
         seam.incoming
-            .onEach { swatch -> onPlyFrame(id, swatch) }
+            .onEach { swatch ->
+                try {
+                    onPlyFrame(id, swatch)
+                } catch (failure: Throwable) {
+                    // Genuinely our own cancellation (detach, or the seam closing) → rethrow so the pump
+                    // stops as structured concurrency intends; anything else is this frame's failure.
+                    currentCoroutineContext().ensureActive()
+                    raisePlyFailure(id, PlyReconcileException.Phase.INBOUND, failure)
+                }
+            }
+            .catch { failure -> raisePlyFailure(id, PlyReconcileException.Phase.INBOUND, failure) }
             .launchIn(plyScope)
 
         // Recompute peers on transport membership changes; re-announce to newcomers.

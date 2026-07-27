@@ -14,6 +14,9 @@ internal sealed interface PlyFrame {
         private const val TAG_ANNOUNCE: Byte = 1
         private const val TAG_DATA: Byte = 2
 
+        /** Fixed prefix both frame kinds share: 1 tag byte + a 4-byte big-endian id length. */
+        private const val HEADER_BYTES = 1 + Int.SIZE_BYTES
+
         fun encode(frame: PlyFrame): ByteArray =
             when (frame) {
                 is Announce -> encodeAnnounce(frame)
@@ -40,6 +43,44 @@ internal sealed interface PlyFrame {
             return out
         }
 
+        /**
+         * Decode [bytes] as a [PlyFrame], throwing [IllegalArgumentException] for anything malformed.
+         *
+         * ### Every check runs BEFORE the read it protects (#1788)
+         * These bytes come off the wire from another peer, so a malformed frame is *reachable input*,
+         * not a local programming error. It used to be worse than a rejected frame: `readInt(bytes, 1)`
+         * ran **before** the `require` written to reject a short frame, so a **2-byte** frame threw
+         * [IndexOutOfBoundsException] out of the composite's per-ply inbound pump — which on
+         * Kotlin/Native is an unhandled coroutine exception on a `SupervisorJob` child, routed to the
+         * global handler and, with no `setUnhandledExceptionHook` installed, **aborting the process**.
+         * One short frame from any peer crashed a shipped app.
+         *
+         * Three malformed shapes a peer can put on the wire are rejected, not one:
+         *  - a buffer too short to hold the [HEADER_BYTES] header at all — bounds-checked before [readInt]
+         *    touches `bytes[1..4]`;
+         *  - a **negative** declared length: the prefix is read as a signed [Int], so a peer can set its
+         *    high bit and the old `bytes.size >= 5 + len` passed for a length no buffer can satisfy. (The
+         *    read that followed then died in `decodeToString`'s own `startIndex > endIndex` check — a
+         *    throw either way, just a different one, and nothing but that internal was closing the hole.)
+         *  - a length that **overflows** when added to the header, wrapping `5 + len + 8` negative so that
+         *    same comparison passed again. Hence [idLength] subtracts rather than adds.
+         *
+         * ### Do NOT "harmonize" [idLength] back to the additive form the other frame types use
+         * `NamedFrame.headerLength` computes `1 + nameLen` and `GossipFrame.tryDecode` computes
+         * `ORIGIN_OFFSET + originLen + 8` — both **additive**, and both correct, because their declared
+         * length is an **8-bit** and a **16-bit** field respectively. Structurally capped at 255 and 65535,
+         * those additions cannot overflow and the length cannot be negative, so neither file needs the two
+         * checks above and neither is a template for them. This frame (like `MeshHello` and `NwHello`) reads
+         * a full **signed 32-bit** length, which is precisely what makes `len < 0` and the wrap reachable.
+         * What is shared with those two is only the *discipline* — check before the read, never after.
+         *
+         * ### Why this throws where those two return null
+         * They are **discriminators**: a frame that does not decode there is ordinary application traffic,
+         * passed through unwrapped, so `null` is a category and not a fault. Every frame arriving on a
+         * composite ply is a `PlyFrame` by construction, so one that does not decode is a fault with a
+         * diagnosis worth carrying — and the exception *is* the diagnosis `CompositeSeam`'s inbound pump
+         * raises through `onPlyFailure` ([PlyReconcileException.Phase.INBOUND]) after dropping the frame.
+         */
         fun decode(bytes: ByteArray): PlyFrame {
             require(bytes.isNotEmpty()) { "empty ply frame" }
             return when (bytes[0]) {
@@ -50,19 +91,44 @@ internal sealed interface PlyFrame {
         }
 
         private fun decodeAnnounce(bytes: ByteArray): Announce {
-            val len = readInt(bytes, 1)
-            require(bytes.size >= 5 + len) { "truncated announce frame: declared id length $len exceeds buffer" }
-            val id = bytes.decodeToString(5, 5 + len)
-            return Announce(PeerId(id))
+            val len = idLength(bytes, trailing = 0, kind = "announce")
+            return Announce(PeerId(bytes.decodeToString(HEADER_BYTES, HEADER_BYTES + len)))
         }
 
         private fun decodeData(bytes: ByteArray): Data {
-            val len = readInt(bytes, 1)
-            require(bytes.size >= 5 + len + 8) { "truncated data frame: declared id length $len exceeds buffer" }
-            val id = bytes.decodeToString(5, 5 + len)
-            val seq = readLong(bytes, 5 + len)
-            val payload = bytes.copyOfRange(5 + len + 8, bytes.size)
+            val len = idLength(bytes, trailing = Long.SIZE_BYTES, kind = "data")
+            val id = bytes.decodeToString(HEADER_BYTES, HEADER_BYTES + len)
+            val seq = readLong(bytes, HEADER_BYTES + len)
+            val payload = bytes.copyOfRange(HEADER_BYTES + len + Long.SIZE_BYTES, bytes.size)
             return Data(PeerId(id), seq, payload)
+        }
+
+        /**
+         * The **validated** declared id length of [bytes], for a frame carrying [trailing] fixed bytes
+         * after the id (a [Data] frame's 8-byte sequence; nothing for an [Announce]).
+         *
+         * Rejects all three peer-supplied malformed shapes — see [decode]. Once this returns,
+         * `HEADER_BYTES + len (+ trailing)` is guaranteed to be a valid index into [bytes], so every read
+         * in the callers is in bounds by construction rather than by inspection.
+         */
+        private fun idLength(bytes: ByteArray, trailing: Int, kind: String): Int {
+            // BEFORE readInt, which touches bytes[1..4]: a 2-byte frame index-faulted here (#1788).
+            require(bytes.size >= HEADER_BYTES) {
+                "truncated $kind frame: ${bytes.size} bytes cannot hold the $HEADER_BYTES-byte header"
+            }
+            val len = readInt(bytes, 1)
+            // The length is read as a SIGNED Int, so a peer can simply set the high bit.
+            require(len >= 0) { "malformed $kind frame: negative declared id length $len" }
+            // Subtract, never add: `HEADER_BYTES + len + trailing` wraps NEGATIVE for a large declared
+            // length and `bytes.size >= <negative>` then passes — the overflow hole. The left-hand side
+            // cannot overflow (a non-negative size minus two small constants), and its going negative is
+            // itself a buffer too short for the header plus `trailing`, which this same check rejects.
+            // The additive form in `NamedFrame`/`GossipFrame` is safe only because their length fields are
+            // 8 and 16 bits wide; a 32-bit signed length cannot use it. See [decode].
+            require(bytes.size - HEADER_BYTES - trailing >= len) {
+                "truncated $kind frame: declared id length $len exceeds the ${bytes.size}-byte buffer"
+            }
+            return len
         }
 
         private fun writeInt(b: ByteArray, off: Int, v: Int) {

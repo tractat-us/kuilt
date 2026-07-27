@@ -1,6 +1,7 @@
 package us.tractat.kuilt.core.composite
 
 import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -88,5 +89,104 @@ class PlyFrameTest {
         val valid = PlyFrame.encode(PlyFrame.Announce(PeerId("bob")))
         val truncated = valid.copyOf(valid.size - 2)
         assertFailsWith<IllegalArgumentException> { PlyFrame.decode(truncated) }
+    }
+
+    // --- malformed input a PEER can send (#1788) ---
+    //
+    // These bytes are reachable from any peer in the session, so each of the three shapes below is a
+    // remote input and not a local programming error. All three defeated the old `require`s, and all
+    // three threw out of the composite's per-ply inbound pump — which on Kotlin/Native aborts the
+    // process (see `CompositeMalformedFrameProcessSurvivalTest`). They differed in HOW, which is worth
+    // recording because only two of them go red as *decoder* tests:
+    //  - short buffer: `readInt` index-faulted BEFORE the check meant to reject it →
+    //    `ArrayIndexOutOfBoundsException`, red below;
+    //  - overflowing length: `bytes.size >= 5 + len + 8` passed on the wrap, and the read then blew up →
+    //    `IndexOutOfBoundsException: startIndex: 5, endIndex: 2147483644, size: 37`, red below;
+    //  - negative length: `bytes.size >= 5 + len` also passed, but `decodeToString(5, 4)` then rejected
+    //    `startIndex > endIndex` with an `IllegalArgumentException` of its own — so the test below was
+    //    incidentally GREEN pre-fix. Note what that does and does not mean: the negative length was never
+    //    reachable as an *index fault*, but it was fully reachable as a **process abort**, because an
+    //    `IllegalArgumentException` escaping an unguarded pump aborts exactly as an AIOOBE does. So the
+    //    test below is a regression guard for a hole the `require` genuinely had — kept because nothing
+    //    but `decodeToString`'s internals was closing it — while the crash it led to is pinned by
+    //    `CompositeInboundPumpTest`, where this input does go red.
+
+    @Test
+    fun aTwoByteFrameIsRejectedRatherThanIndexFaulting() {
+        // THE crash frame: a valid tag and one byte, so `readInt(bytes, 1)` reads bytes[1..4] — three of
+        // which do not exist. The bounds check has to precede the read, not follow it.
+        val announceTag = PlyFrame.encode(PlyFrame.Announce(PeerId("a"))).copyOf(2)
+        val dataTag = PlyFrame.encode(PlyFrame.Data(PeerId("a"), 0L, byteArrayOf())).copyOf(2)
+        assertAll(
+            { assertFailsWith<IllegalArgumentException> { PlyFrame.decode(announceTag) } },
+            { assertFailsWith<IllegalArgumentException> { PlyFrame.decode(dataTag) } },
+        )
+    }
+
+    @Test
+    fun aFrameTruncatedInsideTheLengthPrefixIsRejected() {
+        val valid = PlyFrame.encode(PlyFrame.Data(PeerId("alice"), 1L, byteArrayOf(9)))
+        // Every buffer that stops short of the 5-byte header, including the tag-only case.
+        (1 until 5).forEach { size ->
+            assertFailsWith<IllegalArgumentException>("a $size-byte frame must be rejected, not index-fault") {
+                PlyFrame.decode(valid.copyOf(size))
+            }
+        }
+    }
+
+    @Test
+    fun aNegativeDeclaredIdLengthIsRejected() {
+        // The 4-byte length is read as a SIGNED Int, so a peer only has to set its high bit. Then
+        // `bytes.size >= 5 + len` compares against something SMALLER than the header and passes.
+        assertAll(
+            { assertFailsWith<IllegalArgumentException> { PlyFrame.decode(frameWithDeclaredLength(ANNOUNCE_TAG, -1)) } },
+            { assertFailsWith<IllegalArgumentException> { PlyFrame.decode(frameWithDeclaredLength(DATA_TAG, -1)) } },
+            {
+                assertFailsWith<IllegalArgumentException> {
+                    PlyFrame.decode(frameWithDeclaredLength(DATA_TAG, Int.MIN_VALUE))
+                }
+            },
+        )
+    }
+
+    @Test
+    fun aDeclaredIdLengthThatOverflowsTheOffsetIsRejected() {
+        // `5 + Int.MAX_VALUE` wraps NEGATIVE, so an ADDITIVE bounds check passes for a length no buffer
+        // could ever satisfy. The check must subtract from the buffer size instead.
+        assertAll(
+            {
+                assertFailsWith<IllegalArgumentException> {
+                    PlyFrame.decode(frameWithDeclaredLength(ANNOUNCE_TAG, Int.MAX_VALUE))
+                }
+            },
+            {
+                assertFailsWith<IllegalArgumentException> {
+                    PlyFrame.decode(frameWithDeclaredLength(DATA_TAG, Int.MAX_VALUE))
+                }
+            },
+            // `5 + len + 8` overflows for this one while `5 + len` alone does not — the Data frame's
+            // 8-byte sequence widens the hole, so the trailing bytes must be part of the check.
+            {
+                assertFailsWith<IllegalArgumentException> {
+                    PlyFrame.decode(frameWithDeclaredLength(DATA_TAG, Int.MAX_VALUE - 8))
+                }
+            },
+        )
+    }
+
+    /** A syntactically well-formed header for [tag] declaring [declaredIdLength], and 32 bytes of body. */
+    private fun frameWithDeclaredLength(tag: Byte, declaredIdLength: Int): ByteArray =
+        ByteArray(5 + 32).also { frame ->
+            frame[0] = tag
+            frame[1] = (declaredIdLength ushr 24).toByte()
+            frame[2] = (declaredIdLength ushr 16).toByte()
+            frame[3] = (declaredIdLength ushr 8).toByte()
+            frame[4] = declaredIdLength.toByte()
+        }
+
+    private companion object {
+        /** Read off the encoder rather than duplicated, so a tag renumbering cannot silently pass. */
+        val ANNOUNCE_TAG: Byte = PlyFrame.encode(PlyFrame.Announce(PeerId("t")))[0]
+        val DATA_TAG: Byte = PlyFrame.encode(PlyFrame.Data(PeerId("t"), 0L, byteArrayOf()))[0]
     }
 }
