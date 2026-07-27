@@ -100,8 +100,15 @@ public interface Room {
      * **This is the authoritative, replay-safe level.** Being a [StateFlow], a late collector
      * immediately reads the current value and so cannot miss a drop, where
      * [MembershipEvent.LocalFabricLost] / [MembershipEvent.LocalFabricRestored] on [events] are
-     * only notifications that it moved. The two never disagree: a consumer reacting to an edge
-     * always reads the matching level here (#1712).
+     * only notifications that it moved.
+     *
+     * The level is never *staler* than an edge — so it never claims the fabric is up while an
+     * emitted [MembershipEvent.LocalFabricLost] says otherwise. It can, however, be **ahead** of the
+     * edge you are handling: events are buffered, so under a rapid flap
+     * (`Available → Unavailable → Available`) a handler may read `Available` while processing the
+     * `LocalFabricLost`, with the matching `LocalFabricRestored` still queued behind it. Treat the
+     * edges as idempotent notifications and this level as authoritative; do not assert that the level
+     * matches the edge in hand (#1712).
      *
      * Deliberately has **no** interface default. An implementation that silently inherited
      * `Unknown` would be claiming it cannot tell, when a `Room` implementation — a fake above all —

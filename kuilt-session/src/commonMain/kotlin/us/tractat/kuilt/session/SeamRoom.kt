@@ -716,10 +716,11 @@ internal class SeamRoom(
     // ── Local fabric: this peer's own reachability, as a level plus edges ──────
 
     /**
-     * Fold [Seam.capability] into [localFabric]'s edges. ONE collector owns both, so the level and
-     * the events cannot diverge — and because [localFabric] projects the source directly, the level
-     * is already current by the time an edge is emitted, so a consumer reacting to an edge always
-     * reads the matching level (#1712).
+     * Fold [Seam.capability] into [localFabric]'s edges. Because [localFabric] projects the source
+     * directly rather than mirroring it, the level is already current by the time an edge is emitted,
+     * so it can never be *staler* than an edge. It can be **ahead** of one — events are buffered, so
+     * under a rapid flap a consumer may read a newer level than the edge it is handling. See
+     * [Room.localFabric] for the guarantee as consumers should rely on it (#1712).
      *
      * [Seam.capability] is a [StateFlow], not `incoming`, so collecting it here does not contend
      * with the ADR-034 single-collection contract.
@@ -734,7 +735,12 @@ internal class SeamRoom(
         seam.capability.collect { cap ->
             val next = cap.availability
             // The source conflates on the whole TransportCapability, so a role-only change can
-            // re-deliver an unchanged availability. Only a real move is an edge.
+            // re-deliver an unchanged availability. This is a FAST PATH, not a correctness guard:
+            // review enumerated the fold's whole state space and `lastDecided` already suppresses
+            // every duplicate edge on its own (Unavailable is gated on `lastDecided !is Unavailable`,
+            // Available on `lastDecided is Unavailable`, Unknown decides nothing). Kept because it
+            // states the intent at the point of delivery — but if you change the fold, `lastDecided`
+            // is the invariant to preserve, and note that no test distinguishes this line's presence.
             if (next == previous) return@collect
             previous = next
             // No level write here — `localFabric` reads the source directly and is already current.
