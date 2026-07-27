@@ -65,14 +65,21 @@ internal sealed interface PlyFrame {
          *  - a length that **overflows** when added to the header, wrapping `5 + len + 8` negative so that
          *    same comparison passed again. Hence [idLength] subtracts rather than adds.
          *
-         * ### Why this throws where the exemplars return null
-         * `NamedFrame.headerLength` and `GossipFrame.tryDecode` are bounds- and overflow-safe by the same
-         * check-before-read discipline, but they are **discriminators**: a frame that does not decode there
-         * is ordinary application traffic, passed through unwrapped, so `null` is a category and not a
-         * fault. Every frame arriving on a composite ply is a `PlyFrame` by construction, so one that does
-         * not decode is a fault with a diagnosis worth carrying — and the exception *is* the diagnosis
-         * `CompositeSeam`'s inbound pump raises through `onPlyFailure`
-         * ([PlyReconcileException.Phase.INBOUND]) after dropping the frame.
+         * ### Do NOT "harmonize" [idLength] back to the additive form the other frame types use
+         * `NamedFrame.headerLength` computes `1 + nameLen` and `GossipFrame.tryDecode` computes
+         * `ORIGIN_OFFSET + originLen + 8` — both **additive**, and both correct, because their declared
+         * length is an **8-bit** and a **16-bit** field respectively. Structurally capped at 255 and 65535,
+         * those additions cannot overflow and the length cannot be negative, so neither file needs the two
+         * checks above and neither is a template for them. This frame (like `MeshHello` and `NwHello`) reads
+         * a full **signed 32-bit** length, which is precisely what makes `len < 0` and the wrap reachable.
+         * What is shared with those two is only the *discipline* — check before the read, never after.
+         *
+         * ### Why this throws where those two return null
+         * They are **discriminators**: a frame that does not decode there is ordinary application traffic,
+         * passed through unwrapped, so `null` is a category and not a fault. Every frame arriving on a
+         * composite ply is a `PlyFrame` by construction, so one that does not decode is a fault with a
+         * diagnosis worth carrying — and the exception *is* the diagnosis `CompositeSeam`'s inbound pump
+         * raises through `onPlyFailure` ([PlyReconcileException.Phase.INBOUND]) after dropping the frame.
          */
         fun decode(bytes: ByteArray): PlyFrame {
             require(bytes.isNotEmpty()) { "empty ply frame" }
@@ -116,6 +123,8 @@ internal sealed interface PlyFrame {
             // length and `bytes.size >= <negative>` then passes — the overflow hole. The left-hand side
             // cannot overflow (a non-negative size minus two small constants), and its going negative is
             // itself a buffer too short for the header plus `trailing`, which this same check rejects.
+            // The additive form in `NamedFrame`/`GossipFrame` is safe only because their length fields are
+            // 8 and 16 bits wide; a 32-bit signed length cannot use it. See [decode].
             require(bytes.size - HEADER_BYTES - trailing >= len) {
                 "truncated $kind frame: declared id length $len exceeds the ${bytes.size}-byte buffer"
             }

@@ -109,8 +109,15 @@ internal data class MeshHello(val peerId: PeerId, val nonce: ByteArray) {
          * protects (#1788): a frame shorter than the 4-byte length prefix would index-fault inside
          * [readInt], a negative declared length passes any `size >= 4 + idLen` test (the prefix is read
          * as a signed [Int]), and a large one wraps `4 + idLen` negative so that test passes too — hence
-         * the subtraction. Rejecting here rather than relying on a caller's guard: `handshakeLink` is one
-         * `async` among many during mesh construction, and `addLink` runs on a hub's accept pump.
+         * the subtraction. (Additive checks are fine in `NamedFrame`/`GossipFrame` only because their
+         * length fields are 8 and 16 bits wide; a signed 32-bit length cannot use one.)
+         *
+         * **What this changes for a caller is the diagnosis, not the liveness.** Neither call site was
+         * crashing: `handshakeLink` throws into `buildMesh`'s `coroutineScope`/`async`, so a malformed
+         * preamble still fails whole-mesh construction, and `addLink`'s throw is absorbed by a hub's
+         * accept pump (`HostedOverlay`). Rejecting in the decoder replaces an `IndexOutOfBoundsException`
+         * raised from inside [readInt] — which says only that *something* was wrong — with a message that
+         * names *what*.
          */
         public fun decode(frame: ByteArray): MeshHello {
             require(frame.size >= Int.SIZE_BYTES) {

@@ -26,10 +26,10 @@ import kotlin.time.Duration.Companion.seconds
 /**
  * A malformed frame from a peer must not **terminate the process** (#1788).
  *
- * ### Why this test is native, bare, and here rather than in `commonTest`
+ * ### Why this test is native, bare, and in `appleTest` rather than in `commonTest`
  * On Kotlin/Native an unhandled coroutine exception does not merely kill the coroutine — it aborts the
- * process. Measured on both `macosArm64` and `iosSimulatorArm64`: a throw escaping a collector launched in
- * a scope whose job is a [kotlinx.coroutines.SupervisorJob] reaches
+ * process. A throw escaping a collector launched in a scope whose job is a
+ * [kotlinx.coroutines.SupervisorJob] reaches
  * `handleUncaughtCoroutineException` → the runtime default → `Uncaught Kotlin exception` → abort.
  * `SupervisorJob` is not protection here, it is the mechanism: suppressing *parent* propagation is exactly
  * what routes the throw to the global handler. kuilt installs no `setUnhandledExceptionHook` anywhere in
@@ -43,6 +43,14 @@ import kotlin.time.Duration.Companion.seconds
  * thousands of uncaught exceptions in `system-err` on *passing* runs (#1784) rather than as crashes. Hence
  * a **bare `@Test` with no `runTest`**, so a regression reads as `Test running process exited
  * unexpectedly` instead of a green build.
+ *
+ * ### It lives in `appleTest`, not `macosArm64Test`, because the bug is an **iOS** crash
+ * The shipped consumer is an iPhone app, so the abort has to be pinned on the target that models it.
+ * `appleTest` is compiled into `macosArm64Test`, `iosSimulatorArm64Test` and `iosArm64Test`, and both
+ * Apple lanes already invoke `macosArm64Test iosSimulatorArm64Test` — so the simulator runs this for free,
+ * where a `macosArm64Test`-only file would have left the iOS lane with nothing to run. (The
+ * "first `appleMain` source breaks the Dokka module-doc check" trap is a *main* source-set problem; a test
+ * source set is not in Dokka's graph.)
  *
  * The complementary half — that the frame is *dropped and reported* and the pump keeps delivering — is
  * pinned deterministically on every target by `CompositeInboundPumpTest`, and **that** is the half wired

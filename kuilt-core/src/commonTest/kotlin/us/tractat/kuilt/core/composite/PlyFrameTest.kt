@@ -104,9 +104,12 @@ class PlyFrameTest {
     //    `IndexOutOfBoundsException: startIndex: 5, endIndex: 2147483644, size: 37`, red below;
     //  - negative length: `bytes.size >= 5 + len` also passed, but `decodeToString(5, 4)` then rejected
     //    `startIndex > endIndex` with an `IllegalArgumentException` of its own — so the test below was
-    //    incidentally GREEN pre-fix. It is a regression guard for a hole the `require` genuinely had,
-    //    kept because nothing but `decodeToString`'s internals was closing it. The pump-level cost of
-    //    that throw is pinned by `CompositeInboundPumpTest` instead, where it does go red.
+    //    incidentally GREEN pre-fix. Note what that does and does not mean: the negative length was never
+    //    reachable as an *index fault*, but it was fully reachable as a **process abort**, because an
+    //    `IllegalArgumentException` escaping an unguarded pump aborts exactly as an AIOOBE does. So the
+    //    test below is a regression guard for a hole the `require` genuinely had — kept because nothing
+    //    but `decodeToString`'s internals was closing it — while the crash it led to is pinned by
+    //    `CompositeInboundPumpTest`, where this input does go red.
 
     @Test
     fun aTwoByteFrameIsRejectedRatherThanIndexFaulting() {
