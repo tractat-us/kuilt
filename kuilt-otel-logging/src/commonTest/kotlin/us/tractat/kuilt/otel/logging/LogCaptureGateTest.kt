@@ -25,10 +25,11 @@ class LogCaptureGateTest {
     private fun capture(exporter: WarpLogRecordExporter, config: CaptureConfig, provider: TraceContextProvider?) =
         LogCapture(exporter, config, fixedClock, Random(0), provider)
 
-    // Mirror the production capture edge: resolve the trace synchronously (as the
-    // appender does at log() time) and carry it on the event into capture() (#1034).
+    // Mirror the production capture edge: resolve synchronously (as the appender
+    // does at log() time) and carry the snapshot on the event into capture()
+    // (#1034 trace, #1630 attributes).
     private suspend fun LogCapture.captureAtEdge(event: NormalizedLogEvent) =
-        capture(event.copy(activeTrace = resolveTrace()))
+        capture(assertNotNull(resolveAtEdge(event)))
 
     @Test
     fun nullProviderCapturesWithoutStamp() = runTest(StandardTestDispatcher()) {

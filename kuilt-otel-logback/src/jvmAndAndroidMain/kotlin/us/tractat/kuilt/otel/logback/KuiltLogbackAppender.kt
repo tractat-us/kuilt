@@ -70,11 +70,13 @@ public class KuiltLogbackAppender(
 
     protected override fun append(eventObject: ILoggingEvent) {
         val normalized = eventObject.normalize() ?: return
-        // Resolve the trace HERE — synchronously, on the caller that logged — and
-        // snapshot it onto the event, so the drain-side gate honours an ambient
-        // context that only exists on the caller thread (#1034, same edge invariant
-        // as the uniform CapturingAppender).
-        events.trySend(normalized.copy(activeTrace = capture.resolveTrace()))
+        // Resolve HERE — synchronously, on the caller that logged — and snapshot the
+        // result onto the event, so the drain-side gate honours an ambient trace
+        // context that only exists on the caller thread (#1034) and the attribute
+        // mapper sees the ambient app state the line was emitted under (#1630).
+        // Same edge invariant as the uniform CapturingAppender.
+        val resolved = capture.resolveAtEdge(normalized) ?: return
+        events.trySend(resolved)
     }
 
     /**

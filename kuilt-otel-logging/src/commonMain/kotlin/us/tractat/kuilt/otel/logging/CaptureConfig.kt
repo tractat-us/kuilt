@@ -30,6 +30,22 @@ public data class CaptureConfig(
      * Maps a [NormalizedLogEvent] to the `LogRecord` attributes. Defaults to
      * [defaultAttributeMapper], which records the logger name plus the event's
      * own key/value pairs.
+     *
+     * **Applied at emit time, on the caller that logged** — synchronously inside the
+     * `log()`/`append()` call, before the event is queued for the drain coroutine
+     * (`LogCapture.resolveAtEdge`). A mapper may therefore fold *ambient* state (the
+     * session or game currently in progress, a request id, the current screen) into
+     * attributes and trust that a record carries the state the line was emitted
+     * under, not whatever it has become by the time the record is drained (#1630).
+     *
+     * Two consequences:
+     * - Keep it **cheap and non-blocking**. It runs on the application's logging
+     *   thread, once per captured event, not once per drain batch. It is skipped for
+     *   events that produce no record (below [minLevel], or one of the exporter's own
+     *   loggers), but it runs before the trace/sampling gate — so a mapper is paid
+     *   for even when a wired `TraceContextProvider` later drops the event.
+     * - It should not throw. A mapper that throws drops that one record; the failure
+     *   is swallowed rather than propagated into the application's logging call.
      */
     public val attributeMapper: (NormalizedLogEvent) -> Map<String, String> = ::defaultAttributeMapper,
 )
