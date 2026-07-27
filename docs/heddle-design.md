@@ -536,12 +536,63 @@ rounding.
 
 ### 7.2 Neutral creation and no idle credit
 
-- **Neutral creation:** a new generation's `initialVirtualTime` is the
-  parent's current virtual time, recorded immutably in the record. A newborn
-  starts level with its siblings — no credit for the parent's whole past.
+- **The front:** both rules below seat a child at the parent's *current
+  virtual time* — call it the **front** — and "current" is meaningless
+  without a set. The front is the weighted mean
+  `V = Σ w(e)·effectiveVirtualService(e) / Σ w(e)`, taken over the
+  **demanding** children: those with `additionalNeed = max(0,
+  targetOutstanding − outstanding(e)) > 0` — the same predicate as §7.3
+  step 1's candidates, but with the quantum trims (holdings,
+  `maximumUsefulGrant`, the caps) dropped. Those trims decide who can be
+  *served this round on this peer*; §7.3 step 2 keeps them for `pick`'s own
+  `V`. The front and `pick`'s `V` share this one weighted-mean arithmetic
+  over two different sets, and coincide only when no trim binds.
 
-  The parent's virtual time `V = Σ w·ev / Σ w` is a rational and almost never
-  integral, while `initialVirtualTime` is a `Long`, so creation must round.
+  Taking the mean over every ACTIVE child instead — demanding or not — is
+  wrong in *both* directions. A sibling idling well behind the runners
+  pulls the mean back, so a newborn seated there starts with a slice of
+  the idler's absence as lifetime credit — precisely the credit §10.6's
+  clamp exists to deny the idler itself. A sibling that is *satisfied and
+  sitting ahead* (`additionalNeed = 0`) pulls the mean forward instead, and
+  the newborn takes an arbitrary penalty for a race it isn't running. Only
+  the mean over the set the newcomer will actually compete in is neutral
+  by construction.
+
+  The joiner is excluded from its own front by name. A newborn is excluded
+  for free — it is not an edge yet — but a waker is already ACTIVE and
+  already demanding by the moment its clamp is computed, so it (and any
+  co-waker crossing idle→demand in the same act) must be excluded
+  explicitly, or it drags its own stale virtual service into the mean and
+  banks the credit it was supposed to lose.
+
+  When some ACTIVE child survives exclusion but none is demanding, the
+  front falls back to the **maximum** effective virtual service rather
+  than the mean. §10.5 is one-directional — credit is forbidden, a sliver
+  of penalty merely undesirable — so the conservative bound is the one
+  that can only give up ground, never hand out a share of the past. One
+  consequence holds until the picture changes: a child that is satisfied
+  and sits ahead of the rest pins the front at its own high mark for every
+  newborn seated while it stays that way — a max doesn't average its
+  distance away the way a mean would.
+
+  When *no* child survives exclusion at all, the front is `null` — there
+  is no set left to take a front of. That single value covers two
+  different situations: the parent's genuine first generation, whose
+  correct seat *is* the origin `0`, and a view that simply hasn't applied
+  a sibling's `Prepare` yet, whose correct seat is anything but. A caller
+  must not read `null` as "seat at the origin" without fencing first —
+  confirming this peer still holds leader authority and that its applied
+  log prefix has caught up — and must refuse rather than freeze a guess:
+  the origin seat is carried in the replicated record forever once agreed,
+  so a wrong guess is unrecoverable where a refusal is merely retryable
+  (issue #1713 covers what that fence does and does not close).
+- **Neutral creation:** a new generation's `initialVirtualTime` is the
+  front, recorded immutably in the record. A newborn starts level with the
+  siblings it will actually compete against — no credit for the parent's
+  whole past, and no exposure to one that isn't racing.
+
+  The front is a rational and almost never integral, while
+  `initialVirtualTime` is a `Long`, so creation must round.
   **The rule is the exact ceiling — `initialVirtualTime = ⌈V⌉`** — and the
   direction is normative, not a matter of taste. Flooring would seat the
   newborn *behind* the front, and lower virtual service reads as "has had less
@@ -554,10 +605,12 @@ rounding.
   lands on the same `Long`. `AttachmentRecord.neutral` / `neutralInitialVirtualTime`
   are the single implementation of the rule.
 - **No unlimited idle credit:** when a child goes from not-demanding to
-  demanding, a local wake offset clamps it forward:
+  demanding, a local wake offset clamps it forward to the front — computed
+  with that child (and any co-waker making the same transition) excluded,
+  per above:
 
   ```text
-  virtualOffset = max(0, parentVirtualTime − v_raw(e) − sleeperCredit / w(e))
+  virtualOffset = max(0, front − v_raw(e) − sleeperCredit / w(e))
   effectiveVirtualService(e) = v_raw(e) + virtualOffset
   ```
 
@@ -575,7 +628,10 @@ Per allocation round at one parent, on one peer:
    localHoldings, perChildOutstandingCap)`, dropping `q == 0`.
 2. **Parent virtual time:** the weighted mean
    `V = Σ w(e)·effectiveVirtualService(e) / Σ w(e)` over the fixed candidate
-   set.
+   set — the same arithmetic §7.2's front uses, over a different set: this
+   `V` keeps the quantum trims step 1 already applied, the front drops them
+   for the untrimmed demanding set, so the two coincide only when no trim
+   binds.
 3. **Eligibility:** `effectiveVirtualService(e) ≤ V`. (If rounding ever
    yields no eligible candidate: take the minimum, emit a diagnostic, carry
    on.)
