@@ -23,7 +23,25 @@ package us.tractat.kuilt.core
  * @sample us.tractat.kuilt.core.sampleHostAndJoin
  */
 public interface Loom {
-    /** Establish a [Seam] according to [rendezvous] — either host a new session or join an existing one. */
+    /**
+     * Establish a [Seam] according to [rendezvous] — either host a new session or join an existing one.
+     *
+     * ## A fabric failure must NOT be reported as a cancellation
+     *
+     * Throw an ordinary exception when the fabric cannot be reached. An implementation must **not** let a
+     * `CancellationException` out of this method unless it is signalling the *caller's* own cancellation,
+     * because the caller cannot tell the two apart: the idiomatic guard (`runCatchingCancellable`)
+     * rethrows any `CancellationException`, and a rethrown one **cancels** the calling coroutine rather
+     * than failing it — no failure handler runs, and there is not even a stack trace to find it by.
+     *
+     * The trap is `withTimeout(dialTimeout) { dial() }`. `withTimeout` throws
+     * `TimeoutCancellationException` — which *is* a `CancellationException` — **to its caller**, without
+     * cancelling that caller's job. Convert it before it escapes: `withTimeoutOrNull` plus an explicit
+     * throw, or catch it and rethrow as a plain `Exception`. `NwLoom` in `:kuilt-nw` is the in-tree
+     * pattern — it converts its own dial timeout into a plain `NwUnreachableException` for exactly this
+     * reason. A ply whose `Loom.weave` breaks this rule used to kill a `CompositeLoom`'s reconciliation
+     * for the life of the seam, silently (#1784).
+     */
     public suspend fun weave(rendezvous: Rendezvous): Seam
 
     /** Host / start a new session. */
