@@ -22,6 +22,13 @@ tasks.withType<Test>().configureEach {
     // nothing).
     if (!runConcurrencyStress) {
         filter { excludeTestsMatching("*ConcurrencyTest") }
+    } else {
+        // The probe harness installs DebugProbes to dump *coroutine* stacks on a hang (#1784), which
+        // attaches a java agent at runtime. JDK 21+ warns on stderr when that happens (JEP 451), and
+        // stderr cleanliness is itself evidence on these hangs — an uncaught-exception flood in
+        // `system-err` is how #1787's defect was found. Pre-approving the attach keeps that channel
+        // meaningful. Scoped to the stress runs, so the normal build's test JVMs are untouched.
+        jvmArgs("-XX:+EnableDynamicAgentLoading")
     }
 }
 
@@ -35,6 +42,13 @@ kotlin {
         commonTest.dependencies {
             implementation(project(":kuilt-test"))
             implementation(libs.kotlinx.coroutines.test)
+        }
+        // JVM-only, test-only. `DebugProbes` is what lets the concurrency-probe harness dump
+        // *coroutine* stacks on a hang; a thread dump shows only threads, and a suspended coroutine
+        // has none — the gap that made #1784 cost four investigation cycles. Confined to jvmTest so
+        // no other target, and nothing published, sees it.
+        jvmTest.dependencies {
+            implementation(libs.kotlinx.coroutines.debug)
         }
     }
 }

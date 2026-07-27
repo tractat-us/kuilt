@@ -21,6 +21,7 @@ import us.tractat.kuilt.core.PlyId
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.runConcurrencyStress
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.test.Test
@@ -76,20 +77,25 @@ class CompositeSeamCloseTornConcurrencyTest {
             val dispatcher = Dispatchers.Default
             val plies = (0 until plyCount).map { PlyId("ply-$it") to (InMemoryLoom() as Loom) }
             val desired = MutableStateFlow(plies)
+            // Read by the snapshot instead of a literal. The close-vs-churn stage SPANS host.close(), so a
+            // hardcoded `closed = false` there asserts a seam is open that is already Torn — the inverse of
+            // the "(close() was called)" defect this snapshot exists to end, and it is exactly the field an
+            // investigator uses to decide whether the peers-strand verdict is interpretable.
+            val hostCloseEntered = AtomicBoolean()
 
             val host = CompositeLoom(desired, dispatcher, onPlyFailure = watch).host(Pattern("host"))
             val joiner = CompositeLoom(desired, dispatcher, onPlyFailure = watch).join(InMemoryTag("join"))
 
-            stage.at("iter=$iter host.peers==2") { snapshot(iter, host, joiner, plies, closed = false) }
+            stage.at("iter=$iter host.peers==2") { snapshot(iter, host, joiner, plies, hostCloseEntered) }
             host.peers.first { it.size == 2 }
-            stage.at("iter=$iter joiner.peers==2") { snapshot(iter, host, joiner, plies, closed = false) }
+            stage.at("iter=$iter joiner.peers==2") { snapshot(iter, host, joiner, plies, hostCloseEntered) }
             joiner.peers.first { it.size == 2 }
 
             // Reproduce the #1135 contention: a broadcast flood keeps the dispatcher threads busy while
             // a ply-churn loop (detach ply-0, re-attach it) drives a continuous _plies → rollup stream;
             // close() races that live rollup. The yield() between churn steps defeats StateFlow
             // conflation (both the drop and the re-add are observed as real reconciles).
-            stage.at("iter=$iter close-vs-churn") { snapshot(iter, host, joiner, plies, closed = false) }
+            stage.at("iter=$iter close-vs-churn") { snapshot(iter, host, joiner, plies, hostCloseEntered) }
             coroutineScope {
                 val ready = CompletableDeferred<Unit>()
                 val flood = async(Dispatchers.Default) {
@@ -107,6 +113,7 @@ class CompositeSeamCloseTornConcurrencyTest {
                 }
                 ready.complete(Unit)
                 // Close while the flood + churn are still running — close() must race a live rollup.
+                hostCloseEntered.set(true)
                 host.close()
                 awaitAll(flood, churn)
             }
@@ -115,14 +122,14 @@ class CompositeSeamCloseTornConcurrencyTest {
             // The per-iteration bounded assertion: a lost Torn makes `state.first { Torn }` hang (the
             // clobber is permanent), so a tight timeout converts it into a fast, self-naming failure that
             // prints the exact violated invariant and the observed (non-terminal-despite-close) state.
-            stage.at("iter=$iter awaitTorn") { snapshot(iter, host, joiner, plies, closed = true) }
+            stage.at("iter=$iter awaitTorn") { snapshot(iter, host, joiner, plies, hostCloseEntered) }
             try {
                 withTimeout(3.seconds) { host.state.first { it is SeamState.Torn } }
             } catch (e: TimeoutCancellationException) {
                 throw AssertionError(
                     "iter=$iter: close() returned but state never reached the terminal Torn — a rollup " +
                         "write clobbered close()'s Torn. Observed " +
-                        "${snapshot(iter, host, joiner, plies, closed = true)}. " +
+                        "${snapshot(iter, host, joiner, plies, hostCloseEntered)}. " +
                         "Invariant: state.value must be Torn once close() has returned.",
                     e,
                 )
@@ -159,38 +166,82 @@ class CompositeSeamCloseTornConcurrencyTest {
      * An observed-state snapshot for the harness's on-timeout diagnostic (see #1135), reporting
      * **identities and state, never sizes** — which is what makes a stall name its own cause.
      *
-     * It reports both composites and each ply's underlying mesh membership, because that is exactly the
-     * fork a `peers` stall presents: if a ply's `InMemoryLoom.peers` holds both transport ids, the mesh
-     * formed and the composite never learned the `(plyId, transportId) → compositeId` mapping (a lost
-     * Announce); if it does not, the transport itself never came up. The two need entirely different
-     * investigations and the old snapshot could not tell them apart.
+     * It reports both composites, each ply's underlying mesh membership, and — the load-bearing part —
+     * [peersStrand]. Mesh membership answers whether the transport came up at all: if a ply's
+     * `InMemoryLoom.peers` holds both transport ids the mesh formed, and if it does not the transport
+     * never did. But it cannot say why a *formed* mesh failed to become `peers`, because it reads as
+     * formed whether the `(plyId, transportId) → compositeId` mapping was never learned or was learned
+     * and never published. Only the learned `idMap` beside the published `peers` separates those — see
+     * [CompositeSeam.learnedIdMapOrNull].
      *
-     * [closed] must be passed honestly. The previous version appended a hardcoded "(close() was called)"
-     * to *every* stage including the pre-close `peers` waits, which is how #1784's first diagnosis went
-     * looking for a close-path cause for a stall that happens during setup.
+     * [hostCloseEntered] is a live per-iteration flag, not a per-call-site literal. The original snapshot
+     * appended a hardcoded "(close() was called)" to *every* stage including the pre-close `peers` waits,
+     * which is how #1784's first diagnosis went looking for a close-path cause for a setup stall; a literal
+     * `false` on the stage that spans `close()` is the same defect with the sign flipped.
      */
     private fun snapshot(
         iter: Int,
         host: Seam,
         joiner: Seam,
         plies: List<Pair<PlyId, Loom>>,
-        closed: Boolean,
+        hostCloseEntered: AtomicBoolean,
     ): String = buildString {
         append("iter=").append(iter)
-        append(" closeCalled=").append(closed)
-        append(" host{id=").append(host.selfId.value)
+        append(" hostCloseEntered=").append(hostCloseEntered.get())
+        append("\n  host{id=").append(host.selfId.value)
         append(" state=").append(host.state.value)
         append(" peers=").append(host.peers.value.map { it.value })
         append(" plies=").append(host.plies.value.mapKeys { it.key.value })
-        append("} joiner{id=").append(joiner.selfId.value)
+        append(" ").append(peersStrand(host))
+        append("}\n  joiner{id=").append(joiner.selfId.value)
         append(" state=").append(joiner.state.value)
         append(" peers=").append(joiner.peers.value.map { it.value })
         append(" plies=").append(joiner.plies.value.mapKeys { it.key.value })
-        append("} mesh{")
+        append(" ").append(peersStrand(joiner))
+        append("}\n  mesh{")
         plies.joinTo(this) { (id, loom) ->
             val members = (loom as? InMemoryLoom)?.peers?.value?.map { it.value }
             "${id.value}=$members"
         }
         append("}")
+    }
+
+    /**
+     * The composite's peers strand: the learned mappings, the still-live plies, what a recompute **would**
+     * publish now, and the published `peers` — with the verdict spelled out rather than left to be
+     * re-derived.
+     *
+     * The verdict compares `peers` against [CompositeSeam.PeersStrand.wouldPublish], **never** against
+     * `idMap` directly. An `idMap` entry missing from `peers` is *correct* whenever `recomputePeers`'
+     * predicate rejects it — its ply is no longer live, or its transport peer has left that ply's peer
+     * set — and in this close-heavy probe both hold routinely: `close()` clears `live` without purging
+     * `idMap` or recomputing, and a far composite closing its ply seams removes its transport ids from the
+     * shared `InMemoryLoom` mesh. Comparing against `idMap` would therefore print
+     * `LEARNED BUT UNPUBLISHED` on essentially every post-close render — a confident, named, wrong
+     * mechanism, which is precisely the failure the hardcoded `(close() was called)` caused and this
+     * snapshot exists to end. The one asymmetry that *is* a finding is a peer the fold would publish and
+     * `peers` lacks: a recompute is owed and no trigger remains to run it.
+     */
+    private fun peersStrand(seam: Seam): String {
+        val composite = seam as? CompositeSeam ?: return "strand=<not a CompositeSeam>"
+        val strand = composite.peersStrandOrNull() ?: return "strand=<lock busy — not read>"
+        val entries = strand.idMap.entries.map { (key, compositeId) ->
+            "(${key.first.value}, ${key.second.value})->${compositeId.value}"
+        }
+        val published = seam.peers.value
+        val owed = (strand.wouldPublish - published).map { it.value }
+        val retained = (published - strand.wouldPublish).map { it.value }
+        val verdict = when {
+            strand.idMap.isEmpty() -> "no mapping recorded — stall is upstream of the peers strand"
+            owed.isNotEmpty() ->
+                "LEARNED BUT UNPUBLISHED $owed — a recomputePeers publish was lost (a recompute is owed " +
+                    "and, if VERDICT above reads QUIESCENT, none is in flight to deliver it)"
+            retained.isNotEmpty() ->
+                "peers still advertises $retained that a recompute would now drop — EXPECTED after " +
+                    "close(), which clears live without recomputing; not a finding"
+            else -> "peers matches what a recompute would publish"
+        }
+        return "idMap=$entries livePlies=${strand.livePlies.map { it.value }} " +
+            "wouldPublish=${strand.wouldPublish.map { it.value }} verdict=[$verdict]"
     }
 }
