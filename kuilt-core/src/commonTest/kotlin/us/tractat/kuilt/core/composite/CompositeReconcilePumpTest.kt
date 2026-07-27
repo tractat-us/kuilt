@@ -5,6 +5,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.yield
 import us.tractat.kuilt.core.CloseReason
 import us.tractat.kuilt.core.FabricAvailability
 import us.tractat.kuilt.core.Loom
@@ -168,9 +169,9 @@ class CompositeReconcilePumpTest {
         )
     }
 
-    /** A [Loom] that weaves one [FakeSeam], counting its dials. */
+    /** A [Loom] that weaves one seam, counting its dials. */
     private open class OneSeamLoom(id: String) : Loom {
-        val seam: FakeSeam = FakeSeam(selfId = PeerId("ply-$id"))
+        open val seam: Seam = FakeSeam(selfId = PeerId("ply-$id"))
         var weaveAttempts: Int = 0
             private set
 
@@ -206,6 +207,14 @@ class CompositeReconcilePumpTest {
      * park would simply throw on resume and prove nothing.
      */
     private class GatedLoom(id: String) : OneSeamLoom(id) {
+        /**
+         * A seam whose `close()` suspends before tearing — as every real transport's does (a WebSocket
+         * close handshake, a `Mutex`, a channel send). `FakeSeam.close` is entirely non-suspending, so a
+         * plain `FakeSeam` here could never observe the cancellation that `close()` has already issued,
+         * and the test would pass while the production salvage was skipped.
+         */
+        override val seam: SlowClosingSeam = SlowClosingSeam(PeerId("ply-$id"))
+
         var parked: Continuation<Unit>? = null
             private set
 
@@ -213,6 +222,17 @@ class CompositeReconcilePumpTest {
             val woven = super.weave(rendezvous)
             suspendCoroutine<Unit> { parked = it }
             return woven
+        }
+    }
+
+    /** A [FakeSeam] that yields — a real, cancellable suspension point — before tearing down. */
+    private class SlowClosingSeam(
+        selfId: PeerId,
+        private val delegate: FakeSeam = FakeSeam(selfId = selfId),
+    ) : Seam by delegate {
+        override suspend fun close(reason: CloseReason) {
+            yield()
+            delegate.close(reason)
         }
     }
 

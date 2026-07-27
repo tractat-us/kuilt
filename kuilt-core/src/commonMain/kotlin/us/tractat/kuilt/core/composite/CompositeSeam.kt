@@ -6,6 +6,7 @@ import kotlinx.atomicfu.locks.withLock
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.Channel
@@ -17,6 +18,7 @@ import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import us.tractat.kuilt.core.CloseReason
 import us.tractat.kuilt.core.DeliveryPolicy
 import us.tractat.kuilt.core.FabricAvailability
@@ -255,10 +257,14 @@ internal class CompositeSeam(
             if (lock.withLock { id in live }) continue
             // Read the terminal state AFTER the `live` check, and per ply — the order is the correctness
             // argument, not a style choice. [close] latches `Torn` BEFORE it takes [lock] to drain `live`,
-            // so a ply that looks un-live *because of that drain* is guaranteed to observe `Torn` here, and
-            // the pass stops instead of dialling a fresh transport for a seam that is already dead. Reading
-            // the two the other way round would let a stale not-`Torn` read pair with a post-drain `live`
-            // read and re-weave the whole desired set onto the corpse (#1784).
+            // so `live`'s lock release happens-before this read: a ply that looks un-live *because of that
+            // drain* is guaranteed to observe `Torn` here, and the pass stops. Reading the two the other
+            // way round would let a stale not-`Torn` read pair with a post-drain `live` read.
+            //
+            // This is the cheap outer guard, not the safety net — [attachPly] fuses the same check with the
+            // registration, so dropping this one would not corrupt state. It would mean actually dialling a
+            // fresh transport (a socket, a radio) for a seam already dead, only to close it again; before
+            // BOTH checks existed the pass re-wove the entire desired set onto the corpse (#1784).
             if (state.value is SeamState.Torn) return
             runCatchingCancellable { attachDesiredPly(id, loom) }
                 .onFailure { failure ->
@@ -291,7 +297,26 @@ internal class CompositeSeam(
         // back into this consumer-authored method. Static by contract, so once is enough (#1712).
         val roles = loom.capability().roles
         val seam = loom.weave(rendezvous)
-        if (!attachPly(id, seam, roles)) seam.close(CloseReason.Normal)
+        if (!attachPly(id, seam, roles)) discardOrphanedPly(id, seam)
+    }
+
+    /**
+     * Tear down a ply that was woven but could not be attached, because [close] latched `Torn` first.
+     *
+     * **`NonCancellable` is load-bearing, not belt-and-braces.** The only thing that makes [attachPly]
+     * decline is [close] having latched `Torn` — and [close] runs `tear()` → drain `live` →
+     * `scope.cancel()` with no suspension point after the drain, so by the time this runs, this coroutine
+     * is almost always *already cancelled*. `Seam.close` is a suspending call into a consumer-authored
+     * transport and suspends on any real one (a WebSocket close handshake, a `Mutex`, a channel send), so
+     * without the shield its first cancellable suspension point would throw and skip the close — leaking
+     * precisely the live transport this method exists to reclaim, with [close] single-shot and already
+     * returned. The same idiom, for the same reason, is in `NwLoom.weave`.
+     */
+    private suspend fun discardOrphanedPly(id: PlyId, seam: Seam) {
+        withContext(NonCancellable) {
+            runCatchingCancellable { seam.close(CloseReason.Normal) }
+                .onFailure { raisePlyFailure(id, PlyReconcileException.Phase.DETACH, it) }
+        }
     }
 
     /** Raise one ply's reconciliation failure to the consumer. Best-effort: a throwing observer is absorbed. */

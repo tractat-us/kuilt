@@ -136,9 +136,11 @@ class CompositeSeamCloseTornConcurrencyTest {
             val failures = plyFailures.get()
             if (failures != 0) {
                 throw AssertionError(
-                    "iter=$iter: $failures ply attach/detach failure(s) while churning across close(). " +
-                        "First: ${firstPlyFailure.get()}. Invariant: reconciling a composite must not fail " +
-                        "for a ply whose fabric is healthy.",
+                    "at or before iter=$iter: $failures ply attach/detach failure(s) while churning across " +
+                        "close(). The counter spans iterations (a failure raised by a still-draining pump " +
+                        "can land after its own iteration returned), so trust the ply named here, not the " +
+                        "iteration. First: ${firstPlyFailure.get()}. Invariant: reconciling a composite " +
+                        "must not fail for a ply whose fabric is healthy.",
                 )
             }
         }
