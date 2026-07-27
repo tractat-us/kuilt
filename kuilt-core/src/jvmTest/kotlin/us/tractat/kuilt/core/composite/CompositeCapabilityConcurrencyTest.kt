@@ -110,11 +110,12 @@ class CompositeCapabilityConcurrencyTest {
             //
             // Deliberately NOT re-read from `.value` afterwards (#1712). `capability` is an
             // eventually-consistent rollup of the plies' ANNOUNCED values and cannot be made monotone:
-            //  - the fold must be a pure function of announced values, because a fold that re-reads a ply's
-            //    LIVE value strands the instant that ply's own notification is conflated away — StateFlow
-            //    emits only when the value it re-reads differs from that collector's last-emitted value, so
-            //    a ply round-tripping X→Y→X past a descheduled pump announces nothing. That strand is the
-            //    exact defect this probe exists to catch;
+            //  - the fold must read nothing live — only values the plies ANNOUNCED, plus roles, captured
+            //    once at attach and static by contract — because a fold that re-reads a ply's LIVE value
+            //    strands the instant that ply's own notification is conflated away: StateFlow emits only
+            //    when the value it re-reads differs from that collector's last-emitted value, so a ply
+            //    round-tripping X→Y→X past a descheduled pump announces nothing. That strand is the exact
+            //    defect this probe exists to catch;
             //  - and a mirrored fold necessarily combines announcements written at different instants, so any
             //    one of them may already be superseded by fold time.
             // A pump preempted between StateFlow's read and its delivery therefore lands a genuine but
