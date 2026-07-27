@@ -24,12 +24,19 @@ import kotlin.test.assertTrue
  *  3. **Candidate B is sound and self-correcting.** A per-edge seat held as a replicated
  *     max-register, written by every peer that still sees `issued == 0`, converges to the
  *     best-informed reading, survives restart, and is monotone in the safe direction.
- *  4. **B's ratchet bias is bounded.** A max over peers' locally-computed weighted means can
+ *  4. **The front-gap is bounded.** A max over peers' locally-computed weighted means can
  *     only exceed the true front by the ev-spread of the competing set, which EEVDF's own
  *     eligibility rule bounds by one quantum at the smallest weight — the same order as
- *     #1687's `ceil` bias, not a new unbounded term.
+ *     #1687's `ceil` bias.
  *
- * If these pass, the *arithmetic* of the design is settled; the Kotlin wiring is separate.
+ * **Revision 2 — read this before trusting point 4.** The adversarial pass recorded in
+ * §11 of the design refuted §5.2's write gate, and with it the *inference* from point 4 to
+ * "B's seat overshoot is bounded". The bound above is real but is a statement about the
+ * **front**, not about the stored **seat**: once the `effIssued == 0` write gate misfires
+ * on an already-served edge, the additive read path `ev = seat + committed/w` double-counts
+ * and the overshoot is linear in the staleness window. See
+ * `review/1713-seat-design-adversarial` → `SeatDesignAdversarialPocTest.kt`. Points 1–3 are
+ * unaffected — they concern *where* the seat must live, which survived review.
  */
 class NewbornSeatPocTest {
 
@@ -306,19 +313,23 @@ class NewbornSeatPocTest {
     // ── 4. B's ratchet bias is bounded ───────────────────────────────────────────────────
 
     /**
-     * **Quantifying B's only new bias.** The stored front is a max over peers of a *weighted mean*
-     * over each peer's demanding set. A max over means can sit above the converged mean —
-     * penalising the newborn — but never above the largest `ev` in the competing set, because a
+     * **The front-gap bound — true, and narrower than revision 1 claimed.** Any peer's front is a
+     * *weighted mean* over that peer's demanding set. It can sit above the converged mean —
+     * penalising a newborn — but never above the largest `ev` in the competing set, because a
      * weighted mean is bounded by its maximum element.
      *
      * EEVDF then bounds that spread for free: eligibility serves only children with `ev ≤ V`, and
      * a grant advances the winner by `q / w`, so no child ever sits more than `q / w` above the
-     * mean in a converged steady state. The ratchet bias is therefore
-     * `0 ≤ storedFront − V ≤ q / w_min` — the same order as #1687's `0 ≤ ⌈V⌉ − V < 1`, and in the
-     * §10.5-safe direction (it can only give up, never claim).
+     * mean in a converged steady state. Hence `0 ≤ anyPeersFront − V ≤ q / w_min` — the same order
+     * as #1687's `0 ≤ ⌈V⌉ − V < 1`, and in the §10.5-safe direction.
+     *
+     * **It does NOT bound the stored seat's error** — revision 1 inferred that and the adversarial
+     * pass falsified it. The seat's error is `front_at_write − seat_correct`, and §5.2's write gate
+     * lets that grow with the edge's own served history. Renamed accordingly; the assertion below
+     * is unchanged and still correct.
      */
     @Test
-    fun candidateBsRatchetBiasIsBoundedByOneQuantumAtTheSmallestWeight() {
+    fun anyPeersFrontIsWithinOneQuantumAtTheSmallestWeightOfTheTrueFront() {
         val q = 1L
         val children = listOf(
             Child("a", Rational.ZERO, w = 1L),
