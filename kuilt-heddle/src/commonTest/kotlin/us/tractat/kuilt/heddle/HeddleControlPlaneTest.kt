@@ -25,6 +25,7 @@ import us.tractat.kuilt.raft.RaftNode
 import us.tractat.kuilt.raft.RaftRole
 import us.tractat.kuilt.raft.test.FakeRaftNode
 import us.tractat.kuilt.raft.test.MultiNodeRaftSim
+import us.tractat.kuilt.test.assertAll
 import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -32,6 +33,7 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
@@ -602,6 +604,150 @@ class HeddleControlPlaneTest {
         val conflict = outcome.conflict
         assertIs<ControlConflict.Refused>(conflict)
         assertTrue(conflict.reason.contains("readIndex"), "the refusal must name the §9 #3 fence, was: ${conflict.reason}")
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // #1713 (the defect): prepareNeutral's ORIGIN seat is fenced, not trusted.
+    // A null front means "no active child survives", which is a genuine first
+    // generation OR a view whose applied prefix is behind the committed log. Seating
+    // the stale case at the origin hands the newborn the parent's entire past as
+    // lifetime credit (§10.5) — and the seat is frozen into the committed bytes, so
+    // every peer applies the same wrong value permanently. So a null front must clear
+    // the §9 #3 readIndex fence AND a caught-up applied prefix.
+    // ═══════════════════════════════════════════════════════════════════════════
+    @Test
+    fun prepareNeutralRefusesAnOriginSeatOnAStaleEmptyView() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        val fake = FakeRaftNode(selfId = NodeId("solo"), initialRole = RaftRole.Leader)
+        // Model the #1713 stale-view shape: the committed log is AHEAD of what this peer has folded.
+        // readIndex fences at 42 while the control plane's applied prefix is still 0, i.e. the
+        // siblings' Prepare/Activate entries are committed but not yet applied here — so `front`
+        // reads null for a parent that, in log order, already has children.
+        fake.readIndexBehavior = { 42L }
+        val loom = InMemoryLoom()
+        val seam: Seam = loom.host(Pattern("heddle-h5-neutral-stale"))
+        val self = ReplicaId(seam.selfId.value)
+        val governed = backgroundScope.heddleGoverned(
+            seam = seam, self = self, raft = fake, root = root,
+            clock = { Instant.fromEpochMilliseconds(testScheduler.currentTime) }, config = config(seed = 17),
+            incarnation = "boot-neutral-stale", epoch = 0L,
+        )
+
+        val newborn = AttachmentId("newborn")
+        assertNull(governed.parentVirtualTime(root), "the stale view must show no front at all")
+
+        val outcome = governed.prepareNeutral(newborn, root, GroupId("child"), Weight.ONE)
+        assertIs<ControlOutcome.Conflict>(outcome)
+        val conflict = outcome.conflict
+        assertIs<ControlConflict.Refused>(conflict)
+        assertAll(
+            { assertEquals(ControlOutcome.NOT_COMMITTED, outcome.index, "a fenced refusal never commits") },
+            {
+                assertTrue(
+                    conflict.reason.contains("stale"),
+                    "the refusal must say the empty view is stale, was: ${conflict.reason}",
+                )
+            },
+            { assertNull(governed.ledger.value.record(newborn), "a refused prepareNeutral writes no record") },
+            { assertNull(governed.ledger.value.lifecycle(newborn), "the edge must stay entirely unknown") },
+        )
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // #1713: the fence must NOT wedge bootstrap. A caught-up view that genuinely has
+    // no active children under the parent is the first generation, and the origin IS
+    // that parent's virtual-time origin — Applied at initialVirtualTime 0. The
+    // non-origin path is unaffected: once the parent has rendered service the front is
+    // non-null and the joiner is seated at ⌈V⌉ with no fence involved (§7.2, #1688).
+    // ═══════════════════════════════════════════════════════════════════════════
+    @Test
+    fun prepareNeutralSeatsAGenuineFirstGenerationAtTheOrigin() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        val fake = FakeRaftNode(selfId = NodeId("solo"), initialRole = RaftRole.Leader)
+        val loom = InMemoryLoom()
+        val seam: Seam = loom.host(Pattern("heddle-h5-neutral-origin"))
+        val self = ReplicaId(seam.selfId.value)
+        val governed = backgroundScope.heddleGoverned(
+            seam = seam, self = self, raft = fake, root = root,
+            clock = { Instant.fromEpochMilliseconds(testScheduler.currentTime) }, config = config(seed = 19),
+            incarnation = "boot-neutral-origin", epoch = 0L,
+        )
+        // A real committed act first, so the applied prefix is genuinely level with the fence
+        // (FakeRaftNode's readIndex returns its commitIndex) — and so the tree has supply to render.
+        assertIs<ControlOutcome.Applied>(governed.mint(self, 1_000L))
+
+        val first = AttachmentId("first")
+        assertNull(governed.parentVirtualTime(root), "a parent with no active children has no front")
+        assertIs<ControlOutcome.Applied>(governed.prepareNeutral(first, root, GroupId("leaf"), Weight.ONE))
+        val firstRecord = governed.ledger.value.record(first)
+        assertNotNull(firstRecord)
+        assertEquals(0L, firstRecord.initialVirtualTime, "the first generation is seated at the parent's origin")
+
+        // Render service through it, so the parent's front advances past the origin.
+        assertIs<ControlOutcome.Applied>(governed.activate(first))
+        governed.advertise(first, Demand(targetOutstanding = 100L, maximumUsefulGrant = 100L))
+        governed.schedule(root)
+        val front = governed.parentVirtualTime(root)
+        assertNotNull(front)
+        assertTrue(front > Rational.ZERO, "the parent has rendered service, so its front has advanced, was $front")
+
+        // A second generation takes the non-origin path: a non-null front, no fence, seated at ⌈V⌉.
+        val second = AttachmentId("second")
+        assertIs<ControlOutcome.Applied>(governed.prepareNeutral(second, root, GroupId("leaf2"), Weight.ONE))
+        val secondRecord = governed.ledger.value.record(second)
+        assertNotNull(secondRecord)
+        assertEquals(front.ceil(), secondRecord.initialVirtualTime, "a joiner is seated at ⌈V⌉, never at 0")
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // #1713 / #1700 doc correction: two proposers reading different fronts for one id
+    // do NOT starve the child on the governed path. The log orders them first-wins and
+    // answers the loser with a structured Refused ("refuse, don't lie Applied"), so the
+    // id resolves — deterministically, on every peer. Starvation is real only on the
+    // UNGOVERNED path, where the per-id set union retains both records; that contrast
+    // is asserted here because it is where the warning belongs (HeddleNode.prepare).
+    // ═══════════════════════════════════════════════════════════════════════════
+    @Test
+    fun twoProposersOfOneIdAreOrderedFirstWinsAndDoNotStarveTheChild() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        val fake = FakeRaftNode(selfId = NodeId("solo"), initialRole = RaftRole.Leader)
+        val plane = HeddleControlPlane(
+            fake, ReplicaId("solo"), backgroundScope, RecordingSink(), NO_REMONITOR, EntitlementLedger.ZERO, "boot-two-fronts",
+        )
+        val id = AttachmentId("contested")
+        val child = GroupId("c")
+        // Two peers whose views disagree on V produce records differing ONLY in the seat — exactly
+        // what two concurrent prepareNeutral calls for one id propose.
+        val fromPeerA = AttachmentRecord.neutral(id, root, child, Weight.ONE, Rational.of(10L))
+        val fromPeerB = AttachmentRecord.neutral(id, root, child, Weight.ONE, Rational.of(25L))
+
+        assertIs<ControlOutcome.Applied>(plane.submit(ControlCommand.Prepare(fromPeerA)))
+        val loser = plane.submit(ControlCommand.Prepare(fromPeerB))
+        assertIs<ControlOutcome.Conflict>(loser)
+        val conflict = loser.conflict
+        assertIs<ControlConflict.Refused>(conflict)
+
+        // The ungoverned merge of the same two records, for contrast: a divergent set, no record.
+        val patchA = EntitlementLedger.ZERO.prepare(fromPeerA)
+        val patchB = EntitlementLedger.ZERO.prepare(fromPeerB)
+        assertNotNull(patchA)
+        assertNotNull(patchB)
+        val ungoverned = EntitlementLedger.ZERO.piece(patchA.delta).piece(patchB.delta)
+
+        assertAll(
+            { assertTrue(conflict.reason.contains(id.value), "the refusal must name the bound id, was: ${conflict.reason}") },
+            {
+                assertEquals(
+                    fromPeerA,
+                    plane.projectionSnapshot().record(id),
+                    "first-wins: the id resolves to the first proposal, so the child is NOT starved",
+                )
+            },
+            { assertEquals(10L, plane.projectionSnapshot().record(id)?.initialVirtualTime, "the winner's seat stands") },
+            {
+                assertNull(
+                    ungoverned.record(id),
+                    "ungoverned: the per-id set union retains both records and the id resolves to nothing",
+                )
+            },
+        )
     }
 
     // ─────────────────────────────────────────────────────────────────────────────

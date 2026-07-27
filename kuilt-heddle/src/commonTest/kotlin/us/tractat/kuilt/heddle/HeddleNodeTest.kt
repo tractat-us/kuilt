@@ -655,6 +655,91 @@ class HeddleNodeTest {
         }
 
     // ─────────────────────────────────────────────────────────────────────────────
+    // 8. The §10.6 wake clamp, end to end through the node (#1695).
+    // ─────────────────────────────────────────────────────────────────────────────
+
+    /**
+     * A child that stops asking while a sibling runs does **not** get a catch-up burst when it
+     * wakes: the node detects the idle→demand edge, clamps the waker to the front of the set it
+     * is rejoining, and it takes its fair half of what is left (design §7.2, §10.6).
+     *
+     * This is the production half of the invariant. [HeddlePolicy.wakeOffset] has always been
+     * correct, but until #1695 nothing called it — every [PolicyEdge] was built with the default
+     * `virtualOffset = ZERO`, so the shipped node let a waker bank the whole idle interval. The
+     * numbers here are exact and the contrast is the point: with the clamp g2 alternates with g1
+     * for 15 grants apiece; without it, g2 wins the first 20 outright (walking its virtual
+     * service up from 0 to 200) and ends on 250 against g1's 250.
+     */
+    @Test
+    fun wakingChildIsClampedToTheFrontInsteadOfBursting() = runTest(
+        StandardTestDispatcher(),
+        timeout = 5.seconds,
+    ) {
+        val h = harness(peers = 1, mint = mapOf(0 to 500L), topology = flatTopology())
+        h.pump()
+        val node = h.peers[0].node
+
+        // Phase 1 — g1 runs alone to a bounded appetite; g2 never asks.
+        node.advertise(e1, Demand(targetOutstanding = 200L, maximumUsefulGrant = 10L))
+        node.schedule(root)
+        h.pump()
+        assertAll(
+            { assertEquals(200L, node.ledger.value.edge(e1)!!.issued, "g1 runs alone to its target") },
+            { assertEquals(0L, node.ledger.value.edge(e2)!!.issued, "g2 never demanded") },
+            // The front is where the scheduler is: the one competing child's virtual service.
+            { assertEquals(Rational.of(200L), node.parentVirtualTime(root)) },
+        )
+
+        // Phase 2 — g2 wakes; both now want everything that is left (300 units, 30 quanta).
+        val hungrier = Demand(targetOutstanding = 10_000L, maximumUsefulGrant = 10L)
+        node.advertise(e1, hungrier)
+        node.advertise(e2, hungrier)
+        node.schedule(root)
+        h.pump()
+
+        val ledger = node.ledger.value
+        assertAll(
+            { assertEquals(150L, ledger.edge(e2)!!.issued, "the waker takes its fair half, not a burst") },
+            { assertEquals(350L, ledger.edge(e1)!!.issued, "the incumbent keeps its half of what is left") },
+        )
+    }
+
+    /**
+     * The clamp fires on an observed idle→demand **transition**, never on the first sight of an
+     * edge: a first observation carries no evidence the child was ever idle, and forfeiting a
+     * real deficit accrued under some *other* peer's scheduling would be a penalty this peer has
+     * no standing to impose. Seating a genuinely new generation is the creation rule's job
+     * ([AttachmentRecord.neutral], #1688), not the clamp's.
+     */
+    @Test
+    fun firstObservationOfADemandingEdgeIsNotTreatedAsAWake() = runTest(
+        StandardTestDispatcher(),
+        timeout = 5.seconds,
+    ) {
+        val h = harness(peers = 1, mint = mapOf(0 to 200L), topology = flatTopology())
+        h.pump()
+        val node = h.peers[0].node
+
+        // g1 is handed a deficit out of band — it is behind, and has never been observed idle.
+        val behind = AttachmentRecord(AttachmentId("e3"), root, GroupId("g3"), Weight.ONE, 100L)
+        assertTrue(node.prepare(behind) && node.activate(behind.id))
+        val hungrier = Demand(targetOutstanding = 10_000L, maximumUsefulGrant = 10L)
+        node.advertise(e1, hungrier)
+        node.advertise(behind.id, hungrier)
+        node.schedule(root)
+        h.pump()
+
+        // e1 starts at 0 and e3 at 100, so e1 is eligible first and stays ahead on grants; the
+        // clamp must not have levelled them.
+        val ledger = node.ledger.value
+        assertTrue(
+            ledger.edge(e1)!!.issued > ledger.edge(behind.id)!!.issued,
+            "an unclamped first observation must keep e1's real advantage " +
+                "(e1=${ledger.edge(e1)!!.issued}, e3=${ledger.edge(behind.id)!!.issued})",
+        )
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────
     // harness
     // ─────────────────────────────────────────────────────────────────────────────
 

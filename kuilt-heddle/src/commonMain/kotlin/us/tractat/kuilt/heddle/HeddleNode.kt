@@ -161,6 +161,24 @@ public class HeddleNode internal constructor(
     private val detectors = HashMap<PeerId, HeartbeatPartitionDetector>()
 
     /**
+     * The §10.6 wake clamps this peer has computed, and the demanding-state each was derived
+     * from (design §7.2; issue #1695). Both are keyed by attachment id across the whole tree and
+     * are **scheduler-local** — never replicated, never in the ledger: a divergent offset
+     * reorders one peer's grants but can never create entitlement. Written and read only under
+     * [lock], from [refreshWakeClamps]/[policyEdges].
+     *
+     * [demandingObserved] is what makes the clamp an *edge* detector rather than a level one:
+     * `false` means this peer has seen the child not competing, so the next round in which it
+     * competes is a wake. An id that is *absent* has never been observed and is therefore never
+     * treated as a wake — a first observation carries no evidence the child was ever idle, and
+     * forfeiting a deficit accrued under some other peer's scheduling would be a penalty this
+     * peer has no standing to impose. Seating a genuinely new generation is the creation rule's
+     * job ([AttachmentRecord.neutral]), not the clamp's.
+     */
+    private val wakeOffsets = HashMap<AttachmentId, Rational>()
+    private val demandingObserved = HashMap<AttachmentId, Boolean>()
+
+    /**
      * Peers whose detector reached the terminal [PartitionEvent.PeerLost] state — the only ones a
      * committed enrollment re-monitors ([remonitorOnEnrollment]). Lock-guarded because it is written
      * from the detector-event collectors and read from the control plane's apply loop.
@@ -193,7 +211,24 @@ public class HeddleNode internal constructor(
     // see the matching EntitlementLedger mutator's contract).
     // ─────────────────────────────────────────────────────────────────────────────
 
-    /** Introduce a new generation ([EntitlementLedger.prepare]); returns whether it applied. */
+    /**
+     * Introduce a new generation ([EntitlementLedger.prepare]); returns whether it applied.
+     *
+     * **Two peers preparing one id starve the child — on this ungoverned path only.** There is no
+     * serializer here: both peers pass their own local `isKnown` check, the Quilter merges the
+     * results, and the per-id join is a **set union** (§5.2 deliberately refuses last-writer-wins on
+     * a parent pointer), so the id ends up bound to a divergent *set*. [EntitlementLedger.record]
+     * then resolves to `null`, the policy drops the edge as inconsistent input, and the child never
+     * competes again — permanently, on every peer, with no way to re-prepare the id. One proposer
+     * per generation is a hard requirement in static mode, not a habit.
+     *
+     * The governed path does not have this failure mode:
+     * [GovernedHeddleNode.prepare][GovernedHeddleNode.prepare] /
+     * [prepareNeutral][GovernedHeddleNode.prepareNeutral] route through the consensus log, which
+     * orders concurrent proposals **first-wins** and answers the loser with a structured
+     * `Conflict(Refused)` naming the bound id. That is why this mutator is not re-exposed on
+     * [GovernedHeddleNode].
+     */
     public fun prepare(record: AttachmentRecord): Boolean =
         applyIfPresent { it.prepare(record) }
 
@@ -244,6 +279,9 @@ public class HeddleNode internal constructor(
      * @return the count of grants applied this call.
      */
     public fun schedule(parent: GroupId): Int = lock.withLock {
+        // §10.6 first: settle who woke since the last round *before* anyone is served, so a
+        // waker is clamped to the front it is rejoining rather than to the one it helps set.
+        refreshWakeClamps(ledger.value, parent)
         var grants = 0
         while (grants < MAX_ROUNDS_PER_CALL) {
             // Peek on the current state: if nothing is delegable, stop *without* entering the
@@ -266,6 +304,34 @@ public class HeddleNode internal constructor(
         }
         grants
     }
+
+    /**
+     * [parent]'s **current virtual time** `V` on this peer — the front a new generation under it
+     * must be seated at (design §7.2; issue #1688). `null` when [parent] has no active children in
+     * *this peer's view* and there is therefore no front to take.
+     *
+     * Round it into a record with [AttachmentRecord.neutral], which applies the one documented
+     * rule `initialVirtualTime = ⌈V⌉`; never seat a runtime generation by hand, and never at a
+     * literal `0`, which would hand it the parent's whole past as lifetime credit (§10.5).
+     *
+     * **This is a propose-side read, not a derivation two peers may repeat.** `V` depends on
+     * demand that ages out by *local* receive time and on non-replicated wake clamps, so two
+     * peers legitimately read different values at the same instant. That is safe only because a
+     * generation is agreed by **carriage**: the finished record travels in the control-plane log
+     * entry and every peer applies the same bytes.
+     *
+     * **Unfenceable here, and a `null` is ambiguous.** This node has no control plane, so there is
+     * no `readIndex()` to confirm the view is not merely behind: a `null` may mean [parent] genuinely
+     * has no children *or* that this peer has not yet merged them, and the two are indistinguishable
+     * from the view alone (issue #1713). A static node must therefore not treat `null` as licence to
+     * seat at the origin unless it *knows* the generation is the first. The governed
+     * [GovernedHeddleNode.prepareNeutral] does fence that case.
+     *
+     * @see GovernedHeddleNode.prepareNeutral for the governed, fenced, one-act form.
+     * @see prepare for the divergence hazard of two peers preparing one id on the ungoverned path.
+     */
+    public fun parentVirtualTime(parent: GroupId): Rational? =
+        lock.withLock { HeddlePolicy.front(policyEdges(ledger.value, parent)) }
 
     /**
      * The current §8.2 bound metrics at [parent], from the merged ledger, the roster (live
@@ -413,13 +479,81 @@ public class HeddleNode internal constructor(
     private fun pickOne(s: EntitlementLedger, parent: GroupId): Grant? {
         val localHoldings = s.holdings(parent, self) - (earmarks[parent] ?: 0L)
         if (localHoldings <= 0L) return null
-        val live = demandTracker.live()
-        val edges = s.activeChildren(parent).mapNotNull { summary ->
-            val record = s.record(summary.attachment) ?: return@mapNotNull null
-            PolicyEdge(record, summary, foldDemand(live, summary.attachment))
-        }
+        val edges = policyEdges(s, parent)
         if (edges.isEmpty()) return null
         return HeddlePolicy.pick(edges, config.policy, localHoldings)
+    }
+
+    /**
+     * The policy's view of [parent]'s active children in [s]: each edge's immutable record, its
+     * parent-facing summary, the folded **live** demand, and this peer's stored §10.6 wake clamp.
+     * An edge whose record has diverged is dropped — the policy refuses inconsistent inputs
+     * rather than schedule against them. Always called under [lock] (the [demandTracker] and
+     * [wakeOffsets] reads need it).
+     */
+    private fun policyEdges(s: EntitlementLedger, parent: GroupId): List<PolicyEdge> {
+        val live = demandTracker.live()
+        return s.activeChildren(parent).mapNotNull { summary ->
+            val record = s.record(summary.attachment) ?: return@mapNotNull null
+            PolicyEdge(
+                record = record,
+                summary = summary,
+                demand = foldDemand(live, summary.attachment),
+                virtualOffset = wakeOffsets[summary.attachment] ?: Rational.ZERO,
+            )
+        }
+    }
+
+    /**
+     * Enforce §10.6 — "no unlimited idle credit" — for [parent]'s children (issue #1695).
+     *
+     * Every child that this peer has previously observed **not** competing and that competes now
+     * has crossed the idle→demand edge the design §7.2 clamp is defined on. Each such waker is
+     * clamped forward to [HeddlePolicy.front] — the front of the set it is rejoining — so it
+     * re-enters level with the children that kept running instead of spending the whole idle
+     * interval in one burst. The clamp is a *forward* offset only: it can never advance a child's
+     * turn, only give one up.
+     *
+     * All wakers are excluded from the front together, not just each from its own: two siblings
+     * waking in the same round would otherwise average each other's stale virtual service into
+     * the front and both keep the credit. A `null` front means nothing survived the exclusion —
+     * every competing child is a waker, so nobody ran ahead of anybody and there is nothing to
+     * clamp to.
+     *
+     * The demanding state is sampled **once per scheduling round, at entry**, before any grant
+     * lands. Sampling again after the loop would mark a child that its own grants had just
+     * satisfied as "idle", making the next round a spurious wake for it.
+     *
+     * Called under [lock] from [schedule].
+     */
+    private fun refreshWakeClamps(s: EntitlementLedger, parent: GroupId) {
+        val edges = policyEdges(s, parent)
+        // Forget edges that have left this parent's active set. Entries for other parents are
+        // untouched — both maps are keyed by attachment id across the whole tree.
+        val present = edges.mapTo(HashSet()) { it.record.id }
+        val departed = demandingObserved.keys.filterTo(HashSet()) { id ->
+            id !in present && s.record(id)?.parent == parent
+        }
+        demandingObserved.keys.removeAll(departed)
+        wakeOffsets.keys.removeAll(departed)
+        if (edges.isEmpty()) return
+
+        val wakers = edges.filterTo(HashSet()) { edge ->
+            HeddlePolicy.isDemanding(edge) && demandingObserved[edge.record.id] == false
+        }.mapTo(HashSet()) { it.record.id }
+        val front = if (wakers.isEmpty()) null else HeddlePolicy.front(edges, excluding = wakers)
+        if (front != null) {
+            for (edge in edges) {
+                if (edge.record.id !in wakers) continue
+                wakeOffsets[edge.record.id] = HeddlePolicy.wakeOffset(
+                    front = front,
+                    vRaw = HeddlePolicy.virtualService(edge.record, edge.summary),
+                    weight = edge.record.weight,
+                    sleeperCredit = config.policy.sleeperCredit,
+                )
+            }
+        }
+        for (edge in edges) demandingObserved[edge.record.id] = HeddlePolicy.isDemanding(edge)
     }
 
     /** Fold the live slots' demand for [edge] by taking the most optimistic appetite (design §6). */
