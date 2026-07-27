@@ -237,6 +237,50 @@ class LocalFabricTest {
         }
 
     /**
+     * **A joiner gets its own fabric edges.** The fold is not role-gated, and must not become so.
+     *
+     * #1712's headline scenario is the *dropped device* reporting its own outage instead of blaming
+     * its peer — and the dropped device is usually a **joiner**. `localFabricLoop()` is therefore
+     * launched from [SeamRoom.start]'s unconditional job list, deliberately outside every role gate:
+     * self-reachability is a fact about this peer's own end of the fabric, so a host needs it exactly
+     * as much as a joiner does.
+     *
+     * Every other test in this file drives a **host** room, so re-gating that launch to
+     * `if (role == SessionRole.Host)` would leave all of them green while silently breaking the
+     * feature's primary case. This test is the only thing standing between that regression and a
+     * clean suite.
+     *
+     * (A joiner room is inert enough here to assert the event list exactly: its `Hello` broadcast is
+     * only *recorded* by [FakeSeam], and its admit deadline is armed on virtual time that these
+     * tests never advance — so the fabric edges are the whole transcript.)
+     */
+    @Test
+    fun aJoinerGetsItsOwnFabricEdgesToo() =
+        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+            val capability = MutableStateFlow(
+                TransportCapability(emptySet(), FabricAvailability.Available),
+            )
+            val room = roomOverCapability(capability, role = SessionRole.Joiner)
+            val seen = mutableListOf<MembershipEvent>()
+            backgroundScope.launch { room.events.collect { seen += it } }
+            runCurrent()
+
+            capability.value = TransportCapability(emptySet(), FabricAvailability.Unavailable("radio off"))
+            runCurrent()
+            capability.value = TransportCapability(emptySet(), FabricAvailability.Available)
+            runCurrent()
+
+            assertEquals<List<MembershipEvent>>(
+                listOf(
+                    MembershipEvent.LocalFabricLost(AT, "radio off"),
+                    MembershipEvent.LocalFabricRestored(AT),
+                ),
+                seen,
+                "a joiner must get both of its own fabric edges — the fold is not host-gated",
+            )
+        }
+
+    /**
      * A drop in the construction → [SeamRoom.start] window still reports a `Lost` edge.
      *
      * Seeding the fold from the value read at *loop start* rather than at construction would
@@ -493,15 +537,22 @@ class LocalFabricTest {
         { Instant.fromEpochMilliseconds(testScheduler.currentTime) }
 
     /**
-     * A host room over a seam whose [Seam.capability] the test drives, on [TestScope.backgroundScope]
-     * with a fixed clock. Host role and a `null` roomId keep every other room loop inert: there is no
-     * reconnect controller, the torn watcher parks on a `Woven` seam, and the main loop only collects
-     * `incoming`.
+     * A room over a seam whose [Seam.capability] the test drives, on [TestScope.backgroundScope]
+     * with a fixed clock. A `null` roomId keeps every other room loop inert: there is no reconnect
+     * controller (host-only, and gated on a non-null roomId), the torn watcher parks on a `Woven`
+     * seam, and the main loop only collects `incoming`.
+     *
+     * [role] defaults to [SessionRole.Host] — the inertest case — but is a parameter rather than a
+     * constant precisely because the fold must run for a joiner too; see
+     * [aJoinerGetsItsOwnFabricEdgesToo].
      */
-    private fun TestScope.roomOverCapability(capability: StateFlow<TransportCapability>): SeamRoom =
+    private fun TestScope.roomOverCapability(
+        capability: StateFlow<TransportCapability>,
+        role: SessionRole = SessionRole.Host,
+    ): SeamRoom =
         SeamRoom(
             seam = CapabilitySeam(FakeSeam(PeerId("self")), capability),
-            role = SessionRole.Host,
+            role = role,
             memberName = "self",
             scope = backgroundScope,
             clock = { AT },
