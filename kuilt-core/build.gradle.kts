@@ -3,8 +3,9 @@ plugins {
     alias(libs.plugins.kotlinSerialization)
 }
 
-// The three real-threaded concurrency probes — CompositeSeamConcurrencyTest,
-// LinkSeamConcurrencyTest, MeshSeamConcurrencyTest — run on real threads (not
+// Every `*ConcurrencyTest` in this module is a real-threaded probe (the name is the
+// contract — deliberately NOT an enumeration, which is what went stale as probes were
+// added). They run on real threads (not
 // virtual time), so their background pump coroutines get starved of CPU when the
 // machine is saturated by sibling test JVMs. On an idle box they finish in ~0.45s;
 // under CI's full parallel `./gradlew build` (load ~40) their unbounded awaits can

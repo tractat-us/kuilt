@@ -34,9 +34,14 @@ class PeerMeshConformanceTest : SeamConformanceSuite() {
         return PeerMeshLoom(PeerId("host"), h) to PeerMeshLoom(PeerId("joiner"), j)
     }
 
-    /** In-memory: not a secured transport — mirrors [InMemoryLoomConformanceTest]. */
-    override fun capabilities() = SeamCapabilities.FULL.copy(securesTransport = false)
-    override fun capabilityGaps() = mapOf("securesTransport" to CapabilityGaps.SECURES_TRANSPORT)
+    /** In-memory: not a secured transport, and no path observer — mirrors [InMemoryLoomConformanceTest]. */
+    override fun capabilities() =
+        SeamCapabilities.FULL.copy(securesTransport = false, reportsLiveCapability = false)
+
+    override fun capabilityGaps() = mapOf(
+        "securesTransport" to CapabilityGaps.SECURES_TRANSPORT,
+        "reportsLiveCapability" to CapabilityGaps.LIVE_CAPABILITY,
+    )
 
     override suspend fun injectMidSessionDeath(host: Seam, joiner: Seam): Boolean {
         // Drop BOTH ends so each side observes its peer's disconnect (a remote death, not a local

@@ -549,8 +549,9 @@ jobs:
         run: ./gradlew dokkaGenerateModuleHtml --max-workers=2
 
   # ── concurrency-probes ──────────────────────────────────────────────────────
-  # The three real-threaded concurrency probes (CompositeSeamConcurrencyTest,
-  # LinkSeamConcurrencyTest, MeshSeamConcurrencyTest) run on real threads, not
+  # Every `*ConcurrencyTest` in kuilt-core is a real-threaded probe (the name is the
+  # contract — deliberately not an enumeration here, which is what went stale as
+  # probes were added). They run on real threads, not
   # virtual time, so they are starved when other test JVMs saturate the box (the
   # #1135 hang — root-caused as OS-CPU contention, not a code defect; see #1158).
   # They are -P-gated OUT of the normal build (kuilt-core/build.gradle.kts) and run

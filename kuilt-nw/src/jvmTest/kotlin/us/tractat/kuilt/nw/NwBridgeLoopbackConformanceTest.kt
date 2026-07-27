@@ -6,6 +6,7 @@ import com.sun.jna.Pointer
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.junit.AssumptionViolatedException
+import us.tractat.kuilt.conformance.CapabilityGaps
 import us.tractat.kuilt.conformance.SeamCapabilities
 import us.tractat.kuilt.conformance.SeamConformanceSuite
 import us.tractat.kuilt.core.InMemoryTag
@@ -103,11 +104,23 @@ class NwBridgeLoopbackConformanceTest : SeamConformanceSuite() {
 
     override fun joinTag(): Tag = InMemoryTag(sessionName = "host", peerKey = "nw-bridge-loopback-joiner")
 
-    /** The loopback link is real TLS-PSK through the dylib, so every capability — wire encryption included — holds. */
-    override fun capabilities(): SeamCapabilities = SeamCapabilities.FULL.copy(securesTransport = true)
+    /**
+     * The loopback link is real TLS-PSK through the dylib, so `securesTransport = true` — this test IS
+     * the JVM-bridge proof of that capability for kuilt-nw.
+     *
+     * `reportsLiveCapability = false`, though, because the flag tracks the **binding under test**, not
+     * the abstract fabric — the same rule that makes `securesTransport` `true` here and `false` on
+     * `NwConformanceTest`'s plaintext fake. [BridgeNwApi] does not override [NwApi.pathState], so it
+     * inherits the shared never-updated `null` ("no monitor wired") and [NwSeam] therefore reports
+     * availability `Unknown` forever on this binding — which is exactly what the `false` branch asserts.
+     * The static loom report supplies only the ROLES. The observer is real on `RealNwApi` and proven by
+     * `NwLoopbackConformanceTest` / `NwSeamCapabilityTest`; it is simply absent here (#1712).
+     */
+    override fun capabilities(): SeamCapabilities =
+        SeamCapabilities.FULL.copy(securesTransport = true, reportsLiveCapability = false)
 
-    /** No gaps — this test IS the JVM-bridge proof of the `securesTransport` capability for kuilt-nw. */
-    override fun capabilityGaps(): Map<String, String> = emptyMap()
+    override fun capabilityGaps(): Map<String, String> =
+        mapOf("reportsLiveCapability" to CapabilityGaps.LIVE_CAPABILITY)
 
     /**
      * Wrap [delegate] so `weave` runs on a real [Dispatchers.Default]. [NwLoom] captures its seam

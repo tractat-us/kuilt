@@ -94,12 +94,16 @@ class WebSocketConformanceTest : SeamConformanceSuite() {
     /** Proven: this harness drops the transport by stopping the server, so no gap. */
     override fun midSessionDeathGap(): String? = null
 
-    // plaintext ws://; relay/hub topology — frames traverse the server.
-    override fun capabilities(): SeamCapabilities =
-        SeamCapabilities.FULL.copy(securesTransport = false, meshDelivery = false)
+    // plaintext ws://; relay/hub topology — frames traverse the server; no path observer (#1712/#1725).
+    override fun capabilities(): SeamCapabilities = SeamCapabilities.FULL.copy(
+        securesTransport = false,
+        meshDelivery = false,
+        reportsLiveCapability = false,
+    )
 
     override fun capabilityGaps(): Map<String, String> = mapOf(
         "securesTransport" to CapabilityGaps.SECURES_TRANSPORT,
         "meshDelivery" to CapabilityGaps.MESH_DELIVERY,
+        "reportsLiveCapability" to CapabilityGaps.LIVE_CAPABILITY,
     )
 }

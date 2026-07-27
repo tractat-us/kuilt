@@ -30,12 +30,45 @@ import kotlin.random.Random
  * temporal Phase-3 gap it once was. Every other flag is honoured: real direct-mesh delivery
  * (`meshDelivery = true`, earned by [NwMeshConformanceTest]) and real directed send
  * (`supportsSendTo = true`).
+ *
+ * `reportsLiveCapability = true`: [NwSeam] drives its [us.tractat.kuilt.core.Seam.capability] from
+ * [NwApi.pathState] (#1541), so kuilt-nw is the one fabric off the
+ * [us.tractat.kuilt.core.FabricAvailability.Unknown] floor (#1712).
+ *
+ * **The [SATISFIED_WIFI_PATH] emissions in [newLoomPair] are load-bearing — do not delete them.** The
+ * flag selects the AWAITING branch of [SeamConformanceSuite.wovenSeamCapabilityIsHonest], which blocks on
+ * `capability.first { it.availability !is Unknown }`; and since #1712 the path observer is the ONLY thing
+ * that can satisfy it — there is no static availability seed left ([NwLoom]'s static report supplies the
+ * ROLES only). [FakeNwApi] starts from a `null` path, so an unseeded [NwSeam] publishes `Unknown`
+ * forever: the await would never complete, the test would die on `runTest`'s 60 s wall-clock timeout, and
+ * it would do so on every common target (jvm, Android, iosSimulatorArm64, macosArm64) — red `build-jvm`
+ * AND `build-native`. So the assertion **is** discriminating here: it is precisely what catches a harness
+ * claiming a live observer it never routed a value through. What it does not do is watch the value
+ * *move*; the tests that pin the observer driving transitions are [NwSeamCapabilityTest] (availability)
+ * and [NwInterfaceRolesTest] (roles).
  */
 class NwConformanceTest : SeamConformanceSuite() {
 
     private companion object {
         const val SERVICE_TYPE = "_kuilt._tcp"
         const val HOST_DEVICE = "host"
+
+        /**
+         * A live, satisfied infrastructure-Wi-Fi path. Published on both fakes in [newLoomPair] to drive
+         * the seams' #1541 path-observer loop, which since #1712 is the ONLY source of a
+         * non-[us.tractat.kuilt.core.FabricAvailability.Unknown] availability — [NwSeam] no longer seeds
+         * one from [FakeNwApi.availability] (that answers *platform support*, not *live path*), so the
+         * static report supplies roles only. Required setup, not decoration: without it
+         * `SeamConformanceSuite.wovenSeamCapabilityIsHonest` awaits a verdict that never arrives and fails
+         * on the 60 s `runTest` timeout.
+         */
+        val SATISFIED_WIFI_PATH = NwPathState(
+            status = NwPathStatus.Satisfied,
+            interfaces = setOf(NwInterfaceType.WifiLan),
+            isExpensive = false,
+            isConstrained = false,
+            unsatisfiedReason = null,
+        )
     }
 
     // The radio backing the current pair, captured so injectSelfDial can drive the host device to dial
@@ -45,16 +78,14 @@ class NwConformanceTest : SeamConformanceSuite() {
     override fun newLoomPair(): Pair<Loom, Loom> {
         val r = FakeNwRadio()
         radio = r
-        val host = NwLoom(
-            FakeNwApi(r, deviceId = HOST_DEVICE, serviceName = "host"),
-            serviceType = SERVICE_TYPE,
-            random = Random(0),
-        )
-        val joiner = NwLoom(
-            FakeNwApi(r, deviceId = "join", serviceName = "join"),
-            serviceType = SERVICE_TYPE,
-            random = Random(1),
-        )
+        val hostApi = FakeNwApi(r, deviceId = HOST_DEVICE, serviceName = "host")
+        val joinerApi = FakeNwApi(r, deviceId = "join", serviceName = "join")
+        // LOAD-BEARING (#1712): the path observer is the only source of a non-Unknown availability, and
+        // the suite's reportsLiveCapability branch AWAITS one. Delete these and the suite hangs to timeout.
+        hostApi.emitPathState(SATISFIED_WIFI_PATH)
+        joinerApi.emitPathState(SATISFIED_WIFI_PATH)
+        val host = NwLoom(hostApi, serviceType = SERVICE_TYPE, random = Random(0))
+        val joiner = NwLoom(joinerApi, serviceType = SERVICE_TYPE, random = Random(1))
         return host to joiner
     }
 

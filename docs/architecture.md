@@ -282,10 +282,11 @@ the cold-`Connection` pump gotcha, and a `SeamConformanceSuite` subclass templat
 ## Capability gaps by design
 
 Not every fabric can promise everything. A fabric declares what it can and
-can't do (its `SeamCapabilities`), and two of those gaps are permanent
+can't do (its `SeamCapabilities`), and the first two gaps below are permanent
 properties of *how the fabric works*, not bugs waiting on a fix — they are
 recorded here so a reader hits the explanation once, rather than re-deriving
-it every time a new fabric declares the same honest limitation.
+it every time a new fabric declares the same honest limitation. The third is a
+different shape: an honest "not wired yet" that closes fabric by fabric.
 
 ### securesTransport — fabrics without wire encryption
 
@@ -311,6 +312,29 @@ delivery for the ability to scale a large room without every peer dialing
 every other peer. Declaring `meshDelivery = false` (or `true` vacuously, on a
 strictly 2-peer fabric with no third peer to relay through) records honestly
 that the frame did not travel peer-to-peer.
+
+### reportsLiveCapability — fabrics without a path observer
+
+Ask a device "is the network up?" and there are three honest answers: yes, no,
+and *I don't know*. Most fabrics can only give the third one. A connection that
+opened a moment ago proves the network was reachable *then*; it says nothing
+about whether the Wi-Fi has since dropped, the phone has gone into a tunnel, or
+the user has revoked the local-network permission. Only a fabric wired to the
+operating system's own path monitor — today just `kuilt-nw`, via
+`NWPathMonitor` — can actually watch that and report a live answer.
+
+So `Seam.capability` starts at "I don't know" and a fabric has to earn anything
+stronger. A fabric with no observer declares `reportsLiveCapability = false`
+and keeps reporting `Unknown`; one with a real observer declares `true` and its
+`FabricAvailability` moves with the device. The alternative — every fabric
+asserting `Available` because a seam exists — is worse than saying nothing: a
+consumer that surfaces it to a user would confidently claim the network is fine
+while the phone sits on a dead radio. Silence is recoverable; a false all-clear
+is not.
+
+Unlike the two gaps above, this one is not permanent. Each fabric's observer is
+wired one lane at a time, and a lane flips its flag to `true` in the same change
+that lands the observer and a test proving the value actually moves.
 
 ## Consensus and leader election
 

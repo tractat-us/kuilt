@@ -1,5 +1,6 @@
 package us.tractat.kuilt.webrtc
 
+import us.tractat.kuilt.conformance.CapabilityGaps
 import us.tractat.kuilt.conformance.SeamCapabilities
 import us.tractat.kuilt.conformance.SeamConformanceSuite
 import us.tractat.kuilt.core.Loom
@@ -55,9 +56,16 @@ class WebRTCConformanceTest : SeamConformanceSuite() {
      *
      * `supportsSendTo = true` (#1409): the resolved remote `PeerId` is reconciled into
      * the roster once the ID-exchange completes, and `sendTo` awaits that resolution,
-     * so `sendTo(actualPeerId)` delivers to the named peer. Fully conforming.
+     * so `sendTo(actualPeerId)` delivers to the named peer.
+     *
+     * `reportsLiveCapability = false`: nothing folds the browser's connectivity signals
+     * (`RTCPeerConnection.connectionState`, `navigator.onLine`) into
+     * [us.tractat.kuilt.core.Seam.capability], so it sits on the honest
+     * [us.tractat.kuilt.core.FabricAvailability.Unknown] floor (#1712/#1544).
      */
-    override fun capabilities(): SeamCapabilities = SeamCapabilities.FULL
+    override fun capabilities(): SeamCapabilities =
+        SeamCapabilities.FULL.copy(reportsLiveCapability = false)
 
-    override fun capabilityGaps(): Map<String, String> = emptyMap()
+    override fun capabilityGaps(): Map<String, String> =
+        mapOf("reportsLiveCapability" to CapabilityGaps.LIVE_CAPABILITY)
 }

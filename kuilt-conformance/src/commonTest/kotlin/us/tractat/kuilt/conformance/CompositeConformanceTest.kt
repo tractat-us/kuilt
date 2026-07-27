@@ -34,7 +34,16 @@ class CompositeConformanceTest : SeamConformanceSuite() {
     /**
      * `meshDelivery = true` here is genuine, not vacuous: [CompositeLoom] bonds
      * plies into an N-peer mesh (mesh evidence tracked in #1408, Task 1.8).
+     *
+     * `reportsLiveCapability = false`: the composite rollup is reactive to plies going
+     * **woven/torn**, which is not a path observer. With no observing ply under it the composite
+     * reports the honest [us.tractat.kuilt.core.FabricAvailability.Unknown] floor (#1712/#1545).
      */
-    override fun capabilities() = SeamCapabilities.FULL.copy(securesTransport = false)
-    override fun capabilityGaps() = mapOf("securesTransport" to CapabilityGaps.SECURES_TRANSPORT)
+    override fun capabilities() =
+        SeamCapabilities.FULL.copy(securesTransport = false, reportsLiveCapability = false)
+
+    override fun capabilityGaps() = mapOf(
+        "securesTransport" to CapabilityGaps.SECURES_TRANSPORT,
+        "reportsLiveCapability" to CapabilityGaps.LIVE_CAPABILITY,
+    )
 }
