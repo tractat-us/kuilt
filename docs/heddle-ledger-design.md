@@ -279,9 +279,13 @@ list a false conflict that self-heals on anti-entropy. The checks:
   manufactured spendable authority the per-lineage checks then read as legitimate, but the
   units it charged were never minted. **Exact on a converged state** (there conservation is an
   identity, so it fires only when `Σ holdings` really went negative). Under partial delivery it
-  adds no new false-fire: charges travel with the witness carrying the actor's own minted
-  supply, and a state that observes a charge whose root mint has not arrived already strands a
-  `PersistentNegativeHoldings` at the delegator.
+  inherits the accepted transient: charges travel with the witness carrying the **actor's own**
+  minted supply, so a directly-funded charge always arrives with its backing; a charge funded by
+  a transfer at a non-root path is backed only by the donor's `issued`, so a state can observe
+  it without the root mint. Where that state also carries the topology, the same gap already
+  strands a `PersistentNegativeHoldings` at the delegator — a second voice on one fault. On a
+  bare delta carrying no records it can be the only report (`allGroups()` is empty, so no
+  per-group check runs).
 
 **Honest scope note (fix 6, from C/D reviews):** under the stated non-Byzantine model,
 `piece`'s max erases the loser of an *equivocated* one-writer slot, so `heddle-design.md`

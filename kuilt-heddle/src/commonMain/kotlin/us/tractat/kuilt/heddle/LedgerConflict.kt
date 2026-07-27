@@ -181,14 +181,20 @@ public sealed interface LedgerConflict : Comparable<LedgerConflict> {
      * — `mintedTotal = Σ holdings + Σ leafSpent` — so this fires only when `Σ holdings` has
      * gone negative for a real reason, or when the identity itself has been broken by a bug.
      *
-     * Under **partial delivery** it inherits exactly the accepted transient the other checks
-     * have and adds none of its own. Charged service travels with the witness the mutator
-     * attached (see [EntitlementLedger]), so a direct or single-hop-transfer-funded charge
-     * always arrives alongside the supply that justified it. What can transiently trip it is
-     * a state that observes a charge whose *root* mint has not yet been delivered — and by
-     * the conservation identity that same state already strands a negative
-     * [PersistentNegativeHoldings] at the delegator. It never fires alone on honest traffic,
-     * and it self-heals on anti-entropy like every other report here.
+     * Under **partial delivery** it inherits the accepted transient the other checks have.
+     * Charged service travels with the witness the mutator attached (see [EntitlementLedger]),
+     * and that witness carries the *actor's own* minted supply — so a directly-funded charge
+     * always arrives alongside the supply justifying it. What can transiently trip it is a
+     * state observing a charge whose **root** mint has not been delivered, which is reachable
+     * when the charge was funded by a transfer at a non-root path: the witness backs the donor
+     * with its `issued` at that edge, not with the mint behind it.
+     *
+     * Where such a state also carries the **topology**, the conservation identity means the
+     * same gap already strands a negative [PersistentNegativeHoldings] at the delegator — this
+     * is a second voice on one fault, not a new one. On a bare delta carrying no records at
+     * all it *can* be the only report, because `allGroups()` is empty there and no per-group
+     * check runs. Either way it self-heals on anti-entropy, and — as for every report here —
+     * consumers must not gate on `validate().isEmpty()` while rebalancing is in flight.
      *
      * @property leafSpentTotal the effective leaf spend summed over every edge
      * @property mintedTotal total supply ever minted on this state
