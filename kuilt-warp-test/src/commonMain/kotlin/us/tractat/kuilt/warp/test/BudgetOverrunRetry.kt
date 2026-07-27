@@ -84,6 +84,12 @@ private const val BUDGET_OVERRUN_MARKER: String = "WASM execution exceeded"
  * an equivalent well-behaved invocation on a fresh, generously-budgeted runtime — so the reader can
  * separate contention from regression from the message alone, without re-running anything.
  *
+ * Two known gaps in that diagnostic, tracked by #1810: an *absorbed* overrun is silent (so drift
+ * from "no retry ever consumed" toward "three of four every run" is invisible until all four fail),
+ * and the reference price is one sample that includes `load` as well as the invoke it is compared
+ * against — both biases inflating it, i.e. nudging the reader toward the comfortable
+ * "blame the host" branch.
+ *
  * @param what What the scenario proves, for the failure message.
  * @param budget The [WasmSandboxConfig.executionTimeout] the scenario's runtime is configured with.
  * @param attempts Maximum attempts; must be at least 1.
