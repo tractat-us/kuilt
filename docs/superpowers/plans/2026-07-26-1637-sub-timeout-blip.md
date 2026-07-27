@@ -10,7 +10,13 @@
 
 ## Global Constraints
 
-- `source ~/.sdkman/bin/sdkman-init.sh && sdk env` — kuilt pins **JDK 21** via `.sdkmanrc`. Not 25 (detekt/detekt#8714, see #1708).
+- **JDK 21 — select it explicitly.** Pin it per command:
+  `JAVA_HOME=$HOME/.sdkman/candidates/java/21.0.5-tem ./gradlew …`
+  **Do NOT use `sdk env`.** There is no `.sdkmanrc` in this repo (verified 2026-07-27 — untracked and
+  absent in every worktree), so `sdk env` no-ops and the build proceeds on the system default, JDK 25.
+  That does not fail at the top: it fails ~3 minutes in, at `:kuilt-warp-ksp:detekt`, with
+  `Invalid value (25) passed to --jvm-target` (detekt/detekt#8714, see #1708) — which reads like a code
+  defect in your own task and is not one. Confirm with `java -version` before trusting a build result.
 - `explicitApi()` is enforced; every new public declaration needs an explicit modifier. **No `!!` in production code** — CI's `:module:detektJvmMain` fails on `UnsafeCallOnNullableType` and a local `detektAll` can false-green it (#1537).
 - Coroutine-test discipline: `runTest(StandardTestDispatcher(), timeout = 5.seconds)`, bounded `advanceTimeBy`, **never `advanceUntilIdle()`** (election/heartbeat timers re-arm forever). Seed every `Random`. No production dispatchers in test sources.
 - `runCatchingCancellable`, never bare `runCatching`, in any suspend context.
@@ -225,7 +231,7 @@ class SubTimeoutBlipResumeTest {
 
 - [ ] **Step 2: Run the test and verify it fails**
 
-Run: `./gradlew :kuilt-session:jvmTest --tests "*SubTimeoutBlipResumeTest*"`
+Run: `JAVA_HOME=$HOME/.sdkman/candidates/java/21.0.5-tem ./gradlew :kuilt-session:jvmTest --tests "*SubTimeoutBlipResumeTest*"`
 Expected: **FAIL** — `resumed.isCompleted` is false; the joiner is still retrying, or has already emitted `HostLost`. This is the #1637 repro.
 
 - [ ] **Step 3: Commit the failing test**
@@ -330,12 +336,12 @@ import us.tractat.kuilt.session.admit.RejectCode
 
 - [ ] **Step 4: Run the Task 1 test and verify it passes**
 
-Run: `./gradlew :kuilt-session:jvmTest --tests "*SubTimeoutBlipResumeTest*"`
+Run: `JAVA_HOME=$HOME/.sdkman/candidates/java/21.0.5-tem ./gradlew :kuilt-session:jvmTest --tests "*SubTimeoutBlipResumeTest*"`
 Expected: **PASS** — `Recovered(hostId)` emitted (see Amendment; **not** `Resumed`), no `HostLost`.
 
 - [ ] **Step 5: Run the #1572 regression guard**
 
-Run: `./gradlew :kuilt-session:jvmTest --tests "*FastReconnectRaceTest*"`
+Run: `JAVA_HOME=$HOME/.sdkman/candidates/java/21.0.5-tem ./gradlew :kuilt-session:jvmTest --tests "*FastReconnectRaceTest*"`
 Expected: **PASS**, unchanged. If this fails, the dwell is shorter than the host's window-open latency — do not lengthen the dwell blindly; read the failure and confirm which branch fired.
 
 - [ ] **Step 6: Commit**
@@ -414,7 +420,7 @@ The fix must not rescue a room that genuinely lost its host, and must not pre-em
 
 - [ ] **Step 2: Run both tests**
 
-Run: `./gradlew :kuilt-session:jvmTest --tests "*SubTimeoutBlipResumeTest*"`
+Run: `JAVA_HOME=$HOME/.sdkman/candidates/java/21.0.5-tem ./gradlew :kuilt-session:jvmTest --tests "*SubTimeoutBlipResumeTest*"`
 Expected: **PASS** (both).
 
 - [ ] **Step 3: Add the `assertAll` import**
@@ -440,7 +446,7 @@ git commit -m "test(session): the no-op resume must not rescue a genuine host lo
 
 - [ ] **Step 1: Full build, cache disabled**
 
-Run: `./gradlew build detektAll --rerun-tasks`
+Run: `JAVA_HOME=$HOME/.sdkman/candidates/java/21.0.5-tem ./gradlew build detektAll --rerun-tasks`
 Expected: BUILD SUCCESSFUL, tasks `EXECUTED` not `FROM-CACHE`. This is the only run that proves the Android and Kotlin/Native variants compile and that the `:examples` / `:kuilt-cluster` E2E cluster invariants still hold.
 
 Note: `:kuilt-warp-heddle:allTests` has an unrelated `iosSimulatorArm64` flake under machine load (`UncompletedCoroutinesError`) — check `uptime` before believing a timing failure, and re-run on an idle box. If it reproduces idle, it is a separate bug; file it, do not fold it into this PR.
