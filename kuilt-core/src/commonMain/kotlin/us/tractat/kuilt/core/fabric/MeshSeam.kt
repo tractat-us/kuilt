@@ -102,10 +102,27 @@ internal data class MeshHello(val peerId: PeerId, val nonce: ByteArray) {
             }
         }
 
+        /**
+         * Decode a preamble frame, throwing [IllegalArgumentException] if it is malformed.
+         *
+         * The frame is the **first bytes a remote sends**, so every check runs before the read it
+         * protects (#1788): a frame shorter than the 4-byte length prefix would index-fault inside
+         * [readInt], a negative declared length passes any `size >= 4 + idLen` test (the prefix is read
+         * as a signed [Int]), and a large one wraps `4 + idLen` negative so that test passes too — hence
+         * the subtraction. Rejecting here rather than relying on a caller's guard: `handshakeLink` is one
+         * `async` among many during mesh construction, and `addLink` runs on a hub's accept pump.
+         */
         public fun decode(frame: ByteArray): MeshHello {
+            require(frame.size >= Int.SIZE_BYTES) {
+                "truncated MeshHello: ${frame.size} bytes cannot hold the ${Int.SIZE_BYTES}-byte id length"
+            }
             val idLen = frame.readInt(offset = 0)
-            val peerId = PeerId(frame.decodeToString(startIndex = 4, endIndex = 4 + idLen))
-            val nonce = frame.copyOfRange(4 + idLen, frame.size)
+            require(idLen >= 0) { "malformed MeshHello: negative declared id length $idLen" }
+            require(frame.size - Int.SIZE_BYTES >= idLen) {
+                "truncated MeshHello: declared id length $idLen exceeds the ${frame.size}-byte frame"
+            }
+            val peerId = PeerId(frame.decodeToString(startIndex = Int.SIZE_BYTES, endIndex = Int.SIZE_BYTES + idLen))
+            val nonce = frame.copyOfRange(Int.SIZE_BYTES + idLen, frame.size)
             return MeshHello(peerId, nonce)
         }
     }

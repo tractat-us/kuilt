@@ -721,7 +721,7 @@ class NwSeamTest {
     @Test
     fun anUndecodableFirstFrameDoesNotKillTheReceiveLoop() = runTest(StandardTestDispatcher()) {
         // #1528 part B (backstop). Even if a tombstone is missed, a first frame on an unresolved conn that
-        // fails NwHello.decode (garbage idLen → IndexOutOfBounds) must NOT propagate out of the collector and
+        // fails NwHello.decode (garbage idLen, rejected by its own bounds check) must NOT propagate out of the collector and
         // kill bytesReceivedLoop (leaving the seam permanently DEAF yet non-Torn). Pre-fix the throw escapes
         // and kills the loop; post-fix the decode failure disconnects that conn and the loop keeps running —
         // proven by a subsequent legit frame delivered on a DIFFERENT live conn.
@@ -742,7 +742,8 @@ class NwSeamTest {
         )
         assertTrue(pumpUntil { PeerId("peer-1") in seamA.peers.value }, "peer-1 resolved on the live conn")
 
-        // A genuinely-new conn whose FIRST frame is undecodable as an NwHello (idLen = 0x7fffffff → OOB).
+        // A genuinely-new conn whose FIRST frame is undecodable as an NwHello (idLen = 0x7fffffff — a declared
+        // length no buffer can satisfy, and one that overflows `4 + idLen`; see NwHello.decode).
         val bad = NwConnectionId("c-bad")
         apiA.emitConnectionOpened(NwConnectionOpened(bad, endpoint = null))
         testScheduler.runCurrent()

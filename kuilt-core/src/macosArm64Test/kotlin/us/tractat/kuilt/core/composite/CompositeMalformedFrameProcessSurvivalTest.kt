@@ -45,9 +45,12 @@ import kotlin.time.Duration.Companion.seconds
  * unexpectedly` instead of a green build.
  *
  * The complementary half — that the frame is *dropped and reported* and the pump keeps delivering — is
- * pinned deterministically on every target by `CompositeInboundPumpTest`. That one is also what gates CI:
- * this repo's `build-native` job runs on a Linux host, where Apple test tasks are disabled, so this test
- * is a **local/macOS gate only** (see #1789).
+ * pinned deterministically on every target by `CompositeInboundPumpTest`, and **that** is the half wired
+ * into `ci-required`: `ci.yml`'s `build-native` job runs on a Linux host, where the Apple test tasks are
+ * disabled, so this test runs on a Mac only — locally, or out of band in the `apple-nightly` workflow
+ * (`gh workflow run apple-nightly.yml`). See #933 for why the split is deliberate. Removing the guard
+ * therefore still turns a PR red, via the sibling test; this one is what makes the *process-death*
+ * dimension legible when someone does run it.
  */
 class CompositeMalformedFrameProcessSurvivalTest {
 

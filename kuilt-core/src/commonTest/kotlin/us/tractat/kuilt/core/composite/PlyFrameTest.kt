@@ -94,11 +94,19 @@ class PlyFrameTest {
     // --- malformed input a PEER can send (#1788) ---
     //
     // These bytes are reachable from any peer in the session, so each of the three shapes below is a
-    // remote input and not a local programming error. Before the fix all three defeated the `require`s:
-    // the short frame index-faulted inside `readInt` BEFORE the check ran, and the negative and
-    // overflowing declared lengths both made `bytes.size >= 5 + len (+ 8)` pass. Whatever escaped went
-    // out of the composite's per-ply inbound pump — which on Kotlin/Native aborts the process, see
-    // `CompositeMalformedFrameProcessSurvivalTest`.
+    // remote input and not a local programming error. All three defeated the old `require`s, and all
+    // three threw out of the composite's per-ply inbound pump — which on Kotlin/Native aborts the
+    // process (see `CompositeMalformedFrameProcessSurvivalTest`). They differed in HOW, which is worth
+    // recording because only two of them go red as *decoder* tests:
+    //  - short buffer: `readInt` index-faulted BEFORE the check meant to reject it →
+    //    `ArrayIndexOutOfBoundsException`, red below;
+    //  - overflowing length: `bytes.size >= 5 + len + 8` passed on the wrap, and the read then blew up →
+    //    `IndexOutOfBoundsException: startIndex: 5, endIndex: 2147483644, size: 37`, red below;
+    //  - negative length: `bytes.size >= 5 + len` also passed, but `decodeToString(5, 4)` then rejected
+    //    `startIndex > endIndex` with an `IllegalArgumentException` of its own — so the test below was
+    //    incidentally GREEN pre-fix. It is a regression guard for a hole the `require` genuinely had,
+    //    kept because nothing but `decodeToString`'s internals was closing it. The pump-level cost of
+    //    that throw is pinned by `CompositeInboundPumpTest` instead, where it does go red.
 
     @Test
     fun aTwoByteFrameIsRejectedRatherThanIndexFaulting() {

@@ -42,7 +42,8 @@ import kotlin.test.assertTrue
  * to the global handler, and with no `setUnhandledExceptionHook` installed the runtime **aborts the
  * process**. That dimension cannot be pinned from `runTest` — kotlinx-coroutines-test collects the throw
  * and reports it as a test failure, so a `runTest` body passes whether the crash is fixed or not — and is
- * pinned separately by `CompositeMalformedFrameProcessSurvivalTest` (a bare `@Test` on `macosArm64Test`).
+ * pinned separately by `CompositeMalformedFrameProcessSurvivalTest` (a bare `@Test` on `macosArm64Test`),
+ * which runs on a Mac only — so **these** are the tests that gate `ci-required`.
  *
  * These tests own the other half, deterministically and on every target: the frame is **dropped and
  * reported**, and the pump keeps delivering.
@@ -112,8 +113,11 @@ class CompositeInboundPumpTest {
         backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) { composite.incoming.collect { received += it } }
         runCurrent()
 
-        // The empty frame, an unknown tag, a truncated header, a NEGATIVE declared id length, and one that
-        // OVERFLOWS the offset arithmetic — the last two defeated the old additive `require` outright.
+        // The empty frame, an unknown tag, a truncated header, a NEGATIVE declared id length, and two that
+        // OVERFLOW the offset arithmetic. The last three defeated the old additive `require` outright; what
+        // exception each then threw differed, which is exactly why the pump — not the decoder — is where
+        // "survives whatever a peer sends" has to be true. Pre-fix this list yields six dead pumps and zero
+        // reports.
         listOf(
             byteArrayOf(),
             byteArrayOf(99),

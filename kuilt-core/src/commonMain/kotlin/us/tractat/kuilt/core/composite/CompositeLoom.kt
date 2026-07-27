@@ -35,12 +35,13 @@ import kotlin.coroutines.CoroutineContext
  * @param policy Governs the inbound [us.tractat.kuilt.core.Spool]'s capacity and overflow
  *   behaviour for each woven [CompositeSeam]. Defaults to [DeliveryPolicy.Reliable]
  *   (bounded, backpressured, lossless).
- * @param onPlyFailure Raised whenever one ply fails to attach or detach while reconciling a live
- *   session — a constituent [Loom]'s `capability()`/`weave()`, or a ply [Seam]'s `close()`, threw.
- *   The composite absorbs the failure and keeps reconciling its other plies, retrying the failed one
- *   on the next [plies] emission; `kuilt-core` is logger-free, so this is how that surfaces to a
- *   consumer's own logger. Best-effort and non-suspending; defaults to a silent absorb. See
- *   [PlyReconcileException].
+ * @param onPlyFailure Raised whenever one ply fails inside a live session — a constituent [Loom]'s
+ *   `capability()`/`weave()` or a ply [Seam]'s `close()` threw while reconciling, or a peer sent an
+ *   inbound frame the ply could not process. The composite absorbs the failure and keeps going: the other
+ *   plies still reconcile, a failed attach is retried on the next [plies] emission, and a ply whose
+ *   inbound frame failed drops that frame and keeps delivering. `kuilt-core` is logger-free, so this is
+ *   how that surfaces to a consumer's own logger. Best-effort and non-suspending; defaults to a silent
+ *   absorb. See [PlyReconcileException].
  */
 public class CompositeLoom(
     private val plies: StateFlow<List<Pair<PlyId, Loom>>>,
