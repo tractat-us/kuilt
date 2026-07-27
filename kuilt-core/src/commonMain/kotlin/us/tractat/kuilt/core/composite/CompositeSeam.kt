@@ -157,15 +157,20 @@ internal class CompositeSeam(
     )
 
     // The SINGLE capability writer. Every snapshot→publish pair runs here, so no two can interleave and
-    // no stale publish can land last (#1712). Started before any ply attaches so no request is missed;
-    // dies with [scope] on close. NOT a `limitedParallelism(1)` confinement crutch — this is the
-    // dedicated-writer-draining-a-Channel pattern, and it owns the whole read-modify-write, not just
-    // the write.
-    private val capabilityWriter: Job = scope.launch {
-        for (request in capabilityRecomputes) publishCapability()
-    }
+    // no stale publish can land last (#1712). NOT a `limitedParallelism(1)` confinement crutch — this is
+    // the dedicated-writer-draining-a-Channel pattern, and it owns the whole read-modify-write, not just
+    // the write. Dies with [scope] on close.
+    private val capabilityWriter: Job
 
     init {
+        // Started FIRST, and from `init` rather than a property initializer, so that "before any ply
+        // attaches" is enforced by statement order here instead of by this property happening to be
+        // declared below every field publishCapability touches — a declaration reorder must not be able
+        // to make the writer observe an uninitialised field.
+        capabilityWriter = scope.launch {
+            for (request in capabilityRecomputes) publishCapability()
+        }
+
         // Aggregate state is derived from the per-ply map: any ply Woven => Woven, else Weaving
         // (empty or all-torn are both recoverable Weaving, #1367). A derived write via update():
         // no-ops once close() has latched the terminal Torn, so a late rollup can never clobber it.
