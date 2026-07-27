@@ -10,9 +10,11 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.cbor.Cbor
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.Seam
+import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.crdt.GCounter
 import us.tractat.kuilt.crdt.Patch
 import us.tractat.kuilt.crdt.ReplicaId
@@ -759,6 +761,7 @@ class HeddleControlPlaneTest {
     // only the behavioural half is asserted.
     // ═══════════════════════════════════════════════════════════════════════════
     @Test
+    @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
     fun undecodableEntryIsSkippedAndStillAdvancesTheAppliedIndex() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
         val fake = FakeRaftNode(selfId = NodeId("solo"), initialRole = RaftRole.Leader)
         val sink = RecordingSink()
@@ -770,11 +773,16 @@ class HeddleControlPlaneTest {
         val projectionBefore = plane.projectionSnapshot()
         val indexBefore = plane.rosterSnapshot().appliedIndex
 
-        // A committed entry whose bytes are not a ControlEnvelope. `0xFF` is CBOR's break byte, so it
-        // can never open a valid encoding. This is what a non-heddle entry looks like — and equally
-        // what an older heddle entry stranded by a ControlEnvelope/ControlCommand schema change would
-        // look like on the replay-from-index-1 every governed node performs at boot.
-        val undecodable = fake.pushCommitted(byteArrayOf(0xFF.toByte(), 0x00, 0x42))
+        // Bytes that are not a ControlEnvelope. `0xFF` is CBOR's break byte, so it can never open a
+        // valid encoding. This is what a non-heddle entry looks like — and equally what an older
+        // heddle entry stranded by a ControlEnvelope/ControlCommand schema change would look like on
+        // the replay-from-index-1 every governed node performs at boot.
+        val bytes = byteArrayOf(0xFF.toByte(), 0x00, 0x42)
+        assertTrue(
+            runCatchingCancellable { Cbor.decodeFromByteArray(ControlEnvelope.serializer(), bytes) }.isFailure,
+            "fixture non-vacuity: the bytes must genuinely fail to decode as a ControlEnvelope",
+        )
+        val undecodable = fake.pushCommitted(bytes)
         runCurrent()
 
         assertAll(
