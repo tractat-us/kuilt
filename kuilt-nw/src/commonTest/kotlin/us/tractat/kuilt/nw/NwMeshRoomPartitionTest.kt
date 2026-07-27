@@ -20,6 +20,7 @@ import us.tractat.kuilt.test.assertAll
 import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertIs
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
@@ -138,8 +139,7 @@ class NwMeshRoomPartitionTest {
                     )
                 },
                 {
-                    assertEquals(
-                        Liveness.Partitioned,
+                    assertIs<Liveness.Partitioned>(
                         hostRoom.roster.value.first { it.id == droppedId }.liveness,
                         "the dropped peer's roster entry must read Partitioned",
                     )

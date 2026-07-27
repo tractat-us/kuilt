@@ -15,6 +15,7 @@ import us.tractat.kuilt.test.FaultySeam
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertIs
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
@@ -164,8 +165,7 @@ class StarTopologyPresenceFanoutTest {
                     )
                 },
                 {
-                    assertEquals(
-                        Liveness.Partitioned,
+                    assertIs<Liveness.Partitioned>(
                         star.bystander.roster.value.first { it.id == star.droppedId }.liveness,
                         "the roster entry must read Partitioned, not Connected",
                     )

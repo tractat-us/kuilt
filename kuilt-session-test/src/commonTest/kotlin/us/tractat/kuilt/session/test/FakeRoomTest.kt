@@ -26,6 +26,7 @@ import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Instant
 
 class FakeRoomTest {
@@ -135,14 +136,27 @@ class FakeRoomTest {
         val updatedMember = room.roster.value.single { it.id == PeerId("alice") }
         val event = eventDeferred.await()
         assertAll(
-            { assertEquals(Liveness.Partitioned, updatedMember.liveness) },
+            {
+                assertEquals(
+                    Liveness.Partitioned(since = at, windowExpiresAt = at + 1.minutes),
+                    updatedMember.liveness,
+                    "the level carries the deadline; windowExpiresAt defaults to one minute past `at`",
+                )
+            },
             { assertEquals(MembershipEvent.Partitioned(PeerId("alice"), at, ReconnectReason.LinkTimeout), event) },
         )
     }
 
     @Test
     fun `recover flips liveness back and emits Recovered`() = runTest {
-        val alice = member(PeerId("alice"), liveness = Liveness.Partitioned)
+        val partitionedAt = Instant.fromEpochMilliseconds(1000L)
+        val alice = member(
+            PeerId("alice"),
+            liveness = Liveness.Partitioned(
+                since = partitionedAt,
+                windowExpiresAt = partitionedAt + 1.minutes,
+            ),
+        )
         val room = FakeRoom(initialRoster = setOf(alice))
         val at = Instant.fromEpochMilliseconds(2000L)
         val eventDeferred = async { room.events.first() }

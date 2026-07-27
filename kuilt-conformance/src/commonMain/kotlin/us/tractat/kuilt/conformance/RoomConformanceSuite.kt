@@ -281,7 +281,7 @@ public abstract class RoomConformanceSuite {
             val partitioned = partitionedDeferred.await()
             assertIs<MembershipEvent.Partitioned>(partitioned)
             assertEquals(ReconnectReason.LinkTimeout, partitioned.reason)
-            assertEquals(Liveness.Partitioned, hostRoom.roster.value.first().liveness)
+            assertIs<Liveness.Partitioned>(hostRoom.roster.value.first().liveness)
 
             // Heal the host seam then advance one tick for ping/pong exchange.
             hostSeam.heal()

@@ -361,7 +361,8 @@ public suspend fun holdTheSeatOpenSample(
 <!-- verbatim from kuilt-session/src/commonSamples/kotlin/us/tractat/kuilt/session/AgentCookbookSamples.kt#observePausedPeersSample -->
 ```kotlin
 public suspend fun observePausedPeersSample(room: Room) {
-    // room.roster.value.filter { it.liveness == Liveness.Partitioned } is the same fact, pull-style.
+    // room.roster.value.filter { it.liveness is Liveness.Partitioned } is the same fact, pull-style —
+    // and each Partitioned carries windowExpiresAt, so the countdown needs no event replay.
     room.events.collect { event ->
         when (event) {
             is MembershipEvent.Partitioned -> Unit // grey the seat out — this peer's link dropped
