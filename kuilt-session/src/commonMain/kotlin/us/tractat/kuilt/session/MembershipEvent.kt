@@ -64,10 +64,17 @@ public sealed interface MembershipEvent {
          * nothing about them. Read it off the event rather than correlating two streams by
          * timestamp (#1712).
          *
+         * That inference holds where *we* observed the silence — our own detection or our own link
+         * tear. It does **not** hold for a host-relayed pause: that report is host-authoritative and
+         * arrived over a link working well enough to deliver it, so an `Unavailable` tag there says
+         * only that our own end was down when we processed the report, not that the report is
+         * unfounded. Either way [Room.roster]'s liveness stays authoritative.
+         *
          * [FabricAvailability.Unknown] means the fabric has no path observer, so precedence cannot
          * be determined — treat it as "no information", not as "we were fine". It is the **normal**
-         * value on every fabric without a live OS path observer, which today is all of them bar
-         * one, so a consumer must handle it as a first-class third answer rather than a gap.
+         * value on every fabric without a live OS path observer (see
+         * `SeamCapabilities.reportsLiveCapability`), so a consumer must handle it as a first-class
+         * third answer rather than a gap.
          */
         val localFabric: FabricAvailability,
     ) : MembershipEvent
@@ -127,8 +134,9 @@ public sealed interface MembershipEvent {
          *
          * [FabricAvailability.Unknown] means the fabric has no path observer, so precedence cannot
          * be determined — treat it as "no information", not as "we were fine". It is the **normal**
-         * value on every fabric without a live OS path observer, which today is all of them bar
-         * one, so a consumer must handle it as a first-class third answer rather than a gap.
+         * value on every fabric without a live OS path observer (see
+         * `SeamCapabilities.reportsLiveCapability`), so a consumer must handle it as a first-class
+         * third answer rather than a gap.
          */
         val localFabric: FabricAvailability,
     ) : MembershipEvent
