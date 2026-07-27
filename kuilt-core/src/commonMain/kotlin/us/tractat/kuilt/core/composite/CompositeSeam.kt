@@ -353,11 +353,20 @@ internal class CompositeSeam(
      */
     private suspend fun discardOrphanedPly(id: PlyId, seam: Seam) {
         withContext(NonCancellable) {
-            // SALVAGE, not DETACH: this ply never entered `live` and never appeared in [plies], so
-            // DETACH's "its pumps are stopped and it is out of the composite" would be a false report on
-            // the consumer's own logger. Which ply, doing what, and why *is* the diagnosis.
-            runCatchingCancellable { seam.close(CloseReason.Normal) }
-                .onFailure { raisePlyFailure(id, PlyReconcileException.Phase.SALVAGE, it) }
+            try {
+                seam.close(CloseReason.Normal)
+            } catch (failure: Throwable) {
+                // Inside the shield there is no "our own cancellation" left to preserve — this block's Job
+                // is parented to [NonCancellable] — so `ensureActive` cannot fire and every throwable,
+                // including a `CancellationException` the consumer's `close` minted itself (a close
+                // handshake `withTimeout`), is this ply's failure. `runCatchingCancellable` here would
+                // instead rethrow that one case straight past the guard. See [reconcile].
+                currentCoroutineContext().ensureActive()
+                // SALVAGE, not DETACH: this ply never entered `live` and never appeared in [plies], so
+                // DETACH's "its pumps are stopped and it is out of the composite" would be a false report
+                // on the consumer's own logger. Which ply, doing what, and why *is* the diagnosis.
+                raisePlyFailure(id, PlyReconcileException.Phase.SALVAGE, failure)
+            }
         }
     }
 
@@ -497,9 +506,18 @@ internal class CompositeSeam(
             _plies.update { it - id }
             // Purge this ply's learned mappings so a re-attach starts clean.
             lock.withLock { idMap.keys.removeAll { it.first == id } }
-            // Guarded so the two recomputes below are unconditional — see the KDoc.
-            runCatchingCancellable { handle.seam.close(CloseReason.Normal) }
-                .onFailure { raisePlyFailure(id, PlyReconcileException.Phase.DETACH, it) }
+            // Guarded so the two recomputes below are unconditional — see the KDoc. `catch (Throwable)`
+            // rather than `runCatchingCancellable`: inside the shield this block's Job is parented to
+            // [NonCancellable], so a `CancellationException` arriving here can only be one the consumer's
+            // `close` minted itself, and rethrowing it would skip the very recomputes this guard exists
+            // for. `ensureActive` is kept as the discriminator for symmetry with [reconcile]; it cannot
+            // fire here.
+            try {
+                handle.seam.close(CloseReason.Normal)
+            } catch (failure: Throwable) {
+                currentCoroutineContext().ensureActive()
+                raisePlyFailure(id, PlyReconcileException.Phase.DETACH, failure)
+            }
         }
         recomputePeers()
         // This ply's roles no longer union in — request a recompute.

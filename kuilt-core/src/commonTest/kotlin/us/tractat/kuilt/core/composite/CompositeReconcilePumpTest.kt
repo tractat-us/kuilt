@@ -336,6 +336,63 @@ class CompositeReconcilePumpTest {
     }
 
     /**
+     * The same detach guard, against a `close()` that reports its failure *as* a `CancellationException`.
+     *
+     * A close handshake written `withTimeout(closeTimeout) { … }` throws to its caller. Inside the detach's
+     * `NonCancellable` shield that can only ever be the consumer's own throw — the block is not cancellable
+     * there — so `runCatchingCancellable` would rethrow it straight past the guard and skip the recomputes
+     * the guard exists for. Finding 1's discriminator, applied to the other foreign call.
+     */
+    @Test
+    fun aPlyWhoseCloseTimesOutStillLeavesPeersAndCapabilityRecomputed() = runTest {
+        val initial = OneSeamLoom("initial")
+        val doomed = UncloseableLoom(DOOMED, REMOTE_TRANSPORT, closeTimesOut = true)
+        val desired = MutableStateFlow(listOf(PlyId(INITIAL) to initial as Loom))
+        val raised = mutableListOf<PlyReconcileException>()
+        val composite = CompositeLoom(
+            plies = desired,
+            dispatcher = UnconfinedTestDispatcher(testScheduler),
+            onPlyFailure = { raised += it },
+        ).host(Pattern("host"))
+
+        desired.value = listOf(PlyId(INITIAL) to initial, PlyId(DOOMED) to doomed)
+        runCurrent()
+        doomed.fake.deliver(REMOTE_TRANSPORT, PlyFrame.encode(PlyFrame.Announce(REMOTE_COMPOSITE)))
+        runCurrent()
+        assertEquals(
+            setOf(composite.selfId, REMOTE_COMPOSITE),
+            composite.peers.value,
+            "precondition: the remote composite peer is reachable only through the doomed ply",
+        )
+
+        desired.value = listOf(PlyId(INITIAL) to initial)
+        advanceTimeBy(DIAL_TIMEOUT * 2)
+        runCurrent()
+
+        assertAll(
+            {
+                assertEquals(
+                    setOf(composite.selfId),
+                    composite.peers.value,
+                    "a close() that times out is still the consumer's failure, not our cancellation — the " +
+                        "peers recompute must run",
+                )
+            },
+            {
+                assertEquals(
+                    setOf(TransportRole.Data),
+                    composite.capability.value.roles,
+                    "…and so must the capability recompute",
+                )
+            },
+            { assertIs<TimeoutCancellationException>(raised.firstOrNull()?.cause, "the cause must be the timeout") },
+            { assertEquals(listOf(PlyReconcileException.Phase.DETACH), raised.map { it.phase }) },
+        )
+
+        composite.close(CloseReason.Normal)
+    }
+
+    /**
      * A detach that races `close()` must still close the transport it took ownership of.
      *
      * `detachPly` takes ownership at `live.remove(id)` — after it, `close()`'s drain cannot see the
@@ -501,13 +558,19 @@ class CompositeReconcilePumpTest {
      * detach path's exception-safety case. Its role is deliberately distinct from every other ply's so the
      * capability union shows whether the recompute ran.
      */
-    private class UncloseableLoom(id: String, remote: PeerId) : Loom {
+    private class UncloseableLoom(id: String, remote: PeerId, closeTimesOut: Boolean = false) : Loom {
         val fake: FakeSeam = FakeSeam(
             selfId = PeerId("ply-$id"),
             initialPeers = setOf(PeerId("ply-$id"), remote),
         )
         private val seam: Seam = object : Seam by fake {
-            override suspend fun close(reason: CloseReason): Unit = throw IllegalStateException(UNCLOSEABLE_MESSAGE)
+            override suspend fun close(reason: CloseReason) {
+                // A close that never completes, reported the two ways a consumer reports it: an ordinary
+                // exception, or the CancellationException a close-handshake `withTimeout` throws to its
+                // caller.
+                if (closeTimesOut) withTimeout(DIAL_TIMEOUT) { awaitCancellation() }
+                throw IllegalStateException(UNCLOSEABLE_MESSAGE)
+            }
         }
 
         override suspend fun weave(rendezvous: Rendezvous): Seam = seam
