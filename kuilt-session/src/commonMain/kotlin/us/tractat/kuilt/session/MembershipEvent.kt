@@ -97,6 +97,35 @@ public sealed interface MembershipEvent {
     public data class HostLost(val at: Instant, val reason: FailureReason) : MembershipEvent
 
     /**
+     * **This peer's own end** of the fabric carrying this room can no longer carry frames.
+     *
+     * Self-attributed and **session-scoped** — it says nothing about the device as a whole. A peer
+     * in two rooms over two fabrics gets this independently per room, and neither speaks for the
+     * other; a room over a bonded `CompositeSeam` emits it only when every woven ply is down.
+     *
+     * Emitted only on a transition **into** [us.tractat.kuilt.core.FabricAvailability.Unavailable].
+     * A move into [us.tractat.kuilt.core.FabricAvailability.Unknown] emits nothing — "we stopped
+     * being able to tell" is not a loss. Read [Room.localFabric] for the authoritative level; this
+     * is the notification. [reason] is the transport's own words.
+     */
+    public data class LocalFabricLost(val at: Instant, val reason: String) : MembershipEvent
+
+    /**
+     * This peer's own end of the room's fabric can carry frames again.
+     *
+     * Emitted on a transition into [us.tractat.kuilt.core.FabricAvailability.Available] when the
+     * last decided state was [us.tractat.kuilt.core.FabricAvailability.Unavailable] — including
+     * when the path passed through [us.tractat.kuilt.core.FabricAvailability.Unknown] on the way
+     * back. Never emitted for a first-ever `Available`: nothing was lost.
+     *
+     * **A room whose fabric was already `Unavailable` when it was constructed emits this with no
+     * preceding [LocalFabricLost].** That is deliberate, not a gap: [Room.localFabric] carried the
+     * initial `Unavailable` from the start, so the consumer was never misinformed — there was simply
+     * no transition to announce. Consumers must not treat a `Lost` as a precondition for a `Restored`.
+     */
+    public data class LocalFabricRestored(val at: Instant) : MembershipEvent
+
+    /**
      * The joiner's admit handshake failed terminally — it never entered a roster
      * (joiner perspective only).
      *

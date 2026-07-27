@@ -351,5 +351,8 @@ private fun MembershipEvent.arc(names: Map<PeerId, String>): String {
         is MembershipEvent.Resumed -> "Resumed(${name(peerId)})"
         is MembershipEvent.HostLost -> "HostLost"
         is MembershipEvent.AdmissionFailed -> "AdmissionFailed"
+        // Self-attributed: the subject is this peer's own end of the fabric, never another peer.
+        is MembershipEvent.LocalFabricLost -> "LocalFabricLost"
+        is MembershipEvent.LocalFabricRestored -> "LocalFabricRestored"
     }
 }

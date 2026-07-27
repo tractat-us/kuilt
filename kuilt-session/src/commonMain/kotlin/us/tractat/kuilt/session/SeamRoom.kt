@@ -5,10 +5,12 @@ import kotlinx.atomicfu.locks.reentrantLock
 import kotlinx.atomicfu.locks.withLock
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.ExperimentalForInheritanceCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.FlowCollector
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -20,6 +22,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import us.tractat.kuilt.core.CloseReason
+import us.tractat.kuilt.core.FabricAvailability
 import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
@@ -30,6 +33,7 @@ import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.Swatch
 import us.tractat.kuilt.core.Tag
+import us.tractat.kuilt.core.TransportCapability
 import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.session.admit.AdmitMessage
 import us.tractat.kuilt.session.admit.ProtocolVersion
@@ -491,6 +495,27 @@ internal class SeamRoom(
     override val events: Flow<MembershipEvent> = _events.asSharedFlow()
 
     /**
+     * A **zero-lag** view of the seam's availability, NOT a mirrored copy.
+     *
+     * A `MutableStateFlow` written by [localFabricLoop] would lag [Seam.capability] by one
+     * collector dispatch, and the sites that read this level run on other coroutines — so a radio
+     * death could be reported alongside a level still reading `Available`, the headline #1712 case
+     * exactly inverted. Projecting the source directly makes every reader and the level agree by
+     * construction.
+     */
+    override val localFabric: StateFlow<FabricAvailability> = MappedAvailability(seam.capability)
+
+    /**
+     * [Seam.capability]'s availability as read at **construction** — [localFabricLoop]'s seed.
+     *
+     * Captured here rather than at loop start so a drop landing in the construction → [start]
+     * window still produces a [MembershipEvent.LocalFabricLost]: re-reading the seam at loop start
+     * would find `Unavailable` already in place and mistake an unannounced transition for one that
+     * had been reported.
+     */
+    private val constructionAvailability: FabricAvailability = seam.capability.value.availability
+
+    /**
      * Emit a [MembershipEvent] on [events], logging it first (#1618 presence/partition diagnostics).
      *
      * Every membership transition this room announces — `Joined`/`Partitioned`/`WindowOpened`/
@@ -678,11 +703,60 @@ internal class SeamRoom(
             scope.launch { runMainLoop() },
             scope.launch { runTornWatcher() },
             scope.launch { runDetectorRouteWatcher() },
+            // Deliberately outside every role gate: self-reachability is a fact about this peer's
+            // own end of the fabric, so a host needs it exactly as much as a joiner does.
+            scope.launch { localFabricLoop() },
         )
         if (reconnectController != null) {
             jobs += scope.launch { runReconnectEventLoop(reconnectController) }
         }
         loopJobs = jobs
+    }
+
+    // ── Local fabric: this peer's own reachability, as a level plus edges ──────
+
+    /**
+     * Fold [Seam.capability] into [localFabric]'s edges. ONE collector owns both, so the level and
+     * the events cannot diverge — and because [localFabric] projects the source directly, the level
+     * is already current by the time an edge is emitted, so a consumer reacting to an edge always
+     * reads the matching level (#1712).
+     *
+     * [Seam.capability] is a [StateFlow], not `incoming`, so collecting it here does not contend
+     * with the ADR-034 single-collection contract.
+     */
+    private suspend fun localFabricLoop() {
+        // Seeded from the value captured at CONSTRUCTION, not at loop start — see
+        // constructionAvailability. `lastDecided` holds the last availability that *decided*
+        // something (Available or Unavailable); Unknown never decides, so it seeds as null.
+        var lastDecided: FabricAvailability? = constructionAvailability
+            .takeIf { it !is FabricAvailability.Unknown }
+        var previous: FabricAvailability = constructionAvailability
+        seam.capability.collect { cap ->
+            val next = cap.availability
+            // The source conflates on the whole TransportCapability, so a role-only change can
+            // re-deliver an unchanged availability. Only a real move is an edge.
+            if (next == previous) return@collect
+            previous = next
+            // No level write here — `localFabric` reads the source directly and is already current.
+            when (next) {
+                is FabricAvailability.Unavailable ->
+                    if (lastDecided !is FabricAvailability.Unavailable) {
+                        emitEvent(MembershipEvent.LocalFabricLost(clock(), next.reason))
+                        lastDecided = next
+                    }
+
+                is FabricAvailability.Available -> {
+                    if (lastDecided is FabricAvailability.Unavailable) {
+                        emitEvent(MembershipEvent.LocalFabricRestored(clock()))
+                    }
+                    lastDecided = next
+                }
+
+                // Level only. lastDecided deliberately unchanged, so a recovery THROUGH Unknown
+                // still restores.
+                is FabricAvailability.Unknown -> Unit
+            }
+        }
     }
 
     // ── Torn watcher: react to permanent transport closure ────────────────────
@@ -1888,4 +1962,35 @@ internal class PerPeerSeam(
 
     /** No-op — lifecycle is owned by [SeamRoom], not this view. */
     override suspend fun close(reason: CloseReason) = Unit
+}
+
+/**
+ * Zero-lag `StateFlow<TransportCapability>` → `StateFlow<FabricAvailability>` projection, backing
+ * [SeamRoom.localFabric]. Scope-free: it owns no coroutine and stores no copy, so it cannot lag
+ * [Seam.capability] the way a `stateIn`/mirrored `MutableStateFlow` would.
+ *
+ * Mirrors `:kuilt-core`'s `internal MappedStateFlow`, which `:kuilt-session` cannot see. It differs
+ * in one respect that matters: that class requires an *injective* transform, and
+ * `TransportCapability → availability` is not (a role-only change leaves the availability equal).
+ * Conflation is therefore restored explicitly per collector, so this satisfies the [StateFlow]
+ * contract that equal consecutive values are never emitted.
+ */
+@OptIn(ExperimentalForInheritanceCoroutinesApi::class)
+private class MappedAvailability(
+    private val source: StateFlow<TransportCapability>,
+) : StateFlow<FabricAvailability> {
+    override val value: FabricAvailability get() = source.value.availability
+    override val replayCache: List<FabricAvailability> get() = listOf(value)
+
+    override suspend fun collect(collector: FlowCollector<FabricAvailability>): Nothing {
+        // `last` is confined to this collect call, which the source drives sequentially.
+        var last: FabricAvailability? = null
+        source.collect { capability ->
+            val next = capability.availability
+            if (next != last) {
+                last = next
+                collector.emit(next)
+            }
+        }
+    }
 }

@@ -5,6 +5,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.test.runTest
+import us.tractat.kuilt.core.FabricAvailability
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.session.FailureReason
 import us.tractat.kuilt.session.LeaveReason
@@ -28,6 +29,9 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Instant
+
+/** A fixed instant for the driver helpers that stamp one: these tests assert edges, not time. */
+private val AT = Instant.fromEpochMilliseconds(1_000L)
 
 class FakeRoomTest {
     // ── Defaults ─────────────────────────────────────────────────────────────
@@ -366,6 +370,70 @@ class FakeRoomTest {
         val room = FakeRoom(initialResumeToken = token)
         room.setResumeToken(null)
         assertNull(room.resumeToken)
+    }
+
+    // ── localFabric ──────────────────────────────────────────────────────────
+
+    @Test
+    fun `localFabric starts Available - a fake is the thing that can tell`() = runTest {
+        assertEquals(FabricAvailability.Available, FakeRoom().localFabric.value)
+    }
+
+    @Test
+    fun `setLocalFabric drives the level and emits the matching edges`() = runTest {
+        val room = FakeRoom()
+        val seen = async { room.events.take(2).toList() }
+        room.setLocalFabric(FabricAvailability.Unavailable("radio off"), AT)
+        val whileDown = room.localFabric.value
+        room.setLocalFabric(FabricAvailability.Available, AT)
+        assertAll(
+            { assertEquals(FabricAvailability.Unavailable("radio off"), whileDown) },
+            { assertEquals(FabricAvailability.Available, room.localFabric.value) },
+        )
+        assertEquals(
+            listOf(
+                MembershipEvent.LocalFabricLost(AT, "radio off"),
+                MembershipEvent.LocalFabricRestored(AT),
+            ),
+            seen.await(),
+        )
+    }
+
+    @Test
+    fun `setLocalFabric to Unknown moves the level but mints no edge`() = runTest {
+        val room = FakeRoom()
+        room.setLocalFabric(FabricAvailability.Unknown("observer gone"), AT)
+        room.leave() // closes events, so toList() terminates instead of hanging
+        val events = room.events.toList()
+        assertAll(
+            { assertEquals(FabricAvailability.Unknown("observer gone"), room.localFabric.value) },
+            { assertEquals(emptyList(), events) },
+        )
+    }
+
+    /** Mirrors the real room: `Restored` is measured against the last *decided* level. */
+    @Test
+    fun `setLocalFabric restores through Unknown`() = runTest {
+        val room = FakeRoom()
+        val seen = async { room.events.take(2).toList() }
+        room.setLocalFabric(FabricAvailability.Unavailable("radio off"), AT)
+        room.setLocalFabric(FabricAvailability.Unknown("observer gone"), AT)
+        room.setLocalFabric(FabricAvailability.Available, AT)
+        assertEquals(
+            listOf(
+                MembershipEvent.LocalFabricLost(AT, "radio off"),
+                MembershipEvent.LocalFabricRestored(AT),
+            ),
+            seen.await(),
+        )
+    }
+
+    @Test
+    fun `setLocalFabric to the current level is a no-op`() = runTest {
+        val room = FakeRoom()
+        room.setLocalFabric(FabricAvailability.Available, AT)
+        room.leave()
+        assertEquals(emptyList(), room.events.toList())
     }
 
     // ── raw emit ─────────────────────────────────────────────────────────────
