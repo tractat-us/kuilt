@@ -55,14 +55,16 @@ internal class InitialPly(
 )
 
 /**
- * **Diagnostic only.** A consistent snapshot of the three things `CompositeSeam.recomputePeers` reads,
+ * **Diagnostic only.** A consistent snapshot of the three things `CompositeSeam.publishPeers` folds,
  * taken under one lock acquisition. Produced by `CompositeSeam.peersStrandOrNull` for the real-threaded
  * concurrency probes' on-timeout report (#1784); no library code consumes it.
  *
  * @property idMap the learned `(plyId, transport peer) → composite peer` mappings.
  * @property livePlies the plies still attached — `close()` clears these without purging [idMap].
- * @property wouldPublish what a recompute would publish *right now*, from the real fold. Compare against
- *   `Seam.peers`: a peer here but not there means a recompute is owed with no trigger left to run it.
+ * @property wouldPublish what a recompute would publish *right now*, from the real fold — whose inputs are
+ *   each ply's MIRRORED peer set, not a live seam read (#1784). Compare against `Seam.peers`: a peer here
+ *   but not there means a recompute is owed; the publish is serialised, so a persistent gap is a lost
+ *   trigger or a dead writer, never a lost publish.
  */
 internal class PeersStrand(
     val idMap: Map<Pair<PlyId, PeerId>, PeerId>,
@@ -860,17 +862,17 @@ internal class CompositeSeam(
      * in the second collector; the pinning test is
      * `CompositePeersWriterTest.aPlyWhoseReAnnounceNeverReturnsStillLetsTheMirrorAdvance`.
      *
-     * ### Liveness here is `live[plyId] != null` only — it does NOT screen a torn ply
-     * A ply that has latched `Torn` but is not yet detached still contributes its mirror to this fold, where
+     * ### Liveness in [reachablePeersLocked] is `live[plyId] != null` only — it does NOT screen a torn ply
+     * A ply that has latched `Torn` but is not yet detached still contributes its mirror to that fold, where
      * [resolveSendTargets] filters it. What closes the gap today is a **convention, not the contract**: every
      * in-tree fabric collapses its roster to `{selfId}` *before* latching `Torn` (`LinkSeam`, `MeshSeam`), so
      * a torn ply's mirrored peer set is empty and contributes nothing. That obligation is not stated on
      * [Seam] and not asserted by the conformance suite, so a consumer fabric that tears without collapsing
      * would leave [peers] stale-inclusive until detach.
      *
-     * Adding `handle.woven` to the predicate below looks like the fix and **is not**: the pump that mirrors
-     * [PlyHandle.woven] requests only a *capability* recompute, never a peers one, so `woven` would become an
-     * input to this fold with no trigger — a fresh instance of the very lost-trigger defect above (a ply
+     * Adding `handle.woven` to [reachablePeersLocked]'s predicate looks like the fix and **is not**: the pump
+     * that mirrors [PlyHandle.woven] requests only a *capability* recompute, never a peers one, so `woven`
+     * would become an input to that fold with no trigger — a fresh instance of the lost-trigger defect above (a ply
      * reaching `Woven` after its peers were mirrored would stay stale-*exclusive*, permanently). Taking it
      * safely means also requesting a peers recompute from the state pump, which is a behaviour change this
      * fold's tests do not cover. The durable fix is to put the obligation in [Seam]'s contract and assert it
@@ -918,17 +920,24 @@ internal class CompositeSeam(
     }
 
     /**
-     * **Diagnostic only.** Everything [recomputePeers] reads, captured under one [lock] acquisition, or
+     * **Diagnostic only.** Everything [reachablePeersLocked] folds, captured under one [lock] acquisition, or
      * `null` if the lock was busy. Read by the real-threaded concurrency probes' on-timeout snapshot; it
      * is `internal`, takes no part in any code path, and nothing in the library calls it.
      *
      * It exists because it is the **only** observable that decides why a composite's [peers] can stall
-     * short of the expected set (#1784). [recomputePeers] is a read-modify-write whose snapshot is
-     * totally ordered by [lock] but whose publish is not, and it has **no periodic backstop** — it fires
-     * only on an `Announce`, a ply membership change, or a detach. So two very different failures
-     * present identically, as total quiescence with every worker parked:
-     *  - [PeersStrand.wouldPublish] contains a peer [peers] does not ⇒ a recompute is **owed** and no
-     *    trigger remains to run it: the mapping was learned and a *derived publish* was lost. Permanent.
+     * short of the expected set (#1784). The fold has **no periodic backstop** — it fires only on an
+     * `Announce`, a ply membership change, or a detach — so very different failures present identically, as
+     * total quiescence with every worker parked:
+     *  - [PeersStrand.wouldPublish] contains a peer [peers] does not ⇒ a recompute is **owed**. Since the
+     *    publish is now serialised on [peersWriter], a *lost publish* is no longer representable (that was
+     *    the #1784 defect, fixed): a persistent divergence therefore means the **request** never happened or
+     *    can never be served — a lost *trigger* (some fold input advanced without a `trySend`), or
+     *    [peersWriter] itself is dead. Read once and it may simply be a request still in flight; read twice,
+     *    unchanged, and it is one of those two.
+     *  - [PeersStrand.wouldPublish] **equals** [peers] while `peers` is short of what the test expects ⇒ the
+     *    fold's own inputs are wrong, not its publishing. Post-#1784 the input is each ply's *mirrored*
+     *    peer set ([PlyHandle.transportPeers]), so this points at a mirror that never advanced — its pump
+     *    not yet dispatched, or blocked. Compare against the ply seams' live `peers` to tell them apart.
      *  - [PeersStrand.idMap] is **empty** ⇒ no `Announce` was ever recorded, so the failure is upstream
      *    of the peers strand entirely.
      *
