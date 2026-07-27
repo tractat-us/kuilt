@@ -49,7 +49,13 @@ public class CompositeLoom(
         val current = plies.value
         require(current.isNotEmpty()) { "CompositeLoom desired set must be non-empty at weave()" }
         require(current.map { it.first }.toSet().size == current.size) { "duplicate PlyId" }
-        val initial = current.map { (id, loom) -> id to loom.weave(rendezvous) }
+        // Each initial ply carries its own Loom's roles, captured from THIS snapshot alongside the seam
+        // woven from it. Deliberately not looked up from `plies` later: `loom.weave` suspends and `plies`
+        // is caller-mutable, so by the time the seam exists the desired set may no longer contain this
+        // ply. Pairing them here makes the initial plies' roles total by construction (#1712).
+        val initial = current.map { (id, loom) ->
+            InitialPly(id = id, seam = loom.weave(rendezvous), roles = loom.capability().roles)
+        }
         return CompositeSeam(initial, rendezvous, plies, dispatcher, policy)
     }
 

@@ -31,8 +31,23 @@ import us.tractat.kuilt.core.SeamStateGate
 import us.tractat.kuilt.core.Spool
 import us.tractat.kuilt.core.Swatch
 import us.tractat.kuilt.core.TransportCapability
+import us.tractat.kuilt.core.TransportRole
 import us.tractat.kuilt.core.runCatchingCancellable
 import kotlin.coroutines.CoroutineContext
+
+/**
+ * One ply woven by [CompositeLoom] before `weave()` returns: its [id], the woven [seam], and the
+ * static [roles] of the [Loom] that wove it.
+ *
+ * [roles] travels with the seam rather than being looked up from the desired set later, because the
+ * desired set is caller-mutable and `weave` suspends — see [CompositeLoom.weave] and, for why the
+ * capability fold must not read anything live, `CompositeSeam.publishCapability`.
+ */
+internal class InitialPly(
+    val id: PlyId,
+    val seam: Seam,
+    val roles: Set<TransportRole>,
+)
 
 /**
  * The composite `Seam` woven by [CompositeLoom]. Presents a single peer set,
@@ -86,7 +101,7 @@ import kotlin.coroutines.CoroutineContext
  *   virtual clock as the test, driving reconciliation eagerly.
  */
 internal class CompositeSeam(
-    initial: List<Pair<PlyId, Seam>>,
+    initial: List<InitialPly>,
     private val rendezvous: Rendezvous,
     private val desired: StateFlow<List<Pair<PlyId, Loom>>>,
     private val dispatcher: CoroutineContext = Dispatchers.Default,
@@ -116,10 +131,10 @@ internal class CompositeSeam(
     private val _plies = MutableStateFlow<Map<PlyId, SeamState>>(emptyMap())
     override val plies: StateFlow<Map<PlyId, SeamState>> = _plies.asStateFlow()
 
-    // Live capability rollup: the union of the constituent Looms' roles for currently-Woven plies,
-    // folded with those plies' live Seam availabilities. Seeded roleless/Unknown — before the first
-    // recomputeCapability() no ply has been consulted, so a confident verdict here would be a
-    // fabrication for the whole pre-recompute window (#1712).
+    // Live capability rollup: the union of the constituent Looms' roles (captured per ply at attach) for
+    // currently-Woven plies, folded with those plies' announced Seam availabilities. Seeded roleless/Unknown
+    // — before the first recomputeCapability() no ply has been consulted, so a confident verdict here would
+    // be a fabrication for the whole pre-recompute window (#1712).
     private val _capability = MutableStateFlow(
         TransportCapability(emptySet(), FabricAvailability.Unknown("composite capability not yet computed")),
     )
@@ -144,14 +159,21 @@ internal class CompositeSeam(
     private val live = LinkedHashMap<PlyId, PlyHandle>()
 
     /**
-     * One live ply. [woven] and [availability] are the capability rollup's **mirrored** inputs: the values
-     * this ply's own pumps last *delivered*, never a live re-read of [seam]. Both are guarded by [lock] and
-     * written only by this ply's pumps in [attachPly]. See [publishCapability] for why the fold must not
-     * read the seam directly.
+     * One live ply, and the complete set of inputs the capability rollup folds — nothing the fold reads
+     * lives anywhere else.
+     *
+     * [woven] and [availability] are **mirrored**: the values this ply's own pumps last *delivered*, never
+     * a live re-read of [seam]. Both are guarded by [lock] and written only by this ply's pumps in
+     * [attachPly]. [roles] is captured **once at attach** and immutable thereafter — a ply's medium does
+     * not change under it, so its Loom's roles are static by contract and there is nothing to re-read.
+     *
+     * See [publishCapability] for why the fold must read only these, and never the seam, the [Loom], or
+     * the caller-mutable desired set.
      */
     private class PlyHandle(
         val seam: Seam,
         val job: Job,
+        val roles: Set<TransportRole>,
         var woven: Boolean,
         var availability: FabricAvailability,
     )
@@ -178,8 +200,9 @@ internal class CompositeSeam(
             .onEach { stateGate.update(rollup(it.values.toList())) }
             .launchIn(scope)
 
-        // Seed the initial plies (already woven by CompositeLoom).
-        initial.forEach { (id, seam) -> attachPly(id, seam) }
+        // Seed the initial plies (already woven by CompositeLoom, which captured each one's Loom roles
+        // from the same snapshot it wove the seam from — see [InitialPly]).
+        initial.forEach { ply -> attachPly(ply.id, ply.seam, ply.roles) }
 
         // Reconcile on every desired-set change. The first emission equals the
         // initial set, so it produces no attach/detach.
@@ -196,11 +219,13 @@ internal class CompositeSeam(
         // Attach: desired plies not yet live — weave their loom now.
         for ((id, loom) in desiredSet) {
             val alreadyLive = lock.withLock { id in live }
-            if (!alreadyLive) attachPly(id, loom.weave(rendezvous))
+            // Roles are read from the Loom HERE, once, and captured onto the handle — the fold never calls
+            // back into this consumer-authored method. Static by contract, so once is enough (#1712).
+            if (!alreadyLive) attachPly(id, loom.weave(rendezvous), loom.capability().roles)
         }
     }
 
-    private fun attachPly(id: PlyId, seam: Seam) {
+    private fun attachPly(id: PlyId, seam: Seam, roles: Set<TransportRole>) {
         // Per-ply pumps run under a child Job so detach cancels exactly this ply.
         val job = SupervisorJob(scope.coroutineContext[Job])
         val plyScope = CoroutineScope(scope.coroutineContext + job)
@@ -216,6 +241,8 @@ internal class CompositeSeam(
             live[id] = PlyHandle(
                 seam = seam,
                 job = job,
+                // Captured once — static by contract, so no pump mirrors this and nothing re-reads it.
+                roles = roles,
                 // Seeded from the ply's current values. Both pumps below deliver their first value
                 // unconditionally (a StateFlow collector always emits once — `oldState == null`), so these
                 // seeds are immediately superseded by delivered ones.
@@ -315,11 +342,11 @@ internal class CompositeSeam(
     }
 
     /**
-     * Recompute the live [capability] over the currently-[SeamState.Woven] plies. Roles come from the
-     * constituent [Loom]s (held in [desired]) — a ply's medium does not change under it, so roles are
-     * static. **Availability comes from the plies' own [Seam.capability]**, not their Looms: the Loom
-     * value is the static pre-connect claim, and folding it here would launder an observer-less ply's
-     * claim into a confident live verdict (#1712).
+     * Recompute the live [capability] over the currently-[SeamState.Woven] plies. Roles are the
+     * constituent [Loom]'s, captured onto the [PlyHandle] at attach — a ply's medium does not change under
+     * it, so roles are static and one read at attach is the whole story. **Availability comes from the
+     * plies' own [Seam.capability]**, not their Looms: the Loom value is the static pre-connect claim, and
+     * folding it here would launder an observer-less ply's claim into a confident live verdict (#1712).
      *
      * Because that source is live, [attachPly] **subscribes** to each ply's [Seam.capability] — sampling
      * only at attach/detach/state-change would miss a path drop that leaves the ply [SeamState.Woven].
@@ -332,11 +359,12 @@ internal class CompositeSeam(
      * by construction, which is why this is private and only [capabilityWriter] calls it; everything else
      * goes through [recomputeCapability].
      *
-     * ### The fold reads MIRRORS, never the plies (#1712)
-     * Every input folded here — [PlyHandle.woven], [PlyHandle.availability] — is the value that ply's own
-     * pump last **delivered**, mirrored onto its handle under [lock] before the pump requested the recompute.
-     * The fold must never re-read `seam.state.value` / `seam.capability.value`, and the reason is not
-     * tidiness — it is the difference between converging and wedging forever:
+     * ### The fold reads the HANDLES, never anything live (#1712)
+     * Every input folded here comes off the [PlyHandle] and nowhere else. [PlyHandle.woven] and
+     * [PlyHandle.availability] are the values that ply's own pump last **delivered**, mirrored onto the
+     * handle under [lock] before the pump requested the recompute; [PlyHandle.roles] was captured at attach
+     * and cannot change. The fold must never re-read `seam.state.value` / `seam.capability.value`, and the
+     * reason is not tidiness — it is the difference between converging and wedging forever:
      *
      * A `StateFlow` conflates emissions **per collector, against that collector's own last-emitted value**
      * (`StateFlowImpl.collect` re-reads `_state.value` after being dispatched, then emits only
@@ -362,21 +390,29 @@ internal class CompositeSeam(
      *
      * So once the plies quiesce, some fold runs strictly after the final mirror write and reads every ply's
      * true value. The composite can lag only by a *pending* delivery, never by a *swallowed* one.
+     *
+     * The same argument is why [PlyHandle.roles] is captured at attach instead of resolved from the desired
+     * set at fold time. That set is a caller-mutable `StateFlow` as well, so a list flapping
+     * `[a,b] → [a] → [a,b]` past a descheduled `reconcile` collector nets to no attach and no detach — hence
+     * requests no recompute — while a fold that ran mid-flap published roles missing `b`'s with nothing left
+     * to correct them. Milder than the availability strand (roles are descriptive, not a reachability claim)
+     * but the identical lost-trigger shape, and the claim above only holds if the fold reads *no* live value.
+     *
+     * A corollary: the fold makes **no foreign call**. `Loom.capability()` is consumer-authored and this
+     * class treats [lock] as non-reentrant, so resolving roles here at all meant keeping that call outside
+     * the locked section to avoid deadlocking — or merely stalling every sender — behind an arbitrarily slow
+     * callee. Capturing at attach removes the call from this path, so there is nothing left to keep out.
      */
     private fun publishCapability() {
-        // Only the mirrors are read under the lock. Availability comes from the woven plies' SEAMS (mirrored
-        // by their pumps), not their Looms: the Loom value is the static pre-connect claim, and folding it
-        // would launder an observer-less ply's claim into a confident live verdict.
-        val (wovenIds, availabilities) = lock.withLock {
-            val wovenEntries = live.entries.filter { it.value.woven }
-            wovenEntries.map { it.key }.toSet() to wovenEntries.map { it.value.availability }
+        // ONLY the handles are read, and every input comes off them: roles captured at attach, availability
+        // mirrored by the plies' own pumps. Availability comes from the plies' SEAMS, not their Looms — the
+        // Loom value is the static pre-connect claim, and folding it would launder an observer-less ply's
+        // claim into a confident live verdict. No foreign call and no live StateFlow read happens here, so
+        // the whole snapshot is taken under the lock with nothing left to hoist out of it.
+        val (roles, availabilities) = lock.withLock {
+            val woven = live.values.filter { it.woven }
+            woven.flatMap { it.roles }.toSet() to woven.map { it.availability }
         }
-        // Roles ARE static on the Loom — a ply's medium does not change under it — so they are resolved
-        // OUTSIDE the lock. `Loom.capability()` is consumer-authored code, and this class treats [lock] as
-        // non-reentrant: calling into a foreign implementation while holding it risks a deadlock (and stalls
-        // every sender behind an arbitrarily slow callee) for no benefit, since the result is a constant.
-        val roles = desired.value.filter { (id, _) -> id in wovenIds }
-            .flatMap { (_, loom) -> loom.capability().roles }.toSet()
         // Three-way lattice fold over the woven plies' announced availabilities (mirrors
         // CompositeLoom.capability): any Available ⇒ Available; else any Unknown ⇒ Unknown
         // (best-effort — don't collapse an unproven ply to Unavailable); else Unavailable.
@@ -513,7 +549,7 @@ internal class CompositeSeam(
     }
 
     private companion object {
-        fun mintCompositeId(initial: List<Pair<PlyId, Seam>>): PeerId =
-            PeerId("composite-" + initial.joinToString("-") { it.second.selfId.value })
+        fun mintCompositeId(initial: List<InitialPly>): PeerId =
+            PeerId("composite-" + initial.joinToString("-") { it.seam.selfId.value })
     }
 }
