@@ -109,6 +109,17 @@ internal class PeersStrand(
  * state correctness. Suspending ply calls (`Seam.broadcast`/`sendTo`/`close`) are NEVER invoked while
  * the lock is held: callers snapshot the target plies under the lock, release, then send/close outside it.
  *
+ * **Each derived flow has exactly one writer.** [state], [capability] and [peers] are all
+ * *snapshot-then-publish* over lock-guarded state, and the publish cannot happen under the lock (emitting
+ * to a `StateFlow` can resume an unconfined collector inline, running consumer code under a lock this class
+ * treats as non-reentrant). Snapshots are totally ordered by the lock; publishes are not — so each strand
+ * needs a serialising writer or a stale publish lands last and, with no periodic backstop, wedges the flow
+ * permanently. All three now have one: [SeamStateGate] for [state] (#1135), [capabilityWriter] for
+ * [capability] (#1712), [peersWriter] for [peers] (#1784). The writer is only half of it: each fold must
+ * also read **mirrored** [PlyHandle] fields rather than a live foreign `StateFlow`, or a suppressed
+ * `StateFlow` delivery loses the *trigger* and there is no request for a writer to serialise — see
+ * [publishCapability] and [publishPeers].
+ *
  * **Inbound backpressure.** Application payloads are delivered through a [Spool] whose
  * capacity and overflow behaviour are governed by [policy] (default [DeliveryPolicy.Reliable]).
  * The unbounded `Channel.UNLIMITED` inbox is gone; unbounded inbound queues are structurally
@@ -178,6 +189,12 @@ internal class CompositeSeam(
     private val _peers = MutableStateFlow(setOf(selfId))
     override val peers: StateFlow<Set<PeerId>> = _peers.asStateFlow()
 
+    // Peers recompute requests, drained by the single [peersWriter] coroutine. CONFLATED for the same
+    // reason as [capabilityRecomputes]: every recompute reads current state, so only the latest request
+    // matters. This is the single-writer serialisation that keeps snapshot→publish atomic — see
+    // [publishPeers] (#1784).
+    private val peersRecomputes = Channel<Unit>(Channel.CONFLATED)
+
     private val spool = Spool<Swatch>(policy)
     override val incoming: Flow<Swatch> = spool.incoming
 
@@ -186,16 +203,18 @@ internal class CompositeSeam(
     private val live = LinkedHashMap<PlyId, PlyHandle>()
 
     /**
-     * One live ply, and the complete set of inputs the capability rollup folds — nothing the fold reads
-     * lives anywhere else.
+     * One live ply, and the complete set of inputs the [capability] rollup and the [peers] fold read —
+     * nothing either fold reads lives anywhere else.
      *
-     * [woven] and [availability] are **mirrored**: the values this ply's own pumps last *delivered*, never
-     * a live re-read of [seam]. Both are guarded by [lock] and written only by this ply's pumps in
-     * [attachPly]. [roles] is captured **once at attach** and immutable thereafter — a ply's medium does
-     * not change under it, so its Loom's roles are static by contract and there is nothing to re-read.
+     * [woven], [availability] and [transportPeers] are **mirrored**: the values this ply's own pumps last
+     * *delivered*, never a live re-read of [seam]. All three are guarded by [lock] and written only by this
+     * ply's pumps in [attachPly]. [roles] is captured **once at attach** and immutable thereafter — a ply's
+     * medium does not change under it, so its Loom's roles are static by contract and there is nothing to
+     * re-read.
      *
-     * See [publishCapability] for why the fold must read only these, and never the seam, the [Loom], or
-     * the caller-mutable desired set.
+     * See [publishCapability] for why the capability fold must read only these, and never the seam, the
+     * [Loom], or the caller-mutable desired set; [publishPeers] applies the identical argument to the peers
+     * fold, which is why [transportPeers] exists at all rather than the fold re-reading `seam.peers.value`.
      */
     private class PlyHandle(
         val seam: Seam,
@@ -203,6 +222,7 @@ internal class CompositeSeam(
         val roles: Set<TransportRole>,
         var woven: Boolean,
         var availability: FabricAvailability,
+        var transportPeers: Set<PeerId>,
     )
 
     // The SINGLE capability writer. Every snapshot→publish pair runs here, so no two can interleave and
@@ -211,6 +231,11 @@ internal class CompositeSeam(
     // the write. Dies with [scope] on close.
     private val capabilityWriter: Job
 
+    // The SINGLE peers writer — the identical pattern, for the identical reason, on the third strand of the
+    // same class (#1784; `state` was fixed by [SeamStateGate] in #1135 and `capability` by
+    // [capabilityWriter] in #1712). Dies with [scope] on close.
+    private val peersWriter: Job
+
     init {
         // Started FIRST, and from `init` rather than a property initializer, so that "before any ply
         // attaches" is enforced by statement order here instead of by this property happening to be
@@ -218,6 +243,12 @@ internal class CompositeSeam(
         // to make the writer observe an uninitialised field.
         capabilityWriter = scope.launch {
             for (request in capabilityRecomputes) publishCapability()
+        }
+
+        // Same contract, same ordering argument: started before any ply attaches, so no pump can enqueue a
+        // recompute request that has no writer to drain it.
+        peersWriter = scope.launch {
+            for (request in peersRecomputes) publishPeers()
         }
 
         // Aggregate state is derived from the per-ply map: any ply Woven => Woven, else Weaving
@@ -440,11 +471,12 @@ internal class CompositeSeam(
                 job = job,
                 // Captured once — static by contract, so no pump mirrors this and nothing re-reads it.
                 roles = roles,
-                // Seeded from the ply's current values. Both pumps below deliver their first value
+                // Seeded from the ply's current values. All three pumps below deliver their first value
                 // unconditionally (a StateFlow collector always emits once — `oldState == null`), so these
                 // seeds are immediately superseded by delivered ones.
                 woven = seam.state.value is SeamState.Woven,
                 availability = seam.capability.value.availability,
+                transportPeers = seam.peers.value,
             )
         }
 
@@ -533,8 +565,14 @@ internal class CompositeSeam(
             .launchIn(plyScope)
 
         // Recompute peers on transport membership changes; re-announce to newcomers.
+        //
+        // This pump's DELIVERED value is the peers fold's input (mirrored onto the handle BEFORE the
+        // request, exactly as the two pumps above do for the capability rollup). It is not merely a wakeup
+        // for a fresh read of `seam.peers` — that distinction is the whole of [publishPeers]'s correctness
+        // argument, and getting it wrong leaves the wedge reachable even with the writer in place (#1784).
         seam.peers
             .onEach { newPeers ->
+                lock.withLock { live[id]?.transportPeers = newPeers }
                 recomputePeers()
                 if (newPeers.size > 1 && seam.state.value is SeamState.Woven) {
                     // Best-effort re-announce to newcomers — swallow a torn-ply send (#535).
@@ -735,26 +773,100 @@ internal class CompositeSeam(
         }
     }
 
+    /**
+     * Request a [peers] recompute. Non-blocking and safe to call from any pump or thread: the work itself
+     * runs on the single [peersWriter] coroutine (see [peersRecomputes]).
+     *
+     * Callers may hold no lock — [publishPeers] re-takes the non-reentrant [lock] — but note the request is
+     * **asynchronous**, so [peers] converges shortly after this returns rather than during it.
+     */
     private fun recomputePeers() {
+        // CONFLATED: a burst of triggers collapses to one recompute, which reads the LATEST state anyway.
+        // trySend never blocks and never fails on a conflated channel, so a pump can fire this freely.
+        peersRecomputes.trySend(Unit)
+    }
+
+    /**
+     * Recompute the reachable composite [peers]: self, plus every composite id the learned
+     * `(plyId, transportId) → compositeId` mapping resolves to whose transport id is still a member of that
+     * ply's peer set.
+     *
+     * **Runs on the single [peersWriter] coroutine only** — hence private, with everything else going
+     * through [recomputePeers]. Snapshot-then-publish is a read-modify-write and the [_peers] write happens
+     * *outside* [lock] (emitting to a `StateFlow` can resume an unconfined collector inline, and running
+     * arbitrary consumer code under [lock] risks a deadlock on a lock this class treats as non-reentrant).
+     * Snapshots taken under the lock are totally ordered; publishes made outside it are **not**. Before
+     * #1784 up to 16 callers per session setup raced here — each of four plies' `seam.peers` pumps firing
+     * twice, plus the `Announce`-driven calls from the four inbound pumps — and a caller preempted in the
+     * handful of instructions between its lock release and its write published a snapshot taken *before* the
+     * joiner existed, landing `{selfId}` **last**. Nothing then recomputes: this fold has no periodic
+     * backstop, firing only on an `Announce`, a ply membership change, or a detach, so `peers` wedged at
+     * size 1 permanently with every coroutine legitimately suspended and every dispatcher worker parked.
+     * Serialising every snapshot→publish pair onto one coroutine removes the interleaving by construction —
+     * the last publish reflects the last snapshot. This is the third strand of one class in this file:
+     * `state` ([SeamStateGate], #1135), `capability` ([capabilityWriter], #1712), and now `peers`.
+     *
+     * ### The fold reads the HANDLES, never anything live (#1784)
+     * The single writer alone is **not sufficient**, and this is the half that is easy to omit. Until #1784
+     * the fold resolved reachability from `seam.peers.value` — a live foreign `StateFlow` — and
+     * [publishCapability]'s lost-trigger argument applies verbatim: a `StateFlow` conflates emissions per
+     * collector against *that collector's* last-emitted value, so a ply whose peer set round-trips
+     * `X → Y → X` while its pump is descheduled delivers **nothing** and requests nothing. Serialising the
+     * writer cannot help, because there is no request to serialise — the lost thing is the *trigger*, not
+     * the *update*. A surviving trigger (another ply's edge, an `Announce`) then drives a fold whose joint
+     * read of every ply lands mid-flap and publishes a reachability verdict already stale for the silent
+     * ply, with nothing left to correct it. Both directions wedge and both are absorbing: a stale
+     * *inclusion* leaves [peers] advertising a peer only [sendTo] can disprove (throwing [PeerNotConnected]
+     * for a peer [peers] calls reachable — the same defect [detachPly] guards against), and a stale
+     * *omission* hides a peer that is in fact reachable, which is the `host.peers.first { it.size == 2 }`
+     * stall itself.
+     *
+     * Mirroring [PlyHandle.transportPeers] makes that silence harmless *structurally*, on the identical
+     * three-step argument spelled out in [publishCapability]: a delivery is suppressed exactly when the
+     * ply's value equals the pump's last-delivered value — precisely when the mirror already holds the right
+     * value and no fold is owed; any other change must be delivered, and each delivery writes the mirror
+     * before requesting; and a request always yields a later drain, so once the plies quiesce some fold runs
+     * strictly after the final mirror write. The composite can lag by a *pending* delivery, never by a
+     * *swallowed* one.
+     *
+     * ### Why [resolveSendTargets] still reads the live ply peers
+     * Deliberate, not an oversight. The lost-trigger argument bites on a **published derived value with no
+     * backstop**; [sendTo] resolves its candidates afresh on every call, so it is its own backstop and can
+     * never strand. A live read is also strictly the better input there — a candidate the transport has just
+     * dropped is skipped rather than attempted, and a stale-optimistic one falls through to the next
+     * candidate by design (#542).
+     */
+    private fun publishPeers() {
+        // The fold itself lives in [reachablePeersLocked] so the diagnostic in [peersStrandOrNull] evaluates
+        // the SAME predicate rather than a restatement that could drift (#1804). Snapshot under the lock,
+        // publish outside it.
         val reachable = lock.withLock { reachablePeersLocked() }
         _peers.value = reachable
     }
 
     /**
-     * The composite peers [recomputePeers] would publish from the current state. Call under [lock].
+     * The composite peers [publishPeers] would publish from the current state. Call under [lock].
      *
      * Extracted so the diagnostic in [peersStrandOrNull] can call the **same** fold rather than restate
      * it. A restatement drifts: the two conditions below — the ply must still be live, *and* the transport
-     * peer must still be in that ply's peer set — are each a reason an entry in [idMap] is *correctly*
-     * absent from [peers], and a diagnostic that mirrors only one of them reports a lost publish where
-     * there is none.
+     * peer must still be in that ply's **mirrored** peer set — are each a reason an entry in [idMap] is
+     * *correctly* absent from [peers], and a diagnostic that mirrors only one of them reports a lost publish
+     * where there is none.
+     *
+     * **The input is the mirror, never the live seam (#1784).** Reachability is decided from
+     * [PlyHandle.transportPeers] — the value that ply's own peers pump last *delivered* — and deliberately
+     * **not** from `live[plyId]?.seam?.peers?.value`. Re-reading the seam here reintroduces the lost-trigger
+     * wedge: a ply whose peer set round-trips `X → Y → X` while its pump is descheduled delivers nothing, so
+     * no recompute is requested, so a fold driven by some *other* trigger can publish a verdict already stale
+     * for the silent ply with nothing left to correct it. [publishPeers] carries the full argument. Anyone
+     * "simplifying" this line back to a live read should read that first.
      */
     private fun reachablePeersLocked(): Set<PeerId> = buildSet {
         add(selfId)
         idMap.forEach { (key, compositeId) ->
             val (plyId, transportId) = key
-            val seam = live[plyId]?.seam
-            if (seam != null && transportId in seam.peers.value) add(compositeId)
+            val handle = live[plyId]
+            if (handle != null && transportId in handle.transportPeers) add(compositeId)
         }
     }
 
@@ -833,7 +945,13 @@ internal class CompositeSeam(
         throw PeerNotConnected(peer)
     }
 
-    /** Every live, non-torn ply that can reach [peer], in send-preference order. Call under [lock]. */
+    /**
+     * Every live, non-torn ply that can reach [peer], in send-preference order. Call under [lock].
+     *
+     * Reads the plies' **live** `state`/`peers` on purpose, where [publishPeers] must not — see that
+     * method's last section for why a per-call resolution is its own backstop and a published derived
+     * value is not.
+     */
     private fun resolveSendTargets(peer: PeerId): List<Pair<PlyHandle, PeerId>> =
         buildList {
             for ((plyId, handle) in live) {
