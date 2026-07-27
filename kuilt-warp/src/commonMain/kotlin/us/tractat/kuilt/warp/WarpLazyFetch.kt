@@ -11,9 +11,10 @@ import kotlin.time.Duration.Companion.seconds
  * [creel] supplies cached bytes (or `null` when not yet fetched), and [runtime] compiles
  * those bytes into a runnable [Op] under the capability sandbox.
  *
- * **Carries a [Creel], not a `BobbinExchange`.** The fetch-transport layer (warp slice C5)
- * is wired above this bundle; this type is intentionally pure data so it can be constructed
- * and passed across module boundaries without importing the exchange machinery.
+ * **Carries a [Creel], not a [BobbinExchange].** The fetch transport is wired above this
+ * bundle — [us.tractat.kuilt.warp.WarpNode] owns the [BobbinExchange] itself; this type is
+ * intentionally pure data so it can be constructed and passed across module boundaries
+ * without importing the exchange machinery.
  *
  * **Runtime lifecycle is the caller's.** The [runtime] is **owned by the caller**, not by the
  * [us.tractat.kuilt.warp.WarpNode] it is handed to: it outlives the node, is shared freely, and is
@@ -35,6 +36,8 @@ import kotlin.time.Duration.Companion.seconds
  *   (1 s) and the claim settle window (500 ms) so a transiently-slow holder is not abandoned
  *   prematurely, yet well below any horizon at which a permanently-missing bobbin should keep a
  *   task claimed. Drives [kotlinx.coroutines.withTimeoutOrNull], so it honours virtual time.
+ *
+ * @sample us.tractat.kuilt.warp.sampleLazyFetch
  */
 public class WarpLazyFetch(
     public val creel: Creel,

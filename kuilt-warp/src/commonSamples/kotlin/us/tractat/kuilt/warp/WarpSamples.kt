@@ -241,6 +241,48 @@ internal fun samplePinnedExecution() {
     check(pinned.pinnedOwner == alice)
 }
 
+// ── code mobility: content-addressed kernels + lazy fetch ─────────────────────
+
+/**
+ * Send the *code* for a job, not just its name — and cache it by its own hash.
+ *
+ * A [Creel] is this peer's local kernel cache, keyed by the SHA-256 of the bytes. Because the
+ * key is a function of the value, two peers holding the same [BobbinHash] hold byte-identical
+ * bytes: there is nothing to reconcile, and bytes that arrived over the wire can be verified
+ * before they are trusted. Handing a [WarpLazyFetch] to a `WarpNode` lets an [OpId] that is
+ * *not* in the local registry resolve at execution time — fetch the bytes from a peer, load
+ * them under the sandbox, run them.
+ *
+ * @param runtime In production one of `:kuilt-warp-runtime`'s implementations —
+ *   `ChicoryWasmRuntime` (JVM), `Wasm3WasmRuntime` (iOS/macOS), `BrowserWasmRuntime` (wasmJs).
+ */
+@Suppress("unused")
+internal fun sampleLazyFetch(runtime: WasmRuntime) {
+    val creel = Creel()
+
+    // Storing bytes yields their content address; storing them again is a no-op.
+    val kernel = byteArrayOf(0x00, 0x61, 0x73, 0x6d)
+    val hash: BobbinHash = creel.put(kernel)
+    check(creel.put(kernel) == hash)
+
+    // Bytes that arrived from a neighbour are re-hashed before being cached — a mismatch throws.
+    creel.putVerified(hash, kernel)
+    check(creel.contains(hash))
+    check(hash in creel.loaded)          // the fragment this peer can serve to neighbours
+
+    // A miss is the legitimate "not fetched yet" state, not an error.
+    check(creel.get(BobbinHash("deadbeef")) == null)
+
+    // The capability bundle a WarpNode needs to run an op it has never seen.
+    val lazyFetch = WarpLazyFetch(
+        creel = creel,
+        runtime = runtime,
+        opToBobbin = { op -> if (op == OpId("reverse")) hash else null },
+    )
+    check(lazyFetch.opToBobbin(OpId("reverse")) == hash)
+    check(lazyFetch.opToBobbin(OpId("unknown")) == null) // nothing to fetch — the task stands by
+}
+
 // ── location eligibility (H8, §14.6) ───────────────────────────────────────────
 
 /**

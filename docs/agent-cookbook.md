@@ -29,6 +29,8 @@ If you catch yourself writing any of these, stop — kuilt already ships it:
 | minting new quota or re-parenting a group at runtime and needing everyone to agree on the order (no double-mint on a split) | `heddleGoverned` (`GovernedHeddleNode`) | [Fair share & placement](#fair-share--placement) |
 | gating a `WarpNode`'s tasks by a weighted lane — "interactive gets 3× batch" | `HeddleAdmissionControl` + `TaskDescriptor.inLane` | [Fair share & placement](#fair-share--placement) |
 | "only run this on a GPU / in-region peer", a placement predicate over peer capabilities, "can this peer run this task" | `Affinity` + `TaskDescriptor.where` + `CapSet` | [Fair share & placement](#fair-share--placement) |
+| a blob cache keyed by a content hash, a "have you got these bytes?" request/response, a manifest of what each peer holds | `Creel` + `BobbinExchange` | [Code mobility](#code-mobility) |
+| running code that arrived from another peer — a plugin loader, an `eval`, a bespoke sandbox or timeout-and-kill wrapper | `WasmRuntime` + `WasmSandboxConfig` + `WarpLazyFetch` | [Code mobility](#code-mobility) |
 
 ## Discovery
 
@@ -551,6 +553,59 @@ only the eligible peers. `Affinity.Anywhere` (the default) requires nothing. Com
     // Tag a task with the requirement; placement then hashes over only the eligible peers.
     val task = TaskDescriptor(OpId("train"), byteArrayOf(1, 2, 3)).where(where)
     check(task.affinity == where)
+```
+
+## Code mobility
+
+**Intent:** the peer that should do the work doesn't have the code. You want to ship it there,
+cache it, and run it — without shipping a whole new build, and without trusting whatever arrives.
+
+**Primitive:** `Creel` + `BobbinExchange` for the bytes, `WasmRuntime` + `WarpLazyFetch` for
+running them (`:kuilt-warp`; the engines are in `:kuilt-warp-runtime`). Don't hand-roll a blob
+cache, a "who has these bytes" protocol, or a sandbox.
+
+- **`Creel`** is the local cache, keyed by the SHA-256 of the bytes. Content addressing means
+  merge is free (same key ⇒ same bytes, no conflict possible) and `putVerified` re-hashes
+  anything that came off the wire before trusting it. `get` returning `null` is the ordinary
+  "not fetched yet" state, not an error.
+- **`BobbinExchange`** gossips a manifest of *which* kernels exist eagerly and fetches the
+  *bytes* on demand — concurrent callers of the same hash share one in-flight request, and a
+  re-request loop reaches a peer that only later acquires the bytes.
+- **`WarpLazyFetch`** is the capability bundle you hand a `WarpNode` so an unknown `OpId`
+  resolves at execution time: fetch, load under the sandbox, run, cache. A fetch that times out
+  is **transient** — the task stands by and is retried; only a kernel that is broken or hostile
+  fails terminally.
+- **`WasmRuntime`** is the sandbox contract, and it is strict on purpose because kernels come
+  from peers you don't control: a module declaring any import is rejected, it must declare a
+  bounded memory maximum within `WasmSandboxConfig.maxMemoryPages`, and every invocation is cut
+  off at `WasmSandboxConfig.executionTimeout`. `ChicoryWasmRuntime` (JVM), `Wasm3WasmRuntime`
+  (iOS/macOS) and `BrowserWasmRuntime` (wasmJs) all pass the same `WasmRuntimeConformanceSuite`.
+
+<!-- verbatim from kuilt-warp/src/commonSamples/kotlin/us/tractat/kuilt/warp/WarpSamples.kt#sampleLazyFetch -->
+```kotlin
+    val creel = Creel()
+
+    // Storing bytes yields their content address; storing them again is a no-op.
+    val kernel = byteArrayOf(0x00, 0x61, 0x73, 0x6d)
+    val hash: BobbinHash = creel.put(kernel)
+    check(creel.put(kernel) == hash)
+
+    // Bytes that arrived from a neighbour are re-hashed before being cached — a mismatch throws.
+    creel.putVerified(hash, kernel)
+    check(creel.contains(hash))
+    check(hash in creel.loaded)          // the fragment this peer can serve to neighbours
+
+    // A miss is the legitimate "not fetched yet" state, not an error.
+    check(creel.get(BobbinHash("deadbeef")) == null)
+
+    // The capability bundle a WarpNode needs to run an op it has never seen.
+    val lazyFetch = WarpLazyFetch(
+        creel = creel,
+        runtime = runtime,
+        opToBobbin = { op -> if (op == OpId("reverse")) hash else null },
+    )
+    check(lazyFetch.opToBobbin(OpId("reverse")) == hash)
+    check(lazyFetch.opToBobbin(OpId("unknown")) == null) // nothing to fetch — the task stands by
 ```
 
 ## Dedup

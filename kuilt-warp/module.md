@@ -304,9 +304,14 @@ Everything else lives in a satellite module you add only when you need it:
 - **`:kuilt-warp-runtime`** — the actual WebAssembly runtimes: Chicory on the JVM, wasm3 on
   Apple platforms (this is where the native binaries live), the browser engine on the web. Add it
   when you send real code to run, not just named tasks.
+- **`:kuilt-warp-compiler`** — the real optimizer a *compiler node* runs (Binaryen `wasm-opt`,
+  bundled). Add it only on a peer that volunteers to make other peers' kernels faster.
 - **`:kuilt-warp-planning`** — the query planner: it scores a pipeline by how many agreement
   round-trips it costs and rewrites it to spend fewer. Add it when you build multi-step `Draft`
   pipelines and want them optimised.
+- **`:kuilt-warp-heddle`** — weighted fair share across lanes: "interactive work gets 3× what
+  batch work gets". Add it when *how much* of the grid a group of tasks may use is a question you
+  need answered.
 - **`:kuilt-warp-ml`** — the federated-learning demo (FedAvg): train on each peer's own data,
   share only the model update. Add it when you want the machine-learning example.
 - **`:kuilt-warp-otel`** — metrics, for peers that export telemetry. Add it when you collect
@@ -342,8 +347,10 @@ so it gossips out. The task's replicated result is the variant's hash:
 `compile(sourceHash, target, optLevel) → variantHash`. No imperative call into the
 compiler node is needed; the ring routes the work like any other task.
 
-The current spike proves **distribution and swap**, not speedup — its compiler is a
-deterministic no-op transform. Genuine optimization (GraalWasm / Kotlin-Wasm / `wasm-opt`)
-is a later epic. The iOS ceiling stays *interpret*: Apple forbids executing
-externally-delivered machine code, so a compiler node can ship iOS an optimized wasm→wasm
-variant but never native code.
+What a compiler node actually runs is the injectable `WasmOptimizer` seam.
+`PassthroughWasmOptimizer` — the identity transform in this module — proves **distribution and
+swap** without a toolchain, and is what the tests and the no-toolchain paths use. Real
+optimization ships in the opt-in `:kuilt-warp-compiler` satellite as `BinaryenWasmOptimizer`,
+which runs Binaryen's `wasm-opt` and returns a leaner, still-ABI-preserving module. The iOS
+ceiling stays *interpret*: Apple forbids executing externally-delivered machine code, so a
+compiler node can ship iOS an optimized wasm→wasm variant but never native code.

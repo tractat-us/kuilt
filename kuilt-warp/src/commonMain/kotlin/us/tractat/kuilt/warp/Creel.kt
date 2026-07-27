@@ -14,8 +14,8 @@ import org.kotlincrypto.hash.sha2.SHA256
  * **Content-addressing makes merge trivial.** Because `key = hash(bytes)`, any two peers
  * that hold the same [BobbinHash] hold byte-identical bytes. The value lattice is the
  * one-step `Absent ⊏ Present`: two stores are merged by taking the union of their keys —
- * no conflict is possible. The gossip layer (warp slice C5) advertises a
- * `GSet<BobbinHash>` manifest eagerly and fetches the bytes lazily; this class is the
+ * no conflict is possible. [BobbinExchange] is the gossip layer above: it advertises a
+ * `GSet<BobbinMeta>` manifest eagerly and fetches the bytes lazily; this class is the
  * local byte-cache that sits beneath it.
  *
  * **A `null` result from [get] is legitimate.** It means the bobbin has not been fetched
@@ -27,7 +27,9 @@ import org.kotlincrypto.hash.sha2.SHA256
  * [kotlinx.atomicfu.locks.ReentrantLock]; no `suspend` calls are made inside the lock.
  * This type is correct under a multi-threaded dispatcher.
  *
+ * @sample us.tractat.kuilt.warp.sampleLazyFetch
  * @see BobbinHash
+ * @see BobbinExchange
  */
 public class Creel {
 
@@ -81,7 +83,8 @@ public class Creel {
      *
      * A `null` return is the legitimate **"bobbin not loaded yet"** state — routine on
      * the lazy-fetch path. It is not an error; the caller should request the bytes from
-     * a neighbour (warp slice C5) and call [put] or [putVerified] once they arrive.
+     * a neighbour — [BobbinExchange.fetch] does exactly that, calling [putVerified] on
+     * the bytes it receives.
      *
      * The returned array is a defensive copy; callers may mutate it freely without
      * affecting stored content.
@@ -95,8 +98,8 @@ public class Creel {
 
     /**
      * The set of [BobbinHash]es currently held by this creel — the keys this peer can
-     * serve to neighbours. This is the local fragment of the `GSet<BobbinHash>` manifest
-     * that slice C5 will gossip across the mesh.
+     * serve to neighbours. This is the local fragment of the `GSet<BobbinMeta>` manifest
+     * [BobbinExchange] gossips across the mesh.
      */
     public val loaded: Set<BobbinHash>
         get() = lock.withLock { store.keys.toSet() }
