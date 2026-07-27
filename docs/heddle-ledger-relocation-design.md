@@ -546,11 +546,25 @@ derivation.
    cannot understate. A restart with an empty local ledger can.
 3. **The boot-ordering invariant (new normative obligation).** A peer — fresh joiner
    or restart — must not execute data-plane mutators until its control-plane apply has
-   caught up to the leader's commit index at boot (one `readIndex()` + wait). Without
-   it, a rebooted peer whose quiesce mark (in-memory) was lost could reserve across a
-   stale-ACTIVE view of `s` and charge it before replay restores the mark. With it,
-   every mark is restored before the first mutator can run. Cheap, and independently
-   valuable (it also closes the analogous window for every other log-gated fact).
+   caught up. Without it, a rebooted peer whose quiesce mark (in-memory) was lost could
+   reserve across a stale-ACTIVE view of `s` and charge it before replay restores the
+   mark. With it, every mark is restored before the first mutator can run. Cheap, and
+   independently valuable (it also closes the analogous window for every other
+   log-gated fact).
+
+   **The gate is this peer's own `Enroll(self)` applying here — not a `readIndex()`.**
+   An earlier revision specified "one `readIndex()` + wait"; implementing it showed
+   that to be both unnecessary and strictly worse (§14 item 2). `readIndex()` throws on
+   a non-leader, so a follower could never open its own gate, and because Raft may
+   legitimately withhold entries from `committedFrom`, the applied prefix can sit below
+   the fenced index. Waiting on this peer's own post-boot `Enroll(self)` has the same
+   guarantee by a cheaper argument: **Raft applies in index order**, so a peer that has
+   applied its own enroll has applied every entry before it — every barrier committed
+   earlier is restored, and every later one arrives in order. It works on a follower,
+   it cannot be wedged by a withheld entry, and it makes §13.2's enrollment
+   precondition *the same act*, closing both holes with one gate. Shipped as
+   `GovernedHeddleNode.isWritable`, gating `reserve` and `schedule` (and `complete`
+   transitively, since a reservation can only come from `reserve`).
 
 ### 6.6 Cost, honestly
 
