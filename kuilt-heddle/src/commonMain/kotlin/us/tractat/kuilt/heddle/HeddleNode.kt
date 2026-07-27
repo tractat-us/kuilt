@@ -517,12 +517,40 @@ public class HeddleNode internal constructor(
      * All wakers are excluded from the front together, not just each from its own: two siblings
      * waking in the same round would otherwise average each other's stale virtual service into
      * the front and both keep the credit. A `null` front means nothing survived the exclusion —
-     * every competing child is a waker, so nobody ran ahead of anybody and there is nothing to
-     * clamp to.
+     * every **active** child under [parent] is a waker, so nobody ran ahead of anybody and there
+     * is nothing to clamp to. Surviving children that are merely *idle* do not produce a `null`:
+     * [HeddlePolicy.front] falls back to the maximum effective virtual service across them, the
+     * bound that can only ever give a turn up (§7.2).
+     *
+     * **The stored offset is joined with `max`, never replaced** (issue #1714). [HeddlePolicy.front]
+     * is a weighted mean over whoever is competing *right now*, and that mean is not monotone
+     * across wake cycles: a child that woke into a busy front, ran, and slept again can re-wake
+     * beside a starved sibling and compute a *smaller* offset than the one it is already carrying
+     * — handing back credit the earlier clamp forfeited and dropping its effective virtual service.
+     * Joining keeps the promise made two paragraphs up (a forward offset can only give a turn up)
+     * across every wake, and it is the same invariant CFS/EEVDF hold by materialising vruntime so
+     * it never decreases. The join is a high-water mark, not a sum, so a long-lived child cannot
+     * accumulate an unbounded penalty; and the one-directional stance of §10.5 — credit forbidden,
+     * a sliver of penalty merely undesirable — is what makes keeping the larger offset the safe
+     * side when the front genuinely regresses. Nothing else lowers a stored offset: an edge is
+     * forgotten only when it leaves the active set, which
+     * [EntitlementLedger.activate][EntitlementLedger.activate] makes permanent (closure dominance,
+     * §10.10), so a cleared clamp can never come back to an edge that will compete again.
      *
      * The demanding state is sampled **once per scheduling round, at entry**, before any grant
      * lands. Sampling again after the loop would mark a child that its own grants had just
      * satisfied as "idle", making the next round a spurious wake for it.
+     *
+     * **§10.6 is therefore enforced only modulo that sampling** (issue #1715). §7.2 defines the
+     * clamp on an idle→demand *event* this peer has actually observed, and sampling once per
+     * [schedule] entry cannot see a window that opens and closes between two samples.
+     * Single-peer that is exactly right: the front moves only on this peer's own grants, all of
+     * which land after the entry sample, so an idle interval between rounds banks nothing. The
+     * escape is multi-peer — a child may idle and re-demand between this peer's rounds while
+     * *another* peer's grants advance its siblings, so this peer sees demanding→demanding and does
+     * not clamp. Accepted by design: the resulting catch-up burst is capped by this peer's holdings
+     * and the §8.2 caps, any peer that did observe the window clamps independently, and wake
+     * offsets are scheduler-local anyway, so divergence between peers is already tolerated.
      *
      * Called under [lock] from [schedule].
      */
@@ -545,12 +573,15 @@ public class HeddleNode internal constructor(
         if (front != null) {
             for (edge in edges) {
                 if (edge.record.id !in wakers) continue
-                wakeOffsets[edge.record.id] = HeddlePolicy.wakeOffset(
+                val computed = HeddlePolicy.wakeOffset(
                     front = front,
                     vRaw = HeddlePolicy.virtualService(edge.record, edge.summary),
                     weight = edge.record.weight,
                     sleeperCredit = config.policy.sleeperCredit,
                 )
+                // Join, never replace: the front is not monotone across wake cycles (#1714).
+                val carried = wakeOffsets[edge.record.id] ?: Rational.ZERO
+                wakeOffsets[edge.record.id] = Rational.max(carried, computed)
             }
         }
         for (edge in edges) demandingObserved[edge.record.id] = HeddlePolicy.isDemanding(edge)
