@@ -1,7 +1,7 @@
 # Local-fabric vocabulary: self-attributed liveness as a level
 
 **Date:** 2026-07-26
-**Issues:** #1712 (primary), #1618 Q2, plus two defects found during design (D3, D4 below)
+**Issues:** #1712 (primary), #1618 Q2, #1723 (D3), #1724 (D4). Enabling follow-up filed: #1725.
 **Track:** A of three — see [Scope boundary](#scope-boundary) for B and C
 
 ## The problem in one paragraph
@@ -36,8 +36,8 @@ So the real gaps are narrower and different: `Room` never exposes the fact, and 
 |---|---|---|
 | **D1** | `Room` publishes no self-attributed fact. A consumer must reach past `Room` into a transport-specific API. | #1712 |
 | **D2** | The **host's** `WindowOpened` reaches `Room.events` through a deferred `launch` onto a **replay-0** `SharedFlow`; the other two emission sites emit inline. | #1618 Drop B |
-| **D3** | A **joiner** never sets its host's `Member.liveness`. While partitioned from its host, `events` has said `Partitioned(hostId)` but `roster` still reports that host `Connected`. | found in design |
-| **D4** | On a **joiner**, `reconnectController` is `null`, so the `markPartitioned` lane emits **no `WindowOpened` at all** — there is nothing to count down from. | found in review |
+| **D3** | A **joiner** never sets its host's `Member.liveness`. While partitioned from its host, `events` has said `Partitioned(hostId)` but `roster` still reports that host `Connected`. | #1723 |
+| **D4** | On a **joiner**, `reconnectController` is `null`, so the `markPartitioned` lane emits **no `WindowOpened` at all** — there is nothing to count down from. | #1724 |
 
 ### D2 root cause — not lossy delivery
 
@@ -368,7 +368,7 @@ Track A is the observation vocabulary. It explicitly does **not**:
   forever on WebSocket, TCP, InMemory, Multipeer, Nearby, WebRTC and Mux. That is the intended
   shippable state: it fixes the reported nw case and is honest, not silent, everywhere else.
   **Track B** flips them one at a time — #1542 multipeer, #1543 nearby, #1544 webrtc, #1545
-  composite, #1546 mux, plus a websocket-lane issue that does not yet exist.
+  composite, #1546 mux, #1725 websocket.
 - **Touch recovery behaviour.** In particular it does **not** wire `localFabric` into
   `JoinerResumeMachine`. That is the #1637 discriminator — "my own fabric dropped and healed, so the
   host never saw a tear, so no window is coming" versus the plan's dwell timer — and it should be
@@ -402,12 +402,13 @@ behaviour, so it takes the full-build gate above rather than a module-scoped bui
 
 To be done alongside the work, not at the end:
 
-- **File D3** and **D4** — both found during this design, currently unfiled.
-- **File the websocket-lane reactive-capability issue** that #1712 calls out and Track B lacks.
-- **Comment on #1618** with the D2 root cause (replay-0 `SharedFlow` + deferred `launch`, not lossy
+- ~~File D3 and D4~~ — filed as **#1723** and **#1724**.
+- ~~File the websocket-lane reactive-capability issue~~ — filed as **#1725**.
+- **Not filed, deliberately:** #1724 must not be mistaken for #1635 (closed: routing a joiner's host `Timeout` into `attemptReconnect` regresses the common case). #1724 changes no recovery path — only what the episode publishes. Its body says so.
+- ~~Comment on #1618~~ — posted, [issuecomment-5085870215](https://github.com/tractat-us/kuilt/issues/1618#issuecomment-5085870215): D2 root cause (replay-0 `SharedFlow` + deferred `launch`, not lossy
   delivery), and post the Correction 2 supersession: #1637 makes the joiner emit `Resumed` where
   Correction 2 says `Recovered`, so anyone reading that thread today gets advice #1637 invalidates.
   Update the body, which still frames D2 as unreliable delivery.
-- **Correct #1712's body** — `Seam.capability` is commonMain `:kuilt-core`, not nw-only; the real gap
+- ~~Correct #1712's body~~ — done. — `Seam.capability` is commonMain `:kuilt-core`, not nw-only; the real gap
   is the `Available` floor plus no `Room` surface. Attach the hardware evidence, which currently
   argues the case from first principles.
