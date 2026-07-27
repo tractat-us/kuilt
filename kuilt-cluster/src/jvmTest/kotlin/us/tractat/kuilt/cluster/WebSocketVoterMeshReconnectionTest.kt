@@ -260,13 +260,18 @@ class WebSocketVoterMeshReconnectionTest {
     ): VoterMesh {
         val dispatcher = coroutineContext[ContinuationInterceptor] as CoroutineDispatcher
         val specs = listOfNotNull(voterA, voterB, voterC)
-        val port = ServerSocket(0).use { it.localPort }
-
+        // Bind 0 and read the port back from the *live* connector. Probing a free port with a
+        // throwaway `ServerSocket(0).use { it.localPort }` and re-binding the number is a TOCTOU:
+        // the probe closes before Netty binds, so another process on a loaded box can take the port
+        // in that window (`BindException: Address already in use` — #1590). Binding 0 has no window.
+        // (SeverableTcpProxy below keeps its ServerSocket open for its whole life, so it is not the
+        // same pattern — the port it reports is a port it still holds.)
         lateinit var sources: Map<NodeId, KtorConnectionSource>
-        val srv = embeddedServer(Netty, port = port) {
+        val srv = embeddedServer(Netty, port = 0) {
             sources = mountSources(this, specs)
         }.also { server = it }
         srv.start(wait = false)
+        val port = srv.engine.resolvedConnectors().first().port
 
         val proxyPort = SeverableTcpProxy(targetHost = "localhost", targetPort = port)
             .also { proxy = it }

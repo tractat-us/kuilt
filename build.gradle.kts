@@ -88,6 +88,92 @@ val forbidUnboundedSwatchDelivery by tasks.registering {
     }
 }
 
+// Guard: forbid the probe-a-free-port-then-re-bind-it TOCTOU (#1590, first seen as #1586).
+//
+//     val port = ServerSocket(0).use { it.localPort }   // allocates, then CLOSES
+//     …later: bind that number                          // anything can have taken it by now
+//
+// The probe socket is released before the real bind, so any other process on the box can win the
+// port inside that window. It is invisible when a module runs alone and shows up as
+// `BindException: Address already in use` under concurrent builds — routine here, since several
+// sessions build in parallel on one machine. It is a flake *generator*: every site eventually costs
+// someone a debugging session for a defect that is not in their change.
+//
+// The fix is to never release the port: bind 0 and read back what you actually got —
+//   Ktor:  embeddedServer(Netty, port = 0).start(wait = false)
+//          val port = server.engine.resolvedConnectors().first().port
+//   Ktor sockets: aSocket(selector).tcp().bind("127.0.0.1", 0)
+//          val port = (serverSocket.localAddress as InetSocketAddress).port
+//
+// Detection is deliberately narrow — the *closing* probe only. A `ServerSocket(0)` held open for the
+// life of the fixture (e.g. the loopback proxies in the half-open tests) reports a port it still
+// owns and is fine; so is a `use { }` block that accepts on the socket it opened. The trip-wire is
+// `ServerSocket(0)` + `.use` + a `localPort` read inside the first few lines of the block, i.e. "the
+// only thing taken out of this socket is its number, and then it is closed".
+//
+// The allowlist is the #1590 backlog, not an escape hatch: `TcpLoom`/mDNS sites need their host to
+// bind 0 itself (a per-site change, not a mechanical one) and the `*ConformanceTest` files are held
+// out to avoid colliding with in-flight work. Every entry is a known site awaiting conversion — do
+// NOT add a new file here; bind 0 instead.
+val forbidPortProbeRebind by tasks.registering {
+    group = "verification"
+    description = "Fails if a source probes a free port with ServerSocket(0) and then re-binds it (#1590)."
+    val srcDirs = subprojects.mapNotNull { it.projectDir.resolve("src").takeIf(java.io.File::exists) }
+    srcDirs.forEach { inputs.dir(it) }
+    val rootPath = rootDir
+    // Known #1590 sites not yet converted. Shrinks to empty as they land; never grows.
+    val allowlist = setOf(
+        // Held out of the sweep to avoid a merge collision with in-flight conformance work.
+        "TcpConformanceTest.kt",
+        "WebSocketConformanceTest.kt",
+        "MDNSConformanceTest.kt",
+        // mDNS: the port is an *input* to the advertisement built inside the embeddedServer module
+        // lambda, so it must be known before start() — needs a restructure, not a one-line change.
+        "MDNSLoomCapabilityTest.kt",
+        "MDNSMultiAcceptHostTest.kt",
+        "MDNSRoomKeySourcingTest.kt",
+        "MDNSSelfDiscoveryFilterTest.kt",
+        "MDNSSelfDiscoveryMulticastTest.kt",
+        // TcpLoom sites: bind the Ktor ServerSocket to 0 and read localAddress instead.
+        "TcpClusterExampleTest.kt",
+        "TcpLoomCapabilityTest.kt",
+        "TcpRoundTripTest.kt",
+        "TcpMeshBuilder.kt",
+    )
+    doLast {
+        // Matches the aliased import too (`JvmServerSocket(0)` contains `ServerSocket(0)`).
+        val probe = Regex("""ServerSocket\(\s*0\s*\)""")
+        val lookahead = 3
+        // Code only — a line of prose that *describes* the banned idiom (this comment, the
+        // explanatory notes at each converted site) is not the idiom.
+        fun codeOf(raw: String): String {
+            val t = raw.trimStart()
+            return if (t.startsWith("//") || t.startsWith("*") || t.startsWith("/*")) "" else raw.substringBefore("//")
+        }
+        val offenders = srcDirs.asSequence().flatMap { dir ->
+            dir.walkTopDown().filter { it.isFile && it.extension == "kt" && it.name !in allowlist }
+        }.flatMap { file ->
+            val code = file.readLines().map(::codeOf)
+            code.asSequence().withIndex()
+                .filter { (i, line) ->
+                    probe.containsMatchIn(line) && ".use" in line &&
+                        code.subList(i, minOf(i + lookahead, code.size)).any { "localPort" in it }
+                }
+                .map { (i, line) -> "${file.relativeTo(rootPath)}:${i + 1}  ${line.trim()}" }
+        }.toList()
+        if (offenders.isNotEmpty()) {
+            error(
+                "Free-port probe then re-bind (TOCTOU) found — the probe socket is closed before the " +
+                    "real bind, so another process can take the port in that window (#1590). Bind port 0 " +
+                    "and read back the port you actually got: Ktor " +
+                    "`server.engine.resolvedConnectors().first().port` after `start(wait = false)`, or " +
+                    "`(serverSocket.localAddress as InetSocketAddress).port` for a Ktor socket:\n  " +
+                    offenders.joinToString("\n  "),
+            )
+        }
+    }
+}
+
 // Guard: forbid declaring a KMP target you have no source for (#1014).
 //
 // A module that applies `kuilt.kmp-library` gets the full target set (jvm, android,
@@ -161,5 +247,6 @@ allprojects {
     tasks.matching { it.name == "check" }.configureEach {
         dependsOn(rootProject.tasks.named("forbidUnboundedSwatchDelivery"))
         dependsOn(rootProject.tasks.named("forbidSourcelessKmpTarget"))
+        dependsOn(rootProject.tasks.named("forbidPortProbeRebind"))
     }
 }

@@ -42,7 +42,6 @@ import us.tractat.kuilt.warp.WarpNode
 import us.tractat.kuilt.websocket.KtorClientLoom
 import us.tractat.kuilt.websocket.KtorServerLoom
 import us.tractat.kuilt.websocket.WebSocketAdvertisement
-import java.net.ServerSocket
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -213,7 +212,6 @@ class FederatedLearningExampleTest {
         val relayId = PeerId("fl-relay")
         val clientId = PeerId("fl-client")
         val path = "/ws/fl-demo"
-        val port = ServerSocket(0).use { it.localPort }
         // Real wall clock, real dispatcher — not virtual time, so expectVirtualTime stays false.
         val wsCfg = QuilterConfig(
             antiEntropyInterval = 50.milliseconds,
@@ -224,10 +222,15 @@ class FederatedLearningExampleTest {
         val wsOwners = owners.take(2)
 
         lateinit var serverLoom: KtorServerLoom
-        val server = embeddedServer(Netty, port = port) {
+        // Bind 0 and read the port back from the *live* connector. Probing a free port with a
+        // throwaway `ServerSocket(0).use { it.localPort }` and re-binding the number is a TOCTOU:
+        // the probe closes before Netty binds, so another process on a loaded box can take the port
+        // in that window (`BindException: Address already in use` — #1590). Binding 0 has no window.
+        val server = embeddedServer(Netty, port = 0) {
             serverLoom = KtorServerLoom(this, path, selfPeerId = relayId)
         }
         server.start(wait = false)
+        val port = runBlocking { server.engine.resolvedConnectors().first().port }
         val httpClient = HttpClient(OkHttp) { install(WebSockets) }
         val nodeScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
         val runtimes = List(2) { ChicoryWasmRuntime() }

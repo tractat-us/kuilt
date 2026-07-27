@@ -15,7 +15,6 @@ import us.tractat.kuilt.websocket.tls.DevTlsIdentity
 import us.tractat.kuilt.websocket.tls.generateDevTlsIdentity
 import us.tractat.kuilt.websocket.tls.pinnedTlsHttpClient
 import us.tractat.kuilt.websocket.tls.tapTlsConnector
-import java.net.ServerSocket
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
@@ -48,18 +47,23 @@ class TapTlsPinningTest {
         server?.stop(gracePeriodMillis = 100, timeoutMillis = 1_000)
     }
 
-    private fun startTlsServer(identity: DevTlsIdentity): Pair<KtorServerLoom, Int> {
-        val port = ServerSocket(0).use { it.localPort }
+    /**
+     * Bind the TLS connector to port 0 and read the port back from the *live* connector. Probing a
+     * free port with a throwaway `ServerSocket(0).use { it.localPort }` and re-binding the number is
+     * a TOCTOU: the probe closes before Netty binds, so on a loaded box another process can take the
+     * port in that window (`BindException: Address already in use` — #1590). Binding 0 has no window.
+     */
+    private suspend fun startTlsServer(identity: DevTlsIdentity): Pair<KtorServerLoom, Int> {
         lateinit var loom: KtorServerLoom
         val srv = embeddedServer(
             Netty,
-            configure = { tapTlsConnector(identity, port = port) },
+            configure = { tapTlsConnector(identity, port = 0) },
         ) {
             loom = KtorServerLoom(this, path)
         }
         srv.start(wait = false)
         server = srv
-        return loom to port
+        return loom to srv.engine.resolvedConnectors().first().port
     }
 
     @Test
