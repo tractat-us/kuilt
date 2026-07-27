@@ -25,7 +25,6 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
-import kotlin.test.assertTrue
 
 /**
  * A [CompositeSeam]'s reconcile pump must survive everything a **consumer-authored** [Loom] does to it
@@ -57,7 +56,12 @@ class CompositeReconcilePumpTest {
         val sibling = OneSeamLoom("sibling")
         val later = OneSeamLoom("later")
         val desired = MutableStateFlow(listOf(PlyId(INITIAL) to initial as Loom))
-        val composite = CompositeLoom(desired, UnconfinedTestDispatcher(testScheduler)).host(Pattern("host"))
+        val raised = mutableListOf<PlyReconcileException>()
+        val composite = CompositeLoom(
+            plies = desired,
+            dispatcher = UnconfinedTestDispatcher(testScheduler),
+            onPlyFailure = { raised += it },
+        ).host(Pattern("host"))
 
         // One reconciliation carrying a ply whose weave throws, followed by a healthy sibling. The order
         // is the point: an unguarded throw aborts the pass, so the sibling never gets woven either.
@@ -67,10 +71,19 @@ class CompositeReconcilePumpTest {
             PlyId("sibling") to sibling,
         )
         runCurrent()
-        assertEquals(
-            setOf(PlyId(INITIAL), PlyId("sibling")),
-            composite.plies.value.keys,
-            "one ply's throwing weave must not stop its siblings in the same reconciliation from attaching",
+        assertAll(
+            {
+                assertEquals(
+                    setOf(PlyId(INITIAL), PlyId("sibling")),
+                    composite.plies.value.keys,
+                    "one ply's throwing weave must not stop its siblings in the same reconciliation attaching",
+                )
+            },
+            // Absorbed is not the same as silent: kuilt-core is logger-free, so the failure must reach the
+            // consumer carrying the ply's identity and the exception, never a bare count.
+            { assertEquals(listOf(PlyId("thrower")), raised.map { it.plyId }, "the failure must be raised") },
+            { assertEquals(listOf(PlyReconcileException.Phase.ATTACH), raised.map { it.phase }) },
+            { assertEquals(FLAKY_MESSAGE, raised.single().cause.message, "the cause must be the Loom's own") },
         )
 
         // And the pump must still be alive: a LATER desired emission still reconciles.
@@ -151,7 +164,7 @@ class CompositeReconcilePumpTest {
                 )
             },
             { assertIs<SeamState.Torn>(composite.state.value, "the composite must stay terminal") },
-            { assertTrue(gated.weaveAttempts == 1, "the ply must be woven exactly once") },
+            { assertEquals(1, gated.weaveAttempts, "the ply must be woven exactly once") },
         )
     }
 
@@ -180,7 +193,7 @@ class CompositeReconcilePumpTest {
 
         override suspend fun weave(rendezvous: Rendezvous): Seam {
             val woven = super.weave(rendezvous)
-            check(healthy) { "flaky fabric cannot dial yet" }
+            check(healthy) { FLAKY_MESSAGE }
             return woven
         }
     }
@@ -205,5 +218,6 @@ class CompositeReconcilePumpTest {
 
     private companion object {
         const val INITIAL = "initial"
+        const val FLAKY_MESSAGE = "flaky fabric cannot dial yet"
     }
 }

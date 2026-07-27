@@ -31,11 +31,18 @@ import kotlin.coroutines.CoroutineContext
  * @param policy Governs the inbound [us.tractat.kuilt.core.Spool]'s capacity and overflow
  *   behaviour for each woven [CompositeSeam]. Defaults to [DeliveryPolicy.Reliable]
  *   (bounded, backpressured, lossless).
+ * @param onPlyFailure Raised whenever one ply fails to attach or detach while reconciling a live
+ *   session — a constituent [Loom]'s `capability()`/`weave()`, or a ply [Seam]'s `close()`, threw.
+ *   The composite absorbs the failure and keeps reconciling its other plies, retrying the failed one
+ *   on the next [plies] emission; `kuilt-core` is logger-free, so this is how that surfaces to a
+ *   consumer's own logger. Best-effort and non-suspending; defaults to a silent absorb. See
+ *   [PlyReconcileException].
  */
 public class CompositeLoom(
     private val plies: StateFlow<List<Pair<PlyId, Loom>>>,
     private val dispatcher: CoroutineContext = Dispatchers.Default,
     private val policy: DeliveryPolicy = DeliveryPolicy.Reliable,
+    private val onPlyFailure: (PlyReconcileException) -> Unit = {},
 ) : Loom {
 
     /** Static convenience: a fixed ply set that never changes after `weave()`. */
@@ -43,7 +50,8 @@ public class CompositeLoom(
         plies: List<Pair<PlyId, Loom>>,
         dispatcher: CoroutineContext = Dispatchers.Default,
         policy: DeliveryPolicy = DeliveryPolicy.Reliable,
-    ) : this(MutableStateFlow(plies), dispatcher, policy)
+        onPlyFailure: (PlyReconcileException) -> Unit = {},
+    ) : this(MutableStateFlow(plies), dispatcher, policy, onPlyFailure)
 
     override suspend fun weave(rendezvous: Rendezvous): Seam {
         val current = plies.value
@@ -56,7 +64,7 @@ public class CompositeLoom(
         val initial = current.map { (id, loom) ->
             InitialPly(id = id, seam = loom.weave(rendezvous), roles = loom.capability().roles)
         }
-        return CompositeSeam(initial, rendezvous, plies, dispatcher, policy)
+        return CompositeSeam(initial, rendezvous, plies, dispatcher, policy, onPlyFailure)
     }
 
     override fun capability(): TransportCapability {
