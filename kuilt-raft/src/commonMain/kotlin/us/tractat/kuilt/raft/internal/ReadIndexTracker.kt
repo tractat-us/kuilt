@@ -35,8 +35,10 @@ internal data class GatedRead(val deferred: CompletableDeferred<Long>, val reinv
  * [lastAckRound]`[v] > H` ([resolve]). Without the nonce, an ACK generated in response to a round-H
  * heartbeat but arriving after the round advanced to `H+1` would be credited to `H+1` and wrongly
  * appear fresh for a read queued at `sinceRound = H` (round-slip). Crediting to the echoed round `H`
- * correctly excludes it. Pinned by `roundSlipAckDoesNotConfirmReadIndex` /
- * `staleAckDoesNotConfirmReadIndex`.
+ * correctly excludes it. An echo *above* [round] is discarded outright (#1817) — an honest echo can
+ * never exceed it, so nothing is lost, and a nonce admits no conservative in-range reading the way a
+ * quantity does (see [recordAck]). Pinned by `roundSlipAckDoesNotConfirmReadIndex` /
+ * `staleAckDoesNotConfirmReadIndex` / `ReadIndexRoundClampTest`.
  *
  * **BLOCKER 2 — joint dual-majority (do not regress).** Freshness is checked via
  * [MembershipState.quorumOfContacts], which during a Joint configuration requires an independent fresh
@@ -117,9 +119,29 @@ internal class ReadIndexTracker {
     /**
      * Record that [from] answered a heartbeat that echoed [echoedRound] (BLOCKER 1a). Crediting the ACK
      * to the round it actually responded to — not the current [round] — is what defeats round-slip.
+     *
+     * An `echoedRound` above [round] is **discarded, not clamped** (#1817). [round] only ever increases
+     * within a leadership term and only this leader stamps it into an outgoing request, so any round a
+     * follower could honestly be echoing was necessarily stamped while [round] was at or below its
+     * present value: an honest echo always satisfies `echoedRound <= round`, including a *late* one,
+     * which keeps its older echoed round and so preserves BLOCKER 1. `echoedRound > round` is therefore
+     * positive proof this leader never sent that round.
+     *
+     * Discarding rather than clamping is load-bearing, and this is the one place the [matchIndex]-style
+     * precedent does **not** transfer. `matchIndex` is a *quantity*, so `minOf` with a valid bound is a
+     * meaningful conservative answer. A round is a *nonce*: clamping maps a forged value onto the most
+     * favourable value in range — the round the leader has just broadcast and not yet heard an answer
+     * to — which is indistinguishable from an honest reply. That does not close the hole, it only
+     * re-arms it per frame: echoing `Long.MAX_VALUE` on every response would keep the sender in
+     * [resolve]'s fresh set for every read for the rest of the term, serving a stale read as
+     * linearizable (§3.7). §6.4 freshness means the leader exchanged heartbeats with a majority *after
+     * the read arrived*, and crediting an unanswered round severs exactly the request→response link the
+     * nonce exists to enforce. Dropping the frame's freshness evidence is the only disposition that
+     * preserves it — the sender simply stays at its last honestly-answered round.
+     * Pinned by `forgedEchoArrivingAfterBumpMustNotConfirmRead`.
      */
     fun recordAck(from: NodeId, echoedRound: Long) {
-        lastAckRound[from] = echoedRound
+        if (echoedRound <= round) lastAckRound[from] = echoedRound
     }
 
     /** Arm the §5.4.2 leader-completeness gate: reads must not resolve before commit reaches [index]. */
