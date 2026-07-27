@@ -257,7 +257,7 @@ In `SeamConformanceSuite.kt`, replace the `runWovenSeamReportsAvailableCapabilit
     internal suspend fun runWovenSeamCapabilityIsHonest(scope: TestScope): Unit =
         scope.connectedPair { host, _ ->
             val availability = host.capability.value.availability
-            if (capabilities.reportsLiveCapability) {
+            if (capabilities().reportsLiveCapability) {
                 // A fabric claiming a live observer must not be sitting on the Unknown floor.
                 // Whether it reads Available or Unavailable is the fabric's own business: a woven
                 // seam whose device path has dropped is legitimately Unavailable (the #1478 grace
@@ -315,6 +315,13 @@ With this, `CompositeConformanceTest` declares `reportsLiveCapability = false` h
 - `SeamCapabilities.kt` — the `FULL` constant. Set `reportsLiveCapability = true`: `FULL` means "meets every obligation", and fabrics flip individual flags down from it.
 - `SeamCapabilitiesReflectionTest.kt:37` — the `allFalse` value. Add `reportsLiveCapability = false`.
 - `SeamConformanceUngatedCoreTest.kt:87` — the `ALL_FALSE` value. Same.
+
+Two more files pin the flag **count** and must move from 8 to 9 — neither is obvious from a `SeamCapabilities(` grep, and both fail loudly if missed:
+
+- `kuilt-conformance/src/commonTest/.../SeamConformanceUngatedCoreTest.kt:63` — `assertEquals(8, allFalseHarness().capabilities().falseFlags().size, …)` becomes `9`.
+- `kuilt-conformance/src/commonTest/.../CapabilityMatrixTest.kt:32-41` — a **golden markdown table**. Add a `reportsLiveCapability` header column, extend the `|---|` separator by one, and add a cell to each expected fabric row. The column order must match `FLAGS`, so append it last.
+
+Also `kuilt-core/.../composite/CompositeSeam.kt:119` — the `_capability` initial seed, constructed before any `recomputeCapability()`. Verify what it seeds; if it hardcodes `Available` it must become `Unknown`, or a composite reports a confident verdict for the whole window before its first recompute.
 
 Then each fabric's conformance subclass that uses `FULL` (or a `FULL.copy(...)`) and has **no** live observer must flip it down and declare the gap. Find them with:
 
@@ -375,7 +382,9 @@ git commit -m "feat(core): Seam.capability floors at Unknown, declared per fabri
 - Consumes: `Seam.capability` (Task 1), `SeamRoom.emitEvent`, `SeamRoom.clock`, `SeamRoom.scope`.
 - Produces: `Room.localFabric: StateFlow<FabricAvailability>`, `MembershipEvent.LocalFabricLost(at: Instant, reason: String)`, `MembershipEvent.LocalFabricRestored(at: Instant)`. Task 4 reads the same backing field for its tag.
 
-Additive only — no existing signature changes, so nothing else in the repo breaks.
+**NOT additive.** `Room` is an interface and `FakeRoom` implements it (`kuilt-session-test/src/commonMain/.../FakeRoom.kt:72`), so a new abstract member breaks `:kuilt-session-test` at compile time. This task must land the `FakeRoom` override too (Step 5a), and `:kuilt-session:jvmTest` alone will **not** reveal the break — that module is not on its compile path. Use the cross-module gate in Step 6.
+
+Deliberately given **no interface default**, unlike `Seam.capability`. A `Room` implementation silently inheriting `Unknown` would be a fake claiming it cannot tell, when in fact a fake is exactly the thing that should be able to say. Fail-fast on the implementor instead.
 
 **Before writing the test**, read `kuilt-session/src/commonTest/kotlin/us/tractat/kuilt/session/FastReconnectRaceTest.kt` for the in-module fake-seam idiom; it already overrides `capability`. Reuse that fake if it is shared, otherwise mirror its shape. Do not build a new harness style.
 
@@ -533,6 +542,11 @@ In `MembershipEvent.kt`, inside the sealed interface:
      * last decided state was [us.tractat.kuilt.core.FabricAvailability.Unavailable] — including
      * when the path passed through [us.tractat.kuilt.core.FabricAvailability.Unknown] on the way
      * back. Never emitted for a first-ever `Available`: nothing was lost.
+     *
+     * **A room whose fabric was already `Unavailable` when it was constructed emits this with no
+     * preceding [LocalFabricLost].** That is deliberate, not a gap: [Room.localFabric] carried the
+     * initial `Unavailable` from the start, so the consumer was never misinformed — there was simply
+     * no transition to announce. Consumers must not treat a `Lost` as a precondition for a `Restored`.
      */
     public data class LocalFabricRestored(val at: Instant) : MembershipEvent
 ```
@@ -546,9 +560,33 @@ In `Room.kt`, after `attestedPrincipals`, add the declaration and KDoc exactly a
 In `SeamRoom.kt`, beside the other backing fields (near `_events`, ~486):
 
 ```kotlin
-    private val _localFabric = MutableStateFlow(seam.capability.value.availability)
-    override val localFabric: StateFlow<FabricAvailability> = _localFabric.asStateFlow()
+    /**
+     * A **zero-lag** view of the seam's availability, NOT a mirrored copy.
+     *
+     * A `MutableStateFlow` written by [localFabricLoop] would lag [Seam.capability] by one
+     * collector dispatch, and the four tag sites (Task 4) run on other coroutines — so a radio
+     * death could emit `HostLost(localFabric = Available)`, the headline #1712 case exactly
+     * inverted. Mapping the source directly makes the tag and the level agree by construction.
+     */
+    override val localFabric: StateFlow<FabricAvailability> =
+        MappedAvailability(seam.capability)
 ```
+
+`kotlinx.coroutines` has no zero-lag `StateFlow.map`. Add a small private class in the same file (mirroring `:kuilt-core`'s `internal MappedStateFlow`, which `:kuilt-session` cannot see):
+
+```kotlin
+/** Zero-lag `StateFlow<TransportCapability>` → `StateFlow<FabricAvailability>` projection. */
+private class MappedAvailability(
+    private val source: StateFlow<TransportCapability>,
+) : StateFlow<FabricAvailability> {
+    override val value: FabricAvailability get() = source.value.availability
+    override val replayCache: List<FabricAvailability> get() = listOf(value)
+    override suspend fun collect(collector: FlowCollector<FabricAvailability>): Nothing =
+        source.map { it.availability }.distinctUntilChanged().collect(collector) as Nothing
+}
+```
+
+Check `:kuilt-core`'s `internal/MappedStateFlow.kt` first and copy its shape exactly — including how it satisfies `collect`'s `Nothing` return. If it is trivially liftable to a shared location, prefer that over duplicating.
 
 Add the loop as a private suspend fun near the other loops:
 
@@ -562,15 +600,18 @@ Add the loop as a private suspend fun near the other loops:
      * with the ADR-034 single-collection contract.
      */
     private suspend fun localFabricLoop() {
-        // Seeded, NOT null: _localFabric already holds the initial availability, so the first
-        // collect emission is deduped below and would never set lastDecided. A room that starts
-        // Unavailable and then heals must still emit LocalFabricRestored.
-        var lastDecided: FabricAvailability? =
-            seam.capability.value.availability.takeIf { it !is FabricAvailability.Unknown }
+        // Seeded from the value captured at CONSTRUCTION, not at loop start. Re-reading
+        // seam.capability here would swallow a Lost edge for a drop that happened in the
+        // construction -> launch window: lastDecided would already be Unavailable, so the
+        // transition would look like it had been reported.
+        var lastDecided: FabricAvailability? = constructionAvailability
+            .takeIf { it !is FabricAvailability.Unknown }
+        var previous: FabricAvailability = constructionAvailability
         seam.capability.collect { cap ->
             val next = cap.availability
-            if (next == _localFabric.value) return@collect
-            _localFabric.value = next
+            if (next == previous) return@collect
+            previous = next
+            // No level write here — `localFabric` reads the source directly and is already current.
             when (next) {
                 is FabricAvailability.Unavailable ->
                     if (lastDecided !is FabricAvailability.Unavailable) {
@@ -593,13 +634,47 @@ Add the loop as a private suspend fun near the other loops:
 
 Launch it alongside the room's other jobs — find where `jobs += scope.launch { runReconnectEventLoop(...) }` lives (~683) and add `jobs += scope.launch { localFabricLoop() }` in the same block, **outside** any host-only gate. It must run for both roles.
 
-- [ ] **Step 6: Run the test and verify it passes**
+- [ ] **Step 5a: Give `FakeRoom` a controllable `localFabric`**
 
-```bash
-./gradlew :kuilt-session:jvmTest --tests "*LocalFabricTest*"
+`:kuilt-session-test` ships in commonMain, so this is consumer-facing test-support API — and driving self-reachability is precisely what a consumer testing #1712 rendering needs.
+
+```kotlin
+    private val _localFabric = MutableStateFlow<FabricAvailability>(FabricAvailability.Available)
+    override val localFabric: StateFlow<FabricAvailability> = _localFabric.asStateFlow()
+
+    /**
+     * Drive this fake's self-reachability, emitting the matching edge.
+     *
+     * Defaults to [FabricAvailability.Available] so existing tests are unaffected. Mirrors the real
+     * room's rule: an edge only on a transition into `Available` or `Unavailable`; `Unknown` is
+     * level-only.
+     */
+    public suspend fun setLocalFabric(availability: FabricAvailability, at: Instant = DEFAULT_AT) {
+        val previous = _localFabric.value
+        if (previous == availability) return
+        _localFabric.value = availability
+        when (availability) {
+            is FabricAvailability.Unavailable ->
+                eventsChannel.send(MembershipEvent.LocalFabricLost(at, availability.reason))
+            is FabricAvailability.Available ->
+                if (previous is FabricAvailability.Unavailable) {
+                    eventsChannel.send(MembershipEvent.LocalFabricRestored(at))
+                }
+            is FabricAvailability.Unknown -> Unit
+        }
+    }
 ```
 
-Expected: **PASS**, all four.
+Use whatever default-instant idiom `FakeRoom` already has for `partition()` / `hostLost()` rather than inventing `DEFAULT_AT`.
+
+- [ ] **Step 6: Run the tests across BOTH modules**
+
+```bash
+./gradlew :kuilt-session:jvmTest :kuilt-session-test:jvmTest --tests "*LocalFabricTest*" --rerun-tasks
+./gradlew :kuilt-session-test:compileKotlinJvm --rerun-tasks
+```
+
+Expected: **PASS**. The second command is the one that catches F1 — do not skip it.
 
 - [ ] **Step 7: Commit**
 
@@ -615,6 +690,7 @@ git commit -m "feat(session): Room.localFabric — self-attributed reachability 
 **Files:**
 - Modify: `kuilt-session/src/commonMain/kotlin/us/tractat/kuilt/session/MembershipEvent.kt`
 - Modify: `kuilt-session/src/commonMain/kotlin/us/tractat/kuilt/session/SeamRoom.kt` (lines 651, 1507, 1587, 1660)
+- Modify: `kuilt-session-test/src/commonMain/kotlin/us/tractat/kuilt/session/test/FakeRoom.kt:187, :221` — both construct the changed events
 - Test: `kuilt-session/src/commonTest/kotlin/us/tractat/kuilt/session/LocalFabricTest.kt` (extend)
 
 **Interfaces:**
@@ -685,17 +761,25 @@ Use the same KDoc on `HostLost.localFabric`, substituting "about the host" for "
 
 - [ ] **Step 4: Populate it at all four emission sites**
 
-`SeamRoom.kt` lines 651 (`onReconnectStarted`), 1507 (`markPartitioned`), 1587 (`handlePaused`), 1660 (`markHostLost`). Each becomes `localFabric = _localFabric.value`.
+`SeamRoom.kt` lines 651 (`onReconnectStarted`), 1507 (`markPartitioned`), 1587 (`handlePaused`), 1660 (`markHostLost`). Each becomes:
 
-Read it **outside** the room's `lock` — the lock guards `admittedById`, and every one of these sites already emits outside it. `_localFabric` is a `MutableStateFlow`, so the read is thread-safe on its own.
-
-- [ ] **Step 5: Fix the fallout and run**
-
-```bash
-./gradlew :kuilt-session:jvmTest --rerun-tasks
+```kotlin
+            localFabric = localFabric.value,   // the zero-lag view, NOT a mirrored field
 ```
 
-Expected: **PASS**. Compile errors in other tests mean positional construction — add the named argument.
+**This must read the zero-lag projection from Task 3, never a `MutableStateFlow` copy.** These four sites run on coroutines other than the capability collector; against a mirrored field, a radio death would emit `HostLost(localFabric = Available)` because the collector had not yet been dispatched — the #1712 headline case inverted, and the single worst possible failure for this feature.
+
+Read it **outside** the room's `lock` — the lock guards `admittedById`, and every one of these sites already emits outside it.
+
+Then fix `FakeRoom.kt:187` and `:221`, which construct `Partitioned` and `HostLost`. Pass `_localFabric.value` so the fake's tag tracks its own `setLocalFabric`.
+
+- [ ] **Step 5: Fix the fallout and run — across modules**
+
+```bash
+./gradlew :kuilt-session:jvmTest :kuilt-session-test:jvmTest :kuilt-conformance:jvmTest --rerun-tasks
+```
+
+Expected: **PASS**. `:kuilt-session:jvmTest` alone is insufficient here: it does not compile `:kuilt-session-test`, so the `FakeRoom` breaks above would stay invisible until a later task's full build. Compile errors elsewhere mean positional construction — add the named argument, do not reorder parameters.
 
 - [ ] **Step 6: Commit**
 
@@ -794,7 +878,8 @@ At 1505, hoist the deadline above the role gate and use it (Task 6 will reuse th
                     ?: return
                 )
         }
-        // …unchanged below; propagatePaused now takes expiresAt.inWholeMilliseconds…
+        // …unchanged below; propagatePaused now takes expiresAt.toEpochMilliseconds().
+        // NOT `.inWholeMilliseconds` — expiresAt is an Instant, not a Duration.
     }
 ```
 
@@ -805,6 +890,22 @@ At 1505, hoist the deadline above the role gate and use it (Task 6 will reuse th
             at.toEpochMilliseconds() + heartbeatConfig.reconnectWindow.inWholeMilliseconds,
         )
 ```
+
+**Do not clobber a host-authoritative deadline (F4).** On a mesh a member can receive the host's `Paused` *before* its own detector fires. `markPartitioned` would then overwrite the host's authoritative `expiresAt` with a local estimate — the mirror of the hazard Task 6 Step 5 fixes, which only handles the reverse order. The window authority is the host, so:
+
+```kotlin
+            val current = admittedById[peerId] ?: return
+            val existing = current.liveness as? Liveness.Partitioned
+            // The host owns the window for its joiners and genuinely re-arms it on re-detection, so
+            // it always recomputes. A non-host must PRESERVE a deadline it already holds: that value
+            // is either the host's authoritative Paused or its own earlier estimate, and a fresh
+            // local estimate is no better than either.
+            val effectiveExpiry =
+                if (_role.value == SessionRole.Host || existing == null) expiresAt
+                else existing.windowExpiresAt
+```
+
+and use `effectiveExpiry` in the `Liveness.Partitioned(...)` and in the emitted `WindowOpened`.
 
 Same operands, same order, same truncation as the controller — so the deadline on the level is provably the one the controller enforces, not merely a value that ought to agree.
 
@@ -832,14 +933,15 @@ In `FakeRoom.kt`, `partition()` gains a **defaulted** parameter so existing cons
      */
     public fun partition(
         peerId: PeerId,
-        windowExpiresAt: Instant = clock() + 1.minutes,
+        at: Instant = DEFAULT_AT,
+        windowExpiresAt: Instant = at + 1.minutes,
     ) {
-        updateLiveness(peerId, Liveness.Partitioned(since = clock(), windowExpiresAt = windowExpiresAt))
+        updateLiveness(peerId, Liveness.Partitioned(since = at, windowExpiresAt = windowExpiresAt))
         // …unchanged…
     }
 ```
 
-Read `FakeRoom`'s existing clock/time handling first — if it has no clock, add the parameter as required-with-no-default only if there are no external call sites, otherwise thread a clock in.
+**`FakeRoom` has no clock** — do not write `clock()`. Its existing `partition` already takes an instant (it constructs `MembershipEvent.Partitioned(peerId, at, reason)` at `:187`); reuse that parameter and its default rather than introducing a clock. Read the current signature and match it.
 
 - [ ] **Step 3: Update every broken assertion**
 
@@ -923,6 +1025,24 @@ Create `kuilt-session/src/commonTest/kotlin/us/tractat/kuilt/session/WindowLevel
      */
     @Test
     fun hostPausedRefinesALocallyEstimatedDeadline() { /* … */ }
+
+    /**
+     * F4, the reverse order: Paused arrives BEFORE local detection. A member's own detector firing
+     * afterwards must NOT overwrite the host's authoritative deadline with a local estimate.
+     * Deliver Paused with a deliberately distinctive expiresAt, then fire the local detector, then
+     * assert the roster still holds the host's value.
+     */
+    @Test
+    fun localDetectionDoesNotClobberAnEarlierHostPausedDeadline() { /* … */ }
+
+    /**
+     * F6: a re-arm must re-emit. Drive an unresponsive peer twice (Timeout, then a detector
+     * link-close) and assert TWO WindowOpened events with the LATER deadline second — the
+     * controller re-arms unconditionally today and consumers must not be left counting down to a
+     * deadline that has moved.
+     */
+    @Test
+    fun reArmingTheWindowReEmitsWindowOpenedWithTheNewDeadline() { /* … */ }
 ```
 
 Fill each body against the module's existing idiom. For `joinerHostTimeoutOpensAWindowWithADeadline`, drive `PartitionEvent.Reason.Timeout` — **not** `TransportClosed`, which routes to `attemptReconnect` instead of `markPartitioned` and would not exercise the defect. `JoinerHostTimeoutRecoveryTest` is the reference for that injection.
@@ -933,7 +1053,9 @@ Fill each body against the module's existing idiom. For `joinerHostTimeoutOpensA
 ./gradlew :kuilt-session:jvmTest --tests "*WindowLevelTest*"
 ```
 
-Expected: **FAIL** — no `WindowOpened` on the joiner lane; the late-subscriber and refinement cases red too.
+Expected: **FAIL** — but *not uniformly*, and the difference matters.
+
+`joinerHostTimeoutOpensAWindowWithADeadline`, `aLateSubscriberStillReadsTheDeadlineOffRoster` and `hostPausedRefinesALocallyEstimatedDeadline` must be **RED**. `hostEmitsWindowOpenedForAnUnresponsiveJoiner` may well **PASS** today: the controller does emit for the host, just across a race this test is unlikely to lose deterministically. It is a **characterization** test — it pins the behaviour the refactor must preserve, not a defect. Record which of the four were red; if the joiner-lane test passes at this step, the injection is wrong (you probably drove `TransportClosed` instead of `Timeout`) — fix the test before touching production code.
 
 - [ ] **Step 3: Emit inline**
 
@@ -941,14 +1063,21 @@ In `markPartitioned`, after the existing `Partitioned` emission:
 
 ```kotlin
         if (!wasPartitioned) {
-            emitEvent(MembershipEvent.Partitioned(updated.id, at, reason, _localFabric.value))
-            // Inline, from the SAME expiresAt that sets the level and feeds propagatePaused.
-            // Previously the host's window crossed the controller's replay-0 SharedFlow (lost when
-            // runReconnectEventLoop had not yet subscribed, #1618 Drop B) and the joiner got none at
-            // all (reconnectController is null on a joiner, #1724). markPartitioned is role-agnostic,
-            // so one emission serves both.
-            emitEvent(MembershipEvent.WindowOpened(updated.id, expiresAt))
+            emitEvent(MembershipEvent.Partitioned(updated.id, at, reason, localFabric.value))
         }
+        // WindowOpened is emitted UNCONDITIONALLY — deliberately outside the !wasPartitioned gate,
+        // unlike Partitioned. `reconnectController.onPeerUnresponsive` below is also unconditional,
+        // and `openWindow` cancels the existing timer and re-arms, re-emitting WindowOpened. Gating
+        // this on !wasPartitioned while deleting the controller's mapping (Step 4) would silently
+        // drop every re-arm — reachable when a detector link-close follows a Timeout episode — and
+        // consumers would count down to a deadline that had already moved.
+        //
+        // Inline, from the SAME expiresAt that sets the level and feeds propagatePaused. Previously
+        // the host's window crossed the controller's replay-0 SharedFlow (lost when
+        // runReconnectEventLoop had not yet subscribed, #1618 Drop B) and the joiner got none at all
+        // (reconnectController is null on a joiner, #1724). markPartitioned is role-agnostic, so one
+        // emission serves both.
+        emitEvent(MembershipEvent.WindowOpened(updated.id, expiresAt))
 ```
 
 - [ ] **Step 4: Drop the controller's mapping**
@@ -1030,6 +1159,14 @@ Append to `WindowLevelTest.kt`:
      */
     @Test
     fun joinerShowsItsHostPartitionedInTheRoster() { /* tear the host link; assert roster, not events */ }
+
+    /**
+     * The clear side. Without this the level is worse than no level: a host stuck Partitioned in
+     * the joiner's roster forever renders a permanent "reconnecting…". Resume the joiner and assert
+     * the roster returns to Liveness.Connected — asserting on ROSTER, not on the Resumed event.
+     */
+    @Test
+    fun aResumedJoinerShowsItsHostConnectedAgain() { /* … */ }
 ```
 
 Assert on `roster`, and assert the `windowExpiresAt` equals the `WindowOpened.expiresAt` the joiner emitted — that equality is the point.
