@@ -197,7 +197,7 @@ class WarpNodeCoordinatedRaftSimTest {
      * count — no task executes twice.
      *
      * Multi-node Raft discipline:
-     * - [raftSimTest] provides [StandardTestDispatcher] + 5 s timeout.
+     * - [raftSimTest] provides [StandardTestDispatcher] + the wall-clock wedge backstop.
      * - [MultiNodeRaftSim] handles per-node seeded [Random], backgroundScope child scopes,
      *   and the bounded [MultiNodeRaftSim.awaitLeader] / [MultiNodeRaftSim.awaitTrue] helpers.
      * - [ClaimStrategy.Ring] on each [WarpNode] eliminates the settle-window delay so the

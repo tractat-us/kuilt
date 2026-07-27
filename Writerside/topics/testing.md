@@ -83,12 +83,16 @@ quickly and print a full state dump instead of hanging.
 
 A few rules keep cluster tests fast and honest, all handled for you by `raftSimTest`:
 
-- **A tight timeout, not the default.** The harness caps the wait at 5 seconds, so a
-  cluster that never agrees fails in seconds with a diagnostic, not after a minute of
-  silence.
 - **Never "run until idle."** A consensus engine's timers re-arm forever, so it's
   never idle — asking it to run until quiet would spin forever. The `await*` helpers
-  advance time in bounded steps instead.
+  advance time in bounded steps instead, and give up after a couple of seconds *of the
+  test's own pretend clock* — which means they fail in the same place no matter how busy
+  the machine happens to be.
+- **A long stop-watch as a last resort.** There is also a plain 30-second real-world cap,
+  but it is only there to catch a test that has wedged somewhere the bounded waits can't
+  see. It is deliberately generous: it measures how fast your computer is, not whether the
+  code is correct, so a tight one would just fail at random on a busy laptop. When it does
+  fire, the harness prints the same full state dump.
 - **Each peer gets its own seeded randomness** so their election timers differ and one
   actually wins the race — otherwise every peer times out in lockstep and no leader
   ever emerges.

@@ -20,7 +20,7 @@
  * 2. `roundsAtExecution == coordinationCost(planned, stats).rounds` — execution matches the model.
  *
  * Multi-node Raft discipline (per CLAUDE.md):
- * - [raftSimTest] provides [StandardTestDispatcher] + 5 s timeout.
+ * - [raftSimTest] provides [StandardTestDispatcher] + the wall-clock wedge backstop.
  * - [MultiNodeRaftSim] handles per-node seeded [Random], backgroundScope child scopes,
  *   bounded [MultiNodeRaftSim.awaitLeader] and [MultiNodeRaftSim.proposeOnLeader] helpers.
  * - [MultiNodeRaftSim.checkInvariants] asserts election safety and state-machine safety.

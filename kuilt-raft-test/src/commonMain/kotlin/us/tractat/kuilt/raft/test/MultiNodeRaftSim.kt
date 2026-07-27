@@ -33,7 +33,7 @@
  *
  * ```kotlin
  * @Test
- * fun leaderElectedManual() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+ * fun leaderElectedManual() = runTest(StandardTestDispatcher(), timeout = RAFT_SIM_WEDGE_BACKSTOP) {
  *     val ids = listOf(NodeId("a"), NodeId("b"), NodeId("c"))
  *     val sim = MultiNodeRaftSim(nodeIds = ids, scope = this, nodeScope = backgroundScope)
  *     val leader = sim.awaitLeader()
@@ -48,22 +48,34 @@
  * the ordering of timer fires vs message round-trips load-dependent even though every `delay()` is
  * already virtual. `StandardTestDispatcher` fixes that ordering. See `:kuilt-raft` issue #383.
  *
- * Use [raftSimTest] as the standard entry point: it wires `StandardTestDispatcher`, the 5 s timeout,
- * and hands a ready [MultiNodeRaftSim] into the test body.
+ * Use [raftSimTest] as the standard entry point: it wires `StandardTestDispatcher`, the
+ * [RAFT_SIM_WEDGE_BACKSTOP] wall-clock backstop, [dumpOnWedge], and hands a ready
+ * [MultiNodeRaftSim] into the test body.
+ *
+ * ## Where fast failure comes from
+ *
+ * **Not** from the outer [runTest] budget. Everything that budget bounds is virtual-time and
+ * deterministic, so a wall-clock cap over it measures the host, not the cluster — see
+ * [RAFT_SIM_WEDGE_BACKSTOP]. Fast, legible failure comes from two load-*independent* detectors,
+ * both of which fail with a full [dumpState]:
+ *
+ * - the bounded `await*` helpers' `within` bound (`DEFAULT_AWAIT`, 2 s of **virtual** time), and
+ * - the `MAX_ELECTION_THRASH` election-churn bound.
  *
  * ## Non-converging clusters
  *
  * A cluster that never elects a leader (e.g. all nodes share one [Random] seed and draw identical
  * election timeouts) causes election/heartbeat timers to fire without bound. Under
  * `StandardTestDispatcher` this inflates virtual time while CPU stays pegged on scheduler
- * bookkeeping — the [runTest] timeout eventually fires, but only after a full 5 s wall-clock wait.
- * The `await*` helpers detect churn early via an election-cycle counter and fail fast with a
- * [dumpState] before the outer timeout fires. Symptom: `election thrash exceeded N cycles`.
+ * bookkeeping. The `await*` helpers detect the churn early via an election-cycle counter and fail
+ * fast with a [dumpState] — long before the outer wall-clock backstop could fire. Symptom:
+ * `election thrash exceeded N cycles`.
  */
 @file:OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 
 package us.tractat.kuilt.raft.test
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
@@ -473,9 +485,85 @@ public val MULTI_NODE_SIM_BASE_CONFIG: RaftConfig = RaftConfig(
 )
 
 /**
+ * Wall-clock backstop for [raftSimTest] — the budget for a genuine **wedge**, *not* a performance
+ * assertion.
+ *
+ * ## Why it is deliberately loose
+ *
+ * A [MultiNodeRaftSim] test runs entirely on virtual time: `StandardTestDispatcher`, per-node
+ * seeded [Random], an in-memory [MultiNodeRaftNetwork], and [RaftConfig.expectVirtualTime]. There
+ * is **no real-clock input anywhere on the execution path**, so the virtual trajectory — and
+ * therefore the total quantity of real work — is identical on every run. Machine load can change
+ * only the wall-clock *rate* at which that fixed work is retired.
+ *
+ * A tight wall-clock cap over a fixed quantity of work is therefore not an assertion about the code
+ * at all. It asserts *"this host can retire N units of work in T seconds"*. Measured on a 16-core
+ * box, the heaviest current `raftSimTest` costs 0.435 s near-idle and 1.453 s under a routine
+ * multi-agent build load — 3.34×, with a sibling test degrading 3.47× (uniform CPU contention, not
+ * a hot loop). Against the previous 5 s cap that left ~3× of margin, which a full
+ * `./gradlew build --rerun-tasks` closes; the result was recurring false reds across three
+ * unrelated modules (kuilt #1382).
+ *
+ * ## Do NOT tighten this back to a few seconds
+ *
+ * The instinct is that a tight timeout buys fast failure. Here it does not — fast failure is
+ * already bought, *load-independently*, by the bounded `await*` helpers' `within` bound
+ * (`DEFAULT_AWAIT`, 2 s of **virtual** time, immune to contention) and by the
+ * `MAX_ELECTION_THRASH` churn bound. Both fail fast **and** emit a full [MultiNodeRaftSim.dumpState].
+ * A tight outer cap fires *before* either can speak, producing a bare `UncompletedCoroutinesError`
+ * with no cluster state at all. Tightening it adds no detector; it pre-empts the legible ones with
+ * a load-sensitive false-red generator.
+ *
+ * What it *is* for is the residual case the virtual bounds cannot cover: a wedge **outside** the
+ * bounded helpers — an unbounded `await`, a deadlocked hand-rolled `Channel` receive. 30 s still
+ * bounds that to half a minute, and [dumpOnWedge] makes it legible when it fires.
+ */
+public val RAFT_SIM_WEDGE_BACKSTOP: Duration = 30.seconds
+
+/**
+ * Run [body], emitting a [MultiNodeRaftSim.dumpState] snapshot of [sim] to [emit] if [body] is
+ * **cancelled**, then rethrowing the [CancellationException] untouched.
+ *
+ * This is what makes a wedge legible. When [raftSimTest]'s [RAFT_SIM_WEDGE_BACKSTOP] expires,
+ * [runTest] cancels the test coroutine and reports a bare `UncompletedCoroutinesError` that says
+ * nothing about the cluster — historically the worst diagnostic in the harness. Intercepting the
+ * cancellation here puts roles, terms, commit indices, log ranges and the election histogram in the
+ * test output *before* that error is raised, so the next occurrence self-diagnoses.
+ *
+ * [MultiNodeRaftSim.dumpState] is a `suspend` function that reads storage, so it cannot run on the
+ * cancelled scope — it is invoked under [NonCancellable], exactly as the bounded `await*` helpers
+ * already do.
+ *
+ * Only cancellation is intercepted. An ordinary failure — including the [AssertionError] the
+ * `await*` helpers throw, which already carries its own dump — propagates untouched.
+ *
+ * [raftSimTest] applies this automatically; call it directly only when hand-wiring a
+ * [MultiNodeRaftSim] under your own [runTest].
+ *
+ * @param sim The simulation to snapshot on a wedge.
+ * @param emit Where the dump goes. Defaults to `println`, which the Gradle test report captures as
+ *   `system-out` alongside the failure. Override to capture the dump in a test.
+ */
+public suspend fun <T> dumpOnWedge(
+    sim: MultiNodeRaftSim,
+    emit: (String) -> Unit = { println(it) },
+    body: suspend () -> T,
+): T = try {
+    body()
+} catch (e: CancellationException) {
+    emit(withContext(NonCancellable) { sim.dumpState(WEDGE_REASON) })
+    throw e
+}
+
+private const val WEDGE_REASON: String =
+    "test coroutine cancelled — most likely raftSimTest's wall-clock backstop firing on a wedge " +
+        "outside the bounded await helpers (see kuilt #1382)"
+
+/**
  * Build a [MultiNodeRaftSim] of [n] voters and run [body] under
- * `runTest(StandardTestDispatcher(), timeout = 5.seconds)` — the canonical harness for multi-node
- * Raft tests. See [MultiNodeRaftSim] for the full determinism contract.
+ * `runTest(StandardTestDispatcher(), timeout = RAFT_SIM_WEDGE_BACKSTOP)`, wrapped in
+ * [dumpOnWedge] — the canonical harness for multi-node Raft tests. See [MultiNodeRaftSim] for the
+ * full determinism contract.
  *
  * ```kotlin
  * @Test
@@ -502,14 +590,16 @@ public val MULTI_NODE_SIM_BASE_CONFIG: RaftConfig = RaftConfig(
  * @param n Number of voters (default 3 — minimum for fault tolerance with one crash).
  * @param baseConfig Timing config forwarded to [MultiNodeRaftSim]. Defaults to [MULTI_NODE_SIM_BASE_CONFIG].
  * @param baseSeed Seed for per-node [Random] derivation. Defaults to [MULTI_NODE_SIM_SEED].
- * @param timeout Test timeout. Default 5 s — tight enough to surface hangs quickly. Widen only for
- *   tests that intentionally wait on multi-round operations (e.g. large-log compaction).
+ * @param timeout Wall-clock **wedge backstop**, not a performance budget — read
+ *   [RAFT_SIM_WEDGE_BACKSTOP] before changing it, and in particular before tightening it. Fast
+ *   failure is the job of the bounded `await*` helpers' virtual `within` bounds and the
+ *   election-churn bound, both of which are load-independent and dump state.
  */
 public fun raftSimTest(
     n: Int = 3,
     baseConfig: RaftConfig = MULTI_NODE_SIM_BASE_CONFIG,
     baseSeed: Long = MULTI_NODE_SIM_SEED,
-    timeout: Duration = 5.seconds,
+    timeout: Duration = RAFT_SIM_WEDGE_BACKSTOP,
     body: suspend TestScope.(MultiNodeRaftSim) -> Unit,
 ): TestResult = runTest(
     context = StandardTestDispatcher(),
@@ -523,7 +613,7 @@ public fun raftSimTest(
         baseConfig = baseConfig,
         baseSeed = baseSeed,
     )
-    body(sim)
+    dumpOnWedge(sim) { body(sim) }
 }
 
 // ── Private factory ──────────────────────────────────────────────────────────

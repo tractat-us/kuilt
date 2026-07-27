@@ -28,7 +28,7 @@ import kotlin.test.assertEquals
  * are needed. [RaftTraceEvent] captures both the send and the acceptance at the protocol
  * level, irrespective of serialisation overhead, making the counts transport-agnostic.
  *
- * All tests run under [raftSimTest]'s [StandardTestDispatcher] + 5 s timeout. Each test
+ * All tests run under [raftSimTest]'s [StandardTestDispatcher] + wall-clock wedge backstop. Each test
  * is fenced independently so a hang in one does not block others.
  */
 class RaftScalingTest {

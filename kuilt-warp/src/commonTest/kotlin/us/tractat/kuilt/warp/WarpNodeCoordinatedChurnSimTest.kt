@@ -14,7 +14,7 @@
  * set prevents a second committed entry for the same task from re-executing it.
  *
  * Multi-node Raft discipline (per CLAUDE.md):
- * - [raftSimTest] → [StandardTestDispatcher], 5 s timeout.
+ * - [raftSimTest] → [StandardTestDispatcher], wall-clock wedge backstop.
  * - [MultiNodeRaftSim] seeded per-node [Random], backgroundScope child scopes.
  * - Bounded [MultiNodeRaftSim.awaitTrue] — never [advanceUntilIdle].
  * - [ClaimStrategy.Ring] so claiming fires immediately without a settle window.

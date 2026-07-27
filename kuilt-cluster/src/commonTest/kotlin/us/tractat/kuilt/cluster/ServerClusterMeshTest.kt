@@ -15,7 +15,7 @@ import kotlin.test.assertTrue
  * Voter-core consensus tests for [VoterMesh], S3b-2 of epic #485.
  *
  * Proves that an M=3 voter mesh wired under [us.tractat.kuilt.raft.test.MultiNodeRaftSim]
- * (virtual time, [kotlinx.coroutines.test.StandardTestDispatcher], 5 s timeout) converges
+ * (virtual time, [kotlinx.coroutines.test.StandardTestDispatcher], wedge backstop) converges
  * correctly. This is the headline proof for S3b-2: the voter mesh wiring works.
  *
  * Tests run in `commonTest` — `MultiNodeRaftSim` is a commonMain artifact in `:kuilt-raft-test`,
@@ -23,7 +23,9 @@ import kotlin.test.assertTrue
  *
  * ## Harness discipline (enforced by `verifyRaftHarnessDiscipline`)
  *
- * - Every `runTest(...)` carries an explicit `timeout =` (via `raftSimTest`'s 5 s default).
+ * - Every `runTest(...)` carries an explicit `timeout =` (via `raftSimTest`'s
+ *   `RAFT_SIM_WEDGE_BACKSTOP` default). Fast failure comes from the bounded virtual-time
+ *   `await*` bounds, not from that wall-clock cap.
  * - Cluster-state awaits use `sim.await*` bounded helpers — never raw `.first/.filter` on
  *   `commitIndex` or `role`, never `advanceUntilIdle()`.
  * - Node coroutines run on `backgroundScope` (wired by `raftSimTest`).
