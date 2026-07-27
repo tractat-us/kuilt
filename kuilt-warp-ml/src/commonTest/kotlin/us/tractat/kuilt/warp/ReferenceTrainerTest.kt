@@ -4,6 +4,7 @@ import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 
 class ReferenceTrainerTest {
 
@@ -22,6 +23,18 @@ class ReferenceTrainerTest {
             { assertEquals(1.3, out[0], absoluteTolerance = 1e-12) },
             { assertEquals(0.2, out[1], absoluteTolerance = 1e-12) },
         )
+    }
+
+    /**
+     * An empty batch makes `scale = 2.0 / 0.0 = +Infinity`, and both gradients are `0.0`, so
+     * `Infinity * 0.0` yields `NaN` and the step silently returns `[NaN, NaN]`. Fail loud
+     * instead — a NaN weight dominates `FedAvg`'s slot ordering and poisons the merged model.
+     */
+    @Test
+    fun `step rejects an empty batch instead of returning NaN`() {
+        assertFailsWith<IllegalArgumentException> {
+            ReferenceTrainer.step(weights = listOf(1.0, 0.0), examples = emptyList(), learnRate = 0.1)
+        }
     }
 
     @Test

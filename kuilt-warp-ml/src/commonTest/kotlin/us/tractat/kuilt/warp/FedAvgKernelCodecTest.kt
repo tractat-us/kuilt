@@ -28,6 +28,18 @@ class FedAvgKernelCodecTest {
         )
     }
 
+    /**
+     * The kernel divides by the example count (`f64.div (f64.const 2) (f64.convert_i32_u n)`),
+     * so an empty batch traps it into `Infinity * 0.0 = NaN` exactly as the Kotlin oracle does.
+     * Reject the input here so neither path can produce a NaN weight vector.
+     */
+    @Test
+    fun `encodeInput rejects an empty batch`() {
+        assertFailsWith<IllegalArgumentException> {
+            FedAvgKernelCodec.encodeInput(weights = listOf(1.0, 0.0), examples = emptyList(), learnRate = 0.1)
+        }
+    }
+
     @Test
     fun `decodeOutput round-trips an encoded output`() {
         val out = FedAvgKernelCodec.encodeOutputForTest(sampleCount = 7L, weights = listOf(1.3, 0.2))
