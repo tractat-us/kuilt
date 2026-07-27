@@ -29,12 +29,26 @@ public class PlyReconcileException(
     override val cause: Throwable,
 ) : Exception("composite ply '${plyId.value}' failed to ${phase.name.lowercase()}: $cause", cause) {
 
-    /** Which half of the reconciliation the ply failed in. */
+    /**
+     * Which part of the reconciliation the ply failed in.
+     *
+     * Pre-1.0 this may gain values: a `when` over it should carry an `else`.
+     */
     public enum class Phase {
         /** `Loom.capability()`, `Loom.weave()`, or the attach itself threw; the ply is not live. */
         ATTACH,
 
         /** The ply's teardown threw. Its pumps are stopped and it is out of the composite regardless. */
         DETACH,
+
+        /**
+         * The ply was woven but could not be attached — the composite had already been closed — and
+         * closing the freshly woven transport back down *also* threw, so it may be leaked.
+         *
+         * Distinct from [DETACH] deliberately: this ply never entered the live set and never appeared in
+         * `Seam.plies`, so there was nothing in the composite to remove and [DETACH]'s "its pumps are
+         * stopped and it is out of the composite" would be a false report.
+         */
+        SALVAGE,
     }
 }
