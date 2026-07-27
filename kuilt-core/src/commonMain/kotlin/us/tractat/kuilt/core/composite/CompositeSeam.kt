@@ -243,12 +243,20 @@ internal class CompositeSeam(
         // attaches" is enforced by statement order here instead of by this property happening to be
         // declared below every field publishCapability touches — a declaration reorder must not be able
         // to make the writer observe an uninitialised field.
+        //
+        // UNGUARDED BY DESIGN, AND THAT IS A CONSTRAINT ON THE BODY, NOT AN OVERSIGHT: no consumer-authored
+        // call may enter this loop. An escaping throw kills the flow's ONLY writer, and because [scope] is a
+        // SupervisorJob nothing else dies and nothing restarts it — [capability] then freezes at its last
+        // value for the life of the seam with a lone stderr trace, the silent-death mode `4f93c843` had to
+        // guard the reconcile pump against. Safe today precisely because [publishCapability] folds mirrored
+        // handle state and makes no foreign call; keep it that way rather than adding a catch.
         capabilityWriter = scope.launch {
             for (request in capabilityRecomputes) publishCapability()
         }
 
         // Same contract, same ordering argument: started before any ply attaches, so no pump can enqueue a
-        // recompute request that has no writer to drain it.
+        // recompute request that has no writer to drain it. The no-consumer-call constraint above applies
+        // identically here — [publishPeers] folds mirrored state only.
         peersWriter = scope.launch {
             for (request in peersRecomputes) publishPeers()
         }
@@ -466,6 +474,16 @@ internal class CompositeSeam(
         // this lock, so a registration that wins the lock is inside close()'s snapshot and gets torn down
         // with the rest, while one that loses it observes `Torn` and declines. Checking outside the lock
         // would be check-then-act — the very race [SeamStateGate] exists to remove.
+        // Seeded from the ply's current values, read BEFORE taking the lock. These three are
+        // consumer-authored property getters, and this class's rule is that no foreign code runs while the
+        // lock is held — a pathological getter would otherwise stall every sender. Hoisting is free here:
+        // all three pumps below deliver their first value unconditionally (a StateFlow collector always
+        // emits once — `oldState == null`), so a seed that goes stale between this read and the
+        // registration is superseded either way, and the seeded window is a *pending* delivery, never a
+        // swallowed one.
+        val seedWoven = seam.state.value is SeamState.Woven
+        val seedAvailability = seam.capability.value.availability
+        val seedTransportPeers = seam.peers.value
         lock.withLock {
             if (state.value is SeamState.Torn) return false
             live[id] = PlyHandle(
@@ -473,12 +491,9 @@ internal class CompositeSeam(
                 job = job,
                 // Captured once — static by contract, so no pump mirrors this and nothing re-reads it.
                 roles = roles,
-                // Seeded from the ply's current values. All three pumps below deliver their first value
-                // unconditionally (a StateFlow collector always emits once — `oldState == null`), so these
-                // seeds are immediately superseded by delivered ones.
-                woven = seam.state.value is SeamState.Woven,
-                availability = seam.capability.value.availability,
-                transportPeers = seam.peers.value,
+                woven = seedWoven,
+                availability = seedAvailability,
+                transportPeers = seedTransportPeers,
             )
         }
 
@@ -870,6 +885,14 @@ internal class CompositeSeam(
      * [Seam] and not asserted by the conformance suite, so a consumer fabric that tears without collapsing
      * would leave [peers] stale-inclusive until detach.
      *
+     * **[CompositeSeam] is itself such a fabric** — [close] never collapses [_peers], so a closed composite
+     * reports its pre-close roster forever, and a composite is type-legal as a *ply* of another composite
+     * ([CompositeLoom] is a [Loom]). So the in-tree instance already exists; it is pre-existing on `main` and
+     * deliberately not fixed here, because the naive `_peers.value = setOf(selfId)` in [close] **races** the
+     * writer — an in-flight [publishPeers] holding a pre-clear snapshot would overwrite it, which is this
+     * issue's own defect resurfacing. Doing it properly needs the writer stopped first. Tracked with the
+     * contract gap in #1816.
+     *
      * Adding `handle.woven` to [reachablePeersLocked]'s predicate looks like the fix and **is not**: the pump
      * that mirrors [PlyHandle.woven] requests only a *capability* recompute, never a peers one, so `woven`
      * would become an input to that fold with no trigger — a fresh instance of the lost-trigger defect above (a ply
@@ -935,11 +958,15 @@ internal class CompositeSeam(
      *    [peersWriter] itself is dead. Read once and it may simply be a request still in flight; read twice,
      *    unchanged, and it is one of those two.
      *  - [PeersStrand.wouldPublish] **equals** [peers] while `peers` is short of what the test expects ⇒ the
-     *    fold's own inputs are wrong, not its publishing. Post-#1784 the input is each ply's *mirrored*
-     *    peer set ([PlyHandle.transportPeers]), so this points at a mirror that never advanced — its pump
-     *    not yet dispatched, or blocked. Compare against the ply seams' live `peers` to tell them apart.
-     *  - [PeersStrand.idMap] is **empty** ⇒ no `Announce` was ever recorded, so the failure is upstream
-     *    of the peers strand entirely.
+     *    fold's own **inputs** are wrong, not its publishing — exhaustively, since the fold is total over its
+     *    three inputs. Any of: a ply's *mirrored* peer set ([PlyHandle.transportPeers]) never advanced (its
+     *    pump not yet dispatched, or blocked); [PeersStrand.idMap] lacks the expected
+     *    `(plyId, transportId)` entry; or that ply is absent from [PeersStrand.livePlies]. Compare against
+     *    the ply seams' live `peers` to tell the first from the rest.
+     *  - [PeersStrand.idMap] lacks the expected `(plyId, transportId)` entry — **empty** in the limit ⇒ the
+     *    `Announce` was never recorded, so the failure is upstream of the peers strand entirely. A *partial*
+     *    `idMap` is genuinely reachable, not just the empty case: both announce sends are best-effort and
+     *    swallowed ([attachPly]), so one ply can learn a mapping its sibling never did.
      *
      * Neither the mesh membership of the underlying plies nor either composite's [peers] can tell those
      * apart — the mesh reads as formed in both.
