@@ -14,12 +14,18 @@ public object ReferenceTrainer {
      *
      * Operation order is load-bearing: it is replicated verbatim in `fedavg_train.wat`, so the
      * two produce bit-identical f64 results on the JVM.
+     *
+     * @throws IllegalArgumentException if [examples] is empty. The mean-squared-error scale is
+     *   `2 / |examples|`, so an empty batch would divide by zero and return `[NaN, NaN]` — a NaN
+     *   weight then dominates [FedAvg]'s slot ordering and poisons the merged model, so fail loud
+     *   rather than emit a plausible-looking wrong answer.
      */
     public fun step(
         weights: List<Double>,
         examples: List<Pair<Double, Double>>,
         learnRate: Double,
     ): List<Double> {
+        require(examples.isNotEmpty()) { "a training step needs at least one example" }
         val w0 = weights[0]
         val b = weights[1]
         var gradW0 = 0.0

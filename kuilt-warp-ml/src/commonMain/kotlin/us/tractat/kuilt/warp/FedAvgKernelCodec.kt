@@ -19,13 +19,21 @@ public object FedAvgKernelCodec {
     /** Length in bytes of the kernel's output region. */
     public const val RESULT_LEN: Int = 32
 
-    /** Encodes `(weights, examples, learnRate)` into the kernel input layout. */
+    /**
+     * Encodes `(weights, examples, learnRate)` into the kernel input layout.
+     *
+     * @throws IllegalArgumentException if [weights] is not `D = 2`-dimensional, or if [examples]
+     *   is empty. The kernel scales the gradient by `2 / count`, so a zero count divides by zero
+     *   and emit a `NaN` weight vector — matching [ReferenceTrainer.step]'s guard keeps the oracle
+     *   and the kernel equivalent for every input either one accepts.
+     */
     public fun encodeInput(
         weights: List<Double>,
         examples: List<Pair<Double, Double>>,
         learnRate: Double,
     ): ByteArray {
         require(weights.size == DIM) { "v1 kernel requires D=$DIM weights, got ${weights.size}" }
+        require(examples.isNotEmpty()) { "a training batch needs at least one example" }
         val out = ByteArray(HEADER_BYTES + examples.size * EXAMPLE_BYTES)
         putU32(out, 0, MAGIC)
         putU32(out, 4, DIM)
