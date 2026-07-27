@@ -46,6 +46,8 @@ internal class SnapshotSender(
             val stored = storage.loadSnapshot() ?: return null   // nothing to send yet
             SnapshotXfer(stored.meta, stored.state, 0L).also { snapshotXfer[peer] = it }
         }
+        // Lossless by construction: nextOffset is only ever 0 (fresh load) or a value [onAck] clamped
+        // into 0..state.size, and state.size is an Int. Keep that clamp if you touch [onAck] (#1818).
         val start = xfer.nextOffset.toInt()
         val end = minOf(start + chunkBytes(), xfer.state.size)
         val done = end >= xfer.state.size
@@ -62,10 +64,33 @@ internal class SnapshotSender(
      * Advance the transfer to [peer] on the follower's ack (its next expected offset, [nextOffset]).
      * Returns [AckOutcome.NoTransfer] if no transfer is in flight, [AckOutcome.Complete] once the whole
      * snapshot has been received (the transfer is removed), else [AckOutcome.SendNext].
+     *
+     * [nextOffset] is an unvalidated wire field, so it is clamped into `0..state.size` (#1817's sibling,
+     * #1818) — enforcing the class invariant above on the field rather than merely documenting it.
+     *
+     * The **lower** bound is the corrective half. A negative ack left `nextOffset >= state.size` false,
+     * so the machine returned [AckOutcome.SendNext] and the engine called [nextChunk], which sliced
+     * `state.copyOfRange(-1, …)`. That throws inside the engine's actor loop — a `try`/`finally` with no
+     * `catch` — so the throw unwinds the loop and its `finally` runs the full teardown: one malformed
+     * frame from one follower permanently killed the leader. Clamping to 0 rewinds the transfer instead,
+     * which is also the only in-range reading of the ack and matches the follower-driven `ReAdvertise(0)`
+     * rewind already supported. `require` would be the wrong shape for exactly the reason the crash was
+     * fatal: it throws in that same uncaught loop.
+     *
+     * The **upper** bound is defensive, not corrective: any `nextOffset > Int.MAX_VALUE` is necessarily
+     * `>= state.size` (a `ByteArray`'s size is an `Int`), so it already exited via [AckOutcome.Complete]
+     * and never reached [nextChunk]'s `.toInt()`. Clamping makes that narrowing lossless by construction
+     * instead of by that two-step argument.
+     *
+     * Deliberately **not** addressed, because no clamp can: a follower that stored nothing but acks
+     * `nextOffset = state.size` gets [AckOutcome.Complete], and the engine credits it
+     * `matchIndex = lastIncludedIndex`. That value is in range, so it is indistinguishable from an honest
+     * completion — a Byzantine lie, outside Raft's crash-fault model, and unprovable without an
+     * end-to-end digest of the transferred bytes.
      */
     fun onAck(peer: NodeId, nextOffset: Long): AckOutcome {
         val xfer = snapshotXfer[peer] ?: return AckOutcome.NoTransfer
-        xfer.nextOffset = nextOffset
+        xfer.nextOffset = nextOffset.coerceIn(0L, xfer.state.size.toLong())
         return if (xfer.nextOffset >= xfer.state.size) {          // fully received
             snapshotXfer.remove(peer)
             AckOutcome.Complete(xfer.meta.lastIncludedIndex)

@@ -35,8 +35,10 @@ internal data class GatedRead(val deferred: CompletableDeferred<Long>, val reinv
  * [lastAckRound]`[v] > H` ([resolve]). Without the nonce, an ACK generated in response to a round-H
  * heartbeat but arriving after the round advanced to `H+1` would be credited to `H+1` and wrongly
  * appear fresh for a read queued at `sinceRound = H` (round-slip). Crediting to the echoed round `H`
- * correctly excludes it. Pinned by `roundSlipAckDoesNotConfirmReadIndex` /
- * `staleAckDoesNotConfirmReadIndex`.
+ * correctly excludes it. The echoed round is clamped to [round] on the way in (#1817) — an honest echo
+ * can never exceed it, so the clamp costs nothing here and denies a forged echo a permanent seat in the
+ * freshness quorum. Pinned by `roundSlipAckDoesNotConfirmReadIndex` / `staleAckDoesNotConfirmReadIndex` /
+ * `ReadIndexRoundClampTest`.
  *
  * **BLOCKER 2 — joint dual-majority (do not regress).** Freshness is checked via
  * [MembershipState.quorumOfContacts], which during a Joint configuration requires an independent fresh
@@ -117,9 +119,19 @@ internal class ReadIndexTracker {
     /**
      * Record that [from] answered a heartbeat that echoed [echoedRound] (BLOCKER 1a). Crediting the ACK
      * to the round it actually responded to — not the current [round] — is what defeats round-slip.
+     *
+     * Clamped to [round] (#1817): [round] only ever increases and only this leader stamps it into an
+     * outgoing request, so any round a follower could be echoing was necessarily stamped while [round]
+     * was at or below its present value — an honest `echoedRound` therefore always satisfies
+     * `echoedRound <= round` and the clamp is a no-op for it (in particular a *late* ACK keeps its older
+     * echoed round, preserving BLOCKER 1). The clamp only bites on a value this leader never sent, where
+     * it turns a forged freshness quorum — one `Long.MAX_VALUE` reply counting as fresh for every read
+     * for the rest of the term, serving a stale read as linearizable (§3.7) — into a benign no-op. Same
+     * shape and same reasoning as the `minOf(m.matchIndex, state.lastLogIndex)` clamp in the
+     * AppendEntries-response handler (#1175).
      */
     fun recordAck(from: NodeId, echoedRound: Long) {
-        lastAckRound[from] = echoedRound
+        lastAckRound[from] = minOf(echoedRound, round)
     }
 
     /** Arm the §5.4.2 leader-completeness gate: reads must not resolve before commit reaches [index]. */
