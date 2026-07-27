@@ -824,14 +824,14 @@ internal class SeamRoom(
     /**
      * Collects [JoinerReconnectController] events and maps them to [MembershipEvent]s.
      *
-     * - [JoinerReconnectEvent.WindowOpened] → **nothing**. [markPartitioned] emits
-     *   [MembershipEvent.WindowOpened] inline, from the same `expiresAt` the controller is armed
-     *   with, so mapping it here would only duplicate it. It used to be the *only* emitter, which
+     * - [JoinerReconnectEvent.WindowOpened] → [refineWindow], **not** a direct
+     *   [MembershipEvent.WindowOpened]. [markPartitioned] already announced the window inline, so
+     *   this is a refinement that goes silent when the controller picked the same deadline — which
+     *   [DefaultJoinerReconnectController] always does. It used to be the *only* emitter, and that
      *   was the bug: the controller opens the window from a `scope.launch`, so its event reached
      *   this loop's `replay = 0` [kotlinx.coroutines.flow.SharedFlow] at an unpredictable later
      *   instant — discarded outright when this loop had not yet subscribed (#1618 Drop B) — and a
-     *   joiner has no controller at all, so it never got a window (#1724). The controller still
-     *   opens and enforces the real window; only its *event* is redundant.
+     *   joiner has no controller at all, so it never got a window (#1724).
      * - [JoinerReconnectEvent.Resumed] → [MembershipEvent.Resumed] (host events; liveness reset).
      * - [JoinerReconnectEvent.WindowExpired] → no extra *local* event here; the
      *   [HeartbeatPartitionDetector] drives [PartitionEvent.PeerLost] which produces
@@ -842,10 +842,8 @@ internal class SeamRoom(
     private suspend fun runReconnectEventLoop(ctrl: JoinerReconnectController) {
         ctrl.events.collect { event ->
             when (event) {
-                // Kept as an explicit no-op branch rather than deleted: the controller genuinely
-                // still opens the window this event reports; only announcing it here is redundant
-                // now that markPartitioned emits inline. See the KDoc above.
-                is JoinerReconnectEvent.WindowOpened -> Unit
+                is JoinerReconnectEvent.WindowOpened ->
+                    refineWindow(event.peerId, Instant.fromEpochMilliseconds(event.expiresAt))
                 is JoinerReconnectEvent.Resumed ->
                     handleReconnectResumed(event.peerId)
                 is JoinerReconnectEvent.WindowExpired -> {
@@ -1652,6 +1650,34 @@ internal class SeamRoom(
         if (!wasPartitioned && isHost) {
             propagatePaused(peerId, expiresAtMs = level.windowExpiresAt.toEpochMilliseconds())
         }
+    }
+
+    /**
+     * **Host only.** Replace [peerId]'s reconnect deadline with the one the
+     * [JoinerReconnectController] actually armed, and announce it if it moved.
+     *
+     * [markPartitioned] computes its deadline from [HeartbeatConfig.reconnectWindow], which is what
+     * the default [DefaultJoinerReconnectController] enforces — so for that controller this is a
+     * no-op and no duplicate [MembershipEvent.WindowOpened] is announced. But the controller is
+     * **injectable** (#1614) precisely so a host can implement a different hold policy — a
+     * predicate/unbounded hold that keeps a seat while a durable rejoin record exists. Such a
+     * controller is the *owner* of the window and its deadline can be arbitrarily far from
+     * `at + reconnectWindow`, so its number has to supersede the estimate — on the level as well as
+     * on the event, or the roster would contradict the announcement.
+     *
+     * The same authority relationship as [handlePaused]'s: whoever enforces the window decides it,
+     * and a locally-computed value is a placeholder until they speak.
+     *
+     * A no-op unless [peerId] is currently [Liveness.Partitioned]: a window announcement that
+     * arrives after the member recovered or was evicted must not resurrect a stale deadline.
+     */
+    private fun refineWindow(peerId: PeerId, expiresAt: Instant) {
+        lock.withLock {
+            val current = admittedById[peerId]?.liveness as? Liveness.Partitioned ?: return
+            if (current.windowExpiresAt == expiresAt) return
+            updateMemberLiveness(peerId, current.copy(windowExpiresAt = expiresAt)) ?: return
+        }
+        emitEvent(MembershipEvent.WindowOpened(peerId, expiresAt))
     }
 
     /**

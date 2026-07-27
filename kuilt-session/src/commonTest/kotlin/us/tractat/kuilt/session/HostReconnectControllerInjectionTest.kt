@@ -29,6 +29,7 @@ import kotlin.coroutines.ContinuationInterceptor
 import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertIs
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
@@ -111,7 +112,14 @@ class HostReconnectControllerInjectionTest {
 
             hostRoom.roster.first { it.size == 1 }
 
-            val windowOpened = async { hostRoom.events.filterIsInstance<MembershipEvent.WindowOpened>().first() }
+            // The room announces its own HeartbeatConfig-derived estimate inline the moment it
+            // detects the drop (#1724 / #1618 Drop B), so the injected controller's authoritative
+            // deadline is the one it *settles* on, not necessarily the first one announced.
+            val sentinelWindow = async {
+                hostRoom.events
+                    .filterIsInstance<MembershipEvent.WindowOpened>()
+                    .first { it.expiresAt == Instant.fromEpochMilliseconds(SENTINEL_EXPIRES_AT) }
+            }
 
             // Transport close — the in-memory analog of a socket close.
             clientMesh.close()
@@ -121,9 +129,17 @@ class HostReconnectControllerInjectionTest {
 
             // And the room surfaced the injected controller's window — a sentinel expiry the default
             // fixed-window controller (which would compute the 500 ms reconnectWindow) never emits.
+            assertEquals(PeerId("client"), sentinelWindow.await().peerId)
+
+            // The roster must not contradict the announcement: a custom hold policy owns the window,
+            // so its deadline supersedes the room's estimate on the level too.
+            val level = assertIs<Liveness.Partitioned>(
+                hostRoom.roster.value.first { it.id == PeerId("client") }.liveness,
+            )
             assertEquals(
                 Instant.fromEpochMilliseconds(SENTINEL_EXPIRES_AT),
-                windowOpened.await().expiresAt,
+                level.windowExpiresAt,
+                "the injected controller's deadline must reach the roster level, not just the event",
             )
         }
 
