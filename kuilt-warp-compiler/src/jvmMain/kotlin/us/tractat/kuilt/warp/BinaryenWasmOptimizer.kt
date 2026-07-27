@@ -3,6 +3,7 @@ package us.tractat.kuilt.warp
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.withContext
 import us.tractat.kuilt.core.runCatchingCancellable
+import java.io.File
 import java.io.IOException
 import java.nio.file.Files
 import java.util.Properties
@@ -12,14 +13,30 @@ import java.util.Properties
  * bundled and invoked as a subprocess.
  *
  * [optimize] writes the input module to a temp file, execs
- * `wasm-opt -O<level> <in> -o <out>`, and reads the leaner module back. The
- * `wasm-opt` binary (and its `libbinaryen` shared library) is resolved from the
- * official version-pinned, checksum-verified Binaryen release by the module's
- * `resolveWasmOpt` Gradle task and packaged as a JVM resource under
- * `us/tractat/kuilt/warp/binaryen/`; on first use it is extracted to a temp
- * directory (preserving the `bin/`+`lib/` layout `wasm-opt`'s `@loader_path/../lib`
- * / `$ORIGIN/../lib` rpath needs) and made executable. Extraction is JVM-wide and
- * happens once; the temp directory is cleaned on JVM exit.
+ * `wasm-opt -O<level> <in> -o <out>`, and reads the leaner module back. On first use
+ * the binary (and its `libbinaryen` shared library) is extracted from the classpath to
+ * a temp directory — preserving the `bin/`+`lib/` layout `wasm-opt`'s
+ * `@loader_path/../lib` / `$ORIGIN/../lib` rpath needs — and made executable.
+ * Extraction is JVM-wide and happens once; the temp directory is cleaned on JVM exit.
+ *
+ * **Where the binary comes from: one classified artifact per OS.** `wasm-opt` is a
+ * native executable, so there is no single jar that works everywhere. The module's main
+ * artifact therefore carries **no** binary; each supported platform is published as a
+ * classified companion jar built from the official version-pinned, SHA-256-verified
+ * Binaryen release. A compiler-node operator adds the one matching the host they run on:
+ *
+ * ```kotlin
+ * implementation("us.tractat.kuilt:kuilt-warp-compiler:<version>")
+ * // …plus exactly one of:
+ * runtimeOnly("us.tractat.kuilt:kuilt-warp-compiler-jvm:<version>:macos-arm64")
+ * runtimeOnly("us.tractat.kuilt:kuilt-warp-compiler-jvm:<version>:macos-x86_64")
+ * runtimeOnly("us.tractat.kuilt:kuilt-warp-compiler-jvm:<version>:linux-x86_64")
+ * runtimeOnly("us.tractat.kuilt:kuilt-warp-compiler-jvm:<version>:linux-aarch64")
+ * ```
+ *
+ * If none is present — or the one present is for a different OS — [optimize] fails with a
+ * [WasmOptimizationException] naming the exact coordinate to add. It never degrades to a
+ * silent passthrough.
  *
  * **ABI-preserving.** `wasm-opt` preserves a module's exported functions at every
  * level, so the warp `warp_alloc`/`warp_run` ABI survives — a weaker peer loads and
@@ -75,7 +92,7 @@ public class BinaryenWasmOptimizer(
         }
     }
 
-    private fun extractedBinary(): java.io.File = extractedWasmOpt.value
+    private fun extractedBinary(): File = extractedWasmOpt.value
 
     private companion object {
         /** `wasm-opt` maps only for the non-passthrough levels; `O0` returns the source unchanged. */
@@ -89,14 +106,21 @@ public class BinaryenWasmOptimizer(
 
         private const val RESOURCE_ROOT = "binaryen"
 
+        /** Fallback when the generated coordinates resource is somehow absent. */
+        private const val UNKNOWN_COORDINATES = "us.tractat.kuilt:kuilt-warp-compiler-jvm:<version>"
+
         /**
-         * JVM-wide, thread-safe one-time extraction of the bundled `wasm-opt` + `libbinaryen`
-         * into a temp directory. Reads the generated `manifest.properties` (written by
-         * `resolveWasmOpt`) for the file list and executable path, preserving relative paths so
-         * the binary's rpath finds the shared library alongside it.
+         * JVM-wide, thread-safe one-time extraction of the classified `wasm-opt` +
+         * `libbinaryen` into a temp directory. Reads the generated `manifest.properties`
+         * (written by the module's `resolveWasmOpt<Platform>` task) for the file list and
+         * executable path, preserving relative paths so the binary's rpath finds the shared
+         * library alongside it.
          */
-        private val extractedWasmOpt: Lazy<java.io.File> = lazy {
-            val manifest = loadManifest()
+        private val extractedWasmOpt: Lazy<File> = lazy {
+            val host = hostPlatform()
+            val manifest = loadManifest(host)
+            val bundled = manifest.getProperty("binaryen.platform")
+            if (bundled != null && bundled != host) throw IOException(wrongPlatformMessage(bundled, host))
             val files = manifest.getProperty("binaryen.files")
                 ?.split(",")?.map { it.trim() }?.filter { it.isNotEmpty() }
                 ?: error("bundled Binaryen manifest is missing 'binaryen.files'")
@@ -110,10 +134,10 @@ public class BinaryenWasmOptimizer(
             for (rel in files) {
                 val target = dir.resolve(rel)
                 target.parentFile.mkdirs()
-                val stream = BinaryenWasmOptimizer::class.java.getResourceAsStream("$RESOURCE_ROOT/$rel")
+                val stream = resource(rel)
                     ?: error(
-                        "bundled Binaryen resource '$RESOURCE_ROOT/$rel' not found on the classpath — " +
-                            "was :kuilt-warp-compiler built with the resolveWasmOpt task on a supported host?",
+                        "Binaryen resource '$RESOURCE_ROOT/$rel' is named by the manifest but not on " +
+                            "the classpath — the '$bundled' companion jar looks truncated or shaded.",
                     )
                 stream.use { input -> target.outputStream().use { out -> input.copyTo(out) } }
             }
@@ -122,21 +146,81 @@ public class BinaryenWasmOptimizer(
             executable
         }
 
-        private fun loadManifest(): Properties {
-            val stream = BinaryenWasmOptimizer::class.java.getResourceAsStream("$RESOURCE_ROOT/manifest.properties")
-                ?: throw IOException(
-                    "bundled Binaryen manifest not found on the classpath. :kuilt-warp-compiler must be " +
-                        "built with the resolveWasmOpt task (macOS/Linux host); a compiler node is a JVM/server peer.",
-                )
+        private fun resource(relative: String) =
+            BinaryenWasmOptimizer::class.java.getResourceAsStream("$RESOURCE_ROOT/$relative")
+
+        private fun loadManifest(host: String?): Properties {
+            val stream = resource("manifest.properties") ?: throw IOException(missingArtifactMessage(host))
             return Properties().apply { stream.use { load(it) } }
         }
+
+        /**
+         * This JVM's platform in published-classifier form (`<os>-<arch>`), or `null` when
+         * no `wasm-opt` is published for it. A compiler node is a JVM/server peer on
+         * macOS or Linux; every other host is a pure consumer of the optimized variant.
+         */
+        private fun hostPlatform(): String? {
+            val os = System.getProperty("os.name").orEmpty().lowercase()
+            val arch = System.getProperty("os.arch").orEmpty().lowercase()
+            val osKey = when {
+                os.contains("mac") || os.contains("darwin") -> "macos"
+                os.contains("linux") -> "linux"
+                else -> return null
+            }
+            val archKey = when (arch) {
+                "aarch64", "arm64" -> if (osKey == "macos") "arm64" else "aarch64"
+                "x86_64", "amd64" -> "x86_64"
+                else -> return null
+            }
+            return "$osKey-$archKey"
+        }
+
+        /** `<group>:<artifactId>:<version>` of the jvm publication, generated into this jar. */
+        private fun coordinates(): String =
+            metadata()?.getProperty("binaryen.coordinates") ?: UNKNOWN_COORDINATES
+
+        /** Every classifier this build publishes, for the "published:" line of a failure. */
+        private fun publishedPlatforms(): List<String> =
+            metadata()?.getProperty("binaryen.platforms")
+                ?.split(",")?.map { it.trim() }?.filter { it.isNotEmpty() }
+                .orEmpty()
+
+        private fun metadata(): Properties? {
+            val stream = resource("coordinates.properties") ?: return null
+            return Properties().apply { stream.use { load(it) } }
+        }
+
+        private fun missingArtifactMessage(host: String?): String {
+            val published = publishedPlatforms()
+            val header = "no Binaryen `wasm-opt` on the runtime classpath. :kuilt-warp-compiler " +
+                "publishes the native binary as one classified companion jar per OS, so the main " +
+                "artifact stays lean"
+            if (host == null || (published.isNotEmpty() && host !in published)) {
+                return "$header. This JVM (os.name=${System.getProperty("os.name")}, " +
+                    "os.arch=${System.getProperty("os.arch")}) has no published `wasm-opt`" +
+                    publishedSuffix(published) + ". A warp compiler node is a JVM/server peer on " +
+                    "macOS or Linux; other peers consume the optimized variant without running wasm-opt."
+            }
+            return "$header. Add the one for this host:\n" +
+                "    runtimeOnly(\"${coordinates()}:$host\")" +
+                publishedSuffix(published)
+        }
+
+        private fun wrongPlatformMessage(bundled: String, host: String?): String =
+            "the Binaryen `wasm-opt` on the runtime classpath is the '$bundled' build, but this JVM " +
+                "is '${host ?: "an unsupported platform"}'. Replace the classified dependency with " +
+                "the matching one:\n    runtimeOnly(\"${coordinates()}:${host ?: "<platform>"}\")"
+
+        private fun publishedSuffix(published: List<String>): String =
+            if (published.isEmpty()) "" else " (published: ${published.joinToString(", ")})"
     }
 }
 
 /**
- * Thrown when the bundled `wasm-opt` subprocess fails — a missing binary, a non-zero exit, or an
- * I/O error. Surfaces the failure loudly rather than degrading to a silent passthrough (which
- * would publish an unoptimized "variant" indistinguishable from the source).
+ * Thrown when the bundled `wasm-opt` subprocess fails — a missing or wrong-OS classified
+ * artifact, a non-zero exit, or an I/O error. Surfaces the failure loudly rather than
+ * degrading to a silent passthrough (which would publish an unoptimized "variant"
+ * indistinguishable from the source).
  */
 public class WasmOptimizationException(
     message: String,
