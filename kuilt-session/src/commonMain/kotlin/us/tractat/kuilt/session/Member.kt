@@ -69,6 +69,14 @@ public sealed interface Liveness {
      * window, so its number always wins. On a joiner watching its *host*, the joiner's own reconnect
      * budget is the authority and no refinement occurs.
      *
+     * **A refinement is announced.** Moving this field emits a fresh
+     * [MembershipEvent.WindowOpened][us.tractat.kuilt.session.MembershipEvent.WindowOpened] carrying
+     * the new deadline, so the event stream and the roster cannot disagree — a silent move would
+     * leave the last announcement a consumer heard permanently false. The corollary for a consumer
+     * that *does* key on the event: a later `WindowOpened` for the same peer **supersedes** the
+     * earlier one; hold the latest, do not assume the first is final. Keying on this level avoids
+     * the question entirely, which is why it exists.
+     *
      * Beware that the two fields can then come from **different clocks**. `markPartitioned` derives
      * both from the local clock, but the `Paused` path pairs a local [since] with the *host's*
      * [windowExpiresAt]. So treat [windowExpiresAt] as a deadline to compare the local clock

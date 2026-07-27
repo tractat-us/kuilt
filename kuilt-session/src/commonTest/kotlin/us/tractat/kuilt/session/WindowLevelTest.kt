@@ -296,6 +296,103 @@ class WindowLevelTest {
         }
 
     /**
+     * The refinement is **announced**, not merely written to the level.
+     *
+     * Same timeline as [hostPausedRefinesALocallyEstimatedDeadline], asserting the half that test
+     * cannot see. `handlePaused` used to return before both emissions on an already-partitioned
+     * member, so the authoritative deadline moved the roster **silently**: the last
+     * [MembershipEvent.WindowOpened] a consumer heard still named the bystander's own 5 s estimate
+     * while the seat was held to the host's 30 s one, and a consumer counting down to the event's
+     * deadline dropped the "reconnecting" seat ~25 s early. That is exactly the defect #1724 fixes on
+     * the other lanes; the roster being right does not make the event's lie acceptable.
+     *
+     * The final assertion is the one that matters: whichever surface a consumer keys on — the last
+     * announcement or the level — it reads the same number.
+     */
+    @Test
+    fun hostPausedAnnouncesTheRefinedDeadline() =
+        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+            val mesh = mesh(
+                hostConfig = fastConfig.copy(timeout = 700.milliseconds, reconnectWindow = 30.seconds),
+                joinerConfig = fastConfig.copy(reconnectWindow = 5.seconds),
+            )
+            val windows = mutableListOf<MembershipEvent.WindowOpened>()
+            val partitioned = mutableListOf<MembershipEvent.Partitioned>()
+            backgroundScope.launch {
+                mesh.bystander.events.collect { event ->
+                    when (event) {
+                        is MembershipEvent.WindowOpened -> if (event.peerId == mesh.droppedId) windows += event
+                        is MembershipEvent.Partitioned -> if (event.peerId == mesh.droppedId) partitioned += event
+                        else -> Unit
+                    }
+                }
+            }
+            testScheduler.runCurrent()
+
+            mesh.droppedLink.partition()
+
+            // Past the bystander's own 200 ms timeout but short of the host's 700 ms one: the only
+            // announcement so far is the bystander's own 5 s estimate.
+            testScheduler.advanceTimeBy(400.milliseconds)
+            testScheduler.runCurrent()
+            val estimated = windows.map { it.expiresAt }
+
+            // Now let the host detect and fan out its authoritative 30 s Paused.
+            testScheduler.advanceTimeBy(600.milliseconds)
+            testScheduler.runCurrent()
+
+            assertAll(
+                {
+                    assertEquals(
+                        1,
+                        estimated.size,
+                        "sanity: before the host spoke the bystander announced its own estimate " +
+                            "exactly once — observed $estimated",
+                    )
+                },
+                {
+                    assertTrue(
+                        estimated.all { it < authorityThreshold },
+                        "sanity: that first announcement is the local 5 s estimate — observed $estimated",
+                    )
+                },
+                {
+                    assertEquals(
+                        2,
+                        windows.size,
+                        "the host's authoritative deadline must be ANNOUNCED, not only written to " +
+                            "the level; handlePaused returning early on an already-partitioned " +
+                            "member leaves the estimate as the last thing a consumer heard " +
+                            "(#1724) — observed $windows",
+                    )
+                },
+                {
+                    assertTrue(
+                        windows.last().expiresAt > authorityThreshold,
+                        "…and the re-announcement must carry the host's 30 s deadline, not repeat " +
+                            "the estimate — observed $windows",
+                    )
+                },
+                {
+                    assertEquals(
+                        mesh.bystanderLevel().windowExpiresAt,
+                        windows.last().expiresAt,
+                        "the last announcement and the roster level must be the same number, so a " +
+                            "consumer keying on either counts down to the same instant",
+                    )
+                },
+                {
+                    assertEquals(
+                        1,
+                        partitioned.size,
+                        "…while re-announcing the window must not re-announce the partition — " +
+                            "observed $partitioned",
+                    )
+                },
+            )
+        }
+
+    /**
      * The reverse order: `Paused` arrives **before** local detection. A member's own detector
      * firing afterwards must not overwrite the host's authoritative deadline with a local estimate.
      *

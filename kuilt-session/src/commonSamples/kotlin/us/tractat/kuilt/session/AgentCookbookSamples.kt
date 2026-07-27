@@ -84,7 +84,9 @@ public suspend fun observePausedPeersSample(room: Room) {
     room.events.collect { event ->
         when (event) {
             is MembershipEvent.Partitioned -> Unit // grey the seat out — this peer's link dropped
-            is MembershipEvent.WindowOpened -> Unit // its seat is held until event.expiresAt
+            // Held until event.expiresAt — but a later WindowOpened for the same peer supersedes
+            // this one (a more authoritative deadline arrived), so keep the latest, not the first.
+            is MembershipEvent.WindowOpened -> Unit
             is MembershipEvent.Recovered -> Unit // it returned inside the window — un-grey it
             is MembershipEvent.Left -> Unit // gone for good: Normal (clean) or PartitionExpired
             else -> Unit
