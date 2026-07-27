@@ -379,6 +379,12 @@ class HeddleAdmissionControlTest {
             epoch = 0L,
         )
 
+        // Enrolling self is what opens this node's write gate (#1693): until it applies, `reserve`
+        // returns null and `schedule` delegates nothing, so an unenrolled peer can never author
+        // entitlement no barrier is waiting for (§13.2). Every governed consumer must do this on
+        // every boot — omitting it makes the node silently schedule nothing.
+        assertIs<ControlOutcome.Applied>(governed.enroll(self))
+
         // Mint + build the 3:1 tree through the governed control plane, then delegate down.
         assertIs<ControlOutcome.Applied>(governed.mint(self, 40L))
         assertIs<ControlOutcome.Applied>(governed.prepare(AttachmentRecord(eA, root, laneA, Weight.of(3), 0L)))
