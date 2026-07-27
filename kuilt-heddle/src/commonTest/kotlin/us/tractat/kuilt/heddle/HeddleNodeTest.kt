@@ -739,6 +739,91 @@ class HeddleNodeTest {
         )
     }
 
+    /**
+     * A **second** wake can never hand back credit a **first** wake already forfeited (design §7.2,
+     * §10.6; issue #1714). The stored clamp is a materialized forfeiture, so it only ever grows —
+     * exactly as CFS/EEVDF materialized vruntime never decreases.
+     *
+     * The clamp is derived from [HeddlePolicy.front], the weighted mean over the *currently*
+     * demanding set, and that mean is **not** monotone across wake cycles: a later wake into a
+     * further-behind set computes a smaller offset than the one already stored. Storing by
+     * replacement therefore refunds the difference. The worked scenario, all weights 1 and
+     * `sleeperCredit = 0`:
+     *
+     *  - e1 runs alone to `vRaw = 20` and stops asking.
+     *  - e2 wakes against it: front `20`, offset `20`, effective vs `20`. It runs to `vRaw = 5`
+     *    (effective vs `25`) and idles again.
+     *  - e3 is seated behind at `initialVirtualTime = 10` and demands, but the root supply is
+     *    exhausted, so nothing can be delegated and its virtual service stays at `10`.
+     *  - e2 re-wakes. The front over the surviving demanding set `{e3}` is `10`, so the freshly
+     *    computed offset is `max(0, 10 − 5) = 5`. Under replacement e2's effective vs falls
+     *    `25 → 10`; under the monotone join it stays `25`.
+     *
+     * Bounded, never a conservation break: effective vs can never fall below `vRaw`, so the
+     * failure mode is the §10.6 clamp degrading toward a no-op — credit under-forfeited, never
+     * created. The read-back window is [HeddleNode.parentVirtualTime]: with e2 the only demanding
+     * child, the parent's virtual time *is* e2's effective virtual service.
+     */
+    @Test
+    fun aRewakeNeverRefundsCreditAnEarlierWakeAlreadyForfeited() = runTest(
+        StandardTestDispatcher(),
+        timeout = 5.seconds,
+    ) {
+        // 25 units is exactly e1's 20 plus e2's 5 — the supply is spent before e3 ever competes.
+        val h = harness(peers = 1, mint = mapOf(0 to 25L), topology = flatTopology())
+        h.pump()
+        val node = h.peers[0].node
+
+        // Phase 1 — e1 runs alone to vRaw 20; e2 never asks, so it is observed idle.
+        node.advertise(e1, Demand(targetOutstanding = 20L, maximumUsefulGrant = 10L))
+        node.schedule(root)
+        h.pump()
+
+        // Phase 2 — e2 wakes against a front of 20, forfeiting 20 units of idle credit, then runs
+        // to vRaw 5. Its effective virtual service is 5 + 20 = 25, and it is now the whole front.
+        node.advertise(e2, Demand(targetOutstanding = 5L, maximumUsefulGrant = 5L))
+        node.schedule(root)
+        h.pump()
+        assertAll(
+            { assertEquals(20L, node.ledger.value.edge(e1)!!.issued, "e1 runs alone to its target") },
+            { assertEquals(5L, node.ledger.value.edge(e2)!!.issued, "the waker takes only what is left") },
+            { assertEquals(Rational.of(25L), node.parentVirtualTime(root), "e2's materialized effective vs") },
+        )
+
+        // Phase 3 — e2 idles again; the node must observe it not competing for the next round to
+        // count as a wake.
+        node.advertise(e2, Demand.NONE)
+        node.schedule(root)
+        h.pump()
+
+        // Phase 4 — e3 is seated behind at 10 and demands, but the supply is exhausted so it is
+        // starved: its virtual service cannot advance. A first observation is never a wake, so it
+        // carries no clamp of its own.
+        val starved = AttachmentRecord(AttachmentId("e3"), root, GroupId("g3"), Weight.ONE, 10L)
+        assertTrue(node.prepare(starved) && node.activate(starved.id))
+        val hungrier = Demand(targetOutstanding = 10_000L, maximumUsefulGrant = 10L)
+        node.advertise(starved.id, hungrier)
+        node.schedule(root)
+        h.pump()
+        assertEquals(0L, node.ledger.value.edge(starved.id)!!.issued, "e3 is starved, not served")
+
+        // Phase 5 — e2 re-wakes into a front of 10, which computes a *smaller* offset (5) than the
+        // 20 already stored.
+        node.advertise(e2, hungrier)
+        node.schedule(root)
+        h.pump()
+
+        // Read back e2's effective vs: drop e3's demand so e2 is the only competing child and the
+        // parent's virtual time is exactly its effective virtual service. No schedule call happens
+        // in between, so no clamp is recomputed.
+        node.advertise(starved.id, Demand.NONE)
+        assertEquals(
+            Rational.of(25L),
+            node.parentVirtualTime(root),
+            "a re-wake must not refund the 20 units of idle credit the first wake forfeited",
+        )
+    }
+
     // ─────────────────────────────────────────────────────────────────────────────
     // harness
     // ─────────────────────────────────────────────────────────────────────────────
