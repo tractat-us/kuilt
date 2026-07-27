@@ -6,6 +6,7 @@ import com.sun.jna.Pointer
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.junit.AssumptionViolatedException
+import us.tractat.kuilt.conformance.CapabilityGaps
 import us.tractat.kuilt.conformance.SeamCapabilities
 import us.tractat.kuilt.conformance.SeamConformanceSuite
 import us.tractat.kuilt.core.InMemoryTag
@@ -104,18 +105,21 @@ class NwBridgeLoopbackConformanceTest : SeamConformanceSuite() {
     override fun joinTag(): Tag = InMemoryTag(sessionName = "host", peerKey = "nw-bridge-loopback-joiner")
 
     /**
-     * The loopback link is real TLS-PSK through the dylib, so every capability — wire encryption
-     * included — holds.
+     * The loopback link is real TLS-PSK through the dylib, so `securesTransport = true` — this test IS
+     * the JVM-bridge proof of that capability for kuilt-nw.
      *
-     * `reportsLiveCapability = true` describes the **fabric**: [NwSeam] drives its capability from
-     * [NwApi.pathState] (#1541). Note this *binding* does not wire an `NWPathMonitor` (the dylib bridge
-     * publishes no path state), so the seam holds its static seed here rather than a live reading;
-     * the observer itself is exercised by `NwConformanceTest` and `NwSeamCapabilityTest` (#1712).
+     * `reportsLiveCapability = false`, though, because the flag tracks the **binding under test**, not
+     * the abstract fabric — the same rule that makes `securesTransport` `true` here and `false` on
+     * `NwConformanceTest`'s plaintext fake. [BridgeNwApi] does not override [NwApi.pathState], so it
+     * inherits the shared never-updated `null` ("no monitor wired"), and [NwSeam] holds its static seed
+     * forever. The observer is real on [RealNwApi] and proven by `NwLoopbackConformanceTest` /
+     * `NwSeamCapabilityTest`; it is simply absent from this binding (#1712).
      */
-    override fun capabilities(): SeamCapabilities = SeamCapabilities.FULL.copy(securesTransport = true)
+    override fun capabilities(): SeamCapabilities =
+        SeamCapabilities.FULL.copy(securesTransport = true, reportsLiveCapability = false)
 
-    /** No gaps — this test IS the JVM-bridge proof of the `securesTransport` capability for kuilt-nw. */
-    override fun capabilityGaps(): Map<String, String> = emptyMap()
+    override fun capabilityGaps(): Map<String, String> =
+        mapOf("reportsLiveCapability" to CapabilityGaps.LIVE_CAPABILITY)
 
     /**
      * Wrap [delegate] so `weave` runs on a real [Dispatchers.Default]. [NwLoom] captures its seam

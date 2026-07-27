@@ -75,6 +75,10 @@ import kotlin.test.assertTrue
  * structural guarantee is pinned by [SeamConformanceUngatedCoreTest], which drives the
  * core obligations through a harness whose [capabilities] would betray any read.
  *
+ * [wovenSeamCapabilityIsHonest] is a **flag-selected** obligation — a third kind. It reads
+ * [SeamCapabilities.reportsLiveCapability] (so it is not core) but never early-returns: the flag
+ * picks which assertion applies, so no capability value can make it vacuous.
+ *
  * Only the capability-specific obligations gate in-body on their **own** flag:
  *  - [incomingCompletesWhenSeamCloses] ↔ [SeamCapabilities.terminatesIncomingOnClose]
  *  - [stateStaysTornAfterClose] ↔ [SeamCapabilities.staysTornAfterClose]
@@ -440,38 +444,6 @@ public abstract class SeamConformanceSuite {
         runAvailabilityReturnsAKnownVariant()
     }
 
-    // ── (6b) live capability is honest about whether it is observed ─────────
-    //
-    // Still ungated in the sense that matters: NEITHER branch skips. The flag only selects WHICH
-    // assertion applies, so no capability value can make this obligation vacuous. It does *read*
-    // capabilities(), so it is not part of the hostile-harness core set in
-    // [SeamConformanceUngatedCoreTest] — that set proves "never reads the flags", which this one
-    // deliberately does.
-
-    internal suspend fun runWovenSeamCapabilityIsHonest(scope: TestScope): Unit =
-        scope.connectedPair { host, _ ->
-            val availability = host.capability.value.availability
-            if (capabilities().reportsLiveCapability) {
-                // A fabric claiming a live observer must not be sitting on the Unknown floor.
-                // Whether it reads Available or Unavailable is the fabric's own business: a woven
-                // seam whose device path has dropped is legitimately Unavailable (the #1478 grace
-                // window), so this must NOT assert Available.
-                assertTrue(
-                    availability !is FabricAvailability.Unknown,
-                    "a fabric declaring reportsLiveCapability=true must not report the Unknown floor, got $availability",
-                )
-            } else {
-                assertTrue(
-                    availability is FabricAvailability.Unknown,
-                    "a fabric with no live path observer must report Unknown, not a fabricated verdict, got $availability",
-                )
-            }
-        }
-
-    @Test
-    public fun wovenSeamCapabilityIsHonest(): TestResult =
-        runTest { runWovenSeamCapabilityIsHonest(this) }
-
     // ── (7) state is Woven after host and joiner both return ─────────────────
 
     internal suspend fun runStateIsWovenAfterConnect(scope: TestScope): Unit =
@@ -531,6 +503,53 @@ public abstract class SeamConformanceSuite {
     @Test
     public fun sendToAbsentPeerThrowsPeerNotConnected(): TestResult =
         runTest { runSendToAbsentPeerThrows(this) }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    //  Flag-SELECTED obligation — reads a capability flag, but NEVER skips.
+    //
+    //  A third kind, distinct from both neighbours. Unlike a core obligation it
+    //  *does* consult `capabilities()`, so it cannot live in the ungated block
+    //  above (whose invariant — pinned by the hostile harness in
+    //  [SeamConformanceUngatedCoreTest] — is that those bodies never read the
+    //  flags at all). Unlike a capability-gated obligation it never early-returns:
+    //  the flag chooses WHICH assertion applies, so no capability value can make
+    //  it vacuous, and it is correspondingly absent from that test's `runAllCore`.
+    // ─────────────────────────────────────────────────────────────────────────
+
+    // ── (6b) live capability is honest about whether it is observed ─────────
+
+    internal suspend fun runWovenSeamCapabilityIsHonest(scope: TestScope): Unit =
+        scope.connectedPair { host, _ ->
+            if (capabilities().reportsLiveCapability) {
+                // A fabric claiming a live observer must REACH a real verdict — so AWAIT it rather than
+                // sample. A real OS path monitor (`NWPathMonitor`) reports asynchronously and starts from
+                // "nothing reported yet", so the value at this instant may legitimately still be the
+                // Unknown floor; what must not happen is that it stays there. An observer that never fires
+                // hangs here and `runTest`'s own timeout fails the suite — the same await-the-flow idiom
+                // `stateIsWovenAfterConnect` uses, and real-time-safe for a flow fed off an OS queue.
+                //
+                // Which non-Unknown value it settles on is the fabric's own business: a woven seam whose
+                // device path has dropped is legitimately Unavailable (the #1478 grace window), so this
+                // must NOT assert Available.
+                val observed = host.capability.first { it.availability !is FabricAvailability.Unknown }
+                assertFalse(
+                    observed.availability is FabricAvailability.Unknown,
+                    "a fabric declaring reportsLiveCapability=true must leave the Unknown floor, got $observed",
+                )
+            } else {
+                // No observer ⇒ the floor is the answer NOW; there is nothing to wait for, and a sample
+                // is what catches a fabric fabricating a verdict it cannot have.
+                val availability = host.capability.value.availability
+                assertTrue(
+                    availability is FabricAvailability.Unknown,
+                    "a fabric with no live path observer must report Unknown, not a fabricated verdict, got $availability",
+                )
+            }
+        }
+
+    @Test
+    public fun wovenSeamCapabilityIsHonest(): TestResult =
+        runTest { runWovenSeamCapabilityIsHonest(this) }
 
     // ─────────────────────────────────────────────────────────────────────────
     //  Capability-gated obligations — each gates in-body on its OWN flag only.

@@ -16,7 +16,8 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 
 /**
- * `NwSeam.capability` is LIVE (#1541): seeded once at connect from the loom's static report, then driven
+ * `NwSeam.capability` is LIVE (#1541): its ROLES seed at connect from the loom's static report while its
+ * AVAILABILITY starts at an honest `Unknown` (nothing has been observed yet, #1712), and both are then driven
  * by the injected [FakeNwApi] path-monitor flow (standing in for `RealNwApi`'s `nw_path_monitor`). Flipping
  * the fake's path state — down, Local-Network-denied, recovered — moves the seam's availability. The base
  * roles are always [TransportRole.Discovery] + [TransportRole.Data]; the live Wi-Fi medium role split
@@ -41,14 +42,25 @@ class NwSeamCapabilityTest {
     }
 
     @Test
-    fun capabilitySeedsFromLoomStaticReportBeforeAnyPathUpdate() = runTest(StandardTestDispatcher()) {
-        val (_, seam) = newSeam()
-        val cap = seam.capability.value
-        assertAll(
-            { assertEquals(NW_ROLES, cap.roles, "seed carries the fabric's Discovery+Data roles") },
-            { assertEquals(FabricAvailability.Available, cap.availability, "seed availability is the static Available floor") },
-        )
-    }
+    fun capabilitySeedsRolesFromLoomStaticReportButAvailabilityIsUnknownBeforeAnyPathUpdate() =
+        runTest(StandardTestDispatcher()) {
+            val (_, seam) = newSeam()
+            val cap = seam.capability.value
+            assertAll(
+                { assertEquals(NW_ROLES, cap.roles, "seed carries the fabric's Discovery+Data roles") },
+                {
+                    // NOT the loom's `api.availability()`. That answers "is this fabric usable on this
+                    // runtime" — a platform question — and republishing it as a live path verdict is the
+                    // #1712 defect: a seam whose monitor has not reported (or whose binding wired none, e.g.
+                    // the JVM dylib bridge) would assert a confident Available with nothing behind it.
+                    assertEquals(
+                        FabricAvailability.Unknown("no path monitor has reported on this binding"),
+                        cap.availability,
+                        "before the monitor reports, availability must be an honest Unknown",
+                    )
+                },
+            )
+        }
 
     @Test
     fun localNetworkPermissionDenialMakesTheSeamUnavailable() = runTest(StandardTestDispatcher()) {

@@ -191,6 +191,15 @@ internal class CompositeSeam(
             }
             .launchIn(plyScope)
 
+        // A ply's own capability is a LIVE value (an nw ply follows its path monitor), so the rollup
+        // must SUBSCRIBE, not merely sample at attach/detach/state-change. Without this pump a ply whose
+        // device path drops while its state stays Woven — exactly the #1478 grace window — would leave
+        // the composite publishing a stale, confident Available (#1712). Same shape as the state pump:
+        // launched outside the lock, and recomputeCapability re-takes the non-reentrant lock itself.
+        seam.capability
+            .onEach { recomputeCapability() }
+            .launchIn(plyScope)
+
         // Re-announce on every Woven transition (cold start + recovery). Best-effort: the
         // ply may tear between this Woven emission and the send (the Seam contract throws
         // IllegalStateException on a Torn send), and the far side re-learns the mapping on
@@ -245,9 +254,13 @@ internal class CompositeSeam(
      * constituent [Loom]s (held in [desired]) — a ply's medium does not change under it, so roles are
      * static. **Availability comes from the plies' live [Seam.capability]**, not their Looms: the Loom
      * value is the static pre-connect claim, and folding it here would launder an observer-less ply's
-     * claim into a confident live verdict (#1712). Reads of [live] / [desired] are non-suspending and
-     * happen under [lock]; the caller MUST hold NO lock — the non-reentrant [lock] is re-taken here,
-     * so calling this from inside a locked block deadlocks.
+     * claim into a confident live verdict (#1712).
+     *
+     * Because that source is live, [attachPly] **subscribes** to each ply's [Seam.capability] and calls
+     * this on every emission — sampling only at attach/detach/state-change would miss a path drop that
+     * leaves the ply [SeamState.Woven]. Reads of [live] / [desired] are non-suspending and happen under
+     * [lock]; the caller MUST hold NO lock — the non-reentrant [lock] is re-taken here, so calling this
+     * from inside a locked block deadlocks.
      */
     private fun recomputeCapability() {
         val snapshot = lock.withLock {

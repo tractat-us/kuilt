@@ -19,6 +19,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import us.tractat.kuilt.core.CloseReason
 import us.tractat.kuilt.core.DeliveryPolicy
+import us.tractat.kuilt.core.FabricAvailability
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.PeerNotConnected
 import us.tractat.kuilt.core.Seam
@@ -228,13 +229,20 @@ internal class NwSeam(
     private val _state = MutableStateFlow<SeamState>(SeamState.Weaving)
     override val state: StateFlow<SeamState> = _state.asStateFlow()
 
-    // Live capability (#1541/#1554): seeded from the loom's static report ([staticCapability]) and thereafter
-    // driven by the injected path monitor ([NwApi.pathState]). The monitor moves [TransportCapability.availability]
-    // as the real-world path goes up/down or the Local-Network permission is denied, AND now folds the live
-    // interface type into the ROLES — a peer-to-peer AWDL path adds [TransportRole.WifiDirect], an infrastructure
-    // path adds [TransportRole.WifiLan], atop the fabric's base Discovery+Data ([NwLoom.NW_ROLES]). A
-    // MutableStateFlow so the write from the single [pathStateLoop] collector is thread-safe (CAS) under any dispatcher.
-    private val _capability = MutableStateFlow(staticCapability)
+    // Live capability (#1541/#1554): ROLES seeded from the loom's static report ([staticCapability]) and
+    // thereafter driven by the injected path monitor ([NwApi.pathState]). The monitor moves
+    // [TransportCapability.availability] as the real-world path goes up/down or the Local-Network permission is
+    // denied, AND folds the live interface type into the ROLES — a peer-to-peer AWDL path adds
+    // [TransportRole.WifiDirect], an infrastructure path adds [TransportRole.WifiLan], atop the fabric's base
+    // Discovery+Data ([NwLoom.NW_ROLES]). A MutableStateFlow so the write from the single [pathStateLoop]
+    // collector is thread-safe (CAS) under any dispatcher.
+    //
+    // AVAILABILITY seeds at [unobservedCapability]'s Unknown, NOT at [staticCapability]'s: the static value is
+    // `api.availability()`, which answers "is this fabric usable on this runtime" (a platform question), not
+    // "is my path up right now" (#1712). Publishing it here laundered a platform-support answer into a live
+    // path verdict, so a binding with no monitor — the JVM dylib bridge, or any seam before the OS reports
+    // ground truth — asserted a confident Available with nothing behind it.
+    private val _capability = MutableStateFlow(unobservedCapability)
     override val capability: StateFlow<TransportCapability> = _capability.asStateFlow()
 
     private val spool = Spool<Swatch>(policy)
@@ -698,7 +706,7 @@ internal class NwSeam(
         api.pathState.collect { path ->
             _capability.value =
                 if (path == null) {
-                    staticCapability
+                    unobservedCapability
                 } else {
                     TransportCapability(
                         roles = staticCapability.roles + path.interfaceRoles(),
@@ -707,6 +715,24 @@ internal class NwSeam(
                 }
         }
     }
+
+    /**
+     * The capability of a seam with **no live path reading**: the fabric's static roles, but an honest
+     * [FabricAvailability.Unknown] availability.
+     *
+     * A `null` [NwApi.pathState] means the binding wired no `NWPathMonitor` (the JVM dylib bridge) or the
+     * monitor has not yet reported ground truth. Either way this seam does not know whether its path is up,
+     * and must say so rather than repeat [staticCapability]'s `api.availability()` — that value answers a
+     * *platform-support* question, and reusing it as a live verdict is the #1712 defect. Note the file
+     * already answers the equivalent question this way one level down: [NwPathState.toAvailability] maps
+     * [NwPathStatus.Invalid] ("monitor has not reported ground truth") to `Unknown`, and a `null` path state
+     * is strictly less informative than `Invalid`.
+     */
+    private val unobservedCapability: TransportCapability
+        get() = TransportCapability(
+            roles = staticCapability.roles,
+            availability = FabricAvailability.Unknown("no path monitor has reported on this binding"),
+        )
 
     /**
      * Reconcile the transport's per-connection latest [NwConnState] map — the drop-tolerant #1539

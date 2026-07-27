@@ -31,11 +31,14 @@ import kotlin.random.Random
  * (`meshDelivery = true`, earned by [NwMeshConformanceTest]) and real directed send
  * (`supportsSendTo = true`).
  *
- * `reportsLiveCapability = true` is likewise earned, not asserted: [NwSeam] drives its
- * [us.tractat.kuilt.core.Seam.capability] from [NwApi.pathState] (#1541), and this harness publishes a
- * live path on both fakes ([SATISFIED_WIFI_PATH]) so the conformance assertion exercises that observer
- * rather than the static seed. kuilt-nw is the one fabric off the [us.tractat.kuilt.core.FabricAvailability.Unknown]
- * floor (#1712).
+ * `reportsLiveCapability = true`: [NwSeam] drives its [us.tractat.kuilt.core.Seam.capability] from
+ * [NwApi.pathState] (#1541), so kuilt-nw is the one fabric off the
+ * [us.tractat.kuilt.core.FabricAvailability.Unknown] floor (#1712). This harness publishes a live path on
+ * both fakes ([SATISFIED_WIFI_PATH]) so the value the conformance assertion reads has come *through* the
+ * observer. Be honest about what that buys: a satisfied path folds to `Available`, which is also what the
+ * static seed says, so the suite assertion is green either way — the seeding fixes the value's
+ * **provenance**, not the assertion's discriminating power. The tests that actually pin the observer
+ * moving the value are [NwSeamCapabilityTest] (availability) and [NwInterfaceRolesTest] (roles).
  */
 class NwConformanceTest : SeamConformanceSuite() {
 
@@ -45,10 +48,10 @@ class NwConformanceTest : SeamConformanceSuite() {
 
         /**
          * A live, satisfied infrastructure-Wi-Fi path. Published on both fakes in [newLoomPair] so the
-         * seams' #1541 path-observer loop — not the static [FakeNwApi.availability] seed — is what drives
-         * `capability`. `SeamConformanceSuite.wovenSeamCapabilityIsHonest` asserts this harness is off the
-         * `Unknown` floor because it declares `reportsLiveCapability = true`; seeding the observer is what
-         * makes that assertion mean the observer works, rather than passing on the seed alone (#1712).
+         * seams' #1541 path-observer loop — not the static [FakeNwApi.availability] seed — is what supplies
+         * `capability`. It folds to the same `Available` the seed would give, so this does not make
+         * `SeamConformanceSuite.wovenSeamCapabilityIsHonest` discriminating; it makes the harness declaring
+         * `reportsLiveCapability = true` actually route through the observer it is claiming (#1712).
          */
         val SATISFIED_WIFI_PATH = NwPathState(
             status = NwPathStatus.Satisfied,
