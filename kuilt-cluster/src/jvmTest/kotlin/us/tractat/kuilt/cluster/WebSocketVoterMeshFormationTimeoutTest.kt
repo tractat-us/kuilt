@@ -21,7 +21,6 @@ import us.tractat.kuilt.core.fabric.ConnectionSource
 import us.tractat.kuilt.raft.NodeId
 import us.tractat.kuilt.raft.RaftConfig
 import us.tractat.kuilt.websocket.KtorConnectionSource
-import java.net.ServerSocket
 import kotlin.coroutines.ContinuationInterceptor
 import kotlin.coroutines.coroutineContext
 import kotlin.random.Random
@@ -80,13 +79,16 @@ class WebSocketVoterMeshFormationTimeoutTest {
     @Test
     fun formationTimeoutCancelsPumpsAndClosesPartialSeams() = runMeshTest {
         val dispatcher = requireNotNull(coroutineContext[ContinuationInterceptor] as? CoroutineDispatcher)
-        val port = ServerSocket(0).use { it.localPort }
-
         // A real route at /higher so the lower voter's dial upgrades cleanly (no connect throw).
-        val srv = embeddedServer(Netty, port = port) {
+        // Bind 0 and read the port back from the *live* connector. Probing a free port with a
+        // throwaway `ServerSocket(0).use { it.localPort }` and re-binding the number is a TOCTOU:
+        // the probe closes before Netty binds, so another process on a loaded box can take the port
+        // in that window (`BindException: Address already in use` — #1590). Binding 0 has no window.
+        val srv = embeddedServer(Netty, port = 0) {
             KtorConnectionSource(this, "/higher", pingPeriod = pingPeriod)
         }.also { server = it }
         srv.start(wait = false)
+        val port = srv.engine.resolvedConnectors().first().port
 
         val client = HttpClient(CIO) { install(ClientWebSockets) { pingInterval = pingPeriod } }
             .also { httpClient = it }

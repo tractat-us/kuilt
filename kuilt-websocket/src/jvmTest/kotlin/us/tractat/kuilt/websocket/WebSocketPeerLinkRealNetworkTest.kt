@@ -15,7 +15,6 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import org.junit.Assume
 import us.tractat.kuilt.core.Seam
-import java.net.ServerSocket
 import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
 import kotlin.test.Test
@@ -45,12 +44,16 @@ class WebSocketPeerLinkRealNetworkTest {
             "Skipped: set -Pserver.realnet.tests=true to run real-network integration tests",
             System.getProperty("server.realnet.tests") == "true",
         )
-        port = ServerSocket(0).use { it.localPort }
+        // Bind 0 and read the port back from the *live* connector. Probing a free port with a
+        // throwaway `ServerSocket(0).use { it.localPort }` and re-binding the number is a TOCTOU:
+        // the probe closes before Netty binds, so another process on a loaded box can take the port
+        // in that window (`BindException: Address already in use` — #1590). Binding 0 has no window.
         server =
-            embeddedServer(Netty, port = port) {
+            embeddedServer(Netty, port = 0) {
                 serverFactory = KtorServerLoom(this, path)
             }
         server.start(wait = false)
+        port = runBlocking { server.engine.resolvedConnectors().first().port }
     }
 
     @AfterTest
