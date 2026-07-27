@@ -21,6 +21,8 @@ import us.tractat.kuilt.core.PlyId
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.runConcurrencyStress
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.test.Test
 import kotlin.test.assertIs
 import kotlin.time.Duration.Companion.seconds
@@ -59,24 +61,35 @@ class CompositeSeamCloseTornConcurrencyTest {
     fun closePublishesTerminalTornEvenWhenPliesAreChurning() = runConcurrencyStress { stage ->
         val iterations = 6000
         val plyCount = 4
+        // A composite absorbs a ply's attach/detach failure and keeps reconciling (#1784) — which is
+        // right, but it means this probe would otherwise never see one. Before #1784 the failure was an
+        // UNCAUGHT exception that killed the reconcile pump, and this suite emitted ~3,100 of them per
+        // *passing* run: visible only in the report XML's system-err, which nothing asserts on. So watch
+        // the signal instead of the stderr, and fail on it.
+        val plyFailures = AtomicInteger()
+        val firstPlyFailure = AtomicReference<PlyReconcileException?>(null)
+        val watch: (PlyReconcileException) -> Unit = { failure ->
+            plyFailures.incrementAndGet()
+            firstPlyFailure.compareAndSet(null, failure)
+        }
         repeat(iterations) { iter ->
             val dispatcher = Dispatchers.Default
             val plies = (0 until plyCount).map { PlyId("ply-$it") to (InMemoryLoom() as Loom) }
             val desired = MutableStateFlow(plies)
 
-            val host = CompositeLoom(desired, dispatcher).host(Pattern("host"))
-            val joiner = CompositeLoom(desired, dispatcher).join(InMemoryTag("join"))
+            val host = CompositeLoom(desired, dispatcher, onPlyFailure = watch).host(Pattern("host"))
+            val joiner = CompositeLoom(desired, dispatcher, onPlyFailure = watch).join(InMemoryTag("join"))
 
-            stage.at("iter=$iter host.peers==2") { snapshot(iter, host) }
+            stage.at("iter=$iter host.peers==2") { snapshot(iter, host, joiner, plies, closed = false) }
             host.peers.first { it.size == 2 }
-            stage.at("iter=$iter joiner.peers==2") { snapshot(iter, host) }
+            stage.at("iter=$iter joiner.peers==2") { snapshot(iter, host, joiner, plies, closed = false) }
             joiner.peers.first { it.size == 2 }
 
             // Reproduce the #1135 contention: a broadcast flood keeps the dispatcher threads busy while
             // a ply-churn loop (detach ply-0, re-attach it) drives a continuous _plies → rollup stream;
             // close() races that live rollup. The yield() between churn steps defeats StateFlow
             // conflation (both the drop and the re-add are observed as real reconciles).
-            stage.at("iter=$iter close-vs-churn") { snapshot(iter, host) }
+            stage.at("iter=$iter close-vs-churn") { snapshot(iter, host, joiner, plies, closed = false) }
             coroutineScope {
                 val ready = CompletableDeferred<Unit>()
                 val flood = async(Dispatchers.Default) {
@@ -102,18 +115,32 @@ class CompositeSeamCloseTornConcurrencyTest {
             // The per-iteration bounded assertion: a lost Torn makes `state.first { Torn }` hang (the
             // clobber is permanent), so a tight timeout converts it into a fast, self-naming failure that
             // prints the exact violated invariant and the observed (non-terminal-despite-close) state.
-            stage.at("iter=$iter awaitTorn") { snapshot(iter, host) }
+            stage.at("iter=$iter awaitTorn") { snapshot(iter, host, joiner, plies, closed = true) }
             try {
                 withTimeout(3.seconds) { host.state.first { it is SeamState.Torn } }
             } catch (e: TimeoutCancellationException) {
                 throw AssertionError(
                     "iter=$iter: close() returned but state never reached the terminal Torn — a rollup " +
-                        "write clobbered close()'s Torn. Observed ${snapshot(iter, host)}. " +
+                        "write clobbered close()'s Torn. Observed " +
+                        "${snapshot(iter, host, joiner, plies, closed = true)}. " +
                         "Invariant: state.value must be Torn once close() has returned.",
                     e,
                 )
             }
             assertIs<SeamState.Torn>(host.state.value, "iter=$iter: state must be Torn after close()")
+
+            // Churning plies across a close() must never make the composite fail to attach or detach one.
+            // The failure this catches is a reconcile pass that keeps running after close() drained `live`
+            // and re-weaves the whole desired set onto the dead seam (#1784) — which, on a fabric that
+            // rejects a second concurrent host, throws.
+            val failures = plyFailures.get()
+            if (failures != 0) {
+                throw AssertionError(
+                    "iter=$iter: $failures ply attach/detach failure(s) while churning across close(). " +
+                        "First: ${firstPlyFailure.get()}. Invariant: reconciling a composite must not fail " +
+                        "for a ply whose fabric is healthy.",
+                )
+            }
         }
     }
 
@@ -126,7 +153,42 @@ class CompositeSeamCloseTornConcurrencyTest {
         }
     }
 
-    /** A one-line observed-state snapshot for the harness's on-timeout diagnostic (see #1135). */
-    private fun snapshot(iter: Int, host: Seam): String =
-        "iter=$iter host.state=${host.state.value} host.plies=${host.plies.value} (close() was called)"
+    /**
+     * An observed-state snapshot for the harness's on-timeout diagnostic (see #1135), reporting
+     * **identities and state, never sizes** — which is what makes a stall name its own cause.
+     *
+     * It reports both composites and each ply's underlying mesh membership, because that is exactly the
+     * fork a `peers` stall presents: if a ply's `InMemoryLoom.peers` holds both transport ids, the mesh
+     * formed and the composite never learned the `(plyId, transportId) → compositeId` mapping (a lost
+     * Announce); if it does not, the transport itself never came up. The two need entirely different
+     * investigations and the old snapshot could not tell them apart.
+     *
+     * [closed] must be passed honestly. The previous version appended a hardcoded "(close() was called)"
+     * to *every* stage including the pre-close `peers` waits, which is how #1784's first diagnosis went
+     * looking for a close-path cause for a stall that happens during setup.
+     */
+    private fun snapshot(
+        iter: Int,
+        host: Seam,
+        joiner: Seam,
+        plies: List<Pair<PlyId, Loom>>,
+        closed: Boolean,
+    ): String = buildString {
+        append("iter=").append(iter)
+        append(" closeCalled=").append(closed)
+        append(" host{id=").append(host.selfId.value)
+        append(" state=").append(host.state.value)
+        append(" peers=").append(host.peers.value.map { it.value })
+        append(" plies=").append(host.plies.value.mapKeys { it.key.value })
+        append("} joiner{id=").append(joiner.selfId.value)
+        append(" state=").append(joiner.state.value)
+        append(" peers=").append(joiner.peers.value.map { it.value })
+        append(" plies=").append(joiner.plies.value.mapKeys { it.key.value })
+        append("} mesh{")
+        plies.joinTo(this) { (id, loom) ->
+            val members = (loom as? InMemoryLoom)?.peers?.value?.map { it.value }
+            "${id.value}=$members"
+        }
+        append("}")
+    }
 }
