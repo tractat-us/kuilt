@@ -20,8 +20,9 @@ import kotlin.test.assertTrue
  * The kernel is [WasmKernelFixtures.REVERSE] — the well-behaved warp kernel the
  * runtime conformance suite exercises (full `warp_alloc`/`warp_run` ABI, a real
  * loop over linear memory), not a hand-minimal `.wat` that `wasm-opt` would
- * barely touch. These run un-gated in CI because the binary is resolved onto the
- * runner by the `resolveWasmOpt` Gradle task.
+ * barely touch. These run un-gated in CI because the build host's own
+ * `resolveWasmOpt<Platform>` task wires its binary straight into `jvmTest` resources —
+ * the tests never declare the consumer-facing classified dependency (#1335).
  *
  * `wasm-opt` is a real subprocess doing real, wall-clock, blocking I/O — the
  * sanctioned real-threading exception (like [ChicoryWasmRuntime]'s real-IO path).

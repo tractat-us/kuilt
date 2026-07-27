@@ -69,17 +69,31 @@ You choose how `wasm-opt` optimizes with an `OptLevel`:
 - **`O2` / `O0`** — a lighter pass, and no optimization, respectively.
 
 The `wasm-opt` binary is not committed to the repository. It is downloaded from Binaryen's
-official release at build time — **version-pinned and SHA-256-verified** — and bundled as a
-resource, so there is no toolchain for an operator to install and no unverified binary in
-git. Because running a native optimizer is a server-side concern, this is a **JVM/server-only
-module**: iOS, browser, and other native peers consume the optimized variant but never run
-`wasm-opt` themselves.
+official release at build time — **version-pinned and SHA-256-verified** — so there is no
+toolchain for an operator to install and no unverified binary in git. Because running a
+native optimizer is a server-side concern, this is a **JVM/server-only module**: iOS,
+browser, and other native peers consume the optimized variant but never run `wasm-opt`
+themselves.
 
-> **Packaging caveat.** The published `:kuilt-warp-compiler` artifact today bundles a
-> **build-host-only** `wasm-opt` binary — i.e. the one for whichever OS/architecture built
-> the release. Running a compiler node on a *different* host OS is not yet covered by the
-> published artifact. Bundling `wasm-opt` for every target OS is tracked separately in
-> [#1335](https://github.com/tractat-us/kuilt/issues/1335).
+## Adding a compiler node to your build
+
+`wasm-opt` is a native program, so one jar cannot serve every machine. The module's main
+artifact ships with no binary inside it, and each supported host gets its own companion
+jar. Take the module, then add the companion for the machine your compiler node will run
+on:
+
+```kotlin
+implementation("us.tractat.kuilt:kuilt-warp-compiler:<version>")
+runtimeOnly("us.tractat.kuilt:kuilt-warp-compiler-jvm:<version>:macos-arm64")
+```
+
+Swap the last part for the host you run on — `macos-arm64`, `macos-x86_64`, `linux-x86_64`
+or `linux-aarch64`. Only the *compiler node* needs this; every other peer just receives the
+smaller module it produces.
+
+> **Forget the companion jar and you get told, immediately and precisely.** The first
+> optimization fails with an error naming the exact line to add, rather than quietly
+> handing back an unoptimized module that looks like a successful compile.
 
 ## Where this sits in warp
 
