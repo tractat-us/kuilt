@@ -10,6 +10,8 @@ import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -236,6 +238,27 @@ internal class CompositeSeam(
      * nor reaches the collector, and it is raised through [onPlyFailure] with the ply's identity and the
      * exception rather than absorbed in silence.
      *
+     * ### `runCatchingCancellable` is not enough — the callee's OWN cancellation (#1784)
+     * The guard here deliberately catches [Throwable] and then re-checks *this* coroutine, rather than
+     * using `runCatchingCancellable`. That helper rethrows **every**
+     * [kotlin.coroutines.cancellation.CancellationException], including one the callee threw of its own
+     * accord rather than one signalling this coroutine's cancellation — and the natural way to write a
+     * dialling `Loom` is `withTimeout(dialTimeout) { dial(rendezvous) }`. `withTimeout` throws
+     * `TimeoutCancellationException` (a `CancellationException`) **to its caller**, without cancelling
+     * that caller's job. Rethrown from here it escapes the collector on a live, non-`Torn` composite, and
+     * because the escaping throwable *is* a `CancellationException` the collector is **cancelled, not
+     * failed**: [onPlyFailure] is never invoked and there is not even a stack trace on stderr. That is
+     * this very defect with its one remaining diagnostic thread cut — a dial timeout being the single
+     * likeliest way a ply fails to come up.
+     *
+     * `currentCoroutineContext().ensureActive()` is the discriminator: it rethrows this job's own
+     * cancellation when the coroutine really was cancelled (structured concurrency preserved) and falls
+     * through otherwise, so a fabric's dial timeout becomes an ordinary ply failure. `NwLoom` in
+     * `:kuilt-nw` defuses its own timeout by converting it to a plain `NwUnreachableException`, but that
+     * is one fabric's convention; `Loom.weave` is consumer-authored and this class's whole premise is
+     * surviving whatever a consumer's `Loom` does. (The obligation is now stated on `Loom.weave` too —
+     * a convention only one fabric knows about is not a convention.)
+     *
      * ### A failed ply is retried, not blacklisted
      * A ply that fails to attach is simply left un-live, so the next [desired] emission tries it again. A
      * failure ledger would need an invalidation rule and every plausible rule wedges — a fabric that is
@@ -249,8 +272,14 @@ internal class CompositeSeam(
         val liveIds = lock.withLock { live.keys.toList() }
         for (id in liveIds) {
             if (id in desiredIds) continue
-            runCatchingCancellable { detachPly(id) }
-                .onFailure { raisePlyFailure(id, PlyReconcileException.Phase.DETACH, it) }
+            try {
+                detachPly(id)
+            } catch (failure: Throwable) {
+                // Genuinely our own cancellation → rethrow; anything else (including a
+                // CancellationException the callee minted itself) is this ply's failure. See the KDoc.
+                currentCoroutineContext().ensureActive()
+                raisePlyFailure(id, PlyReconcileException.Phase.DETACH, failure)
+            }
         }
         // Attach: desired plies not yet live — weave their loom now.
         for ((id, loom) in desiredSet) {
@@ -266,14 +295,24 @@ internal class CompositeSeam(
             // fresh transport (a socket, a radio) for a seam already dead, only to close it again; before
             // BOTH checks existed the pass re-wove the entire desired set onto the corpse (#1784).
             if (state.value is SeamState.Torn) return
-            runCatchingCancellable { attachDesiredPly(id, loom) }
-                .onFailure { failure ->
-                    raisePlyFailure(id, PlyReconcileException.Phase.ATTACH, failure)
-                    // attachPly registers the handle BEFORE launching its pumps, so a throw partway through
-                    // can leave a half-built ply in `live`. Purge it — itself best-effort, since the purge
-                    // closes a consumer seam — so the next emission retries from a clean slate.
-                    runCatchingCancellable { detachPly(id) }
+            try {
+                attachDesiredPly(id, loom)
+            } catch (failure: Throwable) {
+                // Genuinely our own cancellation → rethrow; anything else (including a
+                // CancellationException the callee minted itself — a dial `withTimeout` is the common
+                // case) is this ply's failure. See the KDoc.
+                currentCoroutineContext().ensureActive()
+                raisePlyFailure(id, PlyReconcileException.Phase.ATTACH, failure)
+                // attachPly registers the handle BEFORE launching its pumps, so a throw partway through
+                // can leave a half-built ply in `live`. Purge it — itself best-effort, since the purge
+                // closes a consumer seam — so the next emission retries from a clean slate.
+                try {
+                    detachPly(id)
+                } catch (_: Throwable) {
+                    // Same discriminator; the purge's own failure is already reported by [detachPly].
+                    currentCoroutineContext().ensureActive()
                 }
+            }
         }
     }
 
@@ -314,8 +353,11 @@ internal class CompositeSeam(
      */
     private suspend fun discardOrphanedPly(id: PlyId, seam: Seam) {
         withContext(NonCancellable) {
+            // SALVAGE, not DETACH: this ply never entered `live` and never appeared in [plies], so
+            // DETACH's "its pumps are stopped and it is out of the composite" would be a false report on
+            // the consumer's own logger. Which ply, doing what, and why *is* the diagnosis.
             runCatchingCancellable { seam.close(CloseReason.Normal) }
-                .onFailure { raisePlyFailure(id, PlyReconcileException.Phase.DETACH, it) }
+                .onFailure { raisePlyFailure(id, PlyReconcileException.Phase.SALVAGE, it) }
         }
     }
 
@@ -421,18 +463,44 @@ internal class CompositeSeam(
         return true
     }
 
+    /**
+     * Detach ply [id]: stop its pumps, purge the state it contributed, and close its transport.
+     *
+     * ### Once the handle leaves `live`, the teardown is committed — hence `NonCancellable` (#1784)
+     * Ownership passes at the `live.remove` below: after it, [close]'s drain cannot see this handle, so if
+     * this method does not close the transport **nobody will**. Yet the very next statement,
+     * `handle.job.cancelAndJoin()`, throws whenever this collector has been cancelled — which is exactly
+     * the churn-across-[close] interleaving: reconcile wins `live.remove(id)`, [close] then latches `Torn`,
+     * drains a snapshot *without* this ply and cancels the scope, and the unshielded join throws, leaking
+     * the ply's transport with [close] single-shot and already returned. So the whole teardown runs under
+     * [NonCancellable] — the identical argument, for the identical reason, as [discardOrphanedPly]. It is
+     * bounded, not open-ended: the only wait is joining pumps that have just been cancelled.
+     *
+     * ### The foreign close is the guarded step, so the recomputes always run
+     * `Seam.close` is consumer-authored and may throw. Letting it escape would skip [recomputePeers] and
+     * [recomputeCapability] *after* `idMap` was already purged — so [peers] would keep advertising a
+     * composite peer reachable only through this now-detached ply (`sendTo` throwing [PeerNotConnected]
+     * for a peer `peers` calls reachable) and [capability] would keep this ply's roles in the union. Every
+     * trigger that could correct either is gone with this ply's cancelled pumps, so both would stay stale
+     * **indefinitely**. Absorbing the close and raising it through [onPlyFailure] keeps the recomputes on
+     * the only path that always executes.
+     */
     private suspend fun detachPly(id: PlyId) {
         // Remove from the live map under the lock; the suspending teardown runs outside it.
         val handle = lock.withLock { live.remove(id) } ?: return
-        // Stop this ply's pumps FIRST so a resuming pump can't resurrect the
-        // _plies/idMap entries we are about to purge.
-        handle.job.cancelAndJoin()
-        // Remove from the per-ply map (now safe) so the aggregate rolls up
-        // without this ply — empty => Weaving, never a transient terminal Torn.
-        _plies.update { it - id }
-        // Purge this ply's learned mappings so a re-attach starts clean.
-        lock.withLock { idMap.keys.removeAll { it.first == id } }
-        handle.seam.close(CloseReason.Normal)
+        withContext(NonCancellable) {
+            // Stop this ply's pumps FIRST so a resuming pump can't resurrect the
+            // _plies/idMap entries we are about to purge.
+            handle.job.cancelAndJoin()
+            // Remove from the per-ply map (now safe) so the aggregate rolls up
+            // without this ply — empty => Weaving, never a transient terminal Torn.
+            _plies.update { it - id }
+            // Purge this ply's learned mappings so a re-attach starts clean.
+            lock.withLock { idMap.keys.removeAll { it.first == id } }
+            // Guarded so the two recomputes below are unconditional — see the KDoc.
+            runCatchingCancellable { handle.seam.close(CloseReason.Normal) }
+                .onFailure { raisePlyFailure(id, PlyReconcileException.Phase.DETACH, it) }
+        }
         recomputePeers()
         // This ply's roles no longer union in — request a recompute.
         recomputeCapability()
