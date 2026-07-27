@@ -68,7 +68,7 @@ jobs:
       # the native targets cold. Keyed on the toolchain-defining files, matching
       # ci.yml's konan cache step (macOS-scoped runner.os key).
       - name: Cache Kotlin/Native (~/.konan)
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: ~/.konan
           key: konan-${{ runner.os }}-${{ hashFiles('gradle/libs.versions.toml', 'gradle.properties', 'settings.gradle.kts') }}
