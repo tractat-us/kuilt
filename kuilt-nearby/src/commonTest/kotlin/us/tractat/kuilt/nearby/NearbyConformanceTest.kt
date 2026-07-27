@@ -1,5 +1,6 @@
 package us.tractat.kuilt.nearby
 
+import us.tractat.kuilt.conformance.CapabilityGaps
 import us.tractat.kuilt.conformance.SeamCapabilities
 import us.tractat.kuilt.conformance.SeamConformanceSuite
 import us.tractat.kuilt.core.Loom
@@ -28,10 +29,17 @@ class NearbyConformanceTest : SeamConformanceSuite() {
         NearbyLoom(FakeNearbyApi(FakeNearbyRadio())).let { it to it }
 
     /**
-     * All capabilities honoured — Nearby Connections encrypts every connection
+     * Every capability honoured but one — Nearby Connections encrypts every connection
      * unconditionally; meshDelivery vacuously true (NearbyLoom currently weaves one
      * 2-peer link per session — Task 1.8 / #1408 meshEvidence: 2-peer vacuity).
+     *
+     * `reportsLiveCapability = false`: nothing feeds a live path signal into
+     * [us.tractat.kuilt.core.Seam.capability], so it sits on the honest
+     * [us.tractat.kuilt.core.FabricAvailability.Unknown] floor (#1712/#1543).
      */
-    override fun capabilities(): SeamCapabilities = SeamCapabilities.FULL
-    override fun capabilityGaps(): Map<String, String> = emptyMap()
+    override fun capabilities(): SeamCapabilities =
+        SeamCapabilities.FULL.copy(reportsLiveCapability = false)
+
+    override fun capabilityGaps(): Map<String, String> =
+        mapOf("reportsLiveCapability" to CapabilityGaps.LIVE_CAPABILITY)
 }

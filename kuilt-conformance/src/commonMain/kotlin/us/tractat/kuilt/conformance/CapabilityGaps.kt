@@ -11,6 +11,16 @@ public object CapabilityGaps {
         "https://github.com/tractat-us/kuilt/blob/main/docs/architecture.md#meshdelivery--relay-and-multi-hop-fabrics"
 
     /**
+     * A fabric with no live OS path observer, so [us.tractat.kuilt.core.Seam.capability] is a static
+     * [us.tractat.kuilt.core.FabricAvailability.Unknown] floor rather than a reactive value. A *fabric*
+     * gap, not a harness gap: the platform observer simply has not been wired yet. Track B
+     * (#1542 multipeer, #1543 nearby, #1544 webrtc, #1545 composite, #1546 mux, #1725 websocket)
+     * closes these one lane at a time.
+     */
+    public const val LIVE_CAPABILITY: String =
+        "https://github.com/tractat-us/kuilt/blob/main/docs/architecture.md#reportslivecapability--fabrics-without-a-path-observer"
+
+    /**
      * A conformance harness that has not implemented mid-session transport-death injection
      * (see [SeamConformanceSuite.midSessionDeathGap]). Not a *fabric* gap — a *harness* gap:
      * the harness cannot reach a raw transport handle to drop out from under a live session,

@@ -32,10 +32,10 @@ class CapabilityMatrixTest {
         val expected = listOf(
             "| Fabric | ordersDelivery | reportsPeerLoss | terminatesIncomingOnClose | " +
                 "staysTornAfterClose | throwsOnSendToTorn | supportsSendTo | securesTransport | " +
-                "meshDelivery | mesh evidence |",
-            "|---|---|---|---|---|---|---|---|---|---|",
-            "| WebSocket | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | 2-peer vacuous (SeamConformanceSuite) |",
-            "| WebRTC | ✓ | ✓ | ✓ | ✓ | ✓ | [–]($SEND_TO_GAP) | ✓ | [–]($MESH_GAP) |  |",
+                "meshDelivery | reportsLiveCapability | mesh evidence |",
+            "|---|---|---|---|---|---|---|---|---|---|---|",
+            "| WebSocket | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | 2-peer vacuous (SeamConformanceSuite) |",
+            "| WebRTC | ✓ | ✓ | ✓ | ✓ | ✓ | [–]($SEND_TO_GAP) | ✓ | [–]($MESH_GAP) | ✓ |  |",
         ).joinToString("\n")
 
         assertEquals(expected, renderMatrix(entries))

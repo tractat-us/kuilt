@@ -69,11 +69,15 @@ public interface Seam {
     /**
      * Live capability of the fabric carrying this session — its role(s) and
      * whether it is usable right now. Updates as radios, permissions, and network
-     * paths change. Default: a static roleless [FabricAvailability.Available] floor;
-     * fabrics with real OS observers override to make it reactive.
+     * paths change.
+     *
+     * Default: a roleless [FabricAvailability.Unknown] floor — a fabric with no live path
+     * observer reports "cannot tell", never a confident `Available`. Fabrics with real OS
+     * observers override this to make it reactive; a fabric that does so declares
+     * `reportsLiveCapability = true` in its `SeamCapabilities`.
      */
     public val capability: StateFlow<TransportCapability>
-        get() = us.tractat.kuilt.core.internal.StaticAvailableCapability
+        get() = us.tractat.kuilt.core.internal.StaticUnknownCapability
 
     /**
      * Frames received from peers, in send order, delivered to **a single collector**.

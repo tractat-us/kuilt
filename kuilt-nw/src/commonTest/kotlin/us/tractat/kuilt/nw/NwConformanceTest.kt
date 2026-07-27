@@ -30,12 +30,33 @@ import kotlin.random.Random
  * temporal Phase-3 gap it once was. Every other flag is honoured: real direct-mesh delivery
  * (`meshDelivery = true`, earned by [NwMeshConformanceTest]) and real directed send
  * (`supportsSendTo = true`).
+ *
+ * `reportsLiveCapability = true` is likewise earned, not asserted: [NwSeam] drives its
+ * [us.tractat.kuilt.core.Seam.capability] from [NwApi.pathState] (#1541), and this harness publishes a
+ * live path on both fakes ([SATISFIED_WIFI_PATH]) so the conformance assertion exercises that observer
+ * rather than the static seed. kuilt-nw is the one fabric off the [us.tractat.kuilt.core.FabricAvailability.Unknown]
+ * floor (#1712).
  */
 class NwConformanceTest : SeamConformanceSuite() {
 
     private companion object {
         const val SERVICE_TYPE = "_kuilt._tcp"
         const val HOST_DEVICE = "host"
+
+        /**
+         * A live, satisfied infrastructure-Wi-Fi path. Published on both fakes in [newLoomPair] so the
+         * seams' #1541 path-observer loop — not the static [FakeNwApi.availability] seed — is what drives
+         * `capability`. `SeamConformanceSuite.wovenSeamCapabilityIsHonest` asserts this harness is off the
+         * `Unknown` floor because it declares `reportsLiveCapability = true`; seeding the observer is what
+         * makes that assertion mean the observer works, rather than passing on the seed alone (#1712).
+         */
+        val SATISFIED_WIFI_PATH = NwPathState(
+            status = NwPathStatus.Satisfied,
+            interfaces = setOf(NwInterfaceType.WifiLan),
+            isExpensive = false,
+            isConstrained = false,
+            unsatisfiedReason = null,
+        )
     }
 
     // The radio backing the current pair, captured so injectSelfDial can drive the host device to dial
@@ -45,16 +66,13 @@ class NwConformanceTest : SeamConformanceSuite() {
     override fun newLoomPair(): Pair<Loom, Loom> {
         val r = FakeNwRadio()
         radio = r
-        val host = NwLoom(
-            FakeNwApi(r, deviceId = HOST_DEVICE, serviceName = "host"),
-            serviceType = SERVICE_TYPE,
-            random = Random(0),
-        )
-        val joiner = NwLoom(
-            FakeNwApi(r, deviceId = "join", serviceName = "join"),
-            serviceType = SERVICE_TYPE,
-            random = Random(1),
-        )
+        val hostApi = FakeNwApi(r, deviceId = HOST_DEVICE, serviceName = "host")
+        val joinerApi = FakeNwApi(r, deviceId = "join", serviceName = "join")
+        // Drive the live path observer, not just the static seed — see SATISFIED_WIFI_PATH.
+        hostApi.emitPathState(SATISFIED_WIFI_PATH)
+        joinerApi.emitPathState(SATISFIED_WIFI_PATH)
+        val host = NwLoom(hostApi, serviceType = SERVICE_TYPE, random = Random(0))
+        val joiner = NwLoom(joinerApi, serviceType = SERVICE_TYPE, random = Random(1))
         return host to joiner
     }
 

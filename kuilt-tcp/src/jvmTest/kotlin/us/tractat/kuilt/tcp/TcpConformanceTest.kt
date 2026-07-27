@@ -60,12 +60,13 @@ class TcpConformanceTest : SeamConformanceSuite() {
 
     /**
      * meshDelivery vacuously true — strictly 2-peer direct socket (Task 1.8 / #1408
-     * meshEvidence: 2-peer vacuity). Raw bytes, no wire encryption.
+     * meshEvidence: 2-peer vacuity). Raw bytes, no wire encryption, and no path observer (#1712).
      */
     override fun capabilities(): SeamCapabilities =
-        SeamCapabilities.FULL.copy(securesTransport = false)
+        SeamCapabilities.FULL.copy(securesTransport = false, reportsLiveCapability = false)
 
     override fun capabilityGaps(): Map<String, String> = mapOf(
         "securesTransport" to CapabilityGaps.SECURES_TRANSPORT,
+        "reportsLiveCapability" to CapabilityGaps.LIVE_CAPABILITY,
     )
 }

@@ -440,19 +440,37 @@ public abstract class SeamConformanceSuite {
         runAvailabilityReturnsAKnownVariant()
     }
 
-    // ── (6b) a Woven Seam reports Available live capability ─────────────────
+    // ── (6b) live capability is honest about whether it is observed ─────────
+    //
+    // Still ungated in the sense that matters: NEITHER branch skips. The flag only selects WHICH
+    // assertion applies, so no capability value can make this obligation vacuous. It does *read*
+    // capabilities(), so it is not part of the hostile-harness core set in
+    // [SeamConformanceUngatedCoreTest] — that set proves "never reads the flags", which this one
+    // deliberately does.
 
-    internal suspend fun runWovenSeamReportsAvailableCapability(scope: TestScope): Unit =
+    internal suspend fun runWovenSeamCapabilityIsHonest(scope: TestScope): Unit =
         scope.connectedPair { host, _ ->
-            assertTrue(
-                host.capability.value.availability is FabricAvailability.Available,
-                "a Woven Seam must report Available capability, got ${host.capability.value}",
-            )
+            val availability = host.capability.value.availability
+            if (capabilities().reportsLiveCapability) {
+                // A fabric claiming a live observer must not be sitting on the Unknown floor.
+                // Whether it reads Available or Unavailable is the fabric's own business: a woven
+                // seam whose device path has dropped is legitimately Unavailable (the #1478 grace
+                // window), so this must NOT assert Available.
+                assertTrue(
+                    availability !is FabricAvailability.Unknown,
+                    "a fabric declaring reportsLiveCapability=true must not report the Unknown floor, got $availability",
+                )
+            } else {
+                assertTrue(
+                    availability is FabricAvailability.Unknown,
+                    "a fabric with no live path observer must report Unknown, not a fabricated verdict, got $availability",
+                )
+            }
         }
 
     @Test
-    public fun wovenSeamReportsAvailableCapability(): TestResult =
-        runTest { runWovenSeamReportsAvailableCapability(this) }
+    public fun wovenSeamCapabilityIsHonest(): TestResult =
+        runTest { runWovenSeamCapabilityIsHonest(this) }
 
     // ── (7) state is Woven after host and joiner both return ─────────────────
 

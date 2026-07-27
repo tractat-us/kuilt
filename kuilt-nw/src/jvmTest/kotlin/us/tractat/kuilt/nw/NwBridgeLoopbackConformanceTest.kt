@@ -103,7 +103,15 @@ class NwBridgeLoopbackConformanceTest : SeamConformanceSuite() {
 
     override fun joinTag(): Tag = InMemoryTag(sessionName = "host", peerKey = "nw-bridge-loopback-joiner")
 
-    /** The loopback link is real TLS-PSK through the dylib, so every capability — wire encryption included — holds. */
+    /**
+     * The loopback link is real TLS-PSK through the dylib, so every capability — wire encryption
+     * included — holds.
+     *
+     * `reportsLiveCapability = true` describes the **fabric**: [NwSeam] drives its capability from
+     * [NwApi.pathState] (#1541). Note this *binding* does not wire an `NWPathMonitor` (the dylib bridge
+     * publishes no path state), so the seam holds its static seed here rather than a live reading;
+     * the observer itself is exercised by `NwConformanceTest` and `NwSeamCapabilityTest` (#1712).
+     */
     override fun capabilities(): SeamCapabilities = SeamCapabilities.FULL.copy(securesTransport = true)
 
     /** No gaps — this test IS the JVM-bridge proof of the `securesTransport` capability for kuilt-nw. */

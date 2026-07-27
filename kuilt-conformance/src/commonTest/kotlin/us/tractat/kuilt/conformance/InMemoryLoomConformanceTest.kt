@@ -27,8 +27,13 @@ class InMemoryLoomConformanceTest : SeamConformanceSuite() {
      * N-peer shared mesh, proven against the shared [MeshConformanceSuite] by
      * [InMemoryLoomMeshConformanceTest] (#1408, Task 1.8).
      */
-    override fun capabilities() = SeamCapabilities.FULL.copy(securesTransport = false)
-    override fun capabilityGaps() = mapOf("securesTransport" to CapabilityGaps.SECURES_TRANSPORT)
+    override fun capabilities() =
+        SeamCapabilities.FULL.copy(securesTransport = false, reportsLiveCapability = false)
+
+    override fun capabilityGaps() = mapOf(
+        "securesTransport" to CapabilityGaps.SECURES_TRANSPORT,
+        "reportsLiveCapability" to CapabilityGaps.LIVE_CAPABILITY,
+    )
 
     /**
      * Drain the joiner from the shared roster: closing the joiner seam removes it from the loom's

@@ -173,13 +173,17 @@ class MDNSConformanceTest : SeamConformanceSuite() {
     override fun selfDialGap(): String? = null
 
     // identical byte path to websocket — plaintext ws:// to a host-peer hub;
-    // joiner↔joiner frames traverse the host.
-    override fun capabilities(): SeamCapabilities =
-        SeamCapabilities.FULL.copy(securesTransport = false, meshDelivery = false)
+    // joiner↔joiner frames traverse the host; no path observer either (#1712).
+    override fun capabilities(): SeamCapabilities = SeamCapabilities.FULL.copy(
+        securesTransport = false,
+        meshDelivery = false,
+        reportsLiveCapability = false,
+    )
 
     override fun capabilityGaps(): Map<String, String> = mapOf(
         "securesTransport" to CapabilityGaps.SECURES_TRANSPORT,
         "meshDelivery" to CapabilityGaps.MESH_DELIVERY,
+        "reportsLiveCapability" to CapabilityGaps.LIVE_CAPABILITY,
     )
 
     // ── Private helpers ──────────────────────────────────────────────────────

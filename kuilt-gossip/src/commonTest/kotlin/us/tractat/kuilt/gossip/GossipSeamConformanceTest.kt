@@ -45,13 +45,17 @@ class GossipSeamConformanceTest : SeamConformanceSuite() {
         GossipLoom(InMemoryLoom(), testScope).let { it to it }
 
     // overlay adds no crypto, inherits its base; dissemination is deliberate
-    // multi-hop flood — not direct p2p.
-    override fun capabilities(): SeamCapabilities =
-        SeamCapabilities.FULL.copy(securesTransport = false, meshDelivery = false)
+    // multi-hop flood — not direct p2p; and the overlay wires no path observer (#1712).
+    override fun capabilities(): SeamCapabilities = SeamCapabilities.FULL.copy(
+        securesTransport = false,
+        meshDelivery = false,
+        reportsLiveCapability = false,
+    )
 
     override fun capabilityGaps(): Map<String, String> = mapOf(
         "securesTransport" to CapabilityGaps.SECURES_TRANSPORT,
         "meshDelivery" to CapabilityGaps.MESH_DELIVERY,
+        "reportsLiveCapability" to CapabilityGaps.LIVE_CAPABILITY,
     )
 }
 

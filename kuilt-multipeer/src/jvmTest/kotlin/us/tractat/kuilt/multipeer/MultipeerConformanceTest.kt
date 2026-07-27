@@ -1,5 +1,6 @@
 package us.tractat.kuilt.multipeer
 
+import us.tractat.kuilt.conformance.CapabilityGaps
 import us.tractat.kuilt.conformance.SeamCapabilities
 import us.tractat.kuilt.conformance.SeamConformanceSuite
 import us.tractat.kuilt.core.Loom
@@ -87,11 +88,18 @@ class MultipeerConformanceTest : SeamConformanceSuite() {
     override fun selfDialGap(): String? = null
 
     /**
-     * All capabilities honoured — MultipeerConnectivity requires encryption
+     * Every capability honoured but one — MultipeerConnectivity requires encryption
      * (MCEncryptionRequired) and is an N≤8 peer mesh. meshEvidence (Task 1.8 / #1408):
      * MC mesh; a MeshConformanceSuite subclass is deprioritised (module slated for
      * retirement by kuilt-nw, #1403).
+     *
+     * `reportsLiveCapability = false`: no `MCSession`/path observer feeds
+     * [us.tractat.kuilt.core.Seam.capability], so it sits on the honest
+     * [us.tractat.kuilt.core.FabricAvailability.Unknown] floor (#1712/#1542).
      */
-    override fun capabilities(): SeamCapabilities = SeamCapabilities.FULL
-    override fun capabilityGaps(): Map<String, String> = emptyMap()
+    override fun capabilities(): SeamCapabilities =
+        SeamCapabilities.FULL.copy(reportsLiveCapability = false)
+
+    override fun capabilityGaps(): Map<String, String> =
+        mapOf("reportsLiveCapability" to CapabilityGaps.LIVE_CAPABILITY)
 }

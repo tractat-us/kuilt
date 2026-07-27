@@ -114,9 +114,12 @@ internal class CompositeSeam(
     private val _plies = MutableStateFlow<Map<PlyId, SeamState>>(emptyMap())
     override val plies: StateFlow<Map<PlyId, SeamState>> = _plies.asStateFlow()
 
-    // Live capability rollup: the union of the constituent Looms' roles for currently-Woven plies.
+    // Live capability rollup: the union of the constituent Looms' roles for currently-Woven plies,
+    // folded with those plies' live Seam availabilities. Seeded roleless/Unknown — before the first
+    // recomputeCapability() no ply has been consulted, so a confident verdict here would be a
+    // fabrication for the whole pre-recompute window (#1712).
     private val _capability = MutableStateFlow(
-        TransportCapability(emptySet(), FabricAvailability.Available),
+        TransportCapability(emptySet(), FabricAvailability.Unknown("composite capability not yet computed")),
     )
     override val capability: StateFlow<TransportCapability> = _capability.asStateFlow()
 
@@ -238,23 +241,30 @@ internal class CompositeSeam(
     }
 
     /**
-     * Recompute the live [capability] from the constituent Looms of currently-[SeamState.Woven]
-     * plies. Roles are static on the [Loom] (held in [desired]); the woven seams report only the
-     * floor, so the union is read from the desired set filtered to the woven ply ids. Reads of
-     * [live] / [desired] are non-suspending and happen under [lock]; the caller MUST hold NO lock —
-     * the non-reentrant [lock] is re-taken here, so calling this from inside a locked block deadlocks.
+     * Recompute the live [capability] over the currently-[SeamState.Woven] plies. Roles come from the
+     * constituent [Loom]s (held in [desired]) — a ply's medium does not change under it, so roles are
+     * static. **Availability comes from the plies' live [Seam.capability]**, not their Looms: the Loom
+     * value is the static pre-connect claim, and folding it here would launder an observer-less ply's
+     * claim into a confident live verdict (#1712). Reads of [live] / [desired] are non-suspending and
+     * happen under [lock]; the caller MUST hold NO lock — the non-reentrant [lock] is re-taken here,
+     * so calling this from inside a locked block deadlocks.
      */
     private fun recomputeCapability() {
         val snapshot = lock.withLock {
-            val wovenIds = live.entries
+            val wovenEntries = live.entries
                 .filter { it.value.seam.state.value is SeamState.Woven }
-                .map { it.key }.toSet()
-            val wovenLooms = desired.value.filter { (id, _) -> id in wovenIds }
-            val roles = wovenLooms.flatMap { (_, loom) -> loom.capability().roles }.toSet()
-            val availabilities = wovenLooms.map { (_, loom) -> loom.capability().availability }
+            val wovenIds = wovenEntries.map { it.key }.toSet()
+            // Roles ARE static on the Loom — a ply's medium does not change under it.
+            val roles = desired.value.filter { (id, _) -> id in wovenIds }
+                .flatMap { (_, loom) -> loom.capability().roles }.toSet()
+            // Availability comes from the woven plies' SEAMS. Reading loom.capability() here was
+            // correct only while the seam floor was a meaningless Available; post-#1712 the floor is
+            // an honest Unknown and the seam is the live source. Keeping the loom read would let a
+            // composite launder two observer-less plies' static Available into a confident verdict.
+            val availabilities = wovenEntries.map { it.value.seam.capability.value.availability }
             roles to availabilities
         }
-        // Three-way lattice fold over the woven plies' Loom availabilities (mirrors
+        // Three-way lattice fold over the woven plies' Seam availabilities (mirrors
         // CompositeLoom.capability): any Available ⇒ Available; else any Unknown ⇒ Unknown
         // (best-effort — don't collapse an unproven ply to Unavailable); else Unavailable.
         val availability = when {

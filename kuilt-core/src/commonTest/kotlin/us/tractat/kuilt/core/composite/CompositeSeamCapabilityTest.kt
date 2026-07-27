@@ -23,7 +23,8 @@ import kotlin.test.assertIs
 /**
  * A [CompositeSeam]'s live [Seam.capability] unions the roles of the constituent **Looms** of
  * every currently-[us.tractat.kuilt.core.SeamState.Woven] ply. Roles are static on the [Loom], so
- * the rollup reads them from the desired set (not the woven seams, which report only the floor).
+ * the rollup reads them from the desired set; availability instead comes from those plies' live
+ * [Seam.capability] — the Loom value is a static pre-connect claim (#1712).
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class CompositeSeamCapabilityTest {
@@ -58,11 +59,30 @@ class CompositeSeamCapabilityTest {
         )
         val composite = loom.host(Pattern("host"))
 
-        // Both plies are Woven FakeSeams whose Looms report Unknown availability → the composite
+        // Both plies are Woven FakeSeams sitting on the Unknown capability floor → the composite
         // must fold to Unknown (best-effort), NEVER Unavailable.
         withTimeoutOrNull(2_000) {
             composite.capability.first { it.availability is FabricAvailability.Unknown }
         }
+        assertIs<FabricAvailability.Unknown>(composite.capability.value.availability)
+        composite.close(CloseReason.Normal)
+    }
+
+    @Test
+    fun availableLoomClaimIsNotLaunderedIntoAConfidentSeamVerdict() = runTest {
+        val loom = CompositeLoom(
+            listOf(
+                PlyId("a") to roleLoom(TransportRole.Discovery),
+                PlyId("b") to roleLoom(TransportRole.Data),
+            ),
+            dispatcher = UnconfinedTestDispatcher(testScheduler),
+        )
+        val composite = loom.host(Pattern("host"))
+
+        // Both Looms claim Available — but that is the STATIC pre-connect claim, and neither woven
+        // FakeSeam has a live path observer, so both seams report the Unknown floor. The composite
+        // must inherit the plies' honesty, not resurrect the looms' confidence (#1712).
+        withTimeoutOrNull(2_000) { composite.capability.first { it.roles.size == 2 } }
         assertIs<FabricAvailability.Unknown>(composite.capability.value.availability)
         composite.close(CloseReason.Normal)
     }

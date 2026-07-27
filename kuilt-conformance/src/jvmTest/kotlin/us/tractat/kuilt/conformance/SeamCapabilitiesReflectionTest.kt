@@ -11,9 +11,9 @@ import kotlin.test.assertEquals
  * `commonMain` has no reflection, so the flag list ([SeamCapabilities.FLAGS]) is
  * hand-maintained — and `falseFlags()` plus the capability-matrix render columns
  * both derive from it. That collapses the two parallel lists that used to exist,
- * but leaves one residual silent failure mode: adding a **9th** boolean property
+ * but leaves one residual silent failure mode: adding a **further** boolean property
  * to the data class (and to `FULL`, which the compiler forces) while forgetting to
- * extend `FLAGS`. The 9th flag would then be invisible to `falseFlags()`, so a
+ * extend `FLAGS`. The new flag would then be invisible to `falseFlags()`, so a
  * `false` value for it would be **undeclarable** — it would slip past
  * `SeamConformanceSuite.everyFalseCapabilityDeclaresAGap`, which only iterates
  * `falseFlags()`.
@@ -43,6 +43,7 @@ class SeamCapabilitiesReflectionTest {
             supportsSendTo = false,
             securesTransport = false,
             meshDelivery = false,
+            reportsLiveCapability = false,
         )
 
         assertAll(
