@@ -27,9 +27,9 @@
 
 ---
 
-## Two corrections to the spec (verified 2026-07-26 against `origin/main` @ `8717f823`)
+## Four corrections to the spec (verified 2026-07-26 against `origin/main` @ `8717f823`)
 
-Both were found while mapping the blast radius. Follow the plan, not the spec, where they differ.
+Found while mapping the blast radius and during an independent second-planner pass. Follow the plan, not the spec, where they differ.
 
 **1. The conformance declaration uses the existing mechanism, not a new `protected open val`.**
 The spec proposes `protected open val reportsLiveCapability: Boolean = false` on `SeamConformanceSuite`. The repo already has a mature declaration system: `SeamCapabilities` (a data class of 8 boolean flags with a `FLAGS` single-source-of-truth list), `CapabilityGaps` (stable gap URLs), a rendered `CapabilityMatrix`, and `SeamCapabilitiesReflectionTest` which fails loudly if a declared boolean property is missing from `FLAGS`. The flag becomes the **9th `SeamCapabilities` dimension** so it inherits matrix rendering and gap-declaration enforcement for free.
@@ -39,6 +39,11 @@ The spec says the deadline "is already computed one line below." It is — but a
 
 **3. `FakeRoom.partition(peerId)` is shipped commonMain API with no deadline concept.**
 `kuilt-session-test/src/commonMain/.../FakeRoom.kt:186` calls `updateLiveness(peerId, Liveness.Partitioned)`. Task 5 gives it a defaulted `expiresAt` parameter rather than a required one, so existing consumer call sites keep compiling.
+
+**4. `CompositeSeam` aggregates its plies' *Looms*, not their *Seams* — so the floor flip does not reach it.**
+The spec says "`CompositeSeam` already rolls plies up." The *fold* is right (`CompositeSeam.kt:258`), but the *inputs* are wrong for our purpose: `recomputeCapability` reads `loom.capability()` — the **static pre-connect** claim — and its own KDoc explains why (`242`): *"the woven seams report only the floor, so the union is read from the desired set filtered to the woven ply ids."* That reasoning is exactly what Task 1 invalidates.
+
+Left alone, a composite of two observer-less WebSocket plies would launder their static `Available` into a confident live verdict while declaring `reportsLiveCapability = false` — a false-positive **amplifier**, the precise thing Task 1 exists to remove. Task 2 Step 3a therefore takes **availability from the woven plies' seams** while **roles stay on the looms** (roles genuinely are static). This is a deliberate, contained expansion that partially anticipates #1545; it is not optional, because without it the conformance assertion cannot be stated honestly.
 
 ---
 
@@ -51,6 +56,7 @@ The spec says the deadline "is already computed one line below." It is — but a
 | `kuilt-conformance/src/commonMain/kotlin/us/tractat/kuilt/conformance/SeamCapabilities.kt` | **Modify.** Add the `reportsLiveCapability` flag + its `FLAGS` entry. |
 | `kuilt-conformance/src/commonMain/kotlin/us/tractat/kuilt/conformance/CapabilityGaps.kt` | **Modify.** Add the `LIVE_CAPABILITY` gap URL. |
 | `kuilt-conformance/src/commonMain/kotlin/us/tractat/kuilt/conformance/SeamConformanceSuite.kt` | **Modify.** Replace the "must report Available" assertion with a flag-driven one. |
+| `kuilt-core/src/commonMain/kotlin/us/tractat/kuilt/core/composite/CompositeSeam.kt` | **Modify.** Take availability from the woven plies' seams, not their looms (correction 4). |
 | `kuilt-conformance/src/commonMain/kotlin/us/tractat/kuilt/conformance/RoomConformanceSuite.kt` | **Modify.** `Liveness.Partitioned` equality → `assertIs`. |
 | every fabric's `*ConformanceTest.kt` | **Modify.** Declare `reportsLiveCapability` + gap URL. Enumerated in Task 2. |
 | `kuilt-session/src/commonMain/kotlin/us/tractat/kuilt/session/Room.kt` | **Modify.** Add `localFabric`. |
@@ -189,6 +195,7 @@ The conformance suite is now red across the repo. Task 2 is the other half of th
 - Modify: `kuilt-conformance/src/commonMain/kotlin/us/tractat/kuilt/conformance/SeamCapabilities.kt`
 - Modify: `kuilt-conformance/src/commonMain/kotlin/us/tractat/kuilt/conformance/CapabilityGaps.kt`
 - Modify: `kuilt-conformance/src/commonMain/kotlin/us/tractat/kuilt/conformance/SeamConformanceSuite.kt` (the `runWovenSeamReportsAvailableCapability` block, ~line 444)
+- Modify: `kuilt-core/src/commonMain/kotlin/us/tractat/kuilt/core/composite/CompositeSeam.kt` (`recomputeCapability`, ~248)
 - Modify: `docs/architecture.md`
 - Modify: each fabric's conformance subclass (enumerated in Step 4)
 
@@ -274,6 +281,33 @@ In `SeamConformanceSuite.kt`, replace the `runWovenSeamReportsAvailableCapabilit
 
 Update `SeamConformanceUngatedCoreTest` if it references the old method name.
 
+- [ ] **Step 3a: Stop `CompositeSeam` laundering static loom claims (correction 4)**
+
+In `CompositeSeam.recomputeCapability`, keep roles on the looms and move availability to the plies' seams:
+
+```kotlin
+        val snapshot = lock.withLock {
+            val wovenEntries = live.entries
+                .filter { it.value.seam.state.value is SeamState.Woven }
+            val wovenIds = wovenEntries.map { it.key }.toSet()
+            // Roles ARE static on the Loom — a ply's medium does not change under it.
+            val roles = desired.value.filter { (id, _) -> id in wovenIds }
+                .flatMap { (_, loom) -> loom.capability().roles }.toSet()
+            // Availability comes from the woven plies' SEAMS. Reading loom.capability() here was
+            // correct only while the seam floor was a meaningless Available; post-#1712 the floor is
+            // an honest Unknown and the seam is the live source. Keeping the loom read would let a
+            // composite launder two observer-less plies' static Available into a confident verdict.
+            val availabilities = wovenEntries.map { it.value.seam.capability.value.availability }
+            roles to availabilities
+        }
+```
+
+Update the KDoc sentence at `242` that justifies the old source — it now says the opposite of what the code does.
+
+The three-way fold below is unchanged. Run `./gradlew :kuilt-core:jvmTest --tests "*CompositeSeamCapabilityTest*" --rerun-tasks`: the roles assertion must still pass, and the existing `Unknown` case (`64-66`) should still hold. If the roles assertion breaks, roles were being taken from the wrong place and that is a separate finding — report it rather than papering over it.
+
+With this, `CompositeConformanceTest` declares `reportsLiveCapability = false` honestly and reports `Unknown` when no ply has an observer.
+
 - [ ] **Step 4: Declare the flag in every fabric**
 
 `SeamCapabilities` is a data class with required positional parameters, so **every** construction site must supply the new flag. Sites, from `grep -rn "SeamCapabilities(" --include="*.kt" . | grep -v /build/`:
@@ -304,7 +338,7 @@ Match each file's existing idiom for both overrides — some already override on
 
 **The nw suites are the exception**: `NwSeam` overrides `capability` and drives it from `NwApi.pathState`, so they keep `reportsLiveCapability = true` and declare no gap. Verify per-suite: a suite whose harness uses a `FakeNwApi` that never publishes a `pathState` will sit on the floor and fail the `true` branch. If so, seed the fake's `pathState` in that harness rather than declaring a gap — the fabric genuinely has the observer.
 
-`CompositeConformanceTest` also needs judgement: `CompositeSeam` overrides `capability`, but it aggregates its constituent looms, so it reports `Unknown` when they all do. Declare `false` unless its harness gives it an observing constituent.
+`CompositeConformanceTest` declares `false` plus the gap URL: after Step 3a it aggregates its plies' seams, so with no observing ply it reports `Unknown`. Do **not** declare `true` on the grounds that it recomputes reactively — it reacts to ply *woven/torn*, not to a path observer, and claiming otherwise reintroduces exactly the false confidence Task 1 removes.
 
 - [ ] **Step 5: Run the conformance suites**
 
@@ -528,7 +562,11 @@ Add the loop as a private suspend fun near the other loops:
      * with the ADR-034 single-collection contract.
      */
     private suspend fun localFabricLoop() {
-        var lastDecided: FabricAvailability? = null
+        // Seeded, NOT null: _localFabric already holds the initial availability, so the first
+        // collect emission is deduped below and would never set lastDecided. A room that starts
+        // Unavailable and then heals must still emit LocalFabricRestored.
+        var lastDecided: FabricAvailability? =
+            seam.capability.value.availability.takeIf { it !is FabricAvailability.Unknown }
         seam.capability.collect { cap ->
             val next = cap.availability
             if (next == _localFabric.value) return@collect
@@ -760,7 +798,15 @@ At 1505, hoist the deadline above the role gate and use it (Task 6 will reuse th
     }
 ```
 
-Confirm `heartbeatConfig.reconnectWindow` is a `Duration` so `at + reconnectWindow` yields an `Instant`; if the existing code went via epoch-millis, keep that arithmetic and convert once.
+**Do the arithmetic in epoch-millis and convert once**, mirroring `DefaultJoinerReconnectController.openWindow`'s `expiresAt = at + reconnectWindowMs` exactly:
+
+```kotlin
+        val expiresAt = Instant.fromEpochMilliseconds(
+            at.toEpochMilliseconds() + heartbeatConfig.reconnectWindow.inWholeMilliseconds,
+        )
+```
+
+Same operands, same order, same truncation as the controller — so the deadline on the level is provably the one the controller enforces, not merely a value that ought to agree.
 
 At 1583, `handlePaused` uses the host's value:
 
