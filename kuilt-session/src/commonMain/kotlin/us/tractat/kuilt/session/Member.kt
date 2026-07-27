@@ -62,12 +62,26 @@ public sealed interface Liveness {
      * this type can represent. That is deliberate: it was previously reachable only by replaying a
      * [MembershipEvent.WindowOpened] that some paths never emitted (#1723, #1724).
      *
-     * On a member watching *another* member, this deadline may start as a local estimate and be
-     * refined by the host's authoritative [AdmitMessage.Paused][us.tractat.kuilt.session.admit.AdmitMessage.Paused].
-     * On a joiner watching its *host*, the joiner's own reconnect budget is the authority and no
-     * refinement occurs.
+     * On a member watching *another* member, this deadline is **intended** to start as a local
+     * estimate and then be refined by the host's authoritative
+     * [AdmitMessage.Paused][us.tractat.kuilt.session.admit.AdmitMessage.Paused] — that refinement is
+     * not implemented yet (#1724 lands it; today `handlePaused` returns early on an already-
+     * partitioned member, so a local estimate stands). On a joiner watching its *host*, the joiner's
+     * own reconnect budget is the authority and no refinement occurs.
+     *
+     * Beware that the two fields can come from **different clocks**. `markPartitioned` derives both
+     * from the local clock, but the `Paused` path pairs a local [since] with the *host's*
+     * [windowExpiresAt]. So treat [windowExpiresAt] as a deadline to compare the local clock
+     * against — never as an interval to subtract from [since], which host↔member skew would distort.
      */
     public data class Partitioned(
+        /**
+         * When this partition was **first** detected — preserved across an idempotent re-detection
+         * rather than advanced, so it agrees with the single [MembershipEvent.Partitioned] that was
+         * actually emitted (that event fires only on the first detection). Do not "simplify" this to
+         * overwrite on every detection: `since` would then drift forward while [windowExpiresAt]
+         * stayed pinned, and could eventually exceed it.
+         */
         val since: Instant,
         val windowExpiresAt: Instant,
     ) : Liveness
