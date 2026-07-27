@@ -1648,10 +1648,15 @@ internal class SeamRoom(
         // on a joiner, #1724). markPartitioned is role-agnostic, so one emission serves both.
         emitEvent(MembershipEvent.WindowOpened(peerId, level.windowExpiresAt))
         reconnectController?.onPeerUnresponsive(peerId, at.toEpochMilliseconds())
-        // Same single source of truth for the fan-out, so no remote member can hold a deadline the
-        // local level disagrees with. This carries the room's HeartbeatConfig estimate, which is
-        // right for the default controller and a placeholder for an injected one — refineWindow
-        // re-fans the enforced deadline when the two differ, so the property holds in both cases.
+        // Same single source of truth for the fan-out. This carries the room's HeartbeatConfig
+        // estimate, which is right for the default controller and a placeholder for an injected one —
+        // refineWindow re-fans the enforced deadline when the two differ.
+        //
+        // Convergence is BEST-EFFORT, not guaranteed: this fan-out and refineWindow's each run in
+        // their own `scope.launch`, so under a multi-threaded dispatcher the estimate can reach a
+        // remote member AFTER the refinement and move its level backwards, with nothing to re-assert
+        // it (Paused carries no episode identity — #1781). The worst case is the deadline a remote
+        // held before refinement existed at all, so this is still strictly better than not re-fanning.
         if (!wasPartitioned && isHost) {
             propagatePaused(peerId, expiresAtMs = level.windowExpiresAt.toEpochMilliseconds())
         }
@@ -1693,7 +1698,12 @@ internal class SeamRoom(
      * On the **host** the refined deadline is also fanned out as an authoritative
      * [AdmitMessage.Paused], for the same reason [markPartitioned]'s is: without it a remote
      * member's roster keeps `at + reconnectWindow` forever while the host holds the seat to the
-     * injected policy's deadline, so the two rosters disagree with no way to converge.
+     * injected policy's deadline, so the two rosters disagree with no way to converge. That
+     * convergence is **best-effort**: this fan-out and [markPartitioned]'s are separate
+     * `scope.launch`es with no ordering between them, so on a multi-threaded dispatcher the estimate
+     * can land after the refinement and a remote level can move backwards. `Paused` carries no
+     * episode identity to reject the stale one — see #1781. The residual worst case is the value the
+     * remote would have held anyway, so re-fanning is still an improvement, not a guarantee.
      * **No fan-out loop is possible:** only a host propagates, and the inbound-`Paused` caller
      * ([handlePaused]) is reached only when `role` is [SessionRole.Joiner] (see the dispatch gate in
      * `handleAdmitFrame`), so a member reacting to a `Paused` can never re-send one.
@@ -1774,7 +1784,17 @@ internal class SeamRoom(
         val bytes = AdmitMessage.encode(message)
         scope.launch {
             for (recipient in recipients) {
+                // Best-effort by design — a peer may tear between the roster snapshot and the send.
+                // Logged, not silent: a dropped `Paused` that carried a REFINED deadline leaves the
+                // recipient holding a wrong-but-plausible number with no anti-entropy behind it, so
+                // absence of the frame has to be diagnosable off-device (#1781).
                 runCatchingCancellable { seam.sendTo(recipient, bytes) }
+                    .onFailure {
+                        logger.debug {
+                            "room.fanout.drop self=${selfId.value} to=${recipient.value} " +
+                                "message=${message::class.simpleName} cause=${it::class.simpleName}: ${it.message}"
+                        }
+                    }
             }
         }
     }
