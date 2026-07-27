@@ -1,6 +1,7 @@
 package us.tractat.kuilt.session
 
 import kotlinx.coroutines.delay
+import us.tractat.kuilt.core.FabricAvailability
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.util.ExponentialBackoff
 import us.tractat.kuilt.session.admit.RejectCode
@@ -110,19 +111,73 @@ public suspend fun retryWithBackoffSample(random: Random, dial: suspend () -> Bo
  * Drive a reconnect banner / terminal-error decision from the reason kuilt already classifies,
  * instead of re-deriving your own transient/unrecoverable buckets. [ReconnectReason] says why the
  * link is down while a window is open; [FailureReason] says why the session ended for good.
+ *
+ * Check the `localFabric` tag **first**. Both events carry this peer's own
+ * [Room.localFabric] as it stood when they were emitted, and when that is
+ * [FabricAvailability.Unavailable] the event is not evidence about the peer it names — our own end
+ * of the fabric was down, so their silence says nothing about them. Without that branch a joiner
+ * whose own radio died renders "lost the host" (#1712).
  */
 public suspend fun reconnectBannerSample(room: Room) {
     room.events.collect { event ->
-        when (event) {
-            is MembershipEvent.Partitioned -> when (event.reason) {
+        // The tag inverts attribution only for silence *we* observed — our own detector, or our own
+        // link tearing. `HostLost` is always that. `Partitioned` is not: on a joiner in a 3+-peer
+        // room the host relays "peer C paused", and that report is host-authoritative — it arrived
+        // over a link working well enough to deliver it, so an `Unavailable` tag there says our end
+        // was down when we *processed* the report, not that the report is unfounded. Suppressing it
+        // would leave C shown as present while the host holds its seat open.
+        //
+        // The event carries no provenance field, and `Room` exposes no host id, so a consumer cannot
+        // tell the two apart from the event alone. In a two-peer session it does not matter (the only
+        // peer you watch *is* the host). In a larger room, scope this to peers you observe yourself.
+        val ourOwnEndWasDown = when (event) {
+            is MembershipEvent.HostLost -> event.localFabric is FabricAvailability.Unavailable
+            else -> false
+        }
+        when {
+            // First branch, deliberately: never say "lost the host" when *we* are the ones offline.
+            ourOwnEndWasDown -> Unit // "You're offline — check your connection"
+            event is MembershipEvent.Partitioned -> when (event.reason) {
                 ReconnectReason.LinkTimeout, ReconnectReason.TransportClosed -> Unit // "Reconnecting…"
                 ReconnectReason.Backpressure -> Unit // "Connection congested…"
             }
-            is MembershipEvent.HostLost -> when (val reason = event.reason) {
+            event is MembershipEvent.HostLost -> when (val reason = event.reason) {
                 FailureReason.WindowExpired -> Unit // "Lost the host — rejoin"
                 FailureReason.Unrecoverable -> Unit // "Can't reconnect — return to lobby"
                 is FailureReason.Refused -> Unit // show reason.message (auth-expired / version, …)
             }
+            else -> Unit
+        }
+    }
+}
+
+/**
+ * Tell "**you** are offline" apart from "**they** are offline". Every other member of the presence
+ * vocabulary names somebody else, so a peer that loses its own network blames its peers.
+ * [Room.localFabric] is the level — a `StateFlow`, so a late reader cannot miss a drop — and
+ * [MembershipEvent.LocalFabricLost] / [MembershipEvent.LocalFabricRestored] are the notifications
+ * that it moved. Don't reach past [Room] into a transport-specific path monitor.
+ */
+public suspend fun localFabricBannerSample(room: Room) {
+    // Bind the banner to the LEVEL, not to the edges. A StateFlow replays its current value to a late
+    // collector, so this cannot miss a drop that happened before you subscribed, and it keeps the UI
+    // reading the authoritative surface rather than a notification that may already be superseded.
+    room.localFabric.collect { availability ->
+        when (availability) {
+            FabricAvailability.Available -> Unit // no banner
+            is FabricAvailability.Unavailable -> Unit // "You're offline" — this room's fabric, not the device
+            is FabricAvailability.Unknown -> Unit // kuilt cannot tell on this fabric — say nothing
+        }
+    }
+    // The edges are for things a level cannot express — logging the transport's own words, or firing a
+    // one-shot. Only transitions into Unavailable and into Available emit; a move into Unknown emits
+    // nothing, because "we stopped being able to tell" is not a loss. Re-read the level when handling
+    // one: under a rapid flap the level may already be ahead of the edge in your hand.
+    room.events.collect { event ->
+        when (event) {
+            is MembershipEvent.LocalFabricLost ->
+                Unit // event.reason is the transport's own words; room.localFabric.value is the truth now
+            is MembershipEvent.LocalFabricRestored -> Unit // may arrive with no preceding Lost
             else -> Unit
         }
     }

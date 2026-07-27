@@ -47,6 +47,14 @@ public interface Room {
      * **This is the authoritative, replay-safe source of current membership.** Being a
      * [StateFlow], a new collector immediately receives the current set. Reach for [roster]
      * (not [events]) to answer "who is in the room?" — it cannot miss a join or leave.
+     *
+     * The same holds for **liveness**: [Member.liveness] is the level, so prefer it over replaying
+     * [MembershipEvent.Partitioned] / [MembershipEvent.Recovered] / [MembershipEvent.Resumed], and
+     * read a seat-hold countdown from [Liveness.Partitioned.windowExpiresAt] rather than from a
+     * [MembershipEvent.WindowOpened] a late collector may have missed (or a later one may supersede).
+     *
+     * Every [Member] here is *somebody else* — this set excludes this peer. For this peer's own
+     * reachability, the self-attributed counterpart is [localFabric].
      */
     public val roster: StateFlow<Set<Member>>
 
@@ -56,8 +64,9 @@ public interface Room {
      * Hot, backed by a shared flow with a **bounded replay cache**: a late collector still
      * receives the most recent membership events (so a [MembershipEvent.Joined] emitted in the
      * brief window before a `host { onRoom }` consumer subscribes is not lost — see #692), but
-     * only the recent tail, not the full history. Treat events as **idempotent notifications**;
-     * use [roster] as the authoritative current-membership source.
+     * only the recent tail, not the full history. Treat events as **idempotent notifications**; the
+     * authoritative levels are [roster] (membership and [Member.liveness]) and [localFabric] (this
+     * peer's own reachability).
      */
     public val events: Flow<MembershipEvent>
 
