@@ -78,6 +78,14 @@ attach or detach a ply on a live session — an overlay (a LAN radio, a WebRTC
 link) that lights up when peers come into proximity and drops when they leave.
 The fixed-list constructor is the degenerate single-emission case.
 
+Sometimes a connection you asked for just won't come up: the radio is off, the
+permission hasn't been granted yet, the far side isn't listening. That's normal,
+and it's survivable — the other connections in the same list still come up, and
+the one that failed is simply tried again the next time you publish a list. To
+see *why* it failed, pass `onPlyFailure` when you build the `CompositeLoom`; it
+hands your logger a `PlyReconcileException` naming the ply and the cause. kuilt
+keeps no logger of its own, so that hook is the only place this surfaces.
+
 ## Feeding the layers above
 
 Because a composite is just a `Seam`, hand it to consensus or replication exactly
