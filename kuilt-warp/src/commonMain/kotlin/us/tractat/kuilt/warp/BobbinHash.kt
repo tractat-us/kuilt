@@ -14,7 +14,7 @@ import kotlin.jvm.JvmInline
  *
  * The string form is 64 lowercase hexadecimal characters (256 bits / 4 bits per char).
  * It is stable across all KMP targets and safe to embed in [us.tractat.kuilt.warp.OpId]
- * values once WASM bobbins ship (warp slice C5).
+ * values.
  *
  * @see Creel
  */

@@ -132,7 +132,7 @@ Three pure rewrites can improve a draft without changing what it computes:
 
 `optimize()` applies all three to a fixpoint and returns a structurally equivalent draft:
 
-<!-- verbatim from kuilt-warp/src/commonSamples/kotlin/us/tractat/kuilt/warp/WarpSamples.kt#sampleOptimize -->
+<!-- verbatim from kuilt-warp-planning/src/commonSamples/kotlin/us/tractat/kuilt/warp/PlanningSamples.kt#sampleOptimize -->
 
 ```kotlin
 val optimized = unoptimized.optimize()
@@ -151,7 +151,7 @@ check(unoptimized.isEquivalentTo(optimized))              // same convergent res
 For a single `embroider`, `plan` reduces `coordinatedVolume` by deferring the embroider
 past selective filters:
 
-<!-- verbatim from kuilt-warp/src/commonSamples/kotlin/us/tractat/kuilt/warp/WarpSamples.kt#sampleCoordinationCost -->
+<!-- verbatim from kuilt-warp-planning/src/commonSamples/kotlin/us/tractat/kuilt/warp/PlanningSamples.kt#sampleCoordinationCost -->
 
 ```kotlin
 // Unplanned: embroider before filter → consensus sees ~1000 docs
@@ -198,7 +198,7 @@ The two branches share no ancestor path — their embroideries are independent. 
 planner can commit both in a single Raft round-trip instead of two. Calling
 `consolidateEmbroideries()` (included in `plan`) fuses them into one `BatchedEmbroider`:
 
-<!-- verbatim from kuilt-warp/src/commonSamples/kotlin/us/tractat/kuilt/warp/WarpSamples.kt#sampleConsolidateEmbroideries -->
+<!-- verbatim from kuilt-warp-planning/src/commonSamples/kotlin/us/tractat/kuilt/warp/PlanningSamples.kt#sampleConsolidateEmbroideries -->
 
 ```kotlin
 val consolidated = combined.consolidateEmbroideries()
@@ -214,7 +214,7 @@ The round-count cut is analytically provable and holds at real Raft execution. T
 representative query has three independent agreements (level 0) plus one that depends
 on them (level 1) — four rounds unplanned, two after `plan`:
 
-<!-- verbatim from kuilt-warp/src/commonSamples/kotlin/us/tractat/kuilt/warp/WarpSamples.kt#sampleCoordinationCostDepth -->
+<!-- verbatim from kuilt-warp-planning/src/commonSamples/kotlin/us/tractat/kuilt/warp/PlanningSamples.kt#sampleCoordinationCostDepth -->
 
 ```kotlin
 // Branch C chains two embroideries: embroider(C) must commit before embroider(D).

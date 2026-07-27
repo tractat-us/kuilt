@@ -3,8 +3,12 @@ package us.tractat.kuilt.warp
 /**
  * Injectable contract for a sandboxed WASM execution environment.
  *
- * Production implementations are target-specific (JVM: Chicory; browser: WebAssembly API).
- * Tests inject a fake that returns a known [Op] without compiling real WASM bytes.
+ * Production implementations are target-specific and all ship in `:kuilt-warp-runtime` —
+ * `ChicoryWasmRuntime` (JVM/Android: the Chicory interpreter), `Wasm3WasmRuntime` (iOS/macOS:
+ * the vendored wasm3 interpreter), `BrowserWasmRuntime` (wasmJs: the browser's WebAssembly API
+ * inside a Web Worker). Every one of them is verified against the same
+ * `WasmRuntimeConformanceSuite` TCK in `:kuilt-warp-test`. Tests inject a fake that returns a
+ * known [Op] without compiling real WASM bytes.
  *
  * **Capability sandbox.** A conforming implementation MUST reject any WASM module that
  * declares an import (i.e. requests host capabilities beyond the compute sandbox). Malformed

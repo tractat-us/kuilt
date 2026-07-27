@@ -2,6 +2,7 @@
 
 package us.tractat.kuilt.warp
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.await
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -82,9 +83,22 @@ public class BrowserWasmRuntime(
         return WorkerBackedOp(bytes.toUint8Array(), config)
     }
 
+    /**
+     * Compiles [bytes], converting any engine error into a terminal [WasmLoadException].
+     *
+     * The catch is deliberately `Throwable` — the JS engine's rejection arrives as an opaque
+     * `JsException`, and nothing narrower would cover it — so structured-concurrency
+     * cancellation is rethrown first rather than being converted into a *terminal* load
+     * failure. `load` is not a suspend function and `wasmCompile` is a synchronous JS call, so
+     * this is a guard rather than a live path; it is here because the conversion is exactly the
+     * shape in which a cancellation gets eaten, and it keeps parity with
+     * [ChicoryWasmRuntime]'s guards.
+     */
     private fun compileModule(bytes: ByteArray): JsAny =
         try {
             wasmCompile(bytes.toUint8Array())
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Throwable) {
             throw WasmLoadException("malformed WASM module: ${e.message}", e)
         }
