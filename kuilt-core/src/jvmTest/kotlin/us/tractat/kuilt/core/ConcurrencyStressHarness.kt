@@ -131,15 +131,25 @@ private fun section(label: String, produce: () -> String): String {
  *
  * The reporting thread is excluded: it is RUNNABLE by construction (it is producing this text), and
  * counting it is exactly how #1784's first read of its own dump saw "worker-1 RUNNABLE".
+ *
+ * The verdict is **sampled twice**, [QUIESCENCE_SAMPLE_GAP_MS] apart, and a worker counts as runnable only
+ * if it is RUNNABLE in *both*. A `CoroutineScheduler` worker spins briefly before parking, so a single
+ * instant can catch one mid-spin and flip the headline to CPU-BOUND on a genuinely idle dispatcher —
+ * inverting the one conclusion this section exists to state.
  */
 private fun dispatcherVerdict(): String {
     val self = Thread.currentThread()
-    val workers = Thread.getAllStackTraces()
+    fun sample(): Map<Thread, Array<StackTraceElement>> = Thread.getAllStackTraces()
         .filterKeys { it !== self && it.name.startsWith(DISPATCHER_THREAD_PREFIX) }
-    val runnable = workers.filterKeys { it.state == Thread.State.RUNNABLE }
+    val first = sample().filterKeys { it.state == Thread.State.RUNNABLE }.keys
+    Thread.sleep(QUIESCENCE_SAMPLE_GAP_MS)
+    val workers = sample()
+    // Runnable in BOTH samples — a transient pre-park spin is not CPU-bound.
+    val runnable = workers.filterKeys { it.state == Thread.State.RUNNABLE && it in first }
     return buildString {
         append(runnable.size).append(" of ").append(workers.size).append(' ')
-            .append(DISPATCHER_THREAD_PREFIX).append("* threads RUNNABLE")
+            .append(DISPATCHER_THREAD_PREFIX)
+            .append("* threads RUNNABLE in both samples ${QUIESCENCE_SAMPLE_GAP_MS}ms apart")
         if (workers.isEmpty()) {
             append(" — no dispatcher threads found (they exit after being idle); treat as QUIESCENT.")
         } else if (runnable.isEmpty()) {
@@ -147,10 +157,11 @@ private fun dispatcherVerdict(): String {
             append(
                 "CPU starvation is ruled out for this occurrence: starvation shows RUNNABLE workers and " +
                     "cannot park every one of them (#1158's explanation for this family does not fit here). " +
-                    "So the awaited event was either never emitted, or was emitted and never scheduled — " +
-                    "the COROUTINE CENSUS below decides which: a coroutine SUSPENDED inside the awaited " +
-                    "path means the event arrived and the path stalled; a path with no coroutine parked in " +
-                    "it at all means nothing ever arrived.",
+                    "So the awaited event was either never emitted, or was emitted and never scheduled. " +
+                    "A coroutine SUSPENDED inside library code in the COROUTINE CENSUS below names a path " +
+                    "that stalled mid-flight. Note what CANNOT be inferred: an ABSENT coroutine proves " +
+                    "nothing, because the cap cancels the probe body's own coroutines before this report " +
+                    "runs (see the census header).",
             )
         } else {
             append(" → CPU-BOUND / not quiescent. Consistent with CPU starvation (#1158) or a spinning\n")
@@ -189,6 +200,11 @@ private fun boxTelemetry(): String {
  * kuilt frame is idle *at its source*, which is the healthy resting state and is normally the biggest
  * group by far; a coroutine parked with a kuilt frame in its stack is parked **inside** library code,
  * and that is the finding. Sorting purely by count buries the answer under the wallpaper.
+ *
+ * Known blind spot: `launchIn` keeps the `onEach` lambda out of the suspended continuation chain, so
+ * `CompositeSeam`'s five per-ply pumps all collapse into one `$NO_KUILT_FRAME` group and cannot be told
+ * apart. The ordering above stops that hiding the answer; naming the pumps would let the census name it
+ * outright, tracked in #1811.
  */
 private fun coroutineCensus(): String {
     val infos = DebugProbes.dumpCoroutinesInfo()
@@ -196,12 +212,27 @@ private fun coroutineCensus(): String {
     val byState = infos.groupingBy { it.state }.eachCount()
     val groups = infos.groupBy { info -> censusKey(info) }
         .entries
-        // Informative first (a kuilt frame means parked INSIDE library code), then by size.
-        .sortedWith(compareByDescending<Map.Entry<String, List<CoroutineInfo>>> { NO_KUILT_FRAME !in it.key }
-            .thenByDescending { it.value.size })
+        // Rank 0 = parked inside kuilt code (the answer), 1 = idle at a non-kuilt source, 2 = the
+        // stack-unavailable fallback. The fallback needs its own rank: it contains no kuilt frame marker,
+        // so a two-way "has a kuilt frame" test would sort a degenerate group into the answer slot.
+        .sortedWith(compareBy<Map.Entry<String, List<CoroutineInfo>>> { group ->
+            when {
+                STACK_UNAVAILABLE in group.key -> 2
+                NO_KUILT_FRAME in group.key -> 1
+                else -> 0
+            }
+        }.thenByDescending { it.value.size })
     return buildString {
         append(infos.size).append(" tracked coroutines: ")
         append(State.entries.filter { it in byState }.joinToString { "$it=${byState[it]}" }).append('\n')
+        append(
+            "SCOPE — read this before drawing a conclusion from an ABSENCE. `withTimeout` cancels its " +
+                "block and joins its children before this report runs, so the probe body's own coroutines " +
+                "(the awaiting `first {}` collector, any `async` flood/churn) are gone BY CONSTRUCTION and " +
+                "their absence carries no information. What survives is the system under test's pumps, " +
+                "which live on a root `SupervisorJob` of their own — that is what makes this census worth " +
+                "having, and it is also the only thing it is evidence about.\n",
+        )
         append("grouped by (state, top frame, first kuilt frame); groups parked INSIDE kuilt code first:\n")
         groups.take(MAX_CENSUS_GROUPS).forEach { (key, members) ->
             append("  ×").append(members.size).append("  ").append(key).append('\n')
@@ -225,7 +256,7 @@ private fun censusKey(info: CoroutineInfo): String {
         info.lastObservedStackTrace()
     } catch (e: Throwable) {
         // Broad on purpose: a coroutine that completes mid-walk must not take the census with it.
-        return "${info.state} <stack unavailable: ${e::class.simpleName}>"
+        return "${info.state} $STACK_UNAVAILABLE: ${e::class.simpleName}"
     }
     val top = frames.firstOrNull()?.toString() ?: "<no observed frame>"
     val kuilt = frames.firstOrNull { it.className.startsWith(KUILT_PACKAGE) }?.toString() ?: NO_KUILT_FRAME
@@ -261,6 +292,8 @@ private fun coroutineDump(): String {
 private const val DISPATCHER_THREAD_PREFIX = "DefaultDispatcher-worker"
 private const val KUILT_PACKAGE = "us.tractat.kuilt"
 private const val NO_KUILT_FRAME = "<no kuilt frame>"
+private const val STACK_UNAVAILABLE = "<stack unavailable"
+private const val QUIESCENCE_SAMPLE_GAP_MS = 250L
 private const val MAX_CENSUS_GROUPS = 25
 private const val MAX_IDENTITIES_PER_GROUP = 6
 private const val MAX_DUMP_CHARS = 200_000
@@ -321,11 +354,14 @@ internal class StageTracker {
         val inStageMs = (now - stageEnteredAtNanos) / 1_000_000
         val totalMs = (now - startedAtNanos) / 1_000_000
         val beforeMs = totalMs - inStageMs
-        val rate = if (beforeMs > 0) (stagesEntered - 1) * 1000.0 / beforeMs else Double.NaN
+        // Clamped: if the body hangs before its first `at()` the label is still "start" and no stage has
+        // been entered, which would otherwise print "-1 earlier stage(s)".
+        val earlier = (stagesEntered - 1).coerceAtLeast(0)
+        val rate = if (beforeMs > 0 && earlier > 0) "%.1f".format(earlier * 1000.0 / beforeMs) else "n/a"
         return "stuck ${inStageMs}ms in stage '$current'; reached it after ${beforeMs}ms and " +
-            "${stagesEntered - 1} earlier stage(s) (${"%.1f".format(rate)} stages/s); run total ${totalMs}ms.\n" +
+            "$earlier earlier stage(s) ($rate stages/s); run total ${totalMs}ms.\n" +
             "A stage holding nearly the whole cap is a wedge; a low stages/s rate with many stages " +
-            "entered is a slow box."
+            "entered is a slow box. Stage 'start' with 0 earlier means it never reached the first await."
     }
 }
 

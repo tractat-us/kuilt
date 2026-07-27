@@ -54,6 +54,22 @@ internal class InitialPly(
 )
 
 /**
+ * **Diagnostic only.** A consistent snapshot of the three things `CompositeSeam.recomputePeers` reads,
+ * taken under one lock acquisition. Produced by `CompositeSeam.peersStrandOrNull` for the real-threaded
+ * concurrency probes' on-timeout report (#1784); no library code consumes it.
+ *
+ * @property idMap the learned `(plyId, transport peer) → composite peer` mappings.
+ * @property livePlies the plies still attached — `close()` clears these without purging [idMap].
+ * @property wouldPublish what a recompute would publish *right now*, from the real fold. Compare against
+ *   `Seam.peers`: a peer here but not there means a recompute is owed with no trigger left to run it.
+ */
+internal class PeersStrand(
+    val idMap: Map<Pair<PlyId, PeerId>, PeerId>,
+    val livePlies: Set<PlyId>,
+    val wouldPublish: Set<PeerId>,
+)
+
+/**
  * The composite `Seam` woven by [CompositeLoom]. Presents a single peer set,
  * `incoming` flow, and send surface over a set of constituent plies that may
  * change while the session is live.
@@ -659,22 +675,31 @@ internal class CompositeSeam(
     }
 
     private fun recomputePeers() {
-        val reachable = lock.withLock {
-            buildSet {
-                add(selfId)
-                idMap.forEach { (key, compositeId) ->
-                    val (plyId, transportId) = key
-                    val seam = live[plyId]?.seam
-                    if (seam != null && transportId in seam.peers.value) add(compositeId)
-                }
-            }
-        }
+        val reachable = lock.withLock { reachablePeersLocked() }
         _peers.value = reachable
     }
 
     /**
-     * **Diagnostic only.** The learned `(plyId, transport peer) → composite peer` mapping, copied, or
-     * `null` if [lock] was busy. Read by the real-threaded concurrency probes' on-timeout snapshot; it
+     * The composite peers [recomputePeers] would publish from the current state. Call under [lock].
+     *
+     * Extracted so the diagnostic in [peersStrandOrNull] can call the **same** fold rather than restate
+     * it. A restatement drifts: the two conditions below — the ply must still be live, *and* the transport
+     * peer must still be in that ply's peer set — are each a reason an entry in [idMap] is *correctly*
+     * absent from [peers], and a diagnostic that mirrors only one of them reports a lost publish where
+     * there is none.
+     */
+    private fun reachablePeersLocked(): Set<PeerId> = buildSet {
+        add(selfId)
+        idMap.forEach { (key, compositeId) ->
+            val (plyId, transportId) = key
+            val seam = live[plyId]?.seam
+            if (seam != null && transportId in seam.peers.value) add(compositeId)
+        }
+    }
+
+    /**
+     * **Diagnostic only.** Everything [recomputePeers] reads, captured under one [lock] acquisition, or
+     * `null` if the lock was busy. Read by the real-threaded concurrency probes' on-timeout snapshot; it
      * is `internal`, takes no part in any code path, and nothing in the library calls it.
      *
      * It exists because it is the **only** observable that decides why a composite's [peers] can stall
@@ -682,24 +707,35 @@ internal class CompositeSeam(
      * totally ordered by [lock] but whose publish is not, and it has **no periodic backstop** — it fires
      * only on an `Announce`, a ply membership change, or a detach. So two very different failures
      * present identically, as total quiescence with every worker parked:
-     *  - `idMap` **holds** the far peer's mapping while [peers] does not ⇒ the mapping was learned and a
-     *    *derived publish* was lost (a stale `reachable` computed before the peer existed, published
-     *    last after a preemption between the lock release and the write). Nothing recomputes; permanent.
-     *  - `idMap` is **empty** ⇒ no `Announce` was ever recorded, so the failure is upstream of the peers
-     *    strand entirely.
+     *  - [PeersStrand.wouldPublish] contains a peer [peers] does not ⇒ a recompute is **owed** and no
+     *    trigger remains to run it: the mapping was learned and a *derived publish* was lost. Permanent.
+     *  - [PeersStrand.idMap] is **empty** ⇒ no `Announce` was ever recorded, so the failure is upstream
+     *    of the peers strand entirely.
      *
      * Neither the mesh membership of the underlying plies nor either composite's [peers] can tell those
-     * apart — the mesh reads as formed in both. Only `idMap` itself does, which is why it is exposed.
+     * apart — the mesh reads as formed in both.
+     *
+     * **Why this returns [wouldPublish] and not just [idMap].** An entry in `idMap` absent from `peers`
+     * is *correct*, not lost, whenever [reachablePeersLocked]'s predicate rejects it — the ply is no
+     * longer live (`close()` clears `live` without purging `idMap` or recomputing) or the transport peer
+     * has left that ply's peer set (the far composite closed its ply seams). Both happen by design in the
+     * close-heavy probes, so a diagnostic comparing `idMap` against `peers` directly would announce a lost
+     * publish on nearly every post-close render. Handing back the real fold's output makes the comparison
+     * correct by construction instead of by restatement.
      *
      * [tryLock] rather than [withLock] deliberately: this is called from a **failure reporting path**
      * while the system under test is wedged. A blocking read that met a permanently-held lock would
      * consume the diagnostic it was written to produce, so a busy lock degrades to `null` — itself a
      * reportable fact — rather than to a second hang.
      */
-    internal fun learnedIdMapOrNull(): Map<Pair<PlyId, PeerId>, PeerId>? {
+    internal fun peersStrandOrNull(): PeersStrand? {
         if (!lock.tryLock()) return null
         return try {
-            idMap.toMap()
+            PeersStrand(
+                idMap = idMap.toMap(),
+                livePlies = live.keys.toSet(),
+                wouldPublish = reachablePeersLocked(),
+            )
         } finally {
             lock.unlock()
         }
