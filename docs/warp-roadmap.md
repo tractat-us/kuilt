@@ -188,6 +188,10 @@ weren't in the deployed binary. The largest and riskiest epic; full design:
 - **C3 — per-target wasm runtimes** (split, because each is genuinely different
   work): `C3·browser` (native), `C3·jvm` (Chicory), `C3·macos` (wasmtime JIT),
   `C3·ios` (wasm3 interpret).
+  _(What shipped differs on Apple: **wasm3 interpret covers macOS and iOS alike**,
+  as one `appleMain` `Wasm3WasmRuntime` rather than a separate wasmtime JIT for
+  macOS — see #923. The plan text above is left as written, per this page's
+  convention of preserving the original plan-of-record.)_
 - **C4 — bobbin + creel.** Content-addressed kernel cache.
 - **C5 — lazy bobbin gossip.** Merkle-CRDT manifest: keys (hashes) gossip eagerly,
   bytes fetch on demand.
