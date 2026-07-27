@@ -517,8 +517,10 @@ public class HeddleNode internal constructor(
      * All wakers are excluded from the front together, not just each from its own: two siblings
      * waking in the same round would otherwise average each other's stale virtual service into
      * the front and both keep the credit. A `null` front means nothing survived the exclusion —
-     * every competing child is a waker, so nobody ran ahead of anybody and there is nothing to
-     * clamp to.
+     * every **active** child under [parent] is a waker, so nobody ran ahead of anybody and there
+     * is nothing to clamp to. Surviving children that are merely *idle* do not produce a `null`:
+     * [HeddlePolicy.front] falls back to the maximum effective virtual service across them, the
+     * bound that can only ever give a turn up (§7.2).
      *
      * **The stored offset is joined with `max`, never replaced** (issue #1714). [HeddlePolicy.front]
      * is a weighted mean over whoever is competing *right now*, and that mean is not monotone
@@ -540,8 +542,8 @@ public class HeddleNode internal constructor(
      * satisfied as "idle", making the next round a spurious wake for it.
      *
      * **§10.6 is therefore enforced only modulo that sampling** (issue #1715). §7.2 defines the
-     * clamp on an *event* — a child going from not-demanding to demanding — and sampling once per
-     * [schedule] entry cannot see an idle window that opens and closes between two samples.
+     * clamp on an idle→demand *event* this peer has actually observed, and sampling once per
+     * [schedule] entry cannot see a window that opens and closes between two samples.
      * Single-peer that is exactly right: the front moves only on this peer's own grants, all of
      * which land after the entry sample, so an idle interval between rounds banks nothing. The
      * escape is multi-peer — a child may idle and re-demand between this peer's rounds while
